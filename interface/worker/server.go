@@ -604,7 +604,7 @@ func (s *AgentServer) UpdateOptions(opts WorkerOptions) error {
 	updated := mergeWorkerOptions(current, opts)
 	updated = resolveWorkerOptions(updated)
 	if !validWorkerLogLevel(updated.LogLevel) {
-		return fmt.Errorf("invalid log_level %q, valid levels: CRITICAL, DEBUG, ERROR, INFO, TRACE, WARN", updated.LogLevel)
+		return invalidWorkerLogLevelError(updated.LogLevel)
 	}
 
 	s.mu.Lock()
@@ -779,7 +779,9 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 			opts.LogLevel = defaultProdLogLevel
 		}
 	}
-	opts.LogLevel = strings.ToUpper(opts.LogLevel)
+	if validWorkerLogLevel(opts.LogLevel) {
+		opts.LogLevel = strings.ToUpper(opts.LogLevel)
+	}
 	if opts.Port == 0 && !opts.DevMode && !opts.PortSet {
 		opts.Port = defaultProdHTTPPort
 	}
@@ -964,6 +966,10 @@ func validWorkerLogLevel(logLevel string) bool {
 	default:
 		return false
 	}
+}
+
+func invalidWorkerLogLevelError(logLevel string) error {
+	return fmt.Errorf("%s '%s'. Valid levels: CRITICAL, DEBUG, ERROR, INFO, TRACE, WARN", "Invalid log level", logLevel)
 }
 
 func defaultNumIdleProcesses() int {
@@ -1411,7 +1417,7 @@ func (s *AgentServer) validateRunPreconditions() error {
 		logger.Logger.Warnw("load_threshold in prod env should be less than 1", nil, "currentValue", s.Options.LoadThreshold)
 	}
 	if !validWorkerLogLevel(s.Options.LogLevel) {
-		return fmt.Errorf("invalid log_level %q, valid levels: CRITICAL, DEBUG, ERROR, INFO, TRACE, WARN", s.Options.LogLevel)
+		return invalidWorkerLogLevelError(s.Options.LogLevel)
 	}
 	if s.entrypointFnc == nil {
 		return fmt.Errorf("no RTC session entrypoint has been registered")
@@ -1431,7 +1437,7 @@ func (s *AgentServer) validateRunPreconditions() error {
 func (s *AgentServer) validateUnregisteredRunPreconditions() error {
 	s.Options = resolveWorkerOptions(s.Options)
 	if !validWorkerLogLevel(s.Options.LogLevel) {
-		return fmt.Errorf("invalid log_level %q, valid levels: CRITICAL, DEBUG, ERROR, INFO, TRACE, WARN", s.Options.LogLevel)
+		return invalidWorkerLogLevelError(s.Options.LogLevel)
 	}
 	if s.entrypointFnc == nil {
 		return fmt.Errorf("no RTC session entrypoint has been registered")

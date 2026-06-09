@@ -735,8 +735,11 @@ func TestUpdateOptionsRejectsInvalidLogLevel(t *testing.T) {
 	if err == nil {
 		t.Fatal("UpdateOptions() error = nil, want invalid log level error")
 	}
-	if !strings.Contains(err.Error(), "invalid log_level") {
-		t.Fatalf("UpdateOptions() error = %q, want invalid log_level message", err.Error())
+	if got, want := err.Error(), "Invalid log level 'verbose'. Valid levels: CRITICAL, DEBUG, ERROR, INFO, TRACE, WARN"; got != want {
+		t.Fatalf("UpdateOptions() error = %q, want %q", got, want)
+	}
+	if strings.Contains(err.Error(), "invalid log_level") {
+		t.Fatalf("UpdateOptions() error = %q, want reference log level wording", err.Error())
 	}
 	if server.Options.LogLevel != "INFO" {
 		t.Fatalf("LogLevel = %q, want previous normalized INFO after rejected update", server.Options.LogLevel)
@@ -3288,8 +3291,11 @@ func TestValidateRunPreconditionsRejectsInvalidLogLevel(t *testing.T) {
 	if err == nil {
 		t.Fatal("validateRunPreconditions() error = nil, want invalid log level error")
 	}
-	if !strings.Contains(err.Error(), "invalid log_level") {
-		t.Fatalf("validateRunPreconditions() error = %q, want invalid log level message", err.Error())
+	if got, want := err.Error(), "Invalid log level 'verbose'. Valid levels: CRITICAL, DEBUG, ERROR, INFO, TRACE, WARN"; got != want {
+		t.Fatalf("validateRunPreconditions() error = %q, want %q", got, want)
+	}
+	if strings.Contains(err.Error(), "invalid log_level") {
+		t.Fatalf("validateRunPreconditions() error = %q, want reference log level wording", err.Error())
 	}
 }
 
