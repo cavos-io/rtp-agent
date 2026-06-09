@@ -189,7 +189,12 @@ func evaluateWithLLM(ctx context.Context, evaluatorLLM llm.LLM, prompt string) (
 
 	options := []llm.ChatOption{
 		llm.WithTools([]llm.Tool{verdictTool}),
-		llm.WithToolChoice("submit_verdict"),
+		llm.WithToolChoice(map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name": "submit_verdict",
+			},
+		}),
 	}
 	if !strings.Contains(llm.Model(evaluatorLLM), "gpt-5") {
 		options = append(options, llm.WithExtraParams(map[string]any{"temperature": 0.0}))

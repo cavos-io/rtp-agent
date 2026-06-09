@@ -256,6 +256,29 @@ func TestEvaluateWithLLMOmitsReferenceTemperatureForGPT5Models(t *testing.T) {
 	}
 }
 
+func TestEvaluateWithLLMUsesReferenceSubmitVerdictToolChoice(t *testing.T) {
+	evaluator := &recordingEvalLLM{}
+
+	if _, err := evaluateWithLLM(context.Background(), evaluator, "judge this"); err != nil {
+		t.Fatalf("evaluateWithLLM() error = %v", err)
+	}
+
+	choice, ok := evaluator.options.ToolChoice.(map[string]any)
+	if !ok {
+		t.Fatalf("ToolChoice = %#v, want reference function tool_choice map", evaluator.options.ToolChoice)
+	}
+	if choice["type"] != "function" {
+		t.Fatalf("ToolChoice[type] = %#v, want function", choice["type"])
+	}
+	function, ok := choice["function"].(map[string]any)
+	if !ok {
+		t.Fatalf("ToolChoice[function] = %#v, want function map", choice["function"])
+	}
+	if function["name"] != "submit_verdict" {
+		t.Fatalf("ToolChoice[function][name] = %#v, want submit_verdict", function["name"])
+	}
+}
+
 func containsAll(s string, parts []string) bool {
 	for _, part := range parts {
 		if !contains(s, part) {
