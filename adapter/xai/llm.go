@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -24,9 +25,16 @@ func NewXaiLLM(apiKey string, model string) *XaiLLM {
 		model = "grok-4-1-fast-non-reasoning"
 	}
 	return &XaiLLM{
-		apiKey: apiKey,
+		apiKey: resolveXaiLLMAPIKey(apiKey),
 		model:  model,
 	}
+}
+
+func resolveXaiLLMAPIKey(apiKey string) string {
+	if apiKey != "" {
+		return apiKey
+	}
+	return os.Getenv("XAI_API_KEY")
 }
 
 func (l *XaiLLM) Model() string {
