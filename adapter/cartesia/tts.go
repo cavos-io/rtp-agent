@@ -146,6 +146,10 @@ func (t *CartesiaTTS) SampleRate() int  { return t.sampleRate }
 func (t *CartesiaTTS) NumChannels() int { return 1 }
 
 func (t *CartesiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if err := validateCartesiaTTSAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
+
 	apiURL, jsonBody, err := buildCartesiaSynthesizeRequest(t, text)
 	if err != nil {
 		return nil, err
@@ -257,6 +261,10 @@ func (s *cartesiaTTSChunkedStream) Close() error {
 }
 
 func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if err := validateCartesiaTTSAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
+
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildCartesiaStreamURL(t), buildCartesiaStreamHeaders(t))
 	if err != nil {
 		return nil, err
@@ -279,6 +287,13 @@ func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 	go stream.readLoop()
 
 	return stream, nil
+}
+
+func validateCartesiaTTSAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("cartesia API key is required, either as argument or set CARTESIA_API_KEY environment variable")
+	}
+	return nil
 }
 
 func buildCartesiaStreamURL(t *CartesiaTTS) string {

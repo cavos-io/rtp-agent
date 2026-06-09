@@ -1,8 +1,10 @@
 package cartesia
 
 import (
+	"context"
 	"encoding/json"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -145,6 +147,27 @@ func TestCartesiaSynthesizeRequestSupportsVoiceEmbedding(t *testing.T) {
 	embedding := voice["embedding"].([]any)
 	if len(embedding) != 3 || embedding[0] != 0.1 || embedding[1] != 0.2 || embedding[2] != 0.3 {
 		t.Fatalf("embedding = %+v, want configured vector", embedding)
+	}
+}
+
+func TestCartesiaTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("CARTESIA_API_KEY", "")
+	provider := NewCartesiaTTS("", "", "", WithCartesiaBaseURL("://bad-url"))
+
+	_, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("Synthesize returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "CARTESIA_API_KEY") {
+		t.Fatalf("Synthesize error = %q, want CARTESIA_API_KEY guidance", err)
+	}
+
+	_, err = provider.Stream(context.Background())
+	if err == nil {
+		t.Fatal("Stream returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "CARTESIA_API_KEY") {
+		t.Fatalf("Stream error = %q, want CARTESIA_API_KEY guidance", err)
 	}
 }
 
