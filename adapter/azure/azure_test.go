@@ -212,6 +212,24 @@ func TestAzureTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestAzureTTSChunkedStreamKeepsFinalReadBytes(t *testing.T) {
+	stream := &azureTTSChunkedStream{
+		body:       &finalReadBytesCloser{data: []byte{0x01, 0x02}},
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if !bytes.Equal(audio.Frame.Data, []byte{0x01, 0x02}) {
+		t.Fatalf("data = %v, want final read bytes", audio.Frame.Data)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("second Next error = %v, want io.EOF", err)
+	}
+}
+
 func TestAzureTTSSynthesizeUsesConfiguredClient(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {
@@ -244,6 +262,23 @@ func TestAzureTTSSynthesizeUsesConfiguredClient(t *testing.T) {
 	if audio.Frame.SampleRate != 24000 {
 		t.Fatalf("sampleRate = %d, want 24000", audio.Frame.SampleRate)
 	}
+}
+
+type finalReadBytesCloser struct {
+	data []byte
+	done bool
+}
+
+func (r *finalReadBytesCloser) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	r.done = true
+	return copy(p, r.data), io.EOF
+}
+
+func (r *finalReadBytesCloser) Close() error {
+	return nil
 }
 
 func TestAzureTTSStreamReportsUnsupported(t *testing.T) {
