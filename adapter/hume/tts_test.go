@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -53,6 +54,19 @@ func TestNewHumeTTSUsesEnvironmentAPIKey(t *testing.T) {
 	explicit := NewHumeTTS("explicit-key", "")
 	if explicit.apiKey != "explicit-key" {
 		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
+func TestHumeTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("HUME_API_KEY", "")
+	provider := NewHumeTTS("", "")
+
+	_, err := buildHumeTTSRequest(context.Background(), provider, "hello")
+	if err == nil {
+		t.Fatal("build request returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "HUME_API_KEY") {
+		t.Fatalf("build request error = %q, want HUME_API_KEY guidance", err)
 	}
 }
 
