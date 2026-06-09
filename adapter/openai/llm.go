@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -37,6 +38,7 @@ type OpenAILLM struct {
 	defaultReasoning     bool
 	extraHeaders         map[string]string
 	extraQuery           map[string]string
+	extraBody            map[string]any
 }
 
 type OpenAILLMOption func(*OpenAILLM)
@@ -156,6 +158,12 @@ func WithOpenAILLMExtraQuery(query map[string]string) OpenAILLMOption {
 	}
 }
 
+func WithOpenAILLMExtraBody(body map[string]any) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		l.extraBody = cloneOpenAIAnyMap(body)
+	}
+}
+
 func withOpenAILLMHTTPClient(httpClient openai.HTTPDoer) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		l.httpClient = httpClient
@@ -188,6 +196,7 @@ func newOpenAILLMWithConfigAndModel(config openai.ClientConfig, model string, op
 	applyOpenAIHTTPClient(provider, &config)
 	wrapOpenAIExtraHeaders(provider, &config)
 	wrapOpenAIExtraQuery(provider, &config)
+	wrapOpenAIExtraBody(provider, &config)
 	provider.client = openai.NewClientWithConfig(config)
 	return provider, nil
 }
@@ -241,6 +250,7 @@ func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	}
 	wrapOpenAIExtraHeaders(provider, &config)
 	wrapOpenAIExtraQuery(provider, &config)
+	wrapOpenAIExtraBody(provider, &config)
 	provider.client = openai.NewClientWithConfig(config)
 	provider.baseURL = config.BaseURL
 	return provider, nil
@@ -285,6 +295,7 @@ func NewOpenAILLMWithBaseURLAndHTTPClient(apiKey string, model string, baseURL s
 	applyOpenAIHTTPClient(provider, &config)
 	wrapOpenAIExtraHeaders(provider, &config)
 	wrapOpenAIExtraQuery(provider, &config)
+	wrapOpenAIExtraBody(provider, &config)
 	provider.client = openai.NewClientWithConfig(config)
 	return provider
 }
@@ -309,6 +320,15 @@ func wrapOpenAIExtraQuery(provider *OpenAILLM, config *openai.ClientConfig) {
 		config.HTTPClient = &extraQueryHTTPClient{
 			base:  config.HTTPClient,
 			query: cloneOpenAIStringMap(provider.extraQuery),
+		}
+	}
+}
+
+func wrapOpenAIExtraBody(provider *OpenAILLM, config *openai.ClientConfig) {
+	if len(provider.extraBody) > 0 {
+		config.HTTPClient = &extraBodyHTTPClient{
+			base: config.HTTPClient,
+			body: cloneOpenAIAnyMap(provider.extraBody),
 		}
 	}
 }
@@ -346,6 +366,50 @@ func (c *extraQueryHTTPClient) Do(req *http.Request) (*http.Response, error) {
 		query.Set(key, value)
 	}
 	cloned.URL.RawQuery = query.Encode()
+	return base.Do(cloned)
+}
+
+type extraBodyHTTPClient struct {
+	base openai.HTTPDoer
+	body map[string]any
+}
+
+func (c *extraBodyHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	base := c.base
+	if base == nil {
+		base = http.DefaultClient
+	}
+	if req.Body == nil {
+		return base.Do(req)
+	}
+	original, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil, err
+	}
+	_ = req.Body.Close()
+
+	payload := map[string]any{}
+	if len(original) > 0 {
+		if err := json.Unmarshal(original, &payload); err != nil {
+			cloned := req.Clone(req.Context())
+			cloned.Body = io.NopCloser(bytes.NewReader(original))
+			cloned.ContentLength = int64(len(original))
+			return base.Do(cloned)
+		}
+	}
+	for key, value := range c.body {
+		payload[key] = value
+	}
+	merged, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	cloned := req.Clone(req.Context())
+	cloned.Body = io.NopCloser(bytes.NewReader(merged))
+	cloned.ContentLength = int64(len(merged))
+	cloned.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(merged)), nil
+	}
 	return base.Do(cloned)
 }
 
@@ -489,6 +553,17 @@ func cloneOpenAIStringMap(src map[string]string) map[string]string {
 		return nil
 	}
 	dst := make(map[string]string, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
+}
+
+func cloneOpenAIAnyMap(src map[string]any) map[string]any {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]any, len(src))
 	for key, value := range src {
 		dst[key] = value
 	}
