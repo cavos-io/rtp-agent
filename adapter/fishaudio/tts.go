@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,8 @@ const (
 	defaultFishAudioLatencyMode = "balanced"
 	defaultFishAudioChunkLength = 100
 	fishAudioTTSUserAgent       = "livekit-plugins-fishaudio/go"
+	fishAudioPrimaryAPIKeyEnv   = "FISHAUDIO_API_KEY"
+	fishAudioFallbackAPIKeyEnv  = "FISH_AUDIO_API_KEY"
 )
 
 type FishAudioTTS struct {
@@ -97,6 +100,12 @@ func WithFishAudioTTSChunkLength(chunkLength int) FishAudioTTSOption {
 }
 
 func NewFishAudioTTS(apiKey string, voice string, opts ...FishAudioTTSOption) *FishAudioTTS {
+	if apiKey == "" {
+		apiKey = os.Getenv(fishAudioPrimaryAPIKeyEnv)
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(fishAudioFallbackAPIKeyEnv)
+	}
 	provider := &FishAudioTTS{
 		apiKey:       apiKey,
 		baseURL:      defaultFishAudioBaseURL,
