@@ -59,6 +59,8 @@ const (
 		"    @server.rtc_session(agent_name=\"my_agent\")\n" +
 		"    async def my_agent(ctx: JobContext):\n" +
 		"        ...\n"
+
+	duplicateRTCSessionMessage = "The AgentServer currently only supports registering only one rtc_session"
 )
 
 type workerReferenceError string
@@ -1253,7 +1255,7 @@ func (s *AgentServer) RTCSession(
 	sessionEnd func(*JobContext) error,
 ) error {
 	if s.entrypointFnc != nil {
-		return fmt.Errorf("the AgentServer currently only supports registering one rtc_session")
+		return workerReferenceError(duplicateRTCSessionMessage)
 	}
 	s.entrypointFnc = entrypoint
 	s.requestFnc = request

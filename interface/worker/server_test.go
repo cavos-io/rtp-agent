@@ -3563,8 +3563,11 @@ func TestRTCSessionRejectsSecondRegistration(t *testing.T) {
 	if err == nil {
 		t.Fatal("second RTCSession() error = nil, want duplicate registration error")
 	}
-	if !strings.Contains(err.Error(), "only supports registering one rtc_session") {
-		t.Fatalf("second RTCSession() error = %q, want duplicate registration message", err.Error())
+	if got, want := err.Error(), duplicateRTCSessionMessage; got != want {
+		t.Fatalf("second RTCSession() error = %q, want %q", got, want)
+	}
+	if strings.Contains(err.Error(), "supports registering one rtc_session") {
+		t.Fatalf("second RTCSession() error = %q, want reference duplicate-registration wording", err.Error())
 	}
 }
 
