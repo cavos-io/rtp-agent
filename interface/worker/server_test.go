@@ -866,8 +866,11 @@ func TestUpdateOptionsRejectsAfterWorkerStarted(t *testing.T) {
 	if err == nil {
 		t.Fatal("UpdateOptions() error = nil, want started worker error")
 	}
-	if !strings.Contains(err.Error(), "cannot update options after starting the server") {
-		t.Fatalf("UpdateOptions() error = %q, want started worker message", err.Error())
+	if got, want := err.Error(), "cannot update options after starting the server"; got != want {
+		t.Fatalf("UpdateOptions() error = %q, want %q", got, want)
+	}
+	if strings.Contains(err.Error(), "worker already started") {
+		t.Fatalf("UpdateOptions() error = %q, want reference started-server wording", err.Error())
 	}
 }
 
@@ -879,8 +882,11 @@ func TestUpdateOptionsRejectsAfterHTTPServerStarted(t *testing.T) {
 	if err == nil {
 		t.Fatal("UpdateOptions() error = nil, want started worker error")
 	}
-	if !strings.Contains(err.Error(), "cannot update options after starting the server") {
-		t.Fatalf("UpdateOptions() error = %q, want started worker message", err.Error())
+	if got, want := err.Error(), "cannot update options after starting the server"; got != want {
+		t.Fatalf("UpdateOptions() error = %q, want %q", got, want)
+	}
+	if strings.Contains(err.Error(), "http server already started") {
+		t.Fatalf("UpdateOptions() error = %q, want reference started-server wording", err.Error())
 	}
 }
 
