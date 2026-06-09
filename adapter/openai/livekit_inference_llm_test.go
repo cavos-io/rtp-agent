@@ -278,7 +278,11 @@ func TestLiveKitInferenceLLMChatRequestsReferenceUsageStreamOptions(t *testing.T
 		responseBody: `{"error":{"message":"stop"}}`,
 	}
 
-	provider, err := NewLiveKitInferenceLLM("openai/gpt-4.1", "key", "secret")
+	provider, err := NewLiveKitInferenceLLM("openai/gpt-4.1", "key", "secret",
+		WithLiveKitInferenceLLMExtraParams(map[string]any{
+			"stream_options": map[string]any{"include_usage": false},
+		}),
+	)
 	if err != nil {
 		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
 	}

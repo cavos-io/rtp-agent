@@ -189,7 +189,10 @@ func liveKitInferenceLLMStreamOptions(params map[string]any) map[string]any {
 	if params == nil {
 		params = map[string]any{}
 	}
-	if _, ok := params["stream_options"]; !ok {
+	switch options := params["stream_options"].(type) {
+	case map[string]any:
+		options["include_usage"] = true
+	default:
 		params["stream_options"] = map[string]any{"include_usage": true}
 	}
 	return params
