@@ -226,13 +226,16 @@ func TestTTSWebsocketSendsReferenceContextHeaders(t *testing.T) {
 
 type recordingTTSConn struct {
 	closed      atomic.Bool
+	writeCount  atomic.Int64
 	readCh      chan []byte
 	writeErr    error
+	writeErrAt  int64
 	onWriteJSON func(map[string]any)
 }
 
 func (c *recordingTTSConn) WriteJSON(v any) error {
-	if c.writeErr != nil {
+	writeCount := c.writeCount.Add(1)
+	if c.writeErr != nil && (c.writeErrAt == 0 || writeCount >= c.writeErrAt) {
 		return c.writeErr
 	}
 	if msg, ok := v.(map[string]any); ok && c.onWriteJSON != nil {
@@ -307,6 +310,49 @@ func TestInferenceTTSSessionCreateWriteErrorMatchesReference(t *testing.T) {
 	}
 	if !conn.closed.Load() {
 		t.Fatal("connection closed = false, want true after session.create write error")
+	}
+}
+
+func TestInferenceTTSInputTranscriptWriteErrorReturnsNextError(t *testing.T) {
+	conn := &recordingTTSConn{
+		writeErr:   errors.New("write failed"),
+		writeErrAt: 2,
+	}
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		errCh <- err
+	}()
+
+	select {
+	case err = <-errCh:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for input write error")
+	}
+	if err == nil {
+		t.Fatal("Next() error = nil, want input write error")
+	}
+	if !strings.Contains(err.Error(), "failed to send input_transcript message to LiveKit Inference TTS") {
+		t.Fatalf("Next() error = %v, want input write error", err)
 	}
 }
 

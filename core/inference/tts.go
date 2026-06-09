@@ -510,6 +510,8 @@ func (s *inferenceTTSStream) run() {
 				err = s.conn.WriteJSON(map[string]interface{}{"type": "session.flush"})
 				s.mu.Unlock()
 				if err != nil {
+					s.setStreamError(fmt.Errorf("failed to send session.flush message to LiveKit Inference TTS: %w", err))
+					s.Close()
 					return
 				}
 				return
@@ -542,6 +544,8 @@ func (s *inferenceTTSStream) run() {
 			s.mu.Unlock()
 
 			if err != nil {
+				s.setStreamError(fmt.Errorf("failed to send input_transcript message to LiveKit Inference TTS: %w", err))
+				s.Close()
 				return
 			}
 		}
