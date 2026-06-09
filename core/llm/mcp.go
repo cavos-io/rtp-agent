@@ -43,7 +43,13 @@ type MCPServerHTTP struct {
 	initialized bool
 	cacheDirty  bool
 	toolsCache  []Tool
+	initState   *mcpHTTPInitializeState
 	mu          sync.Mutex
+}
+
+type mcpHTTPInitializeState struct {
+	done chan struct{}
+	err  error
 }
 
 func NewMCPServerHTTP(url string) *MCPServerHTTP {
@@ -88,9 +94,41 @@ func (s *MCPServerHTTP) httpClientSnapshot() *http.Client {
 }
 
 func (s *MCPServerHTTP) Initialize(ctx context.Context) error {
-	if s.Initialized() {
+	s.mu.Lock()
+	if s.initialized {
+		s.mu.Unlock()
 		return nil
 	}
+	if s.initState != nil {
+		state := s.initState
+		s.mu.Unlock()
+		select {
+		case <-state.done:
+			return state.err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	state := &mcpHTTPInitializeState{done: make(chan struct{})}
+	s.initState = state
+	s.mu.Unlock()
+
+	err := s.initialize(ctx)
+
+	s.mu.Lock()
+	state.err = err
+	if err == nil {
+		s.initialized = true
+	}
+	if s.initState == state {
+		s.initState = nil
+	}
+	close(state.done)
+	s.mu.Unlock()
+	return err
+}
+
+func (s *MCPServerHTTP) initialize(ctx context.Context) error {
 	params := map[string]interface{}{
 		"protocolVersion": "2024-11-05",
 		"clientInfo": map[string]interface{}{
@@ -105,9 +143,6 @@ func (s *MCPServerHTTP) Initialize(ctx context.Context) error {
 	if err := s.sendNotification(ctx, "initialized", map[string]interface{}{}); err != nil {
 		return fmt.Errorf("initialized notification failed: %w", err)
 	}
-	s.mu.Lock()
-	s.initialized = true
-	s.mu.Unlock()
 	return nil
 }
 

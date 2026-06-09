@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -240,6 +241,66 @@ func TestMCPServerHTTPInitializeIsIdempotent(t *testing.T) {
 	}
 	if initializeCalls != 1 {
 		t.Fatalf("initialize calls = %d, want 1", initializeCalls)
+	}
+}
+
+func TestMCPServerHTTPInitializeCoalescesConcurrentCalls(t *testing.T) {
+	initializeStarted := make(chan struct{})
+	releaseInitialize := make(chan struct{})
+	var initializeCalls atomic.Int32
+	httpClient := newMCPTestHTTPClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req jsonRPCRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		switch req.Method {
+		case "initialize":
+			if initializeCalls.Add(1) == 1 {
+				close(initializeStarted)
+			}
+			<-releaseInitialize
+			writeMCPHTTPResponse(t, w, req.ID, map[string]any{"protocolVersion": "2024-11-05"})
+		case "initialized":
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			t.Fatalf("unexpected MCP method %q", req.Method)
+		}
+	}))
+
+	server := NewMCPServerHTTP("https://mcp.test/rpc")
+	server.client = httpClient
+
+	errCh := make(chan error, 2)
+	go func() {
+		errCh <- server.Initialize(context.Background())
+	}()
+
+	select {
+	case <-initializeStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("first Initialize() did not reach server")
+	}
+
+	go func() {
+		errCh <- server.Initialize(context.Background())
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	close(releaseInitialize)
+
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-errCh:
+			if err != nil {
+				t.Fatalf("Initialize() error = %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Initialize() did not return")
+		}
+	}
+	if got := initializeCalls.Load(); got != 1 {
+		t.Fatalf("initialize calls = %d, want 1 concurrent reference initialization", got)
 	}
 }
 
