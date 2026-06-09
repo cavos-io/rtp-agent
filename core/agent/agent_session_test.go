@@ -2751,6 +2751,9 @@ func TestAgentSessionDrainRequiresRunningActivity(t *testing.T) {
 	if !errors.Is(err, ErrAgentSessionNotRunning) {
 		t.Fatalf("Drain error = %v, want ErrAgentSessionNotRunning", err)
 	}
+	if got, want := err.Error(), "AgentSession isn't running"; got != want {
+		t.Fatalf("Drain error text = %q, want %q", got, want)
+	}
 }
 
 func TestAgentSessionDrainDelegatesToActivity(t *testing.T) {
@@ -2790,6 +2793,9 @@ func TestAgentSessionInterruptRequiresRunningActivity(t *testing.T) {
 	if !errors.Is(err, ErrAgentSessionNotRunning) {
 		t.Fatalf("Interrupt error = %v, want ErrAgentSessionNotRunning", err)
 	}
+	if got, want := err.Error(), "AgentSession isn't running"; got != want {
+		t.Fatalf("Interrupt error text = %q, want %q", got, want)
+	}
 }
 
 func TestAgentSessionInterruptDelegatesToActivity(t *testing.T) {
@@ -2826,6 +2832,9 @@ func TestAgentSessionClearUserTurnRequiresRunningActivity(t *testing.T) {
 	if !errors.Is(err, ErrAgentSessionNotRunning) {
 		t.Fatalf("ClearUserTurn error = %v, want ErrAgentSessionNotRunning", err)
 	}
+	if got, want := err.Error(), "AgentSession isn't running"; got != want {
+		t.Fatalf("ClearUserTurn error text = %q, want %q", got, want)
+	}
 }
 
 func TestAgentSessionCommitUserTurnRequiresRunningActivity(t *testing.T) {
@@ -2836,6 +2845,9 @@ func TestAgentSessionCommitUserTurnRequiresRunningActivity(t *testing.T) {
 
 	if !errors.Is(err, ErrAgentSessionNotRunning) {
 		t.Fatalf("CommitUserTurn error = %v, want ErrAgentSessionNotRunning", err)
+	}
+	if got, want := err.Error(), "AgentSession isn't running"; got != want {
+		t.Fatalf("CommitUserTurn error text = %q, want %q", got, want)
 	}
 }
 
