@@ -203,6 +203,7 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		conn:      conn,
 		ctx:       ctx,
 		cancel:    cancel,
+		language:  language,
 		requestID: cavosmath.ShortUUID("stt_request_"),
 		audioCh:   make(chan *model.AudioFrame, 100),
 		eventCh:   make(chan *stt.SpeechEvent, 100),
@@ -416,6 +417,7 @@ type inferenceSTTStream struct {
 	audioCh         chan *model.AudioFrame
 	eventCh         chan *stt.SpeechEvent
 	requestID       string
+	language        string
 	mu              sync.Mutex
 	closed          bool
 	inputEnded      bool
@@ -592,8 +594,8 @@ func (s *inferenceSTTStream) transcriptLanguage(data map[string]interface{}) str
 	if language := stringFromMap(data, "language"); language != "" {
 		return language
 	}
-	if s.stt != nil && s.stt.language != "" {
-		return s.stt.language
+	if s.language != "" {
+		return s.language
 	}
 	return "en"
 }

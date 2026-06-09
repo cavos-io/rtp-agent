@@ -631,7 +631,7 @@ func TestInferenceSTTTranscriptUsesReferenceLanguageFallback(t *testing.T) {
 				eventCh: make(chan *stt.SpeechEvent, 2),
 			}
 			if tt.streamLang != "" {
-				stream.stt = &STT{language: tt.streamLang}
+				stream.language = tt.streamLang
 			}
 
 			data := map[string]interface{}{
@@ -653,6 +653,38 @@ func TestInferenceSTTTranscriptUsesReferenceLanguageFallback(t *testing.T) {
 				t.Fatalf("Language = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestInferenceSTTTranscriptLanguageUsesStreamOptionSnapshot(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{readBlock: make(chan struct{})}
+	provider := NewSTT("deepgram/nova-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	rawStream, err := provider.Stream(context.Background(), "ja")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	stream := rawStream.(*inferenceSTTStream)
+	defer stream.Close()
+
+	provider.UpdateOptions(WithSTTLanguage("id"))
+
+	stream.processTranscript(map[string]interface{}{
+		"request_id": "req-1",
+		"transcript": "hello",
+	}, false)
+
+	<-stream.eventCh
+	interim := <-stream.eventCh
+	if interim.Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("event type = %s, want interim_transcript", interim.Type)
+	}
+	if got := interim.Alternatives[0].Language; got != "ja" {
+		t.Fatalf("Language = %q, want stream creation language ja", got)
 	}
 }
 
