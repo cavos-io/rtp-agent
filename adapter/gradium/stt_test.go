@@ -78,6 +78,19 @@ func TestNewGradiumSTTUsesEnvironmentAPIKey(t *testing.T) {
 	}
 }
 
+func TestGradiumSTTRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("GRADIUM_API_KEY", "")
+	provider := NewGradiumSTT("", WithGradiumSTTModelEndpoint("://bad-url"))
+
+	_, err := provider.Stream(context.Background(), "")
+	if err == nil {
+		t.Fatal("Stream returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "GRADIUM_API_KEY") {
+		t.Fatalf("Stream error = %q, want GRADIUM_API_KEY guidance", err)
+	}
+}
+
 func TestGradiumSTTOptionsBuildReferenceSetupAndHeaders(t *testing.T) {
 	temp := 0.2
 	provider := NewGradiumSTT("test-key",

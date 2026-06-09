@@ -131,6 +131,10 @@ func (s *GradiumSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *GradiumSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if err := validateGradiumAPIKey(s.apiKey); err != nil {
+		return nil, err
+	}
+
 	if language != "" {
 		s.language = language
 	}
