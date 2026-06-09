@@ -97,6 +97,10 @@ func (s *MistralAISTT) Stream(ctx context.Context, language string) (stt.Recogni
 }
 
 func (s *MistralAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+	if err := validateMistralAISTTAPIKey(s.apiKey); err != nil {
+		return nil, err
+	}
+
 	if mistralAISTTIsRealtime(s.model) {
 		return nil, fmt.Errorf("mistralai realtime models do not support offline recognize")
 	}
@@ -162,6 +166,13 @@ func buildMistralAISTTRecognizeRequest(ctx context.Context, s *MistralAISTT, aud
 	req.Header.Set("x-api-key", s.apiKey)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	return req, nil
+}
+
+func validateMistralAISTTAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("mistral AI API key is required. Set MISTRAL_API_KEY or pass api_key")
+	}
+	return nil
 }
 
 func resolveMistralAISTTLanguage(s *MistralAISTT, language string) string {
