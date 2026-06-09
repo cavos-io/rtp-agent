@@ -24,7 +24,10 @@ const (
 	azureOpenAIAPIKeyEnv   = "AZURE_OPENAI_API_KEY"
 	azureOpenAIADTokenEnv  = "AZURE_OPENAI_AD_TOKEN"
 	openAIAPIVersionEnv    = "OPENAI_API_VERSION"
+	openRouterAPIKeyEnv    = "OPENROUTER_API_KEY"
 )
+
+const defaultOpenRouterLLMURL = "https://openrouter.ai/api/v1"
 
 type OpenAILLM struct {
 	client               *openai.Client
@@ -42,6 +45,53 @@ type OpenAILLM struct {
 }
 
 type OpenAILLMOption func(*OpenAILLM)
+
+type openRouterLLMOptions struct {
+	siteURL        string
+	appName        string
+	fallbackModels []string
+	provider       map[string]any
+	plugins        []map[string]any
+	llmOptions     []OpenAILLMOption
+}
+
+type OpenRouterLLMOption func(*openRouterLLMOptions)
+
+func WithOpenRouterSiteURL(siteURL string) OpenRouterLLMOption {
+	return func(o *openRouterLLMOptions) {
+		o.siteURL = siteURL
+	}
+}
+
+func WithOpenRouterAppName(appName string) OpenRouterLLMOption {
+	return func(o *openRouterLLMOptions) {
+		o.appName = appName
+	}
+}
+
+func WithOpenRouterFallbackModels(models []string) OpenRouterLLMOption {
+	return func(o *openRouterLLMOptions) {
+		o.fallbackModels = append([]string(nil), models...)
+	}
+}
+
+func WithOpenRouterProvider(provider map[string]any) OpenRouterLLMOption {
+	return func(o *openRouterLLMOptions) {
+		o.provider = cloneOpenAIAnyMap(provider)
+	}
+}
+
+func WithOpenRouterPlugins(plugins []map[string]any) OpenRouterLLMOption {
+	return func(o *openRouterLLMOptions) {
+		o.plugins = cloneOpenAIAnyMapSlice(plugins)
+	}
+}
+
+func WithOpenRouterLLMOptions(opts ...OpenAILLMOption) OpenRouterLLMOption {
+	return func(o *openRouterLLMOptions) {
+		o.llmOptions = append(o.llmOptions, opts...)
+	}
+}
 
 func WithOpenAILLMTemperature(temperature float64) OpenAILLMOption {
 	return func(l *OpenAILLM) {
@@ -272,6 +322,61 @@ func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	provider.client = openai.NewClientWithConfig(config)
 	provider.baseURL = config.BaseURL
 	return provider, nil
+}
+
+func NewOpenRouterLLM(apiKey, model string, opts ...OpenRouterLLMOption) (*OpenAILLM, error) {
+	return newOpenRouterLLM(apiKey, model, defaultOpenRouterLLMURL, nil, opts...)
+}
+
+func NewOpenRouterLLMWithHTTPClient(apiKey, model string, httpClient openai.HTTPDoer, opts ...OpenRouterLLMOption) (*OpenAILLM, error) {
+	return newOpenRouterLLM(apiKey, model, defaultOpenRouterLLMURL, httpClient, opts...)
+}
+
+func newOpenRouterLLM(apiKey, model, baseURL string, httpClient openai.HTTPDoer, opts ...OpenRouterLLMOption) (*OpenAILLM, error) {
+	if apiKey == "" {
+		apiKey = os.Getenv(openRouterAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("%s is required, either as argument or set %s environment variable", openRouterAPIKeyEnv, openRouterAPIKeyEnv)
+	}
+	if model == "" {
+		model = "auto"
+	}
+
+	options := &openRouterLLMOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	headers := map[string]string{}
+	if options.siteURL != "" {
+		headers["HTTP-Referer"] = options.siteURL
+	}
+	if options.appName != "" {
+		headers["X-Title"] = options.appName
+	}
+
+	body := map[string]any{}
+	if len(options.provider) > 0 {
+		body["provider"] = cloneOpenAIAnyMap(options.provider)
+	}
+	if len(options.fallbackModels) > 0 {
+		models := make([]string, 0, len(options.fallbackModels)+1)
+		models = append(models, model)
+		models = append(models, options.fallbackModels...)
+		body["models"] = models
+	}
+	if len(options.plugins) > 0 {
+		body["plugins"] = cloneOpenAIAnyMapSlice(options.plugins)
+	}
+
+	llmOptions := []OpenAILLMOption{
+		WithOpenAILLMToolChoice("auto"),
+		WithOpenAILLMExtraHeaders(headers),
+		WithOpenAILLMExtraBody(body),
+	}
+	llmOptions = append(llmOptions, options.llmOptions...)
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, baseURL, httpClient, llmOptions...), nil
 }
 
 type azureADTokenHTTPClient struct {
@@ -584,6 +689,17 @@ func cloneOpenAIAnyMap(src map[string]any) map[string]any {
 	dst := make(map[string]any, len(src))
 	for key, value := range src {
 		dst[key] = value
+	}
+	return dst
+}
+
+func cloneOpenAIAnyMapSlice(src []map[string]any) []map[string]any {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make([]map[string]any, 0, len(src))
+	for _, item := range src {
+		dst = append(dst, cloneOpenAIAnyMap(item))
 	}
 	return dst
 }

@@ -757,6 +757,84 @@ func TestNewOpenAILLMWithBaseURLAndHTTPClientUsesConfiguredClient(t *testing.T) 
 	}
 }
 
+func TestNewOpenRouterLLMMatchesReferenceHeadersAndBody(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model, err := NewOpenRouterLLMWithHTTPClient(
+		"test-key",
+		"openai/gpt-4o-mini",
+		capture,
+		WithOpenRouterSiteURL("https://app.example"),
+		WithOpenRouterAppName("Cavos Agent"),
+		WithOpenRouterFallbackModels([]string{"anthropic/claude-3.5-sonnet"}),
+		WithOpenRouterProvider(map[string]any{"order": []any{"OpenAI", "Anthropic"}}),
+		WithOpenRouterPlugins([]map[string]any{{"id": "web", "max_results": 3}}),
+	)
+	if err != nil {
+		t.Fatalf("NewOpenRouterLLMWithHTTPClient error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if got := capture.header.Get("HTTP-Referer"); got != "https://app.example" {
+		t.Fatalf("HTTP-Referer = %q, want site URL", got)
+	}
+	if got := capture.header.Get("X-Title"); got != "Cavos Agent" {
+		t.Fatalf("X-Title = %q, want app name", got)
+	}
+	if !strings.HasPrefix(capture.requestURL, "https://openrouter.ai/api/v1/chat/completions") {
+		t.Fatalf("request URL = %s, want OpenRouter chat completions endpoint", capture.requestURL)
+	}
+	for _, want := range []string{
+		`"tool_choice":"auto"`,
+		`"models":["openai/gpt-4o-mini","anthropic/claude-3.5-sonnet"]`,
+		`"provider":{"order":["OpenAI","Anthropic"]}`,
+		`"plugins":[{"id":"web","max_results":3}]`,
+	} {
+		if !strings.Contains(capture.requestBody, want) {
+			t.Fatalf("request body = %s, want %s", capture.requestBody, want)
+		}
+	}
+}
+
+func TestNewOpenRouterLLMUsesEnvironmentKeyAndForwardedOptions(t *testing.T) {
+	t.Setenv(openRouterAPIKeyEnv, "env-key")
+	model, err := NewOpenRouterLLM(
+		"",
+		"",
+		WithOpenRouterLLMOptions(
+			WithOpenAILLMTemperature(0.2),
+			WithOpenAILLMUser("caller-123"),
+		),
+	)
+	if err != nil {
+		t.Fatalf("NewOpenRouterLLM error = %v", err)
+	}
+
+	if model.Model() != "auto" {
+		t.Fatalf("Model = %q, want reference auto default", model.Model())
+	}
+	if model.Provider() != "openrouter.ai" {
+		t.Fatalf("Provider = %q, want OpenRouter host", model.Provider())
+	}
+
+	req := buildOpenAIChatCompletionRequest("auto", llm.NewChatContext(), &llm.ChatOptions{
+		ExtraParams: model.extraParams,
+		ToolChoice:  model.toolChoice,
+	})
+	if req.ToolChoice != "auto" {
+		t.Fatalf("ToolChoice = %#v, want reference auto default", req.ToolChoice)
+	}
+	if req.Temperature != 0.2 {
+		t.Fatalf("Temperature = %v, want forwarded option", req.Temperature)
+	}
+	if req.User != "caller-123" {
+		t.Fatalf("User = %q, want forwarded option", req.User)
+	}
+}
+
 type captureDeadlineHTTPClient struct {
 	err               error
 	hasDeadline       bool
