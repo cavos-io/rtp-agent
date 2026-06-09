@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
@@ -28,6 +29,7 @@ type TTS struct {
 	sampleRate        int
 	extraKwargs       map[string]any
 	fallbackModels    []FallbackModel
+	connectOptions    *APIConnectOptions
 	apiKey            string
 	apiSecret         string
 	baseURL           string
@@ -38,6 +40,8 @@ type TTS struct {
 }
 
 type TTSOption func(*TTS)
+
+type APIConnectOptions = llm.APIConnectOptions
 
 type inferenceTTSConn interface {
 	WriteJSON(v any) error
@@ -104,6 +108,12 @@ func WithTTSExtraKwargs(extra map[string]any) TTSOption {
 func WithTTSFallbackModels(models ...FallbackModel) TTSOption {
 	return func(t *TTS) {
 		t.fallbackModels = cloneTTSFallbackModels(models)
+	}
+}
+
+func WithTTSConnectOptions(options APIConnectOptions) TTSOption {
+	return func(t *TTS) {
+		t.connectOptions = &options
 	}
 }
 
@@ -227,7 +237,7 @@ func (t *TTS) connectTTSWebsocket(ctx context.Context) (inferenceTTSConn, error)
 		return nil, err
 	}
 
-	modelName, createParams := ttsSessionCreateParams(t.model, t.voice, t.language, t.encoding, t.sampleRate, t.extraKwargs, t.fallbackModels)
+	modelName, createParams := ttsSessionCreateParams(t.model, t.voice, t.language, t.encoding, t.sampleRate, t.extraKwargs, t.fallbackModels, t.connectOptions)
 
 	wsURL, err := url.Parse(t.baseURL + "/tts")
 	if err != nil {
@@ -262,7 +272,7 @@ func defaultInferenceTTSDialer(ctx context.Context, endpoint string, header http
 	return conn, nil
 }
 
-func ttsSessionCreateParams(model string, voice string, language string, encoding string, sampleRate int, extra map[string]any, fallback []FallbackModel) (string, map[string]interface{}) {
+func ttsSessionCreateParams(model string, voice string, language string, encoding string, sampleRate int, extra map[string]any, fallback []FallbackModel, connectOptions *APIConnectOptions) (string, map[string]interface{}) {
 	modelName, voice := ttsModelAndVoice(model, voice)
 	if encoding == "" {
 		encoding = "pcm_s16le"
@@ -288,6 +298,12 @@ func ttsSessionCreateParams(model string, voice string, language string, encodin
 	if len(fallback) > 0 {
 		createParams["fallback"] = map[string]interface{}{
 			"models": ttsFallbackModelsPayload(fallback),
+		}
+	}
+	if connectOptions != nil {
+		createParams["connection"] = map[string]interface{}{
+			"timeout": connectOptions.Timeout.Seconds(),
+			"retries": connectOptions.MaxRetry,
 		}
 	}
 	return modelName, createParams

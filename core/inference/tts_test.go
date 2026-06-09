@@ -601,6 +601,45 @@ func TestInferenceTTSSessionCreateUsesReferenceAudioOptions(t *testing.T) {
 	}
 }
 
+func TestInferenceTTSSessionCreateUsesReferenceConnectOptions(t *testing.T) {
+	writes := make(chan map[string]any, 2)
+	provider := NewTTS("cartesia/sonic-3", "key", "secret",
+		WithTTSConnectOptions(APIConnectOptions{
+			Timeout:  1500 * time.Millisecond,
+			MaxRetry: 2,
+		}),
+	)
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{
+			onWriteJSON: func(msg map[string]any) {
+				writes <- msg
+			},
+		}, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	session := <-writes
+	if session["type"] != "session.create" {
+		t.Fatalf("first write type = %v, want session.create", session["type"])
+	}
+	connection, ok := session["connection"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("connection = %#v, want map", session["connection"])
+	}
+	if connection["timeout"] != 1.5 {
+		t.Fatalf("connection.timeout = %#v, want 1.5", connection["timeout"])
+	}
+	if connection["retries"] != 2 {
+		t.Fatalf("connection.retries = %#v, want 2", connection["retries"])
+	}
+}
+
 func TestInferenceTTSFallbackModelsMatchReferenceSessionCreate(t *testing.T) {
 	writes := make(chan map[string]any, 4)
 	provider := NewTTS("cartesia/sonic-3", "key", "secret", WithTTSFallbackModels(
@@ -661,7 +700,7 @@ func TestInferenceTTSFallbackModelsMatchReferenceSessionCreate(t *testing.T) {
 }
 
 func TestInferenceTTSSessionCreateParamsMatchReferenceShape(t *testing.T) {
-	modelName, params := ttsSessionCreateParams("cartesia/sonic-3:voice-id", "", "", "", 0, nil, nil)
+	modelName, params := ttsSessionCreateParams("cartesia/sonic-3:voice-id", "", "", "", 0, nil, nil, nil)
 
 	if modelName != "cartesia/sonic-3" {
 		t.Fatalf("modelName = %q, want cartesia/sonic-3", modelName)
