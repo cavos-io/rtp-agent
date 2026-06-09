@@ -118,6 +118,9 @@ func (t *NeuphonicTTS) SampleRate() int  { return t.sampleRate }
 func (t *NeuphonicTTS) NumChannels() int { return 1 }
 
 func (t *NeuphonicTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if err := validateNeuphonicAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
 	req, err := buildNeuphonicTTSRequest(ctx, t, text)
 	if err != nil {
 		return nil, err
@@ -164,6 +167,9 @@ func buildNeuphonicTTSRequest(ctx context.Context, t *NeuphonicTTS, text string)
 }
 
 func (t *NeuphonicTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if err := validateNeuphonicAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildNeuphonicTTSWebsocketURL(t).String(), buildNeuphonicTTSWebsocketHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial neuphonic tts websocket: %w", err)
@@ -180,6 +186,13 @@ func (t *NeuphonicTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error)
 	}
 	go stream.readLoop()
 	return stream, nil
+}
+
+func validateNeuphonicAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("neuphonic API key or JWT token is required, either as argument or set NEUPHONIC_API_KEY environment variable")
+	}
+	return nil
 }
 
 func buildNeuphonicTTSWebsocketURL(t *NeuphonicTTS) *url.URL {
