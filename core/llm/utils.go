@@ -543,7 +543,7 @@ func functionOutputRepr(value any) string {
 	}
 	switch v := value.(type) {
 	case string:
-		return "'" + strings.ReplaceAll(strings.ReplaceAll(v, `\`, `\\`), `'`, `\'`) + "'"
+		return functionOutputStringRepr(v)
 	case bool:
 		if v {
 			return "True"
@@ -588,6 +588,17 @@ func functionOutputRepr(value any) string {
 		return "{" + strings.Join(parts, ", ") + "}"
 	}
 	return fmt.Sprint(value)
+}
+
+func functionOutputStringRepr(value string) string {
+	escaped := strings.NewReplacer(
+		`\`, `\\`,
+		"\n", `\n`,
+		"\r", `\r`,
+		"\t", `\t`,
+		`'`, `\'`,
+	).Replace(value)
+	return "'" + escaped + "'"
 }
 
 func functionOutputComplexRepr(value complex128, bitSize int) string {

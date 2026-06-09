@@ -305,6 +305,7 @@ func TestMakeFunctionCallOutputStringifiesValidOutputs(t *testing.T) {
 		{name: "true", output: true, want: "True"},
 		{name: "complex", output: complex(1, 2), want: "(1+2j)"},
 		{name: "list", output: []any{1, "x", true}, want: "[1, 'x', True]"},
+		{name: "list string newline", output: []any{"line\nnext"}, want: "['line\\nnext']"},
 		{name: "dict", output: map[string]any{"ok": true}, want: "{'ok': True}"},
 	}
 
