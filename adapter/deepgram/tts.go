@@ -83,6 +83,9 @@ func (t *DeepgramTTS) SampleRate() int  { return t.sampleRate }
 func (t *DeepgramTTS) NumChannels() int { return 1 }
 
 func (t *DeepgramTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if err := validateDeepgramTTSAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
 	u, jsonBody := buildDeepgramTTSSynthesizeRequest(t, text)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", u, bytes.NewBuffer(jsonBody))
@@ -125,6 +128,9 @@ func buildDeepgramTTSSynthesizeRequest(t *DeepgramTTS, text string) (string, []b
 }
 
 func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if err := validateDeepgramTTSAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
 	header := make(map[string][]string)
 	header["Authorization"] = []string{"Token " + t.apiKey}
 
@@ -143,6 +149,13 @@ func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 	go stream.readLoop()
 
 	return stream, nil
+}
+
+func validateDeepgramTTSAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("deepgram API key required. Set DEEPGRAM_API_KEY or provide api_key")
+	}
+	return nil
 }
 
 func buildDeepgramTTSStreamURL(t *DeepgramTTS) string {
