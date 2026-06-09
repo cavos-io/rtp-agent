@@ -16,7 +16,6 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
-	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/gorilla/websocket"
@@ -555,7 +554,12 @@ func (s *inferenceTTSStream) run() {
 		default:
 			_, msg, err := s.conn.ReadMessage()
 			if err != nil {
-				logger.Logger.Errorw("LiveKit Inference TTS disconnected", err)
+				select {
+				case <-s.ctx.Done():
+					return
+				default:
+					s.setStreamError(fmt.Errorf("%s: %w", "Gateway connection closed unexpectedly", err))
+				}
 				return
 			}
 
