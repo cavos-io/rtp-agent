@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -103,6 +104,9 @@ func WithFireworksTimestampGranularities(granularities []string) FireworksSTTOpt
 }
 
 func NewFireworksSTT(apiKey string, opts ...FireworksSTTOption) *FireworksSTT {
+	if apiKey == "" {
+		apiKey = os.Getenv("FIREWORKS_API_KEY")
+	}
 	provider := &FireworksSTT{
 		apiKey:             apiKey,
 		baseURL:            defaultBaseURL,
