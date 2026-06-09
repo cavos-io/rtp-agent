@@ -35,6 +35,21 @@ func TestNewTavusAvatarUsesReferenceDefaults(t *testing.T) {
 	}
 }
 
+func TestNewTavusAvatarUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("TAVUS_API_KEY", "env-key")
+
+	avatar := NewTavusAvatar("")
+
+	if avatar.apiKey != "env-key" {
+		t.Fatalf("apiKey = %q, want env key", avatar.apiKey)
+	}
+
+	explicit := NewTavusAvatar("explicit-key")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("apiKey = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestTavusAvatarUpdateStateRecordsReferenceState(t *testing.T) {
 	avatar := NewTavusAvatar("test-key")
 
