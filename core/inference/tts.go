@@ -637,7 +637,7 @@ func inferenceTTSTimedTranscript(data map[string]interface{}) ([]tts.TimedString
 		for _, raw := range words {
 			word, ok := raw.(map[string]interface{})
 			if !ok {
-				continue
+				return nil, fmt.Errorf("invalid output_alignment word entry")
 			}
 			text, ok := word["word"].(string)
 			if !ok {
@@ -664,7 +664,7 @@ func inferenceTTSTimedTranscript(data map[string]interface{}) ([]tts.TimedString
 		for _, raw := range chars {
 			char, ok := raw.(map[string]interface{})
 			if !ok {
-				continue
+				return nil, fmt.Errorf("invalid output_alignment char entry")
 			}
 			text, ok := char["char"].(string)
 			if !ok {
