@@ -126,6 +126,9 @@ func (t *LMNTTTS) SampleRate() int  { return t.sampleRate }
 func (t *LMNTTTS) NumChannels() int { return 1 }
 
 func (t *LMNTTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if err := validateLMNTAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
 	req, err := buildLMNTTTSRequest(ctx, t, text)
 	if err != nil {
 		return nil, err
@@ -171,6 +174,13 @@ func buildLMNTTTSRequest(ctx context.Context, t *LMNTTTS, text string) (*http.Re
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", t.apiKey)
 	return req, nil
+}
+
+func validateLMNTAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("lmnt API key is required, either as argument or set LMNT_API_KEY environment variable")
+	}
+	return nil
 }
 
 func (t *LMNTTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
