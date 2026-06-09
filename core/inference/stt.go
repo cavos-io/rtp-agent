@@ -15,7 +15,6 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
-	"github.com/cavos-io/rtp-agent/library/logger"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/gorilla/websocket"
 )
@@ -685,7 +684,12 @@ func (s *inferenceSTTStream) run() {
 		default:
 			_, msg, err := s.conn.ReadMessage()
 			if err != nil {
-				logger.Logger.Errorw("LiveKit Inference STT disconnected", err)
+				select {
+				case <-s.ctx.Done():
+					return
+				default:
+					s.setStreamError(fmt.Errorf("LiveKit Inference STT connection closed unexpectedly: %w", err))
+				}
 				return
 			}
 

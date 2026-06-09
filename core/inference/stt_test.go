@@ -904,6 +904,31 @@ func TestInferenceSTTStreamErrorMessageReturnsNextError(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTUnexpectedCloseReturnsNextError(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{
+		readCh: make(chan []byte),
+	}
+	close(conn.readCh)
+	provider := NewSTT("livekit/stt", "key", "secret")
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next() error = nil, want unexpected close error")
+	}
+	if !strings.Contains(err.Error(), "LiveKit Inference STT connection closed unexpectedly") {
+		t.Fatalf("Next() error = %v, want unexpected close error", err)
+	}
+}
+
 type fakeInferenceWebsocketConn struct {
 	writes    []map[string]interface{}
 	closed    bool
