@@ -60,6 +60,17 @@ func TestNewSonioxSTTUsesEnvironmentAPIKey(t *testing.T) {
 	}
 }
 
+func TestSonioxSTTStreamRequiresAPIKeyBeforeDial(t *testing.T) {
+	t.Setenv("SONIOX_API_KEY", "")
+	provider := NewSonioxSTT("", WithSonioxBaseURL("://bad-url"))
+
+	_, err := provider.Stream(context.Background(), "")
+
+	if err == nil || !strings.Contains(err.Error(), "SONIOX_API_KEY") {
+		t.Fatalf("Stream error = %v, want missing API key error", err)
+	}
+}
+
 func TestSonioxSTTOptionsBuildReferenceConfig(t *testing.T) {
 	provider := NewSonioxSTT("test-key",
 		WithSonioxBaseURL("ws://soniox.example/ws"),

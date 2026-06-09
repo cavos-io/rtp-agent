@@ -1,6 +1,7 @@
 package soniox
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"strings"
@@ -54,6 +55,17 @@ func TestNewSonioxTTSUsesEnvironmentAPIKey(t *testing.T) {
 	provider = NewSonioxTTS("explicit-key")
 	if provider.apiKey != "explicit-key" {
 		t.Fatalf("apiKey = %q, want explicit key", provider.apiKey)
+	}
+}
+
+func TestSonioxTTSStreamRequiresAPIKeyBeforeDial(t *testing.T) {
+	t.Setenv("SONIOX_API_KEY", "")
+	provider := NewSonioxTTS("", WithSonioxTTSWebsocketURL("://bad-url"))
+
+	_, err := provider.Stream(context.Background())
+
+	if err == nil || !strings.Contains(err.Error(), "SONIOX_API_KEY") {
+		t.Fatalf("Stream error = %v, want missing API key error", err)
 	}
 }
 

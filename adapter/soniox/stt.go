@@ -195,6 +195,9 @@ func (s *SonioxSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *SonioxSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if err := validateSonioxAPIKey(s.apiKey); err != nil {
+		return nil, err
+	}
 	payload, err := buildSonioxConfigJSON(s)
 	if err != nil {
 		return nil, err
@@ -225,6 +228,13 @@ func (s *SonioxSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 
 func (s *SonioxSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	return nil, fmt.Errorf("soniox speech-to-text api does not support single frame recognition")
+}
+
+func validateSonioxAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("soniox API key is required. Set SONIOX_API_KEY or pass api_key")
+	}
+	return nil
 }
 
 func buildSonioxConfig(s *SonioxSTT) map[string]any {
