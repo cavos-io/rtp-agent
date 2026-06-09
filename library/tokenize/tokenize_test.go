@@ -54,6 +54,39 @@ func TestSplitSentencesUsesReferenceWebsiteSuffixes(t *testing.T) {
 	}
 }
 
+func TestSplitSentencesUsesReferenceTitlePrefixes(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{
+			name: "professor title is not protected",
+			text: "Please consult Prof. Smith for details. Next sentence follows here.",
+			want: []string{"Please consult Prof.", "Smith for details. Next sentence follows here."},
+		},
+		{
+			name: "captain title is not protected",
+			text: "Please consult Capt. Smith for details. Next sentence follows here.",
+			want: []string{"Please consult Capt.", "Smith for details. Next sentence follows here."},
+		},
+		{
+			name: "doctor title remains protected",
+			text: "Please consult Dr. Smith for details. Next sentence follows here.",
+			want: []string{"Please consult Dr. Smith for details.", "Next sentence follows here."},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NewBasicSentenceTokenizer().Tokenize(tt.text, "")
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("Tokenize() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSplitSentencesKeepsClosingQuoteAfterCJKPunctuation(t *testing.T) {
 	tokens := NewBasicSentenceTokenizer().Tokenize("他说：“你好。” 下一句。", "")
 

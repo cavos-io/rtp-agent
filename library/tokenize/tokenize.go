@@ -100,7 +100,7 @@ func (t *BasicWordTokenizer) FormatWords(words []string) string {
 
 func SplitSentences(text string, minSentenceLen int, retainFormat bool) []TokenData {
 	alphabets := regexp.MustCompile(`([A-Za-z])`)
-	prefixes := regexp.MustCompile(`(Mr|St|Mrs|Ms|Dr|Prof|Capt|Cpt|Lt|Col|Gen|Rep|Sen|Gov|Sr|Jr|Maj|Sgt|Adm|Rev|Hon)\.`)
+	prefixes := regexp.MustCompile(`(Mr|St|Mrs|Ms|Dr)\.`)
 	suffixes := regexp.MustCompile(`(Inc|Ltd|Jr|Sr|Co|Corp|LLC)`)
 	starters := regexp.MustCompile(`(Mr|Mrs|Ms|Dr|Prof|Capt|Cpt|Lt|He\s|She\s|It\s|They\s|Their\s|Our\s|We\s|But\s|However\s|That\s|This\s|Wherever|Moreover|Furthermore|Therefore|Consequently)`)
 	acronyms := regexp.MustCompile(`([A-Z]\.[A-Z]\.(?:[A-Z]\.)?)`)
