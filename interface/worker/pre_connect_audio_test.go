@@ -85,6 +85,25 @@ func TestPreConnectAudioStaleBufferReturnsEmptyFrames(t *testing.T) {
 	}
 }
 
+func TestPreConnectAudioAfterConnectSkipsWait(t *testing.T) {
+	handler := NewPreConnectAudioHandler(nil, time.Second)
+	handler.afterConnect = true
+
+	done := make(chan []*model.AudioFrame, 1)
+	go func() {
+		done <- handler.WaitForData(context.Background(), "track-late")
+	}()
+
+	select {
+	case frames := <-done:
+		if frames != nil {
+			t.Fatalf("WaitForData() frames = %#v, want nil after room connection", frames)
+		}
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("WaitForData() blocked after room connection")
+	}
+}
+
 func TestPreConnectAudioRawPCMUsesReferenceByteStreamFlush(t *testing.T) {
 	data := make([]byte, 24)
 	for i := 0; i < 12; i++ {
