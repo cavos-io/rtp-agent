@@ -82,6 +82,9 @@ func (t *ResembleTTS) SampleRate() int  { return t.sampleRate }
 func (t *ResembleTTS) NumChannels() int { return 1 }
 
 func (t *ResembleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if err := validateResembleAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
 	req, err := buildResembleTTSRequest(ctx, t, text)
 	if err != nil {
 		return nil, err
@@ -130,6 +133,9 @@ func buildResembleTTSRequest(ctx context.Context, t *ResembleTTS, text string) (
 }
 
 func (t *ResembleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if err := validateResembleAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildResembleTTSWebsocketURL(), buildResembleTTSWebsocketHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial resemble tts websocket: %w", err)
@@ -145,6 +151,13 @@ func (t *ResembleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 	}
 	go stream.readLoop()
 	return stream, nil
+}
+
+func validateResembleAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("resemble API key is required, either as argument or set RESEMBLE_API_KEY environment variable")
+	}
+	return nil
 }
 
 func buildResembleTTSWebsocketURL() string {
