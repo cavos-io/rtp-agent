@@ -94,6 +94,10 @@ func (t *ElevenLabsTTS) NumChannels() int { return 1 }
 
 // Synthesize performs a full HTTP POST for non-streaming scenarios.
 func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if err := validateElevenLabsAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
+
 	apiURL, jsonBody := buildElevenLabsSynthesizeRequest(t, text)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewBuffer(jsonBody))
@@ -181,6 +185,10 @@ func (s *elevenLabsChunkedStream) Close() error {
 
 // Stream establishes a high-performance WebSocket connection to ElevenLabs for low-latency streaming TTS.
 func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if err := validateElevenLabsAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
+
 	header := make(http.Header)
 	header.Set("xi-api-key", t.apiKey)
 

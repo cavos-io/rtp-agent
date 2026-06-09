@@ -1,9 +1,11 @@
 package elevenlabs
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -60,6 +62,31 @@ func TestNewElevenLabsTTSUsesFallbackEnvironmentAPIKey(t *testing.T) {
 
 	if provider.apiKey != "fallback-env-key" {
 		t.Fatalf("api key = %q, want fallback env key", provider.apiKey)
+	}
+}
+
+func TestElevenLabsTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("ELEVENLABS_API_KEY", "")
+	t.Setenv("ELEVEN_API_KEY", "")
+	provider, err := NewElevenLabsTTS("", "", "", WithElevenLabsBaseURL("://bad-url"))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	_, err = provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("Synthesize returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "ELEVEN_API_KEY") {
+		t.Fatalf("Synthesize error = %q, want ELEVEN_API_KEY guidance", err)
+	}
+
+	_, err = provider.Stream(context.Background())
+	if err == nil {
+		t.Fatal("Stream returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "ELEVEN_API_KEY") {
+		t.Fatalf("Stream error = %q, want ELEVEN_API_KEY guidance", err)
 	}
 }
 
