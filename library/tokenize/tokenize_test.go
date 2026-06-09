@@ -26,6 +26,34 @@ func TestSplitSentencesPreservesDecimalNumbers(t *testing.T) {
 	}
 }
 
+func TestSplitSentencesUsesReferenceWebsiteSuffixes(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{
+			name: "reference suffix remains protected",
+			text: "Please visit the service at example.io. Next sentence follows here.",
+			want: []string{"Please visit the service at example.io.", "Next sentence follows here."},
+		},
+		{
+			name: "non reference suffix is not protected",
+			text: "Please visit the service at example.dev. Next sentence follows here.",
+			want: []string{"Please visit the service at example.", "dev. Next sentence follows here."},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NewBasicSentenceTokenizer().Tokenize(tt.text, "")
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("Tokenize() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSplitSentencesKeepsClosingQuoteAfterCJKPunctuation(t *testing.T) {
 	tokens := NewBasicSentenceTokenizer().Tokenize("他说：“你好。” 下一句。", "")
 
