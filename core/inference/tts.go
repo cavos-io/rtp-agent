@@ -295,6 +295,7 @@ func (s *inferenceTTSStream) run() {
 				"transcript": tok.Token + " ",
 				"generation_config": map[string]interface{}{
 					"model": s.tts.model,
+					"voice": s.tts.voice,
 				},
 			}
 
