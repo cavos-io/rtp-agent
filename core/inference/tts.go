@@ -293,6 +293,7 @@ func (s *inferenceTTSStream) run() {
 			tokenPkt := map[string]interface{}{
 				"type":       "input_transcript",
 				"transcript": tok.Token + " ",
+				"extra":      map[string]interface{}{},
 				"generation_config": map[string]interface{}{
 					"model": s.tts.model,
 					"voice": s.tts.voice,

@@ -274,6 +274,53 @@ func TestInferenceTTSInputTranscriptIncludesReferenceVoice(t *testing.T) {
 	}
 }
 
+func TestInferenceTTSInputTranscriptIncludesReferenceExtra(t *testing.T) {
+	writes := make(chan map[string]any, 4)
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{
+			onWriteJSON: func(msg map[string]any) {
+				writes <- msg
+			},
+		}, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	var input map[string]any
+	deadline := time.After(time.Second)
+	for input == nil {
+		select {
+		case msg := <-writes:
+			if msg["type"] == "input_transcript" {
+				input = msg
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for input_transcript")
+		}
+	}
+
+	extra, ok := input["extra"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("extra = %#v, want map", input["extra"])
+	}
+	if len(extra) != 0 {
+		t.Fatalf("extra = %#v, want empty map", extra)
+	}
+}
+
 func TestInferenceTTSSessionCreateParamsMatchReferenceShape(t *testing.T) {
 	modelName, params := ttsSessionCreateParams("cartesia/sonic-3:voice-id", "")
 
