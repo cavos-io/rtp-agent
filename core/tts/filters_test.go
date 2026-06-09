@@ -68,6 +68,15 @@ func TestFilterMarkdownRemovesSingleCharacterStrikethrough(t *testing.T) {
 	}
 }
 
+func TestApplyTextTransformsRemovesEndCallToolMarkers(t *testing.T) {
+	input := "Goodbye (end_call). [endcall] {END_CALL}"
+	want := "Goodbye .  "
+
+	if got := ApplyTextTransforms(input); got != want {
+		t.Fatalf("ApplyTextTransforms() = %q, want %q", got, want)
+	}
+}
+
 func TestTextTransformBufferYieldsBeforeTrailingSplitToken(t *testing.T) {
 	buffer := NewTextTransformBuffer()
 
@@ -94,6 +103,22 @@ func TestTextTransformBufferFiltersMarkdownAcrossChunks(t *testing.T) {
 	for _, chunk := range chunks {
 		if strings.Contains(chunk, "**") {
 			t.Fatalf("chunk %q leaked markdown markers; chunks = %#v", chunk, chunks)
+		}
+	}
+}
+
+func TestTextTransformBufferFiltersEndCallToolMarkersAcrossChunks(t *testing.T) {
+	buffer := NewTextTransformBuffer()
+
+	chunks := append(buffer.Push("Goodbye (end_"), buffer.Push("call).")...)
+	chunks = append(chunks, buffer.Flush()...)
+
+	if got, want := strings.Join(chunks, ""), "Goodbye ."; got != want {
+		t.Fatalf("joined output = %q, want %q; chunks = %#v", got, want, chunks)
+	}
+	for _, chunk := range chunks {
+		if strings.Contains(strings.ToLower(chunk), "end_call") || strings.Contains(strings.ToLower(chunk), "endcall") {
+			t.Fatalf("chunk %q leaked tool marker; chunks = %#v", chunk, chunks)
 		}
 	}
 }
