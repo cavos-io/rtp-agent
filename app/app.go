@@ -1498,21 +1498,27 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 		return nil
 	}
 	if ctx != nil {
-		if ctx.Room == nil {
-			if err := ctx.Connect(context.Background(), nil); err != nil {
+		roomOptions := a.RoomOptions
+		if roomOptions.DeleteRoom == nil {
+			roomOptions.DeleteRoom = func(deleteCtx context.Context, roomName string) error {
+				_, err := ctx.DeleteRoom(deleteCtx, roomName)
 				return err
 			}
 		}
+		var roomIO *worker.RoomIO
+		if ctx.Room == nil {
+			roomIO = worker.NewRoomIO(nil, a.Session, roomOptions)
+			if err := ctx.Connect(context.Background(), roomIO.GetCallback()); err != nil {
+				_ = roomIO.Close()
+				return err
+			}
+			roomIO.AttachRoom(ctx.Room)
+		}
 		if ctx.Room != nil {
 			a.Session.Room = ctx.Room
-			roomOptions := a.RoomOptions
-			if roomOptions.DeleteRoom == nil {
-				roomOptions.DeleteRoom = func(deleteCtx context.Context, roomName string) error {
-					_, err := ctx.DeleteRoom(deleteCtx, roomName)
-					return err
-				}
+			if roomIO == nil {
+				roomIO = worker.NewRoomIO(ctx.Room, a.Session, roomOptions)
 			}
-			roomIO := worker.NewRoomIO(ctx.Room, a.Session, roomOptions)
 			a.RoomIO = roomIO
 			if err := a.startAudioRecorder(ctx, roomIO); err != nil {
 				return err
