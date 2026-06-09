@@ -275,7 +275,7 @@ func (s *inferenceSTTStream) buildSpeechData(data map[string]interface{}) stt.Sp
 		Text:       stringFromMap(data, "transcript"),
 		Language:   s.transcriptLanguage(data),
 		SpeakerID:  stringFromMap(data, "speaker_id"),
-		Confidence: floatFromMap(data, "confidence"),
+		Confidence: floatFromMapDefault(data, "confidence", 1.0),
 	}
 
 	start := floatFromMap(data, "start")
@@ -324,6 +324,14 @@ func stringFromMap(data map[string]interface{}, key string) string {
 
 func floatFromMap(data map[string]interface{}, key string) float64 {
 	value, _ := data[key].(float64)
+	return value
+}
+
+func floatFromMapDefault(data map[string]interface{}, key string, fallback float64) float64 {
+	value, ok := data[key].(float64)
+	if !ok {
+		return fallback
+	}
 	return value
 }
 

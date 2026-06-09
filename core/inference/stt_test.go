@@ -398,6 +398,26 @@ func TestInferenceSTTTranscriptUsesReferenceLanguageFallback(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTTranscriptUsesReferenceConfidenceDefault(t *testing.T) {
+	stream := &inferenceSTTStream{
+		eventCh: make(chan *stt.SpeechEvent, 2),
+	}
+
+	stream.processTranscript(map[string]interface{}{
+		"request_id": "req-1",
+		"transcript": "hello",
+	}, false)
+
+	<-stream.eventCh
+	interim := <-stream.eventCh
+	if interim.Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("event type = %s, want interim_transcript", interim.Type)
+	}
+	if got := interim.Alternatives[0].Confidence; got != 1.0 {
+		t.Fatalf("Confidence = %v, want 1.0", got)
+	}
+}
+
 func TestInferenceSTTPreflightTranscriptRequiresActiveSpeech(t *testing.T) {
 	stream := &inferenceSTTStream{
 		eventCh: make(chan *stt.SpeechEvent, 3),
