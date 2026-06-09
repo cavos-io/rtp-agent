@@ -599,7 +599,7 @@ func applyConnectArgs(server *worker.AgentServer, args ConnectArgs) error {
 }
 
 func parseConsoleArgs(argv []string) (ConsoleArgs, error) {
-	args := ConsoleArgs{Mode: ConsoleModeText, LogLevel: "DEBUG"}
+	args := ConsoleArgs{Mode: ConsoleModeAudio, LogLevel: "DEBUG"}
 	for i := 2; i < len(argv); i++ {
 		switch argv[i] {
 		case "--text":
