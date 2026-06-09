@@ -154,6 +154,26 @@ func TestJudgeEvaluateCarriesResolvedInstructions(t *testing.T) {
 	}
 }
 
+func TestJudgeEvaluateReferenceExcludesInstructionMessages(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "compare this"})
+	reference := llm.NewChatContext()
+	reference.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleSystem, Text: "hidden rubric"})
+	reference.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "visible reference"})
+	evaluator := &recordingEvalLLM{}
+	judge := NewJudge("reference", "compare the answer", nil)
+
+	if _, err := judge.Evaluate(context.Background(), chatCtx, reference, evaluator); err != nil {
+		t.Fatalf("Evaluate() error = %v", err)
+	}
+	if contains(evaluator.prompt, "system: hidden rubric") {
+		t.Fatalf("prompt included reference instruction message: %q", evaluator.prompt)
+	}
+	if !contains(evaluator.prompt, "user: visible reference") {
+		t.Fatalf("prompt = %q, want visible reference message", evaluator.prompt)
+	}
+}
+
 func containsAll(s string, parts []string) bool {
 	for _, part := range parts {
 		if !contains(s, part) {

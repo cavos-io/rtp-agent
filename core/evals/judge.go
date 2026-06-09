@@ -56,6 +56,7 @@ func (j *Judge) Evaluate(ctx context.Context, chatCtx *llm.ChatContext, referenc
 
 	prompt := fmt.Sprintf("Criteria: %s\n\nConversation:\n%s", instructions, formatChatCtx(chatCtx))
 	if reference != nil {
+		reference = reference.Copy(llm.ChatContextCopyOptions{ExcludeInstructions: true})
 		prompt += fmt.Sprintf("\n\nReference:\n%s", formatChatCtx(reference))
 	}
 	prompt += "\n\nEvaluate if the conversation meets the criteria."
