@@ -355,7 +355,7 @@ func HandoffJudge(llmInstance llm.LLM) Evaluator {
 func ToolUseJudge(llmInstance llm.LLM) Evaluator {
 	return NewJudge(
 		"tool_use",
-		"The agent must use tools correctly when needed. Fail only if the agent should have called a tool but didn't, called a tool with incorrect or missing parameters, called an inappropriate tool for the task, misinterpreted or ignored the tool's output, or failed to handle tool errors gracefully.",
+		"The agent must use tools correctly when needed. Pass if no tools were needed for the conversation (e.g., simple greetings, user declined service, or no actionable request was made). Fail only if the agent should have called a tool but didn't, called a tool with incorrect or missing parameters, called an inappropriate tool for the task, misinterpreted or ignored the tool's output, or failed to handle tool errors gracefully (e.g., retrying, informing user, or escalating).",
 		llmInstance,
 	)
 }

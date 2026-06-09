@@ -209,6 +209,27 @@ func TestTaskCompletionJudgeEvaluateMatchesReferencePromptShape(t *testing.T) {
 	}
 }
 
+func TestToolUseJudgeInstructionsMatchReferenceNoToolNeededPass(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "hello"})
+	evaluator := &recordingEvalLLM{arguments: `{"verdict":"pass","reasoning":"no tool needed"}`}
+	judge := ToolUseJudge(nil)
+
+	result, err := judge.Evaluate(context.Background(), chatCtx, nil, evaluator)
+	if err != nil {
+		t.Fatalf("Evaluate() error = %v", err)
+	}
+	if !result.Passed() {
+		t.Fatalf("Verdict = %q, want pass", result.Verdict)
+	}
+	if !contains(result.Instructions, "Pass if no tools were needed for the conversation") {
+		t.Fatalf("Instructions = %q, want reference no-tools-needed pass clause", result.Instructions)
+	}
+	if !contains(evaluator.prompt, "Pass if no tools were needed for the conversation") {
+		t.Fatalf("prompt = %q, want reference no-tools-needed pass clause", evaluator.prompt)
+	}
+}
+
 func TestJudgeEvaluateReferenceExcludesInstructionMessages(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "compare this"})
