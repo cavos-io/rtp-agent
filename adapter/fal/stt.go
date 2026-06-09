@@ -79,6 +79,10 @@ func (s *FalSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 }
 
 func (s *FalSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+	if err := validateFalSTTAPIKey(s.apiKey); err != nil {
+		return nil, err
+	}
+
 	// For Fal, we typically need to provide an audio URL or base64 encoded data
 	var buf bytes.Buffer
 	for _, f := range frames {
@@ -114,6 +118,13 @@ func (s *FalSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 			{Text: result.Text},
 		},
 	}, nil
+}
+
+func validateFalSTTAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("fal AI API key is required. It should be set with env FAL_KEY")
+	}
+	return nil
 }
 
 func buildFalSTTRequest(ctx context.Context, s *FalSTT, audio []byte, language string) (*http.Request, error) {

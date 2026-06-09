@@ -21,9 +21,13 @@ func NewGoogleLLM(apiKey string, model string) (*GoogleLLM, error) {
 	if model == "" {
 		model = "gemini-2.5-flash"
 	}
+	resolvedAPIKey := resolveGoogleAPIKey(apiKey)
+	if resolvedAPIKey == "" {
+		return nil, errors.New("google API key is required either via api_key or GOOGLE_API_KEY environment variable")
+	}
 	ctx := context.Background()
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey:  resolveGoogleAPIKey(apiKey),
+		APIKey:  resolvedAPIKey,
 		Backend: genai.BackendGeminiAPI,
 	})
 	if err != nil {

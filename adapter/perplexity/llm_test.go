@@ -1,6 +1,12 @@
 package perplexity
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/cavos-io/rtp-agent/core/llm"
+)
 
 func TestNewPerplexityLLMDefaultsMatchReference(t *testing.T) {
 	provider := NewPerplexityLLM("test-key", "")
@@ -29,5 +35,24 @@ func TestNewPerplexityLLMUsesEnvironmentAPIKey(t *testing.T) {
 	}
 	if got := resolvePerplexityAPIKey("explicit-key"); got != "explicit-key" {
 		t.Fatalf("resolved API key = %q, want explicit key", got)
+	}
+}
+
+func TestPerplexityLLMRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("PERPLEXITY_API_KEY", "")
+	provider := NewPerplexityLLM("", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	_, err := provider.Chat(ctx, chatCtx)
+	if err == nil {
+		t.Fatal("Chat returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "PERPLEXITY_API_KEY") {
+		t.Fatalf("Chat error = %q, want PERPLEXITY_API_KEY guidance", err)
 	}
 }

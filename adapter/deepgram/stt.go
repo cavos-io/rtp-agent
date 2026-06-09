@@ -198,6 +198,10 @@ func (s *DeepgramSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.RecognizeStream, error) {
+	if err := validateDeepgramSTTAPIKey(s.apiKey); err != nil {
+		return nil, err
+	}
+
 	languageStr = language.NormalizeLanguage(languageStr)
 
 	header := make(http.Header)
@@ -224,6 +228,10 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 }
 
 func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, languageStr string) (*stt.SpeechEvent, error) {
+	if err := validateDeepgramSTTAPIKey(s.apiKey); err != nil {
+		return nil, err
+	}
+
 	languageStr = language.NormalizeLanguage(languageStr)
 
 	var buf bytes.Buffer
@@ -256,6 +264,13 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 	}
 
 	return deepgramRecognizeSpeechEvent(result), nil
+}
+
+func validateDeepgramSTTAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("deepgram API key is required, either as argument or set DEEPGRAM_API_KEY environment variable")
+	}
+	return nil
 }
 
 func buildDeepgramStreamURL(s *DeepgramSTT, languageStr string) string {

@@ -1,6 +1,7 @@
 package xai
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -68,6 +69,25 @@ func TestNewXaiLLMUsesEnvironmentAPIKey(t *testing.T) {
 	}
 	if got := resolveXaiLLMAPIKey("explicit-key"); got != "explicit-key" {
 		t.Fatalf("resolved API key = %q, want explicit key", got)
+	}
+}
+
+func TestXaiLLMRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("XAI_API_KEY", "")
+	provider := NewXaiLLM("", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	_, err := provider.Chat(ctx, chatCtx)
+	if err == nil {
+		t.Fatal("Chat returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "XAI_API_KEY") {
+		t.Fatalf("Chat error = %q, want XAI_API_KEY guidance", err)
 	}
 }
 

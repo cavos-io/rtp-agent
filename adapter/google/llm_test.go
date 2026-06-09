@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -37,6 +38,18 @@ func TestNewGoogleLLMUsesEnvironmentAPIKey(t *testing.T) {
 	}
 	if got := resolveGoogleAPIKey("explicit-key"); got != "explicit-key" {
 		t.Fatalf("resolved API key = %q, want explicit key", got)
+	}
+}
+
+func TestNewGoogleLLMRequiresAPIKey(t *testing.T) {
+	t.Setenv("GOOGLE_API_KEY", "")
+
+	_, err := NewGoogleLLM("", "")
+	if err == nil {
+		t.Fatal("NewGoogleLLM returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "GOOGLE_API_KEY") {
+		t.Fatalf("NewGoogleLLM error = %q, want GOOGLE_API_KEY guidance", err)
 	}
 }
 

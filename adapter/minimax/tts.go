@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -124,9 +125,13 @@ func WithMinimaxTTSTextNormalization(enabled bool) MinimaxTTSOption {
 }
 
 func NewMinimaxTTS(apiKey string, voice string, opts ...MinimaxTTSOption) *MinimaxTTS {
+	baseURL := os.Getenv("MINIMAX_BASE_URL")
+	if baseURL == "" {
+		baseURL = defaultMinimaxBaseURL
+	}
 	provider := &MinimaxTTS{
 		apiKey:      resolveMinimaxAPIKey(apiKey),
-		baseURL:     defaultMinimaxBaseURL,
+		baseURL:     strings.TrimRight(baseURL, "/"),
 		model:       defaultMinimaxModel,
 		voice:       voice,
 		sampleRate:  defaultMinimaxSampleRate,
@@ -152,6 +157,13 @@ func (t *MinimaxTTS) SampleRate() int  { return t.sampleRate }
 func (t *MinimaxTTS) NumChannels() int { return 1 }
 
 func (t *MinimaxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if err := validateMinimaxAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
+	if err := validateMinimaxTTSOptions(t); err != nil {
+		return nil, err
+	}
+
 	req, err := buildMinimaxTTSRequest(ctx, t, text)
 	if err != nil {
 		return nil, err
@@ -175,6 +187,9 @@ func (t *MinimaxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 }
 
 func buildMinimaxTTSRequest(ctx context.Context, t *MinimaxTTS, text string) (*http.Request, error) {
+	if err := validateMinimaxTTSOptions(t); err != nil {
+		return nil, err
+	}
 	reqBody := minimaxOptions(t)
 	reqBody["text"] = text
 	reqBody["stream"] = true
@@ -220,6 +235,13 @@ func minimaxOptions(t *MinimaxTTS) map[string]interface{} {
 }
 
 func (t *MinimaxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if err := validateMinimaxAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
+	if err := validateMinimaxTTSOptions(t); err != nil {
+		return nil, err
+	}
+
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildMinimaxTTSWebsocketURL(t).String(), buildMinimaxTTSWebsocketHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial minimax tts websocket: %w", err)
@@ -246,6 +268,20 @@ func (t *MinimaxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	go stream.readLoop()
 	return stream, nil
+}
+
+func validateMinimaxAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("MiniMax API key is required, either as argument or set MINIMAX_API_KEY environment variable")
+	}
+	return nil
+}
+
+func validateMinimaxTTSOptions(t *MinimaxTTS) error {
+	if t.speed < 0.5 || t.speed > 2.0 {
+		return fmt.Errorf("speed must be between 0.5 and 2.0, but got %g", t.speed)
+	}
+	return nil
 }
 
 type minimaxTTSChunkedStream struct {

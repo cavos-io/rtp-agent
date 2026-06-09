@@ -1,6 +1,12 @@
 package mistralai
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/cavos-io/rtp-agent/core/llm"
+)
 
 func TestNewMistralLLMDefaultsToReferenceModel(t *testing.T) {
 	provider := NewMistralLLM("test-key", "")
@@ -26,5 +32,24 @@ func TestNewMistralLLMUsesEnvironmentAPIKey(t *testing.T) {
 	}
 	if got := resolveMistralLLMAPIKey("explicit-key"); got != "explicit-key" {
 		t.Fatalf("resolved API key = %q, want explicit key", got)
+	}
+}
+
+func TestMistralLLMRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("MISTRAL_API_KEY", "")
+	provider := NewMistralLLM("", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	_, err := provider.Chat(ctx, chatCtx)
+	if err == nil {
+		t.Fatal("Chat returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "MISTRAL_API_KEY") {
+		t.Fatalf("Chat error = %q, want MISTRAL_API_KEY guidance", err)
 	}
 }

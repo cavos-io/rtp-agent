@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -53,6 +54,51 @@ func TestNewMinimaxTTSUsesEnvironmentAPIKey(t *testing.T) {
 	}
 	if got := buildMinimaxTTSWebsocketHeaders(explicit).Get("Authorization"); got != "Bearer explicit-key" {
 		t.Fatalf("authorization = %q, want explicit bearer key", got)
+	}
+}
+
+func TestNewMinimaxTTSUsesEnvironmentBaseURL(t *testing.T) {
+	t.Setenv("MINIMAX_BASE_URL", "https://minimax.env")
+
+	provider := NewMinimaxTTS("test-key", "")
+
+	if provider.baseURL != "https://minimax.env" {
+		t.Fatalf("base URL = %q, want env base URL", provider.baseURL)
+	}
+	req, err := buildMinimaxTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if req.URL.String() != "https://minimax.env/v1/t2a_v2" {
+		t.Fatalf("url = %q, want env base URL endpoint", req.URL.String())
+	}
+
+	explicit := NewMinimaxTTS("test-key", "", WithMinimaxTTSBaseURL("https://minimax.explicit"))
+	if explicit.baseURL != "https://minimax.explicit" {
+		t.Fatalf("base URL = %q, want explicit base URL", explicit.baseURL)
+	}
+}
+
+func TestMinimaxTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("MINIMAX_API_KEY", "")
+	provider := NewMinimaxTTS("", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, synthErr := provider.Synthesize(ctx, "hello")
+	if synthErr == nil {
+		t.Fatal("Synthesize returned nil error, want missing API key error")
+	}
+	if !strings.Contains(synthErr.Error(), "MINIMAX_API_KEY") {
+		t.Fatalf("Synthesize error = %q, want MINIMAX_API_KEY guidance", synthErr)
+	}
+
+	_, streamErr := provider.Stream(ctx)
+	if streamErr == nil {
+		t.Fatal("Stream returned nil error, want missing API key error")
+	}
+	if !strings.Contains(streamErr.Error(), "MINIMAX_API_KEY") {
+		t.Fatalf("Stream error = %q, want MINIMAX_API_KEY guidance", streamErr)
 	}
 }
 
@@ -154,6 +200,28 @@ func TestMinimaxTTSOptionsMatchReference(t *testing.T) {
 	}
 	if audioSetting["bitrate"] != float64(256000) {
 		t.Fatalf("bitrate = %#v, want 256000", audioSetting["bitrate"])
+	}
+}
+
+func TestMinimaxTTSRejectsInvalidSpeedBeforeRequest(t *testing.T) {
+	provider := NewMinimaxTTS("test-key", "", WithMinimaxTTSSpeed(0.4))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, synthErr := provider.Synthesize(ctx, "hello")
+	if synthErr == nil {
+		t.Fatal("Synthesize returned nil error, want speed validation error")
+	}
+	if !strings.Contains(synthErr.Error(), "speed must be between 0.5 and 2.0") {
+		t.Fatalf("Synthesize error = %q, want speed range guidance", synthErr)
+	}
+
+	_, streamErr := provider.Stream(ctx)
+	if streamErr == nil {
+		t.Fatal("Stream returned nil error, want speed validation error")
+	}
+	if !strings.Contains(streamErr.Error(), "speed must be between 0.5 and 2.0") {
+		t.Fatalf("Stream error = %q, want speed range guidance", streamErr)
 	}
 }
 
