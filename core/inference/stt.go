@@ -634,6 +634,19 @@ func floatFromMap(data map[string]interface{}, key string) float64 {
 	return value
 }
 
+func floatValue(value interface{}) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	default:
+		return 0, false
+	}
+}
+
 func floatFromMapDefault(data map[string]interface{}, key string, fallback float64) float64 {
 	value, ok := data[key].(float64)
 	if !ok {

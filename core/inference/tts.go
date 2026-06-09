@@ -604,7 +604,12 @@ func (s *inferenceTTSStream) run() {
 						},
 					}
 				} else if evType == "output_alignment" {
-					if timedTranscript := inferenceTTSTimedTranscript(ev); len(timedTranscript) > 0 {
+					timedTranscript, err := inferenceTTSTimedTranscript(ev)
+					if err != nil {
+						s.setStreamError(err)
+						return
+					}
+					if len(timedTranscript) > 0 {
 						s.eventCh <- &tts.SynthesizedAudio{SegmentID: currentSessionID, TimedTranscript: timedTranscript}
 					}
 				} else if evType == "done" {
@@ -626,7 +631,7 @@ func (s *inferenceTTSStream) run() {
 	}
 }
 
-func inferenceTTSTimedTranscript(data map[string]interface{}) []tts.TimedString {
+func inferenceTTSTimedTranscript(data map[string]interface{}) ([]tts.TimedString, error) {
 	if words, ok := data["words"].([]interface{}); ok {
 		timed := make([]tts.TimedString, 0, len(words))
 		for _, raw := range words {
@@ -634,13 +639,25 @@ func inferenceTTSTimedTranscript(data map[string]interface{}) []tts.TimedString 
 			if !ok {
 				continue
 			}
+			text, ok := word["word"].(string)
+			if !ok {
+				return nil, fmt.Errorf("missing output_alignment word")
+			}
+			start, ok := floatValue(word["start"])
+			if !ok {
+				return nil, fmt.Errorf("missing output_alignment word start")
+			}
+			end, ok := floatValue(word["end"])
+			if !ok {
+				return nil, fmt.Errorf("missing output_alignment word end")
+			}
 			timed = append(timed, tts.TimedString{
-				Text:      stringFromMap(word, "word"),
-				StartTime: floatFromMap(word, "start"),
-				EndTime:   floatFromMap(word, "end"),
+				Text:      text,
+				StartTime: start,
+				EndTime:   end,
 			})
 		}
-		return timed
+		return timed, nil
 	}
 	if chars, ok := data["chars"].([]interface{}); ok {
 		timed := make([]tts.TimedString, 0, len(chars))
@@ -649,13 +666,25 @@ func inferenceTTSTimedTranscript(data map[string]interface{}) []tts.TimedString 
 			if !ok {
 				continue
 			}
+			text, ok := char["char"].(string)
+			if !ok {
+				return nil, fmt.Errorf("missing output_alignment char")
+			}
+			start, ok := floatValue(char["start"])
+			if !ok {
+				return nil, fmt.Errorf("missing output_alignment char start")
+			}
+			end, ok := floatValue(char["end"])
+			if !ok {
+				return nil, fmt.Errorf("missing output_alignment char end")
+			}
 			timed = append(timed, tts.TimedString{
-				Text:      stringFromMap(char, "char"),
-				StartTime: floatFromMap(char, "start"),
-				EndTime:   floatFromMap(char, "end"),
+				Text:      text,
+				StartTime: start,
+				EndTime:   end,
 			})
 		}
-		return timed
+		return timed, nil
 	}
-	return nil
+	return nil, nil
 }
