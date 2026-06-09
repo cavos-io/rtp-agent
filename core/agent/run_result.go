@@ -15,8 +15,8 @@ import (
 )
 
 var (
-	ErrRunResultNotDone         = errors.New("run result is not done")
-	ErrRunResultNoFinalOutput   = errors.New("run result has no final output")
+	ErrRunResultNotDone         = errors.New("cannot retrieve final_output, RunResult is not done")
+	ErrRunResultNoFinalOutput   = errors.New("no final output")
 	ErrRunResultFinalOutputType = errors.New("run result final output type mismatch")
 )
 

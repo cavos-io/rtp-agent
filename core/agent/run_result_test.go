@@ -115,6 +115,9 @@ func TestRunResultFinalOutputRequiresDone(t *testing.T) {
 	if !errors.Is(err, ErrRunResultNotDone) {
 		t.Fatalf("FinalOutput error = %v, want ErrRunResultNotDone", err)
 	}
+	if got, want := err.Error(), "cannot retrieve final_output, RunResult is not done"; got != want {
+		t.Fatalf("FinalOutput error text = %q, want %q", got, want)
+	}
 }
 
 func TestRunResultFinalOutputRequiresOutput(t *testing.T) {
@@ -125,6 +128,9 @@ func TestRunResultFinalOutputRequiresOutput(t *testing.T) {
 
 	if !errors.Is(err, ErrRunResultNoFinalOutput) {
 		t.Fatalf("FinalOutput error = %v, want ErrRunResultNoFinalOutput", err)
+	}
+	if got, want := err.Error(), "no final output"; got != want {
+		t.Fatalf("FinalOutput error text = %q, want %q", got, want)
 	}
 }
 
