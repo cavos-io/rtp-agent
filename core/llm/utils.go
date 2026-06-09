@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -548,6 +549,10 @@ func functionOutputRepr(value any) string {
 			return "True"
 		}
 		return "False"
+	case complex64:
+		return functionOutputComplexRepr(complex128(v), 32)
+	case complex128:
+		return functionOutputComplexRepr(v, 64)
 	case []any:
 		parts := make([]string, 0, len(v))
 		for _, item := range v {
@@ -583,6 +588,20 @@ func functionOutputRepr(value any) string {
 		return "{" + strings.Join(parts, ", ") + "}"
 	}
 	return fmt.Sprint(value)
+}
+
+func functionOutputComplexRepr(value complex128, bitSize int) string {
+	realPart := real(value)
+	imagPart := imag(value)
+	realText := strconv.FormatFloat(realPart, 'g', -1, bitSize)
+	imagText := strconv.FormatFloat(imagPart, 'g', -1, bitSize)
+	if realPart == 0 {
+		return imagText + "j"
+	}
+	if imagPart < 0 {
+		return "(" + realText + imagText + "j)"
+	}
+	return "(" + realText + "+" + imagText + "j)"
 }
 
 func isFalsyFunctionOutput(value any) bool {
