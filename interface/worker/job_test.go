@@ -278,8 +278,9 @@ func TestJobContextInitRecordingStoresOptionsOnce(t *testing.T) {
 func TestJobContextPrimarySessionRequiresRegisteredSession(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_no_session"}, "", "", "")
 
-	if _, err := ctx.PrimarySession(); err == nil {
-		t.Fatal("PrimarySession() error = nil, want missing primary session error")
+	const wantMessage = "No AgentSession was started for this job"
+	if _, err := ctx.PrimarySession(); err == nil || err.Error() != wantMessage {
+		t.Fatalf("PrimarySession() error = %v, want %q", err, wantMessage)
 	}
 }
 

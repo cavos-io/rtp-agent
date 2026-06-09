@@ -512,7 +512,8 @@ func (c *JobContext) SetPrimarySession(session *agent.AgentSession) {
 
 func (c *JobContext) PrimarySession() (*agent.AgentSession, error) {
 	if c.primarySession == nil {
-		return nil, fmt.Errorf("no primary AgentSession was started for this job")
+		//lint:ignore ST1005 match LiveKit Agents primary_session RuntimeError message
+		return nil, fmt.Errorf("No AgentSession was started for this job")
 	}
 	return c.primarySession, nil
 }
