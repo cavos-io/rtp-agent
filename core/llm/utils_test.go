@@ -459,6 +459,9 @@ func TestExecuteFunctionCallReturnsUnknownFunctionOutput(t *testing.T) {
 	if result.RawError == nil {
 		t.Fatal("RawError = nil, want unknown function error")
 	}
+	if result.RawError.Error() != "Unknown function: missing" {
+		t.Fatalf("RawError = %q, want reference unknown function error", result.RawError.Error())
+	}
 }
 
 func TestExecuteFunctionCallUnknownFunctionPreservesRawArguments(t *testing.T) {

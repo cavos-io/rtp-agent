@@ -451,7 +451,8 @@ func ExecuteFunctionCall(ctx context.Context, toolCall *FunctionToolCall, toolCt
 
 	tool := toolCtx.GetFunctionTool(toolCall.Name)
 	if tool == nil {
-		err := fmt.Errorf("unknown function: %s", toolCall.Name)
+		//lint:ignore ST1005 match LiveKit Agents raw ValueError text
+		err := fmt.Errorf("Unknown function: %s", toolCall.Name)
 		return FunctionCallResult{
 			FncCall: fncCall,
 			FncCallOut: &FunctionCallOutput{
