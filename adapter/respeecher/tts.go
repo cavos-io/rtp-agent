@@ -118,6 +118,10 @@ func (t *RespeecherTTS) SampleRate() int  { return t.sampleRate }
 func (t *RespeecherTTS) NumChannels() int { return 1 }
 
 func (t *RespeecherTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if err := validateRespeecherAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
+
 	req, err := buildRespeecherTTSRequest(ctx, t, text)
 	if err != nil {
 		return nil, err
@@ -162,6 +166,10 @@ func buildRespeecherTTSRequest(ctx context.Context, t *RespeecherTTS, text strin
 }
 
 func (t *RespeecherTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if err := validateRespeecherAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
+
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildRespeecherTTSWebsocketURL(t).String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial respeecher tts websocket: %w", err)
@@ -178,6 +186,13 @@ func (t *RespeecherTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 	}
 	go stream.readLoop()
 	return stream, nil
+}
+
+func validateRespeecherAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("RESPEECHER_API_KEY must be set")
+	}
+	return nil
 }
 
 type respeecherTTSChunkedStream struct {
