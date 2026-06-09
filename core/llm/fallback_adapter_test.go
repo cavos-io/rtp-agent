@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -29,6 +30,20 @@ func TestFallbackAdapterForwardsProviderMetrics(t *testing.T) {
 	if strings.Join(got, ",") != "primary-req,fallback-req" {
 		t.Fatalf("forwarded metrics = %#v, want primary and fallback request IDs", got)
 	}
+}
+
+func TestFallbackAdapterRequiresAtLeastOneLLM(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("NewFallbackAdapter() did not panic, want empty LLM list rejection")
+		}
+		if got, want := fmt.Sprint(r), "at least one LLM instance must be provided."; got != want {
+			t.Fatalf("NewFallbackAdapter() panic = %q, want %q", got, want)
+		}
+	}()
+
+	_ = NewFallbackAdapter(nil)
 }
 
 func TestFallbackAdapterForwardsProviderErrors(t *testing.T) {

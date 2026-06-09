@@ -187,6 +187,9 @@ func TestAgentTaskWaitIsNotReentrant(t *testing.T) {
 	if !errors.Is(err, ErrAgentTaskAlreadyWaited) {
 		t.Fatalf("second Wait() error = %v, want ErrAgentTaskAlreadyWaited", err)
 	}
+	if gotErr, want := err.Error(), "AgentTask is not re-entrant, await only once"; gotErr != want {
+		t.Fatalf("second Wait() error text = %q, want %q", gotErr, want)
+	}
 	if got != "" {
 		t.Fatalf("second Wait() result = %q, want zero value", got)
 	}
@@ -204,6 +207,9 @@ func TestAgentTaskWaitAnyIsNotReentrant(t *testing.T) {
 	got, err := task.WaitAny(context.Background())
 	if !errors.Is(err, ErrAgentTaskAlreadyWaited) {
 		t.Fatalf("second WaitAny() error = %v, want ErrAgentTaskAlreadyWaited", err)
+	}
+	if gotErr, want := err.Error(), "AgentTask is not re-entrant, await only once"; gotErr != want {
+		t.Fatalf("second WaitAny() error text = %q, want %q", gotErr, want)
 	}
 	if got != nil {
 		t.Fatalf("second WaitAny() result = %#v, want nil", got)
@@ -536,6 +542,8 @@ func TestAgentTaskCompleteIsOneTime(t *testing.T) {
 
 	if err := task.Complete("second"); !errors.Is(err, ErrAgentTaskAlreadyDone) {
 		t.Fatalf("Complete(second) error = %v, want ErrAgentTaskAlreadyDone", err)
+	} else if got, want := err.Error(), "AgentTask is already done"; got != want {
+		t.Fatalf("Complete(second) error text = %q, want %q", got, want)
 	}
 
 	got, err := task.WaitAny(context.Background())
@@ -556,6 +564,8 @@ func TestAgentTaskFailIsOneTime(t *testing.T) {
 
 	if err := task.Fail(errors.New("second failure")); !errors.Is(err, ErrAgentTaskAlreadyDone) {
 		t.Fatalf("Fail(second) error = %v, want ErrAgentTaskAlreadyDone", err)
+	} else if got, want := err.Error(), "AgentTask is already done"; got != want {
+		t.Fatalf("Fail(second) error text = %q, want %q", got, want)
 	}
 
 	got, err := task.WaitAny(context.Background())
@@ -578,6 +588,9 @@ func TestAgentTaskFailAfterCompleteReturnsAlreadyDone(t *testing.T) {
 	if !errors.Is(err, ErrAgentTaskAlreadyDone) {
 		t.Fatalf("Fail after Complete error = %v, want ErrAgentTaskAlreadyDone", err)
 	}
+	if got, want := err.Error(), "AgentTask is already done"; got != want {
+		t.Fatalf("Fail after Complete error text = %q, want %q", got, want)
+	}
 	got, waitErr := task.WaitAny(context.Background())
 	if waitErr != nil {
 		t.Fatalf("WaitAny error = %v, want nil", waitErr)
@@ -598,6 +611,9 @@ func TestAgentTaskCompleteAfterFailReturnsAlreadyDone(t *testing.T) {
 
 	if !errors.Is(err, ErrAgentTaskAlreadyDone) {
 		t.Fatalf("Complete after Fail error = %v, want ErrAgentTaskAlreadyDone", err)
+	}
+	if got, want := err.Error(), "AgentTask is already done"; got != want {
+		t.Fatalf("Complete after Fail error text = %q, want %q", got, want)
 	}
 	got, waitErr := task.WaitAny(context.Background())
 	if waitErr != firstErr {

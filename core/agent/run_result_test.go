@@ -115,6 +115,9 @@ func TestRunResultFinalOutputRequiresDone(t *testing.T) {
 	if !errors.Is(err, ErrRunResultNotDone) {
 		t.Fatalf("FinalOutput error = %v, want ErrRunResultNotDone", err)
 	}
+	if got, want := err.Error(), "cannot retrieve final_output, RunResult is not done"; got != want {
+		t.Fatalf("FinalOutput error text = %q, want %q", got, want)
+	}
 }
 
 func TestRunResultFinalOutputRequiresOutput(t *testing.T) {
@@ -125,6 +128,9 @@ func TestRunResultFinalOutputRequiresOutput(t *testing.T) {
 
 	if !errors.Is(err, ErrRunResultNoFinalOutput) {
 		t.Fatalf("FinalOutput error = %v, want ErrRunResultNoFinalOutput", err)
+	}
+	if got, want := err.Error(), "no final output"; got != want {
+		t.Fatalf("FinalOutput error text = %q, want %q", got, want)
 	}
 }
 
@@ -311,6 +317,9 @@ func TestRunResultFinalOutputRejectsUnexpectedType(t *testing.T) {
 	if !errors.Is(err, ErrRunResultFinalOutputType) {
 		t.Fatalf("FinalOutput error = %v, want ErrRunResultFinalOutputType", err)
 	}
+	if got, want := err.Error(), "Expected output of type string, got int"; got != want {
+		t.Fatalf("FinalOutput error text = %q, want %q", got, want)
+	}
 	if output != nil {
 		t.Fatalf("FinalOutput output = %#v, want nil on type mismatch", output)
 	}
@@ -376,6 +385,9 @@ func TestRunResultSetFinalOutputRejectsUnexpectedType(t *testing.T) {
 	output, err := result.FinalOutput()
 	if !errors.Is(err, ErrRunResultFinalOutputType) {
 		t.Fatalf("FinalOutput error = %v, want ErrRunResultFinalOutputType", err)
+	}
+	if got, want := err.Error(), "Expected output of type string, got int"; got != want {
+		t.Fatalf("FinalOutput error text = %q, want %q", got, want)
 	}
 	if output != nil {
 		t.Fatalf("FinalOutput output = %#v, want nil on type mismatch", output)

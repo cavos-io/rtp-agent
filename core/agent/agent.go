@@ -212,8 +212,8 @@ type TaskWaiter interface {
 	WaitAny(ctx context.Context) (any, error)
 }
 
-var ErrAgentTaskAlreadyDone = errors.New("agent task is already done")
-var ErrAgentTaskAlreadyWaited = errors.New("agent task is not re-entrant, wait only once")
+var ErrAgentTaskAlreadyDone = errors.New("AgentTask is already done")
+var ErrAgentTaskAlreadyWaited = errors.New("AgentTask is not re-entrant, await only once")
 
 func NewAgentTask[T any](instructions string) *AgentTask[T] {
 	baseAgent := NewAgent(instructions)

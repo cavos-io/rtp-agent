@@ -15,10 +15,37 @@ import (
 )
 
 var (
-	ErrRunResultNotDone         = errors.New("run result is not done")
-	ErrRunResultNoFinalOutput   = errors.New("run result has no final output")
+	ErrRunResultNotDone         = errors.New("cannot retrieve final_output, RunResult is not done")
+	ErrRunResultNoFinalOutput   = errors.New("no final output")
 	ErrRunResultFinalOutputType = errors.New("run result final output type mismatch")
 )
+
+type runResultFinalOutputTypeError struct {
+	expected reflect.Type
+	actual   reflect.Type
+}
+
+func (e runResultFinalOutputTypeError) Error() string {
+	return fmt.Sprintf(
+		"Expected output of type %s, got %s",
+		runResultTypeName(e.expected),
+		runResultTypeName(e.actual),
+	)
+}
+
+func (e runResultFinalOutputTypeError) Unwrap() error {
+	return ErrRunResultFinalOutputType
+}
+
+func runResultTypeName(t reflect.Type) string {
+	if t == nil {
+		return "nil"
+	}
+	if name := t.Name(); name != "" {
+		return name
+	}
+	return t.String()
+}
 
 type RunResult struct {
 	ChatCtx         *llm.ChatContext
@@ -346,7 +373,7 @@ func (r *RunResult) setFinalOutputLocked(output any) {
 	} else if r.finalOutputType != nil {
 		outputType := reflect.TypeOf(output)
 		if outputType == nil || !outputType.AssignableTo(r.finalOutputType) {
-			r.finalOutputErr = fmt.Errorf("%w: expected %s, got %T", ErrRunResultFinalOutputType, r.finalOutputType, output)
+			r.finalOutputErr = runResultFinalOutputTypeError{expected: r.finalOutputType, actual: outputType}
 		} else {
 			r.finalOutput = output
 		}

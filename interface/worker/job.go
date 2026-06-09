@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -24,6 +25,8 @@ import (
 )
 
 var currentJobContexts sync.Map
+
+const errNoJobContext = "no job context found, are you running this code inside a job entrypoint?"
 
 func init() {
 	inference.SetContextHeadersProvider(currentInferenceContextHeaders)
@@ -77,6 +80,18 @@ func GetJobContext() (*JobContext, bool) {
 // with LiveKit Agents' get_current_job_context name.
 func GetCurrentJobContext() (*JobContext, bool) {
 	return GetJobContext()
+}
+
+func RequireJobContext() (*JobContext, error) {
+	ctx, ok := GetJobContext()
+	if !ok || ctx == nil {
+		return nil, errors.New(errNoJobContext)
+	}
+	return ctx, nil
+}
+
+func RequireCurrentJobContext() (*JobContext, error) {
+	return RequireJobContext()
 }
 
 func runWithJobContext(ctx *JobContext, fn func() error) error {
@@ -497,7 +512,8 @@ func (c *JobContext) SetPrimarySession(session *agent.AgentSession) {
 
 func (c *JobContext) PrimarySession() (*agent.AgentSession, error) {
 	if c.primarySession == nil {
-		return nil, fmt.Errorf("no primary AgentSession was started for this job")
+		//lint:ignore ST1005 match LiveKit Agents primary_session RuntimeError message
+		return nil, fmt.Errorf("No AgentSession was started for this job")
 	}
 	return c.primarySession, nil
 }
@@ -507,14 +523,11 @@ func (c *JobContext) MakeSessionReport(sessions ...*agent.AgentSession) (*agent.
 	if len(sessions) > 0 {
 		session = sessions[0]
 	} else {
-		var err error
-		session, err = c.PrimarySession()
-		if err != nil {
-			return nil, err
-		}
+		session = c.primarySession
 	}
 	if session == nil {
-		return nil, fmt.Errorf("cannot prepare report, no AgentSession was found")
+		//lint:ignore ST1005 match LiveKit Agents make_session_report RuntimeError message
+		return nil, fmt.Errorf("Cannot prepare report, no AgentSession was found")
 	}
 
 	report := agent.NewSessionReport(session)
@@ -751,7 +764,7 @@ func (c *JobContext) AddParticipantEntrypoint(entrypoint ParticipantEntrypoint, 
 	}
 	for _, registered := range c.participantEntrypoints {
 		if reflect.ValueOf(registered.entrypoint).Pointer() == reflect.ValueOf(entrypoint).Pointer() {
-			return fmt.Errorf("participant entrypoints cannot be added more than once")
+			return fmt.Errorf("entrypoints cannot be added more than once")
 		}
 	}
 	if len(kinds) == 0 {

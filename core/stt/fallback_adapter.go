@@ -99,7 +99,7 @@ func NewFallbackAdapterWithVADAndOptions(stts []STT, vad vad.VAD, options Fallba
 
 func newFallbackAdapter(stts []STT, vad vad.VAD, options FallbackAdapterOptions) *FallbackAdapter {
 	if len(stts) == 0 {
-		panic("FallbackAdapter requires at least one STT")
+		panic("At least one STT instance must be provided.")
 	}
 	if options.AttemptTimeout <= 0 {
 		options.AttemptTimeout = defaultFallbackAttemptTimeout

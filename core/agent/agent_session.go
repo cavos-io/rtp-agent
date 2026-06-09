@@ -97,11 +97,21 @@ type AgentSessionUpdateOptions struct {
 }
 
 var (
-	ErrAgentSessionNotRunning       = errors.New("agent session is not running")
-	ErrAgentSessionNestedRun        = errors.New("nested agent session runs are not supported")
-	ErrAgentSessionUserdataNotSet   = errors.New("agent session userdata is not set")
+	ErrAgentSessionNotRunning       = errors.New("AgentSession isn't running")
+	ErrAgentSessionNestedRun        = errors.New("nested runs are not supported")
+	ErrAgentSessionUserdataNotSet   = errors.New("AgentSession userdata is not set")
 	ErrAgentSessionJobContextNotSet = errors.New("agent session job context is not set")
 )
+
+type voiceAgentNotRunningError struct{}
+
+func (voiceAgentNotRunningError) Error() string {
+	return "VoiceAgent isn't running"
+}
+
+func (voiceAgentNotRunningError) Is(target error) bool {
+	return target == ErrAgentSessionNotRunning
+}
 
 type GenerateReplyOptions struct {
 	UserInput           string
@@ -566,7 +576,7 @@ func (s *AgentSession) CurrentAgent() (AgentInterface, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.Agent == nil {
-		return nil, ErrAgentSessionNotRunning
+		return nil, voiceAgentNotRunningError{}
 	}
 	return s.Agent, nil
 }

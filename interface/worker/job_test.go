@@ -45,6 +45,28 @@ func TestGetJobContextReturnsActiveEntrypointContext(t *testing.T) {
 	}
 }
 
+func TestRequireJobContextMatchesReferenceRequiredDefault(t *testing.T) {
+	const wantMessage = "no job context found, are you running this code inside a job entrypoint?"
+	if got, err := RequireJobContext(); err == nil || got != nil || err.Error() != wantMessage {
+		t.Fatalf("RequireJobContext() = %#v, %v; want nil and reference error", got, err)
+	}
+
+	jobCtx := NewJobContext(&livekit.Job{Id: "job_required"}, "", "", "")
+	if err := runWithJobContext(jobCtx, func() error {
+		got, err := RequireJobContext()
+		if err != nil || got != jobCtx {
+			t.Fatalf("RequireJobContext() inside entrypoint = %#v, %v; want job context, nil", got, err)
+		}
+		got, err = RequireCurrentJobContext()
+		if err != nil || got != jobCtx {
+			t.Fatalf("RequireCurrentJobContext() inside entrypoint = %#v, %v; want job context, nil", got, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("runWithJobContext() error = %v", err)
+	}
+}
+
 func TestJobContextProvidesReferenceInferenceHeaders(t *testing.T) {
 	jobCtx := NewJobContext(&livekit.Job{
 		Id:   "job_inference",
@@ -256,8 +278,9 @@ func TestJobContextInitRecordingStoresOptionsOnce(t *testing.T) {
 func TestJobContextPrimarySessionRequiresRegisteredSession(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_no_session"}, "", "", "")
 
-	if _, err := ctx.PrimarySession(); err == nil {
-		t.Fatal("PrimarySession() error = nil, want missing primary session error")
+	const wantMessage = "No AgentSession was started for this job"
+	if _, err := ctx.PrimarySession(); err == nil || err.Error() != wantMessage {
+		t.Fatalf("PrimarySession() error = %v, want %q", err, wantMessage)
 	}
 }
 
@@ -304,6 +327,15 @@ func TestJobContextMakeSessionReportUsesPrimarySession(t *testing.T) {
 	}
 	if ctx.Report != report {
 		t.Fatal("JobContext Report was not updated to generated session report")
+	}
+}
+
+func TestJobContextMakeSessionReportRequiresSession(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_report_no_session"}, "", "", "")
+
+	const wantMessage = "Cannot prepare report, no AgentSession was found"
+	if report, err := ctx.MakeSessionReport(); err == nil || report != nil || err.Error() != wantMessage {
+		t.Fatalf("MakeSessionReport() = %#v, %v; want nil and %q", report, err, wantMessage)
 	}
 }
 
@@ -554,8 +586,9 @@ func TestJobContextAddParticipantEntrypointRejectsDuplicates(t *testing.T) {
 	}
 
 	err := ctx.AddParticipantEntrypoint(entrypoint)
-	if err == nil {
-		t.Fatal("AddParticipantEntrypoint() duplicate error = nil, want error")
+	const wantMessage = "entrypoints cannot be added more than once"
+	if err == nil || err.Error() != wantMessage {
+		t.Fatalf("AddParticipantEntrypoint() duplicate error = %v, want %q", err, wantMessage)
 	}
 }
 

@@ -45,6 +45,20 @@ func TestFallbackAdapterAggregatesProviderCapabilities(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterRequiresAtLeastOneSTT(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("NewFallbackAdapter() did not panic, want empty STT list rejection")
+		}
+		if got, want := r, "At least one STT instance must be provided."; got != want {
+			t.Fatalf("NewFallbackAdapter() panic = %q, want %q", got, want)
+		}
+	}()
+
+	_ = NewFallbackAdapter(nil)
+}
+
 func TestFallbackAdapterDefaultConstructorsUseReferenceRetryInterval(t *testing.T) {
 	adapter := NewFallbackAdapter([]STT{
 		&metadataSTT{label: "primary", capabilities: STTCapabilities{Streaming: true}},
@@ -196,8 +210,13 @@ func TestFallbackAdapterClearsAlignedTranscriptWhenAnyProviderLacksIt(t *testing
 
 func TestFallbackAdapterRejectsNonStreamingProviderWithoutVAD(t *testing.T) {
 	defer func() {
-		if recover() == nil {
+		recovered := recover()
+		if recovered == nil {
 			t.Fatal("NewFallbackAdapter did not panic")
+		}
+		want := "STTs do not support streaming: offline. Provide a VAD to enable stt.StreamAdapter automatically or wrap them with stt.StreamAdapter before using this adapter."
+		if got := recovered; got != want {
+			t.Fatalf("NewFallbackAdapter panic = %q, want %q", got, want)
 		}
 	}()
 

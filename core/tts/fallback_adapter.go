@@ -66,7 +66,7 @@ func NewFallbackAdapter(ttss []TTS) *FallbackAdapter {
 
 func NewFallbackAdapterWithOptions(ttss []TTS, options FallbackAdapterOptions) *FallbackAdapter {
 	if len(ttss) == 0 {
-		panic("FallbackAdapter requires at least one TTS")
+		panic("at least one TTS instance must be provided.")
 	}
 
 	numChannels := ttss[0].NumChannels()

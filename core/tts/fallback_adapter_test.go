@@ -30,6 +30,20 @@ func TestFallbackAdapterAggregatesProviderMetadata(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterRequiresAtLeastOneTTS(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("NewFallbackAdapter() did not panic, want empty TTS list rejection")
+		}
+		if got, want := r, "at least one TTS instance must be provided."; got != want {
+			t.Fatalf("NewFallbackAdapter() panic = %q, want %q", got, want)
+		}
+	}()
+
+	_ = NewFallbackAdapter(nil)
+}
+
 func TestFallbackAdapterReportsModelProvider(t *testing.T) {
 	adapter := NewFallbackAdapter([]TTS{
 		&metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1},
