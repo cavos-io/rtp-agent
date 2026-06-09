@@ -677,6 +677,21 @@ done
 	}
 }
 
+func TestMCPServerStdioInitializeFailureLeavesUninitialized(t *testing.T) {
+	server := NewMCPServerStdio(filepath.Join(t.TempDir(), "missing-mcp-server"), nil)
+
+	err := server.Initialize(context.Background())
+	if err == nil {
+		t.Fatal("Initialize() error = nil, want command start failure")
+	}
+	if server.Initialized() {
+		t.Fatal("Initialized() = true after failed Initialize, want false")
+	}
+	if _, err := server.ListTools(context.Background()); err == nil || !strings.Contains(err.Error(), "isn't initialized") {
+		t.Fatalf("ListTools() error = %v, want uninitialized lifecycle error", err)
+	}
+}
+
 func TestMCPServerStdioInitializeCoalescesConcurrentCalls(t *testing.T) {
 	tmpDir := t.TempDir()
 	startedPath := filepath.Join(tmpDir, "started")

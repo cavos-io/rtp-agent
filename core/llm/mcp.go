@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -498,6 +499,9 @@ func (s *MCPServerStdio) Initialize(ctx context.Context) error {
 
 	s.mu.Lock()
 	state.err = err
+	if err != nil {
+		_ = s.closeTransportLocked()
+	}
 	if s.initState == state {
 		s.initState = nil
 	}
@@ -610,14 +614,32 @@ func (s *MCPServerStdio) Initialized() bool {
 
 func (s *MCPServerStdio) Close() error {
 	s.InvalidateCache()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closeTransportLocked()
+}
+
+func (s *MCPServerStdio) closeTransportLocked() error {
+	var firstErr error
 	if s.stdin != nil {
-		s.stdin.Close()
+		if err := s.stdin.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
 		s.stdin = nil
 	}
-	if s.cmd != nil && s.cmd.Process != nil {
-		return s.cmd.Process.Kill()
+	if s.stdout != nil {
+		if err := s.stdout.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		s.stdout = nil
 	}
-	return nil
+	if s.cmd != nil && s.cmd.Process != nil {
+		if err := s.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) && firstErr == nil {
+			firstErr = err
+		}
+	}
+	s.cmd = nil
+	return firstErr
 }
 
 func (s *MCPServerStdio) sendRequest(ctx context.Context, method string, params interface{}) (*jsonRPCResponse, error) {
