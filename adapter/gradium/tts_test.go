@@ -30,6 +30,21 @@ func TestGradiumTTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewGradiumTTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("GRADIUM_API_KEY", "env-key")
+
+	provider := NewGradiumTTS("", "")
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+
+	explicit := NewGradiumTTS("explicit-key", "")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestGradiumTTSOptionsBuildReferenceSetupAndHeaders(t *testing.T) {
 	provider := NewGradiumTTS("test-key", "Ava",
 		WithGradiumTTSModelEndpoint("wss://gradium.example/tts"),

@@ -63,6 +63,21 @@ func TestGradiumSTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewGradiumSTTUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("GRADIUM_API_KEY", "env-key")
+
+	provider := NewGradiumSTT("")
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+
+	explicit := NewGradiumSTT("explicit-key")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestGradiumSTTOptionsBuildReferenceSetupAndHeaders(t *testing.T) {
 	temp := 0.2
 	provider := NewGradiumSTT("test-key",

@@ -72,7 +72,7 @@ func WithGradiumTTSJSONConfig(jsonConfig map[string]any) GradiumTTSOption {
 
 func NewGradiumTTS(apiKey string, voice string, opts ...GradiumTTSOption) *GradiumTTS {
 	provider := &GradiumTTS{
-		apiKey:        apiKey,
+		apiKey:        resolveGradiumAPIKey(apiKey),
 		modelEndpoint: defaultTTSModelEndpoint,
 		modelName:     defaultTTSModelName,
 		voice:         voice,
