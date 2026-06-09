@@ -113,9 +113,6 @@ func (e *ExpFilter) Value() (float64, bool) {
 }
 
 func (e *ExpFilter) UpdateBase(alpha float64) {
-	if err := validateAlpha(alpha); err != nil {
-		panic(err)
-	}
 	e.alpha = alpha
 }
 

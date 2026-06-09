@@ -1594,6 +1594,34 @@ func TestAgentSessionOnReceivesRecordedEmittedEvents(t *testing.T) {
 	}
 }
 
+func TestAgentSessionEventListenerPanicDoesNotBlockOtherListeners(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	received := make(chan Event, 1)
+
+	session.On("error", func(Event) {
+		panic("listener failed")
+	})
+	session.On("error", func(ev Event) {
+		received <- ev
+	})
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("EmitError panic = %v, want listener panic isolated", recovered)
+		}
+		select {
+		case ev := <-received:
+			if _, ok := ev.(*ErrorEvent); !ok {
+				t.Fatalf("remaining listener event = %T, want *ErrorEvent", ev)
+			}
+		default:
+			t.Fatal("remaining listener was not called after listener panic")
+		}
+	}()
+
+	session.EmitError(ErrorEvent{Error: errors.New("provider failed"), Source: "llm"})
+}
+
 func TestAgentSessionOnReturnsUnsubscribe(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -1643,6 +1671,35 @@ func TestAgentSessionOffRemovesMatchingListener(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("remaining listener did not receive emitted event")
 	}
+}
+
+func TestAgentSessionCloseListenerPanicDoesNotBlockOtherListeners(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.started = true
+	received := make(chan Event, 1)
+
+	session.On("close", func(Event) {
+		panic("close listener failed")
+	})
+	session.On("close", func(ev Event) {
+		received <- ev
+	})
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("CloseSoon panic = %v, want close listener panic isolated", recovered)
+		}
+		select {
+		case ev := <-received:
+			if _, ok := ev.(*CloseEvent); !ok {
+				t.Fatalf("remaining close listener event = %T, want *CloseEvent", ev)
+			}
+		default:
+			t.Fatal("remaining close listener was not called after listener panic")
+		}
+	}()
+
+	session.CloseSoon(CloseReasonUserInitiated)
 }
 
 func TestAgentSessionOffUsesCallbackIdentity(t *testing.T) {

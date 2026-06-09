@@ -35,6 +35,30 @@ func TestRespeecherTTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewRespeecherTTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("RESPEECHER_API_KEY", "env-key")
+
+	provider := NewRespeecherTTS("", "")
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+	req, err := buildRespeecherTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if got := req.Header.Get("X-API-Key"); got != "env-key" {
+		t.Fatalf("X-API-Key = %q, want env key", got)
+	}
+	if got := buildRespeecherTTSWebsocketURL(provider).Query().Get("api_key"); got != "env-key" {
+		t.Fatalf("websocket api_key = %q, want env key", got)
+	}
+
+	explicit := NewRespeecherTTS("explicit-key", "")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestRespeecherTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	provider := NewRespeecherTTS("test-key", "")
 

@@ -2844,6 +2844,8 @@ func TestEvaluateSessionReturnsEvaluationSummary(t *testing.T) {
 		Role:    llm.ChatRoleUser,
 		Content: []llm.ChatContent{{Text: "hello"}},
 	})
+	jobCtx := worker.NewJobContext(&livekit.Job{Id: "job_eval"}, "", "", "")
+	session.SetJobContext(jobCtx)
 	evaluatorLLM := &fakeEvalLLM{
 		stream: &fakeEvalLLMStream{chunks: []*llm.ChatChunk{{
 			Delta: &llm.ChoiceDelta{ToolCalls: []llm.FunctionToolCall{{
@@ -2863,6 +2865,13 @@ func TestEvaluateSessionReturnsEvaluationSummary(t *testing.T) {
 	}
 	if summary.Score != 1 || !summary.AllPassed || !summary.AnyPassed || !summary.MajorityPassed || !summary.NoneFailed {
 		t.Fatalf("summary = %+v, want passing evaluation summary", summary)
+	}
+	evaluations := jobCtx.Tagger().Evaluations()
+	if len(evaluations) != 1 {
+		t.Fatalf("job context evaluations = %#v, want one auto-tagged evaluation", evaluations)
+	}
+	if evaluations[0]["name"] != "accuracy" || evaluations[0]["verdict"] != "pass" {
+		t.Fatalf("job context evaluation = %#v, want accuracy pass", evaluations[0])
 	}
 }
 

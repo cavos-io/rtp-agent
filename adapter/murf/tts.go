@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -102,6 +103,9 @@ func WithMurfTTSSampleRate(sampleRate int) MurfTTSOption {
 }
 
 func NewMurfTTS(apiKey string, voice string, opts ...MurfTTSOption) *MurfTTS {
+	if apiKey == "" {
+		apiKey = os.Getenv("MURF_API_KEY")
+	}
 	provider := &MurfTTS{
 		apiKey:     apiKey,
 		baseURL:    defaultMurfBaseURL,

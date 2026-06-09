@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -56,6 +57,9 @@ func WithResembleTTSModel(model string) ResembleTTSOption {
 }
 
 func NewResembleTTS(apiKey string, voice string, opts ...ResembleTTSOption) *ResembleTTS {
+	if apiKey == "" {
+		apiKey = os.Getenv("RESEMBLE_API_KEY")
+	}
 	provider := &ResembleTTS{
 		apiKey:     apiKey,
 		voice:      voice,

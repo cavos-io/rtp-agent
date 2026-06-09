@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -86,6 +87,9 @@ func WithRespeecherTTSSamplingParams(params map[string]any) RespeecherTTSOption 
 }
 
 func NewRespeecherTTS(apiKey string, voiceID string, opts ...RespeecherTTSOption) *RespeecherTTS {
+	if apiKey == "" {
+		apiKey = os.Getenv("RESPEECHER_API_KEY")
+	}
 	provider := &RespeecherTTS{
 		apiKey:     apiKey,
 		baseURL:    defaultRespeecherBaseURL,

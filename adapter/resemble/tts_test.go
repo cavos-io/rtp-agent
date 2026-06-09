@@ -26,6 +26,30 @@ func TestResembleTTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewResembleTTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("RESEMBLE_API_KEY", "env-key")
+
+	provider := NewResembleTTS("", "")
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+	req, err := buildResembleTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if got := req.Header.Get("Authorization"); got != "Bearer env-key" {
+		t.Fatalf("authorization = %q, want env bearer token", got)
+	}
+	if got := buildResembleTTSWebsocketHeaders(provider).Get("Authorization"); got != "Bearer env-key" {
+		t.Fatalf("websocket authorization = %q, want env bearer token", got)
+	}
+
+	explicit := NewResembleTTS("explicit-key", "")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestResembleTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	provider := NewResembleTTS("test-key", "")
 

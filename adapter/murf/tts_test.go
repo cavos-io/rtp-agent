@@ -37,6 +37,30 @@ func TestMurfTTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewMurfTTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("MURF_API_KEY", "env-key")
+
+	provider := NewMurfTTS("", "")
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+	req, err := buildMurfTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if got := req.Header.Get("api-key"); got != "env-key" {
+		t.Fatalf("api-key = %q, want env key", got)
+	}
+	if got := buildMurfTTSWebsocketHeaders(provider).Get("api-key"); got != "env-key" {
+		t.Fatalf("websocket api-key = %q, want env key", got)
+	}
+
+	explicit := NewMurfTTS("explicit-key", "")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestMurfTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	provider := NewMurfTTS("test-key", "")
 

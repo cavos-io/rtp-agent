@@ -304,6 +304,71 @@ func TestMCPServerHTTPInitializeCoalescesConcurrentCalls(t *testing.T) {
 	}
 }
 
+func TestMCPServerHTTPCloseDuringInitializeLeavesUninitialized(t *testing.T) {
+	initializeStarted := make(chan struct{})
+	releaseInitialize := make(chan struct{})
+	httpClient := newMCPTestHTTPClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req jsonRPCRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		switch req.Method {
+		case "initialize":
+			close(initializeStarted)
+			<-releaseInitialize
+			writeMCPHTTPResponse(t, w, req.ID, map[string]any{"protocolVersion": "2024-11-05"})
+		case "initialized":
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			t.Fatalf("unexpected MCP method %q", req.Method)
+		}
+	}))
+
+	server := NewMCPServerHTTP("https://mcp.test/rpc")
+	server.client = httpClient
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.Initialize(context.Background())
+	}()
+
+	select {
+	case <-initializeStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Initialize() did not reach server")
+	}
+	if err := server.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	close(releaseInitialize)
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Initialize() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Initialize() did not return")
+	}
+	if server.Initialized() {
+		t.Fatal("Initialized() = true after Close during Initialize, want false")
+	}
+}
+
+func TestMCPServerHTTPCloseClosesIdleConnections(t *testing.T) {
+	transport := &mcpCloseIdleTransport{}
+	server := NewMCPServerHTTP("https://mcp.test/rpc")
+	server.SetHTTPClient(&http.Client{Transport: transport})
+
+	if err := server.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if got := transport.closeIdleCalls.Load(); got != 1 {
+		t.Fatalf("CloseIdleConnections calls = %d, want 1", got)
+	}
+}
+
 func TestMCPServerHTTPSetHeadersAppliesToSubsequentRequests(t *testing.T) {
 	httpClient := newMCPTestHTTPClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req jsonRPCRequest
@@ -391,6 +456,18 @@ type mcpTestRoundTripper func(*http.Request) (*http.Response, error)
 
 func (f mcpTestRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+type mcpCloseIdleTransport struct {
+	closeIdleCalls atomic.Int32
+}
+
+func (t *mcpCloseIdleTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("unexpected HTTP request")
+}
+
+func (t *mcpCloseIdleTransport) CloseIdleConnections() {
+	t.closeIdleCalls.Add(1)
 }
 
 func TestMCPToolsetSetupInitializesServerAndFlattensTools(t *testing.T) {
@@ -689,6 +766,118 @@ func TestMCPServerStdioInitializeFailureLeavesUninitialized(t *testing.T) {
 	}
 	if _, err := server.ListTools(context.Background()); err == nil || !strings.Contains(err.Error(), "isn't initialized") {
 		t.Fatalf("ListTools() error = %v, want uninitialized lifecycle error", err)
+	}
+}
+
+func TestMCPServerStdioInitializedNotificationFailureLeavesUninitialized(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "mcp-exit-before-initialized.sh")
+	script := `#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":1,"result":{}}\n'
+      exec 0<&-
+      sleep 1
+      exit 0
+      ;;
+  esac
+done
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write helper script: %v", err)
+	}
+
+	server := NewMCPServerStdio("sh", []string{scriptPath})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := server.Initialize(ctx)
+	if err == nil {
+		t.Fatal("Initialize() error = nil, want initialized notification failure")
+	}
+	if server.Initialized() {
+		t.Fatal("Initialized() = true after initialized notification failure, want false")
+	}
+}
+
+func TestMCPServerStdioListToolsReturnsWhenTransportCloses(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "mcp-exit-on-tools-list.sh")
+	script := `#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":1,"result":{}}\n'
+      ;;
+    *'"method":"tools/list"'*)
+      exit 0
+      ;;
+  esac
+done
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write helper script: %v", err)
+	}
+
+	server := NewMCPServerStdio("sh", []string{scriptPath})
+	defer server.Close()
+	if err := server.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := server.ListTools(context.Background())
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("ListTools() error = nil, want transport closed error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ListTools() did not return after MCP stdio transport closed")
+	}
+}
+
+func TestMCPServerStdioTransportCloseClearsInitializedState(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "mcp-close-clears-state.sh")
+	script := `#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":1,"result":{}}\n'
+      ;;
+    *'"method":"tools/list"'*)
+      exit 0
+      ;;
+  esac
+done
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write helper script: %v", err)
+	}
+
+	server := NewMCPServerStdio("sh", []string{scriptPath})
+	defer server.Close()
+	if err := server.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+	if !server.Initialized() {
+		t.Fatal("Initialized() = false after Initialize, want true")
+	}
+
+	if _, err := server.ListTools(context.Background()); err == nil {
+		t.Fatal("ListTools() error = nil, want transport closed error")
+	}
+	if server.Initialized() {
+		t.Fatal("Initialized() = true after MCP stdio transport closed, want false")
+	}
+	if _, err := server.ListTools(context.Background()); err == nil || !strings.Contains(err.Error(), "isn't initialized") {
+		t.Fatalf("ListTools() after transport close error = %v, want uninitialized lifecycle error", err)
 	}
 }
 

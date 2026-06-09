@@ -35,6 +35,27 @@ func TestLMNTTTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewLMNTTTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("LMNT_API_KEY", "env-key")
+
+	provider := NewLMNTTTS("", "")
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+	req, err := buildLMNTTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if got := req.Header.Get("X-API-Key"); got != "env-key" {
+		t.Fatalf("X-API-Key = %q, want env key", got)
+	}
+
+	explicit := NewLMNTTTS("explicit-key", "")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestLMNTTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	provider := NewLMNTTTS("test-key", "")
 

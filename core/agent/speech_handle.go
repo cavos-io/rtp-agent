@@ -3,12 +3,14 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/google/uuid"
 )
 
@@ -187,15 +189,18 @@ func (s *SpeechHandle) RunFinalOutput() (any, bool) {
 
 func (s *SpeechHandle) MarkDone() {
 	s.mu.Lock()
-	if s.IsDone() {
+	alreadyDone := s.IsDone()
+	if !alreadyDone {
+		close(s.doneCh)
+	}
+	if len(s.generationChs) > 0 {
+		s.closeGenerationLocked(len(s.generationChs) - 1)
+	}
+	if alreadyDone {
 		s.mu.Unlock()
 		return
 	}
 
-	close(s.doneCh)
-	if len(s.generationChs) > 0 {
-		s.closeGenerationLocked(len(s.generationChs) - 1)
-	}
 	callbacks := make([]func(*SpeechHandle), 0, len(s.doneCallbacks))
 	for _, callback := range s.doneCallbacks {
 		callbacks = append(callbacks, callback)
@@ -203,7 +208,7 @@ func (s *SpeechHandle) MarkDone() {
 	s.mu.Unlock()
 
 	for _, callback := range callbacks {
-		callback(s)
+		callSpeechDoneCallback(callback, s)
 	}
 }
 
@@ -349,7 +354,7 @@ func (s *SpeechHandle) AddChatItems(items ...llm.ChatItem) {
 		s.mu.Unlock()
 
 		for _, callback := range callbacks {
-			callback(item)
+			callSpeechItemAddedCallback(callback, item)
 		}
 
 		s.mu.Lock()
@@ -433,6 +438,31 @@ func (s *SpeechHandle) MarkGenerationDone() error {
 
 	s.closeGenerationLocked(len(s.generationChs) - 1)
 	return nil
+}
+
+func callSpeechDoneCallback(callback func(*SpeechHandle), speech *SpeechHandle) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logger.Logger.Warnw("error in done_callback", panicAsError(recovered))
+		}
+	}()
+	callback(speech)
+}
+
+func callSpeechItemAddedCallback(callback func(llm.ChatItem), item llm.ChatItem) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logger.Logger.Warnw("error in item_added_callback", panicAsError(recovered))
+		}
+	}()
+	callback(item)
+}
+
+func panicAsError(recovered any) error {
+	if err, ok := recovered.(error); ok {
+		return err
+	}
+	return fmt.Errorf("%v", recovered)
 }
 
 func (s *SpeechHandle) closeGenerationLocked(index int) {

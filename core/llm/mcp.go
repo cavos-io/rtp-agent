@@ -45,6 +45,7 @@ type MCPServerHTTP struct {
 	cacheDirty  bool
 	toolsCache  []Tool
 	initState   *mcpInitializeState
+	closeSeq    uint64
 	mu          sync.Mutex
 }
 
@@ -112,13 +113,14 @@ func (s *MCPServerHTTP) Initialize(ctx context.Context) error {
 	}
 	state := &mcpInitializeState{done: make(chan struct{})}
 	s.initState = state
+	startCloseSeq := s.closeSeq
 	s.mu.Unlock()
 
 	err := s.initialize(ctx)
 
 	s.mu.Lock()
 	state.err = err
-	if err == nil {
+	if err == nil && s.closeSeq == startCloseSeq {
 		s.initialized = true
 	}
 	if s.initState == state {
@@ -178,8 +180,13 @@ func (s *MCPServerHTTP) InvalidateCache() {
 func (s *MCPServerHTTP) Close() error {
 	s.InvalidateCache()
 	s.mu.Lock()
+	s.closeSeq++
 	s.initialized = false
+	client := s.client
 	s.mu.Unlock()
+	if client != nil {
+		client.CloseIdleConnections()
+	}
 	return nil
 }
 
@@ -550,8 +557,9 @@ func (s *MCPServerStdio) initialize(ctx context.Context) error {
 		return fmt.Errorf("initialize failed: %w", err)
 	}
 
-	// Send initialized notification
-	_ = s.sendNotification("initialized", map[string]interface{}{})
+	if err := s.sendNotification("initialized", map[string]interface{}{}); err != nil {
+		return fmt.Errorf("initialized notification failed: %w", err)
+	}
 
 	return nil
 }
@@ -694,11 +702,18 @@ func (s *MCPServerStdio) sendNotification(method string, params interface{}) err
 		return err
 	}
 	b = append(b, '\n')
-	_, err = s.stdin.Write(b)
+	s.mu.Lock()
+	stdin := s.stdin
+	s.mu.Unlock()
+	if stdin == nil {
+		return errors.New("MCP stdio transport closed")
+	}
+	_, err = stdin.Write(b)
 	return err
 }
 
 func (s *MCPServerStdio) readLoop() {
+	defer s.handleTransportClosed("MCP stdio transport closed")
 	scanner := bufio.NewScanner(s.stdout)
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -715,6 +730,21 @@ func (s *MCPServerStdio) readLoop() {
 			s.mu.Unlock()
 		}
 	}
+}
+
+func (s *MCPServerStdio) handleTransportClosed(message string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, ch := range s.pending {
+		delete(s.pending, id)
+		select {
+		case ch <- &jsonRPCResponse{JSONRPC: "2.0", ID: id, Error: &jsonRPCError{Code: -32000, Message: message}}:
+		default:
+		}
+	}
+	s.cacheDirty = true
+	s.toolsCache = nil
+	_ = s.closeTransportLocked()
 }
 
 type mcpProxyTool struct {

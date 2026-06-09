@@ -37,6 +37,30 @@ func TestNeuphonicTTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewNeuphonicTTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("NEUPHONIC_API_KEY", "env-key")
+
+	provider := NewNeuphonicTTS("", "")
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+	req, err := buildNeuphonicTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if got := req.Header.Get("x-api-key"); got != "env-key" {
+		t.Fatalf("x-api-key = %q, want env key", got)
+	}
+	if got := buildNeuphonicTTSWebsocketHeaders(provider).Get("x-api-key"); got != "env-key" {
+		t.Fatalf("websocket x-api-key = %q, want env key", got)
+	}
+
+	explicit := NewNeuphonicTTS("explicit-key", "")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestNeuphonicTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	provider := NewNeuphonicTTS("test-key", "")
 

@@ -212,8 +212,10 @@ run_or_codex() {
 run_worktree_tests() {
   local path="$1"
   local branch="$2"
+  local temp_root="$path/.tmp"
 
-  run_or_codex "$path" "$branch" env "GOCACHE=${GOCACHE:-$REPO_ROOT/.tmp}" "TMPDIR=${TMPDIR:-$REPO_ROOT/.tmp/gotmp}" go -C "$path" test ./...
+  mkdir -p "$temp_root" "$temp_root/gotmp" "$temp_root/gocache"
+  run_or_codex "$path" "$branch" env "GOCACHE=${GOCACHE:-$temp_root}" "TMPDIR=${TMPDIR:-$temp_root/gotmp}" go -C "$path" test ./...
 }
 
 echo "============================================================"

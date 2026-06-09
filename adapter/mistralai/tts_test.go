@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 
@@ -42,6 +43,34 @@ func TestMistralAITTSDefaultsMatchReference(t *testing.T) {
 	caps := provider.Capabilities()
 	if caps.Streaming {
 		t.Fatal("streaming = true, want false for chunked TTS")
+	}
+}
+
+func TestNewMistralAITTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("MISTRAL_API_KEY", "env-key")
+
+	provider, err := NewMistralAITTS("", "")
+	if err != nil {
+		t.Fatalf("new tts with env key: %v", err)
+	}
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+
+	explicit, err := NewMistralAITTS("explicit-key", "")
+	if err != nil {
+		t.Fatalf("new tts with explicit key: %v", err)
+	}
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+
+	t.Setenv("MISTRAL_API_KEY", "")
+	if err := os.Unsetenv("MISTRAL_API_KEY"); err != nil {
+		t.Fatalf("unset env: %v", err)
+	}
+	if _, err := NewMistralAITTS("", ""); err == nil || !strings.Contains(err.Error(), "mistral AI API key is required") {
+		t.Fatalf("error = %v, want missing API key error", err)
 	}
 }
 

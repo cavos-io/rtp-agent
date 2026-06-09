@@ -70,6 +70,20 @@ func TestExpFilterResetAlphaPreservesReferenceValue(t *testing.T) {
 	}
 }
 
+func TestExpFilterUpdateBaseUsesReferenceAssignment(t *testing.T) {
+	initial := 10.0
+	filter, err := NewExpFilterWithOptions(0.5, ExpFilterOptions{Initial: &initial})
+	if err != nil {
+		t.Fatalf("NewExpFilterWithOptions() error = %v", err)
+	}
+
+	filter.UpdateBase(2)
+
+	if got := filter.Apply(1, 14); got != 6 {
+		t.Fatalf("Apply() after UpdateBase(2) = %v, want reference assignment result 6", got)
+	}
+}
+
 func TestExpFilterLegacyConstructorKeepsMaximumClamp(t *testing.T) {
 	filter := NewExpFilter(0.5, 5)
 

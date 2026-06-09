@@ -11,6 +11,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -74,6 +75,9 @@ func WithMistralAITTSResponseFormat(responseFormat string) MistralAITTSOption {
 }
 
 func NewMistralAITTS(apiKey string, voice string, opts ...MistralAITTSOption) (*MistralAITTS, error) {
+	if apiKey == "" {
+		apiKey = os.Getenv("MISTRAL_API_KEY")
+	}
 	provider := &MistralAITTS{
 		apiKey:         apiKey,
 		baseURL:        defaultMistralAITTSBaseURL,
@@ -89,6 +93,9 @@ func NewMistralAITTS(apiKey string, voice string, opts ...MistralAITTSOption) (*
 	}
 	if provider.voice != "" && provider.refAudio != "" {
 		return nil, fmt.Errorf("only one of voice or ref_audio may be provided")
+	}
+	if provider.apiKey == "" {
+		return nil, fmt.Errorf("mistral AI API key is required. Set MISTRAL_API_KEY or pass api_key")
 	}
 	return provider, nil
 }
