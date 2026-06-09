@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -295,16 +296,31 @@ func TestMakeFunctionCallOutputMasksInternalErrors(t *testing.T) {
 func TestMakeFunctionCallOutputStringifiesValidOutputs(t *testing.T) {
 	call := FunctionCall{CallID: "call_lookup", Name: "lookup", Arguments: "{}"}
 
-	result := MakeFunctionCallOutput(call, 7, nil)
+	tests := []struct {
+		name   string
+		output any
+		want   string
+	}{
+		{name: "integer", output: 7, want: "7"},
+		{name: "true", output: true, want: "True"},
+		{name: "list", output: []any{1, "x", true}, want: "[1, 'x', True]"},
+		{name: "dict", output: map[string]any{"ok": true}, want: "{'ok': True}"},
+	}
 
-	if result.FncCallOut == nil {
-		t.Fatal("FncCallOut = nil, want successful output")
-	}
-	if result.FncCallOut.IsError || result.FncCallOut.Output != "7" {
-		t.Fatalf("FncCallOut = %#v, want stringified successful output", result.FncCallOut)
-	}
-	if result.RawOutput != 7 {
-		t.Fatalf("RawOutput = %#v, want original output", result.RawOutput)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := MakeFunctionCallOutput(call, tt.output, nil)
+
+			if result.FncCallOut == nil {
+				t.Fatal("FncCallOut = nil, want successful output")
+			}
+			if result.FncCallOut.IsError || result.FncCallOut.Output != tt.want {
+				t.Fatalf("FncCallOut = %#v, want output %q", result.FncCallOut, tt.want)
+			}
+			if !reflect.DeepEqual(result.RawOutput, tt.output) {
+				t.Fatalf("RawOutput = %#v, want original output %#v", result.RawOutput, tt.output)
+			}
+		})
 	}
 }
 
