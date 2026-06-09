@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"reflect"
 	"regexp"
 	"sort"
@@ -549,6 +550,10 @@ func functionOutputRepr(value any) string {
 			return "True"
 		}
 		return "False"
+	case float32:
+		return functionOutputFloatRepr(float64(v), 32)
+	case float64:
+		return functionOutputFloatRepr(v, 64)
 	case complex64:
 		return functionOutputComplexRepr(complex128(v), 32)
 	case complex128:
@@ -588,6 +593,19 @@ func functionOutputRepr(value any) string {
 		return "{" + strings.Join(parts, ", ") + "}"
 	}
 	return fmt.Sprint(value)
+}
+
+func functionOutputFloatRepr(value float64, bitSize int) string {
+	switch {
+	case math.IsInf(value, 1):
+		return "inf"
+	case math.IsInf(value, -1):
+		return "-inf"
+	case math.IsNaN(value):
+		return "nan"
+	default:
+		return strconv.FormatFloat(value, 'g', -1, bitSize)
+	}
 }
 
 func functionOutputStringRepr(value string) string {

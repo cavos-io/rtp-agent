@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -302,6 +303,8 @@ func TestMakeFunctionCallOutputStringifiesValidOutputs(t *testing.T) {
 		want   string
 	}{
 		{name: "integer", output: 7, want: "7"},
+		{name: "positive infinity", output: math.Inf(1), want: "inf"},
+		{name: "negative infinity", output: math.Inf(-1), want: "-inf"},
 		{name: "true", output: true, want: "True"},
 		{name: "complex", output: complex(1, 2), want: "(1+2j)"},
 		{name: "list", output: []any{1, "x", true}, want: "[1, 'x', True]"},
