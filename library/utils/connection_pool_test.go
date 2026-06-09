@@ -231,3 +231,43 @@ func TestConnectionPoolWithConnectionRemovesOnError(t *testing.T) {
 		t.Fatalf("closed = %#v, want [1]", closed)
 	}
 }
+
+func TestConnectionPoolWithConnectionRemovesOnPanic(t *testing.T) {
+	var next int
+	var closed []int
+	pool := NewConnectionPool(ConnectionPoolOptions[int]{
+		Connect: func(context.Context) (int, error) {
+			next++
+			return next, nil
+		},
+		Close: func(_ context.Context, conn int) error {
+			closed = append(closed, conn)
+			return nil
+		},
+	})
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != "boom" {
+				t.Fatalf("WithConnection panic = %#v, want boom", recovered)
+			}
+		}()
+		_ = pool.WithConnection(context.Background(), time.Second, func(conn int) error {
+			if conn != 1 {
+				t.Fatalf("WithConnection() conn = %d, want 1", conn)
+			}
+			panic("boom")
+		})
+	}()
+
+	fresh, err := pool.Get(context.Background(), time.Second)
+	if err != nil {
+		t.Fatalf("Get() after panic error = %v", err)
+	}
+	if fresh != 2 || pool.LastConnectionReused {
+		t.Fatalf("Get() after panic conn=%d reused=%v, want conn=2 reused=false", fresh, pool.LastConnectionReused)
+	}
+	if !reflect.DeepEqual(closed, []int{1}) {
+		t.Fatalf("closed = %#v, want [1]", closed)
+	}
+}

@@ -79,6 +79,12 @@ func (p *ConnectionPool[T]) WithConnection(ctx context.Context, timeout time.Dur
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			p.Remove(conn)
+			panic(recovered)
+		}
+	}()
 	if err := fn(conn); err != nil {
 		p.Remove(conn)
 		return err
