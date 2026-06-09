@@ -401,6 +401,7 @@ type inferenceTTSStream struct {
 	eventCh     chan *tts.SynthesizedAudio
 	mu          sync.Mutex
 	closed      bool
+	inputEnded  bool
 }
 
 func (s *inferenceTTSStream) PushText(text string) error {
@@ -408,6 +409,9 @@ func (s *inferenceTTSStream) PushText(text string) error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return fmt.Errorf("stream closed")
+	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
 	}
 	return s.tokenizer.PushText(text)
 }
@@ -418,12 +422,23 @@ func (s *inferenceTTSStream) Flush() error {
 	if s.closed {
 		return fmt.Errorf("stream closed")
 	}
-	s.tokenizer.Flush()
-
-	endPkt := map[string]interface{}{
-		"type": "session.flush",
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
 	}
-	return s.conn.WriteJSON(endPkt)
+	return s.tokenizer.Flush()
+}
+
+func (s *inferenceTTSStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("stream closed")
+	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
+	s.inputEnded = true
+	return s.tokenizer.EndInput()
 }
 
 func (s *inferenceTTSStream) Close() error {
@@ -434,7 +449,7 @@ func (s *inferenceTTSStream) Close() error {
 	}
 	s.closed = true
 	s.cancel()
-	s.tokenizer.Close()
+	s.tokenizer.AClose()
 	if s.connPool != nil {
 		s.connPool.Remove(s.conn)
 	}
@@ -459,6 +474,16 @@ func (s *inferenceTTSStream) run() {
 		for {
 			tok, err := s.tokenizer.Next()
 			if err != nil {
+				s.mu.Lock()
+				if s.closed {
+					s.mu.Unlock()
+					return
+				}
+				err = s.conn.WriteJSON(map[string]interface{}{"type": "session.flush"})
+				s.mu.Unlock()
+				if err != nil {
+					return
+				}
 				return
 			}
 

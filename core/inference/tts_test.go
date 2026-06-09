@@ -360,6 +360,76 @@ func TestInferenceTTSInputTranscriptIncludesReferenceExtra(t *testing.T) {
 	}
 }
 
+func TestInferenceTTSFlushOnlyFlushesTokenizerUntilEndInput(t *testing.T) {
+	writes := make(chan map[string]any, 8)
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{
+			onWriteJSON: func(msg map[string]any) {
+				writes <- msg
+			},
+		}, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	deadline := time.After(time.Second)
+	seenInput := false
+	for !seenInput {
+		select {
+		case msg := <-writes:
+			if msg["type"] == "session.flush" {
+				t.Fatal("Flush() wrote session.flush before input end")
+			}
+			if msg["type"] == "input_transcript" {
+				seenInput = true
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for input_transcript")
+		}
+	}
+
+	select {
+	case msg := <-writes:
+		if msg["type"] == "session.flush" {
+			t.Fatal("Flush() wrote session.flush before input end")
+		}
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	ending, ok := stream.(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+
+	deadline = time.After(time.Second)
+	for {
+		select {
+		case msg := <-writes:
+			if msg["type"] == "session.flush" {
+				return
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for final session.flush")
+		}
+	}
+}
+
 func TestInferenceTTSLanguageOptionMatchesReferencePackets(t *testing.T) {
 	writes := make(chan map[string]any, 4)
 	provider := NewTTS("cartesia/sonic-3:voice-id", "key", "secret", WithTTSLanguage("fr"))
