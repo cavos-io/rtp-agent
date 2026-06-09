@@ -2,8 +2,10 @@ package gradium
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -42,6 +44,27 @@ func TestNewGradiumTTSUsesEnvironmentAPIKey(t *testing.T) {
 	explicit := NewGradiumTTS("explicit-key", "")
 	if explicit.apiKey != "explicit-key" {
 		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
+func TestGradiumTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("GRADIUM_API_KEY", "")
+	provider := NewGradiumTTS("", "", WithGradiumTTSModelEndpoint("://bad-url"))
+
+	_, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("Synthesize returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "GRADIUM_API_KEY") {
+		t.Fatalf("Synthesize error = %q, want GRADIUM_API_KEY guidance", err)
+	}
+
+	_, err = provider.Stream(context.Background())
+	if err == nil {
+		t.Fatal("Stream returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "GRADIUM_API_KEY") {
+		t.Fatalf("Stream error = %q, want GRADIUM_API_KEY guidance", err)
 	}
 }
 
