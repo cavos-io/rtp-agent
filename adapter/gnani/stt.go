@@ -91,6 +91,10 @@ func (s *STT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if err := validateGnaniSTTAPIKey(s.apiKey); err != nil {
+		return nil, err
+	}
+
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildGnaniSTTWebsocketURL(s).String(), buildGnaniSTTWebsocketHeaders(s, language))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial gnani stt websocket: %w", err)
@@ -134,6 +138,10 @@ func buildGnaniSTTWebsocketHeaders(s *STT, language string) http.Header {
 }
 
 func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+	if err := validateGnaniSTTAPIKey(s.apiKey); err != nil {
+		return nil, err
+	}
+
 	var audio bytes.Buffer
 	for _, frame := range frames {
 		audio.Write(frame.Data)
@@ -159,6 +167,13 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 		return nil, err
 	}
 	return gnaniSpeechEventFromResponse(result, resolveSTTLanguage(s, language))
+}
+
+func validateGnaniSTTAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("gnani API key is required, either as argument or set %s environment variable", gnaniAPIKeyEnv)
+	}
+	return nil
 }
 
 func buildSTTRequest(ctx context.Context, s *STT, audio []byte, language string) (*http.Request, error) {

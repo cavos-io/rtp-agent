@@ -48,6 +48,27 @@ func TestNewGnaniSTTUsesEnvironmentAPIKey(t *testing.T) {
 	}
 }
 
+func TestGnaniSTTRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("GNANI_API_KEY", "")
+	provider := NewSTT("", WithSTTBaseURL("://bad-url"))
+
+	_, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatal("Recognize returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "GNANI_API_KEY") {
+		t.Fatalf("Recognize error = %q, want GNANI_API_KEY guidance", err)
+	}
+
+	_, err = provider.Stream(context.Background(), "")
+	if err == nil {
+		t.Fatal("Stream returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "GNANI_API_KEY") {
+		t.Fatalf("Stream error = %q, want GNANI_API_KEY guidance", err)
+	}
+}
+
 func TestGnaniSTTRecognizeRequestUsesReferenceMultipart(t *testing.T) {
 	provider := NewSTT("test-key")
 
