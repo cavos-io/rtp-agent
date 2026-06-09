@@ -1200,7 +1200,7 @@ func workflowNameOptionsFromConfig(cfg AppConfig) (workflows.GetNameOptions, err
 		lastName = *cfg.WorkflowNameLastName
 	}
 	if !firstName && !middleName && !lastName {
-		return workflows.GetNameOptions{}, fmt.Errorf("at least one of first_name, middle_name, or last_name must be true")
+		return workflows.GetNameOptions{}, fmt.Errorf("%s", "At least one of first_name, middle_name, or last_name must be True")
 	}
 	return workflows.GetNameOptions{
 		FirstName:              firstName,
