@@ -43,11 +43,11 @@ type MCPServerHTTP struct {
 	initialized bool
 	cacheDirty  bool
 	toolsCache  []Tool
-	initState   *mcpHTTPInitializeState
+	initState   *mcpInitializeState
 	mu          sync.Mutex
 }
 
-type mcpHTTPInitializeState struct {
+type mcpInitializeState struct {
 	done chan struct{}
 	err  error
 }
@@ -109,7 +109,7 @@ func (s *MCPServerHTTP) Initialize(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
-	state := &mcpHTTPInitializeState{done: make(chan struct{})}
+	state := &mcpInitializeState{done: make(chan struct{})}
 	s.initState = state
 	s.mu.Unlock()
 
@@ -308,6 +308,7 @@ type MCPServerStdio struct {
 
 	cacheDirty bool
 	toolsCache []Tool
+	initState  *mcpInitializeState
 }
 
 type MCPToolset struct {
@@ -474,9 +475,38 @@ func serializeMCPToolContent(content []mcpToolContent) (string, error) {
 }
 
 func (s *MCPServerStdio) Initialize(ctx context.Context) error {
-	if s.Initialized() {
+	s.mu.Lock()
+	if s.initState != nil {
+		state := s.initState
+		s.mu.Unlock()
+		select {
+		case <-state.done:
+			return state.err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if s.stdin != nil {
+		s.mu.Unlock()
 		return nil
 	}
+	state := &mcpInitializeState{done: make(chan struct{})}
+	s.initState = state
+	s.mu.Unlock()
+
+	err := s.initialize(ctx)
+
+	s.mu.Lock()
+	state.err = err
+	if s.initState == state {
+		s.initState = nil
+	}
+	close(state.done)
+	s.mu.Unlock()
+	return err
+}
+
+func (s *MCPServerStdio) initialize(ctx context.Context) error {
 	s.cmd = exec.CommandContext(context.Background(), s.Command, s.Args...)
 	s.cmd.Dir = s.Cwd
 	if len(s.Env) > 0 {
@@ -570,7 +600,12 @@ func (s *MCPServerStdio) setToolsCache(tools []Tool) {
 }
 
 func (s *MCPServerStdio) Initialized() bool {
-	return s != nil && s.stdin != nil
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stdin != nil && s.initState == nil
 }
 
 func (s *MCPServerStdio) Close() error {

@@ -677,6 +677,85 @@ done
 	}
 }
 
+func TestMCPServerStdioInitializeCoalescesConcurrentCalls(t *testing.T) {
+	tmpDir := t.TempDir()
+	startedPath := filepath.Join(tmpDir, "started")
+	releasePath := filepath.Join(tmpDir, "release")
+	scriptPath := filepath.Join(tmpDir, "mcp-delayed-init-test.sh")
+	script := `#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      : > "$MCP_STARTED_PATH"
+      while [ ! -f "$MCP_RELEASE_PATH" ]; do
+        sleep 0.01
+      done
+      printf '{"jsonrpc":"2.0","id":1,"result":{}}\n'
+      ;;
+    *'"method":"initialized"'*)
+      :
+      ;;
+  esac
+done
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write helper script: %v", err)
+	}
+
+	server := NewMCPServerStdio("sh", []string{scriptPath})
+	server.Env = map[string]string{
+		"MCP_STARTED_PATH": startedPath,
+		"MCP_RELEASE_PATH": releasePath,
+	}
+	defer server.Close()
+
+	errCh := make(chan error, 2)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go func() {
+		errCh <- server.Initialize(ctx)
+	}()
+
+	waitForFile(t, startedPath)
+
+	go func() {
+		errCh <- server.Initialize(ctx)
+	}()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("concurrent Initialize() returned before first initialize completed: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	if err := os.WriteFile(releasePath, []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write release file: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-errCh:
+			if err != nil {
+				t.Fatalf("Initialize() error = %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Initialize() did not return after release")
+		}
+	}
+}
+
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("file %s was not created", path)
+}
+
 type fakeMCPWriteCloser struct {
 	server  *MCPServerStdio
 	result  json.RawMessage
