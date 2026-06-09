@@ -220,6 +220,35 @@ func TestInferenceSTTFinalTranscriptEmitsStructuredRecognitionUsage(t *testing.T
 	}
 }
 
+func TestInferenceSTTFinalTranscriptOmitsZeroDurationUsage(t *testing.T) {
+	stream := &inferenceSTTStream{
+		eventCh: make(chan *stt.SpeechEvent, 4),
+	}
+
+	stream.processTranscript(map[string]interface{}{
+		"request_id": "req-1",
+		"transcript": "hello",
+		"language":   "en",
+		"start":      2.0,
+		"duration":   0.7,
+	}, true)
+
+	start := <-stream.eventCh
+	if start.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event type = %s, want start_of_speech", start.Type)
+	}
+
+	final := <-stream.eventCh
+	if final.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("second event type = %s, want final_transcript", final.Type)
+	}
+
+	end := <-stream.eventCh
+	if end.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("third event type = %s, want end_of_speech", end.Type)
+	}
+}
+
 func TestInferenceSTTTranscriptPreservesWordsAndMetadata(t *testing.T) {
 	stream := &inferenceSTTStream{
 		eventCh: make(chan *stt.SpeechEvent, 3),

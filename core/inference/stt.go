@@ -417,15 +417,19 @@ func (s *inferenceSTTStream) processTranscript(data map[string]interface{}, isFi
 	if isFinal {
 		s.mu.Lock()
 		duration := s.audioDuration
-		s.audioDuration = 0
+		if duration > 0 {
+			s.audioDuration = 0
+		}
 		s.mu.Unlock()
 
-		s.eventCh <- &stt.SpeechEvent{
-			Type:      stt.SpeechEventRecognitionUsage,
-			RequestID: requestID,
-			RecognitionUsage: &stt.RecognitionUsage{
-				AudioDuration: duration,
-			},
+		if duration > 0 {
+			s.eventCh <- &stt.SpeechEvent{
+				Type:      stt.SpeechEventRecognitionUsage,
+				RequestID: requestID,
+				RecognitionUsage: &stt.RecognitionUsage{
+					AudioDuration: duration,
+				},
+			}
 		}
 
 		s.eventCh <- &stt.SpeechEvent{
