@@ -210,6 +210,39 @@ func TestMCPServerHTTPInitializedReflectsLifecycle(t *testing.T) {
 	}
 }
 
+func TestMCPServerHTTPInitializeIsIdempotent(t *testing.T) {
+	var initializeCalls int
+	httpClient := newMCPTestHTTPClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req jsonRPCRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		switch req.Method {
+		case "initialize":
+			initializeCalls++
+			writeMCPHTTPResponse(t, w, req.ID, map[string]any{"protocolVersion": "2024-11-05"})
+		case "initialized":
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			t.Fatalf("unexpected MCP method %q", req.Method)
+		}
+	}))
+
+	server := NewMCPServerHTTP("https://mcp.test/rpc")
+	server.client = httpClient
+
+	if err := server.Initialize(context.Background()); err != nil {
+		t.Fatalf("first Initialize() error = %v", err)
+	}
+	if err := server.Initialize(context.Background()); err != nil {
+		t.Fatalf("second Initialize() error = %v", err)
+	}
+	if initializeCalls != 1 {
+		t.Fatalf("initialize calls = %d, want 1", initializeCalls)
+	}
+}
+
 func TestMCPServerHTTPSetHeadersAppliesToSubsequentRequests(t *testing.T) {
 	httpClient := newMCPTestHTTPClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req jsonRPCRequest
