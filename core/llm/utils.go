@@ -608,10 +608,12 @@ func functionOutputFloatRepr(value float64, bitSize int) string {
 			return "-0.0"
 		}
 		return "0.0"
-	case math.Trunc(value) == value:
-		return strconv.FormatFloat(value, 'f', 1, bitSize)
 	default:
-		return strconv.FormatFloat(value, 'g', -1, bitSize)
+		text := strconv.FormatFloat(value, 'g', -1, bitSize)
+		if math.Trunc(value) == value && !strings.ContainsAny(text, ".eE") {
+			text += ".0"
+		}
+		return text
 	}
 }
 
