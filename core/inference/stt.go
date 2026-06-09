@@ -671,6 +671,8 @@ func (s *inferenceSTTStream) run() {
 				s.mu.Unlock()
 
 				if err != nil {
+					s.setStreamError(fmt.Errorf("failed to send input_audio message to LiveKit Inference STT: %w", err))
+					s.Close()
 					return
 				}
 			}

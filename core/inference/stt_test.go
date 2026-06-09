@@ -2,6 +2,7 @@ package inference
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -950,14 +951,64 @@ func TestInferenceSTTUnexpectedCloseReturnsNextError(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTInputAudioWriteErrorReturnsNextError(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{
+		readBlock:  make(chan struct{}),
+		writeErr:   errors.New("write failed"),
+		writeErrAt: 2,
+	}
+	provider := NewSTT("livekit/stt", "key", "secret")
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte("audio"),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		errCh <- err
+	}()
+
+	select {
+	case err = <-errCh:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for input audio write error")
+	}
+	if err == nil {
+		t.Fatal("Next() error = nil, want input audio write error")
+	}
+	if !strings.Contains(err.Error(), "failed to send input_audio message to LiveKit Inference STT") {
+		t.Fatalf("Next() error = %v, want input audio write error", err)
+	}
+}
+
 type fakeInferenceWebsocketConn struct {
-	writes    []map[string]interface{}
-	closed    bool
-	readBlock chan struct{}
-	readCh    chan []byte
+	writes     []map[string]interface{}
+	closed     bool
+	readBlock  chan struct{}
+	readCh     chan []byte
+	writeErr   error
+	writeErrAt int
 }
 
 func (f *fakeInferenceWebsocketConn) WriteJSON(v interface{}) error {
+	if f.writeErr != nil && (f.writeErrAt == 0 || len(f.writes)+1 >= f.writeErrAt) {
+		return f.writeErr
+	}
 	msg, _ := v.(map[string]interface{})
 	f.writes = append(f.writes, msg)
 	return nil
