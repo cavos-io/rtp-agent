@@ -28,6 +28,20 @@ func TestStripThinkingTokensTracksHiddenChunks(t *testing.T) {
 	}
 }
 
+func TestSerializeImageRejectsUnsupportedMIMETypeWithReferenceError(t *testing.T) {
+	_, err := SerializeImage(&ImageContent{
+		Image: "data:image/bmp;base64,AA==",
+	})
+	if err == nil {
+		t.Fatal("SerializeImage() error = nil, want unsupported mime_type error")
+	}
+
+	want := "Unsupported mime_type image/bmp. Must be jpeg, png, webp, or gif"
+	if err.Error() != want {
+		t.Fatalf("SerializeImage() error = %q, want %q", err, want)
+	}
+}
+
 func TestParseFunctionArgumentsParsesJSONObject(t *testing.T) {
 	args, err := ParseFunctionArguments(`{"city":"Paris","limit":3}`)
 	if err != nil {
