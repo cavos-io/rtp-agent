@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -138,6 +139,9 @@ func WithHumeTTSContextUtterances(context []HumeTTSUtterance) HumeTTSOption {
 }
 
 func NewHumeTTS(apiKey string, model string, opts ...HumeTTSOption) *HumeTTS {
+	if apiKey == "" {
+		apiKey = os.Getenv("HUME_API_KEY")
+	}
 	provider := &HumeTTS{
 		apiKey:        apiKey,
 		baseURL:       defaultHumeBaseURL,

@@ -35,6 +35,27 @@ func TestHumeTTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewHumeTTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("HUME_API_KEY", "env-key")
+
+	provider := NewHumeTTS("", "")
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+	req, err := buildHumeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if got := req.Header.Get("X-Hume-Api-Key"); got != "env-key" {
+		t.Fatalf("X-Hume-Api-Key = %q, want env key", got)
+	}
+
+	explicit := NewHumeTTS("explicit-key", "")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestHumeTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	provider := NewHumeTTS("test-key", "")
 
