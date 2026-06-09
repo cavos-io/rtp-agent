@@ -468,7 +468,7 @@ func ExecuteFunctionCall(ctx context.Context, toolCall *FunctionToolCall, toolCt
 
 	parsedArgs, err := ParseFunctionArguments(args)
 	if err != nil {
-		return MakeToolOutput(fncCall, nil, err)
+		return MakeToolOutput(fncCall, nil, NewToolError(fmt.Sprintf("Error parsing arguments for `%s`: %s", toolCall.Name, err.Error())))
 	}
 	encodedArgs, err := json.Marshal(parsedArgs)
 	if err != nil {

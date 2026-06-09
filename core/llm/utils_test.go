@@ -534,6 +534,38 @@ func TestExecuteFunctionCallRepairsMalformedArgumentsBeforeExecutingTool(t *test
 	}
 }
 
+func TestExecuteFunctionCallReportsArgumentParseErrorToToolOutput(t *testing.T) {
+	tool := &recordingTool{name: "lookup", result: "Paris"}
+	toolCtx := NewToolContext([]interface{}{tool})
+
+	result := ExecuteFunctionCall(context.Background(), &FunctionToolCall{
+		Name:      "lookup",
+		CallID:    "call_lookup",
+		Arguments: `["Paris"]`,
+	}, toolCtx)
+
+	if tool.args != "" {
+		t.Fatalf("tool args = %q, want tool not called after argument parse error", tool.args)
+	}
+	if result.FncCall.Arguments != `["Paris"]` {
+		t.Fatalf("FncCall.Arguments = %q, want raw invalid arguments", result.FncCall.Arguments)
+	}
+	if result.FncCallOut == nil {
+		t.Fatal("FncCallOut = nil, want visible argument parse error")
+	}
+	want := "Error parsing arguments for `lookup`: expected dict from function arguments, got list: [\"Paris\"]"
+	if !result.FncCallOut.IsError || result.FncCallOut.Output != want {
+		t.Fatalf("FncCallOut = %#v, want visible parse error %q", result.FncCallOut, want)
+	}
+	var toolErr ToolError
+	if !errors.As(result.RawError, &toolErr) {
+		t.Fatalf("RawError = %T, want ToolError", result.RawError)
+	}
+	if toolErr.Message != want {
+		t.Fatalf("ToolError.Message = %q, want %q", toolErr.Message, want)
+	}
+}
+
 func TestExecuteFunctionCallNormalizesToolError(t *testing.T) {
 	tool := &recordingTool{name: "lookup", err: NewToolError("visible failure")}
 	toolCtx := NewToolContext([]interface{}{tool})
