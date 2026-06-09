@@ -409,7 +409,7 @@ func (s *inferenceSTTStream) processTranscript(data map[string]interface{}, isFi
 
 	if !s.speaking {
 		s.speaking = true
-		s.eventCh <- &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech, RequestID: requestID}
+		s.eventCh <- &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech}
 	}
 
 	speechData := s.buildSpeechData(data)
@@ -440,7 +440,7 @@ func (s *inferenceSTTStream) processTranscript(data map[string]interface{}, isFi
 
 		if s.speaking {
 			s.speaking = false
-			s.eventCh <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech, RequestID: requestID}
+			s.eventCh <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
 		}
 	} else {
 		s.eventCh <- &stt.SpeechEvent{

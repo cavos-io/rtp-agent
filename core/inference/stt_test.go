@@ -249,6 +249,42 @@ func TestInferenceSTTFinalTranscriptOmitsZeroDurationUsage(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTLifecycleEventsOmitRequestID(t *testing.T) {
+	stream := &inferenceSTTStream{
+		eventCh: make(chan *stt.SpeechEvent, 3),
+	}
+
+	stream.processTranscript(map[string]interface{}{
+		"request_id": "req-1",
+		"transcript": "hello",
+		"language":   "en",
+	}, true)
+
+	start := <-stream.eventCh
+	if start.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event type = %s, want start_of_speech", start.Type)
+	}
+	if start.RequestID != "" {
+		t.Fatalf("start RequestID = %q, want empty", start.RequestID)
+	}
+
+	final := <-stream.eventCh
+	if final.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("second event type = %s, want final_transcript", final.Type)
+	}
+	if final.RequestID != "req-1" {
+		t.Fatalf("final RequestID = %q, want req-1", final.RequestID)
+	}
+
+	end := <-stream.eventCh
+	if end.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("third event type = %s, want end_of_speech", end.Type)
+	}
+	if end.RequestID != "" {
+		t.Fatalf("end RequestID = %q, want empty", end.RequestID)
+	}
+}
+
 func TestInferenceSTTTranscriptPreservesWordsAndMetadata(t *testing.T) {
 	stream := &inferenceSTTStream{
 		eventCh: make(chan *stt.SpeechEvent, 3),
