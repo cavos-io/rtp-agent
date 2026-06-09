@@ -36,6 +36,7 @@ type OpenAILLM struct {
 	toolChoice           llm.ToolChoice
 	defaultReasoning     bool
 	extraHeaders         map[string]string
+	extraQuery           map[string]string
 }
 
 type OpenAILLMOption func(*OpenAILLM)
@@ -149,6 +150,12 @@ func WithOpenAILLMExtraHeaders(headers map[string]string) OpenAILLMOption {
 	}
 }
 
+func WithOpenAILLMExtraQuery(query map[string]string) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		l.extraQuery = cloneOpenAIStringMap(query)
+	}
+}
+
 func withOpenAILLMHTTPClient(httpClient openai.HTTPDoer) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		l.httpClient = httpClient
@@ -180,6 +187,7 @@ func newOpenAILLMWithConfigAndModel(config openai.ClientConfig, model string, op
 	}
 	applyOpenAIHTTPClient(provider, &config)
 	wrapOpenAIExtraHeaders(provider, &config)
+	wrapOpenAIExtraQuery(provider, &config)
 	provider.client = openai.NewClientWithConfig(config)
 	return provider, nil
 }
@@ -232,6 +240,7 @@ func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 		}
 	}
 	wrapOpenAIExtraHeaders(provider, &config)
+	wrapOpenAIExtraQuery(provider, &config)
 	provider.client = openai.NewClientWithConfig(config)
 	provider.baseURL = config.BaseURL
 	return provider, nil
@@ -275,6 +284,7 @@ func NewOpenAILLMWithBaseURLAndHTTPClient(apiKey string, model string, baseURL s
 	}
 	applyOpenAIHTTPClient(provider, &config)
 	wrapOpenAIExtraHeaders(provider, &config)
+	wrapOpenAIExtraQuery(provider, &config)
 	provider.client = openai.NewClientWithConfig(config)
 	return provider
 }
@@ -294,6 +304,15 @@ func wrapOpenAIExtraHeaders(provider *OpenAILLM, config *openai.ClientConfig) {
 	}
 }
 
+func wrapOpenAIExtraQuery(provider *OpenAILLM, config *openai.ClientConfig) {
+	if len(provider.extraQuery) > 0 {
+		config.HTTPClient = &extraQueryHTTPClient{
+			base:  config.HTTPClient,
+			query: cloneOpenAIStringMap(provider.extraQuery),
+		}
+	}
+}
+
 type extraHeadersHTTPClient struct {
 	base    openai.HTTPDoer
 	headers map[string]string
@@ -308,6 +327,25 @@ func (c *extraHeadersHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	for key, value := range c.headers {
 		cloned.Header.Set(key, value)
 	}
+	return base.Do(cloned)
+}
+
+type extraQueryHTTPClient struct {
+	base  openai.HTTPDoer
+	query map[string]string
+}
+
+func (c *extraQueryHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	base := c.base
+	if base == nil {
+		base = http.DefaultClient
+	}
+	cloned := req.Clone(req.Context())
+	query := cloned.URL.Query()
+	for key, value := range c.query {
+		query.Set(key, value)
+	}
+	cloned.URL.RawQuery = query.Encode()
 	return base.Do(cloned)
 }
 
