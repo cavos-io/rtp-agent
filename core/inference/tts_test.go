@@ -476,6 +476,94 @@ func TestInferenceTTSExtraKwargsMatchReferencePackets(t *testing.T) {
 	}
 }
 
+func TestInferenceTTSUpdateOptionsMatchReferenceFutureStreams(t *testing.T) {
+	writes := make(chan map[string]any, 8)
+	provider := NewTTS("cartesia/sonic-3", "key", "secret", WithTTSExtraKwargs(map[string]any{
+		"temperature": 0.2,
+	}))
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{
+			onWriteJSON: func(msg map[string]any) {
+				writes <- msg
+			},
+		}, nil
+	}
+
+	provider.UpdateOptions(
+		WithTTSModel("elevenlabs/turbo"),
+		WithTTSVoice("voice-updated"),
+		WithTTSLanguage("id"),
+		WithTTSExtraKwargs(map[string]any{"sync_alignment": true}),
+	)
+
+	if got := provider.Model(); got != "elevenlabs/turbo" {
+		t.Fatalf("Model = %q, want elevenlabs/turbo", got)
+	}
+	if !provider.Capabilities().AlignedTranscript {
+		t.Fatal("AlignedTranscript = false, want true after sync_alignment update")
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	session := <-writes
+	if session["type"] != "session.create" {
+		t.Fatalf("first write type = %v, want session.create", session["type"])
+	}
+	if session["model"] != "elevenlabs/turbo" {
+		t.Fatalf("session.create model = %#v, want elevenlabs/turbo", session["model"])
+	}
+	if session["voice"] != "voice-updated" {
+		t.Fatalf("session.create voice = %#v, want voice-updated", session["voice"])
+	}
+	sessionExtra, ok := session["extra"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("session.create extra = %#v, want map", session["extra"])
+	}
+	if sessionExtra["temperature"] != 0.2 || sessionExtra["sync_alignment"] != true {
+		t.Fatalf("session.create extra = %#v, want merged extra kwargs", sessionExtra)
+	}
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	var input map[string]any
+	deadline := time.After(time.Second)
+	for input == nil {
+		select {
+		case msg := <-writes:
+			if msg["type"] == "input_transcript" {
+				input = msg
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for input_transcript")
+		}
+	}
+
+	config, ok := input["generation_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("generation_config = %#v, want map", input["generation_config"])
+	}
+	if config["model"] != "elevenlabs/turbo" || config["voice"] != "voice-updated" || config["language"] != "id" {
+		t.Fatalf("generation_config = %#v, want updated model, voice, and language", config)
+	}
+	extra, ok := input["extra"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("input extra = %#v, want map", input["extra"])
+	}
+	if extra["temperature"] != 0.2 || extra["sync_alignment"] != true {
+		t.Fatalf("input extra = %#v, want merged extra kwargs", extra)
+	}
+}
+
 func TestInferenceTTSFallbackModelsMatchReferenceSessionCreate(t *testing.T) {
 	writes := make(chan map[string]any, 4)
 	provider := NewTTS("cartesia/sonic-3", "key", "secret", WithTTSFallbackModels(

@@ -50,6 +50,22 @@ func WithSentenceTokenizer(tokenizer tokenize.SentenceTokenizer) TTSOption {
 	}
 }
 
+func WithTTSModel(model string) TTSOption {
+	return func(t *TTS) {
+		modelName, voice := ttsModelAndVoice(model, "")
+		t.model = modelName
+		if voice != "" {
+			t.voice = voice
+		}
+	}
+}
+
+func WithTTSVoice(voice string) TTSOption {
+	return func(t *TTS) {
+		t.voice = voice
+	}
+}
+
 func WithTTSLanguage(language string) TTSOption {
 	return func(t *TTS) {
 		t.language = language
@@ -58,7 +74,15 @@ func WithTTSLanguage(language string) TTSOption {
 
 func WithTTSExtraKwargs(extra map[string]any) TTSOption {
 	return func(t *TTS) {
-		t.extraKwargs = cloneTTSExtra(extra)
+		if len(extra) == 0 {
+			return
+		}
+		if t.extraKwargs == nil {
+			t.extraKwargs = make(map[string]any, len(extra))
+		}
+		for key, value := range extra {
+			t.extraKwargs[key] = value
+		}
 	}
 }
 
@@ -86,6 +110,12 @@ func NewTTS(model string, apiKey, apiSecret string, opts ...TTSOption) *TTS {
 		opt(t)
 	}
 	return t
+}
+
+func (t *TTS) UpdateOptions(opts ...TTSOption) {
+	for _, opt := range opts {
+		opt(t)
+	}
 }
 
 type FallbackModel struct {
