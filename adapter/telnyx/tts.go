@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sync"
 	"time"
 
@@ -42,6 +43,9 @@ func WithTelnyxTTSBaseURL(baseURL string) TelnyxTTSOption {
 }
 
 func NewTelnyxTTS(apiKey string, voice string, opts ...TelnyxTTSOption) *TelnyxTTS {
+	if apiKey == "" {
+		apiKey = os.Getenv(telnyxAPIKeyEnv)
+	}
 	if voice == "" {
 		voice = defaultTelnyxTTSVoice
 	}

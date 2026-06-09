@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sync"
 	"time"
 
@@ -23,6 +24,7 @@ const (
 	defaultTelnyxSTTTranscriptionEngine = "telnyx"
 	defaultTelnyxSTTSampleRate          = 16000
 	telnyxSTTNumChannels                = 1
+	telnyxAPIKeyEnv                     = "TELNYX_API_KEY"
 )
 
 type TelnyxSTT struct {
@@ -69,6 +71,9 @@ func WithTelnyxSTTSampleRate(sampleRate int) TelnyxSTTOption {
 }
 
 func NewTelnyxSTT(apiKey string, opts ...TelnyxSTTOption) *TelnyxSTT {
+	if apiKey == "" {
+		apiKey = os.Getenv(telnyxAPIKeyEnv)
+	}
 	provider := &TelnyxSTT{
 		apiKey:              apiKey,
 		baseURL:             defaultTelnyxSTTBaseURL,
