@@ -29,6 +29,48 @@ func TestNewSTTUsesReferenceCredentialEnvFallback(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTStreamRequiresReferenceCredentials(t *testing.T) {
+	tests := []struct {
+		name      string
+		apiKey    string
+		apiSecret string
+		want      string
+	}{
+		{
+			name: "missing key",
+			want: "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable",
+		},
+		{
+			name:      "missing secret",
+			apiKey:    "key",
+			apiSecret: "",
+			want:      "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("LIVEKIT_INFERENCE_API_KEY", "")
+			t.Setenv("LIVEKIT_INFERENCE_API_SECRET", "")
+			t.Setenv("LIVEKIT_API_KEY", "")
+			t.Setenv("LIVEKIT_API_SECRET", "")
+
+			provider := NewSTT("deepgram/nova-3", tt.apiKey, tt.apiSecret)
+
+			stream, err := provider.Stream(context.Background(), "en")
+			if stream != nil {
+				stream.Close()
+			}
+			if err == nil {
+				t.Fatal("Stream() error = nil, want missing credential error")
+			}
+			if got := err.Error(); got != tt.want {
+				t.Fatalf("Stream() error = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestInferenceSTTCapabilitiesReportReferenceWordAlignment(t *testing.T) {
 	provider := NewSTT("deepgram/nova-3", "key", "secret")
 

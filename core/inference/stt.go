@@ -164,6 +164,13 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 }
 
 func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if s.apiKey == "" {
+		return nil, fmt.Errorf("api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable")
+	}
+	if s.apiSecret == "" {
+		return nil, fmt.Errorf("api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable")
+	}
+
 	token, err := CreateAccessToken(s.apiKey, s.apiSecret, InferenceAccessTokenTTL)
 	if err != nil {
 		return nil, err
