@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -90,6 +91,9 @@ func WithLMNTTTSTopP(topP float64) LMNTTTSOption {
 }
 
 func NewLMNTTTS(apiKey string, voice string, opts ...LMNTTTSOption) *LMNTTTS {
+	if apiKey == "" {
+		apiKey = os.Getenv("LMNT_API_KEY")
+	}
 	provider := &LMNTTTS{
 		apiKey:      apiKey,
 		voice:       voice,
