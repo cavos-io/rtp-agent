@@ -263,7 +263,7 @@ func (t *TTS) connectTTSWebsocket(ctx context.Context) (inferenceTTSConn, error)
 
 	if err := conn.WriteJSON(createParams); err != nil {
 		conn.Close()
-		return nil, err
+		return nil, fmt.Errorf("failed to send session.create message to LiveKit Inference TTS: %w", err)
 	}
 
 	return conn, nil

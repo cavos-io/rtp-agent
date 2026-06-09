@@ -227,10 +227,14 @@ func TestTTSWebsocketSendsReferenceContextHeaders(t *testing.T) {
 type recordingTTSConn struct {
 	closed      atomic.Bool
 	readCh      chan []byte
+	writeErr    error
 	onWriteJSON func(map[string]any)
 }
 
 func (c *recordingTTSConn) WriteJSON(v any) error {
+	if c.writeErr != nil {
+		return c.writeErr
+	}
 	if msg, ok := v.(map[string]any); ok && c.onWriteJSON != nil {
 		c.onWriteJSON(msg)
 	}
@@ -280,6 +284,29 @@ func TestTTSConnectionPoolUsesReferenceMaxSessionDuration(t *testing.T) {
 	got := time.Duration(pool.FieldByName("opts").FieldByName("MaxSessionDuration").Int())
 	if got != 5*time.Minute {
 		t.Fatalf("MaxSessionDuration = %v, want 5m reference duration", got)
+	}
+}
+
+func TestInferenceTTSSessionCreateWriteErrorMatchesReference(t *testing.T) {
+	conn := &recordingTTSConn{writeErr: errors.New("write failed")}
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if stream != nil {
+		stream.Close()
+	}
+	if err == nil {
+		t.Fatal("Stream() error = nil, want session.create write error")
+	}
+	if !strings.Contains(err.Error(), "failed to send session.create message to LiveKit Inference TTS") {
+		t.Fatalf("Stream() error = %v, want reference session.create write error", err)
+	}
+	if !conn.closed.Load() {
+		t.Fatal("connection closed = false, want true after session.create write error")
 	}
 }
 
