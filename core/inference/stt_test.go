@@ -433,6 +433,27 @@ func TestInferenceSTTFallbackModelsMatchReferenceSessionCreate(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTFallbackModelStringOmitsReferenceLanguage(t *testing.T) {
+	_, params := sttSessionCreateParams("deepgram/nova-3", "", "", 0, nil, []FallbackModel{
+		{Model: "cartesia/ink-whisper:es"},
+	}, nil)
+
+	fallback, ok := params["fallback"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("fallback = %#v, want map", params["fallback"])
+	}
+	models, ok := fallback["models"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("fallback.models = %#v, want model maps", fallback["models"])
+	}
+	if len(models) != 1 {
+		t.Fatalf("fallback models = %#v, want 1 entry", models)
+	}
+	if models[0]["model"] != "cartesia/ink-whisper" {
+		t.Fatalf("fallback model = %#v, want cartesia/ink-whisper", models[0])
+	}
+}
+
 func TestInferenceSTTFinalTranscriptEmitsStructuredRecognitionUsage(t *testing.T) {
 	stream := &inferenceSTTStream{
 		eventCh:       make(chan *stt.SpeechEvent, 4),

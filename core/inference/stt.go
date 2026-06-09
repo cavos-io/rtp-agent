@@ -278,8 +278,9 @@ func sttSessionCreateParams(model string, language string, encoding string, samp
 func sttFallbackModelsPayload(models []FallbackModel) []map[string]interface{} {
 	payload := make([]map[string]interface{}, 0, len(models))
 	for _, model := range models {
+		modelName, _ := sttModelAndLanguage(model.Model, "")
 		payload = append(payload, map[string]interface{}{
-			"model": model.Model,
+			"model": modelName,
 			"extra": sttExtraPayload(model.ExtraKwargs),
 		})
 	}
