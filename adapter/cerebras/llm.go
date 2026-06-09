@@ -2,6 +2,7 @@ package cerebras
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/cavos-io/rtp-agent/adapter/openai"
@@ -15,6 +16,7 @@ const (
 
 type CerebrasLLM struct {
 	inner   *openai.OpenAILLM
+	apiKey  string
 	baseURL string
 }
 
@@ -22,8 +24,10 @@ func NewCerebrasLLM(apiKey string, model string) *CerebrasLLM {
 	if model == "" {
 		model = defaultCerebrasModel
 	}
+	resolvedAPIKey := resolveCerebrasAPIKey(apiKey)
 	return &CerebrasLLM{
-		inner:   openai.NewOpenAILLMWithBaseURL(resolveCerebrasAPIKey(apiKey), model, defaultCerebrasBaseURL),
+		inner:   openai.NewOpenAILLMWithBaseURL(resolvedAPIKey, model, defaultCerebrasBaseURL),
+		apiKey:  resolvedAPIKey,
 		baseURL: defaultCerebrasBaseURL,
 	}
 }
@@ -48,5 +52,8 @@ func (l *CerebrasLLM) BaseURL() string {
 }
 
 func (l *CerebrasLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+	if l.apiKey == "" {
+		return nil, fmt.Errorf("cerebras API key is required, either as argument or set CEREBRAS_API_KEY environmental variable")
+	}
 	return l.inner.Chat(ctx, chatCtx, opts...)
 }
