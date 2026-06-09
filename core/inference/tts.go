@@ -22,6 +22,7 @@ import (
 type TTS struct {
 	model             string
 	voice             string
+	language          string
 	apiKey            string
 	apiSecret         string
 	baseURL           string
@@ -44,6 +45,12 @@ type inferenceTTSDialer func(ctx context.Context, endpoint string, header http.H
 func WithSentenceTokenizer(tokenizer tokenize.SentenceTokenizer) TTSOption {
 	return func(t *TTS) {
 		t.sentenceTokenizer = tokenizer
+	}
+}
+
+func WithTTSLanguage(language string) TTSOption {
+	return func(t *TTS) {
+		t.language = language
 	}
 }
 
@@ -156,7 +163,7 @@ func (t *TTS) connectTTSWebsocket(ctx context.Context) (inferenceTTSConn, error)
 		return nil, err
 	}
 
-	modelName, createParams := ttsSessionCreateParams(t.model, t.voice)
+	modelName, createParams := ttsSessionCreateParams(t.model, t.voice, t.language)
 
 	wsURL, err := url.Parse(t.baseURL + "/tts")
 	if err != nil {
@@ -191,7 +198,7 @@ func defaultInferenceTTSDialer(ctx context.Context, endpoint string, header http
 	return conn, nil
 }
 
-func ttsSessionCreateParams(model string, voice string) (string, map[string]interface{}) {
+func ttsSessionCreateParams(model string, voice string, language string) (string, map[string]interface{}) {
 	modelName, voice := ttsModelAndVoice(model, voice)
 	createParams := map[string]interface{}{
 		"type":        "session.create",
@@ -204,6 +211,9 @@ func ttsSessionCreateParams(model string, voice string) (string, map[string]inte
 	}
 	if voice != "" {
 		createParams["voice"] = voice
+	}
+	if language != "" {
+		createParams["language"] = language
 	}
 	return modelName, createParams
 }
@@ -290,14 +300,22 @@ func (s *inferenceTTSStream) run() {
 				return
 			}
 
+			generationConfig := map[string]interface{}{}
+			if s.tts.model != "" {
+				generationConfig["model"] = s.tts.model
+			}
+			if s.tts.voice != "" {
+				generationConfig["voice"] = s.tts.voice
+			}
+			if s.tts.language != "" {
+				generationConfig["language"] = s.tts.language
+			}
+
 			tokenPkt := map[string]interface{}{
-				"type":       "input_transcript",
-				"transcript": tok.Token + " ",
-				"extra":      map[string]interface{}{},
-				"generation_config": map[string]interface{}{
-					"model": s.tts.model,
-					"voice": s.tts.voice,
-				},
+				"type":              "input_transcript",
+				"transcript":        tok.Token + " ",
+				"extra":             map[string]interface{}{},
+				"generation_config": generationConfig,
 			}
 
 			s.mu.Lock()

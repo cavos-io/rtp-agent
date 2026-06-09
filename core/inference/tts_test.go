@@ -321,8 +321,63 @@ func TestInferenceTTSInputTranscriptIncludesReferenceExtra(t *testing.T) {
 	}
 }
 
+func TestInferenceTTSLanguageOptionMatchesReferencePackets(t *testing.T) {
+	writes := make(chan map[string]any, 4)
+	provider := NewTTS("cartesia/sonic-3:voice-id", "key", "secret", WithTTSLanguage("fr"))
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{
+			onWriteJSON: func(msg map[string]any) {
+				writes <- msg
+			},
+		}, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	session := <-writes
+	if session["type"] != "session.create" {
+		t.Fatalf("first write type = %v, want session.create", session["type"])
+	}
+	if got := session["language"]; got != "fr" {
+		t.Fatalf("session.create language = %#v, want fr", got)
+	}
+
+	if err := stream.PushText("bonjour"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	var input map[string]any
+	deadline := time.After(time.Second)
+	for input == nil {
+		select {
+		case msg := <-writes:
+			if msg["type"] == "input_transcript" {
+				input = msg
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for input_transcript")
+		}
+	}
+
+	config, ok := input["generation_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("generation_config = %#v, want map", input["generation_config"])
+	}
+	if got := config["language"]; got != "fr" {
+		t.Fatalf("generation_config.language = %#v, want fr", got)
+	}
+}
+
 func TestInferenceTTSSessionCreateParamsMatchReferenceShape(t *testing.T) {
-	modelName, params := ttsSessionCreateParams("cartesia/sonic-3:voice-id", "")
+	modelName, params := ttsSessionCreateParams("cartesia/sonic-3:voice-id", "", "")
 
 	if modelName != "cartesia/sonic-3" {
 		t.Fatalf("modelName = %q, want cartesia/sonic-3", modelName)
