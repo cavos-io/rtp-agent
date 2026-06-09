@@ -622,8 +622,8 @@ func functionOutputStringRepr(value string) string {
 func functionOutputComplexRepr(value complex128, bitSize int) string {
 	realPart := real(value)
 	imagPart := imag(value)
-	realText := strconv.FormatFloat(realPart, 'g', -1, bitSize)
-	imagText := strconv.FormatFloat(imagPart, 'g', -1, bitSize)
+	realText := functionOutputFloatRepr(realPart, bitSize)
+	imagText := functionOutputFloatRepr(imagPart, bitSize)
 	if realPart == 0 {
 		return imagText + "j"
 	}

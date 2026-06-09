@@ -307,6 +307,9 @@ func TestMakeFunctionCallOutputStringifiesValidOutputs(t *testing.T) {
 		{name: "negative infinity", output: math.Inf(-1), want: "-inf"},
 		{name: "true", output: true, want: "True"},
 		{name: "complex", output: complex(1, 2), want: "(1+2j)"},
+		{name: "complex positive infinity", output: complex(math.Inf(1), 2), want: "(inf+2j)"},
+		{name: "complex imaginary infinity", output: complex(1, math.Inf(1)), want: "(1+infj)"},
+		{name: "complex nan", output: complex(math.NaN(), 2), want: "(nan+2j)"},
 		{name: "list", output: []any{1, "x", true}, want: "[1, 'x', True]"},
 		{name: "list string newline", output: []any{"line\nnext"}, want: "['line\\nnext']"},
 		{name: "dict", output: map[string]any{"ok": true}, want: "{'ok': True}"},
@@ -322,11 +325,31 @@ func TestMakeFunctionCallOutputStringifiesValidOutputs(t *testing.T) {
 			if result.FncCallOut.IsError || result.FncCallOut.Output != tt.want {
 				t.Fatalf("FncCallOut = %#v, want output %q", result.FncCallOut, tt.want)
 			}
-			if !reflect.DeepEqual(result.RawOutput, tt.output) {
+			if !functionOutputTestEqual(result.RawOutput, tt.output) {
 				t.Fatalf("RawOutput = %#v, want original output %#v", result.RawOutput, tt.output)
 			}
 		})
 	}
+}
+
+func functionOutputTestEqual(got, want any) bool {
+	switch wantValue := want.(type) {
+	case complex128:
+		gotValue, ok := got.(complex128)
+		if !ok {
+			return false
+		}
+		return floatTestEqual(real(gotValue), real(wantValue)) && floatTestEqual(imag(gotValue), imag(wantValue))
+	default:
+		return reflect.DeepEqual(got, want)
+	}
+}
+
+func floatTestEqual(got, want float64) bool {
+	if math.IsNaN(want) {
+		return math.IsNaN(got)
+	}
+	return got == want
 }
 
 func TestMakeFunctionCallOutputUsesEmptyStringForFalsyOutputs(t *testing.T) {
