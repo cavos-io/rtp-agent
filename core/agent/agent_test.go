@@ -495,6 +495,22 @@ func TestAgentUpdateChatContextWhileRunningReplacesInstructionMessage(t *testing
 	}
 }
 
+func TestAgentUpdateInstructionsRejectsNonMessageInstructionItem(t *testing.T) {
+	agent := NewAgent("new instructions")
+	agent.ChatCtx.Append(&llm.FunctionCall{ID: agentInstructionsMessageID, Name: "lookup"})
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	agent.activity = NewAgentActivity(agent, session)
+
+	err := agent.UpdateInstructions(context.Background(), "newer instructions")
+
+	if err == nil {
+		t.Fatal("UpdateInstructions error = nil, want non-message instruction item error")
+	}
+	if got, want := err.Error(), "expected the instructions inside the chat_ctx to be of type 'message'"; got != want {
+		t.Fatalf("UpdateInstructions error text = %q, want %q", got, want)
+	}
+}
+
 func TestAgentOnUserTurnExceededGeneratesNonInterruptibleCutIn(t *testing.T) {
 	agent := NewAgent("help")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

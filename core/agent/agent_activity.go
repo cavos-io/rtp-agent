@@ -783,7 +783,7 @@ func updateAgentInstructionsMessage(chatCtx *llm.ChatContext, instructions *llm.
 	if idx != nil {
 		existing, ok := chatCtx.Items[*idx].(*llm.ChatMessage)
 		if !ok {
-			return errors.New("expected instructions chat item to be a message")
+			return errors.New("expected the instructions inside the chat_ctx to be of type 'message'")
 		}
 		chatCtx.Items[*idx] = &llm.ChatMessage{
 			ID:        agentInstructionsMessageID,
