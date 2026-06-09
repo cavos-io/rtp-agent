@@ -142,6 +142,10 @@ func (t *SmallestAITTS) SampleRate() int  { return t.sampleRate }
 func (t *SmallestAITTS) NumChannels() int { return 1 }
 
 func (t *SmallestAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if err := validateSmallestAITTSAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
+
 	req, err := buildSmallestAITTSRequest(ctx, t, text)
 	if err != nil {
 		return nil, err
@@ -190,6 +194,10 @@ func buildSmallestAITTSRequest(ctx context.Context, t *SmallestAITTS, text strin
 }
 
 func (t *SmallestAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if err := validateSmallestAITTSAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
+
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildSmallestAITTSWebsocketURL(t), buildSmallestAITTSWebsocketHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial smallestai tts websocket: %w", err)
@@ -202,6 +210,13 @@ func (t *SmallestAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 		cancel:     cancel,
 		sampleRate: t.sampleRate,
 	}, nil
+}
+
+func validateSmallestAITTSAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("smallestai API key is required, either as argument or set SMALLEST_API_KEY environment variable")
+	}
+	return nil
 }
 
 func buildSmallestAITTSWebsocketURL(t *SmallestAITTS) string {
