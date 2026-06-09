@@ -579,7 +579,16 @@ func functionOutputRepr(value any) string {
 	}
 	rv := reflect.ValueOf(value)
 	switch rv.Kind() {
-	case reflect.Array, reflect.Slice:
+	case reflect.Array:
+		parts := make([]string, 0, rv.Len())
+		for i := 0; i < rv.Len(); i++ {
+			parts = append(parts, functionOutputRepr(rv.Index(i).Interface()))
+		}
+		if rv.Len() == 1 {
+			return "(" + parts[0] + ",)"
+		}
+		return "(" + strings.Join(parts, ", ") + ")"
+	case reflect.Slice:
 		parts := make([]string, 0, rv.Len())
 		for i := 0; i < rv.Len(); i++ {
 			parts = append(parts, functionOutputRepr(rv.Index(i).Interface()))

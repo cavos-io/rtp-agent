@@ -324,6 +324,8 @@ func TestMakeFunctionCallOutputStringifiesValidOutputs(t *testing.T) {
 		{name: "list string next line", output: []any{"\u0085"}, want: `['\x85']`},
 		{name: "list string line separator", output: []any{"\u2028"}, want: `['\u2028']`},
 		{name: "list string non-ascii printable", output: []any{"é"}, want: "['é']"},
+		{name: "tuple", output: [3]any{1, "x", true}, want: "(1, 'x', True)"},
+		{name: "singleton tuple", output: [1]any{1}, want: "(1,)"},
 		{name: "dict", output: map[string]any{"ok": true}, want: "{'ok': True}"},
 		{name: "dict float", output: map[string]any{"score": 1.0}, want: "{'score': 1.0}"},
 	}
