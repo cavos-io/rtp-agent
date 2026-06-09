@@ -526,6 +526,9 @@ func TestChatContextToProviderFormatEReturnsErrorForUnsupportedFormat(t *testing
 	if messages != nil || extra != nil {
 		t.Fatalf("ToProviderFormatE() messages=%#v extra=%#v, want nil outputs on error", messages, extra)
 	}
+	if got, want := err.Error(), "Unsupported provider format: unknown"; got != want {
+		t.Fatalf("ToProviderFormatE() error = %q, want %q", got, want)
+	}
 }
 
 func TestChatContextToProviderFormatEReturnsErrorForMalformedToolArguments(t *testing.T) {
@@ -667,6 +670,9 @@ func TestChatContextUpsertItemRejectsTypeMismatchByDefault(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("UpsertItem() error = nil, want type mismatch error")
+	}
+	if got, want := err.Error(), "Item type mismatch: function_call != message"; got != want {
+		t.Fatalf("UpsertItem() error = %q, want %q", got, want)
 	}
 	if got, want := itemIDs(ctx.Items), "item"; got != want {
 		t.Fatalf("items = %q, want %q", got, want)

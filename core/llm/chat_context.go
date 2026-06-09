@@ -189,7 +189,7 @@ func (c *ChatContext) UpsertItem(item ChatItem, options ...ChatContextUpsertOpti
 		return nil
 	}
 	if !opts.AllowTypeMismatch && item.GetType() != c.Items[*idx].GetType() {
-		return fmt.Errorf("item type mismatch: %s != %s", item.GetType(), c.Items[*idx].GetType())
+		return fmt.Errorf("%s type mismatch: %s != %s", "Item", item.GetType(), c.Items[*idx].GetType())
 	}
 	c.Items[*idx] = item
 	return nil
@@ -1167,7 +1167,7 @@ func (c *ChatContext) ToProviderFormatE(format string, options ...ChatContextPro
 		}
 		return messages, extra, nil
 	}
-	return nil, nil, fmt.Errorf("unsupported provider format: %s", format)
+	return nil, nil, fmt.Errorf("%s provider format: %s", "Unsupported", format)
 }
 
 func (c *ChatContext) toGoogleProviderFormat(opts ChatContextProviderFormatOptions) ([]map[string]any, any, error) {
