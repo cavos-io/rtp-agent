@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"os"
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -61,6 +62,9 @@ func WithMistralAISTTContextBias(contextBias []string) MistralAISTTOption {
 }
 
 func NewMistralAISTT(apiKey string, opts ...MistralAISTTOption) *MistralAISTT {
+	if apiKey == "" {
+		apiKey = os.Getenv("MISTRAL_API_KEY")
+	}
 	provider := &MistralAISTT{
 		apiKey:     apiKey,
 		baseURL:    defaultMistralAISTTBaseURL,

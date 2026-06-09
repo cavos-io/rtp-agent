@@ -43,6 +43,28 @@ func TestMistralAISTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewMistralAISTTUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("MISTRAL_API_KEY", "env-key")
+
+	provider := NewMistralAISTT("")
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+
+	explicit := NewMistralAISTT("explicit-key")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+
+	req, err := buildMistralAISTTRecognizeRequest(context.Background(), provider, []byte{0x01}, "")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if got := req.Header.Get("x-api-key"); got != "env-key" {
+		t.Fatalf("x-api-key = %q, want env key", got)
+	}
+}
+
 func TestMistralAISTTRealtimeCapabilitiesFollowReference(t *testing.T) {
 	provider := NewMistralAISTT("test-key", WithMistralAISTTModel("voxtral-realtime-latest"))
 
