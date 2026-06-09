@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,8 @@ type TTS struct {
 	model             string
 	voice             string
 	language          string
+	encoding          string
+	sampleRate        int
 	extraKwargs       map[string]any
 	fallbackModels    []FallbackModel
 	apiKey            string
@@ -72,6 +75,18 @@ func WithTTSLanguage(language string) TTSOption {
 	}
 }
 
+func WithTTSEncoding(encoding string) TTSOption {
+	return func(t *TTS) {
+		t.encoding = encoding
+	}
+}
+
+func WithTTSSampleRate(sampleRate int) TTSOption {
+	return func(t *TTS) {
+		t.sampleRate = sampleRate
+	}
+}
+
 func WithTTSExtraKwargs(extra map[string]any) TTSOption {
 	return func(t *TTS) {
 		if len(extra) == 0 {
@@ -101,6 +116,8 @@ func NewTTS(model string, apiKey, apiSecret string, opts ...TTSOption) *TTS {
 	t := &TTS{
 		model:         model,
 		voice:         voice,
+		encoding:      "pcm_s16le",
+		sampleRate:    24000,
 		apiKey:        apiKey,
 		apiSecret:     apiSecret,
 		baseURL:       defaultInferenceWebsocketURL(),
@@ -144,7 +161,7 @@ func (t *TTS) Capabilities() tts.TTSCapabilities {
 }
 
 func (t *TTS) SampleRate() int {
-	return 24000
+	return t.sampleRate
 }
 
 func (t *TTS) NumChannels() int {
@@ -210,7 +227,7 @@ func (t *TTS) connectTTSWebsocket(ctx context.Context) (inferenceTTSConn, error)
 		return nil, err
 	}
 
-	modelName, createParams := ttsSessionCreateParams(t.model, t.voice, t.language, t.extraKwargs, t.fallbackModels)
+	modelName, createParams := ttsSessionCreateParams(t.model, t.voice, t.language, t.encoding, t.sampleRate, t.extraKwargs, t.fallbackModels)
 
 	wsURL, err := url.Parse(t.baseURL + "/tts")
 	if err != nil {
@@ -245,12 +262,18 @@ func defaultInferenceTTSDialer(ctx context.Context, endpoint string, header http
 	return conn, nil
 }
 
-func ttsSessionCreateParams(model string, voice string, language string, extra map[string]any, fallback []FallbackModel) (string, map[string]interface{}) {
+func ttsSessionCreateParams(model string, voice string, language string, encoding string, sampleRate int, extra map[string]any, fallback []FallbackModel) (string, map[string]interface{}) {
 	modelName, voice := ttsModelAndVoice(model, voice)
+	if encoding == "" {
+		encoding = "pcm_s16le"
+	}
+	if sampleRate == 0 {
+		sampleRate = 24000
+	}
 	createParams := map[string]interface{}{
 		"type":        "session.create",
-		"sample_rate": "24000",
-		"encoding":    "pcm_s16le",
+		"sample_rate": strconv.Itoa(sampleRate),
+		"encoding":    encoding,
 		"extra":       ttsExtraPayload(extra),
 	}
 	if modelName != "" {

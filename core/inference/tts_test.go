@@ -564,6 +564,43 @@ func TestInferenceTTSUpdateOptionsMatchReferenceFutureStreams(t *testing.T) {
 	}
 }
 
+func TestInferenceTTSSessionCreateUsesReferenceAudioOptions(t *testing.T) {
+	writes := make(chan map[string]any, 2)
+	provider := NewTTS("cartesia/sonic-3", "key", "secret",
+		WithTTSSampleRate(16000),
+		WithTTSEncoding("mulaw"),
+	)
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{
+			onWriteJSON: func(msg map[string]any) {
+				writes <- msg
+			},
+		}, nil
+	}
+
+	if provider.SampleRate() != 16000 {
+		t.Fatalf("SampleRate = %d, want configured 16000", provider.SampleRate())
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	session := <-writes
+	if session["type"] != "session.create" {
+		t.Fatalf("first write type = %v, want session.create", session["type"])
+	}
+	if session["sample_rate"] != "16000" {
+		t.Fatalf("session.create sample_rate = %#v, want string 16000", session["sample_rate"])
+	}
+	if session["encoding"] != "mulaw" {
+		t.Fatalf("session.create encoding = %#v, want mulaw", session["encoding"])
+	}
+}
+
 func TestInferenceTTSFallbackModelsMatchReferenceSessionCreate(t *testing.T) {
 	writes := make(chan map[string]any, 4)
 	provider := NewTTS("cartesia/sonic-3", "key", "secret", WithTTSFallbackModels(
@@ -624,7 +661,7 @@ func TestInferenceTTSFallbackModelsMatchReferenceSessionCreate(t *testing.T) {
 }
 
 func TestInferenceTTSSessionCreateParamsMatchReferenceShape(t *testing.T) {
-	modelName, params := ttsSessionCreateParams("cartesia/sonic-3:voice-id", "", "", nil, nil)
+	modelName, params := ttsSessionCreateParams("cartesia/sonic-3:voice-id", "", "", "", 0, nil, nil)
 
 	if modelName != "cartesia/sonic-3" {
 		t.Fatalf("modelName = %q, want cartesia/sonic-3", modelName)
