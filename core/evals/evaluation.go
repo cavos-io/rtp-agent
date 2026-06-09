@@ -128,6 +128,9 @@ func (g *JudgeGroup) Evaluate(ctx context.Context, chatCtx *llm.ChatContext, ref
 				logger.Logger.Warnw("Judge failed", err, "name", judge.Name())
 				return
 			}
+			if res == nil {
+				return
+			}
 
 			mu.Lock()
 			result.Judgments[judge.Name()] = res

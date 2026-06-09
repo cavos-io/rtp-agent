@@ -61,6 +61,27 @@ func TestEvaluationResultMajorityPassedRequiresExplicitPassMajority(t *testing.T
 	}
 }
 
+func TestJudgeGroupFiltersNilJudgmentResults(t *testing.T) {
+	group := NewJudgeGroup(&recordingEvalLLM{}, []Evaluator{
+		nilJudgmentEvaluator{name: "empty"},
+		fixedJudgmentEvaluator{name: "pass", result: &JudgmentResult{Verdict: VerdictPass}},
+	})
+
+	result, err := group.Evaluate(context.Background(), llm.NewChatContext(), nil)
+	if err != nil {
+		t.Fatalf("Evaluate() error = %v", err)
+	}
+	if _, ok := result.Judgments["empty"]; ok {
+		t.Fatalf("Judgments contains nil result for failed/non-judgment evaluator: %#v", result.Judgments["empty"])
+	}
+	if got := len(result.Judgments); got != 1 {
+		t.Fatalf("len(Judgments) = %d, want 1", got)
+	}
+	if !result.Judgments["pass"].Passed() {
+		t.Fatalf("Judgments[pass] = %#v, want pass verdict", result.Judgments["pass"])
+	}
+}
+
 func TestJudgeHandoffShortCircuitCarriesInstructions(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	judge := NewJudge("handoff", "only evaluate actual handoffs", nil)
@@ -155,3 +176,24 @@ func (s *recordingEvalStream) Next() (*llm.ChatChunk, error) {
 }
 
 func (s *recordingEvalStream) Close() error { return nil }
+
+type nilJudgmentEvaluator struct {
+	name string
+}
+
+func (e nilJudgmentEvaluator) Name() string { return e.name }
+
+func (e nilJudgmentEvaluator) Evaluate(context.Context, *llm.ChatContext, *llm.ChatContext, llm.LLM) (*JudgmentResult, error) {
+	return nil, nil
+}
+
+type fixedJudgmentEvaluator struct {
+	name   string
+	result *JudgmentResult
+}
+
+func (e fixedJudgmentEvaluator) Name() string { return e.name }
+
+func (e fixedJudgmentEvaluator) Evaluate(context.Context, *llm.ChatContext, *llm.ChatContext, llm.LLM) (*JudgmentResult, error) {
+	return e.result, nil
+}
