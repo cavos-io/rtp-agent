@@ -13,6 +13,11 @@ const taskCompletionCriteria = "Evaluate if the agent completed its goal based o
 	"Task completed, appropriately handed off, or correctly declined = pass. " +
 	"User's need ignored, no resolution, gave up without handoff = fail."
 
+const handoffCriteria = "Evaluate if the conversation maintained context across agent handoffs. " +
+	"Handoffs can be silent or explicit, either is acceptable. " +
+	"Remembered info (names, details, requests) = pass. " +
+	"Break in continuity, repeated questions, context lost = fail."
+
 type Judge struct {
 	name         string
 	instructions string
@@ -57,11 +62,16 @@ func (j *Judge) Evaluate(ctx context.Context, chatCtx *llm.ChatContext, referenc
 	if j.name == "handoff" {
 		if !hasHandoffs(chatCtx) {
 			return &JudgmentResult{
-				Verdict:      VerdictPass,
-				Reasoning:    "No agent handoffs occurred in this conversation.",
-				Instructions: instructions,
+				Verdict:   VerdictPass,
+				Reasoning: "No agent handoffs occurred in this conversation.",
 			}, nil
 		}
+		result, err := evaluateWithLLM(ctx, effectiveLLM, handoffPrompt(chatCtx, reference))
+		if err != nil {
+			return nil, err
+		}
+		result.Instructions = handoffCriteria
+		return result, nil
 	}
 
 	prompt := fmt.Sprintf("Criteria: %s\n\nConversation:\n%s", instructions, formatChatCtx(chatCtx))
@@ -85,6 +95,15 @@ func taskCompletionPrompt(chatCtx *llm.ChatContext, reference *llm.ChatContext, 
 		promptParts = append(promptParts, "Agent Instructions:\n"+instructions, "")
 	}
 	promptParts = append(promptParts, "Conversation:\n"+formatChatCtx(chatCtx))
+	if reference != nil {
+		reference = reference.Copy(llm.ChatContextCopyOptions{ExcludeInstructions: true})
+		promptParts = append(promptParts, "", "Reference:\n"+formatChatCtx(reference))
+	}
+	return strings.Join(promptParts, "\n")
+}
+
+func handoffPrompt(chatCtx *llm.ChatContext, reference *llm.ChatContext) string {
+	promptParts := []string{handoffCriteria, "", "Conversation:\n" + formatChatCtx(chatCtx)}
 	if reference != nil {
 		reference = reference.Copy(llm.ChatContextCopyOptions{ExcludeInstructions: true})
 		promptParts = append(promptParts, "", "Reference:\n"+formatChatCtx(reference))
@@ -315,7 +334,7 @@ func ConcisenessJudge(llmInstance llm.LLM) Evaluator {
 func HandoffJudge(llmInstance llm.LLM) Evaluator {
 	return NewJudge(
 		"handoff",
-		"Evaluate if the conversation maintained context across agent handoffs. Consider: remembered info (names, details, requests) = pass. Break in continuity, repeated questions, context lost = fail",
+		handoffCriteria,
 		llmInstance,
 	)
 }

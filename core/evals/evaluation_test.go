@@ -113,7 +113,7 @@ func TestFormatChatCtxInterruptedMessageMatchesReferenceShape(t *testing.T) {
 	}
 }
 
-func TestJudgeHandoffShortCircuitCarriesInstructions(t *testing.T) {
+func TestHandoffJudgeShortCircuitMatchesReferenceResult(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	judge := NewJudge("handoff", "only evaluate actual handoffs", nil)
 
@@ -124,8 +124,50 @@ func TestJudgeHandoffShortCircuitCarriesInstructions(t *testing.T) {
 	if !result.Passed() {
 		t.Fatalf("Verdict = %q, want pass", result.Verdict)
 	}
-	if result.Instructions != "only evaluate actual handoffs" {
-		t.Fatalf("Instructions = %q, want handoff instructions", result.Instructions)
+	if result.Reasoning != "No agent handoffs occurred in this conversation." {
+		t.Fatalf("Reasoning = %q, want reference no-handoff reasoning", result.Reasoning)
+	}
+	if result.Instructions != "" {
+		t.Fatalf("Instructions = %q, want empty instructions for no-handoff short-circuit", result.Instructions)
+	}
+}
+
+func TestHandoffJudgeEvaluateMatchesReferencePromptShape(t *testing.T) {
+	oldAgent := "triage"
+	chatCtx := llm.NewChatContext()
+	chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "need billing help"})
+	chatCtx.Append(&llm.AgentHandoff{OldAgentID: &oldAgent, NewAgentID: "billing"})
+	evaluator := &recordingEvalLLM{arguments: `{"verdict":"pass","reasoning":"context preserved"}`}
+	judge := HandoffJudge(nil)
+	handoffCriteria := "Evaluate if the conversation maintained context across agent handoffs. " +
+		"Handoffs can be silent or explicit, either is acceptable. " +
+		"Remembered info (names, details, requests) = pass. " +
+		"Break in continuity, repeated questions, context lost = fail."
+
+	result, err := judge.Evaluate(context.Background(), chatCtx, nil, evaluator)
+	if err != nil {
+		t.Fatalf("Evaluate() error = %v", err)
+	}
+	if !result.Passed() {
+		t.Fatalf("Verdict = %q, want pass", result.Verdict)
+	}
+	if result.Reasoning != "context preserved" {
+		t.Fatalf("Reasoning = %q, want LLM reasoning", result.Reasoning)
+	}
+	if result.Instructions != handoffCriteria {
+		t.Fatalf("Instructions = %q, want handoff criteria", result.Instructions)
+	}
+	if !containsAll(evaluator.prompt, []string{
+		handoffCriteria,
+		"Conversation:\nuser: need billing help\n[agent handoff: triage -> billing]",
+	}) {
+		t.Fatalf("prompt = %q, want reference handoff criteria and conversation", evaluator.prompt)
+	}
+	if contains(evaluator.prompt, "Criteria: ") {
+		t.Fatalf("prompt = %q, want reference handoff prompt without generic Criteria prefix", evaluator.prompt)
+	}
+	if contains(evaluator.prompt, "Evaluate if the conversation meets the criteria.") {
+		t.Fatalf("prompt = %q, want reference handoff prompt without generic evaluation suffix", evaluator.prompt)
 	}
 }
 
