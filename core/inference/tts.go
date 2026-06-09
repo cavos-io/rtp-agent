@@ -339,9 +339,10 @@ func cloneTTSExtra(extra map[string]any) map[string]any {
 func ttsFallbackModelsPayload(models []FallbackModel) []map[string]interface{} {
 	payload := make([]map[string]interface{}, 0, len(models))
 	for _, model := range models {
+		modelName, voice := ttsModelAndVoice(model.Model, model.Voice)
 		payload = append(payload, map[string]interface{}{
-			"model": model.Model,
-			"voice": model.Voice,
+			"model": modelName,
+			"voice": voice,
 			"extra": ttsExtraPayload(model.ExtraKwargs),
 		})
 	}

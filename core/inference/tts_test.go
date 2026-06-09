@@ -1085,6 +1085,27 @@ func TestInferenceTTSFallbackModelsMatchReferenceSessionCreate(t *testing.T) {
 	}
 }
 
+func TestInferenceTTSFallbackModelStringParsesReferenceVoice(t *testing.T) {
+	_, params := ttsSessionCreateParams("cartesia/sonic-3", "", "", "", 0, nil, []FallbackModel{
+		{Model: "rime/mist:river"},
+	}, nil)
+
+	fallback, ok := params["fallback"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("fallback = %#v, want map", params["fallback"])
+	}
+	models, ok := fallback["models"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("fallback.models = %#v, want model maps", fallback["models"])
+	}
+	if len(models) != 1 {
+		t.Fatalf("fallback models = %#v, want 1 entry", models)
+	}
+	if models[0]["model"] != "rime/mist" || models[0]["voice"] != "river" {
+		t.Fatalf("fallback model = %#v, want rime/mist/river", models[0])
+	}
+}
+
 func TestInferenceTTSSessionCreateParamsMatchReferenceShape(t *testing.T) {
 	modelName, params := ttsSessionCreateParams("cartesia/sonic-3:voice-id", "", "", "", 0, nil, nil, nil)
 
