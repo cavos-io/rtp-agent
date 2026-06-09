@@ -269,8 +269,11 @@ func TestMCPServersRejectListToolsBeforeInitialize(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := tt.server.ListTools(context.Background())
 
-			if err == nil || !strings.Contains(err.Error(), "MCPServer isn't initialized") {
-				t.Fatalf("ListTools() error = %v, want uninitialized MCPServer error", err)
+			if err == nil {
+				t.Fatal("ListTools() error = nil, want uninitialized MCPServer error")
+			}
+			if got, want := err.Error(), "MCPServer isn't initialized"; got != want {
+				t.Fatalf("ListTools() error = %q, want %q", got, want)
 			}
 		})
 	}
