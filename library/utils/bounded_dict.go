@@ -3,6 +3,7 @@ package utils
 import (
 	"container/list"
 	"fmt"
+	"reflect"
 	"sync"
 )
 
@@ -78,16 +79,20 @@ func (c *BoundedDict[K, V]) SetOrUpdate(key K, factory func() V, update func(V) 
 	defer c.mu.Unlock()
 
 	var value V
-	if ent, ok := c.items[key]; ok {
+	if ent, ok := c.items[key]; ok && !isNilValue(ent.Value.(*entry[K, V]).value) {
 		kv := ent.Value.(*entry[K, V])
 		value = kv.value
 	} else {
 		value = factory()
-		ent := &entry[K, V]{key, value}
-		element := c.evictList.PushFront(ent)
-		c.items[key] = element
-		if c.evictList.Len() > c.maxSize {
-			c.removeOldest()
+		if ent, ok := c.items[key]; ok {
+			ent.Value.(*entry[K, V]).value = value
+		} else {
+			ent := &entry[K, V]{key, value}
+			element := c.evictList.PushFront(ent)
+			c.items[key] = element
+			if c.evictList.Len() > c.maxSize {
+				c.removeOldest()
+			}
 		}
 	}
 
@@ -134,4 +139,17 @@ func (c *BoundedDict[K, V]) popElement(ent *list.Element) (K, V, bool) {
 	kv := ent.Value.(*entry[K, V])
 	delete(c.items, kv.key)
 	return kv.key, kv.value, true
+}
+
+func isNilValue(value any) bool {
+	if value == nil {
+		return true
+	}
+	v := reflect.ValueOf(value)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return v.IsNil()
+	default:
+		return false
+	}
 }
