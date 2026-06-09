@@ -692,6 +692,47 @@ func TestMCPServerStdioInitializeFailureLeavesUninitialized(t *testing.T) {
 	}
 }
 
+func TestMCPServerStdioListToolsReturnsWhenTransportCloses(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "mcp-exit-on-tools-list.sh")
+	script := `#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":1,"result":{}}\n'
+      ;;
+    *'"method":"tools/list"'*)
+      exit 0
+      ;;
+  esac
+done
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write helper script: %v", err)
+	}
+
+	server := NewMCPServerStdio("sh", []string{scriptPath})
+	defer server.Close()
+	if err := server.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := server.ListTools(context.Background())
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("ListTools() error = nil, want transport closed error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ListTools() did not return after MCP stdio transport closed")
+	}
+}
+
 func TestMCPServerStdioInitializeCoalescesConcurrentCalls(t *testing.T) {
 	tmpDir := t.TempDir()
 	startedPath := filepath.Join(tmpDir, "started")

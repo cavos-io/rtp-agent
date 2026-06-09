@@ -699,6 +699,7 @@ func (s *MCPServerStdio) sendNotification(method string, params interface{}) err
 }
 
 func (s *MCPServerStdio) readLoop() {
+	defer s.failPendingRequests("MCP stdio transport closed")
 	scanner := bufio.NewScanner(s.stdout)
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -713,6 +714,18 @@ func (s *MCPServerStdio) readLoop() {
 				ch <- &resp
 			}
 			s.mu.Unlock()
+		}
+	}
+}
+
+func (s *MCPServerStdio) failPendingRequests(message string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, ch := range s.pending {
+		delete(s.pending, id)
+		select {
+		case ch <- &jsonRPCResponse{JSONRPC: "2.0", ID: id, Error: &jsonRPCError{Code: -32000, Message: message}}:
+		default:
 		}
 	}
 }
