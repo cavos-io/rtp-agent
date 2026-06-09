@@ -304,6 +304,58 @@ func TestMCPServerHTTPInitializeCoalescesConcurrentCalls(t *testing.T) {
 	}
 }
 
+func TestMCPServerHTTPCloseDuringInitializeLeavesUninitialized(t *testing.T) {
+	initializeStarted := make(chan struct{})
+	releaseInitialize := make(chan struct{})
+	httpClient := newMCPTestHTTPClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req jsonRPCRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		switch req.Method {
+		case "initialize":
+			close(initializeStarted)
+			<-releaseInitialize
+			writeMCPHTTPResponse(t, w, req.ID, map[string]any{"protocolVersion": "2024-11-05"})
+		case "initialized":
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			t.Fatalf("unexpected MCP method %q", req.Method)
+		}
+	}))
+
+	server := NewMCPServerHTTP("https://mcp.test/rpc")
+	server.client = httpClient
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.Initialize(context.Background())
+	}()
+
+	select {
+	case <-initializeStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Initialize() did not reach server")
+	}
+	if err := server.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	close(releaseInitialize)
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Initialize() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Initialize() did not return")
+	}
+	if server.Initialized() {
+		t.Fatal("Initialized() = true after Close during Initialize, want false")
+	}
+}
+
 func TestMCPServerHTTPSetHeadersAppliesToSubsequentRequests(t *testing.T) {
 	httpClient := newMCPTestHTTPClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req jsonRPCRequest

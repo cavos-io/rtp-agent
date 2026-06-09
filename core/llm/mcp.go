@@ -45,6 +45,7 @@ type MCPServerHTTP struct {
 	cacheDirty  bool
 	toolsCache  []Tool
 	initState   *mcpInitializeState
+	closeSeq    uint64
 	mu          sync.Mutex
 }
 
@@ -112,13 +113,14 @@ func (s *MCPServerHTTP) Initialize(ctx context.Context) error {
 	}
 	state := &mcpInitializeState{done: make(chan struct{})}
 	s.initState = state
+	startCloseSeq := s.closeSeq
 	s.mu.Unlock()
 
 	err := s.initialize(ctx)
 
 	s.mu.Lock()
 	state.err = err
-	if err == nil {
+	if err == nil && s.closeSeq == startCloseSeq {
 		s.initialized = true
 	}
 	if s.initState == state {
@@ -178,6 +180,7 @@ func (s *MCPServerHTTP) InvalidateCache() {
 func (s *MCPServerHTTP) Close() error {
 	s.InvalidateCache()
 	s.mu.Lock()
+	s.closeSeq++
 	s.initialized = false
 	s.mu.Unlock()
 	return nil
