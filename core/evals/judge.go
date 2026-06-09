@@ -187,7 +187,15 @@ func evaluateWithLLM(ctx context.Context, evaluatorLLM llm.LLM, prompt string) (
 
 	verdictTool := &submitVerdictTool{}
 
-	stream, err := evaluatorLLM.Chat(ctx, evalCtx, llm.WithTools([]llm.Tool{verdictTool}), llm.WithToolChoice("submit_verdict"))
+	options := []llm.ChatOption{
+		llm.WithTools([]llm.Tool{verdictTool}),
+		llm.WithToolChoice("submit_verdict"),
+	}
+	if !strings.Contains(llm.Model(evaluatorLLM), "gpt-5") {
+		options = append(options, llm.WithExtraParams(map[string]any{"temperature": 0.0}))
+	}
+
+	stream, err := evaluatorLLM.Chat(ctx, evalCtx, options...)
 	if err != nil {
 		return nil, fmt.Errorf("evaluation failed to start: %w", err)
 	}

@@ -229,6 +229,33 @@ func TestJudgeEvaluateReferenceExcludesInstructionMessages(t *testing.T) {
 	}
 }
 
+func TestEvaluateWithLLMPassesReferenceTemperatureForNonGPT5Models(t *testing.T) {
+	evaluator := &recordingEvalLLM{model: "gpt-4o-mini"}
+
+	if _, err := evaluateWithLLM(context.Background(), evaluator, "judge this"); err != nil {
+		t.Fatalf("evaluateWithLLM() error = %v", err)
+	}
+
+	if evaluator.options.ExtraParams == nil {
+		t.Fatal("ExtraParams = nil, want temperature parameter")
+	}
+	if got := evaluator.options.ExtraParams["temperature"]; got != 0.0 {
+		t.Fatalf("ExtraParams[temperature] = %#v, want 0.0", got)
+	}
+}
+
+func TestEvaluateWithLLMOmitsReferenceTemperatureForGPT5Models(t *testing.T) {
+	evaluator := &recordingEvalLLM{model: "openai/gpt-5-mini"}
+
+	if _, err := evaluateWithLLM(context.Background(), evaluator, "judge this"); err != nil {
+		t.Fatalf("evaluateWithLLM() error = %v", err)
+	}
+
+	if _, ok := evaluator.options.ExtraParams["temperature"]; ok {
+		t.Fatalf("ExtraParams = %#v, want no temperature for gpt-5 models", evaluator.options.ExtraParams)
+	}
+}
+
 func containsAll(s string, parts []string) bool {
 	for _, part := range parts {
 		if !contains(s, part) {
@@ -250,9 +277,15 @@ func contains(s string, part string) bool {
 type recordingEvalLLM struct {
 	arguments string
 	prompt    string
+	model     string
+	options   llm.ChatOptions
 }
 
 func (l *recordingEvalLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+	l.options = llm.ChatOptions{}
+	for _, opt := range opts {
+		opt(&l.options)
+	}
 	if len(chatCtx.Items) > 1 {
 		if msg, ok := chatCtx.Items[1].(*llm.ChatMessage); ok {
 			l.prompt = msg.TextContent()
@@ -263,6 +296,13 @@ func (l *recordingEvalLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, o
 		arguments = `{"verdict":"pass","reasoning":"ok"}`
 	}
 	return &recordingEvalStream{arguments: arguments}, nil
+}
+
+func (l *recordingEvalLLM) Model() string {
+	if l.model != "" {
+		return l.model
+	}
+	return "test-model"
 }
 
 type recordingEvalStream struct {
