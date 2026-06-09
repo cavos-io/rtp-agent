@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -25,6 +26,7 @@ const (
 	defaultXaiSTTSampleRate   = 16000
 	defaultXaiSTTLanguage     = "en"
 	defaultXaiSTTEndpointing  = 100
+	xaiAPIKeyEnv              = "XAI_API_KEY"
 )
 
 type XaiSTT struct {
@@ -93,6 +95,9 @@ func WithXaiSTTEndpointing(endpointing int) XaiSTTOption {
 }
 
 func NewXaiSTT(apiKey string, opts ...XaiSTTOption) *XaiSTT {
+	if apiKey == "" {
+		apiKey = os.Getenv(xaiAPIKeyEnv)
+	}
 	provider := &XaiSTT{
 		apiKey:               apiKey,
 		restURL:              defaultXaiSTTRestURL,

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -52,6 +53,9 @@ func WithXaiTTSLanguage(language string) XaiTTSOption {
 }
 
 func NewXaiTTS(apiKey string, voice string, opts ...XaiTTSOption) *XaiTTS {
+	if apiKey == "" {
+		apiKey = os.Getenv(xaiAPIKeyEnv)
+	}
 	provider := &XaiTTS{
 		apiKey:       apiKey,
 		websocketURL: defaultXaiTTSWebsocketURL,

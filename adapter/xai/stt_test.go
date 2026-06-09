@@ -57,6 +57,21 @@ func TestXaiSTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewXaiSTTUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("XAI_API_KEY", "env-key")
+
+	provider := NewXaiSTT("")
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+
+	explicit := NewXaiSTT("explicit-key")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestXaiSTTRecognizeRequestUsesReferenceMultipartFields(t *testing.T) {
 	provider := NewXaiSTT("test-key")
 
