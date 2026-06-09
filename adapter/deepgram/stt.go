@@ -440,7 +440,7 @@ func deepgramSpeechEvent(resp dgResponse) *stt.SpeechEvent {
 		})
 	}
 
-	if transcriptBuilder == "" && !resp.IsFinal {
+	if transcriptBuilder == "" {
 		return nil
 	}
 
