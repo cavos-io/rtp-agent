@@ -177,14 +177,18 @@ func (w *streamAdapterWrapper) run() {
 					}
 					return
 				}
-				if err := vadStream.PushFrame(input.frame); err != nil {
-					w.sendErr(err)
-					return
-				}
-
 				w.mu.Lock()
 				w.frameBuffer = append(w.frameBuffer, input.frame)
 				w.mu.Unlock()
+				if err := vadStream.PushFrame(input.frame); err != nil {
+					w.mu.Lock()
+					if n := len(w.frameBuffer); n > 0 && w.frameBuffer[n-1] == input.frame {
+						w.frameBuffer = w.frameBuffer[:n-1]
+					}
+					w.mu.Unlock()
+					w.sendErr(err)
+					return
+				}
 			}
 		}
 	}()

@@ -538,6 +538,71 @@ func TestStreamAdapterRecognizesBufferedFramesWhenVADEndOmitsFrames(t *testing.T
 	}
 }
 
+func TestStreamAdapterBuffersFrameBeforeVADPushReturns(t *testing.T) {
+	frame := &model.AudioFrame{Data: []byte("raced"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+	pushStarted := make(chan struct{}, 1)
+	releasePush := make(chan struct{})
+	wrapped := &fakeStreamAdapterSTT{recognizeResult: &SpeechEvent{
+		Type:         SpeechEventFinalTranscript,
+		Alternatives: []SpeechData{{Text: "raced speech"}},
+	}}
+	stream, err := NewStreamAdapter(
+		wrapped,
+		&fakeStreamAdapterVAD{stream: &fakeStreamAdapterVADStream{
+			events: []*vad.VADEvent{
+				{Type: vad.VADEventEndOfSpeech},
+			},
+			waitPushesBeforeEvent: []int{1},
+			pushCh:                make(chan struct{}, 1),
+			pushStartedCh:         pushStarted,
+			releasePushCh:         releasePush,
+			done:                  make(chan struct{}),
+		}},
+	).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	pushErrCh := make(chan error, 1)
+	go func() {
+		pushErrCh <- stream.PushFrame(frame)
+	}()
+
+	select {
+	case <-pushStarted:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for VAD PushFrame")
+	}
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if event.Type != SpeechEventEndOfSpeech {
+		t.Fatalf("first event type = %s, want end_of_speech", event.Type)
+	}
+
+	event, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if event.Type != SpeechEventFinalTranscript {
+		t.Fatalf("second event type = %s, want final_transcript", event.Type)
+	}
+	if got := len(wrapped.recognizeFrames); got != 1 {
+		t.Fatalf("Recognize frame count = %d, want raced frame buffered before VAD push returns", got)
+	}
+	if wrapped.recognizeFrames[0] != frame {
+		t.Fatalf("Recognize frame = %#v, want original raced frame", wrapped.recognizeFrames[0])
+	}
+
+	close(releasePush)
+	if err := <-pushErrCh; err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
+	}
+}
+
 func TestStreamAdapterDoesNotReadNextVADEventBeforeFinalTranscript(t *testing.T) {
 	recognizeStarted := make(chan struct{}, 1)
 	releaseRecognize := make(chan struct{})
@@ -715,6 +780,8 @@ type fakeStreamAdapterVADStream struct {
 	index                 int
 	nextErr               error
 	pushErr               error
+	pushStartedCh         chan struct{}
+	releasePushCh         chan struct{}
 	flushCh               chan struct{}
 	endInputCh            chan struct{}
 	closedCh              chan struct{}
@@ -725,8 +792,14 @@ type fakeStreamAdapterVADStream struct {
 }
 
 func (f *fakeStreamAdapterVADStream) PushFrame(*model.AudioFrame) error {
+	if f.pushStartedCh != nil {
+		f.pushStartedCh <- struct{}{}
+	}
 	if f.pushCh != nil {
 		f.pushCh <- struct{}{}
+	}
+	if f.releasePushCh != nil {
+		<-f.releasePushCh
 	}
 	if f.pushErr != nil {
 		return f.pushErr
