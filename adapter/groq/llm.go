@@ -2,6 +2,7 @@ package groq
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/cavos-io/rtp-agent/adapter/openai"
@@ -9,12 +10,15 @@ import (
 )
 
 type GroqLLM struct {
-	inner *openai.OpenAILLM
+	inner  *openai.OpenAILLM
+	apiKey string
 }
 
 func NewGroqLLM(apiKey string, model string) *GroqLLM {
+	resolvedAPIKey := resolveGroqAPIKey(apiKey)
 	return &GroqLLM{
-		inner: openai.NewOpenAILLMWithBaseURL(resolveGroqAPIKey(apiKey), model, "https://api.groq.com/openai/v1"),
+		inner:  openai.NewOpenAILLMWithBaseURL(resolvedAPIKey, model, "https://api.groq.com/openai/v1"),
+		apiKey: resolvedAPIKey,
 	}
 }
 
@@ -31,5 +35,8 @@ func (l *GroqLLM) Provider() string {
 }
 
 func (l *GroqLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+	if l.apiKey == "" {
+		return nil, fmt.Errorf("groq API key is required, either as argument or set GROQ_API_KEY environmental variable")
+	}
 	return l.inner.Chat(ctx, chatCtx, opts...)
 }
