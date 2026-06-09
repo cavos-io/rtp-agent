@@ -1058,6 +1058,9 @@ func TestAgentSessionUserdataRequiresValue(t *testing.T) {
 	if !errors.Is(err, ErrAgentSessionUserdataNotSet) {
 		t.Fatalf("Userdata error = %v, want ErrAgentSessionUserdataNotSet", err)
 	}
+	if got, want := err.Error(), "AgentSession userdata is not set"; got != want {
+		t.Fatalf("Userdata error text = %q, want %q", got, want)
+	}
 }
 
 func TestAgentSessionUserdataCanBeSet(t *testing.T) {
@@ -2399,6 +2402,9 @@ func TestAgentSessionRunRejectsNestedActiveRun(t *testing.T) {
 	if !errors.Is(err, ErrAgentSessionNestedRun) {
 		t.Fatalf("second Run error = %v, want ErrAgentSessionNestedRun", err)
 	}
+	if got, want := err.Error(), "nested runs are not supported"; got != want {
+		t.Fatalf("second Run error text = %q, want %q", got, want)
+	}
 
 	session.activity.speechQueue[0].speech.MarkDone()
 	if !first.Done() {
@@ -2418,6 +2424,9 @@ func TestAgentSessionGenerateReplyRequiresRunningActivity(t *testing.T) {
 	if !errors.Is(err, ErrAgentSessionNotRunning) {
 		t.Fatalf("GenerateReply error = %v, want ErrAgentSessionNotRunning", err)
 	}
+	if got, want := err.Error(), "AgentSession isn't running"; got != want {
+		t.Fatalf("GenerateReply error text = %q, want %q", got, want)
+	}
 }
 
 func TestAgentSessionCurrentAgentRequiresConfiguredAgent(t *testing.T) {
@@ -2430,6 +2439,9 @@ func TestAgentSessionCurrentAgentRequiresConfiguredAgent(t *testing.T) {
 	}
 	if !errors.Is(err, ErrAgentSessionNotRunning) {
 		t.Fatalf("CurrentAgent error = %v, want ErrAgentSessionNotRunning", err)
+	}
+	if got, want := err.Error(), "VoiceAgent isn't running"; got != want {
+		t.Fatalf("CurrentAgent error text = %q, want %q", got, want)
 	}
 }
 
