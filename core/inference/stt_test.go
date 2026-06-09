@@ -84,6 +84,38 @@ func TestInferenceSTTExtraKwargsMatchReferenceSessionCreate(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTSessionCreateUsesReferenceAudioOptions(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{}
+	provider := NewSTT("deepgram/nova-3", "key", "secret",
+		WithSTTSampleRate(8000),
+		WithSTTEncoding("mulaw"),
+	)
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if len(conn.writes) != 1 {
+		t.Fatalf("writes = %d, want session.create", len(conn.writes))
+	}
+	settings, ok := conn.writes[0]["settings"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("settings = %#v, want map", conn.writes[0]["settings"])
+	}
+	if settings["sample_rate"] != "8000" {
+		t.Fatalf("settings.sample_rate = %#v, want string 8000", settings["sample_rate"])
+	}
+	if settings["encoding"] != "mulaw" {
+		t.Fatalf("settings.encoding = %#v, want mulaw", settings["encoding"])
+	}
+}
+
 func TestInferenceSTTRecognizeMatchesReferenceUnsupportedBatch(t *testing.T) {
 	provider := NewSTT("deepgram/nova-3", "key", "secret")
 
@@ -196,7 +228,7 @@ func TestSTTWebsocketSendsReferenceContextHeaders(t *testing.T) {
 }
 
 func TestInferenceSTTSessionCreateParamsMatchReferenceShape(t *testing.T) {
-	modelName, params := sttSessionCreateParams("auto:en", "", nil, nil)
+	modelName, params := sttSessionCreateParams("auto:en", "", "", 0, nil, nil)
 
 	if modelName != "auto" {
 		t.Fatalf("modelName = %q, want auto", modelName)

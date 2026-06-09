@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -21,6 +22,8 @@ import (
 type STT struct {
 	model          string
 	language       string
+	encoding       string
+	sampleRate     int
 	extraKwargs    map[string]any
 	fallbackModels []FallbackModel
 	apiKey         string
@@ -45,6 +48,18 @@ func WithSTTExtraKwargs(extra map[string]any) STTOption {
 	}
 }
 
+func WithSTTEncoding(encoding string) STTOption {
+	return func(s *STT) {
+		s.encoding = encoding
+	}
+}
+
+func WithSTTSampleRate(sampleRate int) STTOption {
+	return func(s *STT) {
+		s.sampleRate = sampleRate
+	}
+}
+
 func NewSTT(model string, apiKey, apiSecret string, opts ...STTOption) *STT {
 	if model == "" {
 		model = "deepgram/nova-3"
@@ -54,6 +69,8 @@ func NewSTT(model string, apiKey, apiSecret string, opts ...STTOption) *STT {
 	s := &STT{
 		model:         model,
 		language:      language,
+		encoding:      "pcm_s16le",
+		sampleRate:    16000,
 		apiKey:        apiKey,
 		apiSecret:     apiSecret,
 		baseURL:       defaultInferenceWebsocketURL(),
@@ -100,7 +117,7 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		language = s.language
 	}
 
-	modelName, createParams := sttSessionCreateParams(s.model, language, s.extraKwargs, s.fallbackModels)
+	modelName, createParams := sttSessionCreateParams(s.model, language, s.encoding, s.sampleRate, s.extraKwargs, s.fallbackModels)
 
 	wsURL, err := url.Parse(s.baseURL + "/stt")
 	if err != nil {
@@ -148,11 +165,17 @@ func defaultInferenceSTTDialer(ctx context.Context, endpoint string, header http
 	return conn, nil
 }
 
-func sttSessionCreateParams(model string, language string, extra map[string]any, fallback []FallbackModel) (string, map[string]interface{}) {
+func sttSessionCreateParams(model string, language string, encoding string, sampleRate int, extra map[string]any, fallback []FallbackModel) (string, map[string]interface{}) {
 	modelName, language := sttModelAndLanguage(model, language)
+	if encoding == "" {
+		encoding = "pcm_s16le"
+	}
+	if sampleRate == 0 {
+		sampleRate = 16000
+	}
 	settings := map[string]interface{}{
-		"sample_rate": "16000",
-		"encoding":    "pcm_s16le",
+		"sample_rate": strconv.Itoa(sampleRate),
+		"encoding":    encoding,
 		"extra":       sttExtraPayload(extra),
 	}
 	if language != "" {
