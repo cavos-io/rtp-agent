@@ -1735,11 +1735,9 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 	s.UpdateAgentState(AgentStateListening)
 
 	if runState != nil {
-		if err := s.WaitForInactive(ctx); err != nil {
+		if err := runState.Wait(ctx); err != nil {
+			s.clearRunStateIfCurrent(runState)
 			return nil, err
-		}
-		if !runState.Done() {
-			runState.MarkDone()
 		}
 	}
 
