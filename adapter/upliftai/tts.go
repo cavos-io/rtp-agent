@@ -44,6 +44,10 @@ func (t *UpliftAITTS) SampleRate() int  { return defaultUpliftAISampleRate }
 func (t *UpliftAITTS) NumChannels() int { return 1 }
 
 func (t *UpliftAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if t.apiKey == "" {
+		return nil, fmt.Errorf("API key is required, either as argument or set UPLIFTAI_API_KEY environment variable")
+	}
+
 	url := "https://api.upliftai.org/v1/tts"
 
 	reqBody := map[string]interface{}{
