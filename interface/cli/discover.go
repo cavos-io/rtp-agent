@@ -16,6 +16,9 @@ var defaultEntrypointPaths = []string{
 	"main.go",
 	"app.go",
 	"agent.go",
+	filepath.Join("app", "main.go"),
+	filepath.Join("app", "app.go"),
+	filepath.Join("app", "agent.go"),
 	filepath.Join("cmd", "main.go"),
 	filepath.Join("cmd", "worker", "main.go"),
 }
@@ -32,6 +35,12 @@ type ImportData struct {
 	ImportString string
 }
 
+type discoverReferenceError string
+
+func (e discoverReferenceError) Error() string {
+	return string(e)
+}
+
 func GetDefaultPath() (string, error) {
 	for _, candidate := range defaultEntrypointPaths {
 		info, err := os.Stat(candidate)
@@ -42,7 +51,7 @@ func GetDefaultPath() (string, error) {
 			return "", err
 		}
 	}
-	return "", fmt.Errorf("could not find a default file to run, please provide an explicit path")
+	return "", discoverReferenceError("Could not find a default file to run, please provide an explicit path")
 }
 
 func GetModuleDataFromPath(path string) (ModuleData, error) {
@@ -96,7 +105,7 @@ func GetImportData(path string) (ImportData, error) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
-			return ImportData{}, fmt.Errorf("path does not exist %s", path)
+			return ImportData{}, discoverReferenceError("Path does not exist " + path)
 		}
 		return ImportData{}, err
 	}

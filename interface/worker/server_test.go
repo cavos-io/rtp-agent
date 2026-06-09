@@ -735,8 +735,11 @@ func TestUpdateOptionsRejectsInvalidLogLevel(t *testing.T) {
 	if err == nil {
 		t.Fatal("UpdateOptions() error = nil, want invalid log level error")
 	}
-	if !strings.Contains(err.Error(), "invalid log_level") {
-		t.Fatalf("UpdateOptions() error = %q, want invalid log_level message", err.Error())
+	if got, want := err.Error(), "Invalid log level 'verbose'. Valid levels: CRITICAL, DEBUG, ERROR, INFO, TRACE, WARN"; got != want {
+		t.Fatalf("UpdateOptions() error = %q, want %q", got, want)
+	}
+	if strings.Contains(err.Error(), "invalid log_level") {
+		t.Fatalf("UpdateOptions() error = %q, want reference log level wording", err.Error())
 	}
 	if server.Options.LogLevel != "INFO" {
 		t.Fatalf("LogLevel = %q, want previous normalized INFO after rejected update", server.Options.LogLevel)
@@ -863,8 +866,11 @@ func TestUpdateOptionsRejectsAfterWorkerStarted(t *testing.T) {
 	if err == nil {
 		t.Fatal("UpdateOptions() error = nil, want started worker error")
 	}
-	if !strings.Contains(err.Error(), "cannot update options after starting the server") {
-		t.Fatalf("UpdateOptions() error = %q, want started worker message", err.Error())
+	if got, want := err.Error(), "cannot update options after starting the server"; got != want {
+		t.Fatalf("UpdateOptions() error = %q, want %q", got, want)
+	}
+	if strings.Contains(err.Error(), "worker already started") {
+		t.Fatalf("UpdateOptions() error = %q, want reference started-server wording", err.Error())
 	}
 }
 
@@ -876,8 +882,11 @@ func TestUpdateOptionsRejectsAfterHTTPServerStarted(t *testing.T) {
 	if err == nil {
 		t.Fatal("UpdateOptions() error = nil, want started worker error")
 	}
-	if !strings.Contains(err.Error(), "cannot update options after starting the server") {
-		t.Fatalf("UpdateOptions() error = %q, want started worker message", err.Error())
+	if got, want := err.Error(), "cannot update options after starting the server"; got != want {
+		t.Fatalf("UpdateOptions() error = %q, want %q", got, want)
+	}
+	if strings.Contains(err.Error(), "http server already started") {
+		t.Fatalf("UpdateOptions() error = %q, want reference started-server wording", err.Error())
 	}
 }
 
@@ -2594,8 +2603,11 @@ func TestInitialRegisterMessageRejectsNonRegisterMessage(t *testing.T) {
 	if err == nil {
 		t.Fatal("handleInitialRegisterMessage() error = nil, want expected register response error")
 	}
-	if !strings.Contains(err.Error(), "expected register response as first message") {
-		t.Fatalf("handleInitialRegisterMessage() error = %q, want expected register response message", err.Error())
+	if got, want := err.Error(), "expected register response as first message"; got != want {
+		t.Fatalf("handleInitialRegisterMessage() error = %q, want %q", got, want)
+	}
+	if len(server.activeJobs) != 0 {
+		t.Fatalf("activeJobs = %#v, want no availability handling before register response", server.activeJobs)
 	}
 }
 
@@ -3138,8 +3150,11 @@ func TestValidateRunPreconditionsRequiresRTCSession(t *testing.T) {
 	if err == nil {
 		t.Fatal("validateRunPreconditions() error = nil, want missing RTC session error")
 	}
-	if !strings.Contains(err.Error(), "no RTC session entrypoint") {
-		t.Fatalf("validateRunPreconditions() error = %q, want RTC session message", err.Error())
+	if got, want := err.Error(), rtcSessionRequiredMessage; got != want {
+		t.Fatalf("validateRunPreconditions() error = %q, want %q", got, want)
+	}
+	if strings.Contains(err.Error(), "no RTC session entrypoint") {
+		t.Fatalf("validateRunPreconditions() error = %q, want reference capitalization", err.Error())
 	}
 }
 
@@ -3288,8 +3303,11 @@ func TestValidateRunPreconditionsRejectsInvalidLogLevel(t *testing.T) {
 	if err == nil {
 		t.Fatal("validateRunPreconditions() error = nil, want invalid log level error")
 	}
-	if !strings.Contains(err.Error(), "invalid log_level") {
-		t.Fatalf("validateRunPreconditions() error = %q, want invalid log level message", err.Error())
+	if got, want := err.Error(), "Invalid log level 'verbose'. Valid levels: CRITICAL, DEBUG, ERROR, INFO, TRACE, WARN"; got != want {
+		t.Fatalf("validateRunPreconditions() error = %q, want %q", got, want)
+	}
+	if strings.Contains(err.Error(), "invalid log_level") {
+		t.Fatalf("validateRunPreconditions() error = %q, want reference log level wording", err.Error())
 	}
 }
 
@@ -3443,8 +3461,11 @@ func TestRunRejectsAlreadyStartedServer(t *testing.T) {
 	if err == nil {
 		t.Fatal("Run() error = nil, want already running error")
 	}
-	if !strings.Contains(err.Error(), "already running") {
-		t.Fatalf("Run() error = %q, want already running message", err.Error())
+	if got, want := err.Error(), "worker is already running"; got != want {
+		t.Fatalf("Run() error = %q, want %q", got, want)
+	}
+	if strings.Contains(err.Error(), "server is already running") {
+		t.Fatalf("Run() error = %q, want reference worker wording", err.Error())
 	}
 }
 
@@ -3542,8 +3563,11 @@ func TestRTCSessionRejectsSecondRegistration(t *testing.T) {
 	if err == nil {
 		t.Fatal("second RTCSession() error = nil, want duplicate registration error")
 	}
-	if !strings.Contains(err.Error(), "only supports registering one rtc_session") {
-		t.Fatalf("second RTCSession() error = %q, want duplicate registration message", err.Error())
+	if got, want := err.Error(), duplicateRTCSessionMessage; got != want {
+		t.Fatalf("second RTCSession() error = %q, want %q", got, want)
+	}
+	if strings.Contains(err.Error(), "supports registering one rtc_session") {
+		t.Fatalf("second RTCSession() error = %q, want reference duplicate-registration wording", err.Error())
 	}
 }
 
@@ -4068,8 +4092,11 @@ func TestExecuteLocalJobRejectsMissingRTCSession(t *testing.T) {
 	if err == nil {
 		t.Fatal("ExecuteLocalJob() error = nil, want missing RTC session error")
 	}
-	if !strings.Contains(err.Error(), "no RTC session entrypoint") {
-		t.Fatalf("ExecuteLocalJob() error = %q, want RTC session message", err.Error())
+	if got, want := err.Error(), rtcSessionRequiredMessage; got != want {
+		t.Fatalf("ExecuteLocalJob() error = %q, want %q", got, want)
+	}
+	if strings.Contains(err.Error(), "no RTC session entrypoint") {
+		t.Fatalf("ExecuteLocalJob() error = %q, want reference capitalization", err.Error())
 	}
 }
 
@@ -4393,8 +4420,8 @@ func TestExecuteLocalJobWithOptionsRejectsNonFakeWithoutRoomInfo(t *testing.T) {
 	if err == nil {
 		t.Fatal("ExecuteLocalJobWithOptions() error = nil, want missing room info error")
 	}
-	if !strings.Contains(err.Error(), "room info is required") {
-		t.Fatalf("ExecuteLocalJobWithOptions() error = %q, want room info requirement", err.Error())
+	if got, want := err.Error(), "room_info is None but fake_job is False"; got != want {
+		t.Fatalf("ExecuteLocalJobWithOptions() error = %q, want %q", got, want)
 	}
 }
 
@@ -4410,8 +4437,22 @@ func TestExecuteLocalJobWithOptionsRejectsNonFakeWithoutAgentIdentity(t *testing
 	if err == nil {
 		t.Fatal("ExecuteLocalJobWithOptions() error = nil, want missing agent identity error")
 	}
-	if !strings.Contains(err.Error(), "agent identity is required") {
-		t.Fatalf("ExecuteLocalJobWithOptions() error = %q, want agent identity requirement", err.Error())
+	if got, want := err.Error(), "agent_identity is None but fake_job is False"; got != want {
+		t.Fatalf("ExecuteLocalJobWithOptions() error = %q, want %q", got, want)
+	}
+}
+
+func TestExecuteLocalJobWithOptionsChecksReferenceIdentityBeforeRoomInfo(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := server.ExecuteLocalJobWithOptions(ctx, "room-a", "", LocalJobOptions{FakeJob: false})
+	if err == nil {
+		t.Fatal("ExecuteLocalJobWithOptions() error = nil, want missing agent identity error")
+	}
+	if got, want := err.Error(), "agent_identity is None but fake_job is False"; got != want {
+		t.Fatalf("ExecuteLocalJobWithOptions() error = %q, want %q", got, want)
 	}
 }
 

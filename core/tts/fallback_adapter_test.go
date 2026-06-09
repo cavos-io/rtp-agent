@@ -688,8 +688,12 @@ func TestFallbackAdapterRejectsMixedChannelCounts(t *testing.T) {
 		if recovered == nil {
 			t.Fatal("NewFallbackAdapter did not panic")
 		}
-		if !strings.Contains(recovered.(string), "same number of channels") {
-			t.Fatalf("panic = %q, want channel-count error", recovered)
+		message, ok := recovered.(string)
+		if !ok {
+			t.Fatalf("panic = %T(%v), want string", recovered, recovered)
+		}
+		if got, want := message, "all TTS must have the same number of channels"; got != want {
+			t.Fatalf("panic = %q, want %q", got, want)
 		}
 	}()
 

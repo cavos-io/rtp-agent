@@ -2460,8 +2460,11 @@ func TestDefaultConfigFromEnvRejectsNameWorkflowWithoutSelectedParts(t *testing.
 	if err == nil {
 		t.Fatal("NewApp() error = nil, want no selected name parts error")
 	}
-	if !strings.Contains(strings.ToLower(err.Error()), "at least one of first_name, middle_name, or last_name must be true") {
-		t.Fatalf("NewApp() error = %v, want reference selected-name-part error", err)
+	if got, want := err.Error(), "At least one of first_name, middle_name, or last_name must be True"; got != want {
+		t.Fatalf("NewApp() error = %q, want %q", got, want)
+	}
+	if strings.Contains(err.Error(), "must be true") {
+		t.Fatalf("NewApp() error = %q, want reference True casing", err.Error())
 	}
 }
 

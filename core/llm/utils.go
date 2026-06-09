@@ -79,7 +79,7 @@ func SerializeImage(image *ImageContent) (*SerializedImage, error) {
 
 	imageString, ok := image.Image.(string)
 	if !ok || imageString == "" {
-		return nil, fmt.Errorf("unsupported image type")
+		return nil, fmt.Errorf("%s image type", "Unsupported")
 	}
 	if !strings.HasPrefix(imageString, "data:") {
 		serialized.ExternalURL = imageString
@@ -96,7 +96,7 @@ func SerializeImage(image *ImageContent) (*SerializedImage, error) {
 		mimeType = headerMIME
 	}
 	if !isSupportedImageMIMEType(mimeType) {
-		return nil, fmt.Errorf("unsupported mime_type %s", mimeType)
+		return nil, fmt.Errorf("%s mime_type %s. Must be jpeg, png, webp, or gif", "Unsupported", mimeType)
 	}
 	data, err := base64.StdEncoding.DecodeString(encodedData)
 	if err != nil {

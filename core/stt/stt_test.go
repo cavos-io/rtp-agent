@@ -371,6 +371,21 @@ func TestStreamTimingRejectsNegativeReferenceTimingAnchors(t *testing.T) {
 	}
 }
 
+func TestSampleRateGuardUsesReferenceMismatchError(t *testing.T) {
+	guard := &SampleRateGuard{}
+	if err := guard.Check(&model.AudioFrame{SampleRate: 16000}); err != nil {
+		t.Fatalf("Check(first) returned error: %v", err)
+	}
+
+	err := guard.Check(&model.AudioFrame{SampleRate: 8000})
+	if err == nil {
+		t.Fatal("Check(second) returned nil, want sample-rate mismatch error")
+	}
+	if got, want := err.Error(), "the sample rate of the input frames must be consistent"; got != want {
+		t.Fatalf("mismatch error = %q, want %q", got, want)
+	}
+}
+
 func TestSpeechStreamAliasMatchesRecognizeStream(t *testing.T) {
 	var stream SpeechStream = (*fakeSpeechStream)(nil)
 	var _ RecognizeStream = stream

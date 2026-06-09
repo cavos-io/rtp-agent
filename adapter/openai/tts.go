@@ -82,7 +82,7 @@ func NewOpenAITTS(apiKey string, model openai.SpeechModel, voice openai.SpeechVo
 		apiKey = os.Getenv(openAIAPIKeyEnv)
 	}
 	if apiKey == "" {
-		return nil, fmt.Errorf("OPENAI_API_KEY is required, either as argument or set OPENAI_API_KEY environment variable")
+		return nil, fmt.Errorf("%s", openAIAPIKeyRequiredMessage)
 	}
 	return newOpenAITTS(openai.NewClient(apiKey), apiKey, model, voice, opts...), nil
 }

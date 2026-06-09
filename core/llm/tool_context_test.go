@@ -52,6 +52,19 @@ func (t nonComparableTool) Parameters() map[string]any { return nil }
 
 func (t nonComparableTool) Execute(context.Context, string) (string, error) { return "", nil }
 
+func requireToolContextErrorString(t *testing.T, op string, err error, want string) {
+	t.Helper()
+	if op == "" {
+		t.Fatal("operation label must be set")
+	}
+	if err == nil {
+		t.Fatalf("%s error = nil, want %q", op, want)
+	}
+	if got := err.Error(); got != want {
+		t.Fatalf("%s error = %q, want %q", op, got, want)
+	}
+}
+
 func TestToolContextEmptyMatchesReferenceConstructor(t *testing.T) {
 	var receiver ToolContext
 	ctx := receiver.Empty()
@@ -103,12 +116,7 @@ func TestToolContextUpdateToolsRejectsDifferentToolsWithSameName(t *testing.T) {
 		&testTool{id: "lookup-b", name: "lookup"},
 	})
 
-	if err == nil {
-		t.Fatal("UpdateTools() error = nil, want duplicate function name error")
-	}
-	if !strings.Contains(err.Error(), "duplicate function name: lookup") {
-		t.Fatalf("UpdateTools() error = %q, want duplicate function name", err)
-	}
+	requireToolContextErrorString(t, "UpdateTools()", err, "duplicate function name: lookup")
 }
 
 func TestToolContextAddToolUpdatesFlattenedTools(t *testing.T) {
@@ -147,20 +155,17 @@ func TestToolContextAddToolRejectsDifferentToolWithSameName(t *testing.T) {
 
 	err := ctx.AddTool(&testTool{id: "lookup-b", name: "lookup"})
 
-	if err == nil {
-		t.Fatal("AddTool() error = nil, want duplicate function name error")
-	}
-	if !strings.Contains(err.Error(), "duplicate function name: lookup") {
-		t.Fatalf("AddTool() error = %q, want duplicate function name", err)
-	}
+	requireToolContextErrorString(t, "AddTool()", err, "duplicate function name: lookup")
 }
 
 func TestNewToolContextPanicsOnDuplicateFunctionName(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
 			t.Fatal("NewToolContext() did not panic, want duplicate function name panic")
-		} else if err, ok := r.(error); !ok || !strings.Contains(err.Error(), "duplicate function name: lookup") {
-			t.Fatalf("NewToolContext() panic = %v, want duplicate function name", r)
+		} else if err, ok := r.(error); !ok {
+			t.Fatalf("NewToolContext() panic = %T %v, want error", r, r)
+		} else {
+			requireToolContextErrorString(t, "NewToolContext() panic", err, "duplicate function name: lookup")
 		}
 	}()
 
@@ -174,8 +179,10 @@ func TestNewToolContextPanicsOnUnknownToolType(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
 			t.Fatal("NewToolContext() did not panic, want unknown tool type panic")
-		} else if err, ok := r.(error); !ok || !strings.Contains(err.Error(), "unknown tool type: string") {
-			t.Fatalf("NewToolContext() panic = %v, want unknown tool type", r)
+		} else if err, ok := r.(error); !ok {
+			t.Fatalf("NewToolContext() panic = %T %v, want error", r, r)
+		} else {
+			requireToolContextErrorString(t, "NewToolContext() panic", err, "unknown tool type: string")
 		}
 	}()
 
@@ -190,12 +197,7 @@ func TestToolContextUpdateToolsRejectsNonComparableDuplicateName(t *testing.T) {
 		nonComparableTool{id: "lookup-b", name: "lookup", labels: []string{"b"}},
 	})
 
-	if err == nil {
-		t.Fatal("UpdateTools() error = nil, want duplicate function name error")
-	}
-	if !strings.Contains(err.Error(), "duplicate function name: lookup") {
-		t.Fatalf("UpdateTools() error = %q, want duplicate function name", err)
-	}
+	requireToolContextErrorString(t, "UpdateTools()", err, "duplicate function name: lookup")
 }
 
 func TestToolContextFlattenSortsFunctionToolsByName(t *testing.T) {

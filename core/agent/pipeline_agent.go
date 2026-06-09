@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -883,12 +885,24 @@ func resolveToolsByID(tools []llm.Tool, ids []string) ([]llm.Tool, error) {
 		}
 		tool, ok := byID[id]
 		if !ok {
-			return nil, fmt.Errorf("tool %q not found in registered tools: %v", id, available)
+			sort.Strings(available)
+			return nil, fmt.Errorf("tool '%s' not found in agent's registered tools. Available tools: %s", id, formatPythonStringList(available))
 		}
 		resolved = append(resolved, tool)
 		seen[id] = struct{}{}
 	}
 	return resolved, nil
+}
+
+func formatPythonStringList(values []string) string {
+	if len(values) == 0 {
+		return "[]"
+	}
+	quoted := make([]string, len(values))
+	for i, value := range values {
+		quoted[i] = "'" + value + "'"
+	}
+	return "[" + strings.Join(quoted, ", ") + "]"
 }
 
 func (va *PipelineAgent) OnAudioFrame(ctx context.Context, frame *model.AudioFrame) {

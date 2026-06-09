@@ -31,6 +31,34 @@ func TestGetDefaultPathFindsReferenceStyleEntrypoints(t *testing.T) {
 	}
 }
 
+func TestGetDefaultPathFindsReferenceNestedAppEntrypoints(t *testing.T) {
+	dir := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir(temp) error = %v", err)
+	}
+	defer os.Chdir(oldWD)
+
+	appDir := filepath.Join(dir, "app")
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatalf("mkdir app: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "agent.go"), []byte("package app\n"), 0o644); err != nil {
+		t.Fatalf("write app/agent.go: %v", err)
+	}
+
+	got, err := GetDefaultPath()
+	if err != nil {
+		t.Fatalf("GetDefaultPath() error = %v", err)
+	}
+	if got != filepath.Join("app", "agent.go") {
+		t.Fatalf("GetDefaultPath() = %q, want app/agent.go", got)
+	}
+}
+
 func TestGetDefaultPathPrefersMainBeforeAppAndAgent(t *testing.T) {
 	dir := t.TempDir()
 	oldWD, err := os.Getwd()
@@ -71,6 +99,12 @@ func TestGetDefaultPathErrorsWhenNoEntrypointExists(t *testing.T) {
 	_, err = GetDefaultPath()
 	if err == nil {
 		t.Fatal("GetDefaultPath() error = nil, want missing default file error")
+	}
+	if got, want := err.Error(), "Could not find a default file to run, please provide an explicit path"; got != want {
+		t.Fatalf("GetDefaultPath() error = %q, want %q", got, want)
+	}
+	if err.Error()[0] != 'C' {
+		t.Fatalf("GetDefaultPath() error = %q, want reference capitalization", err.Error())
 	}
 }
 
@@ -125,5 +159,21 @@ func TestGetImportDataUsesPackageName(t *testing.T) {
 	}
 	if data.ImportString != "example.com/agent:voiceagent" {
 		t.Fatalf("ImportString = %q, want example.com/agent:voiceagent", data.ImportString)
+	}
+}
+
+func TestGetImportDataErrorsWhenPathDoesNotExist(t *testing.T) {
+	missingPath := filepath.Join(t.TempDir(), "missing.go")
+
+	_, err := GetImportData(missingPath)
+	if err == nil {
+		t.Fatal("GetImportData() error = nil, want missing path error")
+	}
+	want := "Path does not exist " + missingPath
+	if got := err.Error(); got != want {
+		t.Fatalf("GetImportData() error = %q, want %q", got, want)
+	}
+	if err.Error()[0] != 'P' {
+		t.Fatalf("GetImportData() error = %q, want reference capitalization", err.Error())
 	}
 }

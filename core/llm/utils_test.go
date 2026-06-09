@@ -28,6 +28,32 @@ func TestStripThinkingTokensTracksHiddenChunks(t *testing.T) {
 	}
 }
 
+func TestSerializeImageRejectsUnsupportedMIMETypeWithReferenceError(t *testing.T) {
+	_, err := SerializeImage(&ImageContent{
+		Image: "data:image/bmp;base64,AA==",
+	})
+	if err == nil {
+		t.Fatal("SerializeImage() error = nil, want unsupported mime_type error")
+	}
+
+	want := "Unsupported mime_type image/bmp. Must be jpeg, png, webp, or gif"
+	if err.Error() != want {
+		t.Fatalf("SerializeImage() error = %q, want %q", err, want)
+	}
+}
+
+func TestSerializeImageRejectsUnsupportedImageTypeWithReferenceError(t *testing.T) {
+	_, err := SerializeImage(&ImageContent{Image: 42})
+	if err == nil {
+		t.Fatal("SerializeImage() error = nil, want unsupported image type error")
+	}
+
+	want := "Unsupported image type"
+	if err.Error() != want {
+		t.Fatalf("SerializeImage() error = %q, want %q", err, want)
+	}
+}
+
 func TestParseFunctionArgumentsParsesJSONObject(t *testing.T) {
 	args, err := ParseFunctionArguments(`{"city":"Paris","limit":3}`)
 	if err != nil {
@@ -47,6 +73,18 @@ func TestParseFunctionArgumentsUnwrapsNestedJSONString(t *testing.T) {
 
 	if args["city"] != "Paris" {
 		t.Fatalf("args = %#v, want nested JSON object", args)
+	}
+}
+
+func TestParseFunctionArgumentsRejectsNestedNonJSONStringWithReferenceError(t *testing.T) {
+	_, err := ParseFunctionArguments(`"not json object"`)
+	if err == nil {
+		t.Fatal("ParseFunctionArguments(nested string) error = nil, want error")
+	}
+
+	want := "function arguments decoded to a non-JSON string: not json object"
+	if err.Error() != want {
+		t.Fatalf("ParseFunctionArguments(nested string) error = %q, want %q", err.Error(), want)
 	}
 }
 

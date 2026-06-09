@@ -18,6 +18,8 @@ import (
 )
 
 const defaultOpenAILLMModel = "gpt-4.1"
+const defaultAzureOpenAILLMModel = "gpt-4o"
+const openAIAPIKeyRequiredMessage = "OpenAI API key is required, either as argument or set OPENAI_API_KEY environment variable"
 
 const (
 	azureOpenAIEndpointEnv = "AZURE_OPENAI_ENDPOINT"
@@ -243,7 +245,7 @@ func NewOpenAILLM(apiKey string, model string, opts ...OpenAILLMOption) (*OpenAI
 		apiKey = os.Getenv(openAIAPIKeyEnv)
 	}
 	if apiKey == "" {
-		return nil, fmt.Errorf("OPENAI_API_KEY is required, either as argument or set OPENAI_API_KEY environment variable")
+		return nil, fmt.Errorf("%s", openAIAPIKeyRequiredMessage)
 	}
 	config := openai.DefaultConfig(apiKey)
 	return newOpenAILLMWithConfigAndModel(config, model, opts...)
@@ -271,7 +273,7 @@ func newOpenAILLMWithConfigAndModel(config openai.ClientConfig, model string, op
 
 func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
 	if model == "" {
-		model = defaultOpenAILLMModel
+		model = defaultAzureOpenAILLMModel
 	}
 	if azureEndpoint == "" {
 		azureEndpoint = os.Getenv(azureOpenAIEndpointEnv)

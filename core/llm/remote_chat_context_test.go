@@ -1,9 +1,6 @@
 package llm
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestRemoteChatContextInsertOrdersItemsLikeReference(t *testing.T) {
 	ctx := NewRemoteChatContext()
@@ -48,11 +45,19 @@ func TestRemoteChatContextErrorsMatchReferenceMessages(t *testing.T) {
 	}
 
 	missingPrevious := "missing"
-	if err := ctx.Insert(&missingPrevious, &ChatMessage{ID: "second", Role: ChatRoleAssistant}); err == nil || !strings.Contains(err.Error(), "previous_item_id `missing` not found") {
-		t.Fatalf("Insert(missing previous) error = %v, want reference missing previous message", err)
+	err := ctx.Insert(&missingPrevious, &ChatMessage{ID: "second", Role: ChatRoleAssistant})
+	if err == nil {
+		t.Fatal("Insert(missing previous) error = nil, want reference missing previous message")
+	}
+	if got, want := err.Error(), "previous_item_id `missing` not found"; got != want {
+		t.Fatalf("Insert(missing previous) error = %q, want %q", got, want)
 	}
 
-	if err := ctx.Delete("missing"); err == nil || !strings.Contains(err.Error(), "item_id `missing` not found") {
-		t.Fatalf("Delete(missing) error = %v, want reference missing item message", err)
+	err = ctx.Delete("missing")
+	if err == nil {
+		t.Fatal("Delete(missing) error = nil, want reference missing item message")
+	}
+	if got, want := err.Error(), "item_id `missing` not found"; got != want {
+		t.Fatalf("Delete(missing) error = %q, want %q", got, want)
 	}
 }

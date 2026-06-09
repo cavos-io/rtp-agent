@@ -25,11 +25,15 @@ func boolPtr(value bool) *bool {
 	return &value
 }
 
-func assertPanics(t *testing.T, name string, fn func()) {
+func assertPanicsWithValue(t *testing.T, name string, want any, fn func()) {
 	t.Helper()
 	defer func() {
-		if recover() == nil {
+		got := recover()
+		if got == nil {
 			t.Fatalf("%s did not panic", name)
+		}
+		if got != want {
+			t.Fatalf("%s panic = %#v, want %#v", name, got, want)
 		}
 	}()
 	fn()
@@ -197,7 +201,8 @@ func TestChatContextReadOnlyViewRejectsMutatingMethods(t *testing.T) {
 		t.Fatalf("read-only items = %q, want %q", got, want)
 	}
 
-	assertPanics(t, "AddMessage on read-only context", func() {
+	const readOnlyError = "trying to modify a read-only chat context, please use .copy() and agent.update_chat_ctx() to modify the chat context"
+	assertPanicsWithValue(t, "AddMessage on read-only context", readOnlyError, func() {
 		readOnly.AddMessage(ChatMessageArgs{Role: ChatRoleUser, Text: "blocked"})
 	})
 
@@ -432,6 +437,22 @@ func TestInstructionsAppendStringPreservesExplicitTextVariant(t *testing.T) {
 	}
 }
 
+func TestInstructionsPrependStringPreservesExplicitTextVariant(t *testing.T) {
+	instructions := NewInstructions("audio", "text").AsModality("text")
+
+	prepended := instructions.PrependString("prefix ")
+
+	if got := prepended.String(); got != "prefix text" {
+		t.Fatalf("prepended.String() = %q, want active text representation with prefix", got)
+	}
+	if got := prepended.AsModality("audio").String(); got != "prefix audio" {
+		t.Fatalf("prepended audio = %q, want prefix", got)
+	}
+	if got := prepended.AsModality("text").String(); got != "prefix text" {
+		t.Fatalf("prepended text = %q, want prefix", got)
+	}
+}
+
 func TestChatContextInstructionsSerializeAndRoundTrip(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
@@ -520,6 +541,9 @@ func TestChatContextToProviderFormatEReturnsErrorForUnsupportedFormat(t *testing
 	}
 	if messages != nil || extra != nil {
 		t.Fatalf("ToProviderFormatE() messages=%#v extra=%#v, want nil outputs on error", messages, extra)
+	}
+	if got, want := err.Error(), "Unsupported provider format: unknown"; got != want {
+		t.Fatalf("ToProviderFormatE() error = %q, want %q", got, want)
 	}
 }
 
@@ -662,6 +686,9 @@ func TestChatContextUpsertItemRejectsTypeMismatchByDefault(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("UpsertItem() error = nil, want type mismatch error")
+	}
+	if got, want := err.Error(), "Item type mismatch: function_call != message"; got != want {
+		t.Fatalf("UpsertItem() error = %q, want %q", got, want)
 	}
 	if got, want := itemIDs(ctx.Items), "item"; got != want {
 		t.Fatalf("items = %q, want %q", got, want)
@@ -2062,8 +2089,11 @@ func TestChatContextToAWSProviderFormatRejectsExternalImageURL(t *testing.T) {
 	if messages != nil || extra != nil {
 		t.Fatalf("ToProviderFormatE(aws) messages=%#v extra=%#v, want nil outputs on error", messages, extra)
 	}
-	if !strings.Contains(err.Error(), "external image URLs are not supported by AWS") {
-		t.Fatalf("ToProviderFormatE(aws) error = %q, want AWS external image URL error", err)
+	if got, want := err.Error(), "external_url is not supported by AWS Bedrock."; got != want {
+		t.Fatalf("ToProviderFormatE(aws) error = %q, want %q", got, want)
+	}
+	if strings.Contains(err.Error(), "external image URLs") {
+		t.Fatalf("ToProviderFormatE(aws) error = %q, want reference external_url wording", err)
 	}
 }
 

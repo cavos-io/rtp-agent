@@ -53,7 +53,21 @@ const (
 	defaultDevHTTPPort    = 0
 
 	participantAttributeAgentName = "lk.agent.name"
+
+	rtcSessionRequiredMessage = "No RTC session entrypoint has been registered.\n" +
+		"Define one using the @server.rtc_session() decorator, for example:\n" +
+		"    @server.rtc_session(agent_name=\"my_agent\")\n" +
+		"    async def my_agent(ctx: JobContext):\n" +
+		"        ...\n"
+
+	duplicateRTCSessionMessage = "The AgentServer currently only supports registering only one rtc_session"
 )
+
+type workerReferenceError string
+
+func (e workerReferenceError) Error() string {
+	return string(e)
+}
 
 var localEntrypointCloseWait = 15 * time.Second
 
@@ -414,7 +428,7 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 		return fmt.Errorf("running job info must include a job")
 	}
 	if s.entrypointFnc == nil {
-		return fmt.Errorf("no RTC session entrypoint has been registered")
+		return workerReferenceError(rtcSessionRequiredMessage)
 	}
 
 	jobURL := info.URL
@@ -604,7 +618,7 @@ func (s *AgentServer) UpdateOptions(opts WorkerOptions) error {
 	updated := mergeWorkerOptions(current, opts)
 	updated = resolveWorkerOptions(updated)
 	if !validWorkerLogLevel(updated.LogLevel) {
-		return fmt.Errorf("invalid log_level %q, valid levels: CRITICAL, DEBUG, ERROR, INFO, TRACE, WARN", updated.LogLevel)
+		return invalidWorkerLogLevelError(updated.LogLevel)
 	}
 
 	s.mu.Lock()
@@ -779,7 +793,9 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 			opts.LogLevel = defaultProdLogLevel
 		}
 	}
-	opts.LogLevel = strings.ToUpper(opts.LogLevel)
+	if validWorkerLogLevel(opts.LogLevel) {
+		opts.LogLevel = strings.ToUpper(opts.LogLevel)
+	}
 	if opts.Port == 0 && !opts.DevMode && !opts.PortSet {
 		opts.Port = defaultProdHTTPPort
 	}
@@ -964,6 +980,10 @@ func validWorkerLogLevel(logLevel string) bool {
 	default:
 		return false
 	}
+}
+
+func invalidWorkerLogLevelError(logLevel string) error {
+	return fmt.Errorf("%s '%s'. Valid levels: CRITICAL, DEBUG, ERROR, INFO, TRACE, WARN", "Invalid log level", logLevel)
 }
 
 func defaultNumIdleProcesses() int {
@@ -1235,7 +1255,7 @@ func (s *AgentServer) RTCSession(
 	sessionEnd func(*JobContext) error,
 ) error {
 	if s.entrypointFnc != nil {
-		return fmt.Errorf("the AgentServer currently only supports registering one rtc_session")
+		return workerReferenceError(duplicateRTCSessionMessage)
 	}
 	s.entrypointFnc = entrypoint
 	s.requestFnc = request
@@ -1411,10 +1431,10 @@ func (s *AgentServer) validateRunPreconditions() error {
 		logger.Logger.Warnw("load_threshold in prod env should be less than 1", nil, "currentValue", s.Options.LoadThreshold)
 	}
 	if !validWorkerLogLevel(s.Options.LogLevel) {
-		return fmt.Errorf("invalid log_level %q, valid levels: CRITICAL, DEBUG, ERROR, INFO, TRACE, WARN", s.Options.LogLevel)
+		return invalidWorkerLogLevelError(s.Options.LogLevel)
 	}
 	if s.entrypointFnc == nil {
-		return fmt.Errorf("no RTC session entrypoint has been registered")
+		return workerReferenceError(rtcSessionRequiredMessage)
 	}
 	if s.Options.WSRL == "" {
 		return fmt.Errorf("ws_url is required, or set LIVEKIT_URL environment variable")
@@ -1431,10 +1451,10 @@ func (s *AgentServer) validateRunPreconditions() error {
 func (s *AgentServer) validateUnregisteredRunPreconditions() error {
 	s.Options = resolveWorkerOptions(s.Options)
 	if !validWorkerLogLevel(s.Options.LogLevel) {
-		return fmt.Errorf("invalid log_level %q, valid levels: CRITICAL, DEBUG, ERROR, INFO, TRACE, WARN", s.Options.LogLevel)
+		return invalidWorkerLogLevelError(s.Options.LogLevel)
 	}
 	if s.entrypointFnc == nil {
-		return fmt.Errorf("no RTC session entrypoint has been registered")
+		return workerReferenceError(rtcSessionRequiredMessage)
 	}
 	return nil
 }
@@ -1967,9 +1987,6 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 }
 
 func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName string, participantIdentity string, options LocalJobOptions) error {
-	if !options.FakeJob && options.RoomInfo == nil {
-		return fmt.Errorf("room info is required for non-fake local jobs")
-	}
 	if options.Token != "" {
 		verifier, err := auth.ParseAPIToken(options.Token)
 		if err != nil {
@@ -1978,10 +1995,13 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 		participantIdentity = verifier.Identity()
 	}
 	if !options.FakeJob && participantIdentity == "" && options.Token == "" {
-		return fmt.Errorf("agent identity is required for non-fake local jobs")
+		return fmt.Errorf("agent_identity is None but fake_job is False")
+	}
+	if !options.FakeJob && options.RoomInfo == nil {
+		return fmt.Errorf("room_info is None but fake_job is False")
 	}
 	if s.entrypointFnc == nil {
-		return fmt.Errorf("no RTC session entrypoint has been registered")
+		return workerReferenceError(rtcSessionRequiredMessage)
 	}
 	jobCtx := newLocalJobContextWithOptions(roomName, participantIdentity, s.Options, options)
 	if options == (LocalJobOptions{FakeJob: true}) {

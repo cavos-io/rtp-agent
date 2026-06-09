@@ -247,7 +247,7 @@ type realtimeMessageGeneration struct {
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	if m.apiKey == "" {
-		return nil, fmt.Errorf("OPENAI_API_KEY is required, either as argument or set OPENAI_API_KEY environment variable")
+		return nil, fmt.Errorf("%s", "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable")
 	}
 	wsURL := openAIRealtimeSessionURL(m.baseURL, m.model)
 
@@ -1757,7 +1757,7 @@ func openAIRealtimeChatItem(item map[string]any) (llm.ChatItem, error) {
 	case "function_call_output":
 		return openAIRealtimeFunctionCallOutput(item)
 	default:
-		return nil, fmt.Errorf("unsupported realtime item type %q", itemType)
+		return nil, fmt.Errorf("unsupported item type: %s", itemType)
 	}
 }
 
@@ -1799,7 +1799,7 @@ func openAIRealtimeChatMessage(item map[string]any) (*llm.ChatMessage, error) {
 	switch role {
 	case llm.ChatRoleSystem, llm.ChatRoleDeveloper, llm.ChatRoleUser, llm.ChatRoleAssistant:
 	default:
-		return nil, fmt.Errorf("unsupported realtime message role %q", roleRaw)
+		return nil, fmt.Errorf("unsupported role: %s", roleRaw)
 	}
 	contents, _ := item["content"].([]any)
 	return &llm.ChatMessage{

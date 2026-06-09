@@ -76,8 +76,12 @@ func TestOpenAIRealtimeSessionRequiresAPIKeyBeforeDial(t *testing.T) {
 
 	_, err := model.Session()
 
-	if err == nil || !strings.Contains(err.Error(), "OPENAI_API_KEY") {
-		t.Fatalf("Session() error = %v, want OPENAI_API_KEY error", err)
+	if err == nil {
+		t.Fatal("Session() error = nil, want API key error")
+	}
+	want := "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable"
+	if err.Error() != want {
+		t.Fatalf("Session() error = %q, want %q", err.Error(), want)
 	}
 	if dialed {
 		t.Fatal("Session() dialed websocket before validating API key")
@@ -2156,6 +2160,30 @@ func TestRealtimeEventMapsConversationItemAddedFunctionCall(t *testing.T) {
 	}
 	if call.ID != "fc_123" || call.CallID != "call_123" || call.Name != "lookup" || call.Arguments != `{"query":"hello"}` {
 		t.Fatalf("function call = %#v, want OpenAI function call item", call)
+	}
+}
+
+func TestOpenAIRealtimeChatItemRejectsUnsupportedItemTypeWithReferenceError(t *testing.T) {
+	_, err := openAIRealtimeChatItem(map[string]any{"type": "audio"})
+	if err == nil {
+		t.Fatal("openAIRealtimeChatItem() error = nil, want unsupported item type error")
+	}
+	if got, want := err.Error(), "unsupported item type: audio"; got != want {
+		t.Fatalf("openAIRealtimeChatItem() error = %q, want %q", got, want)
+	}
+}
+
+func TestOpenAIRealtimeChatItemRejectsUnsupportedRoleWithReferenceError(t *testing.T) {
+	_, err := openAIRealtimeChatItem(map[string]any{
+		"id":   "msg_123",
+		"type": "message",
+		"role": "tool",
+	})
+	if err == nil {
+		t.Fatal("openAIRealtimeChatItem() error = nil, want unsupported role error")
+	}
+	if got, want := err.Error(), "unsupported role: tool"; got != want {
+		t.Fatalf("openAIRealtimeChatItem() error = %q, want %q", got, want)
 	}
 }
 
