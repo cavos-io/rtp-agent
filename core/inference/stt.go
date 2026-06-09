@@ -36,6 +36,22 @@ type STTOption func(*STT)
 
 type inferenceSTTDialer func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error)
 
+func WithSTTModel(model string) STTOption {
+	return func(s *STT) {
+		modelName, language := sttModelAndLanguage(model, "")
+		s.model = modelName
+		if language != "" {
+			s.language = language
+		}
+	}
+}
+
+func WithSTTLanguage(language string) STTOption {
+	return func(s *STT) {
+		s.language = language
+	}
+}
+
 func WithSTTFallbackModels(models ...FallbackModel) STTOption {
 	return func(s *STT) {
 		s.fallbackModels = cloneSTTFallbackModels(models)
@@ -44,7 +60,15 @@ func WithSTTFallbackModels(models ...FallbackModel) STTOption {
 
 func WithSTTExtraKwargs(extra map[string]any) STTOption {
 	return func(s *STT) {
-		s.extraKwargs = cloneSTTExtra(extra)
+		if len(extra) == 0 {
+			return
+		}
+		if s.extraKwargs == nil {
+			s.extraKwargs = make(map[string]any, len(extra))
+		}
+		for key, value := range extra {
+			s.extraKwargs[key] = value
+		}
 	}
 }
 
@@ -80,6 +104,12 @@ func NewSTT(model string, apiKey, apiSecret string, opts ...STTOption) *STT {
 		opt(s)
 	}
 	return s
+}
+
+func (s *STT) UpdateOptions(opts ...STTOption) {
+	for _, opt := range opts {
+		opt(s)
+	}
 }
 
 func (s *STT) Label() string {

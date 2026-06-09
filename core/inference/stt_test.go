@@ -173,6 +173,60 @@ func TestNewSTTPreservesReferenceModelStringLanguageForStream(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTUpdateOptionsMatchReferenceFutureStreams(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{}
+	provider := NewSTT("deepgram/nova-3", "key", "secret", WithSTTExtraKwargs(map[string]any{
+		"keyterms": []string{"existing"},
+	}))
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	provider.UpdateOptions(
+		WithSTTModel("assemblyai/universal-streaming:id"),
+		WithSTTLanguage("fr"),
+		WithSTTExtraKwargs(map[string]any{"speaker_labels": true}),
+	)
+
+	if got := stt.Model(provider); got != "assemblyai/universal-streaming" {
+		t.Fatalf("Model = %q, want updated model without language suffix", got)
+	}
+	if !provider.Capabilities().Diarization {
+		t.Fatal("Diarization = false, want true after update extra enables speaker_labels")
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if len(conn.writes) != 1 {
+		t.Fatalf("writes = %d, want session.create", len(conn.writes))
+	}
+	if conn.writes[0]["model"] != "assemblyai/universal-streaming" {
+		t.Fatalf("session.create model = %#v, want assemblyai/universal-streaming", conn.writes[0]["model"])
+	}
+	settings, ok := conn.writes[0]["settings"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("settings = %#v, want map", conn.writes[0]["settings"])
+	}
+	if settings["language"] != "fr" {
+		t.Fatalf("settings.language = %#v, want explicit update language", settings["language"])
+	}
+	extra, ok := settings["extra"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("settings.extra = %#v, want map", settings["extra"])
+	}
+	if _, ok := extra["keyterms"]; !ok {
+		t.Fatalf("settings.extra = %#v, want existing extra retained", extra)
+	}
+	if extra["speaker_labels"] != true {
+		t.Fatalf("settings.extra.speaker_labels = %#v, want true", extra["speaker_labels"])
+	}
+}
+
 func TestSTTWebsocketSendsReferenceInferenceHeaders(t *testing.T) {
 	var captured http.Header
 	provider := NewSTT("deepgram/nova-3", "key", "secret")
