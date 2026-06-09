@@ -210,6 +210,9 @@ func (s *SpeechmaticsSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if s.apiKey == "" {
+		return nil, fmt.Errorf("speechmatics API key is required. Pass one in via the apiKey parameter, or set SPEECHMATICS_API_KEY")
+	}
 	header := make(map[string][]string)
 	header["Authorization"] = []string{"Bearer " + s.apiKey}
 
