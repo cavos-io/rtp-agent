@@ -43,6 +43,20 @@ func TestSonioxTTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewSonioxTTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("SONIOX_API_KEY", "env-key")
+
+	provider := NewSonioxTTS("")
+	if provider.apiKey != "env-key" {
+		t.Fatalf("apiKey = %q, want env key", provider.apiKey)
+	}
+
+	provider = NewSonioxTTS("explicit-key")
+	if provider.apiKey != "explicit-key" {
+		t.Fatalf("apiKey = %q, want explicit key", provider.apiKey)
+	}
+}
+
 func TestSonioxTTSOptionsBuildReferenceStartConfig(t *testing.T) {
 	bitrate := 64000
 	provider := NewSonioxTTS("test-key",

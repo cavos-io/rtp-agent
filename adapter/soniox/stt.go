@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,7 @@ const (
 	defaultSampleRate         = 16000
 	defaultNumChannels        = 1
 	defaultMaxEndpointDelayMS = 500
+	sonioxAPIKeyEnv           = "SONIOX_API_KEY"
 
 	sonioxKeepaliveMessage = `{"type": "keepalive"}`
 	sonioxEndToken         = "<end>"
@@ -163,6 +165,9 @@ func WithSonioxTwoWayTranslation(languageA string, languageB string) SonioxSTTOp
 }
 
 func NewSonioxSTT(apiKey string, opts ...SonioxSTTOption) *SonioxSTT {
+	if apiKey == "" {
+		apiKey = os.Getenv(sonioxAPIKeyEnv)
+	}
 	provider := &SonioxSTT{
 		apiKey:                       apiKey,
 		baseURL:                      defaultBaseURL,
