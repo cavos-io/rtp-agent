@@ -45,6 +45,20 @@ func TestFallbackAdapterAggregatesProviderCapabilities(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterRequiresAtLeastOneSTT(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("NewFallbackAdapter() did not panic, want empty STT list rejection")
+		}
+		if got, want := r, "At least one STT instance must be provided."; got != want {
+			t.Fatalf("NewFallbackAdapter() panic = %q, want %q", got, want)
+		}
+	}()
+
+	_ = NewFallbackAdapter(nil)
+}
+
 func TestFallbackAdapterDefaultConstructorsUseReferenceRetryInterval(t *testing.T) {
 	adapter := NewFallbackAdapter([]STT{
 		&metadataSTT{label: "primary", capabilities: STTCapabilities{Streaming: true}},
