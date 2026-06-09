@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -87,6 +88,9 @@ func WithNeuphonicTTSSpeed(speed float64) NeuphonicTTSOption {
 }
 
 func NewNeuphonicTTS(apiKey string, voice string, opts ...NeuphonicTTSOption) *NeuphonicTTS {
+	if apiKey == "" {
+		apiKey = os.Getenv("NEUPHONIC_API_KEY")
+	}
 	defaultSpeed := 1.0
 	provider := &NeuphonicTTS{
 		apiKey:     apiKey,
