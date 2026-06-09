@@ -2,6 +2,7 @@ package perplexity
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/cavos-io/rtp-agent/adapter/openai"
@@ -15,6 +16,7 @@ const (
 
 type PerplexityLLM struct {
 	inner   *openai.OpenAILLM
+	apiKey  string
 	baseURL string
 }
 
@@ -22,8 +24,10 @@ func NewPerplexityLLM(apiKey string, model string) *PerplexityLLM {
 	if model == "" {
 		model = defaultPerplexityModel
 	}
+	resolvedAPIKey := resolvePerplexityAPIKey(apiKey)
 	return &PerplexityLLM{
-		inner:   openai.NewOpenAILLMWithBaseURL(resolvePerplexityAPIKey(apiKey), model, defaultPerplexityBaseURL),
+		inner:   openai.NewOpenAILLMWithBaseURL(resolvedAPIKey, model, defaultPerplexityBaseURL),
+		apiKey:  resolvedAPIKey,
 		baseURL: defaultPerplexityBaseURL,
 	}
 }
@@ -44,5 +48,8 @@ func (l *PerplexityLLM) BaseURL() string {
 }
 
 func (l *PerplexityLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+	if l.apiKey == "" {
+		return nil, fmt.Errorf("perplexity API key is required, either as argument or set PERPLEXITY_API_KEY environmental variable")
+	}
 	return l.inner.Chat(ctx, chatCtx, opts...)
 }
