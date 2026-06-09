@@ -523,14 +523,11 @@ func (c *JobContext) MakeSessionReport(sessions ...*agent.AgentSession) (*agent.
 	if len(sessions) > 0 {
 		session = sessions[0]
 	} else {
-		var err error
-		session, err = c.PrimarySession()
-		if err != nil {
-			return nil, err
-		}
+		session = c.primarySession
 	}
 	if session == nil {
-		return nil, fmt.Errorf("cannot prepare report, no AgentSession was found")
+		//lint:ignore ST1005 match LiveKit Agents make_session_report RuntimeError message
+		return nil, fmt.Errorf("Cannot prepare report, no AgentSession was found")
 	}
 
 	report := agent.NewSessionReport(session)

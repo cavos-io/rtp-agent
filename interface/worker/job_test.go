@@ -330,6 +330,15 @@ func TestJobContextMakeSessionReportUsesPrimarySession(t *testing.T) {
 	}
 }
 
+func TestJobContextMakeSessionReportRequiresSession(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_report_no_session"}, "", "", "")
+
+	const wantMessage = "Cannot prepare report, no AgentSession was found"
+	if report, err := ctx.MakeSessionReport(); err == nil || report != nil || err.Error() != wantMessage {
+		t.Fatalf("MakeSessionReport() = %#v, %v; want nil and %q", report, err, wantMessage)
+	}
+}
+
 func TestJobContextSessionDirectoryCanBeConfigured(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_session_dir"}, "", "", "")
 	dir := t.TempDir()
