@@ -24,6 +24,20 @@ func TestSpeechmaticsTTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewSpeechmaticsTTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("SPEECHMATICS_API_KEY", "env-key")
+
+	provider := NewSpeechmaticsTTS("")
+	if provider.apiKey != "env-key" {
+		t.Fatalf("apiKey = %q, want env key", provider.apiKey)
+	}
+
+	provider = NewSpeechmaticsTTS("explicit-key")
+	if provider.apiKey != "explicit-key" {
+		t.Fatalf("apiKey = %q, want explicit key", provider.apiKey)
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	provider := NewSpeechmaticsTTS("test-key",
 		WithSpeechmaticsTTSVoice("theo"),

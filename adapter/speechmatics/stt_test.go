@@ -95,6 +95,20 @@ func TestSpeechmaticsSTTCapabilitiesMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewSpeechmaticsSTTUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("SPEECHMATICS_API_KEY", "env-key")
+
+	provider := NewSpeechmaticsSTT("")
+	if provider.apiKey != "env-key" {
+		t.Fatalf("apiKey = %q, want env key", provider.apiKey)
+	}
+
+	provider = NewSpeechmaticsSTT("explicit-key")
+	if provider.apiKey != "explicit-key" {
+		t.Fatalf("apiKey = %q, want explicit key", provider.apiKey)
+	}
+}
+
 func TestSpeechmaticsSTTStreamURLMatchesReference(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 	streamURL, err := url.Parse(buildSpeechmaticsSTTStreamURL(provider))
