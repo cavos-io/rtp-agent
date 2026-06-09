@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/cavos-io/rtp-agent/library/math"
 )
@@ -69,7 +70,7 @@ func (s *BufferedTokenStream) PushText(text string) error {
 
 		tokIdx := strings.Index(s.inBuf, tok)
 		if tokIdx >= 0 {
-			s.inBuf = strings.TrimLeft(s.inBuf[tokIdx+len(tok):], " ")
+			s.inBuf = strings.TrimLeftFunc(s.inBuf[tokIdx+len(tok):], unicode.IsSpace)
 		} else {
 			break
 		}

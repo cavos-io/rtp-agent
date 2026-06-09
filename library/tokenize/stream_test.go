@@ -109,6 +109,42 @@ func TestBufferedTokenStreamKeepsLastTokenAsContext(t *testing.T) {
 	}
 }
 
+func TestBufferedTokenStreamTrimsReferenceWhitespaceContext(t *testing.T) {
+	stream := NewBufferedTokenStream(func(text string) []string {
+		if strings.HasPrefix(text, "\t") {
+			return []string{"\t", "two"}
+		}
+		return strings.Fields(text)
+	}, 1, 1)
+
+	if err := stream.PushText("one\t two"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next first returned error: %v", err)
+	}
+	if first.Token != "one" {
+		t.Fatalf("first token = %q, want one", first.Token)
+	}
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next second returned error: %v", err)
+	}
+	if second.Token != "two" {
+		t.Fatalf("second token = %q, want two", second.Token)
+	}
+	select {
+	case token := <-stream.eventCh:
+		t.Fatalf("unexpected token after whitespace trim: %q", token.Token)
+	default:
+	}
+}
+
 func TestBufferedTokenStreamEndInputFlushesAndCloses(t *testing.T) {
 	stream := NewBufferedTokenStream(func(text string) []string {
 		return []string{text}
