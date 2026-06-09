@@ -172,6 +172,7 @@ func (l *LiveKitInferenceLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext
 	if len(extraHeaders) == 0 {
 		extraHeaders = callHeaders
 	}
+	extraParams = liveKitInferenceLLMStreamOptions(extraParams)
 	inner := NewOpenAILLMWithBaseURLAndHTTPClient(token, l.model, l.baseURL, &liveKitInferenceHeadersHTTPClient{
 		base:              l.httpClient,
 		extraHeaders:      extraHeaders,
@@ -182,6 +183,16 @@ func (l *LiveKitInferenceLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext
 		inner.defaultReasoning = false
 	})
 	return inner.Chat(ctx, chatCtx, chatOpts...)
+}
+
+func liveKitInferenceLLMStreamOptions(params map[string]any) map[string]any {
+	if params == nil {
+		params = map[string]any{}
+	}
+	if _, ok := params["stream_options"]; !ok {
+		params["stream_options"] = map[string]any{"include_usage": true}
+	}
+	return params
 }
 
 func liveKitInferenceClassFromOptions(opts []llm.ChatOption) string {
