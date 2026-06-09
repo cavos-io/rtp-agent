@@ -58,6 +58,10 @@ type xaiToolCall struct {
 }
 
 func (l *XaiLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+	if l.apiKey == "" {
+		return nil, fmt.Errorf("xAI API key is required, either as argument or set XAI_API_KEY environmental variable")
+	}
+
 	options := &llm.ChatOptions{
 		ParallelToolCalls: true,
 	}
