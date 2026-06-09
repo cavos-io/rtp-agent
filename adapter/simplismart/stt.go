@@ -182,6 +182,10 @@ func (s *SimplismartSTT) Stream(ctx context.Context, language string) (stt.Recog
 	if !s.streaming {
 		return nil, fmt.Errorf("simplismart streaming stt requires streaming mode enabled")
 	}
+	if err := validateSimplismartSTTAPIKey(s.apiKey); err != nil {
+		return nil, err
+	}
+
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildSimplismartSTTStreamURL(s), buildSimplismartSTTHeaders(s))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial simplismart stt websocket: %w", err)
@@ -210,6 +214,10 @@ func (s *SimplismartSTT) Stream(ctx context.Context, language string) (stt.Recog
 }
 
 func (s *SimplismartSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+	if err := validateSimplismartSTTAPIKey(s.apiKey); err != nil {
+		return nil, err
+	}
+
 	var audio bytes.Buffer
 	for _, frame := range frames {
 		audio.Write(frame.Data)
@@ -232,6 +240,13 @@ func (s *SimplismartSTT) Recognize(ctx context.Context, frames []*model.AudioFra
 		return nil, err
 	}
 	return simplismartSTTSpeechEvent(resolveSimplismartSTTLanguage(s, language), result), nil
+}
+
+func validateSimplismartSTTAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("%s is not set", simplismartAPIKeyEnv)
+	}
+	return nil
 }
 
 func buildSimplismartSTTRecognizeRequest(ctx context.Context, s *SimplismartSTT, audio []byte, language string) (*http.Request, error) {
