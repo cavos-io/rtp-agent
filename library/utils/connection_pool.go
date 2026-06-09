@@ -20,11 +20,13 @@ type ConnectionPoolOptions[T comparable] struct {
 type ConnectionPool[T comparable] struct {
 	opts ConnectionPoolOptions[T]
 
-	mu          sync.Mutex
-	connections map[T]time.Time
-	available   map[T]struct{}
-	toClose     map[T]struct{}
-	prewarming  bool
+	mu            sync.Mutex
+	connections   map[T]time.Time
+	available     map[T]struct{}
+	toClose       map[T]struct{}
+	prewarming    bool
+	prewarmCancel context.CancelFunc
+	prewarmDone   chan struct{}
 
 	LastAcquireTime      time.Duration
 	LastConnectionReused bool
@@ -128,22 +130,45 @@ func (p *ConnectionPool[T]) Prewarm(ctx context.Context) {
 	}
 	p.prewarming = true
 	timeout := p.opts.ConnectTimeout
+	prewarmCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	p.prewarmCancel = cancel
+	p.prewarmDone = done
 	p.mu.Unlock()
 
 	go func() {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		p.prewarming = false
+		defer close(done)
+		defer cancel()
 
 		var conn T
-		conn, err := p.connectLocked(ctx, timeout)
-		if err == nil {
+		var err error
+		if p.opts.Connect == nil {
+			err = ErrConnectionPoolNoConnect
+		} else {
+			connectCtx, connectCancel := context.WithTimeout(prewarmCtx, timeout)
+			conn, err = p.opts.Connect(connectCtx)
+			connectCancel()
+		}
+
+		p.mu.Lock()
+		defer p.mu.Unlock()
+
+		if p.prewarmDone == done {
+			p.prewarming = false
+			p.prewarmCancel = nil
+			p.prewarmDone = nil
+		}
+		if err == nil && prewarmCtx.Err() == nil {
+			p.connections[conn] = time.Now()
 			p.available[conn] = struct{}{}
 		}
 	}()
 }
 
 func (p *ConnectionPool[T]) Close(ctx context.Context) error {
+	if err := p.cancelPrewarm(ctx); err != nil {
+		return err
+	}
 	p.Invalidate()
 
 	p.mu.Lock()
@@ -186,5 +211,23 @@ func (p *ConnectionPool[T]) drainToCloseLocked(ctx context.Context) {
 		if p.opts.Close != nil {
 			_ = p.opts.Close(ctx, conn)
 		}
+	}
+}
+
+func (p *ConnectionPool[T]) cancelPrewarm(ctx context.Context) error {
+	p.mu.Lock()
+	cancel := p.prewarmCancel
+	done := p.prewarmDone
+	p.mu.Unlock()
+	if cancel == nil || done == nil {
+		return nil
+	}
+
+	cancel()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }

@@ -196,6 +196,52 @@ func TestConnectionPoolPrewarmCreatesReusableConnection(t *testing.T) {
 	}
 }
 
+func TestConnectionPoolCloseCancelsPrewarmConnect(t *testing.T) {
+	connectStarted := make(chan struct{})
+	connectCanceled := make(chan struct{})
+	releaseConnect := make(chan struct{})
+	closeReturned := make(chan struct{})
+
+	pool := NewConnectionPool(ConnectionPoolOptions[int]{
+		ConnectTimeout: time.Hour,
+		Connect: func(ctx context.Context) (int, error) {
+			close(connectStarted)
+			select {
+			case <-ctx.Done():
+				close(connectCanceled)
+				return 0, ctx.Err()
+			case <-releaseConnect:
+				return 1, nil
+			}
+		},
+	})
+
+	pool.Prewarm(context.Background())
+	select {
+	case <-connectStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("prewarm connect did not start")
+	}
+
+	go func() {
+		_ = pool.Close(context.Background())
+		close(closeReturned)
+	}()
+
+	select {
+	case <-connectCanceled:
+	case <-time.After(200 * time.Millisecond):
+		close(releaseConnect)
+		<-closeReturned
+		t.Fatal("Close did not cancel prewarm connect")
+	}
+	select {
+	case <-closeReturned:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Close did not return after canceling prewarm connect")
+	}
+}
+
 func TestConnectionPoolWithConnectionRemovesOnError(t *testing.T) {
 	var next int
 	var closed []int
