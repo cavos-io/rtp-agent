@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -38,6 +39,17 @@ func TestNewSpeechifyTTSUsesEnvironmentAPIKey(t *testing.T) {
 	explicit := NewSpeechifyTTS("explicit-key", "")
 	if explicit.apiKey != "explicit-key" {
 		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
+func TestSpeechifyTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("SPEECHIFY_API_KEY", "")
+	provider := NewSpeechifyTTS("", "", WithSpeechifyTTSBaseURL("://bad-url"))
+
+	_, err := provider.Synthesize(context.Background(), "hello")
+
+	if err == nil || !strings.Contains(err.Error(), "SPEECHIFY_API_KEY") {
+		t.Fatalf("Synthesize error = %v, want missing API key error", err)
 	}
 }
 
