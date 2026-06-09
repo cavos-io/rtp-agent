@@ -102,7 +102,7 @@ func SplitSentences(text string, minSentenceLen int, retainFormat bool) []TokenD
 	alphabets := regexp.MustCompile(`([A-Za-z])`)
 	prefixes := regexp.MustCompile(`(Mr|St|Mrs|Ms|Dr)\.`)
 	suffixes := regexp.MustCompile(`(Inc|Ltd|Jr|Sr|Co)`)
-	starters := regexp.MustCompile(`(Mr|Mrs|Ms|Dr|Prof|Capt|Cpt|Lt|He\s|She\s|It\s|They\s|Their\s|Our\s|We\s|But\s|However\s|That\s|This\s|Wherever|Moreover|Furthermore|Therefore|Consequently)`)
+	starters := regexp.MustCompile(`(Mr|Mrs|Ms|Dr|Prof|Capt|Cpt|Lt|He\s|She\s|It\s|They\s|Their\s|Our\s|We\s|But\s|However\s|That\s|This\s|Wherever)`)
 	acronyms := regexp.MustCompile(`([A-Z]\.[A-Z]\.(?:[A-Z]\.)?)`)
 	websites := regexp.MustCompile(`\.(com|net|org|io|gov|edu|me)`)
 	decimalDigits := regexp.MustCompile(`([0-9])\.([0-9])`)

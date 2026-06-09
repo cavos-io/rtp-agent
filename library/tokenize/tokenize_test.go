@@ -120,6 +120,39 @@ func TestSplitSentencesUsesReferenceCompanySuffixes(t *testing.T) {
 	}
 }
 
+func TestSplitSentencesUsesReferenceStarterWords(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{
+			name: "therefore is not a starter",
+			text: "Please inspect the acronym A.B. Therefore this sentence follows here.",
+			want: []string{"Please inspect the acronym A.B. Therefore this sentence follows here."},
+		},
+		{
+			name: "consequently is not a starter",
+			text: "Please inspect the acronym A.B. Consequently this sentence follows here.",
+			want: []string{"Please inspect the acronym A.B. Consequently this sentence follows here."},
+		},
+		{
+			name: "however remains a starter",
+			text: "Please inspect the acronym A.B. However this sentence follows here.",
+			want: []string{"Please inspect the acronym A.B.", "However this sentence follows here."},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NewBasicSentenceTokenizer().Tokenize(tt.text, "")
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("Tokenize() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSplitSentencesKeepsClosingQuoteAfterCJKPunctuation(t *testing.T) {
 	tokens := NewBasicSentenceTokenizer().Tokenize("他说：“你好。” 下一句。", "")
 
