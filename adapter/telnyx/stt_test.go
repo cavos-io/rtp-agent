@@ -1,8 +1,10 @@
 package telnyx
 
 import (
+	"context"
 	"encoding/binary"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -41,6 +43,17 @@ func TestNewTelnyxSTTUsesEnvironmentAPIKey(t *testing.T) {
 	explicit := NewTelnyxSTT("explicit-key")
 	if explicit.apiKey != "explicit-key" {
 		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
+func TestTelnyxSTTStreamRequiresAPIKeyBeforeDial(t *testing.T) {
+	t.Setenv("TELNYX_API_KEY", "")
+	provider := NewTelnyxSTT("", WithTelnyxSTTBaseURL("://bad-url"))
+
+	_, err := provider.Stream(context.Background(), "")
+
+	if err == nil || !strings.Contains(err.Error(), "TELNYX_API_KEY") {
+		t.Fatalf("Stream error = %v, want missing API key error", err)
 	}
 }
 
