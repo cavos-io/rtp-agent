@@ -192,6 +192,10 @@ func (t *HumeTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 }
 
 func buildHumeTTSRequest(ctx context.Context, t *HumeTTS, text string) (*http.Request, error) {
+	if t.apiKey == "" {
+		return nil, fmt.Errorf("hume API key is required via api_key or HUME_API_KEY env var")
+	}
+
 	utterance := map[string]interface{}{
 		"text": text,
 	}

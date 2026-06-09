@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -59,6 +60,34 @@ func TestNewGnaniTTSUsesEnvironmentAPIKey(t *testing.T) {
 	explicit := NewTTS("explicit-key")
 	if explicit.apiKey != "explicit-key" {
 		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
+func TestGnaniTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("GNANI_API_KEY", "")
+	provider := NewTTS("", WithBaseURL("://bad-url"))
+
+	_, err := provider.Synthesize(context.Background(), "namaste")
+	if err == nil {
+		t.Fatal("Synthesize returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "GNANI_API_KEY") {
+		t.Fatalf("Synthesize error = %q, want GNANI_API_KEY guidance", err)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error before flush: %v", err)
+	}
+	if err := stream.PushText("namaste"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	err = stream.Flush()
+	if err == nil {
+		t.Fatal("Flush returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "GNANI_API_KEY") {
+		t.Fatalf("Flush error = %q, want GNANI_API_KEY guidance", err)
 	}
 }
 

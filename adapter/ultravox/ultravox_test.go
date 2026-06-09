@@ -1,6 +1,10 @@
 package ultravox
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+)
 
 func TestUltravoxPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.ultravox" {
@@ -26,5 +30,20 @@ func TestNewUltravoxTTSUsesEnvironmentAPIKey(t *testing.T) {
 	explicit := NewUltravoxTTS("explicit-key", "")
 	if explicit.apiKey != "explicit-key" {
 		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
+func TestUltravoxTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("ULTRAVOX_API_KEY", "")
+	provider := NewUltravoxTTS("", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := provider.Synthesize(ctx, "hello")
+	if err == nil {
+		t.Fatal("Synthesize returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "ULTRAVOX_API_KEY") {
+		t.Fatalf("Synthesize error = %q, want ULTRAVOX_API_KEY guidance", err)
 	}
 }

@@ -200,6 +200,29 @@ func TestElevenLabsSTTStreamURLConvertsHTTPBaseURLToWebsocket(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("ELEVENLABS_API_KEY", "")
+	t.Setenv("ELEVEN_API_KEY", "")
+	provider := NewElevenLabsSTT("", WithElevenLabsSTTBaseURL("://bad-url"))
+
+	_, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatal("Recognize returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "ELEVEN_API_KEY") {
+		t.Fatalf("Recognize error = %q, want ELEVEN_API_KEY guidance", err)
+	}
+
+	realtime := NewElevenLabsSTT("", WithElevenLabsSTTBaseURL("://bad-url"), WithElevenLabsSTTModel("scribe_v2_realtime"))
+	_, err = realtime.Stream(context.Background(), "")
+	if err == nil {
+		t.Fatal("Stream returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "ELEVEN_API_KEY") {
+		t.Fatalf("Stream error = %q, want ELEVEN_API_KEY guidance", err)
+	}
+}
+
 func TestElevenLabsSTTBatchResponseMapsSpeechEvent(t *testing.T) {
 	event := elevenLabsSTTSpeechEvent("en", elevenLabsSTTResponse{
 		Text:         "hello world",

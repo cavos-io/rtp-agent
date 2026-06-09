@@ -127,6 +127,10 @@ func (s *CartesiaSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *CartesiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if err := validateCartesiaSTTAPIKey(s.apiKey); err != nil {
+		return nil, err
+	}
+
 	if language != "" {
 		s.language = language
 	}
@@ -152,6 +156,13 @@ func (s *CartesiaSTT) Stream(ctx context.Context, language string) (stt.Recogniz
 
 func (s *CartesiaSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	return nil, fmt.Errorf("cartesia stt does not support batch recognition")
+}
+
+func validateCartesiaSTTAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("cartesia API key is required, either as argument or set CARTESIA_API_KEY environment variable")
+	}
+	return nil
 }
 
 type cartesiaSTTStream struct {

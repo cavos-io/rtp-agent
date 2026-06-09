@@ -92,6 +92,10 @@ func (t *GradiumTTS) SampleRate() int  { return gradiumTTSSampleRate }
 func (t *GradiumTTS) NumChannels() int { return 1 }
 
 func (t *GradiumTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if err := validateGradiumAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
+
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, t.modelEndpoint, buildGradiumTTSHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial gradium tts websocket: %w", err)
@@ -173,6 +177,10 @@ func writeGradiumTTSMessage(conn *websocket.Conn, message map[string]any) error 
 }
 
 func (t *GradiumTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if err := validateGradiumAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
+
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, t.modelEndpoint, buildGradiumTTSHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial gradium tts websocket: %w", err)
@@ -188,6 +196,13 @@ func (t *GradiumTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		cancel:     cancel,
 		sampleRate: t.SampleRate(),
 	}, nil
+}
+
+func validateGradiumAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("gradium API key is required; pass api_key or set GRADIUM_API_KEY environment variable")
+	}
+	return nil
 }
 
 type gradiumTTSWebsocketChunkedStream struct {

@@ -39,6 +39,10 @@ func (t *SimplismartTTS) SampleRate() int  { return 24000 }
 func (t *SimplismartTTS) NumChannels() int { return 1 }
 
 func (t *SimplismartTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if t.apiKey == "" {
+		return nil, fmt.Errorf("%s is not set", simplismartAPIKeyEnv)
+	}
+
 	url := "https://api.simplismart.live/tts"
 
 	reqBody := map[string]interface{}{

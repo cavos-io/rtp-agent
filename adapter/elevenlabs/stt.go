@@ -134,6 +134,10 @@ func (s *ElevenLabsSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *ElevenLabsSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if err := validateElevenLabsAPIKey(s.apiKey); err != nil {
+		return nil, err
+	}
+
 	if !elevenLabsSTTIsRealtime(s.modelID) {
 		return nil, fmt.Errorf("elevenlabs streaming stt requires scribe_v2_realtime")
 	}
@@ -160,6 +164,10 @@ func (s *ElevenLabsSTT) Stream(ctx context.Context, language string) (stt.Recogn
 }
 
 func (s *ElevenLabsSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+	if err := validateElevenLabsAPIKey(s.apiKey); err != nil {
+		return nil, err
+	}
+
 	if elevenLabsSTTIsRealtime(s.modelID) {
 		return nil, fmt.Errorf("elevenlabs realtime models do not support offline recognize")
 	}

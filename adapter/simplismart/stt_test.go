@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -51,6 +52,30 @@ func TestNewSimplismartSTTUsesEnvironmentAPIKey(t *testing.T) {
 	provider = NewSimplismartSTT("explicit-key")
 	if provider.apiKey != "explicit-key" {
 		t.Fatalf("apiKey = %q, want explicit key", provider.apiKey)
+	}
+}
+
+func TestSimplismartSTTRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("SIMPLISMART_API_KEY", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	provider := NewSimplismartSTT("")
+	_, err := provider.Recognize(ctx, nil, "")
+	if err == nil {
+		t.Fatal("Recognize returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "SIMPLISMART_API_KEY") {
+		t.Fatalf("Recognize error = %q, want SIMPLISMART_API_KEY guidance", err)
+	}
+
+	streamingProvider := NewSimplismartSTT("", WithSimplismartSTTStreaming(true))
+	_, err = streamingProvider.Stream(ctx, "")
+	if err == nil {
+		t.Fatal("Stream returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "SIMPLISMART_API_KEY") {
+		t.Fatalf("Stream error = %q, want SIMPLISMART_API_KEY guidance", err)
 	}
 }
 

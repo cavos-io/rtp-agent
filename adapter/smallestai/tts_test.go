@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -55,6 +56,30 @@ func TestNewSmallestAITTSUsesEnvironmentAPIKey(t *testing.T) {
 	provider = NewSmallestAITTS("explicit-key", "")
 	if provider.apiKey != "explicit-key" {
 		t.Fatalf("apiKey = %q, want explicit key", provider.apiKey)
+	}
+}
+
+func TestSmallestAITTSRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("SMALLEST_API_KEY", "")
+	provider := NewSmallestAITTS("", "",
+		WithSmallestAITTSBaseURL("://bad-url"),
+		WithSmallestAITTSWebsocketURL("://bad-ws"),
+	)
+
+	_, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("Synthesize returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "SMALLEST_API_KEY") {
+		t.Fatalf("Synthesize error = %q, want SMALLEST_API_KEY guidance", err)
+	}
+
+	_, err = provider.Stream(context.Background())
+	if err == nil {
+		t.Fatal("Stream returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "SMALLEST_API_KEY") {
+		t.Fatalf("Stream error = %q, want SMALLEST_API_KEY guidance", err)
 	}
 }
 

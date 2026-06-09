@@ -70,6 +70,27 @@ func TestNewSmallestAISTTUsesEnvironmentAPIKey(t *testing.T) {
 	}
 }
 
+func TestSmallestAISTTRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("SMALLEST_API_KEY", "")
+	provider := NewSmallestAISTT("", WithSmallestAISTTBaseURL("://bad-url"))
+
+	_, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatal("Recognize returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "SMALLEST_API_KEY") {
+		t.Fatalf("Recognize error = %q, want SMALLEST_API_KEY guidance", err)
+	}
+
+	_, err = provider.Stream(context.Background(), "")
+	if err == nil {
+		t.Fatal("Stream returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "SMALLEST_API_KEY") {
+		t.Fatalf("Stream error = %q, want SMALLEST_API_KEY guidance", err)
+	}
+}
+
 func TestSmallestAISTTRecognizeRequestUsesReferenceParams(t *testing.T) {
 	provider := NewSmallestAISTT("test-key")
 

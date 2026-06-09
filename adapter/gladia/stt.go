@@ -221,6 +221,10 @@ func (s *GladiaSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *GladiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if err := validateGladiaAPIKey(s.apiKey); err != nil {
+		return nil, err
+	}
+
 	provider := s.cloneWithLanguage(language)
 	req, err := buildGladiaInitRequest(ctx, provider)
 	if err != nil {
@@ -260,6 +264,13 @@ func (s *GladiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	}
 	go stream.readLoop()
 	return stream, nil
+}
+
+func validateGladiaAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("gladia API key is required; set GLADIA_API_KEY or pass api_key")
+	}
+	return nil
 }
 
 func (s *GladiaSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {

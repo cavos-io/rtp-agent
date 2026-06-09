@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -43,6 +44,21 @@ func TestGladiaSTTUsesEnvAPIKeyWhenOmitted(t *testing.T) {
 	provider = NewGladiaSTT("explicit-key")
 	if provider.apiKey != "explicit-key" {
 		t.Fatalf("apiKey = %q, want explicit key", provider.apiKey)
+	}
+}
+
+func TestGladiaSTTRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("GLADIA_API_KEY", "")
+	provider := NewGladiaSTT("")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := provider.Stream(ctx, "")
+	if err == nil {
+		t.Fatal("Stream returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "GLADIA_API_KEY") {
+		t.Fatalf("Stream error = %q, want GLADIA_API_KEY guidance", err)
 	}
 }
 

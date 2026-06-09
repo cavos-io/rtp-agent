@@ -56,6 +56,21 @@ func TestUpliftAITTSUsesEnvironmentAPIKey(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("UPLIFTAI_API_KEY", "")
+	tts := NewUpliftAITTS("", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := tts.Synthesize(ctx, "hello")
+	if err == nil {
+		t.Fatal("Synthesize returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "UPLIFTAI_API_KEY") {
+		t.Fatalf("Synthesize error = %q, want UPLIFTAI_API_KEY guidance", err)
+	}
+}
+
 func TestUpliftAITTSChunkedStreamFramesAudio(t *testing.T) {
 	body := io.NopCloser(strings.NewReader("\x01\x02\x03\x04"))
 	stream := &upliftAITTSChunkedStream{resp: &http.Response{Body: body}}

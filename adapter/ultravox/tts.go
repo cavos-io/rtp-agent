@@ -41,6 +41,10 @@ func (t *UltravoxTTS) SampleRate() int  { return 24000 }
 func (t *UltravoxTTS) NumChannels() int { return 1 }
 
 func (t *UltravoxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if t.apiKey == "" {
+		return nil, fmt.Errorf("ultravox API key is required; provide it via api_key parameter or ULTRAVOX_API_KEY environment variable")
+	}
+
 	url := "https://api.ultravox.ai/api/tts"
 
 	reqBody := map[string]interface{}{
