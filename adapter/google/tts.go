@@ -22,30 +22,76 @@ type googleTTSClient interface {
 	SynthesizeSpeech(ctx context.Context, req *texttospeechpb.SynthesizeSpeechRequest, opts ...gax.CallOption) (*texttospeechpb.SynthesizeSpeechResponse, error)
 }
 
-// NewGoogleTTS creates a new TTS client using Application Default Credentials,
-// or by providing a path to a credentials JSON file.
-func NewGoogleTTS(credentialsFile string) (*GoogleTTS, error) {
-	ctx := context.Background()
-	opts, err := googleClientOptionsFromCredentialsFile(credentialsFile)
-	if err != nil {
-		return nil, err
-	}
+type GoogleTTSOption func(*googleTTSConfig)
 
-	client, err := texttospeech.NewClient(ctx, opts...)
-	if err != nil {
-		return nil, err
-	}
-
-	return newGoogleTTSWithClient(client), nil
+type googleTTSConfig struct {
+	language string
+	voice    string
+	model    string
 }
 
-func newGoogleTTSWithClient(client googleTTSClient) *GoogleTTS {
+func WithGoogleTTSLanguage(language string) GoogleTTSOption {
+	return func(cfg *googleTTSConfig) {
+		if language != "" {
+			cfg.language = language
+		}
+	}
+}
+
+func WithGoogleTTSVoice(voice string) GoogleTTSOption {
+	return func(cfg *googleTTSConfig) {
+		if voice != "" {
+			cfg.voice = voice
+		}
+	}
+}
+
+func WithGoogleTTSModel(model string) GoogleTTSOption {
+	return func(cfg *googleTTSConfig) {
+		if model != "" {
+			cfg.model = model
+		}
+	}
+}
+
+// NewGoogleTTS creates a new TTS client using Application Default Credentials,
+// or by providing a path to a credentials JSON file.
+func NewGoogleTTS(credentialsFile string, ttsOpts ...GoogleTTSOption) (*GoogleTTS, error) {
+	ctx := context.Background()
+	clientOpts, err := googleClientOptionsFromCredentialsFile(credentialsFile)
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := texttospeech.NewClient(ctx, clientOpts...)
+	if err != nil {
+		return nil, err
+	}
+
+	return newGoogleTTSWithClient(client, ttsOpts...), nil
+}
+
+func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *GoogleTTS {
+	cfg := googleTTSConfig{
+		language: "en-US",
+		voice:    "Charon",
+		model:    "gemini-2.5-flash-tts",
+	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
+	voice := &texttospeechpb.VoiceSelectionParams{
+		LanguageCode: cfg.language,
+		Name:         cfg.voice,
+	}
+	if cfg.model != "chirp_3" {
+		voice.ModelName = cfg.model
+	}
+
 	return &GoogleTTS{
 		client: client,
-		voice: &texttospeechpb.VoiceSelectionParams{
-			LanguageCode: "en-US",
-			Name:         "en-US-Journey-F",
-		},
+		voice:  voice,
 		audio: &texttospeechpb.AudioConfig{
 			AudioEncoding:   texttospeechpb.AudioEncoding_LINEAR16,
 			SampleRateHertz: 24000,

@@ -3067,7 +3067,17 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = provider
 	case providerGoogle:
-		provider, err := adaptergoogle.NewGoogleTTS(cfg.GoogleCredentialsFile)
+		ttsOpts := []adaptergoogle.GoogleTTSOption{}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSModel(cfg.TTSModel))
+		}
+		provider, err := adaptergoogle.NewGoogleTTS(cfg.GoogleCredentialsFile, ttsOpts...)
 		if err != nil {
 			return nil, err
 		}
