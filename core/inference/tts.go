@@ -569,6 +569,10 @@ func (s *inferenceTTSStream) run() {
 							},
 						}
 					}
+				} else if evType == "output_alignment" {
+					if timedTranscript := inferenceTTSTimedTranscript(ev); len(timedTranscript) > 0 {
+						s.eventCh <- &tts.SynthesizedAudio{TimedTranscript: timedTranscript}
+					}
 				} else if evType == "error" {
 					s.setStreamError(fmt.Errorf("LiveKit Inference TTS returned error: %s", string(msg)))
 					return
@@ -576,4 +580,38 @@ func (s *inferenceTTSStream) run() {
 			}
 		}
 	}
+}
+
+func inferenceTTSTimedTranscript(data map[string]interface{}) []tts.TimedString {
+	if words, ok := data["words"].([]interface{}); ok {
+		timed := make([]tts.TimedString, 0, len(words))
+		for _, raw := range words {
+			word, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			timed = append(timed, tts.TimedString{
+				Text:      stringFromMap(word, "word"),
+				StartTime: floatFromMap(word, "start"),
+				EndTime:   floatFromMap(word, "end"),
+			})
+		}
+		return timed
+	}
+	if chars, ok := data["chars"].([]interface{}); ok {
+		timed := make([]tts.TimedString, 0, len(chars))
+		for _, raw := range chars {
+			char, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			timed = append(timed, tts.TimedString{
+				Text:      stringFromMap(char, "char"),
+				StartTime: floatFromMap(char, "start"),
+				EndTime:   floatFromMap(char, "end"),
+			})
+		}
+		return timed
+	}
+	return nil
 }

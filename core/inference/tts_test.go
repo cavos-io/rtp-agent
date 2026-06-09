@@ -519,6 +519,50 @@ func TestInferenceTTSOutputAudioUsesConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestInferenceTTSOutputAlignmentMapsTimedTranscript(t *testing.T) {
+	readCh := make(chan []byte, 2)
+	readCh <- []byte(`{"type":"output_alignment","words":[{"word":"hello","start":0.25,"end":0.5}]}`)
+	close(readCh)
+
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{readCh: readCh}, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	ending, ok := stream.(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if audio.Frame != nil {
+		t.Fatalf("Frame = %#v, want nil for alignment-only event", audio.Frame)
+	}
+	if len(audio.TimedTranscript) != 1 {
+		t.Fatalf("TimedTranscript = %#v, want one word", audio.TimedTranscript)
+	}
+	got := audio.TimedTranscript[0]
+	if got.Text != "hello" || got.StartTime != 0.25 || got.EndTime != 0.5 {
+		t.Fatalf("TimedTranscript[0] = %#v, want hello 0.25-0.5", got)
+	}
+}
+
 func TestInferenceTTSLanguageOptionMatchesReferencePackets(t *testing.T) {
 	writes := make(chan map[string]any, 4)
 	provider := NewTTS("cartesia/sonic-3:voice-id", "key", "secret", WithTTSLanguage("fr"))
