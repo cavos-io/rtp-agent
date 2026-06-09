@@ -106,7 +106,7 @@ func NewLiveKitInferenceLLM(model string, apiKey, apiSecret string, opts ...Live
 		apiKey = os.Getenv(liveKitAPIKeyEnv)
 	}
 	if apiKey == "" {
-		return nil, fmt.Errorf("LIVEKIT_API_KEY is required, either as argument or set LIVEKIT_INFERENCE_API_KEY or LIVEKIT_API_KEY environment variable")
+		return nil, fmt.Errorf("api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable")
 	}
 	if apiSecret == "" {
 		apiSecret = os.Getenv(liveKitInferenceAPISecretEnv)
@@ -115,7 +115,7 @@ func NewLiveKitInferenceLLM(model string, apiKey, apiSecret string, opts ...Live
 		apiSecret = os.Getenv(liveKitAPISecretEnv)
 	}
 	if apiSecret == "" {
-		return nil, fmt.Errorf("LIVEKIT_API_SECRET is required, either as argument or set LIVEKIT_INFERENCE_API_SECRET or LIVEKIT_API_SECRET environment variable")
+		return nil, fmt.Errorf("api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable")
 	}
 	provider := &LiveKitInferenceLLM{
 		model:     model,

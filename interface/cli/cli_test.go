@@ -235,16 +235,19 @@ func TestConsoleLocalJobArgsMatchReference(t *testing.T) {
 	}
 }
 
-func TestParseConsoleArgsDefaultsToTextMode(t *testing.T) {
+func TestParseConsoleArgsDefaultsToAudioMode(t *testing.T) {
 	args, err := parseConsoleArgs([]string{"worker", "console"})
 	if err != nil {
 		t.Fatalf("parseConsoleArgs() error = %v", err)
 	}
-	if args.Mode != ConsoleModeText {
-		t.Fatalf("Mode = %q, want %q", args.Mode, ConsoleModeText)
+	if args.Mode != ConsoleModeAudio {
+		t.Fatalf("Mode = %q, want %q", args.Mode, ConsoleModeAudio)
 	}
 	if args.Record {
 		t.Fatal("Record = true, want false")
+	}
+	if args.LogLevel != "DEBUG" {
+		t.Fatalf("LogLevel = %q, want DEBUG", args.LogLevel)
 	}
 }
 

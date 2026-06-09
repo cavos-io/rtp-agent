@@ -74,13 +74,19 @@ func TestNewLiveKitInferenceLLMRequiresModelAndCredentials(t *testing.T) {
 	}
 
 	_, err = NewLiveKitInferenceLLM("openai/gpt-4.1", "", "secret")
-	if err == nil || !strings.Contains(err.Error(), "LIVEKIT_API_KEY") {
-		t.Fatalf("NewLiveKitInferenceLLM error = %v, want missing API key error", err)
+	if err == nil {
+		t.Fatal("NewLiveKitInferenceLLM error = nil, want missing API key error")
+	}
+	if got, want := err.Error(), "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable"; got != want {
+		t.Fatalf("NewLiveKitInferenceLLM error = %q, want %q", got, want)
 	}
 
 	_, err = NewLiveKitInferenceLLM("openai/gpt-4.1", "key", "")
-	if err == nil || !strings.Contains(err.Error(), "LIVEKIT_API_SECRET") {
-		t.Fatalf("NewLiveKitInferenceLLM error = %v, want missing API secret error", err)
+	if err == nil {
+		t.Fatal("NewLiveKitInferenceLLM error = nil, want missing API secret error")
+	}
+	if got, want := err.Error(), "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"; got != want {
+		t.Fatalf("NewLiveKitInferenceLLM error = %q, want %q", got, want)
 	}
 }
 

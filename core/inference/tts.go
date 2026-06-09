@@ -237,6 +237,13 @@ func (t *TTS) connectionPool() *utils.ConnectionPool[inferenceTTSConn] {
 }
 
 func (t *TTS) connectTTSWebsocket(ctx context.Context) (inferenceTTSConn, error) {
+	if t.apiKey == "" {
+		return nil, fmt.Errorf("api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable")
+	}
+	if t.apiSecret == "" {
+		return nil, fmt.Errorf("api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable")
+	}
+
 	token, err := CreateAccessToken(t.apiKey, t.apiSecret, InferenceAccessTokenTTL)
 	if err != nil {
 		return nil, err
@@ -510,6 +517,8 @@ func (s *inferenceTTSStream) run() {
 				err = s.conn.WriteJSON(map[string]interface{}{"type": "session.flush"})
 				s.mu.Unlock()
 				if err != nil {
+					s.setStreamError(fmt.Errorf("failed to send session.flush message to LiveKit Inference TTS: %w", err))
+					s.Close()
 					return
 				}
 				return
@@ -542,12 +551,16 @@ func (s *inferenceTTSStream) run() {
 			s.mu.Unlock()
 
 			if err != nil {
+				s.setStreamError(fmt.Errorf("failed to send input_transcript message to LiveKit Inference TTS: %w", err))
+				s.Close()
 				return
 			}
 		}
 	}()
 
 	// Read loop
+	currentSessionID := ""
+	var pendingAudio *tts.SynthesizedAudio
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -566,31 +579,52 @@ func (s *inferenceTTSStream) run() {
 
 			var ev map[string]interface{}
 			if err := json.Unmarshal(msg, &ev); err != nil {
-				continue
+				s.setStreamError(fmt.Errorf("failed to decode LiveKit Inference TTS message: %w", err))
+				return
+			}
+			if currentSessionID == "" {
+				currentSessionID = stringFromMap(ev, "session_id")
 			}
 
 			if evType, ok := ev["type"].(string); ok {
 				if evType == "output_audio" {
-					if audioB64, ok := ev["audio"].(string); ok {
-						data, err := base64.StdEncoding.DecodeString(audioB64)
-						if err != nil {
-							s.setStreamError(fmt.Errorf("invalid output_audio payload: %w", err))
-							return
-						}
-						s.eventCh <- &tts.SynthesizedAudio{
-							Frame: &model.AudioFrame{
-								Data:              data,
-								SampleRate:        uint32(s.sampleRate),
-								NumChannels:       1,
-								SamplesPerChannel: uint32(len(data) / 2),
-							},
-						}
+					audioB64, ok := ev["audio"].(string)
+					if !ok {
+						s.setStreamError(fmt.Errorf("missing output_audio payload"))
+						return
+					}
+					data, err := base64.StdEncoding.DecodeString(audioB64)
+					if err != nil {
+						s.setStreamError(fmt.Errorf("invalid output_audio payload: %w", err))
+						return
+					}
+					if pendingAudio != nil {
+						s.eventCh <- pendingAudio
+					}
+					pendingAudio = &tts.SynthesizedAudio{
+						SegmentID: currentSessionID,
+						Frame: &model.AudioFrame{
+							Data:              data,
+							SampleRate:        uint32(s.sampleRate),
+							NumChannels:       1,
+							SamplesPerChannel: uint32(len(data) / 2),
+						},
 					}
 				} else if evType == "output_alignment" {
-					if timedTranscript := inferenceTTSTimedTranscript(ev); len(timedTranscript) > 0 {
-						s.eventCh <- &tts.SynthesizedAudio{TimedTranscript: timedTranscript}
+					timedTranscript, err := inferenceTTSTimedTranscript(ev)
+					if err != nil {
+						s.setStreamError(err)
+						return
+					}
+					if len(timedTranscript) > 0 {
+						s.eventCh <- &tts.SynthesizedAudio{SegmentID: currentSessionID, TimedTranscript: timedTranscript}
 					}
 				} else if evType == "done" {
+					if pendingAudio != nil {
+						pendingAudio.IsFinal = true
+						s.eventCh <- pendingAudio
+						pendingAudio = nil
+					}
 					s.mu.Lock()
 					s.done = true
 					s.mu.Unlock()
@@ -604,36 +638,60 @@ func (s *inferenceTTSStream) run() {
 	}
 }
 
-func inferenceTTSTimedTranscript(data map[string]interface{}) []tts.TimedString {
+func inferenceTTSTimedTranscript(data map[string]interface{}) ([]tts.TimedString, error) {
 	if words, ok := data["words"].([]interface{}); ok {
 		timed := make([]tts.TimedString, 0, len(words))
 		for _, raw := range words {
 			word, ok := raw.(map[string]interface{})
 			if !ok {
-				continue
+				return nil, fmt.Errorf("invalid output_alignment word entry")
+			}
+			text, ok := word["word"].(string)
+			if !ok {
+				return nil, fmt.Errorf("missing output_alignment word")
+			}
+			start, ok := floatValue(word["start"])
+			if !ok {
+				return nil, fmt.Errorf("missing output_alignment word start")
+			}
+			end, ok := floatValue(word["end"])
+			if !ok {
+				return nil, fmt.Errorf("missing output_alignment word end")
 			}
 			timed = append(timed, tts.TimedString{
-				Text:      stringFromMap(word, "word"),
-				StartTime: floatFromMap(word, "start"),
-				EndTime:   floatFromMap(word, "end"),
+				Text:      text,
+				StartTime: start,
+				EndTime:   end,
 			})
 		}
-		return timed
+		return timed, nil
 	}
 	if chars, ok := data["chars"].([]interface{}); ok {
 		timed := make([]tts.TimedString, 0, len(chars))
 		for _, raw := range chars {
 			char, ok := raw.(map[string]interface{})
 			if !ok {
-				continue
+				return nil, fmt.Errorf("invalid output_alignment char entry")
+			}
+			text, ok := char["char"].(string)
+			if !ok {
+				return nil, fmt.Errorf("missing output_alignment char")
+			}
+			start, ok := floatValue(char["start"])
+			if !ok {
+				return nil, fmt.Errorf("missing output_alignment char start")
+			}
+			end, ok := floatValue(char["end"])
+			if !ok {
+				return nil, fmt.Errorf("missing output_alignment char end")
 			}
 			timed = append(timed, tts.TimedString{
-				Text:      stringFromMap(char, "char"),
-				StartTime: floatFromMap(char, "start"),
-				EndTime:   floatFromMap(char, "end"),
+				Text:      text,
+				StartTime: start,
+				EndTime:   end,
 			})
 		}
-		return timed
+		return timed, nil
 	}
-	return nil
+	return nil, nil
 }

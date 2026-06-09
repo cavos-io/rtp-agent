@@ -164,6 +164,13 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 }
 
 func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if s.apiKey == "" {
+		return nil, fmt.Errorf("api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable")
+	}
+	if s.apiSecret == "" {
+		return nil, fmt.Errorf("api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable")
+	}
+
 	token, err := CreateAccessToken(s.apiKey, s.apiSecret, InferenceAccessTokenTTL)
 	if err != nil {
 		return nil, err
@@ -634,6 +641,19 @@ func floatFromMap(data map[string]interface{}, key string) float64 {
 	return value
 }
 
+func floatValue(value interface{}) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	default:
+		return 0, false
+	}
+}
+
 func floatFromMapDefault(data map[string]interface{}, key string, fallback float64) float64 {
 	value, ok := data[key].(float64)
 	if !ok {
@@ -671,6 +691,8 @@ func (s *inferenceSTTStream) run() {
 				s.mu.Unlock()
 
 				if err != nil {
+					s.setStreamError(fmt.Errorf("failed to send input_audio message to LiveKit Inference STT: %w", err))
+					s.Close()
 					return
 				}
 			}
@@ -696,7 +718,8 @@ func (s *inferenceSTTStream) run() {
 
 			var ev map[string]interface{}
 			if err := json.Unmarshal(msg, &ev); err != nil {
-				continue
+				s.setStreamError(fmt.Errorf("failed to decode LiveKit Inference STT message: %w", err))
+				return
 			}
 
 			evType, _ := ev["type"].(string)

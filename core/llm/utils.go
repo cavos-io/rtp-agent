@@ -7,8 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"reflect"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -529,7 +532,105 @@ func functionOutputString(value any) string {
 	if isFalsyFunctionOutput(value) {
 		return ""
 	}
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return functionOutputRepr(value)
+}
+
+func functionOutputRepr(value any) string {
+	if value == nil {
+		return "None"
+	}
+	switch v := value.(type) {
+	case string:
+		return functionOutputStringRepr(v)
+	case bool:
+		if v {
+			return "True"
+		}
+		return "False"
+	case float32:
+		return functionOutputFloatRepr(float64(v), 32)
+	case float64:
+		return functionOutputFloatRepr(v, 64)
+	case complex64:
+		return functionOutputComplexRepr(complex128(v), 32)
+	case complex128:
+		return functionOutputComplexRepr(v, 64)
+	case []any:
+		parts := make([]string, 0, len(v))
+		for _, item := range v {
+			parts = append(parts, functionOutputRepr(item))
+		}
+		return "[" + strings.Join(parts, ", ") + "]"
+	case map[string]any:
+		keys := make([]string, 0, len(v))
+		for key := range v {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, key := range keys {
+			parts = append(parts, functionOutputRepr(key)+": "+functionOutputRepr(v[key]))
+		}
+		return "{" + strings.Join(parts, ", ") + "}"
+	}
+	rv := reflect.ValueOf(value)
+	switch rv.Kind() {
+	case reflect.Array, reflect.Slice:
+		parts := make([]string, 0, rv.Len())
+		for i := 0; i < rv.Len(); i++ {
+			parts = append(parts, functionOutputRepr(rv.Index(i).Interface()))
+		}
+		return "[" + strings.Join(parts, ", ") + "]"
+	case reflect.Map:
+		parts := make([]string, 0, rv.Len())
+		for _, key := range rv.MapKeys() {
+			parts = append(parts, functionOutputRepr(key.Interface())+": "+functionOutputRepr(rv.MapIndex(key).Interface()))
+		}
+		sort.Strings(parts)
+		return "{" + strings.Join(parts, ", ") + "}"
+	}
 	return fmt.Sprint(value)
+}
+
+func functionOutputFloatRepr(value float64, bitSize int) string {
+	switch {
+	case math.IsInf(value, 1):
+		return "inf"
+	case math.IsInf(value, -1):
+		return "-inf"
+	case math.IsNaN(value):
+		return "nan"
+	default:
+		return strconv.FormatFloat(value, 'g', -1, bitSize)
+	}
+}
+
+func functionOutputStringRepr(value string) string {
+	escaped := strings.NewReplacer(
+		`\`, `\\`,
+		"\n", `\n`,
+		"\r", `\r`,
+		"\t", `\t`,
+		`'`, `\'`,
+	).Replace(value)
+	return "'" + escaped + "'"
+}
+
+func functionOutputComplexRepr(value complex128, bitSize int) string {
+	realPart := real(value)
+	imagPart := imag(value)
+	realText := functionOutputFloatRepr(realPart, bitSize)
+	imagText := functionOutputFloatRepr(imagPart, bitSize)
+	if realPart == 0 {
+		return imagText + "j"
+	}
+	if imagPart < 0 {
+		return "(" + realText + imagText + "j)"
+	}
+	return "(" + realText + "+" + imagText + "j)"
 }
 
 func isFalsyFunctionOutput(value any) bool {

@@ -2,6 +2,7 @@ package inference
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -25,6 +26,48 @@ func TestNewSTTUsesReferenceCredentialEnvFallback(t *testing.T) {
 	}
 	if provider.apiSecret != "inference-secret" {
 		t.Fatalf("apiSecret = %q, want inference-secret", provider.apiSecret)
+	}
+}
+
+func TestInferenceSTTStreamRequiresReferenceCredentials(t *testing.T) {
+	tests := []struct {
+		name      string
+		apiKey    string
+		apiSecret string
+		want      string
+	}{
+		{
+			name: "missing key",
+			want: "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable",
+		},
+		{
+			name:      "missing secret",
+			apiKey:    "key",
+			apiSecret: "",
+			want:      "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("LIVEKIT_INFERENCE_API_KEY", "")
+			t.Setenv("LIVEKIT_INFERENCE_API_SECRET", "")
+			t.Setenv("LIVEKIT_API_KEY", "")
+			t.Setenv("LIVEKIT_API_SECRET", "")
+
+			provider := NewSTT("deepgram/nova-3", tt.apiKey, tt.apiSecret)
+
+			stream, err := provider.Stream(context.Background(), "en")
+			if stream != nil {
+				stream.Close()
+			}
+			if err == nil {
+				t.Fatal("Stream() error = nil, want missing credential error")
+			}
+			if got := err.Error(); got != tt.want {
+				t.Fatalf("Stream() error = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -950,14 +993,90 @@ func TestInferenceSTTUnexpectedCloseReturnsNextError(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTMalformedGatewayJSONReturnsNextError(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{
+		readCh: make(chan []byte, 1),
+	}
+	conn.readCh <- []byte(`{`)
+	close(conn.readCh)
+	provider := NewSTT("livekit/stt", "key", "secret")
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next() error = nil, want malformed JSON error")
+	}
+	if !strings.Contains(err.Error(), "failed to decode LiveKit Inference STT message") {
+		t.Fatalf("Next() error = %v, want malformed JSON error", err)
+	}
+}
+
+func TestInferenceSTTInputAudioWriteErrorReturnsNextError(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{
+		readBlock:  make(chan struct{}),
+		writeErr:   errors.New("write failed"),
+		writeErrAt: 2,
+	}
+	provider := NewSTT("livekit/stt", "key", "secret")
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte("audio"),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		errCh <- err
+	}()
+
+	select {
+	case err = <-errCh:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for input audio write error")
+	}
+	if err == nil {
+		t.Fatal("Next() error = nil, want input audio write error")
+	}
+	if !strings.Contains(err.Error(), "failed to send input_audio message to LiveKit Inference STT") {
+		t.Fatalf("Next() error = %v, want input audio write error", err)
+	}
+}
+
 type fakeInferenceWebsocketConn struct {
-	writes    []map[string]interface{}
-	closed    bool
-	readBlock chan struct{}
-	readCh    chan []byte
+	writes     []map[string]interface{}
+	closed     bool
+	readBlock  chan struct{}
+	readCh     chan []byte
+	writeErr   error
+	writeErrAt int
 }
 
 func (f *fakeInferenceWebsocketConn) WriteJSON(v interface{}) error {
+	if f.writeErr != nil && (f.writeErrAt == 0 || len(f.writes)+1 >= f.writeErrAt) {
+		return f.writeErr
+	}
 	msg, _ := v.(map[string]interface{})
 	f.writes = append(f.writes, msg)
 	return nil
