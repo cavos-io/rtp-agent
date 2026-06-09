@@ -2,6 +2,7 @@ package keyframe
 
 import (
 	"context"
+	"os"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 )
@@ -11,6 +12,8 @@ const (
 	defaultAPIURL              = "https://api.keyframelabs.com"
 	defaultAvatarAgentIdentity = "keyframe-avatar-agent"
 	defaultInitialAvatarState  = agent.AvatarStateIdle
+	keyframeAPIKeyEnv          = "KEYFRAME_API_KEY"
+	keyframeAPIURLEnv          = "KEYFRAME_API_URL"
 )
 
 type KeyframeAgent struct {
@@ -21,9 +24,16 @@ type KeyframeAgent struct {
 }
 
 func NewKeyframeAgent(apiKey string) *KeyframeAgent {
+	if apiKey == "" {
+		apiKey = os.Getenv(keyframeAPIKeyEnv)
+	}
+	apiURL := os.Getenv(keyframeAPIURLEnv)
+	if apiURL == "" {
+		apiURL = defaultAPIURL
+	}
 	return &KeyframeAgent{
 		apiKey:         apiKey,
-		apiURL:         defaultAPIURL,
+		apiURL:         apiURL,
 		avatarIdentity: defaultAvatarAgentIdentity,
 		state:          defaultInitialAvatarState,
 	}
