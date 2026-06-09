@@ -667,6 +667,43 @@ func TestInferenceTTSOutputAudioUsesConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestInferenceTTSOutputAudioUsesReferenceSessionIDSegment(t *testing.T) {
+	readCh := make(chan []byte, 2)
+	readCh <- []byte(`{"type":"output_audio","session_id":"session-1","audio":"AQIDBA=="}`)
+	close(readCh)
+
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{readCh: readCh}, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	ending, ok := stream.(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if audio.SegmentID != "session-1" {
+		t.Fatalf("SegmentID = %q, want session-1", audio.SegmentID)
+	}
+}
+
 func TestInferenceTTSInvalidOutputAudioReturnsNextError(t *testing.T) {
 	readCh := make(chan []byte, 2)
 	readCh <- []byte(`{"type":"output_audio","audio":"%%%"}`)

@@ -552,6 +552,7 @@ func (s *inferenceTTSStream) run() {
 	}()
 
 	// Read loop
+	currentSessionID := ""
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -573,6 +574,9 @@ func (s *inferenceTTSStream) run() {
 				s.setStreamError(fmt.Errorf("failed to decode LiveKit Inference TTS message: %w", err))
 				return
 			}
+			if currentSessionID == "" {
+				currentSessionID = stringFromMap(ev, "session_id")
+			}
 
 			if evType, ok := ev["type"].(string); ok {
 				if evType == "output_audio" {
@@ -583,6 +587,7 @@ func (s *inferenceTTSStream) run() {
 							return
 						}
 						s.eventCh <- &tts.SynthesizedAudio{
+							SegmentID: currentSessionID,
 							Frame: &model.AudioFrame{
 								Data:              data,
 								SampleRate:        uint32(s.sampleRate),
@@ -593,7 +598,7 @@ func (s *inferenceTTSStream) run() {
 					}
 				} else if evType == "output_alignment" {
 					if timedTranscript := inferenceTTSTimedTranscript(ev); len(timedTranscript) > 0 {
-						s.eventCh <- &tts.SynthesizedAudio{TimedTranscript: timedTranscript}
+						s.eventCh <- &tts.SynthesizedAudio{SegmentID: currentSessionID, TimedTranscript: timedTranscript}
 					}
 				} else if evType == "done" {
 					s.mu.Lock()
