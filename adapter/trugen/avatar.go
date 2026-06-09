@@ -22,7 +22,7 @@ type TrugenAvatar struct {
 
 func NewTrugenAvatar(apiKey string) *TrugenAvatar {
 	return &TrugenAvatar{
-		apiKey:         apiKey,
+		apiKey:         resolveTrugenAPIKey(apiKey),
 		avatarID:       defaultAvatarID,
 		avatarIdentity: defaultAvatarAgentIdentity,
 		state:          defaultInitialAvatarState,
