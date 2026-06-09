@@ -553,6 +553,7 @@ func (s *inferenceTTSStream) run() {
 
 	// Read loop
 	currentSessionID := ""
+	var pendingAudio *tts.SynthesizedAudio
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -586,7 +587,10 @@ func (s *inferenceTTSStream) run() {
 							s.setStreamError(fmt.Errorf("invalid output_audio payload: %w", err))
 							return
 						}
-						s.eventCh <- &tts.SynthesizedAudio{
+						if pendingAudio != nil {
+							s.eventCh <- pendingAudio
+						}
+						pendingAudio = &tts.SynthesizedAudio{
 							SegmentID: currentSessionID,
 							Frame: &model.AudioFrame{
 								Data:              data,
@@ -601,6 +605,11 @@ func (s *inferenceTTSStream) run() {
 						s.eventCh <- &tts.SynthesizedAudio{SegmentID: currentSessionID, TimedTranscript: timedTranscript}
 					}
 				} else if evType == "done" {
+					if pendingAudio != nil {
+						pendingAudio.IsFinal = true
+						s.eventCh <- pendingAudio
+						pendingAudio = nil
+					}
 					s.mu.Lock()
 					s.done = true
 					s.mu.Unlock()

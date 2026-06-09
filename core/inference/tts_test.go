@@ -633,6 +633,7 @@ func TestInferenceTTSMalformedGatewayJSONReturnsNextError(t *testing.T) {
 func TestInferenceTTSOutputAudioUsesConfiguredSampleRate(t *testing.T) {
 	readCh := make(chan []byte, 2)
 	readCh <- []byte(`{"type":"output_audio","audio":"AQIDBA=="}`)
+	readCh <- []byte(`{"type":"done"}`)
 	close(readCh)
 
 	provider := NewTTS("cartesia/sonic-3", "key", "secret", WithTTSSampleRate(16000))
@@ -670,6 +671,7 @@ func TestInferenceTTSOutputAudioUsesConfiguredSampleRate(t *testing.T) {
 func TestInferenceTTSOutputAudioUsesReferenceSessionIDSegment(t *testing.T) {
 	readCh := make(chan []byte, 2)
 	readCh <- []byte(`{"type":"output_audio","session_id":"session-1","audio":"AQIDBA=="}`)
+	readCh <- []byte(`{"type":"done"}`)
 	close(readCh)
 
 	provider := NewTTS("cartesia/sonic-3", "key", "secret")
@@ -769,6 +771,48 @@ func TestInferenceTTSDoneMessageReturnsEOF(t *testing.T) {
 		t.Fatalf("EndInput() error = %v", err)
 	}
 
+	_, err = stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() error = %v, want io.EOF", err)
+	}
+}
+
+func TestInferenceTTSDoneMarksLastOutputAudioFinal(t *testing.T) {
+	readCh := make(chan []byte, 2)
+	readCh <- []byte(`{"type":"output_audio","audio":"AQIDBA=="}`)
+	readCh <- []byte(`{"type":"done"}`)
+	close(readCh)
+
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{readCh: readCh}, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	ending, ok := stream.(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if !audio.IsFinal {
+		t.Fatal("IsFinal = false, want final audio after done")
+	}
 	_, err = stream.Next()
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("Next() error = %v, want io.EOF", err)
