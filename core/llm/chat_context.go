@@ -2104,7 +2104,7 @@ func validateAWSProviderImages(items []ChatItem) error {
 				return err
 			}
 			if image.ExternalURL != "" {
-				return fmt.Errorf("external image URLs are not supported by AWS Bedrock")
+				return fmt.Errorf("%s", "external_url is not supported by AWS Bedrock.")
 			}
 		}
 	}

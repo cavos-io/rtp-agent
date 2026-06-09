@@ -2073,8 +2073,11 @@ func TestChatContextToAWSProviderFormatRejectsExternalImageURL(t *testing.T) {
 	if messages != nil || extra != nil {
 		t.Fatalf("ToProviderFormatE(aws) messages=%#v extra=%#v, want nil outputs on error", messages, extra)
 	}
-	if !strings.Contains(err.Error(), "external image URLs are not supported by AWS") {
-		t.Fatalf("ToProviderFormatE(aws) error = %q, want AWS external image URL error", err)
+	if got, want := err.Error(), "external_url is not supported by AWS Bedrock."; got != want {
+		t.Fatalf("ToProviderFormatE(aws) error = %q, want %q", got, want)
+	}
+	if strings.Contains(err.Error(), "external image URLs") {
+		t.Fatalf("ToProviderFormatE(aws) error = %q, want reference external_url wording", err)
 	}
 }
 
