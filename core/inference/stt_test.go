@@ -220,6 +220,71 @@ func TestInferenceSTTFinalTranscriptEmitsStructuredRecognitionUsage(t *testing.T
 	}
 }
 
+func TestInferenceSTTFinalTranscriptOmitsZeroDurationUsage(t *testing.T) {
+	stream := &inferenceSTTStream{
+		eventCh: make(chan *stt.SpeechEvent, 4),
+	}
+
+	stream.processTranscript(map[string]interface{}{
+		"request_id": "req-1",
+		"transcript": "hello",
+		"language":   "en",
+		"start":      2.0,
+		"duration":   0.7,
+	}, true)
+
+	start := <-stream.eventCh
+	if start.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event type = %s, want start_of_speech", start.Type)
+	}
+
+	final := <-stream.eventCh
+	if final.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("second event type = %s, want final_transcript", final.Type)
+	}
+
+	end := <-stream.eventCh
+	if end.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("third event type = %s, want end_of_speech", end.Type)
+	}
+}
+
+func TestInferenceSTTLifecycleEventsOmitRequestID(t *testing.T) {
+	stream := &inferenceSTTStream{
+		eventCh: make(chan *stt.SpeechEvent, 3),
+	}
+
+	stream.processTranscript(map[string]interface{}{
+		"request_id": "req-1",
+		"transcript": "hello",
+		"language":   "en",
+	}, true)
+
+	start := <-stream.eventCh
+	if start.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event type = %s, want start_of_speech", start.Type)
+	}
+	if start.RequestID != "" {
+		t.Fatalf("start RequestID = %q, want empty", start.RequestID)
+	}
+
+	final := <-stream.eventCh
+	if final.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("second event type = %s, want final_transcript", final.Type)
+	}
+	if final.RequestID != "req-1" {
+		t.Fatalf("final RequestID = %q, want req-1", final.RequestID)
+	}
+
+	end := <-stream.eventCh
+	if end.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("third event type = %s, want end_of_speech", end.Type)
+	}
+	if end.RequestID != "" {
+		t.Fatalf("end RequestID = %q, want empty", end.RequestID)
+	}
+}
+
 func TestInferenceSTTTranscriptPreservesWordsAndMetadata(t *testing.T) {
 	stream := &inferenceSTTStream{
 		eventCh: make(chan *stt.SpeechEvent, 3),
@@ -275,6 +340,146 @@ func TestInferenceSTTTranscriptPreservesWordsAndMetadata(t *testing.T) {
 	}
 	if data.Words[1].Text != "world" || data.Words[1].Confidence != 0.92 || data.Words[1].SpeakerID != "speaker-a" {
 		t.Fatalf("second word = %#v, want world metadata", data.Words[1])
+	}
+}
+
+func TestInferenceSTTTranscriptUsesReferenceLanguageFallback(t *testing.T) {
+	tests := []struct {
+		name       string
+		streamLang string
+		dataLang   string
+		want       string
+	}{
+		{
+			name:       "gateway omitted language uses stream language",
+			streamLang: "ja",
+			want:       "ja",
+		},
+		{
+			name: "gateway omitted language uses english default",
+			want: "en",
+		},
+		{
+			name:       "gateway language wins over stream language",
+			streamLang: "ja",
+			dataLang:   "fr",
+			want:       "fr",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stream := &inferenceSTTStream{
+				eventCh: make(chan *stt.SpeechEvent, 2),
+			}
+			if tt.streamLang != "" {
+				stream.stt = &STT{language: tt.streamLang}
+			}
+
+			data := map[string]interface{}{
+				"request_id": "req-1",
+				"transcript": "hello",
+			}
+			if tt.dataLang != "" {
+				data["language"] = tt.dataLang
+			}
+
+			stream.processTranscript(data, false)
+
+			<-stream.eventCh
+			interim := <-stream.eventCh
+			if interim.Type != stt.SpeechEventInterimTranscript {
+				t.Fatalf("event type = %s, want interim_transcript", interim.Type)
+			}
+			if got := interim.Alternatives[0].Language; got != tt.want {
+				t.Fatalf("Language = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInferenceSTTTranscriptUsesReferenceConfidenceDefault(t *testing.T) {
+	stream := &inferenceSTTStream{
+		eventCh: make(chan *stt.SpeechEvent, 2),
+	}
+
+	stream.processTranscript(map[string]interface{}{
+		"request_id": "req-1",
+		"transcript": "hello",
+	}, false)
+
+	<-stream.eventCh
+	interim := <-stream.eventCh
+	if interim.Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("event type = %s, want interim_transcript", interim.Type)
+	}
+	if got := interim.Alternatives[0].Confidence; got != 1.0 {
+		t.Fatalf("Confidence = %v, want 1.0", got)
+	}
+}
+
+func TestInferenceSTTTranscriptUsesReferenceRequestIDFallback(t *testing.T) {
+	stream := &inferenceSTTStream{
+		requestID: "stt_request_test",
+		eventCh:   make(chan *stt.SpeechEvent, 3),
+	}
+
+	stream.processTranscript(map[string]interface{}{
+		"transcript": "hello",
+	}, true)
+
+	<-stream.eventCh
+	final := <-stream.eventCh
+	if final.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event type = %s, want final_transcript", final.Type)
+	}
+	if final.RequestID != "stt_request_test" {
+		t.Fatalf("RequestID = %q, want fallback stream request id", final.RequestID)
+	}
+}
+
+func TestInferenceSTTPreflightTranscriptRequiresActiveSpeech(t *testing.T) {
+	stream := &inferenceSTTStream{
+		eventCh: make(chan *stt.SpeechEvent, 3),
+	}
+
+	stream.processPreflightTranscript(map[string]interface{}{
+		"request_id": "req-ignored",
+		"transcript": "ignored",
+	})
+
+	select {
+	case ev := <-stream.eventCh:
+		t.Fatalf("unexpected preflight event before speech starts: %#v", ev)
+	default:
+	}
+
+	stream.processTranscript(map[string]interface{}{
+		"request_id": "req-start",
+		"transcript": "hello",
+		"start":      1.0,
+		"duration":   0.5,
+	}, false)
+	<-stream.eventCh
+	<-stream.eventCh
+
+	stream.processPreflightTranscript(map[string]interface{}{
+		"request_id": "req-preflight",
+		"transcript": "hello there",
+		"language":   "en",
+		"start":      1.2,
+		"duration":   0.4,
+	})
+
+	ev := <-stream.eventCh
+	if ev.Type != stt.SpeechEventPreflightTranscript {
+		t.Fatalf("event type = %s, want preflight_transcript", ev.Type)
+	}
+	if ev.RequestID != "req-preflight" {
+		t.Fatalf("RequestID = %q, want req-preflight", ev.RequestID)
+	}
+	if len(ev.Alternatives) != 1 || ev.Alternatives[0].Text != "hello there" {
+		t.Fatalf("Alternatives = %#v, want preflight transcript text", ev.Alternatives)
 	}
 }
 

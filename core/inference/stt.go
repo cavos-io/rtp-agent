@@ -14,6 +14,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/gorilla/websocket"
 )
 
@@ -105,12 +106,13 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 
 	ctx, cancel := context.WithCancel(ctx)
 	stream := &inferenceSTTStream{
-		stt:     s,
-		conn:    conn,
-		ctx:     ctx,
-		cancel:  cancel,
-		audioCh: make(chan *model.AudioFrame, 100),
-		eventCh: make(chan *stt.SpeechEvent, 100),
+		stt:       s,
+		conn:      conn,
+		ctx:       ctx,
+		cancel:    cancel,
+		requestID: cavosmath.ShortUUID("stt_request_"),
+		audioCh:   make(chan *model.AudioFrame, 100),
+		eventCh:   make(chan *stt.SpeechEvent, 100),
 	}
 
 	go stream.run()
@@ -165,6 +167,7 @@ type inferenceSTTStream struct {
 	cancel          context.CancelFunc
 	audioCh         chan *model.AudioFrame
 	eventCh         chan *stt.SpeechEvent
+	requestID       string
 	mu              sync.Mutex
 	closed          bool
 	inputEnded      bool
@@ -273,9 +276,9 @@ func (s *inferenceSTTStream) Next() (*stt.SpeechEvent, error) {
 func (s *inferenceSTTStream) buildSpeechData(data map[string]interface{}) stt.SpeechData {
 	speechData := stt.SpeechData{
 		Text:       stringFromMap(data, "transcript"),
-		Language:   stringFromMap(data, "language"),
+		Language:   s.transcriptLanguage(data),
 		SpeakerID:  stringFromMap(data, "speaker_id"),
-		Confidence: floatFromMap(data, "confidence"),
+		Confidence: floatFromMapDefault(data, "confidence", 1.0),
 	}
 
 	start := floatFromMap(data, "start")
@@ -307,6 +310,23 @@ func (s *inferenceSTTStream) buildSpeechData(data map[string]interface{}) stt.Sp
 	return speechData
 }
 
+func (s *inferenceSTTStream) transcriptLanguage(data map[string]interface{}) string {
+	if language := stringFromMap(data, "language"); language != "" {
+		return language
+	}
+	if s.stt != nil && s.stt.language != "" {
+		return s.stt.language
+	}
+	return "en"
+}
+
+func (s *inferenceSTTStream) transcriptRequestID(data map[string]interface{}) string {
+	if requestID := stringFromMap(data, "request_id"); requestID != "" {
+		return requestID
+	}
+	return s.requestID
+}
+
 func stringFromMap(data map[string]interface{}, key string) string {
 	value, _ := data[key].(string)
 	return value
@@ -314,6 +334,14 @@ func stringFromMap(data map[string]interface{}, key string) string {
 
 func floatFromMap(data map[string]interface{}, key string) float64 {
 	value, _ := data[key].(float64)
+	return value
+}
+
+func floatFromMapDefault(data map[string]interface{}, key string, fallback float64) float64 {
+	value, ok := data[key].(float64)
+	if !ok {
+		return fallback
+	}
 	return value
 }
 
@@ -375,6 +403,8 @@ func (s *inferenceSTTStream) run() {
 				// ignore
 			case "interim_transcript", "final_transcript":
 				s.processTranscript(ev, evType == "final_transcript")
+			case "preflight_transcript":
+				s.processPreflightTranscript(ev)
 			case "error":
 				logger.Logger.Errorw("LiveKit Inference STT error", nil, "msg", string(msg))
 			}
@@ -382,9 +412,24 @@ func (s *inferenceSTTStream) run() {
 	}
 }
 
+func (s *inferenceSTTStream) processPreflightTranscript(data map[string]interface{}) {
+	text, _ := data["transcript"].(string)
+	if text == "" || !s.speaking {
+		return
+	}
+
+	requestID := s.transcriptRequestID(data)
+	speechData := s.buildSpeechData(data)
+	s.eventCh <- &stt.SpeechEvent{
+		Type:         stt.SpeechEventPreflightTranscript,
+		RequestID:    requestID,
+		Alternatives: []stt.SpeechData{speechData},
+	}
+}
+
 func (s *inferenceSTTStream) processTranscript(data map[string]interface{}, isFinal bool) {
 	text, _ := data["transcript"].(string)
-	requestID, _ := data["request_id"].(string)
+	requestID := s.transcriptRequestID(data)
 
 	if text == "" && !isFinal {
 		return
@@ -392,7 +437,7 @@ func (s *inferenceSTTStream) processTranscript(data map[string]interface{}, isFi
 
 	if !s.speaking {
 		s.speaking = true
-		s.eventCh <- &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech, RequestID: requestID}
+		s.eventCh <- &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech}
 	}
 
 	speechData := s.buildSpeechData(data)
@@ -400,15 +445,19 @@ func (s *inferenceSTTStream) processTranscript(data map[string]interface{}, isFi
 	if isFinal {
 		s.mu.Lock()
 		duration := s.audioDuration
-		s.audioDuration = 0
+		if duration > 0 {
+			s.audioDuration = 0
+		}
 		s.mu.Unlock()
 
-		s.eventCh <- &stt.SpeechEvent{
-			Type:      stt.SpeechEventRecognitionUsage,
-			RequestID: requestID,
-			RecognitionUsage: &stt.RecognitionUsage{
-				AudioDuration: duration,
-			},
+		if duration > 0 {
+			s.eventCh <- &stt.SpeechEvent{
+				Type:      stt.SpeechEventRecognitionUsage,
+				RequestID: requestID,
+				RecognitionUsage: &stt.RecognitionUsage{
+					AudioDuration: duration,
+				},
+			}
 		}
 
 		s.eventCh <- &stt.SpeechEvent{
@@ -419,7 +468,7 @@ func (s *inferenceSTTStream) processTranscript(data map[string]interface{}, isFi
 
 		if s.speaking {
 			s.speaking = false
-			s.eventCh <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech, RequestID: requestID}
+			s.eventCh <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
 		}
 	} else {
 		s.eventCh <- &stt.SpeechEvent{

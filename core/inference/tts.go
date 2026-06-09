@@ -22,6 +22,8 @@ import (
 type TTS struct {
 	model             string
 	voice             string
+	language          string
+	extraKwargs       map[string]any
 	apiKey            string
 	apiSecret         string
 	baseURL           string
@@ -44,6 +46,18 @@ type inferenceTTSDialer func(ctx context.Context, endpoint string, header http.H
 func WithSentenceTokenizer(tokenizer tokenize.SentenceTokenizer) TTSOption {
 	return func(t *TTS) {
 		t.sentenceTokenizer = tokenizer
+	}
+}
+
+func WithTTSLanguage(language string) TTSOption {
+	return func(t *TTS) {
+		t.language = language
+	}
+}
+
+func WithTTSExtraKwargs(extra map[string]any) TTSOption {
+	return func(t *TTS) {
+		t.extraKwargs = cloneTTSExtra(extra)
 	}
 }
 
@@ -86,7 +100,10 @@ func (t *TTS) Provider() string {
 }
 
 func (t *TTS) Capabilities() tts.TTSCapabilities {
-	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
+	return tts.TTSCapabilities{
+		Streaming:         true,
+		AlignedTranscript: ttsHasAlignedTranscript(t.model, t.extraKwargs),
+	}
 }
 
 func (t *TTS) SampleRate() int {
@@ -156,7 +173,7 @@ func (t *TTS) connectTTSWebsocket(ctx context.Context) (inferenceTTSConn, error)
 		return nil, err
 	}
 
-	modelName, createParams := ttsSessionCreateParams(t.model, t.voice)
+	modelName, createParams := ttsSessionCreateParams(t.model, t.voice, t.language, t.extraKwargs)
 
 	wsURL, err := url.Parse(t.baseURL + "/tts")
 	if err != nil {
@@ -191,13 +208,13 @@ func defaultInferenceTTSDialer(ctx context.Context, endpoint string, header http
 	return conn, nil
 }
 
-func ttsSessionCreateParams(model string, voice string) (string, map[string]interface{}) {
+func ttsSessionCreateParams(model string, voice string, language string, extra map[string]any) (string, map[string]interface{}) {
 	modelName, voice := ttsModelAndVoice(model, voice)
 	createParams := map[string]interface{}{
 		"type":        "session.create",
 		"sample_rate": "24000",
 		"encoding":    "pcm_s16le",
-		"extra":       map[string]interface{}{},
+		"extra":       ttsExtraPayload(extra),
 	}
 	if modelName != "" {
 		createParams["model"] = modelName
@@ -205,7 +222,49 @@ func ttsSessionCreateParams(model string, voice string) (string, map[string]inte
 	if voice != "" {
 		createParams["voice"] = voice
 	}
+	if language != "" {
+		createParams["language"] = language
+	}
 	return modelName, createParams
+}
+
+func ttsExtraPayload(extra map[string]any) map[string]interface{} {
+	if len(extra) == 0 {
+		return map[string]interface{}{}
+	}
+	payload := make(map[string]interface{}, len(extra))
+	for key, value := range extra {
+		payload[key] = value
+	}
+	return payload
+}
+
+func cloneTTSExtra(extra map[string]any) map[string]any {
+	if len(extra) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(extra))
+	for key, value := range extra {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func ttsHasAlignedTranscript(model string, extra map[string]any) bool {
+	provider := strings.Split(model, "/")[0]
+	switch provider {
+	case "cartesia":
+		enabled, _ := extra["add_timestamps"].(bool)
+		return enabled
+	case "elevenlabs":
+		enabled, _ := extra["sync_alignment"].(bool)
+		return enabled
+	case "inworld":
+		timestampType, _ := extra["timestamp_type"].(string)
+		return timestampType == "WORD" || timestampType == "CHARACTER"
+	default:
+		return false
+	}
 }
 
 func ttsModelAndVoice(model string, voice string) (string, string) {
@@ -290,12 +349,22 @@ func (s *inferenceTTSStream) run() {
 				return
 			}
 
+			generationConfig := map[string]interface{}{}
+			if s.tts.model != "" {
+				generationConfig["model"] = s.tts.model
+			}
+			if s.tts.voice != "" {
+				generationConfig["voice"] = s.tts.voice
+			}
+			if s.tts.language != "" {
+				generationConfig["language"] = s.tts.language
+			}
+
 			tokenPkt := map[string]interface{}{
-				"type":       "input_transcript",
-				"transcript": tok.Token + " ",
-				"generation_config": map[string]interface{}{
-					"model": s.tts.model,
-				},
+				"type":              "input_transcript",
+				"transcript":        tok.Token + " ",
+				"extra":             ttsExtraPayload(s.tts.extraKwargs),
+				"generation_config": generationConfig,
 			}
 
 			s.mu.Lock()
