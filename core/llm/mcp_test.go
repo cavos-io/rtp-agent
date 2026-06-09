@@ -356,6 +356,19 @@ func TestMCPServerHTTPCloseDuringInitializeLeavesUninitialized(t *testing.T) {
 	}
 }
 
+func TestMCPServerHTTPCloseClosesIdleConnections(t *testing.T) {
+	transport := &mcpCloseIdleTransport{}
+	server := NewMCPServerHTTP("https://mcp.test/rpc")
+	server.SetHTTPClient(&http.Client{Transport: transport})
+
+	if err := server.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if got := transport.closeIdleCalls.Load(); got != 1 {
+		t.Fatalf("CloseIdleConnections calls = %d, want 1", got)
+	}
+}
+
 func TestMCPServerHTTPSetHeadersAppliesToSubsequentRequests(t *testing.T) {
 	httpClient := newMCPTestHTTPClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req jsonRPCRequest
@@ -443,6 +456,18 @@ type mcpTestRoundTripper func(*http.Request) (*http.Response, error)
 
 func (f mcpTestRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+type mcpCloseIdleTransport struct {
+	closeIdleCalls atomic.Int32
+}
+
+func (t *mcpCloseIdleTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("unexpected HTTP request")
+}
+
+func (t *mcpCloseIdleTransport) CloseIdleConnections() {
+	t.closeIdleCalls.Add(1)
 }
 
 func TestMCPToolsetSetupInitializesServerAndFlattensTools(t *testing.T) {

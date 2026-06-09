@@ -182,7 +182,11 @@ func (s *MCPServerHTTP) Close() error {
 	s.mu.Lock()
 	s.closeSeq++
 	s.initialized = false
+	client := s.client
 	s.mu.Unlock()
+	if client != nil {
+		client.CloseIdleConnections()
+	}
 	return nil
 }
 
