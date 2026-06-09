@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,6 +27,7 @@ const (
 	defaultSmallestAISTTSampleRate   = 16000
 	defaultSmallestAISTTEncoding     = "linear16"
 	defaultSmallestAISTTEOUTimeoutMS = 0
+	smallestAIAPIKeyEnv              = "SMALLEST_API_KEY"
 )
 
 type SmallestAISTT struct {
@@ -103,6 +105,9 @@ func WithSmallestAISTTEOUTimeoutMS(timeoutMS int) SmallestAISTTOption {
 }
 
 func NewSmallestAISTT(apiKey string, opts ...SmallestAISTTOption) *SmallestAISTT {
+	if apiKey == "" {
+		apiKey = os.Getenv(smallestAIAPIKeyEnv)
+	}
 	provider := &SmallestAISTT{
 		apiKey:         apiKey,
 		baseURL:        defaultSmallestAISTTBaseURL,

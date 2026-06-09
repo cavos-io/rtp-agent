@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -110,6 +111,9 @@ func WithSmallestAITTSOutputFormat(outputFormat string) SmallestAITTSOption {
 }
 
 func NewSmallestAITTS(apiKey string, voice string, opts ...SmallestAITTSOption) *SmallestAITTS {
+	if apiKey == "" {
+		apiKey = os.Getenv(smallestAIAPIKeyEnv)
+	}
 	provider := &SmallestAITTS{
 		apiKey:       apiKey,
 		baseURL:      defaultSmallestAIBaseURL,
