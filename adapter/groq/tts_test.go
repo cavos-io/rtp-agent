@@ -29,6 +29,27 @@ func TestGroqTTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewGroqTTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("GROQ_API_KEY", "env-key")
+
+	provider := NewGroqTTS("", "")
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+	req, err := buildGroqTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if got := req.Header.Get("Authorization"); got != "Bearer env-key" {
+		t.Fatalf("authorization = %q, want env bearer token", got)
+	}
+
+	explicit := NewGroqTTS("explicit-key", "")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestGroqTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	provider := NewGroqTTS("test-key", "")
 

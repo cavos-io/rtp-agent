@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -57,6 +58,9 @@ func WithGroqTTSVoice(voice string) GroqTTSOption {
 }
 
 func NewGroqTTS(apiKey string, voice string, opts ...GroqTTSOption) *GroqTTS {
+	if apiKey == "" {
+		apiKey = os.Getenv("GROQ_API_KEY")
+	}
 	provider := &GroqTTS{
 		apiKey:         apiKey,
 		baseURL:        defaultGroqTTSBaseURL,
