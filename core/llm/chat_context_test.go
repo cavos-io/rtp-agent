@@ -437,6 +437,22 @@ func TestInstructionsAppendStringPreservesExplicitTextVariant(t *testing.T) {
 	}
 }
 
+func TestInstructionsPrependStringPreservesExplicitTextVariant(t *testing.T) {
+	instructions := NewInstructions("audio", "text").AsModality("text")
+
+	prepended := instructions.PrependString("prefix ")
+
+	if got := prepended.String(); got != "prefix text" {
+		t.Fatalf("prepended.String() = %q, want active text representation with prefix", got)
+	}
+	if got := prepended.AsModality("audio").String(); got != "prefix audio" {
+		t.Fatalf("prepended audio = %q, want prefix", got)
+	}
+	if got := prepended.AsModality("text").String(); got != "prefix text" {
+		t.Fatalf("prepended text = %q, want prefix", got)
+	}
+}
+
 func TestChatContextInstructionsSerializeAndRoundTrip(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
