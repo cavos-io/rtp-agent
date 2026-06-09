@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"os"
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -47,6 +48,12 @@ func WithClovaSTTThreshold(threshold float64) ClovaSTTOption {
 }
 
 func NewClovaSTT(secret, invokeURL string, opts ...ClovaSTTOption) *ClovaSTT {
+	if secret == "" {
+		secret = os.Getenv("CLOVA_STT_SECRET_KEY")
+	}
+	if invokeURL == "" {
+		invokeURL = os.Getenv("CLOVA_STT_INVOKE_URL")
+	}
 	provider := &ClovaSTT{
 		secret:    secret,
 		invokeURL: strings.TrimRight(invokeURL, "/"),

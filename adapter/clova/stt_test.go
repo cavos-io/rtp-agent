@@ -47,6 +47,28 @@ func TestClovaSTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewClovaSTTUsesEnvironmentSecretAndInvokeURL(t *testing.T) {
+	t.Setenv("CLOVA_STT_SECRET_KEY", "env-secret")
+	t.Setenv("CLOVA_STT_INVOKE_URL", "https://env-clova.example/")
+
+	provider := NewClovaSTT("", "")
+
+	if provider.secret != "env-secret" {
+		t.Fatalf("secret = %q, want env secret", provider.secret)
+	}
+	if provider.invokeURL != "https://env-clova.example" {
+		t.Fatalf("invoke URL = %q, want env invoke URL without trailing slash", provider.invokeURL)
+	}
+
+	explicit := NewClovaSTT("explicit-secret", "https://explicit.example/")
+	if explicit.secret != "explicit-secret" {
+		t.Fatalf("secret = %q, want explicit secret", explicit.secret)
+	}
+	if explicit.invokeURL != "https://explicit.example" {
+		t.Fatalf("invoke URL = %q, want explicit invoke URL without trailing slash", explicit.invokeURL)
+	}
+}
+
 func TestClovaSTTLanguageMappingMatchesReference(t *testing.T) {
 	provider := NewClovaSTT("secret", "https://clova.example",
 		WithClovaSTTLanguage("en"),
