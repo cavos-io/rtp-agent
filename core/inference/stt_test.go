@@ -951,6 +951,32 @@ func TestInferenceSTTUnexpectedCloseReturnsNextError(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTMalformedGatewayJSONReturnsNextError(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{
+		readCh: make(chan []byte, 1),
+	}
+	conn.readCh <- []byte(`{`)
+	close(conn.readCh)
+	provider := NewSTT("livekit/stt", "key", "secret")
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next() error = nil, want malformed JSON error")
+	}
+	if !strings.Contains(err.Error(), "failed to decode LiveKit Inference STT message") {
+		t.Fatalf("Next() error = %v, want malformed JSON error", err)
+	}
+}
+
 func TestInferenceSTTInputAudioWriteErrorReturnsNextError(t *testing.T) {
 	conn := &fakeInferenceWebsocketConn{
 		readBlock:  make(chan struct{}),

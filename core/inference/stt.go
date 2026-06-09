@@ -698,7 +698,8 @@ func (s *inferenceSTTStream) run() {
 
 			var ev map[string]interface{}
 			if err := json.Unmarshal(msg, &ev); err != nil {
-				continue
+				s.setStreamError(fmt.Errorf("failed to decode LiveKit Inference STT message: %w", err))
+				return
 			}
 
 			evType, _ := ev["type"].(string)
