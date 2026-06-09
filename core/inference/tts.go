@@ -23,6 +23,7 @@ type TTS struct {
 	model             string
 	voice             string
 	language          string
+	extraKwargs       map[string]any
 	apiKey            string
 	apiSecret         string
 	baseURL           string
@@ -51,6 +52,12 @@ func WithSentenceTokenizer(tokenizer tokenize.SentenceTokenizer) TTSOption {
 func WithTTSLanguage(language string) TTSOption {
 	return func(t *TTS) {
 		t.language = language
+	}
+}
+
+func WithTTSExtraKwargs(extra map[string]any) TTSOption {
+	return func(t *TTS) {
+		t.extraKwargs = cloneTTSExtra(extra)
 	}
 }
 
@@ -163,7 +170,7 @@ func (t *TTS) connectTTSWebsocket(ctx context.Context) (inferenceTTSConn, error)
 		return nil, err
 	}
 
-	modelName, createParams := ttsSessionCreateParams(t.model, t.voice, t.language)
+	modelName, createParams := ttsSessionCreateParams(t.model, t.voice, t.language, t.extraKwargs)
 
 	wsURL, err := url.Parse(t.baseURL + "/tts")
 	if err != nil {
@@ -198,13 +205,13 @@ func defaultInferenceTTSDialer(ctx context.Context, endpoint string, header http
 	return conn, nil
 }
 
-func ttsSessionCreateParams(model string, voice string, language string) (string, map[string]interface{}) {
+func ttsSessionCreateParams(model string, voice string, language string, extra map[string]any) (string, map[string]interface{}) {
 	modelName, voice := ttsModelAndVoice(model, voice)
 	createParams := map[string]interface{}{
 		"type":        "session.create",
 		"sample_rate": "24000",
 		"encoding":    "pcm_s16le",
-		"extra":       map[string]interface{}{},
+		"extra":       ttsExtraPayload(extra),
 	}
 	if modelName != "" {
 		createParams["model"] = modelName
@@ -216,6 +223,28 @@ func ttsSessionCreateParams(model string, voice string, language string) (string
 		createParams["language"] = language
 	}
 	return modelName, createParams
+}
+
+func ttsExtraPayload(extra map[string]any) map[string]interface{} {
+	if len(extra) == 0 {
+		return map[string]interface{}{}
+	}
+	payload := make(map[string]interface{}, len(extra))
+	for key, value := range extra {
+		payload[key] = value
+	}
+	return payload
+}
+
+func cloneTTSExtra(extra map[string]any) map[string]any {
+	if len(extra) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(extra))
+	for key, value := range extra {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func ttsModelAndVoice(model string, voice string) (string, string) {
@@ -314,7 +343,7 @@ func (s *inferenceTTSStream) run() {
 			tokenPkt := map[string]interface{}{
 				"type":              "input_transcript",
 				"transcript":        tok.Token + " ",
-				"extra":             map[string]interface{}{},
+				"extra":             ttsExtraPayload(s.tts.extraKwargs),
 				"generation_config": generationConfig,
 			}
 
