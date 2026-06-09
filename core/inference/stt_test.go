@@ -343,6 +343,61 @@ func TestInferenceSTTTranscriptPreservesWordsAndMetadata(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTTranscriptUsesReferenceLanguageFallback(t *testing.T) {
+	tests := []struct {
+		name       string
+		streamLang string
+		dataLang   string
+		want       string
+	}{
+		{
+			name:       "gateway omitted language uses stream language",
+			streamLang: "ja",
+			want:       "ja",
+		},
+		{
+			name: "gateway omitted language uses english default",
+			want: "en",
+		},
+		{
+			name:       "gateway language wins over stream language",
+			streamLang: "ja",
+			dataLang:   "fr",
+			want:       "fr",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stream := &inferenceSTTStream{
+				eventCh: make(chan *stt.SpeechEvent, 2),
+			}
+			if tt.streamLang != "" {
+				stream.stt = &STT{language: tt.streamLang}
+			}
+
+			data := map[string]interface{}{
+				"request_id": "req-1",
+				"transcript": "hello",
+			}
+			if tt.dataLang != "" {
+				data["language"] = tt.dataLang
+			}
+
+			stream.processTranscript(data, false)
+
+			<-stream.eventCh
+			interim := <-stream.eventCh
+			if interim.Type != stt.SpeechEventInterimTranscript {
+				t.Fatalf("event type = %s, want interim_transcript", interim.Type)
+			}
+			if got := interim.Alternatives[0].Language; got != tt.want {
+				t.Fatalf("Language = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestInferenceSTTPreflightTranscriptRequiresActiveSpeech(t *testing.T) {
 	stream := &inferenceSTTStream{
 		eventCh: make(chan *stt.SpeechEvent, 3),

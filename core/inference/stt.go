@@ -273,7 +273,7 @@ func (s *inferenceSTTStream) Next() (*stt.SpeechEvent, error) {
 func (s *inferenceSTTStream) buildSpeechData(data map[string]interface{}) stt.SpeechData {
 	speechData := stt.SpeechData{
 		Text:       stringFromMap(data, "transcript"),
-		Language:   stringFromMap(data, "language"),
+		Language:   s.transcriptLanguage(data),
 		SpeakerID:  stringFromMap(data, "speaker_id"),
 		Confidence: floatFromMap(data, "confidence"),
 	}
@@ -305,6 +305,16 @@ func (s *inferenceSTTStream) buildSpeechData(data map[string]interface{}) stt.Sp
 	}
 
 	return speechData
+}
+
+func (s *inferenceSTTStream) transcriptLanguage(data map[string]interface{}) string {
+	if language := stringFromMap(data, "language"); language != "" {
+		return language
+	}
+	if s.stt != nil && s.stt.language != "" {
+		return s.stt.language
+	}
+	return "en"
 }
 
 func stringFromMap(data map[string]interface{}, key string) string {
