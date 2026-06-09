@@ -4393,8 +4393,8 @@ func TestExecuteLocalJobWithOptionsRejectsNonFakeWithoutRoomInfo(t *testing.T) {
 	if err == nil {
 		t.Fatal("ExecuteLocalJobWithOptions() error = nil, want missing room info error")
 	}
-	if !strings.Contains(err.Error(), "room info is required") {
-		t.Fatalf("ExecuteLocalJobWithOptions() error = %q, want room info requirement", err.Error())
+	if got, want := err.Error(), "room_info is None but fake_job is False"; got != want {
+		t.Fatalf("ExecuteLocalJobWithOptions() error = %q, want %q", got, want)
 	}
 }
 
@@ -4410,8 +4410,22 @@ func TestExecuteLocalJobWithOptionsRejectsNonFakeWithoutAgentIdentity(t *testing
 	if err == nil {
 		t.Fatal("ExecuteLocalJobWithOptions() error = nil, want missing agent identity error")
 	}
-	if !strings.Contains(err.Error(), "agent identity is required") {
-		t.Fatalf("ExecuteLocalJobWithOptions() error = %q, want agent identity requirement", err.Error())
+	if got, want := err.Error(), "agent_identity is None but fake_job is False"; got != want {
+		t.Fatalf("ExecuteLocalJobWithOptions() error = %q, want %q", got, want)
+	}
+}
+
+func TestExecuteLocalJobWithOptionsChecksReferenceIdentityBeforeRoomInfo(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := server.ExecuteLocalJobWithOptions(ctx, "room-a", "", LocalJobOptions{FakeJob: false})
+	if err == nil {
+		t.Fatal("ExecuteLocalJobWithOptions() error = nil, want missing agent identity error")
+	}
+	if got, want := err.Error(), "agent_identity is None but fake_job is False"; got != want {
+		t.Fatalf("ExecuteLocalJobWithOptions() error = %q, want %q", got, want)
 	}
 }
 

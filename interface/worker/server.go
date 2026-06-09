@@ -1967,9 +1967,6 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 }
 
 func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName string, participantIdentity string, options LocalJobOptions) error {
-	if !options.FakeJob && options.RoomInfo == nil {
-		return fmt.Errorf("room info is required for non-fake local jobs")
-	}
 	if options.Token != "" {
 		verifier, err := auth.ParseAPIToken(options.Token)
 		if err != nil {
@@ -1978,7 +1975,10 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 		participantIdentity = verifier.Identity()
 	}
 	if !options.FakeJob && participantIdentity == "" && options.Token == "" {
-		return fmt.Errorf("agent identity is required for non-fake local jobs")
+		return fmt.Errorf("agent_identity is None but fake_job is False")
+	}
+	if !options.FakeJob && options.RoomInfo == nil {
+		return fmt.Errorf("room_info is None but fake_job is False")
 	}
 	if s.entrypointFnc == nil {
 		return fmt.Errorf("no RTC session entrypoint has been registered")
