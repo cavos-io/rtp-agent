@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,7 @@ const (
 	defaultSimplismartSTTLanguage   = "en"
 	defaultSimplismartSTTTask       = "transcribe"
 	defaultSimplismartSTTSampleRate = 16000
+	simplismartAPIKeyEnv            = "SIMPLISMART_API_KEY"
 )
 
 type SimplismartSTT struct {
@@ -126,6 +128,9 @@ func WithSimplismartSTTNumSpeakers(numSpeakers int) SimplismartSTTOption {
 }
 
 func NewSimplismartSTT(apiKey string, opts ...SimplismartSTTOption) *SimplismartSTT {
+	if apiKey == "" {
+		apiKey = os.Getenv(simplismartAPIKeyEnv)
+	}
 	vadOnset := 0.5
 	compressionRatioThreshold := 2.4
 	maxTokens := 400.0
