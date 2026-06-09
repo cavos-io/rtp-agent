@@ -426,11 +426,11 @@ func (s *elevenLabsStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	msg := map[string]interface{}{
-		"text":  "",
-		"flush": true,
-	}
-	return s.conn.WriteJSON(msg)
+	return s.conn.WriteJSON(elevenLabsFlushPayload())
+}
+
+func elevenLabsFlushPayload() map[string]interface{} {
+	return map[string]interface{}{"text": ""}
 }
 
 func (s *elevenLabsStream) Close() error {

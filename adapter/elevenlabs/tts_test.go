@@ -158,6 +158,16 @@ func TestElevenLabsStreamURLUsesConfiguredBaseURL(t *testing.T) {
 	}
 }
 
+func TestElevenLabsStreamFlushUsesEndOfInputSignal(t *testing.T) {
+	flush := elevenLabsFlushPayload()
+	if flush["text"] != "" {
+		t.Fatalf("flush text = %#v, want empty end-of-input signal", flush["text"])
+	}
+	if _, ok := flush["flush"]; ok {
+		t.Fatalf("flush payload = %#v, want no flush flag for stream-input close", flush)
+	}
+}
+
 func TestElevenLabsSynthesizedAudioUsesConfiguredSampleRate(t *testing.T) {
 	resp := elWSResponse{
 		Audio: base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
