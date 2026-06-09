@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -11,6 +12,10 @@ type ToolContext struct {
 	functionTools map[string]Tool
 	providerTools []ProviderTool
 	toolsets      []Toolset
+}
+
+type closeableToolset interface {
+	Close() error
 }
 
 func NewToolContext(tools []interface{}) *ToolContext {
@@ -47,6 +52,21 @@ func (c *ToolContext) Toolsets() []Toolset {
 	arr := make([]Toolset, len(c.toolsets))
 	copy(arr, c.toolsets)
 	return arr
+}
+
+func (c *ToolContext) Close() error {
+	if c == nil {
+		return nil
+	}
+	var errs []error
+	for _, toolset := range c.toolsets {
+		if closeable, ok := toolset.(closeableToolset); ok {
+			if err := closeable.Close(); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (c *ToolContext) Flatten() []Tool {
