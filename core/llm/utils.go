@@ -618,14 +618,23 @@ func functionOutputFloatRepr(value float64, bitSize int) string {
 }
 
 func functionOutputStringRepr(value string) string {
+	quote := "'"
+	if strings.Contains(value, "'") && !strings.Contains(value, `"`) {
+		quote = `"`
+	}
 	escaped := strings.NewReplacer(
 		`\`, `\\`,
+		"\x00", `\x00`,
 		"\n", `\n`,
 		"\r", `\r`,
 		"\t", `\t`,
-		`'`, `\'`,
 	).Replace(value)
-	return "'" + escaped + "'"
+	if quote == "'" {
+		escaped = strings.ReplaceAll(escaped, `'`, `\'`)
+	} else {
+		escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	}
+	return quote + escaped + quote
 }
 
 func functionOutputComplexRepr(value complex128, bitSize int) string {

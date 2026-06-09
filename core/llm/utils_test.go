@@ -317,6 +317,8 @@ func TestMakeFunctionCallOutputStringifiesValidOutputs(t *testing.T) {
 		{name: "list floats", output: []any{0.0, math.Copysign(0, -1), 1.0, 1.5}, want: "[0.0, -0.0, 1.0, 1.5]"},
 		{name: "list exponent floats", output: []any{1e20, 1e-7, 1e-5}, want: "[1e+20, 1e-07, 1e-05]"},
 		{name: "list string newline", output: []any{"line\nnext"}, want: "['line\\nnext']"},
+		{name: "list string apostrophe", output: []any{"can't"}, want: `["can't"]`},
+		{name: "list string nul", output: []any{"\x00"}, want: `['\x00']`},
 		{name: "dict", output: map[string]any{"ok": true}, want: "{'ok': True}"},
 		{name: "dict float", output: map[string]any{"score": 1.0}, want: "{'score': 1.0}"},
 	}
