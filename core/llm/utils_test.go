@@ -76,6 +76,18 @@ func TestParseFunctionArgumentsUnwrapsNestedJSONString(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRejectsNestedNonJSONStringWithReferenceError(t *testing.T) {
+	_, err := ParseFunctionArguments(`"not json object"`)
+	if err == nil {
+		t.Fatal("ParseFunctionArguments(nested string) error = nil, want error")
+	}
+
+	want := "function arguments decoded to a non-JSON string: not json object"
+	if err.Error() != want {
+		t.Fatalf("ParseFunctionArguments(nested string) error = %q, want %q", err.Error(), want)
+	}
+}
+
 func TestParseFunctionArgumentsRejectsNumericNonObjectWithReferenceError(t *testing.T) {
 	_, err := ParseFunctionArguments(`3`)
 	if err == nil {
