@@ -74,7 +74,7 @@ func WithSpitchTTSSampleRate(sampleRate int) SpitchTTSOption {
 
 func NewSpitchTTS(apiKey string, voice string, opts ...SpitchTTSOption) *SpitchTTS {
 	provider := &SpitchTTS{
-		apiKey:       apiKey,
+		apiKey:       resolveSpitchAPIKey(apiKey),
 		baseURL:      defaultSpitchBaseURL,
 		voice:        voice,
 		language:     defaultSpitchLanguage,
