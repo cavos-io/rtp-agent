@@ -32,6 +32,32 @@ func TestRimeTTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewRimeTTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("RIME_API_KEY", "env-key")
+
+	provider := NewRimeTTS("", "")
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if got := req.Header.Get("Authorization"); got != "Bearer env-key" {
+		t.Fatalf("authorization = %q, want env bearer token", got)
+	}
+
+	streaming := NewRimeTTS("", "", WithRimeTTSWebsocket(true))
+	if got := buildRimeTTSWebsocketHeaders(streaming).Get("Authorization"); got != "Bearer env-key" {
+		t.Fatalf("websocket authorization = %q, want env bearer token", got)
+	}
+
+	explicit := NewRimeTTS("explicit-key", "")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestRimeTTSSynthesizeRequestUsesReferenceDefaults(t *testing.T) {
 	provider := NewRimeTTS("test-key", "")
 

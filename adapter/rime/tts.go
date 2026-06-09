@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -105,6 +106,9 @@ func WithRimeTTSSegment(segment string) RimeTTSOption {
 }
 
 func NewRimeTTS(apiKey string, voice string, opts ...RimeTTSOption) *RimeTTS {
+	if apiKey == "" {
+		apiKey = os.Getenv("RIME_API_KEY")
+	}
 	provider := &RimeTTS{
 		apiKey:     apiKey,
 		baseURL:    defaultRimeHTTPBaseURL,
