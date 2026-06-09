@@ -461,6 +461,32 @@ func TestExecuteFunctionCallReturnsUnknownFunctionOutput(t *testing.T) {
 	}
 }
 
+func TestExecuteFunctionCallUnknownFunctionPreservesRawArguments(t *testing.T) {
+	toolCtx := EmptyToolContext()
+
+	result := ExecuteFunctionCall(context.Background(), &FunctionToolCall{
+		Name:      "missing",
+		CallID:    "call_missing",
+		Arguments: `{city:"Paris",limit:3,}`,
+	}, toolCtx)
+
+	if result.FncCall.Name != "missing" || result.FncCall.CallID != "call_missing" {
+		t.Fatalf("FncCall identity = %#v, want missing call", result.FncCall)
+	}
+	if result.FncCall.Arguments != `{city:"Paris",limit:3,}` {
+		t.Fatalf("FncCall.Arguments = %q, want raw unparsed arguments", result.FncCall.Arguments)
+	}
+	if result.FncCallOut == nil {
+		t.Fatal("FncCallOut = nil, want unknown function output")
+	}
+	if !result.FncCallOut.IsError || result.FncCallOut.Output != "Unknown function: missing" {
+		t.Fatalf("FncCallOut = %#v, want unknown function error", result.FncCallOut)
+	}
+	if result.RawError == nil {
+		t.Fatal("RawError = nil, want unknown function error")
+	}
+}
+
 func TestExecuteFunctionCallDefaultsEmptyArgumentsAndReturnsOutput(t *testing.T) {
 	tool := &recordingTool{name: "lookup", result: "Paris"}
 	toolCtx := NewToolContext([]interface{}{tool})
