@@ -570,7 +570,8 @@ func (s *inferenceTTSStream) run() {
 
 			var ev map[string]interface{}
 			if err := json.Unmarshal(msg, &ev); err != nil {
-				continue
+				s.setStreamError(fmt.Errorf("failed to decode LiveKit Inference TTS message: %w", err))
+				return
 			}
 
 			if evType, ok := ev["type"].(string); ok {
