@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -404,6 +405,7 @@ type inferenceTTSStream struct {
 	mu          sync.Mutex
 	closed      bool
 	inputEnded  bool
+	done        bool
 	streamErr   error
 }
 
@@ -469,6 +471,12 @@ func (s *inferenceTTSStream) Next() (*tts.SynthesizedAudio, error) {
 		s.mu.Unlock()
 		if err != nil {
 			return nil, err
+		}
+		s.mu.Lock()
+		done := s.done
+		s.mu.Unlock()
+		if done {
+			return nil, io.EOF
 		}
 		return nil, context.Canceled
 	}
@@ -577,6 +585,11 @@ func (s *inferenceTTSStream) run() {
 					if timedTranscript := inferenceTTSTimedTranscript(ev); len(timedTranscript) > 0 {
 						s.eventCh <- &tts.SynthesizedAudio{TimedTranscript: timedTranscript}
 					}
+				} else if evType == "done" {
+					s.mu.Lock()
+					s.done = true
+					s.mu.Unlock()
+					return
 				} else if evType == "error" {
 					s.setStreamError(fmt.Errorf("LiveKit Inference TTS returned error: %s", string(msg)))
 					return
