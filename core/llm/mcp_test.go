@@ -733,6 +733,45 @@ done
 	}
 }
 
+func TestMCPServerStdioTransportCloseClearsInitializedState(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "mcp-close-clears-state.sh")
+	script := `#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":1,"result":{}}\n'
+      ;;
+    *'"method":"tools/list"'*)
+      exit 0
+      ;;
+  esac
+done
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write helper script: %v", err)
+	}
+
+	server := NewMCPServerStdio("sh", []string{scriptPath})
+	defer server.Close()
+	if err := server.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+	if !server.Initialized() {
+		t.Fatal("Initialized() = false after Initialize, want true")
+	}
+
+	if _, err := server.ListTools(context.Background()); err == nil {
+		t.Fatal("ListTools() error = nil, want transport closed error")
+	}
+	if server.Initialized() {
+		t.Fatal("Initialized() = true after MCP stdio transport closed, want false")
+	}
+	if _, err := server.ListTools(context.Background()); err == nil || !strings.Contains(err.Error(), "isn't initialized") {
+		t.Fatalf("ListTools() after transport close error = %v, want uninitialized lifecycle error", err)
+	}
+}
+
 func TestMCPServerStdioInitializeCoalescesConcurrentCalls(t *testing.T) {
 	tmpDir := t.TempDir()
 	startedPath := filepath.Join(tmpDir, "started")

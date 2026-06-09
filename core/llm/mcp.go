@@ -699,7 +699,7 @@ func (s *MCPServerStdio) sendNotification(method string, params interface{}) err
 }
 
 func (s *MCPServerStdio) readLoop() {
-	defer s.failPendingRequests("MCP stdio transport closed")
+	defer s.handleTransportClosed("MCP stdio transport closed")
 	scanner := bufio.NewScanner(s.stdout)
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -718,7 +718,7 @@ func (s *MCPServerStdio) readLoop() {
 	}
 }
 
-func (s *MCPServerStdio) failPendingRequests(message string) {
+func (s *MCPServerStdio) handleTransportClosed(message string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id, ch := range s.pending {
@@ -728,6 +728,9 @@ func (s *MCPServerStdio) failPendingRequests(message string) {
 		default:
 		}
 	}
+	s.cacheDirty = true
+	s.toolsCache = nil
+	_ = s.closeTransportLocked()
 }
 
 type mcpProxyTool struct {
