@@ -402,6 +402,7 @@ type inferenceTTSStream struct {
 	mu          sync.Mutex
 	closed      bool
 	inputEnded  bool
+	streamErr   error
 }
 
 func (s *inferenceTTSStream) PushText(text string) error {
@@ -461,9 +462,26 @@ func (s *inferenceTTSStream) Close() error {
 func (s *inferenceTTSStream) Next() (*tts.SynthesizedAudio, error) {
 	ev, ok := <-s.eventCh
 	if !ok {
+		s.mu.Lock()
+		err := s.streamErr
+		s.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
 		return nil, context.Canceled
 	}
 	return ev, nil
+}
+
+func (s *inferenceTTSStream) setStreamError(err error) {
+	if err == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.streamErr == nil {
+		s.streamErr = err
+	}
+	s.mu.Unlock()
 }
 
 func (s *inferenceTTSStream) run() {
@@ -550,7 +568,8 @@ func (s *inferenceTTSStream) run() {
 						}
 					}
 				} else if evType == "error" {
-					logger.Logger.Errorw("LiveKit Inference TTS error", nil, "msg", string(msg))
+					s.setStreamError(fmt.Errorf("LiveKit Inference TTS returned error: %s", string(msg)))
+					return
 				}
 			}
 		}

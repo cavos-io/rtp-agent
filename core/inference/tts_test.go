@@ -224,6 +224,7 @@ func TestTTSWebsocketSendsReferenceContextHeaders(t *testing.T) {
 
 type recordingTTSConn struct {
 	closed      atomic.Bool
+	readCh      chan []byte
 	onWriteJSON func(map[string]any)
 }
 
@@ -235,6 +236,14 @@ func (c *recordingTTSConn) WriteJSON(v any) error {
 }
 
 func (c *recordingTTSConn) ReadMessage() (int, []byte, error) {
+	if c.readCh != nil {
+		msg, ok := <-c.readCh
+		if !ok {
+			c.closed.Store(true)
+			return 0, nil, context.Canceled
+		}
+		return 1, msg, nil
+	}
 	for !c.closed.Load() {
 		time.Sleep(time.Millisecond)
 	}
@@ -243,6 +252,12 @@ func (c *recordingTTSConn) ReadMessage() (int, []byte, error) {
 
 func (c *recordingTTSConn) Close() error {
 	c.closed.Store(true)
+	if c.readCh != nil {
+		select {
+		case <-c.readCh:
+		default:
+		}
+	}
 	return nil
 }
 
@@ -427,6 +442,43 @@ func TestInferenceTTSFlushOnlyFlushesTokenizerUntilEndInput(t *testing.T) {
 		case <-deadline:
 			t.Fatal("timed out waiting for final session.flush")
 		}
+	}
+}
+
+func TestInferenceTTSStreamErrorMessageReturnsNextError(t *testing.T) {
+	readCh := make(chan []byte, 2)
+	readCh <- []byte(`{"type":"error","message":"provider failed"}`)
+	close(readCh)
+
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{readCh: readCh}, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	ending, ok := stream.(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next() error = nil, want gateway error")
+	}
+	if !strings.Contains(err.Error(), "LiveKit Inference TTS returned error") {
+		t.Fatalf("Next() error = %v, want gateway error", err)
 	}
 }
 
