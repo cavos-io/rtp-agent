@@ -145,6 +145,10 @@ func (t *TTS) SampleRate() int  { return t.sampleRate }
 func (t *TTS) NumChannels() int { return t.numChannels }
 
 func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if err := validateGnaniTTSAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
+
 	req, err := buildTTSRequest(ctx, t, text)
 	if err != nil {
 		return nil, err
@@ -159,6 +163,13 @@ func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, e
 		return nil, fmt.Errorf("gnani tts error: %s", string(respBody))
 	}
 	return &ttsChunkedStream{resp: resp, sampleRate: t.sampleRate, numChannels: t.numChannels}, nil
+}
+
+func validateGnaniTTSAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("gnani API key is required, either as argument or set %s environment variable", gnaniAPIKeyEnv)
+	}
+	return nil
 }
 
 func buildTTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, error) {
@@ -317,6 +328,9 @@ func (s *gnaniTTSSynthesizeStream) Flush() error {
 		s.started = true
 		close(s.events)
 		return nil
+	}
+	if err := validateGnaniTTSAPIKey(s.provider.apiKey); err != nil {
+		return err
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(s.ctx, buildGnaniTTSWebsocketURL(s.provider).String(), buildGnaniTTSWebsocketHeaders(s.provider))
 	if err != nil {
