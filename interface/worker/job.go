@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -24,6 +25,8 @@ import (
 )
 
 var currentJobContexts sync.Map
+
+const errNoJobContext = "no job context found, are you running this code inside a job entrypoint?"
 
 func init() {
 	inference.SetContextHeadersProvider(currentInferenceContextHeaders)
@@ -77,6 +80,18 @@ func GetJobContext() (*JobContext, bool) {
 // with LiveKit Agents' get_current_job_context name.
 func GetCurrentJobContext() (*JobContext, bool) {
 	return GetJobContext()
+}
+
+func RequireJobContext() (*JobContext, error) {
+	ctx, ok := GetJobContext()
+	if !ok || ctx == nil {
+		return nil, errors.New(errNoJobContext)
+	}
+	return ctx, nil
+}
+
+func RequireCurrentJobContext() (*JobContext, error) {
+	return RequireJobContext()
 }
 
 func runWithJobContext(ctx *JobContext, fn func() error) error {

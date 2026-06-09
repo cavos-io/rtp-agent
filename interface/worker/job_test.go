@@ -45,6 +45,28 @@ func TestGetJobContextReturnsActiveEntrypointContext(t *testing.T) {
 	}
 }
 
+func TestRequireJobContextMatchesReferenceRequiredDefault(t *testing.T) {
+	const wantMessage = "no job context found, are you running this code inside a job entrypoint?"
+	if got, err := RequireJobContext(); err == nil || got != nil || err.Error() != wantMessage {
+		t.Fatalf("RequireJobContext() = %#v, %v; want nil and reference error", got, err)
+	}
+
+	jobCtx := NewJobContext(&livekit.Job{Id: "job_required"}, "", "", "")
+	if err := runWithJobContext(jobCtx, func() error {
+		got, err := RequireJobContext()
+		if err != nil || got != jobCtx {
+			t.Fatalf("RequireJobContext() inside entrypoint = %#v, %v; want job context, nil", got, err)
+		}
+		got, err = RequireCurrentJobContext()
+		if err != nil || got != jobCtx {
+			t.Fatalf("RequireCurrentJobContext() inside entrypoint = %#v, %v; want job context, nil", got, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("runWithJobContext() error = %v", err)
+	}
+}
+
 func TestJobContextProvidesReferenceInferenceHeaders(t *testing.T) {
 	jobCtx := NewJobContext(&livekit.Job{
 		Id:   "job_inference",
