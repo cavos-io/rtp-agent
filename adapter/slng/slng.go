@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -31,6 +32,7 @@ const (
 	defaultSLNGVADMinSilenceMS = 300
 	defaultSLNGVADSpeechPadMS  = 30
 	defaultSLNGSpeed           = 1.0
+	slngAPIKeyEnv              = "SLNG_API_KEY"
 	slngNumChannels            = 1
 	slngFlushMessage           = `{"type":"flush"}`
 )
@@ -124,6 +126,9 @@ func WithSTTModelOptions(options map[string]any) STTOption {
 }
 
 func NewSTT(apiKey string, opts ...STTOption) *STT {
+	if apiKey == "" {
+		apiKey = os.Getenv(slngAPIKeyEnv)
+	}
 	provider := &STT{
 		apiKey:                  apiKey,
 		model:                   defaultSLNGSTTModel,
@@ -325,6 +330,9 @@ func WithTTSModelOptions(options map[string]any) TTSOption {
 }
 
 func NewTTS(apiKey string, opts ...TTSOption) *TTS {
+	if apiKey == "" {
+		apiKey = os.Getenv(slngAPIKeyEnv)
+	}
 	provider := &TTS{
 		apiKey:     apiKey,
 		model:      defaultSLNGTTSModel,
