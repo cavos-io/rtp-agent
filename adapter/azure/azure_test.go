@@ -102,6 +102,9 @@ func TestAzureTTSDefaultsAndEnvironmentMatchReference(t *testing.T) {
 	if provider.voice != "en-US-JennyNeural" {
 		t.Fatalf("voice = %q, want reference default", provider.voice)
 	}
+	if provider.language != "en-US" {
+		t.Fatalf("language = %q, want reference default", provider.language)
+	}
 	if provider.sampleRate != 24000 {
 		t.Fatalf("sampleRate = %d, want 24000", provider.sampleRate)
 	}
@@ -119,6 +122,9 @@ func TestAzureTTSDefaultsAndEnvironmentMatchReference(t *testing.T) {
 	}
 	if provider.NumChannels() != 1 {
 		t.Fatalf("NumChannels = %d, want 1", provider.NumChannels())
+	}
+	if provider.Language() != "en-US" {
+		t.Fatalf("Language = %q, want en-US", provider.Language())
 	}
 	if provider.Capabilities().Streaming {
 		t.Fatal("Streaming = true, want false for Azure REST TTS")
@@ -162,6 +168,29 @@ func TestAzureTTSBuildsReferenceRequest(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `voice name="en-US-AvaNeural"`) {
 		t.Fatalf("SSML = %q, want voice name", string(body))
+	}
+}
+
+func TestAzureTTSBuildsRequestWithConfiguredLanguage(t *testing.T) {
+	provider, err := NewAzureTTS("key", "eastus", "id-ID-GadisNeural", "id-ID")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+
+	req, err := buildAzureTTSRequest(context.Background(), provider, "halo")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	ssml := string(body)
+	if !strings.Contains(ssml, `xml:lang="id-ID"`) {
+		t.Fatalf("SSML = %q, want configured language", ssml)
+	}
+	if !strings.Contains(ssml, `voice name="id-ID-GadisNeural"`) {
+		t.Fatalf("SSML = %q, want configured voice", ssml)
 	}
 }
 

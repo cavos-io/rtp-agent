@@ -3036,7 +3036,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = provider
 	case providerAzure:
-		provider, err := azure.NewAzureTTS("", "", cfg.TTSVoice)
+		provider, err := azure.NewAzureTTS("", "", cfg.TTSVoice, cfg.TTSLanguage)
 		if err != nil {
 			return nil, err
 		}

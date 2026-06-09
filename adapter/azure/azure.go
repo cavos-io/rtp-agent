@@ -17,6 +17,7 @@ const (
 	azureSpeechKeyEnv           = "AZURE_SPEECH_KEY"
 	azureSpeechRegionEnv        = "AZURE_SPEECH_REGION"
 	defaultAzureTTSVoice        = "en-US-JennyNeural"
+	defaultAzureTTSLanguage     = "en-US"
 	defaultAzureTTSSampleRate   = 24000
 	defaultAzureTTSSampleFormat = "raw-24khz-16bit-mono-pcm"
 )
@@ -63,11 +64,12 @@ type AzureTTS struct {
 	apiKey     string
 	region     string
 	voice      string
+	language   string
 	sampleRate int
 	httpClient *http.Client
 }
 
-func NewAzureTTS(apiKey string, region string, voice string) (*AzureTTS, error) {
+func NewAzureTTS(apiKey string, region string, voice string, languages ...string) (*AzureTTS, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(azureSpeechKeyEnv)
 	}
@@ -80,10 +82,15 @@ func NewAzureTTS(apiKey string, region string, voice string) (*AzureTTS, error) 
 	if voice == "" {
 		voice = defaultAzureTTSVoice
 	}
+	language := defaultAzureTTSLanguage
+	if len(languages) > 0 && languages[0] != "" {
+		language = languages[0]
+	}
 	return &AzureTTS{
 		apiKey:     apiKey,
 		region:     region,
 		voice:      voice,
+		language:   language,
 		sampleRate: defaultAzureTTSSampleRate,
 		httpClient: http.DefaultClient,
 	}, nil
@@ -99,6 +106,7 @@ func (t *AzureTTS) Capabilities() tts.TTSCapabilities {
 }
 func (t *AzureTTS) SampleRate() int  { return t.sampleRate }
 func (t *AzureTTS) NumChannels() int { return 1 }
+func (t *AzureTTS) Language() string { return t.language }
 
 func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	req, err := buildAzureTTSRequest(ctx, t, text)
@@ -129,7 +137,11 @@ func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStre
 
 func buildAzureTTSRequest(ctx context.Context, t *AzureTTS, text string) (*http.Request, error) {
 	url := fmt.Sprintf("https://%s.tts.speech.microsoft.com/cognitiveservices/v1", t.region)
-	ssml := fmt.Sprintf(`<speak version="1.0" xml:lang="en-US"><voice name="%s">%s</voice></speak>`, t.voice, text)
+	language := t.language
+	if language == "" {
+		language = defaultAzureTTSLanguage
+	}
+	ssml := fmt.Sprintf(`<speak version="1.0" xml:lang="%s"><voice name="%s">%s</voice></speak>`, language, t.voice, text)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBufferString(ssml))
 	if err != nil {
