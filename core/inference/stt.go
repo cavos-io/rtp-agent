@@ -15,7 +15,6 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
-	"github.com/cavos-io/rtp-agent/library/logger"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/gorilla/websocket"
 )
@@ -279,8 +278,9 @@ func sttSessionCreateParams(model string, language string, encoding string, samp
 func sttFallbackModelsPayload(models []FallbackModel) []map[string]interface{} {
 	payload := make([]map[string]interface{}, 0, len(models))
 	for _, model := range models {
+		modelName, _ := sttModelAndLanguage(model.Model, "")
 		payload = append(payload, map[string]interface{}{
-			"model": model.Model,
+			"model": modelName,
 			"extra": sttExtraPayload(model.ExtraKwargs),
 		})
 	}
@@ -426,6 +426,7 @@ type inferenceSTTStream struct {
 	audioDuration   float64
 	startTimeOffset float64
 	startTime       float64
+	streamErr       error
 }
 
 type inferenceWebsocketConn interface {
@@ -547,9 +548,26 @@ func (s *inferenceSTTStream) Close() error {
 func (s *inferenceSTTStream) Next() (*stt.SpeechEvent, error) {
 	ev, ok := <-s.eventCh
 	if !ok {
+		s.mu.Lock()
+		err := s.streamErr
+		s.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
 		return nil, context.Canceled
 	}
 	return ev, nil
+}
+
+func (s *inferenceSTTStream) setStreamError(err error) {
+	if err == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.streamErr == nil {
+		s.streamErr = err
+	}
+	s.mu.Unlock()
 }
 
 func (s *inferenceSTTStream) buildSpeechData(data map[string]interface{}) stt.SpeechData {
@@ -667,7 +685,12 @@ func (s *inferenceSTTStream) run() {
 		default:
 			_, msg, err := s.conn.ReadMessage()
 			if err != nil {
-				logger.Logger.Errorw("LiveKit Inference STT disconnected", err)
+				select {
+				case <-s.ctx.Done():
+					return
+				default:
+					s.setStreamError(fmt.Errorf("LiveKit Inference STT connection closed unexpectedly: %w", err))
+				}
 				return
 			}
 
@@ -685,7 +708,8 @@ func (s *inferenceSTTStream) run() {
 			case "preflight_transcript":
 				s.processPreflightTranscript(ev)
 			case "error":
-				logger.Logger.Errorw("LiveKit Inference STT error", nil, "msg", string(msg))
+				s.setStreamError(fmt.Errorf("LiveKit Inference STT returned error: %s", stringFromMap(ev, "message")))
+				return
 			}
 		}
 	}

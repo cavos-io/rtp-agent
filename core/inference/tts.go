@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -15,7 +16,6 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
-	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/gorilla/websocket"
@@ -207,6 +207,7 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		model:       t.model,
 		voice:       t.voice,
 		language:    t.language,
+		sampleRate:  t.sampleRate,
 		extraKwargs: cloneTTSExtra(t.extraKwargs),
 		tokenizer:   tokenizer.Stream("en"),
 		eventCh:     make(chan *tts.SynthesizedAudio, 100),
@@ -262,7 +263,7 @@ func (t *TTS) connectTTSWebsocket(ctx context.Context) (inferenceTTSConn, error)
 
 	if err := conn.WriteJSON(createParams); err != nil {
 		conn.Close()
-		return nil, err
+		return nil, fmt.Errorf("failed to send session.create message to LiveKit Inference TTS: %w", err)
 	}
 
 	return conn, nil
@@ -338,9 +339,10 @@ func cloneTTSExtra(extra map[string]any) map[string]any {
 func ttsFallbackModelsPayload(models []FallbackModel) []map[string]interface{} {
 	payload := make([]map[string]interface{}, 0, len(models))
 	for _, model := range models {
+		modelName, voice := ttsModelAndVoice(model.Model, model.Voice)
 		payload = append(payload, map[string]interface{}{
-			"model": model.Model,
-			"voice": model.Voice,
+			"model": modelName,
+			"voice": voice,
 			"extra": ttsExtraPayload(model.ExtraKwargs),
 		})
 	}
@@ -396,11 +398,15 @@ type inferenceTTSStream struct {
 	model       string
 	voice       string
 	language    string
+	sampleRate  int
 	extraKwargs map[string]any
 	tokenizer   tokenize.SentenceStream
 	eventCh     chan *tts.SynthesizedAudio
 	mu          sync.Mutex
 	closed      bool
+	inputEnded  bool
+	done        bool
+	streamErr   error
 }
 
 func (s *inferenceTTSStream) PushText(text string) error {
@@ -408,6 +414,9 @@ func (s *inferenceTTSStream) PushText(text string) error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return fmt.Errorf("stream closed")
+	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
 	}
 	return s.tokenizer.PushText(text)
 }
@@ -418,12 +427,23 @@ func (s *inferenceTTSStream) Flush() error {
 	if s.closed {
 		return fmt.Errorf("stream closed")
 	}
-	s.tokenizer.Flush()
-
-	endPkt := map[string]interface{}{
-		"type": "session.flush",
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
 	}
-	return s.conn.WriteJSON(endPkt)
+	return s.tokenizer.Flush()
+}
+
+func (s *inferenceTTSStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("stream closed")
+	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
+	s.inputEnded = true
+	return s.tokenizer.EndInput()
 }
 
 func (s *inferenceTTSStream) Close() error {
@@ -434,7 +454,7 @@ func (s *inferenceTTSStream) Close() error {
 	}
 	s.closed = true
 	s.cancel()
-	s.tokenizer.Close()
+	s.tokenizer.AClose()
 	if s.connPool != nil {
 		s.connPool.Remove(s.conn)
 	}
@@ -446,9 +466,32 @@ func (s *inferenceTTSStream) Close() error {
 func (s *inferenceTTSStream) Next() (*tts.SynthesizedAudio, error) {
 	ev, ok := <-s.eventCh
 	if !ok {
+		s.mu.Lock()
+		err := s.streamErr
+		s.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
+		s.mu.Lock()
+		done := s.done
+		s.mu.Unlock()
+		if done {
+			return nil, io.EOF
+		}
 		return nil, context.Canceled
 	}
 	return ev, nil
+}
+
+func (s *inferenceTTSStream) setStreamError(err error) {
+	if err == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.streamErr == nil {
+		s.streamErr = err
+	}
+	s.mu.Unlock()
 }
 
 func (s *inferenceTTSStream) run() {
@@ -459,6 +502,16 @@ func (s *inferenceTTSStream) run() {
 		for {
 			tok, err := s.tokenizer.Next()
 			if err != nil {
+				s.mu.Lock()
+				if s.closed {
+					s.mu.Unlock()
+					return
+				}
+				err = s.conn.WriteJSON(map[string]interface{}{"type": "session.flush"})
+				s.mu.Unlock()
+				if err != nil {
+					return
+				}
 				return
 			}
 
@@ -502,7 +555,12 @@ func (s *inferenceTTSStream) run() {
 		default:
 			_, msg, err := s.conn.ReadMessage()
 			if err != nil {
-				logger.Logger.Errorw("LiveKit Inference TTS disconnected", err)
+				select {
+				case <-s.ctx.Done():
+					return
+				default:
+					s.setStreamError(fmt.Errorf("%s: %w", "Gateway connection closed unexpectedly", err))
+				}
 				return
 			}
 
@@ -514,20 +572,68 @@ func (s *inferenceTTSStream) run() {
 			if evType, ok := ev["type"].(string); ok {
 				if evType == "output_audio" {
 					if audioB64, ok := ev["audio"].(string); ok {
-						data, _ := base64.StdEncoding.DecodeString(audioB64)
+						data, err := base64.StdEncoding.DecodeString(audioB64)
+						if err != nil {
+							s.setStreamError(fmt.Errorf("invalid output_audio payload: %w", err))
+							return
+						}
 						s.eventCh <- &tts.SynthesizedAudio{
 							Frame: &model.AudioFrame{
 								Data:              data,
-								SampleRate:        24000,
+								SampleRate:        uint32(s.sampleRate),
 								NumChannels:       1,
 								SamplesPerChannel: uint32(len(data) / 2),
 							},
 						}
 					}
+				} else if evType == "output_alignment" {
+					if timedTranscript := inferenceTTSTimedTranscript(ev); len(timedTranscript) > 0 {
+						s.eventCh <- &tts.SynthesizedAudio{TimedTranscript: timedTranscript}
+					}
+				} else if evType == "done" {
+					s.mu.Lock()
+					s.done = true
+					s.mu.Unlock()
+					return
 				} else if evType == "error" {
-					logger.Logger.Errorw("LiveKit Inference TTS error", nil, "msg", string(msg))
+					s.setStreamError(fmt.Errorf("LiveKit Inference TTS returned error: %s", string(msg)))
+					return
 				}
 			}
 		}
 	}
+}
+
+func inferenceTTSTimedTranscript(data map[string]interface{}) []tts.TimedString {
+	if words, ok := data["words"].([]interface{}); ok {
+		timed := make([]tts.TimedString, 0, len(words))
+		for _, raw := range words {
+			word, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			timed = append(timed, tts.TimedString{
+				Text:      stringFromMap(word, "word"),
+				StartTime: floatFromMap(word, "start"),
+				EndTime:   floatFromMap(word, "end"),
+			})
+		}
+		return timed
+	}
+	if chars, ok := data["chars"].([]interface{}); ok {
+		timed := make([]tts.TimedString, 0, len(chars))
+		for _, raw := range chars {
+			char, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			timed = append(timed, tts.TimedString{
+				Text:      stringFromMap(char, "char"),
+				StartTime: floatFromMap(char, "start"),
+				EndTime:   floatFromMap(char, "end"),
+			})
+		}
+		return timed
+	}
+	return nil
 }

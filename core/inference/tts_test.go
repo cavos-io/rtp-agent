@@ -2,6 +2,8 @@ package inference
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"reflect"
 	"strings"
@@ -224,10 +226,15 @@ func TestTTSWebsocketSendsReferenceContextHeaders(t *testing.T) {
 
 type recordingTTSConn struct {
 	closed      atomic.Bool
+	readCh      chan []byte
+	writeErr    error
 	onWriteJSON func(map[string]any)
 }
 
 func (c *recordingTTSConn) WriteJSON(v any) error {
+	if c.writeErr != nil {
+		return c.writeErr
+	}
 	if msg, ok := v.(map[string]any); ok && c.onWriteJSON != nil {
 		c.onWriteJSON(msg)
 	}
@@ -235,6 +242,14 @@ func (c *recordingTTSConn) WriteJSON(v any) error {
 }
 
 func (c *recordingTTSConn) ReadMessage() (int, []byte, error) {
+	if c.readCh != nil {
+		msg, ok := <-c.readCh
+		if !ok {
+			c.closed.Store(true)
+			return 0, nil, context.Canceled
+		}
+		return 1, msg, nil
+	}
 	for !c.closed.Load() {
 		time.Sleep(time.Millisecond)
 	}
@@ -243,6 +258,12 @@ func (c *recordingTTSConn) ReadMessage() (int, []byte, error) {
 
 func (c *recordingTTSConn) Close() error {
 	c.closed.Store(true)
+	if c.readCh != nil {
+		select {
+		case <-c.readCh:
+		default:
+		}
+	}
 	return nil
 }
 
@@ -263,6 +284,29 @@ func TestTTSConnectionPoolUsesReferenceMaxSessionDuration(t *testing.T) {
 	got := time.Duration(pool.FieldByName("opts").FieldByName("MaxSessionDuration").Int())
 	if got != 5*time.Minute {
 		t.Fatalf("MaxSessionDuration = %v, want 5m reference duration", got)
+	}
+}
+
+func TestInferenceTTSSessionCreateWriteErrorMatchesReference(t *testing.T) {
+	conn := &recordingTTSConn{writeErr: errors.New("write failed")}
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if stream != nil {
+		stream.Close()
+	}
+	if err == nil {
+		t.Fatal("Stream() error = nil, want session.create write error")
+	}
+	if !strings.Contains(err.Error(), "failed to send session.create message to LiveKit Inference TTS") {
+		t.Fatalf("Stream() error = %v, want reference session.create write error", err)
+	}
+	if !conn.closed.Load() {
+		t.Fatal("connection closed = false, want true after session.create write error")
 	}
 }
 
@@ -357,6 +401,301 @@ func TestInferenceTTSInputTranscriptIncludesReferenceExtra(t *testing.T) {
 	}
 	if len(extra) != 0 {
 		t.Fatalf("extra = %#v, want empty map", extra)
+	}
+}
+
+func TestInferenceTTSFlushOnlyFlushesTokenizerUntilEndInput(t *testing.T) {
+	writes := make(chan map[string]any, 8)
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{
+			onWriteJSON: func(msg map[string]any) {
+				writes <- msg
+			},
+		}, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	deadline := time.After(time.Second)
+	seenInput := false
+	for !seenInput {
+		select {
+		case msg := <-writes:
+			if msg["type"] == "session.flush" {
+				t.Fatal("Flush() wrote session.flush before input end")
+			}
+			if msg["type"] == "input_transcript" {
+				seenInput = true
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for input_transcript")
+		}
+	}
+
+	select {
+	case msg := <-writes:
+		if msg["type"] == "session.flush" {
+			t.Fatal("Flush() wrote session.flush before input end")
+		}
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	ending, ok := stream.(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+
+	deadline = time.After(time.Second)
+	for {
+		select {
+		case msg := <-writes:
+			if msg["type"] == "session.flush" {
+				return
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for final session.flush")
+		}
+	}
+}
+
+func TestInferenceTTSStreamErrorMessageReturnsNextError(t *testing.T) {
+	readCh := make(chan []byte, 2)
+	readCh <- []byte(`{"type":"error","message":"provider failed"}`)
+	close(readCh)
+
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{readCh: readCh}, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	ending, ok := stream.(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next() error = nil, want gateway error")
+	}
+	if !strings.Contains(err.Error(), "LiveKit Inference TTS returned error") {
+		t.Fatalf("Next() error = %v, want gateway error", err)
+	}
+}
+
+func TestInferenceTTSUnexpectedCloseReturnsNextError(t *testing.T) {
+	readCh := make(chan []byte)
+	close(readCh)
+
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{readCh: readCh}, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	ending, ok := stream.(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next() error = nil, want unexpected close error")
+	}
+	if !strings.Contains(err.Error(), "Gateway connection closed unexpectedly") {
+		t.Fatalf("Next() error = %v, want unexpected close error", err)
+	}
+}
+
+func TestInferenceTTSOutputAudioUsesConfiguredSampleRate(t *testing.T) {
+	readCh := make(chan []byte, 2)
+	readCh <- []byte(`{"type":"output_audio","audio":"AQIDBA=="}`)
+	close(readCh)
+
+	provider := NewTTS("cartesia/sonic-3", "key", "secret", WithTTSSampleRate(16000))
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{readCh: readCh}, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	ending, ok := stream.(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if audio.Frame.SampleRate != 16000 {
+		t.Fatalf("SampleRate = %d, want configured sample rate 16000", audio.Frame.SampleRate)
+	}
+}
+
+func TestInferenceTTSInvalidOutputAudioReturnsNextError(t *testing.T) {
+	readCh := make(chan []byte, 2)
+	readCh <- []byte(`{"type":"output_audio","audio":"%%%"}`)
+	close(readCh)
+
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{readCh: readCh}, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	ending, ok := stream.(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next() error = nil, want invalid audio error")
+	}
+	if !strings.Contains(err.Error(), "invalid output_audio payload") {
+		t.Fatalf("Next() error = %v, want invalid output_audio payload", err)
+	}
+}
+
+func TestInferenceTTSDoneMessageReturnsEOF(t *testing.T) {
+	readCh := make(chan []byte, 2)
+	readCh <- []byte(`{"type":"done"}`)
+	close(readCh)
+
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{readCh: readCh}, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	ending, ok := stream.(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+
+	_, err = stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() error = %v, want io.EOF", err)
+	}
+}
+
+func TestInferenceTTSOutputAlignmentMapsTimedTranscript(t *testing.T) {
+	readCh := make(chan []byte, 2)
+	readCh <- []byte(`{"type":"output_alignment","words":[{"word":"hello","start":0.25,"end":0.5}]}`)
+	close(readCh)
+
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{readCh: readCh}, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	ending, ok := stream.(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if audio.Frame != nil {
+		t.Fatalf("Frame = %#v, want nil for alignment-only event", audio.Frame)
+	}
+	if len(audio.TimedTranscript) != 1 {
+		t.Fatalf("TimedTranscript = %#v, want one word", audio.TimedTranscript)
+	}
+	got := audio.TimedTranscript[0]
+	if got.Text != "hello" || got.StartTime != 0.25 || got.EndTime != 0.5 {
+		t.Fatalf("TimedTranscript[0] = %#v, want hello 0.25-0.5", got)
 	}
 }
 
@@ -770,6 +1109,27 @@ func TestInferenceTTSFallbackModelsMatchReferenceSessionCreate(t *testing.T) {
 	extra, ok = models[1]["extra"].(map[string]interface{})
 	if !ok || len(extra) != 0 {
 		t.Fatalf("second fallback extra = %#v, want empty map", models[1]["extra"])
+	}
+}
+
+func TestInferenceTTSFallbackModelStringParsesReferenceVoice(t *testing.T) {
+	_, params := ttsSessionCreateParams("cartesia/sonic-3", "", "", "", 0, nil, []FallbackModel{
+		{Model: "rime/mist:river"},
+	}, nil)
+
+	fallback, ok := params["fallback"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("fallback = %#v, want map", params["fallback"])
+	}
+	models, ok := fallback["models"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("fallback.models = %#v, want model maps", fallback["models"])
+	}
+	if len(models) != 1 {
+		t.Fatalf("fallback models = %#v, want 1 entry", models)
+	}
+	if models[0]["model"] != "rime/mist" || models[0]["voice"] != "river" {
+		t.Fatalf("fallback model = %#v, want rime/mist/river", models[0])
 	}
 }
 

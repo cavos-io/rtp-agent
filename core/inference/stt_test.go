@@ -433,6 +433,27 @@ func TestInferenceSTTFallbackModelsMatchReferenceSessionCreate(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTFallbackModelStringOmitsReferenceLanguage(t *testing.T) {
+	_, params := sttSessionCreateParams("deepgram/nova-3", "", "", 0, nil, []FallbackModel{
+		{Model: "cartesia/ink-whisper:es"},
+	}, nil)
+
+	fallback, ok := params["fallback"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("fallback = %#v, want map", params["fallback"])
+	}
+	models, ok := fallback["models"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("fallback.models = %#v, want model maps", fallback["models"])
+	}
+	if len(models) != 1 {
+		t.Fatalf("fallback models = %#v, want 1 entry", models)
+	}
+	if models[0]["model"] != "cartesia/ink-whisper" {
+		t.Fatalf("fallback model = %#v, want cartesia/ink-whisper", models[0])
+	}
+}
+
 func TestInferenceSTTFinalTranscriptEmitsStructuredRecognitionUsage(t *testing.T) {
 	stream := &inferenceSTTStream{
 		eventCh:       make(chan *stt.SpeechEvent, 4),
@@ -875,10 +896,65 @@ func TestInferenceSTTStreamEndInputFinalizesAndRejectsMoreInput(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTStreamErrorMessageReturnsNextError(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{
+		readCh: make(chan []byte, 1),
+	}
+	conn.readCh <- []byte(`{"type":"error","message":"provider failed"}`)
+	close(conn.readCh)
+	provider := NewSTT("livekit/stt", "key", "secret")
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next() error = nil, want gateway error")
+	}
+	if !strings.Contains(err.Error(), "LiveKit Inference STT returned error") {
+		t.Fatalf("Next() error = %v, want gateway error", err)
+	}
+	if !strings.Contains(err.Error(), "provider failed") {
+		t.Fatalf("Next() error = %v, want provider message", err)
+	}
+}
+
+func TestInferenceSTTUnexpectedCloseReturnsNextError(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{
+		readCh: make(chan []byte),
+	}
+	close(conn.readCh)
+	provider := NewSTT("livekit/stt", "key", "secret")
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next() error = nil, want unexpected close error")
+	}
+	if !strings.Contains(err.Error(), "LiveKit Inference STT connection closed unexpectedly") {
+		t.Fatalf("Next() error = %v, want unexpected close error", err)
+	}
+}
+
 type fakeInferenceWebsocketConn struct {
 	writes    []map[string]interface{}
 	closed    bool
 	readBlock chan struct{}
+	readCh    chan []byte
 }
 
 func (f *fakeInferenceWebsocketConn) WriteJSON(v interface{}) error {
@@ -888,6 +964,13 @@ func (f *fakeInferenceWebsocketConn) WriteJSON(v interface{}) error {
 }
 
 func (f *fakeInferenceWebsocketConn) ReadMessage() (int, []byte, error) {
+	if f.readCh != nil {
+		msg, ok := <-f.readCh
+		if !ok {
+			return 0, nil, io.EOF
+		}
+		return 1, msg, nil
+	}
 	if f.readBlock != nil {
 		<-f.readBlock
 	}
