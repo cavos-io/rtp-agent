@@ -3147,8 +3147,11 @@ func TestValidateRunPreconditionsRequiresRTCSession(t *testing.T) {
 	if err == nil {
 		t.Fatal("validateRunPreconditions() error = nil, want missing RTC session error")
 	}
-	if !strings.Contains(err.Error(), "no RTC session entrypoint") {
-		t.Fatalf("validateRunPreconditions() error = %q, want RTC session message", err.Error())
+	if got, want := err.Error(), rtcSessionRequiredMessage; got != want {
+		t.Fatalf("validateRunPreconditions() error = %q, want %q", got, want)
+	}
+	if strings.Contains(err.Error(), "no RTC session entrypoint") {
+		t.Fatalf("validateRunPreconditions() error = %q, want reference capitalization", err.Error())
 	}
 }
 
@@ -4083,8 +4086,11 @@ func TestExecuteLocalJobRejectsMissingRTCSession(t *testing.T) {
 	if err == nil {
 		t.Fatal("ExecuteLocalJob() error = nil, want missing RTC session error")
 	}
-	if !strings.Contains(err.Error(), "no RTC session entrypoint") {
-		t.Fatalf("ExecuteLocalJob() error = %q, want RTC session message", err.Error())
+	if got, want := err.Error(), rtcSessionRequiredMessage; got != want {
+		t.Fatalf("ExecuteLocalJob() error = %q, want %q", got, want)
+	}
+	if strings.Contains(err.Error(), "no RTC session entrypoint") {
+		t.Fatalf("ExecuteLocalJob() error = %q, want reference capitalization", err.Error())
 	}
 }
 

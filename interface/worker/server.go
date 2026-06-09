@@ -53,7 +53,19 @@ const (
 	defaultDevHTTPPort    = 0
 
 	participantAttributeAgentName = "lk.agent.name"
+
+	rtcSessionRequiredMessage = "No RTC session entrypoint has been registered.\n" +
+		"Define one using the @server.rtc_session() decorator, for example:\n" +
+		"    @server.rtc_session(agent_name=\"my_agent\")\n" +
+		"    async def my_agent(ctx: JobContext):\n" +
+		"        ...\n"
 )
+
+type workerReferenceError string
+
+func (e workerReferenceError) Error() string {
+	return string(e)
+}
 
 var localEntrypointCloseWait = 15 * time.Second
 
@@ -414,7 +426,7 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 		return fmt.Errorf("running job info must include a job")
 	}
 	if s.entrypointFnc == nil {
-		return fmt.Errorf("no RTC session entrypoint has been registered")
+		return workerReferenceError(rtcSessionRequiredMessage)
 	}
 
 	jobURL := info.URL
@@ -1420,7 +1432,7 @@ func (s *AgentServer) validateRunPreconditions() error {
 		return invalidWorkerLogLevelError(s.Options.LogLevel)
 	}
 	if s.entrypointFnc == nil {
-		return fmt.Errorf("no RTC session entrypoint has been registered")
+		return workerReferenceError(rtcSessionRequiredMessage)
 	}
 	if s.Options.WSRL == "" {
 		return fmt.Errorf("ws_url is required, or set LIVEKIT_URL environment variable")
@@ -1440,7 +1452,7 @@ func (s *AgentServer) validateUnregisteredRunPreconditions() error {
 		return invalidWorkerLogLevelError(s.Options.LogLevel)
 	}
 	if s.entrypointFnc == nil {
-		return fmt.Errorf("no RTC session entrypoint has been registered")
+		return workerReferenceError(rtcSessionRequiredMessage)
 	}
 	return nil
 }
@@ -1987,7 +1999,7 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 		return fmt.Errorf("room_info is None but fake_job is False")
 	}
 	if s.entrypointFnc == nil {
-		return fmt.Errorf("no RTC session entrypoint has been registered")
+		return workerReferenceError(rtcSessionRequiredMessage)
 	}
 	jobCtx := newLocalJobContextWithOptions(roomName, participantIdentity, s.Options, options)
 	if options == (LocalJobOptions{FakeJob: true}) {
