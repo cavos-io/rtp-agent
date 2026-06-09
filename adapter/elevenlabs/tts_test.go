@@ -27,6 +27,42 @@ func TestElevenLabsTTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewElevenLabsTTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("ELEVENLABS_API_KEY", "env-key")
+	t.Setenv("ELEVEN_API_KEY", "fallback-env-key")
+
+	provider, err := NewElevenLabsTTS("", "", "")
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want primary env key", provider.apiKey)
+	}
+
+	explicit, err := NewElevenLabsTTS("explicit-key", "", "")
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
+func TestNewElevenLabsTTSUsesFallbackEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("ELEVENLABS_API_KEY", "")
+	t.Setenv("ELEVEN_API_KEY", "fallback-env-key")
+
+	provider, err := NewElevenLabsTTS("", "", "")
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	if provider.apiKey != "fallback-env-key" {
+		t.Fatalf("api key = %q, want fallback env key", provider.apiKey)
+	}
+}
+
 func TestElevenLabsSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	provider, err := NewElevenLabsTTS("test-key", "", "",
 		WithElevenLabsLanguage("en"),

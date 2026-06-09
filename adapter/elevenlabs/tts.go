@@ -72,7 +72,7 @@ func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...Ele
 		modelID = "eleven_turbo_v2_5"
 	}
 	provider := &ElevenLabsTTS{
-		apiKey:     apiKey,
+		apiKey:     resolveElevenLabsAPIKey(apiKey),
 		baseURL:    defaultElevenLabsBaseURL,
 		voiceID:    voiceID,
 		modelID:    modelID,
