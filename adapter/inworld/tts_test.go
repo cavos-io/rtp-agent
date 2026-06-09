@@ -43,6 +43,27 @@ func TestInworldTTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewInworldTTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("INWORLD_API_KEY", "env-key")
+
+	provider := NewInworldTTS("", "")
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+	if got := buildInworldTTSHeaders(provider).Get("Authorization"); got != "Basic env-key" {
+		t.Fatalf("authorization = %q, want env basic key", got)
+	}
+
+	explicit := NewInworldTTS("explicit-key", "")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+	if got := buildInworldTTSHeaders(explicit).Get("Authorization"); got != "Basic explicit-key" {
+		t.Fatalf("authorization = %q, want explicit basic key", got)
+	}
+}
+
 func TestInworldTTSOptionsMatchReference(t *testing.T) {
 	provider := NewInworldTTS("test-key", "",
 		WithInworldTTSBaseURL("https://inworld.example/"),

@@ -26,6 +26,33 @@ func TestFalSTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewFalSTTUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("FAL_KEY", "env-key")
+	t.Setenv("FAL_API_KEY", "fallback-env-key")
+
+	provider := NewFalSTT("")
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want primary env key", provider.apiKey)
+	}
+
+	explicit := NewFalSTT("explicit-key")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
+func TestNewFalSTTUsesFallbackEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("FAL_KEY", "")
+	t.Setenv("FAL_API_KEY", "fallback-env-key")
+
+	provider := NewFalSTT("")
+
+	if provider.apiKey != "fallback-env-key" {
+		t.Fatalf("api key = %q, want fallback env key", provider.apiKey)
+	}
+}
+
 func TestFalSTTRecognizeRequestUsesReferencePayload(t *testing.T) {
 	provider := NewFalSTT("test-key")
 

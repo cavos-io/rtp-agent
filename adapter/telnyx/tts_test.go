@@ -26,6 +26,21 @@ func TestTelnyxTTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewTelnyxTTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("TELNYX_API_KEY", "env-key")
+
+	provider := NewTelnyxTTS("", "")
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+
+	explicit := NewTelnyxTTS("explicit-key", "")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestTelnyxTTSStreamURLAndHeadersMatchReference(t *testing.T) {
 	provider := NewTelnyxTTS("test-key", "voice-1", WithTelnyxTTSBaseURL("wss://telnyx.example/speech"))
 

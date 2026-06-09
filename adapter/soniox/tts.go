@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -97,6 +98,9 @@ func WithSonioxTTSBitrate(bitrate int) SonioxTTSOption {
 }
 
 func NewSonioxTTS(apiKey string, opts ...SonioxTTSOption) *SonioxTTS {
+	if apiKey == "" {
+		apiKey = os.Getenv(sonioxAPIKeyEnv)
+	}
 	provider := &SonioxTTS{
 		apiKey:       apiKey,
 		websocketURL: defaultSonioxTTSWebsocketURL,

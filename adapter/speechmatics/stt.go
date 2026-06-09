@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 
@@ -37,6 +38,8 @@ type SpeechmaticsSTT struct {
 	maxSpeakers          *int
 	preferCurrentSpeaker *bool
 }
+
+const speechmaticsAPIKeyEnv = "SPEECHMATICS_API_KEY"
 
 type SpeechmaticsSTTOption func(*SpeechmaticsSTT)
 
@@ -177,6 +180,9 @@ func WithSpeechmaticsSTTPreferCurrentSpeaker(prefer bool) SpeechmaticsSTTOption 
 }
 
 func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *SpeechmaticsSTT {
+	if apiKey == "" {
+		apiKey = os.Getenv(speechmaticsAPIKeyEnv)
+	}
 	provider := &SpeechmaticsSTT{
 		apiKey:        apiKey,
 		baseURL:       "wss://eu2.rt.speechmatics.com/v2",

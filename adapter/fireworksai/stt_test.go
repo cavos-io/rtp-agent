@@ -38,6 +38,21 @@ func TestFireworksSTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewFireworksSTTUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("FIREWORKS_API_KEY", "env-key")
+
+	provider := NewFireworksSTT("")
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+
+	explicit := NewFireworksSTT("explicit-key")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestFireworksSTTOptionsBuildReferenceStreamURLAndHeaders(t *testing.T) {
 	provider := NewFireworksSTT("test-key",
 		WithFireworksBaseURL("ws://fireworks.example/v1/"),

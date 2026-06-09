@@ -51,6 +51,33 @@ func TestElevenLabsSTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewElevenLabsSTTUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("ELEVENLABS_API_KEY", "env-key")
+	t.Setenv("ELEVEN_API_KEY", "fallback-env-key")
+
+	provider := NewElevenLabsSTT("")
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want primary env key", provider.apiKey)
+	}
+
+	explicit := NewElevenLabsSTT("explicit-key")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
+func TestNewElevenLabsSTTUsesFallbackEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("ELEVENLABS_API_KEY", "")
+	t.Setenv("ELEVEN_API_KEY", "fallback-env-key")
+
+	provider := NewElevenLabsSTT("")
+
+	if provider.apiKey != "fallback-env-key" {
+		t.Fatalf("api key = %q, want fallback env key", provider.apiKey)
+	}
+}
+
 func TestElevenLabsSTTRealtimeCapabilitiesMatchReference(t *testing.T) {
 	provider := NewElevenLabsSTT("test-key",
 		WithElevenLabsSTTModel("scribe_v2_realtime"),

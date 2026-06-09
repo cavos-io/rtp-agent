@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
@@ -18,6 +19,7 @@ const (
 	defaultSpeechifyBaseURL  = "https://api.sws.speechify.com/v1"
 	defaultSpeechifyVoice    = "jack"
 	defaultSpeechifyEncoding = "ogg_24000"
+	speechifyAPIKeyEnv       = "SPEECHIFY_API_KEY"
 )
 
 type SpeechifyTTS struct {
@@ -84,6 +86,9 @@ func WithSpeechifyTTSTextNormalization(enabled bool) SpeechifyTTSOption {
 }
 
 func NewSpeechifyTTS(apiKey string, voice string, opts ...SpeechifyTTSOption) *SpeechifyTTS {
+	if apiKey == "" {
+		apiKey = os.Getenv(speechifyAPIKeyEnv)
+	}
 	provider := &SpeechifyTTS{
 		apiKey:     apiKey,
 		baseURL:    defaultSpeechifyBaseURL,

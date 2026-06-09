@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -56,6 +57,9 @@ func WithSpeechmaticsTTSBaseURL(baseURL string) SpeechmaticsTTSOption {
 }
 
 func NewSpeechmaticsTTS(apiKey string, opts ...SpeechmaticsTTSOption) *SpeechmaticsTTS {
+	if apiKey == "" {
+		apiKey = os.Getenv(speechmaticsAPIKeyEnv)
+	}
 	provider := &SpeechmaticsTTS{
 		apiKey:     apiKey,
 		voice:      defaultSpeechmaticsTTSVoice,

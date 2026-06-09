@@ -57,7 +57,7 @@ func WithFalSTTVersion(version string) FalSTTOption {
 
 func NewFalSTT(apiKey string, opts ...FalSTTOption) *FalSTT {
 	provider := &FalSTT{
-		apiKey:     apiKey,
+		apiKey:     resolveFalAPIKey(apiKey),
 		language:   "en",
 		task:       "transcribe",
 		chunkLevel: "segment",

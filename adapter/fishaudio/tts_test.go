@@ -40,6 +40,33 @@ func TestFishAudioTTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewFishAudioTTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("FISHAUDIO_API_KEY", "env-key")
+	t.Setenv("FISH_AUDIO_API_KEY", "fallback-env-key")
+
+	provider := NewFishAudioTTS("", "")
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want primary env key", provider.apiKey)
+	}
+
+	explicit := NewFishAudioTTS("explicit-key", "")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
+func TestNewFishAudioTTSUsesFallbackEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("FISHAUDIO_API_KEY", "")
+	t.Setenv("FISH_AUDIO_API_KEY", "fallback-env-key")
+
+	provider := NewFishAudioTTS("", "")
+
+	if provider.apiKey != "fallback-env-key" {
+		t.Fatalf("api key = %q, want fallback env key", provider.apiKey)
+	}
+}
+
 func TestFishAudioTTSSynthesizeRequestUsesReferenceMsgpackPayload(t *testing.T) {
 	provider := NewFishAudioTTS("test-key", "")
 

@@ -51,6 +51,27 @@ func TestInworldSTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewInworldSTTUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("INWORLD_API_KEY", "env-key")
+
+	provider := NewInworldSTT("")
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+	if provider.authorization != "Basic env-key" {
+		t.Fatalf("authorization = %q, want env basic key", provider.authorization)
+	}
+
+	explicit := NewInworldSTT("explicit-key")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+	if explicit.authorization != "Basic explicit-key" {
+		t.Fatalf("authorization = %q, want explicit basic key", explicit.authorization)
+	}
+}
+
 func TestInworldSTTOptionsBuildReferenceConfigURLAndHeaders(t *testing.T) {
 	vad := 0.42
 	provider := NewInworldSTT("test-key",

@@ -26,6 +26,36 @@ func TestSpitchTTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewSpitchSTTUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("SPITCH_API_KEY", "env-key")
+
+	provider := NewSpitchSTT("")
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+
+	explicit := NewSpitchSTT("explicit-key")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
+func TestNewSpitchTTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("SPITCH_API_KEY", "env-key")
+
+	provider := NewSpitchTTS("", "")
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+
+	explicit := NewSpitchTTS("explicit-key", "")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestSpitchTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	provider := NewSpitchTTS("test-key", "")
 

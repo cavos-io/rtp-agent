@@ -93,7 +93,7 @@ func NewSarvamLLMWithError(apiKey string, model string, opts ...SarvamLLMOption)
 		return nil, err
 	}
 	provider := &SarvamLLM{
-		apiKey:     apiKey,
+		apiKey:     resolveSarvamAPIKey(apiKey),
 		model:      model,
 		baseURL:    defaultSarvamLLMBaseURL,
 		httpClient: http.DefaultClient,

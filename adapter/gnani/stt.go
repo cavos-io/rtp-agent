@@ -74,7 +74,7 @@ func WithSTTUserID(userID string) STTOption {
 
 func NewSTT(apiKey string, opts ...STTOption) *STT {
 	provider := &STT{
-		apiKey:     apiKey,
+		apiKey:     resolveGnaniAPIKey(apiKey),
 		baseURL:    defaultBaseURL,
 		language:   defaultSTTLanguage,
 		sampleRate: defaultSTTSampleRate,

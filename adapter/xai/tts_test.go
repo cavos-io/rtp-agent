@@ -37,6 +37,21 @@ func TestXaiTTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewXaiTTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("XAI_API_KEY", "env-key")
+
+	provider := NewXaiTTS("", "")
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+
+	explicit := NewXaiTTS("explicit-key", "")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestXaiTTSOptionsBuildReferenceStreamURLAndHeaders(t *testing.T) {
 	provider := NewXaiTTS("test-key", "eve",
 		WithXaiTTSWebsocketURL("ws://xai.example/v1/tts"),

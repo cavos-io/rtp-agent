@@ -44,6 +44,20 @@ func TestSmallestAITTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewSmallestAITTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("SMALLEST_API_KEY", "env-key")
+
+	provider := NewSmallestAITTS("", "")
+	if provider.apiKey != "env-key" {
+		t.Fatalf("apiKey = %q, want env key", provider.apiKey)
+	}
+
+	provider = NewSmallestAITTS("explicit-key", "")
+	if provider.apiKey != "explicit-key" {
+		t.Fatalf("apiKey = %q, want explicit key", provider.apiKey)
+	}
+}
+
 func TestSmallestAITTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	provider := NewSmallestAITTS("test-key", "")
 

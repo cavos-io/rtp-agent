@@ -46,6 +46,20 @@ func TestSonioxSTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewSonioxSTTUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("SONIOX_API_KEY", "env-key")
+
+	provider := NewSonioxSTT("")
+	if provider.apiKey != "env-key" {
+		t.Fatalf("apiKey = %q, want env key", provider.apiKey)
+	}
+
+	provider = NewSonioxSTT("explicit-key")
+	if provider.apiKey != "explicit-key" {
+		t.Fatalf("apiKey = %q, want explicit key", provider.apiKey)
+	}
+}
+
 func TestSonioxSTTOptionsBuildReferenceConfig(t *testing.T) {
 	provider := NewSonioxSTT("test-key",
 		WithSonioxBaseURL("ws://soniox.example/ws"),

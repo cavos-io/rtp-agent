@@ -13,3 +13,18 @@ func TestUltravoxPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 		t.Fatalf("PluginPackage = %q, want rtp-agent.plugins.ultravox", PluginPackage)
 	}
 }
+
+func TestNewUltravoxTTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("ULTRAVOX_API_KEY", "env-key")
+
+	provider := NewUltravoxTTS("", "")
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+
+	explicit := NewUltravoxTTS("explicit-key", "")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}

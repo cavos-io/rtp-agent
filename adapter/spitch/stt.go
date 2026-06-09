@@ -19,7 +19,7 @@ type SpitchSTT struct {
 
 func NewSpitchSTT(apiKey string) *SpitchSTT {
 	return &SpitchSTT{
-		apiKey: apiKey,
+		apiKey: resolveSpitchAPIKey(apiKey),
 	}
 }
 

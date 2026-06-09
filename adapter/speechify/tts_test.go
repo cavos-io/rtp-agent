@@ -26,6 +26,21 @@ func TestSpeechifyTTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewSpeechifyTTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("SPEECHIFY_API_KEY", "env-key")
+
+	provider := NewSpeechifyTTS("", "")
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+
+	explicit := NewSpeechifyTTS("explicit-key", "")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestSpeechifyTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	provider := NewSpeechifyTTS("test-key", "")
 

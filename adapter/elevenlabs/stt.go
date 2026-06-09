@@ -105,7 +105,7 @@ func WithElevenLabsSTTKeyterms(keyterms []string) ElevenLabsSTTOption {
 
 func NewElevenLabsSTT(apiKey string, opts ...ElevenLabsSTTOption) *ElevenLabsSTT {
 	provider := &ElevenLabsSTT{
-		apiKey:         apiKey,
+		apiKey:         resolveElevenLabsAPIKey(apiKey),
 		baseURL:        defaultElevenLabsSTTBaseURL,
 		modelID:        defaultElevenLabsSTTModel,
 		tagAudioEvents: true,

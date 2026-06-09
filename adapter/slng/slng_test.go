@@ -53,6 +53,36 @@ func TestSLNGDefaultEndpointsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewSLNGSTTUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("SLNG_API_KEY", "env-key")
+
+	provider := NewSTT("")
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+
+	explicit := NewSTT("explicit-key")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
+func TestNewSLNGTTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("SLNG_API_KEY", "env-key")
+
+	provider := NewTTS("")
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+
+	explicit := NewTTS("explicit-key")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestSLNGLocalEndpointsUsePlainWebsocket(t *testing.T) {
 	provider := NewSTT("test-key", WithSTTBaseURL("localhost:9000"))
 	if provider.endpoint != "ws://localhost:9000/v1/stt/deepgram/nova:3" {

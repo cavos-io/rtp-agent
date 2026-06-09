@@ -107,7 +107,7 @@ func withGradiumSTTWebsocketDialer(dialer gradiumSTTWebsocketDialer) GradiumSTTO
 func NewGradiumSTT(apiKey string, opts ...GradiumSTTOption) *GradiumSTT {
 	bucket := defaultSTTVADBucket
 	provider := &GradiumSTT{
-		apiKey:            apiKey,
+		apiKey:            resolveGradiumAPIKey(apiKey),
 		modelEndpoint:     defaultSTTModelEndpoint,
 		modelName:         defaultSTTModelName,
 		sampleRate:        defaultSTTSampleRate,

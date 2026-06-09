@@ -56,6 +56,20 @@ func TestSmallestAISTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewSmallestAISTTUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("SMALLEST_API_KEY", "env-key")
+
+	provider := NewSmallestAISTT("")
+	if provider.apiKey != "env-key" {
+		t.Fatalf("apiKey = %q, want env key", provider.apiKey)
+	}
+
+	provider = NewSmallestAISTT("explicit-key")
+	if provider.apiKey != "explicit-key" {
+		t.Fatalf("apiKey = %q, want explicit key", provider.apiKey)
+	}
+}
+
 func TestSmallestAISTTRecognizeRequestUsesReferenceParams(t *testing.T) {
 	provider := NewSmallestAISTT("test-key")
 
