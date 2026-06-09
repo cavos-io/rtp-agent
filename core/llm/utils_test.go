@@ -42,6 +42,18 @@ func TestSerializeImageRejectsUnsupportedMIMETypeWithReferenceError(t *testing.T
 	}
 }
 
+func TestSerializeImageRejectsUnsupportedImageTypeWithReferenceError(t *testing.T) {
+	_, err := SerializeImage(&ImageContent{Image: 42})
+	if err == nil {
+		t.Fatal("SerializeImage() error = nil, want unsupported image type error")
+	}
+
+	want := "Unsupported image type"
+	if err.Error() != want {
+		t.Fatalf("SerializeImage() error = %q, want %q", err, want)
+	}
+}
+
 func TestParseFunctionArgumentsParsesJSONObject(t *testing.T) {
 	args, err := ParseFunctionArguments(`{"city":"Paris","limit":3}`)
 	if err != nil {

@@ -79,7 +79,7 @@ func SerializeImage(image *ImageContent) (*SerializedImage, error) {
 
 	imageString, ok := image.Image.(string)
 	if !ok || imageString == "" {
-		return nil, fmt.Errorf("unsupported image type")
+		return nil, fmt.Errorf("%s image type", "Unsupported")
 	}
 	if !strings.HasPrefix(imageString, "data:") {
 		serialized.ExternalURL = imageString
