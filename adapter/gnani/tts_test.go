@@ -47,6 +47,21 @@ func TestGnaniTTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewGnaniTTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("GNANI_API_KEY", "env-key")
+
+	provider := NewTTS("")
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+
+	explicit := NewTTS("explicit-key")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestGnaniTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	provider := NewTTS("test-key")
 

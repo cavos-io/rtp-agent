@@ -120,7 +120,7 @@ func WithLanguage(language string) Option {
 
 func NewTTS(apiKey string, opts ...Option) *TTS {
 	provider := &TTS{
-		apiKey:      apiKey,
+		apiKey:      resolveGnaniAPIKey(apiKey),
 		baseURL:     defaultBaseURL,
 		voice:       defaultVoice,
 		model:       defaultModel,
