@@ -559,7 +559,11 @@ func (s *inferenceTTSStream) run() {
 			if evType, ok := ev["type"].(string); ok {
 				if evType == "output_audio" {
 					if audioB64, ok := ev["audio"].(string); ok {
-						data, _ := base64.StdEncoding.DecodeString(audioB64)
+						data, err := base64.StdEncoding.DecodeString(audioB64)
+						if err != nil {
+							s.setStreamError(fmt.Errorf("invalid output_audio payload: %w", err))
+							return
+						}
 						s.eventCh <- &tts.SynthesizedAudio{
 							Frame: &model.AudioFrame{
 								Data:              data,
