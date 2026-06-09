@@ -474,6 +474,30 @@ func TestOpenAIChatAppliesProviderExtraBody(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatAppliesProviderPromptCacheOptions(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMPromptCacheKey("room-123"),
+		WithOpenAILLMPromptCacheRetention("24h"),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"prompt_cache_key":"room-123"`) {
+		t.Fatalf("request body = %s, want provider prompt_cache_key", capture.requestBody)
+	}
+	if !strings.Contains(capture.requestBody, `"prompt_cache_retention":"24h"`) {
+		t.Fatalf("request body = %s, want provider prompt_cache_retention", capture.requestBody)
+	}
+}
+
 func TestOpenAIChatAppliesProviderUser(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{
 		statusCode:   http.StatusBadRequest,

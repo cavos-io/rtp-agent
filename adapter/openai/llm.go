@@ -97,6 +97,24 @@ func WithOpenAILLMSafetyIdentifier(safetyIdentifier string) OpenAILLMOption {
 	}
 }
 
+func WithOpenAILLMPromptCacheKey(promptCacheKey string) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if l.extraBody == nil {
+			l.extraBody = map[string]any{}
+		}
+		l.extraBody["prompt_cache_key"] = promptCacheKey
+	}
+}
+
+func WithOpenAILLMPromptCacheRetention(promptCacheRetention string) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if l.extraBody == nil {
+			l.extraBody = map[string]any{}
+		}
+		l.extraBody["prompt_cache_retention"] = promptCacheRetention
+	}
+}
+
 func WithOpenAILLMUser(user string) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		if l.extraParams == nil {
