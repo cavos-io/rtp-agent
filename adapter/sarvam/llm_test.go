@@ -28,6 +28,26 @@ func TestSarvamLLMDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewSarvamLLMUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("SARVAM_API_KEY", "env-key")
+
+	provider, err := NewSarvamLLMWithError("", "")
+	if err != nil {
+		t.Fatalf("new sarvam llm: %v", err)
+	}
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+
+	explicit, err := NewSarvamLLMWithError("explicit-key", "")
+	if err != nil {
+		t.Fatalf("new explicit sarvam llm: %v", err)
+	}
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestSarvamLLMRejectsUnsupportedModel(t *testing.T) {
 	_, err := NewSarvamLLMWithError("test-key", "not-sarvam")
 	if err == nil {

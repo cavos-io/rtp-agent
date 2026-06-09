@@ -253,7 +253,7 @@ func NewSarvamSTT(apiKey string, opts ...SarvamSTTOption) *SarvamSTT {
 
 func NewSarvamSTTWithError(apiKey string, opts ...SarvamSTTOption) (*SarvamSTT, error) {
 	provider := &SarvamSTT{
-		apiKey:       apiKey,
+		apiKey:       resolveSarvamAPIKey(apiKey),
 		baseURL:      defaultSarvamSTTBaseURL,
 		streamingURL: defaultSarvamSTTStreamingURL,
 		model:        defaultSarvamSTTModel,
@@ -983,7 +983,7 @@ func WithSarvamTTSOutputAudioCodec(codec string) SarvamTTSOption {
 
 func NewSarvamTTS(apiKey string, voice string, opts ...SarvamTTSOption) *SarvamTTS {
 	provider := &SarvamTTS{
-		apiKey:             apiKey,
+		apiKey:             resolveSarvamAPIKey(apiKey),
 		baseURL:            defaultSarvamTTSBaseURL,
 		wsURL:              defaultSarvamTTSWSURL,
 		voice:              voice,

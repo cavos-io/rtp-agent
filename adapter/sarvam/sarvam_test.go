@@ -45,6 +45,21 @@ func TestSarvamSTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewSarvamSTTUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("SARVAM_API_KEY", "env-key")
+
+	provider := NewSarvamSTT("")
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+
+	explicit := NewSarvamSTT("explicit-key")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestSarvamSTTModelURLAndValidationReference(t *testing.T) {
 	provider := NewSarvamSTT("test-key", WithSarvamSTTModel("saaras:v2.5"))
 	if provider.baseURL != "https://api.sarvam.ai/speech-to-text-translate" {
@@ -359,6 +374,21 @@ func TestSarvamTTSDefaultsMatchReference(t *testing.T) {
 	}
 	if !provider.Capabilities().Streaming {
 		t.Fatalf("capabilities = %+v, want streaming true", provider.Capabilities())
+	}
+}
+
+func TestNewSarvamTTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("SARVAM_API_KEY", "env-key")
+
+	provider := NewSarvamTTS("", "")
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+
+	explicit := NewSarvamTTS("explicit-key", "")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
 	}
 }
 
