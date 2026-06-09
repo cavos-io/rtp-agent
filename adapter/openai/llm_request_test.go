@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -397,6 +398,79 @@ func TestOpenAIChatAppliesProviderSafetyIdentifier(t *testing.T) {
 
 	if !strings.Contains(capture.requestBody, `"safety_identifier":"hashed-user"`) {
 		t.Fatalf("request body = %s, want provider safety_identifier", capture.requestBody)
+	}
+}
+
+func TestOpenAIChatAppliesProviderExtraHeaders(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMExtraHeaders(map[string]string{
+			"X-Request-Group": "gold",
+		}),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if got := capture.header.Get("X-Request-Group"); got != "gold" {
+		t.Fatalf("X-Request-Group = %q, want provider extra header", got)
+	}
+}
+
+func TestOpenAIChatAppliesProviderExtraQuery(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMExtraQuery(map[string]string{
+			"api-version": "preview",
+		}),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	requestURL, err := url.Parse(capture.requestURL)
+	if err != nil {
+		t.Fatalf("request URL parse error = %v", err)
+	}
+	if got := requestURL.Query().Get("api-version"); got != "preview" {
+		t.Fatalf("api-version query = %q, want provider extra query", got)
+	}
+}
+
+func TestOpenAIChatAppliesProviderExtraBody(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMExtraBody(map[string]any{
+			"prompt_cache_key": "room-123",
+		}),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"prompt_cache_key":"room-123"`) {
+		t.Fatalf("request body = %s, want provider extra body field", capture.requestBody)
+	}
+	if strings.Contains(capture.requestBody, "extra_body") {
+		t.Fatalf("request body = %s, want extra body merged into request", capture.requestBody)
 	}
 }
 
@@ -953,6 +1027,23 @@ func TestBuildOpenAIChatCompletionRequestMapsResponseFormat(t *testing.T) {
 	}
 	if req.ResponseFormat.JSONSchema.Name != "WeatherAnswer" || !req.ResponseFormat.JSONSchema.Strict {
 		t.Fatalf("ResponseFormat.JSONSchema = %#v, want strict WeatherAnswer", req.ResponseFormat.JSONSchema)
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestAppliesExtraParamResponseFormat(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"response_format": map[string]any{
+				"type": "json_object",
+			},
+		},
+	})
+
+	if req.ResponseFormat == nil {
+		t.Fatal("ResponseFormat = nil, want json_object response format")
+	}
+	if req.ResponseFormat.Type != openaisdk.ChatCompletionResponseFormatTypeJSONObject {
+		t.Fatalf("ResponseFormat.Type = %q, want json_object", req.ResponseFormat.Type)
 	}
 }
 

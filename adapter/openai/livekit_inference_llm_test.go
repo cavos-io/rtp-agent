@@ -252,6 +252,50 @@ func TestLiveKitInferenceLLMUpdateOptionsReplacesReferenceExtraParams(t *testing
 	}
 }
 
+func TestLiveKitInferenceLLMChatOmitsDefaultReasoningEffort(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusUnauthorized,
+		responseBody: `{"error":{"message":"stop"}}`,
+	}
+
+	provider, err := NewLiveKitInferenceLLM("openai/gpt-5", "key", "secret")
+	if err != nil {
+		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
+	}
+	provider.baseURL = "https://inference.test/v1"
+	provider.httpClient = capture
+
+	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if strings.Contains(capture.requestBody, `"reasoning_effort"`) {
+		t.Fatalf("request body = %s, want no default reasoning_effort for LiveKit inference LLM", capture.requestBody)
+	}
+}
+
+func TestLiveKitInferenceLLMChatRequestsReferenceUsageStreamOptions(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusUnauthorized,
+		responseBody: `{"error":{"message":"stop"}}`,
+	}
+
+	provider, err := NewLiveKitInferenceLLM("openai/gpt-4.1", "key", "secret",
+		WithLiveKitInferenceLLMExtraParams(map[string]any{
+			"stream_options": map[string]any{"include_usage": false},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
+	}
+	provider.baseURL = "https://inference.test/v1"
+	provider.httpClient = capture
+
+	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"stream_options":{"include_usage":true}`) {
+		t.Fatalf("request body = %s, want stream_options include_usage true", capture.requestBody)
+	}
+}
+
 func TestLiveKitInferenceLLMChatSendsReferenceExtraHeaders(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{
 		statusCode:   http.StatusUnauthorized,

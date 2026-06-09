@@ -28,6 +28,7 @@ type STT struct {
 	sampleRate     int
 	extraKwargs    map[string]any
 	fallbackModels []FallbackModel
+	connectOptions *APIConnectOptions
 	streams        map[*inferenceSTTStream]struct{}
 	apiKey         string
 	apiSecret      string
@@ -84,6 +85,12 @@ func WithSTTEncoding(encoding string) STTOption {
 func WithSTTSampleRate(sampleRate int) STTOption {
 	return func(s *STT) {
 		s.sampleRate = sampleRate
+	}
+}
+
+func WithSTTConnectOptions(options APIConnectOptions) STTOption {
+	return func(s *STT) {
+		s.connectOptions = &options
 	}
 }
 
@@ -166,7 +173,7 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		language = s.language
 	}
 
-	modelName, createParams := sttSessionCreateParams(s.model, language, s.encoding, s.sampleRate, s.extraKwargs, s.fallbackModels)
+	modelName, createParams := sttSessionCreateParams(s.model, language, s.encoding, s.sampleRate, s.extraKwargs, s.fallbackModels, s.connectOptions)
 
 	wsURL, err := url.Parse(s.baseURL + "/stt")
 	if err != nil {
@@ -196,6 +203,7 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		conn:      conn,
 		ctx:       ctx,
 		cancel:    cancel,
+		language:  language,
 		requestID: cavosmath.ShortUUID("stt_request_"),
 		audioCh:   make(chan *model.AudioFrame, 100),
 		eventCh:   make(chan *stt.SpeechEvent, 100),
@@ -230,7 +238,7 @@ func defaultInferenceSTTDialer(ctx context.Context, endpoint string, header http
 	return conn, nil
 }
 
-func sttSessionCreateParams(model string, language string, encoding string, sampleRate int, extra map[string]any, fallback []FallbackModel) (string, map[string]interface{}) {
+func sttSessionCreateParams(model string, language string, encoding string, sampleRate int, extra map[string]any, fallback []FallbackModel, connectOptions *APIConnectOptions) (string, map[string]interface{}) {
 	modelName, language := sttModelAndLanguage(model, language)
 	if encoding == "" {
 		encoding = "pcm_s16le"
@@ -257,6 +265,12 @@ func sttSessionCreateParams(model string, language string, encoding string, samp
 	if len(fallback) > 0 {
 		createParams["fallback"] = map[string]interface{}{
 			"models": sttFallbackModelsPayload(fallback),
+		}
+	}
+	if connectOptions != nil {
+		createParams["connection"] = map[string]interface{}{
+			"timeout": connectOptions.Timeout.Seconds(),
+			"retries": connectOptions.MaxRetry,
 		}
 	}
 	return modelName, createParams
@@ -403,6 +417,7 @@ type inferenceSTTStream struct {
 	audioCh         chan *model.AudioFrame
 	eventCh         chan *stt.SpeechEvent
 	requestID       string
+	language        string
 	mu              sync.Mutex
 	closed          bool
 	inputEnded      bool
@@ -461,8 +476,7 @@ func (s *inferenceSTTStream) Flush() error {
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
 	}
-
-	return s.flushLocked()
+	return nil
 }
 
 func (s *inferenceSTTStream) EndInput() error {
@@ -579,8 +593,8 @@ func (s *inferenceSTTStream) transcriptLanguage(data map[string]interface{}) str
 	if language := stringFromMap(data, "language"); language != "" {
 		return language
 	}
-	if s.stt != nil && s.stt.language != "" {
-		return s.stt.language
+	if s.language != "" {
+		return s.language
 	}
 	return "en"
 }

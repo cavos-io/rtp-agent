@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -113,6 +114,40 @@ func TestInferenceSTTSessionCreateUsesReferenceAudioOptions(t *testing.T) {
 	}
 	if settings["encoding"] != "mulaw" {
 		t.Fatalf("settings.encoding = %#v, want mulaw", settings["encoding"])
+	}
+}
+
+func TestInferenceSTTSessionCreateUsesReferenceConnectOptions(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{}
+	provider := NewSTT("deepgram/nova-3", "key", "secret",
+		WithSTTConnectOptions(APIConnectOptions{
+			Timeout:  1500 * time.Millisecond,
+			MaxRetry: 2,
+		}),
+	)
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if len(conn.writes) != 1 {
+		t.Fatalf("writes = %d, want session.create", len(conn.writes))
+	}
+	connection, ok := conn.writes[0]["connection"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("connection = %#v, want map", conn.writes[0]["connection"])
+	}
+	if connection["timeout"] != 1.5 {
+		t.Fatalf("connection.timeout = %#v, want 1.5", connection["timeout"])
+	}
+	if connection["retries"] != 2 {
+		t.Fatalf("connection.retries = %#v, want 2", connection["retries"])
 	}
 }
 
@@ -328,7 +363,7 @@ func TestSTTWebsocketSendsReferenceContextHeaders(t *testing.T) {
 }
 
 func TestInferenceSTTSessionCreateParamsMatchReferenceShape(t *testing.T) {
-	modelName, params := sttSessionCreateParams("auto:en", "", "", 0, nil, nil)
+	modelName, params := sttSessionCreateParams("auto:en", "", "", 0, nil, nil, nil)
 
 	if modelName != "auto" {
 		t.Fatalf("modelName = %q, want auto", modelName)
@@ -596,7 +631,7 @@ func TestInferenceSTTTranscriptUsesReferenceLanguageFallback(t *testing.T) {
 				eventCh: make(chan *stt.SpeechEvent, 2),
 			}
 			if tt.streamLang != "" {
-				stream.stt = &STT{language: tt.streamLang}
+				stream.language = tt.streamLang
 			}
 
 			data := map[string]interface{}{
@@ -618,6 +653,38 @@ func TestInferenceSTTTranscriptUsesReferenceLanguageFallback(t *testing.T) {
 				t.Fatalf("Language = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestInferenceSTTTranscriptLanguageUsesStreamOptionSnapshot(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{readBlock: make(chan struct{})}
+	provider := NewSTT("deepgram/nova-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	rawStream, err := provider.Stream(context.Background(), "ja")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	stream := rawStream.(*inferenceSTTStream)
+	defer stream.Close()
+
+	provider.UpdateOptions(WithSTTLanguage("id"))
+
+	stream.processTranscript(map[string]interface{}{
+		"request_id": "req-1",
+		"transcript": "hello",
+	}, false)
+
+	<-stream.eventCh
+	interim := <-stream.eventCh
+	if interim.Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("event type = %s, want interim_transcript", interim.Type)
+	}
+	if got := interim.Alternatives[0].Language; got != "ja" {
+		t.Fatalf("Language = %q, want stream creation language ja", got)
 	}
 }
 
@@ -756,6 +823,25 @@ func TestInferenceSTTStreamRejectsMismatchedSampleRates(t *testing.T) {
 	}
 	if got := len(stream.audioCh); got != 1 {
 		t.Fatalf("audio frames forwarded = %d, want 1", got)
+	}
+}
+
+func TestInferenceSTTStreamFlushDoesNotFinalize(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{}
+	stream := &inferenceSTTStream{
+		conn:    conn,
+		audioCh: make(chan *model.AudioFrame, 2),
+		eventCh: make(chan *stt.SpeechEvent, 1),
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	if len(conn.writes) != 0 {
+		t.Fatalf("writes = %#v, want no websocket finalize on flush", conn.writes)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("after"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatalf("PushFrame after Flush returned error: %v", err)
 	}
 }
 

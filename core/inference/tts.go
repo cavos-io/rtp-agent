@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
@@ -23,8 +25,11 @@ type TTS struct {
 	model             string
 	voice             string
 	language          string
+	encoding          string
+	sampleRate        int
 	extraKwargs       map[string]any
 	fallbackModels    []FallbackModel
+	connectOptions    *APIConnectOptions
 	apiKey            string
 	apiSecret         string
 	baseURL           string
@@ -35,6 +40,8 @@ type TTS struct {
 }
 
 type TTSOption func(*TTS)
+
+type APIConnectOptions = llm.APIConnectOptions
 
 type inferenceTTSConn interface {
 	WriteJSON(v any) error
@@ -50,21 +57,63 @@ func WithSentenceTokenizer(tokenizer tokenize.SentenceTokenizer) TTSOption {
 	}
 }
 
+func WithTTSModel(model string) TTSOption {
+	return func(t *TTS) {
+		modelName, voice := ttsModelAndVoice(model, "")
+		t.model = modelName
+		if voice != "" {
+			t.voice = voice
+		}
+	}
+}
+
+func WithTTSVoice(voice string) TTSOption {
+	return func(t *TTS) {
+		t.voice = voice
+	}
+}
+
 func WithTTSLanguage(language string) TTSOption {
 	return func(t *TTS) {
 		t.language = language
 	}
 }
 
+func WithTTSEncoding(encoding string) TTSOption {
+	return func(t *TTS) {
+		t.encoding = encoding
+	}
+}
+
+func WithTTSSampleRate(sampleRate int) TTSOption {
+	return func(t *TTS) {
+		t.sampleRate = sampleRate
+	}
+}
+
 func WithTTSExtraKwargs(extra map[string]any) TTSOption {
 	return func(t *TTS) {
-		t.extraKwargs = cloneTTSExtra(extra)
+		if len(extra) == 0 {
+			return
+		}
+		if t.extraKwargs == nil {
+			t.extraKwargs = make(map[string]any, len(extra))
+		}
+		for key, value := range extra {
+			t.extraKwargs[key] = value
+		}
 	}
 }
 
 func WithTTSFallbackModels(models ...FallbackModel) TTSOption {
 	return func(t *TTS) {
 		t.fallbackModels = cloneTTSFallbackModels(models)
+	}
+}
+
+func WithTTSConnectOptions(options APIConnectOptions) TTSOption {
+	return func(t *TTS) {
+		t.connectOptions = &options
 	}
 }
 
@@ -77,6 +126,8 @@ func NewTTS(model string, apiKey, apiSecret string, opts ...TTSOption) *TTS {
 	t := &TTS{
 		model:         model,
 		voice:         voice,
+		encoding:      "pcm_s16le",
+		sampleRate:    24000,
 		apiKey:        apiKey,
 		apiSecret:     apiSecret,
 		baseURL:       defaultInferenceWebsocketURL(),
@@ -86,6 +137,12 @@ func NewTTS(model string, apiKey, apiSecret string, opts ...TTSOption) *TTS {
 		opt(t)
 	}
 	return t
+}
+
+func (t *TTS) UpdateOptions(opts ...TTSOption) {
+	for _, opt := range opts {
+		opt(t)
+	}
 }
 
 type FallbackModel struct {
@@ -114,7 +171,7 @@ func (t *TTS) Capabilities() tts.TTSCapabilities {
 }
 
 func (t *TTS) SampleRate() int {
-	return 24000
+	return t.sampleRate
 }
 
 func (t *TTS) NumChannels() int {
@@ -142,13 +199,17 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 
 	stream := &inferenceTTSStream{
-		tts:       t,
-		conn:      conn,
-		connPool:  t.connectionPool(),
-		ctx:       ctx,
-		cancel:    cancel,
-		tokenizer: tokenizer.Stream("en"),
-		eventCh:   make(chan *tts.SynthesizedAudio, 100),
+		tts:         t,
+		conn:        conn,
+		connPool:    t.connectionPool(),
+		ctx:         ctx,
+		cancel:      cancel,
+		model:       t.model,
+		voice:       t.voice,
+		language:    t.language,
+		extraKwargs: cloneTTSExtra(t.extraKwargs),
+		tokenizer:   tokenizer.Stream("en"),
+		eventCh:     make(chan *tts.SynthesizedAudio, 100),
 	}
 
 	go stream.run()
@@ -180,7 +241,7 @@ func (t *TTS) connectTTSWebsocket(ctx context.Context) (inferenceTTSConn, error)
 		return nil, err
 	}
 
-	modelName, createParams := ttsSessionCreateParams(t.model, t.voice, t.language, t.extraKwargs, t.fallbackModels)
+	modelName, createParams := ttsSessionCreateParams(t.model, t.voice, t.language, t.encoding, t.sampleRate, t.extraKwargs, t.fallbackModels, t.connectOptions)
 
 	wsURL, err := url.Parse(t.baseURL + "/tts")
 	if err != nil {
@@ -215,12 +276,18 @@ func defaultInferenceTTSDialer(ctx context.Context, endpoint string, header http
 	return conn, nil
 }
 
-func ttsSessionCreateParams(model string, voice string, language string, extra map[string]any, fallback []FallbackModel) (string, map[string]interface{}) {
+func ttsSessionCreateParams(model string, voice string, language string, encoding string, sampleRate int, extra map[string]any, fallback []FallbackModel, connectOptions *APIConnectOptions) (string, map[string]interface{}) {
 	modelName, voice := ttsModelAndVoice(model, voice)
+	if encoding == "" {
+		encoding = "pcm_s16le"
+	}
+	if sampleRate == 0 {
+		sampleRate = 24000
+	}
 	createParams := map[string]interface{}{
 		"type":        "session.create",
-		"sample_rate": "24000",
-		"encoding":    "pcm_s16le",
+		"sample_rate": strconv.Itoa(sampleRate),
+		"encoding":    encoding,
 		"extra":       ttsExtraPayload(extra),
 	}
 	if modelName != "" {
@@ -235,6 +302,12 @@ func ttsSessionCreateParams(model string, voice string, language string, extra m
 	if len(fallback) > 0 {
 		createParams["fallback"] = map[string]interface{}{
 			"models": ttsFallbackModelsPayload(fallback),
+		}
+	}
+	if connectOptions != nil {
+		createParams["connection"] = map[string]interface{}{
+			"timeout": connectOptions.Timeout.Seconds(),
+			"retries": connectOptions.MaxRetry,
 		}
 	}
 	return modelName, createParams
@@ -315,15 +388,19 @@ func ttsModelAndVoice(model string, voice string) (string, string) {
 }
 
 type inferenceTTSStream struct {
-	tts       *TTS
-	conn      inferenceTTSConn
-	connPool  *utils.ConnectionPool[inferenceTTSConn]
-	ctx       context.Context
-	cancel    context.CancelFunc
-	tokenizer tokenize.SentenceStream
-	eventCh   chan *tts.SynthesizedAudio
-	mu        sync.Mutex
-	closed    bool
+	tts         *TTS
+	conn        inferenceTTSConn
+	connPool    *utils.ConnectionPool[inferenceTTSConn]
+	ctx         context.Context
+	cancel      context.CancelFunc
+	model       string
+	voice       string
+	language    string
+	extraKwargs map[string]any
+	tokenizer   tokenize.SentenceStream
+	eventCh     chan *tts.SynthesizedAudio
+	mu          sync.Mutex
+	closed      bool
 }
 
 func (s *inferenceTTSStream) PushText(text string) error {
@@ -386,20 +463,20 @@ func (s *inferenceTTSStream) run() {
 			}
 
 			generationConfig := map[string]interface{}{}
-			if s.tts.model != "" {
-				generationConfig["model"] = s.tts.model
+			if s.model != "" {
+				generationConfig["model"] = s.model
 			}
-			if s.tts.voice != "" {
-				generationConfig["voice"] = s.tts.voice
+			if s.voice != "" {
+				generationConfig["voice"] = s.voice
 			}
-			if s.tts.language != "" {
-				generationConfig["language"] = s.tts.language
+			if s.language != "" {
+				generationConfig["language"] = s.language
 			}
 
 			tokenPkt := map[string]interface{}{
 				"type":              "input_transcript",
 				"transcript":        tok.Token + " ",
-				"extra":             ttsExtraPayload(s.tts.extraKwargs),
+				"extra":             ttsExtraPayload(s.extraKwargs),
 				"generation_config": generationConfig,
 			}
 

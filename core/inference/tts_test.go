@@ -476,6 +476,244 @@ func TestInferenceTTSExtraKwargsMatchReferencePackets(t *testing.T) {
 	}
 }
 
+func TestInferenceTTSUpdateOptionsMatchReferenceFutureStreams(t *testing.T) {
+	writes := make(chan map[string]any, 8)
+	provider := NewTTS("cartesia/sonic-3", "key", "secret", WithTTSExtraKwargs(map[string]any{
+		"temperature": 0.2,
+	}))
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{
+			onWriteJSON: func(msg map[string]any) {
+				writes <- msg
+			},
+		}, nil
+	}
+
+	provider.UpdateOptions(
+		WithTTSModel("elevenlabs/turbo"),
+		WithTTSVoice("voice-updated"),
+		WithTTSLanguage("id"),
+		WithTTSExtraKwargs(map[string]any{"sync_alignment": true}),
+	)
+
+	if got := provider.Model(); got != "elevenlabs/turbo" {
+		t.Fatalf("Model = %q, want elevenlabs/turbo", got)
+	}
+	if !provider.Capabilities().AlignedTranscript {
+		t.Fatal("AlignedTranscript = false, want true after sync_alignment update")
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	session := <-writes
+	if session["type"] != "session.create" {
+		t.Fatalf("first write type = %v, want session.create", session["type"])
+	}
+	if session["model"] != "elevenlabs/turbo" {
+		t.Fatalf("session.create model = %#v, want elevenlabs/turbo", session["model"])
+	}
+	if session["voice"] != "voice-updated" {
+		t.Fatalf("session.create voice = %#v, want voice-updated", session["voice"])
+	}
+	sessionExtra, ok := session["extra"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("session.create extra = %#v, want map", session["extra"])
+	}
+	if sessionExtra["temperature"] != 0.2 || sessionExtra["sync_alignment"] != true {
+		t.Fatalf("session.create extra = %#v, want merged extra kwargs", sessionExtra)
+	}
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	var input map[string]any
+	deadline := time.After(time.Second)
+	for input == nil {
+		select {
+		case msg := <-writes:
+			if msg["type"] == "input_transcript" {
+				input = msg
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for input_transcript")
+		}
+	}
+
+	config, ok := input["generation_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("generation_config = %#v, want map", input["generation_config"])
+	}
+	if config["model"] != "elevenlabs/turbo" || config["voice"] != "voice-updated" || config["language"] != "id" {
+		t.Fatalf("generation_config = %#v, want updated model, voice, and language", config)
+	}
+	extra, ok := input["extra"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("input extra = %#v, want map", input["extra"])
+	}
+	if extra["temperature"] != 0.2 || extra["sync_alignment"] != true {
+		t.Fatalf("input extra = %#v, want merged extra kwargs", extra)
+	}
+}
+
+func TestInferenceTTSStreamKeepsReferenceOptionSnapshot(t *testing.T) {
+	writes := make(chan map[string]any, 8)
+	provider := NewTTS("cartesia/sonic-3:voice-original", "key", "secret", WithTTSExtraKwargs(map[string]any{
+		"temperature": 0.2,
+	}))
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{
+			onWriteJSON: func(msg map[string]any) {
+				writes <- msg
+			},
+		}, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	session := <-writes
+	if session["type"] != "session.create" {
+		t.Fatalf("first write type = %v, want session.create", session["type"])
+	}
+
+	provider.UpdateOptions(
+		WithTTSModel("elevenlabs/turbo"),
+		WithTTSVoice("voice-updated"),
+		WithTTSLanguage("id"),
+		WithTTSExtraKwargs(map[string]any{"sync_alignment": true}),
+	)
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	var input map[string]any
+	deadline := time.After(time.Second)
+	for input == nil {
+		select {
+		case msg := <-writes:
+			if msg["type"] == "input_transcript" {
+				input = msg
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for input_transcript")
+		}
+	}
+
+	config, ok := input["generation_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("generation_config = %#v, want map", input["generation_config"])
+	}
+	if config["model"] != "cartesia/sonic-3" || config["voice"] != "voice-original" {
+		t.Fatalf("generation_config = %#v, want stream creation options", config)
+	}
+	if _, ok := config["language"]; ok {
+		t.Fatalf("generation_config.language = %#v, want omitted from original stream options", config["language"])
+	}
+	extra, ok := input["extra"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("input extra = %#v, want map", input["extra"])
+	}
+	if extra["temperature"] != 0.2 {
+		t.Fatalf("input extra temperature = %#v, want original value 0.2", extra["temperature"])
+	}
+	if _, ok := extra["sync_alignment"]; ok {
+		t.Fatalf("input extra sync_alignment = %#v, want omitted from original stream options", extra["sync_alignment"])
+	}
+}
+
+func TestInferenceTTSSessionCreateUsesReferenceAudioOptions(t *testing.T) {
+	writes := make(chan map[string]any, 2)
+	provider := NewTTS("cartesia/sonic-3", "key", "secret",
+		WithTTSSampleRate(16000),
+		WithTTSEncoding("mulaw"),
+	)
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{
+			onWriteJSON: func(msg map[string]any) {
+				writes <- msg
+			},
+		}, nil
+	}
+
+	if provider.SampleRate() != 16000 {
+		t.Fatalf("SampleRate = %d, want configured 16000", provider.SampleRate())
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	session := <-writes
+	if session["type"] != "session.create" {
+		t.Fatalf("first write type = %v, want session.create", session["type"])
+	}
+	if session["sample_rate"] != "16000" {
+		t.Fatalf("session.create sample_rate = %#v, want string 16000", session["sample_rate"])
+	}
+	if session["encoding"] != "mulaw" {
+		t.Fatalf("session.create encoding = %#v, want mulaw", session["encoding"])
+	}
+}
+
+func TestInferenceTTSSessionCreateUsesReferenceConnectOptions(t *testing.T) {
+	writes := make(chan map[string]any, 2)
+	provider := NewTTS("cartesia/sonic-3", "key", "secret",
+		WithTTSConnectOptions(APIConnectOptions{
+			Timeout:  1500 * time.Millisecond,
+			MaxRetry: 2,
+		}),
+	)
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{
+			onWriteJSON: func(msg map[string]any) {
+				writes <- msg
+			},
+		}, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	session := <-writes
+	if session["type"] != "session.create" {
+		t.Fatalf("first write type = %v, want session.create", session["type"])
+	}
+	connection, ok := session["connection"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("connection = %#v, want map", session["connection"])
+	}
+	if connection["timeout"] != 1.5 {
+		t.Fatalf("connection.timeout = %#v, want 1.5", connection["timeout"])
+	}
+	if connection["retries"] != 2 {
+		t.Fatalf("connection.retries = %#v, want 2", connection["retries"])
+	}
+}
+
 func TestInferenceTTSFallbackModelsMatchReferenceSessionCreate(t *testing.T) {
 	writes := make(chan map[string]any, 4)
 	provider := NewTTS("cartesia/sonic-3", "key", "secret", WithTTSFallbackModels(
@@ -536,7 +774,7 @@ func TestInferenceTTSFallbackModelsMatchReferenceSessionCreate(t *testing.T) {
 }
 
 func TestInferenceTTSSessionCreateParamsMatchReferenceShape(t *testing.T) {
-	modelName, params := ttsSessionCreateParams("cartesia/sonic-3:voice-id", "", "", nil, nil)
+	modelName, params := ttsSessionCreateParams("cartesia/sonic-3:voice-id", "", "", "", 0, nil, nil, nil)
 
 	if modelName != "cartesia/sonic-3" {
 		t.Fatalf("modelName = %q, want cartesia/sonic-3", modelName)

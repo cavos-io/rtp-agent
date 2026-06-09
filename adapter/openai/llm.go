@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -34,6 +35,10 @@ type OpenAILLM struct {
 	parallelToolCalls    bool
 	parallelToolCallsSet bool
 	toolChoice           llm.ToolChoice
+	defaultReasoning     bool
+	extraHeaders         map[string]string
+	extraQuery           map[string]string
+	extraBody            map[string]any
 }
 
 type OpenAILLMOption func(*OpenAILLM)
@@ -141,6 +146,24 @@ func WithOpenAILLMToolChoice(toolChoice llm.ToolChoice) OpenAILLMOption {
 	}
 }
 
+func WithOpenAILLMExtraHeaders(headers map[string]string) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		l.extraHeaders = cloneOpenAIStringMap(headers)
+	}
+}
+
+func WithOpenAILLMExtraQuery(query map[string]string) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		l.extraQuery = cloneOpenAIStringMap(query)
+	}
+}
+
+func WithOpenAILLMExtraBody(body map[string]any) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		l.extraBody = cloneOpenAIAnyMap(body)
+	}
+}
+
 func withOpenAILLMHTTPClient(httpClient openai.HTTPDoer) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		l.httpClient = httpClient
@@ -163,13 +186,18 @@ func newOpenAILLMWithConfigAndModel(config openai.ClientConfig, model string, op
 		model = defaultOpenAILLMModel
 	}
 	provider := &OpenAILLM{
-		client:  openai.NewClientWithConfig(config),
-		model:   model,
-		baseURL: config.BaseURL,
+		model:            model,
+		baseURL:          config.BaseURL,
+		defaultReasoning: true,
 	}
 	for _, opt := range opts {
 		opt(provider)
 	}
+	applyOpenAIHTTPClient(provider, &config)
+	wrapOpenAIExtraHeaders(provider, &config)
+	wrapOpenAIExtraQuery(provider, &config)
+	wrapOpenAIExtraBody(provider, &config)
+	provider.client = openai.NewClientWithConfig(config)
 	return provider, nil
 }
 
@@ -199,7 +227,7 @@ func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 		azureDeployment = model
 	}
 
-	provider := &OpenAILLM{model: model}
+	provider := &OpenAILLM{model: model, defaultReasoning: true}
 	for _, opt := range opts {
 		opt(provider)
 	}
@@ -220,6 +248,9 @@ func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 			token: azureADToken,
 		}
 	}
+	wrapOpenAIExtraHeaders(provider, &config)
+	wrapOpenAIExtraQuery(provider, &config)
+	wrapOpenAIExtraBody(provider, &config)
 	provider.client = openai.NewClientWithConfig(config)
 	provider.baseURL = config.BaseURL
 	return provider, nil
@@ -254,14 +285,132 @@ func NewOpenAILLMWithBaseURLAndHTTPClient(apiKey string, model string, baseURL s
 		config.HTTPClient = httpClient
 	}
 	provider := &OpenAILLM{
-		client:  openai.NewClientWithConfig(config),
-		model:   model,
-		baseURL: config.BaseURL,
+		model:            model,
+		baseURL:          config.BaseURL,
+		defaultReasoning: true,
 	}
 	for _, opt := range opts {
 		opt(provider)
 	}
+	applyOpenAIHTTPClient(provider, &config)
+	wrapOpenAIExtraHeaders(provider, &config)
+	wrapOpenAIExtraQuery(provider, &config)
+	wrapOpenAIExtraBody(provider, &config)
+	provider.client = openai.NewClientWithConfig(config)
 	return provider
+}
+
+func applyOpenAIHTTPClient(provider *OpenAILLM, config *openai.ClientConfig) {
+	if provider.httpClient != nil {
+		config.HTTPClient = provider.httpClient
+	}
+}
+
+func wrapOpenAIExtraHeaders(provider *OpenAILLM, config *openai.ClientConfig) {
+	if len(provider.extraHeaders) > 0 {
+		config.HTTPClient = &extraHeadersHTTPClient{
+			base:    config.HTTPClient,
+			headers: cloneOpenAIStringMap(provider.extraHeaders),
+		}
+	}
+}
+
+func wrapOpenAIExtraQuery(provider *OpenAILLM, config *openai.ClientConfig) {
+	if len(provider.extraQuery) > 0 {
+		config.HTTPClient = &extraQueryHTTPClient{
+			base:  config.HTTPClient,
+			query: cloneOpenAIStringMap(provider.extraQuery),
+		}
+	}
+}
+
+func wrapOpenAIExtraBody(provider *OpenAILLM, config *openai.ClientConfig) {
+	if len(provider.extraBody) > 0 {
+		config.HTTPClient = &extraBodyHTTPClient{
+			base: config.HTTPClient,
+			body: cloneOpenAIAnyMap(provider.extraBody),
+		}
+	}
+}
+
+type extraHeadersHTTPClient struct {
+	base    openai.HTTPDoer
+	headers map[string]string
+}
+
+func (c *extraHeadersHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	base := c.base
+	if base == nil {
+		base = http.DefaultClient
+	}
+	cloned := req.Clone(req.Context())
+	for key, value := range c.headers {
+		cloned.Header.Set(key, value)
+	}
+	return base.Do(cloned)
+}
+
+type extraQueryHTTPClient struct {
+	base  openai.HTTPDoer
+	query map[string]string
+}
+
+func (c *extraQueryHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	base := c.base
+	if base == nil {
+		base = http.DefaultClient
+	}
+	cloned := req.Clone(req.Context())
+	query := cloned.URL.Query()
+	for key, value := range c.query {
+		query.Set(key, value)
+	}
+	cloned.URL.RawQuery = query.Encode()
+	return base.Do(cloned)
+}
+
+type extraBodyHTTPClient struct {
+	base openai.HTTPDoer
+	body map[string]any
+}
+
+func (c *extraBodyHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	base := c.base
+	if base == nil {
+		base = http.DefaultClient
+	}
+	if req.Body == nil {
+		return base.Do(req)
+	}
+	original, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil, err
+	}
+	_ = req.Body.Close()
+
+	payload := map[string]any{}
+	if len(original) > 0 {
+		if err := json.Unmarshal(original, &payload); err != nil {
+			cloned := req.Clone(req.Context())
+			cloned.Body = io.NopCloser(bytes.NewReader(original))
+			cloned.ContentLength = int64(len(original))
+			return base.Do(cloned)
+		}
+	}
+	for key, value := range c.body {
+		payload[key] = value
+	}
+	merged, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	cloned := req.Clone(req.Context())
+	cloned.Body = io.NopCloser(bytes.NewReader(merged))
+	cloned.ContentLength = int64(len(merged))
+	cloned.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(merged)), nil
+	}
+	return base.Do(cloned)
 }
 
 func (l *OpenAILLM) Model() string {
@@ -307,7 +456,7 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		effectiveOptions = &copied
 	}
 
-	req := buildOpenAIChatCompletionRequest(l.model, chatCtx, effectiveOptions)
+	req := buildOpenAIChatCompletionRequestWithReasoningDefault(l.model, chatCtx, effectiveOptions, l.defaultReasoning)
 
 	var lastErr error
 	for attempt := 0; attempt <= connectOptions.MaxRetry; attempt++ {
@@ -399,7 +548,33 @@ func mergeOpenAIExtraParams(callParams, providerParams map[string]any) map[strin
 	return merged
 }
 
+func cloneOpenAIStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
+}
+
+func cloneOpenAIAnyMap(src map[string]any) map[string]any {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]any, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
+}
+
 func buildOpenAIChatCompletionRequest(model string, chatCtx *llm.ChatContext, options *llm.ChatOptions) openai.ChatCompletionRequest {
+	return buildOpenAIChatCompletionRequestWithReasoningDefault(model, chatCtx, options, true)
+}
+
+func buildOpenAIChatCompletionRequestWithReasoningDefault(model string, chatCtx *llm.ChatContext, options *llm.ChatOptions, defaultReasoning bool) openai.ChatCompletionRequest {
 	messages := buildOpenAIChatMessages(chatCtx)
 
 	tools := make([]openai.Tool, 0, len(options.Tools))
@@ -436,7 +611,7 @@ func buildOpenAIChatCompletionRequest(model string, chatCtx *llm.ChatContext, op
 	}
 
 	applyOpenAIExtraParams(&req, dropUnsupportedOpenAIParams(model, options.ExtraParams, len(options.Tools) > 0))
-	if req.ReasoningEffort == "" {
+	if defaultReasoning && req.ReasoningEffort == "" {
 		req.ReasoningEffort = defaultOpenAIReasoningEffort(model, len(options.Tools) > 0)
 	}
 	return req
@@ -584,6 +759,10 @@ func applyOpenAIExtraParams(req *openai.ChatCompletionRequest, params map[string
 		case "tool_choice":
 			if v := buildOpenAIToolChoice(value); v != nil {
 				req.ToolChoice = v
+			}
+		case "response_format":
+			if v := asAnyMap(value); v != nil {
+				req.ResponseFormat = buildOpenAIResponseFormat(v)
 			}
 		case "service_tier":
 			if v, ok := value.(string); ok {
@@ -744,6 +923,15 @@ func asStringMap(value any) map[string]string {
 			out[key] = fmt.Sprint(val)
 		}
 		return out
+	default:
+		return nil
+	}
+}
+
+func asAnyMap(value any) map[string]any {
+	switch v := value.(type) {
+	case map[string]any:
+		return v
 	default:
 		return nil
 	}
