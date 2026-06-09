@@ -127,11 +127,14 @@ func TestNewAzureOpenAILLMFallsBackToReferenceEnvironment(t *testing.T) {
 
 	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
-	if model.Model() != defaultOpenAILLMModel {
-		t.Fatalf("Model = %q, want default model", model.Model())
+	if model.Model() != defaultAzureOpenAILLMModel {
+		t.Fatalf("Model = %q, want Azure reference default model", model.Model())
 	}
-	if !strings.Contains(capture.requestURL, "/openai/deployments/"+defaultOpenAILLMModel+"/chat/completions") {
-		t.Fatalf("request URL = %s, want default model as deployment", capture.requestURL)
+	if !strings.Contains(capture.requestURL, "/openai/deployments/"+defaultAzureOpenAILLMModel+"/chat/completions") {
+		t.Fatalf("request URL = %s, want Azure reference default model as deployment", capture.requestURL)
+	}
+	if strings.Contains(capture.requestURL, "/openai/deployments/"+defaultOpenAILLMModel+"/chat/completions") {
+		t.Fatalf("request URL = %s, want Azure reference default not global OpenAI default", capture.requestURL)
 	}
 	if !strings.Contains(capture.requestURL, "api-version=2024-08-01-preview") {
 		t.Fatalf("request URL = %s, want env api-version", capture.requestURL)

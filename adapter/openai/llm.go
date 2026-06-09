@@ -18,6 +18,7 @@ import (
 )
 
 const defaultOpenAILLMModel = "gpt-4.1"
+const defaultAzureOpenAILLMModel = "gpt-4o"
 
 const (
 	azureOpenAIEndpointEnv = "AZURE_OPENAI_ENDPOINT"
@@ -271,7 +272,7 @@ func newOpenAILLMWithConfigAndModel(config openai.ClientConfig, model string, op
 
 func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
 	if model == "" {
-		model = defaultOpenAILLMModel
+		model = defaultAzureOpenAILLMModel
 	}
 	if azureEndpoint == "" {
 		azureEndpoint = os.Getenv(azureOpenAIEndpointEnv)
