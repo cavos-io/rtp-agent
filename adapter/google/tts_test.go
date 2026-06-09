@@ -46,6 +46,69 @@ func TestGoogleTTSStreamReturnsUnsupportedError(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSSynthesizeRequestUsesReferenceDefaults(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	req := client.request
+	if req == nil {
+		t.Fatal("SynthesizeSpeech request = nil")
+	}
+	if got := req.GetVoice().GetLanguageCode(); got != "en-US" {
+		t.Fatalf("voice language = %q, want en-US", got)
+	}
+	if got := req.GetVoice().GetName(); got != "Charon" {
+		t.Fatalf("voice name = %q, want Charon", got)
+	}
+	if got := req.GetVoice().GetModelName(); got != "gemini-2.5-flash-tts" {
+		t.Fatalf("voice model = %q, want gemini-2.5-flash-tts", got)
+	}
+	if got := req.GetAudioConfig().GetAudioEncoding(); got != texttospeech.AudioEncoding_LINEAR16 {
+		t.Fatalf("audio encoding = %v, want LINEAR16", got)
+	}
+	if got := req.GetAudioConfig().GetSampleRateHertz(); got != 24000 {
+		t.Fatalf("sample rate = %d, want 24000", got)
+	}
+}
+
+func TestGoogleTTSOptionsOverrideReferenceVoiceFields(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client,
+		WithGoogleTTSLanguage("id-ID"),
+		WithGoogleTTSVoice("id-ID-Standard-A"),
+		WithGoogleTTSModel("gemini-custom"),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "halo")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	voice := client.request.GetVoice()
+	if voice.GetLanguageCode() != "id-ID" || voice.GetName() != "id-ID-Standard-A" || voice.GetModelName() != "gemini-custom" {
+		t.Fatalf("voice = %+v, want configured language, voice, and model", voice)
+	}
+}
+
+func TestGoogleTTSChirp3OmitsModelName(t *testing.T) {
+	provider := newGoogleTTSWithClient(nil, WithGoogleTTSModel("chirp_3"))
+
+	if got := provider.voice.GetModelName(); got != "" {
+		t.Fatalf("model name = %q, want omitted for chirp_3", got)
+	}
+}
+
 func TestGoogleTTSSynthesizeStripsWAVHeaderAndChunksAudio(t *testing.T) {
 	payload := append(make([]byte, 44), []byte{1, 2, 3, 4}...)
 	copy(payload[0:4], "RIFF")

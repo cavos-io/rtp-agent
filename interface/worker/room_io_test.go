@@ -127,6 +127,31 @@ func TestNewRoomIOCanDisableTextInput(t *testing.T) {
 	}
 }
 
+func TestRoomIOAttachRoomRegistersDeferredRoomHandlers(t *testing.T) {
+	rio := NewRoomIO(nil, &agent.AgentSession{}, RoomOptions{})
+	if rio.Room != nil {
+		t.Fatal("Room = non-nil before AttachRoom, want deferred room binding")
+	}
+	if rio.preConnectAudio != nil {
+		t.Fatal("preConnectAudio = non-nil before AttachRoom, want deferred handler registration")
+	}
+
+	room := lksdk.NewRoom(nil)
+	rio.AttachRoom(room)
+	defer rio.Close()
+
+	if rio.Room != room {
+		t.Fatal("RoomIO did not attach the room")
+	}
+	if rio.preConnectAudio == nil {
+		t.Fatal("preConnectAudio = nil after AttachRoom, want registered pre-connect handler")
+	}
+	err := room.RegisterTextStreamHandler(RoomIOChatTopic, func(*lksdk.TextStreamReader, string) {})
+	if err == nil {
+		t.Fatal("RegisterTextStreamHandler(lk.chat) error = nil, want existing RoomIO chat handler")
+	}
+}
+
 func TestNewRoomIOCanDisableAudioOutput(t *testing.T) {
 	assistant := &agent.PipelineAgent{}
 	session := &agent.AgentSession{Assistant: assistant}

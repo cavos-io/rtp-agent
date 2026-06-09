@@ -215,44 +215,50 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	dec, _ := newOpusDecoder(48000, 1)
 	enc, _ := newOpusEncoder(48000, 1)
 
-	var preConnectAudio *PreConnectAudioHandler
-	if !opts.DisableAudioInput && !opts.DisablePreConnectAudio {
-		preConnectAudio = NewPreConnectAudioHandler(room, roomIOPreConnectAudioTimeout(opts))
-		preConnectAudio.Register()
-	}
-
 	rio := &RoomIO{
-		Room:            room,
-		AgentSession:    session,
-		Options:         opts,
-		decoder:         dec,
-		encoder:         enc,
-		Recorder:        NewRecorderIO(session),
-		preConnectAudio: preConnectAudio,
-		textInput:       roomIOTextInputCallback(opts),
+		AgentSession: session,
+		Options:      opts,
+		decoder:      dec,
+		encoder:      enc,
+		Recorder:     NewRecorderIO(session),
+		textInput:    roomIOTextInputCallback(opts),
 	}
-	rio.agentStatePublisher = rio.publishLocalParticipantAttributes
-	rio.agentStatePublishEnabled = rio.roomConnected
-	rio.clientEvents = agent.NewClientEventsDispatcher(room)
 	rio.transcriptionTextPublisher = rio.publishTranscriptionText
 	rio.transcriptionPacketPublisher = rio.publishTranscriptionPacket
 	rio.transcriptionParticipantIdentity = rio.localParticipantIdentity
 	rio.roomName = rio.liveKitRoomName
+	rio.agentStatePublisher = rio.publishLocalParticipantAttributes
+	rio.agentStatePublishEnabled = rio.roomConnected
 	rio.startAgentStateListener()
 	rio.startUserStateListener()
 	rio.startUserTranscriptionListener()
 	rio.startAgentTranscriptionListener()
 	rio.startSessionCloseListener()
 
-	if !opts.DisableTextInput {
-		rio.registerTextInput()
-	}
-
 	if !opts.DisableAudioOutput {
 		session.EnsureAssistant().SetPublishAudio(rio.PublishAudio)
 	}
 
+	rio.AttachRoom(room)
 	return rio
+}
+
+func (rio *RoomIO) AttachRoom(room *lksdk.Room) {
+	if rio == nil || room == nil {
+		return
+	}
+	rio.Room = room
+	rio.clientEvents = agent.NewClientEventsDispatcher(room)
+	if !rio.Options.DisableAudioInput && !rio.Options.DisablePreConnectAudio && rio.preConnectAudio == nil {
+		rio.preConnectAudio = NewPreConnectAudioHandler(room, roomIOPreConnectAudioTimeout(rio.Options))
+		rio.preConnectAudio.Register()
+	}
+	if !rio.Options.DisableTextInput {
+		rio.registerTextInput()
+	}
+	for _, participant := range room.GetRemoteParticipants() {
+		rio.onParticipantConnected(participant)
+	}
 }
 
 func (rio *RoomIO) startAgentStateListener() {

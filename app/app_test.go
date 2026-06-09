@@ -3068,6 +3068,7 @@ func TestDefaultConfigFromEnvSelectsAzureSpeechProviders(t *testing.T) {
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "azure")
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "azure")
 	t.Setenv("RTP_AGENT_TTS_VOICE", "en-US-AvaNeural")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "id-ID")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -3084,6 +3085,13 @@ func TestDefaultConfigFromEnvSelectsAzureSpeechProviders(t *testing.T) {
 	}
 	if got := app.Session.TTS.SampleRate(); got != 24000 {
 		t.Fatalf("TTS sample rate = %d, want 24000", got)
+	}
+	languageProvider, ok := app.Session.TTS.(interface{ Language() string })
+	if !ok {
+		t.Fatalf("TTS = %T, want Language method", app.Session.TTS)
+	}
+	if got := languageProvider.Language(); got != "id-ID" {
+		t.Fatalf("TTS language = %q, want id-ID", got)
 	}
 }
 

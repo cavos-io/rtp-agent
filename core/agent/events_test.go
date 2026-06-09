@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
+	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
 func TestRunContextDisallowInterruptionsUpdatesSpeechHandle(t *testing.T) {
@@ -355,6 +356,13 @@ func TestClientEventsDispatcherNoopsWithoutRoom(t *testing.T) {
 	dispatcher.DispatchUserState(UserStateSpeaking)
 	dispatcher.DispatchUserState(UserStateAway)
 	dispatcher.DispatchUserState(UserState("unknown"))
+}
+
+func TestClientEventsDispatcherNoopsWhenRoomDisconnected(t *testing.T) {
+	dispatcher := NewClientEventsDispatcher(&lksdk.Room{LocalParticipant: &lksdk.LocalParticipant{}})
+
+	dispatcher.DispatchAgentState(AgentStateThinking)
+	dispatcher.DispatchUserState(UserStateSpeaking)
 }
 
 func TestClientAgentStateStringMapsIdleToReferenceListening(t *testing.T) {

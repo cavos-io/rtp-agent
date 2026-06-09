@@ -102,6 +102,9 @@ func TestAzureTTSDefaultsAndEnvironmentMatchReference(t *testing.T) {
 	if provider.voice != "en-US-JennyNeural" {
 		t.Fatalf("voice = %q, want reference default", provider.voice)
 	}
+	if provider.language != "en-US" {
+		t.Fatalf("language = %q, want reference default", provider.language)
+	}
 	if provider.sampleRate != 24000 {
 		t.Fatalf("sampleRate = %d, want 24000", provider.sampleRate)
 	}
@@ -119,6 +122,9 @@ func TestAzureTTSDefaultsAndEnvironmentMatchReference(t *testing.T) {
 	}
 	if provider.NumChannels() != 1 {
 		t.Fatalf("NumChannels = %d, want 1", provider.NumChannels())
+	}
+	if provider.Language() != "en-US" {
+		t.Fatalf("Language = %q, want en-US", provider.Language())
 	}
 	if provider.Capabilities().Streaming {
 		t.Fatal("Streaming = true, want false for Azure REST TTS")
@@ -165,6 +171,29 @@ func TestAzureTTSBuildsReferenceRequest(t *testing.T) {
 	}
 }
 
+func TestAzureTTSBuildsRequestWithConfiguredLanguage(t *testing.T) {
+	provider, err := NewAzureTTS("key", "eastus", "id-ID-GadisNeural", "id-ID")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+
+	req, err := buildAzureTTSRequest(context.Background(), provider, "halo")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	ssml := string(body)
+	if !strings.Contains(ssml, `xml:lang="id-ID"`) {
+		t.Fatalf("SSML = %q, want configured language", ssml)
+	}
+	if !strings.Contains(ssml, `voice name="id-ID-GadisNeural"`) {
+		t.Fatalf("SSML = %q, want configured voice", ssml)
+	}
+}
+
 func TestAzureTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	stream := &azureTTSChunkedStream{
 		body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
@@ -180,6 +209,24 @@ func TestAzureTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
+	}
+}
+
+func TestAzureTTSChunkedStreamKeepsFinalReadBytes(t *testing.T) {
+	stream := &azureTTSChunkedStream{
+		body:       &finalReadBytesCloser{data: []byte{0x01, 0x02}},
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if !bytes.Equal(audio.Frame.Data, []byte{0x01, 0x02}) {
+		t.Fatalf("data = %v, want final read bytes", audio.Frame.Data)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("second Next error = %v, want io.EOF", err)
 	}
 }
 
@@ -215,6 +262,23 @@ func TestAzureTTSSynthesizeUsesConfiguredClient(t *testing.T) {
 	if audio.Frame.SampleRate != 24000 {
 		t.Fatalf("sampleRate = %d, want 24000", audio.Frame.SampleRate)
 	}
+}
+
+type finalReadBytesCloser struct {
+	data []byte
+	done bool
+}
+
+func (r *finalReadBytesCloser) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	r.done = true
+	return copy(p, r.data), io.EOF
+}
+
+func (r *finalReadBytesCloser) Close() error {
+	return nil
 }
 
 func TestAzureTTSStreamReportsUnsupported(t *testing.T) {

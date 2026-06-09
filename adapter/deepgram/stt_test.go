@@ -59,6 +59,22 @@ func TestDeepgramSpeechEventPreservesAlternativeWords(t *testing.T) {
 	}
 }
 
+func TestDeepgramSpeechEventSkipsEmptyFinalTranscript(t *testing.T) {
+	resp := dgResponse{
+		Type:        "Results",
+		IsFinal:     true,
+		SpeechFinal: true,
+	}
+	resp.Metadata.RequestID = "request-empty"
+	resp.Channel.Alternatives = []dgAlternative{
+		{Transcript: "", Confidence: 0},
+	}
+
+	if event := deepgramSpeechEvent(resp); event != nil {
+		t.Fatalf("deepgramSpeechEvent() = %+v, want nil for empty final transcript", event)
+	}
+}
+
 func TestDeepgramRecognizeSpeechEventPreservesAlternativeWords(t *testing.T) {
 	speaker := 0
 	resp := dgRecognitionResponse{}

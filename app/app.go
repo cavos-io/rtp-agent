@@ -1498,21 +1498,27 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 		return nil
 	}
 	if ctx != nil {
-		if ctx.Room == nil {
-			if err := ctx.Connect(context.Background(), nil); err != nil {
+		roomOptions := a.RoomOptions
+		if roomOptions.DeleteRoom == nil {
+			roomOptions.DeleteRoom = func(deleteCtx context.Context, roomName string) error {
+				_, err := ctx.DeleteRoom(deleteCtx, roomName)
 				return err
 			}
 		}
+		var roomIO *worker.RoomIO
+		if ctx.Room == nil {
+			roomIO = worker.NewRoomIO(nil, a.Session, roomOptions)
+			if err := ctx.Connect(context.Background(), roomIO.GetCallback()); err != nil {
+				_ = roomIO.Close()
+				return err
+			}
+			roomIO.AttachRoom(ctx.Room)
+		}
 		if ctx.Room != nil {
 			a.Session.Room = ctx.Room
-			roomOptions := a.RoomOptions
-			if roomOptions.DeleteRoom == nil {
-				roomOptions.DeleteRoom = func(deleteCtx context.Context, roomName string) error {
-					_, err := ctx.DeleteRoom(deleteCtx, roomName)
-					return err
-				}
+			if roomIO == nil {
+				roomIO = worker.NewRoomIO(ctx.Room, a.Session, roomOptions)
 			}
-			roomIO := worker.NewRoomIO(ctx.Room, a.Session, roomOptions)
 			a.RoomIO = roomIO
 			if err := a.startAudioRecorder(ctx, roomIO); err != nil {
 				return err
@@ -3030,7 +3036,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = provider
 	case providerAzure:
-		provider, err := azure.NewAzureTTS("", "", cfg.TTSVoice)
+		provider, err := azure.NewAzureTTS("", "", cfg.TTSVoice, cfg.TTSLanguage)
 		if err != nil {
 			return nil, err
 		}
@@ -3061,7 +3067,17 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = provider
 	case providerGoogle:
-		provider, err := adaptergoogle.NewGoogleTTS(cfg.GoogleCredentialsFile)
+		ttsOpts := []adaptergoogle.GoogleTTSOption{}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSModel(cfg.TTSModel))
+		}
+		provider, err := adaptergoogle.NewGoogleTTS(cfg.GoogleCredentialsFile, ttsOpts...)
 		if err != nil {
 			return nil, err
 		}
