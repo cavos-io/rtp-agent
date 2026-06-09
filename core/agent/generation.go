@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"reflect"
 	"sort"
@@ -472,7 +473,19 @@ func PerformToolExecutions(
 					execCtx = WithRunContext(execCtx, NewRunContext(options.Session, options.SpeechHandle, &functionCall))
 				}
 				executionToolCtx := mockToolContext(execCtx, toolCtx, options.Session, fc.Name)
-				result := llm.ExecuteFunctionCall(execCtx, fc, executionToolCtx)
+				result := llm.FunctionCallResult{}
+				if executionToolCtx == nil || executionToolCtx.GetFunctionTool(fc.Name) == nil {
+					fncCall := llm.FunctionCall{
+						CallID:    fc.CallID,
+						Name:      fc.Name,
+						Arguments: fc.Arguments,
+						Extra:     fc.Extra,
+						CreatedAt: time.Now(),
+					}
+					result = llm.MakeToolOutput(fncCall, nil, llm.NewToolError(fmt.Sprintf("Unknown function: %s", fc.Name)))
+				} else {
+					result = llm.ExecuteFunctionCall(execCtx, fc, executionToolCtx)
+				}
 				outCh <- ToolExecutionOutput{
 					FncCall:    result.FncCall,
 					FncCallOut: result.FncCallOut,
