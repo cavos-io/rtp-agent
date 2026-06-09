@@ -4093,9 +4093,10 @@ func TestAgentSessionUsageReturnsCollectedSummary(t *testing.T) {
 }
 
 type recordingLogger struct {
-	infoMessages []string
-	warnMessages []string
-	infoFields   map[string]map[string]any
+	infoMessages  []string
+	warnMessages  []string
+	errorMessages []string
+	infoFields    map[string]map[string]any
 }
 
 func (l *recordingLogger) Debugw(msg string, keysAndValues ...any) {}
@@ -4117,7 +4118,9 @@ func (l *recordingLogger) Infow(msg string, keysAndValues ...any) {
 func (l *recordingLogger) Warnw(msg string, err error, keysAndValues ...any) {
 	l.warnMessages = append(l.warnMessages, msg)
 }
-func (l *recordingLogger) Errorw(msg string, err error, keysAndValues ...any) {}
+func (l *recordingLogger) Errorw(msg string, err error, keysAndValues ...any) {
+	l.errorMessages = append(l.errorMessages, msg)
+}
 func (l *recordingLogger) WithValues(keysAndValues ...any) livekitlogger.Logger {
 	return l
 }
@@ -4145,6 +4148,15 @@ func (l *recordingLogger) WithDeferredValues() (livekitlogger.Logger, livekitlog
 
 func (l *recordingLogger) hasInfo(msg string) bool {
 	for _, logged := range l.infoMessages {
+		if logged == msg {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *recordingLogger) hasError(msg string) bool {
+	for _, logged := range l.errorMessages {
 		if logged == msg {
 			return true
 		}
