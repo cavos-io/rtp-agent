@@ -76,8 +76,12 @@ func TestOpenAIRealtimeSessionRequiresAPIKeyBeforeDial(t *testing.T) {
 
 	_, err := model.Session()
 
-	if err == nil || !strings.Contains(err.Error(), "OPENAI_API_KEY") {
-		t.Fatalf("Session() error = %v, want OPENAI_API_KEY error", err)
+	if err == nil {
+		t.Fatal("Session() error = nil, want API key error")
+	}
+	want := "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable"
+	if err.Error() != want {
+		t.Fatalf("Session() error = %q, want %q", err.Error(), want)
 	}
 	if dialed {
 		t.Fatal("Session() dialed websocket before validating API key")

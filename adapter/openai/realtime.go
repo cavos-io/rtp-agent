@@ -247,7 +247,7 @@ type realtimeMessageGeneration struct {
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	if m.apiKey == "" {
-		return nil, fmt.Errorf("OPENAI_API_KEY is required, either as argument or set OPENAI_API_KEY environment variable")
+		return nil, fmt.Errorf("%s", "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable")
 	}
 	wsURL := openAIRealtimeSessionURL(m.baseURL, m.model)
 
