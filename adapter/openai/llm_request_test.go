@@ -956,6 +956,23 @@ func TestBuildOpenAIChatCompletionRequestMapsResponseFormat(t *testing.T) {
 	}
 }
 
+func TestBuildOpenAIChatCompletionRequestAppliesExtraParamResponseFormat(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"response_format": map[string]any{
+				"type": "json_object",
+			},
+		},
+	})
+
+	if req.ResponseFormat == nil {
+		t.Fatal("ResponseFormat = nil, want json_object response format")
+	}
+	if req.ResponseFormat.Type != openaisdk.ChatCompletionResponseFormatTypeJSONObject {
+		t.Fatalf("ResponseFormat.Type = %q, want json_object", req.ResponseFormat.Type)
+	}
+}
+
 func TestBuildOpenAIChatCompletionRequestDropsUnsupportedReasoningParams(t *testing.T) {
 	req := buildOpenAIChatCompletionRequest("openai/gpt-5", llm.NewChatContext(), &llm.ChatOptions{
 		ParallelToolCalls: true,

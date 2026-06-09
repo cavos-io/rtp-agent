@@ -592,6 +592,10 @@ func applyOpenAIExtraParams(req *openai.ChatCompletionRequest, params map[string
 			if v := buildOpenAIToolChoice(value); v != nil {
 				req.ToolChoice = v
 			}
+		case "response_format":
+			if v := asAnyMap(value); v != nil {
+				req.ResponseFormat = buildOpenAIResponseFormat(v)
+			}
 		case "service_tier":
 			if v, ok := value.(string); ok {
 				req.ServiceTier = openai.ServiceTier(v)
@@ -751,6 +755,15 @@ func asStringMap(value any) map[string]string {
 			out[key] = fmt.Sprint(val)
 		}
 		return out
+	default:
+		return nil
+	}
+}
+
+func asAnyMap(value any) map[string]any {
+	switch v := value.(type) {
+	case map[string]any:
+		return v
 	default:
 		return nil
 	}
