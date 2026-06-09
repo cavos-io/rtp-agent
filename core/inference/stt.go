@@ -476,8 +476,7 @@ func (s *inferenceSTTStream) Flush() error {
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
 	}
-
-	return s.flushLocked()
+	return nil
 }
 
 func (s *inferenceSTTStream) EndInput() error {

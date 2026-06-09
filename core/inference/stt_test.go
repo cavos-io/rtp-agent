@@ -826,6 +826,25 @@ func TestInferenceSTTStreamRejectsMismatchedSampleRates(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTStreamFlushDoesNotFinalize(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{}
+	stream := &inferenceSTTStream{
+		conn:    conn,
+		audioCh: make(chan *model.AudioFrame, 2),
+		eventCh: make(chan *stt.SpeechEvent, 1),
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	if len(conn.writes) != 0 {
+		t.Fatalf("writes = %#v, want no websocket finalize on flush", conn.writes)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("after"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatalf("PushFrame after Flush returned error: %v", err)
+	}
+}
+
 func TestInferenceSTTStreamEndInputFinalizesAndRejectsMoreInput(t *testing.T) {
 	var _ stt.InputEnding = (*inferenceSTTStream)(nil)
 
