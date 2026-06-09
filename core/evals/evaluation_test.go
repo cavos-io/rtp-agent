@@ -98,6 +98,21 @@ func TestFormatChatCtxAgentConfigUpdateMatchesReferenceShape(t *testing.T) {
 	}
 }
 
+func TestFormatChatCtxInterruptedMessageMatchesReferenceShape(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.Append(&llm.ChatMessage{
+		Role:        llm.ChatRoleAssistant,
+		Content:     []llm.ChatContent{{Text: "I can help with that"}},
+		Interrupted: true,
+	})
+
+	got := formatChatCtx(chatCtx)
+	want := "assistant: I can help with that [interrupted]"
+	if got != want {
+		t.Fatalf("formatChatCtx() = %q, want %q", got, want)
+	}
+}
+
 func TestJudgeHandoffShortCircuitCarriesInstructions(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	judge := NewJudge("handoff", "only evaluate actual handoffs", nil)

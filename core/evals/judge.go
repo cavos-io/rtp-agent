@@ -185,7 +185,11 @@ func formatChatCtx(ctx *llm.ChatContext) string {
 	for _, item := range ctx.Items {
 		switch it := item.(type) {
 		case *llm.ChatMessage:
-			parts = append(parts, fmt.Sprintf("%s: %s", it.Role, it.TextContent()))
+			line := fmt.Sprintf("%s: %s", it.Role, it.TextContent())
+			if it.Interrupted {
+				line += " [interrupted]"
+			}
+			parts = append(parts, line)
 		case *llm.FunctionCall:
 			parts = append(parts, fmt.Sprintf("[function call: %s(%s)]", it.Name, it.Arguments))
 		case *llm.FunctionCallOutput:
