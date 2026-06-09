@@ -581,24 +581,27 @@ func (s *inferenceTTSStream) run() {
 
 			if evType, ok := ev["type"].(string); ok {
 				if evType == "output_audio" {
-					if audioB64, ok := ev["audio"].(string); ok {
-						data, err := base64.StdEncoding.DecodeString(audioB64)
-						if err != nil {
-							s.setStreamError(fmt.Errorf("invalid output_audio payload: %w", err))
-							return
-						}
-						if pendingAudio != nil {
-							s.eventCh <- pendingAudio
-						}
-						pendingAudio = &tts.SynthesizedAudio{
-							SegmentID: currentSessionID,
-							Frame: &model.AudioFrame{
-								Data:              data,
-								SampleRate:        uint32(s.sampleRate),
-								NumChannels:       1,
-								SamplesPerChannel: uint32(len(data) / 2),
-							},
-						}
+					audioB64, ok := ev["audio"].(string)
+					if !ok {
+						s.setStreamError(fmt.Errorf("missing output_audio payload"))
+						return
+					}
+					data, err := base64.StdEncoding.DecodeString(audioB64)
+					if err != nil {
+						s.setStreamError(fmt.Errorf("invalid output_audio payload: %w", err))
+						return
+					}
+					if pendingAudio != nil {
+						s.eventCh <- pendingAudio
+					}
+					pendingAudio = &tts.SynthesizedAudio{
+						SegmentID: currentSessionID,
+						Frame: &model.AudioFrame{
+							Data:              data,
+							SampleRate:        uint32(s.sampleRate),
+							NumChannels:       1,
+							SamplesPerChannel: uint32(len(data) / 2),
+						},
 					}
 				} else if evType == "output_alignment" {
 					if timedTranscript := inferenceTTSTimedTranscript(ev); len(timedTranscript) > 0 {

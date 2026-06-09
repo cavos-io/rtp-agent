@@ -743,6 +743,43 @@ func TestInferenceTTSInvalidOutputAudioReturnsNextError(t *testing.T) {
 	}
 }
 
+func TestInferenceTTSMissingOutputAudioPayloadReturnsNextError(t *testing.T) {
+	readCh := make(chan []byte, 1)
+	readCh <- []byte(`{"type":"output_audio"}`)
+	close(readCh)
+
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{readCh: readCh}, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	ending, ok := stream.(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next() error = nil, want missing output_audio payload error")
+	}
+	if !strings.Contains(err.Error(), "missing output_audio payload") {
+		t.Fatalf("Next() error = %v, want missing output_audio payload", err)
+	}
+}
+
 func TestInferenceTTSDoneMessageReturnsEOF(t *testing.T) {
 	readCh := make(chan []byte, 2)
 	readCh <- []byte(`{"type":"done"}`)
