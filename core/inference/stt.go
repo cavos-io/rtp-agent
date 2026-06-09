@@ -14,6 +14,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/gorilla/websocket"
 )
 
@@ -105,12 +106,13 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 
 	ctx, cancel := context.WithCancel(ctx)
 	stream := &inferenceSTTStream{
-		stt:     s,
-		conn:    conn,
-		ctx:     ctx,
-		cancel:  cancel,
-		audioCh: make(chan *model.AudioFrame, 100),
-		eventCh: make(chan *stt.SpeechEvent, 100),
+		stt:       s,
+		conn:      conn,
+		ctx:       ctx,
+		cancel:    cancel,
+		requestID: cavosmath.ShortUUID("stt_request_"),
+		audioCh:   make(chan *model.AudioFrame, 100),
+		eventCh:   make(chan *stt.SpeechEvent, 100),
 	}
 
 	go stream.run()
@@ -165,6 +167,7 @@ type inferenceSTTStream struct {
 	cancel          context.CancelFunc
 	audioCh         chan *model.AudioFrame
 	eventCh         chan *stt.SpeechEvent
+	requestID       string
 	mu              sync.Mutex
 	closed          bool
 	inputEnded      bool
@@ -317,6 +320,13 @@ func (s *inferenceSTTStream) transcriptLanguage(data map[string]interface{}) str
 	return "en"
 }
 
+func (s *inferenceSTTStream) transcriptRequestID(data map[string]interface{}) string {
+	if requestID := stringFromMap(data, "request_id"); requestID != "" {
+		return requestID
+	}
+	return s.requestID
+}
+
 func stringFromMap(data map[string]interface{}, key string) string {
 	value, _ := data[key].(string)
 	return value
@@ -408,7 +418,7 @@ func (s *inferenceSTTStream) processPreflightTranscript(data map[string]interfac
 		return
 	}
 
-	requestID, _ := data["request_id"].(string)
+	requestID := s.transcriptRequestID(data)
 	speechData := s.buildSpeechData(data)
 	s.eventCh <- &stt.SpeechEvent{
 		Type:         stt.SpeechEventPreflightTranscript,
@@ -419,7 +429,7 @@ func (s *inferenceSTTStream) processPreflightTranscript(data map[string]interfac
 
 func (s *inferenceSTTStream) processTranscript(data map[string]interface{}, isFinal bool) {
 	text, _ := data["transcript"].(string)
-	requestID, _ := data["request_id"].(string)
+	requestID := s.transcriptRequestID(data)
 
 	if text == "" && !isFinal {
 		return

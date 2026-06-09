@@ -418,6 +418,26 @@ func TestInferenceSTTTranscriptUsesReferenceConfidenceDefault(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTTranscriptUsesReferenceRequestIDFallback(t *testing.T) {
+	stream := &inferenceSTTStream{
+		requestID: "stt_request_test",
+		eventCh:   make(chan *stt.SpeechEvent, 3),
+	}
+
+	stream.processTranscript(map[string]interface{}{
+		"transcript": "hello",
+	}, true)
+
+	<-stream.eventCh
+	final := <-stream.eventCh
+	if final.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event type = %s, want final_transcript", final.Type)
+	}
+	if final.RequestID != "stt_request_test" {
+		t.Fatalf("RequestID = %q, want fallback stream request id", final.RequestID)
+	}
+}
+
 func TestInferenceSTTPreflightTranscriptRequiresActiveSpeech(t *testing.T) {
 	stream := &inferenceSTTStream{
 		eventCh: make(chan *stt.SpeechEvent, 3),
