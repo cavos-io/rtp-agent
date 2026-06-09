@@ -110,6 +110,34 @@ func TestConnectionPoolExpiredCloseErrorDoesNotBlockFreshGet(t *testing.T) {
 	}
 }
 
+func TestConnectionPoolDeferredCloseErrorDoesNotBlockNextGet(t *testing.T) {
+	var next int
+	closeErr := errors.New("close failed")
+	pool := NewConnectionPool(ConnectionPoolOptions[int]{
+		Connect: func(context.Context) (int, error) {
+			next++
+			return next, nil
+		},
+		Close: func(context.Context, int) error {
+			return closeErr
+		},
+	})
+
+	conn, err := pool.Get(context.Background(), time.Second)
+	if err != nil {
+		t.Fatalf("Get() first error = %v", err)
+	}
+	pool.Remove(conn)
+
+	fresh, err := pool.Get(context.Background(), time.Second)
+	if err != nil {
+		t.Fatalf("Get() after deferred close error = %v, want nil despite close failure", err)
+	}
+	if fresh == conn || pool.LastConnectionReused {
+		t.Fatalf("Get() after deferred close conn=%d reused=%v, want fresh connection", fresh, pool.LastConnectionReused)
+	}
+}
+
 func TestConnectionPoolInvalidateClosesOnNextGet(t *testing.T) {
 	var next int
 	var closed []int

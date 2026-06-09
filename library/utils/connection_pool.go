@@ -47,9 +47,7 @@ func (p *ConnectionPool[T]) Get(ctx context.Context, timeout time.Duration) (T, 
 	defer p.mu.Unlock()
 
 	var zero T
-	if err := p.drainToCloseLocked(ctx); err != nil {
-		return zero, err
-	}
+	p.drainToCloseLocked(ctx)
 
 	now := time.Now()
 	for conn := range p.available {
@@ -144,7 +142,8 @@ func (p *ConnectionPool[T]) Close(ctx context.Context) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.drainToCloseLocked(ctx)
+	p.drainToCloseLocked(ctx)
+	return nil
 }
 
 func (p *ConnectionPool[T]) connectLocked(ctx context.Context, timeout time.Duration) (T, error) {
@@ -175,14 +174,11 @@ func (p *ConnectionPool[T]) removeLocked(conn T) {
 	}
 }
 
-func (p *ConnectionPool[T]) drainToCloseLocked(ctx context.Context) error {
+func (p *ConnectionPool[T]) drainToCloseLocked(ctx context.Context) {
 	for conn := range p.toClose {
 		delete(p.toClose, conn)
 		if p.opts.Close != nil {
-			if err := p.opts.Close(ctx, conn); err != nil {
-				return err
-			}
+			_ = p.opts.Close(ctx, conn)
 		}
 	}
-	return nil
 }
