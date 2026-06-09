@@ -2283,6 +2283,9 @@ func TestAgentSessionGenerateReplyOptionsRejectUnknownTools(t *testing.T) {
 	if err == nil {
 		t.Fatal("GenerateReplyWithOptions error = nil, want unknown tool error")
 	}
+	if got, want := err.Error(), "tool 'missing' not found in agent's registered tools. Available tools: ['lookup']"; got != want {
+		t.Fatalf("GenerateReplyWithOptions error text = %q, want %q", got, want)
+	}
 }
 
 func TestAgentSessionRunReturnsRunResultWatchingGeneratedSpeech(t *testing.T) {
