@@ -132,6 +132,9 @@ func (t *MurfTTS) SampleRate() int  { return t.sampleRate }
 func (t *MurfTTS) NumChannels() int { return 1 }
 
 func (t *MurfTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if err := validateMurfAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
 	req, err := buildMurfTTSRequest(ctx, t, text)
 	if err != nil {
 		return nil, err
@@ -184,6 +187,9 @@ func buildMurfTTSRequest(ctx context.Context, t *MurfTTS, text string) (*http.Re
 }
 
 func (t *MurfTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if err := validateMurfAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildMurfTTSWebsocketURL(t).String(), buildMurfTTSWebsocketHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial murf tts websocket: %w", err)
@@ -201,6 +207,13 @@ func (t *MurfTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	go stream.readLoop()
 	return stream, nil
+}
+
+func validateMurfAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("murf api key required: MURF_API_KEY must be set")
+	}
+	return nil
 }
 
 func buildMurfTTSWebsocketURL(t *MurfTTS) *url.URL {

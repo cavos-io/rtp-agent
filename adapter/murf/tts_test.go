@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -58,6 +59,21 @@ func TestNewMurfTTSUsesEnvironmentAPIKey(t *testing.T) {
 	explicit := NewMurfTTS("explicit-key", "")
 	if explicit.apiKey != "explicit-key" {
 		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
+func TestMurfTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("MURF_API_KEY", "")
+	provider := NewMurfTTS("", "", WithMurfTTSBaseURL("://bad-url"))
+
+	_, synthErr := provider.Synthesize(context.Background(), "hello")
+	if synthErr == nil || !strings.Contains(synthErr.Error(), "MURF_API_KEY") {
+		t.Fatalf("Synthesize error = %v, want missing API key error", synthErr)
+	}
+
+	_, streamErr := provider.Stream(context.Background())
+	if streamErr == nil || !strings.Contains(streamErr.Error(), "MURF_API_KEY") {
+		t.Fatalf("Stream error = %v, want missing API key error", streamErr)
 	}
 }
 
