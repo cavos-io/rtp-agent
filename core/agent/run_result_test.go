@@ -317,6 +317,9 @@ func TestRunResultFinalOutputRejectsUnexpectedType(t *testing.T) {
 	if !errors.Is(err, ErrRunResultFinalOutputType) {
 		t.Fatalf("FinalOutput error = %v, want ErrRunResultFinalOutputType", err)
 	}
+	if got, want := err.Error(), "Expected output of type string, got int"; got != want {
+		t.Fatalf("FinalOutput error text = %q, want %q", got, want)
+	}
 	if output != nil {
 		t.Fatalf("FinalOutput output = %#v, want nil on type mismatch", output)
 	}
@@ -382,6 +385,9 @@ func TestRunResultSetFinalOutputRejectsUnexpectedType(t *testing.T) {
 	output, err := result.FinalOutput()
 	if !errors.Is(err, ErrRunResultFinalOutputType) {
 		t.Fatalf("FinalOutput error = %v, want ErrRunResultFinalOutputType", err)
+	}
+	if got, want := err.Error(), "Expected output of type string, got int"; got != want {
+		t.Fatalf("FinalOutput error text = %q, want %q", got, want)
 	}
 	if output != nil {
 		t.Fatalf("FinalOutput output = %#v, want nil on type mismatch", output)
