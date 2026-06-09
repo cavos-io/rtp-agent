@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,12 +21,14 @@ import (
 )
 
 type STT struct {
+	mu             sync.Mutex
 	model          string
 	language       string
 	encoding       string
 	sampleRate     int
 	extraKwargs    map[string]any
 	fallbackModels []FallbackModel
+	streams        map[*inferenceSTTStream]struct{}
 	apiKey         string
 	apiSecret      string
 	baseURL        string
@@ -107,8 +110,24 @@ func NewSTT(model string, apiKey, apiSecret string, opts ...STTOption) *STT {
 }
 
 func (s *STT) UpdateOptions(opts ...STTOption) {
+	s.mu.Lock()
+	oldModel := s.model
+	oldLanguage := s.language
+	oldExtra := cloneSTTExtra(s.extraKwargs)
 	for _, opt := range opts {
 		opt(s)
+	}
+	updateSettings := sttUpdateSettings(oldModel, oldLanguage, oldExtra, s.model, s.language, s.extraKwargs)
+	streams := make([]*inferenceSTTStream, 0, len(s.streams))
+	if len(updateSettings) > 0 {
+		for stream := range s.streams {
+			streams = append(streams, stream)
+		}
+	}
+	s.mu.Unlock()
+
+	for _, stream := range streams {
+		stream.updateOptions(updateSettings)
 	}
 }
 
@@ -182,9 +201,25 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		eventCh:   make(chan *stt.SpeechEvent, 100),
 	}
 
+	s.registerStream(stream)
 	go stream.run()
 
 	return stream, nil
+}
+
+func (s *STT) registerStream(stream *inferenceSTTStream) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.streams == nil {
+		s.streams = make(map[*inferenceSTTStream]struct{})
+	}
+	s.streams[stream] = struct{}{}
+}
+
+func (s *STT) unregisterStream(stream *inferenceSTTStream) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.streams, stream)
 }
 
 func defaultInferenceSTTDialer(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
@@ -270,6 +305,32 @@ func cloneSTTExtra(extra map[string]any) map[string]any {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func sttUpdateSettings(oldModel string, oldLanguage string, oldExtra map[string]any, model string, language string, extra map[string]any) map[string]interface{} {
+	settings := map[string]interface{}{}
+	if model != oldModel {
+		settings["model"] = model
+	}
+	if language != oldLanguage {
+		settings["language"] = language
+	}
+	extraUpdate := sttChangedExtra(oldExtra, extra)
+	if len(extraUpdate) > 0 {
+		settings["extra"] = extraUpdate
+	}
+	return settings
+}
+
+func sttChangedExtra(oldExtra map[string]any, extra map[string]any) map[string]any {
+	changed := map[string]any{}
+	for key, value := range extra {
+		oldValue, ok := oldExtra[key]
+		if !ok || !reflect.DeepEqual(oldValue, value) {
+			changed[key] = value
+		}
+	}
+	return changed
 }
 
 func sttDiarizationEnabled(extra map[string]any) bool {
@@ -425,17 +486,47 @@ func (s *inferenceSTTStream) flushLocked() error {
 	return s.conn.WriteJSON(endPkt)
 }
 
-func (s *inferenceSTTStream) Close() error {
+func (s *inferenceSTTStream) updateOptions(settings map[string]interface{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed || len(settings) == 0 {
+		return
+	}
+	_ = s.conn.WriteJSON(map[string]interface{}{
+		"type":     "session.update",
+		"settings": settings,
+	})
+}
+
+func (s *inferenceSTTStream) Close() error {
+	s.mu.Lock()
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
-	s.cancel()
-	s.conn.Close()
-	close(s.audioCh)
-	close(s.eventCh)
+	cancel := s.cancel
+	conn := s.conn
+	audioCh := s.audioCh
+	eventCh := s.eventCh
+	parent := s.stt
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if conn != nil {
+		conn.Close()
+	}
+	if audioCh != nil {
+		close(audioCh)
+	}
+	if eventCh != nil {
+		close(eventCh)
+	}
+	if parent != nil {
+		parent.unregisterStream(s)
+	}
 	return nil
 }
 

@@ -227,6 +227,52 @@ func TestInferenceSTTUpdateOptionsMatchReferenceFutureStreams(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTUpdateOptionsSendsReferenceSessionUpdateToActiveStream(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{readBlock: make(chan struct{})}
+	provider := NewSTT("deepgram/nova-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	provider.UpdateOptions(
+		WithSTTModel("assemblyai/universal-streaming"),
+		WithSTTLanguage("id"),
+		WithSTTExtraKwargs(map[string]any{"speaker_labels": true}),
+	)
+
+	if len(conn.writes) != 2 {
+		t.Fatalf("writes = %d, want session.create and session.update", len(conn.writes))
+	}
+	update := conn.writes[1]
+	if update["type"] != "session.update" {
+		t.Fatalf("second write type = %#v, want session.update", update["type"])
+	}
+	settings, ok := update["settings"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("session.update settings = %#v, want map", update["settings"])
+	}
+	if settings["model"] != "assemblyai/universal-streaming" {
+		t.Fatalf("settings.model = %#v, want assemblyai/universal-streaming", settings["model"])
+	}
+	if settings["language"] != "id" {
+		t.Fatalf("settings.language = %#v, want id", settings["language"])
+	}
+	extra, ok := settings["extra"].(map[string]any)
+	if !ok {
+		t.Fatalf("settings.extra = %#v, want map", settings["extra"])
+	}
+	if extra["speaker_labels"] != true {
+		t.Fatalf("settings.extra.speaker_labels = %#v, want true", extra["speaker_labels"])
+	}
+}
+
 func TestSTTWebsocketSendsReferenceInferenceHeaders(t *testing.T) {
 	var captured http.Header
 	provider := NewSTT("deepgram/nova-3", "key", "secret")
@@ -744,8 +790,9 @@ func TestInferenceSTTStreamEndInputFinalizesAndRejectsMoreInput(t *testing.T) {
 }
 
 type fakeInferenceWebsocketConn struct {
-	writes []map[string]interface{}
-	closed bool
+	writes    []map[string]interface{}
+	closed    bool
+	readBlock chan struct{}
 }
 
 func (f *fakeInferenceWebsocketConn) WriteJSON(v interface{}) error {
@@ -755,10 +802,17 @@ func (f *fakeInferenceWebsocketConn) WriteJSON(v interface{}) error {
 }
 
 func (f *fakeInferenceWebsocketConn) ReadMessage() (int, []byte, error) {
+	if f.readBlock != nil {
+		<-f.readBlock
+	}
 	return 0, nil, io.EOF
 }
 
 func (f *fakeInferenceWebsocketConn) Close() error {
 	f.closed = true
+	if f.readBlock != nil {
+		close(f.readBlock)
+		f.readBlock = nil
+	}
 	return nil
 }
