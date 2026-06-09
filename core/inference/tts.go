@@ -24,6 +24,7 @@ type TTS struct {
 	voice             string
 	language          string
 	extraKwargs       map[string]any
+	fallbackModels    []FallbackModel
 	apiKey            string
 	apiSecret         string
 	baseURL           string
@@ -58,6 +59,12 @@ func WithTTSLanguage(language string) TTSOption {
 func WithTTSExtraKwargs(extra map[string]any) TTSOption {
 	return func(t *TTS) {
 		t.extraKwargs = cloneTTSExtra(extra)
+	}
+}
+
+func WithTTSFallbackModels(models ...FallbackModel) TTSOption {
+	return func(t *TTS) {
+		t.fallbackModels = cloneTTSFallbackModels(models)
 	}
 }
 
@@ -173,7 +180,7 @@ func (t *TTS) connectTTSWebsocket(ctx context.Context) (inferenceTTSConn, error)
 		return nil, err
 	}
 
-	modelName, createParams := ttsSessionCreateParams(t.model, t.voice, t.language, t.extraKwargs)
+	modelName, createParams := ttsSessionCreateParams(t.model, t.voice, t.language, t.extraKwargs, t.fallbackModels)
 
 	wsURL, err := url.Parse(t.baseURL + "/tts")
 	if err != nil {
@@ -208,7 +215,7 @@ func defaultInferenceTTSDialer(ctx context.Context, endpoint string, header http
 	return conn, nil
 }
 
-func ttsSessionCreateParams(model string, voice string, language string, extra map[string]any) (string, map[string]interface{}) {
+func ttsSessionCreateParams(model string, voice string, language string, extra map[string]any, fallback []FallbackModel) (string, map[string]interface{}) {
 	modelName, voice := ttsModelAndVoice(model, voice)
 	createParams := map[string]interface{}{
 		"type":        "session.create",
@@ -224,6 +231,11 @@ func ttsSessionCreateParams(model string, voice string, language string, extra m
 	}
 	if language != "" {
 		createParams["language"] = language
+	}
+	if len(fallback) > 0 {
+		createParams["fallback"] = map[string]interface{}{
+			"models": ttsFallbackModelsPayload(fallback),
+		}
 	}
 	return modelName, createParams
 }
@@ -246,6 +258,30 @@ func cloneTTSExtra(extra map[string]any) map[string]any {
 	cloned := make(map[string]any, len(extra))
 	for key, value := range extra {
 		cloned[key] = value
+	}
+	return cloned
+}
+
+func ttsFallbackModelsPayload(models []FallbackModel) []map[string]interface{} {
+	payload := make([]map[string]interface{}, 0, len(models))
+	for _, model := range models {
+		payload = append(payload, map[string]interface{}{
+			"model": model.Model,
+			"voice": model.Voice,
+			"extra": ttsExtraPayload(model.ExtraKwargs),
+		})
+	}
+	return payload
+}
+
+func cloneTTSFallbackModels(models []FallbackModel) []FallbackModel {
+	if len(models) == 0 {
+		return nil
+	}
+	cloned := make([]FallbackModel, 0, len(models))
+	for _, model := range models {
+		model.ExtraKwargs = cloneTTSExtra(model.ExtraKwargs)
+		cloned = append(cloned, model)
 	}
 	return cloned
 }

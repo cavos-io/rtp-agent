@@ -43,6 +43,79 @@ func TestInferenceSTTCapabilitiesUseReferenceDefaultDiarization(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTExtraKwargsMatchReferenceSessionCreate(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{}
+	provider := NewSTT("deepgram/nova-3", "key", "secret", WithSTTExtraKwargs(map[string]any{
+		"diarize":  true,
+		"keyterms": []string{"livekit"},
+	}))
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	if !provider.Capabilities().Diarization {
+		t.Fatal("Diarization = false, want true when reference diarize extra kwarg is truthy")
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if len(conn.writes) != 1 {
+		t.Fatalf("writes = %d, want session.create", len(conn.writes))
+	}
+	settings, ok := conn.writes[0]["settings"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("settings = %#v, want map", conn.writes[0]["settings"])
+	}
+	extra, ok := settings["extra"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("settings.extra = %#v, want map", settings["extra"])
+	}
+	if got := extra["diarize"]; got != true {
+		t.Fatalf("settings.extra.diarize = %#v, want true", got)
+	}
+	keyterms, ok := extra["keyterms"].([]string)
+	if !ok || len(keyterms) != 1 || keyterms[0] != "livekit" {
+		t.Fatalf("settings.extra.keyterms = %#v, want [livekit]", extra["keyterms"])
+	}
+}
+
+func TestInferenceSTTSessionCreateUsesReferenceAudioOptions(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{}
+	provider := NewSTT("deepgram/nova-3", "key", "secret",
+		WithSTTSampleRate(8000),
+		WithSTTEncoding("mulaw"),
+	)
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if len(conn.writes) != 1 {
+		t.Fatalf("writes = %d, want session.create", len(conn.writes))
+	}
+	settings, ok := conn.writes[0]["settings"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("settings = %#v, want map", conn.writes[0]["settings"])
+	}
+	if settings["sample_rate"] != "8000" {
+		t.Fatalf("settings.sample_rate = %#v, want string 8000", settings["sample_rate"])
+	}
+	if settings["encoding"] != "mulaw" {
+		t.Fatalf("settings.encoding = %#v, want mulaw", settings["encoding"])
+	}
+}
+
 func TestInferenceSTTRecognizeMatchesReferenceUnsupportedBatch(t *testing.T) {
 	provider := NewSTT("deepgram/nova-3", "key", "secret")
 
@@ -97,6 +170,106 @@ func TestNewSTTPreservesReferenceModelStringLanguageForStream(t *testing.T) {
 	}
 	if settings["language"] != "en" {
 		t.Fatalf("settings.language = %#v, want parsed model string language", settings["language"])
+	}
+}
+
+func TestInferenceSTTUpdateOptionsMatchReferenceFutureStreams(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{}
+	provider := NewSTT("deepgram/nova-3", "key", "secret", WithSTTExtraKwargs(map[string]any{
+		"keyterms": []string{"existing"},
+	}))
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	provider.UpdateOptions(
+		WithSTTModel("assemblyai/universal-streaming:id"),
+		WithSTTLanguage("fr"),
+		WithSTTExtraKwargs(map[string]any{"speaker_labels": true}),
+	)
+
+	if got := stt.Model(provider); got != "assemblyai/universal-streaming" {
+		t.Fatalf("Model = %q, want updated model without language suffix", got)
+	}
+	if !provider.Capabilities().Diarization {
+		t.Fatal("Diarization = false, want true after update extra enables speaker_labels")
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if len(conn.writes) != 1 {
+		t.Fatalf("writes = %d, want session.create", len(conn.writes))
+	}
+	if conn.writes[0]["model"] != "assemblyai/universal-streaming" {
+		t.Fatalf("session.create model = %#v, want assemblyai/universal-streaming", conn.writes[0]["model"])
+	}
+	settings, ok := conn.writes[0]["settings"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("settings = %#v, want map", conn.writes[0]["settings"])
+	}
+	if settings["language"] != "fr" {
+		t.Fatalf("settings.language = %#v, want explicit update language", settings["language"])
+	}
+	extra, ok := settings["extra"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("settings.extra = %#v, want map", settings["extra"])
+	}
+	if _, ok := extra["keyterms"]; !ok {
+		t.Fatalf("settings.extra = %#v, want existing extra retained", extra)
+	}
+	if extra["speaker_labels"] != true {
+		t.Fatalf("settings.extra.speaker_labels = %#v, want true", extra["speaker_labels"])
+	}
+}
+
+func TestInferenceSTTUpdateOptionsSendsReferenceSessionUpdateToActiveStream(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{readBlock: make(chan struct{})}
+	provider := NewSTT("deepgram/nova-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	provider.UpdateOptions(
+		WithSTTModel("assemblyai/universal-streaming"),
+		WithSTTLanguage("id"),
+		WithSTTExtraKwargs(map[string]any{"speaker_labels": true}),
+	)
+
+	if len(conn.writes) != 2 {
+		t.Fatalf("writes = %d, want session.create and session.update", len(conn.writes))
+	}
+	update := conn.writes[1]
+	if update["type"] != "session.update" {
+		t.Fatalf("second write type = %#v, want session.update", update["type"])
+	}
+	settings, ok := update["settings"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("session.update settings = %#v, want map", update["settings"])
+	}
+	if settings["model"] != "assemblyai/universal-streaming" {
+		t.Fatalf("settings.model = %#v, want assemblyai/universal-streaming", settings["model"])
+	}
+	if settings["language"] != "id" {
+		t.Fatalf("settings.language = %#v, want id", settings["language"])
+	}
+	extra, ok := settings["extra"].(map[string]any)
+	if !ok {
+		t.Fatalf("settings.extra = %#v, want map", settings["extra"])
+	}
+	if extra["speaker_labels"] != true {
+		t.Fatalf("settings.extra.speaker_labels = %#v, want true", extra["speaker_labels"])
 	}
 }
 
@@ -155,7 +328,7 @@ func TestSTTWebsocketSendsReferenceContextHeaders(t *testing.T) {
 }
 
 func TestInferenceSTTSessionCreateParamsMatchReferenceShape(t *testing.T) {
-	modelName, params := sttSessionCreateParams("auto:en", "")
+	modelName, params := sttSessionCreateParams("auto:en", "", "", 0, nil, nil)
 
 	if modelName != "auto" {
 		t.Fatalf("modelName = %q, want auto", modelName)
@@ -172,6 +345,56 @@ func TestInferenceSTTSessionCreateParamsMatchReferenceShape(t *testing.T) {
 	}
 	if extra, ok := settings["extra"].(map[string]interface{}); !ok || len(extra) != 0 {
 		t.Fatalf("settings.extra = %#v, want empty map", settings["extra"])
+	}
+}
+
+func TestInferenceSTTFallbackModelsMatchReferenceSessionCreate(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{}
+	provider := NewSTT("deepgram/nova-3", "key", "secret", WithSTTFallbackModels(
+		FallbackModel{
+			Model:       "assemblyai/universal-streaming",
+			ExtraKwargs: map[string]any{"format_turns": true},
+		},
+		FallbackModel{Model: "cartesia/ink-whisper"},
+	))
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if len(conn.writes) != 1 {
+		t.Fatalf("writes = %d, want session.create", len(conn.writes))
+	}
+	fallback, ok := conn.writes[0]["fallback"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("fallback = %#v, want map", conn.writes[0]["fallback"])
+	}
+	models, ok := fallback["models"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("fallback.models = %#v, want model maps", fallback["models"])
+	}
+	if len(models) != 2 {
+		t.Fatalf("fallback models = %#v, want 2 entries", models)
+	}
+	if models[0]["model"] != "assemblyai/universal-streaming" {
+		t.Fatalf("first fallback model = %#v, want assemblyai/universal-streaming", models[0])
+	}
+	extra, ok := models[0]["extra"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("first fallback extra = %#v, want map", models[0]["extra"])
+	}
+	if got := extra["format_turns"]; got != true {
+		t.Fatalf("first fallback extra format_turns = %#v, want true", got)
+	}
+	extra, ok = models[1]["extra"].(map[string]interface{})
+	if !ok || len(extra) != 0 {
+		t.Fatalf("second fallback extra = %#v, want empty map", models[1]["extra"])
 	}
 }
 
@@ -567,8 +790,9 @@ func TestInferenceSTTStreamEndInputFinalizesAndRejectsMoreInput(t *testing.T) {
 }
 
 type fakeInferenceWebsocketConn struct {
-	writes []map[string]interface{}
-	closed bool
+	writes    []map[string]interface{}
+	closed    bool
+	readBlock chan struct{}
 }
 
 func (f *fakeInferenceWebsocketConn) WriteJSON(v interface{}) error {
@@ -578,10 +802,17 @@ func (f *fakeInferenceWebsocketConn) WriteJSON(v interface{}) error {
 }
 
 func (f *fakeInferenceWebsocketConn) ReadMessage() (int, []byte, error) {
+	if f.readBlock != nil {
+		<-f.readBlock
+	}
 	return 0, nil, io.EOF
 }
 
 func (f *fakeInferenceWebsocketConn) Close() error {
 	f.closed = true
+	if f.readBlock != nil {
+		close(f.readBlock)
+		f.readBlock = nil
+	}
 	return nil
 }

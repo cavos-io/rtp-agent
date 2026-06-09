@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -19,29 +21,113 @@ import (
 )
 
 type STT struct {
-	model         string
-	language      string
-	apiKey        string
-	apiSecret     string
-	baseURL       string
-	dialWebsocket inferenceSTTDialer
+	mu             sync.Mutex
+	model          string
+	language       string
+	encoding       string
+	sampleRate     int
+	extraKwargs    map[string]any
+	fallbackModels []FallbackModel
+	streams        map[*inferenceSTTStream]struct{}
+	apiKey         string
+	apiSecret      string
+	baseURL        string
+	dialWebsocket  inferenceSTTDialer
 }
+
+type STTOption func(*STT)
 
 type inferenceSTTDialer func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error)
 
-func NewSTT(model string, apiKey, apiSecret string) *STT {
+func WithSTTModel(model string) STTOption {
+	return func(s *STT) {
+		modelName, language := sttModelAndLanguage(model, "")
+		s.model = modelName
+		if language != "" {
+			s.language = language
+		}
+	}
+}
+
+func WithSTTLanguage(language string) STTOption {
+	return func(s *STT) {
+		s.language = language
+	}
+}
+
+func WithSTTFallbackModels(models ...FallbackModel) STTOption {
+	return func(s *STT) {
+		s.fallbackModels = cloneSTTFallbackModels(models)
+	}
+}
+
+func WithSTTExtraKwargs(extra map[string]any) STTOption {
+	return func(s *STT) {
+		if len(extra) == 0 {
+			return
+		}
+		if s.extraKwargs == nil {
+			s.extraKwargs = make(map[string]any, len(extra))
+		}
+		for key, value := range extra {
+			s.extraKwargs[key] = value
+		}
+	}
+}
+
+func WithSTTEncoding(encoding string) STTOption {
+	return func(s *STT) {
+		s.encoding = encoding
+	}
+}
+
+func WithSTTSampleRate(sampleRate int) STTOption {
+	return func(s *STT) {
+		s.sampleRate = sampleRate
+	}
+}
+
+func NewSTT(model string, apiKey, apiSecret string, opts ...STTOption) *STT {
 	if model == "" {
 		model = "deepgram/nova-3"
 	}
 	model, language := sttModelAndLanguage(model, "")
 	apiKey, apiSecret = resolveInferenceCredentials(apiKey, apiSecret)
-	return &STT{
+	s := &STT{
 		model:         model,
 		language:      language,
+		encoding:      "pcm_s16le",
+		sampleRate:    16000,
 		apiKey:        apiKey,
 		apiSecret:     apiSecret,
 		baseURL:       defaultInferenceWebsocketURL(),
 		dialWebsocket: defaultInferenceSTTDialer,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+func (s *STT) UpdateOptions(opts ...STTOption) {
+	s.mu.Lock()
+	oldModel := s.model
+	oldLanguage := s.language
+	oldExtra := cloneSTTExtra(s.extraKwargs)
+	for _, opt := range opts {
+		opt(s)
+	}
+	updateSettings := sttUpdateSettings(oldModel, oldLanguage, oldExtra, s.model, s.language, s.extraKwargs)
+	streams := make([]*inferenceSTTStream, 0, len(s.streams))
+	if len(updateSettings) > 0 {
+		for stream := range s.streams {
+			streams = append(streams, stream)
+		}
+	}
+	s.mu.Unlock()
+
+	for _, stream := range streams {
+		stream.updateOptions(updateSettings)
 	}
 }
 
@@ -61,7 +147,7 @@ func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:         true,
 		InterimResults:    true,
-		Diarization:       false,
+		Diarization:       sttDiarizationEnabled(s.extraKwargs),
 		AlignedTranscript: "word",
 		OfflineRecognize:  false,
 	}
@@ -80,7 +166,7 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		language = s.language
 	}
 
-	modelName, createParams := sttSessionCreateParams(s.model, language)
+	modelName, createParams := sttSessionCreateParams(s.model, language, s.encoding, s.sampleRate, s.extraKwargs, s.fallbackModels)
 
 	wsURL, err := url.Parse(s.baseURL + "/stt")
 	if err != nil {
@@ -115,9 +201,25 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		eventCh:   make(chan *stt.SpeechEvent, 100),
 	}
 
+	s.registerStream(stream)
 	go stream.run()
 
 	return stream, nil
+}
+
+func (s *STT) registerStream(stream *inferenceSTTStream) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.streams == nil {
+		s.streams = make(map[*inferenceSTTStream]struct{})
+	}
+	s.streams[stream] = struct{}{}
+}
+
+func (s *STT) unregisterStream(stream *inferenceSTTStream) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.streams, stream)
 }
 
 func defaultInferenceSTTDialer(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
@@ -128,12 +230,18 @@ func defaultInferenceSTTDialer(ctx context.Context, endpoint string, header http
 	return conn, nil
 }
 
-func sttSessionCreateParams(model string, language string) (string, map[string]interface{}) {
+func sttSessionCreateParams(model string, language string, encoding string, sampleRate int, extra map[string]any, fallback []FallbackModel) (string, map[string]interface{}) {
 	modelName, language := sttModelAndLanguage(model, language)
+	if encoding == "" {
+		encoding = "pcm_s16le"
+	}
+	if sampleRate == 0 {
+		sampleRate = 16000
+	}
 	settings := map[string]interface{}{
-		"sample_rate": "16000",
-		"encoding":    "pcm_s16le",
-		"extra":       map[string]interface{}{},
+		"sample_rate": strconv.Itoa(sampleRate),
+		"encoding":    encoding,
+		"extra":       sttExtraPayload(extra),
 	}
 	if language != "" {
 		settings["language"] = language
@@ -146,7 +254,134 @@ func sttSessionCreateParams(model string, language string) (string, map[string]i
 	if modelName != "auto" {
 		createParams["model"] = modelName
 	}
+	if len(fallback) > 0 {
+		createParams["fallback"] = map[string]interface{}{
+			"models": sttFallbackModelsPayload(fallback),
+		}
+	}
 	return modelName, createParams
+}
+
+func sttFallbackModelsPayload(models []FallbackModel) []map[string]interface{} {
+	payload := make([]map[string]interface{}, 0, len(models))
+	for _, model := range models {
+		payload = append(payload, map[string]interface{}{
+			"model": model.Model,
+			"extra": sttExtraPayload(model.ExtraKwargs),
+		})
+	}
+	return payload
+}
+
+func sttExtraPayload(extra map[string]any) map[string]interface{} {
+	if len(extra) == 0 {
+		return map[string]interface{}{}
+	}
+	payload := make(map[string]interface{}, len(extra))
+	for key, value := range extra {
+		payload[key] = value
+	}
+	return payload
+}
+
+func cloneSTTFallbackModels(models []FallbackModel) []FallbackModel {
+	if len(models) == 0 {
+		return nil
+	}
+	cloned := make([]FallbackModel, 0, len(models))
+	for _, model := range models {
+		model.ExtraKwargs = cloneSTTExtra(model.ExtraKwargs)
+		cloned = append(cloned, model)
+	}
+	return cloned
+}
+
+func cloneSTTExtra(extra map[string]any) map[string]any {
+	if len(extra) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(extra))
+	for key, value := range extra {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func sttUpdateSettings(oldModel string, oldLanguage string, oldExtra map[string]any, model string, language string, extra map[string]any) map[string]interface{} {
+	settings := map[string]interface{}{}
+	if model != oldModel {
+		settings["model"] = model
+	}
+	if language != oldLanguage {
+		settings["language"] = language
+	}
+	extraUpdate := sttChangedExtra(oldExtra, extra)
+	if len(extraUpdate) > 0 {
+		settings["extra"] = extraUpdate
+	}
+	return settings
+}
+
+func sttChangedExtra(oldExtra map[string]any, extra map[string]any) map[string]any {
+	changed := map[string]any{}
+	for key, value := range extra {
+		oldValue, ok := oldExtra[key]
+		if !ok || !reflect.DeepEqual(oldValue, value) {
+			changed[key] = value
+		}
+	}
+	return changed
+}
+
+func sttDiarizationEnabled(extra map[string]any) bool {
+	for _, key := range []string{"diarize", "speaker_labels", "diarization"} {
+		value, ok := extra[key]
+		if !ok || !sttExtraTruthy(value) {
+			continue
+		}
+		if text, ok := value.(string); ok && strings.EqualFold(text, "none") {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func sttExtraTruthy(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case bool:
+		return typed
+	case string:
+		return typed != ""
+	case int:
+		return typed != 0
+	case int8:
+		return typed != 0
+	case int16:
+		return typed != 0
+	case int32:
+		return typed != 0
+	case int64:
+		return typed != 0
+	case uint:
+		return typed != 0
+	case uint8:
+		return typed != 0
+	case uint16:
+		return typed != 0
+	case uint32:
+		return typed != 0
+	case uint64:
+		return typed != 0
+	case float32:
+		return typed != 0
+	case float64:
+		return typed != 0
+	default:
+		return true
+	}
 }
 
 func sttModelAndLanguage(model string, language string) (string, string) {
@@ -251,17 +486,47 @@ func (s *inferenceSTTStream) flushLocked() error {
 	return s.conn.WriteJSON(endPkt)
 }
 
-func (s *inferenceSTTStream) Close() error {
+func (s *inferenceSTTStream) updateOptions(settings map[string]interface{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed || len(settings) == 0 {
+		return
+	}
+	_ = s.conn.WriteJSON(map[string]interface{}{
+		"type":     "session.update",
+		"settings": settings,
+	})
+}
+
+func (s *inferenceSTTStream) Close() error {
+	s.mu.Lock()
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
-	s.cancel()
-	s.conn.Close()
-	close(s.audioCh)
-	close(s.eventCh)
+	cancel := s.cancel
+	conn := s.conn
+	audioCh := s.audioCh
+	eventCh := s.eventCh
+	parent := s.stt
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if conn != nil {
+		conn.Close()
+	}
+	if audioCh != nil {
+		close(audioCh)
+	}
+	if eventCh != nil {
+		close(eventCh)
+	}
+	if parent != nil {
+		parent.unregisterStream(s)
+	}
 	return nil
 }
 
