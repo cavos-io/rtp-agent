@@ -86,6 +86,10 @@ func (t *GroqTTS) SampleRate() int  { return t.sampleRate }
 func (t *GroqTTS) NumChannels() int { return 1 }
 
 func (t *GroqTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if err := validateGroqTTSAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
+
 	req, err := buildGroqTTSRequest(ctx, t, text)
 	if err != nil {
 		return nil, err
@@ -102,6 +106,13 @@ func (t *GroqTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 	}
 
 	return &groqTTSChunkedStream{resp: resp, sampleRate: t.sampleRate}, nil
+}
+
+func validateGroqTTSAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("groq API key is required, either as argument or set GROQ_API_KEY environment variable")
+	}
+	return nil
 }
 
 func buildGroqTTSRequest(ctx context.Context, t *GroqTTS, text string) (*http.Request, error) {
