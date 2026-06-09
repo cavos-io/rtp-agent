@@ -199,13 +199,17 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 
 	stream := &inferenceTTSStream{
-		tts:       t,
-		conn:      conn,
-		connPool:  t.connectionPool(),
-		ctx:       ctx,
-		cancel:    cancel,
-		tokenizer: tokenizer.Stream("en"),
-		eventCh:   make(chan *tts.SynthesizedAudio, 100),
+		tts:         t,
+		conn:        conn,
+		connPool:    t.connectionPool(),
+		ctx:         ctx,
+		cancel:      cancel,
+		model:       t.model,
+		voice:       t.voice,
+		language:    t.language,
+		extraKwargs: cloneTTSExtra(t.extraKwargs),
+		tokenizer:   tokenizer.Stream("en"),
+		eventCh:     make(chan *tts.SynthesizedAudio, 100),
 	}
 
 	go stream.run()
@@ -384,15 +388,19 @@ func ttsModelAndVoice(model string, voice string) (string, string) {
 }
 
 type inferenceTTSStream struct {
-	tts       *TTS
-	conn      inferenceTTSConn
-	connPool  *utils.ConnectionPool[inferenceTTSConn]
-	ctx       context.Context
-	cancel    context.CancelFunc
-	tokenizer tokenize.SentenceStream
-	eventCh   chan *tts.SynthesizedAudio
-	mu        sync.Mutex
-	closed    bool
+	tts         *TTS
+	conn        inferenceTTSConn
+	connPool    *utils.ConnectionPool[inferenceTTSConn]
+	ctx         context.Context
+	cancel      context.CancelFunc
+	model       string
+	voice       string
+	language    string
+	extraKwargs map[string]any
+	tokenizer   tokenize.SentenceStream
+	eventCh     chan *tts.SynthesizedAudio
+	mu          sync.Mutex
+	closed      bool
 }
 
 func (s *inferenceTTSStream) PushText(text string) error {
@@ -455,20 +463,20 @@ func (s *inferenceTTSStream) run() {
 			}
 
 			generationConfig := map[string]interface{}{}
-			if s.tts.model != "" {
-				generationConfig["model"] = s.tts.model
+			if s.model != "" {
+				generationConfig["model"] = s.model
 			}
-			if s.tts.voice != "" {
-				generationConfig["voice"] = s.tts.voice
+			if s.voice != "" {
+				generationConfig["voice"] = s.voice
 			}
-			if s.tts.language != "" {
-				generationConfig["language"] = s.tts.language
+			if s.language != "" {
+				generationConfig["language"] = s.language
 			}
 
 			tokenPkt := map[string]interface{}{
 				"type":              "input_transcript",
 				"transcript":        tok.Token + " ",
-				"extra":             ttsExtraPayload(s.tts.extraKwargs),
+				"extra":             ttsExtraPayload(s.extraKwargs),
 				"generation_config": generationConfig,
 			}
 
