@@ -2,6 +2,7 @@ package bithuman
 
 import (
 	"context"
+	"os"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 )
@@ -10,6 +11,7 @@ const (
 	providerName               = "bithuman"
 	defaultAvatarAgentIdentity = "bithuman-avatar-agent"
 	defaultInitialAvatarState  = agent.AvatarStateIdle
+	bithumanAPISecretEnv       = "BITHUMAN_API_SECRET"
 )
 
 type BithumanAvatar struct {
@@ -19,6 +21,9 @@ type BithumanAvatar struct {
 }
 
 func NewBithumanAvatar(apiKey string) *BithumanAvatar {
+	if apiKey == "" {
+		apiKey = os.Getenv(bithumanAPISecretEnv)
+	}
 	return &BithumanAvatar{
 		apiKey:         apiKey,
 		avatarIdentity: defaultAvatarAgentIdentity,
