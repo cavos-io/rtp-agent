@@ -18,7 +18,7 @@ type FalLLM struct {
 
 func NewFalLLM(apiKey string, model string) *FalLLM {
 	return &FalLLM{
-		apiKey: apiKey,
+		apiKey: resolveFalAPIKey(apiKey),
 		model:  model,
 	}
 }
