@@ -598,6 +598,14 @@ func TestPipelineAgentGenerateReplyWithToolsRejectsDuplicateFunctionNames(t *tes
 	}
 }
 
+func TestFormatPythonStringListUsesReferenceStringRepr(t *testing.T) {
+	got := formatPythonStringList([]string{"lookup", "can't", "\u2028"})
+	want := `['lookup', "can't", '\u2028']`
+	if got != want {
+		t.Fatalf("formatPythonStringList() = %q, want %q", got, want)
+	}
+}
+
 func TestPipelineAgentEmitsConversationItemAddedForAssistantMessage(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

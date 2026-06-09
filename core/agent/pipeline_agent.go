@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -900,9 +901,44 @@ func formatPythonStringList(values []string) string {
 	}
 	quoted := make([]string, len(values))
 	for i, value := range values {
-		quoted[i] = "'" + value + "'"
+		quoted[i] = formatPythonStringRepr(value)
 	}
 	return "[" + strings.Join(quoted, ", ") + "]"
+}
+
+func formatPythonStringRepr(value string) string {
+	quote := "'"
+	if strings.Contains(value, "'") && !strings.Contains(value, `"`) {
+		quote = `"`
+	}
+	var escaped strings.Builder
+	for _, r := range value {
+		switch {
+		case r == '\\':
+			escaped.WriteString(`\\`)
+		case r == '\n':
+			escaped.WriteString(`\n`)
+		case r == '\r':
+			escaped.WriteString(`\r`)
+		case r == '\t':
+			escaped.WriteString(`\t`)
+		case r < 0x20:
+			escaped.WriteString(fmt.Sprintf(`\x%02x`, r))
+		case r < 0x100 && !unicode.IsPrint(r):
+			escaped.WriteString(fmt.Sprintf(`\x%02x`, r))
+		case r < 0x10000 && !unicode.IsPrint(r):
+			escaped.WriteString(fmt.Sprintf(`\u%04x`, r))
+		case !unicode.IsPrint(r):
+			escaped.WriteString(fmt.Sprintf(`\U%08x`, r))
+		case quote == "'" && r == '\'':
+			escaped.WriteString(`\'`)
+		case quote == `"` && r == '"':
+			escaped.WriteString(`\"`)
+		default:
+			escaped.WriteRune(r)
+		}
+	}
+	return quote + escaped.String() + quote
 }
 
 func (va *PipelineAgent) OnAudioFrame(ctx context.Context, frame *model.AudioFrame) {
