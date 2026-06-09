@@ -88,6 +88,9 @@ func (s *MCPServerHTTP) httpClientSnapshot() *http.Client {
 }
 
 func (s *MCPServerHTTP) Initialize(ctx context.Context) error {
+	if s.Initialized() {
+		return nil
+	}
 	params := map[string]interface{}{
 		"protocolVersion": "2024-11-05",
 		"clientInfo": map[string]interface{}{
@@ -352,6 +355,22 @@ func (t *MCPToolset) FilterTools(filter func(Tool) bool) *MCPToolset {
 	return t
 }
 
+func (t *MCPToolset) Close() error {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	server := t.mcpServer
+	t.initialized = false
+	t.tools = nil
+	t.mu.Unlock()
+
+	if server != nil {
+		return server.Close()
+	}
+	return nil
+}
+
 func NewMCPServerStdio(command string, args []string) *MCPServerStdio {
 	return &MCPServerStdio{
 		Command:    command,
@@ -420,6 +439,9 @@ func serializeMCPToolContent(content []mcpToolContent) (string, error) {
 }
 
 func (s *MCPServerStdio) Initialize(ctx context.Context) error {
+	if s.Initialized() {
+		return nil
+	}
 	s.cmd = exec.CommandContext(context.Background(), s.Command, s.Args...)
 	s.cmd.Dir = s.Cwd
 	if len(s.Env) > 0 {

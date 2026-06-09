@@ -58,6 +58,31 @@ func TestBoundedDictSetOrUpdateUsesFactoryOnce(t *testing.T) {
 	}
 }
 
+func TestBoundedDictSetOrUpdateTreatsNilPointerAsMissing(t *testing.T) {
+	dict := NewBoundedDict[string, *boundedDictValue](2)
+	dict.Set("key", nil)
+	factoryCalls := 0
+
+	got := dict.SetOrUpdate("key", func() *boundedDictValue {
+		factoryCalls++
+		return &boundedDictValue{Name: "fresh"}
+	}, func(value *boundedDictValue) *boundedDictValue {
+		value.Count = 1
+		return value
+	})
+
+	if factoryCalls != 1 {
+		t.Fatalf("factory calls = %d, want 1", factoryCalls)
+	}
+	if got == nil || got.Name != "fresh" || got.Count != 1 {
+		t.Fatalf("SetOrUpdate(nil existing) = %#v, want fresh updated value", got)
+	}
+	stored, ok := dict.Get("key")
+	if !ok || stored != got {
+		t.Fatalf("stored value = %#v, %v; want returned fresh value", stored, ok)
+	}
+}
+
 func TestBoundedDictUpdateValueOnlyUpdatesExistingKeys(t *testing.T) {
 	dict := NewBoundedDict[string, boundedDictValue](2)
 

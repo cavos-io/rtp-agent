@@ -11,6 +11,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/vad"
+	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 )
@@ -1101,6 +1102,27 @@ func TestAgentActivityStartRecordsInitialMCPTools(t *testing.T) {
 	}
 	if !stringSlicesEqual(config.ToolsAdded, []string{"lookup"}) {
 		t.Fatalf("config tools added = %q, want [lookup]", config.ToolsAdded)
+	}
+}
+
+func TestAgentActivityStartLogsMCPToolsetSetupError(t *testing.T) {
+	recorder := &recordingLogger{}
+	oldLogger := logutil.Logger
+	logutil.SetLogger(recorder)
+	t.Cleanup(func() { logutil.SetLogger(oldLogger) })
+
+	agent := NewAgent("")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.SetMCPServers([]llm.MCPServer{
+		&fakeActivityMCPServer{initializeErr: errors.New("mcp unavailable")},
+	})
+	activity := NewAgentActivity(agent, session)
+
+	activity.Start()
+	defer activity.Stop()
+
+	if !recorder.hasError("failed to record initial agent configuration") {
+		t.Fatalf("error logs = %#v, want initial configuration failure", recorder.errorMessages)
 	}
 }
 
@@ -2478,12 +2500,20 @@ func (r *recordingOptionsAssistant) UpdateOptions(_ context.Context, options llm
 }
 
 type fakeActivityMCPServer struct {
-	tools []llm.Tool
+	tools         []llm.Tool
+	initializeErr error
+	initialized   bool
 }
 
-func (f *fakeActivityMCPServer) Initialize(context.Context) error { return nil }
+func (f *fakeActivityMCPServer) Initialize(context.Context) error {
+	if f.initializeErr != nil {
+		return f.initializeErr
+	}
+	f.initialized = true
+	return nil
+}
 
-func (f *fakeActivityMCPServer) Initialized() bool { return true }
+func (f *fakeActivityMCPServer) Initialized() bool { return f.initialized }
 
 func (f *fakeActivityMCPServer) InvalidateCache() {}
 

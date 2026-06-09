@@ -36,6 +36,16 @@ func (s *testToolset) ID() string { return s.id }
 
 func (s *testToolset) Tools() []Tool { return s.tools }
 
+type closableTestToolset struct {
+	testToolset
+	closeCalls int
+}
+
+func (s *closableTestToolset) Close() error {
+	s.closeCalls++
+	return nil
+}
+
 type nonComparableTool struct {
 	id     string
 	name   string
@@ -156,6 +166,22 @@ func TestToolContextAddToolRejectsDifferentToolWithSameName(t *testing.T) {
 	err := ctx.AddTool(&testTool{id: "lookup-b", name: "lookup"})
 
 	requireToolContextErrorString(t, "AddTool()", err, "duplicate function name: lookup")
+}
+
+func TestToolContextCloseClosesToolsets(t *testing.T) {
+	lookup := &testTool{id: "lookup", name: "lookup"}
+	toolset := &closableTestToolset{
+		testToolset: testToolset{id: "tools", tools: []Tool{lookup}},
+	}
+	ctx := NewToolContext([]interface{}{toolset})
+
+	if err := ctx.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if toolset.closeCalls != 1 {
+		t.Fatalf("toolset Close calls = %d, want 1", toolset.closeCalls)
+	}
 }
 
 func TestNewToolContextPanicsOnDuplicateFunctionName(t *testing.T) {

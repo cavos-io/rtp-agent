@@ -56,6 +56,7 @@ func (j *Judge) Evaluate(ctx context.Context, chatCtx *llm.ChatContext, referenc
 
 	prompt := fmt.Sprintf("Criteria: %s\n\nConversation:\n%s", instructions, formatChatCtx(chatCtx))
 	if reference != nil {
+		reference = reference.Copy(llm.ChatContextCopyOptions{ExcludeInstructions: true})
 		prompt += fmt.Sprintf("\n\nReference:\n%s", formatChatCtx(reference))
 	}
 	prompt += "\n\nEvaluate if the conversation meets the criteria."
@@ -185,7 +186,11 @@ func formatChatCtx(ctx *llm.ChatContext) string {
 	for _, item := range ctx.Items {
 		switch it := item.(type) {
 		case *llm.ChatMessage:
-			parts = append(parts, fmt.Sprintf("%s: %s", it.Role, it.TextContent()))
+			line := fmt.Sprintf("%s: %s", it.Role, it.TextContent())
+			if it.Interrupted {
+				line += " [interrupted]"
+			}
+			parts = append(parts, line)
 		case *llm.FunctionCall:
 			parts = append(parts, fmt.Sprintf("[function call: %s(%s)]", it.Name, it.Arguments))
 		case *llm.FunctionCallOutput:
@@ -197,10 +202,34 @@ func formatChatCtx(ctx *llm.ChatContext) string {
 		case *llm.AgentHandoff:
 			parts = append(parts, fmt.Sprintf("[agent handoff: %s -> %s]", ptrToString(it.OldAgentID), it.NewAgentID))
 		case *llm.AgentConfigUpdate:
-			parts = append(parts, fmt.Sprintf("[agent config update: instructions=%v]", ptrToString(it.Instructions)))
+			configParts := make([]string, 0, 3)
+			if it.Instructions != nil {
+				configParts = append(configParts, "instructions="+pyStringRepr(*it.Instructions))
+			}
+			if len(it.ToolsAdded) > 0 {
+				configParts = append(configParts, "tools_added="+pyStringListRepr(it.ToolsAdded))
+			}
+			if len(it.ToolsRemoved) > 0 {
+				configParts = append(configParts, "tools_removed="+pyStringListRepr(it.ToolsRemoved))
+			}
+			parts = append(parts, fmt.Sprintf("[agent config: %s]", strings.Join(configParts, ", ")))
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+func pyStringRepr(s string) string {
+	escaped := strings.ReplaceAll(s, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `'`, `\'`)
+	return "'" + escaped + "'"
+}
+
+func pyStringListRepr(values []string) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, pyStringRepr(value))
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 func ptrToString(p *string) string {

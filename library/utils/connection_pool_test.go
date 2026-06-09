@@ -110,6 +110,34 @@ func TestConnectionPoolExpiredCloseErrorDoesNotBlockFreshGet(t *testing.T) {
 	}
 }
 
+func TestConnectionPoolDeferredCloseErrorDoesNotBlockNextGet(t *testing.T) {
+	var next int
+	closeErr := errors.New("close failed")
+	pool := NewConnectionPool(ConnectionPoolOptions[int]{
+		Connect: func(context.Context) (int, error) {
+			next++
+			return next, nil
+		},
+		Close: func(context.Context, int) error {
+			return closeErr
+		},
+	})
+
+	conn, err := pool.Get(context.Background(), time.Second)
+	if err != nil {
+		t.Fatalf("Get() first error = %v", err)
+	}
+	pool.Remove(conn)
+
+	fresh, err := pool.Get(context.Background(), time.Second)
+	if err != nil {
+		t.Fatalf("Get() after deferred close error = %v, want nil despite close failure", err)
+	}
+	if fresh == conn || pool.LastConnectionReused {
+		t.Fatalf("Get() after deferred close conn=%d reused=%v, want fresh connection", fresh, pool.LastConnectionReused)
+	}
+}
+
 func TestConnectionPoolInvalidateClosesOnNextGet(t *testing.T) {
 	var next int
 	var closed []int
@@ -168,6 +196,52 @@ func TestConnectionPoolPrewarmCreatesReusableConnection(t *testing.T) {
 	}
 }
 
+func TestConnectionPoolCloseCancelsPrewarmConnect(t *testing.T) {
+	connectStarted := make(chan struct{})
+	connectCanceled := make(chan struct{})
+	releaseConnect := make(chan struct{})
+	closeReturned := make(chan struct{})
+
+	pool := NewConnectionPool(ConnectionPoolOptions[int]{
+		ConnectTimeout: time.Hour,
+		Connect: func(ctx context.Context) (int, error) {
+			close(connectStarted)
+			select {
+			case <-ctx.Done():
+				close(connectCanceled)
+				return 0, ctx.Err()
+			case <-releaseConnect:
+				return 1, nil
+			}
+		},
+	})
+
+	pool.Prewarm(context.Background())
+	select {
+	case <-connectStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("prewarm connect did not start")
+	}
+
+	go func() {
+		_ = pool.Close(context.Background())
+		close(closeReturned)
+	}()
+
+	select {
+	case <-connectCanceled:
+	case <-time.After(200 * time.Millisecond):
+		close(releaseConnect)
+		<-closeReturned
+		t.Fatal("Close did not cancel prewarm connect")
+	}
+	select {
+	case <-closeReturned:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Close did not return after canceling prewarm connect")
+	}
+}
+
 func TestConnectionPoolWithConnectionRemovesOnError(t *testing.T) {
 	var next int
 	var closed []int
@@ -198,6 +272,46 @@ func TestConnectionPoolWithConnectionRemovesOnError(t *testing.T) {
 	}
 	if fresh != 2 || pool.LastConnectionReused {
 		t.Fatalf("Get() after failed WithConnection conn=%d reused=%v, want conn=2 reused=false", fresh, pool.LastConnectionReused)
+	}
+	if !reflect.DeepEqual(closed, []int{1}) {
+		t.Fatalf("closed = %#v, want [1]", closed)
+	}
+}
+
+func TestConnectionPoolWithConnectionRemovesOnPanic(t *testing.T) {
+	var next int
+	var closed []int
+	pool := NewConnectionPool(ConnectionPoolOptions[int]{
+		Connect: func(context.Context) (int, error) {
+			next++
+			return next, nil
+		},
+		Close: func(_ context.Context, conn int) error {
+			closed = append(closed, conn)
+			return nil
+		},
+	})
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != "boom" {
+				t.Fatalf("WithConnection panic = %#v, want boom", recovered)
+			}
+		}()
+		_ = pool.WithConnection(context.Background(), time.Second, func(conn int) error {
+			if conn != 1 {
+				t.Fatalf("WithConnection() conn = %d, want 1", conn)
+			}
+			panic("boom")
+		})
+	}()
+
+	fresh, err := pool.Get(context.Background(), time.Second)
+	if err != nil {
+		t.Fatalf("Get() after panic error = %v", err)
+	}
+	if fresh != 2 || pool.LastConnectionReused {
+		t.Fatalf("Get() after panic conn=%d reused=%v, want conn=2 reused=false", fresh, pool.LastConnectionReused)
 	}
 	if !reflect.DeepEqual(closed, []int{1}) {
 		t.Fatalf("closed = %#v, want [1]", closed)

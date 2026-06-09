@@ -50,6 +50,69 @@ func TestEvaluationResultScoreUsesUncertainHelper(t *testing.T) {
 	}
 }
 
+func TestEvaluationResultMajorityPassedRequiresExplicitPassMajority(t *testing.T) {
+	result := &EvaluationResult{Judgments: map[string]*JudgmentResult{
+		"pass":  {Verdict: VerdictPass},
+		"maybe": {Verdict: VerdictMaybe},
+	}}
+
+	if result.MajorityPassed() {
+		t.Fatal("MajorityPassed() = true, want false when only half of judgments explicitly pass")
+	}
+}
+
+func TestJudgeGroupFiltersNilJudgmentResults(t *testing.T) {
+	group := NewJudgeGroup(&recordingEvalLLM{}, []Evaluator{
+		nilJudgmentEvaluator{name: "empty"},
+		fixedJudgmentEvaluator{name: "pass", result: &JudgmentResult{Verdict: VerdictPass}},
+	})
+
+	result, err := group.Evaluate(context.Background(), llm.NewChatContext(), nil)
+	if err != nil {
+		t.Fatalf("Evaluate() error = %v", err)
+	}
+	if _, ok := result.Judgments["empty"]; ok {
+		t.Fatalf("Judgments contains nil result for failed/non-judgment evaluator: %#v", result.Judgments["empty"])
+	}
+	if got := len(result.Judgments); got != 1 {
+		t.Fatalf("len(Judgments) = %d, want 1", got)
+	}
+	if !result.Judgments["pass"].Passed() {
+		t.Fatalf("Judgments[pass] = %#v, want pass verdict", result.Judgments["pass"])
+	}
+}
+
+func TestFormatChatCtxAgentConfigUpdateMatchesReferenceShape(t *testing.T) {
+	instructions := "be concise"
+	chatCtx := llm.NewChatContext()
+	chatCtx.Append(&llm.AgentConfigUpdate{
+		Instructions: &instructions,
+		ToolsAdded:   []string{"lookup"},
+		ToolsRemoved: []string{"search"},
+	})
+
+	got := formatChatCtx(chatCtx)
+	want := "[agent config: instructions='be concise', tools_added=['lookup'], tools_removed=['search']]"
+	if got != want {
+		t.Fatalf("formatChatCtx() = %q, want %q", got, want)
+	}
+}
+
+func TestFormatChatCtxInterruptedMessageMatchesReferenceShape(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.Append(&llm.ChatMessage{
+		Role:        llm.ChatRoleAssistant,
+		Content:     []llm.ChatContent{{Text: "I can help with that"}},
+		Interrupted: true,
+	})
+
+	got := formatChatCtx(chatCtx)
+	want := "assistant: I can help with that [interrupted]"
+	if got != want {
+		t.Fatalf("formatChatCtx() = %q, want %q", got, want)
+	}
+}
+
 func TestJudgeHandoffShortCircuitCarriesInstructions(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	judge := NewJudge("handoff", "only evaluate actual handoffs", nil)
@@ -88,6 +151,26 @@ func TestJudgeEvaluateCarriesResolvedInstructions(t *testing.T) {
 	}
 	if evaluator.prompt == "" || !containsAll(evaluator.prompt, []string{"Criteria: " + latestInstructions, "Evaluate if the conversation meets the criteria."}) {
 		t.Fatalf("prompt = %q, want resolved criteria and evaluation request", evaluator.prompt)
+	}
+}
+
+func TestJudgeEvaluateReferenceExcludesInstructionMessages(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "compare this"})
+	reference := llm.NewChatContext()
+	reference.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleSystem, Text: "hidden rubric"})
+	reference.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "visible reference"})
+	evaluator := &recordingEvalLLM{}
+	judge := NewJudge("reference", "compare the answer", nil)
+
+	if _, err := judge.Evaluate(context.Background(), chatCtx, reference, evaluator); err != nil {
+		t.Fatalf("Evaluate() error = %v", err)
+	}
+	if contains(evaluator.prompt, "system: hidden rubric") {
+		t.Fatalf("prompt included reference instruction message: %q", evaluator.prompt)
+	}
+	if !contains(evaluator.prompt, "user: visible reference") {
+		t.Fatalf("prompt = %q, want visible reference message", evaluator.prompt)
 	}
 }
 
@@ -144,3 +227,24 @@ func (s *recordingEvalStream) Next() (*llm.ChatChunk, error) {
 }
 
 func (s *recordingEvalStream) Close() error { return nil }
+
+type nilJudgmentEvaluator struct {
+	name string
+}
+
+func (e nilJudgmentEvaluator) Name() string { return e.name }
+
+func (e nilJudgmentEvaluator) Evaluate(context.Context, *llm.ChatContext, *llm.ChatContext, llm.LLM) (*JudgmentResult, error) {
+	return nil, nil
+}
+
+type fixedJudgmentEvaluator struct {
+	name   string
+	result *JudgmentResult
+}
+
+func (e fixedJudgmentEvaluator) Name() string { return e.name }
+
+func (e fixedJudgmentEvaluator) Evaluate(context.Context, *llm.ChatContext, *llm.ChatContext, llm.LLM) (*JudgmentResult, error) {
+	return e.result, nil
+}

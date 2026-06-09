@@ -134,7 +134,9 @@ type scheduledSpeech struct {
 }
 
 func (a *AgentActivity) Start() {
-	_ = a.recordInitialConfiguration()
+	if err := a.recordInitialConfiguration(); err != nil {
+		logger.Logger.Errorw("failed to record initial agent configuration", err)
+	}
 	if a.Session != nil && a.Session.LLM != nil {
 		if collector, ok := a.Session.LLM.(llmMetricsCollector); ok {
 			unsubscribe := collector.OnMetricsCollected(func(metrics *telemetry.LLMMetrics) {
