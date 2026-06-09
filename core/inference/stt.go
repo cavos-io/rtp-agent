@@ -375,10 +375,27 @@ func (s *inferenceSTTStream) run() {
 				// ignore
 			case "interim_transcript", "final_transcript":
 				s.processTranscript(ev, evType == "final_transcript")
+			case "preflight_transcript":
+				s.processPreflightTranscript(ev)
 			case "error":
 				logger.Logger.Errorw("LiveKit Inference STT error", nil, "msg", string(msg))
 			}
 		}
+	}
+}
+
+func (s *inferenceSTTStream) processPreflightTranscript(data map[string]interface{}) {
+	text, _ := data["transcript"].(string)
+	if text == "" || !s.speaking {
+		return
+	}
+
+	requestID, _ := data["request_id"].(string)
+	speechData := s.buildSpeechData(data)
+	s.eventCh <- &stt.SpeechEvent{
+		Type:         stt.SpeechEventPreflightTranscript,
+		RequestID:    requestID,
+		Alternatives: []stt.SpeechData{speechData},
 	}
 }
 

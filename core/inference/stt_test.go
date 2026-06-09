@@ -278,6 +278,51 @@ func TestInferenceSTTTranscriptPreservesWordsAndMetadata(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTPreflightTranscriptRequiresActiveSpeech(t *testing.T) {
+	stream := &inferenceSTTStream{
+		eventCh: make(chan *stt.SpeechEvent, 3),
+	}
+
+	stream.processPreflightTranscript(map[string]interface{}{
+		"request_id": "req-ignored",
+		"transcript": "ignored",
+	})
+
+	select {
+	case ev := <-stream.eventCh:
+		t.Fatalf("unexpected preflight event before speech starts: %#v", ev)
+	default:
+	}
+
+	stream.processTranscript(map[string]interface{}{
+		"request_id": "req-start",
+		"transcript": "hello",
+		"start":      1.0,
+		"duration":   0.5,
+	}, false)
+	<-stream.eventCh
+	<-stream.eventCh
+
+	stream.processPreflightTranscript(map[string]interface{}{
+		"request_id": "req-preflight",
+		"transcript": "hello there",
+		"language":   "en",
+		"start":      1.2,
+		"duration":   0.4,
+	})
+
+	ev := <-stream.eventCh
+	if ev.Type != stt.SpeechEventPreflightTranscript {
+		t.Fatalf("event type = %s, want preflight_transcript", ev.Type)
+	}
+	if ev.RequestID != "req-preflight" {
+		t.Fatalf("RequestID = %q, want req-preflight", ev.RequestID)
+	}
+	if len(ev.Alternatives) != 1 || ev.Alternatives[0].Text != "hello there" {
+		t.Fatalf("Alternatives = %#v, want preflight transcript text", ev.Alternatives)
+	}
+}
+
 func TestInferenceSTTAppliesStartTimeOffsetToTranscriptAndWords(t *testing.T) {
 	stream := &inferenceSTTStream{
 		eventCh:         make(chan *stt.SpeechEvent, 3),
