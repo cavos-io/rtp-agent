@@ -2603,8 +2603,11 @@ func TestInitialRegisterMessageRejectsNonRegisterMessage(t *testing.T) {
 	if err == nil {
 		t.Fatal("handleInitialRegisterMessage() error = nil, want expected register response error")
 	}
-	if !strings.Contains(err.Error(), "expected register response as first message") {
-		t.Fatalf("handleInitialRegisterMessage() error = %q, want expected register response message", err.Error())
+	if got, want := err.Error(), "expected register response as first message"; got != want {
+		t.Fatalf("handleInitialRegisterMessage() error = %q, want %q", got, want)
+	}
+	if len(server.activeJobs) != 0 {
+		t.Fatalf("activeJobs = %#v, want no availability handling before register response", server.activeJobs)
 	}
 }
 
