@@ -230,6 +230,51 @@ func TestToolUseJudgeInstructionsMatchReferenceNoToolNeededPass(t *testing.T) {
 	}
 }
 
+func TestJudgeMissingLLMErrorMatchesReferenceGuidance(t *testing.T) {
+	oldAgent := "triage"
+	cases := []struct {
+		name    string
+		judge   Evaluator
+		chatCtx *llm.ChatContext
+		want    string
+	}{
+		{
+			name:    "generic",
+			judge:   AccuracyJudge(nil),
+			chatCtx: llm.NewChatContext(),
+			want:    "No LLM provided for judge 'accuracy'. Pass llm to JudgeGroup or to the judge constructor.",
+		},
+		{
+			name:    "task_completion",
+			judge:   TaskCompletionJudge(nil),
+			chatCtx: llm.NewChatContext(),
+			want:    "No LLM provided for judge 'task_completion'. Pass llm to JudgeGroup or to the judge constructor.",
+		},
+		{
+			name:  "handoff",
+			judge: HandoffJudge(nil),
+			chatCtx: func() *llm.ChatContext {
+				chatCtx := llm.NewChatContext()
+				chatCtx.Append(&llm.AgentHandoff{OldAgentID: &oldAgent, NewAgentID: "billing"})
+				return chatCtx
+			}(),
+			want: "No LLM provided for judge 'handoff'. Pass llm to JudgeGroup or to the judge constructor.",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tc.judge.Evaluate(context.Background(), tc.chatCtx, nil, nil)
+			if err == nil {
+				t.Fatal("Evaluate() error = nil, want reference missing-LLM error")
+			}
+			if err.Error() != tc.want {
+				t.Fatalf("Evaluate() error = %q, want %q", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
 func TestJudgeEvaluateReferenceExcludesInstructionMessages(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "compare this"})

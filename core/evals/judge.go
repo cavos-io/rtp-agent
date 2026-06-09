@@ -43,7 +43,7 @@ func (j *Judge) Evaluate(ctx context.Context, chatCtx *llm.ChatContext, referenc
 	}
 
 	if effectiveLLM == nil {
-		return nil, fmt.Errorf("no LLM provided for judge '%s'", j.name)
+		return nil, missingLLMError(j.name)
 	}
 
 	instructions := j.instructions
@@ -87,6 +87,11 @@ func (j *Judge) Evaluate(ctx context.Context, chatCtx *llm.ChatContext, referenc
 	}
 	result.Instructions = instructions
 	return result, nil
+}
+
+func missingLLMError(name string) error {
+	//lint:ignore ST1005 match LiveKit Agents ValueError message
+	return fmt.Errorf("No LLM provided for judge '%s'. Pass llm to JudgeGroup or to the judge constructor.", name)
 }
 
 func taskCompletionPrompt(chatCtx *llm.ChatContext, reference *llm.ChatContext, instructions string) string {
