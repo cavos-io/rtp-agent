@@ -35,6 +35,7 @@ type OpenAILLM struct {
 	parallelToolCallsSet bool
 	toolChoice           llm.ToolChoice
 	defaultReasoning     bool
+	extraHeaders         map[string]string
 }
 
 type OpenAILLMOption func(*OpenAILLM)
@@ -142,6 +143,12 @@ func WithOpenAILLMToolChoice(toolChoice llm.ToolChoice) OpenAILLMOption {
 	}
 }
 
+func WithOpenAILLMExtraHeaders(headers map[string]string) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		l.extraHeaders = cloneOpenAIStringMap(headers)
+	}
+}
+
 func withOpenAILLMHTTPClient(httpClient openai.HTTPDoer) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		l.httpClient = httpClient
@@ -164,7 +171,6 @@ func newOpenAILLMWithConfigAndModel(config openai.ClientConfig, model string, op
 		model = defaultOpenAILLMModel
 	}
 	provider := &OpenAILLM{
-		client:           openai.NewClientWithConfig(config),
 		model:            model,
 		baseURL:          config.BaseURL,
 		defaultReasoning: true,
@@ -172,6 +178,9 @@ func newOpenAILLMWithConfigAndModel(config openai.ClientConfig, model string, op
 	for _, opt := range opts {
 		opt(provider)
 	}
+	applyOpenAIHTTPClient(provider, &config)
+	wrapOpenAIExtraHeaders(provider, &config)
+	provider.client = openai.NewClientWithConfig(config)
 	return provider, nil
 }
 
@@ -222,6 +231,7 @@ func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 			token: azureADToken,
 		}
 	}
+	wrapOpenAIExtraHeaders(provider, &config)
 	provider.client = openai.NewClientWithConfig(config)
 	provider.baseURL = config.BaseURL
 	return provider, nil
@@ -256,7 +266,6 @@ func NewOpenAILLMWithBaseURLAndHTTPClient(apiKey string, model string, baseURL s
 		config.HTTPClient = httpClient
 	}
 	provider := &OpenAILLM{
-		client:           openai.NewClientWithConfig(config),
 		model:            model,
 		baseURL:          config.BaseURL,
 		defaultReasoning: true,
@@ -264,7 +273,42 @@ func NewOpenAILLMWithBaseURLAndHTTPClient(apiKey string, model string, baseURL s
 	for _, opt := range opts {
 		opt(provider)
 	}
+	applyOpenAIHTTPClient(provider, &config)
+	wrapOpenAIExtraHeaders(provider, &config)
+	provider.client = openai.NewClientWithConfig(config)
 	return provider
+}
+
+func applyOpenAIHTTPClient(provider *OpenAILLM, config *openai.ClientConfig) {
+	if provider.httpClient != nil {
+		config.HTTPClient = provider.httpClient
+	}
+}
+
+func wrapOpenAIExtraHeaders(provider *OpenAILLM, config *openai.ClientConfig) {
+	if len(provider.extraHeaders) > 0 {
+		config.HTTPClient = &extraHeadersHTTPClient{
+			base:    config.HTTPClient,
+			headers: cloneOpenAIStringMap(provider.extraHeaders),
+		}
+	}
+}
+
+type extraHeadersHTTPClient struct {
+	base    openai.HTTPDoer
+	headers map[string]string
+}
+
+func (c *extraHeadersHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	base := c.base
+	if base == nil {
+		base = http.DefaultClient
+	}
+	cloned := req.Clone(req.Context())
+	for key, value := range c.headers {
+		cloned.Header.Set(key, value)
+	}
+	return base.Do(cloned)
 }
 
 func (l *OpenAILLM) Model() string {
@@ -400,6 +444,17 @@ func mergeOpenAIExtraParams(callParams, providerParams map[string]any) map[strin
 		merged[key] = value
 	}
 	return merged
+}
+
+func cloneOpenAIStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
 }
 
 func buildOpenAIChatCompletionRequest(model string, chatCtx *llm.ChatContext, options *llm.ChatOptions) openai.ChatCompletionRequest {

@@ -400,6 +400,28 @@ func TestOpenAIChatAppliesProviderSafetyIdentifier(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatAppliesProviderExtraHeaders(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMExtraHeaders(map[string]string{
+			"X-Request-Group": "gold",
+		}),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if got := capture.header.Get("X-Request-Group"); got != "gold" {
+		t.Fatalf("X-Request-Group = %q, want provider extra header", got)
+	}
+}
+
 func TestOpenAIChatAppliesProviderUser(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{
 		statusCode:   http.StatusBadRequest,
