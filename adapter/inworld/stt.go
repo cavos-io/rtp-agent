@@ -119,9 +119,10 @@ func WithInworldSTTEndOfTurnConfidenceThreshold(threshold float64) InworldSTTOpt
 }
 
 func NewInworldSTT(apiKey string, opts ...InworldSTTOption) *InworldSTT {
+	resolvedAPIKey := resolveInworldAPIKey(apiKey)
 	provider := &InworldSTT{
-		apiKey:                           apiKey,
-		authorization:                    "Basic " + apiKey,
+		apiKey:                           resolvedAPIKey,
+		authorization:                    "Basic " + resolvedAPIKey,
 		baseURL:                          defaultInworldSTTBaseURL,
 		model:                            defaultInworldSTTModel,
 		language:                         defaultInworldSTTLanguage,

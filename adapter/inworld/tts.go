@@ -184,7 +184,7 @@ func WithInworldTTSMaxBufferDelayMS(delayMS int) InworldTTSOption {
 
 func NewInworldTTS(apiKey string, voice string, opts ...InworldTTSOption) *InworldTTS {
 	provider := &InworldTTS{
-		apiKey:                     apiKey,
+		apiKey:                     resolveInworldAPIKey(apiKey),
 		baseURL:                    defaultInworldBaseURL,
 		wsURL:                      defaultInworldWebsocketURL,
 		voice:                      voice,
