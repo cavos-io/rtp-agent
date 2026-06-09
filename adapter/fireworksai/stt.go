@@ -126,6 +126,10 @@ func (s *FireworksSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *FireworksSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if err := validateFireworksAPIKey(s.apiKey); err != nil {
+		return nil, err
+	}
+
 	if language != "" {
 		s.language = language
 	}
@@ -154,6 +158,13 @@ func (s *FireworksSTT) Stream(ctx context.Context, language string) (stt.Recogni
 
 func (s *FireworksSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	return nil, fmt.Errorf("fireworksai stt does not support batch recognition, use stream instead")
+}
+
+func validateFireworksAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("fireworks API key is required, either as argument or set FIREWORKS_API_KEY environment variable")
+	}
+	return nil
 }
 
 func buildFireworksStreamHeaders(s *FireworksSTT) http.Header {
