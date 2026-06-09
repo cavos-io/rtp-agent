@@ -77,6 +77,45 @@ func TestInferenceTTSDefaultCapabilitiesMatchReferenceAlignment(t *testing.T) {
 	}
 }
 
+func TestInferenceTTSAlignedTranscriptMatchesReferenceOptions(t *testing.T) {
+	tests := []struct {
+		name  string
+		model string
+		extra map[string]any
+	}{
+		{
+			name:  "cartesia add timestamps",
+			model: "cartesia/sonic-3",
+			extra: map[string]any{"add_timestamps": true},
+		},
+		{
+			name:  "elevenlabs sync alignment",
+			model: "elevenlabs/eleven_flash_v2_5",
+			extra: map[string]any{"sync_alignment": true},
+		},
+		{
+			name:  "inworld word timestamps",
+			model: "inworld/tts-1",
+			extra: map[string]any{"timestamp_type": "WORD"},
+		},
+		{
+			name:  "inworld character timestamps",
+			model: "inworld/tts-1",
+			extra: map[string]any{"timestamp_type": "CHARACTER"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := NewTTS(tt.model, "key", "secret", WithTTSExtraKwargs(tt.extra))
+
+			if !provider.Capabilities().AlignedTranscript {
+				t.Fatal("AlignedTranscript = false, want true for reference timestamp option")
+			}
+		})
+	}
+}
+
 func TestTTSPrewarmReusesConnectionForNextStream(t *testing.T) {
 	var connCount atomic.Int32
 	sessionCreated := make(chan struct{}, 1)

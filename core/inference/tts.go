@@ -100,7 +100,10 @@ func (t *TTS) Provider() string {
 }
 
 func (t *TTS) Capabilities() tts.TTSCapabilities {
-	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
+	return tts.TTSCapabilities{
+		Streaming:         true,
+		AlignedTranscript: ttsHasAlignedTranscript(t.model, t.extraKwargs),
+	}
 }
 
 func (t *TTS) SampleRate() int {
@@ -245,6 +248,23 @@ func cloneTTSExtra(extra map[string]any) map[string]any {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func ttsHasAlignedTranscript(model string, extra map[string]any) bool {
+	provider := strings.Split(model, "/")[0]
+	switch provider {
+	case "cartesia":
+		enabled, _ := extra["add_timestamps"].(bool)
+		return enabled
+	case "elevenlabs":
+		enabled, _ := extra["sync_alignment"].(bool)
+		return enabled
+	case "inworld":
+		timestampType, _ := extra["timestamp_type"].(string)
+		return timestampType == "WORD" || timestampType == "CHARACTER"
+	default:
+		return false
+	}
 }
 
 func ttsModelAndVoice(model string, voice string) (string, string) {
