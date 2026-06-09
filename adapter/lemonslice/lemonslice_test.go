@@ -38,6 +38,21 @@ func TestNewLemonsliceAvatarUsesReferenceDefaults(t *testing.T) {
 	}
 }
 
+func TestNewLemonsliceAvatarUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("LEMONSLICE_API_KEY", "env-key")
+
+	avatar := NewLemonsliceAvatar("")
+
+	if avatar.apiKey != "env-key" {
+		t.Fatalf("apiKey = %q, want env key", avatar.apiKey)
+	}
+
+	explicit := NewLemonsliceAvatar("explicit-key")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("apiKey = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestLemonsliceAvatarUpdateStateRecordsReferenceState(t *testing.T) {
 	avatar := NewLemonsliceAvatar("test-key")
 

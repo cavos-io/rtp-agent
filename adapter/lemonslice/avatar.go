@@ -2,6 +2,7 @@ package lemonslice
 
 import (
 	"context"
+	"os"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 )
@@ -11,6 +12,7 @@ const (
 	defaultAPIURL              = "https://lemonslice.com/api/liveai/sessions"
 	defaultAvatarAgentIdentity = "lemonslice-avatar-agent"
 	defaultInitialAvatarState  = agent.AvatarStateIdle
+	lemonSliceAPIKeyEnv        = "LEMONSLICE_API_KEY"
 )
 
 type LemonsliceAvatar struct {
@@ -21,6 +23,9 @@ type LemonsliceAvatar struct {
 }
 
 func NewLemonsliceAvatar(apiKey string) *LemonsliceAvatar {
+	if apiKey == "" {
+		apiKey = os.Getenv(lemonSliceAPIKeyEnv)
+	}
 	return &LemonsliceAvatar{
 		apiKey:         apiKey,
 		apiURL:         defaultAPIURL,
