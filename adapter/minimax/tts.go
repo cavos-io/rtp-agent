@@ -125,7 +125,7 @@ func WithMinimaxTTSTextNormalization(enabled bool) MinimaxTTSOption {
 
 func NewMinimaxTTS(apiKey string, voice string, opts ...MinimaxTTSOption) *MinimaxTTS {
 	provider := &MinimaxTTS{
-		apiKey:      apiKey,
+		apiKey:      resolveMinimaxAPIKey(apiKey),
 		baseURL:     defaultMinimaxBaseURL,
 		model:       defaultMinimaxModel,
 		voice:       voice,

@@ -35,6 +35,27 @@ func TestMinimaxTTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewMinimaxTTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("MINIMAX_API_KEY", "env-key")
+
+	provider := NewMinimaxTTS("", "")
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+	if got := buildMinimaxTTSWebsocketHeaders(provider).Get("Authorization"); got != "Bearer env-key" {
+		t.Fatalf("authorization = %q, want env bearer key", got)
+	}
+
+	explicit := NewMinimaxTTS("explicit-key", "")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+	if got := buildMinimaxTTSWebsocketHeaders(explicit).Get("Authorization"); got != "Bearer explicit-key" {
+		t.Fatalf("authorization = %q, want explicit bearer key", got)
+	}
+}
+
 func TestMinimaxTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	provider := NewMinimaxTTS("test-key", "")
 
