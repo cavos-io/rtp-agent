@@ -126,6 +126,10 @@ func (s *XaiSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *XaiSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if err := validateXaiAPIKey(s.apiKey); err != nil {
+		return nil, err
+	}
+
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildXaiSTTStreamURL(s, language), buildXaiSTTHeaders(s))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial xai stt websocket: %w", err)
@@ -147,6 +151,10 @@ func (s *XaiSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 }
 
 func (s *XaiSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+	if err := validateXaiAPIKey(s.apiKey); err != nil {
+		return nil, err
+	}
+
 	var audio bytes.Buffer
 	for _, frame := range frames {
 		audio.Write(frame.Data)
