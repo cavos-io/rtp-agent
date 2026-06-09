@@ -1,8 +1,10 @@
 package deepgram
 
 import (
+	"context"
 	"encoding/json"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -49,6 +51,21 @@ func TestDeepgramTTSConstructorOptionsMatchReference(t *testing.T) {
 	provider = NewDeepgramTTS("explicit-key", "")
 	if provider.apiKey != "explicit-key" {
 		t.Fatalf("apiKey = %q, want explicit key", provider.apiKey)
+	}
+}
+
+func TestDeepgramTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("DEEPGRAM_API_KEY", "")
+	provider := NewDeepgramTTS("", "", WithDeepgramTTSBaseURL("://bad-url"))
+
+	_, synthErr := provider.Synthesize(context.Background(), "hello")
+	if synthErr == nil || !strings.Contains(synthErr.Error(), "DEEPGRAM_API_KEY") {
+		t.Fatalf("Synthesize error = %v, want missing API key error", synthErr)
+	}
+
+	_, streamErr := provider.Stream(context.Background())
+	if streamErr == nil || !strings.Contains(streamErr.Error(), "DEEPGRAM_API_KEY") {
+		t.Fatalf("Stream error = %v, want missing API key error", streamErr)
 	}
 }
 

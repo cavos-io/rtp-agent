@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,6 +30,8 @@ const (
 	defaultEPDTime         = 0.8
 	defaultNoiseThreshold  = 0.60
 	defaultActiveThreshold = 0.80
+	rtzrClientIDEnv        = "RTZR_CLIENT_ID"
+	rtzrClientSecretEnv    = "RTZR_CLIENT_SECRET"
 )
 
 type RtzrSTT struct {
@@ -172,8 +175,12 @@ func withRtzrWebsocketDialer(dialer rtzrWebsocketDialer) RtzrSTTOption {
 }
 
 func NewRtzrSTT(clientID string, opts ...RtzrSTTOption) *RtzrSTT {
+	if clientID == "" {
+		clientID = os.Getenv(rtzrClientIDEnv)
+	}
 	provider := &RtzrSTT{
 		clientID:        clientID,
+		clientSecret:    os.Getenv(rtzrClientSecretEnv),
 		apiBase:         defaultAPIBase,
 		wsBase:          defaultWSBase,
 		modelName:       defaultModelName,

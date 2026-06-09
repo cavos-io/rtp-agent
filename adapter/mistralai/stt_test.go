@@ -120,6 +120,19 @@ func TestMistralAISTTRecognizeRequestUsesReferenceMultipartFields(t *testing.T) 
 	}
 }
 
+func TestMistralAISTTRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("MISTRAL_API_KEY", "")
+	provider := NewMistralAISTT("", WithMistralAISTTBaseURL("://bad-url"))
+
+	_, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatal("Recognize returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "MISTRAL_API_KEY") {
+		t.Fatalf("Recognize error = %q, want MISTRAL_API_KEY guidance", err)
+	}
+}
+
 func TestMistralAISTTRecognizeRequestLanguageSkipsTimestampGranularity(t *testing.T) {
 	provider := NewMistralAISTT("test-key", WithMistralAISTTLanguage("en"))
 

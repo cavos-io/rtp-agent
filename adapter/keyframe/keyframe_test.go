@@ -38,6 +38,25 @@ func TestNewKeyframeAgentUsesReferenceDefaults(t *testing.T) {
 	}
 }
 
+func TestNewKeyframeAgentUsesEnvironmentConfig(t *testing.T) {
+	t.Setenv("KEYFRAME_API_KEY", "env-key")
+	t.Setenv("KEYFRAME_API_URL", "https://keyframe.example")
+
+	avatar := NewKeyframeAgent("")
+
+	if avatar.apiKey != "env-key" {
+		t.Fatalf("apiKey = %q, want env key", avatar.apiKey)
+	}
+	if avatar.apiURL != "https://keyframe.example" {
+		t.Fatalf("apiURL = %q, want env API URL", avatar.apiURL)
+	}
+
+	explicit := NewKeyframeAgent("explicit-key")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("apiKey = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestKeyframeAgentUpdateStateRecordsReferenceState(t *testing.T) {
 	avatar := NewKeyframeAgent("test-key")
 

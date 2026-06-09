@@ -113,6 +113,9 @@ func (t *SpeechifyTTS) SampleRate() int  { return t.sampleRate }
 func (t *SpeechifyTTS) NumChannels() int { return 1 }
 
 func (t *SpeechifyTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if err := validateSpeechifyAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
 	req, err := buildSpeechifyTTSRequest(ctx, t, text)
 	if err != nil {
 		return nil, err
@@ -163,6 +166,13 @@ func buildSpeechifyTTSRequest(ctx context.Context, t *SpeechifyTTS, text string)
 		req.Header.Set("Accept", accept)
 	}
 	return req, nil
+}
+
+func validateSpeechifyAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("speechify API key is required, either as argument or set SPEECHIFY_API_KEY environment variable")
+	}
+	return nil
 }
 
 func (t *SpeechifyTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {

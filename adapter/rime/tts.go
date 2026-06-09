@@ -152,6 +152,9 @@ func (t *RimeTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 	if t.useWebsocket {
 		return nil, fmt.Errorf("rime tts one-shot synthesize requires websocket mode disabled")
 	}
+	if err := validateRimeAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
 	req, err := buildRimeTTSRequest(ctx, t, text)
 	if err != nil {
 		return nil, err
@@ -205,6 +208,9 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if !t.useWebsocket {
 		return nil, fmt.Errorf("rime tts streaming requires websocket mode enabled")
 	}
+	if err := validateRimeAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildRimeTTSWebsocketURL(t).String(), buildRimeTTSWebsocketHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial rime tts websocket: %w", err)
@@ -221,6 +227,13 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	go stream.readLoop()
 	return stream, nil
+}
+
+func validateRimeAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("rime API key is required, either as argument or set RIME_API_KEY environmental variable")
+	}
+	return nil
 }
 
 func buildRimeTTSWebsocketURL(t *RimeTTS) *url.URL {

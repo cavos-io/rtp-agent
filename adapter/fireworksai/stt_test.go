@@ -110,6 +110,19 @@ func TestFireworksSTTRecognizeMatchesReferenceUnsupportedOffline(t *testing.T) {
 	}
 }
 
+func TestFireworksSTTRequiresAPIKeyBeforeStreamRequest(t *testing.T) {
+	t.Setenv("FIREWORKS_API_KEY", "")
+	provider := NewFireworksSTT("", WithFireworksBaseURL("://bad-url"))
+
+	_, err := provider.Stream(context.Background(), "")
+	if err == nil {
+		t.Fatal("Stream returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "FIREWORKS_API_KEY") {
+		t.Fatalf("Stream error = %q, want FIREWORKS_API_KEY guidance", err)
+	}
+}
+
 func TestFireworksProcessStreamEventEmitsStartInterimFinalAndEnd(t *testing.T) {
 	state := &fireworksStreamState{language: "en", lastFinalSegmentID: -1}
 

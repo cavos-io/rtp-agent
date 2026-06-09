@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -99,6 +100,19 @@ func TestGroqTTSOptionsMatchReference(t *testing.T) {
 	}
 	assertGroqTTSPayload(t, payload, "model", "canopylabs/orpheus-arabic-saudi")
 	assertGroqTTSPayload(t, payload, "voice", "noura")
+}
+
+func TestGroqTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("GROQ_API_KEY", "")
+	provider := NewGroqTTS("", "", WithGroqTTSBaseURL("://bad-url"))
+
+	_, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("Synthesize returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "GROQ_API_KEY") {
+		t.Fatalf("error = %q, want GROQ_API_KEY guidance", err)
+	}
 }
 
 func TestGroqTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {

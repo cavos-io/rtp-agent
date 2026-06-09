@@ -140,6 +140,9 @@ func (t *SonioxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 }
 
 func (t *SonioxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if err := validateSonioxAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, t.websocketURL, http.Header{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial soniox tts websocket: %w", err)

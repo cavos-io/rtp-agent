@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -55,6 +56,22 @@ func TestNewRimeTTSUsesEnvironmentAPIKey(t *testing.T) {
 	explicit := NewRimeTTS("explicit-key", "")
 	if explicit.apiKey != "explicit-key" {
 		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
+func TestRimeTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("RIME_API_KEY", "")
+	provider := NewRimeTTS("", "", WithRimeTTSBaseURL("://bad-url"))
+
+	_, synthErr := provider.Synthesize(context.Background(), "hello")
+	if synthErr == nil || !strings.Contains(synthErr.Error(), "RIME_API_KEY") {
+		t.Fatalf("Synthesize error = %v, want missing API key error", synthErr)
+	}
+
+	streaming := NewRimeTTS("", "", WithRimeTTSBaseURL("://bad-url"), WithRimeTTSWebsocket(true))
+	_, streamErr := streaming.Stream(context.Background())
+	if streamErr == nil || !strings.Contains(streamErr.Error(), "RIME_API_KEY") {
+		t.Fatalf("Stream error = %v, want missing API key error", streamErr)
 	}
 }
 

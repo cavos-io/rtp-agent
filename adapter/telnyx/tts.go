@@ -85,6 +85,9 @@ func (t *TelnyxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 }
 
 func (t *TelnyxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if err := validateTelnyxAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildTelnyxTTSStreamURL(t), buildTelnyxTTSHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial telnyx tts websocket: %w", err)

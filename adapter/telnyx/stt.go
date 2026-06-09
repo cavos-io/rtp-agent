@@ -99,6 +99,9 @@ func (s *TelnyxSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *TelnyxSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if err := validateTelnyxAPIKey(s.apiKey); err != nil {
+		return nil, err
+	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildTelnyxSTTStreamURL(s, language), buildTelnyxSTTHeaders(s))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial telnyx stt websocket: %w", err)
@@ -158,6 +161,13 @@ func (s *TelnyxSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 			Text:     finalText.String(),
 		}},
 	}, nil
+}
+
+func validateTelnyxAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("telnyx API key required. Set TELNYX_API_KEY or provide api_key")
+	}
+	return nil
 }
 
 func buildTelnyxSTTStreamURL(s *TelnyxSTT, language string) string {

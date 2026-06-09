@@ -38,6 +38,21 @@ func TestNewTrugenAvatarUsesReferenceDefaults(t *testing.T) {
 	}
 }
 
+func TestNewTrugenAvatarUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("TRUGEN_API_KEY", "env-key")
+
+	avatar := NewTrugenAvatar("")
+
+	if avatar.apiKey != "env-key" {
+		t.Fatalf("apiKey = %q, want env key", avatar.apiKey)
+	}
+
+	explicit := NewTrugenAvatar("explicit-key")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("apiKey = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestTrugenAvatarUpdateStateRecordsReferenceState(t *testing.T) {
 	avatar := NewTrugenAvatar("test-key")
 

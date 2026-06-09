@@ -145,6 +145,30 @@ func TestXaiSTTOptionsBuildReferenceStreamURLAndHeaders(t *testing.T) {
 	}
 }
 
+func TestXaiSTTRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("XAI_API_KEY", "")
+	provider := NewXaiSTT("",
+		WithXaiSTTRestURL("://bad-url"),
+		WithXaiSTTWebsocketURL("://bad-url"),
+	)
+
+	_, err := provider.Recognize(context.Background(), nil, "en")
+	if err == nil {
+		t.Fatal("Recognize returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "XAI_API_KEY") {
+		t.Fatalf("Recognize error = %q, want XAI_API_KEY guidance", err)
+	}
+
+	_, err = provider.Stream(context.Background(), "en")
+	if err == nil {
+		t.Fatal("Stream returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "XAI_API_KEY") {
+		t.Fatalf("Stream error = %q, want XAI_API_KEY guidance", err)
+	}
+}
+
 func TestXaiSTTBatchResponseMapsSpeechEvent(t *testing.T) {
 	event := xaiSTTBatchSpeechEvent(true, xaiSTTResponse{
 		Text:     "hello world",

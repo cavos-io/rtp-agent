@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -47,6 +48,21 @@ func TestNewResembleTTSUsesEnvironmentAPIKey(t *testing.T) {
 	explicit := NewResembleTTS("explicit-key", "")
 	if explicit.apiKey != "explicit-key" {
 		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
+func TestResembleTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("RESEMBLE_API_KEY", "")
+	provider := NewResembleTTS("", "")
+
+	_, synthErr := provider.Synthesize(context.Background(), "hello")
+	if synthErr == nil || !strings.Contains(synthErr.Error(), "RESEMBLE_API_KEY") {
+		t.Fatalf("Synthesize error = %v, want missing API key error", synthErr)
+	}
+
+	_, streamErr := provider.Stream(context.Background())
+	if streamErr == nil || !strings.Contains(streamErr.Error(), "RESEMBLE_API_KEY") {
+		t.Fatalf("Stream error = %v, want missing API key error", streamErr)
 	}
 }
 

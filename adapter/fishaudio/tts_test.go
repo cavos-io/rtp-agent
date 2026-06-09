@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -56,6 +57,18 @@ func TestNewFishAudioTTSUsesEnvironmentAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewFishAudioTTSUsesReferenceEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("FISH_API_KEY", "reference-env-key")
+	t.Setenv("FISHAUDIO_API_KEY", "")
+	t.Setenv("FISH_AUDIO_API_KEY", "")
+
+	provider := NewFishAudioTTS("", "")
+
+	if provider.apiKey != "reference-env-key" {
+		t.Fatalf("api key = %q, want reference env key", provider.apiKey)
+	}
+}
+
 func TestNewFishAudioTTSUsesFallbackEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("FISHAUDIO_API_KEY", "")
 	t.Setenv("FISH_AUDIO_API_KEY", "fallback-env-key")
@@ -64,6 +77,29 @@ func TestNewFishAudioTTSUsesFallbackEnvironmentAPIKey(t *testing.T) {
 
 	if provider.apiKey != "fallback-env-key" {
 		t.Fatalf("api key = %q, want fallback env key", provider.apiKey)
+	}
+}
+
+func TestFishAudioTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("FISH_API_KEY", "")
+	t.Setenv("FISHAUDIO_API_KEY", "")
+	t.Setenv("FISH_AUDIO_API_KEY", "")
+	provider := NewFishAudioTTS("", "", WithFishAudioTTSBaseURL("://bad-url"))
+
+	_, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("Synthesize returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "FISH_API_KEY") {
+		t.Fatalf("Synthesize error = %q, want FISH_API_KEY guidance", err)
+	}
+
+	_, err = provider.Stream(context.Background())
+	if err == nil {
+		t.Fatal("Stream returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "FISH_API_KEY") {
+		t.Fatalf("Stream error = %q, want FISH_API_KEY guidance", err)
 	}
 }
 

@@ -79,6 +79,10 @@ func (t *XaiTTS) SampleRate() int  { return xaiTTSSampleRate }
 func (t *XaiTTS) NumChannels() int { return xaiTTSNumChannels }
 
 func (t *XaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if err := validateXaiAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
+
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildXaiTTSStreamURL(t), buildXaiTTSHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial xai tts websocket: %w", err)
@@ -95,6 +99,10 @@ func (t *XaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream
 }
 
 func (t *XaiTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if err := validateXaiAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
+
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildXaiTTSStreamURL(t), buildXaiTTSHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial xai tts websocket: %w", err)
@@ -105,6 +113,13 @@ func (t *XaiTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		ctx:    streamCtx,
 		cancel: cancel,
 	}, nil
+}
+
+func validateXaiAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("xAI API key is required, either as argument or set XAI_API_KEY environment variable")
+	}
+	return nil
 }
 
 func buildXaiTTSStreamURL(t *XaiTTS) string {

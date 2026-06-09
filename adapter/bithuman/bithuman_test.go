@@ -35,6 +35,21 @@ func TestNewBithumanAvatarUsesReferenceDefaults(t *testing.T) {
 	}
 }
 
+func TestNewBithumanAvatarUsesEnvironmentAPISecret(t *testing.T) {
+	t.Setenv("BITHUMAN_API_SECRET", "env-secret")
+
+	avatar := NewBithumanAvatar("")
+
+	if avatar.apiKey != "env-secret" {
+		t.Fatalf("apiKey = %q, want env secret", avatar.apiKey)
+	}
+
+	explicit := NewBithumanAvatar("explicit-key")
+	if explicit.apiKey != "explicit-key" {
+		t.Fatalf("apiKey = %q, want explicit key", explicit.apiKey)
+	}
+}
+
 func TestBithumanAvatarUpdateStateRecordsReferenceState(t *testing.T) {
 	avatar := NewBithumanAvatar("test-key")
 

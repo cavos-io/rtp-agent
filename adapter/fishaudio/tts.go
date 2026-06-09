@@ -25,6 +25,7 @@ const (
 	defaultFishAudioLatencyMode = "balanced"
 	defaultFishAudioChunkLength = 100
 	fishAudioTTSUserAgent       = "livekit-plugins-fishaudio/go"
+	fishAudioReferenceAPIKeyEnv = "FISH_API_KEY"
 	fishAudioPrimaryAPIKeyEnv   = "FISHAUDIO_API_KEY"
 	fishAudioFallbackAPIKeyEnv  = "FISH_AUDIO_API_KEY"
 )
@@ -101,6 +102,9 @@ func WithFishAudioTTSChunkLength(chunkLength int) FishAudioTTSOption {
 
 func NewFishAudioTTS(apiKey string, voice string, opts ...FishAudioTTSOption) *FishAudioTTS {
 	if apiKey == "" {
+		apiKey = os.Getenv(fishAudioReferenceAPIKeyEnv)
+	}
+	if apiKey == "" {
 		apiKey = os.Getenv(fishAudioPrimaryAPIKeyEnv)
 	}
 	if apiKey == "" {
@@ -144,6 +148,10 @@ func (t *FishAudioTTS) SampleRate() int  { return t.sampleRate }
 func (t *FishAudioTTS) NumChannels() int { return 1 }
 
 func (t *FishAudioTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if err := validateFishAudioAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
+
 	req, err := buildFishAudioTTSRequest(ctx, t, text)
 	if err != nil {
 		return nil, err
@@ -179,6 +187,13 @@ func buildFishAudioTTSRequest(ctx context.Context, t *FishAudioTTS, text string)
 	req.Header.Set("Content-Type", "application/msgpack")
 	req.Header.Set("model", t.model)
 	return req, nil
+}
+
+func validateFishAudioAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("fish audio API key is required, either as argument or set FISH_API_KEY environment variable")
+	}
+	return nil
 }
 
 func fishAudioTTSRequestPayload(t *FishAudioTTS, text string) map[string]interface{} {
@@ -234,6 +249,10 @@ func buildFishAudioTTSSimpleEvent(event string) ([]byte, error) {
 }
 
 func (t *FishAudioTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if err := validateFishAudioAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
+
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildFishAudioTTSWebsocketURL(t), buildFishAudioTTSWebsocketHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial fishaudio tts websocket: %w", err)

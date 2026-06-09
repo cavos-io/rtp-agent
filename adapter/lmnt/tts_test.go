@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -53,6 +54,17 @@ func TestNewLMNTTTSUsesEnvironmentAPIKey(t *testing.T) {
 	explicit := NewLMNTTTS("explicit-key", "")
 	if explicit.apiKey != "explicit-key" {
 		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
+func TestLMNTTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("LMNT_API_KEY", "")
+	provider := NewLMNTTTS("", "")
+
+	_, err := provider.Synthesize(context.Background(), "hello")
+
+	if err == nil || !strings.Contains(err.Error(), "LMNT_API_KEY") {
+		t.Fatalf("Synthesize error = %v, want missing API key error", err)
 	}
 }
 

@@ -1,6 +1,7 @@
 package xai
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/url"
@@ -74,6 +75,27 @@ func TestXaiTTSOptionsBuildReferenceStreamURLAndHeaders(t *testing.T) {
 	headers := buildXaiTTSHeaders(provider)
 	if headers.Get("Authorization") != "Bearer test-key" {
 		t.Fatalf("Authorization = %q, want bearer token", headers.Get("Authorization"))
+	}
+}
+
+func TestXaiTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("XAI_API_KEY", "")
+	provider := NewXaiTTS("", "", WithXaiTTSWebsocketURL("://bad-url"))
+
+	_, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("Synthesize returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "XAI_API_KEY") {
+		t.Fatalf("Synthesize error = %q, want XAI_API_KEY guidance", err)
+	}
+
+	_, err = provider.Stream(context.Background())
+	if err == nil {
+		t.Fatal("Stream returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "XAI_API_KEY") {
+		t.Fatalf("Stream error = %q, want XAI_API_KEY guidance", err)
 	}
 }
 

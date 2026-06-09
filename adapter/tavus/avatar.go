@@ -20,7 +20,7 @@ type TavusAvatar struct {
 
 func NewTavusAvatar(apiKey string) *TavusAvatar {
 	return &TavusAvatar{
-		apiKey:         apiKey,
+		apiKey:         resolveTavusAPIKey(apiKey),
 		avatarIdentity: defaultAvatarAgentIdentity,
 		state:          defaultInitialAvatarState,
 	}

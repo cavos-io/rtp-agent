@@ -109,6 +109,17 @@ func TestNewSpeechmaticsSTTUsesEnvironmentAPIKey(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTStreamRequiresAPIKeyBeforeDial(t *testing.T) {
+	t.Setenv("SPEECHMATICS_API_KEY", "")
+	provider := NewSpeechmaticsSTT("")
+
+	_, err := provider.Stream(context.Background(), "")
+
+	if err == nil || !strings.Contains(err.Error(), "SPEECHMATICS_API_KEY") {
+		t.Fatalf("Stream error = %v, want missing API key error", err)
+	}
+}
+
 func TestSpeechmaticsSTTStreamURLMatchesReference(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 	streamURL, err := url.Parse(buildSpeechmaticsSTTStreamURL(provider))
@@ -126,6 +137,21 @@ func TestSpeechmaticsSTTStreamURLMatchesReference(t *testing.T) {
 	}
 	if streamURL.String() != "wss://speechmatics.example/v2" {
 		t.Fatalf("stream URL = %q, want trimmed custom base URL", streamURL.String())
+	}
+}
+
+func TestSpeechmaticsSTTUsesEnvironmentRealtimeURL(t *testing.T) {
+	t.Setenv("SPEECHMATICS_RT_URL", "wss://speechmatics.env/v2/")
+
+	provider := NewSpeechmaticsSTT("test-key")
+
+	if got, want := buildSpeechmaticsSTTStreamURL(provider), "wss://speechmatics.env/v2"; got != want {
+		t.Fatalf("stream URL = %q, want environment realtime URL %q", got, want)
+	}
+
+	provider = NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("wss://speechmatics.explicit/v2/"))
+	if got, want := buildSpeechmaticsSTTStreamURL(provider), "wss://speechmatics.explicit/v2"; got != want {
+		t.Fatalf("stream URL = %q, want explicit realtime URL %q", got, want)
 	}
 }
 
