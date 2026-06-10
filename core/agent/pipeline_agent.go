@@ -808,7 +808,12 @@ func sessionRegisteredTools(ctx context.Context, session *AgentSession) ([]llm.T
 		return nil, nil
 	}
 	tools := make([]llm.Tool, 0, len(session.Tools))
-	tools = append(tools, session.Tools...)
+	for idx, tool := range session.Tools {
+		if isNilAgentTool(tool) {
+			return nil, fmt.Errorf("session tool at index %d: nil tool", idx)
+		}
+		tools = append(tools, tool)
+	}
 	if session.Agent != nil && session.Agent.GetAgent() != nil {
 		tools = append(tools, session.Agent.GetAgent().Tools...)
 	}
