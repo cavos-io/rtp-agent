@@ -25,6 +25,12 @@ func TestGnaniTTSDefaultsMatchReference(t *testing.T) {
 	if provider.model != "vachana-voice-v3" {
 		t.Fatalf("model = %q, want vachana-voice-v3", provider.model)
 	}
+	if got := tts.Model(provider); got != "vachana-voice-v3" {
+		t.Fatalf("model metadata = %q, want vachana-voice-v3", got)
+	}
+	if got := tts.Provider(provider); got != "Gnani" {
+		t.Fatalf("provider metadata = %q, want Gnani", got)
+	}
 	if provider.encoding != "linear_pcm" {
 		t.Fatalf("encoding = %q, want linear_pcm", provider.encoding)
 	}
