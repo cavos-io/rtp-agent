@@ -2935,7 +2935,7 @@ func TestAssignmentSendsRunningJobStatus(t *testing.T) {
 	}
 }
 
-func TestAssignmentReportsSuccessWhenEntrypointCompletes(t *testing.T) {
+func TestAssignmentReportsSuccessWhenJobContextShutsDown(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	sentCh := make(chan *livekit.WorkerMessage, 2)
 	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
@@ -2943,6 +2943,7 @@ func TestAssignmentReportsSuccessWhenEntrypointCompletes(t *testing.T) {
 		return nil
 	}
 	server.entrypointFnc = func(ctx *JobContext) error {
+		ctx.Shutdown("session ended")
 		return nil
 	}
 
@@ -2957,7 +2958,7 @@ func TestAssignmentReportsSuccessWhenEntrypointCompletes(t *testing.T) {
 	_, exists := server.activeJobs[job.Id]
 	server.mu.Unlock()
 	if exists {
-		t.Fatal("assigned job remained in activeJobs after successful entrypoint completion")
+		t.Fatal("assigned job remained in activeJobs after job context shutdown")
 	}
 }
 
@@ -3000,6 +3001,7 @@ func TestAssignmentCompletionUploadsRecordedSessionReport(t *testing.T) {
 	}
 	server.entrypointFnc = func(ctx *JobContext) error {
 		ctx.Report.Room = ctx.Job.GetRoom().GetName()
+		ctx.Shutdown("session ended")
 		return nil
 	}
 
@@ -3031,6 +3033,81 @@ func TestAssignmentCompletionUploadsRecordedSessionReport(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("recorded assignment did not upload session report")
+	}
+}
+
+func TestAssignmentWaitsForShutdownAfterEntrypointCompletes(t *testing.T) {
+	oldUpload := uploadSessionReport
+	uploadCh := make(chan struct{}, 1)
+	uploadSessionReport = func(string, string, string, string, *agent.SessionReport) error {
+		uploadCh <- struct{}{}
+		return nil
+	}
+	defer func() { uploadSessionReport = oldUpload }()
+
+	server := NewAgentServer(WorkerOptions{
+		APIKey:    "api-key",
+		APISecret: "api-secret",
+		AgentName: "support-agent",
+	})
+	sentCh := make(chan *livekit.WorkerMessage, 3)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+	entrypointDone := make(chan *JobContext, 1)
+	server.entrypointFnc = func(ctx *JobContext) error {
+		ctx.Report.Room = ctx.Job.GetRoom().GetName()
+		entrypointDone <- ctx
+		return nil
+	}
+
+	assignmentURL := "wss://tenant.livekit.cloud"
+	job := &livekit.Job{
+		Id:              "job_wait_shutdown",
+		Room:            &livekit.Room{Name: "room-a"},
+		EnableRecording: true,
+	}
+	markJobAccepted(t, server, job)
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{
+		Job: job,
+		Url: &assignmentURL,
+	})
+
+	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_wait_shutdown", livekit.JobStatus_JS_RUNNING)
+
+	var jobCtx *JobContext
+	select {
+	case jobCtx = <-entrypointDone:
+	case <-time.After(time.Second):
+		t.Fatal("entrypoint did not return")
+	}
+
+	select {
+	case msg := <-sentCh:
+		t.Fatalf("received job status before shutdown: %#v", msg.GetUpdateJob())
+	case <-time.After(50 * time.Millisecond):
+	}
+	select {
+	case <-uploadCh:
+		t.Fatal("uploaded session report before shutdown")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	server.mu.Lock()
+	_, exists := server.activeJobs[job.Id]
+	server.mu.Unlock()
+	if !exists {
+		t.Fatal("assigned job left activeJobs before shutdown")
+	}
+
+	jobCtx.Shutdown("session ended")
+
+	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_wait_shutdown", livekit.JobStatus_JS_SUCCESS)
+	select {
+	case <-uploadCh:
+	case <-time.After(time.Second):
+		t.Fatal("session report did not upload after shutdown")
 	}
 }
 
@@ -5107,7 +5184,12 @@ func TestHandleTerminationFinalizesAssignedJobOnce(t *testing.T) {
 	}
 
 	close(releaseEntrypoint)
-	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_termination_once", livekit.JobStatus_JS_SUCCESS)
+
+	select {
+	case msg := <-sentCh:
+		t.Fatalf("received job status after termination finalized job: %#v", msg.GetUpdateJob())
+	case <-time.After(20 * time.Millisecond):
+	}
 
 	select {
 	case <-sessionEndCh:

@@ -354,6 +354,7 @@ type JobContext struct {
 	recordingInitialized   bool
 	shutdownCallbacks      []func(string)
 	shutdownOnce           sync.Once
+	shutdownDone           chan struct{}
 	finishOnce             sync.Once
 	participantEntrypoints []participantEntrypointRegistration
 	availableParticipants  []*livekit.ParticipantInfo
@@ -380,13 +381,14 @@ func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string
 		}
 	}
 	return &JobContext{
-		Job:       job,
-		url:       url,
-		apiKey:    apiKey,
-		apiSecret: apiSecret,
-		Report:    report,
-		tagger:    tagger,
-		process:   NewJobProcess(JobExecutorTypeThread, nil, ""),
+		Job:          job,
+		url:          url,
+		apiKey:       apiKey,
+		apiSecret:    apiSecret,
+		Report:       report,
+		tagger:       tagger,
+		process:      NewJobProcess(JobExecutorTypeThread, nil, ""),
+		shutdownDone: make(chan struct{}),
 		logContextFields: map[string]any{
 			"job_id": report.JobID,
 			"room":   report.Room,
@@ -917,6 +919,9 @@ func (c *JobContext) Shutdown(reasons ...string) {
 		reason = reasons[0]
 	}
 	c.shutdownOnce.Do(func() {
+		if c.shutdownDone == nil {
+			c.shutdownDone = make(chan struct{})
+		}
 		for _, callback := range c.shutdownCallbacks {
 			func(callback func(string)) {
 				defer func() {
@@ -930,7 +935,20 @@ func (c *JobContext) Shutdown(reasons ...string) {
 		if c.Room != nil {
 			c.Room.Disconnect()
 		}
+		close(c.shutdownDone)
 	})
+}
+
+func (c *JobContext) ShutdownDone() <-chan struct{} {
+	if c == nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	if c.shutdownDone == nil {
+		c.shutdownDone = make(chan struct{})
+	}
+	return c.shutdownDone
 }
 
 // DeleteRoom deletes the room and disconnects all participants.

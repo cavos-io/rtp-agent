@@ -1970,10 +1970,25 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 					logger.Logger.Errorw("Job entrypoint panicked", fmt.Errorf("%v", recovered), jobLogValues(jobCtx, "jobId", req.Job.Id)...)
 					status = livekit.JobStatus_JS_FAILED
 				}
+				if status == livekit.JobStatus_JS_SUCCESS {
+					select {
+					case <-jobCtx.ShutdownDone():
+					case <-ctx.Done():
+						jobCtx.Shutdown("")
+					}
+					if !s.finishJob(jobCtx) {
+						return
+					}
+				} else {
+					if err := s.sendWorkerMessage(jobStatusMessage(req.Job.Id, status)); err != nil {
+						logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", req.Job.Id)...)
+					}
+					s.finishJob(jobCtx)
+					return
+				}
 				if err := s.sendWorkerMessage(jobStatusMessage(req.Job.Id, status)); err != nil {
 					logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", req.Job.Id)...)
 				}
-				s.finishJob(jobCtx)
 			}()
 
 			if err := s.runJobEntrypoint(jobCtx); err != nil {
@@ -2140,16 +2155,16 @@ func (s *AgentServer) runJobEntrypoint(jobCtx *JobContext) error {
 	})
 }
 
-func (s *AgentServer) finishJob(jobCtx *JobContext) {
+func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
 	if jobCtx == nil || jobCtx.Job == nil {
-		return
+		return false
 	}
 	finalized := false
 	jobCtx.finishOnce.Do(func() {
 		finalized = true
 	})
 	if !finalized {
-		return
+		return false
 	}
 
 	s.mu.Lock()
@@ -2160,6 +2175,7 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) {
 
 	jobCtx.Shutdown("")
 	s.uploadJobSessionReport(jobCtx)
+	return true
 }
 
 func (s *AgentServer) uploadJobSessionReport(jobCtx *JobContext) {
