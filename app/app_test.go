@@ -575,6 +575,26 @@ func TestDefaultConfigFromEnvSelectsCometAPIOpenAILLM(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsOVHCloudOpenAILLM(t *testing.T) {
+	t.Setenv("OVHCLOUD_API_KEY", "test-ovhcloud-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "ovhcloud")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "custom-ovhcloud-model")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Model(app.Session.LLM); got != "custom-ovhcloud-model" {
+		t.Fatalf("LLM model = %q, want custom-ovhcloud-model", got)
+	}
+	if got := llm.Provider(app.Session.LLM); got != "oai.endpoints.kepler.ai.cloud.ovh.net" {
+		t.Fatalf("LLM provider = %q, want oai.endpoints.kepler.ai.cloud.ovh.net", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsNvidiaLLM(t *testing.T) {
 	t.Setenv("NVIDIA_API_KEY", "test-nvidia-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "nvidia")

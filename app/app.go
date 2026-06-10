@@ -226,6 +226,7 @@ const (
 	providerNebius       = "nebius"
 	providerNvidia       = "nvidia"
 	providerOpenAI       = "openai"
+	providerOVHCloud     = "ovhcloud"
 	providerPerplexity   = "perplexity"
 	providerPhonic       = "phonic"
 	providerResemble     = "resemble"
@@ -497,6 +498,7 @@ type AppConfig struct {
 	NeuphonicAPIKey             string
 	NebiusAPIKey                string
 	NvidiaAPIKey                string
+	OVHCloudAPIKey              string
 	PerplexityAPIKey            string
 	PhonicAPIKey                string
 	ResembleAPIKey              string
@@ -853,6 +855,7 @@ func DefaultConfigFromEnv() AppConfig {
 		NeuphonicAPIKey:                         os.Getenv("NEUPHONIC_API_KEY"),
 		NebiusAPIKey:                            os.Getenv("NEBIUS_API_KEY"),
 		NvidiaAPIKey:                            os.Getenv("NVIDIA_API_KEY"),
+		OVHCloudAPIKey:                          os.Getenv("OVHCLOUD_API_KEY"),
 		PerplexityAPIKey:                        os.Getenv("PERPLEXITY_API_KEY"),
 		PhonicAPIKey:                            os.Getenv("PHONIC_API_KEY"),
 		ResembleAPIKey:                          os.Getenv("RESEMBLE_API_KEY"),
@@ -2188,6 +2191,12 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = provider
 	case providerLetta:
 		provider, err := openai.NewLettaOpenAILLM(cfg.LLMModel, cfg.LLMBaseURL, cfg.LettaAPIKey)
+		if err != nil {
+			return nil, err
+		}
+		a.LLM = provider
+	case providerOVHCloud:
+		provider, err := openai.NewOVHCloudOpenAILLM(cfg.LLMModel, cfg.OVHCloudAPIKey)
 		if err != nil {
 			return nil, err
 		}
