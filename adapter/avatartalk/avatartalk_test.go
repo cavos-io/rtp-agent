@@ -21,6 +21,9 @@ func TestNewAvatartalkAvatarUsesReferenceDefaults(t *testing.T) {
 	if providerName != "avatartalk" {
 		t.Fatalf("providerName = %q, want avatartalk", providerName)
 	}
+	if avatar.Provider() != "avatartalk" {
+		t.Fatalf("Provider() = %q, want avatartalk", avatar.Provider())
+	}
 	if avatar.avatar != "japanese_man" {
 		t.Fatalf("avatar = %q, want default avatar", avatar.avatar)
 	}

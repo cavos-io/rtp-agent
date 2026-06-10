@@ -52,6 +52,10 @@ func NewAvatartalkAvatar(apiKey string) *AvatartalkAvatar {
 	}
 }
 
+func (a *AvatartalkAvatar) Provider() string {
+	return providerName
+}
+
 func (a *AvatartalkAvatar) Start(ctx context.Context) error {
 	if a.apiKey == "" {
 		return errors.New("AvatarTalk API key is required, either as argument or set AVATARTALK_API_KEY environment variable")

@@ -39,6 +39,10 @@ func NewAvatarioAvatar(apiKey string) *AvatarioAvatar {
 	}
 }
 
+func (a *AvatarioAvatar) Provider() string {
+	return providerName
+}
+
 func (a *AvatarioAvatar) Start(ctx context.Context) error {
 	if a.avatarID == "" {
 		return errors.New("AVATARIO_AVATAR_ID must be set")
