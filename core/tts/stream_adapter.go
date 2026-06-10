@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -229,7 +230,7 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 	if err != nil {
 		return err
 	}
-	if stream == nil {
+	if isNilChunkedStream(stream) {
 		return fmt.Errorf("TTS returned nil chunked stream")
 	}
 	w.setActiveStream(stream)
@@ -277,6 +278,19 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 		}
 		pending = tail
 		pendingTail = false
+	}
+}
+
+func isNilChunkedStream(stream ChunkedStream) bool {
+	if stream == nil {
+		return true
+	}
+	value := reflect.ValueOf(stream)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
 	}
 }
 
