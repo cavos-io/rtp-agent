@@ -2119,6 +2119,23 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		return groq.NewGroqTTS(cfg.GroqAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerNvidia:
 		return nvidia.NewNvidiaTTS(cfg.NvidiaAPIKey, cfg.TTSVoice)
+	case providerMistralAI:
+		ttsOpts := []mistralai.MistralAITTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSRefAudio != "" {
+			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSRefAudio(cfg.TTSRefAudio))
+		} else if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSResponseFormat(cfg.TTSResponseFormat))
+		}
+		return mistralai.NewMistralAITTS(cfg.MistralAPIKey, "", ttsOpts...)
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {
