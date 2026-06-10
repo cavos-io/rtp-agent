@@ -187,9 +187,9 @@ func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *Se
 	}
 	if report.RecordingOptions.Transcript && report.ChatHistory != nil {
 		for _, item := range report.ChatHistory.Items {
-			recordUploadTelemetryEvent(ctx, "chat_item", "chat item", map[string]interface{}{
+			recordUploadTelemetryEventAt(ctx, "chat_item", "chat item", map[string]interface{}{
 				"chat.item": chatItemReportDict(item),
-			})
+			}, item.GetCreatedAt())
 		}
 	}
 

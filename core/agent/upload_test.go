@@ -365,9 +365,11 @@ func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
 	t.Setenv("LIVEKIT_OBSERVABILITY_URL", "https://observability.test")
 
 	chatCtx := llm.NewChatContext()
+	createdAt := time.Unix(1800, 125000000)
 	chatCtx.AddMessage(llm.ChatMessageArgs{
-		Role: llm.ChatRoleUser,
-		Text: "hello there",
+		Role:      llm.ChatRoleUser,
+		Text:      "hello there",
+		CreatedAt: createdAt,
 	})
 	report := NewSessionReport()
 	report.RecordingOptions = RecordingOptions{Transcript: true}
@@ -382,6 +384,9 @@ func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
 	}
 	if events[1].eventType != "chat_item" || events[1].body != "chat item" {
 		t.Fatalf("second telemetry event = %#v, want chat item event", events[1])
+	}
+	if !events[1].timestamp.Equal(createdAt) {
+		t.Fatalf("chat item event timestamp = %v, want item created_at %v", events[1].timestamp, createdAt)
 	}
 	item, ok := events[1].attrs["chat.item"].(map[string]any)
 	if !ok {
