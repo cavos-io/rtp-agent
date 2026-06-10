@@ -70,6 +70,11 @@ func NewFalSTT(apiKey string, opts ...FalSTTOption) *FalSTT {
 }
 
 func (s *FalSTT) Label() string { return "fal.STT" }
+func (s *FalSTT) Model() string { return "Wizper" }
+func (s *FalSTT) Provider() string {
+	return "Fal"
+}
+
 func (s *FalSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: false, InterimResults: true, Diarization: false, OfflineRecognize: true}
 }
