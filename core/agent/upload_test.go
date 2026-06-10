@@ -348,6 +348,7 @@ func TestUploadSessionReportRecordsModelUsage(t *testing.T) {
 func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
 	oldRecord := recordUploadTelemetryEvent
 	oldRecordAt := recordUploadTelemetryEventAt
+	oldRecordWithOptions := recordUploadTelemetryEventWithOptions
 	var events []uploadTelemetryEvent
 	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
 		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
@@ -355,9 +356,13 @@ func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
 	recordUploadTelemetryEventAt = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, timestamp time.Time) {
 		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: timestamp})
 	}
+	recordUploadTelemetryEventWithOptions = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, options telemetry.ChatEventOptions) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: options.Timestamp, severity: options.SeverityText})
+	}
 	defer func() {
 		recordUploadTelemetryEvent = oldRecord
 		recordUploadTelemetryEventAt = oldRecordAt
+		recordUploadTelemetryEventWithOptions = oldRecordWithOptions
 	}()
 	useRecordingUploadHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -371,6 +376,15 @@ func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
 		Text:      "hello there",
 		CreatedAt: createdAt,
 	})
+	outputCreatedAt := createdAt.Add(time.Millisecond)
+	chatCtx.Items = append(chatCtx.Items, &llm.FunctionCallOutput{
+		ID:        "out_1",
+		CallID:    "call_lookup",
+		Name:      "lookup",
+		Output:    "tool failed",
+		IsError:   true,
+		CreatedAt: outputCreatedAt,
+	})
 	report := NewSessionReport()
 	report.RecordingOptions = RecordingOptions{Transcript: true}
 	report.ChatHistory = chatCtx
@@ -379,8 +393,8 @@ func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
 	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
 		t.Fatalf("UploadSessionReport() error = %v", err)
 	}
-	if len(events) != 2 {
-		t.Fatalf("telemetry events = %#v, want session report and chat item", events)
+	if len(events) != 3 {
+		t.Fatalf("telemetry events = %#v, want session report and chat item events", events)
 	}
 	if events[1].eventType != "chat_item" || events[1].body != "chat item" {
 		t.Fatalf("second telemetry event = %#v, want chat item event", events[1])
@@ -398,6 +412,15 @@ func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
 	content, ok := item["content"].([]any)
 	if !ok || len(content) != 1 || content[0] != "hello there" {
 		t.Fatalf("chat.item content = %#v, want hello there", item["content"])
+	}
+	if events[2].eventType != "chat_item" || events[2].body != "chat item" {
+		t.Fatalf("third telemetry event = %#v, want errored function output chat item event", events[2])
+	}
+	if !events[2].timestamp.Equal(outputCreatedAt) {
+		t.Fatalf("function output event timestamp = %v, want item created_at %v", events[2].timestamp, outputCreatedAt)
+	}
+	if events[2].severity != "error" {
+		t.Fatalf("function output event severity = %q, want error", events[2].severity)
 	}
 }
 
