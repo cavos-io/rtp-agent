@@ -451,9 +451,6 @@ func openAIAudioRequest(s *OpenAISTT, reader io.Reader, language string) openai.
 	}
 	if s.model == "whisper-1" {
 		req.Format = openai.AudioResponseFormatVerboseJSON
-		req.TimestampGranularities = []openai.TranscriptionTimestampGranularity{
-			openai.TranscriptionTimestampGranularityWord,
-		}
 	}
 	return req
 }

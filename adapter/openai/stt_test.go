@@ -19,7 +19,7 @@ import (
 	goopenai "github.com/sashabaranov/go-openai"
 )
 
-func TestOpenAIAudioRequestAsksForWordTimestamps(t *testing.T) {
+func TestOpenAIAudioRequestUsesVerboseJSONForWhisper(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "whisper-1")
 	req := openAIAudioRequest(provider, strings.NewReader("audio"), "en")
 
@@ -29,11 +29,14 @@ func TestOpenAIAudioRequestAsksForWordTimestamps(t *testing.T) {
 	if req.Language != "en" {
 		t.Fatalf("language = %q, want en", req.Language)
 	}
+	if req.Prompt != "" {
+		t.Fatalf("prompt = %q, want omitted when not configured", req.Prompt)
+	}
 	if req.Format != goopenai.AudioResponseFormatVerboseJSON {
 		t.Fatalf("format = %q, want verbose_json", req.Format)
 	}
-	if len(req.TimestampGranularities) != 1 || req.TimestampGranularities[0] != goopenai.TranscriptionTimestampGranularityWord {
-		t.Fatalf("timestamp granularities = %#v, want word", req.TimestampGranularities)
+	if len(req.TimestampGranularities) != 0 {
+		t.Fatalf("timestamp granularities = %#v, want omitted like reference", req.TimestampGranularities)
 	}
 }
 
