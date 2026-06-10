@@ -67,6 +67,10 @@ func NewClovaSTT(secret, invokeURL string, opts ...ClovaSTTOption) *ClovaSTT {
 }
 
 func (s *ClovaSTT) Label() string { return "clova.STT" }
+func (s *ClovaSTT) Model() string { return "unknown" }
+func (s *ClovaSTT) Provider() string {
+	return "Clova"
+}
 func (s *ClovaSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: false, InterimResults: true, Diarization: false, OfflineRecognize: true}
 }
