@@ -898,6 +898,57 @@ func TestFallbackAdapterEmitsAvailabilityChanges(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterAvailabilityHandlerPanicDoesNotBlockOtherHandlers(t *testing.T) {
+	primaryErr := errors.New("primary recognize failed")
+	primary := &metadataSTT{
+		label:         "primary",
+		capabilities:  STTCapabilities{Streaming: true},
+		recognizeErrs: []error{primaryErr},
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		recognizeResult: &SpeechEvent{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback"}},
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+	})
+	changes := make(chan AvailabilityChangedEvent, 1)
+	adapter.OnAvailabilityChanged(func(AvailabilityChangedEvent) {
+		panic("availability handler failed")
+	})
+	adapter.OnAvailabilityChanged(func(event AvailabilityChangedEvent) {
+		changes <- event
+	})
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				t.Fatalf("availability handler panic escaped: %v", recovered)
+			}
+		}()
+
+		event, err := adapter.Recognize(context.Background(), nil, "en")
+		if err != nil {
+			t.Fatalf("Recognize returned error: %v", err)
+		}
+		if got := event.Alternatives[0].Text; got != "fallback" {
+			t.Fatalf("recognized text = %q, want fallback", got)
+		}
+	}()
+
+	unavailable := receiveAvailabilityChange(t, changes)
+	if unavailable.STT != primary {
+		t.Fatalf("unavailable STT = %v, want primary", unavailable.STT.Label())
+	}
+	if unavailable.Available {
+		t.Fatal("unavailable event Available = true, want false")
+	}
+}
+
 func TestFallbackAdapterCanUnsubscribeAvailabilityChanges(t *testing.T) {
 	primaryErr := errors.New("primary recognize failed")
 	primary := &metadataSTT{

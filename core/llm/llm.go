@@ -1217,7 +1217,7 @@ func (f *FallbackAdapter) emitAvailabilityChanged(index int, available bool) {
 	subscriptions := append([]fallbackAvailabilityHandlerSubscription(nil), f.availabilityHandlers...)
 	f.mu.Unlock()
 	for _, subscription := range subscriptions {
-		subscription.handler(event)
+		callFallbackAvailabilityChangedHandler(subscription.handler, event)
 	}
 }
 

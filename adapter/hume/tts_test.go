@@ -175,6 +175,21 @@ func TestHumeTTSOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestHumeTTSRejectsInstantModeWithoutVoice(t *testing.T) {
+	provider := NewHumeTTS("test-key", "",
+		WithHumeTTSVoiceName("", ""),
+		WithHumeTTSInstantMode(true),
+	)
+
+	_, err := buildHumeTTSRequest(context.Background(), provider, "hello")
+	if err == nil {
+		t.Fatal("build request returned nil error, want instant mode without voice error")
+	}
+	if !strings.Contains(err.Error(), "instant_mode cannot be enabled without specifying a voice") {
+		t.Fatalf("build request error = %q, want instant_mode voice guidance", err)
+	}
+}
+
 func TestHumeTTSVoiceIDBuildsReferencePayload(t *testing.T) {
 	provider := NewHumeTTS("test-key", "",
 		WithHumeTTSVoiceID("voice-123", "CUSTOM_VOICE"),

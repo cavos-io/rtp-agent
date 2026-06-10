@@ -70,6 +70,6 @@ func (e *ErrorEmitter) EmitError(err *STTError) {
 	e.mu.Unlock()
 
 	for _, subscription := range handlers {
-		subscription.handler(err)
+		callSTTErrorHandler(subscription.handler, err)
 	}
 }

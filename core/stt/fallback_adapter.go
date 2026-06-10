@@ -419,7 +419,7 @@ func (f *FallbackAdapter) setAvailable(index int, available bool) {
 	f.mu.Unlock()
 
 	for _, subscription := range subscriptions {
-		subscription.handler(event)
+		callAvailabilityChangedHandler(subscription.handler, event)
 	}
 }
 

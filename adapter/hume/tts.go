@@ -195,6 +195,9 @@ func buildHumeTTSRequest(ctx context.Context, t *HumeTTS, text string) (*http.Re
 	if t.apiKey == "" {
 		return nil, fmt.Errorf("hume API key is required via api_key or HUME_API_KEY env var")
 	}
+	if err := validateHumeTTSOptions(t); err != nil {
+		return nil, err
+	}
 
 	utterance := map[string]interface{}{
 		"text": text,
@@ -246,6 +249,13 @@ func buildHumeTTSRequest(ctx context.Context, t *HumeTTS, text string) (*http.Re
 	req.Header.Set("X-Hume-Client-Name", "livekit")
 	req.Header.Set("X-Hume-Client-Version", "go")
 	return req, nil
+}
+
+func validateHumeTTSOptions(t *HumeTTS) error {
+	if t.instantMode && t.voiceID == "" && t.voiceName == "" {
+		return fmt.Errorf("hume TTS: instant_mode cannot be enabled without specifying a voice")
+	}
+	return nil
 }
 
 func humeTTSUtterancePayload(utterance HumeTTSUtterance) map[string]interface{} {
