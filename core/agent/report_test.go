@@ -114,11 +114,11 @@ func TestSessionReportToDictSkipsMetricsCollectedEvents(t *testing.T) {
 	if !ok || len(usage) != 1 {
 		t.Fatalf("usage = %#v, want one usage summary", data["usage"])
 	}
-	if usage[0]["llm_prompt_tokens"] != 7 {
-		t.Fatalf("usage llm_prompt_tokens = %#v, want 7", usage[0]["llm_prompt_tokens"])
+	if usage[0]["type"] != "llm_usage" || usage[0]["input_tokens"] != 7 {
+		t.Fatalf("usage = %#v, want llm_usage input_tokens=7", usage[0])
 	}
-	if _, ok := usage[0]["llm_completion_tokens"]; ok {
-		t.Fatalf("usage llm_completion_tokens present with zero value: %#v", usage[0])
+	if _, ok := usage[0]["output_tokens"]; ok {
+		t.Fatalf("usage output_tokens present with zero value: %#v", usage[0])
 	}
 	if data["sdk_version"] != defaultSessionReportSDKVersion {
 		t.Fatalf("sdk_version = %#v, want default report SDK version", data["sdk_version"])
@@ -200,9 +200,12 @@ func TestSessionReportToDictIncludesModelUsage(t *testing.T) {
 	})
 
 	data := NewSessionReport(session).ToDict()
-	modelUsage, ok := data["model_usage"].([]map[string]any)
+	modelUsage, ok := data["usage"].([]map[string]any)
 	if !ok {
-		t.Fatalf("model_usage = %T, want []map[string]any", data["model_usage"])
+		t.Fatalf("usage = %T, want []map[string]any", data["usage"])
+	}
+	if _, ok := data["model_usage"]; ok {
+		t.Fatalf("model_usage key present: %#v", data["model_usage"])
 	}
 	llmUsage := findReportModelUsage(modelUsage, "llm_usage", "openai", "gpt-report")
 	if llmUsage == nil {
