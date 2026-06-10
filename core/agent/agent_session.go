@@ -1602,6 +1602,10 @@ func (s *AgentSession) Shutdown(drain ...bool) {
 		if err := s.Drain(context.Background()); err != nil && !errors.Is(err, ErrAgentSessionNotRunning) {
 			s.EmitError(ErrorEvent{Error: err, CreatedAt: time.Now()})
 		}
+	} else {
+		if err := s.Interrupt(true); err != nil && !errors.Is(err, ErrAgentSessionNotRunning) {
+			s.EmitError(ErrorEvent{Error: err, CreatedAt: time.Now()})
+		}
 	}
 	s.CloseSoon(CloseReasonUserInitiated)
 }

@@ -2784,10 +2784,33 @@ func TestAgentSessionShutdownCanSkipDrain(t *testing.T) {
 	current := NewSpeechHandle(true, DefaultInputDetails())
 	session.activity.currentSpeech = current
 
-	session.Shutdown(false)
+	closeEvents := session.CloseEvents()
+	done := make(chan struct{}, 1)
+	go func() {
+		session.Shutdown(false)
+		done <- struct{}{}
+	}()
+
+	waitForInterrupted(t, current)
 
 	select {
-	case ev := <-session.CloseEvents():
+	case <-closeEvents:
+		t.Fatal("Shutdown(false) emitted close event before interrupted speech completed")
+	case <-done:
+		t.Fatal("Shutdown(false) returned before interrupted speech completed")
+	default:
+	}
+
+	current.MarkDone()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("Shutdown(false) did not return after interrupted speech completed")
+	}
+
+	select {
+	case ev := <-closeEvents:
 		if ev.Reason != CloseReasonUserInitiated {
 			t.Fatalf("CloseEvent.Reason = %q, want user_initiated", ev.Reason)
 		}
