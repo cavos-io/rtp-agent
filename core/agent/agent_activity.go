@@ -213,8 +213,14 @@ func (a *AgentActivity) Stop() {
 	a.providerUnsubscribes = nil
 	a.cancel()
 	a.queueMu.Lock()
+	a.schedulingPaused = true
+	a.schedulingDraining = false
 	a.schedulingStarted = false
 	a.queueMu.Unlock()
+	select {
+	case a.queueUpdatedCh <- struct{}{}:
+	default:
+	}
 	if a.Agent.activity == a {
 		a.Agent.activity = nil
 	}

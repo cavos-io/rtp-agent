@@ -4048,6 +4048,33 @@ func TestAgentSessionUpdateAgentWhileRunningStartsNewActivity(t *testing.T) {
 	}
 }
 
+func TestAgentSessionUpdateAgentBlocksRealtimeGenerationOnPreviousActivity(t *testing.T) {
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+	oldActivity := NewAgentActivity(initial, session)
+	session.activity = oldActivity
+	session.started = true
+
+	session.UpdateAgent(next)
+
+	handle, err := oldActivity.OnGenerationCreated(llm.GenerationCreatedEvent{
+		ResponseID:    "response_1",
+		UserInitiated: false,
+	})
+	if !errors.Is(err, ErrSpeechSchedulingPaused) {
+		t.Fatalf("OnGenerationCreated error = %v, want ErrSpeechSchedulingPaused", err)
+	}
+	if handle != nil {
+		t.Fatalf("OnGenerationCreated handle = %#v, want nil after UpdateAgent", handle)
+	}
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("unexpected SpeechCreated event from previous activity: %#v", ev)
+	default:
+	}
+}
+
 func testTimeout() <-chan time.Time {
 	return time.After(time.Second)
 }
