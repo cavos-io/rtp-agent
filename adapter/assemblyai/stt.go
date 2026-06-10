@@ -184,6 +184,10 @@ func NewAssemblyAISTT(apiKey string, opts ...AssemblyAISTTOption) *AssemblyAISTT
 }
 
 func (s *AssemblyAISTT) Label() string { return "assemblyai.STT" }
+func (s *AssemblyAISTT) Model() string { return s.speechModel }
+func (s *AssemblyAISTT) Provider() string {
+	return "AssemblyAI"
+}
 func (s *AssemblyAISTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: s.speakerLabels != nil && *s.speakerLabels, AlignedTranscript: "word", OfflineRecognize: false}
 }
