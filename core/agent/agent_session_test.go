@@ -2744,6 +2744,36 @@ func TestAgentSessionCloseSoonInterruptsActiveSpeechBeforeClosing(t *testing.T) 
 	}
 }
 
+func TestAgentSessionCloseSoonClearsAECWarmupBeforeCleanup(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	session.aecWarmupTimer = time.NewTimer(time.Hour)
+	defer session.aecWarmupTimer.Stop()
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	session.activity.currentSpeech = current
+
+	done := make(chan struct{}, 1)
+	go func() {
+		session.CloseSoon(CloseReasonParticipantDisconnected)
+		done <- struct{}{}
+	}()
+
+	waitForInterrupted(t, current)
+	if session.shouldSilenceInputAudio() {
+		t.Fatal("shouldSilenceInputAudio() = true during close, want AEC warmup cleared before cleanup")
+	}
+
+	current.MarkDone()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("CloseSoon did not return after interrupted speech completed")
+	}
+}
+
 func TestAgentSessionShutdownClosesWithUserInitiatedReason(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
