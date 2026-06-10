@@ -24,6 +24,7 @@ const defaultDeepSeekOpenAILLMModel = "deepseek-chat"
 const defaultOllamaOpenAILLMModel = "llama3.1"
 const defaultCometAPIOpenAILLMModel = "gpt-5-chat-latest"
 const defaultOctoAIOpenAILLMModel = "llama-2-13b-chat"
+const defaultSambaNovaOpenAILLMModel = "DeepSeek-R1-0528"
 const openAIAPIKeyRequiredMessage = "OpenAI API key is required, either as argument or set OPENAI_API_KEY environment variable"
 
 const (
@@ -35,6 +36,7 @@ const (
 	deepSeekAPIKeyEnv      = "DEEPSEEK_API_KEY"
 	cometAPIKeyEnv         = "COMETAPI_API_KEY"
 	octoAIAPIKeyEnv        = "OCTOAI_TOKEN"
+	sambaNovaAPIKeyEnv     = "SAMBANOVA_API_KEY"
 )
 
 const defaultOpenRouterLLMURL = "https://openrouter.ai/api/v1"
@@ -42,6 +44,7 @@ const defaultDeepSeekOpenAIBaseURL = "https://api.deepseek.com/v1"
 const defaultOllamaOpenAIBaseURL = "http://localhost:11434/v1"
 const defaultCometAPIOpenAIBaseURL = "https://api.cometapi.com/v1/"
 const defaultOctoAIOpenAIBaseURL = "https://text.octoai.run/v1"
+const defaultSambaNovaOpenAIBaseURL = "https://api.sambanova.ai/v1"
 
 type OpenAILLM struct {
 	client               *openai.Client
@@ -53,6 +56,7 @@ type OpenAILLM struct {
 	parallelToolCallsSet bool
 	toolChoice           llm.ToolChoice
 	defaultReasoning     bool
+	strictToolSchema     bool
 	extraHeaders         map[string]string
 	extraQuery           map[string]string
 	extraBody            map[string]any
@@ -228,6 +232,12 @@ func WithOpenAILLMToolChoice(toolChoice llm.ToolChoice) OpenAILLMOption {
 	}
 }
 
+func WithOpenAILLMStrictToolSchema(strict bool) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		l.strictToolSchema = strict
+	}
+}
+
 func WithOpenAILLMExtraHeaders(headers map[string]string) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		l.extraHeaders = cloneOpenAIStringMap(headers)
@@ -271,6 +281,7 @@ func newOpenAILLMWithConfigAndModel(config openai.ClientConfig, model string, op
 		model:            model,
 		baseURL:          config.BaseURL,
 		defaultReasoning: true,
+		strictToolSchema: true,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -309,7 +320,7 @@ func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 		azureDeployment = model
 	}
 
-	provider := &OpenAILLM{model: model, defaultReasoning: true}
+	provider := &OpenAILLM{model: model, defaultReasoning: true, strictToolSchema: true}
 	for _, opt := range opts {
 		opt(provider)
 	}
@@ -395,6 +406,21 @@ func NewOctoAIOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAIL
 		return nil, fmt.Errorf("OctoAI API key is required, either as argument or set OCTOAI_TOKEN environmental variable")
 	}
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultOctoAIOpenAIBaseURL, nil, opts...), nil
+}
+
+func NewSambaNovaOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+	if model == "" {
+		model = defaultSambaNovaOpenAILLMModel
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(sambaNovaAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("SambaNova API key is required, either as argument or set SAMBANOVA_API_KEY environment variable")
+	}
+	options := []OpenAILLMOption{WithOpenAILLMStrictToolSchema(false)}
+	options = append(options, opts...)
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultSambaNovaOpenAIBaseURL, nil, options...), nil
 }
 
 func NewOpenRouterLLM(apiKey, model string, opts ...OpenRouterLLMOption) (*OpenAILLM, error) {
@@ -484,6 +510,7 @@ func NewOpenAILLMWithBaseURLAndHTTPClient(apiKey string, model string, baseURL s
 		model:            model,
 		baseURL:          config.BaseURL,
 		defaultReasoning: true,
+		strictToolSchema: true,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -652,7 +679,7 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		effectiveOptions = &copied
 	}
 
-	req := buildOpenAIChatCompletionRequestWithReasoningDefault(l.model, chatCtx, effectiveOptions, l.defaultReasoning)
+	req := buildOpenAIChatCompletionRequestWithReasoningDefaultAndToolSchema(l.model, chatCtx, effectiveOptions, l.defaultReasoning, l.strictToolSchema)
 
 	var lastErr error
 	for attempt := 0; attempt <= connectOptions.MaxRetry; attempt++ {
@@ -782,6 +809,10 @@ func buildOpenAIChatCompletionRequest(model string, chatCtx *llm.ChatContext, op
 }
 
 func buildOpenAIChatCompletionRequestWithReasoningDefault(model string, chatCtx *llm.ChatContext, options *llm.ChatOptions, defaultReasoning bool) openai.ChatCompletionRequest {
+	return buildOpenAIChatCompletionRequestWithReasoningDefaultAndToolSchema(model, chatCtx, options, defaultReasoning, true)
+}
+
+func buildOpenAIChatCompletionRequestWithReasoningDefaultAndToolSchema(model string, chatCtx *llm.ChatContext, options *llm.ChatOptions, defaultReasoning bool, strictToolSchema bool) openai.ChatCompletionRequest {
 	messages := buildOpenAIChatMessages(chatCtx)
 
 	tools := make([]openai.Tool, 0, len(options.Tools))
@@ -792,7 +823,7 @@ func buildOpenAIChatCompletionRequestWithReasoningDefault(model string, chatCtx 
 			Function: &openai.FunctionDefinition{
 				Name:        tool.Name(),
 				Description: tool.Description(),
-				Strict:      true,
+				Strict:      strictToolSchema,
 				Parameters:  json.RawMessage(params),
 			},
 		})

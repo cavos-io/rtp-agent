@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -370,6 +371,75 @@ func TestNewOctoAIOpenAILLMRequiresAPIKey(t *testing.T) {
 	_, err := NewOctoAIOpenAILLM("", "")
 	if err == nil || err.Error() != "OctoAI API key is required, either as argument or set OCTOAI_TOKEN environmental variable" {
 		t.Fatalf("NewOctoAIOpenAILLM error = %v, want OctoAI API key required", err)
+	}
+}
+
+func TestNewSambaNovaOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(sambaNovaAPIKeyEnv, "env-sambanova-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewSambaNovaOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewSambaNovaOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "DeepSeek-R1-0528" {
+		t.Fatalf("Model = %q, want DeepSeek-R1-0528", model.Model())
+	}
+	if model.Provider() != "api.sambanova.ai" {
+		t.Fatalf("Provider() = %q, want SambaNova endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-sambanova-key" {
+		t.Fatalf("Authorization = %q, want SambaNova bearer key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "/v1/chat/completions") {
+		t.Fatalf("request URL = %s, want OpenAI-compatible chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"DeepSeek-R1-0528"`) {
+		t.Fatalf("request body = %s, want default SambaNova model", capture.requestBody)
+	}
+}
+
+func TestNewSambaNovaOpenAILLMOmitsStrictToolSchema(t *testing.T) {
+	t.Setenv(sambaNovaAPIKeyEnv, "env-sambanova-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model, err := NewSambaNovaOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewSambaNovaOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithTools([]llm.Tool{requestTestTool{}}),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+
+	var body map[string]any
+	if err := json.Unmarshal([]byte(capture.requestBody), &body); err != nil {
+		t.Fatalf("decode request body: %v", err)
+	}
+	tools := body["tools"].([]any)
+	function := tools[0].(map[string]any)["function"].(map[string]any)
+	if _, ok := function["strict"]; ok {
+		t.Fatalf("strict = %#v, want omitted for SambaNova legacy tool schema; body %s", function["strict"], capture.requestBody)
+	}
+}
+
+func TestNewSambaNovaOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(sambaNovaAPIKeyEnv, "")
+
+	_, err := NewSambaNovaOpenAILLM("", "")
+	if err == nil || err.Error() != "SambaNova API key is required, either as argument or set SAMBANOVA_API_KEY environment variable" {
+		t.Fatalf("NewSambaNovaOpenAILLM error = %v, want SambaNova API key required", err)
 	}
 }
 
