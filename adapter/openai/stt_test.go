@@ -127,6 +127,9 @@ func TestOpenAISTTDefaultsMatchReference(t *testing.T) {
 	if provider.Capabilities().Streaming {
 		t.Fatalf("streaming = true by default, want opt-in realtime streaming")
 	}
+	if got := stt.Model(provider); got != "gpt-4o-mini-transcribe" {
+		t.Fatalf("model metadata = %q, want gpt-4o-mini-transcribe", got)
+	}
 }
 
 func TestNewOpenAISTTUsesEnvironmentAPIKey(t *testing.T) {

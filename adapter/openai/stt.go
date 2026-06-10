@@ -222,6 +222,7 @@ func (s *OpenAISTT) Provider() string {
 	}
 	return u.Host
 }
+func (s *OpenAISTT) Model() string { return s.model }
 func (s *OpenAISTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: s.useRealtime, InterimResults: s.useRealtime, Diarization: false, OfflineRecognize: true}
 }
