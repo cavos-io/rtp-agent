@@ -259,6 +259,41 @@ func TestAgentUpdateChatContextCanKeepInvalidFunctionItems(t *testing.T) {
 	}
 }
 
+func TestAgentUpdateChatContextRejectsNilExistingTool(t *testing.T) {
+	agent := NewAgent("help")
+	agent.Tools = []llm.Tool{nil}
+	original := agent.ChatCtx
+	source := llm.NewChatContext()
+	source.Append(&llm.FunctionCall{ID: "lookup-call", Name: "lookup"})
+
+	err := agent.UpdateChatContext(context.Background(), source)
+
+	if err == nil || !strings.Contains(err.Error(), "nil tool") {
+		t.Fatalf("UpdateChatContext error = %v, want nil tool error", err)
+	}
+	if agent.ChatCtx != original {
+		t.Fatal("UpdateChatContext mutated chat context after failed tool validation")
+	}
+}
+
+func TestAgentUpdateChatContextRejectsTypedNilExistingTool(t *testing.T) {
+	agent := NewAgent("help")
+	var nilTool *agentTestTool
+	agent.Tools = []llm.Tool{nilTool}
+	original := agent.ChatCtx
+	source := llm.NewChatContext()
+	source.Append(&llm.FunctionCall{ID: "lookup-call", Name: "lookup"})
+
+	err := agent.UpdateChatContext(context.Background(), source)
+
+	if err == nil || !strings.Contains(err.Error(), "nil tool") {
+		t.Fatalf("UpdateChatContext error = %v, want nil tool error", err)
+	}
+	if agent.ChatCtx != original {
+		t.Fatal("UpdateChatContext mutated chat context after failed tool validation")
+	}
+}
+
 func TestAgentUpdateChatCtxMatchesReferenceName(t *testing.T) {
 	agent := NewAgent("help")
 	agent.Tools = []llm.Tool{&agentTestTool{name: "lookup"}}
