@@ -152,7 +152,7 @@ func NewAzureOpenAITTS(model openai.SpeechModel, voice openai.SpeechVoice, azure
 	if provider.httpClient != nil {
 		config.HTTPClient = provider.httpClient
 	}
-	config.HTTPClient = &openAITTSStreamFormatHTTPClient{base: config.HTTPClient}
+	config.HTTPClient = &openAITTSStreamFormatHTTPClient{base: config.HTTPClient, provider: provider}
 	if apiKey == "" && azureADToken != "" {
 		config.HTTPClient = &azureADTokenHTTPClient{
 			base:  config.HTTPClient,
@@ -193,7 +193,7 @@ func newOpenAITTS(client *openai.Client, apiKey string, model openai.SpeechModel
 		if provider.httpClient != nil {
 			config.HTTPClient = provider.httpClient
 		}
-		config.HTTPClient = &openAITTSStreamFormatHTTPClient{base: config.HTTPClient}
+		config.HTTPClient = &openAITTSStreamFormatHTTPClient{base: config.HTTPClient, provider: provider}
 		provider.client = openai.NewClientWithConfig(config)
 	}
 	return provider
@@ -337,7 +337,8 @@ func (s *openaiTTSChunkedStream) Close() error {
 }
 
 type openAITTSStreamFormatHTTPClient struct {
-	base openai.HTTPDoer
+	base     openai.HTTPDoer
+	provider *OpenAITTS
 }
 
 func (c *openAITTSStreamFormatHTTPClient) Do(req *http.Request) (*http.Response, error) {
@@ -347,7 +348,7 @@ func (c *openAITTSStreamFormatHTTPClient) Do(req *http.Request) (*http.Response,
 			return nil, err
 		}
 		_ = req.Body.Close()
-		updated := addOpenAITTSStreamFormat(body)
+		updated := addOpenAITTSRequestFields(body, c.provider)
 		req.Body = io.NopCloser(bytes.NewReader(updated))
 		req.ContentLength = int64(len(updated))
 		req.GetBody = func() (io.ReadCloser, error) {
@@ -361,16 +362,20 @@ func (c *openAITTSStreamFormatHTTPClient) Do(req *http.Request) (*http.Response,
 	return base.Do(req)
 }
 
-func addOpenAITTSStreamFormat(body []byte) []byte {
+func addOpenAITTSRequestFields(body []byte, provider *OpenAITTS) []byte {
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return body
 	}
-	if _, ok := payload["stream_format"]; ok {
-		return body
+	if _, ok := payload["stream_format"]; !ok {
+		modelName, _ := payload["model"].(string)
+		payload["stream_format"] = openAITTSStreamFormatForModel(openai.SpeechModel(modelName))
 	}
-	modelName, _ := payload["model"].(string)
-	payload["stream_format"] = openAITTSStreamFormatForModel(openai.SpeechModel(modelName))
+	if provider != nil && provider.speed == 0 {
+		if _, ok := payload["speed"]; !ok {
+			payload["speed"] = 0
+		}
+	}
 	updated, err := json.Marshal(payload)
 	if err != nil {
 		return body
