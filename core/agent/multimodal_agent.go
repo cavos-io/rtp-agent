@@ -201,8 +201,20 @@ func (ma *MultimodalAgent) UpdateRealtimeModel(ctx context.Context, model llm.Re
 
 	ma.mu.Lock()
 	if ma.model == model {
+		rtSession := ma.rtSession
 		ma.mu.Unlock()
-		return nil
+		if rtSession == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if err := rtSession.Interrupt(); err != nil {
+			return err
+		}
+		return rtSession.ClearAudio()
 	}
 	oldSession := ma.rtSession
 	runCtx := ma.ctx

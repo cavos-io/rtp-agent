@@ -1716,6 +1716,7 @@ type fakeRealtimeSession struct {
 	pushVideoErr          error
 	closed                int
 	interrupted           int
+	cleared               int
 }
 
 func (f *fakeRealtimeSession) UpdateInstructions(instructions string) error {
@@ -1796,4 +1797,7 @@ func (f *fakeRealtimeSession) PushVideo(*images.VideoFrame) error {
 
 func (f *fakeRealtimeSession) CommitAudio() error { return nil }
 
-func (f *fakeRealtimeSession) ClearAudio() error { return nil }
+func (f *fakeRealtimeSession) ClearAudio() error {
+	f.cleared++
+	return nil
+}

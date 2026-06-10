@@ -3601,6 +3601,48 @@ func TestAgentSessionUpdateAgentWhileRunningRefreshesMultimodalRealtimeModel(t *
 	}
 }
 
+func TestAgentSessionUpdateAgentWhileRunningClearsReusedRealtimeSession(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	rtSession := &fakeRealtimeSession{}
+	realtime := &fakeRealtimeModel{session: rtSession}
+	initial.RealtimeModel = realtime
+	next := &trackingAgent{Agent: NewAgent("next")}
+	next.RealtimeModel = realtime
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+	defer session.Stop(context.Background())
+	assistant, ok := session.Assistant.(*MultimodalAgent)
+	if !ok {
+		t.Fatalf("Assistant = %T, want *MultimodalAgent", session.Assistant)
+	}
+
+	session.UpdateAgent(next)
+
+	if session.RealtimeModel != realtime {
+		t.Fatalf("session.RealtimeModel = %#v, want reused realtime model", session.RealtimeModel)
+	}
+	if assistant.model != realtime {
+		t.Fatalf("assistant model after handoff = %#v, want reused realtime model", assistant.model)
+	}
+	if assistant.rtSession != rtSession {
+		t.Fatalf("assistant realtime session after handoff = %#v, want reused session", assistant.rtSession)
+	}
+	if rtSession.closed != 0 {
+		t.Fatalf("reused realtime session closed = %d, want 0", rtSession.closed)
+	}
+	if rtSession.interrupted != 1 {
+		t.Fatalf("reused realtime session interrupts = %d, want 1", rtSession.interrupted)
+	}
+	if rtSession.cleared != 1 {
+		t.Fatalf("reused realtime session clears = %d, want 1", rtSession.cleared)
+	}
+}
+
 func TestAgentSessionUpdateAgentEmitsErrorWhenRealtimeModelRefreshFails(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
