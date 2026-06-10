@@ -26,6 +26,7 @@ const defaultCometAPIOpenAILLMModel = "gpt-5-chat-latest"
 const defaultOctoAIOpenAILLMModel = "llama-2-13b-chat"
 const defaultSambaNovaOpenAILLMModel = "DeepSeek-R1-0528"
 const defaultCerebrasOpenAILLMModel = "llama-4-scout-17b-16e-instruct"
+const defaultXAIOpenAILLMModel = "grok-3-fast"
 const openAIAPIKeyRequiredMessage = "OpenAI API key is required, either as argument or set OPENAI_API_KEY environment variable"
 
 const (
@@ -39,6 +40,7 @@ const (
 	octoAIAPIKeyEnv        = "OCTOAI_TOKEN"
 	sambaNovaAPIKeyEnv     = "SAMBANOVA_API_KEY"
 	cerebrasAPIKeyEnv      = "CEREBRAS_API_KEY"
+	xAIAPIKeyEnv           = "XAI_API_KEY"
 )
 
 const defaultOpenRouterLLMURL = "https://openrouter.ai/api/v1"
@@ -48,6 +50,7 @@ const defaultCometAPIOpenAIBaseURL = "https://api.cometapi.com/v1/"
 const defaultOctoAIOpenAIBaseURL = "https://text.octoai.run/v1"
 const defaultSambaNovaOpenAIBaseURL = "https://api.sambanova.ai/v1"
 const defaultCerebrasOpenAIBaseURL = "https://api.cerebras.ai/v1"
+const defaultXAIOpenAIBaseURL = "https://api.x.ai/v1"
 
 type OpenAILLM struct {
 	client               *openai.Client
@@ -439,6 +442,19 @@ func NewCerebrasOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenA
 	options := []OpenAILLMOption{WithOpenAILLMStrictToolSchema(false)}
 	options = append(options, opts...)
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultCerebrasOpenAIBaseURL, nil, options...), nil
+}
+
+func NewXAIOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+	if model == "" {
+		model = defaultXAIOpenAILLMModel
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(xAIAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("XAI API key is required, either as argument or set XAI_API_KEY environmental variable")
+	}
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultXAIOpenAIBaseURL, nil, opts...), nil
 }
 
 func NewOpenRouterLLM(apiKey, model string, opts ...OpenRouterLLMOption) (*OpenAILLM, error) {

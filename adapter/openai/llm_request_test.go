@@ -512,6 +512,46 @@ func TestNewCerebrasOpenAILLMRequiresAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewXAIOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(xAIAPIKeyEnv, "env-xai-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewXAIOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewXAIOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "grok-3-fast" {
+		t.Fatalf("Model = %q, want grok-3-fast", model.Model())
+	}
+	if model.Provider() != "api.x.ai" {
+		t.Fatalf("Provider() = %q, want xAI endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-xai-key" {
+		t.Fatalf("Authorization = %q, want xAI bearer key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "/v1/chat/completions") {
+		t.Fatalf("request URL = %s, want OpenAI-compatible chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"grok-3-fast"`) {
+		t.Fatalf("request body = %s, want default xAI model", capture.requestBody)
+	}
+}
+
+func TestNewXAIOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(xAIAPIKeyEnv, "")
+
+	_, err := NewXAIOpenAILLM("", "")
+	if err == nil || err.Error() != "XAI API key is required, either as argument or set XAI_API_KEY environmental variable" {
+		t.Fatalf("NewXAIOpenAILLM error = %v, want xAI API key required", err)
+	}
+}
+
 func TestNewOpenAILLMChatUsesConfiguredKeyAndDefaultModel(t *testing.T) {
 	t.Setenv(openAIAPIKeyEnv, "env-key")
 	capture := &captureDeadlineHTTPClient{
