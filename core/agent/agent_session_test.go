@@ -2774,6 +2774,39 @@ func TestAgentSessionCloseSoonClearsAECWarmupBeforeCleanup(t *testing.T) {
 	}
 }
 
+func TestAgentSessionCloseSoonCancelsUserAwayTimerBeforeCleanup(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	session.userAwayTimer = time.NewTimer(time.Hour)
+	defer session.userAwayTimer.Stop()
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	session.activity.currentSpeech = current
+
+	done := make(chan struct{}, 1)
+	go func() {
+		session.CloseSoon(CloseReasonParticipantDisconnected)
+		done <- struct{}{}
+	}()
+
+	waitForInterrupted(t, current)
+	session.mu.Lock()
+	timer := session.userAwayTimer
+	session.mu.Unlock()
+	if timer != nil {
+		t.Fatal("userAwayTimer still active during close, want canceled before cleanup")
+	}
+
+	current.MarkDone()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("CloseSoon did not return after interrupted speech completed")
+	}
+}
+
 func TestAgentSessionShutdownClosesWithUserInitiatedReason(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

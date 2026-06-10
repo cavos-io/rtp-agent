@@ -1466,6 +1466,13 @@ func (s *AgentSession) clearAECWarmupLocked() {
 	s.aecWarmupDone = true
 }
 
+func (s *AgentSession) cancelUserAwayTimerLocked() {
+	if s.userAwayTimer != nil {
+		s.userAwayTimer.Stop()
+		s.userAwayTimer = nil
+	}
+}
+
 func (s *AgentSession) aecWarmupActive() bool {
 	if s == nil {
 		return false
@@ -1582,6 +1589,7 @@ func (s *AgentSession) closeSoon(reason CloseReason, err error) {
 		return
 	}
 	s.closing = true
+	s.cancelUserAwayTimerLocked()
 	s.clearAECWarmupLocked()
 	closeEventListeners := s.closeEventListenersLocked()
 	closeSubscribers := s.closeSubscribersLocked()
@@ -2332,10 +2340,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	s.runCtx = nil
 	s.userState = UserStateListening
 	s.agentState = AgentStateInitializing
-	if s.userAwayTimer != nil {
-		s.userAwayTimer.Stop()
-		s.userAwayTimer = nil
-	}
+	s.cancelUserAwayTimerLocked()
 	s.clearAECWarmupLocked()
 	backgroundAudio := s.Options.BackgroundAudio
 	mcpServers := append([]llm.MCPServer(nil), s.mcpServers...)
