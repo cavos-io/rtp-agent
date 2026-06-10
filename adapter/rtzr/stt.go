@@ -201,6 +201,11 @@ func NewRtzrSTT(clientID string, opts ...RtzrSTTOption) *RtzrSTT {
 }
 
 func (s *RtzrSTT) Label() string { return "rtzr.STT" }
+func (s *RtzrSTT) Model() string { return s.modelName }
+func (s *RtzrSTT) Provider() string {
+	return "RTZR"
+}
+
 func (s *RtzrSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, AlignedTranscript: "chunk", OfflineRecognize: false}
 }
