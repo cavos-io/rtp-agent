@@ -374,6 +374,41 @@ func TestRoomIOOffPlaybackStartedUsesCallbackIdentity(t *testing.T) {
 	}
 }
 
+func TestRoomIOPlaybackStartedHandlerPanicDoesNotBlockOtherHandlers(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	kept := make(chan PlaybackStartedEvent, 1)
+	rio.OnPlaybackStarted(func(PlaybackStartedEvent) {
+		panic("playback started handler failed")
+	})
+	rio.OnPlaybackStarted(func(ev PlaybackStartedEvent) {
+		kept <- ev
+	})
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("PublishAudio panic = %v, want playback_started handler panic isolated", recovered)
+		}
+	}()
+
+	if err := rio.PublishAudio(&model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+
+	select {
+	case ev := <-kept:
+		if ev.CreatedAt.IsZero() {
+			t.Fatal("remaining playback_started handler CreatedAt is zero")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("remaining playback_started handler did not receive event")
+	}
+}
+
 func TestRoomIOOffPlaybackFinishedRemovesMatchingHandler(t *testing.T) {
 	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
 	removed := make(chan PlaybackFinishedEvent, 1)
@@ -406,6 +441,43 @@ func TestRoomIOOffPlaybackFinishedRemovesMatchingHandler(t *testing.T) {
 	case ev := <-kept:
 		if ev.Interrupted || ev.PlaybackPosition != 20*time.Millisecond {
 			t.Fatalf("kept playback_finished event = %#v, want non-interrupted 20ms", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("remaining playback_finished handler did not receive event")
+	}
+}
+
+func TestRoomIOPlaybackFinishedHandlerPanicDoesNotBlockOtherHandlers(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	kept := make(chan PlaybackFinishedEvent, 1)
+	rio.OnPlaybackFinished(func(PlaybackFinishedEvent) {
+		panic("playback finished handler failed")
+	})
+	rio.OnPlaybackFinished(func(ev PlaybackFinishedEvent) {
+		kept <- ev
+	})
+
+	if err := rio.PublishAudio(&model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("Flush panic = %v, want playback_finished handler panic isolated", recovered)
+		}
+	}()
+
+	rio.Flush()
+
+	select {
+	case ev := <-kept:
+		if ev.Interrupted || ev.PlaybackPosition != 20*time.Millisecond {
+			t.Fatalf("remaining playback_finished event = %#v, want non-interrupted 20ms", ev)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("remaining playback_finished handler did not receive event")
