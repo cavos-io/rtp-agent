@@ -25,6 +25,15 @@ func callSTTErrorHandler(handler STTErrorHandler, err *STTError) {
 	handler(err)
 }
 
+func callAvailabilityChangedHandler(handler AvailabilityChangedHandler, event AvailabilityChangedEvent) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logger.Logger.Warnw("failed to emit STT fallback availability event", sttPanicAsError(recovered))
+		}
+	}()
+	handler(event)
+}
+
 func sttPanicAsError(recovered any) error {
 	if err, ok := recovered.(error); ok {
 		return err
