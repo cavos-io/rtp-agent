@@ -91,6 +91,8 @@ func (t *ElevenLabsTTS) Capabilities() tts.TTSCapabilities {
 }
 func (t *ElevenLabsTTS) SampleRate() int  { return t.sampleRate }
 func (t *ElevenLabsTTS) NumChannels() int { return 1 }
+func (t *ElevenLabsTTS) Model() string    { return t.modelID }
+func (t *ElevenLabsTTS) Provider() string { return "ElevenLabs" }
 
 // Synthesize performs a full HTTP POST for non-streaming scenarios.
 func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
