@@ -347,6 +347,46 @@ func TestNewPerplexityOpenAILLMRequiresAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewTogetherOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(togetherAPIKeyEnv, "env-together-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewTogetherOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewTogetherOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo" {
+		t.Fatalf("Model = %q, want Together reference model", model.Model())
+	}
+	if model.Provider() != "api.together.xyz" {
+		t.Fatalf("Provider() = %q, want Together endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-together-key" {
+		t.Fatalf("Authorization = %q, want Together bearer key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "/v1/chat/completions") {
+		t.Fatalf("request URL = %s, want Together OpenAI-compatible chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"`) {
+		t.Fatalf("request body = %s, want default Together model", capture.requestBody)
+	}
+}
+
+func TestNewTogetherOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(togetherAPIKeyEnv, "")
+
+	_, err := NewTogetherOpenAILLM("", "")
+	if err == nil || err.Error() != "together AI API key is required, either as argument or set TOGETHER_API_KEY environmental variable" {
+		t.Fatalf("NewTogetherOpenAILLM error = %v, want Together API key required", err)
+	}
+}
+
 func TestNewOllamaOpenAILLMDefaultsMatchReference(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{
 		statusCode:   http.StatusBadRequest,
