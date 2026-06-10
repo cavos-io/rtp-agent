@@ -9,12 +9,59 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/go-jose/go-jose/v3/jwt"
+	"github.com/livekit/protocol/auth"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	statuspb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
+
+func TestUploadSessionReportUsesObservabilityWriteGrant(t *testing.T) {
+	const apiSecret = "secret"
+
+	authCh := make(chan string, 1)
+	useRecordingUploadHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authCh <- r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Setenv("LIVEKIT_OBSERVABILITY_URL", "https://observability.test")
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Transcript: true}
+	report.RoomID = "RM_grant"
+
+	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", apiSecret, "agent-a", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v", err)
+	}
+
+	var authHeader string
+	select {
+	case authHeader = <-authCh:
+	default:
+		t.Fatal("UploadSessionReport did not POST recording upload")
+	}
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+	if token == authHeader || token == "" {
+		t.Fatalf("Authorization header = %q, want bearer token", authHeader)
+	}
+
+	parsed, err := jwt.ParseSigned(token)
+	if err != nil {
+		t.Fatalf("ParseSigned() error = %v", err)
+	}
+	grants := auth.ClaimGrants{}
+	if err := parsed.Claims([]byte(apiSecret), &jwt.Claims{}, &grants); err != nil {
+		t.Fatalf("token Claims() error = %v", err)
+	}
+	if grants.Observability == nil || !grants.Observability.Write {
+		t.Fatalf("observability grant = %#v, want write grant", grants.Observability)
+	}
+	if grants.Video != nil {
+		t.Fatalf("video grant = %#v, want nil", grants.Video)
+	}
+}
 
 func TestUploadSessionReportUsesObservabilityURLEnvOverride(t *testing.T) {
 	requestCh := make(chan string, 1)

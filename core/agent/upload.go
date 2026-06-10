@@ -54,15 +54,10 @@ func UploadSessionReport(
 		return nil
 	}
 
-	// Create JWT token
 	at := auth.NewAccessToken(apiKey, apiSecret).
-		SetVideoGrant(&auth.VideoGrant{}).
+		SetObservabilityGrant(&auth.ObservabilityGrant{Write: true}).
 		SetValidFor(6 * 3600 * time.Second)
 
-	// Add observability grants
-	// Note: go auth package might not have Observability grants struct yet or it's handled differently,
-	// let's just use standard grants if Observability isn't available
-	// Wait, we can just issue a regular token and LiveKit Cloud will accept it if valid
 	jwt, err := at.ToJWT()
 	if err != nil {
 		return fmt.Errorf("failed to create JWT: %w", err)
