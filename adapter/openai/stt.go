@@ -32,6 +32,9 @@ const (
 	openAIRealtimeSTTSilenceDurationMS = 350
 	openAIRealtimeSTTDeltaInterval     = 500 * time.Millisecond
 	openAIAPIKeyEnv                    = "OPENAI_API_KEY"
+	ovhcloudAPIKeyEnv                  = "OVHCLOUD_API_KEY"
+	defaultOVHCloudOpenAIBaseURL       = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
+	defaultOVHCloudOpenAISTTModel      = "whisper-large-v3-turbo"
 )
 
 type OpenAISTT struct {
@@ -215,6 +218,21 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	}
 	provider.client = openai.NewClientWithConfig(config)
 	return provider, nil
+}
+
+func NewOVHCloudOpenAISTT(model, apiKey string, opts ...OpenAISTTOption) (*OpenAISTT, error) {
+	if model == "" {
+		model = defaultOVHCloudOpenAISTTModel
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(ovhcloudAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("OVHcloud AI Endpoints API key is required")
+	}
+
+	options := append([]OpenAISTTOption{WithOpenAISTTBaseURL(defaultOVHCloudOpenAIBaseURL)}, opts...)
+	return NewOpenAISTT(apiKey, model, options...)
 }
 
 func (s *OpenAISTT) Label() string { return "openai.STT" }

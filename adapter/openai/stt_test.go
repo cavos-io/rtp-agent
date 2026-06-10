@@ -317,6 +317,65 @@ func TestNewAzureOpenAISTTUsesEntraTokenWhenAPIKeyEmpty(t *testing.T) {
 	}
 }
 
+func TestNewOVHCloudOpenAISTTDefaultsMatchReference(t *testing.T) {
+	t.Setenv("OVHCLOUD_API_KEY", "env-ovh-key")
+	var gotAuth string
+	var gotPath string
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		gotAuth = r.Header.Get("Authorization")
+		gotPath = r.URL.Path
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			return nil, err
+		}
+		if r.FormValue("model") != "whisper-large-v3-turbo" {
+			t.Fatalf("model form = %q, want whisper-large-v3-turbo", r.FormValue("model"))
+		}
+		if r.FormValue("language") != "en" {
+			t.Fatalf("language form = %q, want en", r.FormValue("language"))
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"text":"bonjour"}`)),
+			Request:    r,
+		}, nil
+	})
+
+	provider, err := NewOVHCloudOpenAISTT("", "", withOpenAISTTHTTPClient(client))
+	if err != nil {
+		t.Fatalf("NewOVHCloudOpenAISTT error = %v", err)
+	}
+
+	if provider.model != "whisper-large-v3-turbo" {
+		t.Fatalf("model = %q, want whisper-large-v3-turbo", provider.model)
+	}
+	if provider.apiKey != "env-ovh-key" {
+		t.Fatalf("apiKey = %q, want env OVHcloud key", provider.apiKey)
+	}
+	if provider.Provider() != "oai.endpoints.kepler.ai.cloud.ovh.net" {
+		t.Fatalf("Provider() = %q, want OVHcloud endpoint host", provider.Provider())
+	}
+	if _, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{1, 2, 3}}}, ""); err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+	if gotAuth != "Bearer env-ovh-key" {
+		t.Fatalf("Authorization = %q, want OVHcloud bearer key", gotAuth)
+	}
+	if gotPath != "/v1/audio/transcriptions" {
+		t.Fatalf("path = %q, want OpenAI-compatible transcription route", gotPath)
+	}
+}
+
+func TestNewOVHCloudOpenAISTTRequiresAPIKey(t *testing.T) {
+	t.Setenv("OVHCLOUD_API_KEY", "")
+
+	_, err := NewOVHCloudOpenAISTT("", "")
+	if err == nil || err.Error() != "OVHcloud AI Endpoints API key is required" {
+		t.Fatalf("NewOVHCloudOpenAISTT error = %v, want OVHcloud API key required", err)
+	}
+}
+
 func TestOpenAIAudioRequestUsesProviderOptions(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "whisper-1",
 		WithOpenAISTTLanguage("id"),
