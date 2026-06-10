@@ -363,13 +363,21 @@ func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
 
 func TestUploadSessionReportRecordsEvaluationAndOutcome(t *testing.T) {
 	oldRecord := recordUploadTelemetryEvent
+	oldRecordAt := recordUploadTelemetryEventAt
 	var events []uploadTelemetryEvent
 	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
 		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
 	}
-	defer func() { recordUploadTelemetryEvent = oldRecord }()
+	recordUploadTelemetryEventAt = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, timestamp time.Time) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: timestamp})
+	}
+	defer func() {
+		recordUploadTelemetryEvent = oldRecord
+		recordUploadTelemetryEventAt = oldRecordAt
+	}()
 
 	report := NewSessionReport()
+	report.Timestamp = 1700.5
 	report.Tagger = NewTagger()
 	report.Tagger.Evaluation(&EvaluationResult{
 		Judgments:    map[string]string{"helpfulness": "pass"},
@@ -388,6 +396,10 @@ func TestUploadSessionReportRecordsEvaluationAndOutcome(t *testing.T) {
 	if events[0].eventType != "evaluation" || events[0].body != "evaluation" {
 		t.Fatalf("first telemetry event = %#v, want evaluation", events[0])
 	}
+	wantReportTimestamp := time.Unix(1700, 500000000)
+	if !events[0].timestamp.Equal(wantReportTimestamp) {
+		t.Fatalf("evaluation event timestamp = %v, want report timestamp %v", events[0].timestamp, wantReportTimestamp)
+	}
 	evaluation, ok := events[0].attrs["evaluation"].(map[string]any)
 	if !ok {
 		t.Fatalf("evaluation attr = %T, want map", events[0].attrs["evaluation"])
@@ -400,6 +412,9 @@ func TestUploadSessionReportRecordsEvaluationAndOutcome(t *testing.T) {
 	}
 	if events[1].eventType != "outcome" || events[1].body != "outcome" {
 		t.Fatalf("second telemetry event = %#v, want outcome", events[1])
+	}
+	if !events[1].timestamp.Equal(wantReportTimestamp) {
+		t.Fatalf("outcome event timestamp = %v, want report timestamp %v", events[1].timestamp, wantReportTimestamp)
 	}
 	outcome, ok := events[1].attrs["outcome"].(map[string]any)
 	if !ok {

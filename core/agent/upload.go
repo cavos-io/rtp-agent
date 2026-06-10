@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
@@ -195,10 +196,11 @@ func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *Se
 	if report.Tagger == nil {
 		return
 	}
+	reportTimestamp := unixSecondsToTime(report.Timestamp)
 	for _, evaluation := range report.Tagger.Evaluations() {
-		recordUploadTelemetryEvent(ctx, "evaluation", "evaluation", map[string]interface{}{
+		recordUploadTelemetryEventAt(ctx, "evaluation", "evaluation", map[string]interface{}{
 			"evaluation": evaluation,
-		})
+		}, reportTimestamp)
 	}
 	for _, tag := range report.Tagger.MetadataTags() {
 		recordUploadTelemetryEventAt(ctx, "tag", "tag", map[string]interface{}{
@@ -213,10 +215,14 @@ func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *Se
 		if reason := report.Tagger.OutcomeReason(); reason != "" {
 			outcomeData["reason"] = reason
 		}
-		recordUploadTelemetryEvent(ctx, "outcome", "outcome", map[string]interface{}{
+		recordUploadTelemetryEventAt(ctx, "outcome", "outcome", map[string]interface{}{
 			"outcome": outcomeData,
-		})
+		}, reportTimestamp)
 	}
+}
+
+func unixSecondsToTime(seconds float64) time.Time {
+	return time.Unix(0, int64(math.Round(seconds*1e9)))
 }
 
 func hasUploadRecordingOption(options RecordingOptions) bool {
