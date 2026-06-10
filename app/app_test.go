@@ -934,6 +934,26 @@ func TestDefaultConfigFromEnvSelectsAssemblyAISTT(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsOVHCloudOpenAISTT(t *testing.T) {
+	t.Setenv("OVHCLOUD_API_KEY", "test-ovhcloud-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "ovhcloud")
+	t.Setenv("RTP_AGENT_STT_MODEL", "custom-ovhcloud-stt")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.STT == nil {
+		t.Fatal("Session STT is nil")
+	}
+	if got := stt.Model(app.Session.STT); got != "custom-ovhcloud-stt" {
+		t.Fatalf("STT model = %q, want custom-ovhcloud-stt", got)
+	}
+	if got := stt.Provider(app.Session.STT); got != "oai.endpoints.kepler.ai.cloud.ovh.net" {
+		t.Fatalf("STT provider = %q, want oai.endpoints.kepler.ai.cloud.ovh.net", got)
+	}
+}
+
 func TestDefaultConfigFromEnvWrapsSTTWithMultiSpeakerAdapter(t *testing.T) {
 	t.Setenv("ASSEMBLYAI_API_KEY", "test-assemblyai-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "assemblyai")

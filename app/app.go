@@ -3147,6 +3147,25 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, err
 		}
 		a.STT = provider
+	case providerOVHCloud:
+		sttOpts := []openai.OpenAISTTOption{}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTDetectLanguage {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTDetectLanguage(true))
+		}
+		if cfg.STTPrompt != "" {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTPrompt(cfg.STTPrompt))
+		}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTBaseURL(cfg.STTBaseURL))
+		}
+		provider, err := openai.NewOVHCloudOpenAISTT(cfg.STTModel, cfg.OVHCloudAPIKey, sttOpts...)
+		if err != nil {
+			return nil, err
+		}
+		a.STT = provider
 	case providerLiveKit:
 		a.STT = inference.NewSTT(cfg.STTModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret)
 	default:
