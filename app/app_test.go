@@ -615,6 +615,26 @@ func TestDefaultConfigFromEnvSelectsOctoAIOpenAILLM(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsSambaNovaOpenAILLM(t *testing.T) {
+	t.Setenv("SAMBANOVA_API_KEY", "test-sambanova-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "sambanova")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "custom-sambanova-model")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Model(app.Session.LLM); got != "custom-sambanova-model" {
+		t.Fatalf("LLM model = %q, want custom-sambanova-model", got)
+	}
+	if got := llm.Provider(app.Session.LLM); got != "api.sambanova.ai" {
+		t.Fatalf("LLM provider = %q, want api.sambanova.ai", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsNvidiaLLM(t *testing.T) {
 	t.Setenv("NVIDIA_API_KEY", "test-nvidia-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "nvidia")

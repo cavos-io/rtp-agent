@@ -235,6 +235,7 @@ const (
 	providerRime         = "rime"
 	providerRtzr         = "rtzr"
 	providerRunway       = "runway"
+	providerSambaNova    = "sambanova"
 	providerSarvam       = "sarvam"
 	providerSilero       = "silero"
 	providerSimli        = "simli"
@@ -513,6 +514,7 @@ type AppConfig struct {
 	RunwayAvatarID              string
 	RunwayPresetID              string
 	RunwayMaxDuration           *int
+	SambaNovaAPIKey             string
 	SarvamAPIKey                string
 	SimliAPIKey                 string
 	SimplismartAPIKey           string
@@ -871,6 +873,7 @@ func DefaultConfigFromEnv() AppConfig {
 		RunwayAvatarID:                          os.Getenv("RTP_AGENT_RUNWAY_AVATAR_ID"),
 		RunwayPresetID:                          os.Getenv("RTP_AGENT_RUNWAY_PRESET_ID"),
 		RunwayMaxDuration:                       getenvOptionalInt("RTP_AGENT_RUNWAY_MAX_DURATION"),
+		SambaNovaAPIKey:                         os.Getenv("SAMBANOVA_API_KEY"),
 		SarvamAPIKey:                            os.Getenv("SARVAM_API_KEY"),
 		SimliAPIKey:                             os.Getenv("SIMLI_API_KEY"),
 		SimplismartAPIKey:                       os.Getenv("SIMPLISMART_API_KEY"),
@@ -2206,6 +2209,12 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = provider
 	case providerOctoAI:
 		provider, err := openai.NewOctoAIOpenAILLM(cfg.LLMModel, cfg.OctoAIAPIKey)
+		if err != nil {
+			return nil, err
+		}
+		a.LLM = provider
+	case providerSambaNova:
+		provider, err := openai.NewSambaNovaOpenAILLM(cfg.LLMModel, cfg.SambaNovaAPIKey)
 		if err != nil {
 			return nil, err
 		}
