@@ -22,6 +22,12 @@ func TestSmallestAISTTDefaultsMatchReference(t *testing.T) {
 	if provider.model != "pulse" {
 		t.Fatalf("model = %q, want pulse", provider.model)
 	}
+	if got := stt.Model(provider); got != "pulse" {
+		t.Fatalf("model metadata = %q, want pulse", got)
+	}
+	if got := stt.Provider(provider); got != "SmallestAI" {
+		t.Fatalf("provider metadata = %q, want SmallestAI", got)
+	}
 	if provider.language != "en" {
 		t.Fatalf("language = %q, want en", provider.language)
 	}
