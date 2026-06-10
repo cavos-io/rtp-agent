@@ -1578,6 +1578,11 @@ func (s *AgentSession) closeSoon(reason CloseReason, err error) {
 	closeSubscribers := s.closeSubscribersLocked()
 	s.mu.Unlock()
 
+	if activity != nil {
+		if err := activity.Interrupt(true); err != nil {
+			s.EmitError(ErrorEvent{Error: err, CreatedAt: time.Now()})
+		}
+	}
 	_ = s.stop(context.Background(), reason != CloseReasonError)
 
 	ev := &CloseEvent{Reason: reason, Error: err, CreatedAt: time.Now()}

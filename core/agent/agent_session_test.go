@@ -2691,6 +2691,49 @@ func TestAgentSessionCloseSoonStopsRunningSession(t *testing.T) {
 	}
 }
 
+func TestAgentSessionCloseSoonInterruptsActiveSpeechBeforeClosing(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	session.activity.currentSpeech = current
+	closeEvents := session.CloseEvents()
+
+	done := make(chan struct{}, 1)
+	go func() {
+		session.CloseSoon(CloseReasonParticipantDisconnected)
+		done <- struct{}{}
+	}()
+
+	waitForInterrupted(t, current)
+
+	select {
+	case <-closeEvents:
+		t.Fatal("CloseSoon emitted close event before interrupted speech completed")
+	case <-done:
+		t.Fatal("CloseSoon returned before interrupted speech completed")
+	default:
+	}
+
+	current.MarkDone()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("CloseSoon did not return after interrupted speech completed")
+	}
+
+	select {
+	case ev := <-closeEvents:
+		if ev.Reason != CloseReasonParticipantDisconnected {
+			t.Fatalf("CloseEvent.Reason = %q, want participant_disconnected", ev.Reason)
+		}
+	default:
+		t.Fatal("CloseSoon did not emit close event")
+	}
+}
+
 func TestAgentSessionShutdownClosesWithUserInitiatedReason(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
