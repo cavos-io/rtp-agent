@@ -427,6 +427,46 @@ func TestNewTelnyxOpenAILLMRequiresAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewNebiusOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(nebiusAPIKeyEnv, "env-nebius-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewNebiusOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewNebiusOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "meta-llama/Meta-Llama-3.1-70B-Instruct" {
+		t.Fatalf("Model = %q, want Nebius reference model", model.Model())
+	}
+	if model.Provider() != "api.studio.nebius.com" {
+		t.Fatalf("Provider() = %q, want Nebius endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-nebius-key" {
+		t.Fatalf("Authorization = %q, want Nebius bearer key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "/v1/chat/completions") {
+		t.Fatalf("request URL = %s, want Nebius OpenAI-compatible chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"meta-llama/Meta-Llama-3.1-70B-Instruct"`) {
+		t.Fatalf("request body = %s, want default Nebius model", capture.requestBody)
+	}
+}
+
+func TestNewNebiusOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(nebiusAPIKeyEnv, "")
+
+	_, err := NewNebiusOpenAILLM("", "")
+	if err == nil || err.Error() != "nebius API key is required, either as argument or set NEBIUS_API_KEY environmental variable" {
+		t.Fatalf("NewNebiusOpenAILLM error = %v, want Nebius API key required", err)
+	}
+}
+
 func TestNewOllamaOpenAILLMDefaultsMatchReference(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{
 		statusCode:   http.StatusBadRequest,
