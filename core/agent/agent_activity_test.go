@@ -320,6 +320,25 @@ func TestAgentActivityUpdateOptionsForwardsRealtimeToolChoice(t *testing.T) {
 	}
 }
 
+func TestAgentActivityUpdateOptionsRefreshesRealtimeStoredToolChoice(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	toolChoice := llm.ToolChoice("auto")
+	session.Options.ToolChoice = toolChoice
+	assistant := &recordingOptionsAssistant{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	minDelay := 0.2
+
+	if err := activity.UpdateOptions(AgentSessionUpdateOptions{MinEndpointingDelay: &minDelay}); err != nil {
+		t.Fatalf("UpdateOptions error = %v, want nil", err)
+	}
+
+	if assistant.options.ToolChoice != toolChoice {
+		t.Fatalf("realtime ToolChoice = %#v, want stored %#v", assistant.options.ToolChoice, toolChoice)
+	}
+}
+
 func TestAgentActivityRealtimeInputSpeechCallbacksUpdateUserState(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

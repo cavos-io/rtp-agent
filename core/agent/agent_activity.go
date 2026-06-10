@@ -663,15 +663,24 @@ func (a *AgentActivity) UpdateChatCtx(ctx context.Context, chatCtx *llm.ChatCont
 }
 
 func (a *AgentActivity) UpdateOptions(opts AgentSessionUpdateOptions) error {
-	if a == nil || a.Session == nil || opts.ToolChoice == nil {
+	if a == nil || a.Session == nil {
 		return nil
 	}
 	updater, ok := a.Session.Assistant.(realtimeOptionsUpdatingAssistant)
 	if !ok {
 		return nil
 	}
+	var toolChoice llm.ToolChoice
+	if opts.ToolChoice != nil {
+		toolChoice = *opts.ToolChoice
+	} else {
+		toolChoice = a.Session.Options.ToolChoice
+	}
+	if toolChoice == nil {
+		return nil
+	}
 	return updater.UpdateOptions(context.Background(), llm.RealtimeSessionOptions{
-		ToolChoice: *opts.ToolChoice,
+		ToolChoice: toolChoice,
 	})
 }
 
