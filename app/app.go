@@ -226,6 +226,7 @@ const (
 	providerNebius       = "nebius"
 	providerNvidia       = "nvidia"
 	providerOctoAI       = "octoai"
+	providerOllama       = "ollama"
 	providerOpenAI       = "openai"
 	providerOVHCloud     = "ovhcloud"
 	providerPerplexity   = "perplexity"
@@ -2213,6 +2214,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, err
 		}
 		a.LLM = provider
+	case providerOllama:
+		a.LLM = openai.NewOllamaOpenAILLM(cfg.LLMModel)
 	case providerSambaNova:
 		provider, err := openai.NewSambaNovaOpenAILLM(cfg.LLMModel, cfg.SambaNovaAPIKey)
 		if err != nil {

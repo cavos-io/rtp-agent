@@ -635,6 +635,25 @@ func TestDefaultConfigFromEnvSelectsSambaNovaOpenAILLM(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsOllamaOpenAILLM(t *testing.T) {
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "ollama")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "llama3.2")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Model(app.Session.LLM); got != "llama3.2" {
+		t.Fatalf("LLM model = %q, want llama3.2", got)
+	}
+	if got := llm.Provider(app.Session.LLM); got != "localhost:11434" {
+		t.Fatalf("LLM provider = %q, want localhost:11434", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsNvidiaLLM(t *testing.T) {
 	t.Setenv("NVIDIA_API_KEY", "test-nvidia-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "nvidia")
