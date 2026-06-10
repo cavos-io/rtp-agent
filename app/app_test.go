@@ -3103,6 +3103,22 @@ func TestDefaultConfigFromEnvWrapsSTTFallbackProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvAcceptsOVHCloudSTTFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
+	t.Setenv("RTP_AGENT_STT_FALLBACK_PROVIDERS", "ovhcloud")
+	t.Setenv("RTP_AGENT_VAD_PROVIDER", "silero")
+	t.Setenv("OVHCLOUD_API_KEY", "test-ovhcloud-key")
+	t.Setenv("RTP_AGENT_STT_MODEL", "custom-ovhcloud-stt")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.STT.Label(); got != "FallbackAdapter(deepgram.STT)" {
+		t.Fatalf("STT label = %q, want fallback adapter around primary deepgram STT", got)
+	}
+}
+
 func TestDefaultConfigFromEnvWrapsNonStreamingSTTFallbackWithVAD(t *testing.T) {
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
 	t.Setenv("RTP_AGENT_STT_FALLBACK_PROVIDERS", "elevenlabs")

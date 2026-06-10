@@ -1931,6 +1931,21 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, openai.WithOpenAISTTBaseURL(cfg.STTBaseURL))
 		}
 		return openai.NewOpenAISTT(cfg.OpenAIAPIKey, cfg.STTModel, sttOpts...)
+	case providerOVHCloud:
+		sttOpts := []openai.OpenAISTTOption{}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTDetectLanguage {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTDetectLanguage(true))
+		}
+		if cfg.STTPrompt != "" {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTPrompt(cfg.STTPrompt))
+		}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTBaseURL(cfg.STTBaseURL))
+		}
+		return openai.NewOVHCloudOpenAISTT(cfg.STTModel, cfg.OVHCloudAPIKey, sttOpts...)
 	case providerElevenLabs:
 		sttOpts := []elevenlabs.ElevenLabsSTTOption{}
 		if cfg.STTBaseURL != "" {
