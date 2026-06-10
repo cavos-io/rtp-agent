@@ -1,9 +1,12 @@
 package deepgram
 
 import (
+	"context"
 	"net/url"
+	"strings"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
@@ -161,6 +164,29 @@ func TestDeepgramSTTUsesEnvAPIKeyWhenOmitted(t *testing.T) {
 	provider = NewDeepgramSTT("explicit-key", "")
 	if provider.apiKey != "explicit-key" {
 		t.Fatalf("apiKey = %q, want explicit key", provider.apiKey)
+	}
+}
+
+func TestDeepgramSTTRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("DEEPGRAM_API_KEY", "")
+	provider := NewDeepgramSTT("", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, recognizeErr := provider.Recognize(ctx, []*model.AudioFrame{{Data: []byte{0x01}}}, "")
+	if recognizeErr == nil {
+		t.Fatal("Recognize returned nil error, want missing API key error")
+	}
+	if !strings.Contains(recognizeErr.Error(), "DEEPGRAM_API_KEY") {
+		t.Fatalf("Recognize error = %q, want DEEPGRAM_API_KEY guidance", recognizeErr)
+	}
+
+	_, streamErr := provider.Stream(ctx, "")
+	if streamErr == nil {
+		t.Fatal("Stream returned nil error, want missing API key error")
+	}
+	if !strings.Contains(streamErr.Error(), "DEEPGRAM_API_KEY") {
+		t.Fatalf("Stream error = %q, want DEEPGRAM_API_KEY guidance", streamErr)
 	}
 }
 
