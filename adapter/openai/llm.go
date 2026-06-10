@@ -19,6 +19,8 @@ import (
 
 const defaultOpenAILLMModel = "gpt-4.1"
 const defaultAzureOpenAILLMModel = "gpt-4o"
+const defaultOVHCloudOpenAILLMModel = "gpt-oss-120b"
+const defaultDeepSeekOpenAILLMModel = "deepseek-chat"
 const openAIAPIKeyRequiredMessage = "OpenAI API key is required, either as argument or set OPENAI_API_KEY environment variable"
 
 const (
@@ -27,9 +29,11 @@ const (
 	azureOpenAIADTokenEnv  = "AZURE_OPENAI_AD_TOKEN"
 	openAIAPIVersionEnv    = "OPENAI_API_VERSION"
 	openRouterAPIKeyEnv    = "OPENROUTER_API_KEY"
+	deepSeekAPIKeyEnv      = "DEEPSEEK_API_KEY"
 )
 
 const defaultOpenRouterLLMURL = "https://openrouter.ai/api/v1"
+const defaultDeepSeekOpenAIBaseURL = "https://api.deepseek.com/v1"
 
 type OpenAILLM struct {
 	client               *openai.Client
@@ -324,6 +328,32 @@ func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	provider.client = openai.NewClientWithConfig(config)
 	provider.baseURL = config.BaseURL
 	return provider, nil
+}
+
+func NewOVHCloudOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+	if model == "" {
+		model = defaultOVHCloudOpenAILLMModel
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(ovhcloudAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("OVHcloud AI Endpoints API key is required, either as argument or set OVHCLOUD_API_KEY environmental variable")
+	}
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultOVHCloudOpenAIBaseURL, nil, opts...), nil
+}
+
+func NewDeepSeekOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+	if model == "" {
+		model = defaultDeepSeekOpenAILLMModel
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(deepSeekAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("DeepSeek API key is required, either as argument or set DEEPSEEK_API_KEY environmental variable")
+	}
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultDeepSeekOpenAIBaseURL, nil, opts...), nil
 }
 
 func NewOpenRouterLLM(apiKey, model string, opts ...OpenRouterLLMOption) (*OpenAILLM, error) {

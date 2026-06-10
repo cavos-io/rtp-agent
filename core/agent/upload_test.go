@@ -286,6 +286,40 @@ func TestUploadSessionReportRecordsSessionTagsSorted(t *testing.T) {
 	}
 }
 
+func TestUploadSessionReportRecordsEmptySessionTagsAsNil(t *testing.T) {
+	oldRecord := recordUploadTelemetryEvent
+	oldRecordAt := recordUploadTelemetryEventAt
+	var events []uploadTelemetryEvent
+	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
+	}
+	recordUploadTelemetryEventAt = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, timestamp time.Time) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: timestamp})
+	}
+	defer func() {
+		recordUploadTelemetryEvent = oldRecord
+		recordUploadTelemetryEventAt = oldRecordAt
+	}()
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Logs: true}
+	report.Tagger = NewTagger()
+
+	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("telemetry events = %#v, want one session report event", events)
+	}
+	tags, ok := events[0].attrs["session.tags"]
+	if !ok {
+		t.Fatalf("session.tags missing from attrs: %#v", events[0].attrs)
+	}
+	if tags != nil {
+		t.Fatalf("session.tags = %#v, want nil for empty tagger", tags)
+	}
+}
+
 func TestUploadSessionReportRecordsModelUsage(t *testing.T) {
 	oldRecord := recordUploadTelemetryEvent
 	oldRecordAt := recordUploadTelemetryEventAt
@@ -345,7 +379,7 @@ func TestUploadSessionReportRecordsModelUsage(t *testing.T) {
 	}
 }
 
-func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
+func TestUploadSessionReportRecordsEmptyUsageAsNil(t *testing.T) {
 	oldRecord := recordUploadTelemetryEvent
 	oldRecordAt := recordUploadTelemetryEventAt
 	var events []uploadTelemetryEvent
@@ -359,6 +393,44 @@ func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
 		recordUploadTelemetryEvent = oldRecord
 		recordUploadTelemetryEventAt = oldRecordAt
 	}()
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Logs: true}
+
+	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("telemetry events = %#v, want one session report event", events)
+	}
+	usage, ok := events[0].attrs["usage"]
+	if !ok {
+		t.Fatalf("usage missing from attrs: %#v", events[0].attrs)
+	}
+	if usage != nil {
+		t.Fatalf("usage = %#v, want nil when report has no model usage", usage)
+	}
+}
+
+func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
+	oldRecord := recordUploadTelemetryEvent
+	oldRecordAt := recordUploadTelemetryEventAt
+	oldRecordWithOptions := recordUploadTelemetryEventWithOptions
+	var events []uploadTelemetryEvent
+	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
+	}
+	recordUploadTelemetryEventAt = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, timestamp time.Time) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: timestamp})
+	}
+	recordUploadTelemetryEventWithOptions = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, options telemetry.ChatEventOptions) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: options.Timestamp, severity: options.SeverityText})
+	}
+	defer func() {
+		recordUploadTelemetryEvent = oldRecord
+		recordUploadTelemetryEventAt = oldRecordAt
+		recordUploadTelemetryEventWithOptions = oldRecordWithOptions
+	}()
 	useRecordingUploadHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -371,6 +443,15 @@ func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
 		Text:      "hello there",
 		CreatedAt: createdAt,
 	})
+	outputCreatedAt := createdAt.Add(time.Millisecond)
+	chatCtx.Items = append(chatCtx.Items, &llm.FunctionCallOutput{
+		ID:        "out_1",
+		CallID:    "call_lookup",
+		Name:      "lookup",
+		Output:    "tool failed",
+		IsError:   true,
+		CreatedAt: outputCreatedAt,
+	})
 	report := NewSessionReport()
 	report.RecordingOptions = RecordingOptions{Transcript: true}
 	report.ChatHistory = chatCtx
@@ -379,8 +460,8 @@ func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
 	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
 		t.Fatalf("UploadSessionReport() error = %v", err)
 	}
-	if len(events) != 2 {
-		t.Fatalf("telemetry events = %#v, want session report and chat item", events)
+	if len(events) != 3 {
+		t.Fatalf("telemetry events = %#v, want session report and chat item events", events)
 	}
 	if events[1].eventType != "chat_item" || events[1].body != "chat item" {
 		t.Fatalf("second telemetry event = %#v, want chat item event", events[1])
@@ -399,11 +480,21 @@ func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
 	if !ok || len(content) != 1 || content[0] != "hello there" {
 		t.Fatalf("chat.item content = %#v, want hello there", item["content"])
 	}
+	if events[2].eventType != "chat_item" || events[2].body != "chat item" {
+		t.Fatalf("third telemetry event = %#v, want errored function output chat item event", events[2])
+	}
+	if !events[2].timestamp.Equal(outputCreatedAt) {
+		t.Fatalf("function output event timestamp = %v, want item created_at %v", events[2].timestamp, outputCreatedAt)
+	}
+	if events[2].severity != "error" {
+		t.Fatalf("function output event severity = %q, want error", events[2].severity)
+	}
 }
 
 func TestUploadSessionReportRecordsEvaluationAndOutcome(t *testing.T) {
 	oldRecord := recordUploadTelemetryEvent
 	oldRecordAt := recordUploadTelemetryEventAt
+	oldRecordWithOptions := recordUploadTelemetryEventWithOptions
 	var events []uploadTelemetryEvent
 	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
 		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
@@ -411,16 +502,20 @@ func TestUploadSessionReportRecordsEvaluationAndOutcome(t *testing.T) {
 	recordUploadTelemetryEventAt = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, timestamp time.Time) {
 		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: timestamp})
 	}
+	recordUploadTelemetryEventWithOptions = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, options telemetry.ChatEventOptions) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: options.Timestamp, severity: options.SeverityText})
+	}
 	defer func() {
 		recordUploadTelemetryEvent = oldRecord
 		recordUploadTelemetryEventAt = oldRecordAt
+		recordUploadTelemetryEventWithOptions = oldRecordWithOptions
 	}()
 
 	report := NewSessionReport()
 	report.Timestamp = 1700.5
 	report.Tagger = NewTagger()
 	report.Tagger.Evaluation(&EvaluationResult{
-		Judgments:    map[string]string{"helpfulness": "pass"},
+		Judgments:    map[string]string{"helpfulness": "fail"},
 		Reasoning:    map[string]string{"helpfulness": "clear answer"},
 		Instructions: map[string]string{"helpfulness": "judge helpfulness"},
 	})
@@ -440,11 +535,14 @@ func TestUploadSessionReportRecordsEvaluationAndOutcome(t *testing.T) {
 	if !events[0].timestamp.Equal(wantReportTimestamp) {
 		t.Fatalf("evaluation event timestamp = %v, want report timestamp %v", events[0].timestamp, wantReportTimestamp)
 	}
+	if events[0].severity != "error" {
+		t.Fatalf("evaluation event severity = %q, want error", events[0].severity)
+	}
 	evaluation, ok := events[0].attrs["evaluation"].(map[string]any)
 	if !ok {
 		t.Fatalf("evaluation attr = %T, want map", events[0].attrs["evaluation"])
 	}
-	if evaluation["tag"] != "lk.judge.helpfulness:pass" {
+	if evaluation["tag"] != "lk.judge.helpfulness:fail" {
 		t.Fatalf("evaluation tag = %#v, want generated judge tag", evaluation["tag"])
 	}
 	if evaluation["reasoning"] != "clear answer" || evaluation["instructions"] != "judge helpfulness" {
@@ -455,6 +553,9 @@ func TestUploadSessionReportRecordsEvaluationAndOutcome(t *testing.T) {
 	}
 	if !events[1].timestamp.Equal(wantReportTimestamp) {
 		t.Fatalf("outcome event timestamp = %v, want report timestamp %v", events[1].timestamp, wantReportTimestamp)
+	}
+	if events[1].severity != "error" {
+		t.Fatalf("outcome event severity = %q, want error", events[1].severity)
 	}
 	outcome, ok := events[1].attrs["outcome"].(map[string]any)
 	if !ok {
@@ -527,6 +628,7 @@ type uploadTelemetryEvent struct {
 	body      string
 	attrs     map[string]interface{}
 	timestamp time.Time
+	severity  string
 }
 
 func useRecordingUploadHTTPClient(t *testing.T, handler http.Handler) {

@@ -109,8 +109,7 @@ func (r *SessionReport) ToDict() map[string]any {
 		"options":                    sessionReportOptionsToDict(r.Options),
 		"chat_history":               chatHistory,
 		"timestamp":                  r.Timestamp,
-		"usage":                      usageSummaryToDict(r.Usage),
-		"model_usage":                modelUsageToDict(r.ModelUsage),
+		"usage":                      sessionReportUsageToDict(r),
 		"sdk_version":                r.SDKVersion,
 	}
 	if r.LLMModel != "" && r.LLMModel != "unknown" {
@@ -261,6 +260,16 @@ func errorReportValue(err error) any {
 
 func usageSummaryIsZero(usage telemetry.UsageSummary) bool {
 	return usage == telemetry.UsageSummary{}
+}
+
+func sessionReportUsageToDict(report *SessionReport) any {
+	if report == nil {
+		return nil
+	}
+	if len(report.ModelUsage) > 0 {
+		return modelUsageToDict(report.ModelUsage)
+	}
+	return usageSummaryToDict(report.Usage)
 }
 
 func usageSummaryToDict(usage *telemetry.UsageSummary) any {

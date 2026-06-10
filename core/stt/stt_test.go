@@ -131,6 +131,9 @@ func TestSpeechEventMarshalJSONMatchesReferenceFieldNames(t *testing.T) {
 	if _, ok := payload["RequestID"]; ok {
 		t.Fatalf("CamelCase RequestID serialized in payload: %s", data)
 	}
+	if _, ok := payload["interrupted"]; ok {
+		t.Fatalf("target-only interrupted serialized in payload: %s", data)
+	}
 
 	alternatives := payload["alternatives"].([]any)
 	alternative := alternatives[0].(map[string]any)

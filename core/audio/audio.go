@@ -98,7 +98,6 @@ func (s *AudioByteStream) Flush() []*model.AudioFrame {
 		return nil
 	}
 	if uint32(len(s.buffer))%s.bytesPerSample != 0 {
-		s.buffer = nil
 		return nil
 	}
 

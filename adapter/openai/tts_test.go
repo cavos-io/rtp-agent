@@ -256,14 +256,41 @@ func TestOpenAITTSBuildSpeechRequestUsesReferenceOptions(t *testing.T) {
 }
 
 func TestOpenAITTSConstructorPreservesExplicitZeroSpeed(t *testing.T) {
+	var body []byte
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		var err error
+		body, err = io.ReadAll(r.Body)
+		if err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(`data: {"type":"speech.audio.done"}` + "\n\n")),
+			Request:    r,
+		}, nil
+	})
 	provider := mustNewOpenAITTS(t, "test-key", "", "",
 		WithOpenAITTSSpeed(0),
+		withOpenAITTSHTTPClient(client),
 	)
 
 	got := buildOpenAITTSSpeechRequest(provider, "hello")
 
 	if got.Speed != 0 {
 		t.Fatalf("speed = %v, want explicit zero speed", got.Speed)
+	}
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want EOF after done event", err)
+	}
+	if !strings.Contains(string(body), `"speed":0`) {
+		t.Fatalf("request body %s missing explicit zero speed", body)
 	}
 }
 

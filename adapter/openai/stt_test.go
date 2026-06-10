@@ -19,7 +19,7 @@ import (
 	goopenai "github.com/sashabaranov/go-openai"
 )
 
-func TestOpenAIAudioRequestAsksForWordTimestamps(t *testing.T) {
+func TestOpenAIAudioRequestUsesVerboseJSONForWhisper(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "whisper-1")
 	req := openAIAudioRequest(provider, strings.NewReader("audio"), "en")
 
@@ -29,11 +29,14 @@ func TestOpenAIAudioRequestAsksForWordTimestamps(t *testing.T) {
 	if req.Language != "en" {
 		t.Fatalf("language = %q, want en", req.Language)
 	}
+	if req.Prompt != "" {
+		t.Fatalf("prompt = %q, want omitted when not configured", req.Prompt)
+	}
 	if req.Format != goopenai.AudioResponseFormatVerboseJSON {
 		t.Fatalf("format = %q, want verbose_json", req.Format)
 	}
-	if len(req.TimestampGranularities) != 1 || req.TimestampGranularities[0] != goopenai.TranscriptionTimestampGranularityWord {
-		t.Fatalf("timestamp granularities = %#v, want word", req.TimestampGranularities)
+	if len(req.TimestampGranularities) != 0 {
+		t.Fatalf("timestamp granularities = %#v, want omitted like reference", req.TimestampGranularities)
 	}
 }
 
@@ -311,6 +314,65 @@ func TestNewAzureOpenAISTTUsesEntraTokenWhenAPIKeyEmpty(t *testing.T) {
 	}
 	if gotAuth != "Bearer entra-token" {
 		t.Fatalf("Authorization = %q, want Entra bearer token", gotAuth)
+	}
+}
+
+func TestNewOVHCloudOpenAISTTDefaultsMatchReference(t *testing.T) {
+	t.Setenv("OVHCLOUD_API_KEY", "env-ovh-key")
+	var gotAuth string
+	var gotPath string
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		gotAuth = r.Header.Get("Authorization")
+		gotPath = r.URL.Path
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			return nil, err
+		}
+		if r.FormValue("model") != "whisper-large-v3-turbo" {
+			t.Fatalf("model form = %q, want whisper-large-v3-turbo", r.FormValue("model"))
+		}
+		if r.FormValue("language") != "en" {
+			t.Fatalf("language form = %q, want en", r.FormValue("language"))
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"text":"bonjour"}`)),
+			Request:    r,
+		}, nil
+	})
+
+	provider, err := NewOVHCloudOpenAISTT("", "", withOpenAISTTHTTPClient(client))
+	if err != nil {
+		t.Fatalf("NewOVHCloudOpenAISTT error = %v", err)
+	}
+
+	if provider.model != "whisper-large-v3-turbo" {
+		t.Fatalf("model = %q, want whisper-large-v3-turbo", provider.model)
+	}
+	if provider.apiKey != "env-ovh-key" {
+		t.Fatalf("apiKey = %q, want env OVHcloud key", provider.apiKey)
+	}
+	if provider.Provider() != "oai.endpoints.kepler.ai.cloud.ovh.net" {
+		t.Fatalf("Provider() = %q, want OVHcloud endpoint host", provider.Provider())
+	}
+	if _, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{1, 2, 3}}}, ""); err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+	if gotAuth != "Bearer env-ovh-key" {
+		t.Fatalf("Authorization = %q, want OVHcloud bearer key", gotAuth)
+	}
+	if gotPath != "/v1/audio/transcriptions" {
+		t.Fatalf("path = %q, want OpenAI-compatible transcription route", gotPath)
+	}
+}
+
+func TestNewOVHCloudOpenAISTTRequiresAPIKey(t *testing.T) {
+	t.Setenv("OVHCLOUD_API_KEY", "")
+
+	_, err := NewOVHCloudOpenAISTT("", "")
+	if err == nil || err.Error() != "OVHcloud AI Endpoints API key is required" {
+		t.Fatalf("NewOVHCloudOpenAISTT error = %v, want OVHcloud API key required", err)
 	}
 }
 
@@ -932,9 +994,61 @@ func TestOpenAISTTUpdateOptionsPropagatesLanguageToActiveStream(t *testing.T) {
 }
 
 func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
-	state := &openAIRealtimeSTTMessageState{language: "id"}
+	now := time.Unix(100, 0)
+	state := &openAIRealtimeSTTMessageState{
+		language: "id",
+		now: func() time.Time {
+			return now
+		},
+	}
 
-	events, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"item-1","audio_start_ms":100}`), state)
+	events, err := openAIRealtimeSTTEventsFromMessage([]byte(`{not-json`), state)
+	if err != nil {
+		t.Fatalf("malformed message error = %v, want ignored message", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want malformed message ignored", events)
+	}
+
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_stopped","item_id":"missing-start","audio_end_ms":900}`), state)
+	if err != nil {
+		t.Fatalf("speech stopped without start: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want timing-only speech stop", events)
+	}
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.completed","item_id":"missing-start","transcript":"","usage":{}}`), state)
+	if err != nil {
+		t.Fatalf("completed without start: %v", err)
+	}
+	if len(events) != 1 || events[0].RecognitionUsage == nil || events[0].RecognitionUsage.AudioDuration != 0 {
+		t.Fatalf("events = %+v, want zero audio duration without speech_started timing", events)
+	}
+
+	missingStopIDState := &openAIRealtimeSTTMessageState{}
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"item-without-stop-id","audio_start_ms":100}`), missingStopIDState)
+	if err != nil {
+		t.Fatalf("speech started before missing stop id: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want timing-only speech start", events)
+	}
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_stopped","audio_end_ms":900}`), missingStopIDState)
+	if err != nil {
+		t.Fatalf("speech stopped missing id: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want missing-id speech stop ignored", events)
+	}
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.completed","item_id":"item-without-stop-id","transcript":"","usage":{}}`), missingStopIDState)
+	if err != nil {
+		t.Fatalf("completed after missing stop id: %v", err)
+	}
+	if len(events) != 1 || events[0].RecognitionUsage == nil || events[0].RecognitionUsage.AudioDuration != 0 {
+		t.Fatalf("events = %+v, want zero audio duration without explicit speech_stopped item_id", events)
+	}
+
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"item-1","audio_start_ms":100}`), state)
 	if err != nil {
 		t.Fatalf("speech started: %v", err)
 	}
@@ -948,6 +1062,24 @@ func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].Type != stt.SpeechEventInterimTranscript || events[0].Alternatives[0].Text != "hel" {
 		t.Fatalf("events = %+v, want interim transcript", events)
+	}
+
+	now = now.Add(100 * time.Millisecond)
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.delta","item_id":"item-1","delta":"lo"}`), state)
+	if err != nil {
+		t.Fatalf("throttled delta: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want throttled interim delta", events)
+	}
+
+	now = now.Add(500 * time.Millisecond)
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.delta","item_id":"item-1","delta":"!"}`), state)
+	if err != nil {
+		t.Fatalf("post-throttle delta: %v", err)
+	}
+	if len(events) != 1 || events[0].Type != stt.SpeechEventInterimTranscript || events[0].Alternatives[0].Text != "hello!" {
+		t.Fatalf("events = %+v, want accumulated throttled interim transcript", events)
 	}
 
 	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_stopped","item_id":"item-1","audio_end_ms":900}`), state)

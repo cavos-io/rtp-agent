@@ -30,7 +30,11 @@ const (
 	openAIRealtimeSTTDefaultThreshold  = 0.5
 	openAIRealtimeSTTPrefixPaddingMS   = 600
 	openAIRealtimeSTTSilenceDurationMS = 350
+	openAIRealtimeSTTDeltaInterval     = 500 * time.Millisecond
 	openAIAPIKeyEnv                    = "OPENAI_API_KEY"
+	ovhcloudAPIKeyEnv                  = "OVHCLOUD_API_KEY"
+	defaultOVHCloudOpenAIBaseURL       = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
+	defaultOVHCloudOpenAISTTModel      = "whisper-large-v3-turbo"
 )
 
 type OpenAISTT struct {
@@ -214,6 +218,21 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	}
 	provider.client = openai.NewClientWithConfig(config)
 	return provider, nil
+}
+
+func NewOVHCloudOpenAISTT(model, apiKey string, opts ...OpenAISTTOption) (*OpenAISTT, error) {
+	if model == "" {
+		model = defaultOVHCloudOpenAISTTModel
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(ovhcloudAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("OVHcloud AI Endpoints API key is required")
+	}
+
+	options := append([]OpenAISTTOption{WithOpenAISTTBaseURL(defaultOVHCloudOpenAIBaseURL)}, opts...)
+	return NewOpenAISTT(apiKey, model, options...)
 }
 
 func (s *OpenAISTT) Label() string { return "openai.STT" }
@@ -450,9 +469,6 @@ func openAIAudioRequest(s *OpenAISTT, reader io.Reader, language string) openai.
 	}
 	if s.model == "whisper-1" {
 		req.Format = openai.AudioResponseFormatVerboseJSON
-		req.TimestampGranularities = []openai.TranscriptionTimestampGranularity{
-			openai.TranscriptionTimestampGranularityWord,
-		}
 	}
 	return req
 }
@@ -632,6 +648,8 @@ type openAIRealtimeSTTMessageState struct {
 	language      string
 	currentText   string
 	currentItemID string
+	lastInterimAt time.Time
+	now           func() time.Time
 	timing        map[string]openAIRealtimeSTTTiming
 }
 
@@ -641,7 +659,7 @@ func openAIRealtimeSTTEventsFromMessage(payload []byte, state *openAIRealtimeSTT
 	}
 	var message map[string]interface{}
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return nil, err
+		return nil, nil
 	}
 	switch openAIString(message["type"]) {
 	case "input_audio_buffer.speech_started":
@@ -653,11 +671,11 @@ func openAIRealtimeSTTEventsFromMessage(payload []byte, state *openAIRealtimeSTT
 		return nil, nil
 	case "input_audio_buffer.speech_stopped":
 		itemID := openAIString(message["item_id"])
-		if itemID == "" {
-			itemID = state.currentItemID
-		}
 		if itemID != "" {
-			timing := state.timing[itemID]
+			timing, ok := state.timing[itemID]
+			if !ok {
+				return nil, nil
+			}
 			timing.endMS = openAIInt(message["audio_end_ms"])
 			state.timing[itemID] = timing
 		}
@@ -675,6 +693,11 @@ func openAIRealtimeSTTEventsFromMessage(payload []byte, state *openAIRealtimeSTT
 			return nil, nil
 		}
 		state.currentText += delta
+		now := openAIRealtimeSTTStateNow(state)
+		if !state.lastInterimAt.IsZero() && now.Sub(state.lastInterimAt) <= openAIRealtimeSTTDeltaInterval {
+			return nil, nil
+		}
+		state.lastInterimAt = now
 		return []*stt.SpeechEvent{{
 			Type:      stt.SpeechEventInterimTranscript,
 			RequestID: state.currentItemID,
@@ -720,6 +743,13 @@ func openAIRealtimeSTTEventsFromMessage(payload []byte, state *openAIRealtimeSTT
 	default:
 		return nil, nil
 	}
+}
+
+func openAIRealtimeSTTStateNow(state *openAIRealtimeSTTMessageState) time.Time {
+	if state.now != nil {
+		return state.now()
+	}
+	return time.Now()
 }
 
 func openAIRealtimeSTTErrorMessage(errorBody map[string]interface{}) string {

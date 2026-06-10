@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils"
@@ -28,9 +29,10 @@ import (
 )
 
 var (
-	recordUploadTelemetryEvent   = telemetry.RecordChatEvent
-	recordUploadTelemetryEventAt = telemetry.RecordChatEventAt
-	recordingUploadHTTPClient    = &http.Client{Timeout: 30 * time.Second}
+	recordUploadTelemetryEvent            = telemetry.RecordChatEvent
+	recordUploadTelemetryEventAt          = telemetry.RecordChatEventAt
+	recordUploadTelemetryEventWithOptions = telemetry.RecordChatEventWithOptions
+	recordingUploadHTTPClient             = &http.Client{Timeout: 30 * time.Second}
 )
 
 func UploadSessionReport(
@@ -178,18 +180,30 @@ func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *Se
 			"session.options":          sessionReportOptionsToDict(report.Options),
 		}
 		if report.Tagger != nil {
-			attrs["session.tags"] = report.Tagger.Tags()
+			tags := report.Tagger.Tags()
+			if len(tags) > 0 {
+				attrs["session.tags"] = tags
+			} else {
+				attrs["session.tags"] = nil
+			}
 		}
 		if len(report.ModelUsage) > 0 {
 			attrs["usage"] = modelUsageToDict(report.ModelUsage)
+		} else {
+			attrs["usage"] = nil
 		}
 		recordUploadTelemetryEventAt(ctx, "session_report", "session report", attrs, sessionReportTelemetryTimestamp(report))
 	}
 	if report.RecordingOptions.Transcript && report.ChatHistory != nil {
 		for _, item := range report.ChatHistory.Items {
-			recordUploadTelemetryEventAt(ctx, "chat_item", "chat item", map[string]interface{}{
+			attrs := map[string]interface{}{
 				"chat.item": chatItemReportDict(item),
-			}, item.GetCreatedAt())
+			}
+			if functionCallOutput, ok := item.(*llm.FunctionCallOutput); ok && functionCallOutput.IsError {
+				recordUploadTelemetryEventWithOptions(ctx, "chat_item", "chat item", attrs, telemetry.ErrorChatEventOptions(item.GetCreatedAt()))
+			} else {
+				recordUploadTelemetryEventAt(ctx, "chat_item", "chat item", attrs, item.GetCreatedAt())
+			}
 		}
 	}
 
@@ -198,9 +212,14 @@ func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *Se
 	}
 	reportTimestamp := unixSecondsToTime(report.Timestamp)
 	for _, evaluation := range report.Tagger.Evaluations() {
-		recordUploadTelemetryEventAt(ctx, "evaluation", "evaluation", map[string]interface{}{
+		attrs := map[string]interface{}{
 			"evaluation": evaluation,
-		}, reportTimestamp)
+		}
+		if evaluation["verdict"] == "fail" {
+			recordUploadTelemetryEventWithOptions(ctx, "evaluation", "evaluation", attrs, telemetry.ErrorChatEventOptions(reportTimestamp))
+		} else {
+			recordUploadTelemetryEventAt(ctx, "evaluation", "evaluation", attrs, reportTimestamp)
+		}
 	}
 	for _, tag := range report.Tagger.MetadataTags() {
 		recordUploadTelemetryEventAt(ctx, "tag", "tag", map[string]interface{}{
@@ -215,9 +234,14 @@ func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *Se
 		if reason := report.Tagger.OutcomeReason(); reason != "" {
 			outcomeData["reason"] = reason
 		}
-		recordUploadTelemetryEventAt(ctx, "outcome", "outcome", map[string]interface{}{
+		attrs := map[string]interface{}{
 			"outcome": outcomeData,
-		}, reportTimestamp)
+		}
+		if outcome == "fail" {
+			recordUploadTelemetryEventWithOptions(ctx, "outcome", "outcome", attrs, telemetry.ErrorChatEventOptions(reportTimestamp))
+		} else {
+			recordUploadTelemetryEventAt(ctx, "outcome", "outcome", attrs, reportTimestamp)
+		}
 	}
 }
 
