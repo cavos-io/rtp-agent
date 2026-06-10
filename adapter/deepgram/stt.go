@@ -285,6 +285,20 @@ func validateDeepgramSTTOptions(s *DeepgramSTT) error {
 			return fmt.Errorf("tag must be no more than 128 characters")
 		}
 	}
+	if strings.HasPrefix(s.model, "nova-3") {
+		for _, keyword := range s.keywords {
+			if keyword.Keyword != "" {
+				return fmt.Errorf("keywords is only available for use with Nova-2, Nova-1, Enhanced, and Base speech to text models; for Nova-3, use Keyterm Prompting")
+			}
+		}
+	}
+	if !strings.HasPrefix(s.model, "nova-3") {
+		for _, keyterm := range s.keyterms {
+			if keyterm != "" {
+				return fmt.Errorf("keyterm Prompting is only available for transcription using the Nova-3 Model; to boost recognition of keywords using another model, use the Keywords feature")
+			}
+		}
+	}
 	return nil
 }
 

@@ -212,6 +212,52 @@ func TestDeepgramSTTRejectsOversizedTagBeforeRequest(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTRejectsKeywordKeytermModelMismatchBeforeRequest(t *testing.T) {
+	tests := []struct {
+		name    string
+		model   string
+		option  DeepgramSTTOption
+		message string
+	}{
+		{
+			name:    "keywords with nova 3",
+			model:   "nova-3",
+			option:  WithDeepgramSTTKeywords([]DeepgramKeyword{{Keyword: "cavos", Boost: 2.5}}),
+			message: "keywords is only available for use with Nova-2, Nova-1, Enhanced, and Base speech to text models",
+		},
+		{
+			name:    "keyterm without nova 3",
+			model:   "nova-2",
+			option:  WithDeepgramSTTKeyterms([]string{"LiveKit"}),
+			message: "keyterm Prompting is only available for transcription using the Nova-3 Model",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := NewDeepgramSTT("test-key", tt.model, tt.option)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			_, recognizeErr := provider.Recognize(ctx, []*model.AudioFrame{{Data: []byte{0x01}}}, "")
+			if recognizeErr == nil {
+				t.Fatal("Recognize returned nil error, want model compatibility validation error")
+			}
+			if !strings.Contains(recognizeErr.Error(), tt.message) {
+				t.Fatalf("Recognize error = %q, want %q", recognizeErr, tt.message)
+			}
+
+			_, streamErr := provider.Stream(ctx, "")
+			if streamErr == nil {
+				t.Fatal("Stream returned nil error, want model compatibility validation error")
+			}
+			if !strings.Contains(streamErr.Error(), tt.message) {
+				t.Fatalf("Stream error = %q, want %q", streamErr, tt.message)
+			}
+		})
+	}
+}
+
 func TestDeepgramStreamURLUsesReferenceOptions(t *testing.T) {
 	provider := NewDeepgramSTT("test-key", "")
 
