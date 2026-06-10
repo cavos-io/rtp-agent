@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -228,6 +229,37 @@ func TestUploadSessionReportRecordsLogsOnlySessionReport(t *testing.T) {
 	}
 	if events[0].attrs["sdk_version"] != "test-sdk" {
 		t.Fatalf("sdk_version attr = %#v, want test-sdk", events[0].attrs["sdk_version"])
+	}
+}
+
+func TestUploadSessionReportRecordsSessionTagsSorted(t *testing.T) {
+	oldRecord := recordUploadTelemetryEvent
+	var events []uploadTelemetryEvent
+	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
+	}
+	defer func() { recordUploadTelemetryEvent = oldRecord }()
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Logs: true}
+	report.Tagger = NewTagger()
+	for _, tag := range []string{"zeta:true", "appointment:booked", "language:es", "alpha:first"} {
+		report.Tagger.Add(tag)
+	}
+
+	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("telemetry events = %#v, want one session report event", events)
+	}
+	tags, ok := events[0].attrs["session.tags"].([]string)
+	if !ok {
+		t.Fatalf("session.tags = %T, want []string", events[0].attrs["session.tags"])
+	}
+	want := []string{"alpha:first", "appointment:booked", "language:es", "zeta:true"}
+	if !slices.Equal(tags, want) {
+		t.Fatalf("session.tags = %#v, want sorted %#v", tags, want)
 	}
 }
 

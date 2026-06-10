@@ -71,6 +71,7 @@ func (t *Tagger) Tags() []string {
 	for tag := range t.tags {
 		tags = append(tags, tag)
 	}
+	sort.Strings(tags)
 	return tags
 }
 
