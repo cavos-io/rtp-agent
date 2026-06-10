@@ -266,6 +266,48 @@ func TestUploadSessionReportRecordsEvaluationAndOutcome(t *testing.T) {
 	}
 }
 
+func TestUploadSessionReportRecordsTagMetadata(t *testing.T) {
+	oldRecord := recordUploadTelemetryEvent
+	var events []uploadTelemetryEvent
+	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
+	}
+	defer func() { recordUploadTelemetryEvent = oldRecord }()
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Logs: true}
+	report.Tagger = NewTagger()
+	report.Tagger.Add("appointment:booked", map[string]any{
+		"slot_id":  "abc123",
+		"calendar": "cal.com",
+	})
+
+	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v", err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("telemetry events = %#v, want session report and tag events", events)
+	}
+	if events[1].eventType != "tag" || events[1].body != "tag" {
+		t.Fatalf("second telemetry event = %#v, want tag event", events[1])
+	}
+	tag, ok := events[1].attrs["tag"].(map[string]any)
+	if !ok {
+		t.Fatalf("tag attr = %T, want map", events[1].attrs["tag"])
+	}
+	if tag["name"] != "appointment:booked" {
+		t.Fatalf("tag name = %#v, want appointment:booked", tag["name"])
+	}
+	metadata, ok := tag["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("tag metadata = %T, want map", tag["metadata"])
+	}
+	if metadata["slot_id"] != "abc123" || metadata["calendar"] != "cal.com" {
+		t.Fatalf("tag metadata = %#v, want appointment metadata", metadata)
+	}
+}
+
 type uploadTelemetryEvent struct {
 	eventType string
 	body      string

@@ -192,6 +192,14 @@ func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *Se
 			"evaluation": evaluation,
 		})
 	}
+	for _, tag := range report.Tagger.MetadataTags() {
+		recordUploadTelemetryEvent(ctx, "tag", "tag", map[string]interface{}{
+			"tag": map[string]any{
+				"name":     tag.Name,
+				"metadata": tag.Metadata,
+			},
+		})
+	}
 	if outcome := report.Tagger.Outcome(); outcome != "" {
 		outcomeData := map[string]any{"outcome": outcome}
 		if reason := report.Tagger.OutcomeReason(); reason != "" {
