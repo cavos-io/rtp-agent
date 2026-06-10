@@ -190,6 +190,28 @@ func TestDeepgramSTTRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTRejectsOversizedTagBeforeRequest(t *testing.T) {
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTTags([]string{strings.Repeat("x", 129)}))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, recognizeErr := provider.Recognize(ctx, []*model.AudioFrame{{Data: []byte{0x01}}}, "")
+	if recognizeErr == nil {
+		t.Fatal("Recognize returned nil error, want tag validation error")
+	}
+	if !strings.Contains(recognizeErr.Error(), "tag must be no more than 128 characters") {
+		t.Fatalf("Recognize error = %q, want tag length guidance", recognizeErr)
+	}
+
+	_, streamErr := provider.Stream(ctx, "")
+	if streamErr == nil {
+		t.Fatal("Stream returned nil error, want tag validation error")
+	}
+	if !strings.Contains(streamErr.Error(), "tag must be no more than 128 characters") {
+		t.Fatalf("Stream error = %q, want tag length guidance", streamErr)
+	}
+}
+
 func TestDeepgramStreamURLUsesReferenceOptions(t *testing.T) {
 	provider := NewDeepgramSTT("test-key", "")
 

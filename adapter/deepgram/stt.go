@@ -201,6 +201,9 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 	if err := validateDeepgramSTTAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}
+	if err := validateDeepgramSTTOptions(s); err != nil {
+		return nil, err
+	}
 
 	languageStr = language.NormalizeLanguage(languageStr)
 
@@ -229,6 +232,9 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 
 func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, languageStr string) (*stt.SpeechEvent, error) {
 	if err := validateDeepgramSTTAPIKey(s.apiKey); err != nil {
+		return nil, err
+	}
+	if err := validateDeepgramSTTOptions(s); err != nil {
 		return nil, err
 	}
 
@@ -269,6 +275,15 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 func validateDeepgramSTTAPIKey(apiKey string) error {
 	if apiKey == "" {
 		return fmt.Errorf("deepgram API key is required, either as argument or set DEEPGRAM_API_KEY environment variable")
+	}
+	return nil
+}
+
+func validateDeepgramSTTOptions(s *DeepgramSTT) error {
+	for _, tag := range s.tags {
+		if len(tag) > 128 {
+			return fmt.Errorf("tag must be no more than 128 characters")
+		}
 	}
 	return nil
 }
