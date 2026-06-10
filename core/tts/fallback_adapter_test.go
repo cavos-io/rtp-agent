@@ -700,6 +700,51 @@ func TestFallbackAdapterEmitsRecoverableErrorOnStreamRetry(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterFallsBackFromTypedNilSynthesizeStream(t *testing.T) {
+	var typedNil *metadataSynthesizeStream
+	adapter := NewFallbackAdapterWithOptions([]TTS{
+		&metadataTTS{
+			label:        "primary",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			streams: []SynthesizeStream{
+				typedNil,
+			},
+		},
+		&metadataTTS{
+			label:        "fallback",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			stream: &metadataSynthesizeStream{events: []*SynthesizedAudio{{Frame: &model.AudioFrame{
+				Data: []byte("fallback"),
+			}}}},
+		},
+	}, FallbackAdapterOptions{DisableRetries: true})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := string(audio.Frame.Data); got != "fallback" {
+		t.Fatalf("audio data = %q, want fallback", got)
+	}
+}
+
 func TestFallbackAdapterErrorUnsubscribeRemovesLocalAndProviderHandlers(t *testing.T) {
 	primary := &metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1}
 	adapter := NewFallbackAdapter([]TTS{primary})

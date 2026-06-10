@@ -384,7 +384,7 @@ func (f *FallbackAdapter) tryRecoverStream(index int, inputs []fallbackSynthesiz
 		defer f.finishRecovery(index, recoveryID)
 
 		stream, err := streamForTTS(ctx, tts)
-		if err != nil || stream == nil {
+		if err != nil || isNilSynthesizeStream(stream) {
 			f.mu.Lock()
 			f.status[index].recovering = false
 			f.mu.Unlock()
@@ -999,7 +999,11 @@ func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
 }
 
 func (s *fallbackSynthesizeStream) startProviderStream(tts TTS) (SynthesizeStream, error) {
-	return streamForTTS(s.ctx, tts)
+	stream, err := streamForTTS(s.ctx, tts)
+	if err == nil && isNilSynthesizeStream(stream) {
+		return nil, fmt.Errorf("TTS returned nil synthesize stream")
+	}
+	return stream, err
 }
 
 func (s *fallbackSynthesizeStream) replayBufferedText(stream SynthesizeStream) error {
