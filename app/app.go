@@ -2205,6 +2205,33 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, rime.WithRimeTTSSegment(cfg.TTSDeliveryMode))
 		}
 		return rime.NewRimeTTS(cfg.RimeAPIKey, cfg.TTSVoice, ttsOpts...), nil
+	case providerMurf:
+		ttsOpts := []murf.MurfTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, murf.WithMurfTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, murf.WithMurfTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, murf.WithMurfTTSLocale(cfg.TTSLanguage))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, murf.WithMurfTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSInstructions != "" {
+			ttsOpts = append(ttsOpts, murf.WithMurfTTSStyle(cfg.TTSInstructions))
+		}
+		if cfg.TTSSpeed != 0 {
+			ttsOpts = append(ttsOpts, murf.WithMurfTTSSpeed(int(cfg.TTSSpeed)))
+		}
+		if cfg.TTSPitch != nil {
+			ttsOpts = append(ttsOpts, murf.WithMurfTTSPitch(*cfg.TTSPitch))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, murf.WithMurfTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		return murf.NewMurfTTS(cfg.MurfAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {
