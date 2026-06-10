@@ -1688,8 +1688,17 @@ func (s *AgentServer) emitWorkerStarted() {
 	s.mu.Unlock()
 
 	for _, handler := range handlers {
-		handler()
+		callWorkerStartedHandler(handler)
 	}
+}
+
+func callWorkerStartedHandler(handler WorkerStartedHandler) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Logger.Errorw("Worker started handler failed", fmt.Errorf("panic: %v", r))
+		}
+	}()
+	handler()
 }
 
 func (s *AgentServer) runWorkerStatusUpdates(ctx context.Context, interval time.Duration) {
@@ -1780,8 +1789,17 @@ func (s *AgentServer) emitWorkerRegistered(workerID string, serverInfo *livekit.
 	s.mu.Unlock()
 
 	for _, handler := range handlers {
-		handler(workerID, serverInfo)
+		callWorkerRegisteredHandler(handler, workerID, serverInfo)
 	}
+}
+
+func callWorkerRegisteredHandler(handler WorkerRegisteredHandler, workerID string, serverInfo *livekit.ServerInfo) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Logger.Errorw("Worker registered handler failed", fmt.Errorf("panic: %v", r), "workerId", workerID)
+		}
+	}()
+	handler(workerID, serverInfo)
 }
 
 func (s *AgentServer) reportActiveJobs() {

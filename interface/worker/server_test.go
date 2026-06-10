@@ -1084,6 +1084,43 @@ func TestHandleRegisterNotifiesWorkerRegisteredHandlers(t *testing.T) {
 	}
 }
 
+func TestWorkerRegisteredHandlerPanicDoesNotBlockOtherHandlers(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	var calls int
+	server.OnWorkerRegistered(func(string, *livekit.ServerInfo) {
+		panic("boom")
+	})
+	server.OnWorkerRegistered(func(workerID string, info *livekit.ServerInfo) {
+		if workerID != "worker-a" {
+			t.Fatalf("workerID = %q, want worker-a", workerID)
+		}
+		if info == nil {
+			t.Fatal("serverInfo is nil")
+		}
+		calls++
+	})
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("worker registered handler panic propagated: %v", recovered)
+		}
+	}()
+
+	server.handleMessage(context.Background(), &livekit.ServerMessage{
+		Message: &livekit.ServerMessage_Register{
+			Register: &livekit.RegisterWorkerResponse{
+				WorkerId:   "worker-a",
+				ServerInfo: &livekit.ServerInfo{},
+			},
+		},
+	})
+
+	if calls != 1 {
+		t.Fatalf("worker registered handler calls = %d, want 1", calls)
+	}
+}
+
 func TestAgentServerIDReturnsRegisteredWorkerID(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	if server.ID() != "unregistered" {
@@ -2038,6 +2075,30 @@ func TestEmitWorkerStartedNotifiesHandlers(t *testing.T) {
 	server.OnWorkerStarted(func() {
 		calls++
 	})
+
+	server.emitWorkerStarted()
+
+	if calls != 1 {
+		t.Fatalf("worker started handler calls = %d, want 1", calls)
+	}
+}
+
+func TestWorkerStartedHandlerPanicDoesNotBlockOtherHandlers(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	var calls int
+	server.OnWorkerStarted(func() {
+		panic("boom")
+	})
+	server.OnWorkerStarted(func() {
+		calls++
+	})
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("worker started handler panic propagated: %v", recovered)
+		}
+	}()
 
 	server.emitWorkerStarted()
 
