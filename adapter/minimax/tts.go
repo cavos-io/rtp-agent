@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -124,9 +125,13 @@ func WithMinimaxTTSTextNormalization(enabled bool) MinimaxTTSOption {
 }
 
 func NewMinimaxTTS(apiKey string, voice string, opts ...MinimaxTTSOption) *MinimaxTTS {
+	baseURL := os.Getenv("MINIMAX_BASE_URL")
+	if baseURL == "" {
+		baseURL = defaultMinimaxBaseURL
+	}
 	provider := &MinimaxTTS{
 		apiKey:      resolveMinimaxAPIKey(apiKey),
-		baseURL:     defaultMinimaxBaseURL,
+		baseURL:     strings.TrimRight(baseURL, "/"),
 		model:       defaultMinimaxModel,
 		voice:       voice,
 		sampleRate:  defaultMinimaxSampleRate,

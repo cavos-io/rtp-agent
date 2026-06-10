@@ -57,6 +57,28 @@ func TestNewMinimaxTTSUsesEnvironmentAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewMinimaxTTSUsesEnvironmentBaseURL(t *testing.T) {
+	t.Setenv("MINIMAX_BASE_URL", "https://minimax.env")
+
+	provider := NewMinimaxTTS("test-key", "")
+
+	if provider.baseURL != "https://minimax.env" {
+		t.Fatalf("base URL = %q, want env base URL", provider.baseURL)
+	}
+	req, err := buildMinimaxTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if req.URL.String() != "https://minimax.env/v1/t2a_v2" {
+		t.Fatalf("url = %q, want env base URL endpoint", req.URL.String())
+	}
+
+	explicit := NewMinimaxTTS("test-key", "", WithMinimaxTTSBaseURL("https://minimax.explicit"))
+	if explicit.baseURL != "https://minimax.explicit" {
+		t.Fatalf("base URL = %q, want explicit base URL", explicit.baseURL)
+	}
+}
+
 func TestMinimaxTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
 	t.Setenv("MINIMAX_API_KEY", "")
 	provider := NewMinimaxTTS("", "")
