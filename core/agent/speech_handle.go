@@ -187,15 +187,18 @@ func (s *SpeechHandle) RunFinalOutput() (any, bool) {
 
 func (s *SpeechHandle) MarkDone() {
 	s.mu.Lock()
-	if s.IsDone() {
+	alreadyDone := s.IsDone()
+	if !alreadyDone {
+		close(s.doneCh)
+	}
+	if len(s.generationChs) > 0 {
+		s.closeGenerationLocked(len(s.generationChs) - 1)
+	}
+	if alreadyDone {
 		s.mu.Unlock()
 		return
 	}
 
-	close(s.doneCh)
-	if len(s.generationChs) > 0 {
-		s.closeGenerationLocked(len(s.generationChs) - 1)
-	}
 	callbacks := make([]func(*SpeechHandle), 0, len(s.doneCallbacks))
 	for _, callback := range s.doneCallbacks {
 		callbacks = append(callbacks, callback)

@@ -388,3 +388,25 @@ func TestSpeechHandleMarkDoneCompletesActiveGeneration(t *testing.T) {
 		t.Fatal("MarkDone did not complete active generation")
 	}
 }
+
+func TestSpeechHandleMarkDoneCompletesGenerationWhenAlreadyDone(t *testing.T) {
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	speech.MarkDone()
+	speech.AuthorizeGeneration()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- speech.WaitForGeneration(context.Background(), -1)
+	}()
+
+	speech.MarkDone()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("WaitForGeneration error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second MarkDone did not complete active generation")
+	}
+}
