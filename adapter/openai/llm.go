@@ -23,6 +23,7 @@ const defaultOVHCloudOpenAILLMModel = "gpt-oss-120b"
 const defaultDeepSeekOpenAILLMModel = "deepseek-chat"
 const defaultOllamaOpenAILLMModel = "llama3.1"
 const defaultCometAPIOpenAILLMModel = "gpt-5-chat-latest"
+const defaultOctoAIOpenAILLMModel = "llama-2-13b-chat"
 const openAIAPIKeyRequiredMessage = "OpenAI API key is required, either as argument or set OPENAI_API_KEY environment variable"
 
 const (
@@ -33,12 +34,14 @@ const (
 	openRouterAPIKeyEnv    = "OPENROUTER_API_KEY"
 	deepSeekAPIKeyEnv      = "DEEPSEEK_API_KEY"
 	cometAPIKeyEnv         = "COMETAPI_API_KEY"
+	octoAIAPIKeyEnv        = "OCTOAI_TOKEN"
 )
 
 const defaultOpenRouterLLMURL = "https://openrouter.ai/api/v1"
 const defaultDeepSeekOpenAIBaseURL = "https://api.deepseek.com/v1"
 const defaultOllamaOpenAIBaseURL = "http://localhost:11434/v1"
 const defaultCometAPIOpenAIBaseURL = "https://api.cometapi.com/v1/"
+const defaultOctoAIOpenAIBaseURL = "https://text.octoai.run/v1"
 
 type OpenAILLM struct {
 	client               *openai.Client
@@ -379,6 +382,19 @@ func NewCometAPIOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenA
 		return nil, fmt.Errorf("CometAPI API key is required, either as argument or set COMETAPI_API_KEY environmental variable")
 	}
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultCometAPIOpenAIBaseURL, nil, opts...), nil
+}
+
+func NewOctoAIOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+	if model == "" {
+		model = defaultOctoAIOpenAILLMModel
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(octoAIAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("OctoAI API key is required, either as argument or set OCTOAI_TOKEN environmental variable")
+	}
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultOctoAIOpenAIBaseURL, nil, opts...), nil
 }
 
 func NewOpenRouterLLM(apiKey, model string, opts ...OpenRouterLLMOption) (*OpenAILLM, error) {

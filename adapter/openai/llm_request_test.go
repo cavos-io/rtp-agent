@@ -333,6 +333,46 @@ func TestNewCometAPIOpenAILLMRequiresAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewOctoAIOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(octoAIAPIKeyEnv, "env-octo-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewOctoAIOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewOctoAIOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "llama-2-13b-chat" {
+		t.Fatalf("Model = %q, want llama-2-13b-chat", model.Model())
+	}
+	if model.Provider() != "text.octoai.run" {
+		t.Fatalf("Provider() = %q, want OctoAI endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-octo-key" {
+		t.Fatalf("Authorization = %q, want OctoAI bearer key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "/v1/chat/completions") {
+		t.Fatalf("request URL = %s, want OpenAI-compatible chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"llama-2-13b-chat"`) {
+		t.Fatalf("request body = %s, want default OctoAI model", capture.requestBody)
+	}
+}
+
+func TestNewOctoAIOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(octoAIAPIKeyEnv, "")
+
+	_, err := NewOctoAIOpenAILLM("", "")
+	if err == nil || err.Error() != "OctoAI API key is required, either as argument or set OCTOAI_TOKEN environmental variable" {
+		t.Fatalf("NewOctoAIOpenAILLM error = %v, want OctoAI API key required", err)
+	}
+}
+
 func TestNewOpenAILLMChatUsesConfiguredKeyAndDefaultModel(t *testing.T) {
 	t.Setenv(openAIAPIKeyEnv, "env-key")
 	capture := &captureDeadlineHTTPClient{
