@@ -104,6 +104,11 @@ func (t *GroqTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 		resp.Body.Close()
 		return nil, fmt.Errorf("groq tts error: %s", string(respBody))
 	}
+	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio") {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("groq tts returned non-audio data: %s", string(respBody))
+	}
 
 	return &groqTTSChunkedStream{resp: resp, sampleRate: t.sampleRate}, nil
 }
