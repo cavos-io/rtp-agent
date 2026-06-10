@@ -13,9 +13,27 @@ import (
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
+const (
+	defaultSimplismartTTSBaseURL           = "https://api.simplismart.live/tts"
+	defaultSimplismartTTSModel             = "canopylabs/orpheus-3b-0.1-ft"
+	defaultSimplismartTTSVoice             = "tara"
+	defaultSimplismartTTSSampleRate        = 24000
+	defaultSimplismartTTSTemperature       = 0.7
+	defaultSimplismartTTSTopP              = 0.9
+	defaultSimplismartTTSRepetitionPenalty = 1.5
+	defaultSimplismartTTSMaxTokens         = 1000
+)
+
 type SimplismartTTS struct {
-	apiKey string
-	voice  string
+	apiKey            string
+	baseURL           string
+	model             string
+	voice             string
+	sampleRate        int
+	temperature       float64
+	topP              float64
+	repetitionPenalty float64
+	maxTokens         int
 }
 
 func NewSimplismartTTS(apiKey string, voice string) *SimplismartTTS {
@@ -23,11 +41,18 @@ func NewSimplismartTTS(apiKey string, voice string) *SimplismartTTS {
 		apiKey = os.Getenv(simplismartAPIKeyEnv)
 	}
 	if voice == "" {
-		voice = "default_voice"
+		voice = defaultSimplismartTTSVoice
 	}
 	return &SimplismartTTS{
-		apiKey: apiKey,
-		voice:  voice,
+		apiKey:            apiKey,
+		baseURL:           defaultSimplismartTTSBaseURL,
+		model:             defaultSimplismartTTSModel,
+		voice:             voice,
+		sampleRate:        defaultSimplismartTTSSampleRate,
+		temperature:       defaultSimplismartTTSTemperature,
+		topP:              defaultSimplismartTTSTopP,
+		repetitionPenalty: defaultSimplismartTTSRepetitionPenalty,
+		maxTokens:         defaultSimplismartTTSMaxTokens,
 	}
 }
 
@@ -35,29 +60,20 @@ func (t *SimplismartTTS) Label() string { return "simplismart.TTS" }
 func (t *SimplismartTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *SimplismartTTS) SampleRate() int  { return 24000 }
+func (t *SimplismartTTS) SampleRate() int  { return t.sampleRate }
 func (t *SimplismartTTS) NumChannels() int { return 1 }
+func (t *SimplismartTTS) Model() string    { return t.model }
+func (t *SimplismartTTS) Provider() string { return "SimpliSmart" }
 
 func (t *SimplismartTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.apiKey == "" {
 		return nil, fmt.Errorf("%s is not set", simplismartAPIKeyEnv)
 	}
 
-	url := "https://api.simplismart.live/tts"
-
-	reqBody := map[string]interface{}{
-		"text":  text,
-		"voice": t.voice,
-	}
-
-	jsonBody, _ := json.Marshal(reqBody)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
+	req, err := buildSimplismartTTSRequest(ctx, t, text)
 	if err != nil {
 		return nil, err
 	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+t.apiKey)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -71,7 +87,8 @@ func (t *SimplismartTTS) Synthesize(ctx context.Context, text string) (tts.Chunk
 	}
 
 	return &simplismartTTSChunkedStream{
-		resp: resp,
+		resp:       resp,
+		sampleRate: t.sampleRate,
 	}, nil
 }
 
@@ -79,8 +96,33 @@ func (t *SimplismartTTS) Stream(ctx context.Context) (tts.SynthesizeStream, erro
 	return nil, fmt.Errorf("simplismart streaming tts not natively supported by basic rest api")
 }
 
+func buildSimplismartTTSRequest(ctx context.Context, t *SimplismartTTS, text string) (*http.Request, error) {
+	reqBody := map[string]interface{}{
+		"prompt":             text,
+		"voice":              t.voice,
+		"model":              t.model,
+		"temperature":        t.temperature,
+		"top_p":              t.topP,
+		"repetition_penalty": t.repetitionPenalty,
+		"max_tokens":         t.maxTokens,
+	}
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.baseURL, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+t.apiKey)
+	return req, nil
+}
+
 type simplismartTTSChunkedStream struct {
-	resp *http.Response
+	resp       *http.Response
+	sampleRate int
 }
 
 func (s *simplismartTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -96,7 +138,7 @@ func (s *simplismartTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
 			Data:              buf[:n],
-			SampleRate:        24000,
+			SampleRate:        uint32(s.sampleRate),
 			NumChannels:       1,
 			SamplesPerChannel: uint32(n / 2),
 		},
