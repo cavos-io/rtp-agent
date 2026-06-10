@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	coretts "github.com/cavos-io/rtp-agent/core/tts"
 )
 
 func TestHumeTTSDefaultsMatchReference(t *testing.T) {
@@ -33,6 +35,12 @@ func TestHumeTTSDefaultsMatchReference(t *testing.T) {
 	}
 	if provider.SampleRate() != 48000 {
 		t.Fatalf("sample rate = %d, want reference supported sample rate", provider.SampleRate())
+	}
+	if got := coretts.Model(provider); got != "Octave" {
+		t.Fatalf("model metadata = %q, want Octave", got)
+	}
+	if got := coretts.Provider(provider); got != "Hume" {
+		t.Fatalf("provider metadata = %q, want Hume", got)
 	}
 }
 

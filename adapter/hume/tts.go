@@ -167,6 +167,8 @@ func (t *HumeTTS) Capabilities() tts.TTSCapabilities {
 }
 func (t *HumeTTS) SampleRate() int  { return t.sampleRate }
 func (t *HumeTTS) NumChannels() int { return 1 }
+func (t *HumeTTS) Model() string    { return "Octave" }
+func (t *HumeTTS) Provider() string { return "Hume" }
 
 func (t *HumeTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	req, err := buildHumeTTSRequest(ctx, t, text)
