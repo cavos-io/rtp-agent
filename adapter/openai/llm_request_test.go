@@ -226,6 +226,46 @@ func TestNewOVHCloudOpenAILLMRequiresAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewDeepSeekOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(deepSeekAPIKeyEnv, "env-deepseek-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewDeepSeekOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewDeepSeekOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "deepseek-chat" {
+		t.Fatalf("Model = %q, want deepseek-chat", model.Model())
+	}
+	if model.Provider() != "api.deepseek.com" {
+		t.Fatalf("Provider() = %q, want DeepSeek endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-deepseek-key" {
+		t.Fatalf("Authorization = %q, want DeepSeek bearer key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "/v1/chat/completions") {
+		t.Fatalf("request URL = %s, want OpenAI-compatible chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"deepseek-chat"`) {
+		t.Fatalf("request body = %s, want default DeepSeek model", capture.requestBody)
+	}
+}
+
+func TestNewDeepSeekOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(deepSeekAPIKeyEnv, "")
+
+	_, err := NewDeepSeekOpenAILLM("", "")
+	if err == nil || err.Error() != "DeepSeek API key is required, either as argument or set DEEPSEEK_API_KEY environmental variable" {
+		t.Fatalf("NewDeepSeekOpenAILLM error = %v, want DeepSeek API key required", err)
+	}
+}
+
 func TestNewOpenAILLMChatUsesConfiguredKeyAndDefaultModel(t *testing.T) {
 	t.Setenv(openAIAPIKeyEnv, "env-key")
 	capture := &captureDeadlineHTTPClient{
