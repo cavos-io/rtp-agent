@@ -228,6 +228,7 @@ const (
 	providerOctoAI       = "octoai"
 	providerOllama       = "ollama"
 	providerOpenAI       = "openai"
+	providerOpenRouter   = "openrouter"
 	providerOVHCloud     = "ovhcloud"
 	providerPerplexity   = "perplexity"
 	providerPhonic       = "phonic"
@@ -502,6 +503,7 @@ type AppConfig struct {
 	NebiusAPIKey                string
 	NvidiaAPIKey                string
 	OctoAIAPIKey                string
+	OpenRouterAPIKey            string
 	OVHCloudAPIKey              string
 	PerplexityAPIKey            string
 	PhonicAPIKey                string
@@ -861,6 +863,7 @@ func DefaultConfigFromEnv() AppConfig {
 		NebiusAPIKey:                            os.Getenv("NEBIUS_API_KEY"),
 		NvidiaAPIKey:                            os.Getenv("NVIDIA_API_KEY"),
 		OctoAIAPIKey:                            os.Getenv("OCTOAI_TOKEN"),
+		OpenRouterAPIKey:                        os.Getenv("OPENROUTER_API_KEY"),
 		OVHCloudAPIKey:                          os.Getenv("OVHCLOUD_API_KEY"),
 		PerplexityAPIKey:                        os.Getenv("PERPLEXITY_API_KEY"),
 		PhonicAPIKey:                            os.Getenv("PHONIC_API_KEY"),
@@ -2216,6 +2219,12 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = provider
 	case providerOllama:
 		a.LLM = openai.NewOllamaOpenAILLM(cfg.LLMModel)
+	case providerOpenRouter:
+		provider, err := openai.NewOpenRouterLLM(cfg.OpenRouterAPIKey, cfg.LLMModel)
+		if err != nil {
+			return nil, err
+		}
+		a.LLM = provider
 	case providerSambaNova:
 		provider, err := openai.NewSambaNovaOpenAILLM(cfg.LLMModel, cfg.SambaNovaAPIKey)
 		if err != nil {

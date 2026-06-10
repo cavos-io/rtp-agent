@@ -654,6 +654,26 @@ func TestDefaultConfigFromEnvSelectsOllamaOpenAILLM(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsOpenRouterOpenAILLM(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "openrouter")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "openai/gpt-4o-mini")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Model(app.Session.LLM); got != "openai/gpt-4o-mini" {
+		t.Fatalf("LLM model = %q, want openai/gpt-4o-mini", got)
+	}
+	if got := llm.Provider(app.Session.LLM); got != "openrouter.ai" {
+		t.Fatalf("LLM provider = %q, want openrouter.ai", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsNvidiaLLM(t *testing.T) {
 	t.Setenv("NVIDIA_API_KEY", "test-nvidia-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "nvidia")
