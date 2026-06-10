@@ -963,6 +963,29 @@ func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
 		t.Fatalf("events = %+v, want zero audio duration without speech_started timing", events)
 	}
 
+	missingStopIDState := &openAIRealtimeSTTMessageState{}
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"item-without-stop-id","audio_start_ms":100}`), missingStopIDState)
+	if err != nil {
+		t.Fatalf("speech started before missing stop id: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want timing-only speech start", events)
+	}
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_stopped","audio_end_ms":900}`), missingStopIDState)
+	if err != nil {
+		t.Fatalf("speech stopped missing id: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want missing-id speech stop ignored", events)
+	}
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.completed","item_id":"item-without-stop-id","transcript":"","usage":{}}`), missingStopIDState)
+	if err != nil {
+		t.Fatalf("completed after missing stop id: %v", err)
+	}
+	if len(events) != 1 || events[0].RecognitionUsage == nil || events[0].RecognitionUsage.AudioDuration != 0 {
+		t.Fatalf("events = %+v, want zero audio duration without explicit speech_stopped item_id", events)
+	}
+
 	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"item-1","audio_start_ms":100}`), state)
 	if err != nil {
 		t.Fatalf("speech started: %v", err)

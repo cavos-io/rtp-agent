@@ -656,9 +656,6 @@ func openAIRealtimeSTTEventsFromMessage(payload []byte, state *openAIRealtimeSTT
 		return nil, nil
 	case "input_audio_buffer.speech_stopped":
 		itemID := openAIString(message["item_id"])
-		if itemID == "" {
-			itemID = state.currentItemID
-		}
 		if itemID != "" {
 			timing, ok := state.timing[itemID]
 			if !ok {
