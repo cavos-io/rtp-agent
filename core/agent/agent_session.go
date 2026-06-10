@@ -580,7 +580,7 @@ func (s *AgentSession) recordEvent(ev Event) {
 	}
 	s.mu.Unlock()
 	for _, listener := range listeners {
-		listener(ev)
+		callAgentSessionListener(eventType, listener, ev)
 	}
 }
 
@@ -1582,7 +1582,7 @@ func (s *AgentSession) closeSoon(reason CloseReason, err error) {
 	ev := &CloseEvent{Reason: reason, Error: err, CreatedAt: time.Now()}
 	s.appendRecordedEvent(ev)
 	for _, listener := range closeEventListeners {
-		listener(ev)
+		callAgentSessionListener("close", listener, ev)
 	}
 	for _, ch := range closeSubscribers {
 		select {
@@ -1638,6 +1638,15 @@ func (s *AgentSession) closeEventListenersLocked() []func(Event) {
 		listeners = append(listeners, listener.callback)
 	}
 	return listeners
+}
+
+func callAgentSessionListener(eventType string, listener func(Event), ev Event) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logger.Logger.Warnw("failed to emit event "+eventType, panicAsError(recovered))
+		}
+	}()
+	listener(ev)
 }
 
 func (s *AgentSession) appendRecordedEvent(ev Event) {
