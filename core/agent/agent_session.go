@@ -811,7 +811,8 @@ func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) error {
 		return nil
 	}
 	return updater.UpdateOptions(context.Background(), llm.RealtimeSessionOptions{
-		ToolChoice: *opts.ToolChoice,
+		ToolChoice:    *opts.ToolChoice,
+		ToolChoiceSet: true,
 	})
 }
 

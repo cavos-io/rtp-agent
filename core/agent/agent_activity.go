@@ -680,7 +680,8 @@ func (a *AgentActivity) UpdateOptions(opts AgentSessionUpdateOptions) error {
 		return nil
 	}
 	return updater.UpdateOptions(context.Background(), llm.RealtimeSessionOptions{
-		ToolChoice: toolChoice,
+		ToolChoice:    toolChoice,
+		ToolChoiceSet: true,
 	})
 }
 

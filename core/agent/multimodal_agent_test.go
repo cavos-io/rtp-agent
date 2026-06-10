@@ -393,6 +393,9 @@ func TestAgentSessionUpdateOptionsUpdatesRealtimeToolChoice(t *testing.T) {
 	if rtSession.options.ToolChoice != "auto" {
 		t.Fatalf("realtime ToolChoice = %#v, want auto", rtSession.options.ToolChoice)
 	}
+	if !rtSession.options.ToolChoiceSet {
+		t.Fatal("realtime ToolChoiceSet = false, want true for explicit tool choice update")
+	}
 }
 
 func TestMultimodalAgentGenerateReplySendsRealtimeOverrides(t *testing.T) {

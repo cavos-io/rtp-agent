@@ -318,6 +318,9 @@ func TestAgentActivityUpdateOptionsForwardsRealtimeToolChoice(t *testing.T) {
 	if assistant.options.ToolChoice != toolChoice {
 		t.Fatalf("realtime ToolChoice = %#v, want %#v", assistant.options.ToolChoice, toolChoice)
 	}
+	if !assistant.options.ToolChoiceSet {
+		t.Fatal("realtime ToolChoiceSet = false, want true for explicit tool choice update")
+	}
 }
 
 func TestAgentActivityUpdateOptionsRefreshesRealtimeStoredToolChoice(t *testing.T) {
@@ -336,6 +339,9 @@ func TestAgentActivityUpdateOptionsRefreshesRealtimeStoredToolChoice(t *testing.
 
 	if assistant.options.ToolChoice != toolChoice {
 		t.Fatalf("realtime ToolChoice = %#v, want stored %#v", assistant.options.ToolChoice, toolChoice)
+	}
+	if !assistant.options.ToolChoiceSet {
+		t.Fatal("realtime ToolChoiceSet = false, want true for stored tool choice refresh")
 	}
 }
 
