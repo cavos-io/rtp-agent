@@ -220,6 +220,7 @@ const (
 	providerMistralAI    = "mistralai"
 	providerMurf         = "murf"
 	providerNeuphonic    = "neuphonic"
+	providerNebius       = "nebius"
 	providerNvidia       = "nvidia"
 	providerOpenAI       = "openai"
 	providerPerplexity   = "perplexity"
@@ -488,6 +489,7 @@ type AppConfig struct {
 	MistralAPIKey               string
 	MurfAPIKey                  string
 	NeuphonicAPIKey             string
+	NebiusAPIKey                string
 	NvidiaAPIKey                string
 	PerplexityAPIKey            string
 	PhonicAPIKey                string
@@ -840,6 +842,7 @@ func DefaultConfigFromEnv() AppConfig {
 		MistralAPIKey:                           os.Getenv("MISTRAL_API_KEY"),
 		MurfAPIKey:                              os.Getenv("MURF_API_KEY"),
 		NeuphonicAPIKey:                         os.Getenv("NEUPHONIC_API_KEY"),
+		NebiusAPIKey:                            os.Getenv("NEBIUS_API_KEY"),
 		NvidiaAPIKey:                            os.Getenv("NVIDIA_API_KEY"),
 		PerplexityAPIKey:                        os.Getenv("PERPLEXITY_API_KEY"),
 		PhonicAPIKey:                            os.Getenv("PHONIC_API_KEY"),
@@ -2152,6 +2155,12 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = provider
 	case providerOpenAI:
 		provider, err := openai.NewOpenAILLM(cfg.OpenAIAPIKey, cfg.LLMModel)
+		if err != nil {
+			return nil, err
+		}
+		a.LLM = provider
+	case providerNebius:
+		provider, err := openai.NewNebiusOpenAILLM(cfg.LLMModel, cfg.NebiusAPIKey)
 		if err != nil {
 			return nil, err
 		}
