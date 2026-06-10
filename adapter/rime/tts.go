@@ -142,6 +142,11 @@ func defaultRimeVoice(model string) string {
 }
 
 func (t *RimeTTS) Label() string { return "rime.TTS" }
+func (t *RimeTTS) Model() string { return t.model }
+func (t *RimeTTS) Provider() string {
+	return "Rime"
+}
+
 func (t *RimeTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: t.useWebsocket, AlignedTranscript: t.useWebsocket}
 }
