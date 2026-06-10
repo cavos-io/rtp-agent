@@ -40,6 +40,12 @@ func TestSLNGDefaultEndpointsMatchReference(t *testing.T) {
 	if !sttProvider.Capabilities().Streaming || !sttProvider.Capabilities().InterimResults || sttProvider.Capabilities().OfflineRecognize {
 		t.Fatalf("STT capabilities = %+v, want streaming websocket capabilities", sttProvider.Capabilities())
 	}
+	if got := stt.Model(sttProvider); got != "slng" {
+		t.Fatalf("STT model metadata = %q, want slng", got)
+	}
+	if got := stt.Provider(sttProvider); got != "SLNG" {
+		t.Fatalf("STT provider metadata = %q, want SLNG", got)
+	}
 
 	ttsProvider := NewTTS("test-key")
 	if ttsProvider.endpoint != "wss://api.slng.ai/v1/tts/deepgram/aura:2" {
@@ -50,6 +56,12 @@ func TestSLNGDefaultEndpointsMatchReference(t *testing.T) {
 	}
 	if !ttsProvider.Capabilities().Streaming {
 		t.Fatalf("TTS capabilities = %+v, want streaming", ttsProvider.Capabilities())
+	}
+	if got := tts.Model(ttsProvider); got != "slng" {
+		t.Fatalf("TTS model metadata = %q, want slng", got)
+	}
+	if got := tts.Provider(ttsProvider); got != "SLNG" {
+		t.Fatalf("TTS provider metadata = %q, want SLNG", got)
 	}
 }
 

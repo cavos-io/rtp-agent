@@ -120,6 +120,11 @@ func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.Chunke
 		resp.Body.Close()
 		return nil, fmt.Errorf("elevenlabs error: %s", string(respBody))
 	}
+	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio/") {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("elevenlabs returned non-audio data: %s", string(respBody))
+	}
 
 	return &elevenLabsChunkedStream{
 		resp:       resp,

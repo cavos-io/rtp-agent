@@ -31,6 +31,12 @@ func TestAssemblyAISTTDefaultsMatchReference(t *testing.T) {
 	if provider.Label() != "assemblyai.STT" {
 		t.Fatalf("Label() = %q, want assemblyai.STT", provider.Label())
 	}
+	if got := stt.Model(provider); got != "universal-streaming-english" {
+		t.Fatalf("model metadata = %q, want universal-streaming-english", got)
+	}
+	if got := stt.Provider(provider); got != "AssemblyAI" {
+		t.Fatalf("provider metadata = %q, want AssemblyAI", got)
+	}
 }
 
 func TestAssemblyAISTTFallsBackToEnvironmentAPIKey(t *testing.T) {

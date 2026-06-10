@@ -999,14 +999,17 @@ func NewApp(cfg AppConfig) (*App, error) {
 	}
 
 	opts := cfg.WorkerOptions
+	server := worker.NewAgentServer(opts)
+	opts = server.Options
 	if opts.AgentName == "" {
 		opts.AgentName = "example-agent"
+		server.Options.AgentName = opts.AgentName
 	}
 	if opts.WorkerType == "" {
 		opts.WorkerType = worker.WorkerTypeRoom
+		server.Options.WorkerType = opts.WorkerType
 	}
 	session.MetricsCollector = metricsRegistry.GetUsageCollector(telemetry.MetricLabels{AgentName: opts.AgentName})
-	server := worker.NewAgentServer(opts)
 
 	app := &App{
 		Server:          server,

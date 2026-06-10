@@ -61,6 +61,30 @@ func TestSpeechifyTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 }
 
+func TestSpeechifyTTSRejectsNonAudioResponse(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":"not audio"}`)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewSpeechifyTTS("test-key", "", WithSpeechifyTTSBaseURL("https://speechify.example/v1"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize returned nil error, want non-audio response error")
+	}
+	if !strings.Contains(err.Error(), "non-audio") {
+		t.Fatalf("Synthesize error = %q, want non-audio guidance", err)
+	}
+}
+
 func TestSpeechifyTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	provider := NewSpeechifyTTS("test-key", "")
 
@@ -178,4 +202,10 @@ func assertSpeechifyPayload(t *testing.T, payload map[string]any, key string, wa
 	if got := payload[key]; got != want {
 		t.Fatalf("%s = %#v, want %q", key, got, want)
 	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }

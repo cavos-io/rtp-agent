@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"testing"
@@ -163,6 +165,35 @@ func TestElevenLabsSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSRejectsNonAudioResponse(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: elevenLabsRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":"not audio"}`)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "",
+		WithElevenLabsBaseURL("https://eleven.example/v1"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize returned nil error, want non-audio response error")
+	}
+	if !strings.Contains(err.Error(), "non-audio") {
+		t.Fatalf("Synthesize error = %q, want non-audio guidance", err)
+	}
+}
+
 func TestElevenLabsStreamURLUsesReferenceOptions(t *testing.T) {
 	provider, err := NewElevenLabsTTS("test-key", "", "",
 		WithElevenLabsLanguage("en"),
@@ -251,4 +282,10 @@ func TestElevenLabsSynthesizedAudioUsesConfiguredSampleRate(t *testing.T) {
 	if audio.Frame.SampleRate != 22050 {
 		t.Fatalf("sample rate = %d, want 22050", audio.Frame.SampleRate)
 	}
+}
+
+type elevenLabsRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f elevenLabsRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }

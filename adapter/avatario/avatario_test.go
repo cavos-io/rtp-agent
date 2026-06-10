@@ -20,6 +20,9 @@ func TestNewAvatarioAvatarUsesReferenceDefaultsAndEnvAvatarID(t *testing.T) {
 	if providerName != "avatario" {
 		t.Fatalf("providerName = %q, want avatario", providerName)
 	}
+	if avatar.Provider() != "avatario" {
+		t.Fatalf("Provider() = %q, want avatario", avatar.Provider())
+	}
 	if avatar.avatarID != "avatar-123" {
 		t.Fatalf("avatarID = %q, want env avatar ID", avatar.avatarID)
 	}
