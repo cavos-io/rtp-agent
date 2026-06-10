@@ -198,7 +198,23 @@ func (a *AgentActivity) Start() {
 		})
 		a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
 	}
-	a.AgentIntf.OnEnter()
+	if a.Session != nil {
+		a.Session.mu.Lock()
+		a.Session.onEnterDepth++
+		a.Session.mu.Unlock()
+	}
+	func() {
+		defer func() {
+			if a.Session != nil {
+				a.Session.mu.Lock()
+				if a.Session.onEnterDepth > 0 {
+					a.Session.onEnterDepth--
+				}
+				a.Session.mu.Unlock()
+			}
+		}()
+		a.AgentIntf.OnEnter()
+	}()
 	a.queueMu.Lock()
 	a.schedulingStarted = true
 	a.queueMu.Unlock()

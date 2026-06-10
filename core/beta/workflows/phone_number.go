@@ -179,6 +179,9 @@ func (t *declinePhoneNumberCaptureTool) ID() string { return "decline_phone_numb
 func (t *declinePhoneNumberCaptureTool) Name() string {
 	return "decline_phone_number_capture"
 }
+func (t *declinePhoneNumberCaptureTool) ToolFlags() llm.ToolFlag {
+	return llm.ToolFlagIgnoreOnEnter
+}
 func (t *declinePhoneNumberCaptureTool) Description() string {
 	return "Handles the case when the user explicitly declines to provide a phone number."
 }

@@ -724,6 +724,9 @@ type declineCardCaptureTool struct {
 
 func (t *declineCardCaptureTool) ID() string   { return "decline_card_capture" }
 func (t *declineCardCaptureTool) Name() string { return "decline_card_capture" }
+func (t *declineCardCaptureTool) ToolFlags() llm.ToolFlag {
+	return llm.ToolFlagIgnoreOnEnter
+}
 func (t *declineCardCaptureTool) Description() string {
 	return "Handles the case when the user explicitly declines to provide card information."
 }
@@ -745,6 +748,9 @@ type restartCardCollectionTool struct {
 
 func (t *restartCardCollectionTool) ID() string   { return "restart_card_collection" }
 func (t *restartCardCollectionTool) Name() string { return "restart_card_collection" }
+func (t *restartCardCollectionTool) ToolFlags() llm.ToolFlag {
+	return llm.ToolFlagIgnoreOnEnter
+}
 func (t *restartCardCollectionTool) Description() string {
 	return "Handles the case when the user wants to restart card information collection."
 }

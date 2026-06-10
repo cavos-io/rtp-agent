@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"math"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 	goopenai "github.com/sashabaranov/go-openai"
@@ -482,6 +484,91 @@ func TestOpenAISTTRecognizeUsesOpenAITranscriptionAPI(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTRecognizeReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Status:     "429 Too Many Requests",
+			Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Request-Id": []string{"req_stt"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"rate limit","type":"rate_limit_error"}}`)),
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAISTT(t, "test-key", "whisper-1",
+		WithOpenAISTTBaseURL("https://openai.test/v1"),
+		withOpenAISTTHTTPClient(client),
+	)
+
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{1, 2, 3}}}, "en")
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Recognize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("StatusCode = %d, want 429", statusErr.StatusCode)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("Retryable = false, want retryable rate-limit status")
+	}
+}
+
+func TestOpenAISTTStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+	)
+	provider.dialWebsocket = func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error) {
+		return nil, nil, errors.New("dial refused")
+	}
+
+	_, err := provider.Stream(context.Background(), "en")
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message != "dial refused" {
+		t.Fatalf("APIConnectionError message = %q, want dial refused", connectionErr.Message)
+	}
+}
+
+func TestOpenAISTTStreamReturnsAPIStatusErrorOnUnexpectedClose(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			_ = conn.WriteControl(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "provider failed"),
+				time.Now().Add(time.Second),
+			)
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != websocket.CloseInternalServerErr {
+		t.Fatalf("StatusCode = %d, want %d", statusErr.StatusCode, websocket.CloseInternalServerErr)
+	}
+	if statusErr.Message != "OpenAI Realtime STT connection closed unexpectedly" {
+		t.Fatalf("APIStatusError message = %q, want unexpected close", statusErr.Message)
+	}
+}
+
 func TestOpenAISTTRecognizeLanguageOverridePersists(t *testing.T) {
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		if err := r.ParseMultipartForm(1 << 20); err != nil {
@@ -883,6 +970,27 @@ func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
 	}
 	if events[1].Type != stt.SpeechEventRecognitionUsage || events[1].RecognitionUsage.AudioDuration != 0.8 || events[1].RecognitionUsage.InputTokens != 3 {
 		t.Fatalf("usage event = %+v, want duration and tokens", events[1])
+	}
+}
+
+func TestOpenAIRealtimeSTTErrorMessageReturnsAPIError(t *testing.T) {
+	_, err := openAIRealtimeSTTEventsFromMessage([]byte(`{
+		"type":"error",
+		"error":{"message":"bad audio","code":"invalid_audio"}
+	}`), &openAIRealtimeSTTMessageState{})
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error = %T %v, want APIError", err, err)
+	}
+	if apiErr.Message != "OpenAI Realtime STT error: bad audio" {
+		t.Fatalf("APIError message = %q, want provider message", apiErr.Message)
+	}
+	if apiErr.Retryable {
+		t.Fatal("APIError retryable = true, want false")
+	}
+	body, ok := apiErr.Body.(map[string]interface{})
+	if !ok || body["code"] != "invalid_audio" {
+		t.Fatalf("APIError body = %#v, want provider error body", apiErr.Body)
 	}
 }
 

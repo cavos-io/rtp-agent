@@ -219,6 +219,9 @@ type declineAddressCaptureTool struct {
 
 func (t *declineAddressCaptureTool) ID() string   { return "decline_address_capture" }
 func (t *declineAddressCaptureTool) Name() string { return "decline_address_capture" }
+func (t *declineAddressCaptureTool) ToolFlags() llm.ToolFlag {
+	return llm.ToolFlagIgnoreOnEnter
+}
 func (t *declineAddressCaptureTool) Description() string {
 	return "Handles the case when the user explicitly declines to provide an address."
 }

@@ -203,6 +203,9 @@ type outOfScopeTool struct {
 
 func (t *outOfScopeTool) ID() string   { return "out_of_scope" }
 func (t *outOfScopeTool) Name() string { return "out_of_scope" }
+func (t *outOfScopeTool) ToolFlags() llm.ToolFlag {
+	return llm.ToolFlagIgnoreOnEnter
+}
 func (t *outOfScopeTool) Description() string {
 	t.group.mu.Lock()
 	defer t.group.mu.Unlock()

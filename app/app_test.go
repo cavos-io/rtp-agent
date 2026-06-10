@@ -2894,6 +2894,13 @@ func TestEvaluateSessionReturnsEvaluationSummary(t *testing.T) {
 	if evaluations[0]["name"] != "accuracy" || evaluations[0]["verdict"] != "pass" {
 		t.Fatalf("job context evaluation = %#v, want accuracy pass", evaluations[0])
 	}
+	if evaluations[0]["reasoning"] != "met the criteria" {
+		t.Fatalf("job context evaluation reasoning = %#v, want LLM reasoning", evaluations[0]["reasoning"])
+	}
+	instructions, ok := evaluations[0]["instructions"].(string)
+	if !ok || !strings.Contains(instructions, "All information provided by the agent must be accurate and grounded") {
+		t.Fatalf("job context evaluation instructions = %#v, want accuracy judge instructions", evaluations[0]["instructions"])
+	}
 }
 
 func TestRunSessionRegistersPrimarySessionOnJobContext(t *testing.T) {

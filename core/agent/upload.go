@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
@@ -27,8 +28,9 @@ import (
 )
 
 var (
-	recordUploadTelemetryEvent = telemetry.RecordChatEvent
-	recordingUploadHTTPClient  = &http.Client{Timeout: 30 * time.Second}
+	recordUploadTelemetryEvent   = telemetry.RecordChatEvent
+	recordUploadTelemetryEventAt = telemetry.RecordChatEventAt
+	recordingUploadHTTPClient    = &http.Client{Timeout: 30 * time.Second}
 )
 
 func UploadSessionReport(
@@ -178,37 +180,56 @@ func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *Se
 		if report.Tagger != nil {
 			attrs["session.tags"] = report.Tagger.Tags()
 		}
-		if report.Usage != nil {
-			attrs["usage"] = usageSummaryToDict(report.Usage)
+		if len(report.ModelUsage) > 0 {
+			attrs["usage"] = modelUsageToDict(report.ModelUsage)
 		}
-		recordUploadTelemetryEvent(ctx, "session_report", "session report", attrs)
+		recordUploadTelemetryEventAt(ctx, "session_report", "session report", attrs, sessionReportTelemetryTimestamp(report))
+	}
+	if report.RecordingOptions.Transcript && report.ChatHistory != nil {
+		for _, item := range report.ChatHistory.Items {
+			recordUploadTelemetryEventAt(ctx, "chat_item", "chat item", map[string]interface{}{
+				"chat.item": chatItemReportDict(item),
+			}, item.GetCreatedAt())
+		}
 	}
 
 	if report.Tagger == nil {
 		return
 	}
+	reportTimestamp := unixSecondsToTime(report.Timestamp)
 	for _, evaluation := range report.Tagger.Evaluations() {
-		recordUploadTelemetryEvent(ctx, "evaluation", "evaluation", map[string]interface{}{
+		recordUploadTelemetryEventAt(ctx, "evaluation", "evaluation", map[string]interface{}{
 			"evaluation": evaluation,
-		})
+		}, reportTimestamp)
 	}
 	for _, tag := range report.Tagger.MetadataTags() {
-		recordUploadTelemetryEvent(ctx, "tag", "tag", map[string]interface{}{
+		recordUploadTelemetryEventAt(ctx, "tag", "tag", map[string]interface{}{
 			"tag": map[string]any{
 				"name":     tag.Name,
 				"metadata": tag.Metadata,
 			},
-		})
+		}, tag.Timestamp)
 	}
 	if outcome := report.Tagger.Outcome(); outcome != "" {
 		outcomeData := map[string]any{"outcome": outcome}
 		if reason := report.Tagger.OutcomeReason(); reason != "" {
 			outcomeData["reason"] = reason
 		}
-		recordUploadTelemetryEvent(ctx, "outcome", "outcome", map[string]interface{}{
+		recordUploadTelemetryEventAt(ctx, "outcome", "outcome", map[string]interface{}{
 			"outcome": outcomeData,
-		})
+		}, reportTimestamp)
 	}
+}
+
+func unixSecondsToTime(seconds float64) time.Time {
+	return time.Unix(0, int64(math.Round(seconds*1e9)))
+}
+
+func sessionReportTelemetryTimestamp(report *SessionReport) time.Time {
+	if report.StartedAt != nil {
+		return unixSecondsToTime(*report.StartedAt)
+	}
+	return unixSecondsToTime(report.Timestamp)
 }
 
 func hasUploadRecordingOption(options RecordingOptions) bool {

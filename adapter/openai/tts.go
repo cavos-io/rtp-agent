@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/sashabaranov/go-openai"
 )
@@ -224,7 +225,7 @@ func (t *OpenAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 
 	resp, err := t.client.CreateSpeech(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, mapOpenAIError(err)
 	}
 
 	return &openaiTTSChunkedStream{
@@ -269,7 +270,7 @@ func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
 		if err == io.EOF {
 			return nil, io.EOF
 		}
-		return nil, err
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 
 	return &tts.SynthesizedAudio{
@@ -311,7 +312,7 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 			}
 			audioData, err := base64.StdEncoding.DecodeString(audioB64)
 			if err != nil {
-				return nil, err
+				return nil, llm.NewAPIConnectionError(err.Error())
 			}
 			return &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{
@@ -326,7 +327,7 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 		}
 	}
 	if err := s.scanner.Err(); err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	return nil, io.EOF
 }

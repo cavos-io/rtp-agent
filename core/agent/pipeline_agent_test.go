@@ -476,6 +476,36 @@ func TestPipelineAgentGenerateReplyWithToolsFiltersChatOptions(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentGenerateReplyOnEnterFiltersIgnoredTools(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "normal tool only"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{
+		&fakeGenerationTool{name: "lookup"},
+		&fakeGenerationTool{name: "workflow_step", flags: llm.ToolFlagIgnoreOnEnter},
+	}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{
+		IgnoreOnEnterTools: true,
+	})
+
+	if len(l.calls) != 1 {
+		t.Fatalf("LLM Chat calls = %d, want 1", len(l.calls))
+	}
+	if got, want := generationToolNames(l.calls[0].Tools), []string{"lookup"}; !stringSlicesEqual(got, want) {
+		t.Fatalf("LLM tools = %#v, want %#v", got, want)
+	}
+}
+
 func TestPipelineAgentGenerateReplyIncludesAgentToolsInChatOptions(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

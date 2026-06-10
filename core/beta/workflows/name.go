@@ -271,6 +271,9 @@ type declineNameCaptureTool struct {
 
 func (t *declineNameCaptureTool) ID() string   { return "decline_name_capture" }
 func (t *declineNameCaptureTool) Name() string { return "decline_name_capture" }
+func (t *declineNameCaptureTool) ToolFlags() llm.ToolFlag {
+	return llm.ToolFlagIgnoreOnEnter
+}
 func (t *declineNameCaptureTool) Description() string {
 	return "Handles the case when the user explicitly declines to provide their name."
 }

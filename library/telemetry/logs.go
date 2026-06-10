@@ -55,6 +55,10 @@ func ShutdownLoggerProvider(ctx context.Context) error {
 }
 
 func RecordChatEvent(ctx context.Context, eventType string, body string, attributes map[string]interface{}) {
+	RecordChatEventAt(ctx, eventType, body, attributes, time.Now())
+}
+
+func RecordChatEventAt(ctx context.Context, eventType string, body string, attributes map[string]interface{}, timestamp time.Time) {
 	if ChatLogger == nil {
 		return
 	}
@@ -65,7 +69,7 @@ func RecordChatEvent(ctx context.Context, eventType string, body string, attribu
 	}
 
 	record := log.Record{}
-	record.SetTimestamp(time.Now())
+	record.SetTimestamp(timestamp)
 	record.SetBody(log.StringValue(body))
 	record.AddAttributes(log.String("event.type", eventType))
 	record.AddAttributes(otelAttrs...)

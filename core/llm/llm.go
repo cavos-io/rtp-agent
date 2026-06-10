@@ -25,6 +25,25 @@ const (
 	ChatRoleAssistant ChatRole = "assistant"
 )
 
+type ToolFlag uint64
+
+const (
+	ToolFlagNone          ToolFlag = 0
+	ToolFlagIgnoreOnEnter ToolFlag = 1 << 0
+)
+
+type ToolFlagger interface {
+	ToolFlags() ToolFlag
+}
+
+func ToolHasFlag(tool Tool, flag ToolFlag) bool {
+	if tool == nil || flag == ToolFlagNone {
+		return false
+	}
+	flagger, ok := tool.(ToolFlagger)
+	return ok && flagger.ToolFlags()&flag != 0
+}
+
 type ImageContent struct {
 	ID              string
 	Image           any

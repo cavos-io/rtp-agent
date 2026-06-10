@@ -860,6 +860,38 @@ func TestAgentSessionStartWithOptionsCapturesOnEnterSpeechRun(t *testing.T) {
 	}
 }
 
+func TestAgentSessionOnEnterGenerateReplyPreservesToolChoiceAndFiltersIgnoredTools(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	agent := &onEnterGenerateReplyAgent{Agent: NewAgent("test")}
+	toolChoice := llm.ToolChoice("auto")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{ToolChoice: toolChoice})
+	agent.session = session
+	session.Assistant = &fakeSessionAssistant{}
+	speechEvents := session.SpeechCreatedEvents()
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+	defer session.Stop(context.Background())
+
+	select {
+	case ev := <-speechEvents:
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
+		}
+		if ev.SpeechHandle.Generation.ToolChoice != "auto" {
+			t.Fatalf("OnEnter GenerateReply ToolChoice = %#v, want auto", ev.SpeechHandle.Generation.ToolChoice)
+		}
+		if !ev.SpeechHandle.Generation.IgnoreOnEnterTools {
+			t.Fatal("OnEnter GenerateReply IgnoreOnEnterTools = false, want true")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive OnEnter generate reply")
+	}
+}
+
 func TestAgentSessionStartWithOptionsCaptureRunWaitsForSpeech(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -941,6 +973,15 @@ type onEnterSayAgent struct {
 
 func (a *onEnterSayAgent) OnEnter() {
 	_, _ = a.session.Say(context.Background(), "hello from on enter")
+}
+
+type onEnterGenerateReplyAgent struct {
+	*Agent
+	session *AgentSession
+}
+
+func (a *onEnterGenerateReplyAgent) OnEnter() {
+	_, _ = a.session.GenerateReply(context.Background(), "hello from on enter")
 }
 
 type fakeCloseableSessionAssistant struct {

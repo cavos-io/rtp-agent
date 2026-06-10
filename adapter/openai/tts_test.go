@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	goopenai "github.com/sashabaranov/go-openai"
 )
@@ -379,6 +380,34 @@ func TestOpenAITTSSynthesizeUsesOpenAISpeechAPI(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSSynthesizeReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Status:     "429 Too Many Requests",
+			Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Request-Id": []string{"req_tts"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"rate limit","type":"rate_limit_error"}}`)),
+			Request:    r,
+		}, nil
+	})
+	provider, err := NewOpenAITTS("test-key", "", "", withOpenAITTSHTTPClient(client))
+	if err != nil {
+		t.Fatalf("NewOpenAITTS error = %v", err)
+	}
+
+	_, err = provider.Synthesize(context.Background(), "hello")
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("StatusCode = %d, want 429", statusErr.StatusCode)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("Retryable = false, want retryable rate-limit status")
+	}
+}
+
 func TestOpenAITTSDefaultModelUsesSSEStreamFormat(t *testing.T) {
 	wantAudio := []byte{7, 8, 9}
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
@@ -472,6 +501,27 @@ func TestOpenAITTSChunkedStreamReturnsDataBeforeEOF(t *testing.T) {
 		t.Fatalf("second Next error = %v, want EOF", err)
 	}
 }
+
+func TestOpenAITTSChunkedStreamReturnsAPIConnectionErrorOnReadFailure(t *testing.T) {
+	stream := &openaiTTSChunkedStream{resp: failingReadCloser{err: errors.New("socket closed")}}
+
+	_, err := stream.Next()
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message != "socket closed" {
+		t.Fatalf("APIConnectionError message = %q, want socket closed", connectionErr.Message)
+	}
+}
+
+type failingReadCloser struct {
+	err error
+}
+
+func (r failingReadCloser) Read([]byte) (int, error) { return 0, r.err }
+
+func (r failingReadCloser) Close() error { return nil }
 
 type eofWithDataReader struct {
 	data []byte

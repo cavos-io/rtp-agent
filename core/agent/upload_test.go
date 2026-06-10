@@ -5,11 +5,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
@@ -203,15 +206,25 @@ func TestUploadSessionReportRetriesProtobufRetryInfo(t *testing.T) {
 
 func TestUploadSessionReportRecordsLogsOnlySessionReport(t *testing.T) {
 	oldRecord := recordUploadTelemetryEvent
+	oldRecordAt := recordUploadTelemetryEventAt
 	var events []uploadTelemetryEvent
 	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
 		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
 	}
-	defer func() { recordUploadTelemetryEvent = oldRecord }()
+	recordUploadTelemetryEventAt = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, timestamp time.Time) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: timestamp})
+	}
+	defer func() {
+		recordUploadTelemetryEvent = oldRecord
+		recordUploadTelemetryEventAt = oldRecordAt
+	}()
 
 	report := NewSessionReport()
 	report.RecordingOptions = RecordingOptions{Logs: true}
 	report.SDKVersion = "test-sdk"
+	report.Timestamp = 1700.5
+	startedAt := 1600.25
+	report.StartedAt = &startedAt
 
 	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
 		t.Fatalf("UploadSessionReport() error = %v", err)
@@ -223,6 +236,10 @@ func TestUploadSessionReportRecordsLogsOnlySessionReport(t *testing.T) {
 	if events[0].eventType != "session_report" || events[0].body != "session report" {
 		t.Fatalf("telemetry event = %#v, want session report event", events[0])
 	}
+	wantStartedAt := time.Unix(1600, 250000000)
+	if !events[0].timestamp.Equal(wantStartedAt) {
+		t.Fatalf("session report event timestamp = %v, want started_at timestamp %v", events[0].timestamp, wantStartedAt)
+	}
 	if events[0].attrs["agent_name"] != "agent-a" {
 		t.Fatalf("agent_name attr = %#v, want agent-a", events[0].attrs["agent_name"])
 	}
@@ -231,17 +248,182 @@ func TestUploadSessionReportRecordsLogsOnlySessionReport(t *testing.T) {
 	}
 }
 
-func TestUploadSessionReportRecordsEvaluationAndOutcome(t *testing.T) {
+func TestUploadSessionReportRecordsSessionTagsSorted(t *testing.T) {
 	oldRecord := recordUploadTelemetryEvent
+	oldRecordAt := recordUploadTelemetryEventAt
 	var events []uploadTelemetryEvent
 	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
 		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
 	}
-	defer func() { recordUploadTelemetryEvent = oldRecord }()
+	recordUploadTelemetryEventAt = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, timestamp time.Time) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: timestamp})
+	}
+	defer func() {
+		recordUploadTelemetryEvent = oldRecord
+		recordUploadTelemetryEventAt = oldRecordAt
+	}()
 
 	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Logs: true}
 	report.Tagger = NewTagger()
-	report.Tagger.Evaluation(&EvaluationResult{Judgments: map[string]string{"helpfulness": "pass"}})
+	for _, tag := range []string{"zeta:true", "appointment:booked", "language:es", "alpha:first"} {
+		report.Tagger.Add(tag)
+	}
+
+	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("telemetry events = %#v, want one session report event", events)
+	}
+	tags, ok := events[0].attrs["session.tags"].([]string)
+	if !ok {
+		t.Fatalf("session.tags = %T, want []string", events[0].attrs["session.tags"])
+	}
+	want := []string{"alpha:first", "appointment:booked", "language:es", "zeta:true"}
+	if !slices.Equal(tags, want) {
+		t.Fatalf("session.tags = %#v, want sorted %#v", tags, want)
+	}
+}
+
+func TestUploadSessionReportRecordsModelUsage(t *testing.T) {
+	oldRecord := recordUploadTelemetryEvent
+	oldRecordAt := recordUploadTelemetryEventAt
+	var events []uploadTelemetryEvent
+	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
+	}
+	recordUploadTelemetryEventAt = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, timestamp time.Time) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: timestamp})
+	}
+	defer func() {
+		recordUploadTelemetryEvent = oldRecord
+		recordUploadTelemetryEventAt = oldRecordAt
+	}()
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Logs: true}
+	report.Usage = &telemetry.UsageSummary{LLMPromptTokens: 99}
+	report.ModelUsage = []telemetry.ModelUsage{
+		&telemetry.LLMModelUsage{
+			Provider:          "openai",
+			Model:             "gpt-report",
+			InputTokens:       12,
+			InputCachedTokens: 3,
+			OutputTokens:      7,
+		},
+	}
+
+	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("telemetry events = %#v, want one session report event", events)
+	}
+	usage, ok := events[0].attrs["usage"].([]map[string]any)
+	if !ok {
+		t.Fatalf("usage = %T, want []map[string]any", events[0].attrs["usage"])
+	}
+	if len(usage) != 1 {
+		t.Fatalf("usage = %#v, want one model usage entry", usage)
+	}
+	entry := usage[0]
+	for key, want := range map[string]any{
+		"type":                "llm_usage",
+		"provider":            "openai",
+		"model":               "gpt-report",
+		"input_tokens":        12,
+		"input_cached_tokens": 3,
+		"output_tokens":       7,
+	} {
+		if entry[key] != want {
+			t.Fatalf("usage[%s] = %#v, want %#v in %#v", key, entry[key], want, entry)
+		}
+	}
+	if _, ok := entry["llm_prompt_tokens"]; ok {
+		t.Fatalf("usage = %#v, want model usage keys not summary keys", usage)
+	}
+}
+
+func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
+	oldRecord := recordUploadTelemetryEvent
+	oldRecordAt := recordUploadTelemetryEventAt
+	var events []uploadTelemetryEvent
+	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
+	}
+	recordUploadTelemetryEventAt = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, timestamp time.Time) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: timestamp})
+	}
+	defer func() {
+		recordUploadTelemetryEvent = oldRecord
+		recordUploadTelemetryEventAt = oldRecordAt
+	}()
+	useRecordingUploadHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Setenv("LIVEKIT_OBSERVABILITY_URL", "https://observability.test")
+
+	chatCtx := llm.NewChatContext()
+	createdAt := time.Unix(1800, 125000000)
+	chatCtx.AddMessage(llm.ChatMessageArgs{
+		Role:      llm.ChatRoleUser,
+		Text:      "hello there",
+		CreatedAt: createdAt,
+	})
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Transcript: true}
+	report.ChatHistory = chatCtx
+	report.RoomID = "RM_chat"
+
+	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("telemetry events = %#v, want session report and chat item", events)
+	}
+	if events[1].eventType != "chat_item" || events[1].body != "chat item" {
+		t.Fatalf("second telemetry event = %#v, want chat item event", events[1])
+	}
+	if !events[1].timestamp.Equal(createdAt) {
+		t.Fatalf("chat item event timestamp = %v, want item created_at %v", events[1].timestamp, createdAt)
+	}
+	item, ok := events[1].attrs["chat.item"].(map[string]any)
+	if !ok {
+		t.Fatalf("chat.item = %T, want map", events[1].attrs["chat.item"])
+	}
+	if item["type"] != "message" || item["role"] != "user" {
+		t.Fatalf("chat.item = %#v, want user message", item)
+	}
+	content, ok := item["content"].([]any)
+	if !ok || len(content) != 1 || content[0] != "hello there" {
+		t.Fatalf("chat.item content = %#v, want hello there", item["content"])
+	}
+}
+
+func TestUploadSessionReportRecordsEvaluationAndOutcome(t *testing.T) {
+	oldRecord := recordUploadTelemetryEvent
+	oldRecordAt := recordUploadTelemetryEventAt
+	var events []uploadTelemetryEvent
+	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
+	}
+	recordUploadTelemetryEventAt = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, timestamp time.Time) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: timestamp})
+	}
+	defer func() {
+		recordUploadTelemetryEvent = oldRecord
+		recordUploadTelemetryEventAt = oldRecordAt
+	}()
+
+	report := NewSessionReport()
+	report.Timestamp = 1700.5
+	report.Tagger = NewTagger()
+	report.Tagger.Evaluation(&EvaluationResult{
+		Judgments:    map[string]string{"helpfulness": "pass"},
+		Reasoning:    map[string]string{"helpfulness": "clear answer"},
+		Instructions: map[string]string{"helpfulness": "judge helpfulness"},
+	})
 	report.Tagger.Fail("caller hung up")
 
 	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
@@ -254,8 +436,25 @@ func TestUploadSessionReportRecordsEvaluationAndOutcome(t *testing.T) {
 	if events[0].eventType != "evaluation" || events[0].body != "evaluation" {
 		t.Fatalf("first telemetry event = %#v, want evaluation", events[0])
 	}
+	wantReportTimestamp := time.Unix(1700, 500000000)
+	if !events[0].timestamp.Equal(wantReportTimestamp) {
+		t.Fatalf("evaluation event timestamp = %v, want report timestamp %v", events[0].timestamp, wantReportTimestamp)
+	}
+	evaluation, ok := events[0].attrs["evaluation"].(map[string]any)
+	if !ok {
+		t.Fatalf("evaluation attr = %T, want map", events[0].attrs["evaluation"])
+	}
+	if evaluation["tag"] != "lk.judge.helpfulness:pass" {
+		t.Fatalf("evaluation tag = %#v, want generated judge tag", evaluation["tag"])
+	}
+	if evaluation["reasoning"] != "clear answer" || evaluation["instructions"] != "judge helpfulness" {
+		t.Fatalf("evaluation attr = %#v, want reasoning and instructions", evaluation)
+	}
 	if events[1].eventType != "outcome" || events[1].body != "outcome" {
 		t.Fatalf("second telemetry event = %#v, want outcome", events[1])
+	}
+	if !events[1].timestamp.Equal(wantReportTimestamp) {
+		t.Fatalf("outcome event timestamp = %v, want report timestamp %v", events[1].timestamp, wantReportTimestamp)
 	}
 	outcome, ok := events[1].attrs["outcome"].(map[string]any)
 	if !ok {
@@ -268,19 +467,28 @@ func TestUploadSessionReportRecordsEvaluationAndOutcome(t *testing.T) {
 
 func TestUploadSessionReportRecordsTagMetadata(t *testing.T) {
 	oldRecord := recordUploadTelemetryEvent
+	oldRecordAt := recordUploadTelemetryEventAt
 	var events []uploadTelemetryEvent
 	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
 		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
 	}
-	defer func() { recordUploadTelemetryEvent = oldRecord }()
+	recordUploadTelemetryEventAt = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, timestamp time.Time) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: timestamp})
+	}
+	defer func() {
+		recordUploadTelemetryEvent = oldRecord
+		recordUploadTelemetryEventAt = oldRecordAt
+	}()
 
 	report := NewSessionReport()
 	report.RecordingOptions = RecordingOptions{Logs: true}
 	report.Tagger = NewTagger()
+	beforeAdd := time.Now()
 	report.Tagger.Add("appointment:booked", map[string]any{
 		"slot_id":  "abc123",
 		"calendar": "cal.com",
 	})
+	afterAdd := time.Now()
 
 	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
 		t.Fatalf("UploadSessionReport() error = %v", err)
@@ -291,6 +499,12 @@ func TestUploadSessionReportRecordsTagMetadata(t *testing.T) {
 	}
 	if events[1].eventType != "tag" || events[1].body != "tag" {
 		t.Fatalf("second telemetry event = %#v, want tag event", events[1])
+	}
+	if events[1].timestamp.IsZero() {
+		t.Fatalf("tag event timestamp is zero, want tag creation timestamp")
+	}
+	if events[1].timestamp.Before(beforeAdd) || events[1].timestamp.After(afterAdd) {
+		t.Fatalf("tag event timestamp = %v, want tag creation timestamp between %v and %v", events[1].timestamp, beforeAdd, afterAdd)
 	}
 	tag, ok := events[1].attrs["tag"].(map[string]any)
 	if !ok {
@@ -312,6 +526,7 @@ type uploadTelemetryEvent struct {
 	eventType string
 	body      string
 	attrs     map[string]interface{}
+	timestamp time.Time
 }
 
 func useRecordingUploadHTTPClient(t *testing.T, handler http.Handler) {
