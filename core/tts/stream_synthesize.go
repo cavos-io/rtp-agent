@@ -76,6 +76,9 @@ func endSynthesizeStreamInput(stream SynthesizeStream) error {
 }
 
 func EndSynthesizeStreamInput(stream SynthesizeStream) error {
+	if isNilSynthesizeStream(stream) {
+		return fmt.Errorf("TTS returned nil synthesize stream")
+	}
 	if ending, ok := stream.(inputEndingSynthesizeStream); ok {
 		return ending.EndInput()
 	}
