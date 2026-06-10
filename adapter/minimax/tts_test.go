@@ -277,6 +277,31 @@ func TestMinimaxTTSRejectsInvalidVoiceModifyBeforeRequest(t *testing.T) {
 	}
 }
 
+func TestMinimaxTTSRejectsFluentEmotionForUnsupportedModel(t *testing.T) {
+	provider := NewMinimaxTTS("test-key", "",
+		WithMinimaxTTSModel("speech-02-turbo"),
+		WithMinimaxTTSEmotion("fluent"),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, synthErr := provider.Synthesize(ctx, "hello")
+	if synthErr == nil {
+		t.Fatal("Synthesize returned nil error, want fluent emotion validation error")
+	}
+	if !strings.Contains(synthErr.Error(), `"fluent" emotion is only supported by speech-2.6-* models`) {
+		t.Fatalf("Synthesize error = %q, want fluent model guidance", synthErr)
+	}
+
+	_, streamErr := provider.Stream(ctx)
+	if streamErr == nil {
+		t.Fatal("Stream returned nil error, want fluent emotion validation error")
+	}
+	if !strings.Contains(streamErr.Error(), `"fluent" emotion is only supported by speech-2.6-* models`) {
+		t.Fatalf("Stream error = %q, want fluent model guidance", streamErr)
+	}
+}
+
 func TestMinimaxTTSChunkedStreamDecodesReferenceSSEAudio(t *testing.T) {
 	stream := &minimaxTTSChunkedStream{
 		resp: &http.Response{

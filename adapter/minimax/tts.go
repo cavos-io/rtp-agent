@@ -312,6 +312,9 @@ func validateMinimaxTTSOptions(t *MinimaxTTS) error {
 	if t.timbre != nil && (*t.timbre < -100 || *t.timbre > 100) {
 		return fmt.Errorf("timbre must be between -100 and 100, but got %d", *t.timbre)
 	}
+	if t.emotion == "fluent" && !strings.HasPrefix(t.model, "speech-2.6") {
+		return fmt.Errorf(`"fluent" emotion is only supported by speech-2.6-* models, but got model %q`, t.model)
+	}
 	return nil
 }
 
