@@ -179,6 +179,64 @@ func TestFallbackAdapterEmitsAvailabilityChanges(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterAvailabilityHandlerPanicDoesNotBlockOtherHandlers(t *testing.T) {
+	streamErr := errors.New("primary unavailable")
+	primary := &metadataTTS{
+		label:       "primary",
+		sampleRate:  24000,
+		numChannels: 1,
+		chunked:     &metadataChunkedStream{err: streamErr},
+	}
+	fallback := &metadataTTS{
+		label:       "fallback",
+		sampleRate:  24000,
+		numChannels: 1,
+		chunked: &metadataChunkedStream{events: []*SynthesizedAudio{{
+			Frame: &model.AudioFrame{Data: []byte("fallback")},
+		}}},
+	}
+	adapter := NewFallbackAdapterWithOptions([]TTS{primary, fallback}, FallbackAdapterOptions{
+		DisableRetries: true,
+	})
+	changes := make(chan AvailabilityChangedEvent, 1)
+	adapter.OnAvailabilityChanged(func(AvailabilityChangedEvent) {
+		panic("availability handler failed")
+	})
+	adapter.OnAvailabilityChanged(func(event AvailabilityChangedEvent) {
+		changes <- event
+	})
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				t.Fatalf("availability handler panic escaped: %v", recovered)
+			}
+		}()
+
+		stream, err := adapter.Synthesize(context.Background(), "hello")
+		if err != nil {
+			t.Fatalf("Synthesize returned error: %v", err)
+		}
+		defer stream.Close()
+
+		audio, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next returned error: %v", err)
+		}
+		if got := string(audio.Frame.Data); got != "fallback" {
+			t.Fatalf("audio data = %q, want fallback", got)
+		}
+	}()
+
+	unavailable := receiveTTSAvailabilityChange(t, changes)
+	if unavailable.TTS != primary {
+		t.Fatalf("unavailable TTS = %v, want primary", unavailable.TTS.Label())
+	}
+	if unavailable.Available {
+		t.Fatal("unavailable event Available = true, want false")
+	}
+}
+
 func TestFallbackAdapterCanUnsubscribeAvailabilityChanges(t *testing.T) {
 	streamErr := errors.New("primary unavailable")
 	primary := &metadataTTS{
