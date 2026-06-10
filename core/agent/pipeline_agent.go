@@ -815,7 +815,12 @@ func sessionRegisteredTools(ctx context.Context, session *AgentSession) ([]llm.T
 		tools = append(tools, tool)
 	}
 	if session.Agent != nil && session.Agent.GetAgent() != nil {
-		tools = append(tools, session.Agent.GetAgent().Tools...)
+		for idx, tool := range session.Agent.GetAgent().Tools {
+			if isNilAgentTool(tool) {
+				return nil, fmt.Errorf("agent tool at index %d: nil tool", idx)
+			}
+			tools = append(tools, tool)
+		}
 	}
 	if ctx == nil {
 		ctx = context.Background()

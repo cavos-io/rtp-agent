@@ -2404,6 +2404,49 @@ func TestAgentSessionGenerateReplyOptionsRejectsTypedNilRegisteredTool(t *testin
 	}
 }
 
+func TestAgentSessionGenerateReplyOptionsRejectsNilAgentTool(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "session_lookup"}}
+	agent.Tools = []llm.Tool{nil}
+	session.activity = NewAgentActivity(agent, session)
+
+	handle, err := session.GenerateReplyWithOptions(context.Background(), GenerateReplyOptions{
+		UserInput:     "hello",
+		Tools:         []string{"session_lookup"},
+		InputModality: "text",
+	})
+
+	if handle != nil {
+		t.Fatalf("GenerateReplyWithOptions handle = %#v, want nil", handle)
+	}
+	if err == nil || !strings.Contains(err.Error(), "nil tool") {
+		t.Fatalf("GenerateReplyWithOptions error = %v, want nil tool error", err)
+	}
+}
+
+func TestAgentSessionGenerateReplyOptionsRejectsTypedNilAgentTool(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "session_lookup"}}
+	var nilTool *fakeGenerationTool
+	agent.Tools = []llm.Tool{nilTool}
+	session.activity = NewAgentActivity(agent, session)
+
+	handle, err := session.GenerateReplyWithOptions(context.Background(), GenerateReplyOptions{
+		UserInput:     "hello",
+		Tools:         []string{"session_lookup"},
+		InputModality: "text",
+	})
+
+	if handle != nil {
+		t.Fatalf("GenerateReplyWithOptions handle = %#v, want nil", handle)
+	}
+	if err == nil || !strings.Contains(err.Error(), "nil tool") {
+		t.Fatalf("GenerateReplyWithOptions error = %v, want nil tool error", err)
+	}
+}
+
 func TestAgentSessionRunReturnsRunResultWatchingGeneratedSpeech(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})
