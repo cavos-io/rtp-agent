@@ -124,6 +124,8 @@ func (t *LMNTTTS) Capabilities() tts.TTSCapabilities {
 }
 func (t *LMNTTTS) SampleRate() int  { return t.sampleRate }
 func (t *LMNTTTS) NumChannels() int { return 1 }
+func (t *LMNTTTS) Model() string    { return t.model }
+func (t *LMNTTTS) Provider() string { return "LMNT" }
 
 func (t *LMNTTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if err := validateLMNTAPIKey(t.apiKey); err != nil {
