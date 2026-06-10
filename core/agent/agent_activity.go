@@ -41,6 +41,10 @@ type realtimeAudioClearer interface {
 	ClearAudio() error
 }
 
+type realtimeInterrupter interface {
+	Interrupt() error
+}
+
 type llmMetricsCollector interface {
 	OnMetricsCollected(llm.LLMMetricsHandler) func()
 }
@@ -409,6 +413,17 @@ func (a *AgentActivity) Interrupt(force bool) error {
 		interrupted = append(interrupted, queued.speech)
 	}
 	a.queueMu.Unlock()
+
+	if a.Session != nil {
+		a.Session.mu.Lock()
+		assistant := a.Session.Assistant
+		a.Session.mu.Unlock()
+		if interrupter, ok := assistant.(realtimeInterrupter); ok {
+			if err := interrupter.Interrupt(); err != nil {
+				return err
+			}
+		}
+	}
 
 	for _, speech := range interrupted {
 		if err := speech.Wait(a.ctx); err != nil {

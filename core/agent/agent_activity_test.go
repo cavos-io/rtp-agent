@@ -976,6 +976,22 @@ func TestAgentActivityInterruptReturnsImmediatelyWhenNoSpeech(t *testing.T) {
 	}
 }
 
+func TestAgentActivityInterruptInterruptsRealtimeSession(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	assistant := &recordingRealtimeCommitAssistant{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	if err := activity.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt(false) error = %v, want nil", err)
+	}
+	if assistant.interrupts != 1 {
+		t.Fatalf("realtime Interrupt calls = %d, want 1", assistant.interrupts)
+	}
+}
+
 func TestAgentActivityInterruptForceBypassesDisallowedInterruptions(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -2594,8 +2610,9 @@ func (r *recordingOptionsAssistant) UpdateOptions(_ context.Context, options llm
 }
 
 type recordingRealtimeCommitAssistant struct {
-	commits int
-	clears  int
+	commits    int
+	clears     int
+	interrupts int
 }
 
 func (r *recordingRealtimeCommitAssistant) Start(context.Context, *AgentSession) error {
@@ -2615,6 +2632,11 @@ func (r *recordingRealtimeCommitAssistant) CommitAudio() error {
 
 func (r *recordingRealtimeCommitAssistant) ClearAudio() error {
 	r.clears++
+	return nil
+}
+
+func (r *recordingRealtimeCommitAssistant) Interrupt() error {
+	r.interrupts++
 	return nil
 }
 

@@ -184,6 +184,16 @@ func (ma *MultimodalAgent) ClearAudio() error {
 	return rtSession.ClearAudio()
 }
 
+func (ma *MultimodalAgent) Interrupt() error {
+	ma.mu.Lock()
+	rtSession := ma.rtSession
+	ma.mu.Unlock()
+	if rtSession == nil {
+		return nil
+	}
+	return rtSession.Interrupt()
+}
+
 func (ma *MultimodalAgent) UpdateRealtimeModel(ctx context.Context, model llm.RealtimeModel) error {
 	if model == nil {
 		return nil
