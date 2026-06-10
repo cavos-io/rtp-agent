@@ -116,6 +116,8 @@ func (t *NeuphonicTTS) Capabilities() tts.TTSCapabilities {
 }
 func (t *NeuphonicTTS) SampleRate() int  { return t.sampleRate }
 func (t *NeuphonicTTS) NumChannels() int { return 1 }
+func (t *NeuphonicTTS) Model() string    { return "Octave" }
+func (t *NeuphonicTTS) Provider() string { return "Neuphonic" }
 
 func (t *NeuphonicTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if err := validateNeuphonicAPIKey(t.apiKey); err != nil {

@@ -33,6 +33,12 @@ func TestNeuphonicTTSDefaultsMatchReference(t *testing.T) {
 	if provider.speed == nil || *provider.speed != 1.0 {
 		t.Fatalf("speed = %v, want 1.0", provider.speed)
 	}
+	if got := tts.Model(provider); got != "Octave" {
+		t.Fatalf("model metadata = %q, want Octave", got)
+	}
+	if got := tts.Provider(provider); got != "Neuphonic" {
+		t.Fatalf("provider metadata = %q, want Neuphonic", got)
+	}
 	if !provider.Capabilities().Streaming {
 		t.Fatalf("streaming = false, want true")
 	}
