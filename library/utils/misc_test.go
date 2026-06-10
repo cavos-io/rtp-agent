@@ -27,6 +27,9 @@ func TestIsCloudMatchesReferenceHosts(t *testing.T) {
 	if !IsCloud("https://tenant.livekit.run/path") {
 		t.Fatal("IsCloud(livekit.run) = false, want true")
 	}
+	if !IsCloud("wss://TENANT.LIVEKIT.CLOUD") {
+		t.Fatal("IsCloud(uppercase livekit.cloud) = false, want true")
+	}
 	if IsCloud("http://localhost:7880") {
 		t.Fatal("IsCloud(localhost) = true, want false")
 	}

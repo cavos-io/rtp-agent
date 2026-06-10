@@ -26,7 +26,7 @@ func IsCloud(rawURL string) bool {
 	if err != nil || parsed.Hostname() == "" {
 		return false
 	}
-	hostname := parsed.Hostname()
+	hostname := strings.ToLower(parsed.Hostname())
 	return strings.HasSuffix(hostname, ".livekit.cloud") || strings.HasSuffix(hostname, ".livekit.run")
 }
 
