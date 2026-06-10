@@ -2894,6 +2894,9 @@ func TestEvaluateSessionReturnsEvaluationSummary(t *testing.T) {
 	if evaluations[0]["name"] != "accuracy" || evaluations[0]["verdict"] != "pass" {
 		t.Fatalf("job context evaluation = %#v, want accuracy pass", evaluations[0])
 	}
+	if evaluations[0]["tag"] != "lk.judge.accuracy:pass" {
+		t.Fatalf("job context evaluation tag = %#v, want generated judge tag", evaluations[0]["tag"])
+	}
 	if evaluations[0]["reasoning"] != "met the criteria" {
 		t.Fatalf("job context evaluation reasoning = %#v, want LLM reasoning", evaluations[0]["reasoning"])
 	}
