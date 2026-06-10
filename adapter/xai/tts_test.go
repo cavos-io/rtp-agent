@@ -20,6 +20,12 @@ func TestXaiTTSDefaultsMatchReference(t *testing.T) {
 	if provider.voice != "ara" {
 		t.Fatalf("voice = %q, want ara", provider.voice)
 	}
+	if got := tts.Model(provider); got != "unknown" {
+		t.Fatalf("model metadata = %q, want unknown", got)
+	}
+	if got := tts.Provider(provider); got != "xAI" {
+		t.Fatalf("provider metadata = %q, want xAI", got)
+	}
 	if provider.language != "auto" {
 		t.Fatalf("language = %q, want auto", provider.language)
 	}

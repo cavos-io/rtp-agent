@@ -72,6 +72,11 @@ func NewXaiTTS(apiKey string, voice string, opts ...XaiTTSOption) *XaiTTS {
 }
 
 func (t *XaiTTS) Label() string { return "xai.TTS" }
+func (t *XaiTTS) Model() string { return "unknown" }
+func (t *XaiTTS) Provider() string {
+	return "xAI"
+}
+
 func (t *XaiTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
