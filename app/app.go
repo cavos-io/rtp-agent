@@ -1841,6 +1841,24 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return minimal.NewMinimalLLM(cfg.MinimalAPIKey, cfg.LLMModel), nil
 	case providerOpenAI:
 		return openai.NewOpenAILLM(cfg.OpenAIAPIKey, cfg.LLMModel)
+	case providerDeepSeek:
+		return openai.NewDeepSeekOpenAILLM(cfg.LLMModel, cfg.DeepSeekAPIKey)
+	case providerCometAPI:
+		return openai.NewCometAPIOpenAILLM(cfg.LLMModel, cfg.CometAPIKey)
+	case providerNebius:
+		return openai.NewNebiusOpenAILLM(cfg.LLMModel, cfg.NebiusAPIKey)
+	case providerLetta:
+		return openai.NewLettaOpenAILLM(cfg.LLMModel, cfg.LLMBaseURL, cfg.LettaAPIKey)
+	case providerOVHCloud:
+		return openai.NewOVHCloudOpenAILLM(cfg.LLMModel, cfg.OVHCloudAPIKey)
+	case providerOctoAI:
+		return openai.NewOctoAIOpenAILLM(cfg.LLMModel, cfg.OctoAIAPIKey)
+	case providerOllama:
+		return openai.NewOllamaOpenAILLM(cfg.LLMModel), nil
+	case providerOpenRouter:
+		return openai.NewOpenRouterLLM(cfg.OpenRouterAPIKey, cfg.LLMModel)
+	case providerSambaNova:
+		return openai.NewSambaNovaOpenAILLM(cfg.LLMModel, cfg.SambaNovaAPIKey)
 	case providerGroq:
 		return groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel), nil
 	case providerXAI:

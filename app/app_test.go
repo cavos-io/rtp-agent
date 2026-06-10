@@ -2990,6 +2990,48 @@ func TestDefaultConfigFromEnvAcceptsTogetherLLMFallbackProvider(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvAcceptsOpenAICompatibleLLMFallbackProviders(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		envKey   string
+		envValue string
+		baseURL  string
+	}{
+		{name: "deepseek", provider: "deepseek", envKey: "DEEPSEEK_API_KEY", envValue: "test-deepseek-key"},
+		{name: "cometapi", provider: "cometapi", envKey: "COMETAPI_API_KEY", envValue: "test-cometapi-key"},
+		{name: "nebius", provider: "nebius", envKey: "NEBIUS_API_KEY", envValue: "test-nebius-key"},
+		{name: "letta", provider: "letta", envKey: "LETTA_API_KEY", envValue: "test-letta-key", baseURL: "https://letta.example.test/v1/chat/completions"},
+		{name: "ovhcloud", provider: "ovhcloud", envKey: "OVHCLOUD_API_KEY", envValue: "test-ovhcloud-key"},
+		{name: "octoai", provider: "octoai", envKey: "OCTOAI_TOKEN", envValue: "test-octoai-key"},
+		{name: "sambanova", provider: "sambanova", envKey: "SAMBANOVA_API_KEY", envValue: "test-sambanova-key"},
+		{name: "ollama", provider: "ollama"},
+		{name: "openrouter", provider: "openrouter", envKey: "OPENROUTER_API_KEY", envValue: "test-openrouter-key"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+			t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", tt.provider)
+			t.Setenv("RTP_AGENT_LLM_MODEL", "custom-fallback-model")
+			if tt.envKey != "" {
+				t.Setenv(tt.envKey, tt.envValue)
+			}
+			if tt.baseURL != "" {
+				t.Setenv("RTP_AGENT_LLM_BASE_URL", tt.baseURL)
+			}
+
+			app, err := NewApp(DefaultConfigFromEnv())
+			if err != nil {
+				t.Fatalf("NewApp() error = %v", err)
+			}
+			if got := llm.Label(app.Agent.LLM); got != "FallbackAdapter(minimal.MinimalLLM)" {
+				t.Fatalf("LLM label = %q, want fallback adapter around primary minimal LLM", got)
+			}
+		})
+	}
+}
+
 func TestDefaultConfigFromEnvConfiguresLLMChatOptions(t *testing.T) {
 	t.Setenv("RTP_AGENT_LLM_PARALLEL_TOOL_CALLS", "true")
 	t.Setenv("RTP_AGENT_LLM_JSON_CONFIG", "temperature=0.2")
