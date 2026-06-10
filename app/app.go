@@ -1081,13 +1081,19 @@ func (a *App) evaluationContext(ctx context.Context) context.Context {
 }
 
 func evaluationResultForTagger(result *evals.EvaluationResult) *agent.EvaluationResult {
-	out := &agent.EvaluationResult{Judgments: make(map[string]string)}
+	out := &agent.EvaluationResult{
+		Judgments:    make(map[string]string),
+		Reasoning:    make(map[string]string),
+		Instructions: make(map[string]string),
+	}
 	if result == nil {
 		return out
 	}
 	for name, judgment := range result.Judgments {
 		if judgment != nil {
 			out.Judgments[name] = string(judgment.Verdict)
+			out.Reasoning[name] = judgment.Reasoning
+			out.Instructions[name] = judgment.Instructions
 		}
 	}
 	return out

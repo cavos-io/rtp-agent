@@ -6,7 +6,9 @@ import (
 )
 
 type EvaluationResult struct {
-	Judgments map[string]string
+	Judgments    map[string]string
+	Reasoning    map[string]string
+	Instructions map[string]string
 }
 
 type Tagger struct {
@@ -128,11 +130,21 @@ func (t *Tagger) Evaluation(result *EvaluationResult) {
 	defer t.mu.Unlock()
 	for name, verdict := range result.Judgments {
 		tag := "lk.judge." + name + ":" + verdict
+		reasoning := ""
+		if result.Reasoning != nil {
+			reasoning = result.Reasoning[name]
+		}
+		instructions := ""
+		if result.Instructions != nil {
+			instructions = result.Instructions[name]
+		}
 		t.tags[tag] = tagEntry{}
 		t.evaluationResults = append(t.evaluationResults, map[string]any{
-			"name":    name,
-			"tag":     tag,
-			"verdict": verdict,
+			"name":         name,
+			"tag":          tag,
+			"verdict":      verdict,
+			"reasoning":    reasoning,
+			"instructions": instructions,
 		})
 	}
 }

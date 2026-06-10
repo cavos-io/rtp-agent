@@ -371,7 +371,11 @@ func TestUploadSessionReportRecordsEvaluationAndOutcome(t *testing.T) {
 
 	report := NewSessionReport()
 	report.Tagger = NewTagger()
-	report.Tagger.Evaluation(&EvaluationResult{Judgments: map[string]string{"helpfulness": "pass"}})
+	report.Tagger.Evaluation(&EvaluationResult{
+		Judgments:    map[string]string{"helpfulness": "pass"},
+		Reasoning:    map[string]string{"helpfulness": "clear answer"},
+		Instructions: map[string]string{"helpfulness": "judge helpfulness"},
+	})
 	report.Tagger.Fail("caller hung up")
 
 	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
@@ -390,6 +394,9 @@ func TestUploadSessionReportRecordsEvaluationAndOutcome(t *testing.T) {
 	}
 	if evaluation["tag"] != "lk.judge.helpfulness:pass" {
 		t.Fatalf("evaluation tag = %#v, want generated judge tag", evaluation["tag"])
+	}
+	if evaluation["reasoning"] != "clear answer" || evaluation["instructions"] != "judge helpfulness" {
+		t.Fatalf("evaluation attr = %#v, want reasoning and instructions", evaluation)
 	}
 	if events[1].eventType != "outcome" || events[1].body != "outcome" {
 		t.Fatalf("second telemetry event = %#v, want outcome", events[1])

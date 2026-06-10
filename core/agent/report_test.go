@@ -241,7 +241,11 @@ func TestSessionReportToDictIncludesTaggerMetadata(t *testing.T) {
 	tagger := NewTagger()
 	tagger.Add("language:en")
 	tagger.Success("completed")
-	tagger.Evaluation(&EvaluationResult{Judgments: map[string]string{"helpfulness": "pass"}})
+	tagger.Evaluation(&EvaluationResult{
+		Judgments:    map[string]string{"helpfulness": "pass"},
+		Reasoning:    map[string]string{"helpfulness": "clear answer"},
+		Instructions: map[string]string{"helpfulness": "judge helpfulness"},
+	})
 	report.Tagger = tagger
 
 	data := report.ToDict()
@@ -269,6 +273,9 @@ func TestSessionReportToDictIncludesTaggerMetadata(t *testing.T) {
 	}
 	if evaluations[0]["tag"] != "lk.judge.helpfulness:pass" {
 		t.Fatalf("evaluation tag = %#v, want generated judge tag", evaluations[0]["tag"])
+	}
+	if evaluations[0]["reasoning"] != "clear answer" || evaluations[0]["instructions"] != "judge helpfulness" {
+		t.Fatalf("evaluation = %#v, want reasoning and instructions", evaluations[0])
 	}
 }
 
