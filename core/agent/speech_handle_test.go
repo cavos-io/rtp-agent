@@ -191,6 +191,29 @@ func TestSpeechHandleDoneCallbackRunsWhenMarkedDone(t *testing.T) {
 	}
 }
 
+func TestSpeechHandleDoneCallbackPanicDoesNotBlockOtherCallbacks(t *testing.T) {
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	called := false
+
+	speech.AddDoneCallback(func(*SpeechHandle) {
+		panic("done callback failed")
+	})
+	speech.AddDoneCallback(func(*SpeechHandle) {
+		called = true
+	})
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("MarkDone panic = %v, want callback panic isolated", recovered)
+		}
+		if !called {
+			t.Fatal("second done callback was not called after first callback panic")
+		}
+	}()
+
+	speech.MarkDone()
+}
+
 func TestSpeechHandleDoneCallbackAddedAfterDoneRunsImmediately(t *testing.T) {
 	speech := NewSpeechHandle(true, DefaultInputDetails())
 	speech.MarkDone()
@@ -247,6 +270,34 @@ func TestSpeechHandleAddChatItemsStoresItemsAndRunsCallbacks(t *testing.T) {
 	if got := speech.ChatItems()[0]; got != msg {
 		t.Fatalf("ChatItems returned mutable backing storage, got %#v want original message", got)
 	}
+}
+
+func TestSpeechHandleItemCallbackPanicDoesNotBlockOtherCallbacksOrStorage(t *testing.T) {
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	msg := &llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant}
+	called := false
+
+	speech.AddItemAddedCallback(func(llm.ChatItem) {
+		panic("item callback failed")
+	})
+	speech.AddItemAddedCallback(func(item llm.ChatItem) {
+		called = item == msg
+	})
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("AddChatItems panic = %v, want callback panic isolated", recovered)
+		}
+		if !called {
+			t.Fatal("second item callback was not called after first callback panic")
+		}
+		items := speech.ChatItems()
+		if len(items) != 1 || items[0] != msg {
+			t.Fatalf("ChatItems() = %#v, want stored message after callback panic", items)
+		}
+	}()
+
+	speech.AddChatItems(msg)
 }
 
 func TestSpeechHandleRemoveItemAddedCallback(t *testing.T) {
