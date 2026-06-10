@@ -3,6 +3,7 @@ package fal
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -50,6 +51,22 @@ func TestNewFalSTTUsesFallbackEnvironmentAPIKey(t *testing.T) {
 
 	if provider.apiKey != "fallback-env-key" {
 		t.Fatalf("api key = %q, want fallback env key", provider.apiKey)
+	}
+}
+
+func TestFalSTTRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("FAL_KEY", "")
+	t.Setenv("FAL_API_KEY", "")
+	provider := NewFalSTT("")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := provider.Recognize(ctx, nil, "")
+	if err == nil {
+		t.Fatal("Recognize returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "FAL_KEY") {
+		t.Fatalf("Recognize error = %q, want FAL_KEY guidance", err)
 	}
 }
 
