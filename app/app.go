@@ -2136,6 +2136,30 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSResponseFormat(cfg.TTSResponseFormat))
 		}
 		return mistralai.NewMistralAITTS(cfg.MistralAPIKey, "", ttsOpts...)
+	case providerLMNT:
+		ttsOpts := []lmnt.LMNTTTSOption{}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSFormat(cfg.TTSResponseFormat))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSTemperature != nil {
+			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSTemperature(*cfg.TTSTemperature))
+		}
+		if cfg.TTSTopP != nil {
+			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSTopP(*cfg.TTSTopP))
+		}
+		return lmnt.NewLMNTTTS(cfg.LMNTAPIKey, "", ttsOpts...), nil
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {

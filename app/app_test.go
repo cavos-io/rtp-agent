@@ -3251,6 +3251,25 @@ func TestDefaultConfigFromEnvAcceptsMistralAITTSFallbackProvider(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvAcceptsLMNTTTSFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "lmnt")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("LMNT_API_KEY", "test-lmnt-key")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "aurora")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "ava")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "en")
+	t.Setenv("RTP_AGENT_TTS_RESPONSE_FORMAT", "wav")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
+		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	}
+}
+
 func TestEvaluateSessionReturnsEvaluationSummary(t *testing.T) {
 	baseAgent := agent.NewAgent("test")
 	session := agent.NewAgentSession(baseAgent, nil, agent.AgentSessionOptions{})
