@@ -16,6 +16,16 @@ import (
 var loggerProvider *sdklog.LoggerProvider
 var ChatLogger log.Logger
 
+type ChatEventOptions struct {
+	Timestamp    time.Time
+	Severity     log.Severity
+	SeverityText string
+}
+
+func ErrorChatEventOptions(timestamp time.Time) ChatEventOptions {
+	return ChatEventOptions{Timestamp: timestamp, Severity: log.SeverityError, SeverityText: "error"}
+}
+
 func InitLoggerProvider(ctx context.Context, endpoint string, headers map[string]string) error {
 	exporter, err := otlploghttp.New(ctx,
 		otlploghttp.WithEndpoint(endpoint),
@@ -59,6 +69,10 @@ func RecordChatEvent(ctx context.Context, eventType string, body string, attribu
 }
 
 func RecordChatEventAt(ctx context.Context, eventType string, body string, attributes map[string]interface{}, timestamp time.Time) {
+	RecordChatEventWithOptions(ctx, eventType, body, attributes, ChatEventOptions{Timestamp: timestamp})
+}
+
+func RecordChatEventWithOptions(ctx context.Context, eventType string, body string, attributes map[string]interface{}, options ChatEventOptions) {
 	if ChatLogger == nil {
 		return
 	}
@@ -67,9 +81,18 @@ func RecordChatEventAt(ctx context.Context, eventType string, body string, attri
 	for k, v := range attributes {
 		otelAttrs = append(otelAttrs, log.String(k, fmt.Sprintf("%v", v)))
 	}
+	if options.Timestamp.IsZero() {
+		options.Timestamp = time.Now()
+	}
 
 	record := log.Record{}
-	record.SetTimestamp(timestamp)
+	record.SetTimestamp(options.Timestamp)
+	if options.Severity != log.SeverityUndefined {
+		record.SetSeverity(options.Severity)
+	}
+	if options.SeverityText != "" {
+		record.SetSeverityText(options.SeverityText)
+	}
 	record.SetBody(log.StringValue(body))
 	record.AddAttributes(log.String("event.type", eventType))
 	record.AddAttributes(otelAttrs...)

@@ -28,9 +28,10 @@ import (
 )
 
 var (
-	recordUploadTelemetryEvent   = telemetry.RecordChatEvent
-	recordUploadTelemetryEventAt = telemetry.RecordChatEventAt
-	recordingUploadHTTPClient    = &http.Client{Timeout: 30 * time.Second}
+	recordUploadTelemetryEvent            = telemetry.RecordChatEvent
+	recordUploadTelemetryEventAt          = telemetry.RecordChatEventAt
+	recordUploadTelemetryEventWithOptions = telemetry.RecordChatEventWithOptions
+	recordingUploadHTTPClient             = &http.Client{Timeout: 30 * time.Second}
 )
 
 func UploadSessionReport(
@@ -198,9 +199,14 @@ func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *Se
 	}
 	reportTimestamp := unixSecondsToTime(report.Timestamp)
 	for _, evaluation := range report.Tagger.Evaluations() {
-		recordUploadTelemetryEventAt(ctx, "evaluation", "evaluation", map[string]interface{}{
+		attrs := map[string]interface{}{
 			"evaluation": evaluation,
-		}, reportTimestamp)
+		}
+		if evaluation["verdict"] == "fail" {
+			recordUploadTelemetryEventWithOptions(ctx, "evaluation", "evaluation", attrs, telemetry.ErrorChatEventOptions(reportTimestamp))
+		} else {
+			recordUploadTelemetryEventAt(ctx, "evaluation", "evaluation", attrs, reportTimestamp)
+		}
 	}
 	for _, tag := range report.Tagger.MetadataTags() {
 		recordUploadTelemetryEventAt(ctx, "tag", "tag", map[string]interface{}{
@@ -215,9 +221,14 @@ func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *Se
 		if reason := report.Tagger.OutcomeReason(); reason != "" {
 			outcomeData["reason"] = reason
 		}
-		recordUploadTelemetryEventAt(ctx, "outcome", "outcome", map[string]interface{}{
+		attrs := map[string]interface{}{
 			"outcome": outcomeData,
-		}, reportTimestamp)
+		}
+		if outcome == "fail" {
+			recordUploadTelemetryEventWithOptions(ctx, "outcome", "outcome", attrs, telemetry.ErrorChatEventOptions(reportTimestamp))
+		} else {
+			recordUploadTelemetryEventAt(ctx, "outcome", "outcome", attrs, reportTimestamp)
+		}
 	}
 }
 

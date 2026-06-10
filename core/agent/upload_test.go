@@ -404,6 +404,7 @@ func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
 func TestUploadSessionReportRecordsEvaluationAndOutcome(t *testing.T) {
 	oldRecord := recordUploadTelemetryEvent
 	oldRecordAt := recordUploadTelemetryEventAt
+	oldRecordWithOptions := recordUploadTelemetryEventWithOptions
 	var events []uploadTelemetryEvent
 	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
 		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
@@ -411,16 +412,20 @@ func TestUploadSessionReportRecordsEvaluationAndOutcome(t *testing.T) {
 	recordUploadTelemetryEventAt = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, timestamp time.Time) {
 		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: timestamp})
 	}
+	recordUploadTelemetryEventWithOptions = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, options telemetry.ChatEventOptions) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: options.Timestamp, severity: options.SeverityText})
+	}
 	defer func() {
 		recordUploadTelemetryEvent = oldRecord
 		recordUploadTelemetryEventAt = oldRecordAt
+		recordUploadTelemetryEventWithOptions = oldRecordWithOptions
 	}()
 
 	report := NewSessionReport()
 	report.Timestamp = 1700.5
 	report.Tagger = NewTagger()
 	report.Tagger.Evaluation(&EvaluationResult{
-		Judgments:    map[string]string{"helpfulness": "pass"},
+		Judgments:    map[string]string{"helpfulness": "fail"},
 		Reasoning:    map[string]string{"helpfulness": "clear answer"},
 		Instructions: map[string]string{"helpfulness": "judge helpfulness"},
 	})
@@ -440,11 +445,14 @@ func TestUploadSessionReportRecordsEvaluationAndOutcome(t *testing.T) {
 	if !events[0].timestamp.Equal(wantReportTimestamp) {
 		t.Fatalf("evaluation event timestamp = %v, want report timestamp %v", events[0].timestamp, wantReportTimestamp)
 	}
+	if events[0].severity != "error" {
+		t.Fatalf("evaluation event severity = %q, want error", events[0].severity)
+	}
 	evaluation, ok := events[0].attrs["evaluation"].(map[string]any)
 	if !ok {
 		t.Fatalf("evaluation attr = %T, want map", events[0].attrs["evaluation"])
 	}
-	if evaluation["tag"] != "lk.judge.helpfulness:pass" {
+	if evaluation["tag"] != "lk.judge.helpfulness:fail" {
 		t.Fatalf("evaluation tag = %#v, want generated judge tag", evaluation["tag"])
 	}
 	if evaluation["reasoning"] != "clear answer" || evaluation["instructions"] != "judge helpfulness" {
@@ -455,6 +463,9 @@ func TestUploadSessionReportRecordsEvaluationAndOutcome(t *testing.T) {
 	}
 	if !events[1].timestamp.Equal(wantReportTimestamp) {
 		t.Fatalf("outcome event timestamp = %v, want report timestamp %v", events[1].timestamp, wantReportTimestamp)
+	}
+	if events[1].severity != "error" {
+		t.Fatalf("outcome event severity = %q, want error", events[1].severity)
 	}
 	outcome, ok := events[1].attrs["outcome"].(map[string]any)
 	if !ok {
@@ -527,6 +538,7 @@ type uploadTelemetryEvent struct {
 	body      string
 	attrs     map[string]interface{}
 	timestamp time.Time
+	severity  string
 }
 
 func useRecordingUploadHTTPClient(t *testing.T, handler http.Handler) {
