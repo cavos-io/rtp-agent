@@ -8,9 +8,11 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/livekit/protocol/auth"
+	"github.com/livekit/protocol/livekit"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	statuspb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/proto"
@@ -60,6 +62,59 @@ func TestUploadSessionReportUsesObservabilityWriteGrant(t *testing.T) {
 	}
 	if grants.Video != nil {
 		t.Fatalf("video grant = %#v, want nil", grants.Video)
+	}
+}
+
+func TestUploadSessionReportTranscriptOnlySetsZeroHeaderStartTime(t *testing.T) {
+	headerCh := make(chan *livekit.MetricsRecordingHeader, 1)
+	useRecordingUploadHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("ParseMultipartForm() error = %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		file, _, err := r.FormFile("header")
+		if err != nil {
+			t.Errorf("FormFile(header) error = %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+		data, err := io.ReadAll(file)
+		if err != nil {
+			t.Errorf("ReadAll(header) error = %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		header := &livekit.MetricsRecordingHeader{}
+		if err := proto.Unmarshal(data, header); err != nil {
+			t.Errorf("Unmarshal(header) error = %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		headerCh <- header
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Setenv("LIVEKIT_OBSERVABILITY_URL", "https://observability.test")
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Transcript: true}
+	report.RoomID = "RM_transcript_only"
+
+	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v", err)
+	}
+
+	select {
+	case header := <-headerCh:
+		if header.StartTime == nil {
+			t.Fatal("header StartTime = nil, want explicit zero timestamp")
+		}
+		if header.StartTime.Seconds != 0 || header.StartTime.Nanos != 0 {
+			t.Fatalf("header StartTime = %v, want zero timestamp", header.StartTime)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UploadSessionReport did not POST recording header")
 	}
 }
 

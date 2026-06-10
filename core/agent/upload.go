@@ -71,9 +71,11 @@ func UploadSessionReport(
 	headerMsg := &livekit.MetricsRecordingHeader{
 		RoomId: report.RoomID,
 	}
+	startedAtMillis := int64(0)
 	if report.AudioRecordingStartedAt != nil {
-		headerMsg.StartTime = timestamppb.New(time.UnixMilli(int64(*report.AudioRecordingStartedAt * 1000)))
+		startedAtMillis = int64(*report.AudioRecordingStartedAt * 1000)
 	}
+	headerMsg.StartTime = timestamppb.New(time.UnixMilli(startedAtMillis))
 
 	headerBytes, err := proto.Marshal(headerMsg)
 	if err != nil {
