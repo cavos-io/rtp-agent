@@ -25,6 +25,7 @@ const defaultOllamaOpenAILLMModel = "llama3.1"
 const defaultCometAPIOpenAILLMModel = "gpt-5-chat-latest"
 const defaultOctoAIOpenAILLMModel = "llama-2-13b-chat"
 const defaultSambaNovaOpenAILLMModel = "DeepSeek-R1-0528"
+const defaultCerebrasOpenAILLMModel = "llama-4-scout-17b-16e-instruct"
 const openAIAPIKeyRequiredMessage = "OpenAI API key is required, either as argument or set OPENAI_API_KEY environment variable"
 
 const (
@@ -37,6 +38,7 @@ const (
 	cometAPIKeyEnv         = "COMETAPI_API_KEY"
 	octoAIAPIKeyEnv        = "OCTOAI_TOKEN"
 	sambaNovaAPIKeyEnv     = "SAMBANOVA_API_KEY"
+	cerebrasAPIKeyEnv      = "CEREBRAS_API_KEY"
 )
 
 const defaultOpenRouterLLMURL = "https://openrouter.ai/api/v1"
@@ -45,6 +47,7 @@ const defaultOllamaOpenAIBaseURL = "http://localhost:11434/v1"
 const defaultCometAPIOpenAIBaseURL = "https://api.cometapi.com/v1/"
 const defaultOctoAIOpenAIBaseURL = "https://text.octoai.run/v1"
 const defaultSambaNovaOpenAIBaseURL = "https://api.sambanova.ai/v1"
+const defaultCerebrasOpenAIBaseURL = "https://api.cerebras.ai/v1"
 
 type OpenAILLM struct {
 	client               *openai.Client
@@ -421,6 +424,21 @@ func NewSambaNovaOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*Open
 	options := []OpenAILLMOption{WithOpenAILLMStrictToolSchema(false)}
 	options = append(options, opts...)
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultSambaNovaOpenAIBaseURL, nil, options...), nil
+}
+
+func NewCerebrasOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+	if model == "" {
+		model = defaultCerebrasOpenAILLMModel
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(cerebrasAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("cerebras API key is required, either as argument or set CEREBRAS_API_KEY environment variable")
+	}
+	options := []OpenAILLMOption{WithOpenAILLMStrictToolSchema(false)}
+	options = append(options, opts...)
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultCerebrasOpenAIBaseURL, nil, options...), nil
 }
 
 func NewOpenRouterLLM(apiKey, model string, opts ...OpenRouterLLMOption) (*OpenAILLM, error) {

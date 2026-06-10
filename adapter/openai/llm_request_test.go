@@ -443,6 +443,75 @@ func TestNewSambaNovaOpenAILLMRequiresAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewCerebrasOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(cerebrasAPIKeyEnv, "env-cerebras-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewCerebrasOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewCerebrasOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "llama-4-scout-17b-16e-instruct" {
+		t.Fatalf("Model = %q, want llama-4-scout-17b-16e-instruct", model.Model())
+	}
+	if model.Provider() != "api.cerebras.ai" {
+		t.Fatalf("Provider() = %q, want Cerebras endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-cerebras-key" {
+		t.Fatalf("Authorization = %q, want Cerebras bearer key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "/v1/chat/completions") {
+		t.Fatalf("request URL = %s, want OpenAI-compatible chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"llama-4-scout-17b-16e-instruct"`) {
+		t.Fatalf("request body = %s, want default Cerebras model", capture.requestBody)
+	}
+}
+
+func TestNewCerebrasOpenAILLMOmitsStrictToolSchema(t *testing.T) {
+	t.Setenv(cerebrasAPIKeyEnv, "env-cerebras-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model, err := NewCerebrasOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewCerebrasOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithTools([]llm.Tool{requestTestTool{}}),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+
+	var body map[string]any
+	if err := json.Unmarshal([]byte(capture.requestBody), &body); err != nil {
+		t.Fatalf("decode request body: %v", err)
+	}
+	tools := body["tools"].([]any)
+	function := tools[0].(map[string]any)["function"].(map[string]any)
+	if _, ok := function["strict"]; ok {
+		t.Fatalf("strict = %#v, want omitted for Cerebras legacy tool schema; body %s", function["strict"], capture.requestBody)
+	}
+}
+
+func TestNewCerebrasOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(cerebrasAPIKeyEnv, "")
+
+	_, err := NewCerebrasOpenAILLM("", "")
+	if err == nil || err.Error() != "cerebras API key is required, either as argument or set CEREBRAS_API_KEY environment variable" {
+		t.Fatalf("NewCerebrasOpenAILLM error = %v, want Cerebras API key required", err)
+	}
+}
+
 func TestNewOpenAILLMChatUsesConfiguredKeyAndDefaultModel(t *testing.T) {
 	t.Setenv(openAIAPIKeyEnv, "env-key")
 	capture := &captureDeadlineHTTPClient{
