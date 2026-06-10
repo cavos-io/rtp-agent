@@ -224,7 +224,7 @@ func (t *OpenAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 
 	resp, err := t.client.CreateSpeech(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, mapOpenAIError(err)
 	}
 
 	return &openaiTTSChunkedStream{
