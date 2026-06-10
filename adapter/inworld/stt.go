@@ -140,6 +140,11 @@ func NewInworldSTT(apiKey string, opts ...InworldSTTOption) *InworldSTT {
 }
 
 func (s *InworldSTT) Label() string { return "inworld.STT" }
+func (s *InworldSTT) Model() string { return s.model }
+func (s *InworldSTT) Provider() string {
+	return "Inworld"
+}
+
 func (s *InworldSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, OfflineRecognize: false}
 }
