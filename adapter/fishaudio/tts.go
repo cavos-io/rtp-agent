@@ -146,6 +146,8 @@ func (t *FishAudioTTS) Capabilities() tts.TTSCapabilities {
 }
 func (t *FishAudioTTS) SampleRate() int  { return t.sampleRate }
 func (t *FishAudioTTS) NumChannels() int { return 1 }
+func (t *FishAudioTTS) Model() string    { return t.model }
+func (t *FishAudioTTS) Provider() string { return "FishAudio" }
 
 func (t *FishAudioTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if err := validateFishAudioAPIKey(t.apiKey); err != nil {
