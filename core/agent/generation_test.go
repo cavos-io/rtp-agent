@@ -815,6 +815,7 @@ type fakeGenerationTool struct {
 	name   string
 	result string
 	err    error
+	flags  llm.ToolFlag
 }
 
 func (f *fakeGenerationTool) ID() string { return f.name }
@@ -828,6 +829,8 @@ func (f *fakeGenerationTool) Parameters() map[string]any { return nil }
 func (f *fakeGenerationTool) Execute(context.Context, string) (string, error) {
 	return f.result, f.err
 }
+
+func (f *fakeGenerationTool) ToolFlags() llm.ToolFlag { return f.flags }
 
 type fakeGenerationProviderTool struct {
 	fakeGenerationTool

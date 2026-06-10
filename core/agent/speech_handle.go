@@ -55,6 +55,7 @@ type SpeechGenerationOptions struct {
 	Instructions       *llm.Instructions
 	ToolChoice         llm.ToolChoice
 	Tools              []string
+	IgnoreOnEnterTools bool
 	ChatCtx            *llm.ChatContext
 	UserMessage        *llm.ChatMessage
 	AssistantMessage   *llm.ChatMessage

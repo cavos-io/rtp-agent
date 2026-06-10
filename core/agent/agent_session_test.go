@@ -860,7 +860,7 @@ func TestAgentSessionStartWithOptionsCapturesOnEnterSpeechRun(t *testing.T) {
 	}
 }
 
-func TestAgentSessionOnEnterGenerateReplyDefaultsToolChoiceNone(t *testing.T) {
+func TestAgentSessionOnEnterGenerateReplyPreservesToolChoiceAndFiltersIgnoredTools(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -881,8 +881,11 @@ func TestAgentSessionOnEnterGenerateReplyDefaultsToolChoiceNone(t *testing.T) {
 		if ev.Source != "generate_reply" {
 			t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
 		}
-		if ev.SpeechHandle.Generation.ToolChoice != "none" {
-			t.Fatalf("OnEnter GenerateReply ToolChoice = %#v, want none", ev.SpeechHandle.Generation.ToolChoice)
+		if ev.SpeechHandle.Generation.ToolChoice != "auto" {
+			t.Fatalf("OnEnter GenerateReply ToolChoice = %#v, want auto", ev.SpeechHandle.Generation.ToolChoice)
+		}
+		if !ev.SpeechHandle.Generation.IgnoreOnEnterTools {
+			t.Fatal("OnEnter GenerateReply IgnoreOnEnterTools = false, want true")
 		}
 	case <-time.After(time.Second):
 		t.Fatal("SpeechCreatedEvents did not receive OnEnter generate reply")

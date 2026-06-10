@@ -357,6 +357,9 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 		}
 		return
 	}
+	if speech.Generation.IgnoreOnEnterTools {
+		selectedTools = filterOnEnterIgnoredTools(selectedTools)
+	}
 	if speech.Generation.UserMessage != nil && ma.chatCtx != nil {
 		if err := ma.chatCtx.UpsertItem(speech.Generation.UserMessage, llm.ChatContextUpsertOptions{AllowTypeMismatch: true}); err != nil {
 			logger.Logger.Errorw("failed to update realtime chat context", err)

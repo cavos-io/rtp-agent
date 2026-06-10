@@ -46,12 +46,13 @@ type PipelineAgent struct {
 }
 
 type pipelineReplyOptions struct {
-	Instructions string
-	ToolChoice   llm.ToolChoice
-	Tools        []string
-	ChatCtx      *llm.ChatContext
-	UserMessage  *llm.ChatMessage
-	SpeechHandle *SpeechHandle
+	Instructions       string
+	ToolChoice         llm.ToolChoice
+	Tools              []string
+	IgnoreOnEnterTools bool
+	ChatCtx            *llm.ChatContext
+	UserMessage        *llm.ChatMessage
+	SpeechHandle       *SpeechHandle
 }
 
 func NewPipelineAgent(
@@ -363,10 +364,11 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 	}
 
 	options := pipelineReplyOptions{
-		Tools:        append([]string(nil), speech.Generation.Tools...),
-		ChatCtx:      speech.Generation.ChatCtx,
-		UserMessage:  speech.Generation.UserMessage,
-		SpeechHandle: speech,
+		Tools:              append([]string(nil), speech.Generation.Tools...),
+		IgnoreOnEnterTools: speech.Generation.IgnoreOnEnterTools,
+		ChatCtx:            speech.Generation.ChatCtx,
+		UserMessage:        speech.Generation.UserMessage,
+		SpeechHandle:       speech,
 	}
 	if speech.Generation.Instructions != nil {
 		options.Instructions = speech.Generation.Instructions.AsModality(speech.InputDetails.Modality).String()
@@ -403,6 +405,9 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		session.EmitError(ErrorEvent{Error: err, Source: va})
 		session.UpdateAgentState(AgentStateIdle)
 		return
+	}
+	if opts.IgnoreOnEnterTools {
+		selectedTools = filterOnEnterIgnoredTools(selectedTools)
 	}
 
 	toolsInterface := make([]interface{}, len(selectedTools))
@@ -903,6 +908,20 @@ func resolveToolsByID(tools []llm.Tool, ids []string) ([]llm.Tool, error) {
 		seen[id] = struct{}{}
 	}
 	return resolved, nil
+}
+
+func filterOnEnterIgnoredTools(tools []llm.Tool) []llm.Tool {
+	if len(tools) == 0 {
+		return nil
+	}
+	filtered := tools[:0]
+	for _, tool := range tools {
+		if llm.ToolHasFlag(tool, llm.ToolFlagIgnoreOnEnter) {
+			continue
+		}
+		filtered = append(filtered, tool)
+	}
+	return filtered
 }
 
 func formatPythonStringList(values []string) string {
