@@ -424,7 +424,7 @@ func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 
 	resp, err := s.client.CreateTranscription(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, mapOpenAIError(err)
 	}
 
 	return openAISpeechEvent(resp), nil

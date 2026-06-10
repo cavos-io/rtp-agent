@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"math"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 	goopenai "github.com/sashabaranov/go-openai"
@@ -479,6 +481,34 @@ func TestOpenAISTTRecognizeUsesOpenAITranscriptionAPI(t *testing.T) {
 	}
 	if len(event.Alternatives[0].Words) != 1 || event.Alternatives[0].Words[0].Text != "hello" {
 		t.Fatalf("words = %+v, want hello timing", event.Alternatives[0].Words)
+	}
+}
+
+func TestOpenAISTTRecognizeReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Status:     "429 Too Many Requests",
+			Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Request-Id": []string{"req_stt"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"rate limit","type":"rate_limit_error"}}`)),
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAISTT(t, "test-key", "whisper-1",
+		WithOpenAISTTBaseURL("https://openai.test/v1"),
+		withOpenAISTTHTTPClient(client),
+	)
+
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{1, 2, 3}}}, "en")
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Recognize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("StatusCode = %d, want 429", statusErr.StatusCode)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("Retryable = false, want retryable rate-limit status")
 	}
 }
 
