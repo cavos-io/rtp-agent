@@ -30,6 +30,12 @@ func TestRtzrSTTDefaultsMatchReference(t *testing.T) {
 	if provider.modelName != "sommers_ko" {
 		t.Fatalf("model = %q, want sommers_ko", provider.modelName)
 	}
+	if got := stt.Model(provider); got != "sommers_ko" {
+		t.Fatalf("model metadata = %q, want sommers_ko", got)
+	}
+	if got := stt.Provider(provider); got != "RTZR" {
+		t.Fatalf("provider metadata = %q, want RTZR", got)
+	}
 	if provider.language != "ko" {
 		t.Fatalf("language = %q, want ko", provider.language)
 	}

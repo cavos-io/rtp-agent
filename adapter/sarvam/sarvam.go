@@ -271,6 +271,10 @@ func NewSarvamSTTWithError(apiKey string, opts ...SarvamSTTOption) (*SarvamSTT, 
 }
 
 func (s *SarvamSTT) Label() string { return "sarvam.STT" }
+func (s *SarvamSTT) Model() string { return s.model }
+func (s *SarvamSTT) Provider() string {
+	return "Sarvam"
+}
 func (s *SarvamSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, OfflineRecognize: true}
 }
@@ -1009,6 +1013,10 @@ func NewSarvamTTS(apiKey string, voice string, opts ...SarvamTTSOption) *SarvamT
 }
 
 func (t *SarvamTTS) Label() string { return "sarvam.TTS" }
+func (t *SarvamTTS) Model() string { return t.model }
+func (t *SarvamTTS) Provider() string {
+	return "Sarvam"
+}
 func (t *SarvamTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }

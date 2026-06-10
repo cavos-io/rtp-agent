@@ -33,6 +33,18 @@ type chatContextUpdatingAssistant interface {
 	UpdateChatContext(context.Context, *llm.ChatContext) error
 }
 
+type realtimeAudioCommitter interface {
+	CommitAudio() error
+}
+
+type realtimeAudioClearer interface {
+	ClearAudio() error
+}
+
+type realtimeInterrupter interface {
+	Interrupt() error
+}
+
 type llmMetricsCollector interface {
 	OnMetricsCollected(llm.LLMMetricsHandler) func()
 }
@@ -201,8 +213,14 @@ func (a *AgentActivity) Stop() {
 	a.providerUnsubscribes = nil
 	a.cancel()
 	a.queueMu.Lock()
+	a.schedulingPaused = true
+	a.schedulingDraining = false
 	a.schedulingStarted = false
 	a.queueMu.Unlock()
+	select {
+	case a.queueUpdatedCh <- struct{}{}:
+	default:
+	}
 	if a.Agent.activity == a {
 		a.Agent.activity = nil
 	}
@@ -401,6 +419,17 @@ func (a *AgentActivity) Interrupt(force bool) error {
 		interrupted = append(interrupted, queued.speech)
 	}
 	a.queueMu.Unlock()
+
+	if a.Session != nil {
+		a.Session.mu.Lock()
+		assistant := a.Session.Assistant
+		a.Session.mu.Unlock()
+		if interrupter, ok := assistant.(realtimeInterrupter); ok {
+			if err := interrupter.Interrupt(); err != nil {
+				return err
+			}
+		}
+	}
 
 	for _, speech := range interrupted {
 		if err := speech.Wait(a.ctx); err != nil {
@@ -663,15 +692,25 @@ func (a *AgentActivity) UpdateChatCtx(ctx context.Context, chatCtx *llm.ChatCont
 }
 
 func (a *AgentActivity) UpdateOptions(opts AgentSessionUpdateOptions) error {
-	if a == nil || a.Session == nil || opts.ToolChoice == nil {
+	if a == nil || a.Session == nil {
 		return nil
 	}
 	updater, ok := a.Session.Assistant.(realtimeOptionsUpdatingAssistant)
 	if !ok {
 		return nil
 	}
+	var toolChoice llm.ToolChoice
+	if opts.ToolChoice != nil {
+		toolChoice = *opts.ToolChoice
+	} else {
+		toolChoice = a.Session.Options.ToolChoice
+	}
+	if toolChoice == nil {
+		return nil
+	}
 	return updater.UpdateOptions(context.Background(), llm.RealtimeSessionOptions{
-		ToolChoice: *opts.ToolChoice,
+		ToolChoice:    toolChoice,
+		ToolChoiceSet: true,
 	})
 }
 
@@ -1358,6 +1397,17 @@ func (a *AgentActivity) ClearUserTurn() {
 
 	a.clearPendingUserTurn()
 
+	if a.Session != nil {
+		a.Session.mu.Lock()
+		assistant := a.Session.Assistant
+		a.Session.mu.Unlock()
+		if clearer, ok := assistant.(realtimeAudioClearer); ok {
+			if err := clearer.ClearAudio(); err != nil {
+				logger.Logger.Warnw("failed to clear realtime audio", err)
+			}
+		}
+	}
+
 	a.sttEOSReceived = false
 	a.speaking = false
 }
@@ -1372,6 +1422,23 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 
 	if ctx == nil {
 		ctx = a.ctx
+	}
+	if a.Session != nil {
+		a.Session.mu.Lock()
+		assistant := a.Session.Assistant
+		activity := a.Session.activity
+		a.Session.mu.Unlock()
+		if committer, ok := assistant.(realtimeAudioCommitter); ok {
+			if err := committer.CommitAudio(); err != nil {
+				return "", err
+			}
+			if !opts.SkipReply && activity == a {
+				if _, err := a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{}); err != nil {
+					return "", err
+				}
+			}
+			opts.SkipReply = true
+		}
 	}
 	if opts.TranscriptTimeout > 0 {
 		deadline := time.NewTimer(opts.TranscriptTimeout)

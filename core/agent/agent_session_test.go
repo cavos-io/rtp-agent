@@ -954,6 +954,16 @@ func (f *fakeCloseableSessionAssistant) Close() error {
 	return f.closeErr
 }
 
+type fakeInterruptingSessionAssistant struct {
+	fakeSessionAssistant
+	interrupts int
+}
+
+func (f *fakeInterruptingSessionAssistant) Interrupt() error {
+	f.interrupts++
+	return nil
+}
+
 type fakeVideoSessionAssistant struct {
 	fakeSessionAssistant
 	videoFrames int
@@ -2691,6 +2701,79 @@ func TestAgentSessionCloseSoonStopsRunningSession(t *testing.T) {
 	}
 }
 
+func TestAgentSessionCloseSoonInterruptsActiveSpeechBeforeClosing(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	session.activity.currentSpeech = current
+	closeEvents := session.CloseEvents()
+
+	done := make(chan struct{}, 1)
+	go func() {
+		session.CloseSoon(CloseReasonParticipantDisconnected)
+		done <- struct{}{}
+	}()
+
+	waitForInterrupted(t, current)
+
+	select {
+	case <-closeEvents:
+		t.Fatal("CloseSoon emitted close event before interrupted speech completed")
+	case <-done:
+		t.Fatal("CloseSoon returned before interrupted speech completed")
+	default:
+	}
+
+	current.MarkDone()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("CloseSoon did not return after interrupted speech completed")
+	}
+
+	select {
+	case ev := <-closeEvents:
+		if ev.Reason != CloseReasonParticipantDisconnected {
+			t.Fatalf("CloseEvent.Reason = %q, want participant_disconnected", ev.Reason)
+		}
+	default:
+		t.Fatal("CloseSoon did not emit close event")
+	}
+}
+
+func TestAgentSessionCloseSoonClearsAECWarmupBeforeCleanup(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	session.aecWarmupTimer = time.NewTimer(time.Hour)
+	defer session.aecWarmupTimer.Stop()
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	session.activity.currentSpeech = current
+
+	done := make(chan struct{}, 1)
+	go func() {
+		session.CloseSoon(CloseReasonParticipantDisconnected)
+		done <- struct{}{}
+	}()
+
+	waitForInterrupted(t, current)
+	if session.shouldSilenceInputAudio() {
+		t.Fatal("shouldSilenceInputAudio() = true during close, want AEC warmup cleared before cleanup")
+	}
+
+	current.MarkDone()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("CloseSoon did not return after interrupted speech completed")
+	}
+}
+
 func TestAgentSessionShutdownClosesWithUserInitiatedReason(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -2784,10 +2867,33 @@ func TestAgentSessionShutdownCanSkipDrain(t *testing.T) {
 	current := NewSpeechHandle(true, DefaultInputDetails())
 	session.activity.currentSpeech = current
 
-	session.Shutdown(false)
+	closeEvents := session.CloseEvents()
+	done := make(chan struct{}, 1)
+	go func() {
+		session.Shutdown(false)
+		done <- struct{}{}
+	}()
+
+	waitForInterrupted(t, current)
 
 	select {
-	case ev := <-session.CloseEvents():
+	case <-closeEvents:
+		t.Fatal("Shutdown(false) emitted close event before interrupted speech completed")
+	case <-done:
+		t.Fatal("Shutdown(false) returned before interrupted speech completed")
+	default:
+	}
+
+	current.MarkDone()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("Shutdown(false) did not return after interrupted speech completed")
+	}
+
+	select {
+	case ev := <-closeEvents:
 		if ev.Reason != CloseReasonUserInitiated {
 			t.Fatalf("CloseEvent.Reason = %q, want user_initiated", ev.Reason)
 		}
@@ -2796,6 +2902,21 @@ func TestAgentSessionShutdownCanSkipDrain(t *testing.T) {
 	}
 	if session.activity != nil {
 		t.Fatalf("session.activity = %#v, want nil after non-draining shutdown", session.activity)
+	}
+}
+
+func TestAgentSessionShutdownSkipDrainInterruptsRealtimeOnce(t *testing.T) {
+	agent := NewAgent("test")
+	assistant := &fakeInterruptingSessionAssistant{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = assistant
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+
+	session.Shutdown(false)
+
+	if assistant.interrupts != 1 {
+		t.Fatalf("realtime interrupts = %d, want 1", assistant.interrupts)
 	}
 }
 
@@ -3601,6 +3722,102 @@ func TestAgentSessionUpdateAgentWhileRunningRefreshesMultimodalRealtimeModel(t *
 	}
 }
 
+func TestAgentSessionUpdateAgentWhileRunningClearsReusedRealtimeSession(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	rtSession := &fakeRealtimeSession{}
+	realtime := &fakeRealtimeModel{session: rtSession}
+	initial.RealtimeModel = realtime
+	next := &trackingAgent{Agent: NewAgent("next")}
+	next.RealtimeModel = realtime
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+	defer session.Stop(context.Background())
+	assistant, ok := session.Assistant.(*MultimodalAgent)
+	if !ok {
+		t.Fatalf("Assistant = %T, want *MultimodalAgent", session.Assistant)
+	}
+
+	session.UpdateAgent(next)
+
+	if session.RealtimeModel != realtime {
+		t.Fatalf("session.RealtimeModel = %#v, want reused realtime model", session.RealtimeModel)
+	}
+	if assistant.model != realtime {
+		t.Fatalf("assistant model after handoff = %#v, want reused realtime model", assistant.model)
+	}
+	if assistant.rtSession != rtSession {
+		t.Fatalf("assistant realtime session after handoff = %#v, want reused session", assistant.rtSession)
+	}
+	if rtSession.closed != 0 {
+		t.Fatalf("reused realtime session closed = %d, want 0", rtSession.closed)
+	}
+	if rtSession.interrupted != 1 {
+		t.Fatalf("reused realtime session interrupts = %d, want 1", rtSession.interrupted)
+	}
+	if rtSession.cleared != 1 {
+		t.Fatalf("reused realtime session clears = %d, want 1", rtSession.cleared)
+	}
+}
+
+func TestAgentSessionUpdateAgentWhileRunningRefreshesMutableReusedRealtimeSessionConfig(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	initial := &trackingAgent{Agent: NewAgent("initial instructions")}
+	initial.Tools = []llm.Tool{&fakeGenerationTool{name: "initial_tool"}}
+	rtSession := &fakeRealtimeSession{}
+	realtime := &fakeRealtimeModel{
+		session: rtSession,
+		capabilities: llm.RealtimeCapabilities{
+			MutableInstructions: true,
+			MutableChatContext:  true,
+			MutableTools:        true,
+		},
+	}
+	initial.RealtimeModel = realtime
+	next := &trackingAgent{Agent: NewAgent("next instructions")}
+	next.Tools = []llm.Tool{&fakeGenerationTool{name: "next_tool"}}
+	next.RealtimeModel = realtime
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+	defer session.Stop(context.Background())
+
+	session.UpdateAgent(next)
+
+	if rtSession.instructions != "next instructions" {
+		t.Fatalf("realtime instructions = %q, want next instructions", rtSession.instructions)
+	}
+	if rtSession.instructionUpdates != 2 {
+		t.Fatalf("realtime instruction updates = %d, want 2", rtSession.instructionUpdates)
+	}
+	if rtSession.chatContextUpdates != 2 {
+		t.Fatalf("realtime chat context updates = %d, want 2", rtSession.chatContextUpdates)
+	}
+	gotTools := toolNames(rtSession.tools)
+	if !strings.Contains(strings.Join(gotTools, ","), "next_tool") {
+		t.Fatalf("updated realtime tools = %#v, want next_tool present", gotTools)
+	}
+	if strings.Contains(strings.Join(gotTools, ","), "initial_tool") {
+		t.Fatalf("updated realtime tools = %#v, want initial_tool removed", gotTools)
+	}
+	if rtSession.toolUpdates != 2 {
+		t.Fatalf("realtime tool updates = %d, want 2", rtSession.toolUpdates)
+	}
+	if rtSession.interrupted != 1 {
+		t.Fatalf("reused realtime session interrupts = %d, want 1", rtSession.interrupted)
+	}
+	if rtSession.cleared != 1 {
+		t.Fatalf("reused realtime session clears = %d, want 1", rtSession.cleared)
+	}
+}
+
 func TestAgentSessionUpdateAgentEmitsErrorWhenRealtimeModelRefreshFails(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -3949,6 +4166,33 @@ func TestAgentSessionUpdateAgentWhileRunningStartsNewActivity(t *testing.T) {
 	}
 	if handoffEvent.Item != handoff || handoffEvent.OldAgent != initial.Agent || handoffEvent.NewAgent != next.Agent {
 		t.Fatalf("handoff event = %#v, want recorded session handoff", handoffEvent)
+	}
+}
+
+func TestAgentSessionUpdateAgentBlocksRealtimeGenerationOnPreviousActivity(t *testing.T) {
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+	oldActivity := NewAgentActivity(initial, session)
+	session.activity = oldActivity
+	session.started = true
+
+	session.UpdateAgent(next)
+
+	handle, err := oldActivity.OnGenerationCreated(llm.GenerationCreatedEvent{
+		ResponseID:    "response_1",
+		UserInitiated: false,
+	})
+	if !errors.Is(err, ErrSpeechSchedulingPaused) {
+		t.Fatalf("OnGenerationCreated error = %v, want ErrSpeechSchedulingPaused", err)
+	}
+	if handle != nil {
+		t.Fatalf("OnGenerationCreated handle = %#v, want nil after UpdateAgent", handle)
+	}
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("unexpected SpeechCreated event from previous activity: %#v", ev)
+	default:
 	}
 }
 

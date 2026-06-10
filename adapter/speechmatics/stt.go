@@ -205,6 +205,15 @@ func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *Speechmat
 }
 
 func (s *SpeechmaticsSTT) Label() string { return "speechmatics.STT" }
+func (s *SpeechmaticsSTT) Model() string {
+	if s.operatingPoint != "" {
+		return s.operatingPoint
+	}
+	return "enhanced"
+}
+func (s *SpeechmaticsSTT) Provider() string {
+	return "Speechmatics"
+}
 func (s *SpeechmaticsSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: true, AlignedTranscript: "chunk", OfflineRecognize: false}
 }

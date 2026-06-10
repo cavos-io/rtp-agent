@@ -38,6 +38,12 @@ func TestSarvamSTTDefaultsMatchReference(t *testing.T) {
 	if provider.sampleRate != 16000 {
 		t.Fatalf("sample rate = %d, want 16000", provider.sampleRate)
 	}
+	if got := stt.Model(provider); got != "saarika:v2.5" {
+		t.Fatalf("model metadata = %q, want saarika:v2.5", got)
+	}
+	if got := stt.Provider(provider); got != "Sarvam" {
+		t.Fatalf("provider metadata = %q, want Sarvam", got)
+	}
 
 	caps := provider.Capabilities()
 	if !caps.Streaming || !caps.InterimResults || !caps.OfflineRecognize {
@@ -371,6 +377,12 @@ func TestSarvamTTSDefaultsMatchReference(t *testing.T) {
 	}
 	if provider.sampleRate != 22050 {
 		t.Fatalf("sample rate = %d, want 22050", provider.sampleRate)
+	}
+	if got := tts.Model(provider); got != "bulbul:v3" {
+		t.Fatalf("model metadata = %q, want bulbul:v3", got)
+	}
+	if got := tts.Provider(provider); got != "Sarvam" {
+		t.Fatalf("provider metadata = %q, want Sarvam", got)
 	}
 	if !provider.Capabilities().Streaming {
 		t.Fatalf("capabilities = %+v, want streaming true", provider.Capabilities())

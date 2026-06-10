@@ -393,6 +393,9 @@ func TestAgentSessionUpdateOptionsUpdatesRealtimeToolChoice(t *testing.T) {
 	if rtSession.options.ToolChoice != "auto" {
 		t.Fatalf("realtime ToolChoice = %#v, want auto", rtSession.options.ToolChoice)
 	}
+	if !rtSession.options.ToolChoiceSet {
+		t.Fatal("realtime ToolChoiceSet = false, want true for explicit tool choice update")
+	}
 }
 
 func TestMultimodalAgentGenerateReplySendsRealtimeOverrides(t *testing.T) {
@@ -1707,16 +1710,21 @@ type fakeRealtimeSession struct {
 	eventCh               chan llm.RealtimeEvent
 	audioCh               chan *model.AudioFrame
 	videoFrames           int
+	instructionUpdates    int
+	chatContextUpdates    int
+	toolUpdates           int
 	updateInstructionsErr error
 	updateChatContextErr  error
 	pushAudioErr          error
 	pushVideoErr          error
 	closed                int
 	interrupted           int
+	cleared               int
 }
 
 func (f *fakeRealtimeSession) UpdateInstructions(instructions string) error {
 	f.instructions = instructions
+	f.instructionUpdates++
 	if f.updateInstructionsErr != nil {
 		return f.updateInstructionsErr
 	}
@@ -1725,6 +1733,7 @@ func (f *fakeRealtimeSession) UpdateInstructions(instructions string) error {
 
 func (f *fakeRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	f.updated = chatCtx
+	f.chatContextUpdates++
 	if f.updateChatContextErr != nil {
 		return f.updateChatContextErr
 	}
@@ -1733,6 +1742,7 @@ func (f *fakeRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error 
 
 func (f *fakeRealtimeSession) UpdateTools(tools []llm.Tool) error {
 	f.tools = append([]llm.Tool(nil), tools...)
+	f.toolUpdates++
 	return nil
 }
 
@@ -1793,4 +1803,7 @@ func (f *fakeRealtimeSession) PushVideo(*images.VideoFrame) error {
 
 func (f *fakeRealtimeSession) CommitAudio() error { return nil }
 
-func (f *fakeRealtimeSession) ClearAudio() error { return nil }
+func (f *fakeRealtimeSession) ClearAudio() error {
+	f.cleared++
+	return nil
+}

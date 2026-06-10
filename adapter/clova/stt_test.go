@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
 func TestClovaPluginDownloadFilesMatchesReferenceNoop(t *testing.T) {
@@ -40,6 +42,12 @@ func TestClovaSTTDefaultsMatchReference(t *testing.T) {
 	}
 	if provider.threshold != 0.5 {
 		t.Fatalf("threshold = %.1f, want 0.5", provider.threshold)
+	}
+	if got := stt.Model(provider); got != "unknown" {
+		t.Fatalf("model metadata = %q, want unknown", got)
+	}
+	if got := stt.Provider(provider); got != "Clova" {
+		t.Fatalf("provider metadata = %q, want Clova", got)
 	}
 	caps := provider.Capabilities()
 	if caps.Streaming || !caps.InterimResults || !caps.OfflineRecognize {

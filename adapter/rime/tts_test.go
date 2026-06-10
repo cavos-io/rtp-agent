@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
 func TestRimeTTSDefaultsMatchReference(t *testing.T) {
@@ -18,6 +20,12 @@ func TestRimeTTSDefaultsMatchReference(t *testing.T) {
 	}
 	if provider.model != "arcana" {
 		t.Fatalf("model = %q, want arcana", provider.model)
+	}
+	if got := tts.Model(provider); got != "arcana" {
+		t.Fatalf("model metadata = %q, want arcana", got)
+	}
+	if got := tts.Provider(provider); got != "Rime" {
+		t.Fatalf("provider metadata = %q, want Rime", got)
 	}
 	if provider.voice != "astra" {
 		t.Fatalf("voice = %q, want astra", provider.voice)

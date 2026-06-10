@@ -73,6 +73,11 @@ func NewSpeechmaticsTTS(apiKey string, opts ...SpeechmaticsTTSOption) *Speechmat
 }
 
 func (t *SpeechmaticsTTS) Label() string { return "speechmatics.TTS" }
+func (t *SpeechmaticsTTS) Model() string { return "unknown" }
+func (t *SpeechmaticsTTS) Provider() string {
+	return "Speechmatics"
+}
+
 func (t *SpeechmaticsTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }

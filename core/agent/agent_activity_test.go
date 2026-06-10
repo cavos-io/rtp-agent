@@ -318,6 +318,31 @@ func TestAgentActivityUpdateOptionsForwardsRealtimeToolChoice(t *testing.T) {
 	if assistant.options.ToolChoice != toolChoice {
 		t.Fatalf("realtime ToolChoice = %#v, want %#v", assistant.options.ToolChoice, toolChoice)
 	}
+	if !assistant.options.ToolChoiceSet {
+		t.Fatal("realtime ToolChoiceSet = false, want true for explicit tool choice update")
+	}
+}
+
+func TestAgentActivityUpdateOptionsRefreshesRealtimeStoredToolChoice(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	toolChoice := llm.ToolChoice("auto")
+	session.Options.ToolChoice = toolChoice
+	assistant := &recordingOptionsAssistant{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	minDelay := 0.2
+
+	if err := activity.UpdateOptions(AgentSessionUpdateOptions{MinEndpointingDelay: &minDelay}); err != nil {
+		t.Fatalf("UpdateOptions error = %v, want nil", err)
+	}
+
+	if assistant.options.ToolChoice != toolChoice {
+		t.Fatalf("realtime ToolChoice = %#v, want stored %#v", assistant.options.ToolChoice, toolChoice)
+	}
+	if !assistant.options.ToolChoiceSet {
+		t.Fatal("realtime ToolChoiceSet = false, want true for stored tool choice refresh")
+	}
 }
 
 func TestAgentActivityRealtimeInputSpeechCallbacksUpdateUserState(t *testing.T) {
@@ -951,6 +976,22 @@ func TestAgentActivityInterruptReturnsImmediatelyWhenNoSpeech(t *testing.T) {
 	}
 }
 
+func TestAgentActivityInterruptInterruptsRealtimeSession(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	assistant := &recordingRealtimeCommitAssistant{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	if err := activity.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt(false) error = %v, want nil", err)
+	}
+	if assistant.interrupts != 1 {
+		t.Fatalf("realtime Interrupt calls = %d, want 1", assistant.interrupts)
+	}
+}
+
 func TestAgentActivityInterruptForceBypassesDisallowedInterruptions(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -1533,6 +1574,22 @@ func TestAgentActivityClearUserTurnDropsPendingManualTranscript(t *testing.T) {
 	}
 }
 
+func TestAgentActivityClearUserTurnClearsRealtimeAudio(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	assistant := &recordingRealtimeCommitAssistant{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.ClearUserTurn()
+
+	if assistant.clears != 1 {
+		t.Fatalf("ClearAudio calls = %d, want 1", assistant.clears)
+	}
+}
+
 func TestAgentActivityCommitUserTurnCompletesPendingManualTranscript(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
@@ -1640,6 +1697,59 @@ func TestAgentActivityCommitUserTurnGeneratesReplyWhenLLMConfigured(t *testing.T
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("CommitUserTurn did not generate a reply")
+	}
+}
+
+func TestAgentActivityCommitUserTurnCommitsRealtimeAudioAndGeneratesReply(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	assistant := &recordingRealtimeCommitAssistant{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+
+	events := session.SpeechCreatedEvents()
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "" {
+		t.Fatalf("CommitUserTurn transcript = %q, want empty without STT final", transcript)
+	}
+	if assistant.commits != 1 {
+		t.Fatalf("CommitAudio calls = %d, want 1", assistant.commits)
+	}
+	select {
+	case ev := <-events:
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated source = %q, want generate_reply", ev.Source)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("SpeechCreatedEvents did not receive realtime commit reply")
+	}
+}
+
+func TestAgentActivityCommitUserTurnSkipReplyCommitsRealtimeAudioOnly(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	assistant := &recordingRealtimeCommitAssistant{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+
+	events := session.SpeechCreatedEvents()
+	if _, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{SkipReply: true}); err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if assistant.commits != 1 {
+		t.Fatalf("CommitAudio calls = %d, want 1", assistant.commits)
+	}
+	select {
+	case ev := <-events:
+		t.Fatalf("unexpected SpeechCreated event with SkipReply: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
 	}
 }
 
@@ -2496,6 +2606,37 @@ func (r *recordingOptionsAssistant) SetPublishAudio(func(frame *model.AudioFrame
 
 func (r *recordingOptionsAssistant) UpdateOptions(_ context.Context, options llm.RealtimeSessionOptions) error {
 	r.options = options
+	return nil
+}
+
+type recordingRealtimeCommitAssistant struct {
+	commits    int
+	clears     int
+	interrupts int
+}
+
+func (r *recordingRealtimeCommitAssistant) Start(context.Context, *AgentSession) error {
+	return nil
+}
+
+func (r *recordingRealtimeCommitAssistant) OnAudioFrame(context.Context, *model.AudioFrame) {
+}
+
+func (r *recordingRealtimeCommitAssistant) SetPublishAudio(func(frame *model.AudioFrame) error) {
+}
+
+func (r *recordingRealtimeCommitAssistant) CommitAudio() error {
+	r.commits++
+	return nil
+}
+
+func (r *recordingRealtimeCommitAssistant) ClearAudio() error {
+	r.clears++
+	return nil
+}
+
+func (r *recordingRealtimeCommitAssistant) Interrupt() error {
+	r.interrupts++
 	return nil
 }
 

@@ -811,7 +811,8 @@ func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) error {
 		return nil
 	}
 	return updater.UpdateOptions(context.Background(), llm.RealtimeSessionOptions{
-		ToolChoice: *opts.ToolChoice,
+		ToolChoice:    *opts.ToolChoice,
+		ToolChoiceSet: true,
 	})
 }
 
@@ -1457,6 +1458,14 @@ func (s *AgentSession) startAECWarmupLocked() {
 	})
 }
 
+func (s *AgentSession) clearAECWarmupLocked() {
+	if s.aecWarmupTimer != nil {
+		s.aecWarmupTimer.Stop()
+		s.aecWarmupTimer = nil
+	}
+	s.aecWarmupDone = true
+}
+
 func (s *AgentSession) aecWarmupActive() bool {
 	if s == nil {
 		return false
@@ -1573,10 +1582,16 @@ func (s *AgentSession) closeSoon(reason CloseReason, err error) {
 		return
 	}
 	s.closing = true
+	s.clearAECWarmupLocked()
 	closeEventListeners := s.closeEventListenersLocked()
 	closeSubscribers := s.closeSubscribersLocked()
 	s.mu.Unlock()
 
+	if activity != nil {
+		if err := activity.Interrupt(true); err != nil {
+			s.EmitError(ErrorEvent{Error: err, CreatedAt: time.Now()})
+		}
+	}
 	_ = s.stop(context.Background(), reason != CloseReasonError)
 
 	ev := &CloseEvent{Reason: reason, Error: err, CreatedAt: time.Now()}
@@ -2321,11 +2336,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 		s.userAwayTimer.Stop()
 		s.userAwayTimer = nil
 	}
-	if s.aecWarmupTimer != nil {
-		s.aecWarmupTimer.Stop()
-		s.aecWarmupTimer = nil
-	}
-	s.aecWarmupDone = true
+	s.clearAECWarmupLocked()
 	backgroundAudio := s.Options.BackgroundAudio
 	mcpServers := append([]llm.MCPServer(nil), s.mcpServers...)
 	s.mu.Unlock()

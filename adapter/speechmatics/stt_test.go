@@ -78,6 +78,12 @@ func TestSpeechmaticsSTTCapabilitiesMatchReference(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 	capabilities := provider.Capabilities()
 
+	if got := stt.Provider(provider); got != "Speechmatics" {
+		t.Fatalf("provider metadata = %q, want Speechmatics", got)
+	}
+	if got := stt.Model(provider); got != "enhanced" {
+		t.Fatalf("model metadata = %q, want enhanced", got)
+	}
 	if !capabilities.Streaming {
 		t.Fatal("Streaming = false, want true")
 	}
@@ -92,6 +98,11 @@ func TestSpeechmaticsSTTCapabilitiesMatchReference(t *testing.T) {
 	}
 	if capabilities.OfflineRecognize {
 		t.Fatal("OfflineRecognize = true, want false")
+	}
+
+	provider = NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTOperatingPoint("standard"))
+	if got := stt.Model(provider); got != "standard" {
+		t.Fatalf("configured model metadata = %q, want standard", got)
 	}
 }
 

@@ -22,6 +22,12 @@ func TestRespeecherTTSDefaultsMatchReference(t *testing.T) {
 	if provider.model != "/public/tts/en-rt" {
 		t.Fatalf("model = %q, want English public model", provider.model)
 	}
+	if got := tts.Model(provider); got != "/public/tts/en-rt" {
+		t.Fatalf("model metadata = %q, want English public model", got)
+	}
+	if got := tts.Provider(provider); got != "Respeecher" {
+		t.Fatalf("provider metadata = %q, want Respeecher", got)
+	}
 	if provider.voiceID != "samantha" {
 		t.Fatalf("voice id = %q, want model default voice", provider.voiceID)
 	}

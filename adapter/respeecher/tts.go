@@ -111,6 +111,11 @@ func NewRespeecherTTS(apiKey string, voiceID string, opts ...RespeecherTTSOption
 }
 
 func (t *RespeecherTTS) Label() string { return "respeecher.TTS" }
+func (t *RespeecherTTS) Model() string { return t.model }
+func (t *RespeecherTTS) Provider() string {
+	return "Respeecher"
+}
+
 func (t *RespeecherTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
