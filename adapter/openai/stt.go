@@ -712,10 +712,22 @@ func openAIRealtimeSTTEventsFromMessage(payload []byte, state *openAIRealtimeSTT
 		return events, nil
 	case "error":
 		errorBody, _ := message["error"].(map[string]interface{})
-		return nil, fmt.Errorf("openai realtime stt error: %s", openAIString(errorBody["message"]))
+		return nil, llm.NewAPIError(
+			fmt.Sprintf("OpenAI Realtime STT error: %s", openAIRealtimeSTTErrorMessage(errorBody)),
+			errorBody,
+			false,
+		)
 	default:
 		return nil, nil
 	}
+}
+
+func openAIRealtimeSTTErrorMessage(errorBody map[string]interface{}) string {
+	message := openAIString(errorBody["message"])
+	if message == "" {
+		return "Unknown error"
+	}
+	return message
 }
 
 func openAIRealtimeSTTAudioDuration(state *openAIRealtimeSTTMessageState, itemID string) float64 {

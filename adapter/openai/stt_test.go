@@ -973,6 +973,27 @@ func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTErrorMessageReturnsAPIError(t *testing.T) {
+	_, err := openAIRealtimeSTTEventsFromMessage([]byte(`{
+		"type":"error",
+		"error":{"message":"bad audio","code":"invalid_audio"}
+	}`), &openAIRealtimeSTTMessageState{})
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error = %T %v, want APIError", err, err)
+	}
+	if apiErr.Message != "OpenAI Realtime STT error: bad audio" {
+		t.Fatalf("APIError message = %q, want provider message", apiErr.Message)
+	}
+	if apiErr.Retryable {
+		t.Fatal("APIError retryable = true, want false")
+	}
+	body, ok := apiErr.Body.(map[string]interface{})
+	if !ok || body["code"] != "invalid_audio" {
+		t.Fatalf("APIError body = %#v, want provider error body", apiErr.Body)
+	}
+}
+
 func mustNewOpenAISTT(t *testing.T, apiKey, model string, opts ...OpenAISTTOption) *OpenAISTT {
 	t.Helper()
 	provider, err := NewOpenAISTT(apiKey, model, opts...)
