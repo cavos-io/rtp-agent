@@ -3270,6 +3270,26 @@ func TestDefaultConfigFromEnvAcceptsLMNTTTSFallbackProvider(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvAcceptsNeuphonicTTSFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "neuphonic")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("NEUPHONIC_API_KEY", "test-neuphonic-key")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://neuphonic.example")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "voice-2")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "es")
+	t.Setenv("RTP_AGENT_TTS_ENCODING", "pcm_mulaw")
+	t.Setenv("RTP_AGENT_TTS_SPEED", "0.75")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
+		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	}
+}
+
 func TestEvaluateSessionReturnsEvaluationSummary(t *testing.T) {
 	baseAgent := agent.NewAgent("test")
 	session := agent.NewAgentSession(baseAgent, nil, agent.AgentSessionOptions{})
