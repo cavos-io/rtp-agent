@@ -954,6 +954,16 @@ func (f *fakeCloseableSessionAssistant) Close() error {
 	return f.closeErr
 }
 
+type fakeInterruptingSessionAssistant struct {
+	fakeSessionAssistant
+	interrupts int
+}
+
+func (f *fakeInterruptingSessionAssistant) Interrupt() error {
+	f.interrupts++
+	return nil
+}
+
 type fakeVideoSessionAssistant struct {
 	fakeSessionAssistant
 	videoFrames int
@@ -2862,6 +2872,21 @@ func TestAgentSessionShutdownCanSkipDrain(t *testing.T) {
 	}
 	if session.activity != nil {
 		t.Fatalf("session.activity = %#v, want nil after non-draining shutdown", session.activity)
+	}
+}
+
+func TestAgentSessionShutdownSkipDrainInterruptsRealtimeOnce(t *testing.T) {
+	agent := NewAgent("test")
+	assistant := &fakeInterruptingSessionAssistant{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = assistant
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+
+	session.Shutdown(false)
+
+	if assistant.interrupts != 1 {
+		t.Fatalf("realtime interrupts = %d, want 1", assistant.interrupts)
 	}
 }
 
