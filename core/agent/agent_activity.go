@@ -37,6 +37,10 @@ type realtimeAudioCommitter interface {
 	CommitAudio() error
 }
 
+type realtimeAudioClearer interface {
+	ClearAudio() error
+}
+
 type llmMetricsCollector interface {
 	OnMetricsCollected(llm.LLMMetricsHandler) func()
 }
@@ -1371,6 +1375,17 @@ func (a *AgentActivity) ClearUserTurn() {
 	a.eouMu.Unlock()
 
 	a.clearPendingUserTurn()
+
+	if a.Session != nil {
+		a.Session.mu.Lock()
+		assistant := a.Session.Assistant
+		a.Session.mu.Unlock()
+		if clearer, ok := assistant.(realtimeAudioClearer); ok {
+			if err := clearer.ClearAudio(); err != nil {
+				logger.Logger.Warnw("failed to clear realtime audio", err)
+			}
+		}
+	}
 
 	a.sttEOSReceived = false
 	a.speaking = false

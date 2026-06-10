@@ -1558,6 +1558,22 @@ func TestAgentActivityClearUserTurnDropsPendingManualTranscript(t *testing.T) {
 	}
 }
 
+func TestAgentActivityClearUserTurnClearsRealtimeAudio(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	assistant := &recordingRealtimeCommitAssistant{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.ClearUserTurn()
+
+	if assistant.clears != 1 {
+		t.Fatalf("ClearAudio calls = %d, want 1", assistant.clears)
+	}
+}
+
 func TestAgentActivityCommitUserTurnCompletesPendingManualTranscript(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
@@ -2579,6 +2595,7 @@ func (r *recordingOptionsAssistant) UpdateOptions(_ context.Context, options llm
 
 type recordingRealtimeCommitAssistant struct {
 	commits int
+	clears  int
 }
 
 func (r *recordingRealtimeCommitAssistant) Start(context.Context, *AgentSession) error {
@@ -2593,6 +2610,11 @@ func (r *recordingRealtimeCommitAssistant) SetPublishAudio(func(frame *model.Aud
 
 func (r *recordingRealtimeCommitAssistant) CommitAudio() error {
 	r.commits++
+	return nil
+}
+
+func (r *recordingRealtimeCommitAssistant) ClearAudio() error {
+	r.clears++
 	return nil
 }
 
