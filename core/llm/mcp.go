@@ -557,8 +557,9 @@ func (s *MCPServerStdio) initialize(ctx context.Context) error {
 		return fmt.Errorf("initialize failed: %w", err)
 	}
 
-	// Send initialized notification
-	_ = s.sendNotification("initialized", map[string]interface{}{})
+	if err := s.sendNotification("initialized", map[string]interface{}{}); err != nil {
+		return fmt.Errorf("initialized notification failed: %w", err)
+	}
 
 	return nil
 }
@@ -701,7 +702,13 @@ func (s *MCPServerStdio) sendNotification(method string, params interface{}) err
 		return err
 	}
 	b = append(b, '\n')
-	_, err = s.stdin.Write(b)
+	s.mu.Lock()
+	stdin := s.stdin
+	s.mu.Unlock()
+	if stdin == nil {
+		return errors.New("MCP stdio transport closed")
+	}
+	_, err = stdin.Write(b)
 	return err
 }
 
