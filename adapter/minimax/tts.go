@@ -178,6 +178,11 @@ func NewMinimaxTTS(apiKey string, voice string, opts ...MinimaxTTSOption) *Minim
 }
 
 func (t *MinimaxTTS) Label() string { return "minimax.TTS" }
+func (t *MinimaxTTS) Model() string { return t.model }
+func (t *MinimaxTTS) Provider() string {
+	return "MiniMax"
+}
+
 func (t *MinimaxTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }

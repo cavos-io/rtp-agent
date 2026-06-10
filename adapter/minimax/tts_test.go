@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
 func TestMinimaxTTSDefaultsMatchReference(t *testing.T) {
@@ -18,6 +20,12 @@ func TestMinimaxTTSDefaultsMatchReference(t *testing.T) {
 	}
 	if provider.model != "speech-02-turbo" {
 		t.Fatalf("model = %q, want speech-02-turbo", provider.model)
+	}
+	if got := tts.Model(provider); got != "speech-02-turbo" {
+		t.Fatalf("model metadata = %q, want speech-02-turbo", got)
+	}
+	if got := tts.Provider(provider); got != "MiniMax" {
+		t.Fatalf("provider metadata = %q, want MiniMax", got)
 	}
 	if provider.voice != "socialmedia_female_2_v1" {
 		t.Fatalf("voice = %q, want default voice", provider.voice)
