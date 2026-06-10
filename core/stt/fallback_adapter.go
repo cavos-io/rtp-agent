@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -533,7 +534,7 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 		for {
 			stt := s.adapter.stts[i]
 			stream, err := stt.Stream(s.ctx, s.language)
-			if err == nil && stream == nil {
+			if err == nil && isNilRecognizeStream(stream) {
 				err = errors.New("STT returned nil stream")
 			}
 			if err != nil {
@@ -787,7 +788,7 @@ func (s *fallbackRecognizeStream) tryRecoverStream(index int) {
 	recoveryCtx := context.WithoutCancel(s.ctx)
 	stt := s.adapter.stts[index]
 	stream, err := stt.Stream(recoveryCtx, s.language)
-	if err != nil || stream == nil {
+	if err != nil || isNilRecognizeStream(stream) {
 		s.adapter.clearRecoveringStream(index)
 		return
 	}
@@ -966,10 +967,23 @@ func (s *fallbackRecognizeStream) detachRecoveriesLocked() []RecognizeStream {
 
 func closeStreams(streams []RecognizeStream) {
 	for _, stream := range streams {
-		if stream == nil {
+		if isNilRecognizeStream(stream) {
 			continue
 		}
 		_ = stream.Close()
+	}
+}
+
+func isNilRecognizeStream(stream RecognizeStream) bool {
+	if stream == nil {
+		return true
+	}
+	value := reflect.ValueOf(stream)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
 	}
 }
 
