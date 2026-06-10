@@ -58,7 +58,7 @@ type SpeechEvent struct {
 	Alternatives     []SpeechData      `json:"alternatives"`
 	RecognitionUsage *RecognitionUsage `json:"recognition_usage"`
 	SpeechStartTime  *float64          `json:"speech_start_time"`
-	Interrupted      bool              `json:"interrupted"`
+	Interrupted      bool              `json:"-"`
 }
 
 func (e SpeechEvent) MarshalJSON() ([]byte, error) {
