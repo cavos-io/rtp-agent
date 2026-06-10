@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"testing"
+
+	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
 func TestSpeechmaticsTTSDefaultsMatchReference(t *testing.T) {
@@ -15,6 +17,12 @@ func TestSpeechmaticsTTSDefaultsMatchReference(t *testing.T) {
 
 	if provider.voice != "sarah" {
 		t.Fatalf("voice = %q, want sarah", provider.voice)
+	}
+	if got := tts.Model(provider); got != "unknown" {
+		t.Fatalf("model metadata = %q, want unknown", got)
+	}
+	if got := tts.Provider(provider); got != "Speechmatics" {
+		t.Fatalf("provider metadata = %q, want Speechmatics", got)
 	}
 	if provider.sampleRate != 16000 {
 		t.Fatalf("sample rate = %d, want 16000", provider.sampleRate)
