@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	coretts "github.com/cavos-io/rtp-agent/core/tts"
 )
 
 func TestResembleTTSDefaultsMatchReference(t *testing.T) {
@@ -21,6 +23,12 @@ func TestResembleTTSDefaultsMatchReference(t *testing.T) {
 	}
 	if provider.model != "" {
 		t.Fatalf("model = %q, want empty by default", provider.model)
+	}
+	if got := coretts.Model(provider); got != "unknown" {
+		t.Fatalf("model metadata = %q, want unknown", got)
+	}
+	if got := coretts.Provider(provider); got != "Resemble" {
+		t.Fatalf("provider metadata = %q, want Resemble", got)
 	}
 	if !provider.Capabilities().Streaming {
 		t.Fatal("streaming = false, want true for websocket streaming")
@@ -122,6 +130,9 @@ func TestResembleTTSOptionsMatchReference(t *testing.T) {
 	assertResemblePayload(t, payload, "model", "chatterbox-turbo")
 	if got := payload["sample_rate"]; got != float64(24000) {
 		t.Fatalf("sample_rate = %#v, want 24000", got)
+	}
+	if got := coretts.Model(provider); got != "chatterbox-turbo" {
+		t.Fatalf("model metadata = %q, want chatterbox-turbo", got)
 	}
 }
 

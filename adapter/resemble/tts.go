@@ -80,6 +80,13 @@ func (t *ResembleTTS) Capabilities() tts.TTSCapabilities {
 }
 func (t *ResembleTTS) SampleRate() int  { return t.sampleRate }
 func (t *ResembleTTS) NumChannels() int { return 1 }
+func (t *ResembleTTS) Model() string {
+	if t.model == "" {
+		return "unknown"
+	}
+	return t.model
+}
+func (t *ResembleTTS) Provider() string { return "Resemble" }
 
 func (t *ResembleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if err := validateResembleAPIKey(t.apiKey); err != nil {
