@@ -151,6 +151,12 @@ func TestDeepgramSTTDefaultsMatchReference(t *testing.T) {
 	if provider.sampleRate != 16000 {
 		t.Fatalf("sampleRate = %d, want 16000", provider.sampleRate)
 	}
+	if got := stt.Model(provider); got != "nova-3" {
+		t.Fatalf("model metadata = %q, want nova-3", got)
+	}
+	if got := stt.Provider(provider); got != "Deepgram" {
+		t.Fatalf("provider metadata = %q, want Deepgram", got)
+	}
 }
 
 func TestDeepgramSTTUsesEnvAPIKeyWhenOmitted(t *testing.T) {
