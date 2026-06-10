@@ -319,6 +319,9 @@ type connectToCallerTool struct {
 
 func (t *connectToCallerTool) ID() string   { return "connect_to_caller" }
 func (t *connectToCallerTool) Name() string { return "connect_to_caller" }
+func (t *connectToCallerTool) ToolFlags() llm.ToolFlag {
+	return llm.ToolFlagIgnoreOnEnter
+}
 func (t *connectToCallerTool) Description() string {
 	return "Called when the human agent wants to connect to the caller."
 }
@@ -340,6 +343,9 @@ type declineTransferTool struct {
 
 func (t *declineTransferTool) ID() string   { return "decline_transfer" }
 func (t *declineTransferTool) Name() string { return "decline_transfer" }
+func (t *declineTransferTool) ToolFlags() llm.ToolFlag {
+	return llm.ToolFlagIgnoreOnEnter
+}
 func (t *declineTransferTool) Description() string {
 	return "Handles the case when the human agent explicitly declines to connect to the caller."
 }
@@ -371,6 +377,9 @@ type voicemailDetectedTool struct {
 
 func (t *voicemailDetectedTool) ID() string   { return "voicemail_detected" }
 func (t *voicemailDetectedTool) Name() string { return "voicemail_detected" }
+func (t *voicemailDetectedTool) ToolFlags() llm.ToolFlag {
+	return llm.ToolFlagIgnoreOnEnter
+}
 func (t *voicemailDetectedTool) Description() string {
 	return "Called when the call reaches voicemail. Use this tool AFTER you hear the voicemail greeting"
 }

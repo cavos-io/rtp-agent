@@ -49,6 +49,28 @@ func TestCaptureDeclineToolsIgnoreOnEnter(t *testing.T) {
 	}
 }
 
+func TestWorkflowControlToolsIgnoreOnEnter(t *testing.T) {
+	tests := []struct {
+		name string
+		tool llm.Tool
+	}{
+		{name: "decline_card_capture", tool: &declineCardCaptureTool{}},
+		{name: "restart_card_collection", tool: &restartCardCollectionTool{}},
+		{name: "connect_to_caller", tool: &connectToCallerTool{}},
+		{name: "decline_transfer", tool: &declineTransferTool{}},
+		{name: "voicemail_detected", tool: &voicemailDetectedTool{}},
+		{name: "out_of_scope", tool: &outOfScopeTool{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !llm.ToolHasFlag(tt.tool, llm.ToolFlagIgnoreOnEnter) {
+				t.Fatalf("%s ToolFlags missing ToolFlagIgnoreOnEnter", tt.name)
+			}
+		})
+	}
+}
+
 func findWorkflowTool(t *testing.T, tools []llm.Tool, name string) llm.Tool {
 	t.Helper()
 
