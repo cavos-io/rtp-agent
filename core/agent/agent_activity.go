@@ -643,6 +643,12 @@ func (a *AgentActivity) UpdateChatCtx(ctx context.Context, chatCtx *llm.ChatCont
 			return err
 		}
 		tools = agentToolsAsInterfaces(registeredTools)
+	} else if a.Agent != nil {
+		for idx, tool := range a.Agent.Tools {
+			if isNilAgentTool(tool) {
+				return fmt.Errorf("agent tool at index %d: nil tool", idx)
+			}
+		}
 	}
 	a.Agent.ChatCtx = chatCtx.Copy(llm.ChatContextCopyOptions{
 		Tools: tools,
