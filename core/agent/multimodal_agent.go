@@ -164,6 +164,16 @@ func (ma *MultimodalAgent) UpdateOptions(ctx context.Context, options llm.Realti
 	return rtSession.UpdateOptions(options)
 }
 
+func (ma *MultimodalAgent) CommitAudio() error {
+	ma.mu.Lock()
+	rtSession := ma.rtSession
+	ma.mu.Unlock()
+	if rtSession == nil {
+		return nil
+	}
+	return rtSession.CommitAudio()
+}
+
 func (ma *MultimodalAgent) UpdateRealtimeModel(ctx context.Context, model llm.RealtimeModel) error {
 	if model == nil {
 		return nil

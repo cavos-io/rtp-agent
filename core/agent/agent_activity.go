@@ -33,6 +33,10 @@ type chatContextUpdatingAssistant interface {
 	UpdateChatContext(context.Context, *llm.ChatContext) error
 }
 
+type realtimeAudioCommitter interface {
+	CommitAudio() error
+}
+
 type llmMetricsCollector interface {
 	OnMetricsCollected(llm.LLMMetricsHandler) func()
 }
@@ -1382,6 +1386,23 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 
 	if ctx == nil {
 		ctx = a.ctx
+	}
+	if a.Session != nil {
+		a.Session.mu.Lock()
+		assistant := a.Session.Assistant
+		activity := a.Session.activity
+		a.Session.mu.Unlock()
+		if committer, ok := assistant.(realtimeAudioCommitter); ok {
+			if err := committer.CommitAudio(); err != nil {
+				return "", err
+			}
+			if !opts.SkipReply && activity == a {
+				if _, err := a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{}); err != nil {
+					return "", err
+				}
+			}
+			opts.SkipReply = true
+		}
 	}
 	if opts.TranscriptTimeout > 0 {
 		deadline := time.NewTimer(opts.TranscriptTimeout)

@@ -1668,6 +1668,59 @@ func TestAgentActivityCommitUserTurnGeneratesReplyWhenLLMConfigured(t *testing.T
 	}
 }
 
+func TestAgentActivityCommitUserTurnCommitsRealtimeAudioAndGeneratesReply(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	assistant := &recordingRealtimeCommitAssistant{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+
+	events := session.SpeechCreatedEvents()
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "" {
+		t.Fatalf("CommitUserTurn transcript = %q, want empty without STT final", transcript)
+	}
+	if assistant.commits != 1 {
+		t.Fatalf("CommitAudio calls = %d, want 1", assistant.commits)
+	}
+	select {
+	case ev := <-events:
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated source = %q, want generate_reply", ev.Source)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("SpeechCreatedEvents did not receive realtime commit reply")
+	}
+}
+
+func TestAgentActivityCommitUserTurnSkipReplyCommitsRealtimeAudioOnly(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	assistant := &recordingRealtimeCommitAssistant{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+
+	events := session.SpeechCreatedEvents()
+	if _, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{SkipReply: true}); err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if assistant.commits != 1 {
+		t.Fatalf("CommitAudio calls = %d, want 1", assistant.commits)
+	}
+	select {
+	case ev := <-events:
+		t.Fatalf("unexpected SpeechCreated event with SkipReply: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func TestAgentActivityCompleteUserTurnEmitsEOUMetricsForGeneratedReply(t *testing.T) {
 	agent := NewAgent("test")
 	agent.TurnDetection = TurnDetectionModeManual
@@ -2521,6 +2574,25 @@ func (r *recordingOptionsAssistant) SetPublishAudio(func(frame *model.AudioFrame
 
 func (r *recordingOptionsAssistant) UpdateOptions(_ context.Context, options llm.RealtimeSessionOptions) error {
 	r.options = options
+	return nil
+}
+
+type recordingRealtimeCommitAssistant struct {
+	commits int
+}
+
+func (r *recordingRealtimeCommitAssistant) Start(context.Context, *AgentSession) error {
+	return nil
+}
+
+func (r *recordingRealtimeCommitAssistant) OnAudioFrame(context.Context, *model.AudioFrame) {
+}
+
+func (r *recordingRealtimeCommitAssistant) SetPublishAudio(func(frame *model.AudioFrame) error) {
+}
+
+func (r *recordingRealtimeCommitAssistant) CommitAudio() error {
+	r.commits++
 	return nil
 }
 
