@@ -674,6 +674,26 @@ func TestDefaultConfigFromEnvSelectsOpenRouterOpenAILLM(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsTogetherOpenAILLM(t *testing.T) {
+	t.Setenv("TOGETHER_API_KEY", "test-together-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "together")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "custom-together-model")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Model(app.Session.LLM); got != "custom-together-model" {
+		t.Fatalf("LLM model = %q, want custom-together-model", got)
+	}
+	if got := llm.Provider(app.Session.LLM); got != "api.together.xyz" {
+		t.Fatalf("LLM provider = %q, want api.together.xyz", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsNvidiaLLM(t *testing.T) {
 	t.Setenv("NVIDIA_API_KEY", "test-nvidia-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "nvidia")

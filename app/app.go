@@ -250,6 +250,7 @@ const (
 	providerSpitch       = "spitch"
 	providerTavus        = "tavus"
 	providerTelnyx       = "telnyx"
+	providerTogether     = "together"
 	providerTrugen       = "trugen"
 	providerUltravox     = "ultravox"
 	providerUpliftAI     = "upliftai"
@@ -529,6 +530,7 @@ type AppConfig struct {
 	SpitchAPIKey                string
 	TavusAPIKey                 string
 	TelnyxAPIKey                string
+	TogetherAPIKey              string
 	TrugenAPIKey                string
 	UltravoxAPIKey              string
 	UpliftAIAPIKey              string
@@ -889,6 +891,7 @@ func DefaultConfigFromEnv() AppConfig {
 		SpitchAPIKey:                            os.Getenv("SPITCH_API_KEY"),
 		TavusAPIKey:                             os.Getenv("TAVUS_API_KEY"),
 		TelnyxAPIKey:                            os.Getenv("TELNYX_API_KEY"),
+		TogetherAPIKey:                          os.Getenv("TOGETHER_API_KEY"),
 		TrugenAPIKey:                            os.Getenv("TRUGEN_API_KEY"),
 		UltravoxAPIKey:                          os.Getenv("ULTRAVOX_API_KEY"),
 		UpliftAIAPIKey:                          os.Getenv("UPLIFTAI_API_KEY"),
@@ -2227,6 +2230,12 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = provider
 	case providerSambaNova:
 		provider, err := openai.NewSambaNovaOpenAILLM(cfg.LLMModel, cfg.SambaNovaAPIKey)
+		if err != nil {
+			return nil, err
+		}
+		a.LLM = provider
+	case providerTogether:
+		provider, err := openai.NewTogetherOpenAILLM(cfg.LLMModel, cfg.TogetherAPIKey)
 		if err != nil {
 			return nil, err
 		}
