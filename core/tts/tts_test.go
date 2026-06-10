@@ -94,6 +94,37 @@ func TestTTSMetricsEmitterIgnoresNilHandler(t *testing.T) {
 	emitter.EmitMetricsCollected(&telemetry.TTSMetrics{Label: "tts"})
 }
 
+func TestTTSMetricsEmitterPanicDoesNotBlockOtherHandlers(t *testing.T) {
+	var emitter MetricsEmitter
+	metrics := &telemetry.TTSMetrics{Label: "tts", RequestID: "req"}
+	received := make(chan *telemetry.TTSMetrics, 1)
+
+	emitter.OnMetricsCollected(func(*telemetry.TTSMetrics) {
+		panic("metrics handler failed")
+	})
+	emitter.OnMetricsCollected(func(got *telemetry.TTSMetrics) {
+		received <- got
+	})
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				t.Fatalf("EmitMetricsCollected panic = %v, want handler panic isolated", recovered)
+			}
+		}()
+		emitter.EmitMetricsCollected(metrics)
+	}()
+
+	select {
+	case got := <-received:
+		if got != metrics {
+			t.Fatalf("metrics pointer = %p, want %p", got, metrics)
+		}
+	default:
+		t.Fatal("second metrics handler was not called")
+	}
+}
+
 func TestTTSErrorEmitterEmitsToHandlers(t *testing.T) {
 	var emitter ErrorEmitter
 	cause := context.Canceled
@@ -156,6 +187,37 @@ func TestTTSErrorEmitterIgnoresNilHandler(t *testing.T) {
 	unsubscribe()
 
 	emitter.EmitError(TTSError{Label: "tts", Err: context.Canceled})
+}
+
+func TestTTSErrorEmitterPanicDoesNotBlockOtherHandlers(t *testing.T) {
+	var emitter ErrorEmitter
+	cause := context.Canceled
+	received := make(chan TTSError, 1)
+
+	emitter.OnError(func(TTSError) {
+		panic("error handler failed")
+	})
+	emitter.OnError(func(err TTSError) {
+		received <- err
+	})
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				t.Fatalf("EmitError panic = %v, want handler panic isolated", recovered)
+			}
+		}()
+		emitter.EmitError(TTSError{Label: "tts", Err: cause})
+	}()
+
+	select {
+	case got := <-received:
+		if got.Err != cause {
+			t.Fatalf("Err = %v, want %v", got.Err, cause)
+		}
+	default:
+		t.Fatal("second error handler was not called")
+	}
 }
 
 func TestCollectCombinesChunkedStreamFrames(t *testing.T) {

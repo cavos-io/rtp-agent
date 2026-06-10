@@ -113,6 +113,6 @@ func (e *ErrorEmitter) EmitError(err TTSError) {
 	e.mu.Unlock()
 
 	for _, subscription := range handlers {
-		subscription.handler(err)
+		callTTSErrorHandler(subscription.handler, err)
 	}
 }
