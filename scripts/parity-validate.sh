@@ -34,6 +34,7 @@ EOF
 }
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_TEMP_ENV_FORCE=1
 source "$REPO_ROOT/scripts/repo-temp-env.sh"
 FIXTURE_ROOT="$REPO_ROOT/scripts/parity-fixtures"
 TEST_CASES_FILE="${PARITY_TEST_CASES_FILE:-$REPO_ROOT/scripts/parity-fixtures/test-cases.tsv}"

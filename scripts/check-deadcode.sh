@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
+REPO_TEMP_ENV_FORCE=1
 source "$REPO_ROOT/scripts/repo-temp-env.sh"
 
 mapfile -t staged_go_files < <(git diff --cached --name-only --diff-filter=ACMR -- '*.go')

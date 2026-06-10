@@ -215,7 +215,7 @@ run_worktree_tests() {
   local temp_root="$path/.tmp"
 
   mkdir -p "$temp_root" "$temp_root/gotmp" "$temp_root/gocache"
-  run_or_codex "$path" "$branch" env "GOCACHE=${GOCACHE:-$temp_root}" "TMPDIR=${TMPDIR:-$temp_root/gotmp}" go -C "$path" test ./...
+  run_or_codex "$path" "$branch" env "GOCACHE=$temp_root" "TMPDIR=$temp_root/gotmp" go -C "$path" test ./...
 }
 
 echo "============================================================"

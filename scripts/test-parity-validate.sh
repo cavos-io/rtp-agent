@@ -58,6 +58,15 @@ ln -s "$WORKDIR/shared-tmp" "$TEMP_ENV_REPO/.tmp"
   [[ "$GOCACHE" == "$WORKDIR/custom-gocache" ]]
   [[ "$TMPDIR" == "$WORKDIR/custom-tmpdir" ]]
 )
+(
+  export GOCACHE="$WORKDIR/custom-gocache"
+  export TMPDIR="$WORKDIR/custom-tmpdir"
+  REPO_ROOT="$TEMP_ENV_REPO"
+  REPO_TEMP_ENV_FORCE=1
+  source "$ROOT/scripts/repo-temp-env.sh"
+  [[ "$GOCACHE" == "$TEMP_ENV_REPO/.tmp" ]]
+  [[ "$TMPDIR" == "$TEMP_ENV_REPO/.tmp/gotmp" ]]
+)
 
 PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --list \
   | grep -Fxq 'go-dev-mode'

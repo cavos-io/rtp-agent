@@ -28,6 +28,7 @@ EOF
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
+REPO_TEMP_ENV_FORCE=1
 source "$REPO_ROOT/scripts/repo-temp-env.sh"
 
 TEST_CASES_FILE="${PARITY_TEST_CASES_FILE:-$REPO_ROOT/scripts/parity-fixtures/test-cases.tsv}"
