@@ -1051,11 +1051,43 @@ func (a *App) EvaluateSession(ctx context.Context, reference *llm.ChatContext) (
 	if a.Session == nil {
 		return nil, fmt.Errorf("agent session is not configured")
 	}
+	ctx = a.evaluationContext(ctx)
 	result, err := a.Evaluator.Evaluate(ctx, a.Session.ChatCtx, reference)
 	if err != nil {
 		return nil, err
 	}
 	return evaluationSummaryFromResult(result), nil
+}
+
+type evaluationTagger interface {
+	Tagger() *agent.Tagger
+}
+
+func (a *App) evaluationContext(ctx context.Context) context.Context {
+	jobCtx, err := a.Session.JobContext()
+	if err != nil {
+		return ctx
+	}
+	taggerSource, ok := jobCtx.(evaluationTagger)
+	if !ok || taggerSource.Tagger() == nil {
+		return ctx
+	}
+	return evals.WithEvaluationResultHandler(ctx, func(result *evals.EvaluationResult) {
+		taggerSource.Tagger().Evaluation(evaluationResultForTagger(result))
+	})
+}
+
+func evaluationResultForTagger(result *evals.EvaluationResult) *agent.EvaluationResult {
+	out := &agent.EvaluationResult{Judgments: make(map[string]string)}
+	if result == nil {
+		return out
+	}
+	for name, judgment := range result.Judgments {
+		if judgment != nil {
+			out.Judgments[name] = string(judgment.Verdict)
+		}
+	}
+	return out
 }
 
 func evaluationSummaryFromResult(result *evals.EvaluationResult) *EvaluationSummary {

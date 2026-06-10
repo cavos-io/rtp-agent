@@ -82,6 +82,35 @@ func TestJudgeGroupFiltersNilJudgmentResults(t *testing.T) {
 	}
 }
 
+func TestJudgeGroupAutoTagsRunContextJobContext(t *testing.T) {
+	var tagged *EvaluationResult
+	ctx := WithEvaluationResultHandler(context.Background(), func(result *EvaluationResult) {
+		tagged = result
+	})
+	group := NewJudgeGroup(&recordingEvalLLM{}, []Evaluator{
+		fixedJudgmentEvaluator{name: "accuracy", result: &JudgmentResult{Verdict: VerdictPass}},
+		fixedJudgmentEvaluator{name: "safety", result: &JudgmentResult{Verdict: VerdictMaybe}},
+	})
+
+	result, err := group.Evaluate(ctx, llm.NewChatContext(), nil)
+	if err != nil {
+		t.Fatalf("Evaluate() error = %v", err)
+	}
+	if got := len(result.Judgments); got != 2 {
+		t.Fatalf("len(Judgments) = %d, want 2", got)
+	}
+	if tagged != result {
+		t.Fatalf("tagged result = %#v, want Evaluate result %#v", tagged, result)
+	}
+	got := map[string]string{}
+	for name, judgment := range tagged.Judgments {
+		got[name] = string(judgment.Verdict)
+	}
+	if got["accuracy"] != "pass" || got["safety"] != "maybe" {
+		t.Fatalf("tagged judgments = %#v, want accuracy pass and safety maybe", got)
+	}
+}
+
 func TestFormatChatCtxAgentConfigUpdateMatchesReferenceShape(t *testing.T) {
 	instructions := "be concise"
 	chatCtx := llm.NewChatContext()

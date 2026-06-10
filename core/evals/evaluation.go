@@ -8,6 +8,14 @@ import (
 	"github.com/cavos-io/rtp-agent/library/logger"
 )
 
+type evaluationResultHandlerKey struct{}
+
+type EvaluationResultHandler func(*EvaluationResult)
+
+func WithEvaluationResultHandler(ctx context.Context, handler EvaluationResultHandler) context.Context {
+	return context.WithValue(ctx, evaluationResultHandlerKey{}, handler)
+}
+
 type Verdict string
 
 const (
@@ -140,9 +148,9 @@ func (g *JudgeGroup) Evaluate(ctx context.Context, chatCtx *llm.ChatContext, ref
 
 	wg.Wait()
 
-	// Automatically tag if possible (parity with Python)
-	// This would require access to JobContext
-	// In Go, we can check if rc is in ctx
+	if handler, ok := ctx.Value(evaluationResultHandlerKey{}).(EvaluationResultHandler); ok && handler != nil {
+		handler(result)
+	}
 
 	return result, nil
 }
