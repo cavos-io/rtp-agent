@@ -773,6 +773,21 @@ func TestChatContextTruncateDropsLeadingFunctionSequence(t *testing.T) {
 	}
 }
 
+func TestChatContextTruncateZeroKeepsReferenceItems(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "system", Role: ChatRoleSystem, Content: []ChatContent{{Text: "instructions"}}},
+		&ChatMessage{ID: "user", Role: ChatRoleUser, Content: []ChatContent{{Text: "hello"}}},
+		&ChatMessage{ID: "assistant", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "hi"}}},
+	}
+
+	ctx.Truncate(0)
+
+	if got, want := itemIDs(ctx.Items), "system,user,assistant"; got != want {
+		t.Fatalf("Truncate(0) item IDs = %q, want %q", got, want)
+	}
+}
+
 func TestChatContextIsEquivalentIgnoresTimestampsAndMetadata(t *testing.T) {
 	left := NewChatContext()
 	left.Items = []ChatItem{
