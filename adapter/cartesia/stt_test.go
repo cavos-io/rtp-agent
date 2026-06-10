@@ -41,6 +41,12 @@ func TestCartesiaSTTDefaultsMatchReference(t *testing.T) {
 	if caps.OfflineRecognize {
 		t.Fatal("offline recognize = true, want false")
 	}
+	if got := stt.Model(provider); got != "ink-2" {
+		t.Fatalf("model metadata = %q, want ink-2", got)
+	}
+	if got := stt.Provider(provider); got != "Cartesia" {
+		t.Fatalf("provider metadata = %q, want Cartesia", got)
+	}
 }
 
 func TestCartesiaSTTConstructorOptionsMatchReference(t *testing.T) {
