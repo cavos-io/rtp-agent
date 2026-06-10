@@ -288,7 +288,7 @@ func (s *OpenAISTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	}
 	conn, _, err := s.dialWebsocket(ctx, buildOpenAIRealtimeSTTWebsocketURL(s).String(), buildOpenAIRealtimeSTTHeaders(s))
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial openai realtime stt websocket: %w", err)
+		return nil, mapOpenAIError(err)
 	}
 	if language != "" {
 		s.language = language

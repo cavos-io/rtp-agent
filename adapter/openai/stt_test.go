@@ -512,6 +512,24 @@ func TestOpenAISTTRecognizeReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+	)
+	provider.dialWebsocket = func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error) {
+		return nil, nil, errors.New("dial refused")
+	}
+
+	_, err := provider.Stream(context.Background(), "en")
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message != "dial refused" {
+		t.Fatalf("APIConnectionError message = %q, want dial refused", connectionErr.Message)
+	}
+}
+
 func TestOpenAISTTRecognizeLanguageOverridePersists(t *testing.T) {
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		if err := r.ParseMultipartForm(1 << 20); err != nil {
