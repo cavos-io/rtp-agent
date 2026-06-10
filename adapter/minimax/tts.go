@@ -41,6 +41,8 @@ type MinimaxTTS struct {
 	speed             float64
 	vol               float64
 	pitch             int
+	intensity         *int
+	timbre            *int
 	textNormalization bool
 }
 
@@ -115,6 +117,18 @@ func WithMinimaxTTSVolume(vol float64) MinimaxTTSOption {
 func WithMinimaxTTSPitch(pitch int) MinimaxTTSOption {
 	return func(t *MinimaxTTS) {
 		t.pitch = pitch
+	}
+}
+
+func WithMinimaxTTSIntensity(intensity int) MinimaxTTSOption {
+	return func(t *MinimaxTTS) {
+		t.intensity = &intensity
+	}
+}
+
+func WithMinimaxTTSTimbre(timbre int) MinimaxTTSOption {
+	return func(t *MinimaxTTS) {
+		t.timbre = &timbre
 	}
 }
 
@@ -221,7 +235,7 @@ func minimaxOptions(t *MinimaxTTS) map[string]interface{} {
 		voiceSetting["emotion"] = t.emotion
 	}
 
-	return map[string]interface{}{
+	payload := map[string]interface{}{
 		"model":         t.model,
 		"voice_setting": voiceSetting,
 		"audio_setting": map[string]interface{}{
@@ -232,6 +246,17 @@ func minimaxOptions(t *MinimaxTTS) map[string]interface{} {
 		},
 		"text_normalization": t.textNormalization,
 	}
+	voiceModify := map[string]interface{}{}
+	if t.intensity != nil {
+		voiceModify["intensity"] = *t.intensity
+	}
+	if t.timbre != nil {
+		voiceModify["timbre"] = *t.timbre
+	}
+	if len(voiceModify) > 0 {
+		payload["voice_modify"] = voiceModify
+	}
+	return payload
 }
 
 func (t *MinimaxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
@@ -280,6 +305,12 @@ func validateMinimaxAPIKey(apiKey string) error {
 func validateMinimaxTTSOptions(t *MinimaxTTS) error {
 	if t.speed < 0.5 || t.speed > 2.0 {
 		return fmt.Errorf("speed must be between 0.5 and 2.0, but got %g", t.speed)
+	}
+	if t.intensity != nil && (*t.intensity < -100 || *t.intensity > 100) {
+		return fmt.Errorf("intensity must be between -100 and 100, but got %d", *t.intensity)
+	}
+	if t.timbre != nil && (*t.timbre < -100 || *t.timbre > 100) {
+		return fmt.Errorf("timbre must be between -100 and 100, but got %d", *t.timbre)
 	}
 	return nil
 }

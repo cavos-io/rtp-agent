@@ -171,6 +171,8 @@ func TestMinimaxTTSOptionsMatchReference(t *testing.T) {
 		WithMinimaxTTSSpeed(1.4),
 		WithMinimaxTTSVolume(2.0),
 		WithMinimaxTTSPitch(-2),
+		WithMinimaxTTSIntensity(75),
+		WithMinimaxTTSTimbre(-40),
 		WithMinimaxTTSTextNormalization(true),
 	)
 
@@ -201,6 +203,13 @@ func TestMinimaxTTSOptionsMatchReference(t *testing.T) {
 	if audioSetting["bitrate"] != float64(256000) {
 		t.Fatalf("bitrate = %#v, want 256000", audioSetting["bitrate"])
 	}
+	voiceModify := payload["voice_modify"].(map[string]any)
+	if voiceModify["intensity"] != float64(75) {
+		t.Fatalf("voice_modify.intensity = %#v, want 75", voiceModify["intensity"])
+	}
+	if voiceModify["timbre"] != float64(-40) {
+		t.Fatalf("voice_modify.timbre = %#v, want -40", voiceModify["timbre"])
+	}
 }
 
 func TestMinimaxTTSRejectsInvalidSpeedBeforeRequest(t *testing.T) {
@@ -222,6 +231,49 @@ func TestMinimaxTTSRejectsInvalidSpeedBeforeRequest(t *testing.T) {
 	}
 	if !strings.Contains(streamErr.Error(), "speed must be between 0.5 and 2.0") {
 		t.Fatalf("Stream error = %q, want speed range guidance", streamErr)
+	}
+}
+
+func TestMinimaxTTSRejectsInvalidVoiceModifyBeforeRequest(t *testing.T) {
+	tests := []struct {
+		name    string
+		option  MinimaxTTSOption
+		message string
+	}{
+		{
+			name:    "intensity",
+			option:  WithMinimaxTTSIntensity(101),
+			message: "intensity must be between -100 and 100",
+		},
+		{
+			name:    "timbre",
+			option:  WithMinimaxTTSTimbre(-101),
+			message: "timbre must be between -100 and 100",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := NewMinimaxTTS("test-key", "", tt.option)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			_, synthErr := provider.Synthesize(ctx, "hello")
+			if synthErr == nil {
+				t.Fatal("Synthesize returned nil error, want voice modify validation error")
+			}
+			if !strings.Contains(synthErr.Error(), tt.message) {
+				t.Fatalf("Synthesize error = %q, want %q", synthErr, tt.message)
+			}
+
+			_, streamErr := provider.Stream(ctx)
+			if streamErr == nil {
+				t.Fatal("Stream returned nil error, want voice modify validation error")
+			}
+			if !strings.Contains(streamErr.Error(), tt.message) {
+				t.Fatalf("Stream error = %q, want %q", streamErr, tt.message)
+			}
+		})
 	}
 }
 
