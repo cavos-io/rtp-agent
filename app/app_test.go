@@ -595,6 +595,26 @@ func TestDefaultConfigFromEnvSelectsOVHCloudOpenAILLM(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsOctoAIOpenAILLM(t *testing.T) {
+	t.Setenv("OCTOAI_TOKEN", "test-octoai-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "octoai")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "custom-octoai-model")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Model(app.Session.LLM); got != "custom-octoai-model" {
+		t.Fatalf("LLM model = %q, want custom-octoai-model", got)
+	}
+	if got := llm.Provider(app.Session.LLM); got != "text.octoai.run" {
+		t.Fatalf("LLM provider = %q, want text.octoai.run", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsNvidiaLLM(t *testing.T) {
 	t.Setenv("NVIDIA_API_KEY", "test-nvidia-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "nvidia")
