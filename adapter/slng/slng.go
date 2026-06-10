@@ -149,6 +149,10 @@ func NewSTT(apiKey string, opts ...STTOption) *STT {
 }
 
 func (s *STT) Label() string { return "slng.STT" }
+func (s *STT) Model() string { return "slng" }
+func (s *STT) Provider() string {
+	return "SLNG"
+}
 func (s *STT) Capabilities() stt.STTCapabilities {
 	streaming := strings.HasPrefix(s.endpoint, "ws://") || strings.HasPrefix(s.endpoint, "wss://")
 	return stt.STTCapabilities{
@@ -350,6 +354,10 @@ func NewTTS(apiKey string, opts ...TTSOption) *TTS {
 }
 
 func (t *TTS) Label() string { return "slng.TTS" }
+func (t *TTS) Model() string { return "slng" }
+func (t *TTS) Provider() string {
+	return "SLNG"
+}
 func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
