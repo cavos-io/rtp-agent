@@ -33,6 +33,12 @@ func TestMurfTTSDefaultsMatchReference(t *testing.T) {
 	if provider.SampleRate() != 24000 {
 		t.Fatalf("sample rate = %d, want 24000", provider.SampleRate())
 	}
+	if got := tts.Model(provider); got != "FALCON" {
+		t.Fatalf("model metadata = %q, want FALCON", got)
+	}
+	if got := tts.Provider(provider); got != "Murf" {
+		t.Fatalf("provider metadata = %q, want Murf", got)
+	}
 	if !provider.Capabilities().Streaming {
 		t.Fatalf("streaming = false, want true")
 	}
