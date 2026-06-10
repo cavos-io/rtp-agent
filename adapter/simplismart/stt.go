@@ -167,6 +167,10 @@ func NewSimplismartSTT(apiKey string, opts ...SimplismartSTTOption) *Simplismart
 }
 
 func (s *SimplismartSTT) Label() string { return "simplismart.STT" }
+func (s *SimplismartSTT) Model() string { return s.model }
+func (s *SimplismartSTT) Provider() string {
+	return "Simplismart"
+}
 
 func (s *SimplismartSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
