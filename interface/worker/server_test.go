@@ -1625,6 +1625,7 @@ func TestAgentServerExecuteRunningJobRunsSetupBeforeEntrypoint(t *testing.T) {
 			return errors.New("setup did not run before entrypoint")
 		}
 		startedCh <- ctx
+		ctx.Shutdown("session ended")
 		return nil
 	}
 
@@ -1688,6 +1689,53 @@ func TestAgentServerExecuteRunningJobRunsSetupBeforeEntrypoint(t *testing.T) {
 	}
 	if got := server.ActiveRunningJobs(); len(got) != 0 {
 		t.Fatalf("ActiveRunningJobs() len after completion = %d, want 0", len(got))
+	}
+}
+
+func TestAgentServerExecuteRunningJobWaitsForShutdownAfterEntrypointCompletes(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	entrypointDone := make(chan *JobContext, 1)
+	server.entrypointFnc = func(ctx *JobContext) error {
+		entrypointDone <- ctx
+		return nil
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ExecuteRunningJob(context.Background(), ipc.RunningJobInfo{
+			Job:      &livekit.Job{Id: "job-running-wait", Room: &livekit.Room{Name: "room-a"}},
+			WorkerID: "worker-running",
+		})
+	}()
+
+	var jobCtx *JobContext
+	select {
+	case jobCtx = <-entrypointDone:
+	case <-time.After(time.Second):
+		t.Fatal("running job entrypoint did not return")
+	}
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("ExecuteRunningJob returned before shutdown: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if got := server.ActiveRunningJobs(); len(got) != 1 || got[0].Job.GetId() != "job-running-wait" {
+		t.Fatalf("ActiveRunningJobs() = %#v, want running job before shutdown", got)
+	}
+
+	jobCtx.Shutdown("session ended")
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("ExecuteRunningJob() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ExecuteRunningJob did not return after shutdown")
+	}
+	if got := server.ActiveRunningJobs(); len(got) != 0 {
+		t.Fatalf("ActiveRunningJobs() len after shutdown = %d, want 0", len(got))
 	}
 }
 
@@ -1897,6 +1945,45 @@ func TestReloadedJobEntrypointPanicDoesNotCrashProcess(t *testing.T) {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("reloaded job panic helper exited with %v\n%s", err, output)
+	}
+}
+
+func TestReloadedJobWaitsForShutdownAfterEntrypointCompletes(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	sentCh := make(chan *livekit.WorkerMessage, 1)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+	entrypointDone := make(chan *JobContext, 1)
+	server.entrypointFnc = func(ctx *JobContext) error {
+		entrypointDone <- ctx
+		return nil
+	}
+	jobCtx := NewJobContext(&livekit.Job{Id: "job-reloaded-wait", Room: &livekit.Room{Name: "room-a"}}, "", "", "")
+	server.mu.Lock()
+	server.activeJobs[jobCtx.Job.Id] = jobCtx
+	server.mu.Unlock()
+
+	server.launchReloadedJob(context.Background(), jobCtx)
+
+	select {
+	case <-entrypointDone:
+	case <-time.After(time.Second):
+		t.Fatal("reloaded job entrypoint did not return")
+	}
+
+	select {
+	case msg := <-sentCh:
+		t.Fatalf("received reloaded job status before shutdown: %#v", msg.GetUpdateJob())
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	jobCtx.Shutdown("session ended")
+
+	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job-reloaded-wait", livekit.JobStatus_JS_SUCCESS)
+	if got := server.ActiveRunningJobs(); len(got) != 0 {
+		t.Fatalf("ActiveRunningJobs() len after shutdown = %d, want 0", len(got))
 	}
 }
 
@@ -3743,6 +3830,7 @@ func TestExecuteRunningJobSetsCurrentJobContext(t *testing.T) {
 			return errors.New("current job context does not match entrypoint context")
 		}
 		entrypointCtx <- got
+		ctx.Shutdown("session ended")
 		return nil
 	}
 

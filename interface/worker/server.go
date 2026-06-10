@@ -472,9 +472,18 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 	case err := <-doneCh:
 		if err != nil {
 			logger.Logger.Errorw("Running job entrypoint failed", err, "jobId", info.Job.Id)
+			s.finishJob(jobCtx)
+			return err
+		}
+		select {
+		case <-jobCtx.ShutdownDone():
+		case <-ctx.Done():
+			jobCtx.Shutdown("")
+			s.finishJob(jobCtx)
+			return ctx.Err()
 		}
 		s.finishJob(jobCtx)
-		return err
+		return nil
 	case <-ctx.Done():
 		jobCtx.Shutdown("")
 		s.finishJob(jobCtx)
@@ -496,6 +505,18 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 			if recovered := recover(); recovered != nil {
 				logger.Logger.Errorw("Reloaded job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", jobCtx.JobID())
 				status = livekit.JobStatus_JS_FAILED
+			}
+			if status == livekit.JobStatus_JS_SUCCESS {
+				select {
+				case <-jobCtx.ShutdownDone():
+				case <-ctx.Done():
+					jobCtx.Shutdown("")
+				}
+				if !s.finishJob(jobCtx) {
+					return
+				}
+			} else {
+				s.finishJob(jobCtx)
 			}
 			select {
 			case <-ctx.Done():
