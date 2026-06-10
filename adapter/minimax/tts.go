@@ -160,6 +160,9 @@ func (t *MinimaxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 	if err := validateMinimaxAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
+	if err := validateMinimaxTTSOptions(t); err != nil {
+		return nil, err
+	}
 
 	req, err := buildMinimaxTTSRequest(ctx, t, text)
 	if err != nil {
@@ -184,6 +187,9 @@ func (t *MinimaxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 }
 
 func buildMinimaxTTSRequest(ctx context.Context, t *MinimaxTTS, text string) (*http.Request, error) {
+	if err := validateMinimaxTTSOptions(t); err != nil {
+		return nil, err
+	}
 	reqBody := minimaxOptions(t)
 	reqBody["text"] = text
 	reqBody["stream"] = true
@@ -232,6 +238,9 @@ func (t *MinimaxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if err := validateMinimaxAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
+	if err := validateMinimaxTTSOptions(t); err != nil {
+		return nil, err
+	}
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildMinimaxTTSWebsocketURL(t).String(), buildMinimaxTTSWebsocketHeaders(t))
 	if err != nil {
@@ -264,6 +273,13 @@ func (t *MinimaxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 func validateMinimaxAPIKey(apiKey string) error {
 	if apiKey == "" {
 		return fmt.Errorf("MiniMax API key is required, either as argument or set MINIMAX_API_KEY environment variable")
+	}
+	return nil
+}
+
+func validateMinimaxTTSOptions(t *MinimaxTTS) error {
+	if t.speed < 0.5 || t.speed > 2.0 {
+		return fmt.Errorf("speed must be between 0.5 and 2.0, but got %g", t.speed)
 	}
 	return nil
 }

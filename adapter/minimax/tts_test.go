@@ -203,6 +203,28 @@ func TestMinimaxTTSOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestMinimaxTTSRejectsInvalidSpeedBeforeRequest(t *testing.T) {
+	provider := NewMinimaxTTS("test-key", "", WithMinimaxTTSSpeed(0.4))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, synthErr := provider.Synthesize(ctx, "hello")
+	if synthErr == nil {
+		t.Fatal("Synthesize returned nil error, want speed validation error")
+	}
+	if !strings.Contains(synthErr.Error(), "speed must be between 0.5 and 2.0") {
+		t.Fatalf("Synthesize error = %q, want speed range guidance", synthErr)
+	}
+
+	_, streamErr := provider.Stream(ctx)
+	if streamErr == nil {
+		t.Fatal("Stream returned nil error, want speed validation error")
+	}
+	if !strings.Contains(streamErr.Error(), "speed must be between 0.5 and 2.0") {
+		t.Fatalf("Stream error = %q, want speed range guidance", streamErr)
+	}
+}
+
 func TestMinimaxTTSChunkedStreamDecodesReferenceSSEAudio(t *testing.T) {
 	stream := &minimaxTTSChunkedStream{
 		resp: &http.Response{
