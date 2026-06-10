@@ -3052,6 +3052,39 @@ func TestDefaultConfigFromEnvAcceptsOpenAICompatibleLLMFallbackProviders(t *test
 	}
 }
 
+func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		envKey   string
+		envValue string
+	}{
+		{name: "cerebras", provider: "cerebras", envKey: "CEREBRAS_API_KEY", envValue: "test-cerebras-key"},
+		{name: "fireworks", provider: "fireworks", envKey: "FIREWORKS_API_KEY", envValue: "test-fireworks-key"},
+		{name: "mistralai", provider: "mistralai", envKey: "MISTRAL_API_KEY", envValue: "test-mistral-key"},
+		{name: "nvidia", provider: "nvidia", envKey: "NVIDIA_API_KEY", envValue: "test-nvidia-key"},
+		{name: "perplexity", provider: "perplexity", envKey: "PERPLEXITY_API_KEY", envValue: "test-perplexity-key"},
+		{name: "telnyx", provider: "telnyx", envKey: "TELNYX_API_KEY", envValue: "test-telnyx-key"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+			t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", tt.provider)
+			t.Setenv("RTP_AGENT_LLM_MODEL", "custom-fallback-model")
+			t.Setenv(tt.envKey, tt.envValue)
+
+			app, err := NewApp(DefaultConfigFromEnv())
+			if err != nil {
+				t.Fatalf("NewApp() error = %v", err)
+			}
+			if got := llm.Label(app.Agent.LLM); got != "FallbackAdapter(minimal.MinimalLLM)" {
+				t.Fatalf("LLM label = %q, want fallback adapter around primary minimal LLM", got)
+			}
+		})
+	}
+}
+
 func TestDefaultConfigFromEnvConfiguresLLMChatOptions(t *testing.T) {
 	t.Setenv("RTP_AGENT_LLM_PARALLEL_TOOL_CALLS", "true")
 	t.Setenv("RTP_AGENT_LLM_JSON_CONFIG", "temperature=0.2")

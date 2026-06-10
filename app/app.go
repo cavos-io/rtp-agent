@@ -1839,6 +1839,14 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 	switch normalizeProvider(provider) {
 	case providerMinimal:
 		return minimal.NewMinimalLLM(cfg.MinimalAPIKey, cfg.LLMModel), nil
+	case providerCerebras:
+		return cerebras.NewCerebrasLLM(cfg.CerebrasAPIKey, cfg.LLMModel), nil
+	case providerFireworks:
+		return fireworksai.NewFireworksLLM(cfg.FireworksAPIKey, cfg.LLMModel), nil
+	case providerMistralAI:
+		return mistralai.NewMistralLLM(cfg.MistralAPIKey, cfg.LLMModel), nil
+	case providerNvidia:
+		return nvidia.NewNvidiaLLM(cfg.NvidiaAPIKey, cfg.LLMModel), nil
 	case providerOpenAI:
 		return openai.NewOpenAILLM(cfg.OpenAIAPIKey, cfg.LLMModel)
 	case providerDeepSeek:
@@ -1859,6 +1867,10 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return openai.NewOpenRouterLLM(cfg.OpenRouterAPIKey, cfg.LLMModel)
 	case providerSambaNova:
 		return openai.NewSambaNovaOpenAILLM(cfg.LLMModel, cfg.SambaNovaAPIKey)
+	case providerPerplexity:
+		return perplexity.NewPerplexityLLM(cfg.PerplexityAPIKey, cfg.LLMModel), nil
+	case providerTelnyx:
+		return telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel), nil
 	case providerGroq:
 		return groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel), nil
 	case providerXAI:
