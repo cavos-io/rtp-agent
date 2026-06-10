@@ -102,6 +102,26 @@ func TestGroqTTSOptionsMatchReference(t *testing.T) {
 	assertGroqTTSPayload(t, payload, "voice", "noura")
 }
 
+func TestGroqTTSUpdateOptionsMatchReference(t *testing.T) {
+	provider := NewGroqTTS("test-key", "",
+		WithGroqTTSModel("canopylabs/orpheus-v1-english"),
+		WithGroqTTSVoice("autumn"),
+	)
+
+	provider.UpdateOptions("canopylabs/orpheus-arabic-saudi", "fahad")
+
+	req, err := buildGroqTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	assertGroqTTSPayload(t, payload, "model", "canopylabs/orpheus-arabic-saudi")
+	assertGroqTTSPayload(t, payload, "voice", "fahad")
+}
+
 func TestGroqTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
 	t.Setenv("GROQ_API_KEY", "")
 	provider := NewGroqTTS("", "", WithGroqTTSBaseURL("://bad-url"))

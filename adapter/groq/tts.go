@@ -85,6 +85,15 @@ func (t *GroqTTS) Capabilities() tts.TTSCapabilities {
 func (t *GroqTTS) SampleRate() int  { return t.sampleRate }
 func (t *GroqTTS) NumChannels() int { return 1 }
 
+func (t *GroqTTS) UpdateOptions(model string, voice string) {
+	if model != "" {
+		t.model = model
+	}
+	if voice != "" {
+		t.voice = voice
+	}
+}
+
 func (t *GroqTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if err := validateGroqTTSAPIKey(t.apiKey); err != nil {
 		return nil, err
