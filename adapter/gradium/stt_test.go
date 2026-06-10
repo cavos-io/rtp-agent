@@ -50,6 +50,12 @@ func TestGradiumSTTDefaultsMatchReference(t *testing.T) {
 	if provider.Label() != "gradium.STT" {
 		t.Fatalf("label = %q, want gradium.STT", provider.Label())
 	}
+	if got := stt.Model(provider); got != "unknown" {
+		t.Fatalf("model metadata = %q, want unknown", got)
+	}
+	if got := stt.Provider(provider); got != "Gradium" {
+		t.Fatalf("provider metadata = %q, want Gradium", got)
+	}
 
 	caps := provider.Capabilities()
 	if !caps.Streaming {

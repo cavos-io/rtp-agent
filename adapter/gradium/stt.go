@@ -126,6 +126,10 @@ func NewGradiumSTT(apiKey string, opts ...GradiumSTTOption) *GradiumSTT {
 }
 
 func (s *GradiumSTT) Label() string { return "gradium.STT" }
+func (s *GradiumSTT) Model() string { return "unknown" }
+func (s *GradiumSTT) Provider() string {
+	return "Gradium"
+}
 func (s *GradiumSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, OfflineRecognize: false}
 }

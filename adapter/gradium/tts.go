@@ -90,6 +90,8 @@ func (t *GradiumTTS) Capabilities() tts.TTSCapabilities {
 }
 func (t *GradiumTTS) SampleRate() int  { return gradiumTTSSampleRate }
 func (t *GradiumTTS) NumChannels() int { return 1 }
+func (t *GradiumTTS) Model() string    { return "unknown" }
+func (t *GradiumTTS) Provider() string { return "Gradium" }
 
 func (t *GradiumTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if err := validateGradiumAPIKey(t.apiKey); err != nil {
