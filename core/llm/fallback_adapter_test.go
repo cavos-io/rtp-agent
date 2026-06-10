@@ -583,6 +583,29 @@ func TestFallbackAdapterTreatsNilProviderStreamAsFailure(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterTreatsTypedNilProviderStreamAsFailure(t *testing.T) {
+	var typedNil *fakeFallbackStream
+	fallback := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
+	}}}
+	adapter := NewFallbackAdapter([]LLM{
+		&fakeFallbackLLM{stream: typedNil},
+		fallback,
+	})
+
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "fallback" {
+		t.Fatalf("chunk content = %q, want fallback", got)
+	}
+}
+
 func TestFallbackAdapterSkipsUnavailableProviderOnNextChat(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	primary := &fakeFallbackLLM{streams: []LLMStream{

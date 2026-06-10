@@ -67,6 +67,8 @@ func (t *TelnyxTTS) Capabilities() tts.TTSCapabilities {
 }
 func (t *TelnyxTTS) SampleRate() int  { return t.sampleRate }
 func (t *TelnyxTTS) NumChannels() int { return telnyxTTSNumChannels }
+func (t *TelnyxTTS) Model() string    { return t.voice }
+func (t *TelnyxTTS) Provider() string { return "telnyx" }
 
 func (t *TelnyxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	stream, err := t.Stream(ctx)

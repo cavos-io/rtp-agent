@@ -12,5 +12,5 @@ if grep -Fq 'GOCACHE=${GOCACHE:-$REPO_ROOT/.tmp}' "$SCRIPT"; then
 fi
 
 grep -Fq 'local temp_root="$path/.tmp"' "$SCRIPT"
-grep -Fq 'GOCACHE=${GOCACHE:-$temp_root}' "$SCRIPT"
-grep -Fq 'TMPDIR=${TMPDIR:-$temp_root/gotmp}' "$SCRIPT"
+grep -Fq 'GOCACHE=$temp_root' "$SCRIPT"
+grep -Fq 'TMPDIR=$temp_root/gotmp' "$SCRIPT"

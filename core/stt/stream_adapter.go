@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"reflect"
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -144,6 +145,12 @@ func (w *streamAdapterWrapper) run() {
 
 	vadStream, err := w.adapter.vad.Stream(w.ctx)
 	if err != nil {
+		logger.Logger.Errorw("Failed to start VAD stream in StreamAdapter", err)
+		w.sendErr(err)
+		return
+	}
+	if isNilVADStream(vadStream) {
+		err := fmt.Errorf("nil VAD stream")
 		logger.Logger.Errorw("Failed to start VAD stream in StreamAdapter", err)
 		w.sendErr(err)
 		return
@@ -375,10 +382,23 @@ func (w *streamAdapterWrapper) closeVADStream() error {
 	vadStream := w.vadStream
 	w.vadStream = nil
 	w.mu.Unlock()
-	if vadStream != nil {
+	if !isNilVADStream(vadStream) {
 		return vadStream.Close()
 	}
 	return nil
+}
+
+func isNilVADStream(stream vad.VADStream) bool {
+	if stream == nil {
+		return true
+	}
+	value := reflect.ValueOf(stream)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 func (w *streamAdapterWrapper) Next() (*SpeechEvent, error) {

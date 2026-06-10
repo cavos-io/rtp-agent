@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	coretts "github.com/cavos-io/rtp-agent/core/tts"
 )
 
 func TestGradiumTTSDefaultsMatchReference(t *testing.T) {
@@ -26,6 +28,12 @@ func TestGradiumTTSDefaultsMatchReference(t *testing.T) {
 	}
 	if provider.SampleRate() != 48000 {
 		t.Fatalf("sample rate = %d, want 48000", provider.SampleRate())
+	}
+	if got := coretts.Model(provider); got != "unknown" {
+		t.Fatalf("model metadata = %q, want unknown", got)
+	}
+	if got := coretts.Provider(provider); got != "Gradium" {
+		t.Fatalf("provider metadata = %q, want Gradium", got)
 	}
 	if !provider.Capabilities().Streaming {
 		t.Fatal("streaming = false, want true")

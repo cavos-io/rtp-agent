@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	coretts "github.com/cavos-io/rtp-agent/core/tts"
 )
 
 func TestSpeechifyTTSDefaultsMatchReference(t *testing.T) {
@@ -24,6 +26,12 @@ func TestSpeechifyTTSDefaultsMatchReference(t *testing.T) {
 	}
 	if provider.sampleRate != 24000 {
 		t.Fatalf("sample rate = %d, want 24000", provider.sampleRate)
+	}
+	if got := coretts.Model(provider); got != "unknown" {
+		t.Fatalf("model metadata = %q, want unknown", got)
+	}
+	if got := coretts.Provider(provider); got != "Speechify" {
+		t.Fatalf("provider metadata = %q, want Speechify", got)
 	}
 }
 
@@ -118,6 +126,9 @@ func TestSpeechifyTTSOptionsMatchReference(t *testing.T) {
 		WithSpeechifyTTSLoudnessNormalization(true),
 		WithSpeechifyTTSTextNormalization(false),
 	)
+	if got := coretts.Model(provider); got != "simba-english" {
+		t.Fatalf("model metadata = %q, want simba-english", got)
+	}
 
 	req, err := buildSpeechifyTTSRequest(context.Background(), provider, "hello")
 	if err != nil {

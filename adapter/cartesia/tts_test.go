@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
 func TestCartesiaTTSDefaultsMatchReference(t *testing.T) {
@@ -25,6 +27,12 @@ func TestCartesiaTTSDefaultsMatchReference(t *testing.T) {
 	}
 	if !provider.Capabilities().AlignedTranscript {
 		t.Fatalf("AlignedTranscript = false, want true when word timestamps are enabled")
+	}
+	if got := tts.Model(provider); got != "sonic-3" {
+		t.Fatalf("model metadata = %q, want sonic-3", got)
+	}
+	if got := tts.Provider(provider); got != "Cartesia" {
+		t.Fatalf("provider metadata = %q, want Cartesia", got)
 	}
 }
 

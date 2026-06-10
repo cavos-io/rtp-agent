@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	coretts "github.com/cavos-io/rtp-agent/core/tts"
 )
 
 func TestLMNTTTSDefaultsMatchReference(t *testing.T) {
@@ -33,6 +35,12 @@ func TestLMNTTTSDefaultsMatchReference(t *testing.T) {
 	}
 	if provider.topP != 0.8 {
 		t.Fatalf("topP = %v, want 0.8", provider.topP)
+	}
+	if got := coretts.Model(provider); got != "blizzard" {
+		t.Fatalf("model metadata = %q, want blizzard", got)
+	}
+	if got := coretts.Provider(provider); got != "LMNT" {
+		t.Fatalf("provider metadata = %q, want LMNT", got)
 	}
 }
 

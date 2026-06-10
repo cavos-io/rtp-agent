@@ -86,6 +86,11 @@ func NewSTT(apiKey string, opts ...STTOption) *STT {
 }
 
 func (s *STT) Label() string { return "gnani.STT" }
+func (s *STT) Model() string { return "vachana-stt-v3" }
+func (s *STT) Provider() string {
+	return "Gnani"
+}
+
 func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: false, Diarization: false, OfflineRecognize: true}
 }

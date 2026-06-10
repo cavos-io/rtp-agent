@@ -111,6 +111,13 @@ func (t *SpeechifyTTS) Capabilities() tts.TTSCapabilities {
 }
 func (t *SpeechifyTTS) SampleRate() int  { return t.sampleRate }
 func (t *SpeechifyTTS) NumChannels() int { return 1 }
+func (t *SpeechifyTTS) Model() string {
+	if t.model == "" {
+		return "unknown"
+	}
+	return t.model
+}
+func (t *SpeechifyTTS) Provider() string { return "Speechify" }
 
 func (t *SpeechifyTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if err := validateSpeechifyAPIKey(t.apiKey); err != nil {

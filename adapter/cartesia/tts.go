@@ -144,6 +144,8 @@ func (t *CartesiaTTS) Capabilities() tts.TTSCapabilities {
 }
 func (t *CartesiaTTS) SampleRate() int  { return t.sampleRate }
 func (t *CartesiaTTS) NumChannels() int { return 1 }
+func (t *CartesiaTTS) Model() string    { return t.model }
+func (t *CartesiaTTS) Provider() string { return "Cartesia" }
 
 func (t *CartesiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if err := validateCartesiaTTSAPIKey(t.apiKey); err != nil {

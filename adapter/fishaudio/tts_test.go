@@ -36,6 +36,12 @@ func TestFishAudioTTSDefaultsMatchReference(t *testing.T) {
 	if provider.chunkLength != 100 {
 		t.Fatalf("chunk length = %d, want 100", provider.chunkLength)
 	}
+	if got := tts.Model(provider); got != "s2-pro" {
+		t.Fatalf("model metadata = %q, want s2-pro", got)
+	}
+	if got := tts.Provider(provider); got != "FishAudio" {
+		t.Fatalf("provider metadata = %q, want FishAudio", got)
+	}
 	if !provider.Capabilities().Streaming {
 		t.Fatalf("streaming = false, want true")
 	}

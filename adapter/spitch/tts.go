@@ -96,6 +96,8 @@ func (t *SpitchTTS) Capabilities() tts.TTSCapabilities {
 }
 func (t *SpitchTTS) SampleRate() int  { return t.sampleRate }
 func (t *SpitchTTS) NumChannels() int { return 1 }
+func (t *SpitchTTS) Model() string    { return "unknown" }
+func (t *SpitchTTS) Provider() string { return "Spitch" }
 
 func (t *SpitchTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	req, err := buildSpitchTTSRequest(ctx, t, text)

@@ -121,6 +121,14 @@ func NewFireworksSTT(apiKey string, opts ...FireworksSTTOption) *FireworksSTT {
 }
 
 func (s *FireworksSTT) Label() string { return "fireworks.STT" }
+func (s *FireworksSTT) Model() string {
+	if s.model == "" {
+		return "unknown"
+	}
+	return s.model
+}
+func (s *FireworksSTT) Provider() string { return "FireworksAI" }
+
 func (s *FireworksSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, OfflineRecognize: false}
 }

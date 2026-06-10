@@ -25,6 +25,12 @@ func TestTelnyxSTTDefaultsMatchReference(t *testing.T) {
 	if provider.sampleRate != 16000 {
 		t.Fatalf("sample rate = %d, want 16000", provider.sampleRate)
 	}
+	if got := stt.Model(provider); got != "telnyx" {
+		t.Fatalf("model metadata = %q, want telnyx", got)
+	}
+	if got := stt.Provider(provider); got != "telnyx" {
+		t.Fatalf("provider metadata = %q, want telnyx", got)
+	}
 	caps := provider.Capabilities()
 	if !caps.Streaming || !caps.InterimResults || !caps.OfflineRecognize {
 		t.Fatalf("capabilities = %+v, want streaming interim offline recognize", caps)

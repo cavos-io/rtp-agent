@@ -111,6 +111,10 @@ func NewCartesiaSTT(apiKey string, opts ...CartesiaSTTOption) *CartesiaSTT {
 }
 
 func (s *CartesiaSTT) Label() string { return "cartesia.STT" }
+func (s *CartesiaSTT) Model() string { return s.model }
+func (s *CartesiaSTT) Provider() string {
+	return "Cartesia"
+}
 func (s *CartesiaSTT) Capabilities() stt.STTCapabilities {
 	legacy := s.finalTranscriptMode == "legacy"
 	aligned := ""

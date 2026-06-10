@@ -138,6 +138,11 @@ func NewTTS(apiKey string, opts ...Option) *TTS {
 }
 
 func (t *TTS) Label() string { return "gnani.TTS" }
+func (t *TTS) Model() string { return t.model }
+func (t *TTS) Provider() string {
+	return "Gnani"
+}
+
 func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }

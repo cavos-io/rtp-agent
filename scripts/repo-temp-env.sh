@@ -2,6 +2,7 @@
 
 repo_temp_env_root="${REPO_ROOT:-$(git rev-parse --show-toplevel)}"
 repo_temp_dir="$repo_temp_env_root/.tmp"
+repo_temp_env_force="${REPO_TEMP_ENV_FORCE:-0}"
 
 if [[ -L "$repo_temp_dir" ]]; then
   rm -f "$repo_temp_dir"
@@ -13,7 +14,12 @@ fi
 
 mkdir -p "$repo_temp_dir" "$repo_temp_dir/gotmp" "$repo_temp_dir/gocache"
 
-export GOCACHE="${GOCACHE:-$repo_temp_dir}"
-export TMPDIR="${TMPDIR:-$repo_temp_dir/gotmp}"
+if [[ "$repo_temp_env_force" == "1" ]]; then
+  export GOCACHE="$repo_temp_dir"
+  export TMPDIR="$repo_temp_dir/gotmp"
+else
+  export GOCACHE="${GOCACHE:-$repo_temp_dir}"
+  export TMPDIR="${TMPDIR:-$repo_temp_dir/gotmp}"
+fi
 
-unset repo_temp_env_root repo_temp_dir
+unset repo_temp_env_root repo_temp_dir repo_temp_env_force REPO_TEMP_ENV_FORCE

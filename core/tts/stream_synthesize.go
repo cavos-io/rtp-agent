@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"time"
 
@@ -19,6 +20,12 @@ func SynthesizeWithStream(ctx context.Context, provider TTS, text string) (Chunk
 	ctx, span := telemetry.NewTTSStreamSpan(ctx, Model(provider), Provider(provider))
 	stream, err := provider.Stream(ctx)
 	if err != nil {
+		span.End()
+		emitTTSError(provider, err, false)
+		return nil, err
+	}
+	if isNilSynthesizeStream(stream) {
+		err := fmt.Errorf("TTS returned nil synthesize stream")
 		span.End()
 		emitTTSError(provider, err, false)
 		return nil, err
@@ -47,6 +54,19 @@ func SynthesizeWithStream(ctx context.Context, provider TTS, text string) (Chunk
 	}, nil
 }
 
+func isNilSynthesizeStream(stream SynthesizeStream) bool {
+	if stream == nil {
+		return true
+	}
+	value := reflect.ValueOf(stream)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
 type inputEndingSynthesizeStream interface {
 	EndInput() error
 }
@@ -56,6 +76,9 @@ func endSynthesizeStreamInput(stream SynthesizeStream) error {
 }
 
 func EndSynthesizeStreamInput(stream SynthesizeStream) error {
+	if isNilSynthesizeStream(stream) {
+		return fmt.Errorf("TTS returned nil synthesize stream")
+	}
 	if ending, ok := stream.(inputEndingSynthesizeStream); ok {
 		return ending.EndInput()
 	}

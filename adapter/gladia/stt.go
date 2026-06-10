@@ -210,6 +210,11 @@ func NewGladiaSTT(apiKey string, opts ...GladiaSTTOption) *GladiaSTT {
 }
 
 func (s *GladiaSTT) Label() string { return "gladia.STT" }
+func (s *GladiaSTT) Model() string { return s.model }
+func (s *GladiaSTT) Provider() string {
+	return "Gladia"
+}
+
 func (s *GladiaSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:         true,

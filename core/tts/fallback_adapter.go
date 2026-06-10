@@ -319,7 +319,7 @@ func (f *FallbackAdapter) tryRecoverChunked(index int, text string) {
 		defer f.finishRecovery(index, recoveryID)
 
 		stream, err := tts.Synthesize(ctx, text)
-		if err != nil || stream == nil {
+		if err != nil || isNilChunkedStream(stream) {
 			f.mu.Lock()
 			f.status[index].recovering = false
 			f.mu.Unlock()
@@ -384,7 +384,7 @@ func (f *FallbackAdapter) tryRecoverStream(index int, inputs []fallbackSynthesiz
 		defer f.finishRecovery(index, recoveryID)
 
 		stream, err := streamForTTS(ctx, tts)
-		if err != nil || stream == nil {
+		if err != nil || isNilSynthesizeStream(stream) {
 			f.mu.Lock()
 			f.status[index].recovering = false
 			f.mu.Unlock()
@@ -590,6 +590,9 @@ func (s *fallbackChunkedStream) tryStartStream(index int) error {
 		for {
 			tts := s.adapter.ttss[i]
 			stream, err := tts.Synthesize(s.ctx, s.text)
+			if err == nil && isNilChunkedStream(stream) {
+				err = fmt.Errorf("TTS returned nil chunked stream")
+			}
 			if err == nil {
 				s.activeStream = stream
 				s.activeIndex = i
@@ -996,7 +999,11 @@ func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
 }
 
 func (s *fallbackSynthesizeStream) startProviderStream(tts TTS) (SynthesizeStream, error) {
-	return streamForTTS(s.ctx, tts)
+	stream, err := streamForTTS(s.ctx, tts)
+	if err == nil && isNilSynthesizeStream(stream) {
+		return nil, fmt.Errorf("TTS returned nil synthesize stream")
+	}
+	return stream, err
 }
 
 func (s *fallbackSynthesizeStream) replayBufferedText(stream SynthesizeStream) error {

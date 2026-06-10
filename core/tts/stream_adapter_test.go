@@ -803,6 +803,53 @@ func TestStreamAdapterPropagatesSynthesizeError(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterReportsNilChunkedStream(t *testing.T) {
+	stream, err := NewStreamAdapter(&fakeStreamAdapterTTS{nilChunked: true}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	err = nextStreamAdapterError(stream)
+	if err == nil {
+		t.Fatal("Next error = nil, want nil stream error")
+	}
+	if !strings.Contains(err.Error(), "nil chunked stream") {
+		t.Fatalf("Next error = %v, want nil chunked stream error", err)
+	}
+}
+
+func TestStreamAdapterReportsTypedNilChunkedStream(t *testing.T) {
+	var typedNil *fakeStreamAdapterChunkedStream
+	stream, err := NewStreamAdapter(&fakeStreamAdapterTTS{chunked: typedNil}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	err = nextStreamAdapterError(stream)
+	if err == nil {
+		t.Fatal("Next error = nil, want typed nil stream error")
+	}
+	if !strings.Contains(err.Error(), "nil chunked stream") {
+		t.Fatalf("Next error = %v, want nil chunked stream error", err)
+	}
+}
+
 func TestStreamAdapterPropagatesChunkedStreamError(t *testing.T) {
 	streamErr := errors.New("audio stream failed")
 	stream, err := NewStreamAdapter(&fakeStreamAdapterTTS{streamErr: streamErr}).Stream(context.Background())
@@ -1064,6 +1111,7 @@ type fakeStreamAdapterTTS struct {
 	streamErr     error
 	events        []*SynthesizedAudio
 	chunked       ChunkedStream
+	nilChunked    bool
 	empty         bool
 	closed        bool
 }
@@ -1105,6 +1153,9 @@ func (f *fakeStreamAdapterTTS) Synthesize(_ context.Context, text string) (Chunk
 	f.texts = append(f.texts, text)
 	if f.synthesizeErr != nil {
 		return nil, f.synthesizeErr
+	}
+	if f.nilChunked {
+		return nil, nil
 	}
 	if f.chunked != nil {
 		return f.chunked, nil

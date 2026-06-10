@@ -184,6 +184,10 @@ func NewSonioxSTT(apiKey string, opts ...SonioxSTTOption) *SonioxSTT {
 }
 
 func (s *SonioxSTT) Label() string { return "soniox.STT" }
+func (s *SonioxSTT) Model() string { return s.model }
+func (s *SonioxSTT) Provider() string {
+	return "Soniox"
+}
 func (s *SonioxSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:         true,

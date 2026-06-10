@@ -167,6 +167,55 @@ func TestSynthesizeWithStreamEmitsErrorOnPushFailure(t *testing.T) {
 	}
 }
 
+func TestSynthesizeWithStreamReportsNilProviderStream(t *testing.T) {
+	provider := &fakeStreamingTTS{}
+	errCh := make(chan TTSError, 1)
+	provider.OnError(func(err TTSError) {
+		errCh <- err
+	})
+
+	_, err := SynthesizeWithStream(context.Background(), provider, "hello")
+	if err == nil {
+		t.Fatal("SynthesizeWithStream() error = nil, want nil provider stream error")
+	}
+	if !strings.Contains(err.Error(), "nil synthesize stream") {
+		t.Fatalf("SynthesizeWithStream() error = %v, want nil provider stream error", err)
+	}
+
+	select {
+	case got := <-errCh:
+		if !strings.Contains(got.Err.Error(), "nil synthesize stream") {
+			t.Fatalf("emitted error = %v, want nil provider stream error", got.Err)
+		}
+		if got.Recoverable {
+			t.Fatal("emitted error is recoverable, want false")
+		}
+	default:
+		t.Fatal("provider did not emit nil provider stream error")
+	}
+}
+
+func TestEndSynthesizeStreamInputRejectsNilStream(t *testing.T) {
+	err := EndSynthesizeStreamInput(nil)
+	if err == nil {
+		t.Fatal("EndSynthesizeStreamInput(nil) error = nil, want nil stream error")
+	}
+	if !strings.Contains(err.Error(), "nil synthesize stream") {
+		t.Fatalf("EndSynthesizeStreamInput(nil) error = %v, want nil stream error", err)
+	}
+}
+
+func TestEndSynthesizeStreamInputRejectsTypedNilStream(t *testing.T) {
+	var stream *fakeSynthesizeStream
+	err := EndSynthesizeStreamInput(stream)
+	if err == nil {
+		t.Fatal("EndSynthesizeStreamInput(typed nil) error = nil, want nil stream error")
+	}
+	if !strings.Contains(err.Error(), "nil synthesize stream") {
+		t.Fatalf("EndSynthesizeStreamInput(typed nil) error = %v, want nil stream error", err)
+	}
+}
+
 func TestSynthesizeWithStreamReturnsStreamEvents(t *testing.T) {
 	want := &SynthesizedAudio{RequestID: "req-a", DeltaText: "hello"}
 	provider := &fakeStreamingTTS{

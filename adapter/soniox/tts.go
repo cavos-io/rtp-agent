@@ -122,6 +122,8 @@ func (t *SonioxTTS) Capabilities() tts.TTSCapabilities {
 }
 func (t *SonioxTTS) SampleRate() int  { return t.sampleRate }
 func (t *SonioxTTS) NumChannels() int { return sonioxTTSNumChannels }
+func (t *SonioxTTS) Model() string    { return t.model }
+func (t *SonioxTTS) Provider() string { return "Soniox" }
 
 func (t *SonioxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	stream, err := t.Stream(ctx)

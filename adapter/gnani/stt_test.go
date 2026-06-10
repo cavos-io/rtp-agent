@@ -24,6 +24,12 @@ func TestGnaniSTTDefaultsMatchReference(t *testing.T) {
 	if provider.sampleRate != 16000 {
 		t.Fatalf("sample rate = %d, want 16000", provider.sampleRate)
 	}
+	if got := stt.Model(provider); got != "vachana-stt-v3" {
+		t.Fatalf("model metadata = %q, want vachana-stt-v3", got)
+	}
+	if got := stt.Provider(provider); got != "Gnani" {
+		t.Fatalf("provider metadata = %q, want Gnani", got)
+	}
 	caps := provider.Capabilities()
 	if !caps.Streaming {
 		t.Fatal("streaming = false, want true for websocket streaming")

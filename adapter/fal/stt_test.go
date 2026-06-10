@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
 func TestFalSTTDefaultsMatchReference(t *testing.T) {
@@ -21,6 +23,12 @@ func TestFalSTTDefaultsMatchReference(t *testing.T) {
 	}
 	if provider.version != "3" {
 		t.Fatalf("version = %q, want 3", provider.version)
+	}
+	if got := stt.Model(provider); got != "Wizper" {
+		t.Fatalf("model metadata = %q, want Wizper", got)
+	}
+	if got := stt.Provider(provider); got != "Fal" {
+		t.Fatalf("provider metadata = %q, want Fal", got)
 	}
 	if !provider.Capabilities().InterimResults {
 		t.Fatalf("interim results = false, want true to match reference capabilities")

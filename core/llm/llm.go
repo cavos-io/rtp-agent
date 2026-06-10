@@ -1281,7 +1281,7 @@ func (s *fallbackLLMStream) markUnavailable(index int, recover bool) {
 func (f *FallbackAdapter) recoverLLM(index int, llm LLM, chatCtx *ChatContext, opts []ChatOption) {
 	ctx, cancel := f.attemptContext(context.Background())
 	stream, err := llm.Chat(ctx, chatCtx, f.attemptOptions(opts)...)
-	if err != nil || stream == nil {
+	if err != nil || isNilLLMStream(stream) {
 		cancel()
 		f.finishRecovery(index, false)
 		return
@@ -1325,7 +1325,7 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 		for {
 			ctx, cancel := s.adapter.attemptContext(s.ctx)
 			stream, err := s.adapter.llms[i].Chat(ctx, s.ChatCtx(), s.adapter.attemptOptions(s.opts)...)
-			if err == nil && stream == nil {
+			if err == nil && isNilLLMStream(stream) {
 				err = NewAPIConnectionError("LLM returned nil stream")
 			}
 			if err == nil {
@@ -1474,7 +1474,7 @@ func (f *FallbackAdapter) waitRetryInterval(ctx context.Context) error {
 }
 
 func (s *fallbackLLMStream) closeActive() {
-	if s.activeStream != nil {
+	if !isNilLLMStream(s.activeStream) {
 		_ = s.activeStream.Close()
 		s.activeStream = nil
 	}
@@ -1496,7 +1496,7 @@ func (s *fallbackLLMStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	if s.activeStream == nil {
+	if isNilLLMStream(s.activeStream) {
 		return nil
 	}
 	err := s.activeStream.Close()
@@ -1505,4 +1505,17 @@ func (s *fallbackLLMStream) Close() error {
 		s.activeCancel = nil
 	}
 	return err
+}
+
+func isNilLLMStream(stream LLMStream) bool {
+	if stream == nil {
+		return true
+	}
+	value := reflect.ValueOf(stream)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }

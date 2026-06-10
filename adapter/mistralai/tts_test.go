@@ -40,6 +40,12 @@ func TestMistralAITTSDefaultsMatchReference(t *testing.T) {
 	if provider.NumChannels() != 1 {
 		t.Fatalf("channels = %d, want 1", provider.NumChannels())
 	}
+	if got := tts.Model(provider); got != "voxtral-mini-tts-latest" {
+		t.Fatalf("model metadata = %q, want voxtral-mini-tts-latest", got)
+	}
+	if got := tts.Provider(provider); got != "MistralAI" {
+		t.Fatalf("provider metadata = %q, want MistralAI", got)
+	}
 	caps := provider.Capabilities()
 	if caps.Streaming {
 		t.Fatal("streaming = true, want false for chunked TTS")

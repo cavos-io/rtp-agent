@@ -354,7 +354,7 @@ func MakeToolOutput(fncCall FunctionCall, output any, exception error) FunctionC
 }
 
 func CollectStream(stream LLMStream) (*CollectedResponse, error) {
-	if stream == nil {
+	if isNilLLMStream(stream) {
 		return nil, fmt.Errorf("llm stream is nil")
 	}
 	defer stream.Close()
@@ -405,14 +405,14 @@ type TextStream struct {
 }
 
 func NewTextStream(stream LLMStream) (*TextStream, error) {
-	if stream == nil {
+	if isNilLLMStream(stream) {
 		return nil, fmt.Errorf("llm stream is nil")
 	}
 	return &TextStream{stream: stream}, nil
 }
 
 func (s *TextStream) Next() (string, error) {
-	if s == nil || s.stream == nil {
+	if s == nil || isNilLLMStream(s.stream) {
 		return "", fmt.Errorf("llm text stream is nil")
 	}
 	for {
