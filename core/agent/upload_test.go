@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/livekit/protocol/auth"
@@ -313,6 +314,50 @@ func TestUploadSessionReportRecordsModelUsage(t *testing.T) {
 	}
 	if _, ok := entry["llm_prompt_tokens"]; ok {
 		t.Fatalf("usage = %#v, want model usage keys not summary keys", usage)
+	}
+}
+
+func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
+	oldRecord := recordUploadTelemetryEvent
+	var events []uploadTelemetryEvent
+	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
+	}
+	defer func() { recordUploadTelemetryEvent = oldRecord }()
+	useRecordingUploadHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Setenv("LIVEKIT_OBSERVABILITY_URL", "https://observability.test")
+
+	chatCtx := llm.NewChatContext()
+	chatCtx.AddMessage(llm.ChatMessageArgs{
+		Role: llm.ChatRoleUser,
+		Text: "hello there",
+	})
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Transcript: true}
+	report.ChatHistory = chatCtx
+	report.RoomID = "RM_chat"
+
+	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("telemetry events = %#v, want session report and chat item", events)
+	}
+	if events[1].eventType != "chat_item" || events[1].body != "chat item" {
+		t.Fatalf("second telemetry event = %#v, want chat item event", events[1])
+	}
+	item, ok := events[1].attrs["chat.item"].(map[string]any)
+	if !ok {
+		t.Fatalf("chat.item = %T, want map", events[1].attrs["chat.item"])
+	}
+	if item["type"] != "message" || item["role"] != "user" {
+		t.Fatalf("chat.item = %#v, want user message", item)
+	}
+	content, ok := item["content"].([]any)
+	if !ok || len(content) != 1 || content[0] != "hello there" {
+		t.Fatalf("chat.item content = %#v, want hello there", item["content"])
 	}
 }
 
