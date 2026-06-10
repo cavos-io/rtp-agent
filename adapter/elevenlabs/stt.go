@@ -516,6 +516,9 @@ func elevenLabsSTTSpeechDataFromStream(state *elevenLabsSTTStreamState, data map
 	if language == "" {
 		language = state.language
 	}
+	if language == "" {
+		language = "en"
+	}
 	words := elevenLabsSTTWordsFromAny(data["words"])
 	speechData := stt.SpeechData{
 		Text:      text,

@@ -288,6 +288,21 @@ func TestElevenLabsSTTStreamEventsMapLifecycle(t *testing.T) {
 	assertElevenLabsSTTEvent(t, events, 0, stt.SpeechEventEndOfSpeech, "")
 }
 
+func TestElevenLabsSTTStreamEventDefaultsLanguageToEnglish(t *testing.T) {
+	events, err := processElevenLabsSTTStreamEvent(&elevenLabsSTTStreamState{}, map[string]any{
+		"message_type": "committed_transcript",
+		"text":         "hello",
+	})
+	if err != nil {
+		t.Fatalf("process final: %v", err)
+	}
+	assertElevenLabsSTTEvent(t, events, 0, stt.SpeechEventStartOfSpeech, "")
+	assertElevenLabsSTTEvent(t, events, 1, stt.SpeechEventFinalTranscript, "hello")
+	if got := events[1].Alternatives[0].Language; got != "en" {
+		t.Fatalf("language = %q, want reference default en", got)
+	}
+}
+
 func TestElevenLabsSTTStreamEventReportsErrors(t *testing.T) {
 	_, err := processElevenLabsSTTStreamEvent(&elevenLabsSTTStreamState{}, map[string]any{
 		"message_type": "quota_exceeded",
