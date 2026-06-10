@@ -28,6 +28,7 @@ EOF
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
+source "$REPO_ROOT/scripts/repo-temp-env.sh"
 
 TEST_CASES_FILE="${PARITY_TEST_CASES_FILE:-$REPO_ROOT/scripts/parity-fixtures/test-cases.tsv}"
 declare -a CASE_ARGS=()
@@ -201,6 +202,7 @@ bash -n scripts/parity-check.sh
 bash -n scripts/parity-validate.sh
 bash -n scripts/parity-test-inventory.sh
 bash -n scripts/repo-temp-env.sh
+bash -n scripts/go-arch-lint.sh
 bash -n scripts/integrate-worktrees-hourly.sh
 bash -n scripts/test-integrate-worktrees-hourly.sh
 bash -n scripts/check-test-integrity.sh
