@@ -2133,6 +2133,12 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, slng.WithTTSSpeed(cfg.TTSSpeed))
 		}
 		return slng.NewTTS(cfg.SLNGAPIKey, ttsOpts...), nil
+	case providerTelnyx:
+		ttsOpts := []telnyx.TelnyxTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, telnyx.WithTelnyxTTSBaseURL(cfg.TTSBaseURL))
+		}
+		return telnyx.NewTelnyxTTS(cfg.TelnyxAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_TTS_FALLBACK_PROVIDERS entry %q", provider)
 	}
