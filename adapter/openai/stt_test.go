@@ -932,7 +932,13 @@ func TestOpenAISTTUpdateOptionsPropagatesLanguageToActiveStream(t *testing.T) {
 }
 
 func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
-	state := &openAIRealtimeSTTMessageState{language: "id"}
+	now := time.Unix(100, 0)
+	state := &openAIRealtimeSTTMessageState{
+		language: "id",
+		now: func() time.Time {
+			return now
+		},
+	}
 
 	events, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"item-1","audio_start_ms":100}`), state)
 	if err != nil {
@@ -948,6 +954,24 @@ func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].Type != stt.SpeechEventInterimTranscript || events[0].Alternatives[0].Text != "hel" {
 		t.Fatalf("events = %+v, want interim transcript", events)
+	}
+
+	now = now.Add(100 * time.Millisecond)
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.delta","item_id":"item-1","delta":"lo"}`), state)
+	if err != nil {
+		t.Fatalf("throttled delta: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want throttled interim delta", events)
+	}
+
+	now = now.Add(500 * time.Millisecond)
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.delta","item_id":"item-1","delta":"!"}`), state)
+	if err != nil {
+		t.Fatalf("post-throttle delta: %v", err)
+	}
+	if len(events) != 1 || events[0].Type != stt.SpeechEventInterimTranscript || events[0].Alternatives[0].Text != "hello!" {
+		t.Fatalf("events = %+v, want accumulated throttled interim transcript", events)
 	}
 
 	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_stopped","item_id":"item-1","audio_end_ms":900}`), state)

@@ -30,6 +30,7 @@ const (
 	openAIRealtimeSTTDefaultThreshold  = 0.5
 	openAIRealtimeSTTPrefixPaddingMS   = 600
 	openAIRealtimeSTTSilenceDurationMS = 350
+	openAIRealtimeSTTDeltaInterval     = 500 * time.Millisecond
 	openAIAPIKeyEnv                    = "OPENAI_API_KEY"
 )
 
@@ -632,6 +633,8 @@ type openAIRealtimeSTTMessageState struct {
 	language      string
 	currentText   string
 	currentItemID string
+	lastInterimAt time.Time
+	now           func() time.Time
 	timing        map[string]openAIRealtimeSTTTiming
 }
 
@@ -675,6 +678,11 @@ func openAIRealtimeSTTEventsFromMessage(payload []byte, state *openAIRealtimeSTT
 			return nil, nil
 		}
 		state.currentText += delta
+		now := openAIRealtimeSTTStateNow(state)
+		if !state.lastInterimAt.IsZero() && now.Sub(state.lastInterimAt) <= openAIRealtimeSTTDeltaInterval {
+			return nil, nil
+		}
+		state.lastInterimAt = now
 		return []*stt.SpeechEvent{{
 			Type:      stt.SpeechEventInterimTranscript,
 			RequestID: state.currentItemID,
@@ -720,6 +728,13 @@ func openAIRealtimeSTTEventsFromMessage(payload []byte, state *openAIRealtimeSTT
 	default:
 		return nil, nil
 	}
+}
+
+func openAIRealtimeSTTStateNow(state *openAIRealtimeSTTMessageState) time.Time {
+	if state.now != nil {
+		return state.now()
+	}
+	return time.Now()
 }
 
 func openAIRealtimeSTTErrorMessage(errorBody map[string]interface{}) string {
