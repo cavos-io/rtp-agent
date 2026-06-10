@@ -60,6 +60,14 @@ func TestAudioByteStreamFlushDropsIncompleteSample(t *testing.T) {
 	if frames := stream.Flush(); len(frames) != 0 {
 		t.Fatalf("Flush() frames = %d, want incomplete sample dropped", len(frames))
 	}
+	stream.Push([]byte{4})
+	frames := stream.Flush()
+	if len(frames) != 1 {
+		t.Fatalf("second Flush() frames = %d, want prior incomplete bytes preserved until sample completes", len(frames))
+	}
+	if got := frames[0].Data; len(got) != 4 || got[0] != 1 || got[1] != 2 || got[2] != 3 || got[3] != 4 {
+		t.Fatalf("second Flush() data = %#v, want original incomplete bytes plus new byte", got)
+	}
 }
 
 func TestAudioByteStreamClearResetsProgressiveSize(t *testing.T) {
