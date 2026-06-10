@@ -183,7 +183,7 @@ func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *Se
 		if len(report.ModelUsage) > 0 {
 			attrs["usage"] = modelUsageToDict(report.ModelUsage)
 		}
-		recordUploadTelemetryEvent(ctx, "session_report", "session report", attrs)
+		recordUploadTelemetryEventAt(ctx, "session_report", "session report", attrs, sessionReportTelemetryTimestamp(report))
 	}
 	if report.RecordingOptions.Transcript && report.ChatHistory != nil {
 		for _, item := range report.ChatHistory.Items {
@@ -223,6 +223,13 @@ func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *Se
 
 func unixSecondsToTime(seconds float64) time.Time {
 	return time.Unix(0, int64(math.Round(seconds*1e9)))
+}
+
+func sessionReportTelemetryTimestamp(report *SessionReport) time.Time {
+	if report.StartedAt != nil {
+		return unixSecondsToTime(*report.StartedAt)
+	}
+	return unixSecondsToTime(report.Timestamp)
 }
 
 func hasUploadRecordingOption(options RecordingOptions) bool {

@@ -206,15 +206,25 @@ func TestUploadSessionReportRetriesProtobufRetryInfo(t *testing.T) {
 
 func TestUploadSessionReportRecordsLogsOnlySessionReport(t *testing.T) {
 	oldRecord := recordUploadTelemetryEvent
+	oldRecordAt := recordUploadTelemetryEventAt
 	var events []uploadTelemetryEvent
 	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
 		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
 	}
-	defer func() { recordUploadTelemetryEvent = oldRecord }()
+	recordUploadTelemetryEventAt = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, timestamp time.Time) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: timestamp})
+	}
+	defer func() {
+		recordUploadTelemetryEvent = oldRecord
+		recordUploadTelemetryEventAt = oldRecordAt
+	}()
 
 	report := NewSessionReport()
 	report.RecordingOptions = RecordingOptions{Logs: true}
 	report.SDKVersion = "test-sdk"
+	report.Timestamp = 1700.5
+	startedAt := 1600.25
+	report.StartedAt = &startedAt
 
 	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
 		t.Fatalf("UploadSessionReport() error = %v", err)
@@ -226,6 +236,10 @@ func TestUploadSessionReportRecordsLogsOnlySessionReport(t *testing.T) {
 	if events[0].eventType != "session_report" || events[0].body != "session report" {
 		t.Fatalf("telemetry event = %#v, want session report event", events[0])
 	}
+	wantStartedAt := time.Unix(1600, 250000000)
+	if !events[0].timestamp.Equal(wantStartedAt) {
+		t.Fatalf("session report event timestamp = %v, want started_at timestamp %v", events[0].timestamp, wantStartedAt)
+	}
 	if events[0].attrs["agent_name"] != "agent-a" {
 		t.Fatalf("agent_name attr = %#v, want agent-a", events[0].attrs["agent_name"])
 	}
@@ -236,11 +250,18 @@ func TestUploadSessionReportRecordsLogsOnlySessionReport(t *testing.T) {
 
 func TestUploadSessionReportRecordsSessionTagsSorted(t *testing.T) {
 	oldRecord := recordUploadTelemetryEvent
+	oldRecordAt := recordUploadTelemetryEventAt
 	var events []uploadTelemetryEvent
 	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
 		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
 	}
-	defer func() { recordUploadTelemetryEvent = oldRecord }()
+	recordUploadTelemetryEventAt = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, timestamp time.Time) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: timestamp})
+	}
+	defer func() {
+		recordUploadTelemetryEvent = oldRecord
+		recordUploadTelemetryEventAt = oldRecordAt
+	}()
 
 	report := NewSessionReport()
 	report.RecordingOptions = RecordingOptions{Logs: true}
@@ -267,11 +288,18 @@ func TestUploadSessionReportRecordsSessionTagsSorted(t *testing.T) {
 
 func TestUploadSessionReportRecordsModelUsage(t *testing.T) {
 	oldRecord := recordUploadTelemetryEvent
+	oldRecordAt := recordUploadTelemetryEventAt
 	var events []uploadTelemetryEvent
 	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
 		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
 	}
-	defer func() { recordUploadTelemetryEvent = oldRecord }()
+	recordUploadTelemetryEventAt = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, timestamp time.Time) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: timestamp})
+	}
+	defer func() {
+		recordUploadTelemetryEvent = oldRecord
+		recordUploadTelemetryEventAt = oldRecordAt
+	}()
 
 	report := NewSessionReport()
 	report.RecordingOptions = RecordingOptions{Logs: true}
@@ -319,11 +347,18 @@ func TestUploadSessionReportRecordsModelUsage(t *testing.T) {
 
 func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
 	oldRecord := recordUploadTelemetryEvent
+	oldRecordAt := recordUploadTelemetryEventAt
 	var events []uploadTelemetryEvent
 	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
 		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
 	}
-	defer func() { recordUploadTelemetryEvent = oldRecord }()
+	recordUploadTelemetryEventAt = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, timestamp time.Time) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: timestamp})
+	}
+	defer func() {
+		recordUploadTelemetryEvent = oldRecord
+		recordUploadTelemetryEventAt = oldRecordAt
+	}()
 	useRecordingUploadHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
