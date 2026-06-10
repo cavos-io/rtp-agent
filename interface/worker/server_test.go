@@ -5252,8 +5252,15 @@ func TestHandleTerminationFinalizesAssignedJobOnce(t *testing.T) {
 		sessionEndCh <- struct{}{}
 		return nil
 	}
+	entrypointStarted := make(chan struct{})
 	releaseEntrypoint := make(chan struct{})
-	server.entrypointFnc = func(*JobContext) error {
+	server.entrypointFnc = func(ctx *JobContext) error {
+		if err := ctx.AddShutdownCallback(func() {
+			close(releaseEntrypoint)
+		}); err != nil {
+			return err
+		}
+		close(entrypointStarted)
 		<-releaseEntrypoint
 		return nil
 	}
@@ -5263,6 +5270,11 @@ func TestHandleTerminationFinalizesAssignedJobOnce(t *testing.T) {
 	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
 
 	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_termination_once", livekit.JobStatus_JS_RUNNING)
+	select {
+	case <-entrypointStarted:
+	case <-time.After(time.Second):
+		t.Fatal("entrypoint did not start")
+	}
 	server.handleTermination(&livekit.JobTermination{JobId: job.Id})
 
 	select {
@@ -5270,8 +5282,6 @@ func TestHandleTerminationFinalizesAssignedJobOnce(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("session end callback did not run on termination")
 	}
-
-	close(releaseEntrypoint)
 
 	select {
 	case msg := <-sentCh:
@@ -5282,6 +5292,75 @@ func TestHandleTerminationFinalizesAssignedJobOnce(t *testing.T) {
 	select {
 	case <-sessionEndCh:
 		t.Fatal("session end callback ran more than once")
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestHandleTerminationLetsEntrypointFinishBeforeSessionEnd(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	sentCh := make(chan *livekit.WorkerMessage, 2)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+	entrypointStarted := make(chan struct{})
+	releaseEntrypoint := make(chan struct{})
+	entrypointDone := make(chan struct{})
+	server.entrypointFnc = func(*JobContext) error {
+		close(entrypointStarted)
+		<-releaseEntrypoint
+		close(entrypointDone)
+		return nil
+	}
+	sessionEndCh := make(chan struct{}, 1)
+	server.sessionEndFnc = func(*JobContext) error {
+		select {
+		case <-entrypointDone:
+		default:
+			return errors.New("session end ran before entrypoint finished")
+		}
+		sessionEndCh <- struct{}{}
+		return nil
+	}
+
+	job := &livekit.Job{Id: "job_termination_wait_entrypoint", Room: &livekit.Room{Name: "room-a"}}
+	markJobAccepted(t, server, job)
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
+
+	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_termination_wait_entrypoint", livekit.JobStatus_JS_RUNNING)
+	select {
+	case <-entrypointStarted:
+	case <-time.After(time.Second):
+		t.Fatal("entrypoint did not start")
+	}
+
+	terminationDone := make(chan struct{})
+	go func() {
+		server.handleTermination(&livekit.JobTermination{JobId: job.Id})
+		close(terminationDone)
+	}()
+
+	select {
+	case <-sessionEndCh:
+		t.Fatal("session end ran before entrypoint was released")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(releaseEntrypoint)
+
+	select {
+	case <-terminationDone:
+	case <-time.After(time.Second):
+		t.Fatal("termination did not finish after entrypoint returned")
+	}
+	select {
+	case <-sessionEndCh:
+	case <-time.After(time.Second):
+		t.Fatal("session end did not run after entrypoint finished")
+	}
+	select {
+	case msg := <-sentCh:
+		t.Fatalf("received job status after termination finalized job: %#v", msg.GetUpdateJob())
 	case <-time.After(20 * time.Millisecond):
 	}
 }
