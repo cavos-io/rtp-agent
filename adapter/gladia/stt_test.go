@@ -21,6 +21,12 @@ func TestGladiaSTTDefaultsMatchReferenceV2(t *testing.T) {
 	if provider.model != "solaria-1" {
 		t.Fatalf("model = %q, want solaria-1", provider.model)
 	}
+	if got := stt.Model(provider); got != "solaria-1" {
+		t.Fatalf("model metadata = %q, want solaria-1", got)
+	}
+	if got := stt.Provider(provider); got != "Gladia" {
+		t.Fatalf("provider metadata = %q, want Gladia", got)
+	}
 	if provider.sampleRate != 16000 || provider.bitDepth != 16 || provider.channels != 1 {
 		t.Fatalf("audio config = %d/%d/%d, want 16000/16/1", provider.sampleRate, provider.bitDepth, provider.channels)
 	}
