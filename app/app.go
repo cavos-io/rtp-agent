@@ -2117,6 +2117,8 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, groq.WithGroqTTSVoice(cfg.TTSVoice))
 		}
 		return groq.NewGroqTTS(cfg.GroqAPIKey, cfg.TTSVoice, ttsOpts...), nil
+	case providerNvidia:
+		return nvidia.NewNvidiaTTS(cfg.NvidiaAPIKey, cfg.TTSVoice)
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {
