@@ -940,7 +940,15 @@ func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
 		},
 	}
 
-	events, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"item-1","audio_start_ms":100}`), state)
+	events, err := openAIRealtimeSTTEventsFromMessage([]byte(`{not-json`), state)
+	if err != nil {
+		t.Fatalf("malformed message error = %v, want ignored message", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want malformed message ignored", events)
+	}
+
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"item-1","audio_start_ms":100}`), state)
 	if err != nil {
 		t.Fatalf("speech started: %v", err)
 	}

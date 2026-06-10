@@ -644,7 +644,7 @@ func openAIRealtimeSTTEventsFromMessage(payload []byte, state *openAIRealtimeSTT
 	}
 	var message map[string]interface{}
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return nil, err
+		return nil, nil
 	}
 	switch openAIString(message["type"]) {
 	case "input_audio_buffer.speech_started":
