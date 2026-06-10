@@ -196,6 +196,7 @@ const (
 	providerCartesia     = "cartesia"
 	providerCerebras     = "cerebras"
 	providerClova        = "clova"
+	providerCometAPI     = "cometapi"
 	providerDeepgram     = "deepgram"
 	providerDeepSeek     = "deepseek"
 	providerDID          = "did"
@@ -470,6 +471,7 @@ type AppConfig struct {
 	ClovaSTTInvokeURL           string
 	ClovaClientID               string
 	ClovaClientSecret           string
+	CometAPIKey                 string
 	DeepSeekAPIKey              string
 	DIDAPIKey                   string
 	DIDAgentID                  string
@@ -825,6 +827,7 @@ func DefaultConfigFromEnv() AppConfig {
 		ClovaSTTInvokeURL:                       os.Getenv("CLOVA_STT_INVOKE_URL"),
 		ClovaClientID:                           os.Getenv("CLOVA_CLIENT_ID"),
 		ClovaClientSecret:                       os.Getenv("CLOVA_CLIENT_SECRET"),
+		CometAPIKey:                             os.Getenv("COMETAPI_API_KEY"),
 		DeepSeekAPIKey:                          os.Getenv("DEEPSEEK_API_KEY"),
 		DIDAPIKey:                               os.Getenv("DID_API_KEY"),
 		DIDAgentID:                              os.Getenv("DID_AGENT_ID"),
@@ -2167,6 +2170,12 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = provider
 	case providerDeepSeek:
 		provider, err := openai.NewDeepSeekOpenAILLM(cfg.LLMModel, cfg.DeepSeekAPIKey)
+		if err != nil {
+			return nil, err
+		}
+		a.LLM = provider
+	case providerCometAPI:
+		provider, err := openai.NewCometAPIOpenAILLM(cfg.LLMModel, cfg.CometAPIKey)
 		if err != nil {
 			return nil, err
 		}

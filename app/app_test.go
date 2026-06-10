@@ -555,6 +555,26 @@ func TestDefaultConfigFromEnvSelectsDeepSeekOpenAILLM(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsCometAPIOpenAILLM(t *testing.T) {
+	t.Setenv("COMETAPI_API_KEY", "test-cometapi-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "cometapi")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "custom-comet-model")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Model(app.Session.LLM); got != "custom-comet-model" {
+		t.Fatalf("LLM model = %q, want custom-comet-model", got)
+	}
+	if got := llm.Provider(app.Session.LLM); got != "api.cometapi.com" {
+		t.Fatalf("LLM provider = %q, want api.cometapi.com", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsNvidiaLLM(t *testing.T) {
 	t.Setenv("NVIDIA_API_KEY", "test-nvidia-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "nvidia")
