@@ -92,8 +92,12 @@ func NewSarvamLLMWithError(apiKey string, model string, opts ...SarvamLLMOption)
 	if err := validateSarvamLLMModel(model); err != nil {
 		return nil, err
 	}
+	resolvedAPIKey := resolveSarvamAPIKey(apiKey)
+	if resolvedAPIKey == "" {
+		return nil, fmt.Errorf("sarvam API key is required, either as argument or set SARVAM_API_KEY environment variable")
+	}
 	provider := &SarvamLLM{
-		apiKey:     resolveSarvamAPIKey(apiKey),
+		apiKey:     resolvedAPIKey,
 		model:      model,
 		baseURL:    defaultSarvamLLMBaseURL,
 		httpClient: http.DefaultClient,

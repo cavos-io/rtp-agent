@@ -48,6 +48,18 @@ func TestNewSarvamLLMUsesEnvironmentAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewSarvamLLMRequiresAPIKey(t *testing.T) {
+	t.Setenv("SARVAM_API_KEY", "")
+
+	_, err := NewSarvamLLMWithError("", "")
+	if err == nil {
+		t.Fatal("NewSarvamLLMWithError returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "SARVAM_API_KEY") {
+		t.Fatalf("NewSarvamLLMWithError error = %q, want SARVAM_API_KEY guidance", err)
+	}
+}
+
 func TestSarvamLLMRejectsUnsupportedModel(t *testing.T) {
 	_, err := NewSarvamLLMWithError("test-key", "not-sarvam")
 	if err == nil {
