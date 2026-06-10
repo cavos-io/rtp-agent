@@ -43,6 +43,8 @@ type MinimaxTTS struct {
 	pitch             int
 	intensity         *int
 	timbre            *int
+	languageBoost     string
+	pronunciationDict map[string][]string
 	textNormalization bool
 }
 
@@ -129,6 +131,18 @@ func WithMinimaxTTSIntensity(intensity int) MinimaxTTSOption {
 func WithMinimaxTTSTimbre(timbre int) MinimaxTTSOption {
 	return func(t *MinimaxTTS) {
 		t.timbre = &timbre
+	}
+}
+
+func WithMinimaxTTSLanguageBoost(languageBoost string) MinimaxTTSOption {
+	return func(t *MinimaxTTS) {
+		t.languageBoost = languageBoost
+	}
+}
+
+func WithMinimaxTTSPronunciationDict(pronunciationDict map[string][]string) MinimaxTTSOption {
+	return func(t *MinimaxTTS) {
+		t.pronunciationDict = pronunciationDict
 	}
 }
 
@@ -255,6 +269,12 @@ func minimaxOptions(t *MinimaxTTS) map[string]interface{} {
 	}
 	if len(voiceModify) > 0 {
 		payload["voice_modify"] = voiceModify
+	}
+	if t.languageBoost != "" {
+		payload["language_boost"] = t.languageBoost
+	}
+	if len(t.pronunciationDict) > 0 {
+		payload["pronunciation_dict"] = t.pronunciationDict
 	}
 	return payload
 }

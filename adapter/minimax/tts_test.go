@@ -173,6 +173,8 @@ func TestMinimaxTTSOptionsMatchReference(t *testing.T) {
 		WithMinimaxTTSPitch(-2),
 		WithMinimaxTTSIntensity(75),
 		WithMinimaxTTSTimbre(-40),
+		WithMinimaxTTSLanguageBoost("Spanish"),
+		WithMinimaxTTSPronunciationDict(map[string][]string{"LiveKit": {"live kit"}}),
 		WithMinimaxTTSTextNormalization(true),
 	)
 
@@ -209,6 +211,12 @@ func TestMinimaxTTSOptionsMatchReference(t *testing.T) {
 	}
 	if voiceModify["timbre"] != float64(-40) {
 		t.Fatalf("voice_modify.timbre = %#v, want -40", voiceModify["timbre"])
+	}
+	assertMinimaxPayload(t, payload, "language_boost", "Spanish")
+	pronunciationDict := payload["pronunciation_dict"].(map[string]any)
+	entries := pronunciationDict["LiveKit"].([]any)
+	if len(entries) != 1 || entries[0] != "live kit" {
+		t.Fatalf("pronunciation_dict.LiveKit = %#v, want [live kit]", pronunciationDict["LiveKit"])
 	}
 }
 
