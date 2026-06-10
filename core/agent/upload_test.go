@@ -286,6 +286,40 @@ func TestUploadSessionReportRecordsSessionTagsSorted(t *testing.T) {
 	}
 }
 
+func TestUploadSessionReportRecordsEmptySessionTagsAsNil(t *testing.T) {
+	oldRecord := recordUploadTelemetryEvent
+	oldRecordAt := recordUploadTelemetryEventAt
+	var events []uploadTelemetryEvent
+	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
+	}
+	recordUploadTelemetryEventAt = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, timestamp time.Time) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: timestamp})
+	}
+	defer func() {
+		recordUploadTelemetryEvent = oldRecord
+		recordUploadTelemetryEventAt = oldRecordAt
+	}()
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Logs: true}
+	report.Tagger = NewTagger()
+
+	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("telemetry events = %#v, want one session report event", events)
+	}
+	tags, ok := events[0].attrs["session.tags"]
+	if !ok {
+		t.Fatalf("session.tags missing from attrs: %#v", events[0].attrs)
+	}
+	if tags != nil {
+		t.Fatalf("session.tags = %#v, want nil for empty tagger", tags)
+	}
+}
+
 func TestUploadSessionReportRecordsModelUsage(t *testing.T) {
 	oldRecord := recordUploadTelemetryEvent
 	oldRecordAt := recordUploadTelemetryEventAt
