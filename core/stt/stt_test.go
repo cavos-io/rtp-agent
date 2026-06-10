@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
 func TestSpeechDataCarriesReferenceMetadataFields(t *testing.T) {
@@ -330,6 +331,69 @@ func TestSTTErrorMarshalJSONMatchesReferencePayload(t *testing.T) {
 	}
 	if _, ok := payload["error"]; ok {
 		t.Fatalf("error serialized in payload: %s", data)
+	}
+}
+
+func TestSTTMetricsEmitterPanicDoesNotBlockOtherHandlers(t *testing.T) {
+	var emitter MetricsEmitter
+	metrics := &telemetry.STTMetrics{RequestID: "req"}
+	received := make(chan *telemetry.STTMetrics, 1)
+
+	emitter.OnMetricsCollected(func(*telemetry.STTMetrics) {
+		panic("metrics handler failed")
+	})
+	emitter.OnMetricsCollected(func(got *telemetry.STTMetrics) {
+		received <- got
+	})
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				t.Fatalf("EmitMetricsCollected panic = %v, want handler panic isolated", recovered)
+			}
+		}()
+		emitter.EmitMetricsCollected(metrics)
+	}()
+
+	select {
+	case got := <-received:
+		if got != metrics {
+			t.Fatalf("metrics pointer = %p, want %p", got, metrics)
+		}
+	default:
+		t.Fatal("second metrics handler was not called")
+	}
+}
+
+func TestSTTErrorEmitterPanicDoesNotBlockOtherHandlers(t *testing.T) {
+	var emitter ErrorEmitter
+	cause := context.Canceled
+	sttErr := NewSTTError("provider.STT", cause, true)
+	received := make(chan *STTError, 1)
+
+	emitter.OnError(func(*STTError) {
+		panic("error handler failed")
+	})
+	emitter.OnError(func(err *STTError) {
+		received <- err
+	})
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				t.Fatalf("EmitError panic = %v, want handler panic isolated", recovered)
+			}
+		}()
+		emitter.EmitError(sttErr)
+	}()
+
+	select {
+	case got := <-received:
+		if got != sttErr {
+			t.Fatalf("error pointer = %p, want %p", got, sttErr)
+		}
+	default:
+		t.Fatal("second error handler was not called")
 	}
 }
 
