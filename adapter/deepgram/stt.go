@@ -304,7 +304,7 @@ func validateDeepgramSTTOptions(s *DeepgramSTT) error {
 
 func buildDeepgramStreamURL(s *DeepgramSTT, languageStr string) string {
 	u, q := deepgramBaseURL(s, true)
-	q.Set("model", s.model)
+	q.Set("model", deepgramSTTModelForLanguage(s.model, languageStr))
 	if languageStr != "" {
 		q.Set("language", languageStr)
 	}
@@ -335,7 +335,7 @@ func buildDeepgramStreamURL(s *DeepgramSTT, languageStr string) string {
 
 func buildDeepgramRecognizeURL(s *DeepgramSTT, languageStr string) string {
 	u, q := deepgramBaseURL(s, false)
-	q.Set("model", s.model)
+	q.Set("model", deepgramSTTModelForLanguage(s.model, languageStr))
 	q.Set("punctuate", strconv.FormatBool(s.punctuate))
 	q.Set("smart_format", strconv.FormatBool(s.smartFormat))
 	q.Set("profanity_filter", strconv.FormatBool(s.profanityFilter))
@@ -370,6 +370,16 @@ func addDeepgramSTTAdvancedQuery(q url.Values, s *DeepgramSTT) {
 			q.Add("tag", tag)
 		}
 	}
+}
+
+func deepgramSTTModelForLanguage(model string, languageStr string) string {
+	switch model {
+	case "nova-2-meeting", "nova-2-phonecall", "nova-2-finance", "nova-2-conversationalai", "nova-2-voicemail", "nova-2-video", "nova-2-medical", "nova-2-drivethru", "nova-2-automotive":
+		if languageStr != "" && languageStr != "en-US" && languageStr != "en" {
+			return "nova-2-general"
+		}
+	}
+	return model
 }
 
 func deepgramBaseURL(s *DeepgramSTT, websocketURL bool) (*url.URL, url.Values) {

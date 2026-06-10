@@ -302,6 +302,30 @@ func TestDeepgramRecognizeURLUsesReferenceOptions(t *testing.T) {
 	assertDeepgramQuery(t, query, "smart_format", "false")
 }
 
+func TestDeepgramSTTEnglishOnlyModelFallsBackForNonEnglishLanguage(t *testing.T) {
+	provider := NewDeepgramSTT("test-key", "nova-2-meeting")
+
+	streamURL, err := url.Parse(buildDeepgramStreamURL(provider, "id-ID"))
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	assertDeepgramQuery(t, streamURL.Query(), "model", "nova-2-general")
+	assertDeepgramQuery(t, streamURL.Query(), "language", "id-ID")
+
+	recognizeURL, err := url.Parse(buildDeepgramRecognizeURL(provider, "id-ID"))
+	if err != nil {
+		t.Fatalf("parse recognize url: %v", err)
+	}
+	assertDeepgramQuery(t, recognizeURL.Query(), "model", "nova-2-general")
+	assertDeepgramQuery(t, recognizeURL.Query(), "language", "id-ID")
+
+	englishURL, err := url.Parse(buildDeepgramRecognizeURL(provider, "en-US"))
+	if err != nil {
+		t.Fatalf("parse english recognize url: %v", err)
+	}
+	assertDeepgramQuery(t, englishURL.Query(), "model", "nova-2-meeting")
+}
+
 func TestDeepgramSTTAdvancedOptionsUseReferenceQueryParams(t *testing.T) {
 	provider := NewDeepgramSTT("test-key", "nova-2",
 		WithDeepgramSTTBaseURL("https://deepgram.example/v1/listen"),
