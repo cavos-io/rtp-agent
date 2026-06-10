@@ -40,6 +40,12 @@ func TestAsyncAITTSDefaultsMatchReference(t *testing.T) {
 	if provider.NumChannels() != 1 {
 		t.Fatalf("NumChannels = %d, want 1", provider.NumChannels())
 	}
+	if got := tts.Model(provider); got != "async_flash_v1.0" {
+		t.Fatalf("model metadata = %q, want async_flash_v1.0", got)
+	}
+	if got := tts.Provider(provider); got != "AsyncAI" {
+		t.Fatalf("provider metadata = %q, want AsyncAI", got)
+	}
 	if !provider.Capabilities().Streaming {
 		t.Fatal("streaming = false, want reference streaming support")
 	}
