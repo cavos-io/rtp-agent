@@ -3251,6 +3251,88 @@ func TestDefaultConfigFromEnvAcceptsMistralAITTSFallbackProvider(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvAcceptsLMNTTTSFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "lmnt")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("LMNT_API_KEY", "test-lmnt-key")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "aurora")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "ava")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "en")
+	t.Setenv("RTP_AGENT_TTS_RESPONSE_FORMAT", "wav")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
+		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	}
+}
+
+func TestDefaultConfigFromEnvAcceptsNeuphonicTTSFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "neuphonic")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("NEUPHONIC_API_KEY", "test-neuphonic-key")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://neuphonic.example")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "voice-2")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "es")
+	t.Setenv("RTP_AGENT_TTS_ENCODING", "pcm_mulaw")
+	t.Setenv("RTP_AGENT_TTS_SPEED", "0.75")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
+		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	}
+}
+
+func TestDefaultConfigFromEnvAcceptsRimeTTSFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "rime")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("RIME_API_KEY", "test-rime-key")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://rime.example/v1/rime-tts")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "coda")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "lyra")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "spa")
+	t.Setenv("RTP_AGENT_TTS_SPEED", "1.1")
+	t.Setenv("RTP_AGENT_TTS_DELIVERY_MODE", "immediate")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
+		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	}
+}
+
+func TestDefaultConfigFromEnvAcceptsMurfTTSFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "murf")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("MURF_API_KEY", "test-murf-key")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://murf.example")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "GEN2")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "en-US-natalie")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "en-US")
+	t.Setenv("RTP_AGENT_TTS_INSTRUCTIONS", "Promo")
+	t.Setenv("RTP_AGENT_TTS_SPEED", "12")
+	t.Setenv("RTP_AGENT_TTS_PITCH", "-4")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
+		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	}
+}
+
 func TestEvaluateSessionReturnsEvaluationSummary(t *testing.T) {
 	baseAgent := agent.NewAgent("test")
 	session := agent.NewAgentSession(baseAgent, nil, agent.AgentSessionOptions{})
