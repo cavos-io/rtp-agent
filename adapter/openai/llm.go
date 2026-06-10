@@ -21,6 +21,7 @@ const defaultOpenAILLMModel = "gpt-4.1"
 const defaultAzureOpenAILLMModel = "gpt-4o"
 const defaultOVHCloudOpenAILLMModel = "gpt-oss-120b"
 const defaultDeepSeekOpenAILLMModel = "deepseek-chat"
+const defaultOllamaOpenAILLMModel = "llama3.1"
 const openAIAPIKeyRequiredMessage = "OpenAI API key is required, either as argument or set OPENAI_API_KEY environment variable"
 
 const (
@@ -34,6 +35,7 @@ const (
 
 const defaultOpenRouterLLMURL = "https://openrouter.ai/api/v1"
 const defaultDeepSeekOpenAIBaseURL = "https://api.deepseek.com/v1"
+const defaultOllamaOpenAIBaseURL = "http://localhost:11434/v1"
 
 type OpenAILLM struct {
 	client               *openai.Client
@@ -354,6 +356,13 @@ func NewDeepSeekOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenA
 		return nil, fmt.Errorf("DeepSeek API key is required, either as argument or set DEEPSEEK_API_KEY environmental variable")
 	}
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultDeepSeekOpenAIBaseURL, nil, opts...), nil
+}
+
+func NewOllamaOpenAILLM(model string, opts ...OpenAILLMOption) *OpenAILLM {
+	if model == "" {
+		model = defaultOllamaOpenAILLMModel
+	}
+	return NewOpenAILLMWithBaseURLAndHTTPClient("ollama", model, defaultOllamaOpenAIBaseURL, nil, opts...)
 }
 
 func NewOpenRouterLLM(apiKey, model string, opts ...OpenRouterLLMOption) (*OpenAILLM, error) {

@@ -266,6 +266,33 @@ func TestNewDeepSeekOpenAILLMRequiresAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewOllamaOpenAILLMDefaultsMatchReference(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model := NewOllamaOpenAILLM("", withOpenAILLMHTTPClient(capture))
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "llama3.1" {
+		t.Fatalf("Model = %q, want llama3.1", model.Model())
+	}
+	if model.Provider() != "localhost:11434" {
+		t.Fatalf("Provider() = %q, want local Ollama endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer ollama" {
+		t.Fatalf("Authorization = %q, want reference ollama API key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "http://localhost:11434/v1/chat/completions") {
+		t.Fatalf("request URL = %s, want local Ollama chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"llama3.1"`) {
+		t.Fatalf("request body = %s, want default Ollama model", capture.requestBody)
+	}
+}
+
 func TestNewOpenAILLMChatUsesConfiguredKeyAndDefaultModel(t *testing.T) {
 	t.Setenv(openAIAPIKeyEnv, "env-key")
 	capture := &captureDeadlineHTTPClient{
