@@ -675,6 +675,18 @@ func TestCollectStreamRejectsNilStream(t *testing.T) {
 	}
 }
 
+func TestCollectStreamRejectsTypedNilStream(t *testing.T) {
+	var stream *fakeCollectStream
+	collected, err := CollectStream(stream)
+
+	if err == nil {
+		t.Fatal("CollectStream(typed nil) error = nil, want error")
+	}
+	if collected != nil {
+		t.Fatalf("CollectStream(typed nil) response = %#v, want nil", collected)
+	}
+}
+
 func TestTextStreamYieldsOnlyTextDeltasAndCloses(t *testing.T) {
 	stream := &fakeCollectStream{events: []fakeCollectEvent{
 		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "hello"}}},
@@ -739,6 +751,18 @@ func TestNewTextStreamRejectsNilStream(t *testing.T) {
 	}
 	if textStream != nil {
 		t.Fatalf("NewTextStream(nil) stream = %#v, want nil", textStream)
+	}
+}
+
+func TestNewTextStreamRejectsTypedNilStream(t *testing.T) {
+	var stream *fakeCollectStream
+	textStream, err := NewTextStream(stream)
+
+	if err == nil {
+		t.Fatal("NewTextStream(typed nil) error = nil, want error")
+	}
+	if textStream != nil {
+		t.Fatalf("NewTextStream(typed nil) stream = %#v, want nil", textStream)
 	}
 }
 
