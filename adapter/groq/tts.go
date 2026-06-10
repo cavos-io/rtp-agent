@@ -84,6 +84,8 @@ func (t *GroqTTS) Capabilities() tts.TTSCapabilities {
 }
 func (t *GroqTTS) SampleRate() int  { return t.sampleRate }
 func (t *GroqTTS) NumChannels() int { return 1 }
+func (t *GroqTTS) Model() string    { return t.model }
+func (t *GroqTTS) Provider() string { return "Groq" }
 
 func (t *GroqTTS) UpdateOptions(model string, voice string) {
 	if model != "" {

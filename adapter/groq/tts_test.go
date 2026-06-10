@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
 func TestGroqTTSDefaultsMatchReference(t *testing.T) {
@@ -27,6 +29,12 @@ func TestGroqTTSDefaultsMatchReference(t *testing.T) {
 	}
 	if provider.SampleRate() != 48000 {
 		t.Fatalf("sample rate = %d, want 48000", provider.SampleRate())
+	}
+	if got := tts.Model(provider); got != "canopylabs/orpheus-v1-english" {
+		t.Fatalf("model metadata = %q, want reference model", got)
+	}
+	if got := tts.Provider(provider); got != "Groq" {
+		t.Fatalf("provider metadata = %q, want Groq", got)
 	}
 }
 
