@@ -90,6 +90,9 @@ func RecordChatEventWithOptions(ctx context.Context, eventType string, body stri
 	if options.Severity != log.SeverityUndefined {
 		record.SetSeverity(options.Severity)
 	}
+	if options.SeverityText == "" {
+		options.SeverityText = "unspecified"
+	}
 	if options.SeverityText != "" {
 		record.SetSeverityText(options.SeverityText)
 	}
