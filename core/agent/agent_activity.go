@@ -562,7 +562,10 @@ func (a *AgentActivity) UpdateTools(ctx context.Context, tools []llm.Tool) error
 	if err := oldToolCtx.UpdateTools(agentToolsAsInterfaces(a.Agent.Tools)); err != nil {
 		return err
 	}
-	dedupedTools := dedupeAgentToolsByID(tools)
+	dedupedTools, err := dedupeAgentToolsByID(tools)
+	if err != nil {
+		return err
+	}
 	newToolCtx := llm.EmptyToolContext()
 	if err := newToolCtx.UpdateTools(agentToolsAsInterfaces(dedupedTools)); err != nil {
 		return err

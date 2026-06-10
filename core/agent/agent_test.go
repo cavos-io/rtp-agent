@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -313,6 +314,37 @@ func TestAgentUpdateToolsDeduplicatesByToolID(t *testing.T) {
 	}
 	if agent.Tools[0] != replacement {
 		t.Fatalf("agent.Tools[0] = %p, want replacement %p", agent.Tools[0], replacement)
+	}
+}
+
+func TestAgentUpdateToolsRejectsNilTool(t *testing.T) {
+	agent := NewAgent("help")
+	existing := &agentTestTool{id: "lookup", name: "lookup"}
+	agent.Tools = []llm.Tool{existing}
+
+	err := agent.UpdateTools(context.Background(), []llm.Tool{nil})
+
+	if err == nil || !strings.Contains(err.Error(), "nil tool") {
+		t.Fatalf("UpdateTools error = %v, want nil tool error", err)
+	}
+	if len(agent.Tools) != 1 || agent.Tools[0] != existing {
+		t.Fatalf("agent.Tools = %#v, want unchanged existing tool", agent.Tools)
+	}
+}
+
+func TestAgentUpdateToolsRejectsTypedNilTool(t *testing.T) {
+	agent := NewAgent("help")
+	existing := &agentTestTool{id: "lookup", name: "lookup"}
+	agent.Tools = []llm.Tool{existing}
+	var nilTool *agentTestTool
+
+	err := agent.UpdateTools(context.Background(), []llm.Tool{nilTool})
+
+	if err == nil || !strings.Contains(err.Error(), "nil tool") {
+		t.Fatalf("UpdateTools error = %v, want nil tool error", err)
+	}
+	if len(agent.Tools) != 1 || agent.Tools[0] != existing {
+		t.Fatalf("agent.Tools = %#v, want unchanged existing tool", agent.Tools)
 	}
 }
 
