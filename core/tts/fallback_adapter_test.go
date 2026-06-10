@@ -562,6 +562,42 @@ func TestFallbackAdapterEmitsRecoverableErrorOnChunkedRetry(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterFallsBackFromTypedNilChunkedStream(t *testing.T) {
+	var typedNil *metadataChunkedStream
+	adapter := NewFallbackAdapterWithOptions([]TTS{
+		&metadataTTS{
+			label:       "primary",
+			sampleRate:  24000,
+			numChannels: 1,
+			chunkedStreams: []ChunkedStream{
+				typedNil,
+			},
+		},
+		&metadataTTS{
+			label:       "fallback",
+			sampleRate:  24000,
+			numChannels: 1,
+			chunked: &metadataChunkedStream{events: []*SynthesizedAudio{{Frame: &model.AudioFrame{
+				Data: []byte("fallback"),
+			}}}},
+		},
+	}, FallbackAdapterOptions{DisableRetries: true})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := string(audio.Frame.Data); got != "fallback" {
+		t.Fatalf("audio data = %q, want fallback", got)
+	}
+}
+
 func TestFallbackAdapterEmitsErrorOnStreamFailure(t *testing.T) {
 	providerErr := errors.New("provider failed")
 	adapter := NewFallbackAdapter([]TTS{

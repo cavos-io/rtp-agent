@@ -319,7 +319,7 @@ func (f *FallbackAdapter) tryRecoverChunked(index int, text string) {
 		defer f.finishRecovery(index, recoveryID)
 
 		stream, err := tts.Synthesize(ctx, text)
-		if err != nil || stream == nil {
+		if err != nil || isNilChunkedStream(stream) {
 			f.mu.Lock()
 			f.status[index].recovering = false
 			f.mu.Unlock()
@@ -590,6 +590,9 @@ func (s *fallbackChunkedStream) tryStartStream(index int) error {
 		for {
 			tts := s.adapter.ttss[i]
 			stream, err := tts.Synthesize(s.ctx, s.text)
+			if err == nil && isNilChunkedStream(stream) {
+				err = fmt.Errorf("TTS returned nil chunked stream")
+			}
 			if err == nil {
 				s.activeStream = stream
 				s.activeIndex = i
