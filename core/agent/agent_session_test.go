@@ -3643,6 +3643,60 @@ func TestAgentSessionUpdateAgentWhileRunningClearsReusedRealtimeSession(t *testi
 	}
 }
 
+func TestAgentSessionUpdateAgentWhileRunningRefreshesMutableReusedRealtimeSessionConfig(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	initial := &trackingAgent{Agent: NewAgent("initial instructions")}
+	initial.Tools = []llm.Tool{&fakeGenerationTool{name: "initial_tool"}}
+	rtSession := &fakeRealtimeSession{}
+	realtime := &fakeRealtimeModel{
+		session: rtSession,
+		capabilities: llm.RealtimeCapabilities{
+			MutableInstructions: true,
+			MutableChatContext:  true,
+			MutableTools:        true,
+		},
+	}
+	initial.RealtimeModel = realtime
+	next := &trackingAgent{Agent: NewAgent("next instructions")}
+	next.Tools = []llm.Tool{&fakeGenerationTool{name: "next_tool"}}
+	next.RealtimeModel = realtime
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+	defer session.Stop(context.Background())
+
+	session.UpdateAgent(next)
+
+	if rtSession.instructions != "next instructions" {
+		t.Fatalf("realtime instructions = %q, want next instructions", rtSession.instructions)
+	}
+	if rtSession.instructionUpdates != 2 {
+		t.Fatalf("realtime instruction updates = %d, want 2", rtSession.instructionUpdates)
+	}
+	if rtSession.chatContextUpdates != 2 {
+		t.Fatalf("realtime chat context updates = %d, want 2", rtSession.chatContextUpdates)
+	}
+	gotTools := toolNames(rtSession.tools)
+	if !strings.Contains(strings.Join(gotTools, ","), "next_tool") {
+		t.Fatalf("updated realtime tools = %#v, want next_tool present", gotTools)
+	}
+	if strings.Contains(strings.Join(gotTools, ","), "initial_tool") {
+		t.Fatalf("updated realtime tools = %#v, want initial_tool removed", gotTools)
+	}
+	if rtSession.toolUpdates != 2 {
+		t.Fatalf("realtime tool updates = %d, want 2", rtSession.toolUpdates)
+	}
+	if rtSession.interrupted != 1 {
+		t.Fatalf("reused realtime session interrupts = %d, want 1", rtSession.interrupted)
+	}
+	if rtSession.cleared != 1 {
+		t.Fatalf("reused realtime session clears = %d, want 1", rtSession.cleared)
+	}
+}
+
 func TestAgentSessionUpdateAgentEmitsErrorWhenRealtimeModelRefreshFails(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

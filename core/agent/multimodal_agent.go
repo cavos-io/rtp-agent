@@ -214,7 +214,10 @@ func (ma *MultimodalAgent) UpdateRealtimeModel(ctx context.Context, model llm.Re
 		if err := rtSession.Interrupt(); err != nil {
 			return err
 		}
-		return rtSession.ClearAudio()
+		if err := rtSession.ClearAudio(); err != nil {
+			return err
+		}
+		return ma.configureRealtimeSession(rtSession, model.Capabilities())
 	}
 	oldSession := ma.rtSession
 	runCtx := ma.ctx
@@ -259,12 +262,20 @@ func (ma *MultimodalAgent) UpdateRealtimeModel(ctx context.Context, model llm.Re
 }
 
 func (ma *MultimodalAgent) initializeRealtimeSession(rtSession llm.RealtimeSession) error {
+	return ma.configureRealtimeSession(rtSession, llm.RealtimeCapabilities{
+		MutableChatContext:  true,
+		MutableInstructions: true,
+		MutableTools:        true,
+	})
+}
+
+func (ma *MultimodalAgent) configureRealtimeSession(rtSession llm.RealtimeSession, capabilities llm.RealtimeCapabilities) error {
 	ma.mu.Lock()
 	session := ma.session
 	chatCtx := ma.chatCtx
 	ma.mu.Unlock()
 
-	if session != nil && session.Agent != nil {
+	if capabilities.MutableInstructions && session != nil && session.Agent != nil {
 		instructions := agentInstructionsText(session.Agent.GetAgent())
 		if instructions != "" {
 			if err := rtSession.UpdateInstructions(instructions); err != nil {
@@ -272,10 +283,13 @@ func (ma *MultimodalAgent) initializeRealtimeSession(rtSession llm.RealtimeSessi
 			}
 		}
 	}
-	if chatCtx != nil {
+	if capabilities.MutableChatContext && chatCtx != nil {
 		if err := rtSession.UpdateChatContext(chatCtx); err != nil {
 			return err
 		}
+	}
+	if !capabilities.MutableTools {
+		return nil
 	}
 	tools, err := ma.realtimeTools()
 	if err != nil {
