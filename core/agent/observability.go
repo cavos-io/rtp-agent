@@ -3,6 +3,7 @@ package agent
 import (
 	"sort"
 	"sync"
+	"time"
 )
 
 type EvaluationResult struct {
@@ -19,12 +20,14 @@ type Tagger struct {
 }
 
 type tagEntry struct {
-	metadata map[string]any
+	metadata  map[string]any
+	timestamp time.Time
 }
 
 type TagMetadata struct {
-	Name     string
-	Metadata map[string]any
+	Name      string
+	Metadata  map[string]any
+	Timestamp time.Time
 }
 
 func NewTagger() *Tagger {
@@ -38,7 +41,7 @@ func (t *Tagger) Success(reason string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.tags, "lk.fail")
-	t.tags["lk.success"] = tagEntry{}
+	t.tags["lk.success"] = tagEntry{timestamp: time.Now()}
 	t.outcomeReason = reason
 }
 
@@ -46,14 +49,14 @@ func (t *Tagger) Fail(reason string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.tags, "lk.success")
-	t.tags["lk.fail"] = tagEntry{}
+	t.tags["lk.fail"] = tagEntry{timestamp: time.Now()}
 	t.outcomeReason = reason
 }
 
 func (t *Tagger) Add(tag string, metadata ...map[string]any) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	entry := tagEntry{}
+	entry := tagEntry{timestamp: time.Now()}
 	if len(metadata) > 0 {
 		entry.metadata = cloneTagMetadata(metadata[0])
 	}
@@ -85,7 +88,7 @@ func (t *Tagger) MetadataTags() []TagMetadata {
 		if len(entry.metadata) == 0 {
 			continue
 		}
-		tags = append(tags, TagMetadata{Name: name, Metadata: cloneTagMetadata(entry.metadata)})
+		tags = append(tags, TagMetadata{Name: name, Metadata: cloneTagMetadata(entry.metadata), Timestamp: entry.timestamp})
 	}
 	sort.Slice(tags, func(i, j int) bool {
 		return tags[i].Name < tags[j].Name
@@ -138,7 +141,7 @@ func (t *Tagger) Evaluation(result *EvaluationResult) {
 		if result.Instructions != nil {
 			instructions = result.Instructions[name]
 		}
-		t.tags[tag] = tagEntry{}
+		t.tags[tag] = tagEntry{timestamp: time.Now()}
 		t.evaluationResults = append(t.evaluationResults, map[string]any{
 			"name":         name,
 			"tag":          tag,

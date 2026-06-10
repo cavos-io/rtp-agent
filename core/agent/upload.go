@@ -27,8 +27,9 @@ import (
 )
 
 var (
-	recordUploadTelemetryEvent = telemetry.RecordChatEvent
-	recordingUploadHTTPClient  = &http.Client{Timeout: 30 * time.Second}
+	recordUploadTelemetryEvent   = telemetry.RecordChatEvent
+	recordUploadTelemetryEventAt = telemetry.RecordChatEventAt
+	recordingUploadHTTPClient    = &http.Client{Timeout: 30 * time.Second}
 )
 
 func UploadSessionReport(
@@ -200,12 +201,12 @@ func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *Se
 		})
 	}
 	for _, tag := range report.Tagger.MetadataTags() {
-		recordUploadTelemetryEvent(ctx, "tag", "tag", map[string]interface{}{
+		recordUploadTelemetryEventAt(ctx, "tag", "tag", map[string]interface{}{
 			"tag": map[string]any{
 				"name":     tag.Name,
 				"metadata": tag.Metadata,
 			},
-		})
+		}, tag.Timestamp)
 	}
 	if outcome := report.Tagger.Outcome(); outcome != "" {
 		outcomeData := map[string]any{"outcome": outcome}

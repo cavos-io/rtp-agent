@@ -412,19 +412,28 @@ func TestUploadSessionReportRecordsEvaluationAndOutcome(t *testing.T) {
 
 func TestUploadSessionReportRecordsTagMetadata(t *testing.T) {
 	oldRecord := recordUploadTelemetryEvent
+	oldRecordAt := recordUploadTelemetryEventAt
 	var events []uploadTelemetryEvent
 	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
 		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
 	}
-	defer func() { recordUploadTelemetryEvent = oldRecord }()
+	recordUploadTelemetryEventAt = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, timestamp time.Time) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: timestamp})
+	}
+	defer func() {
+		recordUploadTelemetryEvent = oldRecord
+		recordUploadTelemetryEventAt = oldRecordAt
+	}()
 
 	report := NewSessionReport()
 	report.RecordingOptions = RecordingOptions{Logs: true}
 	report.Tagger = NewTagger()
+	beforeAdd := time.Now()
 	report.Tagger.Add("appointment:booked", map[string]any{
 		"slot_id":  "abc123",
 		"calendar": "cal.com",
 	})
+	afterAdd := time.Now()
 
 	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
 		t.Fatalf("UploadSessionReport() error = %v", err)
@@ -435,6 +444,12 @@ func TestUploadSessionReportRecordsTagMetadata(t *testing.T) {
 	}
 	if events[1].eventType != "tag" || events[1].body != "tag" {
 		t.Fatalf("second telemetry event = %#v, want tag event", events[1])
+	}
+	if events[1].timestamp.IsZero() {
+		t.Fatalf("tag event timestamp is zero, want tag creation timestamp")
+	}
+	if events[1].timestamp.Before(beforeAdd) || events[1].timestamp.After(afterAdd) {
+		t.Fatalf("tag event timestamp = %v, want tag creation timestamp between %v and %v", events[1].timestamp, beforeAdd, afterAdd)
 	}
 	tag, ok := events[1].attrs["tag"].(map[string]any)
 	if !ok {
@@ -456,6 +471,7 @@ type uploadTelemetryEvent struct {
 	eventType string
 	body      string
 	attrs     map[string]interface{}
+	timestamp time.Time
 }
 
 func useRecordingUploadHTTPClient(t *testing.T, handler http.Handler) {
