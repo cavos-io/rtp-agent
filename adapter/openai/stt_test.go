@@ -948,6 +948,21 @@ func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
 		t.Fatalf("events = %+v, want malformed message ignored", events)
 	}
 
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_stopped","item_id":"missing-start","audio_end_ms":900}`), state)
+	if err != nil {
+		t.Fatalf("speech stopped without start: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want timing-only speech stop", events)
+	}
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.completed","item_id":"missing-start","transcript":"","usage":{}}`), state)
+	if err != nil {
+		t.Fatalf("completed without start: %v", err)
+	}
+	if len(events) != 1 || events[0].RecognitionUsage == nil || events[0].RecognitionUsage.AudioDuration != 0 {
+		t.Fatalf("events = %+v, want zero audio duration without speech_started timing", events)
+	}
+
 	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"item-1","audio_start_ms":100}`), state)
 	if err != nil {
 		t.Fatalf("speech started: %v", err)

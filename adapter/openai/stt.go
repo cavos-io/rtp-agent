@@ -660,7 +660,10 @@ func openAIRealtimeSTTEventsFromMessage(payload []byte, state *openAIRealtimeSTT
 			itemID = state.currentItemID
 		}
 		if itemID != "" {
-			timing := state.timing[itemID]
+			timing, ok := state.timing[itemID]
+			if !ok {
+				return nil, nil
+			}
 			timing.endMS = openAIInt(message["audio_end_ms"])
 			state.timing[itemID] = timing
 		}
