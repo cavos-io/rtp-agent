@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -53,6 +54,29 @@ func TestNewMinimaxTTSUsesEnvironmentAPIKey(t *testing.T) {
 	}
 	if got := buildMinimaxTTSWebsocketHeaders(explicit).Get("Authorization"); got != "Bearer explicit-key" {
 		t.Fatalf("authorization = %q, want explicit bearer key", got)
+	}
+}
+
+func TestMinimaxTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("MINIMAX_API_KEY", "")
+	provider := NewMinimaxTTS("", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, synthErr := provider.Synthesize(ctx, "hello")
+	if synthErr == nil {
+		t.Fatal("Synthesize returned nil error, want missing API key error")
+	}
+	if !strings.Contains(synthErr.Error(), "MINIMAX_API_KEY") {
+		t.Fatalf("Synthesize error = %q, want MINIMAX_API_KEY guidance", synthErr)
+	}
+
+	_, streamErr := provider.Stream(ctx)
+	if streamErr == nil {
+		t.Fatal("Stream returned nil error, want missing API key error")
+	}
+	if !strings.Contains(streamErr.Error(), "MINIMAX_API_KEY") {
+		t.Fatalf("Stream error = %q, want MINIMAX_API_KEY guidance", streamErr)
 	}
 }
 
