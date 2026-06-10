@@ -326,6 +326,27 @@ func TestNewAppUsesConfiguredMetricsRegistry(t *testing.T) {
 	}
 }
 
+func TestNewAppUsesLiveKitAgentNameFromEnv(t *testing.T) {
+	t.Setenv("LIVEKIT_AGENT_NAME", "env-app-agent")
+	registry := telemetry.NewMetricRegistry()
+
+	app, err := NewApp(AppConfig{MetricsRegistry: registry})
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+
+	if app.Server.Options.AgentName != "env-app-agent" {
+		t.Fatalf("server AgentName = %q, want LIVEKIT_AGENT_NAME", app.Server.Options.AgentName)
+	}
+	if !app.Server.Options.AgentNameIsEnv {
+		t.Fatal("server AgentNameIsEnv = false, want true")
+	}
+	want := registry.GetUsageCollector(telemetry.MetricLabels{AgentName: "env-app-agent"})
+	if app.Session.MetricsCollector != want {
+		t.Fatal("Session MetricsCollector was not allocated with LIVEKIT_AGENT_NAME")
+	}
+}
+
 func TestDefaultConfigFromEnvConfiguresTelemetryLogs(t *testing.T) {
 	t.Setenv("RTP_AGENT_OTLP_LOGS_ENDPOINT", "otel.example:4318")
 	t.Setenv("RTP_AGENT_OTLP_LOGS_HEADERS", "Authorization=Bearer token,X-Scope=agent")
