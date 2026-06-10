@@ -25,6 +25,12 @@ func TestFireworksSTTDefaultsMatchReference(t *testing.T) {
 	if provider.responseFormat != "verbose_json" {
 		t.Fatalf("response format = %q, want verbose_json", provider.responseFormat)
 	}
+	if got := stt.Model(provider); got != "unknown" {
+		t.Fatalf("model metadata = %q, want unknown", got)
+	}
+	if got := stt.Provider(provider); got != "FireworksAI" {
+		t.Fatalf("provider metadata = %q, want FireworksAI", got)
+	}
 
 	caps := provider.Capabilities()
 	if !caps.Streaming {
