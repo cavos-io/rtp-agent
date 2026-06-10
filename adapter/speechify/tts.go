@@ -138,6 +138,11 @@ func (t *SpeechifyTTS) Synthesize(ctx context.Context, text string) (tts.Chunked
 		resp.Body.Close()
 		return nil, fmt.Errorf("speechify tts error: %s", string(respBody))
 	}
+	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio/") {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("speechify tts returned non-audio data: %s", string(respBody))
+	}
 
 	return &speechifyTTSChunkedStream{
 		resp:       resp,
