@@ -2181,6 +2181,30 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, neuphonic.WithNeuphonicTTSSpeed(cfg.TTSSpeed))
 		}
 		return neuphonic.NewNeuphonicTTS(cfg.NeuphonicAPIKey, "", ttsOpts...), nil
+	case providerRime:
+		ttsOpts := []rime.RimeTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, rime.WithRimeTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSWebsocketURL != "" {
+			ttsOpts = append(ttsOpts, rime.WithRimeTTSBaseURL(cfg.TTSWebsocketURL), rime.WithRimeTTSWebsocket(true))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, rime.WithRimeTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, rime.WithRimeTTSLang(cfg.TTSLanguage))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, rime.WithRimeTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSSpeed != 0 {
+			ttsOpts = append(ttsOpts, rime.WithRimeTTSTimeScaleFactor(cfg.TTSSpeed))
+		}
+		if cfg.TTSDeliveryMode != "" {
+			ttsOpts = append(ttsOpts, rime.WithRimeTTSSegment(cfg.TTSDeliveryMode))
+		}
+		return rime.NewRimeTTS(cfg.RimeAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {
