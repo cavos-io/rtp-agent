@@ -263,6 +263,9 @@ type declineDOBCaptureTool struct {
 
 func (t *declineDOBCaptureTool) ID() string   { return "decline_dob_capture" }
 func (t *declineDOBCaptureTool) Name() string { return "decline_dob_capture" }
+func (t *declineDOBCaptureTool) ToolFlags() llm.ToolFlag {
+	return llm.ToolFlagIgnoreOnEnter
+}
 func (t *declineDOBCaptureTool) Description() string {
 	return "Handles the case when the user explicitly declines to provide a date of birth."
 }

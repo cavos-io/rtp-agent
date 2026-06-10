@@ -197,6 +197,9 @@ type declineEmailCaptureTool struct {
 
 func (t *declineEmailCaptureTool) ID() string   { return "decline_email_capture" }
 func (t *declineEmailCaptureTool) Name() string { return "decline_email_capture" }
+func (t *declineEmailCaptureTool) ToolFlags() llm.ToolFlag {
+	return llm.ToolFlagIgnoreOnEnter
+}
 func (t *declineEmailCaptureTool) Description() string {
 	return "Handles the case when the user explicitly declines to provide an email address."
 }
