@@ -46,6 +46,7 @@ const (
 	togetherAPIKeyEnv      = "TOGETHER_API_KEY"
 	telnyxAPIKeyEnv        = "TELNYX_API_KEY"
 	nebiusAPIKeyEnv        = "NEBIUS_API_KEY"
+	lettaAPIKeyEnv         = "LETTA_API_KEY"
 	cometAPIKeyEnv         = "COMETAPI_API_KEY"
 	octoAIAPIKeyEnv        = "OCTOAI_TOKEN"
 	sambaNovaAPIKeyEnv     = "SAMBANOVA_API_KEY"
@@ -60,6 +61,7 @@ const defaultPerplexityOpenAIBaseURL = "https://api.perplexity.ai"
 const defaultTogetherOpenAIBaseURL = "https://api.together.xyz/v1"
 const defaultTelnyxOpenAIBaseURL = "https://api.telnyx.com/v2/ai"
 const defaultNebiusOpenAIBaseURL = "https://api.studio.nebius.com/v1/"
+const defaultLettaOpenAIBaseURL = "https://api.letta.com/v1/chat/completions"
 const defaultOllamaOpenAIBaseURL = "http://localhost:11434/v1"
 const defaultCometAPIOpenAIBaseURL = "https://api.cometapi.com/v1/"
 const defaultOctoAIOpenAIBaseURL = "https://text.octoai.run/v1"
@@ -459,6 +461,30 @@ func NewNebiusOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAIL
 		return nil, fmt.Errorf("nebius API key is required, either as argument or set NEBIUS_API_KEY environmental variable")
 	}
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultNebiusOpenAIBaseURL, nil, opts...), nil
+}
+
+func NewLettaOpenAILLM(agentID, baseURL, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+	if baseURL == "" {
+		baseURL = defaultLettaOpenAIBaseURL
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, err
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return nil, fmt.Errorf("invalid URL scheme: %q; must be %q or %q", parsed.Scheme, "http", "https")
+	}
+	if parsed.Host == "" {
+		return nil, fmt.Errorf("URL %q is missing a network location (e.g., domain name)", baseURL)
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(lettaAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("letta API key is required, either as argument or set LETTA_API_KEY environmental variable")
+	}
+	sdkBaseURL := strings.TrimSuffix(strings.TrimRight(baseURL, "/"), "/chat/completions")
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, agentID, sdkBaseURL, nil, opts...), nil
 }
 
 func NewOllamaOpenAILLM(model string, opts ...OpenAILLMOption) *OpenAILLM {

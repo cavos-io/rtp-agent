@@ -467,6 +467,60 @@ func TestNewNebiusOpenAILLMRequiresAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewLettaOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(lettaAPIKeyEnv, "env-letta-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewLettaOpenAILLM("agent-123", "", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewLettaOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "agent-123" {
+		t.Fatalf("Model = %q, want Letta agent id", model.Model())
+	}
+	if model.Provider() != "api.letta.com" {
+		t.Fatalf("Provider() = %q, want Letta endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-letta-key" {
+		t.Fatalf("Authorization = %q, want Letta bearer key", capture.authorization)
+	}
+	if capture.requestURL != "https://api.letta.com/v1/chat/completions" {
+		t.Fatalf("request URL = %s, want Letta chat completions endpoint without duplicated path", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"agent-123"`) {
+		t.Fatalf("request body = %s, want Letta agent id as model", capture.requestBody)
+	}
+}
+
+func TestNewLettaOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(lettaAPIKeyEnv, "")
+
+	_, err := NewLettaOpenAILLM("agent-123", "", "")
+	if err == nil || err.Error() != "letta API key is required, either as argument or set LETTA_API_KEY environmental variable" {
+		t.Fatalf("NewLettaOpenAILLM error = %v, want Letta API key required", err)
+	}
+}
+
+func TestNewLettaOpenAILLMValidatesBaseURL(t *testing.T) {
+	t.Setenv(lettaAPIKeyEnv, "env-letta-key")
+
+	_, err := NewLettaOpenAILLM("agent-123", "ftp://api.letta.com/v1/chat/completions", "")
+	if err == nil || err.Error() != "invalid URL scheme: \"ftp\"; must be \"http\" or \"https\"" {
+		t.Fatalf("NewLettaOpenAILLM invalid scheme error = %v", err)
+	}
+
+	_, err = NewLettaOpenAILLM("agent-123", "https:///v1/chat/completions", "")
+	if err == nil || err.Error() != "URL \"https:///v1/chat/completions\" is missing a network location (e.g., domain name)" {
+		t.Fatalf("NewLettaOpenAILLM missing host error = %v", err)
+	}
+}
+
 func TestNewOllamaOpenAILLMDefaultsMatchReference(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{
 		statusCode:   http.StatusBadRequest,
