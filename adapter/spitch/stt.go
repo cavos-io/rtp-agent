@@ -24,6 +24,10 @@ func NewSpitchSTT(apiKey string) *SpitchSTT {
 }
 
 func (s *SpitchSTT) Label() string { return "spitch.STT" }
+func (s *SpitchSTT) Model() string { return "unknown" }
+func (s *SpitchSTT) Provider() string {
+	return "Spitch"
+}
 func (s *SpitchSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: false, InterimResults: false, Diarization: false, OfflineRecognize: true}
 }

@@ -7,6 +7,9 @@ import (
 	"io"
 	"net/http"
 	"testing"
+
+	corestt "github.com/cavos-io/rtp-agent/core/stt"
+	coretts "github.com/cavos-io/rtp-agent/core/tts"
 )
 
 func TestSpitchTTSDefaultsMatchReference(t *testing.T) {
@@ -24,6 +27,12 @@ func TestSpitchTTSDefaultsMatchReference(t *testing.T) {
 	if provider.SampleRate() != 24000 {
 		t.Fatalf("sample rate = %d, want 24000", provider.SampleRate())
 	}
+	if got := coretts.Model(provider); got != "unknown" {
+		t.Fatalf("model metadata = %q, want unknown", got)
+	}
+	if got := coretts.Provider(provider); got != "Spitch" {
+		t.Fatalf("provider metadata = %q, want Spitch", got)
+	}
 }
 
 func TestNewSpitchSTTUsesEnvironmentAPIKey(t *testing.T) {
@@ -33,6 +42,12 @@ func TestNewSpitchSTTUsesEnvironmentAPIKey(t *testing.T) {
 
 	if provider.apiKey != "env-key" {
 		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+	if got := corestt.Model(provider); got != "unknown" {
+		t.Fatalf("model metadata = %q, want unknown", got)
+	}
+	if got := corestt.Provider(provider); got != "Spitch" {
+		t.Fatalf("provider metadata = %q, want Spitch", got)
 	}
 
 	explicit := NewSpitchSTT("explicit-key")
