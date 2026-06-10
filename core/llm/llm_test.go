@@ -78,6 +78,69 @@ func TestLLMErrorCarriesReferenceFields(t *testing.T) {
 	}
 }
 
+func TestLLMMetricsEmitterPanicDoesNotBlockOtherHandlers(t *testing.T) {
+	var emitter MetricsEmitter
+	metrics := &telemetry.LLMMetrics{RequestID: "req"}
+	received := make(chan *telemetry.LLMMetrics, 1)
+
+	emitter.OnMetricsCollected(func(*telemetry.LLMMetrics) {
+		panic("metrics handler failed")
+	})
+	emitter.OnMetricsCollected(func(got *telemetry.LLMMetrics) {
+		received <- got
+	})
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				t.Fatalf("EmitMetricsCollected panic = %v, want handler panic isolated", recovered)
+			}
+		}()
+		emitter.EmitMetricsCollected(metrics)
+	}()
+
+	select {
+	case got := <-received:
+		if got != metrics {
+			t.Fatalf("metrics pointer = %p, want %p", got, metrics)
+		}
+	default:
+		t.Fatal("second metrics handler was not called")
+	}
+}
+
+func TestLLMErrorEmitterPanicDoesNotBlockOtherHandlers(t *testing.T) {
+	var emitter ErrorEmitter
+	cause := context.Canceled
+	llmErr := NewLLMError("openai.LLM", cause, true)
+	received := make(chan *LLMError, 1)
+
+	emitter.OnError(func(*LLMError) {
+		panic("error handler failed")
+	})
+	emitter.OnError(func(err *LLMError) {
+		received <- err
+	})
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				t.Fatalf("EmitError panic = %v, want handler panic isolated", recovered)
+			}
+		}()
+		emitter.EmitError(llmErr)
+	}()
+
+	select {
+	case got := <-received:
+		if got != llmErr {
+			t.Fatalf("error pointer = %p, want %p", got, llmErr)
+		}
+	default:
+		t.Fatal("second error handler was not called")
+	}
+}
+
 func TestAPIErrorCarriesMessageBodyAndRetryable(t *testing.T) {
 	err := NewAPIError("provider failed", map[string]any{"code": "overloaded"}, true)
 

@@ -61,6 +61,6 @@ func (e *MetricsEmitter) EmitMetricsCollected(metrics *telemetry.LLMMetrics) {
 	e.mu.Unlock()
 
 	for _, subscription := range handlers {
-		subscription.handler(metrics)
+		callLLMMetricsHandler(subscription.handler, metrics)
 	}
 }
