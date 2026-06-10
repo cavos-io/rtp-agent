@@ -189,6 +189,8 @@ func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *Se
 		}
 		if len(report.ModelUsage) > 0 {
 			attrs["usage"] = modelUsageToDict(report.ModelUsage)
+		} else {
+			attrs["usage"] = nil
 		}
 		recordUploadTelemetryEventAt(ctx, "session_report", "session report", attrs, sessionReportTelemetryTimestamp(report))
 	}

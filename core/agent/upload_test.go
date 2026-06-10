@@ -379,6 +379,39 @@ func TestUploadSessionReportRecordsModelUsage(t *testing.T) {
 	}
 }
 
+func TestUploadSessionReportRecordsEmptyUsageAsNil(t *testing.T) {
+	oldRecord := recordUploadTelemetryEvent
+	oldRecordAt := recordUploadTelemetryEventAt
+	var events []uploadTelemetryEvent
+	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
+	}
+	recordUploadTelemetryEventAt = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, timestamp time.Time) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: timestamp})
+	}
+	defer func() {
+		recordUploadTelemetryEvent = oldRecord
+		recordUploadTelemetryEventAt = oldRecordAt
+	}()
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Logs: true}
+
+	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("telemetry events = %#v, want one session report event", events)
+	}
+	usage, ok := events[0].attrs["usage"]
+	if !ok {
+		t.Fatalf("usage missing from attrs: %#v", events[0].attrs)
+	}
+	if usage != nil {
+		t.Fatalf("usage = %#v, want nil when report has no model usage", usage)
+	}
+}
+
 func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
 	oldRecord := recordUploadTelemetryEvent
 	oldRecordAt := recordUploadTelemetryEventAt
