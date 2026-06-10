@@ -307,6 +307,46 @@ func TestNewFireworksOpenAILLMRequiresAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewPerplexityOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(perplexityAPIKeyEnv, "env-perplexity-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewPerplexityOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewPerplexityOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "llama-3.1-sonar-small-128k-chat" {
+		t.Fatalf("Model = %q, want Perplexity reference model", model.Model())
+	}
+	if model.Provider() != "api.perplexity.ai" {
+		t.Fatalf("Provider() = %q, want Perplexity endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-perplexity-key" {
+		t.Fatalf("Authorization = %q, want Perplexity bearer key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "/chat/completions") {
+		t.Fatalf("request URL = %s, want Perplexity OpenAI-compatible chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"llama-3.1-sonar-small-128k-chat"`) {
+		t.Fatalf("request body = %s, want default Perplexity model", capture.requestBody)
+	}
+}
+
+func TestNewPerplexityOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(perplexityAPIKeyEnv, "")
+
+	_, err := NewPerplexityOpenAILLM("", "")
+	if err == nil || err.Error() != "perplexity AI API key is required, either as argument or set PERPLEXITY_API_KEY environmental variable" {
+		t.Fatalf("NewPerplexityOpenAILLM error = %v, want Perplexity API key required", err)
+	}
+}
+
 func TestNewOllamaOpenAILLMDefaultsMatchReference(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{
 		statusCode:   http.StatusBadRequest,
