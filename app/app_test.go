@@ -2975,6 +2975,21 @@ func TestDefaultConfigFromEnvWrapsLLMFallbackProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvAcceptsTogetherLLMFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "together")
+	t.Setenv("TOGETHER_API_KEY", "test-together-key")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "custom-together-model")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := llm.Label(app.Agent.LLM); got != "FallbackAdapter(minimal.MinimalLLM)" {
+		t.Fatalf("LLM label = %q, want fallback adapter around primary minimal LLM", got)
+	}
+}
+
 func TestDefaultConfigFromEnvConfiguresLLMChatOptions(t *testing.T) {
 	t.Setenv("RTP_AGENT_LLM_PARALLEL_TOOL_CALLS", "true")
 	t.Setenv("RTP_AGENT_LLM_JSON_CONFIG", "temperature=0.2")

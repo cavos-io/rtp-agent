@@ -1845,6 +1845,8 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel), nil
 	case providerXAI:
 		return xai.NewXaiLLM(cfg.XAIAPIKey, cfg.LLMModel), nil
+	case providerTogether:
+		return openai.NewTogetherOpenAILLM(cfg.LLMModel, cfg.TogetherAPIKey)
 	case providerLiveKit:
 		return openai.NewLiveKitInferenceLLM(cfg.LLMModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret)
 	default:
