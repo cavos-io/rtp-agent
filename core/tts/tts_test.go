@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -284,6 +285,33 @@ func TestCollectReturnsStreamError(t *testing.T) {
 	_, err := Collect(stream)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("Collect error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestCollectRejectsNilStream(t *testing.T) {
+	frame, err := Collect(nil)
+	if err == nil {
+		t.Fatal("Collect(nil) error = nil, want nil stream error")
+	}
+	if !strings.Contains(err.Error(), "nil chunked stream") {
+		t.Fatalf("Collect(nil) error = %v, want nil stream error", err)
+	}
+	if frame != nil {
+		t.Fatalf("Collect(nil) frame = %#v, want nil", frame)
+	}
+}
+
+func TestCollectRejectsTypedNilStream(t *testing.T) {
+	var stream *collectChunkedStream
+	frame, err := Collect(stream)
+	if err == nil {
+		t.Fatal("Collect(typed nil) error = nil, want nil stream error")
+	}
+	if !strings.Contains(err.Error(), "nil chunked stream") {
+		t.Fatalf("Collect(typed nil) error = %v, want nil stream error", err)
+	}
+	if frame != nil {
+		t.Fatalf("Collect(typed nil) frame = %#v, want nil", frame)
 	}
 }
 

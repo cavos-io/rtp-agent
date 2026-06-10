@@ -2,6 +2,7 @@ package tts
 
 import (
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -13,6 +14,9 @@ func Collect(stream ChunkedStream) (frame *model.AudioFrame, err error) {
 }
 
 func CollectWithTimedTranscript(stream ChunkedStream) (frame *model.AudioFrame, timedTranscript []TimedString, err error) {
+	if isNilChunkedStream(stream) {
+		return nil, nil, fmt.Errorf("TTS returned nil chunked stream")
+	}
 	defer func() {
 		closeErr := stream.Close()
 		if err == nil && closeErr != nil {
