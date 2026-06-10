@@ -213,6 +213,7 @@ const (
 	providerKeyframe     = "keyframe"
 	providerLangChain    = "langchain"
 	providerLemonSlice   = "lemonslice"
+	providerLetta        = "letta"
 	providerLiveAvatar   = "liveavatar"
 	providerLMNT         = "lmnt"
 	providerMinimal      = "minimal"
@@ -482,6 +483,7 @@ type AppConfig struct {
 	KeyframeAPIKey              string
 	LangChainAPIKey             string
 	LemonSliceAPIKey            string
+	LettaAPIKey                 string
 	LiveAvatarAPIKey            string
 	LMNTAPIKey                  string
 	MinimalAPIKey               string
@@ -835,6 +837,7 @@ func DefaultConfigFromEnv() AppConfig {
 		KeyframeAPIKey:                          os.Getenv("KEYFRAME_API_KEY"),
 		LangChainAPIKey:                         os.Getenv("LANGCHAIN_API_KEY"),
 		LemonSliceAPIKey:                        os.Getenv("LEMONSLICE_API_KEY"),
+		LettaAPIKey:                             os.Getenv("LETTA_API_KEY"),
 		LiveAvatarAPIKey:                        os.Getenv("LIVEAVATAR_API_KEY"),
 		LMNTAPIKey:                              os.Getenv("LMNT_API_KEY"),
 		MinimalAPIKey:                           os.Getenv("MINIMAL_API_KEY"),
@@ -2161,6 +2164,12 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = provider
 	case providerNebius:
 		provider, err := openai.NewNebiusOpenAILLM(cfg.LLMModel, cfg.NebiusAPIKey)
+		if err != nil {
+			return nil, err
+		}
+		a.LLM = provider
+	case providerLetta:
+		provider, err := openai.NewLettaOpenAILLM(cfg.LLMModel, cfg.LLMBaseURL, cfg.LettaAPIKey)
 		if err != nil {
 			return nil, err
 		}
