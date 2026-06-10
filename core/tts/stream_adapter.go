@@ -229,6 +229,9 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 	if err != nil {
 		return err
 	}
+	if stream == nil {
+		return fmt.Errorf("TTS returned nil chunked stream")
+	}
 	w.setActiveStream(stream)
 	defer func() {
 		w.clearActiveStream(stream)
