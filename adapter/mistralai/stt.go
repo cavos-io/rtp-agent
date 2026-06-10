@@ -78,6 +78,10 @@ func NewMistralAISTT(apiKey string, opts ...MistralAISTTOption) *MistralAISTT {
 }
 
 func (s *MistralAISTT) Label() string { return "mistralai.STT" }
+func (s *MistralAISTT) Model() string { return s.model }
+func (s *MistralAISTT) Provider() string {
+	return "MistralAI"
+}
 func (s *MistralAISTT) Capabilities() stt.STTCapabilities {
 	realtime := mistralAISTTIsRealtime(s.model)
 	return stt.STTCapabilities{

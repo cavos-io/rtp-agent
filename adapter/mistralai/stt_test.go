@@ -28,6 +28,12 @@ func TestMistralAISTTDefaultsMatchReference(t *testing.T) {
 	if provider.sampleRate != 16000 {
 		t.Fatalf("sample rate = %d, want 16000", provider.sampleRate)
 	}
+	if got := stt.Model(provider); got != "voxtral-mini-latest" {
+		t.Fatalf("model metadata = %q, want voxtral-mini-latest", got)
+	}
+	if got := stt.Provider(provider); got != "MistralAI" {
+		t.Fatalf("provider metadata = %q, want MistralAI", got)
+	}
 	caps := provider.Capabilities()
 	if caps.Streaming {
 		t.Fatal("streaming = true, want false for default batch model")

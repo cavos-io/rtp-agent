@@ -106,6 +106,8 @@ func (t *MistralAITTS) Capabilities() tts.TTSCapabilities {
 }
 func (t *MistralAITTS) SampleRate() int  { return mistralAITTSSampleRate }
 func (t *MistralAITTS) NumChannels() int { return mistralAITTSNumChannels }
+func (t *MistralAITTS) Model() string    { return t.model }
+func (t *MistralAITTS) Provider() string { return "MistralAI" }
 
 func (t *MistralAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	req, err := buildMistralAITTSRequest(ctx, t, text)
