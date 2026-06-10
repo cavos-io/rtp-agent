@@ -21,6 +21,17 @@ const defaultOpenAILLMModel = "gpt-4.1"
 const defaultAzureOpenAILLMModel = "gpt-4o"
 const defaultOVHCloudOpenAILLMModel = "gpt-oss-120b"
 const defaultDeepSeekOpenAILLMModel = "deepseek-chat"
+const defaultFireworksOpenAILLMModel = "accounts/fireworks/models/llama-v3p3-70b-instruct"
+const defaultPerplexityOpenAILLMModel = "llama-3.1-sonar-small-128k-chat"
+const defaultTogetherOpenAILLMModel = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
+const defaultTelnyxOpenAILLMModel = "meta-llama/Meta-Llama-3.1-70B-Instruct"
+const defaultNebiusOpenAILLMModel = "meta-llama/Meta-Llama-3.1-70B-Instruct"
+const defaultOllamaOpenAILLMModel = "llama3.1"
+const defaultCometAPIOpenAILLMModel = "gpt-5-chat-latest"
+const defaultOctoAIOpenAILLMModel = "llama-2-13b-chat"
+const defaultSambaNovaOpenAILLMModel = "DeepSeek-R1-0528"
+const defaultCerebrasOpenAILLMModel = "llama-4-scout-17b-16e-instruct"
+const defaultXAIOpenAILLMModel = "grok-3-fast"
 const openAIAPIKeyRequiredMessage = "OpenAI API key is required, either as argument or set OPENAI_API_KEY environment variable"
 
 const (
@@ -30,10 +41,33 @@ const (
 	openAIAPIVersionEnv    = "OPENAI_API_VERSION"
 	openRouterAPIKeyEnv    = "OPENROUTER_API_KEY"
 	deepSeekAPIKeyEnv      = "DEEPSEEK_API_KEY"
+	fireworksAPIKeyEnv     = "FIREWORKS_API_KEY"
+	perplexityAPIKeyEnv    = "PERPLEXITY_API_KEY"
+	togetherAPIKeyEnv      = "TOGETHER_API_KEY"
+	telnyxAPIKeyEnv        = "TELNYX_API_KEY"
+	nebiusAPIKeyEnv        = "NEBIUS_API_KEY"
+	lettaAPIKeyEnv         = "LETTA_API_KEY"
+	cometAPIKeyEnv         = "COMETAPI_API_KEY"
+	octoAIAPIKeyEnv        = "OCTOAI_TOKEN"
+	sambaNovaAPIKeyEnv     = "SAMBANOVA_API_KEY"
+	cerebrasAPIKeyEnv      = "CEREBRAS_API_KEY"
+	xAIAPIKeyEnv           = "XAI_API_KEY"
 )
 
 const defaultOpenRouterLLMURL = "https://openrouter.ai/api/v1"
 const defaultDeepSeekOpenAIBaseURL = "https://api.deepseek.com/v1"
+const defaultFireworksOpenAIBaseURL = "https://api.fireworks.ai/inference/v1"
+const defaultPerplexityOpenAIBaseURL = "https://api.perplexity.ai"
+const defaultTogetherOpenAIBaseURL = "https://api.together.xyz/v1"
+const defaultTelnyxOpenAIBaseURL = "https://api.telnyx.com/v2/ai"
+const defaultNebiusOpenAIBaseURL = "https://api.studio.nebius.com/v1/"
+const defaultLettaOpenAIBaseURL = "https://api.letta.com/v1/chat/completions"
+const defaultOllamaOpenAIBaseURL = "http://localhost:11434/v1"
+const defaultCometAPIOpenAIBaseURL = "https://api.cometapi.com/v1/"
+const defaultOctoAIOpenAIBaseURL = "https://text.octoai.run/v1"
+const defaultSambaNovaOpenAIBaseURL = "https://api.sambanova.ai/v1"
+const defaultCerebrasOpenAIBaseURL = "https://api.cerebras.ai/v1"
+const defaultXAIOpenAIBaseURL = "https://api.x.ai/v1"
 
 type OpenAILLM struct {
 	client               *openai.Client
@@ -45,6 +79,7 @@ type OpenAILLM struct {
 	parallelToolCallsSet bool
 	toolChoice           llm.ToolChoice
 	defaultReasoning     bool
+	strictToolSchema     bool
 	extraHeaders         map[string]string
 	extraQuery           map[string]string
 	extraBody            map[string]any
@@ -220,6 +255,12 @@ func WithOpenAILLMToolChoice(toolChoice llm.ToolChoice) OpenAILLMOption {
 	}
 }
 
+func WithOpenAILLMStrictToolSchema(strict bool) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		l.strictToolSchema = strict
+	}
+}
+
 func WithOpenAILLMExtraHeaders(headers map[string]string) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		l.extraHeaders = cloneOpenAIStringMap(headers)
@@ -263,6 +304,7 @@ func newOpenAILLMWithConfigAndModel(config openai.ClientConfig, model string, op
 		model:            model,
 		baseURL:          config.BaseURL,
 		defaultReasoning: true,
+		strictToolSchema: true,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -301,7 +343,7 @@ func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 		azureDeployment = model
 	}
 
-	provider := &OpenAILLM{model: model, defaultReasoning: true}
+	provider := &OpenAILLM{model: model, defaultReasoning: true, strictToolSchema: true}
 	for _, opt := range opts {
 		opt(provider)
 	}
@@ -354,6 +396,171 @@ func NewDeepSeekOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenA
 		return nil, fmt.Errorf("DeepSeek API key is required, either as argument or set DEEPSEEK_API_KEY environmental variable")
 	}
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultDeepSeekOpenAIBaseURL, nil, opts...), nil
+}
+
+func NewFireworksOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+	if model == "" {
+		model = defaultFireworksOpenAILLMModel
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(fireworksAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("fireworks API key is required, either as argument or set FIREWORKS_API_KEY environmental variable")
+	}
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultFireworksOpenAIBaseURL, nil, opts...), nil
+}
+
+func NewPerplexityOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+	if model == "" {
+		model = defaultPerplexityOpenAILLMModel
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(perplexityAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("perplexity AI API key is required, either as argument or set PERPLEXITY_API_KEY environmental variable")
+	}
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultPerplexityOpenAIBaseURL, nil, opts...), nil
+}
+
+func NewTogetherOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+	if model == "" {
+		model = defaultTogetherOpenAILLMModel
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(togetherAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("together AI API key is required, either as argument or set TOGETHER_API_KEY environmental variable")
+	}
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultTogetherOpenAIBaseURL, nil, opts...), nil
+}
+
+func NewTelnyxOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+	if model == "" {
+		model = defaultTelnyxOpenAILLMModel
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(telnyxAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("telnyx AI API key is required, either as argument or set TELNYX_API_KEY environmental variable")
+	}
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultTelnyxOpenAIBaseURL, nil, opts...), nil
+}
+
+func NewNebiusOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+	if model == "" {
+		model = defaultNebiusOpenAILLMModel
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(nebiusAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("nebius API key is required, either as argument or set NEBIUS_API_KEY environmental variable")
+	}
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultNebiusOpenAIBaseURL, nil, opts...), nil
+}
+
+func NewLettaOpenAILLM(agentID, baseURL, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+	if baseURL == "" {
+		baseURL = defaultLettaOpenAIBaseURL
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, err
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return nil, fmt.Errorf("invalid URL scheme: %q; must be %q or %q", parsed.Scheme, "http", "https")
+	}
+	if parsed.Host == "" {
+		return nil, fmt.Errorf("URL %q is missing a network location (e.g., domain name)", baseURL)
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(lettaAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("letta API key is required, either as argument or set LETTA_API_KEY environmental variable")
+	}
+	sdkBaseURL := strings.TrimSuffix(strings.TrimRight(baseURL, "/"), "/chat/completions")
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, agentID, sdkBaseURL, nil, opts...), nil
+}
+
+func NewOllamaOpenAILLM(model string, opts ...OpenAILLMOption) *OpenAILLM {
+	if model == "" {
+		model = defaultOllamaOpenAILLMModel
+	}
+	return NewOpenAILLMWithBaseURLAndHTTPClient("ollama", model, defaultOllamaOpenAIBaseURL, nil, opts...)
+}
+
+func NewCometAPIOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+	if model == "" {
+		model = defaultCometAPIOpenAILLMModel
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(cometAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("CometAPI API key is required, either as argument or set COMETAPI_API_KEY environmental variable")
+	}
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultCometAPIOpenAIBaseURL, nil, opts...), nil
+}
+
+func NewOctoAIOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+	if model == "" {
+		model = defaultOctoAIOpenAILLMModel
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(octoAIAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("OctoAI API key is required, either as argument or set OCTOAI_TOKEN environmental variable")
+	}
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultOctoAIOpenAIBaseURL, nil, opts...), nil
+}
+
+func NewSambaNovaOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+	if model == "" {
+		model = defaultSambaNovaOpenAILLMModel
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(sambaNovaAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("SambaNova API key is required, either as argument or set SAMBANOVA_API_KEY environment variable")
+	}
+	options := []OpenAILLMOption{WithOpenAILLMStrictToolSchema(false)}
+	options = append(options, opts...)
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultSambaNovaOpenAIBaseURL, nil, options...), nil
+}
+
+func NewCerebrasOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+	if model == "" {
+		model = defaultCerebrasOpenAILLMModel
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(cerebrasAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("cerebras API key is required, either as argument or set CEREBRAS_API_KEY environment variable")
+	}
+	options := []OpenAILLMOption{WithOpenAILLMStrictToolSchema(false)}
+	options = append(options, opts...)
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultCerebrasOpenAIBaseURL, nil, options...), nil
+}
+
+func NewXAIOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+	if model == "" {
+		model = defaultXAIOpenAILLMModel
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(xAIAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("XAI API key is required, either as argument or set XAI_API_KEY environmental variable")
+	}
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultXAIOpenAIBaseURL, nil, opts...), nil
 }
 
 func NewOpenRouterLLM(apiKey, model string, opts ...OpenRouterLLMOption) (*OpenAILLM, error) {
@@ -443,6 +650,7 @@ func NewOpenAILLMWithBaseURLAndHTTPClient(apiKey string, model string, baseURL s
 		model:            model,
 		baseURL:          config.BaseURL,
 		defaultReasoning: true,
+		strictToolSchema: true,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -611,7 +819,7 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		effectiveOptions = &copied
 	}
 
-	req := buildOpenAIChatCompletionRequestWithReasoningDefault(l.model, chatCtx, effectiveOptions, l.defaultReasoning)
+	req := buildOpenAIChatCompletionRequestWithReasoningDefaultAndToolSchema(l.model, chatCtx, effectiveOptions, l.defaultReasoning, l.strictToolSchema)
 
 	var lastErr error
 	for attempt := 0; attempt <= connectOptions.MaxRetry; attempt++ {
@@ -741,6 +949,10 @@ func buildOpenAIChatCompletionRequest(model string, chatCtx *llm.ChatContext, op
 }
 
 func buildOpenAIChatCompletionRequestWithReasoningDefault(model string, chatCtx *llm.ChatContext, options *llm.ChatOptions, defaultReasoning bool) openai.ChatCompletionRequest {
+	return buildOpenAIChatCompletionRequestWithReasoningDefaultAndToolSchema(model, chatCtx, options, defaultReasoning, true)
+}
+
+func buildOpenAIChatCompletionRequestWithReasoningDefaultAndToolSchema(model string, chatCtx *llm.ChatContext, options *llm.ChatOptions, defaultReasoning bool, strictToolSchema bool) openai.ChatCompletionRequest {
 	messages := buildOpenAIChatMessages(chatCtx)
 
 	tools := make([]openai.Tool, 0, len(options.Tools))
@@ -751,7 +963,7 @@ func buildOpenAIChatCompletionRequestWithReasoningDefault(model string, chatCtx 
 			Function: &openai.FunctionDefinition{
 				Name:        tool.Name(),
 				Description: tool.Description(),
-				Strict:      true,
+				Strict:      strictToolSchema,
 				Parameters:  json.RawMessage(params),
 			},
 		})

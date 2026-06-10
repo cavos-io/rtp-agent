@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -263,6 +264,545 @@ func TestNewDeepSeekOpenAILLMRequiresAPIKey(t *testing.T) {
 	_, err := NewDeepSeekOpenAILLM("", "")
 	if err == nil || err.Error() != "DeepSeek API key is required, either as argument or set DEEPSEEK_API_KEY environmental variable" {
 		t.Fatalf("NewDeepSeekOpenAILLM error = %v, want DeepSeek API key required", err)
+	}
+}
+
+func TestNewFireworksOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(fireworksAPIKeyEnv, "env-fireworks-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewFireworksOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewFireworksOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "accounts/fireworks/models/llama-v3p3-70b-instruct" {
+		t.Fatalf("Model = %q, want Fireworks reference model", model.Model())
+	}
+	if model.Provider() != "api.fireworks.ai" {
+		t.Fatalf("Provider() = %q, want Fireworks endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-fireworks-key" {
+		t.Fatalf("Authorization = %q, want Fireworks bearer key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "/inference/v1/chat/completions") {
+		t.Fatalf("request URL = %s, want Fireworks OpenAI-compatible chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"accounts/fireworks/models/llama-v3p3-70b-instruct"`) {
+		t.Fatalf("request body = %s, want default Fireworks model", capture.requestBody)
+	}
+}
+
+func TestNewFireworksOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(fireworksAPIKeyEnv, "")
+
+	_, err := NewFireworksOpenAILLM("", "")
+	if err == nil || err.Error() != "fireworks API key is required, either as argument or set FIREWORKS_API_KEY environmental variable" {
+		t.Fatalf("NewFireworksOpenAILLM error = %v, want Fireworks API key required", err)
+	}
+}
+
+func TestNewPerplexityOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(perplexityAPIKeyEnv, "env-perplexity-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewPerplexityOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewPerplexityOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "llama-3.1-sonar-small-128k-chat" {
+		t.Fatalf("Model = %q, want Perplexity reference model", model.Model())
+	}
+	if model.Provider() != "api.perplexity.ai" {
+		t.Fatalf("Provider() = %q, want Perplexity endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-perplexity-key" {
+		t.Fatalf("Authorization = %q, want Perplexity bearer key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "/chat/completions") {
+		t.Fatalf("request URL = %s, want Perplexity OpenAI-compatible chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"llama-3.1-sonar-small-128k-chat"`) {
+		t.Fatalf("request body = %s, want default Perplexity model", capture.requestBody)
+	}
+}
+
+func TestNewPerplexityOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(perplexityAPIKeyEnv, "")
+
+	_, err := NewPerplexityOpenAILLM("", "")
+	if err == nil || err.Error() != "perplexity AI API key is required, either as argument or set PERPLEXITY_API_KEY environmental variable" {
+		t.Fatalf("NewPerplexityOpenAILLM error = %v, want Perplexity API key required", err)
+	}
+}
+
+func TestNewTogetherOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(togetherAPIKeyEnv, "env-together-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewTogetherOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewTogetherOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo" {
+		t.Fatalf("Model = %q, want Together reference model", model.Model())
+	}
+	if model.Provider() != "api.together.xyz" {
+		t.Fatalf("Provider() = %q, want Together endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-together-key" {
+		t.Fatalf("Authorization = %q, want Together bearer key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "/v1/chat/completions") {
+		t.Fatalf("request URL = %s, want Together OpenAI-compatible chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"`) {
+		t.Fatalf("request body = %s, want default Together model", capture.requestBody)
+	}
+}
+
+func TestNewTogetherOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(togetherAPIKeyEnv, "")
+
+	_, err := NewTogetherOpenAILLM("", "")
+	if err == nil || err.Error() != "together AI API key is required, either as argument or set TOGETHER_API_KEY environmental variable" {
+		t.Fatalf("NewTogetherOpenAILLM error = %v, want Together API key required", err)
+	}
+}
+
+func TestNewTelnyxOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(telnyxAPIKeyEnv, "env-telnyx-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewTelnyxOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewTelnyxOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "meta-llama/Meta-Llama-3.1-70B-Instruct" {
+		t.Fatalf("Model = %q, want Telnyx reference model", model.Model())
+	}
+	if model.Provider() != "api.telnyx.com" {
+		t.Fatalf("Provider() = %q, want Telnyx endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-telnyx-key" {
+		t.Fatalf("Authorization = %q, want Telnyx bearer key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "/v2/ai/chat/completions") {
+		t.Fatalf("request URL = %s, want Telnyx OpenAI-compatible chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"meta-llama/Meta-Llama-3.1-70B-Instruct"`) {
+		t.Fatalf("request body = %s, want default Telnyx model", capture.requestBody)
+	}
+}
+
+func TestNewTelnyxOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(telnyxAPIKeyEnv, "")
+
+	_, err := NewTelnyxOpenAILLM("", "")
+	if err == nil || err.Error() != "telnyx AI API key is required, either as argument or set TELNYX_API_KEY environmental variable" {
+		t.Fatalf("NewTelnyxOpenAILLM error = %v, want Telnyx API key required", err)
+	}
+}
+
+func TestNewNebiusOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(nebiusAPIKeyEnv, "env-nebius-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewNebiusOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewNebiusOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "meta-llama/Meta-Llama-3.1-70B-Instruct" {
+		t.Fatalf("Model = %q, want Nebius reference model", model.Model())
+	}
+	if model.Provider() != "api.studio.nebius.com" {
+		t.Fatalf("Provider() = %q, want Nebius endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-nebius-key" {
+		t.Fatalf("Authorization = %q, want Nebius bearer key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "/v1/chat/completions") {
+		t.Fatalf("request URL = %s, want Nebius OpenAI-compatible chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"meta-llama/Meta-Llama-3.1-70B-Instruct"`) {
+		t.Fatalf("request body = %s, want default Nebius model", capture.requestBody)
+	}
+}
+
+func TestNewNebiusOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(nebiusAPIKeyEnv, "")
+
+	_, err := NewNebiusOpenAILLM("", "")
+	if err == nil || err.Error() != "nebius API key is required, either as argument or set NEBIUS_API_KEY environmental variable" {
+		t.Fatalf("NewNebiusOpenAILLM error = %v, want Nebius API key required", err)
+	}
+}
+
+func TestNewLettaOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(lettaAPIKeyEnv, "env-letta-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewLettaOpenAILLM("agent-123", "", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewLettaOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "agent-123" {
+		t.Fatalf("Model = %q, want Letta agent id", model.Model())
+	}
+	if model.Provider() != "api.letta.com" {
+		t.Fatalf("Provider() = %q, want Letta endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-letta-key" {
+		t.Fatalf("Authorization = %q, want Letta bearer key", capture.authorization)
+	}
+	if capture.requestURL != "https://api.letta.com/v1/chat/completions" {
+		t.Fatalf("request URL = %s, want Letta chat completions endpoint without duplicated path", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"agent-123"`) {
+		t.Fatalf("request body = %s, want Letta agent id as model", capture.requestBody)
+	}
+}
+
+func TestNewLettaOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(lettaAPIKeyEnv, "")
+
+	_, err := NewLettaOpenAILLM("agent-123", "", "")
+	if err == nil || err.Error() != "letta API key is required, either as argument or set LETTA_API_KEY environmental variable" {
+		t.Fatalf("NewLettaOpenAILLM error = %v, want Letta API key required", err)
+	}
+}
+
+func TestNewLettaOpenAILLMValidatesBaseURL(t *testing.T) {
+	t.Setenv(lettaAPIKeyEnv, "env-letta-key")
+
+	_, err := NewLettaOpenAILLM("agent-123", "ftp://api.letta.com/v1/chat/completions", "")
+	if err == nil || err.Error() != "invalid URL scheme: \"ftp\"; must be \"http\" or \"https\"" {
+		t.Fatalf("NewLettaOpenAILLM invalid scheme error = %v", err)
+	}
+
+	_, err = NewLettaOpenAILLM("agent-123", "https:///v1/chat/completions", "")
+	if err == nil || err.Error() != "URL \"https:///v1/chat/completions\" is missing a network location (e.g., domain name)" {
+		t.Fatalf("NewLettaOpenAILLM missing host error = %v", err)
+	}
+}
+
+func TestNewOllamaOpenAILLMDefaultsMatchReference(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model := NewOllamaOpenAILLM("", withOpenAILLMHTTPClient(capture))
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "llama3.1" {
+		t.Fatalf("Model = %q, want llama3.1", model.Model())
+	}
+	if model.Provider() != "localhost:11434" {
+		t.Fatalf("Provider() = %q, want local Ollama endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer ollama" {
+		t.Fatalf("Authorization = %q, want reference ollama API key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "http://localhost:11434/v1/chat/completions") {
+		t.Fatalf("request URL = %s, want local Ollama chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"llama3.1"`) {
+		t.Fatalf("request body = %s, want default Ollama model", capture.requestBody)
+	}
+}
+
+func TestNewCometAPIOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(cometAPIKeyEnv, "env-comet-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewCometAPIOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewCometAPIOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "gpt-5-chat-latest" {
+		t.Fatalf("Model = %q, want gpt-5-chat-latest", model.Model())
+	}
+	if model.Provider() != "api.cometapi.com" {
+		t.Fatalf("Provider() = %q, want CometAPI endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-comet-key" {
+		t.Fatalf("Authorization = %q, want CometAPI bearer key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "/v1/chat/completions") {
+		t.Fatalf("request URL = %s, want OpenAI-compatible chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"gpt-5-chat-latest"`) {
+		t.Fatalf("request body = %s, want default CometAPI model", capture.requestBody)
+	}
+}
+
+func TestNewCometAPIOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(cometAPIKeyEnv, "")
+
+	_, err := NewCometAPIOpenAILLM("", "")
+	if err == nil || err.Error() != "CometAPI API key is required, either as argument or set COMETAPI_API_KEY environmental variable" {
+		t.Fatalf("NewCometAPIOpenAILLM error = %v, want CometAPI API key required", err)
+	}
+}
+
+func TestNewOctoAIOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(octoAIAPIKeyEnv, "env-octo-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewOctoAIOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewOctoAIOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "llama-2-13b-chat" {
+		t.Fatalf("Model = %q, want llama-2-13b-chat", model.Model())
+	}
+	if model.Provider() != "text.octoai.run" {
+		t.Fatalf("Provider() = %q, want OctoAI endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-octo-key" {
+		t.Fatalf("Authorization = %q, want OctoAI bearer key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "/v1/chat/completions") {
+		t.Fatalf("request URL = %s, want OpenAI-compatible chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"llama-2-13b-chat"`) {
+		t.Fatalf("request body = %s, want default OctoAI model", capture.requestBody)
+	}
+}
+
+func TestNewOctoAIOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(octoAIAPIKeyEnv, "")
+
+	_, err := NewOctoAIOpenAILLM("", "")
+	if err == nil || err.Error() != "OctoAI API key is required, either as argument or set OCTOAI_TOKEN environmental variable" {
+		t.Fatalf("NewOctoAIOpenAILLM error = %v, want OctoAI API key required", err)
+	}
+}
+
+func TestNewSambaNovaOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(sambaNovaAPIKeyEnv, "env-sambanova-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewSambaNovaOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewSambaNovaOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "DeepSeek-R1-0528" {
+		t.Fatalf("Model = %q, want DeepSeek-R1-0528", model.Model())
+	}
+	if model.Provider() != "api.sambanova.ai" {
+		t.Fatalf("Provider() = %q, want SambaNova endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-sambanova-key" {
+		t.Fatalf("Authorization = %q, want SambaNova bearer key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "/v1/chat/completions") {
+		t.Fatalf("request URL = %s, want OpenAI-compatible chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"DeepSeek-R1-0528"`) {
+		t.Fatalf("request body = %s, want default SambaNova model", capture.requestBody)
+	}
+}
+
+func TestNewSambaNovaOpenAILLMOmitsStrictToolSchema(t *testing.T) {
+	t.Setenv(sambaNovaAPIKeyEnv, "env-sambanova-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model, err := NewSambaNovaOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewSambaNovaOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithTools([]llm.Tool{requestTestTool{}}),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+
+	var body map[string]any
+	if err := json.Unmarshal([]byte(capture.requestBody), &body); err != nil {
+		t.Fatalf("decode request body: %v", err)
+	}
+	tools := body["tools"].([]any)
+	function := tools[0].(map[string]any)["function"].(map[string]any)
+	if _, ok := function["strict"]; ok {
+		t.Fatalf("strict = %#v, want omitted for SambaNova legacy tool schema; body %s", function["strict"], capture.requestBody)
+	}
+}
+
+func TestNewSambaNovaOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(sambaNovaAPIKeyEnv, "")
+
+	_, err := NewSambaNovaOpenAILLM("", "")
+	if err == nil || err.Error() != "SambaNova API key is required, either as argument or set SAMBANOVA_API_KEY environment variable" {
+		t.Fatalf("NewSambaNovaOpenAILLM error = %v, want SambaNova API key required", err)
+	}
+}
+
+func TestNewCerebrasOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(cerebrasAPIKeyEnv, "env-cerebras-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewCerebrasOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewCerebrasOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "llama-4-scout-17b-16e-instruct" {
+		t.Fatalf("Model = %q, want llama-4-scout-17b-16e-instruct", model.Model())
+	}
+	if model.Provider() != "api.cerebras.ai" {
+		t.Fatalf("Provider() = %q, want Cerebras endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-cerebras-key" {
+		t.Fatalf("Authorization = %q, want Cerebras bearer key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "/v1/chat/completions") {
+		t.Fatalf("request URL = %s, want OpenAI-compatible chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"llama-4-scout-17b-16e-instruct"`) {
+		t.Fatalf("request body = %s, want default Cerebras model", capture.requestBody)
+	}
+}
+
+func TestNewCerebrasOpenAILLMOmitsStrictToolSchema(t *testing.T) {
+	t.Setenv(cerebrasAPIKeyEnv, "env-cerebras-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model, err := NewCerebrasOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewCerebrasOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithTools([]llm.Tool{requestTestTool{}}),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+
+	var body map[string]any
+	if err := json.Unmarshal([]byte(capture.requestBody), &body); err != nil {
+		t.Fatalf("decode request body: %v", err)
+	}
+	tools := body["tools"].([]any)
+	function := tools[0].(map[string]any)["function"].(map[string]any)
+	if _, ok := function["strict"]; ok {
+		t.Fatalf("strict = %#v, want omitted for Cerebras legacy tool schema; body %s", function["strict"], capture.requestBody)
+	}
+}
+
+func TestNewCerebrasOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(cerebrasAPIKeyEnv, "")
+
+	_, err := NewCerebrasOpenAILLM("", "")
+	if err == nil || err.Error() != "cerebras API key is required, either as argument or set CEREBRAS_API_KEY environment variable" {
+		t.Fatalf("NewCerebrasOpenAILLM error = %v, want Cerebras API key required", err)
+	}
+}
+
+func TestNewXAIOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(xAIAPIKeyEnv, "env-xai-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewXAIOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewXAIOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "grok-3-fast" {
+		t.Fatalf("Model = %q, want grok-3-fast", model.Model())
+	}
+	if model.Provider() != "api.x.ai" {
+		t.Fatalf("Provider() = %q, want xAI endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-xai-key" {
+		t.Fatalf("Authorization = %q, want xAI bearer key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "/v1/chat/completions") {
+		t.Fatalf("request URL = %s, want OpenAI-compatible chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"grok-3-fast"`) {
+		t.Fatalf("request body = %s, want default xAI model", capture.requestBody)
+	}
+}
+
+func TestNewXAIOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(xAIAPIKeyEnv, "")
+
+	_, err := NewXAIOpenAILLM("", "")
+	if err == nil || err.Error() != "XAI API key is required, either as argument or set XAI_API_KEY environmental variable" {
+		t.Fatalf("NewXAIOpenAILLM error = %v, want xAI API key required", err)
 	}
 }
 
