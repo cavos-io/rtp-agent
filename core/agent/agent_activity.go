@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -558,6 +559,11 @@ func (a *AgentActivity) UpdateInstructions(ctx context.Context, instructions str
 }
 
 func (a *AgentActivity) UpdateTools(ctx context.Context, tools []llm.Tool) error {
+	for idx, tool := range a.Agent.Tools {
+		if isNilAgentTool(tool) {
+			return fmt.Errorf("existing agent tool at index %d: nil tool", idx)
+		}
+	}
 	oldToolCtx := llm.EmptyToolContext()
 	if err := oldToolCtx.UpdateTools(agentToolsAsInterfaces(a.Agent.Tools)); err != nil {
 		return err

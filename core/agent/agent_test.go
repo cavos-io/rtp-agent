@@ -348,6 +348,39 @@ func TestAgentUpdateToolsRejectsTypedNilTool(t *testing.T) {
 	}
 }
 
+func TestAgentUpdateToolsWhileRunningRejectsNilExistingTool(t *testing.T) {
+	agent := NewAgent("help")
+	agent.Tools = []llm.Tool{nil}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	agent.activity = NewAgentActivity(agent, session)
+
+	err := agent.UpdateTools(context.Background(), []llm.Tool{&agentTestTool{id: "lookup", name: "lookup"}})
+
+	if err == nil || !strings.Contains(err.Error(), "nil tool") {
+		t.Fatalf("UpdateTools error = %v, want nil tool error", err)
+	}
+	if len(agent.Tools) != 1 || agent.Tools[0] != nil {
+		t.Fatalf("agent.Tools = %#v, want unchanged nil tool after failed update", agent.Tools)
+	}
+}
+
+func TestAgentUpdateToolsWhileRunningRejectsTypedNilExistingTool(t *testing.T) {
+	agent := NewAgent("help")
+	var nilTool *agentTestTool
+	agent.Tools = []llm.Tool{nilTool}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	agent.activity = NewAgentActivity(agent, session)
+
+	err := agent.UpdateTools(context.Background(), []llm.Tool{&agentTestTool{id: "lookup", name: "lookup"}})
+
+	if err == nil || !strings.Contains(err.Error(), "nil tool") {
+		t.Fatalf("UpdateTools error = %v, want nil tool error", err)
+	}
+	if len(agent.Tools) != 1 || !isNilAgentTool(agent.Tools[0]) {
+		t.Fatalf("agent.Tools = %#v, want unchanged typed-nil tool after failed update", agent.Tools)
+	}
+}
+
 func TestAgentUpdateInstructionsWhileRunningRecordsConfigUpdate(t *testing.T) {
 	agent := NewAgent("old")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
