@@ -127,9 +127,11 @@ func (t *Tagger) Evaluation(result *EvaluationResult) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for name, verdict := range result.Judgments {
-		t.tags["lk.judge."+name+":"+verdict] = tagEntry{}
+		tag := "lk.judge." + name + ":" + verdict
+		t.tags[tag] = tagEntry{}
 		t.evaluationResults = append(t.evaluationResults, map[string]any{
 			"name":    name,
+			"tag":     tag,
 			"verdict": verdict,
 		})
 	}

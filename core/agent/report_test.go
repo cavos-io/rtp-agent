@@ -267,6 +267,9 @@ func TestSessionReportToDictIncludesTaggerMetadata(t *testing.T) {
 	if evaluations[0]["name"] != "helpfulness" || evaluations[0]["verdict"] != "pass" {
 		t.Fatalf("evaluation = %#v, want helpfulness pass", evaluations[0])
 	}
+	if evaluations[0]["tag"] != "lk.judge.helpfulness:pass" {
+		t.Fatalf("evaluation tag = %#v, want generated judge tag", evaluations[0]["tag"])
+	}
 }
 
 func TestSessionReportToDictUsesAbsoluteAudioRecordingPath(t *testing.T) {

@@ -384,6 +384,13 @@ func TestUploadSessionReportRecordsEvaluationAndOutcome(t *testing.T) {
 	if events[0].eventType != "evaluation" || events[0].body != "evaluation" {
 		t.Fatalf("first telemetry event = %#v, want evaluation", events[0])
 	}
+	evaluation, ok := events[0].attrs["evaluation"].(map[string]any)
+	if !ok {
+		t.Fatalf("evaluation attr = %T, want map", events[0].attrs["evaluation"])
+	}
+	if evaluation["tag"] != "lk.judge.helpfulness:pass" {
+		t.Fatalf("evaluation tag = %#v, want generated judge tag", evaluation["tag"])
+	}
 	if events[1].eventType != "outcome" || events[1].body != "outcome" {
 		t.Fatalf("second telemetry event = %#v, want outcome", events[1])
 	}
