@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	languageutil "github.com/cavos-io/rtp-agent/library/utils/language"
 	"github.com/gorilla/websocket"
@@ -586,7 +588,7 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- err
+				s.errCh <- openAIRealtimeSTTUnexpectedCloseError(err)
 			}
 			return
 		}
@@ -602,6 +604,19 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 			s.events <- event
 		}
 	}
+}
+
+func openAIRealtimeSTTUnexpectedCloseError(err error) error {
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) {
+		return llm.NewAPIStatusError(
+			"OpenAI Realtime STT connection closed unexpectedly",
+			closeErr.Code,
+			"",
+			closeErr.Text,
+		)
+	}
+	return mapOpenAIError(err)
 }
 
 func openAIRealtimeSTTChunkBytes() int {

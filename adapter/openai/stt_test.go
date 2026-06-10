@@ -530,6 +530,45 @@ func TestOpenAISTTStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTStreamReturnsAPIStatusErrorOnUnexpectedClose(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			_ = conn.WriteControl(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "provider failed"),
+				time.Now().Add(time.Second),
+			)
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != websocket.CloseInternalServerErr {
+		t.Fatalf("StatusCode = %d, want %d", statusErr.StatusCode, websocket.CloseInternalServerErr)
+	}
+	if statusErr.Message != "OpenAI Realtime STT connection closed unexpectedly" {
+		t.Fatalf("APIStatusError message = %q, want unexpected close", statusErr.Message)
+	}
+}
+
 func TestOpenAISTTRecognizeLanguageOverridePersists(t *testing.T) {
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		if err := r.ParseMultipartForm(1 << 20); err != nil {
