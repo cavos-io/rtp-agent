@@ -19,6 +19,7 @@ import (
 
 const defaultOpenAILLMModel = "gpt-4.1"
 const defaultAzureOpenAILLMModel = "gpt-4o"
+const defaultOVHCloudOpenAILLMModel = "gpt-oss-120b"
 const openAIAPIKeyRequiredMessage = "OpenAI API key is required, either as argument or set OPENAI_API_KEY environment variable"
 
 const (
@@ -324,6 +325,19 @@ func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	provider.client = openai.NewClientWithConfig(config)
 	provider.baseURL = config.BaseURL
 	return provider, nil
+}
+
+func NewOVHCloudOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+	if model == "" {
+		model = defaultOVHCloudOpenAILLMModel
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(ovhcloudAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("OVHcloud AI Endpoints API key is required, either as argument or set OVHCLOUD_API_KEY environmental variable")
+	}
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultOVHCloudOpenAIBaseURL, nil, opts...), nil
 }
 
 func NewOpenRouterLLM(apiKey, model string, opts ...OpenRouterLLMOption) (*OpenAILLM, error) {

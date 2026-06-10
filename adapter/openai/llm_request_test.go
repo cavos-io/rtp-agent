@@ -186,6 +186,46 @@ func TestNewAzureOpenAILLMUsesEntraTokenWhenAPIKeyEmpty(t *testing.T) {
 	}
 }
 
+func TestNewOVHCloudOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(ovhcloudAPIKeyEnv, "env-ovh-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewOVHCloudOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewOVHCloudOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "gpt-oss-120b" {
+		t.Fatalf("Model = %q, want gpt-oss-120b", model.Model())
+	}
+	if model.Provider() != "oai.endpoints.kepler.ai.cloud.ovh.net" {
+		t.Fatalf("Provider() = %q, want OVHcloud endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-ovh-key" {
+		t.Fatalf("Authorization = %q, want OVHcloud bearer key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "/v1/chat/completions") {
+		t.Fatalf("request URL = %s, want OpenAI-compatible chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"gpt-oss-120b"`) {
+		t.Fatalf("request body = %s, want default OVHcloud model", capture.requestBody)
+	}
+}
+
+func TestNewOVHCloudOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(ovhcloudAPIKeyEnv, "")
+
+	_, err := NewOVHCloudOpenAILLM("", "")
+	if err == nil || err.Error() != "OVHcloud AI Endpoints API key is required, either as argument or set OVHCLOUD_API_KEY environmental variable" {
+		t.Fatalf("NewOVHCloudOpenAILLM error = %v, want OVHcloud API key required", err)
+	}
+}
+
 func TestNewOpenAILLMChatUsesConfiguredKeyAndDefaultModel(t *testing.T) {
 	t.Setenv(openAIAPIKeyEnv, "env-key")
 	capture := &captureDeadlineHTTPClient{
