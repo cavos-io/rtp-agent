@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
+	"reflect"
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -112,7 +114,11 @@ func (a *Agent) UpdateTools(ctx context.Context, tools []llm.Tool) error {
 	if a.activity != nil {
 		return a.activity.UpdateTools(ctx, tools)
 	}
-	a.Tools = dedupeAgentToolsByID(tools)
+	deduped, err := dedupeAgentToolsByID(tools)
+	if err != nil {
+		return err
+	}
+	a.Tools = deduped
 	if a.ChatCtx != nil {
 		a.ChatCtx = a.ChatCtx.Copy(llm.ChatContextCopyOptions{
 			Tools: agentToolsAsInterfaces(a.Tools),
@@ -121,10 +127,13 @@ func (a *Agent) UpdateTools(ctx context.Context, tools []llm.Tool) error {
 	return nil
 }
 
-func dedupeAgentToolsByID(tools []llm.Tool) []llm.Tool {
+func dedupeAgentToolsByID(tools []llm.Tool) ([]llm.Tool, error) {
 	deduped := make([]llm.Tool, 0, len(tools))
 	indexByID := make(map[string]int, len(tools))
-	for _, tool := range tools {
+	for idx, tool := range tools {
+		if isNilAgentTool(tool) {
+			return nil, fmt.Errorf("invalid tool at index %d: nil tool", idx)
+		}
 		if idx, ok := indexByID[tool.ID()]; ok {
 			deduped[idx] = tool
 			continue
@@ -132,7 +141,20 @@ func dedupeAgentToolsByID(tools []llm.Tool) []llm.Tool {
 		indexByID[tool.ID()] = len(deduped)
 		deduped = append(deduped, tool)
 	}
-	return deduped
+	return deduped, nil
+}
+
+func isNilAgentTool(tool llm.Tool) bool {
+	if tool == nil {
+		return true
+	}
+	value := reflect.ValueOf(tool)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 func (a *Agent) UpdateChatContext(ctx context.Context, chatCtx *llm.ChatContext, excludeInvalidFunctionCalls ...bool) error {
@@ -156,6 +178,11 @@ func (a *Agent) UpdateChatCtx(ctx context.Context, chatCtx *llm.ChatContext, exc
 		return nil
 	}
 
+	for idx, tool := range a.Tools {
+		if isNilAgentTool(tool) {
+			return fmt.Errorf("agent tool at index %d: nil tool", idx)
+		}
+	}
 	a.ChatCtx = chatCtx.Copy(llm.ChatContextCopyOptions{
 		Tools: agentToolsAsInterfaces(a.Tools),
 	})

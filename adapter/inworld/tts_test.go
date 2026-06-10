@@ -26,6 +26,12 @@ func TestInworldTTSDefaultsMatchReference(t *testing.T) {
 	if provider.model != "inworld-tts-1.5-max" {
 		t.Fatalf("model = %q, want reference model", provider.model)
 	}
+	if got := tts.Model(provider); got != "inworld-tts-1.5-max" {
+		t.Fatalf("model metadata = %q, want inworld-tts-1.5-max", got)
+	}
+	if got := tts.Provider(provider); got != "Inworld" {
+		t.Fatalf("provider metadata = %q, want Inworld", got)
+	}
 	if provider.encoding != "PCM" {
 		t.Fatalf("encoding = %q, want PCM", provider.encoding)
 	}

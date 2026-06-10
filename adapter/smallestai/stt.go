@@ -126,6 +126,11 @@ func NewSmallestAISTT(apiKey string, opts ...SmallestAISTTOption) *SmallestAISTT
 }
 
 func (s *SmallestAISTT) Label() string { return "smallestai.STT" }
+func (s *SmallestAISTT) Model() string { return s.model }
+func (s *SmallestAISTT) Provider() string {
+	return "SmallestAI"
+}
+
 func (s *SmallestAISTT) Capabilities() stt.STTCapabilities {
 	aligned := ""
 	if s.wordTimestamps {

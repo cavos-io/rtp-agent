@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -258,6 +259,78 @@ func TestAgentUpdateChatContextCanKeepInvalidFunctionItems(t *testing.T) {
 	}
 }
 
+func TestAgentUpdateChatContextRejectsNilExistingTool(t *testing.T) {
+	agent := NewAgent("help")
+	agent.Tools = []llm.Tool{nil}
+	original := agent.ChatCtx
+	source := llm.NewChatContext()
+	source.Append(&llm.FunctionCall{ID: "lookup-call", Name: "lookup"})
+
+	err := agent.UpdateChatContext(context.Background(), source)
+
+	if err == nil || !strings.Contains(err.Error(), "nil tool") {
+		t.Fatalf("UpdateChatContext error = %v, want nil tool error", err)
+	}
+	if agent.ChatCtx != original {
+		t.Fatal("UpdateChatContext mutated chat context after failed tool validation")
+	}
+}
+
+func TestAgentUpdateChatContextRejectsTypedNilExistingTool(t *testing.T) {
+	agent := NewAgent("help")
+	var nilTool *agentTestTool
+	agent.Tools = []llm.Tool{nilTool}
+	original := agent.ChatCtx
+	source := llm.NewChatContext()
+	source.Append(&llm.FunctionCall{ID: "lookup-call", Name: "lookup"})
+
+	err := agent.UpdateChatContext(context.Background(), source)
+
+	if err == nil || !strings.Contains(err.Error(), "nil tool") {
+		t.Fatalf("UpdateChatContext error = %v, want nil tool error", err)
+	}
+	if agent.ChatCtx != original {
+		t.Fatal("UpdateChatContext mutated chat context after failed tool validation")
+	}
+}
+
+func TestAgentUpdateChatContextWhileRunningRejectsNilExistingTool(t *testing.T) {
+	agent := NewAgent("help")
+	agent.Tools = []llm.Tool{nil}
+	original := agent.ChatCtx
+	agent.activity = NewAgentActivity(agent, nil)
+	source := llm.NewChatContext()
+	source.Append(&llm.FunctionCall{ID: "lookup-call", Name: "lookup"})
+
+	err := agent.UpdateChatContext(context.Background(), source)
+
+	if err == nil || !strings.Contains(err.Error(), "nil tool") {
+		t.Fatalf("UpdateChatContext error = %v, want nil tool error", err)
+	}
+	if agent.ChatCtx != original {
+		t.Fatal("UpdateChatContext mutated chat context after failed tool validation")
+	}
+}
+
+func TestAgentUpdateChatContextWhileRunningRejectsTypedNilExistingTool(t *testing.T) {
+	agent := NewAgent("help")
+	var nilTool *agentTestTool
+	agent.Tools = []llm.Tool{nilTool}
+	original := agent.ChatCtx
+	agent.activity = NewAgentActivity(agent, nil)
+	source := llm.NewChatContext()
+	source.Append(&llm.FunctionCall{ID: "lookup-call", Name: "lookup"})
+
+	err := agent.UpdateChatContext(context.Background(), source)
+
+	if err == nil || !strings.Contains(err.Error(), "nil tool") {
+		t.Fatalf("UpdateChatContext error = %v, want nil tool error", err)
+	}
+	if agent.ChatCtx != original {
+		t.Fatal("UpdateChatContext mutated chat context after failed tool validation")
+	}
+}
+
 func TestAgentUpdateChatCtxMatchesReferenceName(t *testing.T) {
 	agent := NewAgent("help")
 	agent.Tools = []llm.Tool{&agentTestTool{name: "lookup"}}
@@ -313,6 +386,70 @@ func TestAgentUpdateToolsDeduplicatesByToolID(t *testing.T) {
 	}
 	if agent.Tools[0] != replacement {
 		t.Fatalf("agent.Tools[0] = %p, want replacement %p", agent.Tools[0], replacement)
+	}
+}
+
+func TestAgentUpdateToolsRejectsNilTool(t *testing.T) {
+	agent := NewAgent("help")
+	existing := &agentTestTool{id: "lookup", name: "lookup"}
+	agent.Tools = []llm.Tool{existing}
+
+	err := agent.UpdateTools(context.Background(), []llm.Tool{nil})
+
+	if err == nil || !strings.Contains(err.Error(), "nil tool") {
+		t.Fatalf("UpdateTools error = %v, want nil tool error", err)
+	}
+	if len(agent.Tools) != 1 || agent.Tools[0] != existing {
+		t.Fatalf("agent.Tools = %#v, want unchanged existing tool", agent.Tools)
+	}
+}
+
+func TestAgentUpdateToolsRejectsTypedNilTool(t *testing.T) {
+	agent := NewAgent("help")
+	existing := &agentTestTool{id: "lookup", name: "lookup"}
+	agent.Tools = []llm.Tool{existing}
+	var nilTool *agentTestTool
+
+	err := agent.UpdateTools(context.Background(), []llm.Tool{nilTool})
+
+	if err == nil || !strings.Contains(err.Error(), "nil tool") {
+		t.Fatalf("UpdateTools error = %v, want nil tool error", err)
+	}
+	if len(agent.Tools) != 1 || agent.Tools[0] != existing {
+		t.Fatalf("agent.Tools = %#v, want unchanged existing tool", agent.Tools)
+	}
+}
+
+func TestAgentUpdateToolsWhileRunningRejectsNilExistingTool(t *testing.T) {
+	agent := NewAgent("help")
+	agent.Tools = []llm.Tool{nil}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	agent.activity = NewAgentActivity(agent, session)
+
+	err := agent.UpdateTools(context.Background(), []llm.Tool{&agentTestTool{id: "lookup", name: "lookup"}})
+
+	if err == nil || !strings.Contains(err.Error(), "nil tool") {
+		t.Fatalf("UpdateTools error = %v, want nil tool error", err)
+	}
+	if len(agent.Tools) != 1 || agent.Tools[0] != nil {
+		t.Fatalf("agent.Tools = %#v, want unchanged nil tool after failed update", agent.Tools)
+	}
+}
+
+func TestAgentUpdateToolsWhileRunningRejectsTypedNilExistingTool(t *testing.T) {
+	agent := NewAgent("help")
+	var nilTool *agentTestTool
+	agent.Tools = []llm.Tool{nilTool}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	agent.activity = NewAgentActivity(agent, session)
+
+	err := agent.UpdateTools(context.Background(), []llm.Tool{&agentTestTool{id: "lookup", name: "lookup"}})
+
+	if err == nil || !strings.Contains(err.Error(), "nil tool") {
+		t.Fatalf("UpdateTools error = %v, want nil tool error", err)
+	}
+	if len(agent.Tools) != 1 || !isNilAgentTool(agent.Tools[0]) {
+		t.Fatalf("agent.Tools = %#v, want unchanged typed-nil tool after failed update", agent.Tools)
 	}
 }
 

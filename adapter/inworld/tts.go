@@ -211,6 +211,10 @@ func NewInworldTTS(apiKey string, voice string, opts ...InworldTTSOption) *Inwor
 }
 
 func (t *InworldTTS) Label() string { return "inworld.TTS" }
+func (t *InworldTTS) Model() string { return t.model }
+func (t *InworldTTS) Provider() string {
+	return "Inworld"
+}
 
 func (t *InworldTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{

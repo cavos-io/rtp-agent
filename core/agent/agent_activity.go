@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -558,11 +559,19 @@ func (a *AgentActivity) UpdateInstructions(ctx context.Context, instructions str
 }
 
 func (a *AgentActivity) UpdateTools(ctx context.Context, tools []llm.Tool) error {
+	for idx, tool := range a.Agent.Tools {
+		if isNilAgentTool(tool) {
+			return fmt.Errorf("existing agent tool at index %d: nil tool", idx)
+		}
+	}
 	oldToolCtx := llm.EmptyToolContext()
 	if err := oldToolCtx.UpdateTools(agentToolsAsInterfaces(a.Agent.Tools)); err != nil {
 		return err
 	}
-	dedupedTools := dedupeAgentToolsByID(tools)
+	dedupedTools, err := dedupeAgentToolsByID(tools)
+	if err != nil {
+		return err
+	}
 	newToolCtx := llm.EmptyToolContext()
 	if err := newToolCtx.UpdateTools(agentToolsAsInterfaces(dedupedTools)); err != nil {
 		return err
@@ -634,6 +643,12 @@ func (a *AgentActivity) UpdateChatCtx(ctx context.Context, chatCtx *llm.ChatCont
 			return err
 		}
 		tools = agentToolsAsInterfaces(registeredTools)
+	} else if a.Agent != nil {
+		for idx, tool := range a.Agent.Tools {
+			if isNilAgentTool(tool) {
+				return fmt.Errorf("agent tool at index %d: nil tool", idx)
+			}
+		}
 	}
 	a.Agent.ChatCtx = chatCtx.Copy(llm.ChatContextCopyOptions{
 		Tools: tools,

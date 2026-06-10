@@ -17,6 +17,12 @@ func TestInworldSTTDefaultsMatchReference(t *testing.T) {
 	if provider.model != "inworld/inworld-stt-1" {
 		t.Fatalf("model = %q, want default model", provider.model)
 	}
+	if got := stt.Model(provider); got != "inworld/inworld-stt-1" {
+		t.Fatalf("model metadata = %q, want inworld/inworld-stt-1", got)
+	}
+	if got := stt.Provider(provider); got != "Inworld" {
+		t.Fatalf("provider metadata = %q, want Inworld", got)
+	}
 	if provider.language != "en-US" {
 		t.Fatalf("language = %q, want en-US", provider.language)
 	}

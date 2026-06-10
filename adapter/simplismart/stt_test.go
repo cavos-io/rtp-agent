@@ -19,6 +19,12 @@ func TestSimplismartSTTDefaultsMatchReference(t *testing.T) {
 	if provider.model != "openai/whisper-large-v3-turbo" {
 		t.Fatalf("model = %q, want reference default model", provider.model)
 	}
+	if got := stt.Model(provider); got != "openai/whisper-large-v3-turbo" {
+		t.Fatalf("model metadata = %q, want reference default model", got)
+	}
+	if got := stt.Provider(provider); got != "Simplismart" {
+		t.Fatalf("provider metadata = %q, want Simplismart", got)
+	}
 	if provider.language != "en" {
 		t.Fatalf("language = %q, want en", provider.language)
 	}

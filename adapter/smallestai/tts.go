@@ -135,6 +135,11 @@ func NewSmallestAITTS(apiKey string, voice string, opts ...SmallestAITTSOption) 
 }
 
 func (t *SmallestAITTS) Label() string { return "smallestai.TTS" }
+func (t *SmallestAITTS) Model() string { return t.model }
+func (t *SmallestAITTS) Provider() string {
+	return "SmallestAI"
+}
+
 func (t *SmallestAITTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }

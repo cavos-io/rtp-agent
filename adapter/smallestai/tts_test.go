@@ -22,6 +22,12 @@ func TestSmallestAITTSDefaultsMatchReference(t *testing.T) {
 	if provider.model != "lightning_v3.1_pro" {
 		t.Fatalf("model = %q, want lightning_v3.1_pro", provider.model)
 	}
+	if got := tts.Model(provider); got != "lightning_v3.1_pro" {
+		t.Fatalf("model metadata = %q, want lightning_v3.1_pro", got)
+	}
+	if got := tts.Provider(provider); got != "SmallestAI" {
+		t.Fatalf("provider metadata = %q, want SmallestAI", got)
+	}
 	if provider.voice != "meher" {
 		t.Fatalf("voice = %q, want pro default voice", provider.voice)
 	}
