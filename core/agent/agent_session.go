@@ -225,6 +225,7 @@ type AgentSession struct {
 	closing        bool
 	runCtx         context.Context
 	runState       *RunResult
+	onEnterDepth   int
 	userAwayTimer  *time.Timer
 	aecWarmupTimer *time.Timer
 	aecWarmupDone  bool
@@ -1977,6 +1978,7 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	activity := s.activity
 	assistant := s.Assistant
 	closing := s.closing
+	onEnterActive := s.onEnterDepth > 0
 	s.mu.Unlock()
 
 	if activity == nil {
@@ -2018,6 +2020,8 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	if opts.ToolChoice != nil {
 		handle.Generation.ToolChoice = opts.ToolChoice
 	} else if runCtx := GetRunContext(ctx); runCtx != nil && runCtx.FunctionCall != nil {
+		handle.Generation.ToolChoice = "none"
+	} else if onEnterActive {
 		handle.Generation.ToolChoice = "none"
 	} else if s.Options.ToolChoice != nil {
 		handle.Generation.ToolChoice = s.Options.ToolChoice
