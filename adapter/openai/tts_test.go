@@ -502,6 +502,27 @@ func TestOpenAITTSChunkedStreamReturnsDataBeforeEOF(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSChunkedStreamReturnsAPIConnectionErrorOnReadFailure(t *testing.T) {
+	stream := &openaiTTSChunkedStream{resp: failingReadCloser{err: errors.New("socket closed")}}
+
+	_, err := stream.Next()
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message != "socket closed" {
+		t.Fatalf("APIConnectionError message = %q, want socket closed", connectionErr.Message)
+	}
+}
+
+type failingReadCloser struct {
+	err error
+}
+
+func (r failingReadCloser) Read([]byte) (int, error) { return 0, r.err }
+
+func (r failingReadCloser) Close() error { return nil }
+
 type eofWithDataReader struct {
 	data []byte
 	done bool
