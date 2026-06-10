@@ -25,6 +25,15 @@ func callLLMErrorHandler(handler LLMErrorHandler, err *LLMError) {
 	handler(err)
 }
 
+func callFallbackAvailabilityChangedHandler(handler FallbackAvailabilityChangedHandler, event FallbackAvailabilityChangedEvent) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logger.Logger.Warnw("failed to emit LLM fallback availability event", llmPanicAsError(recovered))
+		}
+	}()
+	handler(event)
+}
+
 func llmPanicAsError(recovered any) error {
 	if err, ok := recovered.(error); ok {
 		return err
