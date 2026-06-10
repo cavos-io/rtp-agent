@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +26,31 @@ func TestStreamAdapterPropagatesVADStartError(t *testing.T) {
 	_, err = stream.Next()
 	if !errors.Is(err, startErr) {
 		t.Fatalf("Next error = %v, want VAD start error", err)
+	}
+}
+
+func TestStreamAdapterRejectsNilVADStream(t *testing.T) {
+	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{}).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	_, err = stream.Next()
+	if err == nil || !strings.Contains(err.Error(), "nil VAD stream") {
+		t.Fatalf("Next error = %v, want nil VAD stream error", err)
+	}
+}
+
+func TestStreamAdapterRejectsTypedNilVADStream(t *testing.T) {
+	var vadStream *fakeStreamAdapterVADStream
+	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{stream: vadStream}).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	_, err = stream.Next()
+	if err == nil || !strings.Contains(err.Error(), "nil VAD stream") {
+		t.Fatalf("Next error = %v, want nil VAD stream error", err)
 	}
 }
 
