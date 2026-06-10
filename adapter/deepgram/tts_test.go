@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
 func TestDeepgramTTSDefaultsMatchReference(t *testing.T) {
@@ -19,6 +21,12 @@ func TestDeepgramTTSDefaultsMatchReference(t *testing.T) {
 	}
 	if provider.encoding != "linear16" {
 		t.Fatalf("encoding = %q, want linear16", provider.encoding)
+	}
+	if got := tts.Model(provider); got != "aura-2-andromeda-en" {
+		t.Fatalf("model metadata = %q, want aura-2-andromeda-en", got)
+	}
+	if got := tts.Provider(provider); got != "Deepgram" {
+		t.Fatalf("provider metadata = %q, want Deepgram", got)
 	}
 }
 
