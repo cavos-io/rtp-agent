@@ -81,6 +81,8 @@ func (t *DeepgramTTS) Capabilities() tts.TTSCapabilities {
 }
 func (t *DeepgramTTS) SampleRate() int  { return t.sampleRate }
 func (t *DeepgramTTS) NumChannels() int { return 1 }
+func (t *DeepgramTTS) Model() string    { return t.model }
+func (t *DeepgramTTS) Provider() string { return "Deepgram" }
 
 func (t *DeepgramTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if err := validateDeepgramTTSAPIKey(t.apiKey); err != nil {

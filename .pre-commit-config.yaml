@@ -31,14 +31,14 @@ repos:
 
       - id: go-arch-lint-check
         name: go-arch-lint check
-        entry: go-arch-lint check
+        entry: scripts/go-arch-lint.sh check
         language: system
         pass_filenames: false
         stages: [pre-commit]
 
       - id: go-arch-lint-mapping
         name: go-arch-lint mapping
-        entry: go-arch-lint mapping
+        entry: scripts/go-arch-lint.sh mapping
         language: system
         pass_filenames: false
         stages: [pre-commit]

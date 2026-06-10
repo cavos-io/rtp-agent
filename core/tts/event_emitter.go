@@ -25,6 +25,15 @@ func callTTSErrorHandler(handler TTSErrorHandler, err TTSError) {
 	handler(err)
 }
 
+func callAvailabilityChangedHandler(handler AvailabilityChangedHandler, event AvailabilityChangedEvent) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logger.Logger.Warnw("failed to emit TTS fallback availability event", ttsPanicAsError(recovered))
+		}
+	}()
+	handler(event)
+}
+
 func ttsPanicAsError(recovered any) error {
 	if err, ok := recovered.(error); ok {
 		return err

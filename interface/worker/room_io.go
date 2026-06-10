@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"strconv"
@@ -1210,7 +1211,7 @@ func (rio *RoomIO) finishPlayback(interrupted bool, synchronizedTranscript strin
 		close(waiter)
 	}
 	for _, handler := range handlers {
-		handler(ev)
+		callPlaybackFinishedHandler(handler, ev)
 	}
 }
 
@@ -1234,7 +1235,7 @@ func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
 	started, handlers, ok := rio.startPlayback()
 	if ok {
 		for _, handler := range handlers {
-			handler(started)
+			callPlaybackStartedHandler(handler, started)
 		}
 	}
 
@@ -1255,6 +1256,24 @@ func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
 	}
 	rio.addPlaybackPosition(duration)
 	return nil
+}
+
+func callPlaybackStartedHandler(handler func(PlaybackStartedEvent), ev PlaybackStartedEvent) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logger.Logger.Warnw("failed to emit playback_started", fmt.Errorf("panic: %v", recovered))
+		}
+	}()
+	handler(ev)
+}
+
+func callPlaybackFinishedHandler(handler func(PlaybackFinishedEvent), ev PlaybackFinishedEvent) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logger.Logger.Warnw("failed to emit playback_finished", fmt.Errorf("panic: %v", recovered))
+		}
+	}()
+	handler(ev)
 }
 
 func (rio *RoomIO) Close() error {

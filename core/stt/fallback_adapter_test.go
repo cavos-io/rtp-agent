@@ -581,6 +581,41 @@ func TestFallbackStreamStartReturnsAllFailedErrorWhenProvidersExhausted(t *testi
 	}
 }
 
+func TestFallbackStreamTreatsNilProviderStreamAsFailure(t *testing.T) {
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		stream: &metadataRecognizeStream{events: []*SpeechEvent{{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback"}},
+		}}},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{
+		&metadataSTT{
+			label:        "primary",
+			capabilities: STTCapabilities{Streaming: true},
+		},
+		fallback,
+	}, FallbackAdapterOptions{MaxRetryPerSTT: 0})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "fallback" {
+		t.Fatalf("recognized text = %q, want fallback", got)
+	}
+	if fallback.streamCalls != 1 {
+		t.Fatalf("fallback stream calls = %d, want 1", fallback.streamCalls)
+	}
+}
+
 func TestFallbackStreamStartClosesRecoveryStreamsWhenProvidersExhausted(t *testing.T) {
 	primaryErr := errors.New("primary stream start failed")
 	fallbackErr := errors.New("fallback stream start failed")

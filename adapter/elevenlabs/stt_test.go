@@ -49,6 +49,12 @@ func TestElevenLabsSTTDefaultsMatchReference(t *testing.T) {
 	if !caps.OfflineRecognize {
 		t.Fatal("offline recognize = false, want true")
 	}
+	if got := stt.Model(provider); got != "scribe_v1" {
+		t.Fatalf("model metadata = %q, want scribe_v1", got)
+	}
+	if got := stt.Provider(provider); got != "ElevenLabs" {
+		t.Fatalf("provider metadata = %q, want ElevenLabs", got)
+	}
 }
 
 func TestNewElevenLabsSTTUsesEnvironmentAPIKey(t *testing.T) {
@@ -286,6 +292,21 @@ func TestElevenLabsSTTStreamEventsMapLifecycle(t *testing.T) {
 		t.Fatalf("process end: %v", err)
 	}
 	assertElevenLabsSTTEvent(t, events, 0, stt.SpeechEventEndOfSpeech, "")
+}
+
+func TestElevenLabsSTTStreamEventDefaultsLanguageToEnglish(t *testing.T) {
+	events, err := processElevenLabsSTTStreamEvent(&elevenLabsSTTStreamState{}, map[string]any{
+		"message_type": "committed_transcript",
+		"text":         "hello",
+	})
+	if err != nil {
+		t.Fatalf("process final: %v", err)
+	}
+	assertElevenLabsSTTEvent(t, events, 0, stt.SpeechEventStartOfSpeech, "")
+	assertElevenLabsSTTEvent(t, events, 1, stt.SpeechEventFinalTranscript, "hello")
+	if got := events[1].Alternatives[0].Language; got != "en" {
+		t.Fatalf("language = %q, want reference default en", got)
+	}
 }
 
 func TestElevenLabsSTTStreamEventReportsErrors(t *testing.T) {

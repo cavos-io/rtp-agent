@@ -200,6 +200,7 @@ func (t *OpenAITTS) Provider() string {
 	}
 	return u.Host
 }
+func (t *OpenAITTS) Model() string { return string(t.model) }
 func (t *OpenAITTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }

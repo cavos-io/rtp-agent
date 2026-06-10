@@ -30,6 +30,9 @@ func TestOpenAITTSDefaultsMatchReference(t *testing.T) {
 	if provider.Provider() != "api.openai.com" {
 		t.Fatalf("Provider() = %q, want api.openai.com", provider.Provider())
 	}
+	if got := tts.Model(provider); got != string(goopenai.TTSModelGPT4oMini) {
+		t.Fatalf("model metadata = %q, want %q", got, goopenai.TTSModelGPT4oMini)
+	}
 }
 
 func TestNewOpenAITTSUsesEnvironmentAPIKey(t *testing.T) {

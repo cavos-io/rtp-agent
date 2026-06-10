@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
 func TestGroqTTSDefaultsMatchReference(t *testing.T) {
@@ -27,6 +29,12 @@ func TestGroqTTSDefaultsMatchReference(t *testing.T) {
 	}
 	if provider.SampleRate() != 48000 {
 		t.Fatalf("sample rate = %d, want 48000", provider.SampleRate())
+	}
+	if got := tts.Model(provider); got != "canopylabs/orpheus-v1-english" {
+		t.Fatalf("model metadata = %q, want reference model", got)
+	}
+	if got := tts.Provider(provider); got != "Groq" {
+		t.Fatalf("provider metadata = %q, want Groq", got)
 	}
 }
 
@@ -102,6 +110,26 @@ func TestGroqTTSOptionsMatchReference(t *testing.T) {
 	assertGroqTTSPayload(t, payload, "voice", "noura")
 }
 
+func TestGroqTTSUpdateOptionsMatchReference(t *testing.T) {
+	provider := NewGroqTTS("test-key", "",
+		WithGroqTTSModel("canopylabs/orpheus-v1-english"),
+		WithGroqTTSVoice("autumn"),
+	)
+
+	provider.UpdateOptions("canopylabs/orpheus-arabic-saudi", "fahad")
+
+	req, err := buildGroqTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	assertGroqTTSPayload(t, payload, "model", "canopylabs/orpheus-arabic-saudi")
+	assertGroqTTSPayload(t, payload, "voice", "fahad")
+}
+
 func TestGroqTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
 	t.Setenv("GROQ_API_KEY", "")
 	provider := NewGroqTTS("", "", WithGroqTTSBaseURL("://bad-url"))
@@ -112,6 +140,30 @@ func TestGroqTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "GROQ_API_KEY") {
 		t.Fatalf("error = %q, want GROQ_API_KEY guidance", err)
+	}
+}
+
+func TestGroqTTSRejectsNonAudioResponse(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":"not audio"}`)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewGroqTTS("test-key", "", WithGroqTTSBaseURL("https://groq.example/openai/v1"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize returned nil error, want non-audio response error")
+	}
+	if !strings.Contains(err.Error(), "non-audio") {
+		t.Fatalf("error = %q, want non-audio guidance", err)
 	}
 }
 
@@ -135,4 +187,10 @@ func assertGroqTTSPayload(t *testing.T, payload map[string]any, key string, want
 	if got := payload[key]; got != want {
 		t.Fatalf("%s = %#v, want %q", key, got, want)
 	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }

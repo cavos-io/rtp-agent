@@ -533,6 +533,9 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 		for {
 			stt := s.adapter.stts[i]
 			stream, err := stt.Stream(s.ctx, s.language)
+			if err == nil && stream == nil {
+				err = errors.New("STT returned nil stream")
+			}
 			if err != nil {
 				logger.Logger.Errorw("Failed to start STT stream", err, "stt", stt.Label())
 				lastErr = err

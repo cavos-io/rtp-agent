@@ -1281,7 +1281,7 @@ func (s *fallbackLLMStream) markUnavailable(index int, recover bool) {
 func (f *FallbackAdapter) recoverLLM(index int, llm LLM, chatCtx *ChatContext, opts []ChatOption) {
 	ctx, cancel := f.attemptContext(context.Background())
 	stream, err := llm.Chat(ctx, chatCtx, f.attemptOptions(opts)...)
-	if err != nil {
+	if err != nil || stream == nil {
 		cancel()
 		f.finishRecovery(index, false)
 		return
@@ -1325,6 +1325,9 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 		for {
 			ctx, cancel := s.adapter.attemptContext(s.ctx)
 			stream, err := s.adapter.llms[i].Chat(ctx, s.ChatCtx(), s.adapter.attemptOptions(s.opts)...)
+			if err == nil && stream == nil {
+				err = NewAPIConnectionError("LLM returned nil stream")
+			}
 			if err == nil {
 				s.adapter.setAvailable(i, true)
 				s.closeActive()

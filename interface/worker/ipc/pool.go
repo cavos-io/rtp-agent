@@ -341,8 +341,17 @@ func (p *ProcPool) emit(event ProcPoolEvent, executor JobExecutor) {
 	handlers := append([]func(JobExecutor){}, p.handlers[event]...)
 	p.mu.Unlock()
 	for _, handler := range handlers {
-		handler(executor)
+		callProcPoolHandler(event, handler, executor)
 	}
+}
+
+func callProcPoolHandler(event ProcPoolEvent, handler func(JobExecutor), executor JobExecutor) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logger.Logger.Warnw("ProcPool event handler failed", fmt.Errorf("panic: %v", recovered), "event", event, "executor_id", executor.ID())
+		}
+	}()
+	handler(executor)
 }
 
 func (p *ProcPool) emitMany(event ProcPoolEvent, executors []JobExecutor) {

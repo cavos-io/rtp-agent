@@ -84,6 +84,17 @@ func (t *GroqTTS) Capabilities() tts.TTSCapabilities {
 }
 func (t *GroqTTS) SampleRate() int  { return t.sampleRate }
 func (t *GroqTTS) NumChannels() int { return 1 }
+func (t *GroqTTS) Model() string    { return t.model }
+func (t *GroqTTS) Provider() string { return "Groq" }
+
+func (t *GroqTTS) UpdateOptions(model string, voice string) {
+	if model != "" {
+		t.model = model
+	}
+	if voice != "" {
+		t.voice = voice
+	}
+}
 
 func (t *GroqTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if err := validateGroqTTSAPIKey(t.apiKey); err != nil {
@@ -103,6 +114,11 @@ func (t *GroqTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		return nil, fmt.Errorf("groq tts error: %s", string(respBody))
+	}
+	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio") {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("groq tts returned non-audio data: %s", string(respBody))
 	}
 
 	return &groqTTSChunkedStream{resp: resp, sampleRate: t.sampleRate}, nil

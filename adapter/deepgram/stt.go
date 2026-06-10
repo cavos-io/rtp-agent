@@ -193,6 +193,10 @@ func NewDeepgramSTT(apiKey string, model string, opts ...DeepgramSTTOption) *Dee
 }
 
 func (s *DeepgramSTT) Label() string { return "deepgram.STT" }
+func (s *DeepgramSTT) Model() string { return s.model }
+func (s *DeepgramSTT) Provider() string {
+	return "Deepgram"
+}
 func (s *DeepgramSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: s.interimResults, Diarization: s.enableDiarization, AlignedTranscript: "word", OfflineRecognize: true}
 }
@@ -285,12 +289,26 @@ func validateDeepgramSTTOptions(s *DeepgramSTT) error {
 			return fmt.Errorf("tag must be no more than 128 characters")
 		}
 	}
+	if strings.HasPrefix(s.model, "nova-3") {
+		for _, keyword := range s.keywords {
+			if keyword.Keyword != "" {
+				return fmt.Errorf("keywords is only available for use with Nova-2, Nova-1, Enhanced, and Base speech to text models; for Nova-3, use Keyterm Prompting")
+			}
+		}
+	}
+	if !strings.HasPrefix(s.model, "nova-3") {
+		for _, keyterm := range s.keyterms {
+			if keyterm != "" {
+				return fmt.Errorf("keyterm Prompting is only available for transcription using the Nova-3 Model; to boost recognition of keywords using another model, use the Keywords feature")
+			}
+		}
+	}
 	return nil
 }
 
 func buildDeepgramStreamURL(s *DeepgramSTT, languageStr string) string {
 	u, q := deepgramBaseURL(s, true)
-	q.Set("model", s.model)
+	q.Set("model", deepgramSTTModelForLanguage(s.model, languageStr))
 	if languageStr != "" {
 		q.Set("language", languageStr)
 	}
@@ -321,7 +339,7 @@ func buildDeepgramStreamURL(s *DeepgramSTT, languageStr string) string {
 
 func buildDeepgramRecognizeURL(s *DeepgramSTT, languageStr string) string {
 	u, q := deepgramBaseURL(s, false)
-	q.Set("model", s.model)
+	q.Set("model", deepgramSTTModelForLanguage(s.model, languageStr))
 	q.Set("punctuate", strconv.FormatBool(s.punctuate))
 	q.Set("smart_format", strconv.FormatBool(s.smartFormat))
 	q.Set("profanity_filter", strconv.FormatBool(s.profanityFilter))
@@ -356,6 +374,16 @@ func addDeepgramSTTAdvancedQuery(q url.Values, s *DeepgramSTT) {
 			q.Add("tag", tag)
 		}
 	}
+}
+
+func deepgramSTTModelForLanguage(model string, languageStr string) string {
+	switch model {
+	case "nova-2-meeting", "nova-2-phonecall", "nova-2-finance", "nova-2-conversationalai", "nova-2-voicemail", "nova-2-video", "nova-2-medical", "nova-2-drivethru", "nova-2-automotive":
+		if languageStr != "" && languageStr != "en-US" && languageStr != "en" {
+			return "nova-2-general"
+		}
+	}
+	return model
 }
 
 func deepgramBaseURL(s *DeepgramSTT, websocketURL bool) (*url.URL, url.Values) {

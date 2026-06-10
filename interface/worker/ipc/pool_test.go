@@ -634,6 +634,37 @@ func TestProcPoolEventHandlersCanInspectPool(t *testing.T) {
 	}
 }
 
+func TestProcPoolEventHandlerPanicDoesNotBlockOtherHandlers(t *testing.T) {
+	executor := &fakeJobExecutor{id: "exec-a"}
+	pool := NewProcPool(1, ExecutorTypeThread, nil)
+	pool.executorFactory = func(id string) JobExecutor { return executor }
+
+	var calls int
+	pool.On(ProcPoolEventJobLaunched, func(JobExecutor) {
+		panic("proc pool handler failed")
+	})
+	pool.On(ProcPoolEventJobLaunched, func(got JobExecutor) {
+		if got.ID() != "exec-a" {
+			t.Fatalf("executor = %q, want exec-a", got.ID())
+		}
+		calls++
+	})
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("LaunchJob panic = %v, want event handler panic isolated", recovered)
+		}
+	}()
+
+	if err := pool.LaunchJob(context.Background(), &livekit.Job{Id: "job-a"}); err != nil {
+		t.Fatalf("LaunchJob: %v", err)
+	}
+
+	if calls != 1 {
+		t.Fatalf("remaining handler calls = %d, want 1", calls)
+	}
+}
+
 func TestProcPoolEmitsProcessLifecycleEventsOnLaunch(t *testing.T) {
 	executor := &fakeJobExecutor{id: "exec-a"}
 	pool := NewProcPool(1, ExecutorTypeThread, nil)

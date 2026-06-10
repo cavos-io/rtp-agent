@@ -272,7 +272,7 @@ func (f *FallbackAdapter) markUnavailable(index int) {
 	f.mu.Unlock()
 
 	for _, subscription := range subscriptions {
-		subscription.handler(event)
+		callAvailabilityChangedHandler(subscription.handler, event)
 	}
 }
 
@@ -294,7 +294,7 @@ func (f *FallbackAdapter) markAvailable(index int) {
 	f.mu.Unlock()
 
 	for _, subscription := range subscriptions {
-		subscription.handler(event)
+		callAvailabilityChangedHandler(subscription.handler, event)
 	}
 }
 

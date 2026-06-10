@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
 func TestElevenLabsTTSDefaultsMatchReference(t *testing.T) {
@@ -26,6 +28,12 @@ func TestElevenLabsTTSDefaultsMatchReference(t *testing.T) {
 	}
 	if provider.SampleRate() != 22050 {
 		t.Fatalf("sample rate = %d, want 22050", provider.SampleRate())
+	}
+	if got := tts.Model(provider); got != "eleven_turbo_v2_5" {
+		t.Fatalf("model metadata = %q, want eleven_turbo_v2_5", got)
+	}
+	if got := tts.Provider(provider); got != "ElevenLabs" {
+		t.Fatalf("provider metadata = %q, want ElevenLabs", got)
 	}
 }
 

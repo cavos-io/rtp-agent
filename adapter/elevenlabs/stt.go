@@ -118,6 +118,10 @@ func NewElevenLabsSTT(apiKey string, opts ...ElevenLabsSTTOption) *ElevenLabsSTT
 }
 
 func (s *ElevenLabsSTT) Label() string { return "elevenlabs.STT" }
+func (s *ElevenLabsSTT) Model() string { return s.modelID }
+func (s *ElevenLabsSTT) Provider() string {
+	return "ElevenLabs"
+}
 func (s *ElevenLabsSTT) Capabilities() stt.STTCapabilities {
 	realtime := elevenLabsSTTIsRealtime(s.modelID)
 	aligned := ""
@@ -515,6 +519,9 @@ func elevenLabsSTTSpeechDataFromStream(state *elevenLabsSTTStreamState, data map
 	language, _ := data["language_code"].(string)
 	if language == "" {
 		language = state.language
+	}
+	if language == "" {
+		language = "en"
 	}
 	words := elevenLabsSTTWordsFromAny(data["words"])
 	speechData := stt.SpeechData{
