@@ -267,6 +267,46 @@ func TestNewDeepSeekOpenAILLMRequiresAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewFireworksOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(fireworksAPIKeyEnv, "env-fireworks-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewFireworksOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewFireworksOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "accounts/fireworks/models/llama-v3p3-70b-instruct" {
+		t.Fatalf("Model = %q, want Fireworks reference model", model.Model())
+	}
+	if model.Provider() != "api.fireworks.ai" {
+		t.Fatalf("Provider() = %q, want Fireworks endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-fireworks-key" {
+		t.Fatalf("Authorization = %q, want Fireworks bearer key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "/inference/v1/chat/completions") {
+		t.Fatalf("request URL = %s, want Fireworks OpenAI-compatible chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"accounts/fireworks/models/llama-v3p3-70b-instruct"`) {
+		t.Fatalf("request body = %s, want default Fireworks model", capture.requestBody)
+	}
+}
+
+func TestNewFireworksOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(fireworksAPIKeyEnv, "")
+
+	_, err := NewFireworksOpenAILLM("", "")
+	if err == nil || err.Error() != "fireworks API key is required, either as argument or set FIREWORKS_API_KEY environmental variable" {
+		t.Fatalf("NewFireworksOpenAILLM error = %v, want Fireworks API key required", err)
+	}
+}
+
 func TestNewOllamaOpenAILLMDefaultsMatchReference(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{
 		statusCode:   http.StatusBadRequest,

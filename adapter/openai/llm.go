@@ -21,6 +21,7 @@ const defaultOpenAILLMModel = "gpt-4.1"
 const defaultAzureOpenAILLMModel = "gpt-4o"
 const defaultOVHCloudOpenAILLMModel = "gpt-oss-120b"
 const defaultDeepSeekOpenAILLMModel = "deepseek-chat"
+const defaultFireworksOpenAILLMModel = "accounts/fireworks/models/llama-v3p3-70b-instruct"
 const defaultOllamaOpenAILLMModel = "llama3.1"
 const defaultCometAPIOpenAILLMModel = "gpt-5-chat-latest"
 const defaultOctoAIOpenAILLMModel = "llama-2-13b-chat"
@@ -36,6 +37,7 @@ const (
 	openAIAPIVersionEnv    = "OPENAI_API_VERSION"
 	openRouterAPIKeyEnv    = "OPENROUTER_API_KEY"
 	deepSeekAPIKeyEnv      = "DEEPSEEK_API_KEY"
+	fireworksAPIKeyEnv     = "FIREWORKS_API_KEY"
 	cometAPIKeyEnv         = "COMETAPI_API_KEY"
 	octoAIAPIKeyEnv        = "OCTOAI_TOKEN"
 	sambaNovaAPIKeyEnv     = "SAMBANOVA_API_KEY"
@@ -45,6 +47,7 @@ const (
 
 const defaultOpenRouterLLMURL = "https://openrouter.ai/api/v1"
 const defaultDeepSeekOpenAIBaseURL = "https://api.deepseek.com/v1"
+const defaultFireworksOpenAIBaseURL = "https://api.fireworks.ai/inference/v1"
 const defaultOllamaOpenAIBaseURL = "http://localhost:11434/v1"
 const defaultCometAPIOpenAIBaseURL = "https://api.cometapi.com/v1/"
 const defaultOctoAIOpenAIBaseURL = "https://text.octoai.run/v1"
@@ -379,6 +382,19 @@ func NewDeepSeekOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenA
 		return nil, fmt.Errorf("DeepSeek API key is required, either as argument or set DEEPSEEK_API_KEY environmental variable")
 	}
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultDeepSeekOpenAIBaseURL, nil, opts...), nil
+}
+
+func NewFireworksOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+	if model == "" {
+		model = defaultFireworksOpenAILLMModel
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(fireworksAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("fireworks API key is required, either as argument or set FIREWORKS_API_KEY environmental variable")
+	}
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultFireworksOpenAIBaseURL, nil, opts...), nil
 }
 
 func NewOllamaOpenAILLM(model string, opts ...OpenAILLMOption) *OpenAILLM {
