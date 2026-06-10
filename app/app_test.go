@@ -3526,6 +3526,28 @@ func TestDefaultConfigFromEnvAcceptsMurfTTSFallbackProvider(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvAcceptsSpeechifyTTSFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "speechify")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("SPEECHIFY_API_KEY", "test-speechify-key")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://speechify.example/v1")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "simba-english")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "cliff")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "en-US")
+	t.Setenv("RTP_AGENT_TTS_ENCODING", "mp3_24000")
+	t.Setenv("RTP_AGENT_TTS_LOUDNESS_NORMALIZATION", "true")
+	t.Setenv("RTP_AGENT_TTS_TEXT_NORMALIZATION", "false")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
+		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	}
+}
+
 func TestEvaluateSessionReturnsEvaluationSummary(t *testing.T) {
 	baseAgent := agent.NewAgent("test")
 	session := agent.NewAgentSession(baseAgent, nil, agent.AgentSessionOptions{})

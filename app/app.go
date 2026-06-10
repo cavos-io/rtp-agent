@@ -2293,6 +2293,30 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, murf.WithMurfTTSSampleRate(*cfg.TTSSampleRate))
 		}
 		return murf.NewMurfTTS(cfg.MurfAPIKey, cfg.TTSVoice, ttsOpts...), nil
+	case providerSpeechify:
+		ttsOpts := []speechify.SpeechifyTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSEncoding(cfg.TTSEncoding))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSLoudnessNormalization != nil {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSLoudnessNormalization(*cfg.TTSLoudnessNormalization))
+		}
+		if cfg.TTSTextNormalization != nil {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSTextNormalization(*cfg.TTSTextNormalization))
+		}
+		return speechify.NewSpeechifyTTS(cfg.SpeechifyAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {
