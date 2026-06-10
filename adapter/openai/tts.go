@@ -1,9 +1,14 @@
 package openai
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -24,6 +29,11 @@ type OpenAITTS struct {
 	instructions   string
 	responseFormat openai.SpeechResponseFormat
 }
+
+const (
+	openAITTSStreamFormatAudio = "audio"
+	openAITTSStreamFormatSSE   = "sse"
+)
 
 type OpenAITTSOption func(*OpenAITTS)
 
@@ -141,6 +151,7 @@ func NewAzureOpenAITTS(model openai.SpeechModel, voice openai.SpeechVoice, azure
 	if provider.httpClient != nil {
 		config.HTTPClient = provider.httpClient
 	}
+	config.HTTPClient = &openAITTSStreamFormatHTTPClient{base: config.HTTPClient}
 	if apiKey == "" && azureADToken != "" {
 		config.HTTPClient = &azureADTokenHTTPClient{
 			base:  config.HTTPClient,
@@ -181,6 +192,7 @@ func newOpenAITTS(client *openai.Client, apiKey string, model openai.SpeechModel
 		if provider.httpClient != nil {
 			config.HTTPClient = provider.httpClient
 		}
+		config.HTTPClient = &openAITTSStreamFormatHTTPClient{base: config.HTTPClient}
 		provider.client = openai.NewClientWithConfig(config)
 	}
 	return provider
@@ -216,7 +228,8 @@ func (t *OpenAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	}
 
 	return &openaiTTSChunkedStream{
-		resp: resp,
+		resp:         resp,
+		streamFormat: openAITTSStreamFormatForModel(t.model),
 	}, nil
 }
 
@@ -237,10 +250,19 @@ func (t *OpenAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type openaiTTSChunkedStream struct {
-	resp io.ReadCloser
+	resp         io.ReadCloser
+	streamFormat string
+	scanner      *bufio.Scanner
 }
 
 func (s *openaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.streamFormat == openAITTSStreamFormatSSE {
+		return s.nextSSE()
+	}
+	return s.nextAudio()
+}
+
+func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.resp.Read(buf)
 	if err != nil && n == 0 {
@@ -260,6 +282,106 @@ func (s *openaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
+func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
+	if s.scanner == nil {
+		s.scanner = bufio.NewScanner(s.resp)
+	}
+	for s.scanner.Scan() {
+		line := strings.TrimSpace(s.scanner.Text())
+		if line == "" || !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
+		if data == "[DONE]" {
+			return nil, io.EOF
+		}
+		var event map[string]any
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			continue
+		}
+		eventType, _ := event["type"].(string)
+		switch eventType {
+		case "speech.audio.delta":
+			audioB64, _ := event["delta"].(string)
+			if audioB64 == "" {
+				audioB64, _ = event["audio"].(string)
+			}
+			if audioB64 == "" {
+				continue
+			}
+			audioData, err := base64.StdEncoding.DecodeString(audioB64)
+			if err != nil {
+				return nil, err
+			}
+			return &tts.SynthesizedAudio{
+				Frame: &model.AudioFrame{
+					Data:              audioData,
+					SampleRate:        24000,
+					NumChannels:       1,
+					SamplesPerChannel: uint32(len(audioData) / 2),
+				},
+			}, nil
+		case "speech.audio.done":
+			return nil, io.EOF
+		}
+	}
+	if err := s.scanner.Err(); err != nil {
+		return nil, err
+	}
+	return nil, io.EOF
+}
+
 func (s *openaiTTSChunkedStream) Close() error {
 	return s.resp.Close()
+}
+
+type openAITTSStreamFormatHTTPClient struct {
+	base openai.HTTPDoer
+}
+
+func (c *openAITTSStreamFormatHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	if req != nil && req.Body != nil && strings.HasSuffix(req.URL.Path, "/audio/speech") {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			return nil, err
+		}
+		_ = req.Body.Close()
+		updated := addOpenAITTSStreamFormat(body)
+		req.Body = io.NopCloser(bytes.NewReader(updated))
+		req.ContentLength = int64(len(updated))
+		req.GetBody = func() (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(updated)), nil
+		}
+	}
+	base := c.base
+	if base == nil {
+		base = http.DefaultClient
+	}
+	return base.Do(req)
+}
+
+func addOpenAITTSStreamFormat(body []byte) []byte {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return body
+	}
+	if _, ok := payload["stream_format"]; ok {
+		return body
+	}
+	modelName, _ := payload["model"].(string)
+	payload["stream_format"] = openAITTSStreamFormatForModel(openai.SpeechModel(modelName))
+	updated, err := json.Marshal(payload)
+	if err != nil {
+		return body
+	}
+	return updated
+}
+
+func openAITTSStreamFormatForModel(model openai.SpeechModel) string {
+	switch model {
+	case openai.TTSModel1, openai.TTSModel1HD:
+		return openAITTSStreamFormatAudio
+	default:
+		return openAITTSStreamFormatSSE
+	}
 }

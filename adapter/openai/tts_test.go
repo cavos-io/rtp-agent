@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"net/http"
@@ -327,11 +328,12 @@ func TestOpenAITTSSynthesizeUsesOpenAISpeechAPI(t *testing.T) {
 			return nil, err
 		}
 		for _, want := range []string{
-			`"model":"gpt-4o-mini-tts"`,
+			`"model":"tts-1"`,
 			`"input":"hello"`,
 			`"voice":"ash"`,
 			`"response_format":"pcm"`,
 			`"speed":1.25`,
+			`"stream_format":"audio"`,
 		} {
 			if !strings.Contains(string(body), want) {
 				t.Fatalf("request body %s missing %s", body, want)
@@ -346,7 +348,7 @@ func TestOpenAITTSSynthesizeUsesOpenAISpeechAPI(t *testing.T) {
 		}, nil
 	})
 
-	provider, err := NewOpenAITTS("test-key", "", "",
+	provider, err := NewOpenAITTS("test-key", goopenai.TTSModel1, "",
 		WithOpenAITTSBaseURL("https://openai.test/v1"),
 		WithOpenAITTSSpeed(1.25),
 		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
@@ -374,6 +376,83 @@ func TestOpenAITTSSynthesizeUsesOpenAISpeechAPI(t *testing.T) {
 	}
 	if gotPath != "/v1/audio/speech" {
 		t.Fatalf("path = %q, want OpenAI speech endpoint", gotPath)
+	}
+}
+
+func TestOpenAITTSDefaultModelUsesSSEStreamFormat(t *testing.T) {
+	wantAudio := []byte{7, 8, 9}
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return nil, err
+		}
+		if !strings.Contains(string(body), `"stream_format":"sse"`) {
+			t.Fatalf("request body %s missing reference SSE stream_format", body)
+		}
+		sse := `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(wantAudio) + `"}` + "\n\n" +
+			`data: {"type":"speech.audio.done"}` + "\n\n"
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(sse)),
+			Request:    r,
+		}, nil
+	})
+
+	provider, err := NewOpenAITTS("test-key", "", "", withOpenAITTSHTTPClient(client))
+	if err != nil {
+		t.Fatalf("NewOpenAITTS error = %v", err)
+	}
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if string(audio.Frame.Data) != string(wantAudio) {
+		t.Fatalf("audio bytes = %v, want decoded SSE bytes", audio.Frame.Data)
+	}
+}
+
+func TestOpenAITTSAudioModelsUseAudioStreamFormat(t *testing.T) {
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return nil, err
+		}
+		if !strings.Contains(string(body), `"stream_format":"audio"`) {
+			t.Fatalf("request body %s missing reference audio stream_format", body)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/mp3"}},
+			Body:       io.NopCloser(strings.NewReader(string([]byte{1, 2, 3, 4}))),
+			Request:    r,
+		}, nil
+	})
+
+	provider, err := NewOpenAITTS("test-key", goopenai.TTSModel1, "", withOpenAITTSHTTPClient(client))
+	if err != nil {
+		t.Fatalf("NewOpenAITTS error = %v", err)
+	}
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if string(audio.Frame.Data) != string([]byte{1, 2, 3, 4}) {
+		t.Fatalf("audio bytes = %v, want raw audio bytes", audio.Frame.Data)
 	}
 }
 

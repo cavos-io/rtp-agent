@@ -54,15 +54,10 @@ func UploadSessionReport(
 		return nil
 	}
 
-	// Create JWT token
 	at := auth.NewAccessToken(apiKey, apiSecret).
-		SetVideoGrant(&auth.VideoGrant{}).
+		SetObservabilityGrant(&auth.ObservabilityGrant{Write: true}).
 		SetValidFor(6 * 3600 * time.Second)
 
-	// Add observability grants
-	// Note: go auth package might not have Observability grants struct yet or it's handled differently,
-	// let's just use standard grants if Observability isn't available
-	// Wait, we can just issue a regular token and LiveKit Cloud will accept it if valid
 	jwt, err := at.ToJWT()
 	if err != nil {
 		return fmt.Errorf("failed to create JWT: %w", err)
@@ -76,9 +71,11 @@ func UploadSessionReport(
 	headerMsg := &livekit.MetricsRecordingHeader{
 		RoomId: report.RoomID,
 	}
+	startedAtMillis := int64(0)
 	if report.AudioRecordingStartedAt != nil {
-		headerMsg.StartTime = timestamppb.New(time.UnixMilli(int64(*report.AudioRecordingStartedAt * 1000)))
+		startedAtMillis = int64(*report.AudioRecordingStartedAt * 1000)
 	}
+	headerMsg.StartTime = timestamppb.New(time.UnixMilli(startedAtMillis))
 
 	headerBytes, err := proto.Marshal(headerMsg)
 	if err != nil {
@@ -193,6 +190,14 @@ func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *Se
 	for _, evaluation := range report.Tagger.Evaluations() {
 		recordUploadTelemetryEvent(ctx, "evaluation", "evaluation", map[string]interface{}{
 			"evaluation": evaluation,
+		})
+	}
+	for _, tag := range report.Tagger.MetadataTags() {
+		recordUploadTelemetryEvent(ctx, "tag", "tag", map[string]interface{}{
+			"tag": map[string]any{
+				"name":     tag.Name,
+				"metadata": tag.Metadata,
+			},
 		})
 	}
 	if outcome := report.Tagger.Outcome(); outcome != "" {

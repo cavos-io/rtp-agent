@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/inference"
@@ -354,6 +356,11 @@ type JobContext struct {
 	recordingInitialized   bool
 	shutdownCallbacks      []func(string)
 	shutdownOnce           sync.Once
+	shutdownDone           chan struct{}
+	entrypointStarted      atomic.Bool
+	entrypointDone         chan struct{}
+	entrypointDoneOnce     sync.Once
+	terminated             atomic.Bool
 	finishOnce             sync.Once
 	participantEntrypoints []participantEntrypointRegistration
 	availableParticipants  []*livekit.ParticipantInfo
@@ -380,13 +387,15 @@ func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string
 		}
 	}
 	return &JobContext{
-		Job:       job,
-		url:       url,
-		apiKey:    apiKey,
-		apiSecret: apiSecret,
-		Report:    report,
-		tagger:    tagger,
-		process:   NewJobProcess(JobExecutorTypeThread, nil, ""),
+		Job:            job,
+		url:            url,
+		apiKey:         apiKey,
+		apiSecret:      apiSecret,
+		Report:         report,
+		tagger:         tagger,
+		process:        NewJobProcess(JobExecutorTypeThread, nil, ""),
+		shutdownDone:   make(chan struct{}),
+		entrypointDone: make(chan struct{}),
 		logContextFields: map[string]any{
 			"job_id": report.JobID,
 			"room":   report.Room,
@@ -917,6 +926,9 @@ func (c *JobContext) Shutdown(reasons ...string) {
 		reason = reasons[0]
 	}
 	c.shutdownOnce.Do(func() {
+		if c.shutdownDone == nil {
+			c.shutdownDone = make(chan struct{})
+		}
 		for _, callback := range c.shutdownCallbacks {
 			func(callback func(string)) {
 				defer func() {
@@ -930,7 +942,69 @@ func (c *JobContext) Shutdown(reasons ...string) {
 		if c.Room != nil {
 			c.Room.Disconnect()
 		}
+		close(c.shutdownDone)
 	})
+}
+
+func (c *JobContext) ShutdownDone() <-chan struct{} {
+	if c == nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	if c.shutdownDone == nil {
+		c.shutdownDone = make(chan struct{})
+	}
+	return c.shutdownDone
+}
+
+func (c *JobContext) markEntrypointStarted() {
+	if c == nil {
+		return
+	}
+	if c.entrypointDone == nil {
+		c.entrypointDone = make(chan struct{})
+	}
+	c.entrypointStarted.Store(true)
+}
+
+func (c *JobContext) markEntrypointDone() {
+	if c == nil || !c.entrypointStarted.Load() {
+		return
+	}
+	if c.entrypointDone == nil {
+		c.entrypointDone = make(chan struct{})
+	}
+	c.entrypointDoneOnce.Do(func() {
+		close(c.entrypointDone)
+	})
+}
+
+func (c *JobContext) waitForEntrypointDone(timeout time.Duration) bool {
+	if c == nil || !c.entrypointStarted.Load() {
+		return true
+	}
+	if c.entrypointDone == nil {
+		c.entrypointDone = make(chan struct{})
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-c.entrypointDone:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+func (c *JobContext) markTerminated() {
+	if c != nil {
+		c.terminated.Store(true)
+	}
+}
+
+func (c *JobContext) Terminated() bool {
+	return c != nil && c.terminated.Load()
 }
 
 // DeleteRoom deletes the room and disconnects all participants.

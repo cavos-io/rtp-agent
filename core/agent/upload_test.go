@@ -8,13 +8,115 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/go-jose/go-jose/v3/jwt"
+	"github.com/livekit/protocol/auth"
+	"github.com/livekit/protocol/livekit"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	statuspb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
+
+func TestUploadSessionReportUsesObservabilityWriteGrant(t *testing.T) {
+	const apiSecret = "secret"
+
+	authCh := make(chan string, 1)
+	useRecordingUploadHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authCh <- r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Setenv("LIVEKIT_OBSERVABILITY_URL", "https://observability.test")
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Transcript: true}
+	report.RoomID = "RM_grant"
+
+	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", apiSecret, "agent-a", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v", err)
+	}
+
+	var authHeader string
+	select {
+	case authHeader = <-authCh:
+	default:
+		t.Fatal("UploadSessionReport did not POST recording upload")
+	}
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+	if token == authHeader || token == "" {
+		t.Fatalf("Authorization header = %q, want bearer token", authHeader)
+	}
+
+	parsed, err := jwt.ParseSigned(token)
+	if err != nil {
+		t.Fatalf("ParseSigned() error = %v", err)
+	}
+	grants := auth.ClaimGrants{}
+	if err := parsed.Claims([]byte(apiSecret), &jwt.Claims{}, &grants); err != nil {
+		t.Fatalf("token Claims() error = %v", err)
+	}
+	if grants.Observability == nil || !grants.Observability.Write {
+		t.Fatalf("observability grant = %#v, want write grant", grants.Observability)
+	}
+	if grants.Video != nil {
+		t.Fatalf("video grant = %#v, want nil", grants.Video)
+	}
+}
+
+func TestUploadSessionReportTranscriptOnlySetsZeroHeaderStartTime(t *testing.T) {
+	headerCh := make(chan *livekit.MetricsRecordingHeader, 1)
+	useRecordingUploadHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("ParseMultipartForm() error = %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		file, _, err := r.FormFile("header")
+		if err != nil {
+			t.Errorf("FormFile(header) error = %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+		data, err := io.ReadAll(file)
+		if err != nil {
+			t.Errorf("ReadAll(header) error = %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		header := &livekit.MetricsRecordingHeader{}
+		if err := proto.Unmarshal(data, header); err != nil {
+			t.Errorf("Unmarshal(header) error = %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		headerCh <- header
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Setenv("LIVEKIT_OBSERVABILITY_URL", "https://observability.test")
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Transcript: true}
+	report.RoomID = "RM_transcript_only"
+
+	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v", err)
+	}
+
+	select {
+	case header := <-headerCh:
+		if header.StartTime == nil {
+			t.Fatal("header StartTime = nil, want explicit zero timestamp")
+		}
+		if header.StartTime.Seconds != 0 || header.StartTime.Nanos != 0 {
+			t.Fatalf("header StartTime = %v, want zero timestamp", header.StartTime)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UploadSessionReport did not POST recording header")
+	}
+}
 
 func TestUploadSessionReportUsesObservabilityURLEnvOverride(t *testing.T) {
 	requestCh := make(chan string, 1)
@@ -161,6 +263,48 @@ func TestUploadSessionReportRecordsEvaluationAndOutcome(t *testing.T) {
 	}
 	if outcome["outcome"] != "fail" || outcome["reason"] != "caller hung up" {
 		t.Fatalf("outcome attr = %#v, want fail reason", outcome)
+	}
+}
+
+func TestUploadSessionReportRecordsTagMetadata(t *testing.T) {
+	oldRecord := recordUploadTelemetryEvent
+	var events []uploadTelemetryEvent
+	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
+	}
+	defer func() { recordUploadTelemetryEvent = oldRecord }()
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Logs: true}
+	report.Tagger = NewTagger()
+	report.Tagger.Add("appointment:booked", map[string]any{
+		"slot_id":  "abc123",
+		"calendar": "cal.com",
+	})
+
+	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v", err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("telemetry events = %#v, want session report and tag events", events)
+	}
+	if events[1].eventType != "tag" || events[1].body != "tag" {
+		t.Fatalf("second telemetry event = %#v, want tag event", events[1])
+	}
+	tag, ok := events[1].attrs["tag"].(map[string]any)
+	if !ok {
+		t.Fatalf("tag attr = %T, want map", events[1].attrs["tag"])
+	}
+	if tag["name"] != "appointment:booked" {
+		t.Fatalf("tag name = %#v, want appointment:booked", tag["name"])
+	}
+	metadata, ok := tag["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("tag metadata = %T, want map", tag["metadata"])
+	}
+	if metadata["slot_id"] != "abc123" || metadata["calendar"] != "cal.com" {
+		t.Fatalf("tag metadata = %#v, want appointment metadata", metadata)
 	}
 }
 

@@ -458,7 +458,9 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 	s.mu.Unlock()
 
 	doneCh := make(chan error, 1)
+	jobCtx.markEntrypointStarted()
 	go func() {
+		defer jobCtx.markEntrypointDone()
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				logger.Logger.Errorw("Running job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", info.Job.Id)
@@ -472,11 +474,23 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 	case err := <-doneCh:
 		if err != nil {
 			logger.Logger.Errorw("Running job entrypoint failed", err, "jobId", info.Job.Id)
+			s.finishJob(jobCtx)
+			return err
+		}
+		select {
+		case <-jobCtx.ShutdownDone():
+		case <-ctx.Done():
+			jobCtx.Shutdown("")
+			s.finishJob(jobCtx)
+			return ctx.Err()
 		}
 		s.finishJob(jobCtx)
-		return err
+		return nil
 	case <-ctx.Done():
 		jobCtx.Shutdown("")
+		if !jobCtx.waitForEntrypointDone(localEntrypointCloseWait) {
+			logger.Logger.Warnw("running job entrypoint did not exit before context cancellation finalized", nil, "jobId", info.Job.Id)
+		}
 		s.finishJob(jobCtx)
 		return ctx.Err()
 	}
@@ -490,12 +504,25 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 		jobCtx.process = s.newJobProcess()
 	}
 
+	jobCtx.markEntrypointStarted()
 	go func() {
 		status := livekit.JobStatus_JS_SUCCESS
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				logger.Logger.Errorw("Reloaded job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", jobCtx.JobID())
 				status = livekit.JobStatus_JS_FAILED
+			}
+			if status == livekit.JobStatus_JS_SUCCESS {
+				select {
+				case <-jobCtx.ShutdownDone():
+				case <-ctx.Done():
+					jobCtx.Shutdown("")
+				}
+				if !s.finishJob(jobCtx) {
+					return
+				}
+			} else {
+				s.finishJob(jobCtx)
 			}
 			select {
 			case <-ctx.Done():
@@ -507,6 +534,7 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 			}
 			s.finishJob(jobCtx)
 		}()
+		defer jobCtx.markEntrypointDone()
 		if err := s.runJobEntrypoint(jobCtx); err != nil {
 			logger.Logger.Errorw("Reloaded job entrypoint failed", err, "jobId", jobCtx.JobID())
 			status = livekit.JobStatus_JS_FAILED
@@ -1963,6 +1991,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 	}
 
 	if s.entrypointFnc != nil {
+		jobCtx.markEntrypointStarted()
 		go func() {
 			status := livekit.JobStatus_JS_SUCCESS
 			defer func() {
@@ -1970,11 +1999,31 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 					logger.Logger.Errorw("Job entrypoint panicked", fmt.Errorf("%v", recovered), jobLogValues(jobCtx, "jobId", req.Job.Id)...)
 					status = livekit.JobStatus_JS_FAILED
 				}
+				if jobCtx.Terminated() {
+					s.finishJob(jobCtx)
+					return
+				}
+				if status == livekit.JobStatus_JS_SUCCESS {
+					select {
+					case <-jobCtx.ShutdownDone():
+					case <-ctx.Done():
+						jobCtx.Shutdown("")
+					}
+					if !s.finishJob(jobCtx) {
+						return
+					}
+				} else {
+					if err := s.sendWorkerMessage(jobStatusMessage(req.Job.Id, status)); err != nil {
+						logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", req.Job.Id)...)
+					}
+					s.finishJob(jobCtx)
+					return
+				}
 				if err := s.sendWorkerMessage(jobStatusMessage(req.Job.Id, status)); err != nil {
 					logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", req.Job.Id)...)
 				}
-				s.finishJob(jobCtx)
 			}()
+			defer jobCtx.markEntrypointDone()
 
 			if err := s.runJobEntrypoint(jobCtx); err != nil {
 				logger.Logger.Errorw("Job entrypoint failed", err, jobLogValues(jobCtx, "jobId", req.Job.Id)...)
@@ -1995,6 +2044,11 @@ func (s *AgentServer) handleTermination(req *livekit.JobTermination) {
 	s.mu.Unlock()
 
 	if exists {
+		jobCtx.markTerminated()
+		jobCtx.Shutdown("")
+		if !jobCtx.waitForEntrypointDone(localEntrypointCloseWait) {
+			logger.Logger.Warnw("job entrypoint did not exit before termination finalized", nil, "jobId", req.JobId)
+		}
 		s.finishJob(jobCtx)
 	}
 }
@@ -2140,16 +2194,16 @@ func (s *AgentServer) runJobEntrypoint(jobCtx *JobContext) error {
 	})
 }
 
-func (s *AgentServer) finishJob(jobCtx *JobContext) {
+func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
 	if jobCtx == nil || jobCtx.Job == nil {
-		return
+		return false
 	}
 	finalized := false
 	jobCtx.finishOnce.Do(func() {
 		finalized = true
 	})
 	if !finalized {
-		return
+		return false
 	}
 
 	s.mu.Lock()
@@ -2160,6 +2214,7 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) {
 
 	jobCtx.Shutdown("")
 	s.uploadJobSessionReport(jobCtx)
+	return true
 }
 
 func (s *AgentServer) uploadJobSessionReport(jobCtx *JobContext) {
