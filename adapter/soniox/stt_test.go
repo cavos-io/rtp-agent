@@ -30,6 +30,12 @@ func TestSonioxSTTDefaultsMatchReference(t *testing.T) {
 	if !provider.enableLanguageIdentification {
 		t.Fatal("language identification = false, want true")
 	}
+	if got := stt.Model(provider); got != "stt-rt-v4" {
+		t.Fatalf("model metadata = %q, want stt-rt-v4", got)
+	}
+	if got := stt.Provider(provider); got != "Soniox" {
+		t.Fatalf("provider metadata = %q, want Soniox", got)
+	}
 
 	caps := provider.Capabilities()
 	if !caps.Streaming {

@@ -34,6 +34,12 @@ func TestSonioxTTSDefaultsMatchReference(t *testing.T) {
 	if provider.bitrate != nil {
 		t.Fatalf("bitrate = %#v, want nil", provider.bitrate)
 	}
+	if got := tts.Model(provider); got != "tts-rt-v1-preview" {
+		t.Fatalf("model metadata = %q, want tts-rt-v1-preview", got)
+	}
+	if got := tts.Provider(provider); got != "Soniox" {
+		t.Fatalf("provider metadata = %q, want Soniox", got)
+	}
 
 	caps := provider.Capabilities()
 	if !caps.Streaming {
