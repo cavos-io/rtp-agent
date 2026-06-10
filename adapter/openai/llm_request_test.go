@@ -293,6 +293,46 @@ func TestNewOllamaOpenAILLMDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewCometAPIOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(cometAPIKeyEnv, "env-comet-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewCometAPIOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewCometAPIOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "gpt-5-chat-latest" {
+		t.Fatalf("Model = %q, want gpt-5-chat-latest", model.Model())
+	}
+	if model.Provider() != "api.cometapi.com" {
+		t.Fatalf("Provider() = %q, want CometAPI endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-comet-key" {
+		t.Fatalf("Authorization = %q, want CometAPI bearer key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "/v1/chat/completions") {
+		t.Fatalf("request URL = %s, want OpenAI-compatible chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"gpt-5-chat-latest"`) {
+		t.Fatalf("request body = %s, want default CometAPI model", capture.requestBody)
+	}
+}
+
+func TestNewCometAPIOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(cometAPIKeyEnv, "")
+
+	_, err := NewCometAPIOpenAILLM("", "")
+	if err == nil || err.Error() != "CometAPI API key is required, either as argument or set COMETAPI_API_KEY environmental variable" {
+		t.Fatalf("NewCometAPIOpenAILLM error = %v, want CometAPI API key required", err)
+	}
+}
+
 func TestNewOpenAILLMChatUsesConfiguredKeyAndDefaultModel(t *testing.T) {
 	t.Setenv(openAIAPIKeyEnv, "env-key")
 	capture := &captureDeadlineHTTPClient{
