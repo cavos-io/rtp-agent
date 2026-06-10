@@ -196,7 +196,9 @@ const (
 	providerCartesia     = "cartesia"
 	providerCerebras     = "cerebras"
 	providerClova        = "clova"
+	providerCometAPI     = "cometapi"
 	providerDeepgram     = "deepgram"
+	providerDeepSeek     = "deepseek"
 	providerDID          = "did"
 	providerElevenLabs   = "elevenlabs"
 	providerFal          = "fal"
@@ -213,6 +215,7 @@ const (
 	providerKeyframe     = "keyframe"
 	providerLangChain    = "langchain"
 	providerLemonSlice   = "lemonslice"
+	providerLetta        = "letta"
 	providerLiveAvatar   = "liveavatar"
 	providerLMNT         = "lmnt"
 	providerMinimal      = "minimal"
@@ -220,8 +223,13 @@ const (
 	providerMistralAI    = "mistralai"
 	providerMurf         = "murf"
 	providerNeuphonic    = "neuphonic"
+	providerNebius       = "nebius"
 	providerNvidia       = "nvidia"
+	providerOctoAI       = "octoai"
+	providerOllama       = "ollama"
 	providerOpenAI       = "openai"
+	providerOpenRouter   = "openrouter"
+	providerOVHCloud     = "ovhcloud"
 	providerPerplexity   = "perplexity"
 	providerPhonic       = "phonic"
 	providerResemble     = "resemble"
@@ -229,6 +237,7 @@ const (
 	providerRime         = "rime"
 	providerRtzr         = "rtzr"
 	providerRunway       = "runway"
+	providerSambaNova    = "sambanova"
 	providerSarvam       = "sarvam"
 	providerSilero       = "silero"
 	providerSimli        = "simli"
@@ -241,6 +250,7 @@ const (
 	providerSpitch       = "spitch"
 	providerTavus        = "tavus"
 	providerTelnyx       = "telnyx"
+	providerTogether     = "together"
 	providerTrugen       = "trugen"
 	providerUltravox     = "ultravox"
 	providerUpliftAI     = "upliftai"
@@ -467,6 +477,8 @@ type AppConfig struct {
 	ClovaSTTInvokeURL           string
 	ClovaClientID               string
 	ClovaClientSecret           string
+	CometAPIKey                 string
+	DeepSeekAPIKey              string
 	DIDAPIKey                   string
 	DIDAgentID                  string
 	FalAPIKey                   string
@@ -481,6 +493,7 @@ type AppConfig struct {
 	KeyframeAPIKey              string
 	LangChainAPIKey             string
 	LemonSliceAPIKey            string
+	LettaAPIKey                 string
 	LiveAvatarAPIKey            string
 	LMNTAPIKey                  string
 	MinimalAPIKey               string
@@ -488,7 +501,11 @@ type AppConfig struct {
 	MistralAPIKey               string
 	MurfAPIKey                  string
 	NeuphonicAPIKey             string
+	NebiusAPIKey                string
 	NvidiaAPIKey                string
+	OctoAIAPIKey                string
+	OpenRouterAPIKey            string
+	OVHCloudAPIKey              string
 	PerplexityAPIKey            string
 	PhonicAPIKey                string
 	ResembleAPIKey              string
@@ -501,6 +518,7 @@ type AppConfig struct {
 	RunwayAvatarID              string
 	RunwayPresetID              string
 	RunwayMaxDuration           *int
+	SambaNovaAPIKey             string
 	SarvamAPIKey                string
 	SimliAPIKey                 string
 	SimplismartAPIKey           string
@@ -512,6 +530,7 @@ type AppConfig struct {
 	SpitchAPIKey                string
 	TavusAPIKey                 string
 	TelnyxAPIKey                string
+	TogetherAPIKey              string
 	TrugenAPIKey                string
 	UltravoxAPIKey              string
 	UpliftAIAPIKey              string
@@ -819,6 +838,8 @@ func DefaultConfigFromEnv() AppConfig {
 		ClovaSTTInvokeURL:                       os.Getenv("CLOVA_STT_INVOKE_URL"),
 		ClovaClientID:                           os.Getenv("CLOVA_CLIENT_ID"),
 		ClovaClientSecret:                       os.Getenv("CLOVA_CLIENT_SECRET"),
+		CometAPIKey:                             os.Getenv("COMETAPI_API_KEY"),
+		DeepSeekAPIKey:                          os.Getenv("DEEPSEEK_API_KEY"),
 		DIDAPIKey:                               os.Getenv("DID_API_KEY"),
 		DIDAgentID:                              os.Getenv("DID_AGENT_ID"),
 		FalAPIKey:                               firstEnv("FAL_KEY", "FAL_API_KEY"),
@@ -833,6 +854,7 @@ func DefaultConfigFromEnv() AppConfig {
 		KeyframeAPIKey:                          os.Getenv("KEYFRAME_API_KEY"),
 		LangChainAPIKey:                         os.Getenv("LANGCHAIN_API_KEY"),
 		LemonSliceAPIKey:                        os.Getenv("LEMONSLICE_API_KEY"),
+		LettaAPIKey:                             os.Getenv("LETTA_API_KEY"),
 		LiveAvatarAPIKey:                        os.Getenv("LIVEAVATAR_API_KEY"),
 		LMNTAPIKey:                              os.Getenv("LMNT_API_KEY"),
 		MinimalAPIKey:                           os.Getenv("MINIMAL_API_KEY"),
@@ -840,7 +862,11 @@ func DefaultConfigFromEnv() AppConfig {
 		MistralAPIKey:                           os.Getenv("MISTRAL_API_KEY"),
 		MurfAPIKey:                              os.Getenv("MURF_API_KEY"),
 		NeuphonicAPIKey:                         os.Getenv("NEUPHONIC_API_KEY"),
+		NebiusAPIKey:                            os.Getenv("NEBIUS_API_KEY"),
 		NvidiaAPIKey:                            os.Getenv("NVIDIA_API_KEY"),
+		OctoAIAPIKey:                            os.Getenv("OCTOAI_TOKEN"),
+		OpenRouterAPIKey:                        os.Getenv("OPENROUTER_API_KEY"),
+		OVHCloudAPIKey:                          os.Getenv("OVHCLOUD_API_KEY"),
 		PerplexityAPIKey:                        os.Getenv("PERPLEXITY_API_KEY"),
 		PhonicAPIKey:                            os.Getenv("PHONIC_API_KEY"),
 		ResembleAPIKey:                          os.Getenv("RESEMBLE_API_KEY"),
@@ -853,6 +879,7 @@ func DefaultConfigFromEnv() AppConfig {
 		RunwayAvatarID:                          os.Getenv("RTP_AGENT_RUNWAY_AVATAR_ID"),
 		RunwayPresetID:                          os.Getenv("RTP_AGENT_RUNWAY_PRESET_ID"),
 		RunwayMaxDuration:                       getenvOptionalInt("RTP_AGENT_RUNWAY_MAX_DURATION"),
+		SambaNovaAPIKey:                         os.Getenv("SAMBANOVA_API_KEY"),
 		SarvamAPIKey:                            os.Getenv("SARVAM_API_KEY"),
 		SimliAPIKey:                             os.Getenv("SIMLI_API_KEY"),
 		SimplismartAPIKey:                       os.Getenv("SIMPLISMART_API_KEY"),
@@ -864,6 +891,7 @@ func DefaultConfigFromEnv() AppConfig {
 		SpitchAPIKey:                            os.Getenv("SPITCH_API_KEY"),
 		TavusAPIKey:                             os.Getenv("TAVUS_API_KEY"),
 		TelnyxAPIKey:                            os.Getenv("TELNYX_API_KEY"),
+		TogetherAPIKey:                          os.Getenv("TOGETHER_API_KEY"),
 		TrugenAPIKey:                            os.Getenv("TRUGEN_API_KEY"),
 		UltravoxAPIKey:                          os.Getenv("ULTRAVOX_API_KEY"),
 		UpliftAIAPIKey:                          os.Getenv("UPLIFTAI_API_KEY"),
@@ -1811,12 +1839,44 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 	switch normalizeProvider(provider) {
 	case providerMinimal:
 		return minimal.NewMinimalLLM(cfg.MinimalAPIKey, cfg.LLMModel), nil
+	case providerCerebras:
+		return cerebras.NewCerebrasLLM(cfg.CerebrasAPIKey, cfg.LLMModel), nil
+	case providerFireworks:
+		return fireworksai.NewFireworksLLM(cfg.FireworksAPIKey, cfg.LLMModel), nil
+	case providerMistralAI:
+		return mistralai.NewMistralLLM(cfg.MistralAPIKey, cfg.LLMModel), nil
+	case providerNvidia:
+		return nvidia.NewNvidiaLLM(cfg.NvidiaAPIKey, cfg.LLMModel), nil
 	case providerOpenAI:
 		return openai.NewOpenAILLM(cfg.OpenAIAPIKey, cfg.LLMModel)
+	case providerDeepSeek:
+		return openai.NewDeepSeekOpenAILLM(cfg.LLMModel, cfg.DeepSeekAPIKey)
+	case providerCometAPI:
+		return openai.NewCometAPIOpenAILLM(cfg.LLMModel, cfg.CometAPIKey)
+	case providerNebius:
+		return openai.NewNebiusOpenAILLM(cfg.LLMModel, cfg.NebiusAPIKey)
+	case providerLetta:
+		return openai.NewLettaOpenAILLM(cfg.LLMModel, cfg.LLMBaseURL, cfg.LettaAPIKey)
+	case providerOVHCloud:
+		return openai.NewOVHCloudOpenAILLM(cfg.LLMModel, cfg.OVHCloudAPIKey)
+	case providerOctoAI:
+		return openai.NewOctoAIOpenAILLM(cfg.LLMModel, cfg.OctoAIAPIKey)
+	case providerOllama:
+		return openai.NewOllamaOpenAILLM(cfg.LLMModel), nil
+	case providerOpenRouter:
+		return openai.NewOpenRouterLLM(cfg.OpenRouterAPIKey, cfg.LLMModel)
+	case providerSambaNova:
+		return openai.NewSambaNovaOpenAILLM(cfg.LLMModel, cfg.SambaNovaAPIKey)
+	case providerPerplexity:
+		return perplexity.NewPerplexityLLM(cfg.PerplexityAPIKey, cfg.LLMModel), nil
+	case providerTelnyx:
+		return telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel), nil
 	case providerGroq:
 		return groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel), nil
 	case providerXAI:
 		return xai.NewXaiLLM(cfg.XAIAPIKey, cfg.LLMModel), nil
+	case providerTogether:
+		return openai.NewTogetherOpenAILLM(cfg.LLMModel, cfg.TogetherAPIKey)
 	case providerLiveKit:
 		return openai.NewLiveKitInferenceLLM(cfg.LLMModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret)
 	default:
@@ -1883,6 +1943,21 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, openai.WithOpenAISTTBaseURL(cfg.STTBaseURL))
 		}
 		return openai.NewOpenAISTT(cfg.OpenAIAPIKey, cfg.STTModel, sttOpts...)
+	case providerOVHCloud:
+		sttOpts := []openai.OpenAISTTOption{}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTDetectLanguage {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTDetectLanguage(true))
+		}
+		if cfg.STTPrompt != "" {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTPrompt(cfg.STTPrompt))
+		}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTBaseURL(cfg.STTBaseURL))
+		}
+		return openai.NewOVHCloudOpenAISTT(cfg.STTModel, cfg.OVHCloudAPIKey, sttOpts...)
 	case providerElevenLabs:
 		sttOpts := []elevenlabs.ElevenLabsSTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -2030,6 +2105,37 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEncoding(cfg.TTSEncoding))
 		}
 		return elevenlabs.NewElevenLabsTTS(cfg.ElevenLabsAPIKey, cfg.TTSVoice, cfg.TTSModel, ttsOpts...)
+	case providerGroq:
+		ttsOpts := []groq.GroqTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, groq.WithGroqTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, groq.WithGroqTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, groq.WithGroqTTSVoice(cfg.TTSVoice))
+		}
+		return groq.NewGroqTTS(cfg.GroqAPIKey, cfg.TTSVoice, ttsOpts...), nil
+	case providerNvidia:
+		return nvidia.NewNvidiaTTS(cfg.NvidiaAPIKey, cfg.TTSVoice)
+	case providerMistralAI:
+		ttsOpts := []mistralai.MistralAITTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSRefAudio != "" {
+			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSRefAudio(cfg.TTSRefAudio))
+		} else if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSResponseFormat(cfg.TTSResponseFormat))
+		}
+		return mistralai.NewMistralAITTS(cfg.MistralAPIKey, "", ttsOpts...)
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {
@@ -2058,6 +2164,12 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, slng.WithTTSSpeed(cfg.TTSSpeed))
 		}
 		return slng.NewTTS(cfg.SLNGAPIKey, ttsOpts...), nil
+	case providerTelnyx:
+		ttsOpts := []telnyx.TelnyxTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, telnyx.WithTelnyxTTSBaseURL(cfg.TTSBaseURL))
+		}
+		return telnyx.NewTelnyxTTS(cfg.TelnyxAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_TTS_FALLBACK_PROVIDERS entry %q", provider)
 	}
@@ -2152,6 +2264,62 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = provider
 	case providerOpenAI:
 		provider, err := openai.NewOpenAILLM(cfg.OpenAIAPIKey, cfg.LLMModel)
+		if err != nil {
+			return nil, err
+		}
+		a.LLM = provider
+	case providerDeepSeek:
+		provider, err := openai.NewDeepSeekOpenAILLM(cfg.LLMModel, cfg.DeepSeekAPIKey)
+		if err != nil {
+			return nil, err
+		}
+		a.LLM = provider
+	case providerCometAPI:
+		provider, err := openai.NewCometAPIOpenAILLM(cfg.LLMModel, cfg.CometAPIKey)
+		if err != nil {
+			return nil, err
+		}
+		a.LLM = provider
+	case providerNebius:
+		provider, err := openai.NewNebiusOpenAILLM(cfg.LLMModel, cfg.NebiusAPIKey)
+		if err != nil {
+			return nil, err
+		}
+		a.LLM = provider
+	case providerLetta:
+		provider, err := openai.NewLettaOpenAILLM(cfg.LLMModel, cfg.LLMBaseURL, cfg.LettaAPIKey)
+		if err != nil {
+			return nil, err
+		}
+		a.LLM = provider
+	case providerOVHCloud:
+		provider, err := openai.NewOVHCloudOpenAILLM(cfg.LLMModel, cfg.OVHCloudAPIKey)
+		if err != nil {
+			return nil, err
+		}
+		a.LLM = provider
+	case providerOctoAI:
+		provider, err := openai.NewOctoAIOpenAILLM(cfg.LLMModel, cfg.OctoAIAPIKey)
+		if err != nil {
+			return nil, err
+		}
+		a.LLM = provider
+	case providerOllama:
+		a.LLM = openai.NewOllamaOpenAILLM(cfg.LLMModel)
+	case providerOpenRouter:
+		provider, err := openai.NewOpenRouterLLM(cfg.OpenRouterAPIKey, cfg.LLMModel)
+		if err != nil {
+			return nil, err
+		}
+		a.LLM = provider
+	case providerSambaNova:
+		provider, err := openai.NewSambaNovaOpenAILLM(cfg.LLMModel, cfg.SambaNovaAPIKey)
+		if err != nil {
+			return nil, err
+		}
+		a.LLM = provider
+	case providerTogether:
+		provider, err := openai.NewTogetherOpenAILLM(cfg.LLMModel, cfg.TogetherAPIKey)
 		if err != nil {
 			return nil, err
 		}
@@ -3039,6 +3207,25 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			sttOpts = append(sttOpts, openai.WithOpenAISTTBaseURL(cfg.STTBaseURL))
 		}
 		provider, err := openai.NewOpenAISTT(cfg.OpenAIAPIKey, cfg.STTModel, sttOpts...)
+		if err != nil {
+			return nil, err
+		}
+		a.STT = provider
+	case providerOVHCloud:
+		sttOpts := []openai.OpenAISTTOption{}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTDetectLanguage {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTDetectLanguage(true))
+		}
+		if cfg.STTPrompt != "" {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTPrompt(cfg.STTPrompt))
+		}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTBaseURL(cfg.STTBaseURL))
+		}
+		provider, err := openai.NewOVHCloudOpenAISTT(cfg.STTModel, cfg.OVHCloudAPIKey, sttOpts...)
 		if err != nil {
 			return nil, err
 		}

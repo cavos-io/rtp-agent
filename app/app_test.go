@@ -494,6 +494,206 @@ func TestDefaultConfigFromEnvSelectsPerplexityLLM(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsNebiusOpenAILLM(t *testing.T) {
+	t.Setenv("NEBIUS_API_KEY", "test-nebius-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "nebius")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "custom-nebius-model")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Model(app.Session.LLM); got != "custom-nebius-model" {
+		t.Fatalf("LLM model = %q, want custom-nebius-model", got)
+	}
+	if got := llm.Provider(app.Session.LLM); got != "api.studio.nebius.com" {
+		t.Fatalf("LLM provider = %q, want api.studio.nebius.com", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsLettaOpenAILLM(t *testing.T) {
+	t.Setenv("LETTA_API_KEY", "test-letta-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "letta")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "agent-test")
+	t.Setenv("RTP_AGENT_LLM_BASE_URL", "https://letta.example.test/v1/chat/completions")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Model(app.Session.LLM); got != "agent-test" {
+		t.Fatalf("LLM model = %q, want agent-test", got)
+	}
+	if got := llm.Provider(app.Session.LLM); got != "letta.example.test" {
+		t.Fatalf("LLM provider = %q, want letta.example.test", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsDeepSeekOpenAILLM(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "test-deepseek-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "deepseek")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "deepseek-reasoner")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Model(app.Session.LLM); got != "deepseek-reasoner" {
+		t.Fatalf("LLM model = %q, want deepseek-reasoner", got)
+	}
+	if got := llm.Provider(app.Session.LLM); got != "api.deepseek.com" {
+		t.Fatalf("LLM provider = %q, want api.deepseek.com", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsCometAPIOpenAILLM(t *testing.T) {
+	t.Setenv("COMETAPI_API_KEY", "test-cometapi-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "cometapi")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "custom-comet-model")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Model(app.Session.LLM); got != "custom-comet-model" {
+		t.Fatalf("LLM model = %q, want custom-comet-model", got)
+	}
+	if got := llm.Provider(app.Session.LLM); got != "api.cometapi.com" {
+		t.Fatalf("LLM provider = %q, want api.cometapi.com", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsOVHCloudOpenAILLM(t *testing.T) {
+	t.Setenv("OVHCLOUD_API_KEY", "test-ovhcloud-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "ovhcloud")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "custom-ovhcloud-model")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Model(app.Session.LLM); got != "custom-ovhcloud-model" {
+		t.Fatalf("LLM model = %q, want custom-ovhcloud-model", got)
+	}
+	if got := llm.Provider(app.Session.LLM); got != "oai.endpoints.kepler.ai.cloud.ovh.net" {
+		t.Fatalf("LLM provider = %q, want oai.endpoints.kepler.ai.cloud.ovh.net", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsOctoAIOpenAILLM(t *testing.T) {
+	t.Setenv("OCTOAI_TOKEN", "test-octoai-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "octoai")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "custom-octoai-model")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Model(app.Session.LLM); got != "custom-octoai-model" {
+		t.Fatalf("LLM model = %q, want custom-octoai-model", got)
+	}
+	if got := llm.Provider(app.Session.LLM); got != "text.octoai.run" {
+		t.Fatalf("LLM provider = %q, want text.octoai.run", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsSambaNovaOpenAILLM(t *testing.T) {
+	t.Setenv("SAMBANOVA_API_KEY", "test-sambanova-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "sambanova")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "custom-sambanova-model")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Model(app.Session.LLM); got != "custom-sambanova-model" {
+		t.Fatalf("LLM model = %q, want custom-sambanova-model", got)
+	}
+	if got := llm.Provider(app.Session.LLM); got != "api.sambanova.ai" {
+		t.Fatalf("LLM provider = %q, want api.sambanova.ai", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsOllamaOpenAILLM(t *testing.T) {
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "ollama")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "llama3.2")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Model(app.Session.LLM); got != "llama3.2" {
+		t.Fatalf("LLM model = %q, want llama3.2", got)
+	}
+	if got := llm.Provider(app.Session.LLM); got != "localhost:11434" {
+		t.Fatalf("LLM provider = %q, want localhost:11434", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsOpenRouterOpenAILLM(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "openrouter")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "openai/gpt-4o-mini")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Model(app.Session.LLM); got != "openai/gpt-4o-mini" {
+		t.Fatalf("LLM model = %q, want openai/gpt-4o-mini", got)
+	}
+	if got := llm.Provider(app.Session.LLM); got != "openrouter.ai" {
+		t.Fatalf("LLM provider = %q, want openrouter.ai", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsTogetherOpenAILLM(t *testing.T) {
+	t.Setenv("TOGETHER_API_KEY", "test-together-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "together")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "custom-together-model")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Model(app.Session.LLM); got != "custom-together-model" {
+		t.Fatalf("LLM model = %q, want custom-together-model", got)
+	}
+	if got := llm.Provider(app.Session.LLM); got != "api.together.xyz" {
+		t.Fatalf("LLM provider = %q, want api.together.xyz", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsNvidiaLLM(t *testing.T) {
 	t.Setenv("NVIDIA_API_KEY", "test-nvidia-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "nvidia")
@@ -731,6 +931,26 @@ func TestDefaultConfigFromEnvSelectsAssemblyAISTT(t *testing.T) {
 	}
 	if caps := app.Session.STT.Capabilities(); !caps.Diarization {
 		t.Fatalf("STT Capabilities().Diarization = false, want true")
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsOVHCloudOpenAISTT(t *testing.T) {
+	t.Setenv("OVHCLOUD_API_KEY", "test-ovhcloud-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "ovhcloud")
+	t.Setenv("RTP_AGENT_STT_MODEL", "custom-ovhcloud-stt")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.STT == nil {
+		t.Fatal("Session STT is nil")
+	}
+	if got := stt.Model(app.Session.STT); got != "custom-ovhcloud-stt" {
+		t.Fatalf("STT model = %q, want custom-ovhcloud-stt", got)
+	}
+	if got := stt.Provider(app.Session.STT); got != "oai.endpoints.kepler.ai.cloud.ovh.net" {
+		t.Fatalf("STT provider = %q, want oai.endpoints.kepler.ai.cloud.ovh.net", got)
 	}
 }
 
@@ -2775,6 +2995,96 @@ func TestDefaultConfigFromEnvWrapsLLMFallbackProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvAcceptsTogetherLLMFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "together")
+	t.Setenv("TOGETHER_API_KEY", "test-together-key")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "custom-together-model")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := llm.Label(app.Agent.LLM); got != "FallbackAdapter(minimal.MinimalLLM)" {
+		t.Fatalf("LLM label = %q, want fallback adapter around primary minimal LLM", got)
+	}
+}
+
+func TestDefaultConfigFromEnvAcceptsOpenAICompatibleLLMFallbackProviders(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		envKey   string
+		envValue string
+		baseURL  string
+	}{
+		{name: "deepseek", provider: "deepseek", envKey: "DEEPSEEK_API_KEY", envValue: "test-deepseek-key"},
+		{name: "cometapi", provider: "cometapi", envKey: "COMETAPI_API_KEY", envValue: "test-cometapi-key"},
+		{name: "nebius", provider: "nebius", envKey: "NEBIUS_API_KEY", envValue: "test-nebius-key"},
+		{name: "letta", provider: "letta", envKey: "LETTA_API_KEY", envValue: "test-letta-key", baseURL: "https://letta.example.test/v1/chat/completions"},
+		{name: "ovhcloud", provider: "ovhcloud", envKey: "OVHCLOUD_API_KEY", envValue: "test-ovhcloud-key"},
+		{name: "octoai", provider: "octoai", envKey: "OCTOAI_TOKEN", envValue: "test-octoai-key"},
+		{name: "sambanova", provider: "sambanova", envKey: "SAMBANOVA_API_KEY", envValue: "test-sambanova-key"},
+		{name: "ollama", provider: "ollama"},
+		{name: "openrouter", provider: "openrouter", envKey: "OPENROUTER_API_KEY", envValue: "test-openrouter-key"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+			t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", tt.provider)
+			t.Setenv("RTP_AGENT_LLM_MODEL", "custom-fallback-model")
+			if tt.envKey != "" {
+				t.Setenv(tt.envKey, tt.envValue)
+			}
+			if tt.baseURL != "" {
+				t.Setenv("RTP_AGENT_LLM_BASE_URL", tt.baseURL)
+			}
+
+			app, err := NewApp(DefaultConfigFromEnv())
+			if err != nil {
+				t.Fatalf("NewApp() error = %v", err)
+			}
+			if got := llm.Label(app.Agent.LLM); got != "FallbackAdapter(minimal.MinimalLLM)" {
+				t.Fatalf("LLM label = %q, want fallback adapter around primary minimal LLM", got)
+			}
+		})
+	}
+}
+
+func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		envKey   string
+		envValue string
+	}{
+		{name: "cerebras", provider: "cerebras", envKey: "CEREBRAS_API_KEY", envValue: "test-cerebras-key"},
+		{name: "fireworks", provider: "fireworks", envKey: "FIREWORKS_API_KEY", envValue: "test-fireworks-key"},
+		{name: "mistralai", provider: "mistralai", envKey: "MISTRAL_API_KEY", envValue: "test-mistral-key"},
+		{name: "nvidia", provider: "nvidia", envKey: "NVIDIA_API_KEY", envValue: "test-nvidia-key"},
+		{name: "perplexity", provider: "perplexity", envKey: "PERPLEXITY_API_KEY", envValue: "test-perplexity-key"},
+		{name: "telnyx", provider: "telnyx", envKey: "TELNYX_API_KEY", envValue: "test-telnyx-key"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+			t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", tt.provider)
+			t.Setenv("RTP_AGENT_LLM_MODEL", "custom-fallback-model")
+			t.Setenv(tt.envKey, tt.envValue)
+
+			app, err := NewApp(DefaultConfigFromEnv())
+			if err != nil {
+				t.Fatalf("NewApp() error = %v", err)
+			}
+			if got := llm.Label(app.Agent.LLM); got != "FallbackAdapter(minimal.MinimalLLM)" {
+				t.Fatalf("LLM label = %q, want fallback adapter around primary minimal LLM", got)
+			}
+		})
+	}
+}
+
 func TestDefaultConfigFromEnvConfiguresLLMChatOptions(t *testing.T) {
 	t.Setenv("RTP_AGENT_LLM_PARALLEL_TOOL_CALLS", "true")
 	t.Setenv("RTP_AGENT_LLM_JSON_CONFIG", "temperature=0.2")
@@ -2826,6 +3136,22 @@ func TestDefaultConfigFromEnvWrapsSTTFallbackProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvAcceptsOVHCloudSTTFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
+	t.Setenv("RTP_AGENT_STT_FALLBACK_PROVIDERS", "ovhcloud")
+	t.Setenv("RTP_AGENT_VAD_PROVIDER", "silero")
+	t.Setenv("OVHCLOUD_API_KEY", "test-ovhcloud-key")
+	t.Setenv("RTP_AGENT_STT_MODEL", "custom-ovhcloud-stt")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.STT.Label(); got != "FallbackAdapter(deepgram.STT)" {
+		t.Fatalf("STT label = %q, want fallback adapter around primary deepgram STT", got)
+	}
+}
+
 func TestDefaultConfigFromEnvWrapsNonStreamingSTTFallbackWithVAD(t *testing.T) {
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
 	t.Setenv("RTP_AGENT_STT_FALLBACK_PROVIDERS", "elevenlabs")
@@ -2848,6 +3174,73 @@ func TestDefaultConfigFromEnvWrapsTTSFallbackProviders(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "cartesia")
 	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
+		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	}
+}
+
+func TestDefaultConfigFromEnvAcceptsTelnyxTTSFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "telnyx")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("TELNYX_API_KEY", "test-telnyx-key")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "Telnyx.NaturalHD.astra")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
+		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	}
+}
+
+func TestDefaultConfigFromEnvAcceptsGroqTTSFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "groq")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("GROQ_API_KEY", "test-groq-key")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "playai-tts")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "Fritz-PlayAI")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
+		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	}
+}
+
+func TestDefaultConfigFromEnvAcceptsNvidiaTTSFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "nvidia")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("NVIDIA_API_KEY", "test-nvidia-key")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "Magpie-Multilingual.EN-US.Leo")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
+		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	}
+}
+
+func TestDefaultConfigFromEnvAcceptsMistralAITTSFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "mistralai")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("MISTRAL_API_KEY", "test-mistral-key")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "voxtral-tts-test")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "en_paul_neutral")
+	t.Setenv("RTP_AGENT_TTS_RESPONSE_FORMAT", "pcm")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
