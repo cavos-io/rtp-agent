@@ -3200,6 +3200,23 @@ func TestDefaultConfigFromEnvAcceptsTelnyxTTSFallbackProvider(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvAcceptsGroqTTSFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "groq")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("GROQ_API_KEY", "test-groq-key")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "playai-tts")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "Fritz-PlayAI")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
+		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	}
+}
+
 func TestEvaluateSessionReturnsEvaluationSummary(t *testing.T) {
 	baseAgent := agent.NewAgent("test")
 	session := agent.NewAgentSession(baseAgent, nil, agent.AgentSessionOptions{})
