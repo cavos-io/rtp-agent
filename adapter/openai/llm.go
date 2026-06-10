@@ -24,6 +24,7 @@ const defaultDeepSeekOpenAILLMModel = "deepseek-chat"
 const defaultFireworksOpenAILLMModel = "accounts/fireworks/models/llama-v3p3-70b-instruct"
 const defaultPerplexityOpenAILLMModel = "llama-3.1-sonar-small-128k-chat"
 const defaultTogetherOpenAILLMModel = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
+const defaultTelnyxOpenAILLMModel = "meta-llama/Meta-Llama-3.1-70B-Instruct"
 const defaultOllamaOpenAILLMModel = "llama3.1"
 const defaultCometAPIOpenAILLMModel = "gpt-5-chat-latest"
 const defaultOctoAIOpenAILLMModel = "llama-2-13b-chat"
@@ -42,6 +43,7 @@ const (
 	fireworksAPIKeyEnv     = "FIREWORKS_API_KEY"
 	perplexityAPIKeyEnv    = "PERPLEXITY_API_KEY"
 	togetherAPIKeyEnv      = "TOGETHER_API_KEY"
+	telnyxAPIKeyEnv        = "TELNYX_API_KEY"
 	cometAPIKeyEnv         = "COMETAPI_API_KEY"
 	octoAIAPIKeyEnv        = "OCTOAI_TOKEN"
 	sambaNovaAPIKeyEnv     = "SAMBANOVA_API_KEY"
@@ -54,6 +56,7 @@ const defaultDeepSeekOpenAIBaseURL = "https://api.deepseek.com/v1"
 const defaultFireworksOpenAIBaseURL = "https://api.fireworks.ai/inference/v1"
 const defaultPerplexityOpenAIBaseURL = "https://api.perplexity.ai"
 const defaultTogetherOpenAIBaseURL = "https://api.together.xyz/v1"
+const defaultTelnyxOpenAIBaseURL = "https://api.telnyx.com/v2/ai"
 const defaultOllamaOpenAIBaseURL = "http://localhost:11434/v1"
 const defaultCometAPIOpenAIBaseURL = "https://api.cometapi.com/v1/"
 const defaultOctoAIOpenAIBaseURL = "https://text.octoai.run/v1"
@@ -427,6 +430,19 @@ func NewTogetherOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenA
 		return nil, fmt.Errorf("together AI API key is required, either as argument or set TOGETHER_API_KEY environmental variable")
 	}
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultTogetherOpenAIBaseURL, nil, opts...), nil
+}
+
+func NewTelnyxOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+	if model == "" {
+		model = defaultTelnyxOpenAILLMModel
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(telnyxAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("telnyx AI API key is required, either as argument or set TELNYX_API_KEY environmental variable")
+	}
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultTelnyxOpenAIBaseURL, nil, opts...), nil
 }
 
 func NewOllamaOpenAILLM(model string, opts ...OpenAILLMOption) *OpenAILLM {

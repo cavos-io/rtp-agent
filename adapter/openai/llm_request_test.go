@@ -387,6 +387,46 @@ func TestNewTogetherOpenAILLMRequiresAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewTelnyxOpenAILLMDefaultsMatchReference(t *testing.T) {
+	t.Setenv(telnyxAPIKeyEnv, "env-telnyx-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewTelnyxOpenAILLM("", "", withOpenAILLMHTTPClient(capture))
+	if err != nil {
+		t.Fatalf("NewTelnyxOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "meta-llama/Meta-Llama-3.1-70B-Instruct" {
+		t.Fatalf("Model = %q, want Telnyx reference model", model.Model())
+	}
+	if model.Provider() != "api.telnyx.com" {
+		t.Fatalf("Provider() = %q, want Telnyx endpoint host", model.Provider())
+	}
+	if capture.authorization != "Bearer env-telnyx-key" {
+		t.Fatalf("Authorization = %q, want Telnyx bearer key", capture.authorization)
+	}
+	if !strings.Contains(capture.requestURL, "/v2/ai/chat/completions") {
+		t.Fatalf("request URL = %s, want Telnyx OpenAI-compatible chat completions route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestBody, `"model":"meta-llama/Meta-Llama-3.1-70B-Instruct"`) {
+		t.Fatalf("request body = %s, want default Telnyx model", capture.requestBody)
+	}
+}
+
+func TestNewTelnyxOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(telnyxAPIKeyEnv, "")
+
+	_, err := NewTelnyxOpenAILLM("", "")
+	if err == nil || err.Error() != "telnyx AI API key is required, either as argument or set TELNYX_API_KEY environmental variable" {
+		t.Fatalf("NewTelnyxOpenAILLM error = %v, want Telnyx API key required", err)
+	}
+}
+
 func TestNewOllamaOpenAILLMDefaultsMatchReference(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{
 		statusCode:   http.StatusBadRequest,
