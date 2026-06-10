@@ -89,6 +89,11 @@ func NewTelnyxSTT(apiKey string, opts ...TelnyxSTTOption) *TelnyxSTT {
 }
 
 func (s *TelnyxSTT) Label() string { return "telnyx.STT" }
+func (s *TelnyxSTT) Model() string { return s.transcriptionEngine }
+func (s *TelnyxSTT) Provider() string {
+	return "telnyx"
+}
+
 func (s *TelnyxSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:        true,

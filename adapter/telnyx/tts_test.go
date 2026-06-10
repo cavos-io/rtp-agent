@@ -23,6 +23,12 @@ func TestTelnyxTTSDefaultsMatchReference(t *testing.T) {
 	if provider.SampleRate() != 16000 {
 		t.Fatalf("sample rate = %d, want 16000", provider.SampleRate())
 	}
+	if got := tts.Model(provider); got != "Telnyx.NaturalHD.astra" {
+		t.Fatalf("model metadata = %q, want reference voice", got)
+	}
+	if got := tts.Provider(provider); got != "telnyx" {
+		t.Fatalf("provider metadata = %q, want telnyx", got)
+	}
 	if !provider.Capabilities().Streaming {
 		t.Fatalf("streaming = false, want true")
 	}
