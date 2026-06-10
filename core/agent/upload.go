@@ -178,8 +178,8 @@ func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *Se
 		if report.Tagger != nil {
 			attrs["session.tags"] = report.Tagger.Tags()
 		}
-		if report.Usage != nil {
-			attrs["usage"] = usageSummaryToDict(report.Usage)
+		if len(report.ModelUsage) > 0 {
+			attrs["usage"] = modelUsageToDict(report.ModelUsage)
 		}
 		recordUploadTelemetryEvent(ctx, "session_report", "session report", attrs)
 	}

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
@@ -260,6 +261,58 @@ func TestUploadSessionReportRecordsSessionTagsSorted(t *testing.T) {
 	want := []string{"alpha:first", "appointment:booked", "language:es", "zeta:true"}
 	if !slices.Equal(tags, want) {
 		t.Fatalf("session.tags = %#v, want sorted %#v", tags, want)
+	}
+}
+
+func TestUploadSessionReportRecordsModelUsage(t *testing.T) {
+	oldRecord := recordUploadTelemetryEvent
+	var events []uploadTelemetryEvent
+	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
+	}
+	defer func() { recordUploadTelemetryEvent = oldRecord }()
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Logs: true}
+	report.Usage = &telemetry.UsageSummary{LLMPromptTokens: 99}
+	report.ModelUsage = []telemetry.ModelUsage{
+		&telemetry.LLMModelUsage{
+			Provider:          "openai",
+			Model:             "gpt-report",
+			InputTokens:       12,
+			InputCachedTokens: 3,
+			OutputTokens:      7,
+		},
+	}
+
+	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("telemetry events = %#v, want one session report event", events)
+	}
+	usage, ok := events[0].attrs["usage"].([]map[string]any)
+	if !ok {
+		t.Fatalf("usage = %T, want []map[string]any", events[0].attrs["usage"])
+	}
+	if len(usage) != 1 {
+		t.Fatalf("usage = %#v, want one model usage entry", usage)
+	}
+	entry := usage[0]
+	for key, want := range map[string]any{
+		"type":                "llm_usage",
+		"provider":            "openai",
+		"model":               "gpt-report",
+		"input_tokens":        12,
+		"input_cached_tokens": 3,
+		"output_tokens":       7,
+	} {
+		if entry[key] != want {
+			t.Fatalf("usage[%s] = %#v, want %#v in %#v", key, entry[key], want, entry)
+		}
+	}
+	if _, ok := entry["llm_prompt_tokens"]; ok {
+		t.Fatalf("usage = %#v, want model usage keys not summary keys", usage)
 	}
 }
 
