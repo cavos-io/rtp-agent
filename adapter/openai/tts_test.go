@@ -475,6 +475,26 @@ func TestOpenAITTSDefaultModelUsesSSEStreamFormat(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSSSEStreamHandlesLargeAudioDelta(t *testing.T) {
+	wantAudio := []byte(strings.Repeat("x", 70*1024))
+	sse := `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(wantAudio) + `"}` + "\n\n" +
+		`data: {"type":"speech.audio.done"}` + "\n\n"
+	stream := &openaiTTSChunkedStream{
+		resp:         io.NopCloser(strings.NewReader(sse)),
+		streamFormat: openAITTSStreamFormatSSE,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want large SSE delta decoded", err)
+	}
+	got := audio.Frame.Data
+	if len(got) != len(wantAudio) || got[0] != 'x' || got[len(got)-1] != 'x' {
+		t.Fatalf("audio bytes length/sample = %d/%q/%q, want %d x bytes", len(got), got[0], got[len(got)-1], len(wantAudio))
+	}
+}
+
 func TestOpenAITTSAudioModelsUseAudioStreamFormat(t *testing.T) {
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		body, err := io.ReadAll(r.Body)

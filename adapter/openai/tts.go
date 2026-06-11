@@ -34,6 +34,7 @@ type OpenAITTS struct {
 const (
 	openAITTSStreamFormatAudio = "audio"
 	openAITTSStreamFormatSSE   = "sse"
+	openAITTSMaxSSELineBytes   = 16 * 1024 * 1024
 )
 
 type OpenAITTSOption func(*OpenAITTS)
@@ -286,6 +287,7 @@ func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
 func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 	if s.scanner == nil {
 		s.scanner = bufio.NewScanner(s.resp)
+		s.scanner.Buffer(make([]byte, 0, 64*1024), openAITTSMaxSSELineBytes)
 	}
 	for s.scanner.Scan() {
 		line := strings.TrimSpace(s.scanner.Text())
