@@ -33,6 +33,8 @@ type mcpAvailability interface {
 	Initialized() bool
 }
 
+const mcpMaxStdioLineBytes = 16 * 1024 * 1024
+
 type MCPServerHTTP struct {
 	URL           string
 	TransportType string
@@ -715,6 +717,7 @@ func (s *MCPServerStdio) sendNotification(method string, params interface{}) err
 func (s *MCPServerStdio) readLoop() {
 	defer s.handleTransportClosed("MCP stdio transport closed")
 	scanner := bufio.NewScanner(s.stdout)
+	scanner.Buffer(make([]byte, 0, 64*1024), mcpMaxStdioLineBytes)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		var resp jsonRPCResponse

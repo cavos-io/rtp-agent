@@ -717,6 +717,46 @@ func TestMCPServerStdioPreservesToolMetaInFunctionSchema(t *testing.T) {
 	}
 }
 
+func TestMCPServerStdioReadLoopHandlesLargeJSONRPCLine(t *testing.T) {
+	server := NewMCPServerStdio("", nil)
+	reader, writer := io.Pipe()
+	server.stdout = reader
+	responseCh := make(chan *jsonRPCResponse, 1)
+	server.pending[1] = responseCh
+	go server.readLoop()
+	defer reader.Close()
+
+	largeText := strings.Repeat("x", 70*1024)
+	response, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"result": map[string]any{
+			"content": []map[string]any{{"type": "text", "text": largeText}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	response = append(response, '\n')
+	if _, err := writer.Write(response); err != nil {
+		t.Fatalf("write JSON-RPC response: %v", err)
+	}
+
+	select {
+	case resp := <-responseCh:
+		if resp.Error != nil {
+			t.Fatalf("response error = %#v, want large JSON-RPC line decoded", resp.Error)
+		}
+		if !strings.Contains(string(resp.Result), largeText) {
+			t.Fatalf("response result length = %d, want large payload", len(resp.Result))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for large JSON-RPC response")
+	}
+
+	_ = writer.Close()
+}
+
 func TestMCPServerStdioInitializePassesEnvAndCwd(t *testing.T) {
 	tmpDir := t.TempDir()
 	scriptPath := filepath.Join(tmpDir, "mcp-env-cwd-test.sh")
