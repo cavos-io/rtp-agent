@@ -1244,6 +1244,7 @@ type fallbackLLMStream struct {
 	activeStream LLMStream
 	activeCancel context.CancelFunc
 	activeIndex  int
+	activeCtxSet bool
 	retries      map[int]int
 	outputSent   bool
 	closed       bool
@@ -1252,6 +1253,13 @@ type fallbackLLMStream struct {
 func (s *fallbackLLMStream) ChatCtx() *ChatContext {
 	if s == nil {
 		return nil
+	}
+	if s.activeCtxSet {
+		if streamWithChatCtx, ok := s.activeStream.(interface{ ChatCtx() *ChatContext }); ok {
+			if chatCtx := streamWithChatCtx.ChatCtx(); chatCtx != nil {
+				return chatCtx
+			}
+		}
 	}
 	return s.chatCtx
 }
@@ -1334,6 +1342,7 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 				s.activeStream = stream
 				s.activeCancel = cancel
 				s.activeIndex = i
+				s.activeCtxSet = false
 				return nil
 			}
 			cancel()
@@ -1377,6 +1386,7 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 	for {
 		chunk, err := s.activeStream.Next()
 		if err == nil {
+			s.activeCtxSet = true
 			if chunkHasVisibleOutput(chunk) {
 				s.outputSent = true
 			}
@@ -1478,6 +1488,7 @@ func (s *fallbackLLMStream) closeActive() {
 		_ = s.activeStream.Close()
 		s.activeStream = nil
 	}
+	s.activeCtxSet = false
 	if s.activeCancel != nil {
 		s.activeCancel()
 		s.activeCancel = nil

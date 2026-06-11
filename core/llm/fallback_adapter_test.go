@@ -108,8 +108,15 @@ func TestFallbackAdapterReportsReferenceMetadata(t *testing.T) {
 }
 
 func TestFallbackAdapterStreamExposesChatContext(t *testing.T) {
+	providerChatCtx := NewChatContext()
+	providerChatCtx.AddMessage(ChatMessageArgs{Role: ChatRoleAssistant, Text: "provider"})
 	adapter := NewFallbackAdapter([]LLM{
-		&fakeFallbackLLM{stream: &fakeFallbackStream{}},
+		&fakeFallbackLLM{stream: &fakeFallbackStream{
+			chatCtx: providerChatCtx,
+			events: []fakeFallbackEvent{
+				{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "ok"}}},
+			},
+		}},
 	})
 	chatCtx := NewChatContext()
 	chatCtx.AddMessage(ChatMessageArgs{Role: ChatRoleUser, Text: "hello"})
@@ -126,6 +133,13 @@ func TestFallbackAdapterStreamExposesChatContext(t *testing.T) {
 	}
 	if got := chatCtxStream.ChatCtx(); got != chatCtx {
 		t.Fatalf("ChatCtx() = %p, want original context %p", got, chatCtx)
+	}
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := chatCtxStream.ChatCtx(); got != providerChatCtx {
+		t.Fatalf("ChatCtx() after first chunk = %p, want provider context %p", got, providerChatCtx)
 	}
 }
 
@@ -989,9 +1003,10 @@ type fakeFallbackEvent struct {
 }
 
 type fakeFallbackStream struct {
-	events []fakeFallbackEvent
-	index  int
-	closed bool
+	events  []fakeFallbackEvent
+	chatCtx *ChatContext
+	index   int
+	closed  bool
 }
 
 func (f *fakeFallbackStream) Next() (*ChatChunk, error) {
@@ -1009,6 +1024,10 @@ func (f *fakeFallbackStream) Next() (*ChatChunk, error) {
 func (f *fakeFallbackStream) Close() error {
 	f.closed = true
 	return nil
+}
+
+func (f *fakeFallbackStream) ChatCtx() *ChatContext {
+	return f.chatCtx
 }
 
 func waitForFallbackCalls(t *testing.T, llm *fakeFallbackLLM, calls int) {
