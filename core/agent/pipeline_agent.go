@@ -775,12 +775,20 @@ func (va *PipelineAgent) forwardAgentOutputTranscription(session *AgentSession, 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		var transcript strings.Builder
 		for text := range syncer.EventCh() {
 			if text == "" {
 				continue
 			}
+			transcript.WriteString(text)
 			session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
 				Transcript: text,
+			})
+		}
+		if transcript.Len() > 0 {
+			session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
+				Transcript: strings.TrimSpace(transcript.String()),
+				IsFinal:    true,
 			})
 		}
 	}()
@@ -791,12 +799,20 @@ func (va *PipelineAgent) forwardAlignedAgentOutputTranscription(session *AgentSe
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		var transcript strings.Builder
 		for timedText := range timedTextCh {
 			if timedText.Text == "" {
 				continue
 			}
+			transcript.WriteString(timedText.Text)
 			session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
 				Transcript: timedText.Text,
+			})
+		}
+		if transcript.Len() > 0 {
+			session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
+				Transcript: strings.TrimSpace(transcript.String()),
+				IsFinal:    true,
 			})
 		}
 	}()

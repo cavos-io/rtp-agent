@@ -959,6 +959,9 @@ func (s *ttsStream) readError(err error) error {
 	if !errors.As(err, &closeErr) {
 		return err
 	}
+	if closeErr.Code == websocket.CloseNormalClosure && s.audioFrames > 0 {
+		return io.EOF
+	}
 	return fmt.Errorf(
 		"slng tts websocket closed before completion: %w (model=%s audio_frames=%d audio_bytes=%d text_messages=%d last_message_type=%q)",
 		err,

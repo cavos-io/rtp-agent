@@ -3,6 +3,8 @@ package slng
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -193,8 +195,8 @@ func TestSLNGTTSReceivedEventParsesReferenceShapes(t *testing.T) {
 func TestSLNGTTSStreamUnexpectedCloseReportsAudioStats(t *testing.T) {
 	stream := &ttsStream{
 		model:           "elevenlabs/eleven-flash:2.5",
-		audioFrames:     1,
-		audioBytes:      4,
+		audioFrames:     0,
+		audioBytes:      0,
 		textMessages:    2,
 		lastMessageType: "audio_chunk",
 	}
@@ -205,14 +207,29 @@ func TestSLNGTTSStreamUnexpectedCloseReportsAudioStats(t *testing.T) {
 		"slng tts websocket closed before completion",
 		"websocket: close 1000 (normal)",
 		"model=elevenlabs/eleven-flash:2.5",
-		"audio_frames=1",
-		"audio_bytes=4",
+		"audio_frames=0",
+		"audio_bytes=0",
 		"text_messages=2",
 		`last_message_type="audio_chunk"`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("error = %q, want substring %q", got, want)
 		}
+	}
+}
+
+func TestSLNGTTSStreamNormalCloseAfterAudioReturnsEOF(t *testing.T) {
+	stream := &ttsStream{
+		model:           "elevenlabs/eleven-flash:2.5",
+		audioFrames:     3,
+		audioBytes:      93622,
+		textMessages:    4,
+		lastMessageType: "text/unknown",
+	}
+
+	err := stream.readError(&websocket.CloseError{Code: websocket.CloseNormalClosure, Text: ""})
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("readError() = %v, want io.EOF", err)
 	}
 }
 
