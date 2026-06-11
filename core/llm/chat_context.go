@@ -660,8 +660,12 @@ func ChatContextFromDict(data map[string]any) (*ChatContext, error) {
 }
 
 func (c *ChatContext) FromDict(data map[string]any) error {
-	if _, ok := data["items"]; !ok {
+	items, ok := data["items"]
+	if !ok {
 		return fmt.Errorf("items is required")
+	}
+	if items == nil {
+		return fmt.Errorf("items must be a list")
 	}
 	encoded, err := json.Marshal(data)
 	if err != nil {
