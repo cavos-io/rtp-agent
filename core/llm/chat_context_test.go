@@ -1552,6 +1552,24 @@ func TestChatContextUnmarshalJSONRejectsUnknownItemType(t *testing.T) {
 	}
 }
 
+func TestChatContextUnmarshalJSONRejectsMissingItems(t *testing.T) {
+	for name, data := range map[string][]byte{
+		"missing": []byte(`{}`),
+		"null":    []byte(`{"items":null}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := NewChatContext()
+			ctx.Append(&ChatMessage{ID: "existing", Role: ChatRoleUser, Content: []ChatContent{{Text: "keep"}}})
+			if err := json.Unmarshal(data, ctx); err == nil {
+				t.Fatal("UnmarshalJSON() error = nil, want items error")
+			}
+			if len(ctx.Items) != 1 {
+				t.Fatalf("len(items) after rejected UnmarshalJSON = %d, want existing item preserved", len(ctx.Items))
+			}
+		})
+	}
+}
+
 func TestChatContextFromDictRestoresContext(t *testing.T) {
 	data := map[string]any{
 		"items": []map[string]any{

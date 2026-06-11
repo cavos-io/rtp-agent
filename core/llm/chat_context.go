@@ -679,14 +679,17 @@ func (c *ChatContext) FromDict(data map[string]any) error {
 
 func (c *ChatContext) UnmarshalJSON(data []byte) error {
 	var decoded struct {
-		Items []json.RawMessage `json:"items"`
+		Items *[]json.RawMessage `json:"items"`
 	}
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
 	}
+	if decoded.Items == nil {
+		return fmt.Errorf("items is required")
+	}
 
-	items := make([]ChatItem, 0, len(decoded.Items))
-	for _, rawItem := range decoded.Items {
+	items := make([]ChatItem, 0, len(*decoded.Items))
+	for _, rawItem := range *decoded.Items {
 		item, err := chatItemFromJSON(rawItem)
 		if err != nil {
 			return err
