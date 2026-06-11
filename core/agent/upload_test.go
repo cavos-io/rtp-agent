@@ -2,9 +2,11 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -22,6 +24,30 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
+
+func multipartPartsFromRequest(t *testing.T, req *http.Request) map[string][]byte {
+	t.Helper()
+	reader, err := req.MultipartReader()
+	if err != nil {
+		t.Fatalf("MultipartReader: %v", err)
+	}
+	parts := make(map[string][]byte)
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("NextPart: %v", err)
+		}
+		data, err := io.ReadAll(part)
+		if err != nil {
+			t.Fatalf("ReadAll multipart part: %v", err)
+		}
+		parts[part.FormName()] = data
+	}
+	return parts
+}
 
 func TestUploadSessionReportUsesObservabilityWriteGrant(t *testing.T) {
 	const apiSecret = "secret"
@@ -488,6 +514,64 @@ func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
 	}
 	if events[2].severity != "error" {
 		t.Fatalf("function output event severity = %q, want error", events[2].severity)
+	}
+}
+
+func TestUploadSessionReportSanitizesTranscriptChatHistory(t *testing.T) {
+	oldClient := recordingUploadHTTPClient
+	oldRecord := recordUploadTelemetryEvent
+	oldRecordAt := recordUploadTelemetryEventAt
+	oldRecordWithOptions := recordUploadTelemetryEventWithOptions
+	var events []uploadTelemetryEvent
+	var uploadedChatHistory map[string]any
+	recordUploadTelemetryEvent = func(_ context.Context, eventType string, body string, attrs map[string]interface{}) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs})
+	}
+	recordUploadTelemetryEventAt = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, timestamp time.Time) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: timestamp})
+	}
+	recordUploadTelemetryEventWithOptions = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, options telemetry.ChatEventOptions) {
+		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: options.Timestamp, severity: options.SeverityText})
+	}
+	recordingUploadHTTPClient = &http.Client{Transport: recordingUploadRoundTripper(func(req *http.Request) (*http.Response, error) {
+		parts := multipartPartsFromRequest(t, req)
+		if err := json.Unmarshal(parts["chat_history"], &uploadedChatHistory); err != nil {
+			t.Fatalf("unmarshal uploaded chat_history: %v", err)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(""))}, nil
+	})}
+	defer func() {
+		recordingUploadHTTPClient = oldClient
+		recordUploadTelemetryEvent = oldRecord
+		recordUploadTelemetryEventAt = oldRecordAt
+		recordUploadTelemetryEventWithOptions = oldRecordWithOptions
+	}()
+
+	instructions := "be helpful"
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Transcript: true}
+	report.RoomID = "RM_chat"
+	report.ChatHistory.Append(&llm.ChatMessage{ID: "empty", Role: llm.ChatRoleUser})
+	report.ChatHistory.Append(&llm.ChatMessage{ID: "blank", Role: llm.ChatRoleSystem, Content: []llm.ChatContent{{Text: ""}}})
+	report.ChatHistory.Append(&llm.ChatMessage{ID: "real", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}})
+	report.ChatHistory.Append(&llm.AgentConfigUpdate{ID: "config-1", Instructions: &instructions})
+	report.ChatHistory.Append(&llm.AgentConfigUpdate{ID: "config-1", Instructions: &instructions})
+
+	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v", err)
+	}
+
+	items := uploadedChatHistory["items"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("uploaded chat_history items = %#v, want real message and config update", items)
+	}
+	if len(events) != 3 {
+		t.Fatalf("telemetry events = %#v, want session report plus two sanitized chat items", events)
+	}
+	gotIDs := []string{report.ChatHistory.Items[0].GetID(), report.ChatHistory.Items[1].GetID()}
+	wantIDs := []string{"real", "config-1"}
+	if !reflect.DeepEqual(gotIDs, wantIDs) {
+		t.Fatalf("report ChatHistory ids = %#v, want %#v", gotIDs, wantIDs)
 	}
 }
 

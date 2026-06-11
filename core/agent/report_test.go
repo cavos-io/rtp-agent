@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -14,7 +16,7 @@ import (
 func TestNewSessionReportUsesSessionRecordedEventsAndChatHistory(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})
-	session.ChatCtx.Append(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleUser})
+	session.ChatCtx.Append(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}})
 	cause := errors.New("provider failed")
 	session.EmitError(ErrorEvent{Error: cause, Source: "llm"})
 
@@ -44,7 +46,7 @@ func TestNewSessionReportUsesSessionRecordedEventsAndChatHistory(t *testing.T) {
 func TestNewSessionReportCopiesSessionChatHistory(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
-	session.ChatCtx.Append(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleUser})
+	session.ChatCtx.Append(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}})
 
 	report := NewSessionReport(session)
 	session.ChatCtx.Append(&llm.ChatMessage{ID: "msg_2", Role: llm.ChatRoleAssistant})
@@ -71,7 +73,7 @@ func TestNewSessionReportFromNilSessionReturnsEmptyReport(t *testing.T) {
 func TestSessionReportToDictSkipsMetricsCollectedEvents(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})
-	session.ChatCtx.Append(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleUser})
+	session.ChatCtx.Append(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}})
 	session.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "metrics_req", PromptTokens: 7})
 	session.EmitError(ErrorEvent{Error: errors.New("failed"), Source: "llm"})
 
@@ -144,6 +146,140 @@ func TestSessionReportToDictSkipsMetricsCollectedEvents(t *testing.T) {
 		if eventMap["type"] == "metrics_collected" {
 			t.Fatalf("encoded events contained metrics_collected: %#v", encodedEvents)
 		}
+	}
+}
+
+func TestSessionReportToDictFiltersEmptyMessagesAndDuplicateConfigUpdates(t *testing.T) {
+	report := NewSessionReport(nil)
+	now := time.Unix(10, 0)
+	instructions := "be helpful"
+	report.ChatHistory.Append(&llm.ChatMessage{
+		ID:        "empty-parts",
+		Role:      llm.ChatRoleUser,
+		CreatedAt: now,
+	})
+	report.ChatHistory.Append(&llm.ChatMessage{
+		ID:        "empty-text",
+		Role:      llm.ChatRoleSystem,
+		Content:   []llm.ChatContent{{Text: ""}},
+		CreatedAt: now,
+	})
+	report.ChatHistory.Append(&llm.ChatMessage{
+		ID:        "real-user",
+		Role:      llm.ChatRoleUser,
+		Content:   []llm.ChatContent{{Text: " Hello?"}},
+		CreatedAt: now,
+	})
+	report.ChatHistory.Append(&llm.AgentConfigUpdate{
+		ID:           "config-1",
+		Instructions: &instructions,
+		CreatedAt:    now,
+	})
+	report.ChatHistory.Append(&llm.AgentConfigUpdate{
+		ID:           "config-1",
+		Instructions: &instructions,
+		CreatedAt:    now,
+	})
+
+	data := report.ToDict()
+	chatHistory := data["chat_history"].(map[string]any)
+	items := chatHistory["items"].([]map[string]any)
+	gotIDs := make([]string, 0, len(items))
+	for _, item := range items {
+		gotIDs = append(gotIDs, item["id"].(string))
+	}
+	wantIDs := []string{"real-user", "config-1"}
+	if !reflect.DeepEqual(gotIDs, wantIDs) {
+		t.Fatalf("chat history ids = %#v, want %#v; items=%#v", gotIDs, wantIDs, items)
+	}
+}
+
+func TestNewSessionReportSanitizesChatHistoryForPostProcessConsumers(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	now := time.Unix(10, 0)
+	instructions := "be helpful"
+	session.ChatCtx.Append(&llm.ChatMessage{
+		ID:        "empty-parts",
+		Role:      llm.ChatRoleUser,
+		CreatedAt: now,
+	})
+	session.ChatCtx.Append(&llm.ChatMessage{
+		ID:        "empty-text",
+		Role:      llm.ChatRoleSystem,
+		Content:   []llm.ChatContent{{Text: ""}},
+		CreatedAt: now,
+	})
+	session.ChatCtx.Append(&llm.ChatMessage{
+		ID:        "real-user",
+		Role:      llm.ChatRoleUser,
+		Content:   []llm.ChatContent{{Text: " Hello?"}},
+		CreatedAt: now,
+	})
+	session.ChatCtx.Append(&llm.AgentConfigUpdate{
+		ID:           "config-1",
+		Instructions: &instructions,
+		CreatedAt:    now,
+	})
+	session.ChatCtx.Append(&llm.AgentConfigUpdate{
+		ID:           "config-1",
+		Instructions: &instructions,
+		CreatedAt:    now,
+	})
+
+	report := NewSessionReport(session)
+
+	gotIDs := make([]string, 0, len(report.ChatHistory.Items))
+	for _, item := range report.ChatHistory.Items {
+		gotIDs = append(gotIDs, item.GetID())
+	}
+	wantIDs := []string{"real-user", "config-1"}
+	if !reflect.DeepEqual(gotIDs, wantIDs) {
+		t.Fatalf("report ChatHistory ids = %#v, want %#v", gotIDs, wantIDs)
+	}
+}
+
+func TestSessionReportToDictSanitizesChatHistoryForLaterConsumers(t *testing.T) {
+	report := NewSessionReport(nil)
+	now := time.Unix(10, 0)
+	instructions := "be helpful"
+	report.ChatHistory.Append(&llm.ChatMessage{
+		ID:        "empty-parts",
+		Role:      llm.ChatRoleUser,
+		CreatedAt: now,
+	})
+	report.ChatHistory.Append(&llm.ChatMessage{
+		ID:        "empty-text",
+		Role:      llm.ChatRoleSystem,
+		Content:   []llm.ChatContent{{Text: ""}},
+		CreatedAt: now,
+	})
+	report.ChatHistory.Append(&llm.ChatMessage{
+		ID:        "real-user",
+		Role:      llm.ChatRoleUser,
+		Content:   []llm.ChatContent{{Text: " Hello?"}},
+		CreatedAt: now,
+	})
+	report.ChatHistory.Append(&llm.AgentConfigUpdate{
+		ID:           "config-1",
+		Instructions: &instructions,
+		CreatedAt:    now,
+	})
+	report.ChatHistory.Append(&llm.AgentConfigUpdate{
+		ID:           "config-1",
+		Instructions: &instructions,
+		CreatedAt:    now,
+	})
+
+	report.ToDict()
+
+	gotIDs := make([]string, 0, len(report.ChatHistory.Items))
+	for _, item := range report.ChatHistory.Items {
+		gotIDs = append(gotIDs, item.GetID())
+	}
+	wantIDs := []string{"real-user", "config-1"}
+	if !reflect.DeepEqual(gotIDs, wantIDs) {
+		t.Fatalf("report ChatHistory ids after ToDict = %#v, want %#v", gotIDs, wantIDs)
 	}
 }
 

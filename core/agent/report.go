@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -56,7 +57,7 @@ func NewSessionReport(sessions ...*AgentSession) *SessionReport {
 
 	session := sessions[0]
 	report.Options = session.SessionOptions()
-	report.ChatHistory = session.History().Copy()
+	report.ChatHistory = sanitizeSessionReportChatHistory(session.History().Copy())
 	usage := session.Usage()
 	if !usageSummaryIsZero(usage) {
 		report.Usage = &usage
@@ -96,6 +97,7 @@ func (r *SessionReport) ToDict() map[string]any {
 
 	chatHistory := map[string]any{"items": []map[string]any{}}
 	if r.ChatHistory != nil {
+		r.ChatHistory = sanitizeSessionReportChatHistory(r.ChatHistory)
 		chatHistory = r.ChatHistory.ToDict(llm.ChatContextDictOptions{IncludeTimestamp: true})
 	}
 
@@ -126,6 +128,49 @@ func (r *SessionReport) ToDict() map[string]any {
 	}
 	addTaggerReportFields(out, r.Tagger)
 	return out
+}
+
+func sanitizeSessionReportChatHistory(chatHistory *llm.ChatContext) *llm.ChatContext {
+	if chatHistory == nil {
+		return llm.NewChatContext()
+	}
+	filtered := llm.NewChatContext()
+	seenConfigUpdates := make(map[string]struct{})
+	for _, item := range chatHistory.Items {
+		if item == nil {
+			continue
+		}
+		switch it := item.(type) {
+		case *llm.ChatMessage:
+			if sessionReportChatMessageIsEmpty(it) {
+				continue
+			}
+		case *llm.AgentConfigUpdate:
+			if it.ID != "" {
+				if _, ok := seenConfigUpdates[it.ID]; ok {
+					continue
+				}
+				seenConfigUpdates[it.ID] = struct{}{}
+			}
+		}
+		filtered.Items = append(filtered.Items, item)
+	}
+	return filtered
+}
+
+func sessionReportChatMessageIsEmpty(msg *llm.ChatMessage) bool {
+	if msg == nil || len(msg.Content) == 0 {
+		return true
+	}
+	for _, content := range msg.Content {
+		if strings.TrimSpace(content.Text) != "" {
+			return false
+		}
+		if content.Instructions != nil && strings.TrimSpace(content.Instructions.String()) != "" {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *SessionReport) MarshalJSON() ([]byte, error) {

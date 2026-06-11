@@ -14,9 +14,11 @@ import (
 	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
+	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"github.com/twitchtv/twirp"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -1376,6 +1378,33 @@ func TestJobContextDeleteRoomIgnoresAPIError(t *testing.T) {
 	}
 	if roomAPI.request.Room != "room-a" {
 		t.Fatalf("DeleteRoom() room = %q, want room-a", roomAPI.request.Room)
+	}
+}
+
+func TestJobContextDeleteRoomIgnoresNotFoundWithoutWarning(t *testing.T) {
+	recorder := &roomIORecordingLogger{}
+	oldLogger := logutil.Logger
+	logutil.SetLogger(recorder)
+	t.Cleanup(func() { logutil.SetLogger(oldLogger) })
+
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_delete_room_not_found", Room: &livekit.Room{Name: "room-a"}},
+		"",
+		"",
+		"",
+	)
+	roomAPI := &fakeJobRoomServiceAPI{err: twirp.NewError(twirp.NotFound, "requested room does not exist")}
+	ctx.api = &JobAPI{RoomService: roomAPI}
+
+	resp, err := ctx.DeleteRoom(context.Background(), "")
+	if err != nil {
+		t.Fatalf("DeleteRoom() error = %v, want nil for reference not_found cleanup", err)
+	}
+	if resp == nil {
+		t.Fatal("DeleteRoom() response = nil, want empty response")
+	}
+	if len(recorder.warnMessages) != 0 {
+		t.Fatalf("warn messages = %#v, want none for reference not_found cleanup", recorder.warnMessages)
 	}
 }
 

@@ -14,14 +14,11 @@
         pkgs = import nixpkgs {inherit system;};
 
         libraryDependencies = with pkgs; [
-          ffmpeg
-          libogg
           libopus
           onnxruntime
           opusfile
           portaudio
           pkg-config
-          rnnoise
         ];
 
         soExt =
@@ -29,7 +26,6 @@
           then "dylib"
           else "so";
       in {
-        libDeps = libraryDependencies;
         formatter = pkgs.alejandra;
 
         devShells.default = pkgs.mkShell {
@@ -37,10 +33,7 @@
 
           shellHook = ''
             export CGO_ENABLED=1
-            export GOTOOLCHAIN=auto
-            export ORT_SHARED_LIBRARY_PATH="${pkgs.onnxruntime}/lib/libonnxruntime.${soExt}"
-
-            echo "Nix environment activated: Go $(go version) and C libraries loaded."
+            export ONNXRUNTIME_LIB_PATH="${pkgs.onnxruntime}/lib/libonnxruntime.${soExt}"
           '';
         };
       }
