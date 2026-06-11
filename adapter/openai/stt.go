@@ -497,7 +497,7 @@ func openAIAudioRequest(s *OpenAISTT, reader io.Reader, language string) openai.
 	}
 	req := openai.AudioRequest{
 		Model:    s.model,
-		FilePath: "audio.wav", // Static filename required by API when Reader is used.
+		FilePath: "file.wav", // Static filename required by API when Reader is used.
 		Reader:   reader,
 		Language: requestLanguage,
 		Prompt:   s.prompt,

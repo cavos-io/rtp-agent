@@ -119,8 +119,11 @@ func TestOpenAISTTRecognizeUploadsWAVContainer(t *testing.T) {
 		if len(files) != 1 {
 			t.Fatalf("file parts = %d, want 1", len(files))
 		}
-		if files[0].Filename != "audio.wav" {
-			t.Fatalf("filename = %q, want audio.wav", files[0].Filename)
+		if files[0].Filename != "file.wav" {
+			t.Fatalf("filename = %q, want file.wav", files[0].Filename)
+		}
+		if !strings.HasSuffix(files[0].Filename, ".wav") {
+			t.Fatalf("filename = %q, want wav extension", files[0].Filename)
 		}
 		file, err := files[0].Open()
 		if err != nil {
