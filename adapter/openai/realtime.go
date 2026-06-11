@@ -1838,7 +1838,10 @@ func openAIRealtimeChatMessage(item map[string]any) (*llm.ChatMessage, error) {
 	default:
 		return nil, fmt.Errorf("unsupported role: %s", roleRaw)
 	}
-	contents, _ := item["content"].([]any)
+	contents, ok := item["content"].([]any)
+	if !ok {
+		return nil, fmt.Errorf("content is None")
+	}
 	return &llm.ChatMessage{
 		ID:      id,
 		Role:    role,
