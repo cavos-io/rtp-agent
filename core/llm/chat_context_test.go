@@ -82,6 +82,104 @@ func TestChatContextEmptyMatchesReferenceConstructor(t *testing.T) {
 	}
 }
 
+func TestChatContextInsertAssignsReferenceConfigUpdateID(t *testing.T) {
+	ctx := NewChatContext()
+	config := &AgentConfigUpdate{CreatedAt: time.Unix(10, 0)}
+
+	ctx.Insert(config)
+
+	if config.ID == "" {
+		t.Fatal("AgentConfigUpdate.ID after Insert = empty, want generated item id")
+	}
+	if !strings.HasPrefix(config.ID, "item_") {
+		t.Fatalf("AgentConfigUpdate.ID after Insert = %q, want item_ prefix", config.ID)
+	}
+	if ctx.GetByID(config.ID) != config {
+		t.Fatalf("GetByID(%q) did not return inserted config update", config.ID)
+	}
+}
+
+func TestChatContextInsertAssignsReferenceConfigUpdateCreatedAt(t *testing.T) {
+	ctx := NewChatContext()
+	config := &AgentConfigUpdate{ID: "config"}
+
+	ctx.Insert(config)
+
+	if config.CreatedAt.IsZero() {
+		t.Fatal("AgentConfigUpdate.CreatedAt after Insert is zero, want generated timestamp")
+	}
+}
+
+func TestChatContextAppendAssignsReferenceConfigUpdateDefaults(t *testing.T) {
+	ctx := NewChatContext()
+	config := &AgentConfigUpdate{}
+
+	ctx.Append(config)
+
+	if config.ID == "" {
+		t.Fatal("AgentConfigUpdate.ID after Append = empty, want generated item id")
+	}
+	if !strings.HasPrefix(config.ID, "item_") {
+		t.Fatalf("AgentConfigUpdate.ID after Append = %q, want item_ prefix", config.ID)
+	}
+	if config.CreatedAt.IsZero() {
+		t.Fatal("AgentConfigUpdate.CreatedAt after Append is zero, want generated timestamp")
+	}
+	if ctx.GetByID(config.ID) != config {
+		t.Fatalf("GetByID(%q) did not return appended config update", config.ID)
+	}
+}
+
+func TestChatContextAppendAssignsReferenceItemDefaults(t *testing.T) {
+	ctx := NewChatContext()
+	message := &ChatMessage{Role: ChatRoleUser}
+	call := &FunctionCall{CallID: "call_lookup", Name: "lookup", Arguments: "{}"}
+	output := &FunctionCallOutput{CallID: "call_lookup", Name: "lookup", Output: "ok"}
+	handoff := &AgentHandoff{NewAgentID: "next"}
+
+	ctx.Append(message)
+	ctx.Append(call)
+	ctx.Append(output)
+	ctx.Append(handoff)
+
+	for _, item := range []ChatItem{message, call, output, handoff} {
+		if item.GetID() == "" {
+			t.Fatalf("%s ID after Append = empty, want generated item id", item.GetType())
+		}
+		if !strings.HasPrefix(item.GetID(), "item_") {
+			t.Fatalf("%s ID after Append = %q, want item_ prefix", item.GetType(), item.GetID())
+		}
+		if item.GetCreatedAt().IsZero() {
+			t.Fatalf("%s CreatedAt after Append is zero, want generated timestamp", item.GetType())
+		}
+		if ctx.GetByID(item.GetID()) != item {
+			t.Fatalf("GetByID(%q) did not return appended %s", item.GetID(), item.GetType())
+		}
+	}
+}
+
+func TestChatContextUpsertAssignsReferenceConfigUpdateDefaults(t *testing.T) {
+	ctx := NewChatContext()
+	config := &AgentConfigUpdate{}
+
+	if err := ctx.UpsertItem(config); err != nil {
+		t.Fatalf("UpsertItem error = %v", err)
+	}
+
+	if config.ID == "" {
+		t.Fatal("AgentConfigUpdate.ID after UpsertItem = empty, want generated item id")
+	}
+	if !strings.HasPrefix(config.ID, "item_") {
+		t.Fatalf("AgentConfigUpdate.ID after UpsertItem = %q, want item_ prefix", config.ID)
+	}
+	if config.CreatedAt.IsZero() {
+		t.Fatal("AgentConfigUpdate.CreatedAt after UpsertItem is zero, want generated timestamp")
+	}
+	if ctx.GetByID(config.ID) != config {
+		t.Fatalf("GetByID(%q) did not return upserted config update", config.ID)
+	}
+}
+
 func TestChatContextCopyFiltersReferenceItemTypes(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
@@ -359,6 +457,20 @@ func TestChatMessageTextContentIncludesInstructionsAndPlainText(t *testing.T) {
 	}
 
 	if got, want := message.TextContent(), "voice instructions\nplain text"; got != want {
+		t.Fatalf("TextContent() = %q, want %q", got, want)
+	}
+}
+
+func TestChatMessageTextContentPreservesEmptyStringParts(t *testing.T) {
+	message := &ChatMessage{
+		Role: ChatRoleSystem,
+		Content: []ChatContent{
+			{Text: ""},
+			{Text: "instructions"},
+		},
+	}
+
+	if got, want := message.TextContent(), "\ninstructions"; got != want {
 		t.Fatalf("TextContent() = %q, want %q", got, want)
 	}
 }
@@ -994,6 +1106,30 @@ func TestChatContextToDictUsesReferenceItemShapeAndFilters(t *testing.T) {
 	}
 	if len(content) != 1 || content[0] != "hello" {
 		t.Fatalf("content = %#v, want text-only content", content)
+	}
+}
+
+func TestChatContextToDictPreservesEmptyStringContent(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:   "message",
+			Role: ChatRoleSystem,
+			Content: []ChatContent{
+				{Text: ""},
+				{Text: "instructions"},
+			},
+		},
+	}
+
+	data := ctx.ToDict()
+	items := data["items"].([]map[string]any)
+	content, ok := items[0]["content"].([]any)
+	if !ok {
+		t.Fatalf("content = %#v, want []any", items[0]["content"])
+	}
+	if len(content) != 2 || content[0] != "" || content[1] != "instructions" {
+		t.Fatalf("content = %#v, want empty string followed by instructions", content)
 	}
 }
 

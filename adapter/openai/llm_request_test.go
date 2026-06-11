@@ -60,6 +60,105 @@ func (requestOptionalSchemaTool) Parameters() map[string]any {
 }
 func (requestOptionalSchemaTool) Execute(context.Context, string) (string, error) { return "", nil }
 
+type requestUnionSchemaTool struct{}
+
+func (requestUnionSchemaTool) ID() string          { return "lookup" }
+func (requestUnionSchemaTool) Name() string        { return "lookup" }
+func (requestUnionSchemaTool) Description() string { return "look up information" }
+func (requestUnionSchemaTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"query": map[string]any{
+				"oneOf": []any{
+					map[string]any{"type": "string"},
+					map[string]any{},
+					map[string]any{"type": "integer"},
+				},
+			},
+		},
+		"required": []string{"query"},
+	}
+}
+func (requestUnionSchemaTool) Execute(context.Context, string) (string, error) { return "", nil }
+
+type requestNullableUnionSchemaTool struct{}
+
+func (requestNullableUnionSchemaTool) ID() string          { return "lookup" }
+func (requestNullableUnionSchemaTool) Name() string        { return "lookup" }
+func (requestNullableUnionSchemaTool) Description() string { return "look up information" }
+func (requestNullableUnionSchemaTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"mode": map[string]any{
+				"anyOf": []any{
+					map[string]any{
+						"type": "string",
+						"enum": []any{"fast", "safe"},
+					},
+					map[string]any{"type": "null"},
+				},
+			},
+		},
+		"required": []string{"mode"},
+	}
+}
+func (requestNullableUnionSchemaTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
+
+type requestDefsSchemaTool struct{}
+
+func (requestDefsSchemaTool) ID() string          { return "lookup" }
+func (requestDefsSchemaTool) Name() string        { return "lookup" }
+func (requestDefsSchemaTool) Description() string { return "look up information" }
+func (requestDefsSchemaTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"payload": map[string]any{"$ref": "#/$defs/payload"},
+		},
+		"required": []string{"payload"},
+		"$defs": map[string]any{
+			"payload": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{"type": "string"},
+				},
+			},
+		},
+	}
+}
+func (requestDefsSchemaTool) Execute(context.Context, string) (string, error) { return "", nil }
+
+type requestRefSiblingSchemaTool struct{}
+
+func (requestRefSiblingSchemaTool) ID() string          { return "lookup" }
+func (requestRefSiblingSchemaTool) Name() string        { return "lookup" }
+func (requestRefSiblingSchemaTool) Description() string { return "look up information" }
+func (requestRefSiblingSchemaTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"payload": map[string]any{
+				"$ref":        "#/$defs/payload",
+				"description": "caller payload",
+			},
+		},
+		"required": []string{"payload"},
+		"$defs": map[string]any{
+			"payload": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{"type": "string"},
+				},
+			},
+		},
+	}
+}
+func (requestRefSiblingSchemaTool) Execute(context.Context, string) (string, error) { return "", nil }
+
 func TestNewOpenAILLMUsesEnvironmentAPIKeyAndReferenceDefaultModel(t *testing.T) {
 	t.Setenv(openAIAPIKeyEnv, "env-key")
 
@@ -1772,6 +1871,119 @@ func TestBuildOpenAIChatCompletionRequestNormalizesStrictToolSchema(t *testing.T
 	}
 	if len(types) != 2 || types[0] != "string" || types[1] != "null" {
 		t.Fatalf("properties.variant.type = %#v, want [string null]", types)
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestNormalizesStrictToolSchemaUnions(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4.1-mini", llm.NewChatContext(), &llm.ChatOptions{
+		Tools: []llm.Tool{requestUnionSchemaTool{}},
+	})
+
+	paramsJSON, err := json.Marshal(req.Tools[0].Function.Parameters)
+	if err != nil {
+		t.Fatalf("tool parameters marshal error = %v", err)
+	}
+	var params map[string]any
+	if err := json.Unmarshal(paramsJSON, &params); err != nil {
+		t.Fatalf("tool parameters json error = %v", err)
+	}
+
+	properties := params["properties"].(map[string]any)
+	query := properties["query"].(map[string]any)
+	if _, ok := query["oneOf"]; ok {
+		t.Fatalf("query.oneOf = %#v, want converted away for strict OpenAI schema", query["oneOf"])
+	}
+	anyOf, ok := query["anyOf"].([]any)
+	if !ok {
+		t.Fatalf("query.anyOf = %#v, want anyOf array", query["anyOf"])
+	}
+	if len(anyOf) != 2 {
+		t.Fatalf("query.anyOf = %#v, want two non-empty variants", anyOf)
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestNormalizesStrictToolSchemaNullableUnion(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4.1-mini", llm.NewChatContext(), &llm.ChatOptions{
+		Tools: []llm.Tool{requestNullableUnionSchemaTool{}},
+	})
+
+	paramsJSON, err := json.Marshal(req.Tools[0].Function.Parameters)
+	if err != nil {
+		t.Fatalf("tool parameters marshal error = %v", err)
+	}
+	var params map[string]any
+	if err := json.Unmarshal(paramsJSON, &params); err != nil {
+		t.Fatalf("tool parameters json error = %v", err)
+	}
+
+	properties := params["properties"].(map[string]any)
+	mode := properties["mode"].(map[string]any)
+	if _, ok := mode["anyOf"]; ok {
+		t.Fatalf("mode.anyOf = %#v, want collapsed nullable type", mode["anyOf"])
+	}
+	types, ok := mode["type"].([]any)
+	if !ok || len(types) != 2 || types[0] != "string" || types[1] != "null" {
+		t.Fatalf("mode.type = %#v, want [string null]", mode["type"])
+	}
+	enum, ok := mode["enum"].([]any)
+	if !ok || len(enum) != 3 || enum[0] != "fast" || enum[1] != "safe" || enum[2] != nil {
+		t.Fatalf("mode.enum = %#v, want [fast safe nil]", mode["enum"])
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestNormalizesStrictToolSchemaDefs(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4.1-mini", llm.NewChatContext(), &llm.ChatOptions{
+		Tools: []llm.Tool{requestDefsSchemaTool{}},
+	})
+
+	paramsJSON, err := json.Marshal(req.Tools[0].Function.Parameters)
+	if err != nil {
+		t.Fatalf("tool parameters marshal error = %v", err)
+	}
+	var params map[string]any
+	if err := json.Unmarshal(paramsJSON, &params); err != nil {
+		t.Fatalf("tool parameters json error = %v", err)
+	}
+
+	defs := params["$defs"].(map[string]any)
+	payload := defs["payload"].(map[string]any)
+	if got := payload["additionalProperties"]; got != false {
+		t.Fatalf("$defs.payload.additionalProperties = %#v, want false", got)
+	}
+	required, ok := payload["required"].([]any)
+	if !ok || len(required) != 1 || required[0] != "query" {
+		t.Fatalf("$defs.payload.required = %#v, want [query]", payload["required"])
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestNormalizesStrictToolSchemaRefSiblings(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4.1-mini", llm.NewChatContext(), &llm.ChatOptions{
+		Tools: []llm.Tool{requestRefSiblingSchemaTool{}},
+	})
+
+	paramsJSON, err := json.Marshal(req.Tools[0].Function.Parameters)
+	if err != nil {
+		t.Fatalf("tool parameters marshal error = %v", err)
+	}
+	var params map[string]any
+	if err := json.Unmarshal(paramsJSON, &params); err != nil {
+		t.Fatalf("tool parameters json error = %v", err)
+	}
+
+	properties := params["properties"].(map[string]any)
+	payload := properties["payload"].(map[string]any)
+	if _, ok := payload["$ref"]; ok {
+		t.Fatalf("payload.$ref = %#v, want inlined strict schema", payload["$ref"])
+	}
+	if got := payload["description"]; got != "caller payload" {
+		t.Fatalf("payload.description = %#v, want caller payload", got)
+	}
+	if got := payload["additionalProperties"]; got != false {
+		t.Fatalf("payload.additionalProperties = %#v, want false", got)
+	}
+	required, ok := payload["required"].([]any)
+	if !ok || len(required) != 1 || required[0] != "query" {
+		t.Fatalf("payload.required = %#v, want [query]", payload["required"])
 	}
 }
 

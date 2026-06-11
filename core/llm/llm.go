@@ -221,20 +221,13 @@ type ChatMessage struct {
 func (m *ChatMessage) TextContent() string {
 	var parts []string
 	for _, c := range m.Content {
-		if c.Text != "" {
+		if c.Text != "" || (c.Instructions == nil && c.Image == nil && c.Audio == nil) {
 			parts = append(parts, c.Text)
 		} else if c.Instructions != nil && c.Instructions.String() != "" {
 			parts = append(parts, c.Instructions.String())
 		}
 	}
-	out := ""
-	for _, part := range parts {
-		if out != "" {
-			out += "\n"
-		}
-		out += part
-	}
-	return out
+	return strings.Join(parts, "\n")
 }
 
 type FunctionCall struct {
@@ -324,6 +317,7 @@ func (*ChatContext) Empty() *ChatContext {
 
 func (c *ChatContext) Append(item ChatItem) {
 	c.ensureMutable()
+	ensureChatItemDefaults(item)
 	c.Items = append(c.Items, item)
 
 	// Emit OTLP log event

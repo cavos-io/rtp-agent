@@ -570,6 +570,60 @@ func TestPerformTTSInferenceUsesSynthesizeForNonStreamingTTS(t *testing.T) {
 	}
 }
 
+func TestPerformTTSInferenceErrorsWhenNonStreamingTTSProducesNoAudio(t *testing.T) {
+	provider := &fakeGenerationChunkedTTS{
+		stream: &fakeGenerationChunkedStream{},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "hello"
+	close(textCh)
+
+	data, err := PerformTTSInference(context.Background(), provider, textCh)
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+
+	if _, ok := <-data.AudioCh; ok {
+		t.Fatal("AudioCh emitted audio, want closed stream")
+	}
+	if data.StreamErr == nil {
+		t.Fatal("StreamErr = nil, want no-audio error")
+	}
+	if !strings.Contains(data.StreamErr.Error(), "no audio frames") {
+		t.Fatalf("StreamErr = %v, want no-audio error", data.StreamErr)
+	}
+	if provider.synthesizeText != "hello" {
+		t.Fatalf("synthesize text = %q, want hello", provider.synthesizeText)
+	}
+	if !provider.stream.closed {
+		t.Fatal("chunked stream was not closed")
+	}
+}
+
+func TestPerformTTSInferenceAllowsEmptyTransformedTextWithoutAudio(t *testing.T) {
+	provider := &fakeGenerationChunkedTTS{
+		stream: &fakeGenerationChunkedStream{},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "   "
+	close(textCh)
+
+	data, err := PerformTTSInference(context.Background(), provider, textCh)
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+
+	if _, ok := <-data.AudioCh; ok {
+		t.Fatal("AudioCh emitted audio, want closed stream")
+	}
+	if data.StreamErr != nil {
+		t.Fatalf("StreamErr = %v, want nil for empty transformed text", data.StreamErr)
+	}
+	if provider.synthesizeText != "" {
+		t.Fatalf("synthesize text = %q, want no synthesis call", provider.synthesizeText)
+	}
+}
+
 func TestPerformTTSInferencePreservesNonStreamingTimedTranscript(t *testing.T) {
 	timed := tts.TimedString{Text: "aligned chunk", StartTime: 0.25, EndTime: 0.5}
 	provider := &fakeGenerationChunkedTTS{

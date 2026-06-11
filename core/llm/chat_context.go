@@ -153,8 +153,43 @@ func (c *ChatContext) AddMessage(args ChatMessageArgs) *ChatMessage {
 func (c *ChatContext) Insert(items ...ChatItem) {
 	c.ensureMutable()
 	for _, item := range items {
+		ensureChatItemDefaults(item)
 		idx := c.FindInsertionIndex(item.GetCreatedAt())
 		c.Items = append(c.Items[:idx], append([]ChatItem{item}, c.Items[idx:]...)...)
+	}
+}
+
+func ensureChatItemDefaults(item ChatItem) {
+	now := time.Now()
+	switch it := item.(type) {
+	case *ChatMessage:
+		it.ID = itemIDOrDefault(it.ID)
+		if it.CreatedAt.IsZero() {
+			it.CreatedAt = now
+		}
+	case *FunctionCall:
+		it.ID = itemIDOrDefault(it.ID)
+		if it.CreatedAt.IsZero() {
+			it.CreatedAt = now
+		}
+		if it.Extra == nil {
+			it.Extra = make(map[string]any)
+		}
+	case *FunctionCallOutput:
+		it.ID = itemIDOrDefault(it.ID)
+		if it.CreatedAt.IsZero() {
+			it.CreatedAt = now
+		}
+	case *AgentHandoff:
+		it.ID = itemIDOrDefault(it.ID)
+		if it.CreatedAt.IsZero() {
+			it.CreatedAt = now
+		}
+	case *AgentConfigUpdate:
+		it.ID = itemIDOrDefault(it.ID)
+		if it.CreatedAt.IsZero() {
+			it.CreatedAt = now
+		}
 	}
 }
 
@@ -178,6 +213,7 @@ func (c *ChatContext) IndexByID(itemID string) *int {
 
 func (c *ChatContext) UpsertItem(item ChatItem, options ...ChatContextUpsertOptions) error {
 	c.ensureMutable()
+	ensureChatItemDefaults(item)
 	var opts ChatContextUpsertOptions
 	if len(options) > 0 {
 		opts = options[0]
@@ -946,7 +982,7 @@ func chatItemToDict(item ChatItem, opts ChatContextDictOptions) map[string]any {
 func chatContentToDict(content []ChatContent, opts ChatContextDictOptions) []any {
 	serialized := make([]any, 0, len(content))
 	for _, item := range content {
-		if item.Text != "" {
+		if item.Text != "" || (item.Instructions == nil && item.Image == nil && item.Audio == nil) {
 			serialized = append(serialized, item.Text)
 		}
 		if item.Instructions != nil {

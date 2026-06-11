@@ -33,6 +33,8 @@ type mcpAvailability interface {
 	Initialized() bool
 }
 
+const mcpMaxStdioLineBytes = 16 * 1024 * 1024
+
 type MCPServerHTTP struct {
 	URL           string
 	TransportType string
@@ -313,6 +315,7 @@ type MCPServerStdio struct {
 	msgID   atomic.Int64
 	pending map[int64]chan *jsonRPCResponse
 	mu      sync.Mutex
+	writeMu sync.Mutex
 
 	cacheDirty bool
 	toolsCache []Tool
@@ -667,6 +670,11 @@ func (s *MCPServerStdio) sendRequest(ctx context.Context, method string, params 
 
 	ch := make(chan *jsonRPCResponse, 1)
 	s.mu.Lock()
+	stdin := s.stdin
+	if stdin == nil {
+		s.mu.Unlock()
+		return nil, errors.New("MCP stdio transport closed")
+	}
 	s.pending[id] = ch
 	s.mu.Unlock()
 
@@ -676,7 +684,10 @@ func (s *MCPServerStdio) sendRequest(ctx context.Context, method string, params 
 		s.mu.Unlock()
 	}()
 
-	if _, err := s.stdin.Write(b); err != nil {
+	s.writeMu.Lock()
+	_, err = stdin.Write(b)
+	s.writeMu.Unlock()
+	if err != nil {
 		return nil, err
 	}
 
@@ -708,13 +719,16 @@ func (s *MCPServerStdio) sendNotification(method string, params interface{}) err
 	if stdin == nil {
 		return errors.New("MCP stdio transport closed")
 	}
+	s.writeMu.Lock()
 	_, err = stdin.Write(b)
+	s.writeMu.Unlock()
 	return err
 }
 
 func (s *MCPServerStdio) readLoop() {
 	defer s.handleTransportClosed("MCP stdio transport closed")
 	scanner := bufio.NewScanner(s.stdout)
+	scanner.Buffer(make([]byte, 0, 64*1024), mcpMaxStdioLineBytes)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		var resp jsonRPCResponse
