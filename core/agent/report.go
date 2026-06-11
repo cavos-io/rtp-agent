@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -96,7 +97,7 @@ func (r *SessionReport) ToDict() map[string]any {
 
 	chatHistory := map[string]any{"items": []map[string]any{}}
 	if r.ChatHistory != nil {
-		chatHistory = r.ChatHistory.ToDict(llm.ChatContextDictOptions{IncludeTimestamp: true})
+		chatHistory = sessionReportChatHistoryToDict(r.ChatHistory)
 	}
 
 	out := map[string]any{
@@ -126,6 +127,54 @@ func (r *SessionReport) ToDict() map[string]any {
 	}
 	addTaggerReportFields(out, r.Tagger)
 	return out
+}
+
+func sessionReportChatHistoryToDict(chatHistory *llm.ChatContext) map[string]any {
+	if chatHistory == nil {
+		return map[string]any{"items": []map[string]any{}}
+	}
+	data := chatHistory.ToDict(llm.ChatContextDictOptions{IncludeTimestamp: true})
+	items, ok := data["items"].([]map[string]any)
+	if !ok {
+		return data
+	}
+
+	filtered := make([]map[string]any, 0, len(items))
+	seenConfigUpdates := make(map[string]struct{})
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		switch item["type"] {
+		case "message":
+			if sessionReportMessageItemIsEmpty(item) {
+				continue
+			}
+		case "agent_config_update":
+			id, _ := item["id"].(string)
+			if id != "" {
+				if _, ok := seenConfigUpdates[id]; ok {
+					continue
+				}
+				seenConfigUpdates[id] = struct{}{}
+			}
+		}
+		filtered = append(filtered, item)
+	}
+	data["items"] = filtered
+	return data
+}
+
+func sessionReportMessageItemIsEmpty(item map[string]any) bool {
+	content, ok := item["content"].([]any)
+	if !ok || len(content) == 0 {
+		return true
+	}
+	if len(content) == 1 {
+		text, ok := content[0].(string)
+		return ok && strings.TrimSpace(text) == ""
+	}
+	return false
 }
 
 func (r *SessionReport) MarshalJSON() ([]byte, error) {
