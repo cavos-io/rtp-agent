@@ -130,6 +130,34 @@ func TestChatContextAppendAssignsReferenceConfigUpdateDefaults(t *testing.T) {
 	}
 }
 
+func TestChatContextAppendAssignsReferenceItemDefaults(t *testing.T) {
+	ctx := NewChatContext()
+	message := &ChatMessage{Role: ChatRoleUser}
+	call := &FunctionCall{CallID: "call_lookup", Name: "lookup", Arguments: "{}"}
+	output := &FunctionCallOutput{CallID: "call_lookup", Name: "lookup", Output: "ok"}
+	handoff := &AgentHandoff{NewAgentID: "next"}
+
+	ctx.Append(message)
+	ctx.Append(call)
+	ctx.Append(output)
+	ctx.Append(handoff)
+
+	for _, item := range []ChatItem{message, call, output, handoff} {
+		if item.GetID() == "" {
+			t.Fatalf("%s ID after Append = empty, want generated item id", item.GetType())
+		}
+		if !strings.HasPrefix(item.GetID(), "item_") {
+			t.Fatalf("%s ID after Append = %q, want item_ prefix", item.GetType(), item.GetID())
+		}
+		if item.GetCreatedAt().IsZero() {
+			t.Fatalf("%s CreatedAt after Append is zero, want generated timestamp", item.GetType())
+		}
+		if ctx.GetByID(item.GetID()) != item {
+			t.Fatalf("GetByID(%q) did not return appended %s", item.GetID(), item.GetType())
+		}
+	}
+}
+
 func TestChatContextUpsertAssignsReferenceConfigUpdateDefaults(t *testing.T) {
 	ctx := NewChatContext()
 	config := &AgentConfigUpdate{}

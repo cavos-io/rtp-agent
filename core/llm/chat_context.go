@@ -153,20 +153,43 @@ func (c *ChatContext) AddMessage(args ChatMessageArgs) *ChatMessage {
 func (c *ChatContext) Insert(items ...ChatItem) {
 	c.ensureMutable()
 	for _, item := range items {
-		ensureAgentConfigUpdateDefaults(item)
+		ensureChatItemDefaults(item)
 		idx := c.FindInsertionIndex(item.GetCreatedAt())
 		c.Items = append(c.Items[:idx], append([]ChatItem{item}, c.Items[idx:]...)...)
 	}
 }
 
-func ensureAgentConfigUpdateDefaults(item ChatItem) {
-	config, ok := item.(*AgentConfigUpdate)
-	if !ok {
-		return
-	}
-	config.ID = itemIDOrDefault(config.ID)
-	if config.CreatedAt.IsZero() {
-		config.CreatedAt = time.Now()
+func ensureChatItemDefaults(item ChatItem) {
+	now := time.Now()
+	switch it := item.(type) {
+	case *ChatMessage:
+		it.ID = itemIDOrDefault(it.ID)
+		if it.CreatedAt.IsZero() {
+			it.CreatedAt = now
+		}
+	case *FunctionCall:
+		it.ID = itemIDOrDefault(it.ID)
+		if it.CreatedAt.IsZero() {
+			it.CreatedAt = now
+		}
+		if it.Extra == nil {
+			it.Extra = make(map[string]any)
+		}
+	case *FunctionCallOutput:
+		it.ID = itemIDOrDefault(it.ID)
+		if it.CreatedAt.IsZero() {
+			it.CreatedAt = now
+		}
+	case *AgentHandoff:
+		it.ID = itemIDOrDefault(it.ID)
+		if it.CreatedAt.IsZero() {
+			it.CreatedAt = now
+		}
+	case *AgentConfigUpdate:
+		it.ID = itemIDOrDefault(it.ID)
+		if it.CreatedAt.IsZero() {
+			it.CreatedAt = now
+		}
 	}
 }
 
@@ -190,7 +213,7 @@ func (c *ChatContext) IndexByID(itemID string) *int {
 
 func (c *ChatContext) UpsertItem(item ChatItem, options ...ChatContextUpsertOptions) error {
 	c.ensureMutable()
-	ensureAgentConfigUpdateDefaults(item)
+	ensureChatItemDefaults(item)
 	var opts ChatContextUpsertOptions
 	if len(options) > 0 {
 		opts = options[0]
