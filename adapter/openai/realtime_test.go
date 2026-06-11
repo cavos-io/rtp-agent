@@ -2341,7 +2341,7 @@ func TestOpenAIRealtimeFunctionCallRejectsMissingArgumentsWithReferenceError(t *
 }
 
 func TestOpenAIRealtimeChatItemRejectsUnsupportedItemTypeWithReferenceError(t *testing.T) {
-	_, err := openAIRealtimeChatItem(map[string]any{"type": "audio"})
+	_, err := openAIRealtimeChatItem(map[string]any{"id": "item_123", "type": "audio"})
 	if err == nil {
 		t.Fatal("openAIRealtimeChatItem() error = nil, want unsupported item type error")
 	}
@@ -2361,6 +2361,75 @@ func TestOpenAIRealtimeChatItemRejectsUnsupportedRoleWithReferenceError(t *testi
 	}
 	if got, want := err.Error(), "unsupported role: tool"; got != want {
 		t.Fatalf("openAIRealtimeChatItem() error = %q, want %q", got, want)
+	}
+}
+
+func TestOpenAIRealtimeChatItemRejectsMissingIDWithReferenceError(t *testing.T) {
+	baseItems := []struct {
+		name string
+		item map[string]any
+	}{
+		{
+			name: "message",
+			item: map[string]any{
+				"type":    "message",
+				"role":    "user",
+				"content": []any{},
+			},
+		},
+		{
+			name: "function_call",
+			item: map[string]any{
+				"type":      "function_call",
+				"call_id":   "call_123",
+				"name":      "lookup",
+				"arguments": `{"query":"hello"}`,
+			},
+		},
+		{
+			name: "function_call_output",
+			item: map[string]any{
+				"type":    "function_call_output",
+				"call_id": "call_123",
+				"output":  "Paris",
+			},
+		},
+	}
+	idCases := []struct {
+		name string
+		id   any
+		set  bool
+	}{
+		{name: "missing"},
+		{name: "null", id: nil, set: true},
+		{name: "non_string", id: 123, set: true},
+	}
+	for _, base := range baseItems {
+		for _, idCase := range idCases {
+			t.Run(base.name+"/"+idCase.name, func(t *testing.T) {
+				item := make(map[string]any, len(base.item)+1)
+				for key, value := range base.item {
+					item[key] = value
+				}
+				if idCase.set {
+					item["id"] = idCase.id
+				}
+
+				_, err := openAIRealtimeChatItem(item)
+				if err == nil {
+					t.Fatal("openAIRealtimeChatItem() error = nil, want id is None error")
+				}
+				if got, want := err.Error(), "id is None"; got != want {
+					t.Fatalf("openAIRealtimeChatItem() error = %q, want %q", got, want)
+				}
+				if ev, ok := openAIRealtimeEvent(map[string]any{
+					"type": "conversation.item.added",
+					"item": item,
+				}); ok {
+					t.Fatalf("openAIRealtimeEvent() = %#v, true; want malformed item ignored", ev)
+				}
+			})
+		}
 	}
 }
 

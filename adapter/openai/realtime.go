@@ -1785,6 +1785,9 @@ func openAIRealtimeMetrics(response map[string]any) (*telemetry.RealtimeModelMet
 }
 
 func openAIRealtimeChatItem(item map[string]any) (llm.ChatItem, error) {
+	if _, ok := item["id"].(string); !ok {
+		return nil, fmt.Errorf("id is None")
+	}
 	itemType, _ := item["type"].(string)
 	switch itemType {
 	case "message":
