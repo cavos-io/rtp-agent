@@ -50,6 +50,7 @@ func UploadSessionReport(
 		logger.Logger.Infow("Not a cloud URL, skipping upload", "url", cloudURL)
 		return nil
 	}
+	report.ChatHistory = sanitizeSessionReportChatHistory(report.ChatHistory)
 
 	emitUploadTelemetryEvents(context.Background(), agentName, report)
 
@@ -97,7 +98,11 @@ func UploadSessionReport(
 
 	// 2. Chat history (JSON)
 	if report.RecordingOptions.Transcript {
-		chatJSON, err := json.Marshal(report.ChatHistory)
+		chatJSON, err := json.Marshal(report.ChatHistory.ToDict(llm.ChatContextDictOptions{
+			IncludeImage:     true,
+			IncludeAudio:     true,
+			IncludeTimestamp: true,
+		}))
 		if err != nil {
 			logger.Logger.Errorw("failed to marshal chat history", err)
 		} else {
