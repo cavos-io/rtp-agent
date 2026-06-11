@@ -709,7 +709,7 @@ func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio,
 		}
 		data, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
-			return nil, false, err
+			return nil, false, nil
 		}
 		return &tts.SynthesizedAudio{
 			Frame: &model.AudioFrame{
@@ -727,7 +727,7 @@ func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio,
 		if encoded := slngString(message["audio"]); encoded != "" {
 			data, err := base64.StdEncoding.DecodeString(encoded)
 			if err != nil {
-				return nil, false, err
+				return nil, slngBool(message["isFinal"]), nil
 			}
 			audio := &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{
