@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -933,6 +934,34 @@ func cloneOpenAIAnyMap(src map[string]any) map[string]any {
 	return dst
 }
 
+func cloneOpenAIAnyValue(src any) any {
+	switch value := src.(type) {
+	case map[string]any:
+		return cloneOpenAIAnyMapDeep(value)
+	case []any:
+		dst := make([]any, len(value))
+		for i, item := range value {
+			dst[i] = cloneOpenAIAnyValue(item)
+		}
+		return dst
+	case []string:
+		return append([]string(nil), value...)
+	default:
+		return value
+	}
+}
+
+func cloneOpenAIAnyMapDeep(src map[string]any) map[string]any {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]any, len(src))
+	for key, value := range src {
+		dst[key] = cloneOpenAIAnyValue(value)
+	}
+	return dst
+}
+
 func cloneOpenAIAnyMapSlice(src []map[string]any) []map[string]any {
 	if len(src) == 0 {
 		return nil
@@ -942,6 +971,143 @@ func cloneOpenAIAnyMapSlice(src []map[string]any) []map[string]any {
 		dst = append(dst, cloneOpenAIAnyMap(item))
 	}
 	return dst
+}
+
+func normalizeOpenAIStrictToolSchema(schema map[string]any) map[string]any {
+	strict := cloneOpenAIAnyMapDeep(schema)
+	ensureOpenAIStrictJSONSchema(strict)
+	return strict
+}
+
+func ensureOpenAIStrictJSONSchema(schema map[string]any) {
+	if schema == nil {
+		return
+	}
+
+	if _, ok := schema["default"]; ok {
+		delete(schema, "default")
+		markOpenAISchemaNullable(schema)
+	}
+	delete(schema, "title")
+	delete(schema, "discriminator")
+
+	if schema["type"] == "object" {
+		if _, ok := schema["additionalProperties"]; !ok {
+			schema["additionalProperties"] = false
+		}
+	}
+
+	if properties, ok := schema["properties"].(map[string]any); ok {
+		if len(properties) == 0 {
+			delete(schema, "required")
+		} else {
+			previousRequired := openAIRequiredSet(schema["required"])
+			keys := make([]string, 0, len(properties))
+			for key := range properties {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				propSchema, ok := properties[key].(map[string]any)
+				if !ok {
+					continue
+				}
+				if !previousRequired[key] {
+					markOpenAISchemaNullable(propSchema)
+				}
+				ensureOpenAIStrictJSONSchema(propSchema)
+			}
+			schema["required"] = keys
+		}
+	}
+
+	if items, ok := schema["items"].(map[string]any); ok {
+		ensureOpenAIStrictJSONSchema(items)
+	}
+	for _, key := range []string{"anyOf", "oneOf", "allOf"} {
+		variants, ok := schema[key].([]any)
+		if !ok {
+			continue
+		}
+		for _, variant := range variants {
+			if variantSchema, ok := variant.(map[string]any); ok {
+				ensureOpenAIStrictJSONSchema(variantSchema)
+			}
+		}
+	}
+}
+
+func openAIRequiredSet(required any) map[string]bool {
+	set := map[string]bool{}
+	switch values := required.(type) {
+	case []string:
+		for _, value := range values {
+			set[value] = true
+		}
+	case []any:
+		for _, value := range values {
+			if name, ok := value.(string); ok {
+				set[name] = true
+			}
+		}
+	}
+	return set
+}
+
+func markOpenAISchemaNullable(schema map[string]any) {
+	if schema == nil {
+		return
+	}
+
+	switch typ := schema["type"].(type) {
+	case string:
+		if typ != "null" {
+			schema["type"] = []string{typ, "null"}
+		}
+	case []string:
+		if !containsOpenAIString(typ, "null") {
+			schema["type"] = append(append([]string(nil), typ...), "null")
+		}
+	case []any:
+		if !containsOpenAIAnyString(typ, "null") {
+			schema["type"] = append(append([]any(nil), typ...), "null")
+		}
+	}
+
+	switch enum := schema["enum"].(type) {
+	case []any:
+		for _, value := range enum {
+			if value == nil {
+				return
+			}
+		}
+		schema["enum"] = append(append([]any(nil), enum...), nil)
+	case []string:
+		values := make([]any, 0, len(enum)+1)
+		for _, value := range enum {
+			values = append(values, value)
+		}
+		values = append(values, nil)
+		schema["enum"] = values
+	}
+}
+
+func containsOpenAIString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsOpenAIAnyString(values []any, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func buildOpenAIChatCompletionRequest(model string, chatCtx *llm.ChatContext, options *llm.ChatOptions) openai.ChatCompletionRequest {
@@ -957,7 +1123,11 @@ func buildOpenAIChatCompletionRequestWithReasoningDefaultAndToolSchema(model str
 
 	tools := make([]openai.Tool, 0, len(options.Tools))
 	for _, tool := range options.Tools {
-		params, _ := json.Marshal(tool.Parameters())
+		parameters := tool.Parameters()
+		if strictToolSchema {
+			parameters = normalizeOpenAIStrictToolSchema(parameters)
+		}
+		params, _ := json.Marshal(parameters)
 		tools = append(tools, openai.Tool{
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{

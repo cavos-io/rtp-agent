@@ -41,6 +41,25 @@ func (requestTestTool) Parameters() map[string]any {
 }
 func (requestTestTool) Execute(context.Context, string) (string, error) { return "", nil }
 
+type requestOptionalSchemaTool struct{}
+
+func (requestOptionalSchemaTool) ID() string          { return "end_call" }
+func (requestOptionalSchemaTool) Name() string        { return "end_call" }
+func (requestOptionalSchemaTool) Description() string { return "end call" }
+func (requestOptionalSchemaTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"variant": map[string]any{
+				"type":        "string",
+				"description": "Optional variant name.",
+			},
+		},
+		"required": []string{},
+	}
+}
+func (requestOptionalSchemaTool) Execute(context.Context, string) (string, error) { return "", nil }
+
 func TestNewOpenAILLMUsesEnvironmentAPIKeyAndReferenceDefaultModel(t *testing.T) {
 	t.Setenv(openAIAPIKeyEnv, "env-key")
 
@@ -1700,6 +1719,59 @@ func TestBuildOpenAIChatCompletionRequestMarksToolsStrict(t *testing.T) {
 	}
 	if !req.Tools[0].Function.Strict {
 		t.Fatalf("tool strict = false, want true")
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestNormalizesStrictToolSchema(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4.1-mini", llm.NewChatContext(), &llm.ChatOptions{
+		Tools: []llm.Tool{requestOptionalSchemaTool{}},
+	})
+
+	if len(req.Tools) != 1 {
+		t.Fatalf("len(Tools) = %d, want 1", len(req.Tools))
+	}
+	if req.Tools[0].Function == nil {
+		t.Fatal("tool function is nil")
+	}
+	if !req.Tools[0].Function.Strict {
+		t.Fatalf("tool strict = false, want true")
+	}
+
+	paramsJSON, err := json.Marshal(req.Tools[0].Function.Parameters)
+	if err != nil {
+		t.Fatalf("tool parameters marshal error = %v", err)
+	}
+	var params map[string]any
+	if err := json.Unmarshal(paramsJSON, &params); err != nil {
+		t.Fatalf("tool parameters json error = %v", err)
+	}
+
+	if got := params["additionalProperties"]; got != false {
+		t.Fatalf("additionalProperties = %#v, want false", got)
+	}
+
+	required, ok := params["required"].([]any)
+	if !ok {
+		t.Fatalf("required = %#v, want JSON array", params["required"])
+	}
+	if len(required) != 1 || required[0] != "variant" {
+		t.Fatalf("required = %#v, want [variant]", required)
+	}
+
+	properties, ok := params["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %#v, want object", params["properties"])
+	}
+	variant, ok := properties["variant"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties.variant = %#v, want object", properties["variant"])
+	}
+	types, ok := variant["type"].([]any)
+	if !ok {
+		t.Fatalf("properties.variant.type = %#v, want array", variant["type"])
+	}
+	if len(types) != 2 || types[0] != "string" || types[1] != "null" {
+		t.Fatalf("properties.variant.type = %#v, want [string null]", types)
 	}
 }
 

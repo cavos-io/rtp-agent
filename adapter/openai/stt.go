@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -432,16 +433,11 @@ func buildOpenAIRealtimeSTTCommitMessage() ([]byte, error) {
 }
 
 func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
-	// Concatenate frames into a single buffer
-	var buf bytes.Buffer
-	for _, f := range frames {
-		buf.Write(f.Data)
-	}
-
 	if language != "" {
 		s.language = language
 	}
-	req := openAIAudioRequest(s, bytes.NewReader(buf.Bytes()), language)
+	audio := openAISTTWAVBytes(frames)
+	req := openAIAudioRequest(s, bytes.NewReader(audio), language)
 
 	resp, err := s.client.CreateTranscription(ctx, req)
 	if err != nil {
@@ -449,6 +445,46 @@ func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	}
 
 	return openAISpeechEvent(resp), nil
+}
+
+func openAISTTWAVBytes(frames []*model.AudioFrame) []byte {
+	var pcm bytes.Buffer
+	sampleRate := uint32(16000)
+	numChannels := uint32(1)
+	for _, frame := range frames {
+		if frame == nil {
+			continue
+		}
+		if frame.SampleRate > 0 && sampleRate == 16000 {
+			sampleRate = frame.SampleRate
+		}
+		if frame.NumChannels > 0 && numChannels == 1 {
+			numChannels = frame.NumChannels
+		}
+		pcm.Write(frame.Data)
+	}
+
+	data := pcm.Bytes()
+	dataSize := uint32(len(data))
+	blockAlign := uint16(numChannels * 2)
+	byteRate := sampleRate * numChannels * 2
+
+	var wav bytes.Buffer
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36)+dataSize)
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(numChannels))
+	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
+	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
+	_ = binary.Write(&wav, binary.LittleEndian, blockAlign)
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	wav.WriteString("data")
+	_ = binary.Write(&wav, binary.LittleEndian, dataSize)
+	wav.Write(data)
+	return wav.Bytes()
 }
 
 func openAIAudioRequest(s *OpenAISTT, reader io.Reader, language string) openai.AudioRequest {

@@ -1267,6 +1267,33 @@ func TestAgentActivityUsesSessionMinEndpointingDelay(t *testing.T) {
 	}
 }
 
+func TestAgentActivityRunEOUDetectionSkipsEmptyTranscript(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	defer activity.Stop()
+
+	activity.runEOUDetection(EndOfTurnInfo{})
+
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted got message %q, want skipped empty transcript", msg.TextContent())
+	case <-time.After(30 * time.Millisecond):
+	}
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("SpeechCreated event = %#v, want no reply for empty transcript", ev)
+	case <-time.After(30 * time.Millisecond):
+	}
+	if agent.ChatCtx != nil && len(agent.ChatCtx.Items) != 0 {
+		t.Fatalf("chat context items = %d, want none for empty transcript", len(agent.ChatCtx.Items))
+	}
+}
+
 func TestAgentActivityUsesSessionMaxEndpointingDelay(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeSTT

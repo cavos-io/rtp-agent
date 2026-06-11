@@ -20,6 +20,9 @@ type VADOptions struct {
 	DeactivationThreshold float64
 	UpdateInterval        float64
 	SampleRate            int
+	UseONNXRuntime        bool
+	ONNXFilePath          string
+	ONNXRuntimeLibPath    string
 
 	minSpeechDurationSet     bool
 	minSilenceDurationSet    bool
@@ -27,6 +30,7 @@ type VADOptions struct {
 	deactivationThresholdSet bool
 	activationThresholdSet   bool
 	maxBufferedSpeechSet     bool
+	useONNXRuntimeSet        bool
 }
 
 func DefaultVADOptions() VADOptions {
@@ -110,12 +114,35 @@ func WithUpdateInterval(d float64) VADOption {
 	}
 }
 
+func WithONNXRuntime() VADOption {
+	return func(o *VADOptions) {
+		o.UseONNXRuntime = true
+		o.useONNXRuntimeSet = true
+	}
+}
+
+func WithONNXFilePath(path string) VADOption {
+	return func(o *VADOptions) {
+		o.ONNXFilePath = path
+	}
+}
+
+func WithONNXRuntimeLibraryPath(path string) VADOption {
+	return func(o *VADOptions) {
+		o.ONNXRuntimeLibPath = path
+	}
+}
+
 func NewSileroVAD(opts ...VADOption) *SileroVAD {
 	options := buildVADOptions(opts...)
 	if !options.deactivationThresholdSet {
 		options.DeactivationThreshold = max(options.ActivationThreshold-0.15, 0.01)
 	}
-	return newSileroVADWithResolvedOptions(options)
+	detector, err := newSileroVADWithResolvedOptions(options, false)
+	if err != nil {
+		return newSileroVADFallback(options)
+	}
+	return detector
 }
 
 func NewSileroVADWithOptions(opts ...VADOption) (*SileroVAD, error) {
@@ -126,7 +153,7 @@ func NewSileroVADWithOptions(opts ...VADOption) (*SileroVAD, error) {
 	if err := validateVADOptions(options); err != nil {
 		return nil, err
 	}
-	return newSileroVADWithResolvedOptions(options), nil
+	return newSileroVADWithResolvedOptions(options, options.UseONNXRuntime)
 }
 
 func buildVADOptions(opts ...VADOption) VADOptions {
@@ -139,12 +166,38 @@ func buildVADOptions(opts ...VADOption) VADOptions {
 	return options
 }
 
-func newSileroVADWithResolvedOptions(options VADOptions) *SileroVAD {
-	// Fallback to simple VAD for now to provide out-of-the-box working plugin
-	// without requiring CGO/ONNX dependencies in the base install.
-	inner := vad.NewSimpleVADWithOptions(simpleOptionsFromSilero(options))
+type sileroProbabilityEstimatorFactory func(VADOptions) (vad.ProbabilityEstimatorFactory, error)
+
+var newSileroProbabilityEstimatorFactory sileroProbabilityEstimatorFactory = newSileroONNXProbabilityEstimatorFactory
+
+func newSileroVADWithResolvedOptions(options VADOptions, requireONNX bool) (*SileroVAD, error) {
+	if options.UseONNXRuntime {
+		factory, err := newSileroProbabilityEstimatorFactory(options)
+		if err != nil {
+			if requireONNX {
+				return nil, err
+			}
+			return newSileroVADFallback(options), nil
+		}
+		simpleOptions := simpleOptionsFromSileroONNX(options)
+		simpleOptions.ProbabilityEstimator = factory
+		return newSileroVADFromSimpleOptions(simpleOptions, options, false), nil
+	}
+	return newSileroVADFallback(options), nil
+}
+
+func newSileroVADFallback(options VADOptions) *SileroVAD {
+	return newSileroVADFromSimpleOptions(simpleOptionsFromSilero(options), options, true)
+}
+
+func newSileroVADFromSimpleOptions(simpleOptions vad.SimpleVADOptions, options VADOptions, scaleThreshold bool) *SileroVAD {
+	inner := vad.NewSimpleVADWithOptions(simpleOptions)
 	if options.activationThresholdSet {
-		inner.UpdateOptionsWith(vad.WithThreshold(options.ActivationThreshold / 10.0))
+		threshold := options.ActivationThreshold
+		if scaleThreshold {
+			threshold /= 10.0
+		}
+		inner.UpdateOptionsWith(vad.WithThreshold(threshold))
 	}
 	if options.maxBufferedSpeechSet {
 		inner.UpdateOptionsWith(vad.WithMaxBufferedSpeechDuration(options.MaxBufferedSpeech))
@@ -270,6 +323,13 @@ func simpleOptionsFromSilero(options VADOptions) vad.SimpleVADOptions {
 	}
 }
 
+func simpleOptionsFromSileroONNX(options VADOptions) vad.SimpleVADOptions {
+	simpleOptions := simpleOptionsFromSilero(options)
+	simpleOptions.Threshold = options.ActivationThreshold
+	simpleOptions.DeactivationThreshold = options.DeactivationThreshold
+	return simpleOptions
+}
+
 func simpleUpdateOptionsFromSilero(options VADOptions) []vad.SimpleVADOption {
 	return []vad.SimpleVADOption{
 		vad.WithThreshold(options.ActivationThreshold / 10.0),
@@ -315,6 +375,16 @@ func mergeVADOptions(current, updates VADOptions) VADOptions {
 	}
 	if updates.SampleRate != 0 {
 		current.SampleRate = updates.SampleRate
+	}
+	if updates.UseONNXRuntime || updates.useONNXRuntimeSet {
+		current.UseONNXRuntime = updates.UseONNXRuntime
+		current.useONNXRuntimeSet = updates.useONNXRuntimeSet
+	}
+	if updates.ONNXFilePath != "" {
+		current.ONNXFilePath = updates.ONNXFilePath
+	}
+	if updates.ONNXRuntimeLibPath != "" {
+		current.ONNXRuntimeLibPath = updates.ONNXRuntimeLibPath
 	}
 	return current
 }

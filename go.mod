@@ -29,6 +29,7 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/sashabaranov/go-openai v1.41.2
 	github.com/vmihailenco/msgpack/v5 v5.4.1
+	github.com/yalue/onnxruntime_go v1.31.0
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.20.0
 	go.opentelemetry.io/otel/log v0.20.0
@@ -40,7 +41,7 @@ require (
 	golang.org/x/image v0.42.0
 	golang.org/x/text v0.38.0
 	google.golang.org/api v0.284.0
-	google.golang.org/genai v1.59.0
+	google.golang.org/genai v1.60.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260610212136-7ab31c22f7ad
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
