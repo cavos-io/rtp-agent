@@ -136,6 +136,7 @@ func sanitizeSessionReportChatHistory(chatHistory *llm.ChatContext) *llm.ChatCon
 	}
 	filtered := llm.NewChatContext()
 	seenConfigUpdates := make(map[string]struct{})
+	seenConfigUpdatePointers := make(map[*llm.AgentConfigUpdate]struct{})
 	for _, item := range chatHistory.Items {
 		if item == nil {
 			continue
@@ -146,6 +147,10 @@ func sanitizeSessionReportChatHistory(chatHistory *llm.ChatContext) *llm.ChatCon
 				continue
 			}
 		case *llm.AgentConfigUpdate:
+			if _, ok := seenConfigUpdatePointers[it]; ok {
+				continue
+			}
+			seenConfigUpdatePointers[it] = struct{}{}
 			if it.ID != "" {
 				if _, ok := seenConfigUpdates[it.ID]; ok {
 					continue

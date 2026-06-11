@@ -194,6 +194,33 @@ func TestSessionReportToDictFiltersEmptyMessagesAndDuplicateConfigUpdates(t *tes
 	}
 }
 
+func TestSessionReportToDictDeduplicatesRepeatedBlankIDConfigUpdate(t *testing.T) {
+	report := NewSessionReport(nil)
+	instructions := "be helpful"
+	config := &llm.AgentConfigUpdate{
+		Instructions: &instructions,
+		ToolsAdded:   []string{"lookup"},
+		CreatedAt:    time.Unix(10, 0),
+	}
+	report.ChatHistory.Insert(config, config)
+
+	data := report.ToDict()
+	chatHistory := data["chat_history"].(map[string]any)
+	items := chatHistory["items"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("chat history items = %#v, want one deduplicated config update", items)
+	}
+	if items[0]["type"] != "agent_config_update" {
+		t.Fatalf("chat history item type = %#v, want agent_config_update", items[0]["type"])
+	}
+	if items[0]["id"] == "" {
+		t.Fatalf("chat history item id = %#v, want generated id", items[0]["id"])
+	}
+	if len(report.ChatHistory.Items) != 1 || report.ChatHistory.Items[0] != config {
+		t.Fatalf("report ChatHistory items = %#v, want one original config pointer", report.ChatHistory.Items)
+	}
+}
+
 func TestNewSessionReportSanitizesChatHistoryForPostProcessConsumers(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
