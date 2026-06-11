@@ -636,14 +636,41 @@ func openAIRealtimeChatMessageContent(msg *llm.ChatMessage) ([]map[string]any, e
 				content = append(content, imagePart)
 			}
 		}
-		if msg.Role == llm.ChatRoleUser && part.Audio != nil && part.Audio.Transcript != "" {
-			content = append(content, map[string]any{
-				"type":       "input_audio",
-				"transcript": part.Audio.Transcript,
-			})
+		if msg.Role == llm.ChatRoleUser && part.Audio != nil {
+			audioPart := map[string]any{"type": "input_audio"}
+			if encoded := openAIRealtimeAudioContent(part.Audio); encoded != "" {
+				audioPart["audio"] = encoded
+			}
+			if part.Audio.Transcript != "" {
+				audioPart["transcript"] = part.Audio.Transcript
+			}
+			if len(audioPart) > 1 {
+				content = append(content, audioPart)
+			}
 		}
 	}
 	return content, nil
+}
+
+func openAIRealtimeAudioContent(audio *llm.AudioContent) string {
+	if audio == nil || len(audio.Frames) == 0 {
+		return ""
+	}
+	var data []byte
+	for _, frame := range audio.Frames {
+		switch f := frame.(type) {
+		case *model.AudioFrame:
+			if f != nil {
+				data = append(data, f.Data...)
+			}
+		case model.AudioFrame:
+			data = append(data, f.Data...)
+		}
+	}
+	if len(data) == 0 {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(data)
 }
 
 func openAIRealtimeImageContent(image *llm.ImageContent) (map[string]any, error) {
