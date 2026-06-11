@@ -926,6 +926,9 @@ func TestRoomIOReusesAgentTranscriptionSegmentUntilFinal(t *testing.T) {
 	if final.opts.Attributes[RoomIOTranscriptionFinalAttribute] != "true" {
 		t.Fatalf("final attribute = %q, want true", final.opts.Attributes[RoomIOTranscriptionFinalAttribute])
 	}
+	if second.text != "Halo, ada yang bisa saya bantu?" {
+		t.Fatalf("second text = %q, want accumulated utterance", second.text)
+	}
 	if final.text != "Halo, ada yang bisa saya bantu?" {
 		t.Fatalf("final text = %q, want full utterance", final.text)
 	}

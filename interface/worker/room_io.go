@@ -213,6 +213,7 @@ type RoomIO struct {
 
 	agentTranscriptionCancel         context.CancelFunc
 	agentTranscriptionSegmentID      string
+	agentTranscriptionText           string
 	transcriptionTextPublisher       func(string, lksdk.StreamTextOptions)
 	transcriptionPacketPublisher     func(*livekit.Transcription) error
 	transcriptionParticipantIdentity func() string
@@ -436,7 +437,7 @@ func (rio *RoomIO) handleAgentOutputTranscribed(ev agent.AgentOutputTranscribedE
 	if rio == nil || ev.Transcript == "" {
 		return
 	}
-	segmentID := rio.agentOutputTranscriptionSegmentID(ev.IsFinal)
+	segmentID, transcript := rio.agentOutputTranscriptionState(ev.Transcript, ev.IsFinal)
 	attributes := map[string]string{
 		RoomIOTranscriptionFinalAttribute:     strconv.FormatBool(ev.IsFinal),
 		RoomIOTranscriptionSegmentIDAttribute: segmentID,
@@ -444,19 +445,21 @@ func (rio *RoomIO) handleAgentOutputTranscribed(ev agent.AgentOutputTranscribedE
 	if trackID := rio.transcriptionTrackID(); trackID != "" {
 		attributes[RoomIOTranscriptionTrackIDAttribute] = trackID
 	}
-	rio.publishLegacyAgentTranscription(ev, segmentID)
+	legacyEv := ev
+	legacyEv.Transcript = transcript
+	rio.publishLegacyAgentTranscription(legacyEv, segmentID)
 	if rio.transcriptionTextPublisher == nil {
 		return
 	}
-	rio.transcriptionTextPublisher(ev.Transcript, lksdk.StreamTextOptions{
+	rio.transcriptionTextPublisher(transcript, lksdk.StreamTextOptions{
 		Topic:      RoomIOTranscriptionTopic,
 		Attributes: attributes,
 	})
 }
 
-func (rio *RoomIO) agentOutputTranscriptionSegmentID(final bool) string {
+func (rio *RoomIO) agentOutputTranscriptionState(transcript string, final bool) (string, string) {
 	if rio == nil {
-		return roomIOTranscriptionSegmentID()
+		return roomIOTranscriptionSegmentID(), transcript
 	}
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
@@ -464,10 +467,16 @@ func (rio *RoomIO) agentOutputTranscriptionSegmentID(final bool) string {
 		rio.agentTranscriptionSegmentID = roomIOTranscriptionSegmentID()
 	}
 	segmentID := rio.agentTranscriptionSegmentID
+	publishText := transcript
+	if !final {
+		rio.agentTranscriptionText += transcript
+		publishText = rio.agentTranscriptionText
+	}
 	if final {
 		rio.agentTranscriptionSegmentID = ""
+		rio.agentTranscriptionText = ""
 	}
-	return segmentID
+	return segmentID, publishText
 }
 
 func (rio *RoomIO) handleUserInputTranscribed(ev agent.UserInputTranscribedEvent) {
