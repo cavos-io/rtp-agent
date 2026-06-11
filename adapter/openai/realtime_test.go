@@ -1630,6 +1630,33 @@ func TestRealtimeSessionRoutesOutputMessageTextDeltasToGenerationStream(t *testi
 	}
 }
 
+func TestRealtimeSessionRoutesOutputMessageWithEmptyID(t *testing.T) {
+	session := &realtimeSession{}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "",
+			"type": "message",
+		},
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
+	}
+
+	select {
+	case msg := <-created.Generation.MessageCh:
+		if msg.MessageID != "" {
+			t.Fatalf("MessageID = %q, want empty string", msg.MessageID)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for message generation")
+	}
+}
+
 func TestRealtimeSessionRoutesOutputMessageAudioDeltasToGenerationStream(t *testing.T) {
 	session := &realtimeSession{}
 	created := session.trackRealtimeEvent(llm.RealtimeEvent{
