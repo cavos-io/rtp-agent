@@ -1994,6 +1994,35 @@ func TestRealtimeEventMapsConversationItemAddedEmptyImageURL(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventDropsNonUserImageAndAudioContent(t *testing.T) {
+	for _, role := range []string{"system", "assistant"} {
+		t.Run(role, func(t *testing.T) {
+			ev, ok := openAIRealtimeEvent(map[string]any{
+				"type": "conversation.item.added",
+				"item": map[string]any{
+					"id":   "msg_" + role,
+					"type": "message",
+					"role": role,
+					"content": []any{
+						map[string]any{"type": "input_image", "image_url": "data:image/png;base64,aW1n"},
+						map[string]any{"type": "input_audio", "transcript": "audio text"},
+					},
+				},
+			})
+			if !ok {
+				t.Fatal("openAIRealtimeEvent returned ok=false, want remote item event")
+			}
+			msg, ok := ev.RemoteItem.Item.(*llm.ChatMessage)
+			if !ok {
+				t.Fatalf("RemoteItem.Item = %T, want *llm.ChatMessage", ev.RemoteItem.Item)
+			}
+			if len(msg.Content) != 0 {
+				t.Fatalf("content = %#v, want non-user image/audio content dropped", msg.Content)
+			}
+		})
+	}
+}
+
 func TestRealtimeSessionTracksRemoteItemAddedEvents(t *testing.T) {
 	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
 	root := &llm.ChatMessage{ID: "root", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "root"}}}

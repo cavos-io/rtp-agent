@@ -1870,13 +1870,13 @@ func openAIRealtimeChatContent(role llm.ChatRole, contents []any) []llm.ChatCont
 				out = append(out, llm.ChatContent{Text: text})
 			}
 		case "input_image":
-			if imageURL, hasImageURL := part["image_url"].(string); hasImageURL {
+			if imageURL, hasImageURL := part["image_url"].(string); hasImageURL && role == llm.ChatRoleUser {
 				out = append(out, llm.ChatContent{
 					Image: &llm.ImageContent{Image: imageURL},
 				})
 			}
 		case "input_audio":
-			if transcript, hasTranscript := part["transcript"].(string); hasTranscript {
+			if transcript, hasTranscript := part["transcript"].(string); hasTranscript && role == llm.ChatRoleUser {
 				out = append(out, llm.ChatContent{Text: transcript})
 			}
 		}
