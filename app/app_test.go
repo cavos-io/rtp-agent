@@ -365,6 +365,26 @@ func TestDefaultConfigFromEnvConfiguresTelemetryLogs(t *testing.T) {
 	}
 }
 
+func TestSplitEnvMapParsesTypedModelOptions(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_MODEL_OPTIONS", "auto_mode=true,chunk_length_schedule=[80,120,180],speed=1.1,voice=alpha")
+
+	options := splitEnvMap("RTP_AGENT_TTS_MODEL_OPTIONS")
+
+	if options["auto_mode"] != true {
+		t.Fatalf("auto_mode = %#v, want true", options["auto_mode"])
+	}
+	if options["speed"] != float64(1.1) {
+		t.Fatalf("speed = %#v, want 1.1", options["speed"])
+	}
+	if options["voice"] != "alpha" {
+		t.Fatalf("voice = %#v, want alpha", options["voice"])
+	}
+	schedule, _ := options["chunk_length_schedule"].([]any)
+	if len(schedule) != 3 || schedule[0] != float64(80) || schedule[1] != float64(120) || schedule[2] != float64(180) {
+		t.Fatalf("chunk_length_schedule = %#v, want [80 120 180]", options["chunk_length_schedule"])
+	}
+}
+
 func TestNewAppInitializesAndClosesTelemetryLogs(t *testing.T) {
 	var initializedEndpoint string
 	var initializedHeaders map[string]string

@@ -4864,7 +4864,7 @@ func splitEnvMap(name string) map[string]any {
 		return nil
 	}
 	values := map[string]any{}
-	for _, part := range strings.Split(raw, ",") {
+	for _, part := range splitEnvMapParts(raw) {
 		key, rawValue, ok := strings.Cut(part, "=")
 		if !ok {
 			continue
@@ -4874,16 +4874,68 @@ func splitEnvMap(name string) map[string]any {
 		if key == "" || rawValue == "" {
 			continue
 		}
-		if value, err := strconv.ParseFloat(rawValue, 64); err == nil {
-			values[key] = value
-		} else {
-			values[key] = rawValue
-		}
+		values[key] = parseEnvMapValue(rawValue)
 	}
 	if len(values) == 0 {
 		return nil
 	}
 	return values
+}
+
+func splitEnvMapParts(raw string) []string {
+	parts := []string{}
+	start := 0
+	depth := 0
+	inString := false
+	escaped := false
+	for i, r := range raw {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if inString && r == '\\' {
+			escaped = true
+			continue
+		}
+		if r == '"' {
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		switch r {
+		case '[', '{':
+			depth++
+		case ']', '}':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				parts = append(parts, raw[start:i])
+				start = i + 1
+			}
+		}
+	}
+	parts = append(parts, raw[start:])
+	return parts
+}
+
+func parseEnvMapValue(rawValue string) any {
+	if value, err := strconv.ParseBool(rawValue); err == nil {
+		return value
+	}
+	if value, err := strconv.ParseFloat(rawValue, 64); err == nil {
+		return value
+	}
+	if strings.HasPrefix(rawValue, "[") || strings.HasPrefix(rawValue, "{") {
+		var decoded any
+		if err := json.Unmarshal([]byte(rawValue), &decoded); err == nil {
+			return decoded
+		}
+	}
+	return rawValue
 }
 
 func splitEnvStringMap(name string) map[string]string {
