@@ -1020,6 +1020,9 @@ func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*livekit.
 		Room: roomName,
 	})
 	if err != nil {
+		if roomDeleteNotFound(err) {
+			return &livekit.DeleteRoomResponse{}, nil
+		}
 		logger.Logger.Warnw("error while deleting room", err)
 		return &livekit.DeleteRoomResponse{}, nil
 	}
