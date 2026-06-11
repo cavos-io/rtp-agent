@@ -1825,13 +1825,16 @@ func openAIRealtimeFunctionCallOutput(item map[string]any) (*llm.FunctionCallOut
 func openAIRealtimeFunctionCall(item map[string]any) (*llm.FunctionCall, error) {
 	id, _ := item["id"].(string)
 	callID, hasCallID := item["call_id"].(string)
-	name, _ := item["name"].(string)
+	name, hasName := item["name"].(string)
 	arguments, hasArguments := item["arguments"].(string)
-	if id == "" || name == "" {
+	if id == "" {
 		return nil, fmt.Errorf("malformed realtime function call item")
 	}
 	if !hasCallID {
 		return nil, fmt.Errorf("call_id is None")
+	}
+	if !hasName {
+		return nil, fmt.Errorf("name is None")
 	}
 	if !hasArguments {
 		return nil, fmt.Errorf("arguments is None")

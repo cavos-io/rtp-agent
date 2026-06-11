@@ -2430,6 +2430,64 @@ func TestOpenAIRealtimeFunctionItemsPreserveEmptyCallID(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeFunctionCallRejectsMissingNameWithReferenceError(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		funcName any
+		set      bool
+	}{
+		{name: "missing"},
+		{name: "null", funcName: nil, set: true},
+		{name: "non_string", funcName: 123, set: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			item := map[string]any{
+				"id":        "fc_123",
+				"type":      "function_call",
+				"call_id":   "call_123",
+				"arguments": `{"query":"hello"}`,
+			}
+			if tt.set {
+				item["name"] = tt.funcName
+			}
+
+			_, err := openAIRealtimeChatItem(item)
+			if err == nil {
+				t.Fatal("openAIRealtimeChatItem() error = nil, want name is None error")
+			}
+			if got, want := err.Error(), "name is None"; got != want {
+				t.Fatalf("openAIRealtimeChatItem() error = %q, want %q", got, want)
+			}
+			if ev, ok := openAIRealtimeEvent(map[string]any{
+				"type": "conversation.item.added",
+				"item": item,
+			}); ok {
+				t.Fatalf("openAIRealtimeEvent() = %#v, true; want malformed item ignored", ev)
+			}
+		})
+	}
+}
+
+func TestOpenAIRealtimeFunctionCallPreservesEmptyName(t *testing.T) {
+	item, err := openAIRealtimeChatItem(map[string]any{
+		"id":        "fc_123",
+		"type":      "function_call",
+		"call_id":   "call_123",
+		"name":      "",
+		"arguments": `{"query":"hello"}`,
+	})
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatItem() error = %v, want nil", err)
+	}
+	call, ok := item.(*llm.FunctionCall)
+	if !ok {
+		t.Fatalf("openAIRealtimeChatItem() = %T, want *llm.FunctionCall", item)
+	}
+	if call.Name != "" {
+		t.Fatalf("function call Name = %q, want empty string", call.Name)
+	}
+}
+
 func TestOpenAIRealtimeChatItemRejectsUnsupportedItemTypeWithReferenceError(t *testing.T) {
 	_, err := openAIRealtimeChatItem(map[string]any{"id": "item_123", "type": "audio"})
 	if err == nil {
