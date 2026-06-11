@@ -1870,7 +1870,7 @@ func openAIRealtimeChatContent(role llm.ChatRole, contents []any) []llm.ChatCont
 				out = append(out, llm.ChatContent{Text: text})
 			}
 		case "input_image":
-			if imageURL, _ := part["image_url"].(string); imageURL != "" {
+			if imageURL, hasImageURL := part["image_url"].(string); hasImageURL {
 				out = append(out, llm.ChatContent{
 					Image: &llm.ImageContent{Image: imageURL},
 				})

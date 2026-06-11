@@ -1970,6 +1970,30 @@ func TestRealtimeEventMapsConversationItemAddedEmptyAudioTranscript(t *testing.T
 	}
 }
 
+func TestRealtimeEventMapsConversationItemAddedEmptyImageURL(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "conversation.item.added",
+		"item": map[string]any{
+			"id":   "msg_image_empty",
+			"type": "message",
+			"role": "user",
+			"content": []any{
+				map[string]any{"type": "input_image", "image_url": ""},
+			},
+		},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want remote item event")
+	}
+	msg, ok := ev.RemoteItem.Item.(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("RemoteItem.Item = %T, want *llm.ChatMessage", ev.RemoteItem.Item)
+	}
+	if len(msg.Content) != 1 || msg.Content[0].Image == nil || msg.Content[0].Image.Image != "" {
+		t.Fatalf("content = %#v, want one empty image_url image part", msg.Content)
+	}
+}
+
 func TestRealtimeSessionTracksRemoteItemAddedEvents(t *testing.T) {
 	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
 	root := &llm.ChatMessage{ID: "root", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "root"}}}
