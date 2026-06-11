@@ -2307,6 +2307,25 @@ func TestRealtimeChatContextCreateMessagesMapUserTextMessage(t *testing.T) {
 	}
 }
 
+func TestRealtimeChatContextCreateMessagesPreserveEmptyTextContent(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.AddMessage(llm.ChatMessageArgs{
+		ID:      "msg_empty",
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: ""}},
+	})
+
+	msgs, err := openAIRealtimeChatContextCreateMessages(chatCtx)
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatContextCreateMessages error = %v, want nil", err)
+	}
+	item := msgs[0]["item"].(map[string]any)
+	content := item["content"].([]map[string]any)
+	if len(content) != 1 || content[0]["type"] != "input_text" || content[0]["text"] != "" {
+		t.Fatalf("content = %#v, want one empty input_text part", content)
+	}
+}
+
 func TestRealtimeChatContextCreateMessagesMapUserAudioContent(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	chatCtx.AddMessage(llm.ChatMessageArgs{

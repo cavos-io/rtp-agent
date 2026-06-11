@@ -617,7 +617,7 @@ func openAIRealtimeMessageRole(role llm.ChatRole) llm.ChatRole {
 func openAIRealtimeChatMessageContent(msg *llm.ChatMessage) ([]map[string]any, error) {
 	content := make([]map[string]any, 0, len(msg.Content))
 	for _, part := range msg.Content {
-		if part.Text != "" {
+		if part.Text != "" || (part.Image == nil && part.Audio == nil && part.Instructions == nil) {
 			partType := "input_text"
 			if msg.Role == llm.ChatRoleAssistant {
 				partType = "output_text"
