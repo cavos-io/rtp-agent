@@ -317,6 +317,7 @@ func (*ChatContext) Empty() *ChatContext {
 
 func (c *ChatContext) Append(item ChatItem) {
 	c.ensureMutable()
+	ensureAgentConfigUpdateDefaults(item)
 	c.Items = append(c.Items, item)
 
 	// Emit OTLP log event
