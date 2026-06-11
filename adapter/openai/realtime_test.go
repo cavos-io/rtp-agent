@@ -2206,6 +2206,23 @@ func TestRealtimeSessionTracksRemoteItemDeletedEvents(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionTracksRemoteItemDeletedWithEmptyID(t *testing.T) {
+	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
+	removed := &llm.ChatMessage{ID: "", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "removed"}}}
+	if err := session.remote.Insert(nil, removed); err != nil {
+		t.Fatalf("insert empty-id remote item: %v", err)
+	}
+
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "conversation.item.deleted",
+		"item_id": "",
+	})
+
+	if item := session.remote.Get(""); item != nil {
+		t.Fatalf("deleted item = %#v, want nil", item)
+	}
+}
+
 func TestRealtimeSessionAccumulatesInputAudioTranscriptionDeltas(t *testing.T) {
 	session := &realtimeSession{}
 

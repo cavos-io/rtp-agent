@@ -1362,8 +1362,8 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 	case "response.done":
 		s.closeRealtimeGeneration()
 	case "conversation.item.deleted":
-		itemID, _ := ev["item_id"].(string)
-		if itemID == "" {
+		itemID, hasItemID := ev["item_id"].(string)
+		if !hasItemID {
 			return llm.RealtimeEvent{}, false
 		}
 		if s.remote == nil {
