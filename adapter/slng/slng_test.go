@@ -13,13 +13,14 @@ import (
 )
 
 const expectedPluginNamespace = "rtp-agent.plugins."
+const expectedSLNGPluginVersion = "1.5.15"
 
 func TestSLNGPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.slng" {
 		t.Fatalf("plugin title = %q, want rtp-agent.plugins.slng", PluginTitle)
 	}
-	if PluginVersion != "1.5.15" {
-		t.Fatalf("plugin version = %q, want reference version", PluginVersion)
+	if PluginVersion != expectedSLNGPluginVersion {
+		t.Fatalf("plugin version = %q, want rtp-agent plugin version", PluginVersion)
 	}
 	if PluginPackage != "rtp-agent.plugins.slng" {
 		t.Fatalf("plugin package = %q, want rtp-agent.plugins.slng", PluginPackage)
@@ -124,29 +125,33 @@ func TestSLNGGatewayPayloadsMatchReference(t *testing.T) {
 		WithSTTDiarization(true, 2, 4),
 	)
 	sttPayload := buildSTTInitPayload(sttProvider)
-	assertSLNGField(t, sttPayload, "encoding", "pcm_mulaw")
-	assertSLNGField(t, sttPayload, "sample_rate", float64(16000))
-	assertSLNGField(t, sttPayload, "language", "es")
-	assertSLNGField(t, sttPayload, "enable_partial_transcripts", false)
-	assertSLNGField(t, sttPayload, "enable_diarization", true)
-	assertSLNGField(t, sttPayload, "min_speakers", float64(2))
-	assertSLNGField(t, sttPayload, "max_speakers", float64(4))
+	assertSLNGField(t, sttPayload, "type", "init")
+	assertSLNGField(t, sttPayload, "model", "nova-3")
+	assertSLNGNestedField(t, sttPayload, "config", "encoding", "pcm_mulaw")
+	assertSLNGNestedField(t, sttPayload, "config", "sample_rate", float64(16000))
+	assertSLNGNestedField(t, sttPayload, "config", "language", "es")
+	assertSLNGNestedField(t, sttPayload, "config", "enable_partials", false)
+	assertSLNGNestedField(t, sttPayload, "config", "enable_partial_transcripts", false)
+	assertSLNGNestedField(t, sttPayload, "config", "enable_diarization", true)
+	assertSLNGNestedField(t, sttPayload, "config", "min_speakers", float64(2))
+	assertSLNGNestedField(t, sttPayload, "config", "max_speakers", float64(4))
 
 	ttsProvider := NewTTS("test-key",
-		WithTTSModel("sarvam/bulbul:v3"),
-		WithTTSVoice("default"),
-		WithTTSLanguage("hi"),
+		WithTTSModel("elevenlabs/eleven-flash:2.5"),
+		WithTTSVoice("ebSkW3c0ScIDKR30TbE2"),
+		WithTTSLanguage("id-ID"),
 		WithTTSSampleRate(24000),
-		WithTTSSpeed(1.2),
-		WithTTSModelOptions(map[string]any{"temperature": 0.7}),
+		WithTTSSpeed(1.1),
 	)
 	ttsPayload := buildTTSInitPayload(ttsProvider)
-	assertSLNGField(t, ttsPayload, "voice", "default")
-	assertSLNGField(t, ttsPayload, "language", "hi-IN")
-	assertSLNGField(t, ttsPayload, "sample_rate", float64(24000))
-	assertSLNGField(t, ttsPayload, "encoding", "linear16")
-	assertSLNGField(t, ttsPayload, "speed", float64(1.2))
-	assertSLNGField(t, ttsPayload, "temperature", float64(0.7))
+	assertSLNGField(t, ttsPayload, "type", "init")
+	assertSLNGField(t, ttsPayload, "model", "elevenlabs/eleven-flash:2.5")
+	assertSLNGField(t, ttsPayload, "voice", "ebSkW3c0ScIDKR30TbE2")
+	assertSLNGField(t, ttsPayload, "language", "id-ID")
+	assertSLNGNestedField(t, ttsPayload, "config", "language", "id-ID")
+	assertSLNGNestedField(t, ttsPayload, "config", "sample_rate", float64(24000))
+	assertSLNGNestedField(t, ttsPayload, "config", "encoding", "linear16")
+	assertSLNGNestedField(t, ttsPayload, "config", "speed", float64(1.1))
 }
 
 func TestSLNGTTSReceivedEventParsesReferenceShapes(t *testing.T) {
@@ -207,6 +212,21 @@ func assertSLNGField(t *testing.T, payload []byte, key string, want any) {
 	}
 	if got := data[key]; got != want {
 		t.Fatalf("%s = %#v, want %#v in %s", key, got, want, string(payload))
+	}
+}
+
+func assertSLNGNestedField(t *testing.T, payload []byte, parent, key string, want any) {
+	t.Helper()
+	var data map[string]any
+	if err := json.Unmarshal(payload, &data); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	parentMap, _ := data[parent].(map[string]any)
+	if parentMap == nil {
+		t.Fatalf("%s = %#v, want object in %s", parent, data[parent], string(payload))
+	}
+	if got := parentMap[key]; got != want {
+		t.Fatalf("%s.%s = %#v, want %#v in %s", parent, key, got, want, string(payload))
 	}
 }
 
