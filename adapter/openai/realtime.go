@@ -1867,7 +1867,7 @@ func openAIRealtimeChatContent(role llm.ChatRole, contents []any) []llm.ChatCont
 				})
 			}
 		case "input_audio":
-			if transcript, _ := part["transcript"].(string); transcript != "" {
+			if transcript, hasTranscript := part["transcript"].(string); hasTranscript {
 				out = append(out, llm.ChatContent{Text: transcript})
 			}
 		}
