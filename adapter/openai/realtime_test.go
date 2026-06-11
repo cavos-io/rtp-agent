@@ -2360,6 +2360,43 @@ func TestRealtimeEventMapsConversationItemAddedFunctionCallOutput(t *testing.T) 
 	}
 }
 
+func TestOpenAIRealtimeFunctionCallOutputRejectsMissingOutputWithReferenceError(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		output any
+		set    bool
+	}{
+		{name: "missing"},
+		{name: "null", output: nil, set: true},
+		{name: "non_string", output: 123, set: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			item := map[string]any{
+				"id":      "out_123",
+				"type":    "function_call_output",
+				"call_id": "call_123",
+			}
+			if tt.set {
+				item["output"] = tt.output
+			}
+
+			_, err := openAIRealtimeChatItem(item)
+			if err == nil {
+				t.Fatal("openAIRealtimeChatItem() error = nil, want output is None error")
+			}
+			if got, want := err.Error(), "output is None"; got != want {
+				t.Fatalf("openAIRealtimeChatItem() error = %q, want %q", got, want)
+			}
+			if ev, ok := openAIRealtimeEvent(map[string]any{
+				"type": "conversation.item.added",
+				"item": item,
+			}); ok {
+				t.Fatalf("openAIRealtimeEvent() = %#v, true; want malformed item ignored", ev)
+			}
+		})
+	}
+}
+
 func TestRealtimeChatContextCreateMessagesMapUserTextMessage(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	chatCtx.AddMessage(llm.ChatMessageArgs{

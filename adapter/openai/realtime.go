@@ -1801,9 +1801,12 @@ func openAIRealtimeChatItem(item map[string]any) (llm.ChatItem, error) {
 func openAIRealtimeFunctionCallOutput(item map[string]any) (*llm.FunctionCallOutput, error) {
 	id, _ := item["id"].(string)
 	callID, _ := item["call_id"].(string)
-	output, _ := item["output"].(string)
+	output, ok := item["output"].(string)
 	if id == "" || callID == "" {
 		return nil, fmt.Errorf("malformed realtime function call output item")
+	}
+	if !ok {
+		return nil, fmt.Errorf("output is None")
 	}
 	return &llm.FunctionCallOutput{
 		ID:      id,
