@@ -42,6 +42,7 @@ type ProcPool struct {
 	executorType    ExecutorType
 	closeTimeout    time.Duration
 	closed          bool
+	started         bool
 	targetIdle      int
 	handlers        map[ProcPoolEvent][]func(JobExecutor)
 	executorFactory func(id string) JobExecutor
@@ -77,6 +78,7 @@ func (p *ProcPool) Start(ctx context.Context) error {
 		p.mu.Unlock()
 		return ErrProcPoolClosed
 	}
+	p.started = true
 
 	closedExecutors := p.pruneFinishedExecutorsLocked()
 	warmedExecutors := p.warmIdleExecutorsLocked()
@@ -299,6 +301,10 @@ func (p *ProcPool) GetByJobID(jobID string) JobExecutor {
 
 func (p *ProcPool) Close() error {
 	p.mu.Lock()
+	if !p.started && len(p.executors) == 0 {
+		p.mu.Unlock()
+		return nil
+	}
 	p.closed = true
 
 	executors := make([]JobExecutor, 0, len(p.executors))
