@@ -695,7 +695,7 @@ var sarvamLanguageMap = map[string]string{
 func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio, bool, error) {
 	var message map[string]any
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return nil, false, err
+		return nil, false, nil
 	}
 	if isSLNGTTSEndEvent(message) {
 		return nil, true, nil

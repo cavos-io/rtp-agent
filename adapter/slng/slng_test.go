@@ -232,6 +232,16 @@ func TestSLNGTTSReceivedEventIgnoresInvalidBase64LikeReference(t *testing.T) {
 	}
 }
 
+func TestSLNGTTSReceivedEventIgnoresNonJSONTextLikeReference(t *testing.T) {
+	audio, done, err := ttsAudioFromMessage([]byte(`not-json`), 24000)
+	if err != nil {
+		t.Fatalf("ttsAudioFromMessage(non-json) error = %v, want nil", err)
+	}
+	if audio != nil || done {
+		t.Fatalf("ttsAudioFromMessage(non-json) audio=%+v done=%v, want ignored frame", audio, done)
+	}
+}
+
 func TestSLNGTTSStreamUnexpectedCloseReportsAudioStats(t *testing.T) {
 	stream := &ttsStream{
 		model:           "elevenlabs/eleven-flash:2.5",
