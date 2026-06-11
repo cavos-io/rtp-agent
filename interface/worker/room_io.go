@@ -111,6 +111,7 @@ func (e *opusEncoder) Close() error {
 
 type RoomOptions struct {
 	AudioTrackName             string
+	AudioSubscriptionTimeout   time.Duration
 	PreConnectAudioTimeout     time.Duration
 	DisablePreConnectAudio     bool
 	DisableAudioInput          bool
@@ -136,6 +137,7 @@ const RoomIOTranscriptionSegmentIDAttribute = "lk.segment_id"
 const roomIODeleteRoomCloseTimeout = 10 * time.Second
 const roomIOOpusClockRate uint32 = 48000
 const roomIOOpusFrameSamples uint32 = 960
+const roomIOAudioSubscriptionTimeout = 3 * time.Second
 
 type TextInputEvent struct {
 	Text                string
@@ -1333,12 +1335,25 @@ func (rio *RoomIO) waitForAudioSubscription(ctx context.Context) error {
 	if ch == nil {
 		return nil
 	}
+	timeout := rio.audioSubscriptionTimeout()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case <-ch:
+		return nil
+	case <-timer.C:
+		logger.Logger.Warnw("room audio output subscription wait timed out", nil, "timeout", timeout)
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (rio *RoomIO) audioSubscriptionTimeout() time.Duration {
+	if rio != nil && rio.Options.AudioSubscriptionTimeout > 0 {
+		return rio.Options.AudioSubscriptionTimeout
+	}
+	return roomIOAudioSubscriptionTimeout
 }
 
 func roomIOOpusEncodeFrames(frame *model.AudioFrame) ([]*model.AudioFrame, error) {

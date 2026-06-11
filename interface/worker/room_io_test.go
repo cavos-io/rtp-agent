@@ -211,6 +211,23 @@ func TestRoomIOLocalTrackSubscriptionReleasesAudioOutput(t *testing.T) {
 	}
 }
 
+func TestRoomIOAudioSubscriptionWaitFallsBackAfterTimeout(t *testing.T) {
+	rio := &RoomIO{
+		Options: RoomOptions{
+			AudioSubscriptionTimeout: 20 * time.Millisecond,
+		},
+		audioSubscribed: make(chan struct{}),
+	}
+
+	started := time.Now()
+	if err := rio.waitForAudioSubscription(context.Background()); err != nil {
+		t.Fatalf("waitForAudioSubscription error = %v, want nil fallback after timeout", err)
+	}
+	if elapsed := time.Since(started); elapsed < 20*time.Millisecond {
+		t.Fatalf("waitForAudioSubscription returned after %v, want timeout wait", elapsed)
+	}
+}
+
 func TestRoomIOPlaybackEventsFollowCaptureAndFlush(t *testing.T) {
 	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
 	var started []PlaybackStartedEvent
