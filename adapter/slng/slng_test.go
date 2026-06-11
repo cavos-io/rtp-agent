@@ -192,6 +192,23 @@ func TestSLNGTTSReceivedEventParsesReferenceShapes(t *testing.T) {
 	}
 }
 
+func TestSLNGTTSReceivedEventParsesReferenceTopLevelCompletionTypes(t *testing.T) {
+	for _, payload := range []string{
+		`{"type":"complete"}`,
+		`{"type":"completed"}`,
+		`{"type":"done"}`,
+		`{"type":"final"}`,
+	} {
+		audio, done, err := ttsAudioFromMessage([]byte(payload), 24000)
+		if err != nil {
+			t.Fatalf("ttsAudioFromMessage(%s) error = %v", payload, err)
+		}
+		if audio != nil || !done {
+			t.Fatalf("ttsAudioFromMessage(%s) audio=%+v done=%v, want no-audio end event", payload, audio, done)
+		}
+	}
+}
+
 func TestSLNGTTSStreamUnexpectedCloseReportsAudioStats(t *testing.T) {
 	stream := &ttsStream{
 		model:           "elevenlabs/eleven-flash:2.5",

@@ -719,7 +719,7 @@ func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio,
 				SamplesPerChannel: uint32(len(data) / 2),
 			},
 		}, false, nil
-	case "Flushed", "audio_end", "end", "flushed":
+	case "Flushed", "audio_end", "end", "flushed", "complete", "completed", "done", "final":
 		return nil, true, nil
 	case "Error", "error":
 		return nil, false, fmt.Errorf("slng tts error: %s", extractSLNGError(message))
