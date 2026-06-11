@@ -495,6 +495,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 
 		if genData.GeneratedText != "" {
 			args := llm.ChatMessageArgs{
+				ID:   genData.ID,
 				Role: llm.ChatRoleAssistant,
 				Text: genData.GeneratedText,
 			}

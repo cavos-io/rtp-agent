@@ -111,6 +111,7 @@ func (e *opusEncoder) Close() error {
 
 type RoomOptions struct {
 	AudioTrackName             string
+	AudioSubscriptionTimeout   time.Duration
 	PreConnectAudioTimeout     time.Duration
 	DisablePreConnectAudio     bool
 	DisableAudioInput          bool
@@ -134,6 +135,9 @@ const RoomIOTranscriptionFinalAttribute = "lk.transcription_final"
 const RoomIOTranscriptionTrackIDAttribute = "lk.transcribed_track_id"
 const RoomIOTranscriptionSegmentIDAttribute = "lk.segment_id"
 const roomIODeleteRoomCloseTimeout = 10 * time.Second
+const roomIOOpusClockRate uint32 = 48000
+const roomIOOpusFrameSamples uint32 = 960
+const roomIOAudioSubscriptionTimeout = 3 * time.Second
 
 type TextInputEvent struct {
 	Text                string
@@ -177,6 +181,10 @@ type RoomIO struct {
 	decoder       AudioDecoder
 	encoder       AudioEncoder
 	audioDisabled bool
+
+	audioPublication *lksdk.LocalTrackPublication
+	audioSubscribed  chan struct{}
+	audioSubOnce     sync.Once
 
 	playbackCapturing        bool
 	playbackSegmentsCount    int
@@ -714,10 +722,24 @@ func (rio *RoomIO) registerTextInput() {
 func (rio *RoomIO) GetCallback() *lksdk.RoomCallback {
 	cb := lksdk.NewRoomCallback()
 	cb.OnParticipantConnected = rio.onParticipantConnected
+	cb.OnLocalTrackSubscribed = rio.onLocalTrackSubscribed
 	cb.OnTrackSubscribed = rio.onTrackSubscribed
 	cb.OnParticipantDisconnected = rio.onParticipantDisconnected
 	cb.OnDataPacket = rio.onDataPacket
 	return cb
+}
+
+func (rio *RoomIO) onLocalTrackSubscribed(publication *lksdk.LocalTrackPublication, _ *lksdk.LocalParticipant) {
+	if rio == nil || publication == nil {
+		return
+	}
+	rio.mu.Lock()
+	expected := rio.audioPublication
+	matches := expected == publication || (expected != nil && expected.SID() != "" && expected.SID() == publication.SID())
+	rio.mu.Unlock()
+	if matches {
+		rio.markAudioSubscribed()
+	}
 }
 
 func (rio *RoomIO) onDataPacket(data lksdk.DataPacket, params lksdk.DataReceiveParams) {
@@ -875,11 +897,15 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 	if publication != nil {
 		trackID = publication.SID()
 	}
+	subscribed := make(chan struct{})
+	rio.audioSubOnce = sync.Once{}
 	rio.mu.Lock()
 	rio.audioTrack = track
 	rio.audioTrackID = trackID
+	rio.audioPublication = publication
+	rio.audioSubscribed = subscribed
 	rio.mu.Unlock()
-	return nil
+	return rio.waitForAudioSubscription(ctx)
 }
 
 func (rio *RoomIO) audioTrackPublicationOptions() *lksdk.TrackPublicationOptions {
@@ -1253,23 +1279,149 @@ func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
 		}
 	}
 
-	data := frame.Data
 	if encoder != nil {
-		if encoded, err := encoder.Encode(frame.Data); err == nil {
-			data = encoded
+		encodeFrames, err := roomIOOpusEncodeFrames(frame)
+		if err != nil {
+			return err
 		}
+		for _, encodeFrame := range encodeFrames {
+			encoded, err := encoder.Encode(encodeFrame.Data)
+			if err != nil {
+				return err
+			}
+			duration := time.Duration(audio.CalculateFrameDuration(encodeFrame) * float64(time.Second))
+			if err := track.WriteSample(media.Sample{
+				Data:     encoded,
+				Duration: duration,
+			}, nil); err != nil {
+				return err
+			}
+			rio.addPlaybackPosition(duration)
+		}
+		return nil
 	}
 
 	duration := time.Duration(audio.CalculateFrameDuration(frame) * float64(time.Second))
 
 	if err := track.WriteSample(media.Sample{
-		Data:     data,
+		Data:     frame.Data,
 		Duration: duration,
 	}, nil); err != nil {
 		return err
 	}
 	rio.addPlaybackPosition(duration)
 	return nil
+}
+
+func (rio *RoomIO) markAudioSubscribed() {
+	rio.mu.Lock()
+	ch := rio.audioSubscribed
+	rio.mu.Unlock()
+	if ch == nil {
+		return
+	}
+	rio.audioSubOnce.Do(func() {
+		close(ch)
+	})
+}
+
+func (rio *RoomIO) waitForAudioSubscription(ctx context.Context) error {
+	if rio == nil {
+		return nil
+	}
+	rio.mu.Lock()
+	ch := rio.audioSubscribed
+	rio.mu.Unlock()
+	if ch == nil {
+		return nil
+	}
+	timeout := rio.audioSubscriptionTimeout()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-ch:
+		return nil
+	case <-timer.C:
+		logger.Logger.Warnw("room audio output subscription wait timed out", nil, "timeout", timeout)
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (rio *RoomIO) audioSubscriptionTimeout() time.Duration {
+	if rio != nil && rio.Options.AudioSubscriptionTimeout > 0 {
+		return rio.Options.AudioSubscriptionTimeout
+	}
+	return roomIOAudioSubscriptionTimeout
+}
+
+func roomIOOpusEncodeFrames(frame *model.AudioFrame) ([]*model.AudioFrame, error) {
+	if frame == nil {
+		return nil, nil
+	}
+	encodeFrame := frame
+	if frame.SampleRate != 0 && frame.SampleRate != roomIOOpusClockRate {
+		resampled, err := audio.ResampleAudioFrame(frame, roomIOOpusClockRate)
+		if err != nil {
+			return nil, err
+		}
+		encodeFrame = resampled
+	}
+	if encodeFrame.NumChannels == 0 {
+		return nil, fmt.Errorf("cannot encode audio with zero channels")
+	}
+
+	bytesPerSample := int(encodeFrame.NumChannels * 2)
+	if len(encodeFrame.Data)%bytesPerSample != 0 {
+		return nil, fmt.Errorf("cannot encode incomplete PCM sample")
+	}
+	samplesPerChannel := encodeFrame.SamplesPerChannel
+	if samplesPerChannel == 0 {
+		samplesPerChannel = uint32(len(encodeFrame.Data) / bytesPerSample)
+	}
+	expectedBytes := int(samplesPerChannel) * bytesPerSample
+	if len(encodeFrame.Data) < expectedBytes {
+		return nil, fmt.Errorf("audio frame data is shorter than declared sample count")
+	}
+	data := encodeFrame.Data[:expectedBytes]
+	if samplesPerChannel == 0 {
+		return nil, nil
+	}
+
+	frames := make([]*model.AudioFrame, 0, int(samplesPerChannel/roomIOOpusFrameSamples)+1)
+	for sampleOffset := uint32(0); sampleOffset < samplesPerChannel; {
+		chunkSamples := minUint32(roomIOOpusFrameSamples, samplesPerChannel-sampleOffset)
+		paddedSamples := roomIOValidOpusSamples(chunkSamples)
+		start := int(sampleOffset) * bytesPerSample
+		end := int(sampleOffset+chunkSamples) * bytesPerSample
+		chunkData := make([]byte, int(paddedSamples)*bytesPerSample)
+		copy(chunkData, data[start:end])
+		frames = append(frames, &model.AudioFrame{
+			Data:              chunkData,
+			SampleRate:        roomIOOpusClockRate,
+			NumChannels:       encodeFrame.NumChannels,
+			SamplesPerChannel: paddedSamples,
+		})
+		sampleOffset += chunkSamples
+	}
+	return frames, nil
+}
+
+func roomIOValidOpusSamples(samples uint32) uint32 {
+	for _, valid := range []uint32{120, 240, 480, roomIOOpusFrameSamples} {
+		if samples <= valid {
+			return valid
+		}
+	}
+	return roomIOOpusFrameSamples
+}
+
+func minUint32(a, b uint32) uint32 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func callPlaybackStartedHandler(handler func(PlaybackStartedEvent), ev PlaybackStartedEvent) {

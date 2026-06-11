@@ -858,19 +858,24 @@ func updateAgentInstructionsMessage(chatCtx *llm.ChatContext, instructions *llm.
 		if !ok {
 			return errors.New("expected the instructions inside the chat_ctx to be of type 'message'")
 		}
+		createdAt := existing.CreatedAt
+		if createdAt.IsZero() {
+			createdAt = time.Now()
+		}
 		chatCtx.Items[*idx] = &llm.ChatMessage{
 			ID:        agentInstructionsMessageID,
 			Role:      llm.ChatRoleSystem,
 			Content:   []llm.ChatContent{content},
-			CreatedAt: existing.CreatedAt,
+			CreatedAt: createdAt,
 		}
 		return nil
 	}
 	if addIfMissing {
 		msg := &llm.ChatMessage{
-			ID:      agentInstructionsMessageID,
-			Role:    llm.ChatRoleSystem,
-			Content: []llm.ChatContent{content},
+			ID:        agentInstructionsMessageID,
+			Role:      llm.ChatRoleSystem,
+			Content:   []llm.ChatContent{content},
+			CreatedAt: time.Now(),
 		}
 		chatCtx.Items = append([]llm.ChatItem{msg}, chatCtx.Items...)
 	}
@@ -901,12 +906,16 @@ func applyAgentInstructionsModality(chatCtx *llm.ChatContext, modality string) {
 	if !changed {
 		return
 	}
+	createdAt := msg.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
 	chatCtx.Items[*idx] = &llm.ChatMessage{
 		ID:          msg.ID,
 		Role:        msg.Role,
 		Content:     content,
 		Interrupted: msg.Interrupted,
-		CreatedAt:   msg.CreatedAt,
+		CreatedAt:   createdAt,
 		Extra:       msg.Extra,
 		Metrics:     msg.Metrics,
 	}

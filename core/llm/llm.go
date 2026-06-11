@@ -360,6 +360,7 @@ type ChoiceDelta struct {
 }
 
 type FunctionToolCall struct {
+	ID        string `json:"-"`
 	Type      string
 	Name      string
 	Arguments string

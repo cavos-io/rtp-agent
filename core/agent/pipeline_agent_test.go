@@ -2001,6 +2001,9 @@ func TestPipelineAgentEmitsFunctionToolsExecutedEvent(t *testing.T) {
 		if len(ev.FunctionCalls) != 1 || ev.FunctionCalls[0].CallID != "call_lookup" {
 			t.Fatalf("FunctionCalls = %#v, want call_lookup", ev.FunctionCalls)
 		}
+		if !strings.HasPrefix(ev.FunctionCalls[0].ID, "item_") || !strings.HasSuffix(ev.FunctionCalls[0].ID, "/fnc_0") {
+			t.Fatalf("FunctionCall ID = %q, want generated item group suffix /fnc_0", ev.FunctionCalls[0].ID)
+		}
 		if len(ev.FunctionCallOutputs) != 1 || ev.FunctionCallOutputs[0].Output != "tool result" {
 			t.Fatalf("FunctionCallOutputs = %#v, want tool result", ev.FunctionCallOutputs)
 		}

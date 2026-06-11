@@ -454,24 +454,42 @@ func buildTTSWebsocketHeaders(t *TTS) http.Header {
 }
 
 func buildSTTInitPayload(s *STT) []byte {
-	payload := map[string]any{
-		"encoding":                    s.encoding,
+	encoding := s.encoding
+	if encoding == "pcm_s16le" {
+		encoding = "linear16"
+	}
+	config := map[string]any{
+		"language":                    normalizeLanguageForModel(s.model, s.language, s.modelOptions),
 		"sample_rate":                 s.sampleRate,
-		"enable_partial_transcripts":  s.enablePartialTranscript,
+		"encoding":                    encoding,
 		"vad_threshold":               s.vadThreshold,
 		"vad_min_silence_duration_ms": s.vadMinSilenceDurationMS,
 		"vad_speech_pad_ms":           s.vadSpeechPadMS,
 		"enable_diarization":          s.enableDiarization,
-		"language":                    s.language,
+		"enable_partials":             s.enablePartialTranscript,
+		"enable_partial_transcripts":  s.enablePartialTranscript,
 	}
 	if s.minSpeakers != nil {
-		payload["min_speakers"] = *s.minSpeakers
+		config["min_speakers"] = *s.minSpeakers
 	}
 	if s.maxSpeakers != nil {
-		payload["max_speakers"] = *s.maxSpeakers
+		config["max_speakers"] = *s.maxSpeakers
 	}
 	for key, value := range s.modelOptions {
-		payload[key] = value
+		config[key] = value
+	}
+	partials := slngOptionDefault(config, "enable_partials", slngOptionDefault(config, "enable_partial_transcripts", s.enablePartialTranscript))
+	config["enable_partials"] = partials
+	config["enable_partial_transcripts"] = partials
+
+	payload := map[string]any{
+		"type":   "init",
+		"config": config,
+	}
+	if ref, err := parseModelRef(s.model); err == nil {
+		if model := resolveDeepgramSTTModel(ref); model != "" {
+			payload["model"] = model
+		}
 	}
 	data, _ := json.Marshal(payload)
 	return data
@@ -479,18 +497,52 @@ func buildSTTInitPayload(s *STT) []byte {
 
 func buildTTSInitPayload(t *TTS) []byte {
 	language := normalizeLanguageForModel(t.model, t.language, t.modelOptions)
-	payload := map[string]any{
-		"voice":       t.voice,
+	config := map[string]any{
 		"language":    language,
-		"sample_rate": t.sampleRate,
 		"encoding":    t.encoding,
+		"sample_rate": t.sampleRate,
 		"speed":       t.speed,
 	}
-	for key, value := range t.modelOptions {
-		payload[key] = value
+	payload := map[string]any{
+		"type":     "init",
+		"model":    t.model,
+		"voice":    t.voice,
+		"language": language,
+		"config":   config,
+	}
+	ref, err := parseModelRef(t.model)
+	if err == nil {
+		switch {
+		case ref.routeProvider == "deepgram" && ref.routeModel == "aura":
+			payload["model"] = t.voice
+		case ref.routeProvider == "rime" && ref.routeModel == "arcana":
+			config["modelId"] = slngOptionDefault(t.modelOptions, "modelId", "arcana")
+			config["segment"] = slngOptionDefault(t.modelOptions, "segment", "bySentence")
+			for _, key := range []string{"speakingStyle", "addBreathing", "addDisfluencies", "phonemizeBetweenBrackets", "translateTo"} {
+				if value, ok := t.modelOptions[key]; ok {
+					config[key] = value
+				}
+			}
+			payload["speaker"] = t.voice
+		case ref.routeProvider == "sarvam" && ref.routeModel == "bulbul":
+			config["speech_sample_rate"] = fmt.Sprint(t.sampleRate)
+			config["pace"] = slngOptionDefault(t.modelOptions, "pace", t.speed)
+			for _, key := range []string{"temperature", "output_audio_bitrate", "min_buffer_size", "max_chunk_length"} {
+				if value, ok := t.modelOptions[key]; ok {
+					config[key] = value
+				}
+			}
+		}
 	}
 	data, _ := json.Marshal(payload)
 	return data
+}
+
+func slngOptionDefault(options map[string]any, key string, fallback any) any {
+	if value, ok := options[key]; ok {
+		return value
+	}
+	return fallback
 }
 
 type modelRef struct {
@@ -530,6 +582,23 @@ func parseModelRef(modelName string) (modelRef, error) {
 		return modelRef{raw: raw, routeProvider: cleaned[1], routeModel: strings.Join(cleaned[2:], "/"), variant: variant}, nil
 	}
 	return modelRef{raw: raw, routeProvider: cleaned[0], routeModel: strings.Join(cleaned[1:], "/"), variant: variant}, nil
+}
+
+func resolveDeepgramSTTModel(ref modelRef) string {
+	if ref.routeProvider != "deepgram" || ref.routeModel != "nova" {
+		return ""
+	}
+	variant := strings.ToLower(ref.variant)
+	if strings.HasPrefix(variant, "3-medical") {
+		return "nova-3-medical"
+	}
+	if strings.HasPrefix(variant, "3") {
+		return "nova-3"
+	}
+	if strings.HasPrefix(variant, "2") {
+		return "nova-2"
+	}
+	return ""
 }
 
 func normalizeLanguageForModel(modelName, language string, options map[string]any) string {

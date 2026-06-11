@@ -1720,8 +1720,12 @@ func buildOpenAIChatMessage(msg *llm.ChatMessage) openai.ChatCompletionMessage {
 	oaMsg := openai.ChatCompletionMessage{
 		Role: string(msg.Role),
 	}
-	if len(msg.Content) == 1 && msg.Content[0].Text != "" {
-		oaMsg.Content = msg.Content[0].Text
+	if openAIChatMessageTextOnly(msg) {
+		if text := msg.TextContent(); text != "" {
+			oaMsg.Content = text
+		} else {
+			oaMsg.Content = " "
+		}
 		return oaMsg
 	}
 
@@ -1748,8 +1752,21 @@ func buildOpenAIChatMessage(msg *llm.ChatMessage) openai.ChatCompletionMessage {
 			}
 		}
 	}
+	if len(parts) == 0 {
+		oaMsg.Content = " "
+		return oaMsg
+	}
 	oaMsg.MultiContent = parts
 	return oaMsg
+}
+
+func openAIChatMessageTextOnly(msg *llm.ChatMessage) bool {
+	for _, c := range msg.Content {
+		if c.Image != nil || c.Audio != nil || c.Instructions != nil {
+			return false
+		}
+	}
+	return true
 }
 
 type openAIChatItemGroup struct {
