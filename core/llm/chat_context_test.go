@@ -363,6 +363,20 @@ func TestChatMessageTextContentIncludesInstructionsAndPlainText(t *testing.T) {
 	}
 }
 
+func TestChatMessageTextContentPreservesEmptyStringParts(t *testing.T) {
+	message := &ChatMessage{
+		Role: ChatRoleSystem,
+		Content: []ChatContent{
+			{Text: ""},
+			{Text: "instructions"},
+		},
+	}
+
+	if got, want := message.TextContent(), "\ninstructions"; got != want {
+		t.Fatalf("TextContent() = %q, want %q", got, want)
+	}
+}
+
 func TestInstructionsPreserveVariantsAndSelectModality(t *testing.T) {
 	instructions := NewInstructions("speak plainly", "write tersely")
 
