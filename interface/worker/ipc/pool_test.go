@@ -434,6 +434,9 @@ func TestProcPoolLaunchAfterCloseIsRejected(t *testing.T) {
 		return &fakeJobExecutor{id: id}
 	}
 
+	if err := pool.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
 	if err := pool.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -447,6 +450,30 @@ func TestProcPoolLaunchAfterCloseIsRejected(t *testing.T) {
 	}
 	if created != 0 {
 		t.Fatalf("created executors = %d, want 0", created)
+	}
+}
+
+func TestProcPoolCloseBeforeStartIsReferenceNoop(t *testing.T) {
+	var created int
+	pool := NewProcPool(1, ExecutorTypeThread, nil)
+	pool.SetTargetIdleProcesses(1)
+	pool.executorFactory = func(id string) JobExecutor {
+		created++
+		return &fakeJobExecutor{id: id}
+	}
+
+	if err := pool.Close(); err != nil {
+		t.Fatalf("Close before Start: %v", err)
+	}
+	if err := pool.Start(context.Background()); err != nil {
+		t.Fatalf("Start after pre-start Close: %v", err)
+	}
+
+	if created != 1 {
+		t.Fatalf("created executors = %d, want warmed executor after Start", created)
+	}
+	if got := len(pool.GetExecutors()); got != 1 {
+		t.Fatalf("executors len = %d, want warmed executor after Start", got)
 	}
 }
 

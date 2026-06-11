@@ -598,6 +598,30 @@ func TestChatContextInstructionsSerializeAndRoundTrip(t *testing.T) {
 	}
 }
 
+func TestChatContextInstructionsSerializeExplicitTextVariantMatchingAudio(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:   "system",
+			Role: ChatRoleSystem,
+			Content: []ChatContent{{
+				Instructions: NewInstructions("same instructions", "same instructions"),
+			}},
+		},
+	}
+
+	data := ctx.ToDict()
+	items := data["items"].([]map[string]any)
+	content := items[0]["content"].([]any)
+	instructions := content[0].(map[string]any)
+	if _, ok := instructions["text"]; !ok {
+		t.Fatalf("serialized instructions = %#v, want explicit text field preserved", instructions)
+	}
+	if instructions["text"] != "same instructions" {
+		t.Fatalf("instructions text = %#v, want same instructions", instructions["text"])
+	}
+}
+
 func TestProviderFormatUsesActiveInstructionText(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
@@ -1528,6 +1552,24 @@ func TestChatContextUnmarshalJSONRejectsUnknownItemType(t *testing.T) {
 	}
 }
 
+func TestChatContextUnmarshalJSONRejectsMissingItems(t *testing.T) {
+	for name, data := range map[string][]byte{
+		"missing": []byte(`{}`),
+		"null":    []byte(`{"items":null}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := NewChatContext()
+			ctx.Append(&ChatMessage{ID: "existing", Role: ChatRoleUser, Content: []ChatContent{{Text: "keep"}}})
+			if err := json.Unmarshal(data, ctx); err == nil {
+				t.Fatal("UnmarshalJSON() error = nil, want items error")
+			}
+			if len(ctx.Items) != 1 {
+				t.Fatalf("len(items) after rejected UnmarshalJSON = %d, want existing item preserved", len(ctx.Items))
+			}
+		})
+	}
+}
+
 func TestChatContextFromDictRestoresContext(t *testing.T) {
 	data := map[string]any{
 		"items": []map[string]any{
@@ -1589,6 +1631,28 @@ func TestChatContextFromDictMethodReplacesReceiverItems(t *testing.T) {
 	msg, ok := ctx.Items[0].(*ChatMessage)
 	if !ok || msg.ID != "replacement" || msg.TextContent() != "ready" {
 		t.Fatalf("item[0] = %#v, want replacement assistant message", ctx.Items[0])
+	}
+}
+
+func TestChatContextFromDictRejectsMissingItems(t *testing.T) {
+	for name, data := range map[string]map[string]any{
+		"missing": {},
+		"nil":     {"items": nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ChatContextFromDict(data); err == nil {
+				t.Fatal("ChatContextFromDict() error = nil, want items error")
+			}
+
+			ctx := NewChatContext()
+			ctx.Append(&ChatMessage{ID: "existing", Role: ChatRoleUser, Content: []ChatContent{{Text: "keep"}}})
+			if err := ctx.FromDict(data); err == nil {
+				t.Fatal("FromDict() error = nil, want items error")
+			}
+			if len(ctx.Items) != 1 {
+				t.Fatalf("len(items) after rejected FromDict = %d, want existing item preserved", len(ctx.Items))
+			}
+		})
 	}
 }
 

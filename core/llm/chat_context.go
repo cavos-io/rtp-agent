@@ -660,6 +660,13 @@ func ChatContextFromDict(data map[string]any) (*ChatContext, error) {
 }
 
 func (c *ChatContext) FromDict(data map[string]any) error {
+	items, ok := data["items"]
+	if !ok {
+		return fmt.Errorf("items is required")
+	}
+	if items == nil {
+		return fmt.Errorf("items must be a list")
+	}
 	encoded, err := json.Marshal(data)
 	if err != nil {
 		return err
@@ -672,14 +679,17 @@ func (c *ChatContext) FromDict(data map[string]any) error {
 
 func (c *ChatContext) UnmarshalJSON(data []byte) error {
 	var decoded struct {
-		Items []json.RawMessage `json:"items"`
+		Items *[]json.RawMessage `json:"items"`
 	}
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
 	}
+	if decoded.Items == nil {
+		return fmt.Errorf("items is required")
+	}
 
-	items := make([]ChatItem, 0, len(decoded.Items))
-	for _, rawItem := range decoded.Items {
+	items := make([]ChatItem, 0, len(*decoded.Items))
+	for _, rawItem := range *decoded.Items {
 		item, err := chatItemFromJSON(rawItem)
 		if err != nil {
 			return err
@@ -1020,7 +1030,7 @@ func instructionsToDict(instructions *Instructions) map[string]any {
 		"type":  "instructions",
 		"audio": instructions.Audio,
 	}
-	if instructions.Text != "" && instructions.Text != instructions.Audio {
+	if instructions.textSet {
 		data["text"] = instructions.Text
 	}
 	return data
