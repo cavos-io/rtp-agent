@@ -130,6 +130,28 @@ func TestChatContextAppendAssignsReferenceConfigUpdateDefaults(t *testing.T) {
 	}
 }
 
+func TestChatContextUpsertAssignsReferenceConfigUpdateDefaults(t *testing.T) {
+	ctx := NewChatContext()
+	config := &AgentConfigUpdate{}
+
+	if err := ctx.UpsertItem(config); err != nil {
+		t.Fatalf("UpsertItem error = %v", err)
+	}
+
+	if config.ID == "" {
+		t.Fatal("AgentConfigUpdate.ID after UpsertItem = empty, want generated item id")
+	}
+	if !strings.HasPrefix(config.ID, "item_") {
+		t.Fatalf("AgentConfigUpdate.ID after UpsertItem = %q, want item_ prefix", config.ID)
+	}
+	if config.CreatedAt.IsZero() {
+		t.Fatal("AgentConfigUpdate.CreatedAt after UpsertItem is zero, want generated timestamp")
+	}
+	if ctx.GetByID(config.ID) != config {
+		t.Fatalf("GetByID(%q) did not return upserted config update", config.ID)
+	}
+}
+
 func TestChatContextCopyFiltersReferenceItemTypes(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{

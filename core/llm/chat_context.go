@@ -190,6 +190,7 @@ func (c *ChatContext) IndexByID(itemID string) *int {
 
 func (c *ChatContext) UpsertItem(item ChatItem, options ...ChatContextUpsertOptions) error {
 	c.ensureMutable()
+	ensureAgentConfigUpdateDefaults(item)
 	var opts ChatContextUpsertOptions
 	if len(options) > 0 {
 		opts = options[0]
