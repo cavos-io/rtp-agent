@@ -10,6 +10,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/gorilla/websocket"
 )
 
 const expectedPluginNamespace = "rtp-agent.plugins."
@@ -175,6 +176,32 @@ func TestSLNGTTSReceivedEventParsesReferenceShapes(t *testing.T) {
 	_, _, err = ttsAudioFromMessage([]byte(`{"type":"Error","message":"bad voice"}`), 24000)
 	if err == nil {
 		t.Fatal("error message returned nil error")
+	}
+}
+
+func TestSLNGTTSStreamUnexpectedCloseReportsAudioStats(t *testing.T) {
+	stream := &ttsStream{
+		model:           "elevenlabs/eleven-flash:2.5",
+		audioFrames:     1,
+		audioBytes:      4,
+		textMessages:    2,
+		lastMessageType: "audio_chunk",
+	}
+
+	err := stream.readError(&websocket.CloseError{Code: websocket.CloseNormalClosure, Text: ""})
+	got := err.Error()
+	for _, want := range []string{
+		"slng tts websocket closed before completion",
+		"websocket: close 1000 (normal)",
+		"model=elevenlabs/eleven-flash:2.5",
+		"audio_frames=1",
+		"audio_bytes=4",
+		"text_messages=2",
+		`last_message_type="audio_chunk"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("error = %q, want substring %q", got, want)
+		}
 	}
 }
 
