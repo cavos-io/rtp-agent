@@ -159,6 +159,17 @@ func TestTextReplaceBufferReplacesTermsAcrossChunks(t *testing.T) {
 	}
 }
 
+func TestTextReplaceBufferReplacesWholeWordsAndPreservesPunctuation(t *testing.T) {
+	buffer := NewTextReplaceBuffer(map[string]string{"flow": "stream"}, false)
+
+	chunks := append(buffer.Push("Flow,"), buffer.Push(" workflow flow!")...)
+	chunks = append(chunks, buffer.Flush()...)
+
+	if got, want := strings.Join(chunks, ""), "stream, workflow stream!"; got != want {
+		t.Fatalf("joined output = %q, want %q; chunks = %#v", got, want, chunks)
+	}
+}
+
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
