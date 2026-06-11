@@ -320,10 +320,6 @@ func (w *multiSpeakerAdapterWrapper) run() {
 					continue
 				}
 				if input.end {
-					if err := w.inner.Flush(); err != nil {
-						w.sendErr(err)
-						return
-					}
 					if ending, ok := w.inner.(InputEnding); ok {
 						if err := ending.EndInput(); err != nil {
 							w.sendErr(err)
