@@ -442,6 +442,7 @@ func ExecuteFunctionCall(ctx context.Context, toolCall *FunctionToolCall, toolCt
 		args = "{}"
 	}
 	fncCall := FunctionCall{
+		ID:        toolCall.ID,
 		CallID:    toolCall.CallID,
 		Name:      toolCall.Name,
 		Arguments: args,

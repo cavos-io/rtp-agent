@@ -14,6 +14,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"go.opentelemetry.io/otel/attribute"
@@ -25,6 +26,7 @@ type LLMGenerationData struct {
 	GeneratedText      string
 	GeneratedFunctions []llm.FunctionToolCall
 	GeneratedExtra     map[string]any
+	ID                 string
 	TTFT               time.Duration
 	Duration           time.Duration
 	RequestID          string
@@ -43,6 +45,7 @@ func PerformLLMInference(
 		TextCh:         make(chan string, 100),
 		FunctionCh:     make(chan *llm.FunctionToolCall, 10),
 		GeneratedExtra: make(map[string]any),
+		ID:             cavosmath.ShortUUID("item_"),
 	}
 
 	chatOptions := make([]llm.ChatOption, 0, len(options)+1)
@@ -103,6 +106,9 @@ func PerformLLMInference(
 						continue
 					}
 					f := fc
+					if f.ID == "" {
+						f.ID = fmt.Sprintf("%s/fnc_%d", data.ID, len(data.GeneratedFunctions))
+					}
 					data.GeneratedFunctions = append(data.GeneratedFunctions, f)
 					data.FunctionCh <- &f
 				}
