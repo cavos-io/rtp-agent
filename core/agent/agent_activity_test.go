@@ -1107,6 +1107,9 @@ func TestAgentActivityStartRecordsInitialConfiguration(t *testing.T) {
 	if msg.ID != agentInstructionsMessageID || msg.Role != llm.ChatRoleSystem || msg.TextContent() != "be helpful" {
 		t.Fatalf("instructions message = %#v, want system message with initial instructions", msg)
 	}
+	if msg.CreatedAt.IsZero() {
+		t.Fatal("instructions message CreatedAt is zero, want reference default timestamp")
+	}
 
 	config, ok := agent.ChatCtx.Items[len(agent.ChatCtx.Items)-1].(*llm.AgentConfigUpdate)
 	if !ok {
