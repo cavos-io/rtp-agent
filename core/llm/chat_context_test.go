@@ -1616,6 +1616,21 @@ func TestChatContextFromDictMethodReplacesReceiverItems(t *testing.T) {
 	}
 }
 
+func TestChatContextFromDictRejectsMissingItems(t *testing.T) {
+	if _, err := ChatContextFromDict(map[string]any{}); err == nil {
+		t.Fatal("ChatContextFromDict() error = nil, want missing items error")
+	}
+
+	ctx := NewChatContext()
+	ctx.Append(&ChatMessage{ID: "existing", Role: ChatRoleUser, Content: []ChatContent{{Text: "keep"}}})
+	if err := ctx.FromDict(map[string]any{}); err == nil {
+		t.Fatal("FromDict() error = nil, want missing items error")
+	}
+	if len(ctx.Items) != 1 {
+		t.Fatalf("len(items) after rejected FromDict = %d, want existing item preserved", len(ctx.Items))
+	}
+}
+
 func TestChatContextToOpenAIProviderFormatGroupsToolCallsWithOutputs(t *testing.T) {
 	ctx := NewChatContext()
 	groupID := "assistant-turn"
