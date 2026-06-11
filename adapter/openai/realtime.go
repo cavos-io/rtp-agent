@@ -1327,10 +1327,10 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 			logger.Logger.Warnw("dropping OpenAI realtime message generation for full stream", nil, "item_id", itemID)
 		}
 	case "response.content_part.added":
-		itemID, _ := ev["item_id"].(string)
+		itemID, hasItemID := ev["item_id"].(string)
 		part, _ := ev["part"].(map[string]any)
-		partType, _ := part["type"].(string)
-		if itemID == "" || partType == "" {
+		partType, hasPartType := part["type"].(string)
+		if !hasItemID || !hasPartType {
 			return llm.RealtimeEvent{}, false
 		}
 		if partType == "text" {
@@ -1473,7 +1473,7 @@ func (s *realtimeSession) trackRealtimeAudio(ev llm.RealtimeEvent) {
 }
 
 func (s *realtimeSession) setRealtimeMessageModalities(itemID string, modalities []string) {
-	if s.generation == nil || itemID == "" {
+	if s.generation == nil {
 		return
 	}
 	msg := s.generation.messages[itemID]
