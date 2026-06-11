@@ -228,6 +228,20 @@ func TestRunResultWaitReturnsImmediatelyAfterDone(t *testing.T) {
 	}
 }
 
+func TestRunResultWaitReturnsSpeechFinalOutputError(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	finalErr := errors.New("final output failed")
+	speech.SetRunFinalOutput(finalErr)
+
+	result.WatchSpeechHandle(speech)
+	speech.MarkDone()
+
+	if err := result.Wait(context.Background()); !errors.Is(err, finalErr) {
+		t.Fatalf("Wait error = %v, want finalErr", err)
+	}
+}
+
 func TestRunResultWatchSpeechHandleRecordsAddedItems(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	speech := NewSpeechHandle(true, DefaultInputDetails())

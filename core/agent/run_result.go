@@ -140,6 +140,11 @@ func (r *RunResult) Wait(ctx context.Context) error {
 
 	select {
 	case <-doneCh:
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.finalOutputErr != nil {
+			return r.finalOutputErr
+		}
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
