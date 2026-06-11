@@ -153,6 +153,9 @@ func (c *ChatContext) AddMessage(args ChatMessageArgs) *ChatMessage {
 func (c *ChatContext) Insert(items ...ChatItem) {
 	c.ensureMutable()
 	for _, item := range items {
+		if config, ok := item.(*AgentConfigUpdate); ok {
+			config.ID = itemIDOrDefault(config.ID)
+		}
 		idx := c.FindInsertionIndex(item.GetCreatedAt())
 		c.Items = append(c.Items[:idx], append([]ChatItem{item}, c.Items[idx:]...)...)
 	}

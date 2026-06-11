@@ -82,6 +82,23 @@ func TestChatContextEmptyMatchesReferenceConstructor(t *testing.T) {
 	}
 }
 
+func TestChatContextInsertAssignsReferenceConfigUpdateID(t *testing.T) {
+	ctx := NewChatContext()
+	config := &AgentConfigUpdate{CreatedAt: time.Unix(10, 0)}
+
+	ctx.Insert(config)
+
+	if config.ID == "" {
+		t.Fatal("AgentConfigUpdate.ID after Insert = empty, want generated item id")
+	}
+	if !strings.HasPrefix(config.ID, "item_") {
+		t.Fatalf("AgentConfigUpdate.ID after Insert = %q, want item_ prefix", config.ID)
+	}
+	if ctx.GetByID(config.ID) != config {
+		t.Fatalf("GetByID(%q) did not return inserted config update", config.ID)
+	}
+}
+
 func TestChatContextCopyFiltersReferenceItemTypes(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{

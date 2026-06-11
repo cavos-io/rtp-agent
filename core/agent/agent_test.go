@@ -546,9 +546,11 @@ func TestAgentUpdateToolsWhileRunningRecordsToolDiffAndFiltersWithSessionTools(t
 		t.Fatalf("agent tools = %#v, want calc only", agent.Tools)
 	}
 	gotIDs := chatItemIDs(agent.ChatCtx.Items)
-	wantIDs := []string{agentInstructionsMessageID, "calc-call", "calendar-call", ""}
-	if !stringSlicesEqual(gotIDs, wantIDs) {
-		t.Fatalf("agent ChatCtx item IDs = %q, want %q", gotIDs, wantIDs)
+	if len(gotIDs) != 4 || !stringSlicesEqual(gotIDs[:3], []string{agentInstructionsMessageID, "calc-call", "calendar-call"}) {
+		t.Fatalf("agent ChatCtx item IDs = %q, want instructions, calc-call, calendar-call, config update", gotIDs)
+	}
+	if !strings.HasPrefix(gotIDs[3], "item_") {
+		t.Fatalf("agent config update ID = %q, want generated item_ id", gotIDs[3])
 	}
 	config := assertLastToolUpdate(t, agent.ChatCtx)
 	if !stringSlicesEqual(config.ToolsAdded, []string{"calc"}) {
