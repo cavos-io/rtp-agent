@@ -180,6 +180,10 @@ type RoomIO struct {
 	encoder       AudioEncoder
 	audioDisabled bool
 
+	audioPublication *lksdk.LocalTrackPublication
+	audioSubscribed  chan struct{}
+	audioSubOnce     sync.Once
+
 	playbackCapturing        bool
 	playbackSegmentsCount    int
 	playbackFinishedCount    int
@@ -716,10 +720,24 @@ func (rio *RoomIO) registerTextInput() {
 func (rio *RoomIO) GetCallback() *lksdk.RoomCallback {
 	cb := lksdk.NewRoomCallback()
 	cb.OnParticipantConnected = rio.onParticipantConnected
+	cb.OnLocalTrackSubscribed = rio.onLocalTrackSubscribed
 	cb.OnTrackSubscribed = rio.onTrackSubscribed
 	cb.OnParticipantDisconnected = rio.onParticipantDisconnected
 	cb.OnDataPacket = rio.onDataPacket
 	return cb
+}
+
+func (rio *RoomIO) onLocalTrackSubscribed(publication *lksdk.LocalTrackPublication, _ *lksdk.LocalParticipant) {
+	if rio == nil || publication == nil {
+		return
+	}
+	rio.mu.Lock()
+	expected := rio.audioPublication
+	matches := expected == publication || (expected != nil && expected.SID() != "" && expected.SID() == publication.SID())
+	rio.mu.Unlock()
+	if matches {
+		rio.markAudioSubscribed()
+	}
 }
 
 func (rio *RoomIO) onDataPacket(data lksdk.DataPacket, params lksdk.DataReceiveParams) {
@@ -877,11 +895,15 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 	if publication != nil {
 		trackID = publication.SID()
 	}
+	subscribed := make(chan struct{})
+	rio.audioSubOnce = sync.Once{}
 	rio.mu.Lock()
 	rio.audioTrack = track
 	rio.audioTrackID = trackID
+	rio.audioPublication = publication
+	rio.audioSubscribed = subscribed
 	rio.mu.Unlock()
-	return nil
+	return rio.waitForAudioSubscription(ctx)
 }
 
 func (rio *RoomIO) audioTrackPublicationOptions() *lksdk.TrackPublicationOptions {
@@ -1287,6 +1309,36 @@ func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
 	}
 	rio.addPlaybackPosition(duration)
 	return nil
+}
+
+func (rio *RoomIO) markAudioSubscribed() {
+	rio.mu.Lock()
+	ch := rio.audioSubscribed
+	rio.mu.Unlock()
+	if ch == nil {
+		return
+	}
+	rio.audioSubOnce.Do(func() {
+		close(ch)
+	})
+}
+
+func (rio *RoomIO) waitForAudioSubscription(ctx context.Context) error {
+	if rio == nil {
+		return nil
+	}
+	rio.mu.Lock()
+	ch := rio.audioSubscribed
+	rio.mu.Unlock()
+	if ch == nil {
+		return nil
+	}
+	select {
+	case <-ch:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func roomIOOpusEncodeFrames(frame *model.AudioFrame) ([]*model.AudioFrame, error) {

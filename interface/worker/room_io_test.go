@@ -178,6 +178,39 @@ func TestRoomIOStartSkipsTrackWhenAudioOutputDisabled(t *testing.T) {
 	}
 }
 
+func TestRoomIOLocalTrackSubscriptionReleasesAudioOutput(t *testing.T) {
+	track := newRoomIOTestAudioTrack(t)
+	pub := lksdk.NewLocalTrackPublication(lksdk.TrackKindAudio, track, lksdk.TrackPublicationOptions{}, nil, nil)
+	rio := &RoomIO{
+		audioPublication: pub,
+		audioSubscribed:  make(chan struct{}),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- rio.waitForAudioSubscription(ctx)
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("waitForAudioSubscription returned before subscription: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	rio.GetCallback().OnLocalTrackSubscribed(pub, nil)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("waitForAudioSubscription error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waitForAudioSubscription did not return after local track subscription")
+	}
+}
+
 func TestRoomIOPlaybackEventsFollowCaptureAndFlush(t *testing.T) {
 	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
 	var started []PlaybackStartedEvent
