@@ -1423,6 +1423,21 @@ func TestRealtimeEventMapsInputAudioTranscriptionCompleted(t *testing.T) {
 	if ev.InputTranscription.Confidence != nil {
 		t.Fatalf("Confidence = %#v, want nil for empty logprobs", ev.InputTranscription.Confidence)
 	}
+
+	ev, ok = openAIRealtimeEvent(map[string]any{
+		"type":       "conversation.item.input_audio_transcription.completed",
+		"item_id":    "",
+		"transcript": "",
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent empty item/transcript returned ok=false, want final transcription event")
+	}
+	if ev.InputTranscription == nil {
+		t.Fatal("InputTranscription = nil, want empty final transcription payload")
+	}
+	if ev.InputTranscription.ItemID != "" || ev.InputTranscription.Transcript != "" || !ev.InputTranscription.IsFinal {
+		t.Fatalf("InputTranscription = %#v, want final empty item transcript", ev.InputTranscription)
+	}
 }
 
 func TestRealtimeEventMapsInputAudioTranscriptionDelta(t *testing.T) {
@@ -1558,6 +1573,24 @@ func TestRealtimeEventMapsResponseCreated(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventMapsResponseCreatedEmptyID(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "response.created",
+		"response": map[string]any{
+			"id": "",
+		},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want generation-created event")
+	}
+	if ev.Generation == nil {
+		t.Fatal("Generation = nil, want generation-created payload")
+	}
+	if ev.Generation.ResponseID != "" {
+		t.Fatalf("Generation.ResponseID = %q, want empty string", ev.Generation.ResponseID)
+	}
+}
+
 func TestRealtimeSessionRoutesOutputMessageTextDeltasToGenerationStream(t *testing.T) {
 	session := &realtimeSession{}
 	created := session.trackRealtimeEvent(llm.RealtimeEvent{
@@ -1609,6 +1642,33 @@ func TestRealtimeSessionRoutesOutputMessageTextDeltasToGenerationStream(t *testi
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for text delta")
+	}
+}
+
+func TestRealtimeSessionRoutesOutputMessageWithEmptyID(t *testing.T) {
+	session := &realtimeSession{}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "",
+			"type": "message",
+		},
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
+	}
+
+	select {
+	case msg := <-created.Generation.MessageCh:
+		if msg.MessageID != "" {
+			t.Fatalf("MessageID = %q, want empty string", msg.MessageID)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for message generation")
 	}
 }
 
@@ -1705,6 +1765,45 @@ func TestRealtimeSessionRoutesContentPartModalitiesToGenerationStream(t *testing
 	}
 }
 
+func TestRealtimeSessionRoutesContentPartWithEmptyItemID(t *testing.T) {
+	session := &realtimeSession{}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "",
+			"type": "message",
+		},
+	})
+
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "response.content_part.added",
+		"item_id": "",
+		"part":    map[string]any{"type": "audio"},
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
+	}
+
+	select {
+	case modalities := <-msg.ModalitiesCh:
+		if len(modalities) != 2 || modalities[0] != "audio" || modalities[1] != "text" {
+			t.Fatalf("modalities = %#v, want audio and text", modalities)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for modalities")
+	}
+}
+
 func TestRealtimeSessionClosesOutputMessageStreamsWhenItemDone(t *testing.T) {
 	session := &realtimeSession{}
 	created := session.trackRealtimeEvent(llm.RealtimeEvent{
@@ -1730,6 +1829,55 @@ func TestRealtimeSessionClosesOutputMessageStreamsWhenItemDone(t *testing.T) {
 		"type": "response.output_item.done",
 		"item": map[string]any{
 			"id":   "msg_123",
+			"type": "message",
+		},
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
+	}
+
+	select {
+	case _, ok := <-msg.TextCh:
+		if ok {
+			t.Fatal("TextCh still open, want closed")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for text stream close")
+	}
+	select {
+	case _, ok := <-msg.AudioCh:
+		if ok {
+			t.Fatal("AudioCh still open, want closed")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for audio stream close")
+	}
+}
+
+func TestRealtimeSessionClosesOutputMessageWithEmptyIDWhenItemDone(t *testing.T) {
+	session := &realtimeSession{}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "",
+			"type": "message",
+		},
+	})
+
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.done",
+		"item": map[string]any{
+			"id":   "",
 			"type": "message",
 		},
 	}); ok {
@@ -1922,6 +2070,107 @@ func TestRealtimeEventMapsConversationItemAddedMessage(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventMapsConversationItemAddedEmptyUserText(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "conversation.item.added",
+		"item": map[string]any{
+			"id":   "msg_empty",
+			"type": "message",
+			"role": "user",
+			"content": []any{
+				map[string]any{"type": "input_text", "text": ""},
+			},
+		},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want remote item event")
+	}
+	msg, ok := ev.RemoteItem.Item.(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("RemoteItem.Item = %T, want *llm.ChatMessage", ev.RemoteItem.Item)
+	}
+	if len(msg.Content) != 1 || msg.Content[0].Text != "" {
+		t.Fatalf("content = %#v, want one empty user text part", msg.Content)
+	}
+}
+
+func TestRealtimeEventMapsConversationItemAddedEmptyAudioTranscript(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "conversation.item.added",
+		"item": map[string]any{
+			"id":   "msg_audio_empty",
+			"type": "message",
+			"role": "user",
+			"content": []any{
+				map[string]any{"type": "input_audio", "transcript": ""},
+			},
+		},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want remote item event")
+	}
+	msg, ok := ev.RemoteItem.Item.(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("RemoteItem.Item = %T, want *llm.ChatMessage", ev.RemoteItem.Item)
+	}
+	if len(msg.Content) != 1 || msg.Content[0].Text != "" {
+		t.Fatalf("content = %#v, want one empty audio transcript text part", msg.Content)
+	}
+}
+
+func TestRealtimeEventMapsConversationItemAddedEmptyImageURL(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "conversation.item.added",
+		"item": map[string]any{
+			"id":   "msg_image_empty",
+			"type": "message",
+			"role": "user",
+			"content": []any{
+				map[string]any{"type": "input_image", "image_url": ""},
+			},
+		},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want remote item event")
+	}
+	msg, ok := ev.RemoteItem.Item.(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("RemoteItem.Item = %T, want *llm.ChatMessage", ev.RemoteItem.Item)
+	}
+	if len(msg.Content) != 1 || msg.Content[0].Image == nil || msg.Content[0].Image.Image != "" {
+		t.Fatalf("content = %#v, want one empty image_url image part", msg.Content)
+	}
+}
+
+func TestRealtimeEventDropsNonUserImageAndAudioContent(t *testing.T) {
+	for _, role := range []string{"system", "assistant"} {
+		t.Run(role, func(t *testing.T) {
+			ev, ok := openAIRealtimeEvent(map[string]any{
+				"type": "conversation.item.added",
+				"item": map[string]any{
+					"id":   "msg_" + role,
+					"type": "message",
+					"role": role,
+					"content": []any{
+						map[string]any{"type": "input_image", "image_url": "data:image/png;base64,aW1n"},
+						map[string]any{"type": "input_audio", "transcript": "audio text"},
+					},
+				},
+			})
+			if !ok {
+				t.Fatal("openAIRealtimeEvent returned ok=false, want remote item event")
+			}
+			msg, ok := ev.RemoteItem.Item.(*llm.ChatMessage)
+			if !ok {
+				t.Fatalf("RemoteItem.Item = %T, want *llm.ChatMessage", ev.RemoteItem.Item)
+			}
+			if len(msg.Content) != 0 {
+				t.Fatalf("content = %#v, want non-user image/audio content dropped", msg.Content)
+			}
+		})
+	}
+}
+
 func TestRealtimeSessionTracksRemoteItemAddedEvents(t *testing.T) {
 	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
 	root := &llm.ChatMessage{ID: "root", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "root"}}}
@@ -1969,6 +2218,23 @@ func TestRealtimeSessionTracksRemoteItemDeletedEvents(t *testing.T) {
 	}
 	if item := session.remote.Get("root"); item == nil {
 		t.Fatal("root item missing after deleting another item")
+	}
+}
+
+func TestRealtimeSessionTracksRemoteItemDeletedWithEmptyID(t *testing.T) {
+	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
+	removed := &llm.ChatMessage{ID: "", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "removed"}}}
+	if err := session.remote.Insert(nil, removed); err != nil {
+		t.Fatalf("insert empty-id remote item: %v", err)
+	}
+
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "conversation.item.deleted",
+		"item_id": "",
+	})
+
+	if item := session.remote.Get(""); item != nil {
+		t.Fatalf("deleted item = %#v, want nil", item)
 	}
 }
 
@@ -2201,8 +2467,223 @@ func TestRealtimeEventMapsConversationItemAddedFunctionCall(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeFunctionCallRejectsMissingArgumentsWithReferenceError(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		arguments any
+		set       bool
+	}{
+		{name: "missing"},
+		{name: "null", arguments: nil, set: true},
+		{name: "non_string", arguments: map[string]any{}, set: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			item := map[string]any{
+				"id":      "fc_123",
+				"type":    "function_call",
+				"call_id": "call_123",
+				"name":    "lookup",
+			}
+			if tt.set {
+				item["arguments"] = tt.arguments
+			}
+
+			_, err := openAIRealtimeChatItem(item)
+			if err == nil {
+				t.Fatal("openAIRealtimeChatItem() error = nil, want arguments is None error")
+			}
+			if got, want := err.Error(), "arguments is None"; got != want {
+				t.Fatalf("openAIRealtimeChatItem() error = %q, want %q", got, want)
+			}
+			if ev, ok := openAIRealtimeEvent(map[string]any{
+				"type": "conversation.item.added",
+				"item": item,
+			}); ok {
+				t.Fatalf("openAIRealtimeEvent() = %#v, true; want malformed item ignored", ev)
+			}
+		})
+	}
+}
+
+func TestOpenAIRealtimeFunctionItemsRejectMissingCallIDWithReferenceError(t *testing.T) {
+	baseItems := []struct {
+		name string
+		item map[string]any
+	}{
+		{
+			name: "function_call",
+			item: map[string]any{
+				"id":        "fc_123",
+				"type":      "function_call",
+				"name":      "lookup",
+				"arguments": `{"query":"hello"}`,
+			},
+		},
+		{
+			name: "function_call_output",
+			item: map[string]any{
+				"id":     "out_123",
+				"type":   "function_call_output",
+				"output": "Paris",
+			},
+		},
+	}
+	callIDCases := []struct {
+		name   string
+		callID any
+		set    bool
+	}{
+		{name: "missing"},
+		{name: "null", callID: nil, set: true},
+		{name: "non_string", callID: 123, set: true},
+	}
+	for _, base := range baseItems {
+		for _, callIDCase := range callIDCases {
+			t.Run(base.name+"/"+callIDCase.name, func(t *testing.T) {
+				item := make(map[string]any, len(base.item)+1)
+				for key, value := range base.item {
+					item[key] = value
+				}
+				if callIDCase.set {
+					item["call_id"] = callIDCase.callID
+				}
+
+				_, err := openAIRealtimeChatItem(item)
+				if err == nil {
+					t.Fatal("openAIRealtimeChatItem() error = nil, want call_id is None error")
+				}
+				if got, want := err.Error(), "call_id is None"; got != want {
+					t.Fatalf("openAIRealtimeChatItem() error = %q, want %q", got, want)
+				}
+				if ev, ok := openAIRealtimeEvent(map[string]any{
+					"type": "conversation.item.added",
+					"item": item,
+				}); ok {
+					t.Fatalf("openAIRealtimeEvent() = %#v, true; want malformed item ignored", ev)
+				}
+			})
+		}
+	}
+}
+
+func TestOpenAIRealtimeFunctionItemsPreserveEmptyCallID(t *testing.T) {
+	call, err := openAIRealtimeChatItem(map[string]any{
+		"id":        "fc_123",
+		"type":      "function_call",
+		"call_id":   "",
+		"name":      "lookup",
+		"arguments": `{"query":"hello"}`,
+	})
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatItem(function_call) error = %v, want nil", err)
+	}
+	if got := call.(*llm.FunctionCall).CallID; got != "" {
+		t.Fatalf("function call CallID = %q, want empty string", got)
+	}
+
+	output, err := openAIRealtimeChatItem(map[string]any{
+		"id":      "out_123",
+		"type":    "function_call_output",
+		"call_id": "",
+		"output":  "Paris",
+	})
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatItem(function_call_output) error = %v, want nil", err)
+	}
+	if got := output.(*llm.FunctionCallOutput).CallID; got != "" {
+		t.Fatalf("function output CallID = %q, want empty string", got)
+	}
+}
+
+func TestOpenAIRealtimeFunctionItemsPreserveEmptyID(t *testing.T) {
+	call, err := openAIRealtimeChatItem(map[string]any{
+		"id":        "",
+		"type":      "function_call",
+		"call_id":   "call_123",
+		"name":      "lookup",
+		"arguments": `{"query":"hello"}`,
+	})
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatItem(function_call) error = %v, want nil", err)
+	}
+	if got := call.(*llm.FunctionCall).ID; got != "" {
+		t.Fatalf("function call ID = %q, want empty string", got)
+	}
+
+	output, err := openAIRealtimeChatItem(map[string]any{
+		"id":      "",
+		"type":    "function_call_output",
+		"call_id": "call_123",
+		"output":  "Paris",
+	})
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatItem(function_call_output) error = %v, want nil", err)
+	}
+	if got := output.(*llm.FunctionCallOutput).ID; got != "" {
+		t.Fatalf("function output ID = %q, want empty string", got)
+	}
+}
+
+func TestOpenAIRealtimeFunctionCallRejectsMissingNameWithReferenceError(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		funcName any
+		set      bool
+	}{
+		{name: "missing"},
+		{name: "null", funcName: nil, set: true},
+		{name: "non_string", funcName: 123, set: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			item := map[string]any{
+				"id":        "fc_123",
+				"type":      "function_call",
+				"call_id":   "call_123",
+				"arguments": `{"query":"hello"}`,
+			}
+			if tt.set {
+				item["name"] = tt.funcName
+			}
+
+			_, err := openAIRealtimeChatItem(item)
+			if err == nil {
+				t.Fatal("openAIRealtimeChatItem() error = nil, want name is None error")
+			}
+			if got, want := err.Error(), "name is None"; got != want {
+				t.Fatalf("openAIRealtimeChatItem() error = %q, want %q", got, want)
+			}
+			if ev, ok := openAIRealtimeEvent(map[string]any{
+				"type": "conversation.item.added",
+				"item": item,
+			}); ok {
+				t.Fatalf("openAIRealtimeEvent() = %#v, true; want malformed item ignored", ev)
+			}
+		})
+	}
+}
+
+func TestOpenAIRealtimeFunctionCallPreservesEmptyName(t *testing.T) {
+	item, err := openAIRealtimeChatItem(map[string]any{
+		"id":        "fc_123",
+		"type":      "function_call",
+		"call_id":   "call_123",
+		"name":      "",
+		"arguments": `{"query":"hello"}`,
+	})
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatItem() error = %v, want nil", err)
+	}
+	call, ok := item.(*llm.FunctionCall)
+	if !ok {
+		t.Fatalf("openAIRealtimeChatItem() = %T, want *llm.FunctionCall", item)
+	}
+	if call.Name != "" {
+		t.Fatalf("function call Name = %q, want empty string", call.Name)
+	}
+}
+
 func TestOpenAIRealtimeChatItemRejectsUnsupportedItemTypeWithReferenceError(t *testing.T) {
-	_, err := openAIRealtimeChatItem(map[string]any{"type": "audio"})
+	_, err := openAIRealtimeChatItem(map[string]any{"id": "item_123", "type": "audio"})
 	if err == nil {
 		t.Fatal("openAIRealtimeChatItem() error = nil, want unsupported item type error")
 	}
@@ -2222,6 +2703,149 @@ func TestOpenAIRealtimeChatItemRejectsUnsupportedRoleWithReferenceError(t *testi
 	}
 	if got, want := err.Error(), "unsupported role: tool"; got != want {
 		t.Fatalf("openAIRealtimeChatItem() error = %q, want %q", got, want)
+	}
+}
+
+func TestOpenAIRealtimeChatMessageRejectsMissingRoleWithReferenceError(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		role any
+		set  bool
+	}{
+		{name: "missing"},
+		{name: "null", role: nil, set: true},
+		{name: "non_string", role: 123, set: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			item := map[string]any{
+				"id":      "msg_123",
+				"type":    "message",
+				"content": []any{},
+			}
+			if tt.set {
+				item["role"] = tt.role
+			}
+
+			_, err := openAIRealtimeChatItem(item)
+			if err == nil {
+				t.Fatal("openAIRealtimeChatItem() error = nil, want role is None error")
+			}
+			if got, want := err.Error(), "role is None"; got != want {
+				t.Fatalf("openAIRealtimeChatItem() error = %q, want %q", got, want)
+			}
+			if ev, ok := openAIRealtimeEvent(map[string]any{
+				"type": "conversation.item.added",
+				"item": item,
+			}); ok {
+				t.Fatalf("openAIRealtimeEvent() = %#v, true; want malformed item ignored", ev)
+			}
+		})
+	}
+}
+
+func TestOpenAIRealtimeChatItemRejectsMissingIDWithReferenceError(t *testing.T) {
+	baseItems := []struct {
+		name string
+		item map[string]any
+	}{
+		{
+			name: "message",
+			item: map[string]any{
+				"type":    "message",
+				"role":    "user",
+				"content": []any{},
+			},
+		},
+		{
+			name: "function_call",
+			item: map[string]any{
+				"type":      "function_call",
+				"call_id":   "call_123",
+				"name":      "lookup",
+				"arguments": `{"query":"hello"}`,
+			},
+		},
+		{
+			name: "function_call_output",
+			item: map[string]any{
+				"type":    "function_call_output",
+				"call_id": "call_123",
+				"output":  "Paris",
+			},
+		},
+	}
+	idCases := []struct {
+		name string
+		id   any
+		set  bool
+	}{
+		{name: "missing"},
+		{name: "null", id: nil, set: true},
+		{name: "non_string", id: 123, set: true},
+	}
+	for _, base := range baseItems {
+		for _, idCase := range idCases {
+			t.Run(base.name+"/"+idCase.name, func(t *testing.T) {
+				item := make(map[string]any, len(base.item)+1)
+				for key, value := range base.item {
+					item[key] = value
+				}
+				if idCase.set {
+					item["id"] = idCase.id
+				}
+
+				_, err := openAIRealtimeChatItem(item)
+				if err == nil {
+					t.Fatal("openAIRealtimeChatItem() error = nil, want id is None error")
+				}
+				if got, want := err.Error(), "id is None"; got != want {
+					t.Fatalf("openAIRealtimeChatItem() error = %q, want %q", got, want)
+				}
+				if ev, ok := openAIRealtimeEvent(map[string]any{
+					"type": "conversation.item.added",
+					"item": item,
+				}); ok {
+					t.Fatalf("openAIRealtimeEvent() = %#v, true; want malformed item ignored", ev)
+				}
+			})
+		}
+	}
+}
+
+func TestOpenAIRealtimeChatItemRejectsMissingContentWithReferenceError(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		content any
+		set     bool
+	}{
+		{name: "missing"},
+		{name: "null", content: nil, set: true},
+		{name: "non_list", content: "hello", set: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			item := map[string]any{
+				"id":   "msg_123",
+				"type": "message",
+				"role": "user",
+			}
+			if tt.set {
+				item["content"] = tt.content
+			}
+
+			_, err := openAIRealtimeChatItem(item)
+			if err == nil {
+				t.Fatal("openAIRealtimeChatItem() error = nil, want content is None error")
+			}
+			if got, want := err.Error(), "content is None"; got != want {
+				t.Fatalf("openAIRealtimeChatItem() error = %q, want %q", got, want)
+			}
+			if ev, ok := openAIRealtimeEvent(map[string]any{
+				"type": "conversation.item.added",
+				"item": item,
+			}); ok {
+				t.Fatalf("openAIRealtimeEvent() = %#v, true; want malformed item ignored", ev)
+			}
+		})
 	}
 }
 
@@ -2272,6 +2896,43 @@ func TestRealtimeEventMapsConversationItemAddedFunctionCallOutput(t *testing.T) 
 	}
 	if output.ID != "out_123" || output.CallID != "call_123" || output.Output != "Paris" || output.IsError {
 		t.Fatalf("function output = %#v, want successful OpenAI function output item", output)
+	}
+}
+
+func TestOpenAIRealtimeFunctionCallOutputRejectsMissingOutputWithReferenceError(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		output any
+		set    bool
+	}{
+		{name: "missing"},
+		{name: "null", output: nil, set: true},
+		{name: "non_string", output: 123, set: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			item := map[string]any{
+				"id":      "out_123",
+				"type":    "function_call_output",
+				"call_id": "call_123",
+			}
+			if tt.set {
+				item["output"] = tt.output
+			}
+
+			_, err := openAIRealtimeChatItem(item)
+			if err == nil {
+				t.Fatal("openAIRealtimeChatItem() error = nil, want output is None error")
+			}
+			if got, want := err.Error(), "output is None"; got != want {
+				t.Fatalf("openAIRealtimeChatItem() error = %q, want %q", got, want)
+			}
+			if ev, ok := openAIRealtimeEvent(map[string]any{
+				"type": "conversation.item.added",
+				"item": item,
+			}); ok {
+				t.Fatalf("openAIRealtimeEvent() = %#v, true; want malformed item ignored", ev)
+			}
+		})
 	}
 }
 
@@ -2515,6 +3176,46 @@ func TestRealtimeChatContextUpdateMessagesDeleteRemovedAndRecreateChangedItems(t
 	}
 }
 
+func TestRealtimeChatContextUpdateMessagesSkipsLocalEmptyMessages(t *testing.T) {
+	oldCtx := llm.NewChatContext()
+	oldCtx.AddMessage(llm.ChatMessageArgs{ID: "keep", Role: llm.ChatRoleUser, Text: "keep"})
+
+	newCtx := llm.NewChatContext()
+	newCtx.AddMessage(llm.ChatMessageArgs{ID: "keep", Role: llm.ChatRoleUser, Text: "keep"})
+	newCtx.Items = append(newCtx.Items, &llm.ChatMessage{
+		ID:      "empty-local",
+		Role:    llm.ChatRoleUser,
+		Content: nil,
+	})
+
+	msgs, err := openAIRealtimeChatContextUpdateMessages(oldCtx, newCtx)
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatContextUpdateMessages error = %v, want nil", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("messages = %#v, want none for local empty message", msgs)
+	}
+}
+
+func TestRealtimeChatContextUpdateMessagesKeepsRemoteEmptyMessages(t *testing.T) {
+	oldCtx := llm.NewChatContext()
+	oldCtx.Items = append(oldCtx.Items, &llm.ChatMessage{
+		ID:      "remote-empty",
+		Role:    llm.ChatRoleUser,
+		Content: nil,
+	})
+
+	newCtx := llm.NewChatContext()
+
+	msgs, err := openAIRealtimeChatContextUpdateMessages(oldCtx, newCtx)
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatContextUpdateMessages error = %v, want nil", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("messages = %#v, want no delete for remote empty message", msgs)
+	}
+}
+
 func TestRealtimeTruncateTranscriptUpdateMessagesReplacesTextOnlyMessage(t *testing.T) {
 	oldCtx := llm.NewChatContext()
 	oldCtx.AddMessage(llm.ChatMessageArgs{ID: "msg_123", Role: llm.ChatRoleAssistant, Text: "old transcript"})
@@ -2599,5 +3300,23 @@ func TestRealtimeEventMapsResponseDoneMetrics(t *testing.T) {
 	}
 	if ev.Metrics.OutputTokenDetails.TextTokens != 5 || ev.Metrics.OutputTokenDetails.AudioTokens != 2 {
 		t.Fatalf("output details = %#v, want text/audio output usage", ev.Metrics.OutputTokenDetails)
+	}
+}
+
+func TestRealtimeEventMapsResponseDoneMetricsEmptyID(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "response.done",
+		"response": map[string]any{
+			"id": "",
+		},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want metrics event")
+	}
+	if ev.Metrics == nil {
+		t.Fatal("Metrics = nil, want realtime metrics payload")
+	}
+	if ev.Metrics.RequestID != "" {
+		t.Fatalf("Metrics.RequestID = %q, want empty string", ev.Metrics.RequestID)
 	}
 }

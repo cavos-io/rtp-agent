@@ -468,9 +468,13 @@ func openAIRealtimeChatContextUpdateMessages(oldCtx, newCtx *llm.ChatContext) ([
 	if newCtx == nil {
 		newCtx = llm.NewChatContext()
 	}
+	newCtx = openAIRealtimeFilterEmptyLocalMessages(oldCtx, newCtx)
 	diff := llm.ComputeChatCtxDiff(oldCtx, newCtx)
 	msgs := make([]map[string]any, 0, len(diff.ToRemove)+len(diff.ToCreate)+len(diff.ToUpdate)*2)
 	for _, itemID := range diff.ToRemove {
+		if openAIRealtimeEmptyMessage(oldCtx.GetByID(itemID)) {
+			continue
+		}
 		msgs = append(msgs, openAIRealtimeDeleteChatItemMessage(itemID))
 	}
 	for _, item := range diff.ToCreate {
@@ -484,6 +488,9 @@ func openAIRealtimeChatContextUpdateMessages(oldCtx, newCtx *llm.ChatContext) ([
 		if item[1] == nil {
 			continue
 		}
+		if openAIRealtimeEmptyMessage(oldCtx.GetByID(*item[1])) {
+			continue
+		}
 		msgs = append(msgs, openAIRealtimeDeleteChatItemMessage(*item[1]))
 		msg, err := openAIRealtimeCreateChatItemMessage(newCtx, item[0], item[1])
 		if err != nil {
@@ -492,6 +499,22 @@ func openAIRealtimeChatContextUpdateMessages(oldCtx, newCtx *llm.ChatContext) ([
 		msgs = append(msgs, msg)
 	}
 	return msgs, nil
+}
+
+func openAIRealtimeFilterEmptyLocalMessages(oldCtx, newCtx *llm.ChatContext) *llm.ChatContext {
+	filtered := llm.NewChatContext()
+	for _, item := range newCtx.Items {
+		if openAIRealtimeEmptyMessage(item) && oldCtx.GetByID(item.GetID()) == nil {
+			continue
+		}
+		filtered.Items = append(filtered.Items, item)
+	}
+	return filtered
+}
+
+func openAIRealtimeEmptyMessage(item llm.ChatItem) bool {
+	msg, ok := item.(*llm.ChatMessage)
+	return ok && len(msg.Content) == 0
 }
 
 func openAIRealtimeSyncedChatContext(chatCtx *llm.ChatContext) *llm.ChatContext {
@@ -1304,9 +1327,9 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 	switch evType {
 	case "response.output_item.added":
 		item, _ := ev["item"].(map[string]any)
-		itemID, _ := item["id"].(string)
+		itemID, hasItemID := item["id"].(string)
 		itemType, _ := item["type"].(string)
-		if itemID == "" || itemType != "message" || s.generation == nil {
+		if !hasItemID || itemType != "message" || s.generation == nil {
 			return llm.RealtimeEvent{}, false
 		}
 		msg := &realtimeMessageGeneration{
@@ -1327,10 +1350,10 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 			logger.Logger.Warnw("dropping OpenAI realtime message generation for full stream", nil, "item_id", itemID)
 		}
 	case "response.content_part.added":
-		itemID, _ := ev["item_id"].(string)
+		itemID, hasItemID := ev["item_id"].(string)
 		part, _ := ev["part"].(map[string]any)
-		partType, _ := part["type"].(string)
-		if itemID == "" || partType == "" {
+		partType, hasPartType := part["type"].(string)
+		if !hasItemID || !hasPartType {
 			return llm.RealtimeEvent{}, false
 		}
 		if partType == "text" {
@@ -1340,9 +1363,9 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 		}
 	case "response.output_item.done":
 		item, _ := ev["item"].(map[string]any)
-		itemID, _ := item["id"].(string)
+		itemID, hasItemID := item["id"].(string)
 		itemType, _ := item["type"].(string)
-		if itemID == "" || s.generation == nil {
+		if !hasItemID || s.generation == nil {
 			return llm.RealtimeEvent{}, false
 		}
 		switch itemType {
@@ -1362,8 +1385,8 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 	case "response.done":
 		s.closeRealtimeGeneration()
 	case "conversation.item.deleted":
-		itemID, _ := ev["item_id"].(string)
-		if itemID == "" {
+		itemID, hasItemID := ev["item_id"].(string)
+		if !hasItemID {
 			return llm.RealtimeEvent{}, false
 		}
 		if s.remote == nil {
@@ -1473,7 +1496,7 @@ func (s *realtimeSession) trackRealtimeAudio(ev llm.RealtimeEvent) {
 }
 
 func (s *realtimeSession) setRealtimeMessageModalities(itemID string, modalities []string) {
-	if s.generation == nil || itemID == "" {
+	if s.generation == nil {
 		return
 	}
 	msg := s.generation.messages[itemID]
@@ -1665,9 +1688,6 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 		itemID, _ := ev["item_id"].(string)
 		contentIndex := openAIRealtimeInt(ev["content_index"])
 		transcript, _ := ev["transcript"].(string)
-		if itemID == "" && transcript == "" {
-			return llm.RealtimeEvent{}, false
-		}
 		return llm.RealtimeEvent{
 			Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
 			InputTranscription: &llm.InputTranscriptionCompleted{
@@ -1696,8 +1716,8 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 		}, true
 	case "response.created":
 		response, _ := ev["response"].(map[string]any)
-		responseID, _ := response["id"].(string)
-		if responseID == "" {
+		responseID, hasResponseID := response["id"].(string)
+		if !hasResponseID {
 			return llm.RealtimeEvent{}, false
 		}
 		_, userInitiated := openAIRealtimeResponseClientEventID(response)
@@ -1750,9 +1770,6 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 
 func openAIRealtimeMetrics(response map[string]any) (*telemetry.RealtimeModelMetrics, bool) {
 	requestID, _ := response["id"].(string)
-	if requestID == "" {
-		return nil, false
-	}
 	usage, _ := response["usage"].(map[string]any)
 	inputDetails, _ := usage["input_token_details"].(map[string]any)
 	outputDetails, _ := usage["output_token_details"].(map[string]any)
@@ -1785,6 +1802,9 @@ func openAIRealtimeMetrics(response map[string]any) (*telemetry.RealtimeModelMet
 }
 
 func openAIRealtimeChatItem(item map[string]any) (llm.ChatItem, error) {
+	if _, ok := item["id"].(string); !ok {
+		return nil, fmt.Errorf("id is None")
+	}
 	itemType, _ := item["type"].(string)
 	switch itemType {
 	case "message":
@@ -1800,10 +1820,13 @@ func openAIRealtimeChatItem(item map[string]any) (llm.ChatItem, error) {
 
 func openAIRealtimeFunctionCallOutput(item map[string]any) (*llm.FunctionCallOutput, error) {
 	id, _ := item["id"].(string)
-	callID, _ := item["call_id"].(string)
-	output, _ := item["output"].(string)
-	if id == "" || callID == "" {
-		return nil, fmt.Errorf("malformed realtime function call output item")
+	callID, hasCallID := item["call_id"].(string)
+	output, hasOutput := item["output"].(string)
+	if !hasCallID {
+		return nil, fmt.Errorf("call_id is None")
+	}
+	if !hasOutput {
+		return nil, fmt.Errorf("output is None")
 	}
 	return &llm.FunctionCallOutput{
 		ID:      id,
@@ -1815,11 +1838,17 @@ func openAIRealtimeFunctionCallOutput(item map[string]any) (*llm.FunctionCallOut
 
 func openAIRealtimeFunctionCall(item map[string]any) (*llm.FunctionCall, error) {
 	id, _ := item["id"].(string)
-	callID, _ := item["call_id"].(string)
-	name, _ := item["name"].(string)
-	arguments, _ := item["arguments"].(string)
-	if id == "" || callID == "" || name == "" {
-		return nil, fmt.Errorf("malformed realtime function call item")
+	callID, hasCallID := item["call_id"].(string)
+	name, hasName := item["name"].(string)
+	arguments, hasArguments := item["arguments"].(string)
+	if !hasCallID {
+		return nil, fmt.Errorf("call_id is None")
+	}
+	if !hasName {
+		return nil, fmt.Errorf("name is None")
+	}
+	if !hasArguments {
+		return nil, fmt.Errorf("arguments is None")
 	}
 	return &llm.FunctionCall{
 		ID:        id,
@@ -1831,22 +1860,28 @@ func openAIRealtimeFunctionCall(item map[string]any) (*llm.FunctionCall, error) 
 
 func openAIRealtimeChatMessage(item map[string]any) (*llm.ChatMessage, error) {
 	id, _ := item["id"].(string)
-	roleRaw, _ := item["role"].(string)
+	roleRaw, hasRole := item["role"].(string)
+	if !hasRole {
+		return nil, fmt.Errorf("role is None")
+	}
 	role := llm.ChatRole(roleRaw)
 	switch role {
 	case llm.ChatRoleSystem, llm.ChatRoleDeveloper, llm.ChatRoleUser, llm.ChatRoleAssistant:
 	default:
 		return nil, fmt.Errorf("unsupported role: %s", roleRaw)
 	}
-	contents, _ := item["content"].([]any)
+	contents, ok := item["content"].([]any)
+	if !ok {
+		return nil, fmt.Errorf("content is None")
+	}
 	return &llm.ChatMessage{
 		ID:      id,
 		Role:    role,
-		Content: openAIRealtimeChatContent(contents),
+		Content: openAIRealtimeChatContent(role, contents),
 	}, nil
 }
 
-func openAIRealtimeChatContent(contents []any) []llm.ChatContent {
+func openAIRealtimeChatContent(role llm.ChatRole, contents []any) []llm.ChatContent {
 	out := make([]llm.ChatContent, 0, len(contents))
 	for _, content := range contents {
 		part, ok := content.(map[string]any)
@@ -1856,17 +1891,18 @@ func openAIRealtimeChatContent(contents []any) []llm.ChatContent {
 		partType, _ := part["type"].(string)
 		switch partType {
 		case "input_text", "output_text":
-			if text, _ := part["text"].(string); text != "" {
+			text, hasText := part["text"].(string)
+			if text != "" || (hasText && role == llm.ChatRoleUser && partType == "input_text") {
 				out = append(out, llm.ChatContent{Text: text})
 			}
 		case "input_image":
-			if imageURL, _ := part["image_url"].(string); imageURL != "" {
+			if imageURL, hasImageURL := part["image_url"].(string); hasImageURL && role == llm.ChatRoleUser {
 				out = append(out, llm.ChatContent{
 					Image: &llm.ImageContent{Image: imageURL},
 				})
 			}
 		case "input_audio":
-			if transcript, _ := part["transcript"].(string); transcript != "" {
+			if transcript, hasTranscript := part["transcript"].(string); hasTranscript && role == llm.ChatRoleUser {
 				out = append(out, llm.ChatContent{Text: transcript})
 			}
 		}
