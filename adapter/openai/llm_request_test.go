@@ -106,6 +106,33 @@ func (requestDefsSchemaTool) Parameters() map[string]any {
 }
 func (requestDefsSchemaTool) Execute(context.Context, string) (string, error) { return "", nil }
 
+type requestRefSiblingSchemaTool struct{}
+
+func (requestRefSiblingSchemaTool) ID() string          { return "lookup" }
+func (requestRefSiblingSchemaTool) Name() string        { return "lookup" }
+func (requestRefSiblingSchemaTool) Description() string { return "look up information" }
+func (requestRefSiblingSchemaTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"payload": map[string]any{
+				"$ref":        "#/$defs/payload",
+				"description": "caller payload",
+			},
+		},
+		"required": []string{"payload"},
+		"$defs": map[string]any{
+			"payload": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{"type": "string"},
+				},
+			},
+		},
+	}
+}
+func (requestRefSiblingSchemaTool) Execute(context.Context, string) (string, error) { return "", nil }
+
 func TestNewOpenAILLMUsesEnvironmentAPIKeyAndReferenceDefaultModel(t *testing.T) {
 	t.Setenv(openAIAPIKeyEnv, "env-key")
 
@@ -1871,6 +1898,37 @@ func TestBuildOpenAIChatCompletionRequestNormalizesStrictToolSchemaDefs(t *testi
 	required, ok := payload["required"].([]any)
 	if !ok || len(required) != 1 || required[0] != "query" {
 		t.Fatalf("$defs.payload.required = %#v, want [query]", payload["required"])
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestNormalizesStrictToolSchemaRefSiblings(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4.1-mini", llm.NewChatContext(), &llm.ChatOptions{
+		Tools: []llm.Tool{requestRefSiblingSchemaTool{}},
+	})
+
+	paramsJSON, err := json.Marshal(req.Tools[0].Function.Parameters)
+	if err != nil {
+		t.Fatalf("tool parameters marshal error = %v", err)
+	}
+	var params map[string]any
+	if err := json.Unmarshal(paramsJSON, &params); err != nil {
+		t.Fatalf("tool parameters json error = %v", err)
+	}
+
+	properties := params["properties"].(map[string]any)
+	payload := properties["payload"].(map[string]any)
+	if _, ok := payload["$ref"]; ok {
+		t.Fatalf("payload.$ref = %#v, want inlined strict schema", payload["$ref"])
+	}
+	if got := payload["description"]; got != "caller payload" {
+		t.Fatalf("payload.description = %#v, want caller payload", got)
+	}
+	if got := payload["additionalProperties"]; got != false {
+		t.Fatalf("payload.additionalProperties = %#v, want false", got)
+	}
+	required, ok := payload["required"].([]any)
+	if !ok || len(required) != 1 || required[0] != "query" {
+		t.Fatalf("payload.required = %#v, want [query]", payload["required"])
 	}
 }
 

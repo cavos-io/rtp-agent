@@ -980,12 +980,16 @@ func normalizeOpenAIStrictToolSchema(schema map[string]any) map[string]any {
 }
 
 func ensureOpenAIStrictJSONSchema(schema map[string]any) {
+	ensureOpenAIStrictJSONSchemaWithRoot(schema, schema)
+}
+
+func ensureOpenAIStrictJSONSchemaWithRoot(schema map[string]any, root map[string]any) {
 	if schema == nil {
 		return
 	}
 
-	normalizeOpenAIStrictDefinitionMap(schema["$defs"])
-	normalizeOpenAIStrictDefinitionMap(schema["definitions"])
+	normalizeOpenAIStrictDefinitionMap(schema["$defs"], root)
+	normalizeOpenAIStrictDefinitionMap(schema["definitions"], root)
 
 	if _, ok := schema["default"]; ok {
 		delete(schema, "default")
@@ -1018,21 +1022,21 @@ func ensureOpenAIStrictJSONSchema(schema map[string]any) {
 				if !previousRequired[key] {
 					markOpenAISchemaNullable(propSchema)
 				}
-				ensureOpenAIStrictJSONSchema(propSchema)
+				ensureOpenAIStrictJSONSchemaWithRoot(propSchema, root)
 			}
 			schema["required"] = keys
 		}
 	}
 
 	if items, ok := schema["items"].(map[string]any); ok {
-		ensureOpenAIStrictJSONSchema(items)
+		ensureOpenAIStrictJSONSchemaWithRoot(items, root)
 	}
-	normalizeOpenAIStrictUnionSchema(schema, "anyOf")
-	normalizeOpenAIStrictUnionSchema(schema, "oneOf")
+	normalizeOpenAIStrictUnionSchema(schema, root, "anyOf")
+	normalizeOpenAIStrictUnionSchema(schema, root, "oneOf")
 	if variants, ok := schema["allOf"].([]any); ok {
 		if len(variants) == 1 {
 			if variantSchema, ok := variants[0].(map[string]any); ok {
-				ensureOpenAIStrictJSONSchema(variantSchema)
+				ensureOpenAIStrictJSONSchemaWithRoot(variantSchema, root)
 				delete(schema, "allOf")
 				for key, value := range variantSchema {
 					schema[key] = value
@@ -1041,26 +1045,28 @@ func ensureOpenAIStrictJSONSchema(schema map[string]any) {
 		} else {
 			for _, variant := range variants {
 				if variantSchema, ok := variant.(map[string]any); ok {
-					ensureOpenAIStrictJSONSchema(variantSchema)
+					ensureOpenAIStrictJSONSchemaWithRoot(variantSchema, root)
 				}
 			}
 		}
 	}
+
+	inlineOpenAIStrictRefSchema(schema, root)
 }
 
-func normalizeOpenAIStrictDefinitionMap(value any) {
+func normalizeOpenAIStrictDefinitionMap(value any, root map[string]any) {
 	defs, ok := value.(map[string]any)
 	if !ok {
 		return
 	}
 	for _, def := range defs {
 		if defSchema, ok := def.(map[string]any); ok {
-			ensureOpenAIStrictJSONSchema(defSchema)
+			ensureOpenAIStrictJSONSchemaWithRoot(defSchema, root)
 		}
 	}
 }
 
-func normalizeOpenAIStrictUnionSchema(schema map[string]any, key string) {
+func normalizeOpenAIStrictUnionSchema(schema map[string]any, root map[string]any, key string) {
 	variants, ok := schema[key].([]any)
 	if !ok {
 		return
@@ -1071,7 +1077,7 @@ func normalizeOpenAIStrictUnionSchema(schema map[string]any, key string) {
 		if !ok || len(variantSchema) == 0 {
 			continue
 		}
-		ensureOpenAIStrictJSONSchema(variantSchema)
+		ensureOpenAIStrictJSONSchemaWithRoot(variantSchema, root)
 		normalized = append(normalized, variantSchema)
 	}
 
@@ -1088,6 +1094,49 @@ func normalizeOpenAIStrictUnionSchema(schema map[string]any, key string) {
 	default:
 		schema["anyOf"] = normalized
 	}
+}
+
+func inlineOpenAIStrictRefSchema(schema map[string]any, root map[string]any) {
+	ref, ok := schema["$ref"].(string)
+	if !ok || len(schema) <= 1 {
+		return
+	}
+	resolved, ok := resolveOpenAIStrictRef(root, ref)
+	if !ok {
+		return
+	}
+	merged := cloneOpenAIAnyMapDeep(resolved)
+	for key, value := range schema {
+		merged[key] = value
+	}
+	delete(merged, "$ref")
+	for key := range schema {
+		delete(schema, key)
+	}
+	for key, value := range merged {
+		schema[key] = value
+	}
+	ensureOpenAIStrictJSONSchemaWithRoot(schema, root)
+}
+
+func resolveOpenAIStrictRef(root map[string]any, ref string) (map[string]any, bool) {
+	if !strings.HasPrefix(ref, "#/") {
+		return nil, false
+	}
+	current := any(root)
+	for _, part := range strings.Split(strings.TrimPrefix(ref, "#/"), "/") {
+		part = strings.ReplaceAll(strings.ReplaceAll(part, "~1", "/"), "~0", "~")
+		obj, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = obj[part]
+		if !ok {
+			return nil, false
+		}
+	}
+	resolved, ok := current.(map[string]any)
+	return resolved, ok
 }
 
 func openAIRequiredSet(required any) map[string]bool {
