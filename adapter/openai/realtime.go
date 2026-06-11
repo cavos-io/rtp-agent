@@ -1750,9 +1750,6 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 
 func openAIRealtimeMetrics(response map[string]any) (*telemetry.RealtimeModelMetrics, bool) {
 	requestID, _ := response["id"].(string)
-	if requestID == "" {
-		return nil, false
-	}
 	usage, _ := response["usage"].(map[string]any)
 	inputDetails, _ := usage["input_token_details"].(map[string]any)
 	outputDetails, _ := usage["output_token_details"].(map[string]any)

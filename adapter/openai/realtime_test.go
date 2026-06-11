@@ -3115,3 +3115,21 @@ func TestRealtimeEventMapsResponseDoneMetrics(t *testing.T) {
 		t.Fatalf("output details = %#v, want text/audio output usage", ev.Metrics.OutputTokenDetails)
 	}
 }
+
+func TestRealtimeEventMapsResponseDoneMetricsEmptyID(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "response.done",
+		"response": map[string]any{
+			"id": "",
+		},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want metrics event")
+	}
+	if ev.Metrics == nil {
+		t.Fatal("Metrics = nil, want realtime metrics payload")
+	}
+	if ev.Metrics.RequestID != "" {
+		t.Fatalf("Metrics.RequestID = %q, want empty string", ev.Metrics.RequestID)
+	}
+}
