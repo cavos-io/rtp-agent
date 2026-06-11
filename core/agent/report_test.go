@@ -149,6 +149,25 @@ func TestSessionReportToDictSkipsMetricsCollectedEvents(t *testing.T) {
 	}
 }
 
+func TestSessionReportToDictSerializesErrorEventLLMSourceMetadata(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	source := &reportMetadataLLM{model: "gpt-report", provider: "openai"}
+	session.EmitError(ErrorEvent{Error: errors.New("failed"), Source: source})
+
+	data := NewSessionReport(session).ToDict()
+	events := data["events"].([]map[string]any)
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one error event", events)
+	}
+	got, ok := events[0]["source"].(map[string]any)
+	if !ok {
+		t.Fatalf("error source = %T %#v, want metadata map", events[0]["source"], events[0]["source"])
+	}
+	if got["model"] != "gpt-report" || got["provider"] != "openai" {
+		t.Fatalf("error source = %#v, want model/provider metadata", got)
+	}
+}
+
 func TestSessionReportToDictFiltersEmptyMessagesAndDuplicateConfigUpdates(t *testing.T) {
 	report := NewSessionReport(nil)
 	now := time.Unix(10, 0)
