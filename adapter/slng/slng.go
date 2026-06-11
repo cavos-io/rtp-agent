@@ -504,6 +504,9 @@ func buildTTSInitPayload(t *TTS) []byte {
 		"sample_rate": t.sampleRate,
 		"speed":       t.speed,
 	}
+	for key, value := range t.modelOptions {
+		config[key] = value
+	}
 	payload := map[string]any{
 		"type":     "init",
 		"model":    t.model,

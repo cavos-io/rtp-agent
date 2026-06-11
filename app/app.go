@@ -2259,6 +2259,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSSpeed != 0 {
 			ttsOpts = append(ttsOpts, slng.WithTTSSpeed(cfg.TTSSpeed))
 		}
+		if len(cfg.TTSModelOptions) > 0 {
+			ttsOpts = append(ttsOpts, slng.WithTTSModelOptions(cfg.TTSModelOptions))
+		}
 		return slng.NewTTS(cfg.SLNGAPIKey, ttsOpts...), nil
 	case providerTelnyx:
 		ttsOpts := []telnyx.TelnyxTTSOption{}
