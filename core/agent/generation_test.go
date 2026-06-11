@@ -529,6 +529,44 @@ func TestPerformTTSInferenceAppliesTextReplacements(t *testing.T) {
 	}
 }
 
+func TestPerformTTSInferenceBuffersTextReplacementsAcrossRawChunks(t *testing.T) {
+	providerStream := newEndInputGenerationTTSStream()
+	provider := &fakeGenerationTTS{stream: providerStream}
+	textCh := make(chan string, 2)
+	textCh <- "Use Li"
+	textCh <- "veKit now."
+	close(textCh)
+
+	data, err := PerformTTSInference(
+		context.Background(),
+		provider,
+		textCh,
+		WithTTSTextTransformsDisabled(),
+		WithTTSTextReplacements(map[string]string{
+			"LiveKit": "Cavos",
+		}),
+	)
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+	<-data.AudioCh
+
+	got := providerStream.calls
+	if len(got) == 0 || got[len(got)-1] != "end_input" {
+		t.Fatalf("stream calls = %#v, want final end_input", got)
+	}
+	var pushed strings.Builder
+	for _, call := range got[:len(got)-1] {
+		if !strings.HasPrefix(call, "push:") {
+			t.Fatalf("stream calls = %#v, want only push calls before end_input", got)
+		}
+		pushed.WriteString(strings.TrimPrefix(call, "push:"))
+	}
+	if want := "Use Cavos now."; pushed.String() != want {
+		t.Fatalf("pushed text = %q, want %q; calls = %#v", pushed.String(), want, got)
+	}
+}
+
 func TestPerformTTSInferenceUsesSynthesizeForNonStreamingTTS(t *testing.T) {
 	provider := &fakeGenerationChunkedTTS{
 		stream: &fakeGenerationChunkedStream{

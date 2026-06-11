@@ -351,15 +351,11 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		defer span.End()
 
 		startTime := time.Now()
+		replaceBuffer := tts.NewTextReplaceBuffer(options.TextReplacements, false)
 
 		if options.DisableTextTransforms {
 			for text := range textCh {
-				filteredText := applyTTSTextReplacements(text, options.TextReplacements)
-				if filteredText == "" {
-					continue
-				}
-				if err := stream.PushText(filteredText); err != nil {
-					data.StreamErr = err
+				if !pushTTSReplacementChunks(stream, replaceBuffer.Push(text), data) {
 					return
 				}
 			}
@@ -367,20 +363,19 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			transformBuffer := tts.NewTextTransformBuffer()
 			for text := range textCh {
 				for _, filteredText := range transformBuffer.Push(text) {
-					filteredText = applyTTSTextReplacements(filteredText, options.TextReplacements)
-					if err := stream.PushText(filteredText); err != nil {
-						data.StreamErr = err
+					if !pushTTSReplacementChunks(stream, replaceBuffer.Push(filteredText), data) {
 						return
 					}
 				}
 			}
 			for _, filteredText := range transformBuffer.Flush() {
-				filteredText = applyTTSTextReplacements(filteredText, options.TextReplacements)
-				if err := stream.PushText(filteredText); err != nil {
-					data.StreamErr = err
+				if !pushTTSReplacementChunks(stream, replaceBuffer.Push(filteredText), data) {
 					return
 				}
 			}
+		}
+		if !pushTTSReplacementChunks(stream, replaceBuffer.Flush(), data) {
+			return
 		}
 		if err := tts.EndSynthesizeStreamInput(stream); err != nil {
 			data.StreamErr = err
@@ -411,6 +406,19 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 
 func applyTTSTextReplacements(text string, replacements map[string]string) string {
 	return tokenize.ReplaceWords(text, replacements)
+}
+
+func pushTTSReplacementChunks(stream tts.SynthesizeStream, chunks []string, data *TTSGenerationData) bool {
+	for _, chunk := range chunks {
+		if chunk == "" {
+			continue
+		}
+		if err := stream.PushText(chunk); err != nil {
+			data.StreamErr = err
+			return false
+		}
+	}
+	return true
 }
 
 type ToolExecutionOutput struct {
