@@ -1024,16 +1024,54 @@ func ensureOpenAIStrictJSONSchema(schema map[string]any) {
 	if items, ok := schema["items"].(map[string]any); ok {
 		ensureOpenAIStrictJSONSchema(items)
 	}
-	for _, key := range []string{"anyOf", "oneOf", "allOf"} {
-		variants, ok := schema[key].([]any)
-		if !ok {
-			continue
-		}
-		for _, variant := range variants {
-			if variantSchema, ok := variant.(map[string]any); ok {
+	normalizeOpenAIStrictUnionSchema(schema, "anyOf")
+	normalizeOpenAIStrictUnionSchema(schema, "oneOf")
+	if variants, ok := schema["allOf"].([]any); ok {
+		if len(variants) == 1 {
+			if variantSchema, ok := variants[0].(map[string]any); ok {
 				ensureOpenAIStrictJSONSchema(variantSchema)
+				delete(schema, "allOf")
+				for key, value := range variantSchema {
+					schema[key] = value
+				}
+			}
+		} else {
+			for _, variant := range variants {
+				if variantSchema, ok := variant.(map[string]any); ok {
+					ensureOpenAIStrictJSONSchema(variantSchema)
+				}
 			}
 		}
+	}
+}
+
+func normalizeOpenAIStrictUnionSchema(schema map[string]any, key string) {
+	variants, ok := schema[key].([]any)
+	if !ok {
+		return
+	}
+	normalized := make([]any, 0, len(variants))
+	for _, variant := range variants {
+		variantSchema, ok := variant.(map[string]any)
+		if !ok || len(variantSchema) == 0 {
+			continue
+		}
+		ensureOpenAIStrictJSONSchema(variantSchema)
+		normalized = append(normalized, variantSchema)
+	}
+
+	delete(schema, key)
+	switch len(normalized) {
+	case 0:
+		return
+	case 1:
+		if variantSchema, ok := normalized[0].(map[string]any); ok {
+			for variantKey, value := range variantSchema {
+				schema[variantKey] = value
+			}
+		}
+	default:
+		schema["anyOf"] = normalized
 	}
 }
 
