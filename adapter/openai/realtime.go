@@ -1842,11 +1842,11 @@ func openAIRealtimeChatMessage(item map[string]any) (*llm.ChatMessage, error) {
 	return &llm.ChatMessage{
 		ID:      id,
 		Role:    role,
-		Content: openAIRealtimeChatContent(contents),
+		Content: openAIRealtimeChatContent(role, contents),
 	}, nil
 }
 
-func openAIRealtimeChatContent(contents []any) []llm.ChatContent {
+func openAIRealtimeChatContent(role llm.ChatRole, contents []any) []llm.ChatContent {
 	out := make([]llm.ChatContent, 0, len(contents))
 	for _, content := range contents {
 		part, ok := content.(map[string]any)
@@ -1856,7 +1856,8 @@ func openAIRealtimeChatContent(contents []any) []llm.ChatContent {
 		partType, _ := part["type"].(string)
 		switch partType {
 		case "input_text", "output_text":
-			if text, _ := part["text"].(string); text != "" {
+			text, hasText := part["text"].(string)
+			if text != "" || (hasText && role == llm.ChatRoleUser && partType == "input_text") {
 				out = append(out, llm.ChatContent{Text: text})
 			}
 		case "input_image":
