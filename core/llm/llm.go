@@ -1143,19 +1143,6 @@ func (f *FallbackAdapter) allUnavailable() bool {
 	return true
 }
 
-func (f *FallbackAdapter) setAvailable(index int, available bool) {
-	f.mu.Lock()
-	changed := f.available[index] != available
-	f.available[index] = available
-	if available {
-		f.recovering[index] = false
-	}
-	f.mu.Unlock()
-	if changed {
-		f.emitAvailabilityChanged(index, available)
-	}
-}
-
 func (f *FallbackAdapter) Label() string {
 	return fmt.Sprintf("FallbackAdapter(%s)", Label(f.llms[0]))
 }
@@ -1343,7 +1330,6 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 				err = NewAPIConnectionError("LLM returned nil stream")
 			}
 			if err == nil {
-				s.adapter.setAvailable(i, true)
 				s.closeActive()
 				s.activeStream = stream
 				s.activeCancel = cancel

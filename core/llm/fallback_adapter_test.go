@@ -879,6 +879,29 @@ func TestFallbackAdapterEmitsAvailabilityChangedWhenProviderRecovers(t *testing.
 	}
 }
 
+func TestFallbackAdapterAllUnavailableMainSuccessDoesNotEmitRecovered(t *testing.T) {
+	primary := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "primary active"}}},
+	}}}
+	adapter := NewFallbackAdapter([]LLM{primary})
+	adapter.mu.Lock()
+	adapter.available[0] = false
+	adapter.mu.Unlock()
+
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "primary active" {
+		t.Fatalf("chunk content = %q, want primary active", got)
+	}
+	assertNoFallbackAvailabilityEvent(t, adapter)
+}
+
 func TestFallbackAdapterRecoversUnavailableProviderInBackground(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	primary := &fakeFallbackLLM{streams: []LLMStream{
@@ -1027,6 +1050,15 @@ func assertNoFallbackAvailabilityChange(t *testing.T, changes <-chan FallbackAva
 	select {
 	case event := <-changes:
 		t.Fatalf("received unexpected fallback availability handler event: %#v", event)
+	case <-time.After(25 * time.Millisecond):
+	}
+}
+
+func assertNoFallbackAvailabilityEvent(t *testing.T, adapter *FallbackAdapter) {
+	t.Helper()
+	select {
+	case event := <-adapter.AvailabilityChangedCh():
+		t.Fatalf("received unexpected fallback availability event: %#v", event)
 	case <-time.After(25 * time.Millisecond):
 	}
 }
