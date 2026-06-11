@@ -18,9 +18,10 @@ import (
 type RecorderIO struct {
 	Session *agent.AgentSession
 
-	mu      sync.Mutex
-	started bool
-	closed  bool
+	mu       sync.Mutex
+	started  bool
+	closed   bool
+	stopping bool
 
 	inFrames  []*model.AudioFrame
 	outFrames []*model.AudioFrame
@@ -28,7 +29,8 @@ type RecorderIO struct {
 	oggWriter *oggwriter.OggWriter
 	encoder   *opus.Encoder
 
-	done chan struct{}
+	done          chan struct{}
+	closeComplete chan struct{}
 
 	outPath string
 
@@ -49,7 +51,7 @@ func NewRecorderIO(session *agent.AgentSession) *RecorderIO {
 func (r *RecorderIO) Recording() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.started
+	return r.started && !r.closed
 }
 
 func (r *RecorderIO) OutputPath() string {
@@ -102,7 +104,7 @@ func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.started {
+	if r.started || r.stopping {
 		return nil
 	}
 
@@ -125,25 +127,51 @@ func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 	r.encoder = encoder
 	r.outPath = outputPath
 	r.done = make(chan struct{})
+	r.closeComplete = make(chan struct{})
 	r.closed = false
+	r.stopping = false
 	r.started = true
 
-	go r.recordLoop(sampleRate)
+	go r.recordLoop(sampleRate, r.done, r.closeComplete)
 
 	return nil
 }
 
 func (r *RecorderIO) Stop() error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if !r.started || r.closed {
+	if !r.started {
+		closeComplete := r.closeComplete
+		stopping := r.stopping
+		r.mu.Unlock()
+		if stopping && closeComplete != nil {
+			<-closeComplete
+		}
 		return nil
 	}
+	if r.closed {
+		closeComplete := r.closeComplete
+		r.mu.Unlock()
+		if closeComplete != nil {
+			<-closeComplete
+		}
+		return nil
+	}
+	done := r.done
+	closeComplete := r.closeComplete
 
 	r.closed = true
+	r.stopping = true
+	close(done)
+	r.mu.Unlock()
+
+	if closeComplete != nil {
+		<-closeComplete
+	}
+
+	r.mu.Lock()
 	r.started = false
-	close(r.done)
+	r.stopping = false
+	r.mu.Unlock()
 	return nil
 }
 
@@ -177,13 +205,14 @@ func (r *RecorderIO) RecordOutput(frame *model.AudioFrame) {
 	r.outFrames = append(r.outFrames, frame)
 }
 
-func (r *RecorderIO) recordLoop(sampleRate int) {
+func (r *RecorderIO) recordLoop(sampleRate int, done <-chan struct{}, closeComplete chan<- struct{}) {
 	ticker := time.NewTicker(2500 * time.Millisecond)
 	defer ticker.Stop()
+	defer close(closeComplete)
 
 	for {
 		select {
-		case <-r.done:
+		case <-done:
 			r.flush(sampleRate)
 			r.oggWriter.Close()
 			return

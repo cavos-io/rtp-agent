@@ -1,11 +1,14 @@
 package worker
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 )
 
 func TestRecorderIORecordingStartedAtReturnsNilBeforeAudio(t *testing.T) {
@@ -112,5 +115,36 @@ func TestRecorderIOStopMarksRecorderStopped(t *testing.T) {
 
 	if recorder.started {
 		t.Fatal("started = true after Stop(), want false")
+	}
+}
+
+func TestRecorderIOStopFlushesAndClosesOutput(t *testing.T) {
+	recorder := NewRecorderIO(&agent.AgentSession{})
+	outputPath := filepath.Join(t.TempDir(), "session.ogg")
+	const sampleRate = 48000
+	if err := recorder.Start(outputPath, sampleRate); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        sampleRate,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+	for i := 0; i < len(frame.Data); i += 2 {
+		frame.Data[i] = byte(i)
+		frame.Data[i+1] = byte(i >> 8)
+	}
+	recorder.RecordInput(frame)
+
+	if err := recorder.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	info, err := os.Stat(outputPath)
+	if err != nil {
+		t.Fatalf("Stat recording after Stop(): %v", err)
+	}
+	if info.Size() == 0 {
+		t.Fatal("recording size after Stop() = 0, want flushed and closed output")
 	}
 }
