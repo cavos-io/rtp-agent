@@ -1423,6 +1423,21 @@ func TestRealtimeEventMapsInputAudioTranscriptionCompleted(t *testing.T) {
 	if ev.InputTranscription.Confidence != nil {
 		t.Fatalf("Confidence = %#v, want nil for empty logprobs", ev.InputTranscription.Confidence)
 	}
+
+	ev, ok = openAIRealtimeEvent(map[string]any{
+		"type":       "conversation.item.input_audio_transcription.completed",
+		"item_id":    "",
+		"transcript": "",
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent empty item/transcript returned ok=false, want final transcription event")
+	}
+	if ev.InputTranscription == nil {
+		t.Fatal("InputTranscription = nil, want empty final transcription payload")
+	}
+	if ev.InputTranscription.ItemID != "" || ev.InputTranscription.Transcript != "" || !ev.InputTranscription.IsFinal {
+		t.Fatalf("InputTranscription = %#v, want final empty item transcript", ev.InputTranscription)
+	}
 }
 
 func TestRealtimeEventMapsInputAudioTranscriptionDelta(t *testing.T) {

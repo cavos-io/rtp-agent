@@ -1665,9 +1665,6 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 		itemID, _ := ev["item_id"].(string)
 		contentIndex := openAIRealtimeInt(ev["content_index"])
 		transcript, _ := ev["transcript"].(string)
-		if itemID == "" && transcript == "" {
-			return llm.RealtimeEvent{}, false
-		}
 		return llm.RealtimeEvent{
 			Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
 			InputTranscription: &llm.InputTranscriptionCompleted{
