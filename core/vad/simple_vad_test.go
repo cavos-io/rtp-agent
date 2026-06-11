@@ -396,6 +396,53 @@ func TestNewSimpleVADWithAllowsExplicitZeroThreshold(t *testing.T) {
 	assertEventType(t, stream, VADEventStartOfSpeech)
 }
 
+func TestSimpleVADUsesProbabilityEstimatorFactoryPerStream(t *testing.T) {
+	var factories int
+	detector := NewSimpleVADWith(
+		WithThreshold(0.5),
+		WithMinSpeechDuration(0.01),
+		WithWindowDuration(0.01),
+		WithSampleRate(1000),
+		WithProbabilityEstimatorFactory(func() ProbabilityEstimator {
+			factories++
+			calls := 0
+			return func(*model.AudioFrame) (float64, error) {
+				calls++
+				if calls == 1 {
+					return 0.9, nil
+				}
+				return 0.0, nil
+			}
+		}),
+	)
+
+	first, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("first Stream() error = %v", err)
+	}
+	defer first.Close()
+	second, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("second Stream() error = %v", err)
+	}
+	defer second.Close()
+
+	if err := first.PushFrame(audioFrame(1000, 10, 0)); err != nil {
+		t.Fatalf("first PushFrame() error = %v", err)
+	}
+	if err := second.PushFrame(audioFrame(1000, 10, 0)); err != nil {
+		t.Fatalf("second PushFrame() error = %v", err)
+	}
+
+	assertEventType(t, first, VADEventInferenceDone)
+	assertEventType(t, first, VADEventStartOfSpeech)
+	assertEventType(t, second, VADEventInferenceDone)
+	assertEventType(t, second, VADEventStartOfSpeech)
+	if factories != 2 {
+		t.Fatalf("estimator factories = %d, want one estimator per stream", factories)
+	}
+}
+
 func TestSimpleVADUpdateOptionsWithAllowsZeroThreshold(t *testing.T) {
 	detector := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:         0.05,
