@@ -598,6 +598,30 @@ func TestChatContextInstructionsSerializeAndRoundTrip(t *testing.T) {
 	}
 }
 
+func TestChatContextInstructionsSerializeExplicitTextVariantMatchingAudio(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:   "system",
+			Role: ChatRoleSystem,
+			Content: []ChatContent{{
+				Instructions: NewInstructions("same instructions", "same instructions"),
+			}},
+		},
+	}
+
+	data := ctx.ToDict()
+	items := data["items"].([]map[string]any)
+	content := items[0]["content"].([]any)
+	instructions := content[0].(map[string]any)
+	if _, ok := instructions["text"]; !ok {
+		t.Fatalf("serialized instructions = %#v, want explicit text field preserved", instructions)
+	}
+	if instructions["text"] != "same instructions" {
+		t.Fatalf("instructions text = %#v, want same instructions", instructions["text"])
+	}
+}
+
 func TestProviderFormatUsesActiveInstructionText(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{

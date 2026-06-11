@@ -1020,7 +1020,7 @@ func instructionsToDict(instructions *Instructions) map[string]any {
 		"type":  "instructions",
 		"audio": instructions.Audio,
 	}
-	if instructions.Text != "" && instructions.Text != instructions.Audio {
+	if instructions.textSet {
 		data["text"] = instructions.Text
 	}
 	return data
