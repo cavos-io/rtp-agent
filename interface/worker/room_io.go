@@ -1255,7 +1255,15 @@ func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
 
 	data := frame.Data
 	if encoder != nil {
-		if encoded, err := encoder.Encode(frame.Data); err == nil {
+		encodeFrame := frame
+		if frame.SampleRate != 0 && frame.SampleRate != 48000 {
+			resampled, err := audio.ResampleAudioFrame(frame, 48000)
+			if err != nil {
+				return err
+			}
+			encodeFrame = resampled
+		}
+		if encoded, err := encoder.Encode(encodeFrame.Data); err == nil {
 			data = encoded
 		}
 	}

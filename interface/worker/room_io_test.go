@@ -244,6 +244,31 @@ func TestRoomIOPlaybackEventsFollowCaptureAndFlush(t *testing.T) {
 	}
 }
 
+func TestRoomIOPublishAudioResamplesPCMToOpusClockRate(t *testing.T) {
+	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
+	rio := &RoomIO{
+		audioTrack: newRoomIOTestAudioTrack(t),
+		encoder:    encoder,
+	}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 160*2),
+		SampleRate:        8000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	}
+
+	if err := rio.PublishAudio(frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+
+	if got, want := len(encoder.pcm), 960*2; got != want {
+		t.Fatalf("encoder PCM length = %d, want %d bytes for 20ms at 48kHz", got, want)
+	}
+	if rio.playbackPosition != 20*time.Millisecond {
+		t.Fatalf("playback position = %v, want original 20ms duration", rio.playbackPosition)
+	}
+}
+
 func TestRoomIOClearBufferFinishesPlaybackAsInterrupted(t *testing.T) {
 	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
 	frame := &model.AudioFrame{
@@ -512,6 +537,20 @@ func newRoomIOTestAudioTrack(t *testing.T) *lksdk.LocalTrack {
 		t.Fatalf("NewLocalSampleTrack error = %v", err)
 	}
 	return track
+}
+
+type recordingRoomIOEncoder struct {
+	pcm     []byte
+	encoded []byte
+}
+
+func (e *recordingRoomIOEncoder) Encode(pcm []byte) ([]byte, error) {
+	e.pcm = append([]byte(nil), pcm...)
+	return append([]byte(nil), e.encoded...), nil
+}
+
+func (e *recordingRoomIOEncoder) Close() error {
+	return nil
 }
 
 func TestRoomIOCloseUnregistersChatTextHandler(t *testing.T) {

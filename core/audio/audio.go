@@ -156,6 +156,66 @@ func CalculateFrameDuration(frame *model.AudioFrame) float64 {
 	return float64(frame.SamplesPerChannel) / float64(frame.SampleRate)
 }
 
+func ResampleAudioFrame(frame *model.AudioFrame, outputRate uint32) (*model.AudioFrame, error) {
+	if frame == nil || outputRate == 0 || frame.SampleRate == outputRate {
+		return frame, nil
+	}
+	if frame.SampleRate == 0 {
+		return nil, fmt.Errorf("cannot resample audio with zero sample rate")
+	}
+	if frame.NumChannels == 0 {
+		return nil, fmt.Errorf("cannot resample audio with zero channels")
+	}
+	if len(frame.Data)%2 != 0 {
+		return nil, fmt.Errorf("cannot resample non-16-bit PCM audio")
+	}
+	expectedBytes := int(frame.SamplesPerChannel * frame.NumChannels * 2)
+	if len(frame.Data) < expectedBytes {
+		return nil, fmt.Errorf("audio frame data is shorter than declared sample count")
+	}
+	if frame.SamplesPerChannel == 0 {
+		return &model.AudioFrame{
+			Data:              nil,
+			SampleRate:        outputRate,
+			NumChannels:       frame.NumChannels,
+			SamplesPerChannel: 0,
+		}, nil
+	}
+
+	inRate := frame.SampleRate
+	channels := frame.NumChannels
+	outSamples := uint32((uint64(frame.SamplesPerChannel)*uint64(outputRate) + uint64(inRate) - 1) / uint64(inRate))
+	if outSamples == 0 && frame.SamplesPerChannel > 0 {
+		outSamples = 1
+	}
+	out := make([]byte, int(outSamples*channels*2))
+
+	inputSamples := int(frame.SamplesPerChannel)
+	outputSamples := int(outSamples)
+	channelCount := int(channels)
+	for outIdx := 0; outIdx < outputSamples; outIdx++ {
+		srcIdx := 0
+		if outputSamples > 0 {
+			srcIdx = int(uint64(outIdx) * uint64(inRate) / uint64(outputRate))
+		}
+		if srcIdx >= inputSamples {
+			srcIdx = inputSamples - 1
+		}
+		for ch := 0; ch < channelCount; ch++ {
+			inOffset := (srcIdx*channelCount + ch) * 2
+			outOffset := (outIdx*channelCount + ch) * 2
+			copy(out[outOffset:outOffset+2], frame.Data[inOffset:inOffset+2])
+		}
+	}
+
+	return &model.AudioFrame{
+		Data:              out,
+		SampleRate:        outputRate,
+		NumChannels:       channels,
+		SamplesPerChannel: outSamples,
+	}, nil
+}
+
 func minUint32(a, b uint32) uint32 {
 	if a < b {
 		return a
