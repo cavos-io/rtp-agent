@@ -966,6 +966,53 @@ func TestFallbackAdapterRecoversUnavailableProviderInBackground(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterRetriesRecoveryAfterFailedProbeOnLaterChat(t *testing.T) {
+	firstErr := errors.New("primary stream failed")
+	recoveryErr := errors.New("recovery probe failed")
+	primary := &fakeFallbackLLM{streams: []LLMStream{
+		&fakeFallbackStream{events: []fakeFallbackEvent{{err: firstErr}}},
+		&fakeFallbackStream{events: []fakeFallbackEvent{{err: recoveryErr}}},
+		&fakeFallbackStream{events: []fakeFallbackEvent{
+			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "second recovery probe"}}},
+		}},
+	}}
+	fallback := &fakeFallbackLLM{streams: []LLMStream{
+		&fakeFallbackStream{events: []fakeFallbackEvent{
+			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback first"}}},
+		}},
+		&fakeFallbackStream{events: []fakeFallbackEvent{
+			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback second"}}},
+		}},
+	}}
+	adapter := NewFallbackAdapter([]LLM{primary, fallback})
+
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "fallback first" {
+		t.Fatalf("fallback content = %q, want fallback first", got)
+	}
+	waitForFallbackCalls(t, primary, 2)
+
+	stream, err = adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("second Chat returned error: %v", err)
+	}
+	chunk, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "fallback second" {
+		t.Fatalf("second fallback content = %q, want fallback second", got)
+	}
+	waitForFallbackCalls(t, primary, 3)
+}
+
 type fakeFallbackLLM struct {
 	MetricsEmitter
 	ErrorEmitter

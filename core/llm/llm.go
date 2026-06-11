@@ -1275,15 +1275,30 @@ func (s *fallbackLLMStream) markUnavailable(index int, recover bool) {
 		}
 		return
 	}
-	s.adapter.recovering[index] = true
 	llm := s.adapter.llms[index]
 	chatCtx := s.ChatCtx()
 	opts := append([]ChatOption(nil), s.opts...)
+	s.adapter.recovering[index] = true
 	s.adapter.mu.Unlock()
 
 	if changed {
 		s.adapter.emitAvailabilityChanged(index, false)
 	}
+	go s.adapter.recoverLLM(index, llm, chatCtx, opts)
+}
+
+func (s *fallbackLLMStream) tryRecovery(index int) {
+	s.adapter.mu.Lock()
+	if s.adapter.available[index] || s.adapter.recovering[index] {
+		s.adapter.mu.Unlock()
+		return
+	}
+	llm := s.adapter.llms[index]
+	chatCtx := s.ChatCtx()
+	opts := append([]ChatOption(nil), s.opts...)
+	s.adapter.recovering[index] = true
+	s.adapter.mu.Unlock()
+
 	go s.adapter.recoverLLM(index, llm, chatCtx, opts)
 }
 
@@ -1329,6 +1344,7 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 	allUnavailable := s.adapter.allUnavailable()
 	for i := index; i < len(s.adapter.llms); i++ {
 		if !s.adapter.isAvailable(i, allUnavailable) {
+			s.tryRecovery(i)
 			continue
 		}
 		for {
