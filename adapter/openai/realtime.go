@@ -1340,9 +1340,9 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 		}
 	case "response.output_item.done":
 		item, _ := ev["item"].(map[string]any)
-		itemID, _ := item["id"].(string)
+		itemID, hasItemID := item["id"].(string)
 		itemType, _ := item["type"].(string)
-		if itemID == "" || s.generation == nil {
+		if !hasItemID || s.generation == nil {
 			return llm.RealtimeEvent{}, false
 		}
 		switch itemType {
