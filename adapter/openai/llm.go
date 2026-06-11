@@ -984,6 +984,9 @@ func ensureOpenAIStrictJSONSchema(schema map[string]any) {
 		return
 	}
 
+	normalizeOpenAIStrictDefinitionMap(schema["$defs"])
+	normalizeOpenAIStrictDefinitionMap(schema["definitions"])
+
 	if _, ok := schema["default"]; ok {
 		delete(schema, "default")
 		markOpenAISchemaNullable(schema)
@@ -1041,6 +1044,18 @@ func ensureOpenAIStrictJSONSchema(schema map[string]any) {
 					ensureOpenAIStrictJSONSchema(variantSchema)
 				}
 			}
+		}
+	}
+}
+
+func normalizeOpenAIStrictDefinitionMap(value any) {
+	defs, ok := value.(map[string]any)
+	if !ok {
+		return
+	}
+	for _, def := range defs {
+		if defSchema, ok := def.(map[string]any); ok {
+			ensureOpenAIStrictJSONSchema(defSchema)
 		}
 	}
 }

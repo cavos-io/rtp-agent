@@ -82,6 +82,30 @@ func (requestUnionSchemaTool) Parameters() map[string]any {
 }
 func (requestUnionSchemaTool) Execute(context.Context, string) (string, error) { return "", nil }
 
+type requestDefsSchemaTool struct{}
+
+func (requestDefsSchemaTool) ID() string          { return "lookup" }
+func (requestDefsSchemaTool) Name() string        { return "lookup" }
+func (requestDefsSchemaTool) Description() string { return "look up information" }
+func (requestDefsSchemaTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"payload": map[string]any{"$ref": "#/$defs/payload"},
+		},
+		"required": []string{"payload"},
+		"$defs": map[string]any{
+			"payload": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{"type": "string"},
+				},
+			},
+		},
+	}
+}
+func (requestDefsSchemaTool) Execute(context.Context, string) (string, error) { return "", nil }
+
 func TestNewOpenAILLMUsesEnvironmentAPIKeyAndReferenceDefaultModel(t *testing.T) {
 	t.Setenv(openAIAPIKeyEnv, "env-key")
 
@@ -1822,6 +1846,31 @@ func TestBuildOpenAIChatCompletionRequestNormalizesStrictToolSchemaUnions(t *tes
 	}
 	if len(anyOf) != 2 {
 		t.Fatalf("query.anyOf = %#v, want two non-empty variants", anyOf)
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestNormalizesStrictToolSchemaDefs(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4.1-mini", llm.NewChatContext(), &llm.ChatOptions{
+		Tools: []llm.Tool{requestDefsSchemaTool{}},
+	})
+
+	paramsJSON, err := json.Marshal(req.Tools[0].Function.Parameters)
+	if err != nil {
+		t.Fatalf("tool parameters marshal error = %v", err)
+	}
+	var params map[string]any
+	if err := json.Unmarshal(paramsJSON, &params); err != nil {
+		t.Fatalf("tool parameters json error = %v", err)
+	}
+
+	defs := params["$defs"].(map[string]any)
+	payload := defs["payload"].(map[string]any)
+	if got := payload["additionalProperties"]; got != false {
+		t.Fatalf("$defs.payload.additionalProperties = %#v, want false", got)
+	}
+	required, ok := payload["required"].([]any)
+	if !ok || len(required) != 1 || required[0] != "query" {
+		t.Fatalf("$defs.payload.required = %#v, want [query]", payload["required"])
 	}
 }
 
