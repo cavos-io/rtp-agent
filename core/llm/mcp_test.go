@@ -757,6 +757,56 @@ func TestMCPServerStdioReadLoopHandlesLargeJSONRPCLine(t *testing.T) {
 	_ = writer.Close()
 }
 
+func TestMCPServerStdioSerializesConcurrentWrites(t *testing.T) {
+	server := NewMCPServerStdio("", nil)
+	writer := &blockingMCPWriteCloser{
+		server:       server,
+		firstStarted: make(chan struct{}),
+		releaseFirst: make(chan struct{}),
+		overlap:      make(chan struct{}),
+	}
+	server.stdin = writer
+
+	errs := make(chan error, 2)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go func() {
+		_, err := server.sendRequest(ctx, "tools/call", map[string]any{"name": "first"})
+		errs <- err
+	}()
+
+	select {
+	case <-writer.firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first write")
+	}
+
+	go func() {
+		_, err := server.sendRequest(ctx, "tools/call", map[string]any{"name": "second"})
+		errs <- err
+	}()
+
+	overlapped := false
+	select {
+	case <-writer.overlap:
+		overlapped = true
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(writer.releaseFirst)
+
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("sendRequest error = %v", err)
+		}
+	}
+	if overlapped {
+		t.Fatal("stdio writes overlapped, want serialized JSON-RPC writes")
+	}
+	if got := writer.writes.Load(); got != 2 {
+		t.Fatalf("writes = %d, want 2", got)
+	}
+}
+
 func TestMCPServerStdioInitializePassesEnvAndCwd(t *testing.T) {
 	tmpDir := t.TempDir()
 	scriptPath := filepath.Join(tmpDir, "mcp-env-cwd-test.sh")
@@ -1035,6 +1085,47 @@ func (w *fakeMCPWriteCloser) Write(p []byte) (int, error) {
 }
 
 func (w *fakeMCPWriteCloser) Close() error {
+	return nil
+}
+
+type blockingMCPWriteCloser struct {
+	server       *MCPServerStdio
+	firstStarted chan struct{}
+	releaseFirst chan struct{}
+	overlap      chan struct{}
+	writes       atomic.Int32
+	active       atomic.Int32
+	overlapped   atomic.Bool
+}
+
+func (w *blockingMCPWriteCloser) Write(p []byte) (int, error) {
+	if w.active.Add(1) > 1 && w.overlapped.CompareAndSwap(false, true) {
+		close(w.overlap)
+	}
+	defer w.active.Add(-1)
+
+	var req jsonRPCRequest
+	if err := json.Unmarshal(p, &req); err != nil {
+		return 0, err
+	}
+	writeNo := w.writes.Add(1)
+	if writeNo == 1 {
+		close(w.firstStarted)
+		<-w.releaseFirst
+	}
+
+	w.server.mu.Lock()
+	ch := w.server.pending[req.ID]
+	w.server.mu.Unlock()
+	ch <- &jsonRPCResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result:  json.RawMessage(`{"content":[{"type":"text","text":"ok"}]}`),
+	}
+	return len(p), nil
+}
+
+func (w *blockingMCPWriteCloser) Close() error {
 	return nil
 }
 

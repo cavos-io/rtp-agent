@@ -315,6 +315,7 @@ type MCPServerStdio struct {
 	msgID   atomic.Int64
 	pending map[int64]chan *jsonRPCResponse
 	mu      sync.Mutex
+	writeMu sync.Mutex
 
 	cacheDirty bool
 	toolsCache []Tool
@@ -678,7 +679,10 @@ func (s *MCPServerStdio) sendRequest(ctx context.Context, method string, params 
 		s.mu.Unlock()
 	}()
 
-	if _, err := s.stdin.Write(b); err != nil {
+	s.writeMu.Lock()
+	_, err = s.stdin.Write(b)
+	s.writeMu.Unlock()
+	if err != nil {
 		return nil, err
 	}
 
@@ -710,7 +714,9 @@ func (s *MCPServerStdio) sendNotification(method string, params interface{}) err
 	if stdin == nil {
 		return errors.New("MCP stdio transport closed")
 	}
+	s.writeMu.Lock()
 	_, err = stdin.Write(b)
+	s.writeMu.Unlock()
 	return err
 }
 
