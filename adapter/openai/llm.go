@@ -1052,6 +1052,7 @@ func ensureOpenAIStrictJSONSchemaWithRoot(schema map[string]any, root map[string
 	}
 
 	inlineOpenAIStrictRefSchema(schema, root)
+	simplifyOpenAIStrictNullableUnion(schema)
 }
 
 func normalizeOpenAIStrictDefinitionMap(value any, root map[string]any) {
@@ -1094,6 +1095,58 @@ func normalizeOpenAIStrictUnionSchema(schema map[string]any, root map[string]any
 	default:
 		schema["anyOf"] = normalized
 	}
+}
+
+func simplifyOpenAIStrictNullableUnion(schema map[string]any) {
+	for _, key := range []string{"anyOf", "oneOf"} {
+		variants, ok := schema[key].([]any)
+		if !ok || len(variants) != 2 {
+			continue
+		}
+
+		var nonNull map[string]any
+		hasNull := false
+		for _, variant := range variants {
+			variantSchema, ok := variant.(map[string]any)
+			if !ok {
+				nonNull = nil
+				break
+			}
+			if openAISchemaIsNullType(variantSchema) {
+				hasNull = true
+				continue
+			}
+			nonNull = variantSchema
+		}
+		if nonNull == nil || !hasNull {
+			continue
+		}
+
+		switch typ := nonNull["type"].(type) {
+		case string:
+			nonNull["type"] = []any{typ, "null"}
+		case []any:
+			nonNull["type"] = typ
+		default:
+			continue
+		}
+		if enum, ok := nonNull["enum"].([]any); ok {
+			nonNull["enum"] = append(enum, nil)
+		}
+		delete(schema, "anyOf")
+		delete(schema, "oneOf")
+		for variantKey, value := range nonNull {
+			schema[variantKey] = value
+		}
+		return
+	}
+}
+
+func openAISchemaIsNullType(schema map[string]any) bool {
+	if len(schema) != 1 {
+		return false
+	}
+	return schema["type"] == "null"
 }
 
 func inlineOpenAIStrictRefSchema(schema map[string]any, root map[string]any) {

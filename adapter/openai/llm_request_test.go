@@ -82,6 +82,32 @@ func (requestUnionSchemaTool) Parameters() map[string]any {
 }
 func (requestUnionSchemaTool) Execute(context.Context, string) (string, error) { return "", nil }
 
+type requestNullableUnionSchemaTool struct{}
+
+func (requestNullableUnionSchemaTool) ID() string          { return "lookup" }
+func (requestNullableUnionSchemaTool) Name() string        { return "lookup" }
+func (requestNullableUnionSchemaTool) Description() string { return "look up information" }
+func (requestNullableUnionSchemaTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"mode": map[string]any{
+				"anyOf": []any{
+					map[string]any{
+						"type": "string",
+						"enum": []any{"fast", "safe"},
+					},
+					map[string]any{"type": "null"},
+				},
+			},
+		},
+		"required": []string{"mode"},
+	}
+}
+func (requestNullableUnionSchemaTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
+
 type requestDefsSchemaTool struct{}
 
 func (requestDefsSchemaTool) ID() string          { return "lookup" }
@@ -1873,6 +1899,35 @@ func TestBuildOpenAIChatCompletionRequestNormalizesStrictToolSchemaUnions(t *tes
 	}
 	if len(anyOf) != 2 {
 		t.Fatalf("query.anyOf = %#v, want two non-empty variants", anyOf)
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestNormalizesStrictToolSchemaNullableUnion(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4.1-mini", llm.NewChatContext(), &llm.ChatOptions{
+		Tools: []llm.Tool{requestNullableUnionSchemaTool{}},
+	})
+
+	paramsJSON, err := json.Marshal(req.Tools[0].Function.Parameters)
+	if err != nil {
+		t.Fatalf("tool parameters marshal error = %v", err)
+	}
+	var params map[string]any
+	if err := json.Unmarshal(paramsJSON, &params); err != nil {
+		t.Fatalf("tool parameters json error = %v", err)
+	}
+
+	properties := params["properties"].(map[string]any)
+	mode := properties["mode"].(map[string]any)
+	if _, ok := mode["anyOf"]; ok {
+		t.Fatalf("mode.anyOf = %#v, want collapsed nullable type", mode["anyOf"])
+	}
+	types, ok := mode["type"].([]any)
+	if !ok || len(types) != 2 || types[0] != "string" || types[1] != "null" {
+		t.Fatalf("mode.type = %#v, want [string null]", mode["type"])
+	}
+	enum, ok := mode["enum"].([]any)
+	if !ok || len(enum) != 3 || enum[0] != "fast" || enum[1] != "safe" || enum[2] != nil {
+		t.Fatalf("mode.enum = %#v, want [fast safe nil]", mode["enum"])
 	}
 }
 
