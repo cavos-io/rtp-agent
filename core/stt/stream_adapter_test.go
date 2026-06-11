@@ -564,6 +564,49 @@ func TestStreamAdapterRecognizesBufferedFramesWhenVADEndOmitsFrames(t *testing.T
 	}
 }
 
+func TestStreamAdapterRecognizesReferenceEmptyVADEndOfSpeech(t *testing.T) {
+	wrapped := &fakeStreamAdapterSTT{recognizeResult: &SpeechEvent{
+		Type:         SpeechEventFinalTranscript,
+		Alternatives: []SpeechData{{Text: "empty vad speech"}},
+	}}
+	stream, err := NewStreamAdapter(
+		wrapped,
+		&fakeStreamAdapterVAD{stream: &fakeStreamAdapterVADStream{
+			events: []*vad.VADEvent{{Type: vad.VADEventEndOfSpeech}},
+			done:   make(chan struct{}),
+		}},
+	).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if event.Type != SpeechEventEndOfSpeech {
+		t.Fatalf("first event type = %s, want end_of_speech", event.Type)
+	}
+
+	event, err = nextStreamAdapterEvent(stream)
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if event.Type != SpeechEventFinalTranscript {
+		t.Fatalf("second event type = %s, want final_transcript", event.Type)
+	}
+	if len(event.Alternatives) != 1 || event.Alternatives[0].Text != "empty vad speech" {
+		t.Fatalf("final alternatives = %#v, want wrapped STT text", event.Alternatives)
+	}
+	if wrapped.recognizeCalls != 1 {
+		t.Fatalf("Recognize calls = %d, want 1 for empty VAD end-of-speech", wrapped.recognizeCalls)
+	}
+	if len(wrapped.recognizeFrames) != 0 {
+		t.Fatalf("Recognize frame count = %d, want 0", len(wrapped.recognizeFrames))
+	}
+}
+
 func TestStreamAdapterBuffersFrameBeforeVADPushReturns(t *testing.T) {
 	frame := &model.AudioFrame{Data: []byte("raced"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
 	pushStarted := make(chan struct{}, 1)
@@ -724,6 +767,7 @@ type fakeStreamAdapterSTT struct {
 	recognizeStarted chan struct{}
 	releaseRecognize chan struct{}
 	recognizeFrames  []*model.AudioFrame
+	recognizeCalls   int
 	model            string
 	provider         string
 }
@@ -749,6 +793,7 @@ func (f *fakeStreamAdapterSTT) Stream(context.Context, string) (RecognizeStream,
 }
 
 func (f *fakeStreamAdapterSTT) Recognize(_ context.Context, frames []*model.AudioFrame, _ string) (*SpeechEvent, error) {
+	f.recognizeCalls++
 	f.recognizeFrames = append([]*model.AudioFrame(nil), frames...)
 	if f.recognizeStarted != nil {
 		f.recognizeStarted <- struct{}{}
