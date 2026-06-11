@@ -85,3 +85,29 @@ func TestBuildOpenAIChatMessagesSerializesEmptyTextAsBlankString(t *testing.T) {
 		t.Fatalf("message JSON = %s, want %s", got, want)
 	}
 }
+
+func TestBuildOpenAIChatMessagesCombinesTextOnlyParts(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{
+			ID:   "multi-text",
+			Role: llm.ChatRoleUser,
+			Content: []llm.ChatContent{
+				{Text: "first"},
+				{Text: "second"},
+			},
+		},
+	}
+
+	messages := buildOpenAIChatMessages(ctx)
+
+	if len(messages) != 1 {
+		t.Fatalf("len(messages) = %d, want 1: %#v", len(messages), messages)
+	}
+	if got, want := messages[0].Content, "first\nsecond"; got != want {
+		t.Fatalf("Content = %q, want combined text string %q", got, want)
+	}
+	if len(messages[0].MultiContent) != 0 {
+		t.Fatalf("MultiContent = %#v, want text-only message serialized as string content", messages[0].MultiContent)
+	}
+}
