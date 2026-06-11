@@ -82,6 +82,29 @@ func (requestUnionSchemaTool) Parameters() map[string]any {
 }
 func (requestUnionSchemaTool) Execute(context.Context, string) (string, error) { return "", nil }
 
+type requestOptionalUnionSchemaTool struct{}
+
+func (requestOptionalUnionSchemaTool) ID() string          { return "lookup" }
+func (requestOptionalUnionSchemaTool) Name() string        { return "lookup" }
+func (requestOptionalUnionSchemaTool) Description() string { return "look up information" }
+func (requestOptionalUnionSchemaTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"query": map[string]any{
+				"oneOf": []any{
+					map[string]any{"type": "string"},
+					map[string]any{"type": "integer"},
+				},
+			},
+		},
+		"required": []string{},
+	}
+}
+func (requestOptionalUnionSchemaTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
+
 type requestNullableUnionSchemaTool struct{}
 
 func (requestNullableUnionSchemaTool) ID() string          { return "lookup" }
@@ -1922,6 +1945,42 @@ func TestBuildOpenAIChatCompletionRequestNormalizesStrictToolSchemaUnions(t *tes
 	}
 	if len(anyOf) != 2 {
 		t.Fatalf("query.anyOf = %#v, want two non-empty variants", anyOf)
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestNormalizesStrictOptionalUnionToolSchema(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4.1-mini", llm.NewChatContext(), &llm.ChatOptions{
+		Tools: []llm.Tool{requestOptionalUnionSchemaTool{}},
+	})
+
+	paramsJSON, err := json.Marshal(req.Tools[0].Function.Parameters)
+	if err != nil {
+		t.Fatalf("tool parameters marshal error = %v", err)
+	}
+	var params map[string]any
+	if err := json.Unmarshal(paramsJSON, &params); err != nil {
+		t.Fatalf("tool parameters json error = %v", err)
+	}
+
+	required, ok := params["required"].([]any)
+	if !ok || len(required) != 1 || required[0] != "query" {
+		t.Fatalf("required = %#v, want [query]", params["required"])
+	}
+	properties := params["properties"].(map[string]any)
+	query := properties["query"].(map[string]any)
+	anyOf, ok := query["anyOf"].([]any)
+	if !ok {
+		t.Fatalf("query.anyOf = %#v, want anyOf array", query["anyOf"])
+	}
+	hasNull := false
+	for _, variant := range anyOf {
+		variantSchema, ok := variant.(map[string]any)
+		if ok && variantSchema["type"] == "null" {
+			hasNull = true
+		}
+	}
+	if !hasNull {
+		t.Fatalf("query.anyOf = %#v, want null variant for optional union field", anyOf)
 	}
 }
 
