@@ -556,7 +556,7 @@ func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T
 	}
 }
 
-func TestFallbackAdapterDoesNotFallbackOnNonRetryableAPIError(t *testing.T) {
+func TestFallbackAdapterFallsBackOnNonRetryableAPIErrorBeforeChunk(t *testing.T) {
 	primaryErr := NewAPIStatusError("bad request", 400, "req_123", nil)
 	fallback := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
 		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
@@ -566,12 +566,19 @@ func TestFallbackAdapterDoesNotFallbackOnNonRetryableAPIError(t *testing.T) {
 		fallback,
 	})
 
-	_, err := adapter.Chat(context.Background(), NewChatContext())
-	if !errors.Is(err, primaryErr) {
-		t.Fatalf("Chat error = %v, want non-retryable API error", err)
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
 	}
-	if fallback.calls != 0 {
-		t.Fatalf("fallback calls = %d, want 0 for non-retryable API error", fallback.calls)
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "fallback" {
+		t.Fatalf("chunk content = %q, want fallback after non-retryable API error", got)
+	}
+	if fallback.calls != 1 {
+		t.Fatalf("fallback calls = %d, want 1", fallback.calls)
 	}
 }
 
