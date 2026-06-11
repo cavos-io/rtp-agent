@@ -99,6 +99,17 @@ func TestChatContextInsertAssignsReferenceConfigUpdateID(t *testing.T) {
 	}
 }
 
+func TestChatContextInsertAssignsReferenceConfigUpdateCreatedAt(t *testing.T) {
+	ctx := NewChatContext()
+	config := &AgentConfigUpdate{ID: "config"}
+
+	ctx.Insert(config)
+
+	if config.CreatedAt.IsZero() {
+		t.Fatal("AgentConfigUpdate.CreatedAt after Insert is zero, want generated timestamp")
+	}
+}
+
 func TestChatContextCopyFiltersReferenceItemTypes(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{

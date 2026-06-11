@@ -155,6 +155,9 @@ func (c *ChatContext) Insert(items ...ChatItem) {
 	for _, item := range items {
 		if config, ok := item.(*AgentConfigUpdate); ok {
 			config.ID = itemIDOrDefault(config.ID)
+			if config.CreatedAt.IsZero() {
+				config.CreatedAt = time.Now()
+			}
 		}
 		idx := c.FindInsertionIndex(item.GetCreatedAt())
 		c.Items = append(c.Items[:idx], append([]ChatItem{item}, c.Items[idx:]...)...)
