@@ -1849,7 +1849,10 @@ func openAIRealtimeFunctionCall(item map[string]any) (*llm.FunctionCall, error) 
 
 func openAIRealtimeChatMessage(item map[string]any) (*llm.ChatMessage, error) {
 	id, _ := item["id"].(string)
-	roleRaw, _ := item["role"].(string)
+	roleRaw, hasRole := item["role"].(string)
+	if !hasRole {
+		return nil, fmt.Errorf("role is None")
+	}
 	role := llm.ChatRole(roleRaw)
 	switch role {
 	case llm.ChatRoleSystem, llm.ChatRoleDeveloper, llm.ChatRoleUser, llm.ChatRoleAssistant:

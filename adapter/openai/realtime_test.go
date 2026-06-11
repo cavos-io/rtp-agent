@@ -2512,6 +2512,43 @@ func TestOpenAIRealtimeChatItemRejectsUnsupportedRoleWithReferenceError(t *testi
 	}
 }
 
+func TestOpenAIRealtimeChatMessageRejectsMissingRoleWithReferenceError(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		role any
+		set  bool
+	}{
+		{name: "missing"},
+		{name: "null", role: nil, set: true},
+		{name: "non_string", role: 123, set: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			item := map[string]any{
+				"id":      "msg_123",
+				"type":    "message",
+				"content": []any{},
+			}
+			if tt.set {
+				item["role"] = tt.role
+			}
+
+			_, err := openAIRealtimeChatItem(item)
+			if err == nil {
+				t.Fatal("openAIRealtimeChatItem() error = nil, want role is None error")
+			}
+			if got, want := err.Error(), "role is None"; got != want {
+				t.Fatalf("openAIRealtimeChatItem() error = %q, want %q", got, want)
+			}
+			if ev, ok := openAIRealtimeEvent(map[string]any{
+				"type": "conversation.item.added",
+				"item": item,
+			}); ok {
+				t.Fatalf("openAIRealtimeEvent() = %#v, true; want malformed item ignored", ev)
+			}
+		})
+	}
+}
+
 func TestOpenAIRealtimeChatItemRejectsMissingIDWithReferenceError(t *testing.T) {
 	baseItems := []struct {
 		name string
