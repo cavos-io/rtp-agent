@@ -2211,6 +2211,23 @@ func TestWorkerStatusMessageIncludesCurrentLoad(t *testing.T) {
 	}
 }
 
+func TestWorkerStatusMessagePreservesReferenceNegativeLoad(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		LoadFunc: func(*AgentServer) float64 {
+			return -0.25
+		},
+	})
+
+	msg := server.workerStatusMessage(livekit.WorkerStatus_WS_AVAILABLE)
+	update := msg.GetUpdateWorker()
+	if update == nil {
+		t.Fatal("update worker message is nil")
+	}
+	if update.Load != -0.25 {
+		t.Fatalf("UpdateWorker.Load = %v, want reference load -0.25", update.Load)
+	}
+}
+
 func TestWorkerStatusMessageMarksOverloadedWorkerFull(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		LoadThreshold: 0.5,

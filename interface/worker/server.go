@@ -1388,11 +1388,7 @@ func (s *AgentServer) currentLoad() float64 {
 	if s.Options.LoadFunc == nil {
 		return 0
 	}
-	load := s.Options.LoadFunc(s)
-	if load < 0 {
-		return 0
-	}
-	return load
+	return s.Options.LoadFunc(s)
 }
 
 func (s *AgentServer) effectiveLoadWithLoad(load float64) float64 {
