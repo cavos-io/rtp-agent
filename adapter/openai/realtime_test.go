@@ -804,6 +804,44 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionSpeechStoppedReflectsDisabledInputAudioTranscription(t *testing.T) {
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"input_audio_buffer.speech_stopped"}`)); err != nil {
+			t.Errorf("WriteMessage event error = %v", err)
+		}
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeInputAudioTranscription(nil))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type != llm.RealtimeEventTypeSpeechStopped {
+			t.Fatalf("event type = %q, want speech_stopped", ev.Type)
+		}
+		if ev.SpeechStopped == nil {
+			t.Fatal("SpeechStopped = nil, want payload")
+		}
+		if ev.SpeechStopped.UserTranscriptionEnabled {
+			t.Fatal("UserTranscriptionEnabled = true, want false when input_audio_transcription is nil")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for speech stopped event")
+	}
+}
+
 func newOpenAIRealtimeTestWebsocketDialer(t *testing.T, handler func(*websocket.Conn, *http.Request)) openAIRealtimeWebsocketDialer {
 	t.Helper()
 	upgrader := websocket.Upgrader{}

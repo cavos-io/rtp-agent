@@ -1283,10 +1283,20 @@ func (s *realtimeSession) eventLoop() {
 			if realtimeEvent.Type == llm.RealtimeEventTypeError {
 				logger.Logger.Errorw("OpenAI realtime error", nil, "payload", string(msg))
 			}
+			if realtimeEvent.Type == llm.RealtimeEventTypeSpeechStopped && realtimeEvent.SpeechStopped != nil {
+				realtimeEvent.SpeechStopped.UserTranscriptionEnabled = s.inputAudioTranscriptionEnabled()
+			}
 			realtimeEvent = s.trackRealtimeEvent(realtimeEvent)
 			s.eventCh <- realtimeEvent
 		}
 	}
+}
+
+func (s *realtimeSession) inputAudioTranscriptionEnabled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	value, ok := s.optionsState["audio.input.transcription"]
+	return ok && value != nil
 }
 
 func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
