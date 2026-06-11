@@ -57,7 +57,7 @@ func NewSessionReport(sessions ...*AgentSession) *SessionReport {
 
 	session := sessions[0]
 	report.Options = session.SessionOptions()
-	report.ChatHistory = session.History().Copy()
+	report.ChatHistory = sanitizeSessionReportChatHistory(session.History().Copy())
 	usage := session.Usage()
 	if !usageSummaryIsZero(usage) {
 		report.Usage = &usage
@@ -130,51 +130,50 @@ func (r *SessionReport) ToDict() map[string]any {
 }
 
 func sessionReportChatHistoryToDict(chatHistory *llm.ChatContext) map[string]any {
-	if chatHistory == nil {
-		return map[string]any{"items": []map[string]any{}}
-	}
-	data := chatHistory.ToDict(llm.ChatContextDictOptions{IncludeTimestamp: true})
-	items, ok := data["items"].([]map[string]any)
-	if !ok {
-		return data
-	}
+	return sanitizeSessionReportChatHistory(chatHistory).ToDict(llm.ChatContextDictOptions{IncludeTimestamp: true})
+}
 
-	filtered := make([]map[string]any, 0, len(items))
+func sanitizeSessionReportChatHistory(chatHistory *llm.ChatContext) *llm.ChatContext {
+	if chatHistory == nil {
+		return llm.NewChatContext()
+	}
+	filtered := llm.NewChatContext()
 	seenConfigUpdates := make(map[string]struct{})
-	for _, item := range items {
+	for _, item := range chatHistory.Items {
 		if item == nil {
 			continue
 		}
-		switch item["type"] {
-		case "message":
-			if sessionReportMessageItemIsEmpty(item) {
+		switch it := item.(type) {
+		case *llm.ChatMessage:
+			if sessionReportChatMessageIsEmpty(it) {
 				continue
 			}
-		case "agent_config_update":
-			id, _ := item["id"].(string)
-			if id != "" {
-				if _, ok := seenConfigUpdates[id]; ok {
+		case *llm.AgentConfigUpdate:
+			if it.ID != "" {
+				if _, ok := seenConfigUpdates[it.ID]; ok {
 					continue
 				}
-				seenConfigUpdates[id] = struct{}{}
+				seenConfigUpdates[it.ID] = struct{}{}
 			}
 		}
-		filtered = append(filtered, item)
+		filtered.Items = append(filtered.Items, item)
 	}
-	data["items"] = filtered
-	return data
+	return filtered
 }
 
-func sessionReportMessageItemIsEmpty(item map[string]any) bool {
-	content, ok := item["content"].([]any)
-	if !ok || len(content) == 0 {
+func sessionReportChatMessageIsEmpty(msg *llm.ChatMessage) bool {
+	if msg == nil || len(msg.Content) == 0 {
 		return true
 	}
-	if len(content) == 1 {
-		text, ok := content[0].(string)
-		return ok && strings.TrimSpace(text) == ""
+	for _, content := range msg.Content {
+		if strings.TrimSpace(content.Text) != "" {
+			return false
+		}
+		if content.Instructions != nil && strings.TrimSpace(content.Instructions.String()) != "" {
+			return false
+		}
 	}
-	return false
+	return true
 }
 
 func (r *SessionReport) MarshalJSON() ([]byte, error) {
