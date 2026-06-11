@@ -4,6 +4,10 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 )
 
 var (
@@ -38,9 +42,10 @@ var (
 	// Emoji block ranges
 	emojiPattern = regexp.MustCompile(`[\x{1F000}-\x{1FBFF}]|[\x{2600}-\x{26FF}]|[\x{2700}-\x{27BF}]|[\x{2B00}-\x{2BFF}]|[\x{FE00}-\x{FE0F}]|\x{200D}|\x{20E3}`)
 
-	completeLinksPattern  = regexp.MustCompile(`\[[^\]]*\]\([^)]*\)`)
-	completeImagesPattern = regexp.MustCompile(`!\[[^\]]*\]\([^)]*\)`)
-	inlineSplitTokens     = " ,.?!;，。？！；"
+	completeLinksPattern        = regexp.MustCompile(`\[[^\]]*\]\([^)]*\)`)
+	completeImagesPattern       = regexp.MustCompile(`!\[[^\]]*\]\([^)]*\)`)
+	inlineSplitTokens           = " ,.?!;，。？！；"
+	replacementPunctuationChars = `!"#$%&'()*+,-./:;<=>?@[\]^_` + "`" + `{|}~±—‘’“”…`
 )
 
 type TextTransformBuffer struct {
@@ -114,8 +119,13 @@ func (b *TextTransformBuffer) Push(text string) []string {
 
 	lastSplitPos := strings.LastIndexAny(b.buffer, inlineSplitTokens)
 	if lastSplitPos >= 1 {
-		processable := b.buffer[:lastSplitPos]
-		rest := b.buffer[lastSplitPos:]
+		r, size := utf8.DecodeRuneInString(b.buffer[lastSplitPos:])
+		splitEnd := lastSplitPos
+		if !unicode.IsSpace(r) {
+			splitEnd += size
+		}
+		processable := b.buffer[:splitEnd]
+		rest := b.buffer[splitEnd:]
 		if !hasIncompleteMarkdownPattern(processable) {
 			b.buffer = rest
 			out := appendTransformedText(nil, processable, b.bufferIsNewline, false)
@@ -166,20 +176,48 @@ func (b *TextReplaceBuffer) Flush() []string {
 }
 
 func (b *TextReplaceBuffer) apply(text string) string {
+	if !b.caseSensitive {
+		replacements := make(map[string]string, len(b.replacements))
+		for _, replacement := range b.replacements {
+			if replacement.old == "" {
+				continue
+			}
+			replacements[replacement.old] = replacement.new
+		}
+		return tokenize.ReplaceWords(text, replacements)
+	}
+
 	for _, replacement := range b.replacements {
 		if replacement.old == "" {
 			continue
 		}
-		pattern := regexp.QuoteMeta(replacement.old)
-		if !b.caseSensitive {
-			pattern = "(?i)" + pattern
-		}
-		re := regexp.MustCompile(pattern)
-		text = re.ReplaceAllStringFunc(text, func(string) string {
-			return replacement.new
-		})
+		text = replaceCaseSensitiveWord(text, replacement.old, replacement.new)
 	}
 	return text
+}
+
+func replaceCaseSensitiveWord(text, old, replacement string) string {
+	words := tokenize.SplitWords(text, false, false, false)
+	var builder strings.Builder
+	lastIndex := 0
+	for _, word := range words {
+		noPunctuation := strings.TrimRight(word.Token, replacementPunctuationChars)
+		if noPunctuation != old || noPunctuation == "" {
+			continue
+		}
+
+		punctuationOffset := len(word.Token) - len(noPunctuation)
+		builder.WriteString(text[lastIndex:word.Start])
+		builder.WriteString(replacement)
+		builder.WriteString(text[word.End-punctuationOffset : word.End])
+		lastIndex = word.End
+	}
+
+	if lastIndex == 0 {
+		return text
+	}
+	builder.WriteString(text[lastIndex:])
+	return builder.String()
 }
 
 func FilterMarkdown(text string) string {

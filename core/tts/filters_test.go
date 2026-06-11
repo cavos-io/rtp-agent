@@ -91,6 +91,17 @@ func TestTextTransformBufferYieldsBeforeTrailingSplitToken(t *testing.T) {
 	}
 }
 
+func TestTextTransformBufferKeepsTerminalPunctuationWithChunk(t *testing.T) {
+	buffer := NewTextTransformBuffer()
+
+	chunks := append(buffer.Push("Halo, ada yang bisa saya bantu?"), buffer.Flush()...)
+
+	want := []string{"Halo, ada yang bisa saya bantu?"}
+	if !equalStringSlices(chunks, want) {
+		t.Fatalf("chunks = %#v, want %#v", chunks, want)
+	}
+}
+
 func TestTextTransformBufferFiltersMarkdownAcrossChunks(t *testing.T) {
 	buffer := NewTextTransformBuffer()
 
@@ -144,6 +155,17 @@ func TestTextReplaceBufferReplacesTermsAcrossChunks(t *testing.T) {
 	chunks = append(chunks, shorter.Flush()...)
 
 	if got, want := strings.Join(chunks, ""), "Try LK."; got != want {
+		t.Fatalf("joined output = %q, want %q; chunks = %#v", got, want, chunks)
+	}
+}
+
+func TestTextReplaceBufferReplacesWholeWordsAndPreservesPunctuation(t *testing.T) {
+	buffer := NewTextReplaceBuffer(map[string]string{"flow": "stream"}, false)
+
+	chunks := append(buffer.Push("Flow,"), buffer.Push(" workflow flow!")...)
+	chunks = append(chunks, buffer.Flush()...)
+
+	if got, want := strings.Join(chunks, ""), "stream, workflow stream!"; got != want {
 		t.Fatalf("joined output = %q, want %q; chunks = %#v", got, want, chunks)
 	}
 }

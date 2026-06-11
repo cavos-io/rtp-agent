@@ -212,6 +212,7 @@ type RoomIO struct {
 	clientEvents             roomIOClientEvents
 
 	agentTranscriptionCancel         context.CancelFunc
+	agentTranscriptionSegmentID      string
 	transcriptionTextPublisher       func(string, lksdk.StreamTextOptions)
 	transcriptionPacketPublisher     func(*livekit.Transcription) error
 	transcriptionParticipantIdentity func() string
@@ -435,7 +436,7 @@ func (rio *RoomIO) handleAgentOutputTranscribed(ev agent.AgentOutputTranscribedE
 	if rio == nil || ev.Transcript == "" {
 		return
 	}
-	segmentID := roomIOTranscriptionSegmentID()
+	segmentID := rio.agentOutputTranscriptionSegmentID(ev.IsFinal)
 	attributes := map[string]string{
 		RoomIOTranscriptionFinalAttribute:     strconv.FormatBool(ev.IsFinal),
 		RoomIOTranscriptionSegmentIDAttribute: segmentID,
@@ -451,6 +452,22 @@ func (rio *RoomIO) handleAgentOutputTranscribed(ev agent.AgentOutputTranscribedE
 		Topic:      RoomIOTranscriptionTopic,
 		Attributes: attributes,
 	})
+}
+
+func (rio *RoomIO) agentOutputTranscriptionSegmentID(final bool) string {
+	if rio == nil {
+		return roomIOTranscriptionSegmentID()
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	if rio.agentTranscriptionSegmentID == "" {
+		rio.agentTranscriptionSegmentID = roomIOTranscriptionSegmentID()
+	}
+	segmentID := rio.agentTranscriptionSegmentID
+	if final {
+		rio.agentTranscriptionSegmentID = ""
+	}
+	return segmentID
 }
 
 func (rio *RoomIO) handleUserInputTranscribed(ev agent.UserInputTranscribedEvent) {

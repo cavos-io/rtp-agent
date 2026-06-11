@@ -1651,10 +1651,18 @@ func openAIResponsesMessage(msg *ChatMessage) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
+	result := map[string]any{
 		"role":    string(msg.Role),
 		"content": content,
-	}, nil
+	}
+	if msg.Role == ChatRoleAssistant {
+		if openAIExtra, _ := msg.Extra["openai"].(map[string]any); openAIExtra != nil {
+			if phase, ok := openAIExtra["phase"]; ok {
+				result["phase"] = phase
+			}
+		}
+	}
+	return result, nil
 }
 
 func openAIResponsesContent(content []ChatContent) (any, error) {

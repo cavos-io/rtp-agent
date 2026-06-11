@@ -48,6 +48,18 @@ func TestTranscriptSynchronizerInterruptFlushesQueuedText(t *testing.T) {
 	}
 }
 
+func TestTranscriptSynchronizerCloseFlushesQueuedText(t *testing.T) {
+	syncer := NewTranscriptSynchronizer(20)
+
+	syncer.PushText("closing ")
+	syncer.PushText("text")
+	syncer.Close()
+
+	if got := readTranscriptEvent(t, syncer); got != "closing text" {
+		t.Fatalf("closed transcript = %q, want queued text", got)
+	}
+}
+
 func waitForTranscriptBuffer(t *testing.T, syncer *TranscriptSynchronizer, want string) {
 	t.Helper()
 

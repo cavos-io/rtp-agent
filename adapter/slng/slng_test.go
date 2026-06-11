@@ -3,6 +3,8 @@ package slng
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/gorilla/websocket"
 )
 
 const expectedPluginNamespace = "rtp-agent.plugins."
@@ -172,9 +175,61 @@ func TestSLNGTTSReceivedEventParsesReferenceShapes(t *testing.T) {
 		t.Fatalf("audio=%+v done=%v, want end event", audio, done)
 	}
 
+	audio, done, err = ttsAudioFromMessage([]byte(`{"isFinal":true}`), 24000)
+	if err != nil {
+		t.Fatalf("isFinal message: %v", err)
+	}
+	if audio != nil || !done {
+		t.Fatalf("audio=%+v done=%v, want no-audio isFinal to end segment", audio, done)
+	}
+	if got := slngTTSMessageKind([]byte(`{"isFinal":true}`)); got != "isFinal" {
+		t.Fatalf("message kind = %q, want isFinal", got)
+	}
+
 	_, _, err = ttsAudioFromMessage([]byte(`{"type":"Error","message":"bad voice"}`), 24000)
 	if err == nil {
 		t.Fatal("error message returned nil error")
+	}
+}
+
+func TestSLNGTTSStreamUnexpectedCloseReportsAudioStats(t *testing.T) {
+	stream := &ttsStream{
+		model:           "elevenlabs/eleven-flash:2.5",
+		audioFrames:     0,
+		audioBytes:      0,
+		textMessages:    2,
+		lastMessageType: "audio_chunk",
+	}
+
+	err := stream.readError(&websocket.CloseError{Code: websocket.CloseNormalClosure, Text: ""})
+	got := err.Error()
+	for _, want := range []string{
+		"slng tts websocket closed before completion",
+		"websocket: close 1000 (normal)",
+		"model=elevenlabs/eleven-flash:2.5",
+		"audio_frames=0",
+		"audio_bytes=0",
+		"text_messages=2",
+		`last_message_type="audio_chunk"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("error = %q, want substring %q", got, want)
+		}
+	}
+}
+
+func TestSLNGTTSStreamNormalCloseAfterAudioReturnsEOF(t *testing.T) {
+	stream := &ttsStream{
+		model:           "elevenlabs/eleven-flash:2.5",
+		audioFrames:     3,
+		audioBytes:      93622,
+		textMessages:    4,
+		lastMessageType: "text/unknown",
+	}
+
+	err := stream.readError(&websocket.CloseError{Code: websocket.CloseNormalClosure, Text: ""})
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("readError() = %v, want io.EOF", err)
 	}
 }
 

@@ -95,6 +95,7 @@ import (
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/plugin"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"github.com/gorilla/websocket"
 	"github.com/livekit/protocol/livekit"
 	livekitlogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
@@ -361,6 +362,26 @@ func TestDefaultConfigFromEnvConfiguresTelemetryLogs(t *testing.T) {
 	}
 	if got := cfg.TelemetryLogsHeaders["X-Scope"]; got != "agent" {
 		t.Fatalf("TelemetryLogsHeaders[X-Scope] = %q, want agent", got)
+	}
+}
+
+func TestSplitEnvMapParsesTypedModelOptions(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_MODEL_OPTIONS", "auto_mode=true,chunk_length_schedule=[80,120,180],speed=1.1,voice=alpha")
+
+	options := splitEnvMap("RTP_AGENT_TTS_MODEL_OPTIONS")
+
+	if options["auto_mode"] != true {
+		t.Fatalf("auto_mode = %#v, want true", options["auto_mode"])
+	}
+	if options["speed"] != float64(1.1) {
+		t.Fatalf("speed = %#v, want 1.1", options["speed"])
+	}
+	if options["voice"] != "alpha" {
+		t.Fatalf("voice = %#v, want alpha", options["voice"])
+	}
+	schedule, _ := options["chunk_length_schedule"].([]any)
+	if len(schedule) != 3 || schedule[0] != float64(80) || schedule[1] != float64(120) || schedule[2] != float64(180) {
+		t.Fatalf("chunk_length_schedule = %#v, want [80 120 180]", options["chunk_length_schedule"])
 	}
 }
 
@@ -3181,6 +3202,71 @@ func TestDefaultConfigFromEnvWrapsTTSFallbackProviders(t *testing.T) {
 	}
 	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
 		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	}
+}
+
+func TestSLNGTTSFallbackPassesModelOptions(t *testing.T) {
+	initPayloads := make(chan map[string]any, 1)
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read init payload: %v", err)
+			return
+		}
+		var init map[string]any
+		if err := json.Unmarshal(payload, &init); err != nil {
+			t.Errorf("decode init payload: %v", err)
+			return
+		}
+		initPayloads <- init
+	}))
+	defer server.Close()
+
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		TTSBaseURL: endpoint,
+		TTSModel:   "elevenlabs/eleven-flash:2.5",
+		TTSVoice:   "voice-1",
+		TTSModelOptions: map[string]any{
+			"auto_mode":             true,
+			"enable_ssml_parsing":   true,
+			"chunk_length_schedule": []int{80, 120, 180},
+		},
+		SLNGAPIKey: "test-slng-key",
+	}, providerSLNG)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case init := <-initPayloads:
+		config, _ := init["config"].(map[string]any)
+		if config["auto_mode"] != true {
+			t.Fatalf("config.auto_mode = %#v, want true in %#v", config["auto_mode"], init)
+		}
+		if config["enable_ssml_parsing"] != true {
+			t.Fatalf("config.enable_ssml_parsing = %#v, want true in %#v", config["enable_ssml_parsing"], init)
+		}
+		schedule, _ := config["chunk_length_schedule"].([]any)
+		if len(schedule) != 3 || schedule[0] != float64(80) || schedule[1] != float64(120) || schedule[2] != float64(180) {
+			t.Fatalf("config.chunk_length_schedule = %#v, want [80 120 180] in %#v", config["chunk_length_schedule"], init)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SLNG init payload")
 	}
 }
 

@@ -709,6 +709,47 @@ func TestPipelineAgentEmitsSynchronizedAgentOutputTranscription(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentEmitsFinalSynchronizedAgentOutputTranscription(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "hello "}},
+				{Delta: &llm.ChoiceDelta{Content: "world"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{
+		stream: &fakePipelineTTSStream{
+			frames: []*model.AudioFrame{{
+				Data:              make([]byte, 4000),
+				SampleRate:        1000,
+				NumChannels:       1,
+				SamplesPerChannel: 2000,
+			}},
+		},
+	}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	events := session.AgentOutputTranscribedEvents()
+
+	agent.generateReply()
+
+	var final AgentOutputTranscribedEvent
+	for deadline := time.After(time.Second); !final.IsFinal; {
+		select {
+		case ev := <-events:
+			final = ev
+		case <-deadline:
+			t.Fatal("AgentOutputTranscribedEvents did not receive final assistant transcript")
+		}
+	}
+	if final.Transcript != "hello world" {
+		t.Fatalf("final transcript = %q, want full assistant text", final.Transcript)
+	}
+}
+
 func TestPipelineAgentUsesTTSAlignedTranscriptWhenEnabled(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -748,6 +789,53 @@ func TestPipelineAgentUsesTTSAlignedTranscriptWhenEnabled(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("AgentOutputTranscribedEvents did not receive aligned assistant transcript")
+	}
+}
+
+func TestPipelineAgentEmitsFinalAlignedAgentOutputTranscription(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "llm transcript"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		UseTTSAlignedTranscript: true,
+	})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{
+		capabilities: tts.TTSCapabilities{Streaming: true, AlignedTranscript: true},
+		stream: &fakePipelineTTSStream{
+			frames: []*model.AudioFrame{{
+				Data:              make([]byte, 4000),
+				SampleRate:        1000,
+				NumChannels:       1,
+				SamplesPerChannel: 2000,
+			}},
+			timedTranscripts: [][]tts.TimedString{{
+				{Text: "Halo, ", StartTime: 0.0, EndTime: 0.2},
+				{Text: "ada yang bisa saya bantu?", StartTime: 0.2, EndTime: 1.0},
+			}},
+		},
+	}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	events := session.AgentOutputTranscribedEvents()
+
+	agent.generateReply()
+
+	var final AgentOutputTranscribedEvent
+	for deadline := time.After(time.Second); !final.IsFinal; {
+		select {
+		case ev := <-events:
+			final = ev
+		case <-deadline:
+			t.Fatal("AgentOutputTranscribedEvents did not receive final aligned assistant transcript")
+		}
+	}
+	if final.Transcript != "Halo, ada yang bisa saya bantu?" {
+		t.Fatalf("final transcript = %q, want full aligned assistant text", final.Transcript)
 	}
 }
 

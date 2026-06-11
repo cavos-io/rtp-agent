@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -391,7 +392,7 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		conn.Close()
 		return nil, err
 	}
-	return &ttsStream{conn: conn, sampleRate: t.sampleRate}, nil
+	return &ttsStream{conn: conn, sampleRate: t.sampleRate, model: t.model}, nil
 }
 
 func defaultSTTEndpoint(baseURL, model string) string {
@@ -502,6 +503,9 @@ func buildTTSInitPayload(t *TTS) []byte {
 		"encoding":    t.encoding,
 		"sample_rate": t.sampleRate,
 		"speed":       t.speed,
+	}
+	for key, value := range t.modelOptions {
+		config[key] = value
 	}
 	payload := map[string]any{
 		"type":     "init",
@@ -735,6 +739,9 @@ func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio,
 			}
 			return audio, slngBool(message["isFinal"]), nil
 		}
+		if slngBool(message["isFinal"]) {
+			return nil, true, nil
+		}
 		if message["error"] != nil {
 			return nil, false, fmt.Errorf("slng tts error: %s", extractSLNGError(message))
 		}
@@ -875,8 +882,13 @@ func (s *sttStream) Next() (*stt.SpeechEvent, error) {
 }
 
 type ttsStream struct {
-	conn       *websocket.Conn
-	sampleRate int
+	conn            *websocket.Conn
+	sampleRate      int
+	model           string
+	audioFrames     int
+	audioBytes      int
+	textMessages    int
+	lastMessageType string
 }
 
 func (s *ttsStream) PushText(text string) error {
@@ -905,9 +917,12 @@ func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			return nil, err
+			return nil, s.readError(err)
 		}
 		if msgType == websocket.BinaryMessage {
+			s.audioFrames++
+			s.audioBytes += len(payload)
+			s.lastMessageType = "binary"
 			return &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{
 					Data:              payload,
@@ -920,9 +935,15 @@ func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
 		if msgType != websocket.TextMessage {
 			continue
 		}
+		s.textMessages++
+		s.lastMessageType = slngTTSMessageKind(payload)
 		audio, done, err := ttsAudioFromMessage(payload, s.sampleRate)
 		if err != nil {
 			return nil, err
+		}
+		if audio != nil && audio.Frame != nil {
+			s.audioFrames++
+			s.audioBytes += len(audio.Frame.Data)
 		}
 		if done {
 			return nil, io.EOF
@@ -931,6 +952,45 @@ func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
 			return audio, nil
 		}
 	}
+}
+
+func (s *ttsStream) readError(err error) error {
+	var closeErr *websocket.CloseError
+	if !errors.As(err, &closeErr) {
+		return err
+	}
+	if closeErr.Code == websocket.CloseNormalClosure && s.audioFrames > 0 {
+		return io.EOF
+	}
+	return fmt.Errorf(
+		"slng tts websocket closed before completion: %w (model=%s audio_frames=%d audio_bytes=%d text_messages=%d last_message_type=%q)",
+		err,
+		s.model,
+		s.audioFrames,
+		s.audioBytes,
+		s.textMessages,
+		s.lastMessageType,
+	)
+}
+
+func slngTTSMessageKind(payload []byte) string {
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		return "text/non-json"
+	}
+	if messageType := slngString(message["type"]); messageType != "" {
+		return messageType
+	}
+	if slngString(message["audio"]) != "" {
+		return "audio"
+	}
+	if slngBool(message["isFinal"]) {
+		return "isFinal"
+	}
+	if message["error"] != nil {
+		return "error"
+	}
+	return "text/unknown"
 }
 
 type ttsChunkedStream struct {

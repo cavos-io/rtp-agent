@@ -885,6 +885,52 @@ func TestRoomIOPublishesAgentOutputTranscriptionStream(t *testing.T) {
 	}
 }
 
+func TestRoomIOReusesAgentTranscriptionSegmentUntilFinal(t *testing.T) {
+	published := make(chan roomIOPublishedText, 3)
+	rio := &RoomIO{
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "Halo,",
+		IsFinal:    false,
+		Language:   "id",
+	})
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: " ada yang bisa saya bantu?",
+		IsFinal:    false,
+		Language:   "id",
+	})
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "Halo, ada yang bisa saya bantu?",
+		IsFinal:    true,
+		Language:   "id",
+	})
+
+	first := receivePublishedText(t, published, "first agent transcript")
+	second := receivePublishedText(t, published, "second agent transcript")
+	final := receivePublishedText(t, published, "final agent transcript")
+
+	segmentID := first.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if segmentID == "" {
+		t.Fatal("first segment id is empty")
+	}
+	if second.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute] != segmentID {
+		t.Fatalf("second segment id = %q, want %q", second.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute], segmentID)
+	}
+	if final.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute] != segmentID {
+		t.Fatalf("final segment id = %q, want %q", final.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute], segmentID)
+	}
+	if final.opts.Attributes[RoomIOTranscriptionFinalAttribute] != "true" {
+		t.Fatalf("final attribute = %q, want true", final.opts.Attributes[RoomIOTranscriptionFinalAttribute])
+	}
+	if final.text != "Halo, ada yang bisa saya bantu?" {
+		t.Fatalf("final text = %q, want full utterance", final.text)
+	}
+}
+
 func TestRoomIOPublishesAgentOutputTranscriptionTrackID(t *testing.T) {
 	published := make(chan roomIOPublishedText, 1)
 	rio := &RoomIO{
@@ -2066,6 +2112,17 @@ func waitForPlaybackWaiters(t *testing.T, rio *RoomIO, want int) {
 	got := len(rio.playbackWaiters)
 	rio.mu.Unlock()
 	t.Fatalf("playback waiters = %d, want %d", got, want)
+}
+
+func receivePublishedText(t *testing.T, ch <-chan roomIOPublishedText, label string) roomIOPublishedText {
+	t.Helper()
+	select {
+	case got := <-ch:
+		return got
+	case <-time.After(time.Second):
+		t.Fatalf("%s was not published", label)
+		return roomIOPublishedText{}
+	}
 }
 
 type fakeRoomIORealtimeModel struct {
