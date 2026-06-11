@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -105,6 +106,65 @@ func TestOpenAISpeechEventPreservesWordTimestamps(t *testing.T) {
 	}
 	if got := alt.Words[1]; got.Text != "world" || math.Abs(got.StartTime-0.4) > 0.000001 || math.Abs(got.EndTime-0.8) > 0.000001 {
 		t.Fatalf("second word = %+v, want world timing", got)
+	}
+}
+
+func TestOpenAISTTRecognizeUploadsWAVContainer(t *testing.T) {
+	var uploaded []byte
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			return nil, err
+		}
+		files := r.MultipartForm.File["file"]
+		if len(files) != 1 {
+			t.Fatalf("file parts = %d, want 1", len(files))
+		}
+		if files[0].Filename != "audio.wav" {
+			t.Fatalf("filename = %q, want audio.wav", files[0].Filename)
+		}
+		file, err := files[0].Open()
+		if err != nil {
+			t.Fatalf("open uploaded file: %v", err)
+		}
+		defer file.Close()
+		uploaded, err = io.ReadAll(file)
+		if err != nil {
+			t.Fatalf("read uploaded file: %v", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"text":"hello"}`)),
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAISTT(t, "test-key", "whisper-1", withOpenAISTTHTTPClient(client))
+
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x00, 0x02, 0x00},
+		SampleRate:        8000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}}, "id-ID")
+	if err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+
+	if len(uploaded) < 48 {
+		t.Fatalf("uploaded bytes = %d, want wav header plus data", len(uploaded))
+	}
+	if string(uploaded[0:4]) != "RIFF" || string(uploaded[8:12]) != "WAVE" {
+		t.Fatalf("uploaded prefix = %q/%q, want RIFF/WAVE", uploaded[0:4], uploaded[8:12])
+	}
+	if got := binary.LittleEndian.Uint32(uploaded[24:28]); got != 8000 {
+		t.Fatalf("wav sample rate = %d, want 8000", got)
+	}
+	if got := binary.LittleEndian.Uint16(uploaded[22:24]); got != 1 {
+		t.Fatalf("wav channels = %d, want 1", got)
+	}
+	if got := uploaded[len(uploaded)-4:]; string(got) != string([]byte{0x01, 0x00, 0x02, 0x00}) {
+		t.Fatalf("wav payload tail = %#v, want original PCM", got)
 	}
 }
 
