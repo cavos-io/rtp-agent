@@ -170,6 +170,17 @@ func TestTextReplaceBufferReplacesWholeWordsAndPreservesPunctuation(t *testing.T
 	}
 }
 
+func TestTextReplaceBufferDoesNotReplaceIncompleteFinalWord(t *testing.T) {
+	buffer := NewTextReplaceBuffer(map[string]string{"flow": "stream"}, false)
+
+	chunks := append(buffer.Push("flow"), buffer.Push("er ")...)
+	chunks = append(chunks, buffer.Flush()...)
+
+	if got, want := strings.Join(chunks, ""), "flower "; got != want {
+		t.Fatalf("joined output = %q, want %q; chunks = %#v", got, want, chunks)
+	}
+}
+
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
