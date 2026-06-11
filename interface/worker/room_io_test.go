@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -266,6 +267,36 @@ func TestRoomIOPublishAudioResamplesPCMToOpusClockRate(t *testing.T) {
 	}
 	if rio.playbackPosition != 20*time.Millisecond {
 		t.Fatalf("playback position = %v, want original 20ms duration", rio.playbackPosition)
+	}
+}
+
+func TestRoomIOPublishAudioChunksLongPCMForOpus(t *testing.T) {
+	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}, maxPCMBytes: 960 * 2}
+	rio := &RoomIO{
+		audioTrack: newRoomIOTestAudioTrack(t),
+		encoder:    encoder,
+	}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 99108*2),
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 99108,
+	}
+
+	if err := rio.PublishAudio(frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+
+	if len(encoder.calls) <= 1 {
+		t.Fatalf("encoder calls = %d, want long PCM split into multiple Opus frames", len(encoder.calls))
+	}
+	for i, call := range encoder.calls {
+		if len(call) > 960*2 {
+			t.Fatalf("encoder call %d PCM bytes = %d, want at most 20ms Opus frame", i, len(call))
+		}
+	}
+	if encoder.calls[len(encoder.calls)-1] == nil {
+		t.Fatal("last encoder call missing")
 	}
 }
 
@@ -540,12 +571,18 @@ func newRoomIOTestAudioTrack(t *testing.T) *lksdk.LocalTrack {
 }
 
 type recordingRoomIOEncoder struct {
-	pcm     []byte
-	encoded []byte
+	pcm         []byte
+	calls       [][]byte
+	encoded     []byte
+	maxPCMBytes int
 }
 
 func (e *recordingRoomIOEncoder) Encode(pcm []byte) ([]byte, error) {
 	e.pcm = append([]byte(nil), pcm...)
+	e.calls = append(e.calls, append([]byte(nil), pcm...))
+	if e.maxPCMBytes > 0 && len(pcm) > e.maxPCMBytes {
+		return nil, fmt.Errorf("pcm too large: %d", len(pcm))
+	}
 	return append([]byte(nil), e.encoded...), nil
 }
 

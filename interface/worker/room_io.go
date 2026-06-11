@@ -134,6 +134,8 @@ const RoomIOTranscriptionFinalAttribute = "lk.transcription_final"
 const RoomIOTranscriptionTrackIDAttribute = "lk.transcribed_track_id"
 const RoomIOTranscriptionSegmentIDAttribute = "lk.segment_id"
 const roomIODeleteRoomCloseTimeout = 10 * time.Second
+const roomIOOpusClockRate uint32 = 48000
+const roomIOOpusFrameSamples uint32 = 960
 
 type TextInputEvent struct {
 	Text                string
@@ -1253,31 +1255,106 @@ func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
 		}
 	}
 
-	data := frame.Data
 	if encoder != nil {
-		encodeFrame := frame
-		if frame.SampleRate != 0 && frame.SampleRate != 48000 {
-			resampled, err := audio.ResampleAudioFrame(frame, 48000)
+		encodeFrames, err := roomIOOpusEncodeFrames(frame)
+		if err != nil {
+			return err
+		}
+		for _, encodeFrame := range encodeFrames {
+			encoded, err := encoder.Encode(encodeFrame.Data)
 			if err != nil {
 				return err
 			}
-			encodeFrame = resampled
+			duration := time.Duration(audio.CalculateFrameDuration(encodeFrame) * float64(time.Second))
+			if err := track.WriteSample(media.Sample{
+				Data:     encoded,
+				Duration: duration,
+			}, nil); err != nil {
+				return err
+			}
+			rio.addPlaybackPosition(duration)
 		}
-		if encoded, err := encoder.Encode(encodeFrame.Data); err == nil {
-			data = encoded
-		}
+		return nil
 	}
 
 	duration := time.Duration(audio.CalculateFrameDuration(frame) * float64(time.Second))
 
 	if err := track.WriteSample(media.Sample{
-		Data:     data,
+		Data:     frame.Data,
 		Duration: duration,
 	}, nil); err != nil {
 		return err
 	}
 	rio.addPlaybackPosition(duration)
 	return nil
+}
+
+func roomIOOpusEncodeFrames(frame *model.AudioFrame) ([]*model.AudioFrame, error) {
+	if frame == nil {
+		return nil, nil
+	}
+	encodeFrame := frame
+	if frame.SampleRate != 0 && frame.SampleRate != roomIOOpusClockRate {
+		resampled, err := audio.ResampleAudioFrame(frame, roomIOOpusClockRate)
+		if err != nil {
+			return nil, err
+		}
+		encodeFrame = resampled
+	}
+	if encodeFrame.NumChannels == 0 {
+		return nil, fmt.Errorf("cannot encode audio with zero channels")
+	}
+
+	bytesPerSample := int(encodeFrame.NumChannels * 2)
+	if len(encodeFrame.Data)%bytesPerSample != 0 {
+		return nil, fmt.Errorf("cannot encode incomplete PCM sample")
+	}
+	samplesPerChannel := encodeFrame.SamplesPerChannel
+	if samplesPerChannel == 0 {
+		samplesPerChannel = uint32(len(encodeFrame.Data) / bytesPerSample)
+	}
+	expectedBytes := int(samplesPerChannel) * bytesPerSample
+	if len(encodeFrame.Data) < expectedBytes {
+		return nil, fmt.Errorf("audio frame data is shorter than declared sample count")
+	}
+	data := encodeFrame.Data[:expectedBytes]
+	if samplesPerChannel == 0 {
+		return nil, nil
+	}
+
+	frames := make([]*model.AudioFrame, 0, int(samplesPerChannel/roomIOOpusFrameSamples)+1)
+	for sampleOffset := uint32(0); sampleOffset < samplesPerChannel; {
+		chunkSamples := minUint32(roomIOOpusFrameSamples, samplesPerChannel-sampleOffset)
+		paddedSamples := roomIOValidOpusSamples(chunkSamples)
+		start := int(sampleOffset) * bytesPerSample
+		end := int(sampleOffset+chunkSamples) * bytesPerSample
+		chunkData := make([]byte, int(paddedSamples)*bytesPerSample)
+		copy(chunkData, data[start:end])
+		frames = append(frames, &model.AudioFrame{
+			Data:              chunkData,
+			SampleRate:        roomIOOpusClockRate,
+			NumChannels:       encodeFrame.NumChannels,
+			SamplesPerChannel: paddedSamples,
+		})
+		sampleOffset += chunkSamples
+	}
+	return frames, nil
+}
+
+func roomIOValidOpusSamples(samples uint32) uint32 {
+	for _, valid := range []uint32{120, 240, 480, roomIOOpusFrameSamples} {
+		if samples <= valid {
+			return valid
+		}
+	}
+	return roomIOOpusFrameSamples
+}
+
+func minUint32(a, b uint32) uint32 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func callPlaybackStartedHandler(handler func(PlaybackStartedEvent), ev PlaybackStartedEvent) {
