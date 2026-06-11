@@ -1558,6 +1558,24 @@ func TestRealtimeEventMapsResponseCreated(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventMapsResponseCreatedEmptyID(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "response.created",
+		"response": map[string]any{
+			"id": "",
+		},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want generation-created event")
+	}
+	if ev.Generation == nil {
+		t.Fatal("Generation = nil, want generation-created payload")
+	}
+	if ev.Generation.ResponseID != "" {
+		t.Fatalf("Generation.ResponseID = %q, want empty string", ev.Generation.ResponseID)
+	}
+}
+
 func TestRealtimeSessionRoutesOutputMessageTextDeltasToGenerationStream(t *testing.T) {
 	session := &realtimeSession{}
 	created := session.trackRealtimeEvent(llm.RealtimeEvent{

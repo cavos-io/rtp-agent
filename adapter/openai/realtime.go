@@ -1696,8 +1696,8 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 		}, true
 	case "response.created":
 		response, _ := ev["response"].(map[string]any)
-		responseID, _ := response["id"].(string)
-		if responseID == "" {
+		responseID, hasResponseID := response["id"].(string)
+		if !hasResponseID {
 			return llm.RealtimeEvent{}, false
 		}
 		_, userInitiated := openAIRealtimeResponseClientEventID(response)
