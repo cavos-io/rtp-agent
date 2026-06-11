@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 var (
@@ -114,8 +116,13 @@ func (b *TextTransformBuffer) Push(text string) []string {
 
 	lastSplitPos := strings.LastIndexAny(b.buffer, inlineSplitTokens)
 	if lastSplitPos >= 1 {
-		processable := b.buffer[:lastSplitPos]
-		rest := b.buffer[lastSplitPos:]
+		r, size := utf8.DecodeRuneInString(b.buffer[lastSplitPos:])
+		splitEnd := lastSplitPos
+		if !unicode.IsSpace(r) {
+			splitEnd += size
+		}
+		processable := b.buffer[:splitEnd]
+		rest := b.buffer[splitEnd:]
 		if !hasIncompleteMarkdownPattern(processable) {
 			b.buffer = rest
 			out := appendTransformedText(nil, processable, b.bufferIsNewline, false)

@@ -91,6 +91,17 @@ func TestTextTransformBufferYieldsBeforeTrailingSplitToken(t *testing.T) {
 	}
 }
 
+func TestTextTransformBufferKeepsTerminalPunctuationWithChunk(t *testing.T) {
+	buffer := NewTextTransformBuffer()
+
+	chunks := append(buffer.Push("Halo, ada yang bisa saya bantu?"), buffer.Flush()...)
+
+	want := []string{"Halo, ada yang bisa saya bantu?"}
+	if !equalStringSlices(chunks, want) {
+		t.Fatalf("chunks = %#v, want %#v", chunks, want)
+	}
+}
+
 func TestTextTransformBufferFiltersMarkdownAcrossChunks(t *testing.T) {
 	buffer := NewTextTransformBuffer()
 
