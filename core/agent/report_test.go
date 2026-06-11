@@ -239,6 +239,50 @@ func TestNewSessionReportSanitizesChatHistoryForPostProcessConsumers(t *testing.
 	}
 }
 
+func TestSessionReportToDictSanitizesChatHistoryForLaterConsumers(t *testing.T) {
+	report := NewSessionReport(nil)
+	now := time.Unix(10, 0)
+	instructions := "be helpful"
+	report.ChatHistory.Append(&llm.ChatMessage{
+		ID:        "empty-parts",
+		Role:      llm.ChatRoleUser,
+		CreatedAt: now,
+	})
+	report.ChatHistory.Append(&llm.ChatMessage{
+		ID:        "empty-text",
+		Role:      llm.ChatRoleSystem,
+		Content:   []llm.ChatContent{{Text: ""}},
+		CreatedAt: now,
+	})
+	report.ChatHistory.Append(&llm.ChatMessage{
+		ID:        "real-user",
+		Role:      llm.ChatRoleUser,
+		Content:   []llm.ChatContent{{Text: " Hello?"}},
+		CreatedAt: now,
+	})
+	report.ChatHistory.Append(&llm.AgentConfigUpdate{
+		ID:           "config-1",
+		Instructions: &instructions,
+		CreatedAt:    now,
+	})
+	report.ChatHistory.Append(&llm.AgentConfigUpdate{
+		ID:           "config-1",
+		Instructions: &instructions,
+		CreatedAt:    now,
+	})
+
+	report.ToDict()
+
+	gotIDs := make([]string, 0, len(report.ChatHistory.Items))
+	for _, item := range report.ChatHistory.Items {
+		gotIDs = append(gotIDs, item.GetID())
+	}
+	wantIDs := []string{"real-user", "config-1"}
+	if !reflect.DeepEqual(gotIDs, wantIDs) {
+		t.Fatalf("report ChatHistory ids after ToDict = %#v, want %#v", gotIDs, wantIDs)
+	}
+}
+
 func TestSessionReportToDictIncludesLLMMetadata(t *testing.T) {
 	agent := NewAgent("test")
 	agent.LLM = &reportMetadataLLM{

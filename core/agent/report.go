@@ -97,7 +97,8 @@ func (r *SessionReport) ToDict() map[string]any {
 
 	chatHistory := map[string]any{"items": []map[string]any{}}
 	if r.ChatHistory != nil {
-		chatHistory = sessionReportChatHistoryToDict(r.ChatHistory)
+		r.ChatHistory = sanitizeSessionReportChatHistory(r.ChatHistory)
+		chatHistory = r.ChatHistory.ToDict(llm.ChatContextDictOptions{IncludeTimestamp: true})
 	}
 
 	out := map[string]any{
@@ -127,10 +128,6 @@ func (r *SessionReport) ToDict() map[string]any {
 	}
 	addTaggerReportFields(out, r.Tagger)
 	return out
-}
-
-func sessionReportChatHistoryToDict(chatHistory *llm.ChatContext) map[string]any {
-	return sanitizeSessionReportChatHistory(chatHistory).ToDict(llm.ChatContextDictOptions{IncludeTimestamp: true})
 }
 
 func sanitizeSessionReportChatHistory(chatHistory *llm.ChatContext) *llm.ChatContext {
