@@ -41,6 +41,8 @@ var trailingCommaPattern = regexp.MustCompile(`,\s*([}\]])`)
 
 var unquotedObjectKeyPattern = regexp.MustCompile(`([,{]\s*)([A-Za-z_][A-Za-z0-9_-]*)(\s*:)`)
 
+var unquotedStringValuePattern = regexp.MustCompile(`(:\s*)([A-Za-z_][A-Za-z0-9_-]*)(\s*[,}\]])`)
+
 var singleQuotedStringPattern = regexp.MustCompile(`'([^'\\]*)'`)
 
 type SerializedImage struct {
@@ -199,9 +201,25 @@ func repairFunctionArguments(value string) string {
 	}
 	out = singleQuotedStringPattern.ReplaceAllString(out, `"$1"`)
 	out = unquotedObjectKeyPattern.ReplaceAllString(out, `${1}"${2}"${3}`)
+	out = quoteUnquotedStringValues(out)
 	out = closeUnbalancedJSONContainers(out)
 	out = trailingCommaPattern.ReplaceAllString(out, "$1")
 	return strings.TrimSpace(out)
+}
+
+func quoteUnquotedStringValues(value string) string {
+	return unquotedStringValuePattern.ReplaceAllStringFunc(value, func(match string) string {
+		parts := unquotedStringValuePattern.FindStringSubmatch(match)
+		if len(parts) != 4 {
+			return match
+		}
+		switch parts[2] {
+		case "true", "false", "null":
+			return match
+		default:
+			return parts[1] + `"` + parts[2] + `"` + parts[3]
+		}
+	})
 }
 
 func closeUnbalancedJSONContainers(value string) string {

@@ -695,7 +695,7 @@ var sarvamLanguageMap = map[string]string{
 func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio, bool, error) {
 	var message map[string]any
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return nil, false, err
+		return nil, false, nil
 	}
 	if isSLNGTTSEndEvent(message) {
 		return nil, true, nil
@@ -709,7 +709,7 @@ func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio,
 		}
 		data, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
-			return nil, false, err
+			return nil, false, nil
 		}
 		return &tts.SynthesizedAudio{
 			Frame: &model.AudioFrame{
@@ -719,7 +719,7 @@ func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio,
 				SamplesPerChannel: uint32(len(data) / 2),
 			},
 		}, false, nil
-	case "Flushed", "audio_end", "end", "flushed":
+	case "Flushed", "audio_end", "end", "flushed", "complete", "completed", "done", "final":
 		return nil, true, nil
 	case "Error", "error":
 		return nil, false, fmt.Errorf("slng tts error: %s", extractSLNGError(message))
@@ -727,7 +727,7 @@ func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio,
 		if encoded := slngString(message["audio"]); encoded != "" {
 			data, err := base64.StdEncoding.DecodeString(encoded)
 			if err != nil {
-				return nil, false, err
+				return nil, slngBool(message["isFinal"]), nil
 			}
 			audio := &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{

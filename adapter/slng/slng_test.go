@@ -192,6 +192,56 @@ func TestSLNGTTSReceivedEventParsesReferenceShapes(t *testing.T) {
 	}
 }
 
+func TestSLNGTTSReceivedEventParsesReferenceTopLevelCompletionTypes(t *testing.T) {
+	for _, payload := range []string{
+		`{"type":"complete"}`,
+		`{"type":"completed"}`,
+		`{"type":"done"}`,
+		`{"type":"final"}`,
+	} {
+		audio, done, err := ttsAudioFromMessage([]byte(payload), 24000)
+		if err != nil {
+			t.Fatalf("ttsAudioFromMessage(%s) error = %v", payload, err)
+		}
+		if audio != nil || !done {
+			t.Fatalf("ttsAudioFromMessage(%s) audio=%+v done=%v, want no-audio end event", payload, audio, done)
+		}
+	}
+}
+
+func TestSLNGTTSReceivedEventIgnoresInvalidBase64LikeReference(t *testing.T) {
+	for _, payload := range []string{
+		`{"type":"audio_chunk","data":"not-base64"}`,
+		`{"audio":"not-base64"}`,
+	} {
+		audio, done, err := ttsAudioFromMessage([]byte(payload), 24000)
+		if err != nil {
+			t.Fatalf("ttsAudioFromMessage(%s) error = %v, want nil", payload, err)
+		}
+		if audio != nil || done {
+			t.Fatalf("ttsAudioFromMessage(%s) audio=%+v done=%v, want ignored frame", payload, audio, done)
+		}
+	}
+
+	audio, done, err := ttsAudioFromMessage([]byte(`{"audio":"not-base64","isFinal":true}`), 24000)
+	if err != nil {
+		t.Fatalf("ttsAudioFromMessage(isFinal invalid audio) error = %v, want nil", err)
+	}
+	if audio != nil || !done {
+		t.Fatalf("ttsAudioFromMessage(isFinal invalid audio) audio=%+v done=%v, want final marker", audio, done)
+	}
+}
+
+func TestSLNGTTSReceivedEventIgnoresNonJSONTextLikeReference(t *testing.T) {
+	audio, done, err := ttsAudioFromMessage([]byte(`not-json`), 24000)
+	if err != nil {
+		t.Fatalf("ttsAudioFromMessage(non-json) error = %v, want nil", err)
+	}
+	if audio != nil || done {
+		t.Fatalf("ttsAudioFromMessage(non-json) audio=%+v done=%v, want ignored frame", audio, done)
+	}
+}
+
 func TestSLNGTTSStreamUnexpectedCloseReportsAudioStats(t *testing.T) {
 	stream := &ttsStream{
 		model:           "elevenlabs/eleven-flash:2.5",

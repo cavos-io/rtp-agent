@@ -312,8 +312,9 @@ func (s *OpenAISTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	if err != nil {
 		return nil, mapOpenAIError(err)
 	}
+	eventLanguage := s.language
 	if language != "" {
-		s.language = language
+		eventLanguage = openAISTTRequestLanguage(language)
 	}
 	sessionUpdate, err := buildOpenAIRealtimeSTTSessionUpdate(s)
 	if err != nil {
@@ -332,7 +333,7 @@ func (s *OpenAISTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		events: make(chan *stt.SpeechEvent, 100),
 		errCh:  make(chan error, 1),
 		state: &openAIRealtimeSTTMessageState{
-			language: s.language,
+			language: eventLanguage,
 			timing:   map[string]openAIRealtimeSTTTiming{},
 		},
 		owner: s,

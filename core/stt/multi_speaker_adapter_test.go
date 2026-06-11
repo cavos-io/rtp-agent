@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -458,8 +459,8 @@ func TestMultiSpeakerAdapterStreamPropagatesInitialTimingAnchors(t *testing.T) {
 	}
 }
 
-func TestMultiSpeakerAdapterWrapperEndInputFlushesAndRejectsMoreInput(t *testing.T) {
-	inner := &fakeMultiSpeakerStream{nextErr: io.EOF}
+func TestMultiSpeakerAdapterWrapperEndInputDoesNotFlushAndRejectsMoreInput(t *testing.T) {
+	inner := &fakeMultiSpeakerStream{nextErr: io.EOF, callCh: make(chan struct{}, 2)}
 	wrapper := &multiSpeakerAdapterWrapper{
 		inner:    inner,
 		ctx:      context.Background(),
@@ -468,6 +469,7 @@ func TestMultiSpeakerAdapterWrapperEndInputFlushesAndRejectsMoreInput(t *testing
 		errCh:    make(chan error, 1),
 		inputCh:  make(chan multiSpeakerInput, 2),
 	}
+	go wrapper.run()
 
 	if err := wrapper.PushFrame(&model.AudioFrame{Data: []byte("first"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
 		t.Fatalf("PushFrame returned error: %v", err)
@@ -484,6 +486,16 @@ func TestMultiSpeakerAdapterWrapperEndInputFlushesAndRejectsMoreInput(t *testing
 	}
 	if err := wrapper.Flush(); err == nil {
 		t.Fatal("Flush after EndInput returned nil, want error")
+	}
+	for range 2 {
+		select {
+		case <-inner.callCh:
+		case <-time.After(100 * time.Millisecond):
+			t.Fatalf("timed out waiting for inner calls, got %#v", inner.calls)
+		}
+	}
+	if got, want := strings.Join(inner.calls, ","), "push:first,end_input"; got != want {
+		t.Fatalf("inner calls = %q, want %q", got, want)
 	}
 }
 
@@ -508,7 +520,7 @@ func TestMultiSpeakerAdapterWrapperForwardsEndInput(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for inner EndInput")
 	}
-	want := []string{"flush", "end_input"}
+	want := []string{"end_input"}
 	if len(inner.calls) != len(want) {
 		t.Fatalf("inner call count = %d, want %d: %#v", len(inner.calls), len(want), inner.calls)
 	}

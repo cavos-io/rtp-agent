@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
@@ -241,7 +243,7 @@ func sessionReportEventToDict(ev any) map[string]any {
 	case *SessionUsageUpdatedEvent:
 		return map[string]any{"type": e.GetType(), "usage": e.Usage, "created_at": timeToUnixSeconds(e.CreatedAt)}
 	case *ErrorEvent:
-		return map[string]any{"type": e.GetType(), "error": errorReportValue(e.Error), "source": fmt.Sprint(e.Source), "created_at": timeToUnixSeconds(e.CreatedAt)}
+		return map[string]any{"type": e.GetType(), "error": errorReportValue(e.Error), "source": errorReportSourceValue(e.Source), "created_at": timeToUnixSeconds(e.CreatedAt)}
 	case *CloseEvent:
 		return map[string]any{"type": e.GetType(), "reason": e.Reason, "error": errorReportValue(e.Error), "created_at": timeToUnixSeconds(e.CreatedAt)}
 	default:
@@ -306,6 +308,21 @@ func errorReportValue(err error) any {
 		return nil
 	}
 	return err.Error()
+}
+
+func errorReportSourceValue(source any) any {
+	switch s := source.(type) {
+	case llm.LLM:
+		return map[string]any{"model": llm.Model(s), "provider": llm.Provider(s)}
+	case llm.RealtimeModel:
+		return map[string]any{"model": llm.RealtimeModelName(s), "provider": llm.RealtimeProvider(s)}
+	case stt.STT:
+		return map[string]any{"model": stt.Model(s), "provider": stt.Provider(s)}
+	case tts.TTS:
+		return map[string]any{"model": tts.Model(s), "provider": tts.Provider(s)}
+	default:
+		return fmt.Sprint(source)
+	}
 }
 
 func usageSummaryIsZero(usage telemetry.UsageSummary) bool {

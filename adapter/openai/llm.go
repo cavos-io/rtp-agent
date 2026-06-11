@@ -991,10 +991,6 @@ func ensureOpenAIStrictJSONSchemaWithRoot(schema map[string]any, root map[string
 	normalizeOpenAIStrictDefinitionMap(schema["$defs"], root)
 	normalizeOpenAIStrictDefinitionMap(schema["definitions"], root)
 
-	if _, ok := schema["default"]; ok {
-		delete(schema, "default")
-		markOpenAISchemaNullable(schema)
-	}
 	delete(schema, "title")
 	delete(schema, "discriminator")
 
@@ -1019,10 +1015,10 @@ func ensureOpenAIStrictJSONSchemaWithRoot(schema map[string]any, root map[string
 				if !ok {
 					continue
 				}
+				ensureOpenAIStrictJSONSchemaWithRoot(propSchema, root)
 				if !previousRequired[key] {
 					markOpenAISchemaNullable(propSchema)
 				}
-				ensureOpenAIStrictJSONSchemaWithRoot(propSchema, root)
 			}
 			schema["required"] = keys
 		}
@@ -1049,6 +1045,11 @@ func ensureOpenAIStrictJSONSchemaWithRoot(schema map[string]any, root map[string
 				}
 			}
 		}
+	}
+
+	if _, ok := schema["default"]; ok {
+		delete(schema, "default")
+		markOpenAISchemaNullable(schema)
 	}
 
 	inlineOpenAIStrictRefSchema(schema, root)
@@ -1227,6 +1228,8 @@ func markOpenAISchemaNullable(schema map[string]any) {
 		if !containsOpenAIAnyString(typ, "null") {
 			schema["type"] = append(append([]any(nil), typ...), "null")
 		}
+	default:
+		_ = markOpenAIUnionSchemaNullable(schema, "anyOf") || markOpenAIUnionSchemaNullable(schema, "oneOf")
 	}
 
 	switch enum := schema["enum"].(type) {
@@ -1245,6 +1248,21 @@ func markOpenAISchemaNullable(schema map[string]any) {
 		values = append(values, nil)
 		schema["enum"] = values
 	}
+}
+
+func markOpenAIUnionSchemaNullable(schema map[string]any, key string) bool {
+	variants, ok := schema[key].([]any)
+	if !ok {
+		return false
+	}
+	for _, variant := range variants {
+		variantSchema, ok := variant.(map[string]any)
+		if ok && openAISchemaIsNullType(variantSchema) {
+			return false
+		}
+	}
+	schema[key] = append(append([]any(nil), variants...), map[string]any{"type": "null"})
+	return true
 }
 
 func containsOpenAIString(values []string, want string) bool {

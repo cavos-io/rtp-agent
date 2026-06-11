@@ -55,7 +55,6 @@ type TextTransformBuffer struct {
 
 type TextReplaceBuffer struct {
 	replacements  []textReplacement
-	tailLen       int
 	caseSensitive bool
 	buffer        string
 }
@@ -71,12 +70,8 @@ func NewTextTransformBuffer() *TextTransformBuffer {
 
 func NewTextReplaceBuffer(replacements map[string]string, caseSensitive bool) *TextReplaceBuffer {
 	keys := make([]string, 0, len(replacements))
-	tailLen := 0
 	for old := range replacements {
 		keys = append(keys, old)
-		if len(old) > tailLen {
-			tailLen = len(old)
-		}
 	}
 	sort.Strings(keys)
 
@@ -84,13 +79,9 @@ func NewTextReplaceBuffer(replacements map[string]string, caseSensitive bool) *T
 	for _, old := range keys {
 		ordered = append(ordered, textReplacement{old: old, new: replacements[old]})
 	}
-	if tailLen > 0 {
-		tailLen--
-	}
 
 	return &TextReplaceBuffer{
 		replacements:  ordered,
-		tailLen:       tailLen,
 		caseSensitive: caseSensitive,
 	}
 }
@@ -142,17 +133,22 @@ func (b *TextReplaceBuffer) Push(text string) []string {
 		return nil
 	}
 	b.buffer += text
-	if len(b.buffer) <= b.tailLen {
+	if len(b.replacements) == 0 {
+		out := b.buffer
+		b.buffer = ""
+		return []string{out}
+	}
+
+	words := tokenize.SplitWords(b.buffer, false, false, false)
+	if len(words) <= 1 {
 		return nil
 	}
 
-	b.buffer = b.apply(b.buffer)
-	if len(b.buffer) <= b.tailLen {
-		return nil
-	}
-	flushTo := len(b.buffer) - b.tailLen
-	out := b.buffer[:flushTo]
-	b.buffer = b.buffer[flushTo:]
+	flushTo := words[len(words)-2].End
+	processable := b.buffer[:flushTo]
+	rest := b.buffer[flushTo:]
+	out := b.apply(processable)
+	b.buffer = rest
 	if out == "" {
 		return nil
 	}

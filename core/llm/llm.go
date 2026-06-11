@@ -1143,19 +1143,6 @@ func (f *FallbackAdapter) allUnavailable() bool {
 	return true
 }
 
-func (f *FallbackAdapter) setAvailable(index int, available bool) {
-	f.mu.Lock()
-	changed := f.available[index] != available
-	f.available[index] = available
-	if available {
-		f.recovering[index] = false
-	}
-	f.mu.Unlock()
-	if changed {
-		f.emitAvailabilityChanged(index, available)
-	}
-}
-
 func (f *FallbackAdapter) Label() string {
 	return fmt.Sprintf("FallbackAdapter(%s)", Label(f.llms[0]))
 }
@@ -1257,6 +1244,7 @@ type fallbackLLMStream struct {
 	activeStream LLMStream
 	activeCancel context.CancelFunc
 	activeIndex  int
+	activeCtxSet bool
 	retries      map[int]int
 	outputSent   bool
 	closed       bool
@@ -1265,6 +1253,13 @@ type fallbackLLMStream struct {
 func (s *fallbackLLMStream) ChatCtx() *ChatContext {
 	if s == nil {
 		return nil
+	}
+	if s.activeCtxSet {
+		if streamWithChatCtx, ok := s.activeStream.(interface{ ChatCtx() *ChatContext }); ok {
+			if chatCtx := streamWithChatCtx.ChatCtx(); chatCtx != nil {
+				return chatCtx
+			}
+		}
 	}
 	return s.chatCtx
 }
@@ -1280,15 +1275,30 @@ func (s *fallbackLLMStream) markUnavailable(index int, recover bool) {
 		}
 		return
 	}
-	s.adapter.recovering[index] = true
 	llm := s.adapter.llms[index]
 	chatCtx := s.ChatCtx()
 	opts := append([]ChatOption(nil), s.opts...)
+	s.adapter.recovering[index] = true
 	s.adapter.mu.Unlock()
 
 	if changed {
 		s.adapter.emitAvailabilityChanged(index, false)
 	}
+	go s.adapter.recoverLLM(index, llm, chatCtx, opts)
+}
+
+func (s *fallbackLLMStream) tryRecovery(index int) {
+	s.adapter.mu.Lock()
+	if s.adapter.available[index] || s.adapter.recovering[index] {
+		s.adapter.mu.Unlock()
+		return
+	}
+	llm := s.adapter.llms[index]
+	chatCtx := s.ChatCtx()
+	opts := append([]ChatOption(nil), s.opts...)
+	s.adapter.recovering[index] = true
+	s.adapter.mu.Unlock()
+
 	go s.adapter.recoverLLM(index, llm, chatCtx, opts)
 }
 
@@ -1334,6 +1344,7 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 	allUnavailable := s.adapter.allUnavailable()
 	for i := index; i < len(s.adapter.llms); i++ {
 		if !s.adapter.isAvailable(i, allUnavailable) {
+			s.tryRecovery(i)
 			continue
 		}
 		for {
@@ -1343,17 +1354,14 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 				err = NewAPIConnectionError("LLM returned nil stream")
 			}
 			if err == nil {
-				s.adapter.setAvailable(i, true)
 				s.closeActive()
 				s.activeStream = stream
 				s.activeCancel = cancel
 				s.activeIndex = i
+				s.activeCtxSet = false
 				return nil
 			}
 			cancel()
-			if !isRetryableLLMError(err) {
-				return err
-			}
 			lastErr = err
 			if !s.canRetryLLM(i) {
 				s.markUnavailable(i, true)
@@ -1391,6 +1399,7 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 	for {
 		chunk, err := s.activeStream.Next()
 		if err == nil {
+			s.activeCtxSet = true
 			if chunkHasVisibleOutput(chunk) {
 				s.outputSent = true
 			}
@@ -1402,10 +1411,6 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 		if isClientClosedLLMError(err) {
 			s.closeActive()
 			return nil, io.EOF
-		}
-		if !isRetryableLLMError(err) {
-			s.markUnavailable(s.activeIndex, false)
-			return nil, err
 		}
 		if s.outputSent && !s.adapter.retryOnChunkSent {
 			s.markUnavailable(s.activeIndex, false)
@@ -1441,14 +1446,6 @@ func (s *fallbackLLMStream) canRetryLLM(index int) bool {
 		s.retries = make(map[int]int)
 	}
 	return s.retries[index] < s.adapter.maxRetryPerLLM
-}
-
-func isRetryableLLMError(err error) bool {
-	var apiErr *APIError
-	if errors.As(err, &apiErr) {
-		return apiErr.Retryable
-	}
-	return true
 }
 
 func isClientClosedLLMError(err error) bool {
@@ -1492,6 +1489,7 @@ func (s *fallbackLLMStream) closeActive() {
 		_ = s.activeStream.Close()
 		s.activeStream = nil
 	}
+	s.activeCtxSet = false
 	if s.activeCancel != nil {
 		s.activeCancel()
 		s.activeCancel = nil

@@ -804,6 +804,44 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionSpeechStoppedReflectsDisabledInputAudioTranscription(t *testing.T) {
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"input_audio_buffer.speech_stopped"}`)); err != nil {
+			t.Errorf("WriteMessage event error = %v", err)
+		}
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeInputAudioTranscription(nil))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type != llm.RealtimeEventTypeSpeechStopped {
+			t.Fatalf("event type = %q, want speech_stopped", ev.Type)
+		}
+		if ev.SpeechStopped == nil {
+			t.Fatal("SpeechStopped = nil, want payload")
+		}
+		if ev.SpeechStopped.UserTranscriptionEnabled {
+			t.Fatal("UserTranscriptionEnabled = true, want false when input_audio_transcription is nil")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for speech stopped event")
+	}
+}
+
 func newOpenAIRealtimeTestWebsocketDialer(t *testing.T, handler func(*websocket.Conn, *http.Request)) openAIRealtimeWebsocketDialer {
 	t.Helper()
 	upgrader := websocket.Upgrader{}
@@ -2266,6 +2304,42 @@ func TestRealtimeChatContextCreateMessagesMapUserTextMessage(t *testing.T) {
 	content := item["content"].([]map[string]any)
 	if len(content) != 1 || content[0]["type"] != "input_text" || content[0]["text"] != "hello" {
 		t.Fatalf("content = %#v, want input text hello", content)
+	}
+}
+
+func TestRealtimeChatContextCreateMessagesMapUserAudioContent(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.AddMessage(llm.ChatMessageArgs{
+		ID:   "msg_audio",
+		Role: llm.ChatRoleUser,
+		Content: []llm.ChatContent{{
+			Audio: &llm.AudioContent{
+				Frames: []any{
+					&audiomodel.AudioFrame{Data: []byte{1, 2}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1},
+					&audiomodel.AudioFrame{Data: []byte{3, 4}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1},
+				},
+				Transcript: "spoken words",
+			},
+		}},
+	})
+
+	msgs, err := openAIRealtimeChatContextCreateMessages(chatCtx)
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatContextCreateMessages error = %v, want nil", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("messages len = %d, want 1", len(msgs))
+	}
+	item := msgs[0]["item"].(map[string]any)
+	content := item["content"].([]map[string]any)
+	if len(content) != 1 || content[0]["type"] != "input_audio" {
+		t.Fatalf("content = %#v, want one input audio content part", content)
+	}
+	if got, want := content[0]["audio"], base64.StdEncoding.EncodeToString([]byte{1, 2, 3, 4}); got != want {
+		t.Fatalf("audio = %#v, want %q", got, want)
+	}
+	if got := content[0]["transcript"]; got != "spoken words" {
+		t.Fatalf("transcript = %#v, want spoken words", got)
 	}
 }
 

@@ -300,7 +300,14 @@ func (c *ChatContext) Truncate(maxItems int) *ChatContext {
 		}
 	}
 
-	newItems := c.Items[len(c.Items)-maxItems:]
+	start := len(c.Items) - maxItems
+	if maxItems < 0 {
+		start = -maxItems
+	}
+	if start > len(c.Items) {
+		start = len(c.Items)
+	}
+	newItems := c.Items[start:]
 
 	// Don't start with function calls to avoid partial sequences.
 	for len(newItems) > 0 && isFunctionChatItem(newItems[0]) {

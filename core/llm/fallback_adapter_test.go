@@ -108,8 +108,15 @@ func TestFallbackAdapterReportsReferenceMetadata(t *testing.T) {
 }
 
 func TestFallbackAdapterStreamExposesChatContext(t *testing.T) {
+	providerChatCtx := NewChatContext()
+	providerChatCtx.AddMessage(ChatMessageArgs{Role: ChatRoleAssistant, Text: "provider"})
 	adapter := NewFallbackAdapter([]LLM{
-		&fakeFallbackLLM{stream: &fakeFallbackStream{}},
+		&fakeFallbackLLM{stream: &fakeFallbackStream{
+			chatCtx: providerChatCtx,
+			events: []fakeFallbackEvent{
+				{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "ok"}}},
+			},
+		}},
 	})
 	chatCtx := NewChatContext()
 	chatCtx.AddMessage(ChatMessageArgs{Role: ChatRoleUser, Text: "hello"})
@@ -126,6 +133,13 @@ func TestFallbackAdapterStreamExposesChatContext(t *testing.T) {
 	}
 	if got := chatCtxStream.ChatCtx(); got != chatCtx {
 		t.Fatalf("ChatCtx() = %p, want original context %p", got, chatCtx)
+	}
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := chatCtxStream.ChatCtx(); got != providerChatCtx {
+		t.Fatalf("ChatCtx() after first chunk = %p, want provider context %p", got, providerChatCtx)
 	}
 }
 
@@ -542,7 +556,7 @@ func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T
 	}
 }
 
-func TestFallbackAdapterDoesNotFallbackOnNonRetryableAPIError(t *testing.T) {
+func TestFallbackAdapterFallsBackOnNonRetryableAPIErrorBeforeChunk(t *testing.T) {
 	primaryErr := NewAPIStatusError("bad request", 400, "req_123", nil)
 	fallback := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
 		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
@@ -552,12 +566,19 @@ func TestFallbackAdapterDoesNotFallbackOnNonRetryableAPIError(t *testing.T) {
 		fallback,
 	})
 
-	_, err := adapter.Chat(context.Background(), NewChatContext())
-	if !errors.Is(err, primaryErr) {
-		t.Fatalf("Chat error = %v, want non-retryable API error", err)
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
 	}
-	if fallback.calls != 0 {
-		t.Fatalf("fallback calls = %d, want 0 for non-retryable API error", fallback.calls)
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "fallback" {
+		t.Fatalf("chunk content = %q, want fallback after non-retryable API error", got)
+	}
+	if fallback.calls != 1 {
+		t.Fatalf("fallback calls = %d, want 1", fallback.calls)
 	}
 }
 
@@ -879,6 +900,29 @@ func TestFallbackAdapterEmitsAvailabilityChangedWhenProviderRecovers(t *testing.
 	}
 }
 
+func TestFallbackAdapterAllUnavailableMainSuccessDoesNotEmitRecovered(t *testing.T) {
+	primary := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "primary active"}}},
+	}}}
+	adapter := NewFallbackAdapter([]LLM{primary})
+	adapter.mu.Lock()
+	adapter.available[0] = false
+	adapter.mu.Unlock()
+
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "primary active" {
+		t.Fatalf("chunk content = %q, want primary active", got)
+	}
+	assertNoFallbackAvailabilityEvent(t, adapter)
+}
+
 func TestFallbackAdapterRecoversUnavailableProviderInBackground(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	primary := &fakeFallbackLLM{streams: []LLMStream{
@@ -920,6 +964,53 @@ func TestFallbackAdapterRecoversUnavailableProviderInBackground(t *testing.T) {
 	if got := chunk.Delta.Content; got != "primary active" {
 		t.Fatalf("second stream content = %q, want recovered primary active", got)
 	}
+}
+
+func TestFallbackAdapterRetriesRecoveryAfterFailedProbeOnLaterChat(t *testing.T) {
+	firstErr := errors.New("primary stream failed")
+	recoveryErr := errors.New("recovery probe failed")
+	primary := &fakeFallbackLLM{streams: []LLMStream{
+		&fakeFallbackStream{events: []fakeFallbackEvent{{err: firstErr}}},
+		&fakeFallbackStream{events: []fakeFallbackEvent{{err: recoveryErr}}},
+		&fakeFallbackStream{events: []fakeFallbackEvent{
+			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "second recovery probe"}}},
+		}},
+	}}
+	fallback := &fakeFallbackLLM{streams: []LLMStream{
+		&fakeFallbackStream{events: []fakeFallbackEvent{
+			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback first"}}},
+		}},
+		&fakeFallbackStream{events: []fakeFallbackEvent{
+			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback second"}}},
+		}},
+	}}
+	adapter := NewFallbackAdapter([]LLM{primary, fallback})
+
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "fallback first" {
+		t.Fatalf("fallback content = %q, want fallback first", got)
+	}
+	waitForFallbackCalls(t, primary, 2)
+
+	stream, err = adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("second Chat returned error: %v", err)
+	}
+	chunk, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "fallback second" {
+		t.Fatalf("second fallback content = %q, want fallback second", got)
+	}
+	waitForFallbackCalls(t, primary, 3)
 }
 
 type fakeFallbackLLM struct {
@@ -966,9 +1057,10 @@ type fakeFallbackEvent struct {
 }
 
 type fakeFallbackStream struct {
-	events []fakeFallbackEvent
-	index  int
-	closed bool
+	events  []fakeFallbackEvent
+	chatCtx *ChatContext
+	index   int
+	closed  bool
 }
 
 func (f *fakeFallbackStream) Next() (*ChatChunk, error) {
@@ -986,6 +1078,10 @@ func (f *fakeFallbackStream) Next() (*ChatChunk, error) {
 func (f *fakeFallbackStream) Close() error {
 	f.closed = true
 	return nil
+}
+
+func (f *fakeFallbackStream) ChatCtx() *ChatContext {
+	return f.chatCtx
 }
 
 func waitForFallbackCalls(t *testing.T, llm *fakeFallbackLLM, calls int) {
@@ -1027,6 +1123,15 @@ func assertNoFallbackAvailabilityChange(t *testing.T, changes <-chan FallbackAva
 	select {
 	case event := <-changes:
 		t.Fatalf("received unexpected fallback availability handler event: %#v", event)
+	case <-time.After(25 * time.Millisecond):
+	}
+}
+
+func assertNoFallbackAvailabilityEvent(t *testing.T, adapter *FallbackAdapter) {
+	t.Helper()
+	select {
+	case event := <-adapter.AvailabilityChangedCh():
+		t.Fatalf("received unexpected fallback availability event: %#v", event)
 	case <-time.After(25 * time.Millisecond):
 	}
 }
