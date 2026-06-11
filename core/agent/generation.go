@@ -299,6 +299,8 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 				if err != nil || frame == nil {
 					if err != nil {
 						data.StreamErr = err
+					} else {
+						data.StreamErr = fmt.Errorf("no audio frames were pushed for text: %s", transformedText)
 					}
 					return
 				}
@@ -310,6 +312,8 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 				if err != nil || frame == nil {
 					if err != nil {
 						data.StreamErr = err
+					} else {
+						data.StreamErr = fmt.Errorf("no audio frames were pushed for text: %s", transformedText)
 					}
 					return
 				}
