@@ -1849,7 +1849,14 @@ func TestChatContextToOpenAIResponsesProviderFormat(t *testing.T) {
 				}},
 			},
 		},
-		&ChatMessage{ID: "assistant-turn", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "checking"}}},
+		&ChatMessage{
+			ID:      "assistant-turn",
+			Role:    ChatRoleAssistant,
+			Content: []ChatContent{{Text: "checking"}},
+			Extra: map[string]any{
+				"openai": map[string]any{"phase": "commentary"},
+			},
+		},
 		&FunctionCall{ID: "assistant-turn/tool", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"Paris"}`},
 		&FunctionCallOutput{ID: "lookup-output", CallID: "call_lookup", Name: "lookup", Output: "Paris"},
 	}
@@ -1874,6 +1881,9 @@ func TestChatContextToOpenAIResponsesProviderFormat(t *testing.T) {
 	}
 	if items[1]["role"] != "assistant" || items[1]["content"] != "checking" {
 		t.Fatalf("assistant item = %#v", items[1])
+	}
+	if items[1]["phase"] != "commentary" {
+		t.Fatalf("assistant phase = %#v, want commentary", items[1]["phase"])
 	}
 	if items[2]["type"] != "function_call" || items[2]["call_id"] != "call_lookup" || items[2]["name"] != "lookup" || items[2]["arguments"] != `{"city":"Paris"}` {
 		t.Fatalf("function call item = %#v", items[2])
