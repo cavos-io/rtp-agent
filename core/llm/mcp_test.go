@@ -807,6 +807,24 @@ func TestMCPServerStdioSerializesConcurrentWrites(t *testing.T) {
 	}
 }
 
+func TestMCPServerStdioSendRequestReportsClosedTransport(t *testing.T) {
+	server := NewMCPServerStdio("", nil)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("sendRequest panicked on closed transport: %v", recovered)
+		}
+	}()
+
+	_, err := server.sendRequest(context.Background(), "tools/list", map[string]any{})
+
+	if err == nil {
+		t.Fatal("sendRequest error = nil, want closed transport error")
+	}
+	if got, want := err.Error(), "MCP stdio transport closed"; got != want {
+		t.Fatalf("sendRequest error = %q, want %q", got, want)
+	}
+}
+
 func TestMCPServerStdioInitializePassesEnvAndCwd(t *testing.T) {
 	tmpDir := t.TempDir()
 	scriptPath := filepath.Join(tmpDir, "mcp-env-cwd-test.sh")

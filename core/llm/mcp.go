@@ -670,6 +670,11 @@ func (s *MCPServerStdio) sendRequest(ctx context.Context, method string, params 
 
 	ch := make(chan *jsonRPCResponse, 1)
 	s.mu.Lock()
+	stdin := s.stdin
+	if stdin == nil {
+		s.mu.Unlock()
+		return nil, errors.New("MCP stdio transport closed")
+	}
 	s.pending[id] = ch
 	s.mu.Unlock()
 
@@ -680,7 +685,7 @@ func (s *MCPServerStdio) sendRequest(ctx context.Context, method string, params 
 	}()
 
 	s.writeMu.Lock()
-	_, err = s.stdin.Write(b)
+	_, err = stdin.Write(b)
 	s.writeMu.Unlock()
 	if err != nil {
 		return nil, err
