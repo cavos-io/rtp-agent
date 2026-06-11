@@ -1748,6 +1748,10 @@ func buildOpenAIChatMessage(msg *llm.ChatMessage) openai.ChatCompletionMessage {
 			}
 		}
 	}
+	if len(parts) == 0 {
+		oaMsg.Content = " "
+		return oaMsg
+	}
 	oaMsg.MultiContent = parts
 	return oaMsg
 }
