@@ -900,6 +900,22 @@ func TestChatContextTruncateZeroKeepsReferenceItems(t *testing.T) {
 	}
 }
 
+func TestChatContextTruncateNegativeKeepsReferenceSliceBehavior(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "system", Role: ChatRoleSystem, Content: []ChatContent{{Text: "instructions"}}},
+		&ChatMessage{ID: "old", Role: ChatRoleUser, Content: []ChatContent{{Text: "old"}}},
+		&ChatMessage{ID: "user", Role: ChatRoleUser, Content: []ChatContent{{Text: "hello"}}},
+		&ChatMessage{ID: "assistant", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "hi"}}},
+	}
+
+	ctx.Truncate(-2)
+
+	if got, want := itemIDs(ctx.Items), "system,user,assistant"; got != want {
+		t.Fatalf("Truncate(-2) item IDs = %q, want %q", got, want)
+	}
+}
+
 func TestChatContextIsEquivalentIgnoresTimestampsAndMetadata(t *testing.T) {
 	left := NewChatContext()
 	left.Items = []ChatItem{
