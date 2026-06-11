@@ -739,6 +739,9 @@ func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio,
 			}
 			return audio, slngBool(message["isFinal"]), nil
 		}
+		if slngBool(message["isFinal"]) {
+			return nil, true, nil
+		}
 		if message["error"] != nil {
 			return nil, false, fmt.Errorf("slng tts error: %s", extractSLNGError(message))
 		}
@@ -977,6 +980,9 @@ func slngTTSMessageKind(payload []byte) string {
 	}
 	if slngString(message["audio"]) != "" {
 		return "audio"
+	}
+	if slngBool(message["isFinal"]) {
+		return "isFinal"
 	}
 	if message["error"] != nil {
 		return "error"

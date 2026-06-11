@@ -173,6 +173,17 @@ func TestSLNGTTSReceivedEventParsesReferenceShapes(t *testing.T) {
 		t.Fatalf("audio=%+v done=%v, want end event", audio, done)
 	}
 
+	audio, done, err = ttsAudioFromMessage([]byte(`{"isFinal":true}`), 24000)
+	if err != nil {
+		t.Fatalf("isFinal message: %v", err)
+	}
+	if audio != nil || !done {
+		t.Fatalf("audio=%+v done=%v, want no-audio isFinal to end segment", audio, done)
+	}
+	if got := slngTTSMessageKind([]byte(`{"isFinal":true}`)); got != "isFinal" {
+		t.Fatalf("message kind = %q, want isFinal", got)
+	}
+
 	_, _, err = ttsAudioFromMessage([]byte(`{"type":"Error","message":"bad voice"}`), 24000)
 	if err == nil {
 		t.Fatal("error message returned nil error")
