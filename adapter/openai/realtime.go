@@ -1820,9 +1820,12 @@ func openAIRealtimeFunctionCall(item map[string]any) (*llm.FunctionCall, error) 
 	id, _ := item["id"].(string)
 	callID, _ := item["call_id"].(string)
 	name, _ := item["name"].(string)
-	arguments, _ := item["arguments"].(string)
+	arguments, ok := item["arguments"].(string)
 	if id == "" || callID == "" || name == "" {
 		return nil, fmt.Errorf("malformed realtime function call item")
+	}
+	if !ok {
+		return nil, fmt.Errorf("arguments is None")
 	}
 	return &llm.FunctionCall{
 		ID:        id,

@@ -2249,6 +2249,44 @@ func TestRealtimeEventMapsConversationItemAddedFunctionCall(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeFunctionCallRejectsMissingArgumentsWithReferenceError(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		arguments any
+		set       bool
+	}{
+		{name: "missing"},
+		{name: "null", arguments: nil, set: true},
+		{name: "non_string", arguments: map[string]any{}, set: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			item := map[string]any{
+				"id":      "fc_123",
+				"type":    "function_call",
+				"call_id": "call_123",
+				"name":    "lookup",
+			}
+			if tt.set {
+				item["arguments"] = tt.arguments
+			}
+
+			_, err := openAIRealtimeChatItem(item)
+			if err == nil {
+				t.Fatal("openAIRealtimeChatItem() error = nil, want arguments is None error")
+			}
+			if got, want := err.Error(), "arguments is None"; got != want {
+				t.Fatalf("openAIRealtimeChatItem() error = %q, want %q", got, want)
+			}
+			if ev, ok := openAIRealtimeEvent(map[string]any{
+				"type": "conversation.item.added",
+				"item": item,
+			}); ok {
+				t.Fatalf("openAIRealtimeEvent() = %#v, true; want malformed item ignored", ev)
+			}
+		})
+	}
+}
+
 func TestOpenAIRealtimeChatItemRejectsUnsupportedItemTypeWithReferenceError(t *testing.T) {
 	_, err := openAIRealtimeChatItem(map[string]any{"type": "audio"})
 	if err == nil {
