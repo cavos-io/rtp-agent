@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"sync"
@@ -11,10 +12,13 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"github.com/livekit/protocol/livekit"
+	livekitlogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
+	"github.com/twitchtv/twirp"
 )
 
 type fakeRoomIOTextResponder struct {
@@ -1104,6 +1108,56 @@ func TestRoomIOHandleAgentSessionCloseDeletesRoomWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestRoomIOHandleAgentSessionCloseIgnoresDeleteRoomNotFound(t *testing.T) {
+	recorder := &roomIORecordingLogger{}
+	oldLogger := logutil.Logger
+	logutil.SetLogger(recorder)
+	t.Cleanup(func() { logutil.SetLogger(oldLogger) })
+
+	rio := &RoomIO{
+		Options: RoomOptions{
+			DeleteRoomOnClose: true,
+			DeleteRoom: func(context.Context, string) error {
+				return twirp.NewError(twirp.NotFound, "requested room does not exist")
+			},
+		},
+		roomName: func() string {
+			return "room-a"
+		},
+	}
+
+	rio.handleAgentSessionClose(agent.CloseEvent{Reason: agent.CloseReasonParticipantDisconnected})
+	waitForRoomDeleteIdle(t, rio)
+	if len(recorder.warnMessages) != 0 {
+		t.Fatalf("warn messages = %#v, want none for reference idempotent not_found room delete", recorder.warnMessages)
+	}
+}
+
+func TestRoomIOHandleAgentSessionCloseWarnsOnDeleteRoomUnknownError(t *testing.T) {
+	recorder := &roomIORecordingLogger{}
+	oldLogger := logutil.Logger
+	logutil.SetLogger(recorder)
+	t.Cleanup(func() { logutil.SetLogger(oldLogger) })
+
+	rio := &RoomIO{
+		Options: RoomOptions{
+			DeleteRoomOnClose: true,
+			DeleteRoom: func(context.Context, string) error {
+				return errors.New("boom")
+			},
+		},
+		roomName: func() string {
+			return "room-a"
+		},
+	}
+
+	rio.handleAgentSessionClose(agent.CloseEvent{Reason: agent.CloseReasonParticipantDisconnected})
+	waitForRoomDeleteIdle(t, rio)
+	if !stringSliceContains(recorder.warnMessages, "failed to delete room on agent session close") {
+		t.Fatalf("warn messages = %#v, want delete-room warning for non-not_found error", recorder.warnMessages)
+	}
+}
+
 func waitForRoomDeleteIdle(t *testing.T, rio *RoomIO) {
 	t.Helper()
 
@@ -1121,6 +1175,50 @@ func waitForRoomDeleteIdle(t *testing.T, rio *RoomIO) {
 			t.Fatal("deletingRoom was not cleared")
 		}
 	}
+}
+
+type roomIORecordingLogger struct {
+	warnMessages []string
+}
+
+func (l *roomIORecordingLogger) Debugw(string, ...any) {}
+func (l *roomIORecordingLogger) Infow(string, ...any)  {}
+func (l *roomIORecordingLogger) Warnw(msg string, err error, keysAndValues ...any) {
+	l.warnMessages = append(l.warnMessages, msg)
+}
+func (l *roomIORecordingLogger) Errorw(string, error, ...any) {}
+func (l *roomIORecordingLogger) WithValues(keysAndValues ...any) livekitlogger.Logger {
+	return l
+}
+func (l *roomIORecordingLogger) WithUnlikelyValues(keysAndValues ...any) livekitlogger.UnlikelyLogger {
+	return livekitlogger.GetDiscardLogger().WithUnlikelyValues(keysAndValues...)
+}
+func (l *roomIORecordingLogger) WithName(name string) livekitlogger.Logger {
+	return l
+}
+func (l *roomIORecordingLogger) WithComponent(component string) livekitlogger.Logger {
+	return l
+}
+func (l *roomIORecordingLogger) WithCallDepth(depth int) livekitlogger.Logger {
+	return l
+}
+func (l *roomIORecordingLogger) WithItemSampler() livekitlogger.Logger {
+	return l
+}
+func (l *roomIORecordingLogger) WithoutSampler() livekitlogger.Logger {
+	return l
+}
+func (l *roomIORecordingLogger) WithDeferredValues() (livekitlogger.Logger, livekitlogger.DeferredFieldResolver) {
+	return livekitlogger.GetDiscardLogger().WithDeferredValues()
+}
+
+func stringSliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRoomIOHandleAgentSessionCloseDoesNotBlockOnRoomDelete(t *testing.T) {
