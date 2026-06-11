@@ -1803,12 +1803,15 @@ func openAIRealtimeChatItem(item map[string]any) (llm.ChatItem, error) {
 
 func openAIRealtimeFunctionCallOutput(item map[string]any) (*llm.FunctionCallOutput, error) {
 	id, _ := item["id"].(string)
-	callID, _ := item["call_id"].(string)
-	output, ok := item["output"].(string)
-	if id == "" || callID == "" {
+	callID, hasCallID := item["call_id"].(string)
+	output, hasOutput := item["output"].(string)
+	if id == "" {
 		return nil, fmt.Errorf("malformed realtime function call output item")
 	}
-	if !ok {
+	if !hasCallID {
+		return nil, fmt.Errorf("call_id is None")
+	}
+	if !hasOutput {
 		return nil, fmt.Errorf("output is None")
 	}
 	return &llm.FunctionCallOutput{
@@ -1821,13 +1824,16 @@ func openAIRealtimeFunctionCallOutput(item map[string]any) (*llm.FunctionCallOut
 
 func openAIRealtimeFunctionCall(item map[string]any) (*llm.FunctionCall, error) {
 	id, _ := item["id"].(string)
-	callID, _ := item["call_id"].(string)
+	callID, hasCallID := item["call_id"].(string)
 	name, _ := item["name"].(string)
-	arguments, ok := item["arguments"].(string)
-	if id == "" || callID == "" || name == "" {
+	arguments, hasArguments := item["arguments"].(string)
+	if id == "" || name == "" {
 		return nil, fmt.Errorf("malformed realtime function call item")
 	}
-	if !ok {
+	if !hasCallID {
+		return nil, fmt.Errorf("call_id is None")
+	}
+	if !hasArguments {
 		return nil, fmt.Errorf("arguments is None")
 	}
 	return &llm.FunctionCall{
