@@ -2430,6 +2430,35 @@ func TestOpenAIRealtimeFunctionItemsPreserveEmptyCallID(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeFunctionItemsPreserveEmptyID(t *testing.T) {
+	call, err := openAIRealtimeChatItem(map[string]any{
+		"id":        "",
+		"type":      "function_call",
+		"call_id":   "call_123",
+		"name":      "lookup",
+		"arguments": `{"query":"hello"}`,
+	})
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatItem(function_call) error = %v, want nil", err)
+	}
+	if got := call.(*llm.FunctionCall).ID; got != "" {
+		t.Fatalf("function call ID = %q, want empty string", got)
+	}
+
+	output, err := openAIRealtimeChatItem(map[string]any{
+		"id":      "",
+		"type":    "function_call_output",
+		"call_id": "call_123",
+		"output":  "Paris",
+	})
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatItem(function_call_output) error = %v, want nil", err)
+	}
+	if got := output.(*llm.FunctionCallOutput).ID; got != "" {
+		t.Fatalf("function output ID = %q, want empty string", got)
+	}
+}
+
 func TestOpenAIRealtimeFunctionCallRejectsMissingNameWithReferenceError(t *testing.T) {
 	for _, tt := range []struct {
 		name     string

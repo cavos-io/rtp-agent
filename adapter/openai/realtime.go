@@ -1805,9 +1805,6 @@ func openAIRealtimeFunctionCallOutput(item map[string]any) (*llm.FunctionCallOut
 	id, _ := item["id"].(string)
 	callID, hasCallID := item["call_id"].(string)
 	output, hasOutput := item["output"].(string)
-	if id == "" {
-		return nil, fmt.Errorf("malformed realtime function call output item")
-	}
 	if !hasCallID {
 		return nil, fmt.Errorf("call_id is None")
 	}
@@ -1827,9 +1824,6 @@ func openAIRealtimeFunctionCall(item map[string]any) (*llm.FunctionCall, error) 
 	callID, hasCallID := item["call_id"].(string)
 	name, hasName := item["name"].(string)
 	arguments, hasArguments := item["arguments"].(string)
-	if id == "" {
-		return nil, fmt.Errorf("malformed realtime function call item")
-	}
 	if !hasCallID {
 		return nil, fmt.Errorf("call_id is None")
 	}
