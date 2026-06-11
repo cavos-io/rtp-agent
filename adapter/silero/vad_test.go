@@ -96,6 +96,58 @@ func TestSileroVADMetadataAndMetrics(t *testing.T) {
 	}
 }
 
+func TestSileroVADWithONNXRuntimeUsesModelProbability(t *testing.T) {
+	originalFactory := newSileroProbabilityEstimatorFactory
+	defer func() { newSileroProbabilityEstimatorFactory = originalFactory }()
+
+	var created int
+	newSileroProbabilityEstimatorFactory = func(options VADOptions) (vad.ProbabilityEstimatorFactory, error) {
+		created++
+		if options.ONNXFilePath != "model.onnx" {
+			t.Fatalf("ONNXFilePath = %q, want model.onnx", options.ONNXFilePath)
+		}
+		if options.ONNXRuntimeLibPath != "libonnxruntime.so" {
+			t.Fatalf("ONNXRuntimeLibPath = %q, want libonnxruntime.so", options.ONNXRuntimeLibPath)
+		}
+		return func() vad.ProbabilityEstimator {
+			used := false
+			return func(*model.AudioFrame) (float64, error) {
+				if used {
+					return 0, nil
+				}
+				used = true
+				return 0.9, nil
+			}
+		}, nil
+	}
+
+	detector, err := NewSileroVADWithOptions(
+		WithONNXRuntime(),
+		WithONNXFilePath("model.onnx"),
+		WithONNXRuntimeLibraryPath("libonnxruntime.so"),
+		WithActivationThreshold(0.5),
+		WithMinSpeechDuration(0.032),
+	)
+	if err != nil {
+		t.Fatalf("NewSileroVADWithOptions() error = %v, want nil", err)
+	}
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(testAudioFrame(16000, 512, 0)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+
+	assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
+	assertSileroVADEventType(t, stream, vad.VADEventStartOfSpeech)
+	if created != 1 {
+		t.Fatalf("ONNX estimator factories = %d, want 1", created)
+	}
+}
+
 func TestSileroVADMetricsHandlerPanicDoesNotStopOtherHandlers(t *testing.T) {
 	detector := NewSileroVAD()
 	metricsCh := make(chan *telemetry.VADMetrics, 1)
