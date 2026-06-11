@@ -946,7 +946,7 @@ func chatItemToDict(item ChatItem, opts ChatContextDictOptions) map[string]any {
 func chatContentToDict(content []ChatContent, opts ChatContextDictOptions) []any {
 	serialized := make([]any, 0, len(content))
 	for _, item := range content {
-		if item.Text != "" {
+		if item.Text != "" || (item.Instructions == nil && item.Image == nil && item.Audio == nil) {
 			serialized = append(serialized, item.Text)
 		}
 		if item.Instructions != nil {

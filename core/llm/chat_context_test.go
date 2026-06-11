@@ -997,6 +997,30 @@ func TestChatContextToDictUsesReferenceItemShapeAndFilters(t *testing.T) {
 	}
 }
 
+func TestChatContextToDictPreservesEmptyStringContent(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:   "message",
+			Role: ChatRoleSystem,
+			Content: []ChatContent{
+				{Text: ""},
+				{Text: "instructions"},
+			},
+		},
+	}
+
+	data := ctx.ToDict()
+	items := data["items"].([]map[string]any)
+	content, ok := items[0]["content"].([]any)
+	if !ok {
+		t.Fatalf("content = %#v, want []any", items[0]["content"])
+	}
+	if len(content) != 2 || content[0] != "" || content[1] != "instructions" {
+		t.Fatalf("content = %#v, want empty string followed by instructions", content)
+	}
+}
+
 func TestChatContextToDictIncludesAndExcludesMessageMetrics(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
