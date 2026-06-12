@@ -1087,6 +1087,79 @@ func TestPerformToolExecutionsRejectsReplaceDuplicateWhenRunningToolNotCancellab
 	}
 }
 
+func TestPerformToolExecutionsReplaceCancelsCancellableDuplicate(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	tool := &blockingGenerationTool{
+		duplicateMode: llm.ToolDuplicateModeReplace,
+		flags:         llm.ToolFlagCancellable,
+		started:       make(chan struct{}, 2),
+		args:          make(chan string, 2),
+		release:       make(chan struct{}),
+	}
+	toolCtx := llm.NewToolContext([]interface{}{tool})
+	functionCh := make(chan *llm.FunctionToolCall)
+	outputs := PerformToolExecutions(context.Background(), functionCh, toolCtx, WithToolExecutionSession(session))
+
+	functionCh <- &llm.FunctionToolCall{Name: tool.Name(), CallID: "call_lookup_a", Arguments: `{"city":"Paris"}`}
+	select {
+	case <-tool.started:
+	case <-testTimeout():
+		t.Fatal("first tool call did not start")
+	}
+
+	functionCh <- &llm.FunctionToolCall{Name: tool.Name(), CallID: "call_lookup_b", Arguments: `{"city":"Berlin"}`}
+	select {
+	case <-tool.started:
+	case <-testTimeout():
+		t.Fatal("replacement tool call did not start")
+	}
+
+	var sawParis bool
+	var sawBerlin bool
+	for i := 0; i < 2; i++ {
+		select {
+		case args := <-tool.args:
+			switch args {
+			case `{"city":"Paris"}`:
+				sawParis = true
+			case `{"city":"Berlin"}`:
+				sawBerlin = true
+			}
+		case <-testTimeout():
+			t.Fatal("timed out waiting for tool args")
+		}
+	}
+	if !sawParis || !sawBerlin {
+		t.Fatalf("tool args did not include both calls: sawParis=%v sawBerlin=%v", sawParis, sawBerlin)
+	}
+
+	close(tool.release)
+	close(functionCh)
+	var got []ToolExecutionOutput
+	for output := range outputs {
+		got = append(got, output)
+	}
+	var replacementSuccess bool
+	var cancellationError bool
+	for _, output := range got {
+		if output.FncCall.CallID == "call_lookup_b" && output.RawOutput == "ok" && output.RawError == nil {
+			replacementSuccess = true
+		}
+		if output.FncCall.CallID == "call_lookup_a" && output.RawError != nil && errors.Is(output.RawError, context.Canceled) {
+			cancellationError = true
+		}
+		if output.FncCall.CallID == "call_lookup_b" && output.RawError != nil {
+			t.Fatalf("replacement output = %#v, want success", output)
+		}
+	}
+	if !replacementSuccess {
+		t.Fatalf("outputs = %#v, want replacement call to complete successfully", got)
+	}
+	if !cancellationError {
+		t.Fatalf("outputs = %#v, want first call to observe context cancellation", got)
+	}
+}
+
 func TestPerformToolExecutionsDetachesRunContextAfterReturn(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	tool := &runContextRecordingTool{}
@@ -1348,6 +1421,7 @@ func (r *runContextUpdatingTool) Execute(ctx context.Context, args string) (stri
 
 type blockingGenerationTool struct {
 	duplicateMode llm.ToolDuplicateMode
+	flags         llm.ToolFlag
 	started       chan struct{}
 	args          chan string
 	release       chan struct{}
@@ -1365,12 +1439,20 @@ func (b *blockingGenerationTool) ToolDuplicateMode() llm.ToolDuplicateMode {
 	return b.duplicateMode
 }
 
-func (b *blockingGenerationTool) Execute(_ context.Context, args string) (string, error) {
+func (b *blockingGenerationTool) ToolFlags() llm.ToolFlag {
+	return b.flags
+}
+
+func (b *blockingGenerationTool) Execute(ctx context.Context, args string) (string, error) {
 	b.started <- struct{}{}
 	if b.args != nil {
 		b.args <- args
 	}
-	<-b.release
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
 	return "ok", nil
 }
 

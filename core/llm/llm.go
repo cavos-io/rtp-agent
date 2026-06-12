@@ -30,6 +30,7 @@ type ToolFlag uint64
 const (
 	ToolFlagNone          ToolFlag = 0
 	ToolFlagIgnoreOnEnter ToolFlag = 1 << 0
+	ToolFlagCancellable   ToolFlag = 1 << 1
 )
 
 type ToolFlagger interface {
