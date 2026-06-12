@@ -210,10 +210,72 @@ func repairFunctionArguments(value string) string {
 	out = insertMissingObjectCommas(out)
 	out = unquotedObjectKeyPattern.ReplaceAllString(out, `${1}"${2}"${3}`)
 	out = quoteUnquotedStringValues(out)
+	out = insertMissingArrayCommas(out)
 	out = quoteBareArrayStringValues(out)
 	out = closeUnbalancedJSONContainers(out)
 	out = trailingCommaPattern.ReplaceAllString(out, "$1")
 	return strings.TrimSpace(out)
+}
+
+func insertMissingArrayCommas(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	var stack []byte
+	inString := false
+	escaped := false
+	lastSignificant := byte(0)
+
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+				lastSignificant = ch
+			}
+			continue
+		}
+
+		if isJSONWhitespace(ch) {
+			start := i
+			for i+1 < len(value) && isJSONWhitespace(value[i+1]) {
+				i++
+			}
+			next := nextNonSpaceIndex(value, i+1)
+			if len(stack) > 0 && stack[len(stack)-1] == '[' && isJSONValueEnd(lastSignificant) && next >= 0 && startsArrayValueToken(value[next]) {
+				b.WriteByte(',')
+			}
+			b.WriteString(value[start : i+1])
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+		case '{', '[':
+			stack = append(stack, ch)
+		case '}':
+			if len(stack) > 0 && stack[len(stack)-1] == '{' {
+				stack = stack[:len(stack)-1]
+			}
+		case ']':
+			if len(stack) > 0 && stack[len(stack)-1] == '[' {
+				stack = stack[:len(stack)-1]
+			}
+		}
+		b.WriteByte(ch)
+		lastSignificant = ch
+	}
+
+	return b.String()
+}
+
+func startsArrayValueToken(ch byte) bool {
+	return ch == '"' || ch == '{' || ch == '[' || ch == '-' || ch == '+' || ch == '.' || ('0' <= ch && ch <= '9') || isBareValueStart(ch)
 }
 
 func insertMissingObjectCommas(value string) string {

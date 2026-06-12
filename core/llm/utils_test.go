@@ -337,6 +337,26 @@ func TestParseFunctionArgumentsRepairsMissingObjectCommas(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsMissingArrayCommas(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"items":["urgent" "home"], "nums":[1 2 3], "flags":[true false]}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	items, ok := args["items"].([]any)
+	if !ok || len(items) != 2 || items[0] != "urgent" || items[1] != "home" {
+		t.Fatalf("items = %#v, want string array commas repaired", args["items"])
+	}
+	nums, ok := args["nums"].([]any)
+	if !ok || len(nums) != 3 || nums[0] != float64(1) || nums[1] != float64(2) || nums[2] != float64(3) {
+		t.Fatalf("nums = %#v, want numeric array commas repaired", args["nums"])
+	}
+	flags, ok := args["flags"].([]any)
+	if !ok || len(flags) != 2 || flags[0] != true || flags[1] != false {
+		t.Fatalf("flags = %#v, want boolean array commas repaired", args["flags"])
+	}
+}
+
 func TestParseFunctionArgumentsTreatsNullAsEmptyObject(t *testing.T) {
 	args, err := ParseFunctionArguments(`null`)
 	if err != nil {
