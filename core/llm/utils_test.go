@@ -176,6 +176,17 @@ func TestParseFunctionArgumentsRepairsUnquotedStringValues(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsBareURLAndIdentifierValues(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"url":https://example.com/a-b?q=1,"email":user@example.com,"version":v1.2.3}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["url"] != "https://example.com/a-b?q=1" || args["email"] != "user@example.com" || args["version"] != "v1.2.3" {
+		t.Fatalf("args = %#v, want repaired bare URL and identifier string values", args)
+	}
+}
+
 func TestParseFunctionArgumentsRepairsSingleQuotedValues(t *testing.T) {
 	args, err := ParseFunctionArguments(`{'city':'Paris','country':'FR'}`)
 	if err != nil {

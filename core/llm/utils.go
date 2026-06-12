@@ -197,6 +197,7 @@ func repairFunctionArguments(value string) string {
 	for _, pattern := range templateTokenPatterns {
 		out = pattern.ReplaceAllString(out, "")
 	}
+	out = quoteExtendedBareStringValues(out)
 	out = stripJSONComments(out)
 	out = escapeStringControlCharacters(out)
 	out = normalizePythonBooleanLiterals(out)
@@ -214,6 +215,86 @@ func repairFunctionArguments(value string) string {
 	out = closeUnbalancedJSONContainers(out)
 	out = trailingCommaPattern.ReplaceAllString(out, "$1")
 	return strings.TrimSpace(out)
+}
+
+func quoteExtendedBareStringValues(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(value); {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			i++
+			continue
+		}
+
+		if ch == '"' {
+			inString = true
+			b.WriteByte(ch)
+			i++
+			continue
+		}
+		if ch != ':' {
+			b.WriteByte(ch)
+			i++
+			continue
+		}
+
+		b.WriteByte(ch)
+		i++
+		for i < len(value) && isJSONWhitespace(value[i]) {
+			b.WriteByte(value[i])
+			i++
+		}
+		if i >= len(value) || !isBareStringStart(value[i]) {
+			continue
+		}
+
+		start := i
+		for i < len(value) && !isBareValueDelimiter(value[i]) {
+			i++
+		}
+		raw := strings.TrimRightFunc(value[start:i], unicode.IsSpace)
+		trailing := value[start+len(raw) : i]
+		if raw != "" && needsExtendedBareStringQuote(raw) {
+			escapedValue, _ := json.Marshal(raw)
+			b.Write(escapedValue)
+		} else {
+			b.WriteString(raw)
+		}
+		b.WriteString(trailing)
+	}
+
+	return b.String()
+}
+
+func isBareStringStart(ch byte) bool {
+	return ch == '_' || ('A' <= ch && ch <= 'Z') || ('a' <= ch && ch <= 'z')
+}
+
+func isBareValueDelimiter(ch byte) bool {
+	switch ch {
+	case ',', '}', ']', '\n', '\r':
+		return true
+	default:
+		return false
+	}
+}
+
+func needsExtendedBareStringQuote(value string) bool {
+	return strings.IndexFunc(value, func(r rune) bool {
+		return !(r == '_' || r == '-' || unicode.IsLetter(r) || unicode.IsDigit(r))
+	}) >= 0
 }
 
 func normalizeSingleQuotedStrings(value string) string {
