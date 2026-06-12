@@ -250,6 +250,8 @@ func normalizeSingleQuotedStrings(value string) string {
 			} else if ch == '\'' {
 				inSingleString = false
 				b.WriteByte('"')
+			} else if ch == '"' {
+				b.WriteString(`\"`)
 			} else {
 				b.WriteByte(ch)
 			}

@@ -202,6 +202,21 @@ func TestParseFunctionArgumentsRepairsEscapedSingleQuotedValues(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsDoubleQuotesInsideSingleQuotedValues(t *testing.T) {
+	args, err := ParseFunctionArguments(`{'note':'say "hi"','items':['owner says "go"']}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["note"] != `say "hi"` {
+		t.Fatalf("note = %#v, want embedded double quotes preserved", args["note"])
+	}
+	items, ok := args["items"].([]any)
+	if !ok || len(items) != 1 || items[0] != `owner says "go"` {
+		t.Fatalf("items = %#v, want embedded double quotes preserved", args["items"])
+	}
+}
+
 func TestParseFunctionArgumentsRepairsRawNewlineStringValues(t *testing.T) {
 	args, err := ParseFunctionArguments("{\"message\":\"hello\nworld\"}")
 	if err != nil {
