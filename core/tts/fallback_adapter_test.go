@@ -3011,6 +3011,39 @@ func TestFallbackSynthesizeRecoveryKeepsProviderUnavailableWhenReplayProducesNoA
 	}
 }
 
+func TestFallbackSynthesizeRecoveryKeepsProviderUnavailableWhenReplayAudioInvalid(t *testing.T) {
+	primary := &metadataTTS{
+		label:        "primary",
+		sampleRate:   16000,
+		numChannels:  1,
+		capabilities: TTSCapabilities{Streaming: true},
+		stream: &metadataSynthesizeStream{
+			events: []*SynthesizedAudio{{Frame: &model.AudioFrame{
+				Data:              []byte{1, 2},
+				SampleRate:        16000,
+				NumChannels:       1,
+				SamplesPerChannel: 2,
+			}}},
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]TTS{primary}, FallbackAdapterOptions{
+		SampleRate: 32000,
+	})
+	adapter.status[0].available = false
+
+	adapter.tryRecoverStream(0, []fallbackSynthesizeInput{{text: "hello"}})
+
+	waitForFallbackCondition(t, func() bool {
+		adapter.mu.Lock()
+		defer adapter.mu.Unlock()
+		return !adapter.status[0].recovering
+	})
+
+	if adapter.status[0].available {
+		t.Fatal("provider available = true after invalid-audio recovery probe, want false")
+	}
+}
+
 func waitForFallbackCondition(t *testing.T, condition func() bool) {
 	t.Helper()
 
