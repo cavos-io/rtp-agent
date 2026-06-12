@@ -74,6 +74,57 @@ func TestRunContextWaitForPlayoutWaitsOnlyInitialGenerationStep(t *testing.T) {
 	}
 }
 
+func TestRunContextForegroundHoldsSessionIdle(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	runCtx := NewRunContext(session, nil, &llm.FunctionCall{Name: "lookup"})
+	held := make(chan struct{})
+	release := make(chan struct{})
+	foregroundDone := make(chan error, 1)
+
+	go func() {
+		foregroundDone <- runCtx.Foreground(context.Background(), func(ctx context.Context) error {
+			if err := session.WaitForInactive(ctx); err != nil {
+				return err
+			}
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- session.WaitForInactive(context.Background())
+	}()
+
+	select {
+	case err := <-waitDone:
+		t.Fatalf("WaitForInactive returned while foreground run context held idle: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case err := <-foregroundDone:
+		if err != nil {
+			t.Fatalf("RunContext.Foreground error = %v", err)
+		}
+	case <-testTimeout():
+		t.Fatal("RunContext.Foreground did not release")
+	}
+	select {
+	case err := <-waitDone:
+		if err != nil {
+			t.Fatalf("WaitForInactive error = %v, want nil after foreground release", err)
+		}
+	case <-testTimeout():
+		t.Fatal("WaitForInactive did not return after foreground release")
+	}
+}
+
 func TestRunContextUserdataReturnsSessionUserdata(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	want := map[string]string{"account_id": "acct_123"}

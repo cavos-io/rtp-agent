@@ -260,6 +260,13 @@ func (r *RunContext) WaitForPlayout(ctx context.Context) error {
 	return r.SpeechHandle.Wait(ctx)
 }
 
+func (r *RunContext) Foreground(ctx context.Context, fn func(context.Context) error) error {
+	if r == nil || r.Session == nil || fn == nil {
+		return nil
+	}
+	return r.Session.WaitForInactiveAndHold(ctx, fn)
+}
+
 func (r *RunContext) Userdata() (any, error) {
 	if r == nil || r.Session == nil {
 		return nil, ErrAgentSessionUserdataNotSet
