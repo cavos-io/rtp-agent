@@ -220,6 +220,7 @@ type RunContext struct {
 	FunctionCall     *llm.FunctionCall
 	initialStepIndex int
 	updates          []RunContextUpdate
+	detached         bool
 	mu               sync.Mutex
 }
 
@@ -287,6 +288,10 @@ func (r *RunContext) Update(message any, templates ...string) error {
 	}
 
 	r.mu.Lock()
+	if r.detached {
+		r.mu.Unlock()
+		return nil
+	}
 	updateStep := len(r.updates)
 	if updateStep == 0 {
 		if r.FunctionCall.Extra == nil {
@@ -321,6 +326,15 @@ func (r *RunContext) Updates() []RunContextUpdate {
 	updates := make([]RunContextUpdate, len(r.updates))
 	copy(updates, r.updates)
 	return updates
+}
+
+func (r *RunContext) detach() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.detached = true
+	r.mu.Unlock()
 }
 
 func renderRunContextUpdateTemplate(template string, call *llm.FunctionCall, message string) string {

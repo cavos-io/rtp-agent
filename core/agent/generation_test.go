@@ -862,6 +862,39 @@ func TestPerformToolExecutionsUsesFirstRunContextUpdateAsOutput(t *testing.T) {
 	}
 }
 
+func TestPerformToolExecutionsDetachesRunContextAfterReturn(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	tool := &runContextRecordingTool{}
+	toolCtx := llm.NewToolContext([]interface{}{tool})
+	functionCh := make(chan *llm.FunctionToolCall, 1)
+	functionCh <- &llm.FunctionToolCall{
+		ID:        "reply-a/fnc_0",
+		Name:      tool.Name(),
+		CallID:    "call_lookup",
+		Arguments: `{}`,
+	}
+	close(functionCh)
+
+	outputs := PerformToolExecutions(context.Background(), functionCh, toolCtx, WithToolExecutionSession(session))
+	output, ok := <-outputs
+	if !ok {
+		t.Fatal("PerformToolExecutions closed without output")
+	}
+	if output.RawError != nil || output.RawOutput != "ok" {
+		t.Fatalf("output = %#v, want successful tool result", output)
+	}
+	if tool.runContext == nil {
+		t.Fatal("tool run context was not captured")
+	}
+
+	if err := tool.runContext.Update("late progress"); err != nil {
+		t.Fatalf("late run context update returned error: %v", err)
+	}
+	if updates := tool.runContext.Updates(); len(updates) != 0 {
+		t.Fatalf("late run context updates = %#v, want detached context to ignore updates", updates)
+	}
+}
+
 func TestPerformToolExecutionsUsesScopedMockTool(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	toolCtx := llm.NewToolContext([]interface{}{&fakeGenerationTool{name: "lookup", result: "real"}})

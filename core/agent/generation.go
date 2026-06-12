@@ -517,7 +517,9 @@ func PerformToolExecutions(
 					result = llm.ExecuteFunctionCall(execCtx, fc, executionToolCtx)
 				}
 				if runCtx != nil {
-					if updates := runCtx.Updates(); len(updates) > 0 {
+					updates := runCtx.Updates()
+					runCtx.detach()
+					if len(updates) > 0 {
 						result.FncCall = *updates[0].FunctionCall
 						result.FncCallOut = updates[0].FunctionCallOutput
 						if result.FncCallOut != nil {

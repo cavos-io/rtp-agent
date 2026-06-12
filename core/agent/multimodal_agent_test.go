@@ -876,6 +876,38 @@ func TestMultimodalToolExecutionUsesFirstRunContextUpdateAsOutput(t *testing.T) 
 	}
 }
 
+func TestMultimodalToolExecutionDetachesRunContextAfterReturn(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	tool := &runContextRecordingTool{}
+	session := &AgentSession{Tools: []llm.Tool{tool}}
+	ma := &MultimodalAgent{
+		session:   session,
+		chatCtx:   chatCtx,
+		rtSession: &fakeRealtimeSession{},
+		ctx:       context.Background(),
+	}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type:     llm.RealtimeEventTypeFunctionCall,
+		Function: &llm.FunctionToolCall{Name: "lookup", CallID: "call_lookup", Arguments: `{}`},
+	})
+
+	output := lastFunctionOutput(t, chatCtx)
+	if output.IsError || output.Output != "ok" {
+		t.Fatalf("function output = %#v, want successful tool result", output)
+	}
+	if tool.runContext == nil {
+		t.Fatal("tool run context was not captured")
+	}
+
+	if err := tool.runContext.Update("late progress"); err != nil {
+		t.Fatalf("late run context update returned error: %v", err)
+	}
+	if updates := tool.runContext.Updates(); len(updates) != 0 {
+		t.Fatalf("late run context updates = %#v, want detached context to ignore updates", updates)
+	}
+}
+
 func TestMultimodalToolExecutionRepairsArgumentsBeforeToolCall(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	tool := &recordingRealtimeTool{name: "lookup", result: "agent result"}

@@ -744,7 +744,9 @@ func (ma *MultimodalAgent) executeRealtimeFunctionCall(functionCall *llm.Functio
 	}, executionToolCtx)
 	functionCall.Arguments = result.FncCall.Arguments
 	resultCall := functionCall
-	if updates := runCtx.Updates(); len(updates) > 0 {
+	updates := runCtx.Updates()
+	runCtx.detach()
+	if len(updates) > 0 {
 		if updates[0].FunctionCall != nil {
 			resultCall = updates[0].FunctionCall
 		}
