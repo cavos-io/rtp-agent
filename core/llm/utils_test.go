@@ -139,6 +139,17 @@ func TestParseFunctionArgumentsRepairsTrailingCommas(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsDropsEllipsisPlaceholders(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"city":"Paris","limit":3,...}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["limit"] != float64(3) {
+		t.Fatalf("args = %#v, want ellipsis placeholder dropped", args)
+	}
+}
+
 func TestParseFunctionArgumentsRepairsMissingClosingDelimiter(t *testing.T) {
 	args, err := ParseFunctionArguments(`{"city":"Paris","tags":["metro","food"]`)
 	if err != nil {
