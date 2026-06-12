@@ -199,6 +199,7 @@ func repairFunctionArguments(value string) string {
 	for _, pattern := range templateTokenPatterns {
 		out = pattern.ReplaceAllString(out, "")
 	}
+	out = stripJSONComments(out)
 	out = escapeStringControlCharacters(out)
 	out = singleQuotedStringPattern.ReplaceAllString(out, `"$1"`)
 	out = unquotedObjectKeyPattern.ReplaceAllString(out, `${1}"${2}"${3}`)
@@ -206,6 +207,63 @@ func repairFunctionArguments(value string) string {
 	out = closeUnbalancedJSONContainers(out)
 	out = trailingCommaPattern.ReplaceAllString(out, "$1")
 	return strings.TrimSpace(out)
+}
+
+func stripJSONComments(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		if ch == '"' {
+			inString = true
+			b.WriteByte(ch)
+			continue
+		}
+		if ch == '/' && i+1 < len(value) {
+			switch value[i+1] {
+			case '/':
+				i += 2
+				for i < len(value) && value[i] != '\n' && value[i] != '\r' {
+					i++
+				}
+				if i < len(value) {
+					b.WriteByte(value[i])
+				}
+				continue
+			case '*':
+				i += 2
+				for i+1 < len(value) && !(value[i] == '*' && value[i+1] == '/') {
+					i++
+				}
+				if i+1 < len(value) {
+					i++
+				}
+				continue
+			}
+		}
+		b.WriteByte(ch)
+	}
+
+	return b.String()
 }
 
 func escapeStringControlCharacters(value string) string {

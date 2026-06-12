@@ -209,6 +209,17 @@ func TestParseFunctionArgumentsRepairsRawControlStringValues(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsJSONComments(t *testing.T) {
+	args, err := ParseFunctionArguments("{\"city\":\"Paris\", // destination\n \"limit\":3, /* priority */ \"unit\":\"km\"}")
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["limit"] != float64(3) || args["unit"] != "km" {
+		t.Fatalf("args = %#v, want repaired object with comments removed", args)
+	}
+}
+
 func TestParseFunctionArgumentsTreatsNullAsEmptyObject(t *testing.T) {
 	args, err := ParseFunctionArguments(`null`)
 	if err != nil {
