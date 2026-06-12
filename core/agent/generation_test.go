@@ -912,6 +912,60 @@ func TestPerformToolExecutionsRejectsDuplicateInFlightCallID(t *testing.T) {
 	}
 }
 
+func TestPerformToolExecutionsRejectsDuplicateInFlightFunctionName(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	tool := &blockingGenerationTool{
+		duplicateMode: llm.ToolDuplicateModeReject,
+		started:       make(chan struct{}, 2),
+		release:       make(chan struct{}),
+	}
+	toolCtx := llm.NewToolContext([]interface{}{tool})
+	functionCh := make(chan *llm.FunctionToolCall, 2)
+	functionCh <- &llm.FunctionToolCall{Name: tool.Name(), CallID: "call_lookup_a", Arguments: `{}`}
+	functionCh <- &llm.FunctionToolCall{Name: tool.Name(), CallID: "call_lookup_b", Arguments: `{}`}
+	close(functionCh)
+
+	outputs := PerformToolExecutions(context.Background(), functionCh, toolCtx, WithToolExecutionSession(session))
+	select {
+	case <-tool.started:
+	case <-testTimeout():
+		t.Fatal("first tool call did not start")
+	}
+	select {
+	case <-tool.started:
+		t.Fatal("duplicate in-flight tool call started; want same-name reject mode to block execution")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(tool.release)
+	var got []ToolExecutionOutput
+	for output := range outputs {
+		got = append(got, output)
+	}
+	if len(got) != 2 {
+		t.Fatalf("outputs len = %d, want success plus duplicate rejection", len(got))
+	}
+	var duplicateErr bool
+	var success bool
+	for _, output := range got {
+		if output.RawOutput == "ok" && output.RawError == nil {
+			success = true
+		}
+		if output.RawError != nil && strings.Contains(output.RawError.Error(), "Same tool `lookup` is already running") {
+			duplicateErr = true
+			if output.FncCallOut == nil || !output.FncCallOut.IsError || !strings.Contains(output.FncCallOut.Output, "call_lookup_a") {
+				t.Fatalf("duplicate output = %#v, want visible duplicate details", output.FncCallOut)
+			}
+		}
+	}
+	if !duplicateErr {
+		t.Fatalf("outputs = %#v, want same-name duplicate rejection", got)
+	}
+	if !success {
+		t.Fatalf("outputs = %#v, want first call to complete successfully", got)
+	}
+}
+
 func TestPerformToolExecutionsDetachesRunContextAfterReturn(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	tool := &runContextRecordingTool{}
@@ -1078,10 +1132,11 @@ func spanAttributeValues(attrs []attribute.KeyValue) map[string]attribute.Value 
 }
 
 type fakeGenerationTool struct {
-	name   string
-	result string
-	err    error
-	flags  llm.ToolFlag
+	name          string
+	result        string
+	err           error
+	flags         llm.ToolFlag
+	duplicateMode llm.ToolDuplicateMode
 }
 
 func (f *fakeGenerationTool) ID() string { return f.name }
@@ -1097,6 +1152,10 @@ func (f *fakeGenerationTool) Execute(context.Context, string) (string, error) {
 }
 
 func (f *fakeGenerationTool) ToolFlags() llm.ToolFlag { return f.flags }
+
+func (f *fakeGenerationTool) ToolDuplicateMode() llm.ToolDuplicateMode {
+	return f.duplicateMode
+}
 
 type fakeGenerationProviderTool struct {
 	fakeGenerationTool
@@ -1153,8 +1212,9 @@ func (r *runContextUpdatingTool) Execute(ctx context.Context, args string) (stri
 }
 
 type blockingGenerationTool struct {
-	started chan struct{}
-	release chan struct{}
+	duplicateMode llm.ToolDuplicateMode
+	started       chan struct{}
+	release       chan struct{}
 }
 
 func (b *blockingGenerationTool) ID() string { return "lookup" }
@@ -1164,6 +1224,10 @@ func (b *blockingGenerationTool) Name() string { return "lookup" }
 func (b *blockingGenerationTool) Description() string { return "" }
 
 func (b *blockingGenerationTool) Parameters() map[string]any { return nil }
+
+func (b *blockingGenerationTool) ToolDuplicateMode() llm.ToolDuplicateMode {
+	return b.duplicateMode
+}
 
 func (b *blockingGenerationTool) Execute(context.Context, string) (string, error) {
 	b.started <- struct{}{}

@@ -44,6 +44,35 @@ func ToolHasFlag(tool Tool, flag ToolFlag) bool {
 	return ok && flagger.ToolFlags()&flag != 0
 }
 
+type ToolDuplicateMode string
+
+const (
+	ToolDuplicateModeAllow   ToolDuplicateMode = "allow"
+	ToolDuplicateModeReject  ToolDuplicateMode = "reject"
+	ToolDuplicateModeReplace ToolDuplicateMode = "replace"
+	ToolDuplicateModeConfirm ToolDuplicateMode = "confirm"
+)
+
+type ToolDuplicateModer interface {
+	ToolDuplicateMode() ToolDuplicateMode
+}
+
+func ToolDuplicateModeFor(tool Tool) ToolDuplicateMode {
+	if tool == nil {
+		return ToolDuplicateModeAllow
+	}
+	duper, ok := tool.(ToolDuplicateModer)
+	if !ok {
+		return ToolDuplicateModeAllow
+	}
+	switch mode := duper.ToolDuplicateMode(); mode {
+	case ToolDuplicateModeReject, ToolDuplicateModeReplace, ToolDuplicateModeConfirm:
+		return mode
+	default:
+		return ToolDuplicateModeAllow
+	}
+}
+
 type ImageContent struct {
 	ID              string
 	Image           any
