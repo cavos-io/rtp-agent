@@ -3195,6 +3195,56 @@ func TestAgentSessionWaitForInactiveWaitsForClaimedUserTurn(t *testing.T) {
 	}
 }
 
+func TestAgentSessionWaitForInactiveAndHoldBlocksOtherWaiters(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	held := make(chan struct{})
+	release := make(chan struct{})
+	holdDone := make(chan error, 1)
+
+	go func() {
+		holdDone <- session.WaitForInactiveAndHold(context.Background(), func(ctx context.Context) error {
+			if err := session.WaitForInactive(ctx); err != nil {
+				return err
+			}
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- session.WaitForInactive(context.Background())
+	}()
+
+	select {
+	case err := <-waitDone:
+		t.Fatalf("WaitForInactive returned while another caller held idle: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case err := <-holdDone:
+		if err != nil {
+			t.Fatalf("WaitForInactiveAndHold error = %v", err)
+		}
+	case <-testTimeout():
+		t.Fatal("WaitForInactiveAndHold did not release")
+	}
+	select {
+	case err := <-waitDone:
+		if err != nil {
+			t.Fatalf("WaitForInactive error = %v, want nil after hold release", err)
+		}
+	case <-testTimeout():
+		t.Fatal("WaitForInactive did not return after hold release")
+	}
+}
+
 func TestAgentSessionDrainRequiresRunningActivity(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

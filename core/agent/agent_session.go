@@ -35,6 +35,8 @@ const (
 	AgentStateSpeaking     AgentState = "speaking"
 )
 
+type idleHoldContextKey struct{}
+
 type AgentSessionOptions struct {
 	AllowInterruptions               bool
 	AllowInterruptionsSet            bool
@@ -228,6 +230,8 @@ type AgentSession struct {
 	onEnterDepth   int
 	userTurnClaims int
 	userTurnDone   chan struct{}
+	idleHolds      int
+	idleDone       chan struct{}
 	userAwayTimer  *time.Timer
 	aecWarmupTimer *time.Timer
 	aecWarmupDone  bool
@@ -656,9 +660,19 @@ func (s *AgentSession) WaitForInactive(ctx context.Context) error {
 		s.mu.Lock()
 		claims := s.userTurnClaims
 		done := s.userTurnDone
+		holds := s.idleHolds
+		idleDone := s.idleDone
 		s.mu.Unlock()
 		if claims == 0 {
-			return nil
+			if holds == 0 || ctx.Value(idleHoldContextKey{}) == true {
+				return nil
+			}
+			select {
+			case <-idleDone:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			continue
 		}
 		select {
 		case <-done:
@@ -666,6 +680,41 @@ func (s *AgentSession) WaitForInactive(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
+}
+
+func (s *AgentSession) WaitForInactiveAndHold(ctx context.Context, fn func(context.Context) error) error {
+	if fn == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := s.WaitForInactive(ctx); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	s.idleHolds++
+	if s.idleHolds == 1 {
+		s.idleDone = make(chan struct{})
+	}
+	s.mu.Unlock()
+
+	defer s.releaseIdleHold()
+	return fn(context.WithValue(ctx, idleHoldContextKey{}, true))
+}
+
+func (s *AgentSession) releaseIdleHold() {
+	s.mu.Lock()
+	if s.idleHolds > 0 {
+		s.idleHolds--
+	}
+	done := s.idleDone
+	if s.idleHolds == 0 && done != nil {
+		close(done)
+		s.idleDone = nil
+	}
+	s.mu.Unlock()
 }
 
 func (s *AgentSession) Drain(ctx context.Context) error {
@@ -2418,6 +2467,11 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	}
 	s.userTurnClaims = 0
 	s.userTurnDone = nil
+	if s.idleHolds > 0 && s.idleDone != nil {
+		close(s.idleDone)
+	}
+	s.idleHolds = 0
+	s.idleDone = nil
 	s.llmErrorCount = 0
 	s.ttsErrorCount = 0
 	s.cancelUserAwayTimerLocked()
