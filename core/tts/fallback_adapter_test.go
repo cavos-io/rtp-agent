@@ -880,13 +880,16 @@ func TestFallbackChunkedStreamFallsBackWhenNormalizationFailsBeforeAudio(t *test
 		label:       "primary",
 		sampleRate:  16000,
 		numChannels: 1,
-		chunked: &metadataChunkedStream{
-			events: []*SynthesizedAudio{{Frame: &model.AudioFrame{
-				Data:              []byte{1, 2},
-				SampleRate:        16000,
-				NumChannels:       1,
-				SamplesPerChannel: 2,
-			}}},
+		chunkedStreams: []ChunkedStream{
+			&metadataChunkedStream{
+				events: []*SynthesizedAudio{{Frame: &model.AudioFrame{
+					Data:              []byte{1, 2},
+					SampleRate:        16000,
+					NumChannels:       1,
+					SamplesPerChannel: 2,
+				}}},
+			},
+			&metadataChunkedStream{},
 		},
 	}
 	fallback := &metadataTTS{
@@ -915,11 +918,16 @@ func TestFallbackChunkedStreamFallsBackWhenNormalizationFailsBeforeAudio(t *test
 	if audio.Frame.SampleRate != 32000 {
 		t.Fatalf("SampleRate = %d, want fallback adapter rate", audio.Frame.SampleRate)
 	}
-	if primary.synthesizeCalls != 1 {
-		t.Fatalf("primary synthesize calls = %d, want 1", primary.synthesizeCalls)
-	}
 	if fallback.synthesizeCalls != 1 {
 		t.Fatalf("fallback synthesize calls = %d, want 1", fallback.synthesizeCalls)
+	}
+	waitForFallbackCondition(t, func() bool {
+		adapter.mu.Lock()
+		defer adapter.mu.Unlock()
+		return !adapter.status[0].recovering && primary.synthesizeCalls >= 2
+	})
+	if primary.synthesizeCalls != 2 {
+		t.Fatalf("primary synthesize calls = %d, want initial failure plus recovery probe", primary.synthesizeCalls)
 	}
 	if adapter.status[0].available {
 		t.Fatal("primary availability = true, want false after normalization failure")
@@ -2169,6 +2177,38 @@ func TestFallbackChunkedRecoveryKeepsProviderUnavailableWhenReplayProducesNoAudi
 
 	if adapter.status[0].available {
 		t.Fatal("provider available = true after no-audio recovery probe, want false")
+	}
+}
+
+func TestFallbackChunkedRecoveryKeepsProviderUnavailableWhenReplayAudioInvalid(t *testing.T) {
+	primary := &metadataTTS{
+		label:       "primary",
+		sampleRate:  16000,
+		numChannels: 1,
+		chunked: &metadataChunkedStream{
+			events: []*SynthesizedAudio{{Frame: &model.AudioFrame{
+				Data:              []byte{1, 2},
+				SampleRate:        16000,
+				NumChannels:       1,
+				SamplesPerChannel: 2,
+			}}},
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]TTS{primary}, FallbackAdapterOptions{
+		SampleRate: 32000,
+	})
+	adapter.status[0].available = false
+
+	adapter.tryRecoverChunked(0, "hello")
+
+	waitForFallbackCondition(t, func() bool {
+		adapter.mu.Lock()
+		defer adapter.mu.Unlock()
+		return !adapter.status[0].recovering
+	})
+
+	if adapter.status[0].available {
+		t.Fatal("provider available = true after invalid-audio recovery probe, want false")
 	}
 }
 
