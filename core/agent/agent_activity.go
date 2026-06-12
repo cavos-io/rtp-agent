@@ -319,6 +319,9 @@ func (a *AgentActivity) Tools() []interface{} {
 	for _, tool := range a.Agent.Tools {
 		tools = append(tools, tool)
 	}
+	if hasCancellableTool(tools) {
+		tools = append(tools, cancelTaskTool{}, getRunningTasksTool{})
+	}
 	return tools
 }
 

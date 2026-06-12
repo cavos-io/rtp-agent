@@ -187,6 +187,39 @@ func TestParseFunctionArgumentsRepairsSingleQuotedValues(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsRawNewlineStringValues(t *testing.T) {
+	args, err := ParseFunctionArguments("{\"message\":\"hello\nworld\"}")
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["message"] != "hello\nworld" {
+		t.Fatalf("message = %#v, want raw newline preserved after repair", args["message"])
+	}
+}
+
+func TestParseFunctionArgumentsRepairsRawControlStringValues(t *testing.T) {
+	args, err := ParseFunctionArguments("{\"message\":\"hello\bworld\fdone\"}")
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["message"] != "hello\bworld\fdone" {
+		t.Fatalf("message = %#v, want raw control characters preserved after repair", args["message"])
+	}
+}
+
+func TestParseFunctionArgumentsRepairsJSONComments(t *testing.T) {
+	args, err := ParseFunctionArguments("{\"city\":\"Paris\", // destination\n \"limit\":3, /* priority */ \"unit\":\"km\"}")
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["limit"] != float64(3) || args["unit"] != "km" {
+		t.Fatalf("args = %#v, want repaired object with comments removed", args)
+	}
+}
+
 func TestParseFunctionArgumentsTreatsNullAsEmptyObject(t *testing.T) {
 	args, err := ParseFunctionArguments(`null`)
 	if err != nil {
@@ -549,11 +582,12 @@ func TestExecuteFunctionCallRepairsMalformedArgumentsBeforeExecutingTool(t *test
 	tool := &recordingTool{name: "lookup", result: "Paris"}
 	toolCtx := NewToolContext([]interface{}{tool})
 
-	result := ExecuteFunctionCall(context.Background(), &FunctionToolCall{
+	toolCall := &FunctionToolCall{
 		Name:      "lookup",
 		CallID:    "call_lookup",
 		Arguments: `{city:"Paris",limit:3,}`,
-	}, toolCtx)
+	}
+	result := ExecuteFunctionCall(context.Background(), toolCall, toolCtx)
 
 	if tool.args != `{"city":"Paris","limit":3}` {
 		t.Fatalf("tool args = %q, want repaired JSON object", tool.args)
@@ -561,8 +595,32 @@ func TestExecuteFunctionCallRepairsMalformedArgumentsBeforeExecutingTool(t *test
 	if result.FncCall.Arguments != `{"city":"Paris","limit":3}` {
 		t.Fatalf("FncCall.Arguments = %q, want repaired JSON object", result.FncCall.Arguments)
 	}
+	if toolCall.Arguments != `{"city":"Paris","limit":3}` {
+		t.Fatalf("toolCall.Arguments = %q, want repaired JSON object", toolCall.Arguments)
+	}
 	if result.FncCallOut == nil || result.FncCallOut.IsError || result.FncCallOut.Output != "Paris" {
 		t.Fatalf("FncCallOut = %#v, want successful Paris output", result.FncCallOut)
+	}
+}
+
+func TestExecuteFunctionCallRepairsRawNewlineArgumentsBeforeExecutingTool(t *testing.T) {
+	tool := &recordingTool{name: "compose", result: "ok"}
+	toolCtx := NewToolContext([]interface{}{tool})
+
+	result := ExecuteFunctionCall(context.Background(), &FunctionToolCall{
+		Name:      "compose",
+		CallID:    "call_compose",
+		Arguments: "{\"message\":\"hello\nworld\"}",
+	}, toolCtx)
+
+	if tool.args != `{"message":"hello\nworld"}` {
+		t.Fatalf("tool args = %q, want canonical JSON with escaped newline", tool.args)
+	}
+	if result.FncCall.Arguments != `{"message":"hello\nworld"}` {
+		t.Fatalf("FncCall.Arguments = %q, want canonical JSON with escaped newline", result.FncCall.Arguments)
+	}
+	if result.FncCallOut == nil || result.FncCallOut.IsError {
+		t.Fatalf("FncCallOut = %#v, want successful output", result.FncCallOut)
 	}
 }
 

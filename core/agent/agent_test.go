@@ -11,8 +11,9 @@ import (
 )
 
 type agentTestTool struct {
-	id   string
-	name string
+	id    string
+	name  string
+	flags llm.ToolFlag
 }
 
 func (t *agentTestTool) ID() string {
@@ -29,6 +30,8 @@ func (t *agentTestTool) Description() string { return "" }
 func (t *agentTestTool) Parameters() map[string]any { return nil }
 
 func (t *agentTestTool) Execute(context.Context, string) (string, error) { return "", nil }
+
+func (t *agentTestTool) ToolFlags() llm.ToolFlag { return t.flags }
 
 func TestAgentChatContextReturnsReadOnlyCopy(t *testing.T) {
 	agent := NewAgent("help")
