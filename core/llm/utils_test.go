@@ -571,17 +571,21 @@ func TestExecuteFunctionCallRepairsMalformedArgumentsBeforeExecutingTool(t *test
 	tool := &recordingTool{name: "lookup", result: "Paris"}
 	toolCtx := NewToolContext([]interface{}{tool})
 
-	result := ExecuteFunctionCall(context.Background(), &FunctionToolCall{
+	toolCall := &FunctionToolCall{
 		Name:      "lookup",
 		CallID:    "call_lookup",
 		Arguments: `{city:"Paris",limit:3,}`,
-	}, toolCtx)
+	}
+	result := ExecuteFunctionCall(context.Background(), toolCall, toolCtx)
 
 	if tool.args != `{"city":"Paris","limit":3}` {
 		t.Fatalf("tool args = %q, want repaired JSON object", tool.args)
 	}
 	if result.FncCall.Arguments != `{"city":"Paris","limit":3}` {
 		t.Fatalf("FncCall.Arguments = %q, want repaired JSON object", result.FncCall.Arguments)
+	}
+	if toolCall.Arguments != `{"city":"Paris","limit":3}` {
+		t.Fatalf("toolCall.Arguments = %q, want repaired JSON object", toolCall.Arguments)
 	}
 	if result.FncCallOut == nil || result.FncCallOut.IsError || result.FncCallOut.Output != "Paris" {
 		t.Fatalf("FncCallOut = %#v, want successful Paris output", result.FncCallOut)

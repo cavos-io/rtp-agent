@@ -559,6 +559,7 @@ func ExecuteFunctionCall(ctx context.Context, toolCall *FunctionToolCall, toolCt
 	}
 	args = string(encodedArgs)
 	fncCall.Arguments = args
+	toolCall.Arguments = args
 
 	output, err := tool.Execute(ctx, args)
 	result := MakeToolOutput(fncCall, output, err)
