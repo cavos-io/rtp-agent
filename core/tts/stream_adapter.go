@@ -314,10 +314,10 @@ func (w *streamAdapterWrapper) flushSegmentPending(isFinal bool) {
 	audio.IsFinal = isFinal
 	w.segmentPending = nil
 	w.observeSegmentAudio(audio, audio.DeltaText)
-	w.eventCh <- audio
 	if isFinal {
 		w.emitSegmentMetrics(audio)
 	}
+	w.eventCh <- audio
 }
 
 func (w *streamAdapterWrapper) sendSynthesizedAudio(audio *SynthesizedAudio, text string, segmentID string, isFinal bool, includeTranscript bool) {
@@ -330,10 +330,10 @@ func (w *streamAdapterWrapper) sendSynthesizedAudio(audio *SynthesizedAudio, tex
 		audio.TimedTranscript = []TimedString{{Text: text, StartTime: w.audioCursor}}
 	}
 	w.observeSegmentAudio(audio, text)
-	w.eventCh <- audio
 	if isFinal {
 		w.emitSegmentMetrics(audio)
 	}
+	w.eventCh <- audio
 }
 
 func (w *streamAdapterWrapper) observeSegmentAudio(audio *SynthesizedAudio, text string) {
