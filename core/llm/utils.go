@@ -1089,6 +1089,15 @@ func stripJSONComments(value string) string {
 			b.WriteByte(ch)
 			continue
 		}
+		if ch == '#' {
+			for i < len(value) && value[i] != '\n' && value[i] != '\r' {
+				i++
+			}
+			if i < len(value) {
+				b.WriteByte(value[i])
+			}
+			continue
+		}
 		if ch == '/' && i+1 < len(value) {
 			switch value[i+1] {
 			case '/':

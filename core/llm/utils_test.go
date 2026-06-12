@@ -286,6 +286,17 @@ func TestParseFunctionArgumentsRepairsJSONComments(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsHashComments(t *testing.T) {
+	args, err := ParseFunctionArguments("{\"city\":\"Paris\", # destination\n \"limit\":3, \"note\":\"keep # literal\"}")
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["limit"] != float64(3) || args["note"] != "keep # literal" {
+		t.Fatalf("args = %#v, want repaired object with hash comments removed outside strings", args)
+	}
+}
+
 func TestParseFunctionArgumentsRepairsPythonBooleanLiterals(t *testing.T) {
 	args, err := ParseFunctionArguments(`{"enabled": True, "disabled": False, "flags":[True,False]}`)
 	if err != nil {
