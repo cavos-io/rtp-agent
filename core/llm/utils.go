@@ -205,12 +205,52 @@ func repairFunctionArguments(value string) string {
 	out = normalizeNonstandardNumberLiterals(out)
 	out = normalizeTupleLikeArrays(out)
 	out = normalizeSemicolonSeparators(out)
+	out = extractJSONObjectFromSurroundingText(out)
 	out = singleQuotedStringPattern.ReplaceAllString(out, `"$1"`)
 	out = unquotedObjectKeyPattern.ReplaceAllString(out, `${1}"${2}"${3}`)
 	out = quoteUnquotedStringValues(out)
 	out = closeUnbalancedJSONContainers(out)
 	out = trailingCommaPattern.ReplaceAllString(out, "$1")
 	return strings.TrimSpace(out)
+}
+
+func extractJSONObjectFromSurroundingText(value string) string {
+	start := strings.IndexByte(value, '{')
+	if start < 0 {
+		return value
+	}
+
+	depth := 0
+	inString := false
+	escaped := false
+
+	for i := start; i < len(value); i++ {
+		ch := value[i]
+		if inString {
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return value[start : i+1]
+			}
+		}
+	}
+
+	return value
 }
 
 func normalizeSemicolonSeparators(value string) string {

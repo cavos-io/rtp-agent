@@ -288,6 +288,17 @@ func TestParseFunctionArgumentsRepairsSemicolonSeparators(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsExtractsObjectFromSurroundingText(t *testing.T) {
+	args, err := ParseFunctionArguments(`call tool with {"city":"Paris","note":"keep } literal"} thanks`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["note"] != "keep } literal" {
+		t.Fatalf("args = %#v, want JSON object extracted from surrounding text", args)
+	}
+}
+
 func TestParseFunctionArgumentsTreatsNullAsEmptyObject(t *testing.T) {
 	args, err := ParseFunctionArguments(`null`)
 	if err != nil {
