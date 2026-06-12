@@ -220,6 +220,21 @@ func TestParseFunctionArgumentsRepairsJSONComments(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsPythonBooleanLiterals(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"enabled": True, "disabled": False, "flags":[True,False]}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["enabled"] != true || args["disabled"] != false {
+		t.Fatalf("args = %#v, want Python boolean literals repaired to JSON booleans", args)
+	}
+	flags, ok := args["flags"].([]any)
+	if !ok || len(flags) != 2 || flags[0] != true || flags[1] != false {
+		t.Fatalf("flags = %#v, want repaired boolean array", args["flags"])
+	}
+}
+
 func TestParseFunctionArgumentsTreatsNullAsEmptyObject(t *testing.T) {
 	args, err := ParseFunctionArguments(`null`)
 	if err != nil {

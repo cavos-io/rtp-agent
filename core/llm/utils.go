@@ -201,12 +201,83 @@ func repairFunctionArguments(value string) string {
 	}
 	out = stripJSONComments(out)
 	out = escapeStringControlCharacters(out)
+	out = normalizePythonBooleanLiterals(out)
 	out = singleQuotedStringPattern.ReplaceAllString(out, `"$1"`)
 	out = unquotedObjectKeyPattern.ReplaceAllString(out, `${1}"${2}"${3}`)
 	out = quoteUnquotedStringValues(out)
 	out = closeUnbalancedJSONContainers(out)
 	out = trailingCommaPattern.ReplaceAllString(out, "$1")
 	return strings.TrimSpace(out)
+}
+
+func normalizePythonBooleanLiterals(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(value); {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			i++
+			continue
+		}
+
+		if ch == '"' {
+			inString = true
+			b.WriteByte(ch)
+			i++
+			continue
+		}
+		switch {
+		case hasJSONToken(value, i, "True"):
+			b.WriteString("true")
+			i += len("True")
+			continue
+		case hasJSONToken(value, i, "False"):
+			b.WriteString("false")
+			i += len("False")
+			continue
+		default:
+			b.WriteByte(ch)
+			i++
+		}
+	}
+
+	return b.String()
+}
+
+func hasJSONToken(value string, offset int, token string) bool {
+	if !strings.HasPrefix(value[offset:], token) {
+		return false
+	}
+	before := byte(0)
+	if offset > 0 {
+		before = value[offset-1]
+	}
+	afterOffset := offset + len(token)
+	after := byte(0)
+	if afterOffset < len(value) {
+		after = value[afterOffset]
+	}
+	return isJSONTokenBoundary(before) && isJSONTokenBoundary(after)
+}
+
+func isJSONTokenBoundary(ch byte) bool {
+	switch ch {
+	case 0, ' ', '\n', '\r', '\t', ':', ',', '[', ']', '{', '}':
+		return true
+	default:
+		return false
+	}
 }
 
 func stripJSONComments(value string) string {
