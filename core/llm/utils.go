@@ -203,12 +203,49 @@ func repairFunctionArguments(value string) string {
 	out = escapeStringControlCharacters(out)
 	out = normalizePythonBooleanLiterals(out)
 	out = normalizeNonstandardNumberLiterals(out)
+	out = normalizeTupleLikeArrays(out)
 	out = singleQuotedStringPattern.ReplaceAllString(out, `"$1"`)
 	out = unquotedObjectKeyPattern.ReplaceAllString(out, `${1}"${2}"${3}`)
 	out = quoteUnquotedStringValues(out)
 	out = closeUnbalancedJSONContainers(out)
 	out = trailingCommaPattern.ReplaceAllString(out, "$1")
 	return strings.TrimSpace(out)
+}
+
+func normalizeTupleLikeArrays(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+			b.WriteByte(ch)
+		case '(':
+			b.WriteByte('[')
+		case ')':
+			b.WriteByte(']')
+		default:
+			b.WriteByte(ch)
+		}
+	}
+
+	return b.String()
 }
 
 func normalizeNonstandardNumberLiterals(value string) string {

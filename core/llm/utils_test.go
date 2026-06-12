@@ -261,6 +261,22 @@ func TestParseFunctionArgumentsRepairsNonstandardNumberLiterals(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsTupleLikeArrays(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"numbers": (1,2), "labels": ("fast","safe")}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	numbers, ok := args["numbers"].([]any)
+	if !ok || len(numbers) != 2 || numbers[0] != float64(1) || numbers[1] != float64(2) {
+		t.Fatalf("numbers = %#v, want repaired numeric tuple", args["numbers"])
+	}
+	labels, ok := args["labels"].([]any)
+	if !ok || len(labels) != 2 || labels[0] != "fast" || labels[1] != "safe" {
+		t.Fatalf("labels = %#v, want repaired string tuple", args["labels"])
+	}
+}
+
 func TestParseFunctionArgumentsTreatsNullAsEmptyObject(t *testing.T) {
 	args, err := ParseFunctionArguments(`null`)
 	if err != nil {
