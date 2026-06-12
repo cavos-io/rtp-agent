@@ -43,8 +43,6 @@ var unquotedObjectKeyPattern = regexp.MustCompile(`([,{]\s*)([A-Za-z_][A-Za-z0-9
 
 var unquotedStringValuePattern = regexp.MustCompile(`(:\s*)([A-Za-z_][A-Za-z0-9_-]*)(\s*[,}\]])`)
 
-var singleQuotedStringPattern = regexp.MustCompile(`'([^'\\]*)'`)
-
 type SerializedImage struct {
 	InferenceDetail string
 	MIMEType        string
@@ -206,7 +204,7 @@ func repairFunctionArguments(value string) string {
 	out = normalizeTupleLikeArrays(out)
 	out = normalizeSemicolonSeparators(out)
 	out = extractJSONObjectFromSurroundingText(out)
-	out = singleQuotedStringPattern.ReplaceAllString(out, `"$1"`)
+	out = normalizeSingleQuotedStrings(out)
 	out = insertMissingColonBetweenQuotedKeyAndString(out)
 	out = insertMissingObjectCommas(out)
 	out = unquotedObjectKeyPattern.ReplaceAllString(out, `${1}"${2}"${3}`)
@@ -216,6 +214,64 @@ func repairFunctionArguments(value string) string {
 	out = closeUnbalancedJSONContainers(out)
 	out = trailingCommaPattern.ReplaceAllString(out, "$1")
 	return strings.TrimSpace(out)
+}
+
+func normalizeSingleQuotedStrings(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	inDoubleString := false
+	inSingleString := false
+	escaped := false
+
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if inDoubleString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inDoubleString = false
+			}
+			continue
+		}
+		if inSingleString {
+			if escaped {
+				if ch == '\'' {
+					b.WriteByte('\'')
+				} else {
+					b.WriteByte('\\')
+					b.WriteByte(ch)
+				}
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '\'' {
+				inSingleString = false
+				b.WriteByte('"')
+			} else {
+				b.WriteByte(ch)
+			}
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inDoubleString = true
+			b.WriteByte(ch)
+		case '\'':
+			inSingleString = true
+			b.WriteByte('"')
+		default:
+			b.WriteByte(ch)
+		}
+	}
+
+	if inSingleString {
+		b.WriteByte('"')
+	}
+	return b.String()
 }
 
 func insertMissingColonBetweenQuotedKeyAndString(value string) string {

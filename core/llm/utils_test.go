@@ -187,6 +187,21 @@ func TestParseFunctionArgumentsRepairsSingleQuotedValues(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsEscapedSingleQuotedValues(t *testing.T) {
+	args, err := ParseFunctionArguments(`{'note':'Bob\'s place','items':['owner\'s','guest']}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["note"] != "Bob's place" {
+		t.Fatalf("note = %#v, want escaped apostrophe repaired", args["note"])
+	}
+	items, ok := args["items"].([]any)
+	if !ok || len(items) != 2 || items[0] != "owner's" || items[1] != "guest" {
+		t.Fatalf("items = %#v, want escaped apostrophe array repaired", args["items"])
+	}
+}
+
 func TestParseFunctionArgumentsRepairsRawNewlineStringValues(t *testing.T) {
 	args, err := ParseFunctionArguments("{\"message\":\"hello\nworld\"}")
 	if err != nil {
