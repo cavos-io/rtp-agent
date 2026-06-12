@@ -201,12 +201,585 @@ func repairFunctionArguments(value string) string {
 	}
 	out = stripJSONComments(out)
 	out = escapeStringControlCharacters(out)
+	out = normalizePythonBooleanLiterals(out)
+	out = normalizeNonstandardNumberLiterals(out)
+	out = normalizeTupleLikeArrays(out)
+	out = normalizeSemicolonSeparators(out)
+	out = extractJSONObjectFromSurroundingText(out)
 	out = singleQuotedStringPattern.ReplaceAllString(out, `"$1"`)
+	out = insertMissingColonBetweenQuotedKeyAndString(out)
+	out = insertMissingObjectCommas(out)
 	out = unquotedObjectKeyPattern.ReplaceAllString(out, `${1}"${2}"${3}`)
 	out = quoteUnquotedStringValues(out)
+	out = insertMissingArrayCommas(out)
+	out = quoteBareArrayStringValues(out)
 	out = closeUnbalancedJSONContainers(out)
 	out = trailingCommaPattern.ReplaceAllString(out, "$1")
 	return strings.TrimSpace(out)
+}
+
+func insertMissingColonBetweenQuotedKeyAndString(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	var stack []byte
+	inString := false
+	escaped := false
+	stringStartedAsPossibleKey := false
+	quotedStringMayBeObjectKey := false
+	lastSignificant := byte(0)
+
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+				quotedStringMayBeObjectKey = stringStartedAsPossibleKey
+				stringStartedAsPossibleKey = false
+				lastSignificant = ch
+			}
+			continue
+		}
+
+		if isJSONWhitespace(ch) {
+			start := i
+			for i+1 < len(value) && isJSONWhitespace(value[i+1]) {
+				i++
+			}
+			next := nextNonSpaceIndex(value, i+1)
+			if quotedStringMayBeObjectKey && next >= 0 && value[next] == '"' {
+				b.WriteByte(':')
+				quotedStringMayBeObjectKey = false
+			}
+			b.WriteString(value[start : i+1])
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+			stringStartedAsPossibleKey = len(stack) > 0 && stack[len(stack)-1] == '{' && (lastSignificant == 0 || lastSignificant == '{' || lastSignificant == ',')
+		case '{', '[':
+			stack = append(stack, ch)
+			quotedStringMayBeObjectKey = false
+		case '}':
+			if len(stack) > 0 && stack[len(stack)-1] == '{' {
+				stack = stack[:len(stack)-1]
+			}
+			quotedStringMayBeObjectKey = false
+		case ']':
+			if len(stack) > 0 && stack[len(stack)-1] == '[' {
+				stack = stack[:len(stack)-1]
+			}
+			quotedStringMayBeObjectKey = false
+		case ':', ',':
+			quotedStringMayBeObjectKey = false
+		default:
+			if !isJSONWhitespace(ch) {
+				quotedStringMayBeObjectKey = false
+			}
+		}
+		b.WriteByte(ch)
+		lastSignificant = ch
+	}
+
+	return b.String()
+}
+
+func insertMissingArrayCommas(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	var stack []byte
+	inString := false
+	escaped := false
+	lastSignificant := byte(0)
+
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+				lastSignificant = ch
+			}
+			continue
+		}
+
+		if isJSONWhitespace(ch) {
+			start := i
+			for i+1 < len(value) && isJSONWhitespace(value[i+1]) {
+				i++
+			}
+			next := nextNonSpaceIndex(value, i+1)
+			if len(stack) > 0 && stack[len(stack)-1] == '[' && isJSONValueEnd(lastSignificant) && next >= 0 && startsArrayValueToken(value[next]) {
+				b.WriteByte(',')
+			}
+			b.WriteString(value[start : i+1])
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+		case '{', '[':
+			stack = append(stack, ch)
+		case '}':
+			if len(stack) > 0 && stack[len(stack)-1] == '{' {
+				stack = stack[:len(stack)-1]
+			}
+		case ']':
+			if len(stack) > 0 && stack[len(stack)-1] == '[' {
+				stack = stack[:len(stack)-1]
+			}
+		}
+		b.WriteByte(ch)
+		lastSignificant = ch
+	}
+
+	return b.String()
+}
+
+func startsArrayValueToken(ch byte) bool {
+	return ch == '"' || ch == '{' || ch == '[' || ch == '-' || ch == '+' || ch == '.' || ('0' <= ch && ch <= '9') || isBareValueStart(ch)
+}
+
+func insertMissingObjectCommas(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	objectDepth := 0
+	arrayDepth := 0
+	inString := false
+	escaped := false
+	lastSignificant := byte(0)
+
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+				lastSignificant = ch
+			}
+			continue
+		}
+
+		if isJSONWhitespace(ch) {
+			start := i
+			for i+1 < len(value) && isJSONWhitespace(value[i+1]) {
+				i++
+			}
+			next := nextNonSpaceIndex(value, i+1)
+			if objectDepth > 0 && arrayDepth == 0 && isJSONValueEnd(lastSignificant) && next >= 0 && startsObjectKeyToken(value, next) {
+				b.WriteByte(',')
+			}
+			b.WriteString(value[start : i+1])
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			objectDepth++
+		case '}':
+			if objectDepth > 0 {
+				objectDepth--
+			}
+		case '[':
+			arrayDepth++
+		case ']':
+			if arrayDepth > 0 {
+				arrayDepth--
+			}
+		}
+		b.WriteByte(ch)
+		lastSignificant = ch
+	}
+
+	return b.String()
+}
+
+func nextNonSpaceIndex(value string, start int) int {
+	for i := start; i < len(value); i++ {
+		if !isJSONWhitespace(value[i]) {
+			return i
+		}
+	}
+	return -1
+}
+
+func isJSONWhitespace(ch byte) bool {
+	return ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t'
+}
+
+func isJSONValueEnd(ch byte) bool {
+	return ch == '"' || ch == '}' || ch == ']' || ('0' <= ch && ch <= '9') || ch == 'e' || ch == 'E' || ch == 'l'
+}
+
+func startsObjectKeyToken(value string, start int) bool {
+	switch value[start] {
+	case '"':
+		escaped := false
+		for i := start + 1; i < len(value); i++ {
+			ch := value[i]
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				next := nextNonSpaceIndex(value, i+1)
+				return next >= 0 && value[next] == ':'
+			}
+		}
+		return false
+	default:
+		if !isBareValueStart(value[start]) {
+			return false
+		}
+		i := start
+		for i+1 < len(value) && isBareValueChar(value[i+1]) {
+			i++
+		}
+		next := nextNonSpaceIndex(value, i+1)
+		return next >= 0 && value[next] == ':'
+	}
+}
+
+func quoteBareArrayStringValues(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	arrayDepth := 0
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+			b.WriteByte(ch)
+		case '[':
+			arrayDepth++
+			b.WriteByte(ch)
+		case ']':
+			if arrayDepth > 0 {
+				arrayDepth--
+			}
+			b.WriteByte(ch)
+		default:
+			if arrayDepth > 0 && isBareValueStart(ch) {
+				start := i
+				for i+1 < len(value) && isBareValueChar(value[i+1]) {
+					i++
+				}
+				token := value[start : i+1]
+				if shouldQuoteBareJSONToken(token) {
+					b.WriteByte('"')
+					b.WriteString(token)
+					b.WriteByte('"')
+				} else {
+					b.WriteString(token)
+				}
+				continue
+			}
+			b.WriteByte(ch)
+		}
+	}
+
+	return b.String()
+}
+
+func isBareValueStart(ch byte) bool {
+	return ch == '_' || ('A' <= ch && ch <= 'Z') || ('a' <= ch && ch <= 'z')
+}
+
+func isBareValueChar(ch byte) bool {
+	return isBareValueStart(ch) || ('0' <= ch && ch <= '9') || ch == '-'
+}
+
+func shouldQuoteBareJSONToken(token string) bool {
+	switch token {
+	case "true", "false", "null":
+		return false
+	default:
+		return true
+	}
+}
+
+func extractJSONObjectFromSurroundingText(value string) string {
+	start := strings.IndexByte(value, '{')
+	if start < 0 {
+		return value
+	}
+
+	depth := 0
+	inString := false
+	escaped := false
+
+	for i := start; i < len(value); i++ {
+		ch := value[i]
+		if inString {
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return value[start : i+1]
+			}
+		}
+	}
+
+	return value
+}
+
+func normalizeSemicolonSeparators(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+			b.WriteByte(ch)
+		case ';':
+			b.WriteByte(',')
+		default:
+			b.WriteByte(ch)
+		}
+	}
+
+	return b.String()
+}
+
+func normalizeTupleLikeArrays(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+			b.WriteByte(ch)
+		case '(':
+			b.WriteByte('[')
+		case ')':
+			b.WriteByte(']')
+		default:
+			b.WriteByte(ch)
+		}
+	}
+
+	return b.String()
+}
+
+func normalizeNonstandardNumberLiterals(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(value); {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			i++
+			continue
+		}
+
+		if ch == '"' {
+			inString = true
+			b.WriteByte(ch)
+			i++
+			continue
+		}
+
+		if ch == '+' && i+1 < len(value) && isDigit(value[i+1]) && hasNumberPrefixBoundary(value, i) {
+			i++
+			continue
+		}
+		if ch == '+' && i+1 < len(value) && value[i+1] == '.' && hasNumberPrefixBoundary(value, i) {
+			b.WriteByte('0')
+			i++
+			continue
+		}
+		if ch == '.' && i+1 < len(value) && isDigit(value[i+1]) && hasNumberPrefixBoundary(value, i) {
+			b.WriteString("0.")
+			i++
+			continue
+		}
+		if ch == '-' && i+2 < len(value) && value[i+1] == '.' && isDigit(value[i+2]) && hasNumberPrefixBoundary(value, i) {
+			b.WriteString("-0.")
+			i += 2
+			continue
+		}
+		b.WriteByte(ch)
+		i++
+	}
+
+	return b.String()
+}
+
+func hasNumberPrefixBoundary(value string, offset int) bool {
+	if offset == 0 {
+		return true
+	}
+	return isJSONTokenBoundary(value[offset-1])
+}
+
+func isDigit(ch byte) bool {
+	return ch >= '0' && ch <= '9'
+}
+
+func normalizePythonBooleanLiterals(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(value); {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			i++
+			continue
+		}
+
+		if ch == '"' {
+			inString = true
+			b.WriteByte(ch)
+			i++
+			continue
+		}
+		switch {
+		case hasJSONToken(value, i, "True"):
+			b.WriteString("true")
+			i += len("True")
+			continue
+		case hasJSONToken(value, i, "False"):
+			b.WriteString("false")
+			i += len("False")
+			continue
+		case hasJSONToken(value, i, "None"):
+			b.WriteString(`"None"`)
+			i += len("None")
+			continue
+		default:
+			b.WriteByte(ch)
+			i++
+		}
+	}
+
+	return b.String()
+}
+
+func hasJSONToken(value string, offset int, token string) bool {
+	if !strings.HasPrefix(value[offset:], token) {
+		return false
+	}
+	before := byte(0)
+	if offset > 0 {
+		before = value[offset-1]
+	}
+	afterOffset := offset + len(token)
+	after := byte(0)
+	if afterOffset < len(value) {
+		after = value[afterOffset]
+	}
+	return isJSONTokenBoundary(before) && isJSONTokenBoundary(after)
+}
+
+func isJSONTokenBoundary(ch byte) bool {
+	switch ch {
+	case 0, ' ', '\n', '\r', '\t', ':', ',', '[', ']', '{', '}':
+		return true
+	default:
+		return false
+	}
 }
 
 func stripJSONComments(value string) string {

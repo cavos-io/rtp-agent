@@ -220,6 +220,161 @@ func TestParseFunctionArgumentsRepairsJSONComments(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsPythonBooleanLiterals(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"enabled": True, "disabled": False, "flags":[True,False]}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["enabled"] != true || args["disabled"] != false {
+		t.Fatalf("args = %#v, want Python boolean literals repaired to JSON booleans", args)
+	}
+	flags, ok := args["flags"].([]any)
+	if !ok || len(flags) != 2 || flags[0] != true || flags[1] != false {
+		t.Fatalf("flags = %#v, want repaired boolean array", args["flags"])
+	}
+}
+
+func TestParseFunctionArgumentsRepairsPythonNoneLiteralAsString(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"value": None, "items":[None]}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["value"] != "None" {
+		t.Fatalf("value = %#v, want repaired None string", args["value"])
+	}
+	items, ok := args["items"].([]any)
+	if !ok || len(items) != 1 || items[0] != "None" {
+		t.Fatalf("items = %#v, want repaired None string array", args["items"])
+	}
+}
+
+func TestParseFunctionArgumentsRepairsNonstandardNumberLiterals(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"limit": +3, "ratio": .5, "negative": -.25, "positive": +.75}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["limit"] != float64(3) || args["ratio"] != 0.5 || args["negative"] != -0.25 || args["positive"] != 0.75 {
+		t.Fatalf("args = %#v, want repaired nonstandard numeric literals", args)
+	}
+}
+
+func TestParseFunctionArgumentsRepairsTupleLikeArrays(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"numbers": (1,2), "labels": ("fast","safe")}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	numbers, ok := args["numbers"].([]any)
+	if !ok || len(numbers) != 2 || numbers[0] != float64(1) || numbers[1] != float64(2) {
+		t.Fatalf("numbers = %#v, want repaired numeric tuple", args["numbers"])
+	}
+	labels, ok := args["labels"].([]any)
+	if !ok || len(labels) != 2 || labels[0] != "fast" || labels[1] != "safe" {
+		t.Fatalf("labels = %#v, want repaired string tuple", args["labels"])
+	}
+}
+
+func TestParseFunctionArgumentsRepairsSemicolonSeparators(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"city":"Paris"; "limit":3; "note":"keep;semicolon"}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["limit"] != float64(3) || args["note"] != "keep;semicolon" {
+		t.Fatalf("args = %#v, want semicolon separators repaired outside strings", args)
+	}
+}
+
+func TestParseFunctionArgumentsExtractsObjectFromSurroundingText(t *testing.T) {
+	args, err := ParseFunctionArguments(`call tool with {"city":"Paris","note":"keep } literal"} thanks`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["note"] != "keep } literal" {
+		t.Fatalf("args = %#v, want JSON object extracted from surrounding text", args)
+	}
+}
+
+func TestParseFunctionArgumentsRepairsBareArrayStringValues(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"items":[urgent,home], "nums":[1,+2], "flags":[true,false]}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	items, ok := args["items"].([]any)
+	if !ok || len(items) != 2 || items[0] != "urgent" || items[1] != "home" {
+		t.Fatalf("items = %#v, want repaired string array", args["items"])
+	}
+	nums, ok := args["nums"].([]any)
+	if !ok || len(nums) != 2 || nums[0] != float64(1) || nums[1] != float64(2) {
+		t.Fatalf("nums = %#v, want numeric array preserved", args["nums"])
+	}
+	flags, ok := args["flags"].([]any)
+	if !ok || len(flags) != 2 || flags[0] != true || flags[1] != false {
+		t.Fatalf("flags = %#v, want boolean array preserved", args["flags"])
+	}
+}
+
+func TestParseFunctionArgumentsRepairsMissingObjectCommas(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"city":"Paris" "limit":3, "nested":{"unit":"celsius" "enabled":true}}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["limit"] != float64(3) {
+		t.Fatalf("args = %#v, want repaired top-level object members", args)
+	}
+	nested, ok := args["nested"].(map[string]any)
+	if !ok {
+		t.Fatalf("nested = %#v, want object", args["nested"])
+	}
+	if nested["unit"] != "celsius" || nested["enabled"] != true {
+		t.Fatalf("nested = %#v, want repaired nested object members", nested)
+	}
+}
+
+func TestParseFunctionArgumentsRepairsMissingArrayCommas(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"items":["urgent" "home"], "nums":[1 2 3], "flags":[true false]}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	items, ok := args["items"].([]any)
+	if !ok || len(items) != 2 || items[0] != "urgent" || items[1] != "home" {
+		t.Fatalf("items = %#v, want string array commas repaired", args["items"])
+	}
+	nums, ok := args["nums"].([]any)
+	if !ok || len(nums) != 3 || nums[0] != float64(1) || nums[1] != float64(2) || nums[2] != float64(3) {
+		t.Fatalf("nums = %#v, want numeric array commas repaired", args["nums"])
+	}
+	flags, ok := args["flags"].([]any)
+	if !ok || len(flags) != 2 || flags[0] != true || flags[1] != false {
+		t.Fatalf("flags = %#v, want boolean array commas repaired", args["flags"])
+	}
+}
+
+func TestParseFunctionArgumentsRepairsMissingColonBetweenQuotedKeyAndString(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"city" "Paris", "nested":{"unit" "celsius"}}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" {
+		t.Fatalf("city = %#v, want repaired quoted string value", args["city"])
+	}
+	nested, ok := args["nested"].(map[string]any)
+	if !ok {
+		t.Fatalf("nested = %#v, want object", args["nested"])
+	}
+	if nested["unit"] != "celsius" {
+		t.Fatalf("nested unit = %#v, want repaired quoted string value", nested["unit"])
+	}
+}
+
 func TestParseFunctionArgumentsTreatsNullAsEmptyObject(t *testing.T) {
 	args, err := ParseFunctionArguments(`null`)
 	if err != nil {
