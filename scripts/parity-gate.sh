@@ -141,6 +141,12 @@ changed_path_case_names() {
         add_path(input_json)
         add_command_paths(python_runner)
         add_command_paths(go_runner)
+      } else if (case_type == "json-scenario") {
+        add_path(source_ref)
+        add_path(target_ref)
+        add_path(input_json)
+        add_command_paths(python_runner)
+        add_command_paths(go_runner)
       }
 
       for (i = 1; i <= changed_count; i++) {
