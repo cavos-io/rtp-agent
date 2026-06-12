@@ -240,6 +240,10 @@ func escapeStringControlCharacters(value string) string {
 				b.WriteString(`\t`)
 				continue
 			}
+			if r < 0x20 {
+				writeEscapedControlRune(&b, r)
+				continue
+			}
 		} else if r == '"' {
 			inString = true
 		}
@@ -247,6 +251,17 @@ func escapeStringControlCharacters(value string) string {
 	}
 
 	return b.String()
+}
+
+func writeEscapedControlRune(b *strings.Builder, r rune) {
+	switch r {
+	case '\b':
+		b.WriteString(`\b`)
+	case '\f':
+		b.WriteString(`\f`)
+	default:
+		fmt.Fprintf(b, `\u%04x`, r)
+	}
 }
 
 func quoteUnquotedStringValues(value string) string {

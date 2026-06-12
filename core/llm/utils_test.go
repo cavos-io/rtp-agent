@@ -198,6 +198,17 @@ func TestParseFunctionArgumentsRepairsRawNewlineStringValues(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsRawControlStringValues(t *testing.T) {
+	args, err := ParseFunctionArguments("{\"message\":\"hello\bworld\fdone\"}")
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["message"] != "hello\bworld\fdone" {
+		t.Fatalf("message = %#v, want raw control characters preserved after repair", args["message"])
+	}
+}
+
 func TestParseFunctionArgumentsTreatsNullAsEmptyObject(t *testing.T) {
 	args, err := ParseFunctionArguments(`null`)
 	if err != nil {
