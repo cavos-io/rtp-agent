@@ -2345,6 +2345,8 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	s.runCtx = nil
 	s.userState = UserStateListening
 	s.agentState = AgentStateInitializing
+	s.llmErrorCount = 0
+	s.ttsErrorCount = 0
 	s.cancelUserAwayTimerLocked()
 	s.clearAECWarmupLocked()
 	backgroundAudio := s.Options.BackgroundAudio

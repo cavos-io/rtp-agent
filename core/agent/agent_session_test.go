@@ -3027,6 +3027,26 @@ func TestAgentSessionStopResetsSessionStates(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStopResetsProviderErrorCounts(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	session.llmErrorCount = 2
+	session.ttsErrorCount = 2
+
+	if err := session.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop error = %v, want nil", err)
+	}
+
+	if session.llmErrorCount != 0 {
+		t.Fatalf("llmErrorCount after Stop = %d, want 0", session.llmErrorCount)
+	}
+	if session.ttsErrorCount != 0 {
+		t.Fatalf("ttsErrorCount after Stop = %d, want 0", session.ttsErrorCount)
+	}
+}
+
 func TestAgentSessionStopAllowsOnExitSessionCallbacks(t *testing.T) {
 	agent := &sessionCallbackAgent{Agent: NewAgent("test")}
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
