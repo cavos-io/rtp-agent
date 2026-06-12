@@ -227,6 +227,7 @@ type AgentSession struct {
 	runState       *RunResult
 	onEnterDepth   int
 	userTurnClaims int
+	userTurnDone   chan struct{}
 	userAwayTimer  *time.Timer
 	aecWarmupTimer *time.Timer
 	aecWarmupDone  bool
@@ -387,6 +388,9 @@ func (s *AgentSession) ClaimUserTurn(ctx context.Context, fn func(context.Contex
 	previous := s.userState
 	s.userTurnClaims++
 	first := s.userTurnClaims == 1
+	if first {
+		s.userTurnDone = make(chan struct{})
+	}
 	s.mu.Unlock()
 
 	if first {
@@ -403,6 +407,11 @@ func (s *AgentSession) releaseUserTurnClaim(previous UserState) {
 		s.userTurnClaims--
 	}
 	remaining := s.userTurnClaims
+	done := s.userTurnDone
+	if remaining == 0 && done != nil {
+		close(done)
+		s.userTurnDone = nil
+	}
 	s.mu.Unlock()
 
 	if remaining > 0 {
@@ -634,13 +643,29 @@ func (s *AgentSession) CurrentAgent() (AgentInterface, error) {
 }
 
 func (s *AgentSession) WaitForInactive(ctx context.Context) error {
-	s.mu.Lock()
-	activity := s.activity
-	s.mu.Unlock()
-	if activity == nil {
-		return nil
+	for {
+		s.mu.Lock()
+		activity := s.activity
+		s.mu.Unlock()
+
+		if activity != nil {
+			if err := activity.WaitForInactive(ctx); err != nil {
+				return err
+			}
+		}
+		s.mu.Lock()
+		claims := s.userTurnClaims
+		done := s.userTurnDone
+		s.mu.Unlock()
+		if claims == 0 {
+			return nil
+		}
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
-	return activity.WaitForInactive(ctx)
 }
 
 func (s *AgentSession) Drain(ctx context.Context) error {
@@ -2388,7 +2413,11 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	s.runCtx = nil
 	s.userState = UserStateListening
 	s.agentState = AgentStateInitializing
+	if s.userTurnClaims > 0 && s.userTurnDone != nil {
+		close(s.userTurnDone)
+	}
 	s.userTurnClaims = 0
+	s.userTurnDone = nil
 	s.llmErrorCount = 0
 	s.ttsErrorCount = 0
 	s.cancelUserAwayTimerLocked()

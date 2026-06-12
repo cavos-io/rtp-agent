@@ -3148,6 +3148,53 @@ func TestAgentSessionWaitForInactiveWaitsForCurrentSpeech(t *testing.T) {
 	}
 }
 
+func TestAgentSessionWaitForInactiveWaitsForClaimedUserTurn(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	release := make(chan struct{})
+	claimed := make(chan struct{})
+	claimDone := make(chan error, 1)
+
+	go func() {
+		claimDone <- session.ClaimUserTurn(context.Background(), func(context.Context) error {
+			close(claimed)
+			<-release
+			return nil
+		})
+	}()
+	<-claimed
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.WaitForInactive(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("WaitForInactive returned before claimed user turn released: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case err := <-claimDone:
+		if err != nil {
+			t.Fatalf("ClaimUserTurn error = %v", err)
+		}
+	case <-testTimeout():
+		t.Fatal("ClaimUserTurn did not release")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("WaitForInactive error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("WaitForInactive did not return after claimed user turn released")
+	}
+}
+
 func TestAgentSessionDrainRequiresRunningActivity(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
