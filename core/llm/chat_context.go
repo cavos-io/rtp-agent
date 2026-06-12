@@ -237,15 +237,21 @@ func (c *ChatContext) GetToolNames(tools []interface{}) []string {
 		switch t := tool.(type) {
 		case string:
 			names = append(names, t)
+		case Toolset:
+			names = append(names, c.GetToolNames(toolsAsInterfaces(t.Tools()))...)
 		case Tool:
 			names = append(names, t.Name())
-		case Toolset:
-			for _, childTool := range t.Tools() {
-				names = append(names, childTool.Name())
-			}
 		}
 	}
 	return names
+}
+
+func toolsAsInterfaces(tools []Tool) []interface{} {
+	values := make([]interface{}, 0, len(tools))
+	for _, tool := range tools {
+		values = append(values, tool)
+	}
+	return values
 }
 
 func isFunctionChatItem(item ChatItem) bool {

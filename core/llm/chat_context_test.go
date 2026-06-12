@@ -39,6 +39,13 @@ func assertPanicsWithValue(t *testing.T, name string, want any, fn func()) {
 	fn()
 }
 
+type nestedChatToolset struct {
+	testTool
+	tools []Tool
+}
+
+func (s *nestedChatToolset) Tools() []Tool { return s.tools }
+
 func TestEmptyChatContextReturnsMutableEmptyContext(t *testing.T) {
 	ctx := EmptyChatContext()
 	if ctx == nil {
@@ -238,6 +245,25 @@ func TestChatContextGetToolNamesIncludesStringsToolsAndToolsets(t *testing.T) {
 
 	if got, want := strings.Join(names, ","), "calendar,lookup,weather"; got != want {
 		t.Fatalf("GetToolNames() = %q, want %q", got, want)
+	}
+}
+
+func TestChatContextGetToolNamesRecursesNestedToolsets(t *testing.T) {
+	lookup := &testTool{id: "lookup", name: "lookup"}
+	innerToolset := &nestedChatToolset{
+		testTool: testTool{id: "inner", name: "inner"},
+		tools:    []Tool{lookup},
+	}
+	outerToolset := &nestedChatToolset{
+		testTool: testTool{id: "outer", name: "outer"},
+		tools:    []Tool{innerToolset},
+	}
+	ctx := NewChatContext()
+
+	names := ctx.GetToolNames([]interface{}{outerToolset})
+
+	if got, want := strings.Join(names, ","), "lookup"; got != want {
+		t.Fatalf("GetToolNames() = %q, want recursive nested tool names %q", got, want)
 	}
 }
 
