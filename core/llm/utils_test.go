@@ -139,6 +139,21 @@ func TestParseFunctionArgumentsRepairsTrailingCommas(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsDuplicateCommas(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"city":"Paris",, "limit":3, "items":[urgent,,home], "note":"keep,,literal"}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["limit"] != float64(3) || args["note"] != "keep,,literal" {
+		t.Fatalf("args = %#v, want duplicate commas removed outside strings", args)
+	}
+	items, ok := args["items"].([]any)
+	if !ok || len(items) != 2 || items[0] != "urgent" || items[1] != "home" {
+		t.Fatalf("items = %#v, want duplicate comma slot removed", args["items"])
+	}
+}
+
 func TestParseFunctionArgumentsDropsEllipsisPlaceholders(t *testing.T) {
 	args, err := ParseFunctionArguments(`{"city":"Paris","limit":3,...}`)
 	if err != nil {

@@ -216,8 +216,48 @@ func repairFunctionArguments(value string) string {
 	out = insertMissingArrayCommas(out)
 	out = quoteBareArrayStringValues(out)
 	out = closeUnbalancedJSONContainers(out)
+	out = collapseDuplicateCommas(out)
 	out = trailingCommaPattern.ReplaceAllString(out, "$1")
 	return strings.TrimSpace(out)
+}
+
+func collapseDuplicateCommas(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	inString := false
+	escaped := false
+	lastSignificant := byte(0)
+
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+				lastSignificant = ch
+			}
+			continue
+		}
+
+		if ch == '"' {
+			inString = true
+			b.WriteByte(ch)
+			continue
+		}
+		if ch == ',' && lastSignificant == ',' {
+			continue
+		}
+		b.WriteByte(ch)
+		if !isJSONWhitespace(ch) {
+			lastSignificant = ch
+		}
+	}
+
+	return b.String()
 }
 
 func dropEllipsisPlaceholders(value string) string {
