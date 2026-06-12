@@ -198,6 +198,7 @@ func repairFunctionArguments(value string) string {
 		out = pattern.ReplaceAllString(out, "")
 	}
 	out = quoteExtendedBareStringValues(out)
+	out = quoteExtendedBareArrayStringValues(out)
 	out = stripJSONComments(out)
 	out = escapeStringControlCharacters(out)
 	out = normalizePythonBooleanLiterals(out)
@@ -278,6 +279,73 @@ func quoteExtendedBareStringValues(value string) string {
 	return b.String()
 }
 
+func quoteExtendedBareArrayStringValues(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	arrayDepth := 0
+	inString := false
+	escaped := false
+	lastSignificant := byte(0)
+
+	for i := 0; i < len(value); {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+				lastSignificant = ch
+			}
+			i++
+			continue
+		}
+
+		if ch == '"' {
+			inString = true
+			b.WriteByte(ch)
+			i++
+			continue
+		}
+		if ch == '[' {
+			arrayDepth++
+		} else if ch == ']' && arrayDepth > 0 {
+			arrayDepth--
+		}
+		if arrayDepth == 0 || !isBareStringStart(ch) || (lastSignificant != '[' && lastSignificant != ',') {
+			b.WriteByte(ch)
+			if !isJSONWhitespace(ch) {
+				lastSignificant = ch
+			}
+			i++
+			continue
+		}
+
+		start := i
+		for i < len(value) && !isBareValueDelimiter(value[i]) {
+			i++
+		}
+		raw := strings.TrimRightFunc(value[start:i], unicode.IsSpace)
+		trailing := value[start+len(raw) : i]
+		next := nextNonSpaceIndex(value, i)
+		if raw != "" && needsExtendedBareArrayStringQuote(raw) && (next < 0 || value[next] != ':') {
+			escapedValue, _ := json.Marshal(raw)
+			b.Write(escapedValue)
+			lastSignificant = '"'
+		} else {
+			b.WriteString(raw)
+			if raw != "" {
+				lastSignificant = raw[len(raw)-1]
+			}
+		}
+		b.WriteString(trailing)
+	}
+
+	return b.String()
+}
+
 func isBareStringStart(ch byte) bool {
 	return ch == '_' || ('A' <= ch && ch <= 'Z') || ('a' <= ch && ch <= 'z')
 }
@@ -294,6 +362,17 @@ func isBareValueDelimiter(ch byte) bool {
 func needsExtendedBareStringQuote(value string) bool {
 	return strings.IndexFunc(value, func(r rune) bool {
 		return !(r == '_' || r == '-' || unicode.IsLetter(r) || unicode.IsDigit(r))
+	}) >= 0
+}
+
+func needsExtendedBareArrayStringQuote(value string) bool {
+	return strings.IndexFunc(value, func(r rune) bool {
+		switch r {
+		case '/', '.', '@', '?', '=', '&', '%', '#', ':':
+			return true
+		default:
+			return false
+		}
 	}) >= 0
 }
 

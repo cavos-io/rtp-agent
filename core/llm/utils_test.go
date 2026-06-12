@@ -374,6 +374,22 @@ func TestParseFunctionArgumentsRepairsBareArrayStringValues(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsBareURLArrayValues(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"urls":[https://example.com/a-b?q=1,user@example.com,v1.2.3], "mixed":["quoted",https://example.com,true,3]}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	urls, ok := args["urls"].([]any)
+	if !ok || len(urls) != 3 || urls[0] != "https://example.com/a-b?q=1" || urls[1] != "user@example.com" || urls[2] != "v1.2.3" {
+		t.Fatalf("urls = %#v, want repaired URL-like string array", args["urls"])
+	}
+	mixed, ok := args["mixed"].([]any)
+	if !ok || len(mixed) != 4 || mixed[0] != "quoted" || mixed[1] != "https://example.com" || mixed[2] != true || mixed[3] != float64(3) {
+		t.Fatalf("mixed = %#v, want repaired URL-like value with booleans and numbers preserved", args["mixed"])
+	}
+}
+
 func TestParseFunctionArgumentsRepairsMissingObjectCommas(t *testing.T) {
 	args, err := ParseFunctionArguments(`{"city":"Paris" "limit":3, "nested":{"unit":"celsius" "enabled":true}}`)
 	if err != nil {
