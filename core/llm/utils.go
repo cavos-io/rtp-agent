@@ -207,6 +207,7 @@ func repairFunctionArguments(value string) string {
 	out = normalizeSemicolonSeparators(out)
 	out = extractJSONObjectFromSurroundingText(out)
 	out = singleQuotedStringPattern.ReplaceAllString(out, `"$1"`)
+	out = insertMissingColonBetweenQuotedKeyAndString(out)
 	out = insertMissingObjectCommas(out)
 	out = unquotedObjectKeyPattern.ReplaceAllString(out, `${1}"${2}"${3}`)
 	out = quoteUnquotedStringValues(out)
@@ -215,6 +216,78 @@ func repairFunctionArguments(value string) string {
 	out = closeUnbalancedJSONContainers(out)
 	out = trailingCommaPattern.ReplaceAllString(out, "$1")
 	return strings.TrimSpace(out)
+}
+
+func insertMissingColonBetweenQuotedKeyAndString(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	var stack []byte
+	inString := false
+	escaped := false
+	stringStartedAsPossibleKey := false
+	quotedStringMayBeObjectKey := false
+	lastSignificant := byte(0)
+
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+				quotedStringMayBeObjectKey = stringStartedAsPossibleKey
+				stringStartedAsPossibleKey = false
+				lastSignificant = ch
+			}
+			continue
+		}
+
+		if isJSONWhitespace(ch) {
+			start := i
+			for i+1 < len(value) && isJSONWhitespace(value[i+1]) {
+				i++
+			}
+			next := nextNonSpaceIndex(value, i+1)
+			if quotedStringMayBeObjectKey && next >= 0 && value[next] == '"' {
+				b.WriteByte(':')
+				quotedStringMayBeObjectKey = false
+			}
+			b.WriteString(value[start : i+1])
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+			stringStartedAsPossibleKey = len(stack) > 0 && stack[len(stack)-1] == '{' && (lastSignificant == 0 || lastSignificant == '{' || lastSignificant == ',')
+		case '{', '[':
+			stack = append(stack, ch)
+			quotedStringMayBeObjectKey = false
+		case '}':
+			if len(stack) > 0 && stack[len(stack)-1] == '{' {
+				stack = stack[:len(stack)-1]
+			}
+			quotedStringMayBeObjectKey = false
+		case ']':
+			if len(stack) > 0 && stack[len(stack)-1] == '[' {
+				stack = stack[:len(stack)-1]
+			}
+			quotedStringMayBeObjectKey = false
+		case ':', ',':
+			quotedStringMayBeObjectKey = false
+		default:
+			if !isJSONWhitespace(ch) {
+				quotedStringMayBeObjectKey = false
+			}
+		}
+		b.WriteByte(ch)
+		lastSignificant = ch
+	}
+
+	return b.String()
 }
 
 func insertMissingArrayCommas(value string) string {

@@ -357,6 +357,24 @@ func TestParseFunctionArgumentsRepairsMissingArrayCommas(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsMissingColonBetweenQuotedKeyAndString(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"city" "Paris", "nested":{"unit" "celsius"}}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" {
+		t.Fatalf("city = %#v, want repaired quoted string value", args["city"])
+	}
+	nested, ok := args["nested"].(map[string]any)
+	if !ok {
+		t.Fatalf("nested = %#v, want object", args["nested"])
+	}
+	if nested["unit"] != "celsius" {
+		t.Fatalf("nested unit = %#v, want repaired quoted string value", nested["unit"])
+	}
+}
+
 func TestParseFunctionArgumentsTreatsNullAsEmptyObject(t *testing.T) {
 	args, err := ParseFunctionArguments(`null`)
 	if err != nil {
