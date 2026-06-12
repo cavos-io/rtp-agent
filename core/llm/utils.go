@@ -207,12 +207,123 @@ func repairFunctionArguments(value string) string {
 	out = normalizeSemicolonSeparators(out)
 	out = extractJSONObjectFromSurroundingText(out)
 	out = singleQuotedStringPattern.ReplaceAllString(out, `"$1"`)
+	out = insertMissingObjectCommas(out)
 	out = unquotedObjectKeyPattern.ReplaceAllString(out, `${1}"${2}"${3}`)
 	out = quoteUnquotedStringValues(out)
 	out = quoteBareArrayStringValues(out)
 	out = closeUnbalancedJSONContainers(out)
 	out = trailingCommaPattern.ReplaceAllString(out, "$1")
 	return strings.TrimSpace(out)
+}
+
+func insertMissingObjectCommas(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	objectDepth := 0
+	arrayDepth := 0
+	inString := false
+	escaped := false
+	lastSignificant := byte(0)
+
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+				lastSignificant = ch
+			}
+			continue
+		}
+
+		if isJSONWhitespace(ch) {
+			start := i
+			for i+1 < len(value) && isJSONWhitespace(value[i+1]) {
+				i++
+			}
+			next := nextNonSpaceIndex(value, i+1)
+			if objectDepth > 0 && arrayDepth == 0 && isJSONValueEnd(lastSignificant) && next >= 0 && startsObjectKeyToken(value, next) {
+				b.WriteByte(',')
+			}
+			b.WriteString(value[start : i+1])
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			objectDepth++
+		case '}':
+			if objectDepth > 0 {
+				objectDepth--
+			}
+		case '[':
+			arrayDepth++
+		case ']':
+			if arrayDepth > 0 {
+				arrayDepth--
+			}
+		}
+		b.WriteByte(ch)
+		lastSignificant = ch
+	}
+
+	return b.String()
+}
+
+func nextNonSpaceIndex(value string, start int) int {
+	for i := start; i < len(value); i++ {
+		if !isJSONWhitespace(value[i]) {
+			return i
+		}
+	}
+	return -1
+}
+
+func isJSONWhitespace(ch byte) bool {
+	return ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t'
+}
+
+func isJSONValueEnd(ch byte) bool {
+	return ch == '"' || ch == '}' || ch == ']' || ('0' <= ch && ch <= '9') || ch == 'e' || ch == 'E' || ch == 'l'
+}
+
+func startsObjectKeyToken(value string, start int) bool {
+	switch value[start] {
+	case '"':
+		escaped := false
+		for i := start + 1; i < len(value); i++ {
+			ch := value[i]
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				next := nextNonSpaceIndex(value, i+1)
+				return next >= 0 && value[next] == ':'
+			}
+		}
+		return false
+	default:
+		if !isBareValueStart(value[start]) {
+			return false
+		}
+		i := start
+		for i+1 < len(value) && isBareValueChar(value[i+1]) {
+			i++
+		}
+		next := nextNonSpaceIndex(value, i+1)
+		return next >= 0 && value[next] == ':'
+	}
 }
 
 func quoteBareArrayStringValues(value string) string {

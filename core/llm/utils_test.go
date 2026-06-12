@@ -319,6 +319,24 @@ func TestParseFunctionArgumentsRepairsBareArrayStringValues(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsMissingObjectCommas(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"city":"Paris" "limit":3, "nested":{"unit":"celsius" "enabled":true}}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["limit"] != float64(3) {
+		t.Fatalf("args = %#v, want repaired top-level object members", args)
+	}
+	nested, ok := args["nested"].(map[string]any)
+	if !ok {
+		t.Fatalf("nested = %#v, want object", args["nested"])
+	}
+	if nested["unit"] != "celsius" || nested["enabled"] != true {
+		t.Fatalf("nested = %#v, want repaired nested object members", nested)
+	}
+}
+
 func TestParseFunctionArgumentsTreatsNullAsEmptyObject(t *testing.T) {
 	args, err := ParseFunctionArguments(`null`)
 	if err != nil {
