@@ -277,6 +277,17 @@ func TestParseFunctionArgumentsRepairsTupleLikeArrays(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsSemicolonSeparators(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"city":"Paris"; "limit":3; "note":"keep;semicolon"}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["limit"] != float64(3) || args["note"] != "keep;semicolon" {
+		t.Fatalf("args = %#v, want semicolon separators repaired outside strings", args)
+	}
+}
+
 func TestParseFunctionArgumentsTreatsNullAsEmptyObject(t *testing.T) {
 	args, err := ParseFunctionArguments(`null`)
 	if err != nil {
