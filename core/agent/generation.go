@@ -479,6 +479,7 @@ func PerformToolExecutions(
 			go func(fc *llm.FunctionToolCall) {
 				defer wg.Done()
 				execCtx := ctx
+				var runCtx *RunContext
 				if options.Session != nil {
 					args := fc.Arguments
 					if args == "" {
@@ -497,7 +498,8 @@ func PerformToolExecutions(
 						Extra:     fc.Extra,
 						CreatedAt: time.Now(),
 					}
-					execCtx = WithRunContext(execCtx, NewRunContext(options.Session, options.SpeechHandle, &functionCall))
+					runCtx = NewRunContext(options.Session, options.SpeechHandle, &functionCall)
+					execCtx = WithRunContext(execCtx, runCtx)
 				}
 				executionToolCtx := mockToolContext(execCtx, toolCtx, options.Session, fc.Name)
 				result := llm.FunctionCallResult{}
@@ -513,6 +515,15 @@ func PerformToolExecutions(
 					result = llm.MakeToolOutput(fncCall, nil, llm.NewToolError(fmt.Sprintf("Unknown function: %s", fc.Name)))
 				} else {
 					result = llm.ExecuteFunctionCall(execCtx, fc, executionToolCtx)
+				}
+				if runCtx != nil {
+					if updates := runCtx.Updates(); len(updates) > 0 {
+						result.FncCall = *updates[0].FunctionCall
+						result.FncCallOut = updates[0].FunctionCallOutput
+						if result.FncCallOut != nil {
+							result.RawOutput = result.FncCallOut.Output
+						}
+					}
 				}
 				outCh <- ToolExecutionOutput{
 					FncCall:    result.FncCall,

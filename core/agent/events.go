@@ -288,6 +288,12 @@ func (r *RunContext) Update(message any, templates ...string) error {
 
 	r.mu.Lock()
 	updateStep := len(r.updates)
+	if updateStep == 0 {
+		if r.FunctionCall.Extra == nil {
+			r.FunctionCall.Extra = make(map[string]any)
+		}
+		r.FunctionCall.Extra["__livekit_agents_tool_non_blocking"] = true
+	}
 	call := copyRunContextUpdateCall(r.FunctionCall, runContextUpdateCallIDSuffix(updateStep))
 	result := llm.MakeToolOutput(*call, message, nil)
 	output := result.FncCallOut
