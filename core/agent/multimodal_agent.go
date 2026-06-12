@@ -731,7 +731,8 @@ func (ma *MultimodalAgent) executeRealtimeFunctionCall(functionCall *llm.Functio
 		callCtx = context.Background()
 	}
 	callCtx = contextWithSessionMockTools(callCtx, ma.session)
-	callCtx = WithRunContext(callCtx, NewRunContext(ma.session, nil, functionCall))
+	runCtx := NewRunContext(ma.session, nil, functionCall)
+	callCtx = WithRunContext(callCtx, runCtx)
 	toolCtx := llm.NewToolContext([]interface{}{foundTool})
 	executionToolCtx := mockToolContext(callCtx, toolCtx, ma.session, functionCall.Name)
 	result := llm.ExecuteFunctionCall(callCtx, &llm.FunctionToolCall{
@@ -742,11 +743,18 @@ func (ma *MultimodalAgent) executeRealtimeFunctionCall(functionCall *llm.Functio
 		Extra:     functionCall.Extra,
 	}, executionToolCtx)
 	functionCall.Arguments = result.FncCall.Arguments
+	resultCall := functionCall
+	if updates := runCtx.Updates(); len(updates) > 0 {
+		if updates[0].FunctionCall != nil {
+			resultCall = updates[0].FunctionCall
+		}
+		result.FncCallOut = updates[0].FunctionCallOutput
+	}
 	if result.FncCallOut == nil {
 		return
 	}
 
-	ma.appendRealtimeToolResult(functionCall, result.FncCallOut)
+	ma.appendRealtimeToolResult(resultCall, result.FncCallOut)
 }
 
 func (ma *MultimodalAgent) appendRealtimeToolResult(call *llm.FunctionCall, output *llm.FunctionCallOutput) {
