@@ -1033,6 +1033,60 @@ func TestPerformToolExecutionsConfirmsDuplicateInFlightFunctionName(t *testing.T
 	}
 }
 
+func TestPerformToolExecutionsRejectsReplaceDuplicateWhenRunningToolNotCancellable(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	tool := &blockingGenerationTool{
+		duplicateMode: llm.ToolDuplicateModeReplace,
+		started:       make(chan struct{}, 2),
+		release:       make(chan struct{}),
+	}
+	toolCtx := llm.NewToolContext([]interface{}{tool})
+	functionCh := make(chan *llm.FunctionToolCall, 2)
+	functionCh <- &llm.FunctionToolCall{Name: tool.Name(), CallID: "call_lookup_a", Arguments: `{}`}
+	functionCh <- &llm.FunctionToolCall{Name: tool.Name(), CallID: "call_lookup_b", Arguments: `{}`}
+	close(functionCh)
+
+	outputs := PerformToolExecutions(context.Background(), functionCh, toolCtx, WithToolExecutionSession(session))
+	select {
+	case <-tool.started:
+	case <-testTimeout():
+		t.Fatal("first tool call did not start")
+	}
+	select {
+	case <-tool.started:
+		t.Fatal("replace duplicate started; want non-cancellable running call rejected")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(tool.release)
+	var got []ToolExecutionOutput
+	for output := range outputs {
+		got = append(got, output)
+	}
+	if len(got) != 2 {
+		t.Fatalf("outputs len = %d, want success plus replace rejection", len(got))
+	}
+	var replaceErr bool
+	var success bool
+	for _, output := range got {
+		if output.RawOutput == "ok" && output.RawError == nil {
+			success = true
+		}
+		if output.RawError != nil && strings.Contains(output.RawError.Error(), "cannot replace duplicate call of `lookup`") {
+			replaceErr = true
+			if output.FncCallOut == nil || !output.FncCallOut.IsError || !strings.Contains(output.FncCallOut.Output, "allow_cancellation=False") {
+				t.Fatalf("replace output = %#v, want visible non-cancellable rejection", output.FncCallOut)
+			}
+		}
+	}
+	if !replaceErr {
+		t.Fatalf("outputs = %#v, want replace duplicate rejection", got)
+	}
+	if !success {
+		t.Fatalf("outputs = %#v, want first call to complete successfully", got)
+	}
+}
+
 func TestPerformToolExecutionsDetachesRunContextAfterReturn(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	tool := &runContextRecordingTool{}

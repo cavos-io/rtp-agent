@@ -651,7 +651,7 @@ func stripConfirmDuplicateArgument(arguments string) (string, bool) {
 }
 
 func tracksDuplicateFunctionName(mode llm.ToolDuplicateMode) bool {
-	return mode == llm.ToolDuplicateModeReject || mode == llm.ToolDuplicateModeConfirm
+	return mode == llm.ToolDuplicateModeReject || mode == llm.ToolDuplicateModeConfirm || mode == llm.ToolDuplicateModeReplace
 }
 
 func duplicateToolMessage(functionName string, calls []llm.FunctionCall, mode llm.ToolDuplicateMode) string {
@@ -665,6 +665,9 @@ func duplicateToolMessage(functionName string, calls []llm.FunctionCall, mode ll
 	}
 	if mode == llm.ToolDuplicateModeConfirm {
 		return fmt.Sprintf("Same tool `%s` is already running:\n%s\nRe-call with confirm duplicate True to run a duplicate if needed,\nor if you want to cancel the existing one, call `lk_agents_cancel_task` with call_id.", functionName, strings.Join(lines, "\n"))
+	}
+	if mode == llm.ToolDuplicateModeReplace {
+		return fmt.Sprintf("cannot replace duplicate call of `%s`: running call is not cancellable (allow_cancellation=False)", functionName)
 	}
 	return fmt.Sprintf("Same tool `%s` is already running:\n%s\nIf you want to cancel the existing one, call `lk_agents_cancel_task` with call_id.", functionName, strings.Join(lines, "\n"))
 }
