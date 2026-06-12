@@ -366,6 +366,9 @@ func needsExtendedBareStringQuote(value string) bool {
 }
 
 func needsExtendedBareArrayStringQuote(value string) bool {
+	if strings.ContainsAny(value, " \t") && !isWhitespaceSeparatedJSONLiteralSequence(value) {
+		return true
+	}
 	return strings.IndexFunc(value, func(r rune) bool {
 		switch r {
 		case '/', '.', '@', '?', '=', '&', '%', '#', ':':
@@ -374,6 +377,25 @@ func needsExtendedBareArrayStringQuote(value string) bool {
 			return false
 		}
 	}) >= 0
+}
+
+func isWhitespaceSeparatedJSONLiteralSequence(value string) bool {
+	fields := strings.Fields(value)
+	if len(fields) < 2 {
+		return false
+	}
+	for _, field := range fields {
+		switch field {
+		case "true", "false", "null":
+			continue
+		default:
+			if _, err := strconv.ParseFloat(field, 64); err == nil {
+				continue
+			}
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeSingleQuotedStrings(value string) string {

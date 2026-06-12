@@ -390,6 +390,22 @@ func TestParseFunctionArgumentsRepairsBareURLArrayValues(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsBareMultiWordArrayValues(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"cities":[New York,San Francisco], "labels":[high priority,low risk,true,3]}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	cities, ok := args["cities"].([]any)
+	if !ok || len(cities) != 2 || cities[0] != "New York" || cities[1] != "San Francisco" {
+		t.Fatalf("cities = %#v, want repaired multi-word string array", args["cities"])
+	}
+	labels, ok := args["labels"].([]any)
+	if !ok || len(labels) != 4 || labels[0] != "high priority" || labels[1] != "low risk" || labels[2] != true || labels[3] != float64(3) {
+		t.Fatalf("labels = %#v, want repaired multi-word values with booleans and numbers preserved", args["labels"])
+	}
+}
+
 func TestParseFunctionArgumentsRepairsMissingObjectCommas(t *testing.T) {
 	args, err := ParseFunctionArguments(`{"city":"Paris" "limit":3, "nested":{"unit":"celsius" "enabled":true}}`)
 	if err != nil {
