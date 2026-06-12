@@ -26,6 +26,13 @@ type fakeRoomIOTextResponder struct {
 	calls []string
 }
 
+func (f *fakeRoomIOTextResponder) ClaimUserTurn(ctx context.Context, fn func(context.Context) error) error {
+	f.calls = append(f.calls, "claim-begin")
+	err := fn(ctx)
+	f.calls = append(f.calls, "claim-end")
+	return err
+}
+
 func (f *fakeRoomIOTextResponder) Interrupt(force bool) error {
 	f.calls = append(f.calls, "interrupt")
 	return nil
@@ -769,7 +776,7 @@ func TestRoomIODefaultTextInputInterruptsBeforeGenerateReply(t *testing.T) {
 		t.Fatalf("roomIODefaultTextInput() error = %v", err)
 	}
 
-	want := []string{"interrupt", "generate:hello"}
+	want := []string{"claim-begin", "interrupt", "generate:hello", "claim-end"}
 	if !reflect.DeepEqual(responder.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", responder.calls, want)
 	}

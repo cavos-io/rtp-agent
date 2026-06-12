@@ -226,6 +226,7 @@ type AgentSession struct {
 	runCtx         context.Context
 	runState       *RunResult
 	onEnterDepth   int
+	userTurnClaims int
 	userAwayTimer  *time.Timer
 	aecWarmupTimer *time.Timer
 	aecWarmupDone  bool
@@ -375,6 +376,44 @@ func (s *AgentSession) SetUserdata(value any) {
 
 	s.userdata = value
 	s.userdataSet = true
+}
+
+func (s *AgentSession) ClaimUserTurn(ctx context.Context, fn func(context.Context) error) error {
+	if fn == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	previous := s.userState
+	s.userTurnClaims++
+	first := s.userTurnClaims == 1
+	s.mu.Unlock()
+
+	if first {
+		s.UpdateUserState(UserStateSpeaking)
+	}
+	defer s.releaseUserTurnClaim(previous)
+
+	return fn(ctx)
+}
+
+func (s *AgentSession) releaseUserTurnClaim(previous UserState) {
+	s.mu.Lock()
+	if s.userTurnClaims > 0 {
+		s.userTurnClaims--
+	}
+	remaining := s.userTurnClaims
+	s.mu.Unlock()
+
+	if remaining > 0 {
+		return
+	}
+
+	if previous == UserStateSpeaking {
+		s.UpdateUserState(UserStateSpeaking)
+		return
+	}
+	s.UpdateUserState(UserStateListening)
 }
 
 func (s *AgentSession) JobContext() (any, error) {
@@ -1864,6 +1903,10 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 
 func (s *AgentSession) UpdateUserState(state UserState) {
 	s.mu.Lock()
+	if s.userTurnClaims > 0 && state != UserStateSpeaking {
+		s.mu.Unlock()
+		return
+	}
 	oldState := s.userState
 	s.userState = state
 	videoSampler := s.videoSampler
@@ -2345,6 +2388,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	s.runCtx = nil
 	s.userState = UserStateListening
 	s.agentState = AgentStateInitializing
+	s.userTurnClaims = 0
 	s.llmErrorCount = 0
 	s.ttsErrorCount = 0
 	s.cancelUserAwayTimerLocked()

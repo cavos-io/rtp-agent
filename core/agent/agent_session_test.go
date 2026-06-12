@@ -4474,6 +4474,28 @@ func TestAgentSessionCancelsUserAwayTimerWhenUserSpeaks(t *testing.T) {
 	}
 }
 
+func TestAgentSessionClaimUserTurnPinsUserStateUntilRelease(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	err := session.ClaimUserTurn(context.Background(), func(context.Context) error {
+		if got := session.UserState(); got != UserStateSpeaking {
+			t.Fatalf("UserState() while claimed = %q, want %q", got, UserStateSpeaking)
+		}
+		session.UpdateUserState(UserStateListening)
+		if got := session.UserState(); got != UserStateSpeaking {
+			t.Fatalf("UserState() after listening update while claimed = %q, want %q", got, UserStateSpeaking)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ClaimUserTurn error = %v", err)
+	}
+	if got := session.UserState(); got != UserStateListening {
+		t.Fatalf("UserState() after claim release = %q, want %q", got, UserStateListening)
+	}
+}
+
 func TestAgentSessionCanDisableUserAwayTimeout(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{
