@@ -503,6 +503,7 @@ func PerformToolExecutions(
 				result := llm.FunctionCallResult{}
 				if executionToolCtx == nil || executionToolCtx.GetFunctionTool(fc.Name) == nil {
 					fncCall := llm.FunctionCall{
+						ID:        fc.ID,
 						CallID:    fc.CallID,
 						Name:      fc.Name,
 						Arguments: fc.Arguments,

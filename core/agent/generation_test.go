@@ -310,6 +310,7 @@ func TestPerformToolExecutionsReportsUnknownFunctionAsToolError(t *testing.T) {
 	toolCtx := llm.NewToolContext([]interface{}{&fakeGenerationTool{name: "lookup", result: "ignored"}})
 	functionCh := make(chan *llm.FunctionToolCall, 1)
 	functionCh <- &llm.FunctionToolCall{
+		ID:        "reply-a/fnc_missing",
 		Name:      "missing",
 		CallID:    "call_missing",
 		Arguments: `{bad`,
@@ -321,8 +322,8 @@ func TestPerformToolExecutionsReportsUnknownFunctionAsToolError(t *testing.T) {
 	if !ok {
 		t.Fatal("PerformToolExecutions closed without output")
 	}
-	if output.FncCall.Name != "missing" || output.FncCall.Arguments != `{bad` {
-		t.Fatalf("FncCall = %#v, want unknown call with raw arguments", output.FncCall)
+	if output.FncCall.ID != "reply-a/fnc_missing" || output.FncCall.Name != "missing" || output.FncCall.Arguments != `{bad` {
+		t.Fatalf("FncCall = %#v, want unknown call with generated id and raw arguments", output.FncCall)
 	}
 	if output.FncCallOut == nil {
 		t.Fatal("FncCallOut = nil, want unknown function output")
