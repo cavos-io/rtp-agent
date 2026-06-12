@@ -184,6 +184,41 @@ func TestToolContextCloseClosesToolsets(t *testing.T) {
 	}
 }
 
+func TestToolContextSyncFlattenedPreservesToolsetLifecycle(t *testing.T) {
+	lookup := &testTool{id: "lookup", name: "lookup"}
+	weather := &testTool{id: "weather", name: "weather"}
+	replacement := &testTool{id: "replacement", name: "replacement"}
+	toolset := &closableTestToolset{
+		testToolset: testToolset{id: "tools", tools: []Tool{lookup, weather}},
+	}
+	ctx := NewToolContext([]interface{}{toolset})
+
+	if err := ctx.SyncFlattened([]Tool{weather, replacement}); err != nil {
+		t.Fatalf("SyncFlattened() error = %v", err)
+	}
+
+	if got := ctx.GetFunctionTool("lookup"); got != nil {
+		t.Fatalf("GetFunctionTool(lookup) = %p, want nil after flattened removal", got)
+	}
+	if got := ctx.GetFunctionTool("weather"); got != weather {
+		t.Fatalf("GetFunctionTool(weather) = %p, want %p", got, weather)
+	}
+	if got := ctx.GetFunctionTool("replacement"); got != replacement {
+		t.Fatalf("GetFunctionTool(replacement) = %p, want %p", got, replacement)
+	}
+	toolsets := ctx.Toolsets()
+	if len(toolsets) != 1 || toolsets[0] != toolset {
+		t.Fatalf("Toolsets() = %#v, want original toolset preserved", toolsets)
+	}
+
+	if err := ctx.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if toolset.closeCalls != 1 {
+		t.Fatalf("toolset Close calls = %d, want preserved toolset closed once", toolset.closeCalls)
+	}
+}
+
 func TestNewToolContextPanicsOnDuplicateFunctionName(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
