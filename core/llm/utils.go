@@ -208,6 +208,7 @@ func repairFunctionArguments(value string) string {
 	out = dropEllipsisPlaceholders(out)
 	out = extractJSONObjectFromSurroundingText(out)
 	out = normalizeSingleQuotedStrings(out)
+	out = normalizeDuplicateValueSeparators(out)
 	out = insertMissingColonBetweenQuotedKeyAndString(out)
 	out = insertMissingObjectCommas(out)
 	out = unquotedObjectKeyPattern.ReplaceAllString(out, `${1}"${2}"${3}`)
@@ -246,6 +247,42 @@ func dropEllipsisPlaceholders(value string) string {
 		}
 		if strings.HasPrefix(value[i:], "...") {
 			i += len("...") - 1
+			continue
+		}
+		b.WriteByte(ch)
+	}
+
+	return b.String()
+}
+
+func normalizeDuplicateValueSeparators(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		if ch == '"' {
+			inString = true
+			b.WriteByte(ch)
+			continue
+		}
+		if ch == ':' && i+1 < len(value) && (value[i+1] == ':' || value[i+1] == '=') {
+			b.WriteByte(':')
+			i++
 			continue
 		}
 		b.WriteByte(ch)

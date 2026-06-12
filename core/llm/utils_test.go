@@ -495,6 +495,17 @@ func TestParseFunctionArgumentsRepairsMissingColonBetweenQuotedKeyAndString(t *t
 	}
 }
 
+func TestParseFunctionArgumentsRepairsDuplicateValueSeparators(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"city"::"Paris", "limit":=3, "note":"keep :: literal"}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["limit"] != float64(3) || args["note"] != "keep :: literal" {
+		t.Fatalf("args = %#v, want duplicate separators repaired outside strings", args)
+	}
+}
+
 func TestParseFunctionArgumentsTreatsNullAsEmptyObject(t *testing.T) {
 	args, err := ParseFunctionArguments(`null`)
 	if err != nil {
