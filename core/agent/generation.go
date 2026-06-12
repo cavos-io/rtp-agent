@@ -106,9 +106,7 @@ func PerformLLMInference(
 						continue
 					}
 					f := fc
-					if f.ID == "" {
-						f.ID = fmt.Sprintf("%s/fnc_%d", data.ID, len(data.GeneratedFunctions))
-					}
+					f.ID = fmt.Sprintf("%s/fnc_%d", data.ID, len(data.GeneratedFunctions))
 					data.GeneratedFunctions = append(data.GeneratedFunctions, f)
 					data.FunctionCh <- &f
 				}

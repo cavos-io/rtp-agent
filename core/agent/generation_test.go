@@ -51,6 +51,38 @@ func TestPerformLLMInferenceIgnoresNonFunctionToolCalls(t *testing.T) {
 	}
 }
 
+func TestPerformLLMInferenceUsesReferenceFunctionCallIDs(t *testing.T) {
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{ToolCalls: []llm.FunctionToolCall{
+					{ID: "provider_tool_id", Type: "function", Name: "lookup", CallID: "call_lookup"},
+				}}},
+			},
+		},
+	}
+
+	data, err := PerformLLMInference(context.Background(), l, llm.NewChatContext(), nil)
+	if err != nil {
+		t.Fatalf("PerformLLMInference error = %v, want nil", err)
+	}
+
+	got := drainFunctionCalls(data.FunctionCh)
+	if len(got) != 1 {
+		t.Fatalf("len(FunctionCh) = %d, want 1 function tool call", len(got))
+	}
+	wantID := data.ID + "/fnc_0"
+	if got[0].ID != wantID {
+		t.Fatalf("FunctionCh[0].ID = %q, want generated reference ID %q", got[0].ID, wantID)
+	}
+	if data.GeneratedFunctions[0].ID != wantID {
+		t.Fatalf("GeneratedFunctions[0].ID = %q, want generated reference ID %q", data.GeneratedFunctions[0].ID, wantID)
+	}
+	if got[0].CallID != "call_lookup" {
+		t.Fatalf("FunctionCh[0].CallID = %q, want provider call_id", got[0].CallID)
+	}
+}
+
 func TestPerformLLMInferenceTracksGeneratedExtra(t *testing.T) {
 	l := &fakeGenerationLLM{
 		stream: &fakeGenerationLLMStream{
