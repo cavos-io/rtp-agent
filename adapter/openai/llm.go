@@ -1296,7 +1296,7 @@ func buildOpenAIChatCompletionRequestWithReasoningDefaultAndToolSchema(model str
 
 	tools := make([]openai.Tool, 0, len(options.Tools))
 	for _, tool := range options.Tools {
-		parameters := tool.Parameters()
+		parameters := llm.ToolParameters(tool)
 		if strictToolSchema {
 			parameters = normalizeOpenAIStrictToolSchema(parameters)
 		}

@@ -127,7 +127,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 				tools = append(tools, map[string]interface{}{
 					"name":         tool.Name(),
 					"description":  tool.Description(),
-					"input_schema": tool.Parameters(),
+					"input_schema": llm.ToolParameters(tool),
 					"strict":       true,
 				})
 			}

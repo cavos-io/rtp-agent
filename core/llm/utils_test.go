@@ -619,6 +619,27 @@ func TestExecuteFunctionCallNormalizesToolError(t *testing.T) {
 	}
 }
 
+func TestExecuteFunctionCallStripsConfirmDuplicateArgument(t *testing.T) {
+	tool := &recordingTool{name: "lookup", result: "ok", duplicateMode: ToolDuplicateModeConfirm}
+	toolCtx := NewToolContext([]interface{}{tool})
+
+	result := ExecuteFunctionCall(context.Background(), &FunctionToolCall{
+		Name:      "lookup",
+		CallID:    "call_lookup",
+		Arguments: `{"city":"Paris","lk_agents_confirm_duplicate":true}`,
+	}, toolCtx)
+
+	if result.RawError != nil {
+		t.Fatalf("RawError = %v, want nil", result.RawError)
+	}
+	if tool.args != `{"city":"Paris"}` {
+		t.Fatalf("tool args = %q, want confirmation argument stripped", tool.args)
+	}
+	if result.FncCall.Arguments != `{"city":"Paris"}` {
+		t.Fatalf("FncCall.Arguments = %q, want stripped canonical arguments", result.FncCall.Arguments)
+	}
+}
+
 func TestCollectStreamAggregatesChunks(t *testing.T) {
 	stream := &fakeCollectStream{events: []fakeCollectEvent{
 		{chunk: &ChatChunk{
@@ -799,10 +820,11 @@ func TestNewTextStreamRejectsTypedNilStream(t *testing.T) {
 }
 
 type recordingTool struct {
-	name   string
-	args   string
-	result string
-	err    error
+	name          string
+	args          string
+	result        string
+	err           error
+	duplicateMode ToolDuplicateMode
 }
 
 func (t *recordingTool) ID() string { return t.name }
@@ -816,6 +838,10 @@ func (t *recordingTool) Parameters() map[string]any { return nil }
 func (t *recordingTool) Execute(_ context.Context, args string) (string, error) {
 	t.args = args
 	return t.result, t.err
+}
+
+func (t *recordingTool) ToolDuplicateMode() ToolDuplicateMode {
+	return t.duplicateMode
 }
 
 type fakeCollectEvent struct {

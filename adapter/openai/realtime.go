@@ -451,7 +451,7 @@ func openAIRealtimeTools(tools []llm.Tool) []map[string]any {
 			"type":        "function",
 			"name":        t.Name(),
 			"description": t.Description(),
-			"parameters":  t.Parameters(),
+			"parameters":  llm.ToolParameters(t),
 		})
 	}
 	return oaTools

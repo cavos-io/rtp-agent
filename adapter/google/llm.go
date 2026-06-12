@@ -89,7 +89,7 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 }
 
 func buildGoogleFunctionDeclaration(t llm.Tool) *genai.FunctionDeclaration {
-	schemaMap := t.Parameters()
+	schemaMap := llm.ToolParameters(t)
 	var properties map[string]*genai.Schema
 
 	if props, ok := schemaMap["properties"].(map[string]any); ok {

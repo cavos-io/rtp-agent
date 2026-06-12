@@ -30,6 +30,7 @@ type ToolFlag uint64
 const (
 	ToolFlagNone          ToolFlag = 0
 	ToolFlagIgnoreOnEnter ToolFlag = 1 << 0
+	ToolFlagCancellable   ToolFlag = 1 << 1
 )
 
 type ToolFlagger interface {
@@ -42,6 +43,37 @@ func ToolHasFlag(tool Tool, flag ToolFlag) bool {
 	}
 	flagger, ok := tool.(ToolFlagger)
 	return ok && flagger.ToolFlags()&flag != 0
+}
+
+type ToolDuplicateMode string
+
+const (
+	ToolDuplicateModeAllow   ToolDuplicateMode = "allow"
+	ToolDuplicateModeReject  ToolDuplicateMode = "reject"
+	ToolDuplicateModeReplace ToolDuplicateMode = "replace"
+	ToolDuplicateModeConfirm ToolDuplicateMode = "confirm"
+)
+
+const ConfirmDuplicateParam = "lk_agents_confirm_duplicate"
+
+type ToolDuplicateModer interface {
+	ToolDuplicateMode() ToolDuplicateMode
+}
+
+func ToolDuplicateModeFor(tool Tool) ToolDuplicateMode {
+	if tool == nil {
+		return ToolDuplicateModeAllow
+	}
+	duper, ok := tool.(ToolDuplicateModer)
+	if !ok {
+		return ToolDuplicateModeAllow
+	}
+	switch mode := duper.ToolDuplicateMode(); mode {
+	case ToolDuplicateModeReject, ToolDuplicateModeReplace, ToolDuplicateModeConfirm:
+		return mode
+	default:
+		return ToolDuplicateModeAllow
+	}
 }
 
 type ImageContent struct {

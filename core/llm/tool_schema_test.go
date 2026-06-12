@@ -1,9 +1,52 @@
 package llm
 
 import (
+	"context"
 	"reflect"
 	"testing"
 )
+
+func TestToolParametersInjectsConfirmDuplicateSchema(t *testing.T) {
+	base := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"city": map[string]any{"type": "string"},
+		},
+		"required": []string{"city"},
+	}
+	tool := schemaDuplicateModeTool{params: base, duplicateMode: ToolDuplicateModeConfirm}
+
+	params := ToolParameters(tool)
+	props, ok := params["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %#v, want map", params["properties"])
+	}
+	confirm, ok := props[ConfirmDuplicateParam].(map[string]any)
+	if !ok {
+		t.Fatalf("confirm duplicate property = %#v, want schema map", props[ConfirmDuplicateParam])
+	}
+	if !reflect.DeepEqual(confirm["type"], []string{"boolean", "null"}) {
+		t.Fatalf("confirm duplicate type = %#v, want nullable boolean", confirm["type"])
+	}
+	if confirm["description"] == "" {
+		t.Fatalf("confirm duplicate description is empty")
+	}
+	required, ok := params["required"].([]string)
+	if !ok {
+		t.Fatalf("required = %#v, want []string", params["required"])
+	}
+	if !reflect.DeepEqual(required, []string{"city", ConfirmDuplicateParam}) {
+		t.Fatalf("required = %#v, want city and confirm duplicate", required)
+	}
+
+	originalProps := base["properties"].(map[string]any)
+	if _, ok := originalProps[ConfirmDuplicateParam]; ok {
+		t.Fatalf("base schema was mutated: %#v", base)
+	}
+	if !reflect.DeepEqual(base["required"], []string{"city"}) {
+		t.Fatalf("base required was mutated: %#v", base["required"])
+	}
+}
 
 func TestGenerateStrictJSONSchemaRequiresOmitEmptyFieldsAsNullable(t *testing.T) {
 	type request struct {
@@ -273,6 +316,18 @@ func TestGenerateStrictJSONSchemaPreservesMapValueSchema(t *testing.T) {
 		t.Fatalf("metadata value type = %#v, want string", valueSchema["type"])
 	}
 }
+
+type schemaDuplicateModeTool struct {
+	params        map[string]any
+	duplicateMode ToolDuplicateMode
+}
+
+func (t schemaDuplicateModeTool) ID() string                                      { return "lookup" }
+func (t schemaDuplicateModeTool) Name() string                                    { return "lookup" }
+func (t schemaDuplicateModeTool) Description() string                             { return "look up information" }
+func (t schemaDuplicateModeTool) Parameters() map[string]any                      { return t.params }
+func (t schemaDuplicateModeTool) Execute(context.Context, string) (string, error) { return "", nil }
+func (t schemaDuplicateModeTool) ToolDuplicateMode() ToolDuplicateMode            { return t.duplicateMode }
 
 func TestGenerateStrictJSONSchemaPreservesPointerMapValueSchema(t *testing.T) {
 	type request struct {

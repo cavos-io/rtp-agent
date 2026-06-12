@@ -7,6 +7,49 @@ import (
 	"github.com/cavos-io/rtp-agent/library/utils"
 )
 
+const confirmDuplicateDescription = "Set this to True to confirm you want to run a duplicate. Only do this when user confirms the duplication is needed."
+
+// ToolParameters returns the JSON schema advertised for a tool, including
+// reference-compatible runtime parameters that are stripped before execution.
+func ToolParameters(tool Tool) map[string]any {
+	if tool == nil {
+		return nil
+	}
+	params := tool.Parameters()
+	if ToolDuplicateModeFor(tool) != ToolDuplicateModeConfirm {
+		return params
+	}
+	return injectConfirmDuplicateParameter(params)
+}
+
+func injectConfirmDuplicateParameter(parameters map[string]any) map[string]any {
+	params := make(map[string]any, len(parameters)+2)
+	for key, value := range parameters {
+		params[key] = value
+	}
+	properties, _ := params["properties"].(map[string]any)
+	copiedProperties := make(map[string]any, len(properties)+1)
+	for key, value := range properties {
+		copiedProperties[key] = value
+	}
+	copiedProperties[ConfirmDuplicateParam] = map[string]any{
+		"type":        []string{"boolean", "null"},
+		"description": confirmDuplicateDescription,
+	}
+	params["properties"] = copiedProperties
+
+	switch required := params["required"].(type) {
+	case []string:
+		params["required"] = appendRequiredField(required, ConfirmDuplicateParam)
+	case []any:
+		params["required"] = appendRequiredValue(required, ConfirmDuplicateParam)
+	default:
+		params["required"] = []string{ConfirmDuplicateParam}
+	}
+
+	return params
+}
+
 // GenerateStrictJSONSchema inspects a Go function or struct to generate
 // an OpenAI-compatible "strict" JSON schema.
 // It enforces additionalProperties: false and makes all fields required.
@@ -148,6 +191,15 @@ func markSchemaEnumNullable(schema map[string]interface{}) {
 }
 
 func appendRequiredField(required []string, name string) []string {
+	for _, existing := range required {
+		if existing == name {
+			return required
+		}
+	}
+	return append(required, name)
+}
+
+func appendRequiredValue(required []any, name string) []any {
 	for _, existing := range required {
 		if existing == name {
 			return required
