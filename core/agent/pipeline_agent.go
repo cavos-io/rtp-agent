@@ -859,7 +859,7 @@ func sessionRegisteredTools(ctx context.Context, session *AgentSession) ([]llm.T
 		toolset.FilterTools(func(tool llm.Tool) bool { return tool != nil })
 		tools = append(tools, toolset.Tools()...)
 	}
-	return tools, nil
+	return appendToolExecutorHelperTools(tools), nil
 }
 
 func insertChatItemIfMissing(chatCtx *llm.ChatContext, item llm.ChatItem) {

@@ -57,6 +57,15 @@ func (getRunningTasksTool) Execute(context.Context, string) (string, error) {
 	return "[]", nil
 }
 
+func appendToolExecutorHelperTools(tools []llm.Tool) []llm.Tool {
+	for _, tool := range tools {
+		if !isNilAgentTool(tool) && llm.ToolHasFlag(tool, llm.ToolFlagCancellable) {
+			return append(tools, cancelTaskTool{}, getRunningTasksTool{})
+		}
+	}
+	return tools
+}
+
 func hasCancellableTool(tools []interface{}) bool {
 	for _, tool := range tools {
 		if functionTool, ok := tool.(llm.Tool); ok {

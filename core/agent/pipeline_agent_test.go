@@ -53,6 +53,22 @@ func TestPipelineAgentGenerateReplyAddsAssistantMessageWithExtra(t *testing.T) {
 	}
 }
 
+func TestSessionRegisteredToolsAddsCancellationHelpersForCancellableTools(t *testing.T) {
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", flags: llm.ToolFlagCancellable}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	tools, err := sessionRegisteredTools(context.Background(), session)
+	if err != nil {
+		t.Fatalf("sessionRegisteredTools() error = %v, want nil", err)
+	}
+	got := sortedAgentToolNames(agentToolsAsInterfaces(tools))
+	want := []string{"lk_agents_cancel_task", "lk_agents_get_running_tasks", "lookup"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("sessionRegisteredTools() names = %#v, want reference cancellation helpers %#v", got, want)
+	}
+}
+
 func TestPipelineAgentGenerateReplyAddsAssistantMessageTTSMetrics(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
