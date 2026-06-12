@@ -43,8 +43,6 @@ var unquotedObjectKeyPattern = regexp.MustCompile(`([,{]\s*)([A-Za-z_][A-Za-z0-9
 
 var unquotedStringValuePattern = regexp.MustCompile(`(:\s*)([A-Za-z_][A-Za-z0-9_-]*)(\s*[,}\]])`)
 
-var singleQuotedStringPattern = regexp.MustCompile(`'([^'\\]*)'`)
-
 type SerializedImage struct {
 	InferenceDetail string
 	MIMEType        string
@@ -199,14 +197,18 @@ func repairFunctionArguments(value string) string {
 	for _, pattern := range templateTokenPatterns {
 		out = pattern.ReplaceAllString(out, "")
 	}
+	out = quoteExtendedBareStringValues(out)
+	out = quoteExtendedBareArrayStringValues(out)
 	out = stripJSONComments(out)
 	out = escapeStringControlCharacters(out)
 	out = normalizePythonBooleanLiterals(out)
 	out = normalizeNonstandardNumberLiterals(out)
 	out = normalizeTupleLikeArrays(out)
-	out = normalizeSemicolonSeparators(out)
+	out = normalizeAlternateSeparators(out)
+	out = dropEllipsisPlaceholders(out)
 	out = extractJSONObjectFromSurroundingText(out)
-	out = singleQuotedStringPattern.ReplaceAllString(out, `"$1"`)
+	out = normalizeSingleQuotedStrings(out)
+	out = normalizeDuplicateValueSeparators(out)
 	out = insertMissingColonBetweenQuotedKeyAndString(out)
 	out = insertMissingObjectCommas(out)
 	out = unquotedObjectKeyPattern.ReplaceAllString(out, `${1}"${2}"${3}`)
@@ -214,8 +216,361 @@ func repairFunctionArguments(value string) string {
 	out = insertMissingArrayCommas(out)
 	out = quoteBareArrayStringValues(out)
 	out = closeUnbalancedJSONContainers(out)
+	out = collapseDuplicateCommas(out)
 	out = trailingCommaPattern.ReplaceAllString(out, "$1")
 	return strings.TrimSpace(out)
+}
+
+func collapseDuplicateCommas(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	inString := false
+	escaped := false
+	lastSignificant := byte(0)
+
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+				lastSignificant = ch
+			}
+			continue
+		}
+
+		if ch == '"' {
+			inString = true
+			b.WriteByte(ch)
+			continue
+		}
+		if ch == ',' && (lastSignificant == ',' || lastSignificant == '{' || lastSignificant == '[') {
+			continue
+		}
+		b.WriteByte(ch)
+		if !isJSONWhitespace(ch) {
+			lastSignificant = ch
+		}
+	}
+
+	return b.String()
+}
+
+func dropEllipsisPlaceholders(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		if ch == '"' {
+			inString = true
+			b.WriteByte(ch)
+			continue
+		}
+		if strings.HasPrefix(value[i:], "...") {
+			i += len("...") - 1
+			continue
+		}
+		b.WriteByte(ch)
+	}
+
+	return b.String()
+}
+
+func normalizeDuplicateValueSeparators(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		if ch == '"' {
+			inString = true
+			b.WriteByte(ch)
+			continue
+		}
+		if ch == ':' && i+1 < len(value) && (value[i+1] == ':' || value[i+1] == '=') {
+			b.WriteByte(':')
+			i++
+			continue
+		}
+		b.WriteByte(ch)
+	}
+
+	return b.String()
+}
+
+func quoteExtendedBareStringValues(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(value); {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			i++
+			continue
+		}
+
+		if ch == '"' {
+			inString = true
+			b.WriteByte(ch)
+			i++
+			continue
+		}
+		if ch != ':' {
+			b.WriteByte(ch)
+			i++
+			continue
+		}
+
+		b.WriteByte(ch)
+		i++
+		for i < len(value) && isJSONWhitespace(value[i]) {
+			b.WriteByte(value[i])
+			i++
+		}
+		if i >= len(value) || !isBareStringStart(value[i]) {
+			continue
+		}
+
+		start := i
+		for i < len(value) && !isBareValueDelimiter(value[i]) {
+			i++
+		}
+		raw := strings.TrimRightFunc(value[start:i], unicode.IsSpace)
+		trailing := value[start+len(raw) : i]
+		if raw != "" && needsExtendedBareStringQuote(raw) {
+			escapedValue, _ := json.Marshal(raw)
+			b.Write(escapedValue)
+		} else {
+			b.WriteString(raw)
+		}
+		b.WriteString(trailing)
+	}
+
+	return b.String()
+}
+
+func quoteExtendedBareArrayStringValues(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	arrayDepth := 0
+	inString := false
+	escaped := false
+	lastSignificant := byte(0)
+
+	for i := 0; i < len(value); {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+				lastSignificant = ch
+			}
+			i++
+			continue
+		}
+
+		if ch == '"' {
+			inString = true
+			b.WriteByte(ch)
+			i++
+			continue
+		}
+		if ch == '[' {
+			arrayDepth++
+		} else if ch == ']' && arrayDepth > 0 {
+			arrayDepth--
+		}
+		if arrayDepth == 0 || !isBareStringStart(ch) || (lastSignificant != '[' && lastSignificant != ',') {
+			b.WriteByte(ch)
+			if !isJSONWhitespace(ch) {
+				lastSignificant = ch
+			}
+			i++
+			continue
+		}
+
+		start := i
+		for i < len(value) && !isBareValueDelimiter(value[i]) {
+			i++
+		}
+		raw := strings.TrimRightFunc(value[start:i], unicode.IsSpace)
+		trailing := value[start+len(raw) : i]
+		next := nextNonSpaceIndex(value, i)
+		if raw != "" && needsExtendedBareArrayStringQuote(raw) && (next < 0 || value[next] != ':') {
+			escapedValue, _ := json.Marshal(raw)
+			b.Write(escapedValue)
+			lastSignificant = '"'
+		} else {
+			b.WriteString(raw)
+			if raw != "" {
+				lastSignificant = raw[len(raw)-1]
+			}
+		}
+		b.WriteString(trailing)
+	}
+
+	return b.String()
+}
+
+func isBareStringStart(ch byte) bool {
+	return ch == '_' || ('A' <= ch && ch <= 'Z') || ('a' <= ch && ch <= 'z')
+}
+
+func isBareValueDelimiter(ch byte) bool {
+	switch ch {
+	case ',', '}', ']', '\n', '\r':
+		return true
+	default:
+		return false
+	}
+}
+
+func needsExtendedBareStringQuote(value string) bool {
+	return strings.IndexFunc(value, func(r rune) bool {
+		return !(r == '_' || r == '-' || unicode.IsLetter(r) || unicode.IsDigit(r))
+	}) >= 0
+}
+
+func needsExtendedBareArrayStringQuote(value string) bool {
+	if strings.ContainsAny(value, " \t") && !isWhitespaceSeparatedJSONLiteralSequence(value) {
+		return true
+	}
+	return strings.IndexFunc(value, func(r rune) bool {
+		switch r {
+		case '/', '.', '@', '?', '=', '&', '%', '#', ':':
+			return true
+		default:
+			return false
+		}
+	}) >= 0
+}
+
+func isWhitespaceSeparatedJSONLiteralSequence(value string) bool {
+	fields := strings.Fields(value)
+	if len(fields) < 2 {
+		return false
+	}
+	for _, field := range fields {
+		switch field {
+		case "true", "false", "null":
+			continue
+		default:
+			if _, err := strconv.ParseFloat(field, 64); err == nil {
+				continue
+			}
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeSingleQuotedStrings(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	inDoubleString := false
+	inSingleString := false
+	escaped := false
+
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if inDoubleString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inDoubleString = false
+			}
+			continue
+		}
+		if inSingleString {
+			if escaped {
+				if ch == '\'' {
+					b.WriteByte('\'')
+				} else {
+					b.WriteByte('\\')
+					b.WriteByte(ch)
+				}
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '\'' {
+				inSingleString = false
+				b.WriteByte('"')
+			} else if ch == '"' {
+				b.WriteString(`\"`)
+			} else if ch < 0x20 {
+				writeEscapedControlRune(&b, rune(ch))
+			} else {
+				b.WriteByte(ch)
+			}
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inDoubleString = true
+			b.WriteByte(ch)
+		case '\'':
+			inSingleString = true
+			b.WriteByte('"')
+		default:
+			b.WriteByte(ch)
+		}
+	}
+
+	if inSingleString {
+		b.WriteByte('"')
+	}
+	return b.String()
 }
 
 func insertMissingColonBetweenQuotedKeyAndString(value string) string {
@@ -573,7 +928,7 @@ func extractJSONObjectFromSurroundingText(value string) string {
 	return value
 }
 
-func normalizeSemicolonSeparators(value string) string {
+func normalizeAlternateSeparators(value string) string {
 	var b strings.Builder
 	b.Grow(len(value))
 	inString := false
@@ -597,7 +952,7 @@ func normalizeSemicolonSeparators(value string) string {
 		case '"':
 			inString = true
 			b.WriteByte(ch)
-		case ';':
+		case ';', '|':
 			b.WriteByte(',')
 		default:
 			b.WriteByte(ch)
@@ -811,6 +1166,15 @@ func stripJSONComments(value string) string {
 			b.WriteByte(ch)
 			continue
 		}
+		if ch == '#' {
+			for i < len(value) && value[i] != '\n' && value[i] != '\r' {
+				i++
+			}
+			if i < len(value) {
+				b.WriteByte(value[i])
+			}
+			continue
+		}
 		if ch == '/' && i+1 < len(value) {
 			switch value[i+1] {
 			case '/':
@@ -947,7 +1311,24 @@ func closeUnbalancedJSONContainers(value string) string {
 		}
 	}
 
-	if inString || len(stack) == 0 {
+	if inString {
+		insertAt := len(value)
+		pending := append([]byte(nil), stack...)
+		for len(pending) > 0 && insertAt > 0 && value[insertAt-1] == pending[len(pending)-1] {
+			insertAt--
+			pending = pending[:len(pending)-1]
+		}
+		var b strings.Builder
+		b.Grow(len(value) + 1 + len(pending))
+		b.WriteString(value[:insertAt])
+		b.WriteByte('"')
+		b.WriteString(value[insertAt:])
+		for i := len(pending) - 1; i >= 0; i-- {
+			b.WriteByte(pending[i])
+		}
+		return b.String()
+	}
+	if len(stack) == 0 {
 		return value
 	}
 	var b strings.Builder

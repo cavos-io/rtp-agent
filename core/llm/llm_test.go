@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -75,6 +76,39 @@ func TestLLMErrorCarriesReferenceFields(t *testing.T) {
 	}
 	if !errors.Is(err, cause) {
 		t.Fatal("errors.Is() = false, want wrapped cause")
+	}
+}
+
+func TestLLMErrorMarshalJSONMatchesReferencePayload(t *testing.T) {
+	err := NewLLMError("openai.LLM", errors.New("provider unavailable"), true)
+
+	data, marshalErr := json.Marshal(err)
+	if marshalErr != nil {
+		t.Fatalf("Marshal LLMError returned error: %v", marshalErr)
+	}
+
+	var payload map[string]any
+	if unmarshalErr := json.Unmarshal(data, &payload); unmarshalErr != nil {
+		t.Fatalf("Unmarshal LLMError payload returned error: %v", unmarshalErr)
+	}
+	if payload["type"] != "llm_error" {
+		t.Fatalf("type = %v, want llm_error", payload["type"])
+	}
+	if payload["label"] != "openai.LLM" {
+		t.Fatalf("label = %v, want openai.LLM", payload["label"])
+	}
+	if payload["recoverable"] != true {
+		t.Fatalf("recoverable = %v, want true", payload["recoverable"])
+	}
+	timestamp, ok := payload["timestamp"].(float64)
+	if !ok || timestamp <= 0 {
+		t.Fatalf("timestamp = %v, want positive numeric Unix seconds", payload["timestamp"])
+	}
+	if _, ok := payload["err"]; ok {
+		t.Fatalf("err serialized in payload: %s", data)
+	}
+	if _, ok := payload["error"]; ok {
+		t.Fatalf("error serialized in payload: %s", data)
 	}
 }
 
@@ -297,6 +331,39 @@ func TestRealtimeModelErrorCarriesReferenceFields(t *testing.T) {
 	}
 	if !errors.Is(err, cause) {
 		t.Fatal("errors.Is() = false, want wrapped cause")
+	}
+}
+
+func TestRealtimeModelErrorMarshalJSONMatchesReferencePayload(t *testing.T) {
+	err := NewRealtimeModelError("openai.RealtimeModel", errors.New("session disconnected"), false)
+
+	data, marshalErr := json.Marshal(err)
+	if marshalErr != nil {
+		t.Fatalf("Marshal RealtimeModelError returned error: %v", marshalErr)
+	}
+
+	var payload map[string]any
+	if unmarshalErr := json.Unmarshal(data, &payload); unmarshalErr != nil {
+		t.Fatalf("Unmarshal RealtimeModelError payload returned error: %v", unmarshalErr)
+	}
+	if payload["type"] != "realtime_model_error" {
+		t.Fatalf("type = %v, want realtime_model_error", payload["type"])
+	}
+	if payload["label"] != "openai.RealtimeModel" {
+		t.Fatalf("label = %v, want openai.RealtimeModel", payload["label"])
+	}
+	if payload["recoverable"] != false {
+		t.Fatalf("recoverable = %v, want false", payload["recoverable"])
+	}
+	timestamp, ok := payload["timestamp"].(float64)
+	if !ok || timestamp <= 0 {
+		t.Fatalf("timestamp = %v, want positive numeric Unix seconds", payload["timestamp"])
+	}
+	if _, ok := payload["err"]; ok {
+		t.Fatalf("err serialized in payload: %s", data)
+	}
+	if _, ok := payload["error"]; ok {
+		t.Fatalf("error serialized in payload: %s", data)
 	}
 }
 

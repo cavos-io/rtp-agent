@@ -139,6 +139,47 @@ func TestParseFunctionArgumentsRepairsTrailingCommas(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsDuplicateCommas(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"city":"Paris",, "limit":3, "items":[urgent,,home], "note":"keep,,literal"}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["limit"] != float64(3) || args["note"] != "keep,,literal" {
+		t.Fatalf("args = %#v, want duplicate commas removed outside strings", args)
+	}
+	items, ok := args["items"].([]any)
+	if !ok || len(items) != 2 || items[0] != "urgent" || items[1] != "home" {
+		t.Fatalf("items = %#v, want duplicate comma slot removed", args["items"])
+	}
+}
+
+func TestParseFunctionArgumentsRepairsLeadingCommas(t *testing.T) {
+	args, err := ParseFunctionArguments(`{,"city":"Paris","items":[,urgent,home],"note":"keep, literal"}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["note"] != "keep, literal" {
+		t.Fatalf("args = %#v, want leading comma slots removed outside strings", args)
+	}
+	items, ok := args["items"].([]any)
+	if !ok || len(items) != 2 || items[0] != "urgent" || items[1] != "home" {
+		t.Fatalf("items = %#v, want leading array comma slot removed", args["items"])
+	}
+}
+
+func TestParseFunctionArgumentsDropsEllipsisPlaceholders(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"city":"Paris","limit":3,...}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["limit"] != float64(3) {
+		t.Fatalf("args = %#v, want ellipsis placeholder dropped", args)
+	}
+}
+
 func TestParseFunctionArgumentsRepairsMissingClosingDelimiter(t *testing.T) {
 	args, err := ParseFunctionArguments(`{"city":"Paris","tags":["metro","food"]`)
 	if err != nil {
@@ -176,6 +217,17 @@ func TestParseFunctionArgumentsRepairsUnquotedStringValues(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsBareURLAndIdentifierValues(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"url":https://example.com/a-b?q=1,"email":user@example.com,"version":v1.2.3}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["url"] != "https://example.com/a-b?q=1" || args["email"] != "user@example.com" || args["version"] != "v1.2.3" {
+		t.Fatalf("args = %#v, want repaired bare URL and identifier string values", args)
+	}
+}
+
 func TestParseFunctionArgumentsRepairsSingleQuotedValues(t *testing.T) {
 	args, err := ParseFunctionArguments(`{'city':'Paris','country':'FR'}`)
 	if err != nil {
@@ -184,6 +236,50 @@ func TestParseFunctionArgumentsRepairsSingleQuotedValues(t *testing.T) {
 
 	if args["city"] != "Paris" || args["country"] != "FR" {
 		t.Fatalf("args = %#v, want repaired city and country", args)
+	}
+}
+
+func TestParseFunctionArgumentsRepairsEscapedSingleQuotedValues(t *testing.T) {
+	args, err := ParseFunctionArguments(`{'note':'Bob\'s place','items':['owner\'s','guest']}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["note"] != "Bob's place" {
+		t.Fatalf("note = %#v, want escaped apostrophe repaired", args["note"])
+	}
+	items, ok := args["items"].([]any)
+	if !ok || len(items) != 2 || items[0] != "owner's" || items[1] != "guest" {
+		t.Fatalf("items = %#v, want escaped apostrophe array repaired", args["items"])
+	}
+}
+
+func TestParseFunctionArgumentsRepairsDoubleQuotesInsideSingleQuotedValues(t *testing.T) {
+	args, err := ParseFunctionArguments(`{'note':'say "hi"','items':['owner says "go"']}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["note"] != `say "hi"` {
+		t.Fatalf("note = %#v, want embedded double quotes preserved", args["note"])
+	}
+	items, ok := args["items"].([]any)
+	if !ok || len(items) != 1 || items[0] != `owner says "go"` {
+		t.Fatalf("items = %#v, want embedded double quotes preserved", args["items"])
+	}
+}
+
+func TestParseFunctionArgumentsRepairsRawControlCharactersInsideSingleQuotedValues(t *testing.T) {
+	args, err := ParseFunctionArguments("{'line':'hello\nworld','tab':'hello\tworld'}")
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["line"] != "hello\nworld" {
+		t.Fatalf("line = %#v, want raw newline preserved after repair", args["line"])
+	}
+	if args["tab"] != "hello\tworld" {
+		t.Fatalf("tab = %#v, want raw tab preserved after repair", args["tab"])
 	}
 }
 
@@ -209,6 +305,17 @@ func TestParseFunctionArgumentsRepairsRawControlStringValues(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsUnterminatedDoubleQuotedValue(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"city":"Paris}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" {
+		t.Fatalf("city = %#v, want unterminated string value repaired", args["city"])
+	}
+}
+
 func TestParseFunctionArgumentsRepairsJSONComments(t *testing.T) {
 	args, err := ParseFunctionArguments("{\"city\":\"Paris\", // destination\n \"limit\":3, /* priority */ \"unit\":\"km\"}")
 	if err != nil {
@@ -217,6 +324,17 @@ func TestParseFunctionArgumentsRepairsJSONComments(t *testing.T) {
 
 	if args["city"] != "Paris" || args["limit"] != float64(3) || args["unit"] != "km" {
 		t.Fatalf("args = %#v, want repaired object with comments removed", args)
+	}
+}
+
+func TestParseFunctionArgumentsRepairsHashComments(t *testing.T) {
+	args, err := ParseFunctionArguments("{\"city\":\"Paris\", # destination\n \"limit\":3, \"note\":\"keep # literal\"}")
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["limit"] != float64(3) || args["note"] != "keep # literal" {
+		t.Fatalf("args = %#v, want repaired object with hash comments removed outside strings", args)
 	}
 }
 
@@ -288,6 +406,17 @@ func TestParseFunctionArgumentsRepairsSemicolonSeparators(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsPipeSeparators(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"city":"Paris" | "limit":3 | "note":"keep | literal"}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["limit"] != float64(3) || args["note"] != "keep | literal" {
+		t.Fatalf("args = %#v, want pipe separators repaired outside strings", args)
+	}
+}
+
 func TestParseFunctionArgumentsExtractsObjectFromSurroundingText(t *testing.T) {
 	args, err := ParseFunctionArguments(`call tool with {"city":"Paris","note":"keep } literal"} thanks`)
 	if err != nil {
@@ -316,6 +445,38 @@ func TestParseFunctionArgumentsRepairsBareArrayStringValues(t *testing.T) {
 	flags, ok := args["flags"].([]any)
 	if !ok || len(flags) != 2 || flags[0] != true || flags[1] != false {
 		t.Fatalf("flags = %#v, want boolean array preserved", args["flags"])
+	}
+}
+
+func TestParseFunctionArgumentsRepairsBareURLArrayValues(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"urls":[https://example.com/a-b?q=1,user@example.com,v1.2.3], "mixed":["quoted",https://example.com,true,3]}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	urls, ok := args["urls"].([]any)
+	if !ok || len(urls) != 3 || urls[0] != "https://example.com/a-b?q=1" || urls[1] != "user@example.com" || urls[2] != "v1.2.3" {
+		t.Fatalf("urls = %#v, want repaired URL-like string array", args["urls"])
+	}
+	mixed, ok := args["mixed"].([]any)
+	if !ok || len(mixed) != 4 || mixed[0] != "quoted" || mixed[1] != "https://example.com" || mixed[2] != true || mixed[3] != float64(3) {
+		t.Fatalf("mixed = %#v, want repaired URL-like value with booleans and numbers preserved", args["mixed"])
+	}
+}
+
+func TestParseFunctionArgumentsRepairsBareMultiWordArrayValues(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"cities":[New York,San Francisco], "labels":[high priority,low risk,true,3]}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	cities, ok := args["cities"].([]any)
+	if !ok || len(cities) != 2 || cities[0] != "New York" || cities[1] != "San Francisco" {
+		t.Fatalf("cities = %#v, want repaired multi-word string array", args["cities"])
+	}
+	labels, ok := args["labels"].([]any)
+	if !ok || len(labels) != 4 || labels[0] != "high priority" || labels[1] != "low risk" || labels[2] != true || labels[3] != float64(3) {
+		t.Fatalf("labels = %#v, want repaired multi-word values with booleans and numbers preserved", args["labels"])
 	}
 }
 
@@ -372,6 +533,17 @@ func TestParseFunctionArgumentsRepairsMissingColonBetweenQuotedKeyAndString(t *t
 	}
 	if nested["unit"] != "celsius" {
 		t.Fatalf("nested unit = %#v, want repaired quoted string value", nested["unit"])
+	}
+}
+
+func TestParseFunctionArgumentsRepairsDuplicateValueSeparators(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"city"::"Paris", "limit":=3, "note":"keep :: literal"}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["limit"] != float64(3) || args["note"] != "keep :: literal" {
+		t.Fatalf("args = %#v, want duplicate separators repaired outside strings", args)
 	}
 }
 

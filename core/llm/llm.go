@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -554,6 +555,28 @@ func (e *LLMError) Unwrap() error {
 	return e.Err
 }
 
+func (e *LLMError) MarshalJSON() ([]byte, error) {
+	type llmErrorPayload struct {
+		Type        string  `json:"type"`
+		Timestamp   float64 `json:"timestamp"`
+		Label       string  `json:"label"`
+		Recoverable bool    `json:"recoverable"`
+	}
+	if e == nil {
+		return json.Marshal((*llmErrorPayload)(nil))
+	}
+	errorType := e.Type
+	if errorType == "" {
+		errorType = "llm_error"
+	}
+	return json.Marshal(llmErrorPayload{
+		Type:        errorType,
+		Timestamp:   float64(e.Timestamp.UnixNano()) / float64(time.Second),
+		Label:       e.Label,
+		Recoverable: e.Recoverable,
+	})
+}
+
 type Tool interface {
 	ID() string
 	Name() string
@@ -850,6 +873,28 @@ func (e *RealtimeModelError) Unwrap() error {
 		return nil
 	}
 	return e.Err
+}
+
+func (e *RealtimeModelError) MarshalJSON() ([]byte, error) {
+	type realtimeModelErrorPayload struct {
+		Type        string  `json:"type"`
+		Timestamp   float64 `json:"timestamp"`
+		Label       string  `json:"label"`
+		Recoverable bool    `json:"recoverable"`
+	}
+	if e == nil {
+		return json.Marshal((*realtimeModelErrorPayload)(nil))
+	}
+	errorType := e.Type
+	if errorType == "" {
+		errorType = "realtime_model_error"
+	}
+	return json.Marshal(realtimeModelErrorPayload{
+		Type:        errorType,
+		Timestamp:   float64(e.Timestamp.UnixNano()) / float64(time.Second),
+		Label:       e.Label,
+		Recoverable: e.Recoverable,
+	})
 }
 
 type labelProviderRealtimeModel interface {

@@ -1,6 +1,7 @@
 package tts
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
 )
@@ -30,6 +31,24 @@ func (e TTSError) Error() string {
 
 func (e TTSError) Unwrap() error {
 	return e.Err
+}
+
+func (e TTSError) MarshalJSON() ([]byte, error) {
+	type ttsErrorPayload struct {
+		Type        string  `json:"type"`
+		Timestamp   float64 `json:"timestamp"`
+		Label       string  `json:"label"`
+		Recoverable bool    `json:"recoverable"`
+	}
+	if e.Type == "" {
+		e.Type = TTSErrorType
+	}
+	return json.Marshal(ttsErrorPayload{
+		Type:        e.Type,
+		Timestamp:   float64(e.Timestamp.UnixNano()) / float64(time.Second),
+		Label:       e.Label,
+		Recoverable: e.Recoverable,
+	})
 }
 
 type TTSErrorHandler func(TTSError)
