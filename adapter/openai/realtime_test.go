@@ -3176,6 +3176,46 @@ func TestRealtimeChatContextUpdateMessagesDeleteRemovedAndRecreateChangedItems(t
 	}
 }
 
+func TestRealtimeChatContextUpdateMessagesSkipsLocalEmptyMessages(t *testing.T) {
+	oldCtx := llm.NewChatContext()
+	oldCtx.AddMessage(llm.ChatMessageArgs{ID: "keep", Role: llm.ChatRoleUser, Text: "keep"})
+
+	newCtx := llm.NewChatContext()
+	newCtx.AddMessage(llm.ChatMessageArgs{ID: "keep", Role: llm.ChatRoleUser, Text: "keep"})
+	newCtx.Items = append(newCtx.Items, &llm.ChatMessage{
+		ID:      "empty-local",
+		Role:    llm.ChatRoleUser,
+		Content: nil,
+	})
+
+	msgs, err := openAIRealtimeChatContextUpdateMessages(oldCtx, newCtx)
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatContextUpdateMessages error = %v, want nil", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("messages = %#v, want none for local empty message", msgs)
+	}
+}
+
+func TestRealtimeChatContextUpdateMessagesKeepsRemoteEmptyMessages(t *testing.T) {
+	oldCtx := llm.NewChatContext()
+	oldCtx.Items = append(oldCtx.Items, &llm.ChatMessage{
+		ID:      "remote-empty",
+		Role:    llm.ChatRoleUser,
+		Content: nil,
+	})
+
+	newCtx := llm.NewChatContext()
+
+	msgs, err := openAIRealtimeChatContextUpdateMessages(oldCtx, newCtx)
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatContextUpdateMessages error = %v, want nil", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("messages = %#v, want no delete for remote empty message", msgs)
+	}
+}
+
 func TestRealtimeTruncateTranscriptUpdateMessagesReplacesTextOnlyMessage(t *testing.T) {
 	oldCtx := llm.NewChatContext()
 	oldCtx.AddMessage(llm.ChatMessageArgs{ID: "msg_123", Role: llm.ChatRoleAssistant, Text: "old transcript"})

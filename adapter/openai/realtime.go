@@ -468,9 +468,13 @@ func openAIRealtimeChatContextUpdateMessages(oldCtx, newCtx *llm.ChatContext) ([
 	if newCtx == nil {
 		newCtx = llm.NewChatContext()
 	}
+	newCtx = openAIRealtimeFilterEmptyLocalMessages(oldCtx, newCtx)
 	diff := llm.ComputeChatCtxDiff(oldCtx, newCtx)
 	msgs := make([]map[string]any, 0, len(diff.ToRemove)+len(diff.ToCreate)+len(diff.ToUpdate)*2)
 	for _, itemID := range diff.ToRemove {
+		if openAIRealtimeEmptyMessage(oldCtx.GetByID(itemID)) {
+			continue
+		}
 		msgs = append(msgs, openAIRealtimeDeleteChatItemMessage(itemID))
 	}
 	for _, item := range diff.ToCreate {
@@ -484,6 +488,9 @@ func openAIRealtimeChatContextUpdateMessages(oldCtx, newCtx *llm.ChatContext) ([
 		if item[1] == nil {
 			continue
 		}
+		if openAIRealtimeEmptyMessage(oldCtx.GetByID(*item[1])) {
+			continue
+		}
 		msgs = append(msgs, openAIRealtimeDeleteChatItemMessage(*item[1]))
 		msg, err := openAIRealtimeCreateChatItemMessage(newCtx, item[0], item[1])
 		if err != nil {
@@ -492,6 +499,22 @@ func openAIRealtimeChatContextUpdateMessages(oldCtx, newCtx *llm.ChatContext) ([
 		msgs = append(msgs, msg)
 	}
 	return msgs, nil
+}
+
+func openAIRealtimeFilterEmptyLocalMessages(oldCtx, newCtx *llm.ChatContext) *llm.ChatContext {
+	filtered := llm.NewChatContext()
+	for _, item := range newCtx.Items {
+		if openAIRealtimeEmptyMessage(item) && oldCtx.GetByID(item.GetID()) == nil {
+			continue
+		}
+		filtered.Items = append(filtered.Items, item)
+	}
+	return filtered
+}
+
+func openAIRealtimeEmptyMessage(item llm.ChatItem) bool {
+	msg, ok := item.(*llm.ChatMessage)
+	return ok && len(msg.Content) == 0
 }
 
 func openAIRealtimeSyncedChatContext(chatCtx *llm.ChatContext) *llm.ChatContext {
