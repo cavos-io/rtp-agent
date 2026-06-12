@@ -775,9 +775,11 @@ func TestPerformToolExecutionsProvidesRunContext(t *testing.T) {
 	toolCtx := llm.NewToolContext([]interface{}{tool})
 	functionCh := make(chan *llm.FunctionToolCall, 1)
 	functionCh <- &llm.FunctionToolCall{
+		ID:        "reply-a/fnc_0",
 		Name:      tool.Name(),
 		CallID:    "call_lookup",
-		Arguments: `{}`,
+		Arguments: `{"city": "Jakarta"}`,
+		Extra:     map[string]any{"provider": "test"},
 	}
 	close(functionCh)
 
@@ -795,8 +797,23 @@ func TestPerformToolExecutionsProvidesRunContext(t *testing.T) {
 	if tool.runContext.Session != session {
 		t.Fatal("tool run context Session was not set")
 	}
-	if tool.runContext.FunctionCall == nil || tool.runContext.FunctionCall.CallID != "call_lookup" {
-		t.Fatalf("tool run context FunctionCall = %#v, want call_lookup", tool.runContext.FunctionCall)
+	if tool.runContext.FunctionCall == nil {
+		t.Fatal("tool run context FunctionCall is nil")
+	}
+	if tool.runContext.FunctionCall.ID != "reply-a/fnc_0" {
+		t.Fatalf("tool run context FunctionCall.ID = %q, want generated item id", tool.runContext.FunctionCall.ID)
+	}
+	if tool.runContext.FunctionCall.CallID != "call_lookup" {
+		t.Fatalf("tool run context FunctionCall.CallID = %q, want call_lookup", tool.runContext.FunctionCall.CallID)
+	}
+	if tool.runContext.FunctionCall.Arguments != `{"city":"Jakarta"}` {
+		t.Fatalf("tool run context FunctionCall.Arguments = %q, want canonical JSON", tool.runContext.FunctionCall.Arguments)
+	}
+	if got := tool.runContext.FunctionCall.Extra["provider"]; got != "test" {
+		t.Fatalf("tool run context FunctionCall.Extra[provider] = %#v, want test", got)
+	}
+	if tool.runContext.FunctionCall.CreatedAt.IsZero() {
+		t.Fatal("tool run context FunctionCall.CreatedAt is zero")
 	}
 	if got, err := tool.runContext.JobContext(); err != nil || got != jobCtx {
 		t.Fatalf("tool run context JobContext() = %#v, %v; want %#v, nil", got, err, jobCtx)
