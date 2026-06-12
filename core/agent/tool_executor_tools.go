@@ -58,10 +58,8 @@ func (getRunningTasksTool) Execute(context.Context, string) (string, error) {
 }
 
 func appendToolExecutorHelperTools(tools []llm.Tool) []llm.Tool {
-	for _, tool := range tools {
-		if !isNilAgentTool(tool) && llm.ToolHasFlag(tool, llm.ToolFlagCancellable) {
-			return append(tools, cancelTaskTool{}, getRunningTasksTool{})
-		}
+	if hasCancellableLLMTool(tools) {
+		return append(tools, cancelTaskTool{}, getRunningTasksTool{})
 	}
 	return tools
 }
@@ -75,13 +73,29 @@ func hasCancellableTool(tools []interface{}) bool {
 			if llm.ToolHasFlag(functionTool, llm.ToolFlagCancellable) {
 				return true
 			}
+			if toolset, ok := functionTool.(llm.Toolset); ok && hasCancellableLLMTool(toolset.Tools()) {
+				return true
+			}
 		}
 		if toolset, ok := tool.(llm.Toolset); ok {
-			for _, child := range toolset.Tools() {
-				if !isNilAgentTool(child) && llm.ToolHasFlag(child, llm.ToolFlagCancellable) {
-					return true
-				}
+			if hasCancellableLLMTool(toolset.Tools()) {
+				return true
 			}
+		}
+	}
+	return false
+}
+
+func hasCancellableLLMTool(tools []llm.Tool) bool {
+	for _, tool := range tools {
+		if isNilAgentTool(tool) {
+			continue
+		}
+		if llm.ToolHasFlag(tool, llm.ToolFlagCancellable) {
+			return true
+		}
+		if toolset, ok := tool.(llm.Toolset); ok && hasCancellableLLMTool(toolset.Tools()) {
+			return true
 		}
 	}
 	return false
