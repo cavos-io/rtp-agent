@@ -53,6 +53,8 @@ const (
 	ToolDuplicateModeConfirm ToolDuplicateMode = "confirm"
 )
 
+const ConfirmDuplicateParam = "lk_agents_confirm_duplicate"
+
 type ToolDuplicateModer interface {
 	ToolDuplicateMode() ToolDuplicateMode
 }

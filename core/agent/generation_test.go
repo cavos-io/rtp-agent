@@ -966,6 +966,73 @@ func TestPerformToolExecutionsRejectsDuplicateInFlightFunctionName(t *testing.T)
 	}
 }
 
+func TestPerformToolExecutionsConfirmsDuplicateInFlightFunctionName(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	tool := &blockingGenerationTool{
+		duplicateMode: llm.ToolDuplicateModeConfirm,
+		started:       make(chan struct{}, 3),
+		args:          make(chan string, 3),
+		release:       make(chan struct{}),
+	}
+	toolCtx := llm.NewToolContext([]interface{}{tool})
+	functionCh := make(chan *llm.FunctionToolCall)
+	outputs := PerformToolExecutions(context.Background(), functionCh, toolCtx, WithToolExecutionSession(session))
+
+	functionCh <- &llm.FunctionToolCall{Name: tool.Name(), CallID: "call_lookup_a", Arguments: `{"city":"Paris"}`}
+	select {
+	case <-tool.started:
+	case <-testTimeout():
+		t.Fatal("first tool call did not start")
+	}
+
+	functionCh <- &llm.FunctionToolCall{Name: tool.Name(), CallID: "call_lookup_b", Arguments: `{"city":"Rome"}`}
+	duplicateOutput := mustReceiveToolOutput(t, outputs)
+	if duplicateOutput.RawError == nil || !strings.Contains(duplicateOutput.RawError.Error(), "Re-call with confirm duplicate True") {
+		t.Fatalf("duplicate RawError = %v, want confirmation prompt", duplicateOutput.RawError)
+	}
+	if duplicateOutput.FncCallOut == nil || !duplicateOutput.FncCallOut.IsError || !strings.Contains(duplicateOutput.FncCallOut.Output, "call_lookup_a") {
+		t.Fatalf("duplicate output = %#v, want visible running call details", duplicateOutput.FncCallOut)
+	}
+	select {
+	case <-tool.started:
+		t.Fatal("unconfirmed duplicate in-flight tool call started")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	functionCh <- &llm.FunctionToolCall{
+		Name:      tool.Name(),
+		CallID:    "call_lookup_c",
+		Arguments: `{"city":"Berlin","lk_agents_confirm_duplicate":true}`,
+	}
+	select {
+	case <-tool.started:
+	case <-testTimeout():
+		t.Fatal("confirmed duplicate tool call did not start")
+	}
+	var sawBerlinArgs bool
+	for i := 0; i < 2; i++ {
+		select {
+		case args := <-tool.args:
+			if args == `{"city":"Berlin"}` {
+				sawBerlinArgs = true
+			}
+			if strings.Contains(args, "lk_agents_confirm_duplicate") {
+				t.Fatalf("tool args = %q, want confirmation parameter stripped before execution", args)
+			}
+		case <-testTimeout():
+			t.Fatal("timed out waiting for tool args")
+		}
+	}
+	if !sawBerlinArgs {
+		t.Fatal("confirmed duplicate did not execute with stripped Berlin arguments")
+	}
+
+	close(tool.release)
+	close(functionCh)
+	for range outputs {
+	}
+}
+
 func TestPerformToolExecutionsDetachesRunContextAfterReturn(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	tool := &runContextRecordingTool{}
@@ -1084,6 +1151,20 @@ func executeOneToolCall(t *testing.T, tool llm.Tool) ToolExecutionOutput {
 		t.Fatal("PerformToolExecutions closed without output")
 	}
 	return output
+}
+
+func mustReceiveToolOutput(t *testing.T, outCh <-chan ToolExecutionOutput) ToolExecutionOutput {
+	t.Helper()
+	select {
+	case output, ok := <-outCh:
+		if !ok {
+			t.Fatal("PerformToolExecutions closed without output")
+		}
+		return output
+	case <-testTimeout():
+		t.Fatal("timed out waiting for tool output")
+		return ToolExecutionOutput{}
+	}
 }
 
 func assertSpanEvent(t *testing.T, event sdktrace.Event, wantName string, wantAttrs map[string]string) {
@@ -1214,6 +1295,7 @@ func (r *runContextUpdatingTool) Execute(ctx context.Context, args string) (stri
 type blockingGenerationTool struct {
 	duplicateMode llm.ToolDuplicateMode
 	started       chan struct{}
+	args          chan string
 	release       chan struct{}
 }
 
@@ -1229,8 +1311,11 @@ func (b *blockingGenerationTool) ToolDuplicateMode() llm.ToolDuplicateMode {
 	return b.duplicateMode
 }
 
-func (b *blockingGenerationTool) Execute(context.Context, string) (string, error) {
+func (b *blockingGenerationTool) Execute(_ context.Context, args string) (string, error) {
 	b.started <- struct{}{}
+	if b.args != nil {
+		b.args <- args
+	}
 	<-b.release
 	return "ok", nil
 }

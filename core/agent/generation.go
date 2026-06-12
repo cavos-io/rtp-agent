@@ -483,22 +483,35 @@ func PerformToolExecutions(
 				tool = toolCtx.GetFunctionTool(fncCall.Name)
 			}
 			duplicateMode := llm.ToolDuplicateModeFor(tool)
-			functionCall := makeExecutionFunctionCall(fncCall, fncCall.Arguments)
+			executionArgs := fncCall.Arguments
+			confirmDuplicate := false
+			if duplicateMode == llm.ToolDuplicateModeConfirm {
+				executionArgs, confirmDuplicate = stripConfirmDuplicateArgument(fncCall.Arguments)
+				fncCall = copyFunctionToolCallWithArguments(fncCall, executionArgs)
+			}
+			functionCall := makeExecutionFunctionCall(fncCall, executionArgs)
 			var duplicateNameCalls []llm.FunctionCall
 			var duplicateCallID bool
 			activeMu.Lock()
-			if duplicateMode == llm.ToolDuplicateModeReject && len(activeFunctionCalls[fncCall.Name]) > 0 {
+			if tracksDuplicateFunctionName(duplicateMode) && len(activeFunctionCalls[fncCall.Name]) > 0 {
 				duplicateNameCalls = make([]llm.FunctionCall, 0, len(activeFunctionCalls[fncCall.Name]))
 				for _, runningCall := range activeFunctionCalls[fncCall.Name] {
 					duplicateNameCalls = append(duplicateNameCalls, runningCall)
 				}
-			} else if fncCall.CallID != "" {
+				sort.Slice(duplicateNameCalls, func(i, j int) bool {
+					return duplicateNameCalls[i].CallID < duplicateNameCalls[j].CallID
+				})
+				if duplicateMode == llm.ToolDuplicateModeConfirm && confirmDuplicate {
+					duplicateNameCalls = nil
+				}
+			}
+			if len(duplicateNameCalls) == 0 && fncCall.CallID != "" {
 				_, duplicateCallID = activeCallIDs[fncCall.CallID]
 				if !duplicateCallID {
 					activeCallIDs[fncCall.CallID] = struct{}{}
 				}
 			}
-			if len(duplicateNameCalls) == 0 && !duplicateCallID && duplicateMode == llm.ToolDuplicateModeReject {
+			if len(duplicateNameCalls) == 0 && !duplicateCallID && tracksDuplicateFunctionName(duplicateMode) {
 				if activeFunctionCalls[fncCall.Name] == nil {
 					activeFunctionCalls[fncCall.Name] = make(map[string]llm.FunctionCall)
 				}
@@ -506,7 +519,7 @@ func PerformToolExecutions(
 			}
 			activeMu.Unlock()
 			if len(duplicateNameCalls) > 0 {
-				err := llm.NewToolError(duplicateToolRejectMessage(fncCall.Name, duplicateNameCalls))
+				err := llm.NewToolError(duplicateToolMessage(fncCall.Name, duplicateNameCalls, duplicateMode))
 				result := llm.MakeToolOutput(functionCall, nil, err)
 				outCh <- ToolExecutionOutput{
 					FncCall:    result.FncCall,
@@ -527,7 +540,7 @@ func PerformToolExecutions(
 				}
 				continue
 			}
-			trackFunctionName := duplicateMode == llm.ToolDuplicateModeReject
+			trackFunctionName := tracksDuplicateFunctionName(duplicateMode)
 			wg.Add(1)
 			go func(fc *llm.FunctionToolCall, trackFunctionName bool) {
 				defer wg.Done()
@@ -602,6 +615,12 @@ func PerformToolExecutions(
 	return outCh
 }
 
+func copyFunctionToolCallWithArguments(fc *llm.FunctionToolCall, arguments string) *llm.FunctionToolCall {
+	copied := *fc
+	copied.Arguments = arguments
+	return &copied
+}
+
 func makeExecutionFunctionCall(fc *llm.FunctionToolCall, arguments string) llm.FunctionCall {
 	return llm.FunctionCall{
 		ID:        fc.ID,
@@ -613,7 +632,29 @@ func makeExecutionFunctionCall(fc *llm.FunctionToolCall, arguments string) llm.F
 	}
 }
 
-func duplicateToolRejectMessage(functionName string, calls []llm.FunctionCall) string {
+func stripConfirmDuplicateArgument(arguments string) (string, bool) {
+	args := arguments
+	if args == "" {
+		args = "{}"
+	}
+	parsed, err := llm.ParseFunctionArguments(args)
+	if err != nil {
+		return arguments, false
+	}
+	confirmDuplicate, _ := parsed[llm.ConfirmDuplicateParam].(bool)
+	delete(parsed, llm.ConfirmDuplicateParam)
+	encoded, err := json.Marshal(parsed)
+	if err != nil {
+		return arguments, confirmDuplicate
+	}
+	return string(encoded), confirmDuplicate
+}
+
+func tracksDuplicateFunctionName(mode llm.ToolDuplicateMode) bool {
+	return mode == llm.ToolDuplicateModeReject || mode == llm.ToolDuplicateModeConfirm
+}
+
+func duplicateToolMessage(functionName string, calls []llm.FunctionCall, mode llm.ToolDuplicateMode) string {
 	lines := make([]string, 0, len(calls))
 	for _, call := range calls {
 		encoded, err := json.Marshal(call)
@@ -621,6 +662,9 @@ func duplicateToolRejectMessage(functionName string, calls []llm.FunctionCall) s
 			continue
 		}
 		lines = append(lines, string(encoded))
+	}
+	if mode == llm.ToolDuplicateModeConfirm {
+		return fmt.Sprintf("Same tool `%s` is already running:\n%s\nRe-call with confirm duplicate True to run a duplicate if needed,\nor if you want to cancel the existing one, call `lk_agents_cancel_task` with call_id.", functionName, strings.Join(lines, "\n"))
 	}
 	return fmt.Sprintf("Same tool `%s` is already running:\n%s\nIf you want to cancel the existing one, call `lk_agents_cancel_task` with call_id.", functionName, strings.Join(lines, "\n"))
 }
