@@ -160,6 +160,33 @@ type PlaybackFinishedEvent struct {
 	PlaybackPosition       time.Duration
 	Interrupted            bool
 	SynchronizedTranscript string
+	AudioFrames            int
+	AudioBytes             int
+	AudioEncodedFrames     int
+	AudioSampleRate        uint32
+	AudioChannels          uint32
+	AudioLastError         string
+}
+
+type RoomIOAudioOutputDiagnostics struct {
+	TrackID                     string
+	TrackPublished              bool
+	TrackSubscribed             bool
+	FramesReceived              int
+	FramesPublished             int
+	BytesReceived               int
+	BytesPublished              int
+	EncodedFramesPublished      int
+	LastInputSampleRate         uint32
+	LastInputSamplesPerChannel  uint32
+	LastInputChannels           uint32
+	LastPublishedSampleRate     uint32
+	LastPublishedSamplesPerChan uint32
+	LastPublishedChannels       uint32
+	LastFrameAt                 time.Time
+	LastPublishedAt             time.Time
+	LastError                   string
+	LastErrorAt                 time.Time
 }
 
 type roomIOClientEvents interface {
@@ -190,10 +217,18 @@ type RoomIO struct {
 	playbackSegmentsCount    int
 	playbackFinishedCount    int
 	playbackPosition         time.Duration
+	playbackAudioFrames      int
+	playbackAudioBytes       int
+	playbackAudioEncoded     int
+	playbackAudioSampleRate  uint32
+	playbackAudioChannels    uint32
+	playbackAudioLastError   string
 	lastPlaybackEvent        PlaybackFinishedEvent
 	playbackWaiters          []chan struct{}
 	playbackStartedHandlers  []func(PlaybackStartedEvent)
 	playbackFinishedHandlers []func(PlaybackFinishedEvent)
+
+	audioOutputDiagnostics RoomIOAudioOutputDiagnostics
 
 	preConnectAudio *PreConnectAudioHandler
 	textInput       TextInputCallback
@@ -930,6 +965,9 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 	rio.audioTrackID = trackID
 	rio.audioPublication = publication
 	rio.audioSubscribed = subscribed
+	rio.audioOutputDiagnostics.TrackID = trackID
+	rio.audioOutputDiagnostics.TrackPublished = publication != nil
+	rio.audioOutputDiagnostics.TrackSubscribed = false
 	rio.mu.Unlock()
 	return rio.waitForAudioSubscription(ctx)
 }
@@ -1239,6 +1277,12 @@ func (rio *RoomIO) startPlayback() (PlaybackStartedEvent, []func(PlaybackStarted
 	}
 	rio.playbackCapturing = true
 	rio.playbackSegmentsCount++
+	rio.playbackAudioFrames = 0
+	rio.playbackAudioBytes = 0
+	rio.playbackAudioEncoded = 0
+	rio.playbackAudioSampleRate = 0
+	rio.playbackAudioChannels = 0
+	rio.playbackAudioLastError = ""
 	ev := PlaybackStartedEvent{CreatedAt: time.Now()}
 	handlers := append([]func(PlaybackStartedEvent){}, rio.playbackStartedHandlers...)
 	return ev, handlers, true
@@ -1248,6 +1292,77 @@ func (rio *RoomIO) addPlaybackPosition(duration time.Duration) {
 	rio.mu.Lock()
 	rio.playbackPosition += duration
 	rio.mu.Unlock()
+}
+
+func (rio *RoomIO) AudioOutputDiagnostics() RoomIOAudioOutputDiagnostics {
+	if rio == nil {
+		return RoomIOAudioOutputDiagnostics{}
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	return rio.audioOutputDiagnostics
+}
+
+func (rio *RoomIO) recordAudioOutputFrameReceived(frame *model.AudioFrame) {
+	if rio == nil || frame == nil {
+		return
+	}
+	now := time.Now()
+	rio.mu.Lock()
+	rio.audioOutputDiagnostics.FramesReceived++
+	rio.audioOutputDiagnostics.BytesReceived += len(frame.Data)
+	rio.audioOutputDiagnostics.LastInputSampleRate = frame.SampleRate
+	rio.audioOutputDiagnostics.LastInputSamplesPerChannel = frame.SamplesPerChannel
+	rio.audioOutputDiagnostics.LastInputChannels = frame.NumChannels
+	rio.audioOutputDiagnostics.LastFrameAt = now
+	rio.mu.Unlock()
+}
+
+func (rio *RoomIO) recordPlaybackInputFrame(frame *model.AudioFrame) {
+	if rio == nil || frame == nil {
+		return
+	}
+	rio.mu.Lock()
+	rio.playbackAudioFrames++
+	rio.playbackAudioBytes += len(frame.Data)
+	rio.playbackAudioSampleRate = frame.SampleRate
+	rio.playbackAudioChannels = frame.NumChannels
+	rio.mu.Unlock()
+}
+
+func (rio *RoomIO) recordAudioOutputFramePublished(input *model.AudioFrame, published *model.AudioFrame, publishedBytes int, encodedFrames int) {
+	if rio == nil || input == nil || published == nil {
+		return
+	}
+	now := time.Now()
+	rio.mu.Lock()
+	rio.audioOutputDiagnostics.FramesPublished++
+	rio.audioOutputDiagnostics.BytesPublished += publishedBytes
+	rio.audioOutputDiagnostics.EncodedFramesPublished += encodedFrames
+	rio.audioOutputDiagnostics.LastPublishedSampleRate = published.SampleRate
+	rio.audioOutputDiagnostics.LastPublishedSamplesPerChan = published.SamplesPerChannel
+	rio.audioOutputDiagnostics.LastPublishedChannels = published.NumChannels
+	rio.audioOutputDiagnostics.LastPublishedAt = now
+
+	rio.playbackAudioEncoded += encodedFrames
+	if publishedBytes == 0 {
+		rio.playbackAudioLastError = "room audio output produced empty encoded frame"
+	}
+	rio.mu.Unlock()
+}
+
+func (rio *RoomIO) recordAudioOutputError(err error) {
+	if rio == nil || err == nil {
+		return
+	}
+	now := time.Now()
+	rio.mu.Lock()
+	errText := err.Error()
+	rio.audioOutputDiagnostics.LastError = errText
+	rio.audioOutputDiagnostics.LastErrorAt = now
+	rio.playbackAudioLastError = errText
+	rio.mu.Unlock()
+	logger.Logger.Warnw("room audio output publish failed", err)
 }
 
 func (rio *RoomIO) finishPlayback(interrupted bool, synchronizedTranscript string) {
@@ -1265,8 +1380,20 @@ func (rio *RoomIO) finishPlayback(interrupted bool, synchronizedTranscript strin
 		PlaybackPosition:       rio.playbackPosition,
 		Interrupted:            interrupted,
 		SynchronizedTranscript: synchronizedTranscript,
+		AudioFrames:            rio.playbackAudioFrames,
+		AudioBytes:             rio.playbackAudioBytes,
+		AudioEncodedFrames:     rio.playbackAudioEncoded,
+		AudioSampleRate:        rio.playbackAudioSampleRate,
+		AudioChannels:          rio.playbackAudioChannels,
+		AudioLastError:         rio.playbackAudioLastError,
 	}
 	rio.playbackPosition = 0
+	rio.playbackAudioFrames = 0
+	rio.playbackAudioBytes = 0
+	rio.playbackAudioEncoded = 0
+	rio.playbackAudioSampleRate = 0
+	rio.playbackAudioChannels = 0
+	rio.playbackAudioLastError = ""
 	rio.lastPlaybackEvent = ev
 	handlers := append([]func(PlaybackFinishedEvent){}, rio.playbackFinishedHandlers...)
 	waiters := append([]chan struct{}{}, rio.playbackWaiters...)
@@ -1285,6 +1412,7 @@ func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
 	if rio == nil || rio.Options.DisableAudioOutput || rio.isAudioDisabled() {
 		return nil
 	}
+	rio.recordAudioOutputFrameReceived(frame)
 	if rio.Recorder != nil {
 		rio.Recorder.RecordOutput(frame)
 	}
@@ -1295,6 +1423,7 @@ func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
 	rio.mu.Unlock()
 
 	if track == nil {
+		rio.recordAudioOutputError(errors.New("room audio output track not started"))
 		return nil
 	}
 
@@ -1304,6 +1433,7 @@ func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
 			callPlaybackStartedHandler(handler, started)
 		}
 	}
+	rio.recordPlaybackInputFrame(frame)
 
 	if encoder != nil {
 		encodeFrames, err := roomIOOpusEncodeFrames(frame)
@@ -1313,6 +1443,7 @@ func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
 		for _, encodeFrame := range encodeFrames {
 			encoded, err := encoder.Encode(encodeFrame.Data)
 			if err != nil {
+				rio.recordAudioOutputError(err)
 				return err
 			}
 			duration := time.Duration(audio.CalculateFrameDuration(encodeFrame) * float64(time.Second))
@@ -1320,8 +1451,10 @@ func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
 				Data:     encoded,
 				Duration: duration,
 			}, nil); err != nil {
+				rio.recordAudioOutputError(err)
 				return err
 			}
+			rio.recordAudioOutputFramePublished(frame, encodeFrame, len(encoded), 1)
 			rio.addPlaybackPosition(duration)
 		}
 		return nil
@@ -1333,8 +1466,10 @@ func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
 		Data:     frame.Data,
 		Duration: duration,
 	}, nil); err != nil {
+		rio.recordAudioOutputError(err)
 		return err
 	}
+	rio.recordAudioOutputFramePublished(frame, frame, len(frame.Data), 1)
 	rio.addPlaybackPosition(duration)
 	return nil
 }
@@ -1347,6 +1482,9 @@ func (rio *RoomIO) markAudioSubscribed() {
 		return
 	}
 	rio.audioSubOnce.Do(func() {
+		rio.mu.Lock()
+		rio.audioOutputDiagnostics.TrackSubscribed = true
+		rio.mu.Unlock()
 		close(ch)
 	})
 }

@@ -1884,7 +1884,7 @@ func TestAgentSessionCloseSoonEmitsCloseAfterCleanup(t *testing.T) {
 	current := NewSpeechHandle(true, DefaultInputDetails())
 	session.activity.currentSpeech = current
 	session.activity.OnFinalTranscript(&stt.SpeechEvent{
-		Alternatives: []stt.SpeechData{{Text: "closing turn"}},
+		Alternatives: []stt.SpeechData{{Text: "closing turn", Confidence: 0.9}},
 	})
 
 	done := make(chan struct{}, 1)
@@ -3243,7 +3243,7 @@ func TestAgentSessionCommitUserTurnDelegatesToActivity(t *testing.T) {
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
 	session.activity = NewAgentActivity(agent, session)
 	session.activity.OnFinalTranscript(&stt.SpeechEvent{
-		Alternatives: []stt.SpeechData{{Text: "manual session turn"}},
+		Alternatives: []stt.SpeechData{{Text: "manual session turn", Confidence: 0.9}},
 	})
 
 	transcript, err := session.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
@@ -3257,6 +3257,9 @@ func TestAgentSessionCommitUserTurnDelegatesToActivity(t *testing.T) {
 	case msg := <-agent.turns:
 		if msg.TextContent() != "manual session turn" {
 			t.Fatalf("turn message text = %q, want manual session turn", msg.TextContent())
+		}
+		if msg.TranscriptConfidence == nil || *msg.TranscriptConfidence != 0.9 {
+			t.Fatalf("turn confidence = %v, want 0.9", msg.TranscriptConfidence)
 		}
 	case <-testTimeout():
 		t.Fatal("OnUserTurnCompleted was not called")
@@ -3637,7 +3640,7 @@ func TestAgentSessionCloseSoonCommitsPendingUserTurn(t *testing.T) {
 	session.activity = NewAgentActivity(agent, session)
 	session.started = true
 	session.activity.OnFinalTranscript(&stt.SpeechEvent{
-		Alternatives: []stt.SpeechData{{Text: "closing turn"}},
+		Alternatives: []stt.SpeechData{{Text: "closing turn", Confidence: 0.9}},
 	})
 
 	session.CloseSoon(CloseReasonUserInitiated)

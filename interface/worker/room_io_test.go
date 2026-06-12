@@ -295,6 +295,67 @@ func TestRoomIOPlaybackEventsFollowCaptureAndFlush(t *testing.T) {
 	}
 }
 
+func TestRoomIOPlaybackFinishedIncludesAudioDiagnostics(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 480*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}
+	if err := rio.PublishAudio(frame); err != nil {
+		t.Fatalf("PublishAudio(first) error = %v", err)
+	}
+	if err := rio.PublishAudio(frame); err != nil {
+		t.Fatalf("PublishAudio(second) error = %v", err)
+	}
+
+	rio.Flush()
+	ev, err := rio.WaitForPlayout(context.Background())
+	if err != nil {
+		t.Fatalf("WaitForPlayout error = %v", err)
+	}
+	if ev.AudioFrames != 2 {
+		t.Fatalf("PlaybackFinishedEvent.AudioFrames = %d, want 2", ev.AudioFrames)
+	}
+	if ev.AudioBytes != len(frame.Data)*2 {
+		t.Fatalf("PlaybackFinishedEvent.AudioBytes = %d, want %d", ev.AudioBytes, len(frame.Data)*2)
+	}
+	if ev.AudioSampleRate != frame.SampleRate {
+		t.Fatalf("PlaybackFinishedEvent.AudioSampleRate = %d, want %d", ev.AudioSampleRate, frame.SampleRate)
+	}
+	if ev.AudioChannels != frame.NumChannels {
+		t.Fatalf("PlaybackFinishedEvent.AudioChannels = %d, want %d", ev.AudioChannels, frame.NumChannels)
+	}
+}
+
+func TestRoomIOPublishAudioRecordsMissingTrackDiagnostic(t *testing.T) {
+	rio := &RoomIO{}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 160*2),
+		SampleRate:        8000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	}
+
+	if err := rio.PublishAudio(frame); err != nil {
+		t.Fatalf("PublishAudio without track error = %v, want nil diagnostic", err)
+	}
+	stats := rio.AudioOutputDiagnostics()
+	if stats.FramesReceived != 1 {
+		t.Fatalf("FramesReceived = %d, want 1", stats.FramesReceived)
+	}
+	if stats.FramesPublished != 0 {
+		t.Fatalf("FramesPublished = %d, want 0 without track", stats.FramesPublished)
+	}
+	if stats.LastError == "" {
+		t.Fatal("LastError empty, want missing-track diagnostic")
+	}
+	if stats.LastInputSampleRate != frame.SampleRate {
+		t.Fatalf("LastInputSampleRate = %d, want %d", stats.LastInputSampleRate, frame.SampleRate)
+	}
+}
+
 func TestRoomIOPublishAudioResamplesPCMToOpusClockRate(t *testing.T) {
 	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
 	rio := &RoomIO{
@@ -317,6 +378,13 @@ func TestRoomIOPublishAudioResamplesPCMToOpusClockRate(t *testing.T) {
 	}
 	if rio.playbackPosition != 20*time.Millisecond {
 		t.Fatalf("playback position = %v, want original 20ms duration", rio.playbackPosition)
+	}
+	stats := rio.AudioOutputDiagnostics()
+	if stats.LastInputSampleRate != 8000 {
+		t.Fatalf("LastInputSampleRate = %d, want 8000", stats.LastInputSampleRate)
+	}
+	if stats.LastPublishedSampleRate != roomIOOpusClockRate {
+		t.Fatalf("LastPublishedSampleRate = %d, want %d", stats.LastPublishedSampleRate, roomIOOpusClockRate)
 	}
 }
 
