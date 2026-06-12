@@ -199,12 +199,54 @@ func repairFunctionArguments(value string) string {
 	for _, pattern := range templateTokenPatterns {
 		out = pattern.ReplaceAllString(out, "")
 	}
+	out = escapeStringControlCharacters(out)
 	out = singleQuotedStringPattern.ReplaceAllString(out, `"$1"`)
 	out = unquotedObjectKeyPattern.ReplaceAllString(out, `${1}"${2}"${3}`)
 	out = quoteUnquotedStringValues(out)
 	out = closeUnbalancedJSONContainers(out)
 	out = trailingCommaPattern.ReplaceAllString(out, "$1")
 	return strings.TrimSpace(out)
+}
+
+func escapeStringControlCharacters(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	inString := false
+	escaped := false
+
+	for _, r := range value {
+		if inString {
+			if escaped {
+				b.WriteRune(r)
+				escaped = false
+				continue
+			}
+			switch r {
+			case '\\':
+				b.WriteRune(r)
+				escaped = true
+				continue
+			case '"':
+				b.WriteRune(r)
+				inString = false
+				continue
+			case '\n':
+				b.WriteString(`\n`)
+				continue
+			case '\r':
+				b.WriteString(`\r`)
+				continue
+			case '\t':
+				b.WriteString(`\t`)
+				continue
+			}
+		} else if r == '"' {
+			inString = true
+		}
+		b.WriteRune(r)
+	}
+
+	return b.String()
 }
 
 func quoteUnquotedStringValues(value string) string {
