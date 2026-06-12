@@ -252,6 +252,8 @@ func normalizeSingleQuotedStrings(value string) string {
 				b.WriteByte('"')
 			} else if ch == '"' {
 				b.WriteString(`\"`)
+			} else if ch < 0x20 {
+				writeEscapedControlRune(&b, rune(ch))
 			} else {
 				b.WriteByte(ch)
 			}

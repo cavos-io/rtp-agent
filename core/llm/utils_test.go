@@ -217,6 +217,20 @@ func TestParseFunctionArgumentsRepairsDoubleQuotesInsideSingleQuotedValues(t *te
 	}
 }
 
+func TestParseFunctionArgumentsRepairsRawControlCharactersInsideSingleQuotedValues(t *testing.T) {
+	args, err := ParseFunctionArguments("{'line':'hello\nworld','tab':'hello\tworld'}")
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["line"] != "hello\nworld" {
+		t.Fatalf("line = %#v, want raw newline preserved after repair", args["line"])
+	}
+	if args["tab"] != "hello\tworld" {
+		t.Fatalf("tab = %#v, want raw tab preserved after repair", args["tab"])
+	}
+}
+
 func TestParseFunctionArgumentsRepairsRawNewlineStringValues(t *testing.T) {
 	args, err := ParseFunctionArguments("{\"message\":\"hello\nworld\"}")
 	if err != nil {
