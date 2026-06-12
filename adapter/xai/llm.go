@@ -98,7 +98,7 @@ func (l *XaiLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 					"function": map[string]interface{}{
 						"name":        tool.Name(),
 						"description": tool.Description(),
-						"parameters":  tool.Parameters(),
+						"parameters":  llm.ToolParameters(tool),
 					},
 				})
 			}
