@@ -498,6 +498,7 @@ func TestWorkerHTTPHandlerReportsWorkerMetadata(t *testing.T) {
 		`"worker_type":"JT_ROOM"`,
 		`"worker_load":0.42`,
 		`"active_jobs":1`,
+		`"protocol_version":1`,
 		`"project_type":"go"`,
 		`"node_name":"`,
 		`"hosted":true`,
