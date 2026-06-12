@@ -1160,6 +1160,81 @@ func TestPerformToolExecutionsReplaceCancelsCancellableDuplicate(t *testing.T) {
 	}
 }
 
+func TestPerformToolExecutionsCancelTaskToolCancelsCancellableTool(t *testing.T) {
+	tool := &blockingGenerationTool{
+		flags:   llm.ToolFlagCancellable,
+		started: make(chan struct{}, 1),
+		args:    make(chan string, 1),
+		release: make(chan struct{}),
+	}
+	toolCtx := llm.NewToolContext([]interface{}{tool, getRunningTasksTool{}, cancelTaskTool{}})
+	functionCh := make(chan *llm.FunctionToolCall)
+	outputs := PerformToolExecutions(context.Background(), functionCh, toolCtx)
+
+	functionCh <- &llm.FunctionToolCall{
+		ID:        "item_lookup",
+		Type:      "function",
+		Name:      "lookup",
+		CallID:    "call_lookup_a",
+		Arguments: `{"city":"Paris"}`,
+	}
+	select {
+	case <-tool.started:
+	case <-testTimeout():
+		t.Fatal("cancellable lookup did not start")
+	}
+
+	functionCh <- &llm.FunctionToolCall{
+		ID:        "item_get_running",
+		Type:      "function",
+		Name:      getRunningTasksToolName,
+		CallID:    "call_get_running",
+		Arguments: `{}`,
+	}
+	runningOutput := mustReceiveToolOutput(t, outputs)
+	if runningOutput.RawError != nil {
+		t.Fatalf("get running RawError = %v, want nil", runningOutput.RawError)
+	}
+	runningRaw, ok := runningOutput.RawOutput.(string)
+	if !ok || !strings.Contains(runningRaw, "call_lookup_a") {
+		t.Fatalf("get running RawOutput = %#v, want active call id", runningOutput.RawOutput)
+	}
+
+	functionCh <- &llm.FunctionToolCall{
+		ID:        "item_cancel",
+		Type:      "function",
+		Name:      cancelTaskToolName,
+		CallID:    "call_cancel",
+		Arguments: `{"call_id":"call_lookup_a"}`,
+	}
+	close(functionCh)
+
+	var cancelSucceeded bool
+	var lookupCanceled bool
+	for output := range outputs {
+		switch output.FncCall.Name {
+		case cancelTaskToolName:
+			if output.RawError != nil {
+				t.Fatalf("cancel task RawError = %v, want nil", output.RawError)
+			}
+			if got, want := output.RawOutput, "Task call_lookup_a cancelled successfully."; got != want {
+				t.Fatalf("cancel task RawOutput = %#v, want %q", got, want)
+			}
+			cancelSucceeded = true
+		case "lookup":
+			if errors.Is(output.RawError, context.Canceled) {
+				lookupCanceled = true
+			}
+		}
+	}
+	if !cancelSucceeded {
+		t.Fatal("cancel task output not received")
+	}
+	if !lookupCanceled {
+		t.Fatal("lookup output did not report context cancellation")
+	}
+}
+
 func TestPerformToolExecutionsDetachesRunContextAfterReturn(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	tool := &runContextRecordingTool{}

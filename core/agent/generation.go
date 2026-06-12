@@ -427,9 +427,10 @@ type ToolExecutionOutput struct {
 }
 
 type activeToolCall struct {
-	call        llm.FunctionCall
-	cancel      context.CancelFunc
-	cancellable bool
+	call               llm.FunctionCall
+	cancel             context.CancelFunc
+	cancellable        bool
+	allowInterruptions bool
 }
 
 type ToolExecutionOptions struct {
@@ -479,6 +480,7 @@ func PerformToolExecutions(
 		var activeMu sync.Mutex
 		activeCallIDs := make(map[string]struct{})
 		activeFunctionCalls := make(map[string]map[string]activeToolCall)
+		activeCallsByID := make(map[string]activeToolCall)
 
 		for fncCall := range functionCh {
 			if options.ToolChoice == "none" {
@@ -497,6 +499,15 @@ func PerformToolExecutions(
 			}
 			functionCall := makeExecutionFunctionCall(fncCall, executionArgs)
 			callCtx, callCancel := context.WithCancel(ctx)
+			if isToolExecutorSystemTool(fncCall.Name) {
+				output, cancel := executeToolExecutorSystemTool(fncCall, functionCall, &activeMu, activeCallIDs, activeFunctionCalls, activeCallsByID)
+				if cancel != nil {
+					cancel()
+				}
+				callCancel()
+				outCh <- output
+				continue
+			}
 			var duplicateNameCalls []llm.FunctionCall
 			var replaceCancels []context.CancelFunc
 			var duplicateCallID bool
@@ -526,6 +537,7 @@ func PerformToolExecutions(
 								replaceCancels = append(replaceCancels, runningCall.cancel)
 							}
 							delete(activeCallIDs, callID)
+							delete(activeCallsByID, callID)
 						}
 						delete(activeFunctionCalls, fncCall.Name)
 						duplicateNameCalls = nil
@@ -538,14 +550,22 @@ func PerformToolExecutions(
 					activeCallIDs[fncCall.CallID] = struct{}{}
 				}
 			}
-			if len(duplicateNameCalls) == 0 && !duplicateCallID && tracksDuplicateFunctionName(duplicateMode) {
-				if activeFunctionCalls[fncCall.Name] == nil {
-					activeFunctionCalls[fncCall.Name] = make(map[string]activeToolCall)
+			if len(duplicateNameCalls) == 0 && !duplicateCallID {
+				allowInterruptions := options.SpeechHandle == nil || options.SpeechHandle.AllowInterruptions
+				activeCall := activeToolCall{
+					call:               functionCall,
+					cancel:             callCancel,
+					cancellable:        llm.ToolHasFlag(tool, llm.ToolFlagCancellable),
+					allowInterruptions: allowInterruptions,
 				}
-				activeFunctionCalls[fncCall.Name][fncCall.CallID] = activeToolCall{
-					call:        functionCall,
-					cancel:      callCancel,
-					cancellable: llm.ToolHasFlag(tool, llm.ToolFlagCancellable),
+				if fncCall.CallID != "" {
+					activeCallsByID[fncCall.CallID] = activeCall
+				}
+				if tracksDuplicateFunctionName(duplicateMode) {
+					if activeFunctionCalls[fncCall.Name] == nil {
+						activeFunctionCalls[fncCall.Name] = make(map[string]activeToolCall)
+					}
+					activeFunctionCalls[fncCall.Name][fncCall.CallID] = activeCall
 				}
 			}
 			activeMu.Unlock()
@@ -585,6 +605,7 @@ func PerformToolExecutions(
 					defer func() {
 						activeMu.Lock()
 						delete(activeCallIDs, fc.CallID)
+						delete(activeCallsByID, fc.CallID)
 						if calls := activeFunctionCalls[fc.Name]; calls != nil {
 							delete(calls, fc.CallID)
 							if len(calls) == 0 {
@@ -707,4 +728,116 @@ func duplicateToolMessage(functionName string, calls []llm.FunctionCall, mode ll
 		return fmt.Sprintf("cannot replace duplicate call of `%s`: running call is not cancellable (allow_cancellation=False)", functionName)
 	}
 	return fmt.Sprintf("Same tool `%s` is already running:\n%s\nIf you want to cancel the existing one, call `lk_agents_cancel_task` with call_id.", functionName, strings.Join(lines, "\n"))
+}
+
+func isToolExecutorSystemTool(name string) bool {
+	return name == getRunningTasksToolName || name == cancelTaskToolName
+}
+
+func executeToolExecutorSystemTool(
+	fc *llm.FunctionToolCall,
+	functionCall llm.FunctionCall,
+	activeMu *sync.Mutex,
+	activeCallIDs map[string]struct{},
+	activeFunctionCalls map[string]map[string]activeToolCall,
+	activeCallsByID map[string]activeToolCall,
+) (ToolExecutionOutput, context.CancelFunc) {
+	var output any
+	var err error
+	var cancel context.CancelFunc
+
+	switch fc.Name {
+	case getRunningTasksToolName:
+		output, err = runningTasksJSON(activeMu, activeCallsByID)
+	case cancelTaskToolName:
+		output, cancel, err = cancelRunningTask(fc.Arguments, activeMu, activeCallIDs, activeFunctionCalls, activeCallsByID)
+	default:
+		err = llm.NewToolError(fmt.Sprintf("Unknown function: %s", fc.Name))
+	}
+
+	result := llm.MakeToolOutput(functionCall, output, err)
+	return ToolExecutionOutput{
+		FncCall:    result.FncCall,
+		FncCallOut: result.FncCallOut,
+		RawOutput:  result.RawOutput,
+		RawError:   result.RawError,
+	}, cancel
+}
+
+func runningTasksJSON(activeMu *sync.Mutex, activeCallsByID map[string]activeToolCall) (string, error) {
+	activeMu.Lock()
+	calls := make([]llm.FunctionCall, 0, len(activeCallsByID))
+	for _, active := range activeCallsByID {
+		if active.cancellable {
+			calls = append(calls, active.call)
+		}
+	}
+	activeMu.Unlock()
+
+	sort.Slice(calls, func(i, j int) bool {
+		return calls[i].CallID < calls[j].CallID
+	})
+	items := make([]map[string]any, 0, len(calls))
+	for _, call := range calls {
+		item := map[string]any{
+			"id":        call.ID,
+			"call_id":   call.CallID,
+			"name":      call.Name,
+			"arguments": call.Arguments,
+		}
+		if len(call.Extra) > 0 {
+			item["extra"] = call.Extra
+		}
+		items = append(items, item)
+	}
+	encoded, err := json.Marshal(items)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func cancelRunningTask(
+	arguments string,
+	activeMu *sync.Mutex,
+	activeCallIDs map[string]struct{},
+	activeFunctionCalls map[string]map[string]activeToolCall,
+	activeCallsByID map[string]activeToolCall,
+) (string, context.CancelFunc, error) {
+	args := arguments
+	if args == "" {
+		args = "{}"
+	}
+	parsed, err := llm.ParseFunctionArguments(args)
+	if err != nil {
+		return "", nil, llm.NewToolError(fmt.Sprintf("Error parsing arguments for `%s`: %s", cancelTaskToolName, err.Error()))
+	}
+	callID, _ := parsed["call_id"].(string)
+	if callID == "" {
+		return "", nil, llm.NewToolError("Task  not found")
+	}
+
+	activeMu.Lock()
+	active, ok := activeCallsByID[callID]
+	activeMu.Unlock()
+	if !ok {
+		return "", nil, llm.NewToolError(fmt.Sprintf("Task %s not found", callID))
+	}
+	if !active.cancellable {
+		return "", nil, llm.NewToolError(fmt.Sprintf("Tool call %s is not cancellable", callID))
+	}
+	if !active.allowInterruptions {
+		return "", nil, llm.NewToolError(fmt.Sprintf("Tool call %s is not cancellable because interruptions are disallowed", callID))
+	}
+	activeMu.Lock()
+	delete(activeCallIDs, callID)
+	delete(activeCallsByID, callID)
+	if calls := activeFunctionCalls[active.call.Name]; calls != nil {
+		delete(calls, callID)
+		if len(calls) == 0 {
+			delete(activeFunctionCalls, active.call.Name)
+		}
+	}
+	activeMu.Unlock()
+	return fmt.Sprintf("Task %s cancelled successfully.", callID), active.cancel, nil
 }

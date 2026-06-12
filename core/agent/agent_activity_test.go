@@ -249,6 +249,34 @@ func TestAgentActivityToolsCombinesSessionAndAgentTools(t *testing.T) {
 	}
 }
 
+func TestAgentActivityToolsAddsCancellationHelpersForCancellableTools(t *testing.T) {
+	agentTool := &agentTestTool{id: "lookup", name: "lookup", flags: llm.ToolFlagCancellable}
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{agentTool}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	got := sortedAgentToolNames(activity.Tools())
+	want := []string{"lk_agents_cancel_task", "lk_agents_get_running_tasks", "lookup"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("Tools() names = %#v, want reference cancellation helpers %#v", got, want)
+	}
+}
+
+func TestAgentActivityToolsOmitCancellationHelpersWithoutCancellableTools(t *testing.T) {
+	agentTool := &agentTestTool{id: "lookup", name: "lookup"}
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{agentTool}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	got := sortedAgentToolNames(activity.Tools())
+	want := []string{"lookup"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("Tools() names = %#v, want no reference cancellation helpers %#v", got, want)
+	}
+}
+
 func TestAgentActivityUpdateChatCtxPreservesMCPToolItems(t *testing.T) {
 	mcpTool := &agentTestTool{id: "lookup", name: "lookup"}
 	agent := NewAgent("test")
