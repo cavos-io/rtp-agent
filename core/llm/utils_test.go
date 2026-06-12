@@ -299,6 +299,26 @@ func TestParseFunctionArgumentsExtractsObjectFromSurroundingText(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsBareArrayStringValues(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"items":[urgent,home], "nums":[1,+2], "flags":[true,false]}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	items, ok := args["items"].([]any)
+	if !ok || len(items) != 2 || items[0] != "urgent" || items[1] != "home" {
+		t.Fatalf("items = %#v, want repaired string array", args["items"])
+	}
+	nums, ok := args["nums"].([]any)
+	if !ok || len(nums) != 2 || nums[0] != float64(1) || nums[1] != float64(2) {
+		t.Fatalf("nums = %#v, want numeric array preserved", args["nums"])
+	}
+	flags, ok := args["flags"].([]any)
+	if !ok || len(flags) != 2 || flags[0] != true || flags[1] != false {
+		t.Fatalf("flags = %#v, want boolean array preserved", args["flags"])
+	}
+}
+
 func TestParseFunctionArgumentsTreatsNullAsEmptyObject(t *testing.T) {
 	args, err := ParseFunctionArguments(`null`)
 	if err != nil {

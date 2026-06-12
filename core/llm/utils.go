@@ -209,9 +209,83 @@ func repairFunctionArguments(value string) string {
 	out = singleQuotedStringPattern.ReplaceAllString(out, `"$1"`)
 	out = unquotedObjectKeyPattern.ReplaceAllString(out, `${1}"${2}"${3}`)
 	out = quoteUnquotedStringValues(out)
+	out = quoteBareArrayStringValues(out)
 	out = closeUnbalancedJSONContainers(out)
 	out = trailingCommaPattern.ReplaceAllString(out, "$1")
 	return strings.TrimSpace(out)
+}
+
+func quoteBareArrayStringValues(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	arrayDepth := 0
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+			b.WriteByte(ch)
+		case '[':
+			arrayDepth++
+			b.WriteByte(ch)
+		case ']':
+			if arrayDepth > 0 {
+				arrayDepth--
+			}
+			b.WriteByte(ch)
+		default:
+			if arrayDepth > 0 && isBareValueStart(ch) {
+				start := i
+				for i+1 < len(value) && isBareValueChar(value[i+1]) {
+					i++
+				}
+				token := value[start : i+1]
+				if shouldQuoteBareJSONToken(token) {
+					b.WriteByte('"')
+					b.WriteString(token)
+					b.WriteByte('"')
+				} else {
+					b.WriteString(token)
+				}
+				continue
+			}
+			b.WriteByte(ch)
+		}
+	}
+
+	return b.String()
+}
+
+func isBareValueStart(ch byte) bool {
+	return ch == '_' || ('A' <= ch && ch <= 'Z') || ('a' <= ch && ch <= 'z')
+}
+
+func isBareValueChar(ch byte) bool {
+	return isBareValueStart(ch) || ('0' <= ch && ch <= '9') || ch == '-'
+}
+
+func shouldQuoteBareJSONToken(token string) bool {
+	switch token {
+	case "true", "false", "null":
+		return false
+	default:
+		return true
+	}
 }
 
 func extractJSONObjectFromSurroundingText(value string) string {
