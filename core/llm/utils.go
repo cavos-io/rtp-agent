@@ -246,6 +246,10 @@ func normalizePythonBooleanLiterals(value string) string {
 			b.WriteString("false")
 			i += len("False")
 			continue
+		case hasJSONToken(value, i, "None"):
+			b.WriteString(`"None"`)
+			i += len("None")
+			continue
 		default:
 			b.WriteByte(ch)
 			i++

@@ -235,6 +235,21 @@ func TestParseFunctionArgumentsRepairsPythonBooleanLiterals(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsPythonNoneLiteralAsString(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"value": None, "items":[None]}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["value"] != "None" {
+		t.Fatalf("value = %#v, want repaired None string", args["value"])
+	}
+	items, ok := args["items"].([]any)
+	if !ok || len(items) != 1 || items[0] != "None" {
+		t.Fatalf("items = %#v, want repaired None string array", args["items"])
+	}
+}
+
 func TestParseFunctionArgumentsTreatsNullAsEmptyObject(t *testing.T) {
 	args, err := ParseFunctionArguments(`null`)
 	if err != nil {
