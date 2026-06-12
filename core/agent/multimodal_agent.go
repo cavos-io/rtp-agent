@@ -731,9 +731,11 @@ func (ma *MultimodalAgent) executeRealtimeFunctionCall(functionCall *llm.Functio
 		callCtx = context.Background()
 	}
 	callCtx = contextWithSessionMockTools(callCtx, ma.session)
+	callCtx = WithRunContext(callCtx, NewRunContext(ma.session, nil, functionCall))
 	toolCtx := llm.NewToolContext([]interface{}{foundTool})
 	executionToolCtx := mockToolContext(callCtx, toolCtx, ma.session, functionCall.Name)
 	result := llm.ExecuteFunctionCall(callCtx, &llm.FunctionToolCall{
+		ID:        functionCall.ID,
 		CallID:    functionCall.CallID,
 		Name:      functionCall.Name,
 		Arguments: functionCall.Arguments,

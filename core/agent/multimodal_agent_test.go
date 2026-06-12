@@ -796,6 +796,16 @@ func TestMultimodalToolExecutionUsesScopedMockTool(t *testing.T) {
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
 	ctx := MockTools(context.Background(), session.Agent, map[string]MockToolFunc{
 		"lookup": func(ctx context.Context, args string) (string, error) {
+			runCtx := GetRunContext(ctx)
+			if runCtx == nil {
+				t.Fatal("mock tool run context is nil")
+			}
+			if runCtx.Session != session {
+				t.Fatalf("mock tool run context Session = %#v, want session", runCtx.Session)
+			}
+			if runCtx.FunctionCall == nil || runCtx.FunctionCall.CallID != "call_lookup" || runCtx.FunctionCall.Name != "lookup" {
+				t.Fatalf("mock tool run context FunctionCall = %#v, want lookup call_lookup", runCtx.FunctionCall)
+			}
 			return "mocked realtime", nil
 		},
 	})
