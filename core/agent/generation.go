@@ -470,14 +470,50 @@ func PerformToolExecutions(
 	go func() {
 		defer close(outCh)
 		var wg sync.WaitGroup
+		var activeMu sync.Mutex
+		activeCallIDs := make(map[string]struct{})
 
 		for fncCall := range functionCh {
 			if options.ToolChoice == "none" {
 				continue
 			}
+			if fncCall.CallID != "" {
+				activeMu.Lock()
+				_, duplicate := activeCallIDs[fncCall.CallID]
+				if !duplicate {
+					activeCallIDs[fncCall.CallID] = struct{}{}
+				}
+				activeMu.Unlock()
+				if duplicate {
+					err := llm.NewToolError(fmt.Sprintf("Task already running for call_id: %s", fncCall.CallID))
+					fncCall := llm.FunctionCall{
+						ID:        fncCall.ID,
+						CallID:    fncCall.CallID,
+						Name:      fncCall.Name,
+						Arguments: fncCall.Arguments,
+						Extra:     fncCall.Extra,
+						CreatedAt: time.Now(),
+					}
+					result := llm.MakeToolOutput(fncCall, nil, err)
+					outCh <- ToolExecutionOutput{
+						FncCall:    result.FncCall,
+						FncCallOut: result.FncCallOut,
+						RawOutput:  result.RawOutput,
+						RawError:   result.RawError,
+					}
+					continue
+				}
+			}
 			wg.Add(1)
 			go func(fc *llm.FunctionToolCall) {
 				defer wg.Done()
+				if fc.CallID != "" {
+					defer func() {
+						activeMu.Lock()
+						delete(activeCallIDs, fc.CallID)
+						activeMu.Unlock()
+					}()
+				}
 				execCtx := ctx
 				var runCtx *RunContext
 				if options.Session != nil {

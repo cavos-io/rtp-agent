@@ -862,6 +862,56 @@ func TestPerformToolExecutionsUsesFirstRunContextUpdateAsOutput(t *testing.T) {
 	}
 }
 
+func TestPerformToolExecutionsRejectsDuplicateInFlightCallID(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	tool := &blockingGenerationTool{
+		started: make(chan struct{}, 2),
+		release: make(chan struct{}),
+	}
+	toolCtx := llm.NewToolContext([]interface{}{tool})
+	functionCh := make(chan *llm.FunctionToolCall, 2)
+	functionCh <- &llm.FunctionToolCall{Name: tool.Name(), CallID: "call_lookup", Arguments: `{}`}
+	functionCh <- &llm.FunctionToolCall{Name: tool.Name(), CallID: "call_lookup", Arguments: `{}`}
+	close(functionCh)
+
+	outputs := PerformToolExecutions(context.Background(), functionCh, toolCtx, WithToolExecutionSession(session))
+	select {
+	case <-tool.started:
+	case <-testTimeout():
+		t.Fatal("first tool call did not start")
+	}
+	select {
+	case <-tool.started:
+		t.Fatal("duplicate in-flight tool call started; want duplicate call_id rejected before execution")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(tool.release)
+	var got []ToolExecutionOutput
+	for output := range outputs {
+		got = append(got, output)
+	}
+	if len(got) != 2 {
+		t.Fatalf("outputs len = %d, want success plus duplicate rejection", len(got))
+	}
+	var duplicateErr bool
+	var success bool
+	for _, output := range got {
+		if output.RawError != nil && strings.Contains(output.RawError.Error(), "Task already running for call_id: call_lookup") {
+			duplicateErr = true
+		}
+		if output.RawOutput == "ok" && output.RawError == nil {
+			success = true
+		}
+	}
+	if !duplicateErr {
+		t.Fatalf("outputs = %#v, want duplicate call_id error", got)
+	}
+	if !success {
+		t.Fatalf("outputs = %#v, want first call to complete successfully", got)
+	}
+}
+
 func TestPerformToolExecutionsDetachesRunContextAfterReturn(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	tool := &runContextRecordingTool{}
@@ -1100,6 +1150,25 @@ func (r *runContextUpdatingTool) Execute(ctx context.Context, args string) (stri
 		}
 	}
 	return "final result", nil
+}
+
+type blockingGenerationTool struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingGenerationTool) ID() string { return "lookup" }
+
+func (b *blockingGenerationTool) Name() string { return "lookup" }
+
+func (b *blockingGenerationTool) Description() string { return "" }
+
+func (b *blockingGenerationTool) Parameters() map[string]any { return nil }
+
+func (b *blockingGenerationTool) Execute(context.Context, string) (string, error) {
+	b.started <- struct{}{}
+	<-b.release
+	return "ok", nil
 }
 
 type fakeGenerationLLM struct {
