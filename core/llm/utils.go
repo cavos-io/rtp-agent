@@ -248,7 +248,7 @@ func collapseDuplicateCommas(value string) string {
 			b.WriteByte(ch)
 			continue
 		}
-		if ch == ',' && lastSignificant == ',' {
+		if ch == ',' && (lastSignificant == ',' || lastSignificant == '{' || lastSignificant == '[') {
 			continue
 		}
 		b.WriteByte(ch)

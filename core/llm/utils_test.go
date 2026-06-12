@@ -154,6 +154,21 @@ func TestParseFunctionArgumentsRepairsDuplicateCommas(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsLeadingCommas(t *testing.T) {
+	args, err := ParseFunctionArguments(`{,"city":"Paris","items":[,urgent,home],"note":"keep, literal"}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["note"] != "keep, literal" {
+		t.Fatalf("args = %#v, want leading comma slots removed outside strings", args)
+	}
+	items, ok := args["items"].([]any)
+	if !ok || len(items) != 2 || items[0] != "urgent" || items[1] != "home" {
+		t.Fatalf("items = %#v, want leading array comma slot removed", args["items"])
+	}
+}
+
 func TestParseFunctionArgumentsDropsEllipsisPlaceholders(t *testing.T) {
 	args, err := ParseFunctionArguments(`{"city":"Paris","limit":3,...}`)
 	if err != nil {
