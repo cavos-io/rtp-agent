@@ -204,7 +204,7 @@ func repairFunctionArguments(value string) string {
 	out = normalizePythonBooleanLiterals(out)
 	out = normalizeNonstandardNumberLiterals(out)
 	out = normalizeTupleLikeArrays(out)
-	out = normalizeSemicolonSeparators(out)
+	out = normalizeAlternateSeparators(out)
 	out = dropEllipsisPlaceholders(out)
 	out = extractJSONObjectFromSurroundingText(out)
 	out = normalizeSingleQuotedStrings(out)
@@ -851,7 +851,7 @@ func extractJSONObjectFromSurroundingText(value string) string {
 	return value
 }
 
-func normalizeSemicolonSeparators(value string) string {
+func normalizeAlternateSeparators(value string) string {
 	var b strings.Builder
 	b.Grow(len(value))
 	inString := false
@@ -875,7 +875,7 @@ func normalizeSemicolonSeparators(value string) string {
 		case '"':
 			inString = true
 			b.WriteByte(ch)
-		case ';':
+		case ';', '|':
 			b.WriteByte(',')
 		default:
 			b.WriteByte(ch)

@@ -354,6 +354,17 @@ func TestParseFunctionArgumentsRepairsSemicolonSeparators(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsPipeSeparators(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"city":"Paris" | "limit":3 | "note":"keep | literal"}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["limit"] != float64(3) || args["note"] != "keep | literal" {
+		t.Fatalf("args = %#v, want pipe separators repaired outside strings", args)
+	}
+}
+
 func TestParseFunctionArgumentsExtractsObjectFromSurroundingText(t *testing.T) {
 	args, err := ParseFunctionArguments(`call tool with {"city":"Paris","note":"keep } literal"} thanks`)
 	if err != nil {
