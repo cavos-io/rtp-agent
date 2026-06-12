@@ -250,6 +250,17 @@ func TestParseFunctionArgumentsRepairsPythonNoneLiteralAsString(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsNonstandardNumberLiterals(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"limit": +3, "ratio": .5, "negative": -.25, "positive": +.75}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["limit"] != float64(3) || args["ratio"] != 0.5 || args["negative"] != -0.25 || args["positive"] != 0.75 {
+		t.Fatalf("args = %#v, want repaired nonstandard numeric literals", args)
+	}
+}
+
 func TestParseFunctionArgumentsTreatsNullAsEmptyObject(t *testing.T) {
 	args, err := ParseFunctionArguments(`null`)
 	if err != nil {

@@ -202,12 +202,78 @@ func repairFunctionArguments(value string) string {
 	out = stripJSONComments(out)
 	out = escapeStringControlCharacters(out)
 	out = normalizePythonBooleanLiterals(out)
+	out = normalizeNonstandardNumberLiterals(out)
 	out = singleQuotedStringPattern.ReplaceAllString(out, `"$1"`)
 	out = unquotedObjectKeyPattern.ReplaceAllString(out, `${1}"${2}"${3}`)
 	out = quoteUnquotedStringValues(out)
 	out = closeUnbalancedJSONContainers(out)
 	out = trailingCommaPattern.ReplaceAllString(out, "$1")
 	return strings.TrimSpace(out)
+}
+
+func normalizeNonstandardNumberLiterals(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(value); {
+		ch := value[i]
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			i++
+			continue
+		}
+
+		if ch == '"' {
+			inString = true
+			b.WriteByte(ch)
+			i++
+			continue
+		}
+
+		if ch == '+' && i+1 < len(value) && isDigit(value[i+1]) && hasNumberPrefixBoundary(value, i) {
+			i++
+			continue
+		}
+		if ch == '+' && i+1 < len(value) && value[i+1] == '.' && hasNumberPrefixBoundary(value, i) {
+			b.WriteByte('0')
+			i++
+			continue
+		}
+		if ch == '.' && i+1 < len(value) && isDigit(value[i+1]) && hasNumberPrefixBoundary(value, i) {
+			b.WriteString("0.")
+			i++
+			continue
+		}
+		if ch == '-' && i+2 < len(value) && value[i+1] == '.' && isDigit(value[i+2]) && hasNumberPrefixBoundary(value, i) {
+			b.WriteString("-0.")
+			i += 2
+			continue
+		}
+		b.WriteByte(ch)
+		i++
+	}
+
+	return b.String()
+}
+
+func hasNumberPrefixBoundary(value string, offset int) bool {
+	if offset == 0 {
+		return true
+	}
+	return isJSONTokenBoundary(value[offset-1])
+}
+
+func isDigit(ch byte) bool {
+	return ch >= '0' && ch <= '9'
 }
 
 func normalizePythonBooleanLiterals(value string) string {
