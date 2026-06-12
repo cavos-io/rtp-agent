@@ -821,6 +821,80 @@ func TestPerformToolExecutionsProvidesRunContext(t *testing.T) {
 	}
 }
 
+func TestPerformToolExecutionsUsesFirstRunContextUpdateAsOutput(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	tool := &runContextUpdatingTool{}
+	toolCtx := llm.NewToolContext([]interface{}{tool})
+	functionCh := make(chan *llm.FunctionToolCall, 1)
+	functionCh <- &llm.FunctionToolCall{
+		ID:        "reply-a/fnc_0",
+		Name:      tool.Name(),
+		CallID:    "call_lookup",
+		Arguments: `{"city": "Jakarta"}`,
+		Extra:     map[string]any{"provider": "test"},
+	}
+	close(functionCh)
+
+	outputs := PerformToolExecutions(context.Background(), functionCh, toolCtx, WithToolExecutionSession(session))
+	output, ok := <-outputs
+	if !ok {
+		t.Fatal("PerformToolExecutions closed without output")
+	}
+	if output.RawError != nil {
+		t.Fatalf("RawError = %v, want nil", output.RawError)
+	}
+
+	want := "The tool `lookup` has updated, message: searching\nThe task is still running, so DON'T make up or give information not included in the message above."
+	if output.RawOutput != want {
+		t.Fatalf("RawOutput = %#v, want first update message %q", output.RawOutput, want)
+	}
+	if output.FncCall.CallID != "call_lookup" || output.FncCall.Name != "lookup" || output.FncCall.Arguments != `{"city":"Jakarta"}` {
+		t.Fatalf("FncCall = %#v, want update call with original call id and canonical arguments", output.FncCall)
+	}
+	if output.FncCallOut == nil || output.FncCallOut.CallID != "call_lookup" || output.FncCallOut.Output != want || output.FncCallOut.IsError {
+		t.Fatalf("FncCallOut = %#v, want successful first update output", output.FncCallOut)
+	}
+	if tool.runContext == nil || tool.runContext.FunctionCall == nil {
+		t.Fatal("tool run context/function call was not captured")
+	}
+	if got := tool.runContext.FunctionCall.Extra["__livekit_agents_tool_non_blocking"]; got != true {
+		t.Fatalf("run context nonblocking extra = %#v, want true after first update", got)
+	}
+}
+
+func TestPerformToolExecutionsDetachesRunContextAfterReturn(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	tool := &runContextRecordingTool{}
+	toolCtx := llm.NewToolContext([]interface{}{tool})
+	functionCh := make(chan *llm.FunctionToolCall, 1)
+	functionCh <- &llm.FunctionToolCall{
+		ID:        "reply-a/fnc_0",
+		Name:      tool.Name(),
+		CallID:    "call_lookup",
+		Arguments: `{}`,
+	}
+	close(functionCh)
+
+	outputs := PerformToolExecutions(context.Background(), functionCh, toolCtx, WithToolExecutionSession(session))
+	output, ok := <-outputs
+	if !ok {
+		t.Fatal("PerformToolExecutions closed without output")
+	}
+	if output.RawError != nil || output.RawOutput != "ok" {
+		t.Fatalf("output = %#v, want successful tool result", output)
+	}
+	if tool.runContext == nil {
+		t.Fatal("tool run context was not captured")
+	}
+
+	if err := tool.runContext.Update("late progress"); err != nil {
+		t.Fatalf("late run context update returned error: %v", err)
+	}
+	if updates := tool.runContext.Updates(); len(updates) != 0 {
+		t.Fatalf("late run context updates = %#v, want detached context to ignore updates", updates)
+	}
+}
+
 func TestPerformToolExecutionsUsesScopedMockTool(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	toolCtx := llm.NewToolContext([]interface{}{&fakeGenerationTool{name: "lookup", result: "real"}})
@@ -1004,6 +1078,28 @@ func (r *runContextRecordingTool) Parameters() map[string]any { return nil }
 func (r *runContextRecordingTool) Execute(ctx context.Context, args string) (string, error) {
 	r.runContext = GetRunContext(ctx)
 	return "ok", nil
+}
+
+type runContextUpdatingTool struct {
+	runContext *RunContext
+}
+
+func (r *runContextUpdatingTool) ID() string { return "lookup" }
+
+func (r *runContextUpdatingTool) Name() string { return "lookup" }
+
+func (r *runContextUpdatingTool) Description() string { return "" }
+
+func (r *runContextUpdatingTool) Parameters() map[string]any { return nil }
+
+func (r *runContextUpdatingTool) Execute(ctx context.Context, args string) (string, error) {
+	r.runContext = GetRunContext(ctx)
+	if r.runContext != nil {
+		if err := r.runContext.Update("searching"); err != nil {
+			return "", err
+		}
+	}
+	return "final result", nil
 }
 
 type fakeGenerationLLM struct {

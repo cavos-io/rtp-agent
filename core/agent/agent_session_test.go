@@ -3027,6 +3027,26 @@ func TestAgentSessionStopResetsSessionStates(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStopResetsProviderErrorCounts(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	session.llmErrorCount = 2
+	session.ttsErrorCount = 2
+
+	if err := session.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop error = %v, want nil", err)
+	}
+
+	if session.llmErrorCount != 0 {
+		t.Fatalf("llmErrorCount after Stop = %d, want 0", session.llmErrorCount)
+	}
+	if session.ttsErrorCount != 0 {
+		t.Fatalf("ttsErrorCount after Stop = %d, want 0", session.ttsErrorCount)
+	}
+}
+
 func TestAgentSessionStopAllowsOnExitSessionCallbacks(t *testing.T) {
 	agent := &sessionCallbackAgent{Agent: NewAgent("test")}
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -3125,6 +3145,103 @@ func TestAgentSessionWaitForInactiveWaitsForCurrentSpeech(t *testing.T) {
 		}
 	case <-testTimeout():
 		t.Fatal("WaitForInactive did not return after current speech completed")
+	}
+}
+
+func TestAgentSessionWaitForInactiveWaitsForClaimedUserTurn(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	release := make(chan struct{})
+	claimed := make(chan struct{})
+	claimDone := make(chan error, 1)
+
+	go func() {
+		claimDone <- session.ClaimUserTurn(context.Background(), func(context.Context) error {
+			close(claimed)
+			<-release
+			return nil
+		})
+	}()
+	<-claimed
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.WaitForInactive(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("WaitForInactive returned before claimed user turn released: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case err := <-claimDone:
+		if err != nil {
+			t.Fatalf("ClaimUserTurn error = %v", err)
+		}
+	case <-testTimeout():
+		t.Fatal("ClaimUserTurn did not release")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("WaitForInactive error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("WaitForInactive did not return after claimed user turn released")
+	}
+}
+
+func TestAgentSessionWaitForInactiveAndHoldBlocksOtherWaiters(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	held := make(chan struct{})
+	release := make(chan struct{})
+	holdDone := make(chan error, 1)
+
+	go func() {
+		holdDone <- session.WaitForInactiveAndHold(context.Background(), func(ctx context.Context) error {
+			if err := session.WaitForInactive(ctx); err != nil {
+				return err
+			}
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- session.WaitForInactive(context.Background())
+	}()
+
+	select {
+	case err := <-waitDone:
+		t.Fatalf("WaitForInactive returned while another caller held idle: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case err := <-holdDone:
+		if err != nil {
+			t.Fatalf("WaitForInactiveAndHold error = %v", err)
+		}
+	case <-testTimeout():
+		t.Fatal("WaitForInactiveAndHold did not release")
+	}
+	select {
+	case err := <-waitDone:
+		if err != nil {
+			t.Fatalf("WaitForInactive error = %v, want nil after hold release", err)
+		}
+	case <-testTimeout():
+		t.Fatal("WaitForInactive did not return after hold release")
 	}
 }
 
@@ -4451,6 +4568,28 @@ func TestAgentSessionCancelsUserAwayTimerWhenUserSpeaks(t *testing.T) {
 	}
 	if got := session.UserState(); got != UserStateSpeaking {
 		t.Fatalf("UserState() = %q, want speaking", got)
+	}
+}
+
+func TestAgentSessionClaimUserTurnPinsUserStateUntilRelease(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	err := session.ClaimUserTurn(context.Background(), func(context.Context) error {
+		if got := session.UserState(); got != UserStateSpeaking {
+			t.Fatalf("UserState() while claimed = %q, want %q", got, UserStateSpeaking)
+		}
+		session.UpdateUserState(UserStateListening)
+		if got := session.UserState(); got != UserStateSpeaking {
+			t.Fatalf("UserState() after listening update while claimed = %q, want %q", got, UserStateSpeaking)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ClaimUserTurn error = %v", err)
+	}
+	if got := session.UserState(); got != UserStateListening {
+		t.Fatalf("UserState() after claim release = %q, want %q", got, UserStateListening)
 	}
 }
 

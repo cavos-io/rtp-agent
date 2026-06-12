@@ -35,6 +35,8 @@ const (
 	AgentStateSpeaking     AgentState = "speaking"
 )
 
+type idleHoldContextKey struct{}
+
 type AgentSessionOptions struct {
 	AllowInterruptions               bool
 	AllowInterruptionsSet            bool
@@ -226,6 +228,10 @@ type AgentSession struct {
 	runCtx         context.Context
 	runState       *RunResult
 	onEnterDepth   int
+	userTurnClaims int
+	userTurnDone   chan struct{}
+	idleHolds      int
+	idleDone       chan struct{}
 	userAwayTimer  *time.Timer
 	aecWarmupTimer *time.Timer
 	aecWarmupDone  bool
@@ -375,6 +381,52 @@ func (s *AgentSession) SetUserdata(value any) {
 
 	s.userdata = value
 	s.userdataSet = true
+}
+
+func (s *AgentSession) ClaimUserTurn(ctx context.Context, fn func(context.Context) error) error {
+	if fn == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	previous := s.userState
+	s.userTurnClaims++
+	first := s.userTurnClaims == 1
+	if first {
+		s.userTurnDone = make(chan struct{})
+	}
+	s.mu.Unlock()
+
+	if first {
+		s.UpdateUserState(UserStateSpeaking)
+	}
+	defer s.releaseUserTurnClaim(previous)
+
+	return fn(ctx)
+}
+
+func (s *AgentSession) releaseUserTurnClaim(previous UserState) {
+	s.mu.Lock()
+	if s.userTurnClaims > 0 {
+		s.userTurnClaims--
+	}
+	remaining := s.userTurnClaims
+	done := s.userTurnDone
+	if remaining == 0 && done != nil {
+		close(done)
+		s.userTurnDone = nil
+	}
+	s.mu.Unlock()
+
+	if remaining > 0 {
+		return
+	}
+
+	if previous == UserStateSpeaking {
+		s.UpdateUserState(UserStateSpeaking)
+		return
+	}
+	s.UpdateUserState(UserStateListening)
 }
 
 func (s *AgentSession) JobContext() (any, error) {
@@ -595,13 +647,74 @@ func (s *AgentSession) CurrentAgent() (AgentInterface, error) {
 }
 
 func (s *AgentSession) WaitForInactive(ctx context.Context) error {
-	s.mu.Lock()
-	activity := s.activity
-	s.mu.Unlock()
-	if activity == nil {
+	for {
+		s.mu.Lock()
+		activity := s.activity
+		s.mu.Unlock()
+
+		if activity != nil {
+			if err := activity.WaitForInactive(ctx); err != nil {
+				return err
+			}
+		}
+		s.mu.Lock()
+		claims := s.userTurnClaims
+		done := s.userTurnDone
+		holds := s.idleHolds
+		idleDone := s.idleDone
+		s.mu.Unlock()
+		if claims == 0 {
+			if holds == 0 || ctx.Value(idleHoldContextKey{}) == true {
+				return nil
+			}
+			select {
+			case <-idleDone:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			continue
+		}
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (s *AgentSession) WaitForInactiveAndHold(ctx context.Context, fn func(context.Context) error) error {
+	if fn == nil {
 		return nil
 	}
-	return activity.WaitForInactive(ctx)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := s.WaitForInactive(ctx); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	s.idleHolds++
+	if s.idleHolds == 1 {
+		s.idleDone = make(chan struct{})
+	}
+	s.mu.Unlock()
+
+	defer s.releaseIdleHold()
+	return fn(context.WithValue(ctx, idleHoldContextKey{}, true))
+}
+
+func (s *AgentSession) releaseIdleHold() {
+	s.mu.Lock()
+	if s.idleHolds > 0 {
+		s.idleHolds--
+	}
+	done := s.idleDone
+	if s.idleHolds == 0 && done != nil {
+		close(done)
+		s.idleDone = nil
+	}
+	s.mu.Unlock()
 }
 
 func (s *AgentSession) Drain(ctx context.Context) error {
@@ -1864,6 +1977,10 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 
 func (s *AgentSession) UpdateUserState(state UserState) {
 	s.mu.Lock()
+	if s.userTurnClaims > 0 && state != UserStateSpeaking {
+		s.mu.Unlock()
+		return
+	}
 	oldState := s.userState
 	s.userState = state
 	videoSampler := s.videoSampler
@@ -2345,6 +2462,18 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	s.runCtx = nil
 	s.userState = UserStateListening
 	s.agentState = AgentStateInitializing
+	if s.userTurnClaims > 0 && s.userTurnDone != nil {
+		close(s.userTurnDone)
+	}
+	s.userTurnClaims = 0
+	s.userTurnDone = nil
+	if s.idleHolds > 0 && s.idleDone != nil {
+		close(s.idleDone)
+	}
+	s.idleHolds = 0
+	s.idleDone = nil
+	s.llmErrorCount = 0
+	s.ttsErrorCount = 0
 	s.cancelUserAwayTimerLocked()
 	s.clearAECWarmupLocked()
 	backgroundAudio := s.Options.BackgroundAudio

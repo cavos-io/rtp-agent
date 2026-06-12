@@ -152,6 +152,10 @@ type roomIOTextResponder interface {
 	GenerateReply(ctx context.Context, userInput string) (*agent.SpeechHandle, error)
 }
 
+type roomIOTextTurnClaimer interface {
+	ClaimUserTurn(ctx context.Context, fn func(context.Context) error) error
+}
+
 type PlaybackStartedEvent struct {
 	CreatedAt time.Time
 }
@@ -436,11 +440,17 @@ func roomIOTextInputCallback(opts RoomOptions) TextInputCallback {
 }
 
 func roomIODefaultTextInput(ctx context.Context, responder roomIOTextResponder, text string) error {
-	if err := responder.Interrupt(false); err != nil {
+	run := func(ctx context.Context) error {
+		if err := responder.Interrupt(false); err != nil {
+			return err
+		}
+		_, err := responder.GenerateReply(ctx, text)
 		return err
 	}
-	_, err := responder.GenerateReply(ctx, text)
-	return err
+	if claimer, ok := responder.(roomIOTextTurnClaimer); ok {
+		return claimer.ClaimUserTurn(ctx, run)
+	}
+	return run(ctx)
 }
 
 func (rio *RoomIO) handleAgentStateChanged(ev agent.AgentStateChangedEvent) {

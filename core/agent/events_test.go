@@ -74,6 +74,57 @@ func TestRunContextWaitForPlayoutWaitsOnlyInitialGenerationStep(t *testing.T) {
 	}
 }
 
+func TestRunContextForegroundHoldsSessionIdle(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	runCtx := NewRunContext(session, nil, &llm.FunctionCall{Name: "lookup"})
+	held := make(chan struct{})
+	release := make(chan struct{})
+	foregroundDone := make(chan error, 1)
+
+	go func() {
+		foregroundDone <- runCtx.Foreground(context.Background(), func(ctx context.Context) error {
+			if err := session.WaitForInactive(ctx); err != nil {
+				return err
+			}
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- session.WaitForInactive(context.Background())
+	}()
+
+	select {
+	case err := <-waitDone:
+		t.Fatalf("WaitForInactive returned while foreground run context held idle: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case err := <-foregroundDone:
+		if err != nil {
+			t.Fatalf("RunContext.Foreground error = %v", err)
+		}
+	case <-testTimeout():
+		t.Fatal("RunContext.Foreground did not release")
+	}
+	select {
+	case err := <-waitDone:
+		if err != nil {
+			t.Fatalf("WaitForInactive error = %v, want nil after foreground release", err)
+		}
+	case <-testTimeout():
+		t.Fatal("WaitForInactive did not return after foreground release")
+	}
+}
+
 func TestRunContextUserdataReturnsSessionUserdata(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	want := map[string]string{"account_id": "acct_123"}
@@ -133,6 +184,61 @@ func TestRunContextJobContextReturnsSessionJobContext(t *testing.T) {
 	}
 	if value != jobCtx {
 		t.Fatalf("JobContext value = %#v, want %#v", value, jobCtx)
+	}
+}
+
+func TestRunContextUpdateRecordsStandaloneProgress(t *testing.T) {
+	extra := map[string]any{"trace_id": "trace_123"}
+	runCtx := NewRunContext(nil, nil, &llm.FunctionCall{
+		CallID:    "call_lookup",
+		Name:      "lookup",
+		Arguments: `{"city":"Paris"}`,
+		Extra:     extra,
+		CreatedAt: time.Unix(12, 0),
+	})
+
+	if err := runCtx.Update("halfway there"); err != nil {
+		t.Fatalf("Update first error = %v, want nil", err)
+	}
+	extra["trace_id"] = "mutated"
+	if err := runCtx.Update(map[string]any{"status": "done"}); err != nil {
+		t.Fatalf("Update second error = %v, want nil", err)
+	}
+
+	updates := runCtx.Updates()
+	if len(updates) != 2 {
+		t.Fatalf("len(Updates()) = %d, want 2", len(updates))
+	}
+
+	firstCall := updates[0].FunctionCall
+	if firstCall.CallID != "call_lookup" || firstCall.Name != "lookup" || firstCall.Arguments != `{"city":"Paris"}` {
+		t.Fatalf("first update call = %#v, want original call identity and arguments", firstCall)
+	}
+	if firstCall.Extra["trace_id"] != "trace_123" {
+		t.Fatalf("first update extra trace_id = %#v, want copied original value", firstCall.Extra["trace_id"])
+	}
+	if _, ok := firstCall.Extra["__livekit_agents_tool_non_blocking"]; ok {
+		t.Fatalf("first update extra has nonblocking marker for standalone update: %#v", firstCall.Extra)
+	}
+	if got, want := updates[0].FunctionCallOutput.Output, "The tool `lookup` has updated, message: halfway there\nThe task is still running, so DON'T make up or give information not included in the message above."; got != want {
+		t.Fatalf("first update output = %q, want default template output %q", got, want)
+	}
+
+	secondCall := updates[1].FunctionCall
+	if secondCall.CallID != "call_lookup_update_1" || secondCall.Name != "lookup" || secondCall.Arguments != `{"city":"Paris"}` {
+		t.Fatalf("second update call = %#v, want suffixed call identity and copied arguments", secondCall)
+	}
+	if secondCall.Extra["trace_id"] != "mutated" {
+		t.Fatalf("second update extra trace_id = %#v, want latest copied value", secondCall.Extra["trace_id"])
+	}
+	if _, ok := secondCall.Extra["__livekit_agents_tool_non_blocking"]; ok {
+		t.Fatalf("second update extra has nonblocking marker for standalone update: %#v", secondCall.Extra)
+	}
+	if _, ok := runCtx.FunctionCall.Extra["__livekit_agents_tool_non_blocking"]; ok {
+		t.Fatalf("original function call extra has nonblocking marker for standalone update: %#v", runCtx.FunctionCall.Extra)
+	}
+	if got, want := updates[1].FunctionCallOutput.Output, `{'status': 'done'}`; got != want {
+		t.Fatalf("second update output = %q, want Python-style dict output %q", got, want)
 	}
 }
 

@@ -40,6 +40,7 @@ var processExecutable = os.Executable
 var processCommandContext = exec.CommandContext
 var processPingInterval = 2 * time.Second
 var processPingTimeout = 60 * time.Second
+var processShutdownGraceTimeout = 5 * time.Second
 var processNow = time.Now
 var processTimeMS = mathutil.TimeMS
 var processSignal = func(process *os.Process, signal os.Signal) error {
@@ -403,6 +404,7 @@ func (e *ProcessJobExecutor) Close(ctx context.Context) error {
 	}
 
 	if cmd != nil && cmd.Process != nil {
+		shutdownSent := false
 		if shutdownWriter != nil {
 			msg, err := NewMessage(&ShutdownRequest{})
 			if err == nil {
@@ -410,6 +412,8 @@ func (e *ProcessJobExecutor) Close(ctx context.Context) error {
 			}
 			if err != nil {
 				logger.Logger.Warnw("failed to send job process shutdown request", err, "exec_id", e.id)
+			} else {
+				shutdownSent = true
 			}
 		}
 
@@ -418,6 +422,20 @@ func (e *ProcessJobExecutor) Close(ctx context.Context) error {
 			e.status = JobStatusFailed
 		}
 		e.mu.Unlock()
+
+		if shutdownSent {
+			if processShutdownGraceTimeout > 0 {
+				graceTimer := time.NewTimer(processShutdownGraceTimeout)
+				select {
+				case <-done:
+					graceTimer.Stop()
+					return nil
+				case <-ctx.Done():
+					graceTimer.Stop()
+				case <-graceTimer.C:
+				}
+			}
+		}
 
 		killDone := make(chan error, 1)
 		go func() {

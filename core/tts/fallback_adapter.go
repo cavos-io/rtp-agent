@@ -329,8 +329,14 @@ func (f *FallbackAdapter) tryRecoverChunked(index int, text string) {
 
 		audioSent := false
 		for {
-			_, err := stream.Next()
+			audio, err := stream.Next()
 			if err == nil {
+				if _, err := f.normalizeAudio(audio); err != nil {
+					f.mu.Lock()
+					f.status[index].recovering = false
+					f.mu.Unlock()
+					return
+				}
 				audioSent = true
 				continue
 			}
@@ -409,8 +415,14 @@ func (f *FallbackAdapter) tryRecoverStream(index int, inputs []fallbackSynthesiz
 
 		audioSent := false
 		for {
-			_, err := stream.Next()
+			audio, err := stream.Next()
 			if err == nil {
+				if _, err := f.normalizeAudio(audio); err != nil {
+					f.mu.Lock()
+					f.status[index].recovering = false
+					f.mu.Unlock()
+					return
+				}
 				audioSent = true
 				continue
 			}

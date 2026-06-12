@@ -827,6 +827,87 @@ func TestMultimodalToolExecutionUsesScopedMockTool(t *testing.T) {
 	}
 }
 
+func TestMultimodalToolExecutionUsesFirstRunContextUpdateAsOutput(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	tool := &runContextUpdatingTool{}
+	session := &AgentSession{Tools: []llm.Tool{tool}}
+	ma := &MultimodalAgent{
+		session:   session,
+		chatCtx:   chatCtx,
+		rtSession: &fakeRealtimeSession{},
+		ctx:       context.Background(),
+	}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeFunctionCall,
+		Function: &llm.FunctionToolCall{
+			Name:      "lookup",
+			CallID:    "call_lookup",
+			Arguments: `{"city":"Jakarta"}`,
+		},
+	})
+
+	if len(chatCtx.Items) != 2 {
+		t.Fatalf("chat context items = %#v, want function call and first update output", chatCtx.Items)
+	}
+	call, ok := chatCtx.Items[0].(*llm.FunctionCall)
+	if !ok {
+		t.Fatalf("first item = %T, want FunctionCall", chatCtx.Items[0])
+	}
+	if call.CallID != "call_lookup" || call.Name != "lookup" {
+		t.Fatalf("function call = %#v, want lookup call_lookup", call)
+	}
+	if call.Arguments != `{"city":"Jakarta"}` {
+		t.Fatalf("function call arguments = %q, want canonical JSON arguments", call.Arguments)
+	}
+	output := lastFunctionOutput(t, chatCtx)
+	const wantOutput = "The tool `lookup` has updated, message: searching\nThe task is still running, so DON'T make up or give information not included in the message above."
+	if output.IsError || output.Output != wantOutput {
+		t.Fatalf("function output = %#v, want first update success", output)
+	}
+	if output.CallID != "call_lookup" || output.Name != "lookup" {
+		t.Fatalf("function output identity = %#v, want lookup call_lookup", output)
+	}
+	if tool.runContext == nil {
+		t.Fatal("tool run context is nil")
+	}
+	if got := tool.runContext.FunctionCall.Extra["__livekit_agents_tool_non_blocking"]; got != true {
+		t.Fatalf("nonblocking extra = %#v, want true", got)
+	}
+}
+
+func TestMultimodalToolExecutionDetachesRunContextAfterReturn(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	tool := &runContextRecordingTool{}
+	session := &AgentSession{Tools: []llm.Tool{tool}}
+	ma := &MultimodalAgent{
+		session:   session,
+		chatCtx:   chatCtx,
+		rtSession: &fakeRealtimeSession{},
+		ctx:       context.Background(),
+	}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type:     llm.RealtimeEventTypeFunctionCall,
+		Function: &llm.FunctionToolCall{Name: "lookup", CallID: "call_lookup", Arguments: `{}`},
+	})
+
+	output := lastFunctionOutput(t, chatCtx)
+	if output.IsError || output.Output != "ok" {
+		t.Fatalf("function output = %#v, want successful tool result", output)
+	}
+	if tool.runContext == nil {
+		t.Fatal("tool run context was not captured")
+	}
+
+	if err := tool.runContext.Update("late progress"); err != nil {
+		t.Fatalf("late run context update returned error: %v", err)
+	}
+	if updates := tool.runContext.Updates(); len(updates) != 0 {
+		t.Fatalf("late run context updates = %#v, want detached context to ignore updates", updates)
+	}
+}
+
 func TestMultimodalToolExecutionRepairsArgumentsBeforeToolCall(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	tool := &recordingRealtimeTool{name: "lookup", result: "agent result"}
