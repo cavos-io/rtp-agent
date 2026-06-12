@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -251,7 +252,12 @@ func TestProcessJobExecutorCloseWaitsForProcessExit(t *testing.T) {
 
 func TestProcessJobExecutorCloseSendsShutdownRequestBeforeKill(t *testing.T) {
 	oldKill := processKill
-	defer func() { processKill = oldKill }()
+	oldGraceTimeout := processShutdownGraceTimeout
+	processShutdownGraceTimeout = 0
+	defer func() {
+		processKill = oldKill
+		processShutdownGraceTimeout = oldGraceTimeout
+	}()
 
 	var output bytes.Buffer
 	done := make(chan struct{})
@@ -279,6 +285,59 @@ func TestProcessJobExecutorCloseSendsShutdownRequestBeforeKill(t *testing.T) {
 	}
 	if !shutdownSeenBeforeKill {
 		t.Fatal("Close() did not send ShutdownRequest before killing process")
+	}
+}
+
+func TestProcessJobExecutorCloseWaitsForShutdownExitBeforeKill(t *testing.T) {
+	oldKill := processKill
+	defer func() { processKill = oldKill }()
+
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+
+	done := make(chan struct{})
+	shutdownSeen := make(chan struct{})
+	var closeDone sync.Once
+	closeProcessDone := func() {
+		closeDone.Do(func() {
+			close(done)
+		})
+	}
+
+	go func() {
+		msg, err := ReadMessage(reader)
+		if err == nil && msg.Type == MessageTypeShutdownRequest {
+			close(shutdownSeen)
+			closeProcessDone()
+		}
+	}()
+
+	killCalled := false
+	processKill = func(*os.Process) error {
+		<-shutdownSeen
+		killCalled = true
+		closeProcessDone()
+		return nil
+	}
+
+	executor := NewProcessJobExecutor("exec-process-close-wait-shutdown")
+	executor.mu.Lock()
+	executor.started = true
+	executor.status = JobStatusRunning
+	executor.done = done
+	executor.cmd = &exec.Cmd{Process: &os.Process{Pid: 12345}}
+	executor.pingWriter = writer
+	executor.mu.Unlock()
+
+	if err := executor.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if killCalled {
+		t.Fatal("Close() killed process even though it exited after ShutdownRequest")
+	}
+	if got := executor.Status(); got != JobStatusFailed {
+		t.Fatalf("Status() after Close = %q, want %q", got, JobStatusFailed)
 	}
 }
 
