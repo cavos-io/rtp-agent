@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -217,6 +219,13 @@ type RunContext struct {
 	SpeechHandle     *SpeechHandle
 	FunctionCall     *llm.FunctionCall
 	initialStepIndex int
+	updates          []RunContextUpdate
+	mu               sync.Mutex
+}
+
+type RunContextUpdate struct {
+	FunctionCall       *llm.FunctionCall
+	FunctionCallOutput *llm.FunctionCallOutput
 }
 
 func NewRunContext(session *AgentSession, speechHandle *SpeechHandle, functionCall *llm.FunctionCall) *RunContext {
@@ -261,6 +270,78 @@ func (r *RunContext) JobContext() (any, error) {
 		return nil, ErrAgentSessionJobContextNotSet
 	}
 	return r.Session.JobContext()
+}
+
+const runContextUpdateTemplate = "The tool `{function_name}` has updated, message: {message}\nThe task is still running, so DON'T make up or give information not included in the message above."
+
+func (r *RunContext) Update(message any, templates ...string) error {
+	if r == nil || r.FunctionCall == nil {
+		return nil
+	}
+	if text, ok := message.(string); ok {
+		template := runContextUpdateTemplate
+		if len(templates) > 0 && templates[0] != "" {
+			template = templates[0]
+		}
+		message = renderRunContextUpdateTemplate(template, r.FunctionCall, text)
+	}
+
+	r.mu.Lock()
+	updateStep := len(r.updates)
+	call := copyRunContextUpdateCall(r.FunctionCall, runContextUpdateCallIDSuffix(updateStep))
+	result := llm.MakeToolOutput(*call, message, nil)
+	output := result.FncCallOut
+	if output == nil {
+		output = &llm.FunctionCallOutput{
+			CallID:    call.CallID,
+			Name:      call.Name,
+			Output:    fmt.Sprint(message),
+			IsError:   false,
+			CreatedAt: time.Now(),
+		}
+	}
+	r.updates = append(r.updates, RunContextUpdate{FunctionCall: call, FunctionCallOutput: output})
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *RunContext) Updates() []RunContextUpdate {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	updates := make([]RunContextUpdate, len(r.updates))
+	copy(updates, r.updates)
+	return updates
+}
+
+func renderRunContextUpdateTemplate(template string, call *llm.FunctionCall, message string) string {
+	return strings.NewReplacer(
+		"{function_name}", call.Name,
+		"{call_id}", call.CallID,
+		"{message}", message,
+	).Replace(template)
+}
+
+func runContextUpdateCallIDSuffix(updateStep int) string {
+	if updateStep == 0 {
+		return ""
+	}
+	return fmt.Sprintf("_update_%d", updateStep)
+}
+
+func copyRunContextUpdateCall(call *llm.FunctionCall, callIDSuffix string) *llm.FunctionCall {
+	updateCall := *call
+	updateCall.CallID = call.CallID + callIDSuffix
+	if call.Extra != nil {
+		updateCall.Extra = make(map[string]any, len(call.Extra))
+		for key, value := range call.Extra {
+			updateCall.Extra[key] = value
+		}
+	}
+	return &updateCall
 }
 
 type contextKey string

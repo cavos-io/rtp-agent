@@ -136,6 +136,52 @@ func TestRunContextJobContextReturnsSessionJobContext(t *testing.T) {
 	}
 }
 
+func TestRunContextUpdateRecordsStandaloneProgress(t *testing.T) {
+	extra := map[string]any{"trace_id": "trace_123"}
+	runCtx := NewRunContext(nil, nil, &llm.FunctionCall{
+		CallID:    "call_lookup",
+		Name:      "lookup",
+		Arguments: `{"city":"Paris"}`,
+		Extra:     extra,
+		CreatedAt: time.Unix(12, 0),
+	})
+
+	if err := runCtx.Update("halfway there"); err != nil {
+		t.Fatalf("Update first error = %v, want nil", err)
+	}
+	extra["trace_id"] = "mutated"
+	if err := runCtx.Update(map[string]any{"status": "done"}); err != nil {
+		t.Fatalf("Update second error = %v, want nil", err)
+	}
+
+	updates := runCtx.Updates()
+	if len(updates) != 2 {
+		t.Fatalf("len(Updates()) = %d, want 2", len(updates))
+	}
+
+	firstCall := updates[0].FunctionCall
+	if firstCall.CallID != "call_lookup" || firstCall.Name != "lookup" || firstCall.Arguments != `{"city":"Paris"}` {
+		t.Fatalf("first update call = %#v, want original call identity and arguments", firstCall)
+	}
+	if firstCall.Extra["trace_id"] != "trace_123" {
+		t.Fatalf("first update extra trace_id = %#v, want copied original value", firstCall.Extra["trace_id"])
+	}
+	if got, want := updates[0].FunctionCallOutput.Output, "The tool `lookup` has updated, message: halfway there\nThe task is still running, so DON'T make up or give information not included in the message above."; got != want {
+		t.Fatalf("first update output = %q, want default template output %q", got, want)
+	}
+
+	secondCall := updates[1].FunctionCall
+	if secondCall.CallID != "call_lookup_update_1" || secondCall.Name != "lookup" || secondCall.Arguments != `{"city":"Paris"}` {
+		t.Fatalf("second update call = %#v, want suffixed call identity and copied arguments", secondCall)
+	}
+	if secondCall.Extra["trace_id"] != "mutated" {
+		t.Fatalf("second update extra trace_id = %#v, want latest copied value", secondCall.Extra["trace_id"])
+	}
+	if got, want := updates[1].FunctionCallOutput.Output, `{'status': 'done'}`; got != want {
+		t.Fatalf("second update output = %q, want Python-style dict output %q", got, want)
+	}
+}
+
 func TestFunctionToolsExecutedEventPairsCallsAndOutputs(t *testing.T) {
 	callA := &llm.FunctionCall{CallID: "call_a", Name: "lookup"}
 	callB := &llm.FunctionCall{CallID: "call_b", Name: "notify"}
