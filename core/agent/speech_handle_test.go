@@ -244,6 +244,38 @@ func TestSpeechHandleRemoveDoneCallback(t *testing.T) {
 	}
 }
 
+func TestSpeechHandleWaitRejectsOwningFunctionTool(t *testing.T) {
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	functionCall := &llm.FunctionCall{Name: "lookup", CallID: "call_lookup", Extra: map[string]any{}}
+	deadlineCtx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	ctx := WithRunContext(deadlineCtx, NewRunContext(nil, speech, functionCall))
+
+	err := speech.Wait(ctx)
+
+	if err == nil {
+		t.Fatal("Wait error = nil, want circular function-tool wait error")
+	}
+	if got, want := err.Error(), "cannot call `SpeechHandle.wait_for_playout()` from inside the function tool `lookup` that owns this SpeechHandle. This creates a circular wait: the speech handle is waiting for the function tool to complete, while the function tool is simultaneously waiting for the speech handle.\nTo wait for the assistant's spoken response prior to running this tool, use `RunContext.wait_for_playout()` instead"; got != want {
+		t.Fatalf("Wait error message = %q, want reference message %q", got, want)
+	}
+}
+
+func TestSpeechHandleWaitAllowsNonBlockingFunctionTool(t *testing.T) {
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	functionCall := &llm.FunctionCall{
+		Name:   "lookup",
+		CallID: "call_lookup",
+		Extra:  map[string]any{"__livekit_agents_tool_non_blocking": true},
+	}
+	ctx := WithRunContext(context.Background(), NewRunContext(nil, speech, functionCall))
+	speech.MarkDone()
+
+	if err := speech.Wait(ctx); err != nil {
+		t.Fatalf("Wait error = %v, want nil for nonblocking function tool", err)
+	}
+}
+
 func TestSpeechHandleAddChatItemsStoresItemsAndRunsCallbacks(t *testing.T) {
 	speech := NewSpeechHandle(true, DefaultInputDetails())
 	msg := &llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant}

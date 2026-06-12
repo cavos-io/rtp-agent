@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -3208,7 +3209,7 @@ func TestDefaultConfigFromEnvWrapsTTSFallbackProviders(t *testing.T) {
 func TestSLNGTTSFallbackPassesModelOptions(t *testing.T) {
 	initPayloads := make(chan map[string]any, 1)
 	upgrader := websocket.Upgrader{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			t.Errorf("upgrade websocket: %v", err)
@@ -3227,7 +3228,16 @@ func TestSLNGTTSFallbackPassesModelOptions(t *testing.T) {
 			return
 		}
 		initPayloads <- init
-	}))
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
 	defer server.Close()
 
 	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")

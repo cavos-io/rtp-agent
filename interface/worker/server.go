@@ -93,6 +93,7 @@ var assignmentTimeout = 7500 * time.Millisecond
 var uploadSessionReport = agent.UploadSessionReport
 
 const workerStatusUpdateInterval = 2500 * time.Millisecond
+const WorkerProtocolVersion = 1
 
 var defaultWorkerLoadMu sync.Mutex
 
@@ -876,15 +877,16 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 }
 
 type workerMetadataResponse struct {
-	AgentName      string  `json:"agent_name"`
-	AgentNameIsEnv bool    `json:"agent_name_is_env"`
-	WorkerType     string  `json:"worker_type"`
-	WorkerLoad     float64 `json:"worker_load"`
-	ActiveJobs     int     `json:"active_jobs"`
-	SDKVersion     string  `json:"sdk_version"`
-	ProjectType    string  `json:"project_type"`
-	NodeName       string  `json:"node_name"`
-	Hosted         bool    `json:"hosted"`
+	AgentName       string  `json:"agent_name"`
+	AgentNameIsEnv  bool    `json:"agent_name_is_env"`
+	WorkerType      string  `json:"worker_type"`
+	WorkerLoad      float64 `json:"worker_load"`
+	ActiveJobs      int     `json:"active_jobs"`
+	SDKVersion      string  `json:"sdk_version"`
+	ProtocolVersion int     `json:"protocol_version"`
+	ProjectType     string  `json:"project_type"`
+	NodeName        string  `json:"node_name"`
+	Hosted          bool    `json:"hosted"`
 }
 
 func (s *AgentServer) workerHTTPHandler() http.Handler {
@@ -909,15 +911,16 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 	})
 	mux.HandleFunc("/worker", func(w http.ResponseWriter, r *http.Request) {
 		body := workerMetadataResponse{
-			AgentName:      s.Options.AgentName,
-			AgentNameIsEnv: s.Options.AgentNameIsEnv,
-			WorkerType:     livekit.JobType_name[int32(workerTypeToJobType(s.Options.WorkerType))],
-			WorkerLoad:     s.currentLoad(),
-			ActiveJobs:     s.activeJobCount(),
-			SDKVersion:     s.Options.Version,
-			ProjectType:    "go",
-			NodeName:       utils.NodeName(),
-			Hosted:         utils.IsHosted(),
+			AgentName:       s.Options.AgentName,
+			AgentNameIsEnv:  s.Options.AgentNameIsEnv,
+			WorkerType:      livekit.JobType_name[int32(workerTypeToJobType(s.Options.WorkerType))],
+			WorkerLoad:      s.currentLoad(),
+			ActiveJobs:      s.activeJobCount(),
+			SDKVersion:      s.Options.Version,
+			ProtocolVersion: WorkerProtocolVersion,
+			ProjectType:     "go",
+			NodeName:        utils.NodeName(),
+			Hosted:          utils.IsHosted(),
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(body); err != nil {

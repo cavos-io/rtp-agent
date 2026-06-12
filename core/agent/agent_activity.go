@@ -1357,6 +1357,10 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 		language = ev.Alternatives[0].Language
 		speakerID = ev.Alternatives[0].SpeakerID
 	}
+	if rejectsZeroConfidenceTranscript(transcript, confidence) {
+		logger.Logger.Warnw("skipping zero-confidence final transcript", nil, "transcript", transcript)
+		return
+	}
 	if a.Session != nil {
 		a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
 			Language:   language,
@@ -1498,6 +1502,7 @@ collect:
 	fallbackFinal := false
 	if !present && a.pendingInterimTranscript != "" {
 		transcript = a.pendingInterimTranscript
+		confidence = 1
 		fallbackLanguage = a.pendingInterimLanguage
 		fallbackSpeakerID = a.pendingInterimSpeakerID
 		present = true
@@ -1512,6 +1517,9 @@ collect:
 	a.userTurnMu.Unlock()
 
 	if !present || transcript == "" {
+		return "", nil
+	}
+	if !fallbackFinal && rejectsZeroConfidenceTranscript(transcript, confidence) {
 		return "", nil
 	}
 
@@ -1537,6 +1545,10 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	a.userTurnCompletionMu.Lock()
 	defer a.userTurnCompletionMu.Unlock()
 
+	if rejectsZeroConfidenceTranscript(info.NewTranscript, info.TranscriptConfidence) {
+		logger.Logger.Warnw("skipping zero-confidence user turn", nil, "transcript", info.NewTranscript)
+		return nil, nil
+	}
 	confidence := info.TranscriptConfidence
 	newMsg := &llm.ChatMessage{
 		Role:                 llm.ChatRoleUser,
@@ -1655,6 +1667,10 @@ func metricsReportFromEndOfTurn(info EndOfTurnInfo, onUserTurnCompletedDelay flo
 	metrics["end_of_turn_delay"] = info.EndOfTurnDelay
 	metrics["on_user_turn_completed_delay"] = onUserTurnCompletedDelay
 	return metrics
+}
+
+func rejectsZeroConfidenceTranscript(transcript string, confidence float64) bool {
+	return strings.TrimSpace(transcript) != "" && confidence <= 0
 }
 
 func (a *AgentActivity) commitUserMessage(msg *llm.ChatMessage) {

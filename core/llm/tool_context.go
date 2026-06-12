@@ -93,11 +93,14 @@ func (c *ToolContext) GetFunctionTool(name string) Tool {
 }
 
 func (c *ToolContext) AddTool(tool interface{}) error {
-	return c.addToolValue(tool, true)
+	return c.addToolValue(tool, true, nil)
 }
 
-func (c *ToolContext) addToolValue(tool interface{}, topLevel bool) error {
+func (c *ToolContext) addToolValue(tool interface{}, topLevel bool, exclude []Tool) error {
 	if t, ok := tool.(ProviderTool); ok {
+		if toolExcluded(t, exclude) {
+			return nil
+		}
 		c.providerTools = append(c.providerTools, t)
 		sort.Slice(c.providerTools, func(i, j int) bool {
 			return c.providerTools[i].ID() < c.providerTools[j].ID()
@@ -110,7 +113,7 @@ func (c *ToolContext) addToolValue(tool interface{}, topLevel bool) error {
 
 	if t, ok := tool.(Toolset); ok {
 		for _, childTool := range t.Tools() {
-			if err := c.addToolValue(childTool, false); err != nil {
+			if err := c.addToolValue(childTool, false, exclude); err != nil {
 				return err
 			}
 		}
@@ -121,6 +124,9 @@ func (c *ToolContext) addToolValue(tool interface{}, topLevel bool) error {
 		return nil
 	}
 	if t, ok := tool.(Tool); ok {
+		if toolExcluded(t, exclude) {
+			return nil
+		}
 		if err := c.addTool(t); err != nil {
 			return err
 		}
@@ -134,13 +140,17 @@ func (c *ToolContext) addToolValue(tool interface{}, topLevel bool) error {
 }
 
 func (c *ToolContext) UpdateTools(tools []interface{}) error {
+	return c.updateTools(tools, nil)
+}
+
+func (c *ToolContext) updateTools(tools []interface{}, exclude []Tool) error {
 	c.tools = make([]interface{}, 0, len(tools))
 	c.functionTools = make(map[string]Tool)
 	c.providerTools = make([]ProviderTool, 0)
 	c.toolsets = make([]Toolset, 0)
 
 	for _, t := range tools {
-		if err := c.AddTool(t); err != nil {
+		if err := c.addToolValue(t, true, exclude); err != nil {
 			return err
 		}
 	}
@@ -162,6 +172,15 @@ func (c *ToolContext) addTool(tool Tool) error {
 	return nil
 }
 
+func toolExcluded(tool Tool, exclude []Tool) bool {
+	for _, excluded := range exclude {
+		if sameTool(tool, excluded) {
+			return true
+		}
+	}
+	return false
+}
+
 func sameTool(a, b Tool) bool {
 	aValue := reflect.ValueOf(a)
 	bValue := reflect.ValueOf(b)
@@ -172,6 +191,59 @@ func sameTool(a, b Tool) bool {
 		return false
 	}
 	return a == b
+}
+
+func (c *ToolContext) SyncFlattened(tools []Tool) error {
+	current := c.Flatten()
+	if sameToolSet(current, tools) {
+		return nil
+	}
+
+	added := make([]interface{}, 0)
+	for _, tool := range tools {
+		if !toolInSlice(tool, current) {
+			added = append(added, tool)
+		}
+	}
+
+	removed := make([]Tool, 0)
+	for _, tool := range current {
+		if !toolInSlice(tool, tools) {
+			removed = append(removed, tool)
+		}
+	}
+
+	structured := make([]interface{}, 0, len(c.tools)+len(added))
+	for _, tool := range c.tools {
+		functionTool, ok := tool.(Tool)
+		if ok && toolExcluded(functionTool, removed) {
+			continue
+		}
+		structured = append(structured, tool)
+	}
+	structured = append(structured, added...)
+	return c.updateTools(structured, removed)
+}
+
+func sameToolSet(left, right []Tool) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for _, tool := range left {
+		if !toolInSlice(tool, right) {
+			return false
+		}
+	}
+	return true
+}
+
+func toolInSlice(tool Tool, tools []Tool) bool {
+	for _, candidate := range tools {
+		if sameTool(tool, candidate) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *ToolContext) Copy() *ToolContext {

@@ -459,12 +459,16 @@ func ExecuteFunctionCall(ctx context.Context, toolCall *FunctionToolCall, toolCt
 	if args == "" {
 		args = "{}"
 	}
+	extra := toolCall.Extra
+	if extra == nil {
+		extra = make(map[string]any)
+	}
 	fncCall := FunctionCall{
 		ID:        toolCall.ID,
 		CallID:    toolCall.CallID,
 		Name:      toolCall.Name,
 		Arguments: args,
-		Extra:     toolCall.Extra,
+		Extra:     extra,
 		CreatedAt: time.Now(),
 	}
 

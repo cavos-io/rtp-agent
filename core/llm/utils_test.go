@@ -524,6 +524,27 @@ func TestExecuteFunctionCallDefaultsEmptyArgumentsAndReturnsOutput(t *testing.T)
 	}
 }
 
+func TestExecuteFunctionCallDefaultsEmptyExtra(t *testing.T) {
+	tool := &recordingTool{name: "lookup", result: "Paris"}
+	toolCtx := NewToolContext([]interface{}{tool})
+
+	result := ExecuteFunctionCall(context.Background(), &FunctionToolCall{
+		Name:   "lookup",
+		CallID: "call_lookup",
+	}, toolCtx)
+
+	if result.FncCall.Extra == nil {
+		t.Fatal("FncCall.Extra = nil, want mutable empty map")
+	}
+	if len(result.FncCall.Extra) != 0 {
+		t.Fatalf("FncCall.Extra = %#v, want empty map", result.FncCall.Extra)
+	}
+	result.FncCall.Extra["updated"] = true
+	if result.FncCall.Extra["updated"] != true {
+		t.Fatalf("FncCall.Extra = %#v, want mutable map", result.FncCall.Extra)
+	}
+}
+
 func TestExecuteFunctionCallRepairsMalformedArgumentsBeforeExecutingTool(t *testing.T) {
 	tool := &recordingTool{name: "lookup", result: "Paris"}
 	toolCtx := NewToolContext([]interface{}{tool})

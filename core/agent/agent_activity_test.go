@@ -1258,7 +1258,7 @@ func TestAgentActivityUsesSessionMinEndpointingDelay(t *testing.T) {
 	activity := NewAgentActivity(agent, session)
 	defer activity.Stop()
 
-	activity.runEOUDetection(EndOfTurnInfo{NewTranscript: "hello"})
+	activity.runEOUDetection(EndOfTurnInfo{NewTranscript: "hello", TranscriptConfidence: 0.9})
 
 	select {
 	case msg := <-agent.turns:
@@ -1310,7 +1310,7 @@ func TestAgentActivityUsesSessionMaxEndpointingDelay(t *testing.T) {
 	activity := NewAgentActivity(agent, session)
 	defer activity.Stop()
 
-	activity.runEOUDetection(EndOfTurnInfo{NewTranscript: "still talking"})
+	activity.runEOUDetection(EndOfTurnInfo{NewTranscript: "still talking", TranscriptConfidence: 0.9})
 
 	select {
 	case msg := <-agent.turns:
@@ -1332,7 +1332,7 @@ func TestAgentSessionUpdateOptionsAffectsActiveEndpointingDelay(t *testing.T) {
 	minDelay := 0.01
 	session.UpdateOptions(AgentSessionUpdateOptions{MinEndpointingDelay: &minDelay})
 
-	activity.runEOUDetection(EndOfTurnInfo{NewTranscript: "updated delay"})
+	activity.runEOUDetection(EndOfTurnInfo{NewTranscript: "updated delay", TranscriptConfidence: 0.9})
 
 	select {
 	case msg := <-agent.turns:
@@ -1420,9 +1420,10 @@ func TestAgentActivityOnFinalTranscriptEmitsUserInputTranscribed(t *testing.T) {
 
 	activity.OnFinalTranscript(&stt.SpeechEvent{
 		Alternatives: []stt.SpeechData{{
-			Language:  "en",
-			Text:      "final transcript",
-			SpeakerID: "speaker-1",
+			Language:   "en",
+			Text:       "final transcript",
+			Confidence: 0.9,
+			SpeakerID:  "speaker-1",
 		}},
 	})
 
@@ -1554,7 +1555,7 @@ func TestAgentActivityOnFinalTranscriptInterruptsCurrentSpeechForVADTurnDetectio
 	activity.currentSpeech = current
 
 	activity.OnFinalTranscript(&stt.SpeechEvent{
-		Alternatives: []stt.SpeechData{{Text: "final fallback"}},
+		Alternatives: []stt.SpeechData{{Text: "final fallback", Confidence: 0.9}},
 	})
 
 	waitForInterrupted(t, current)
@@ -1569,7 +1570,7 @@ func TestAgentActivityOnFinalTranscriptDoesNotInterruptManualTurnDetection(t *te
 	activity.currentSpeech = current
 
 	activity.OnFinalTranscript(&stt.SpeechEvent{
-		Alternatives: []stt.SpeechData{{Text: "manual final"}},
+		Alternatives: []stt.SpeechData{{Text: "manual final", Confidence: 0.9}},
 	})
 
 	if current.IsInterrupted() {
@@ -1727,6 +1728,41 @@ func TestAgentActivityCommitUserTurnGeneratesReplyWhenLLMConfigured(t *testing.T
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("CommitUserTurn did not generate a reply")
+	}
+}
+
+func TestAgentActivityCommitUserTurnRejectsZeroConfidenceTranscript(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	defer activity.Stop()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "phantom turn", Confidence: 0}},
+	})
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "" {
+		t.Fatalf("CommitUserTurn transcript = %q, want empty for zero-confidence transcript", transcript)
+	}
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called for zero-confidence transcript with %q", msg.TextContent())
+	case <-time.After(20 * time.Millisecond):
+	}
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("unexpected SpeechCreated event for zero-confidence transcript: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if len(agent.ChatCtx.Items) != 0 {
+		t.Fatalf("agent chat context has %d items, want no zero-confidence user message", len(agent.ChatCtx.Items))
 	}
 }
 
@@ -1900,7 +1936,7 @@ func TestAgentActivityCommitUserTurnSkipsWhenCurrentSpeechCannotBeInterrupted(t 
 	activity.currentSpeech = NewSpeechHandle(false, DefaultInputDetails())
 
 	activity.OnFinalTranscript(&stt.SpeechEvent{
-		Alternatives: []stt.SpeechData{{Text: "do not interrupt"}},
+		Alternatives: []stt.SpeechData{{Text: "do not interrupt", Confidence: 0.9}},
 	})
 
 	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
@@ -1931,7 +1967,7 @@ func TestAgentActivityCommitUserTurnInterruptsCurrentSpeechBeforeReply(t *testin
 	activity.currentSpeech = current
 
 	activity.OnFinalTranscript(&stt.SpeechEvent{
-		Alternatives: []stt.SpeechData{{Text: "interrupt and reply"}},
+		Alternatives: []stt.SpeechData{{Text: "interrupt and reply", Confidence: 0.9}},
 	})
 
 	done := make(chan error, 1)
@@ -2151,7 +2187,7 @@ func TestAgentActivityCommitUserTurnSkipsWhenSchedulingPaused(t *testing.T) {
 	activity.schedulingPaused = true
 
 	activity.OnFinalTranscript(&stt.SpeechEvent{
-		Alternatives: []stt.SpeechData{{Text: "paused turn"}},
+		Alternatives: []stt.SpeechData{{Text: "paused turn", Confidence: 0.9}},
 	})
 
 	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
@@ -2183,7 +2219,7 @@ func TestAgentActivityCommitUserTurnSkipsReplyWhenHookPausesScheduling(t *testin
 	session.activity = activity
 
 	activity.OnFinalTranscript(&stt.SpeechEvent{
-		Alternatives: []stt.SpeechData{{Text: "pause after hook"}},
+		Alternatives: []stt.SpeechData{{Text: "pause after hook", Confidence: 0.9}},
 	})
 
 	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
@@ -2221,7 +2257,7 @@ func TestAgentActivityCommitUserTurnStopResponseSkipsReply(t *testing.T) {
 	session.activity = activity
 
 	activity.OnFinalTranscript(&stt.SpeechEvent{
-		Alternatives: []stt.SpeechData{{Text: "stop response"}},
+		Alternatives: []stt.SpeechData{{Text: "stop response", Confidence: 0.9}},
 	})
 
 	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
@@ -2260,7 +2296,7 @@ func TestAgentActivityCommitUserTurnHookErrorSkipsReply(t *testing.T) {
 	session.activity = activity
 
 	activity.OnFinalTranscript(&stt.SpeechEvent{
-		Alternatives: []stt.SpeechData{{Text: "hook error"}},
+		Alternatives: []stt.SpeechData{{Text: "hook error", Confidence: 0.9}},
 	})
 
 	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
@@ -2294,7 +2330,7 @@ func TestAgentActivityCommitUserTurnSkipsReplyWhenLLMMissing(t *testing.T) {
 	session.activity = activity
 
 	activity.OnFinalTranscript(&stt.SpeechEvent{
-		Alternatives: []stt.SpeechData{{Text: "no llm"}},
+		Alternatives: []stt.SpeechData{{Text: "no llm", Confidence: 0.9}},
 	})
 
 	if _, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{}); err != nil {
@@ -2339,6 +2375,35 @@ func TestAgentActivityAutomaticTurnCompletionConsumesPendingTranscript(t *testin
 	case msg := <-agent.turns:
 		t.Fatalf("CommitUserTurn duplicated completed turn with %q", msg.TextContent())
 	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestAgentActivityAutomaticTurnRejectsZeroConfidenceTranscript(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "phantom automatic turn", Confidence: 0}},
+	})
+
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called for zero-confidence automatic transcript with %q", msg.TextContent())
+	case <-time.After(50 * time.Millisecond):
+	}
+	if len(agent.ChatCtx.Items) != 0 {
+		t.Fatalf("agent chat context has %d items, want no zero-confidence automatic message", len(agent.ChatCtx.Items))
+	}
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "" {
+		t.Fatalf("CommitUserTurn transcript = %q, want empty after rejecting zero-confidence automatic transcript", transcript)
 	}
 }
 

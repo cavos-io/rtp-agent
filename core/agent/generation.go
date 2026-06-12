@@ -106,9 +106,7 @@ func PerformLLMInference(
 						continue
 					}
 					f := fc
-					if f.ID == "" {
-						f.ID = fmt.Sprintf("%s/fnc_%d", data.ID, len(data.GeneratedFunctions))
-					}
+					f.ID = fmt.Sprintf("%s/fnc_%d", data.ID, len(data.GeneratedFunctions))
 					data.GeneratedFunctions = append(data.GeneratedFunctions, f)
 					data.FunctionCh <- &f
 				}
@@ -482,11 +480,22 @@ func PerformToolExecutions(
 				defer wg.Done()
 				execCtx := ctx
 				if options.Session != nil {
+					args := fc.Arguments
+					if args == "" {
+						args = "{}"
+					}
+					if parsedArgs, err := llm.ParseFunctionArguments(args); err == nil {
+						if encodedArgs, err := json.Marshal(parsedArgs); err == nil {
+							args = string(encodedArgs)
+						}
+					}
 					functionCall := llm.FunctionCall{
+						ID:        fc.ID,
 						CallID:    fc.CallID,
 						Name:      fc.Name,
-						Arguments: fc.Arguments,
+						Arguments: args,
 						Extra:     fc.Extra,
+						CreatedAt: time.Now(),
 					}
 					execCtx = WithRunContext(execCtx, NewRunContext(options.Session, options.SpeechHandle, &functionCall))
 				}
@@ -494,6 +503,7 @@ func PerformToolExecutions(
 				result := llm.FunctionCallResult{}
 				if executionToolCtx == nil || executionToolCtx.GetFunctionTool(fc.Name) == nil {
 					fncCall := llm.FunctionCall{
+						ID:        fc.ID,
 						CallID:    fc.CallID,
 						Name:      fc.Name,
 						Arguments: fc.Arguments,

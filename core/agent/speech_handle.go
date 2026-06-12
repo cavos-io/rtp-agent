@@ -232,12 +232,26 @@ func (s *SpeechHandle) WaitForScheduled(ctx context.Context) error {
 }
 
 func (s *SpeechHandle) Wait(ctx context.Context) error {
+	if err := s.rejectOwningFunctionToolWait(ctx); err != nil {
+		return err
+	}
 	select {
 	case <-s.doneCh:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (s *SpeechHandle) rejectOwningFunctionToolWait(ctx context.Context) error {
+	runCtx := GetRunContext(ctx)
+	if runCtx == nil || runCtx.SpeechHandle != s || runCtx.FunctionCall == nil {
+		return nil
+	}
+	if nonBlocking, _ := runCtx.FunctionCall.Extra["__livekit_agents_tool_non_blocking"].(bool); nonBlocking {
+		return nil
+	}
+	return fmt.Errorf("cannot call `SpeechHandle.wait_for_playout()` from inside the function tool `%s` that owns this SpeechHandle. This creates a circular wait: the speech handle is waiting for the function tool to complete, while the function tool is simultaneously waiting for the speech handle.\nTo wait for the assistant's spoken response prior to running this tool, use `RunContext.wait_for_playout()` instead", runCtx.FunctionCall.Name)
 }
 
 func (s *SpeechHandle) WaitIfNotInterrupted(ctx context.Context, workDone ...<-chan error) error {
