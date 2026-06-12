@@ -166,6 +166,9 @@ func TestRunContextUpdateRecordsStandaloneProgress(t *testing.T) {
 	if firstCall.Extra["trace_id"] != "trace_123" {
 		t.Fatalf("first update extra trace_id = %#v, want copied original value", firstCall.Extra["trace_id"])
 	}
+	if _, ok := firstCall.Extra["__livekit_agents_tool_non_blocking"]; ok {
+		t.Fatalf("first update extra has nonblocking marker for standalone update: %#v", firstCall.Extra)
+	}
 	if got, want := updates[0].FunctionCallOutput.Output, "The tool `lookup` has updated, message: halfway there\nThe task is still running, so DON'T make up or give information not included in the message above."; got != want {
 		t.Fatalf("first update output = %q, want default template output %q", got, want)
 	}
@@ -176,6 +179,12 @@ func TestRunContextUpdateRecordsStandaloneProgress(t *testing.T) {
 	}
 	if secondCall.Extra["trace_id"] != "mutated" {
 		t.Fatalf("second update extra trace_id = %#v, want latest copied value", secondCall.Extra["trace_id"])
+	}
+	if _, ok := secondCall.Extra["__livekit_agents_tool_non_blocking"]; ok {
+		t.Fatalf("second update extra has nonblocking marker for standalone update: %#v", secondCall.Extra)
+	}
+	if _, ok := runCtx.FunctionCall.Extra["__livekit_agents_tool_non_blocking"]; ok {
+		t.Fatalf("original function call extra has nonblocking marker for standalone update: %#v", runCtx.FunctionCall.Extra)
 	}
 	if got, want := updates[1].FunctionCallOutput.Output, `{'status': 'done'}`; got != want {
 		t.Fatalf("second update output = %q, want Python-style dict output %q", got, want)

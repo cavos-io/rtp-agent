@@ -499,6 +499,7 @@ func PerformToolExecutions(
 						CreatedAt: time.Now(),
 					}
 					runCtx = NewRunContext(options.Session, options.SpeechHandle, &functionCall)
+					runCtx.attach()
 					execCtx = WithRunContext(execCtx, runCtx)
 				}
 				executionToolCtx := mockToolContext(execCtx, toolCtx, options.Session, fc.Name)

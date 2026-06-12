@@ -220,6 +220,7 @@ type RunContext struct {
 	FunctionCall     *llm.FunctionCall
 	initialStepIndex int
 	updates          []RunContextUpdate
+	attached         bool
 	detached         bool
 	mu               sync.Mutex
 }
@@ -293,7 +294,7 @@ func (r *RunContext) Update(message any, templates ...string) error {
 		return nil
 	}
 	updateStep := len(r.updates)
-	if updateStep == 0 {
+	if updateStep == 0 && r.attached {
 		if r.FunctionCall.Extra == nil {
 			r.FunctionCall.Extra = make(map[string]any)
 		}
@@ -328,11 +329,22 @@ func (r *RunContext) Updates() []RunContextUpdate {
 	return updates
 }
 
+func (r *RunContext) attach() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.attached = true
+	r.detached = false
+	r.mu.Unlock()
+}
+
 func (r *RunContext) detach() {
 	if r == nil {
 		return
 	}
 	r.mu.Lock()
+	r.attached = false
 	r.detached = true
 	r.mu.Unlock()
 }
