@@ -1220,6 +1220,9 @@ func buildLLMScenarioMessage(item map[string]any) (*lkllm.ChatMessage, error) {
 		Role:    lkllm.ChatRole(stringArg(item, "role")),
 		Content: []lkllm.ChatContent{{Text: stringArg(item, "text")}},
 	}
+	if metrics, ok := item["metrics"].(map[string]any); ok {
+		message.Metrics = metrics
+	}
 	if _, ok := item["text"]; !ok {
 		message.Content = nil
 	}
@@ -1361,6 +1364,7 @@ func runLLMChatContextCallStep(state *llmScenarioState, step llmScenarioStepSpec
 		state.vars[step.Assign] = ctx.ToDict(lkllm.ChatContextDictOptions{
 			ExcludeFunctionCall: scenarioBoolArg(step.Args, "exclude_function_call"),
 			ExcludeConfigUpdate: scenarioBoolArg(step.Args, "exclude_config_update"),
+			ExcludeMetrics:      scenarioBoolArg(step.Args, "exclude_metrics"),
 		})
 	case "to_provider_format":
 		options := lkllm.ChatContextProviderFormatOptions{}

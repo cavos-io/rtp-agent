@@ -1186,6 +1186,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         content: list[Any] | None = None,
         *,
         created_at: float = 0.0,
+        metrics: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return {
             "id": item_id,
@@ -1194,7 +1195,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             "content": list(content or []),
             "interrupted": False,
             "extra": {},
-            "metrics": {},
+            "metrics": dict(metrics or {}),
             "created_at": created_at,
         }
 
@@ -1442,6 +1443,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         *,
         exclude_function_call: bool = False,
         exclude_config_update: bool = False,
+        exclude_metrics: bool = False,
     ) -> dict[str, Any]:
         out: list[dict[str, Any]] = []
         for item in items:
@@ -1468,6 +1470,8 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                         continue
                     content.append(part)
                 data["content"] = content
+                if exclude_metrics:
+                    data.pop("metrics", None)
             out.append(data)
         return {"items": out}
 
@@ -1610,6 +1614,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 str(item.get("role", "")),
                 content,
                 created_at=float(item.get("created_at_unix", 0.0)),
+                metrics=item.get("metrics", {}),
             )
         if item_type == "function_call":
             return function_call(
@@ -1744,6 +1749,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 target_items,
                 exclude_function_call=bool(args.get("exclude_function_call", False)),
                 exclude_config_update=bool(args.get("exclude_config_update", False)),
+                exclude_metrics=bool(args.get("exclude_metrics", False)),
             )
             return
         if op == "to_provider_format":

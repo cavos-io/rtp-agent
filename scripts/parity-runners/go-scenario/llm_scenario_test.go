@@ -1257,6 +1257,85 @@ func TestRunLLMChatContextRunsDeclarativeToDictScenario(t *testing.T) {
 	}
 }
 
+func TestRunLLMChatContextRunsDeclarativeToDictMetricsFilterScenario(t *testing.T) {
+	input := json.RawMessage(`{
+		"spec_version": "1.0",
+		"kind": "parity-scenario",
+		"contract": "llm-chat-context",
+		"fixtures": [
+			{
+				"name": "ctx",
+				"factory": "llm_chat_context.items",
+				"args": {
+					"items": [
+						{
+							"type": "message",
+							"id": "message",
+							"role": "assistant",
+							"text": "hello",
+							"metrics": {"llm_node_ttft": 0.25}
+						}
+					]
+				}
+			}
+		],
+		"steps": [
+			{"kind": "call", "op": "to_dict", "target": "ctx", "args": {}, "assign": "with_metrics"},
+			{"kind": "call", "op": "to_dict", "target": "ctx", "args": {"exclude_metrics": true}, "assign": "without_metrics"},
+			{
+				"kind": "emit",
+				"name": "dict_metrics_filter",
+				"fields": [
+					{"name": "with_metrics", "from": "with_metrics"},
+					{"name": "without_metrics", "from": "without_metrics"}
+				]
+			}
+		]
+	}`)
+
+	got, err := runLLMChatContext(input)
+	if err != nil {
+		t.Fatalf("runLLMChatContext() error = %v", err)
+	}
+
+	want := map[string]any{
+		"contract": "llm-chat-context",
+		"events": []map[string]any{
+			{
+				"name": "dict_metrics_filter",
+				"with_metrics": map[string]any{
+					"items": []map[string]any{
+						{
+							"id":          "message",
+							"type":        "message",
+							"role":        "assistant",
+							"content":     []any{"hello"},
+							"interrupted": false,
+							"extra":       map[string]any{},
+							"metrics":     map[string]any{"llm_node_ttft": 0.25},
+						},
+					},
+				},
+				"without_metrics": map[string]any{
+					"items": []map[string]any{
+						{
+							"id":          "message",
+							"type":        "message",
+							"role":        "assistant",
+							"content":     []any{"hello"},
+							"interrupted": false,
+							"extra":       map[string]any{},
+						},
+					},
+				},
+			},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("runLLMChatContext() = %#v, want %#v", got, want)
+	}
+}
+
 func TestRunLLMChatContextRunsDeclarativeInstructionsScenario(t *testing.T) {
 	input := json.RawMessage(`{
 		"spec_version": "1.0",
