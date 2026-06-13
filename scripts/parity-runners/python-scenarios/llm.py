@@ -178,6 +178,113 @@ def llm_api_errors(input_data: Any) -> dict[str, Any]:
                 }
             )
         return {"contract": "llm-api-errors", "events": events}
+    if action == "status_retryable_override":
+        cases = [
+            ("client_forces_false", 400, True),
+            ("transient_keeps_true", 429, True),
+            ("server_keeps_false", 500, False),
+        ]
+        events = []
+        for name, status, retryable in cases:
+            err = module.APIStatusError(
+                name,
+                status_code=status,
+                request_id=f"req_{status}",
+                body=None,
+                retryable=retryable,
+            )
+            events.append(
+                {
+                    "name": "status_retryable_override",
+                    "case": name,
+                    "status": err.status_code,
+                    "request_id": err.request_id,
+                    "retryable": err.retryable,
+                    "message": err.message,
+                    "body_is_nil": err.body is None,
+                }
+            )
+        return {"contract": "llm-api-errors", "events": events}
+    if action == "status_string":
+        err = module.APIStatusError(
+            "quota exceeded",
+            status_code=429,
+            request_id="req_123",
+            body={"type": "rate_limit"},
+        )
+        return {
+            "contract": "llm-api-errors",
+            "events": [
+                {
+                    "name": "status_string",
+                    "error": str(err),
+                    "message": err.message,
+                    "status": err.status_code,
+                    "request_id": err.request_id,
+                    "retryable": err.retryable,
+                }
+            ],
+        }
+    if action == "status_string_nested_body":
+        err = module.APIStatusError(
+            "quota exceeded",
+            status_code=429,
+            request_id="req_123",
+            body={"errors": ["rate", "quota"], "meta": {"retry": False}},
+        )
+        return {
+            "contract": "llm-api-errors",
+            "events": [
+                {
+                    "name": "status_string_nested_body",
+                    "error": str(err),
+                    "message": err.message,
+                    "status": err.status_code,
+                    "request_id": err.request_id,
+                    "retryable": err.retryable,
+                }
+            ],
+        }
+    if action == "status_string_quotes":
+        err = module.APIStatusError(
+            "can't retry",
+            status_code=400,
+            request_id="req_400",
+            body={"detail": "can't retry"},
+        )
+        return {
+            "contract": "llm-api-errors",
+            "events": [
+                {
+                    "name": "status_string_quotes",
+                    "error": str(err),
+                    "message": err.message,
+                    "status": err.status_code,
+                    "request_id": err.request_id,
+                    "retryable": err.retryable,
+                }
+            ],
+        }
+    if action == "status_string_floats":
+        err = module.APIStatusError(
+            "quota exceeded",
+            status_code=429,
+            request_id="req_123",
+            body={"ratio": 1.0, "wait": 1.25},
+        )
+        return {
+            "contract": "llm-api-errors",
+            "events": [
+                {
+                    "name": "status_string_floats",
+                    "error": str(err),
+                    "message": err.message,
+                    "status": err.status_code,
+                    "request_id": err.request_id,
+                    "retryable": err.retryable,
+                }
+            ],
+        }
     if action == "base_error":
         err = module.APIError(
             "provider failed",

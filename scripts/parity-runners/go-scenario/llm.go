@@ -134,6 +134,96 @@ func runLLMAPIErrors(input json.RawMessage) (any, error) {
 			})
 		}
 		return map[string]any{"contract": "llm-api-errors", "events": events}, nil
+	case "status_retryable_override":
+		tests := []struct {
+			name      string
+			status    int
+			retryable bool
+		}{
+			{name: "client_forces_false", status: 400, retryable: true},
+			{name: "transient_keeps_true", status: 429, retryable: true},
+			{name: "server_keeps_false", status: 500, retryable: false},
+		}
+		events := make([]map[string]any, 0, len(tests))
+		for _, test := range tests {
+			err := lkllm.NewAPIStatusErrorWithRetryable(test.name, test.status, fmt.Sprintf("req_%d", test.status), nil, test.retryable)
+			events = append(events, map[string]any{
+				"name":        "status_retryable_override",
+				"case":        test.name,
+				"status":      err.StatusCode,
+				"request_id":  err.RequestID,
+				"retryable":   err.Retryable,
+				"message":     err.Message,
+				"body_is_nil": err.Body == nil,
+			})
+		}
+		return map[string]any{"contract": "llm-api-errors", "events": events}, nil
+	case "status_string":
+		err := lkllm.NewAPIStatusError("quota exceeded", 429, "req_123", map[string]any{"type": "rate_limit"})
+		return map[string]any{
+			"contract": "llm-api-errors",
+			"events": []map[string]any{
+				{
+					"name":       "status_string",
+					"error":      err.Error(),
+					"message":    err.Message,
+					"status":     err.StatusCode,
+					"request_id": err.RequestID,
+					"retryable":  err.Retryable,
+				},
+			},
+		}, nil
+	case "status_string_nested_body":
+		err := lkllm.NewAPIStatusError("quota exceeded", 429, "req_123", map[string]any{
+			"errors": []any{"rate", "quota"},
+			"meta":   map[string]any{"retry": false},
+		})
+		return map[string]any{
+			"contract": "llm-api-errors",
+			"events": []map[string]any{
+				{
+					"name":       "status_string_nested_body",
+					"error":      err.Error(),
+					"message":    err.Message,
+					"status":     err.StatusCode,
+					"request_id": err.RequestID,
+					"retryable":  err.Retryable,
+				},
+			},
+		}, nil
+	case "status_string_quotes":
+		err := lkllm.NewAPIStatusError("can't retry", 400, "req_400", map[string]any{"detail": "can't retry"})
+		return map[string]any{
+			"contract": "llm-api-errors",
+			"events": []map[string]any{
+				{
+					"name":       "status_string_quotes",
+					"error":      err.Error(),
+					"message":    err.Message,
+					"status":     err.StatusCode,
+					"request_id": err.RequestID,
+					"retryable":  err.Retryable,
+				},
+			},
+		}, nil
+	case "status_string_floats":
+		err := lkllm.NewAPIStatusError("quota exceeded", 429, "req_123", map[string]any{
+			"ratio": 1.0,
+			"wait":  1.25,
+		})
+		return map[string]any{
+			"contract": "llm-api-errors",
+			"events": []map[string]any{
+				{
+					"name":       "status_string_floats",
+					"error":      err.Error(),
+					"message":    err.Message,
+					"status":     err.StatusCode,
+					"request_id": err.RequestID,
+					"retryable":  err.Retryable,
+				},
+			},
+		}, nil
 	case "base_error":
 		err := lkllm.NewAPIError("provider failed", map[string]any{"code": "overloaded"}, true)
 		body, _ := err.Body.(map[string]any)
