@@ -2445,6 +2445,21 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             source = variables[str(step.get("args", {}).get("source", ""))]
             variables[step["assign"]] = build_declarative_items(source["items"])
             return
+        if op == "from_dict_capture_error":
+            data = step.get("args", {}).get("data", {})
+            if "items" not in data:
+                variables[step["assign"]] = "items_required"
+                return
+            if data.get("items") is None:
+                variables[step["assign"]] = "items_list_required"
+                return
+            try:
+                target_items[:] = build_declarative_items(data["items"])
+            except Exception:
+                variables[step["assign"]] = "invalid_items"
+                return
+            variables[step["assign"]] = ""
+            return
         if op == "to_provider_format":
             args = step.get("args", {})
             variables[step["assign"]] = to_provider_format(

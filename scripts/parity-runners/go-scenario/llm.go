@@ -1414,6 +1414,23 @@ func runLLMChatContextCallStep(state *llmScenarioState, step llmScenarioStepSpec
 			return err
 		}
 		state.vars[step.Assign] = restored
+	case "from_dict_capture_error":
+		data, ok := step.Args["data"].(map[string]any)
+		if !ok {
+			return errors.New("from_dict_capture_error requires data")
+		}
+		err := ctx.FromDict(data)
+		_, hasItems := data["items"]
+		switch {
+		case err == nil:
+			state.vars[step.Assign] = ""
+		case !hasItems:
+			state.vars[step.Assign] = "items_required"
+		case data["items"] == nil:
+			state.vars[step.Assign] = "items_list_required"
+		default:
+			state.vars[step.Assign] = "invalid_items"
+		}
 	case "to_provider_format":
 		options := lkllm.ChatContextProviderFormatOptions{}
 		if _, ok := step.Args["inject_dummy_user_message"]; ok {
