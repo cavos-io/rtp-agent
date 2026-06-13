@@ -1804,6 +1804,20 @@ func transformLLMScenarioField(state *llmScenarioState, value any, transform str
 			return nil, err
 		}
 		return len(extra) > 0, nil
+	case "provider_tool_output_contents":
+		messages, ok := value.([]map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use provider_tool_output_contents", value)
+		}
+		contents := make([]string, 0)
+		for _, message := range messages {
+			if message["role"] != "tool" {
+				continue
+			}
+			content, _ := message["content"].(string)
+			contents = append(contents, content)
+		}
+		return contents, nil
 	case "provider_message_count":
 		messages, ok := value.([]map[string]any)
 		if !ok {

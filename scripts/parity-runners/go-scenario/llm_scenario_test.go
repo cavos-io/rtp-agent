@@ -1603,6 +1603,58 @@ func TestRunLLMChatContextRunsDeclarativeOpenAIEmptyExtraContentScenario(t *test
 	}
 }
 
+func TestRunLLMChatContextRunsDeclarativeOpenAIMultipleToolOutputsScenario(t *testing.T) {
+	input := json.RawMessage(`{
+		"spec_version": "1.0",
+		"kind": "parity-scenario",
+		"contract": "llm-chat-context",
+		"fixtures": [
+			{
+				"name": "ctx",
+				"factory": "llm_chat_context.items",
+				"args": {
+					"items": [
+						{"type": "message", "id": "assistant", "role": "assistant", "text": "checking"},
+						{"type": "function_call", "id": "assistant/tool", "call_id": "call_lookup", "name": "lookup", "arguments": "{\"city\":\"Paris\"}"},
+						{"type": "function_call_output", "id": "output-1", "call_id": "call_lookup", "name": "lookup", "output": "first"},
+						{"type": "function_call_output", "id": "output-2", "call_id": "call_lookup", "name": "lookup", "output": "second"}
+					]
+				}
+			}
+		],
+		"steps": [
+			{"kind": "call", "op": "to_provider_format", "target": "ctx", "args": {"format": "openai"}, "assign": "messages"},
+			{
+				"kind": "emit",
+				"name": "openai_multiple_tool_outputs",
+				"fields": [
+					{"name": "message_count", "from": "messages", "transform": "provider_message_count"},
+					{"name": "tool_output_contents", "from": "messages", "transform": "provider_tool_output_contents"}
+				]
+			}
+		]
+	}`)
+
+	got, err := runLLMChatContext(input)
+	if err != nil {
+		t.Fatalf("runLLMChatContext() error = %v", err)
+	}
+
+	want := map[string]any{
+		"contract": "llm-chat-context",
+		"events": []map[string]any{
+			{
+				"name":                 "openai_multiple_tool_outputs",
+				"message_count":        3,
+				"tool_output_contents": []string{"first", "second"},
+			},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("runLLMChatContext() = %#v, want %#v", got, want)
+	}
+}
+
 func TestRunLLMChatContextRunsDeclarativeInstructionsScenario(t *testing.T) {
 	input := json.RawMessage(`{
 		"spec_version": "1.0",

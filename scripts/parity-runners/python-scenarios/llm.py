@@ -1527,6 +1527,15 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                         tool_call["extra_content"] = extra_content
                     messages[-1].setdefault("tool_calls", []).append(tool_call)
                     continue
+                if item["type"] == "function_call_output":
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": item["call_id"],
+                            "content": item["output"],
+                        }
+                    )
+                    continue
                 if item["type"] != "message":
                     continue
                 parts: list[dict[str, Any]] = []
@@ -2038,6 +2047,12 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 for tool_call in message_item.get("tool_calls", []):
                     return bool(tool_call.get("extra_content", {}))
             return False
+        if transform == "provider_tool_output_contents":
+            return [
+                message_item.get("content", "")
+                for message_item in value
+                if message_item.get("role") == "tool"
+            ]
         if transform == "provider_message_count":
             return len(value)
         if transform == "provider_last_role":
