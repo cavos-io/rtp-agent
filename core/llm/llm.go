@@ -817,6 +817,23 @@ type RealtimeCapabilities struct {
 	SupportsSay             bool
 }
 
+func (c RealtimeCapabilities) MarshalJSON() ([]byte, error) {
+	type realtimeCapabilitiesPayload struct {
+		MessageTruncation       bool `json:"message_truncation"`
+		TurnDetection           bool `json:"turn_detection"`
+		UserTranscription       bool `json:"user_transcription"`
+		AutoToolReplyGeneration bool `json:"auto_tool_reply_generation"`
+		AudioOutput             bool `json:"audio_output"`
+		ManualFunctionCalls     bool `json:"manual_function_calls"`
+		MutableChatContext      bool `json:"mutable_chat_context"`
+		MutableInstructions     bool `json:"mutable_instructions"`
+		MutableTools            bool `json:"mutable_tools"`
+		PerResponseToolChoice   bool `json:"per_response_tool_choice"`
+		SupportsSay             bool `json:"supports_say"`
+	}
+	return json.Marshal(realtimeCapabilitiesPayload(c))
+}
+
 func (c *RealtimeCapabilities) UnmarshalJSON(data []byte) error {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil {

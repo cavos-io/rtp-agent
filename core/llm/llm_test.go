@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -412,6 +413,49 @@ func TestRealtimeCapabilitiesExposeReferenceFlags(t *testing.T) {
 
 	if !capabilities.ManualFunctionCalls || !capabilities.MutableChatContext || !capabilities.MutableInstructions || !capabilities.MutableTools || !capabilities.PerResponseToolChoice || !capabilities.SupportsSay {
 		t.Fatalf("capabilities missing reference flags: %#v", capabilities)
+	}
+}
+
+func TestRealtimeCapabilitiesMarshalJSONMatchesReferencePayload(t *testing.T) {
+	data, err := json.Marshal(RealtimeCapabilities{
+		MessageTruncation:       true,
+		TurnDetection:           true,
+		UserTranscription:       true,
+		AutoToolReplyGeneration: true,
+		AudioOutput:             true,
+		ManualFunctionCalls:     true,
+		MutableChatContext:      true,
+		MutableInstructions:     true,
+		MutableTools:            true,
+		PerResponseToolChoice:   true,
+		SupportsSay:             true,
+	})
+	if err != nil {
+		t.Fatalf("Marshal RealtimeCapabilities returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal RealtimeCapabilities payload returned error: %v", err)
+	}
+	want := map[string]any{
+		"message_truncation":         true,
+		"turn_detection":             true,
+		"user_transcription":         true,
+		"auto_tool_reply_generation": true,
+		"audio_output":               true,
+		"manual_function_calls":      true,
+		"mutable_chat_context":       true,
+		"mutable_instructions":       true,
+		"mutable_tools":              true,
+		"per_response_tool_choice":   true,
+		"supports_say":               true,
+	}
+	if !reflect.DeepEqual(payload, want) {
+		t.Fatalf("marshaled RealtimeCapabilities = %#v, want %#v", payload, want)
+	}
+	if _, ok := payload["MessageTruncation"]; ok {
+		t.Fatalf("marshaled RealtimeCapabilities leaked Go field name: %#v", payload)
 	}
 }
 
