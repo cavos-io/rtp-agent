@@ -871,16 +871,19 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 		var item struct {
 			ID         string   `json:"id"`
 			OldAgentID *string  `json:"old_agent_id"`
-			NewAgentID string   `json:"new_agent_id"`
+			NewAgentID *string  `json:"new_agent_id"`
 			CreatedAt  *float64 `json:"created_at"`
 		}
 		if err := json.Unmarshal(data, &item); err != nil {
 			return nil, err
 		}
+		if item.NewAgentID == nil {
+			return nil, fmt.Errorf("agent_handoff new_agent_id is required")
+		}
 		return &AgentHandoff{
 			ID:         itemIDOrDefault(item.ID),
 			OldAgentID: item.OldAgentID,
-			NewAgentID: item.NewAgentID,
+			NewAgentID: *item.NewAgentID,
 			CreatedAt:  chatItemCreatedAtOrDefault(item.CreatedAt),
 		}, nil
 	case "agent_config_update":

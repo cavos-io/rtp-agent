@@ -2020,6 +2020,21 @@ func TestChatContextUnmarshalJSONRejectsFunctionCallOutputMissingIsError(t *test
 	}
 }
 
+func TestChatContextUnmarshalJSONRejectsAgentHandoffMissingNewAgentID(t *testing.T) {
+	var ctx ChatContext
+	data := []byte(`{
+		"items": [{
+			"id": "handoff",
+			"type": "agent_handoff",
+			"old_agent_id": "previous"
+		}]
+	}`)
+
+	if err := json.Unmarshal(data, &ctx); err == nil {
+		t.Fatal("Unmarshal ChatContext error = nil, want missing agent_handoff new_agent_id error")
+	}
+}
+
 func TestChatContextItemsDefaultIDs(t *testing.T) {
 	data := []byte(`{
 		"items": [
