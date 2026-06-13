@@ -1291,7 +1291,10 @@ func (s *AgentServer) RTCSession(
 	s.entrypointFnc = entrypoint
 	s.requestFnc = request
 	s.sessionEndFnc = sessionEnd
-	if s.Options.AgentName == "" {
+	if agentName := os.Getenv("LIVEKIT_AGENT_NAME_OVERRIDE"); agentName != "" {
+		s.Options.AgentName = agentName
+		s.Options.AgentNameIsEnv = true
+	} else if s.Options.AgentName == "" {
 		if agentName := os.Getenv("LIVEKIT_AGENT_NAME"); agentName != "" {
 			s.Options.AgentName = agentName
 			s.Options.AgentNameIsEnv = true
