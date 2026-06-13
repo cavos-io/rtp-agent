@@ -1562,6 +1562,86 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             content.append({"text": "", "type": "text"})
         return content
 
+    def anthropic_tool_result_content(output: str) -> Any:
+        try:
+            parsed = json.loads(output)
+            if isinstance(parsed, list):
+                return parsed
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return output
+
+    def anthropic_system_messages(items: list[dict[str, Any]]) -> list[str]:
+        return [
+            text_content(item["content"]) or ""
+            for item in items
+            if item["type"] == "message"
+            and item["role"] == "system"
+            and (text_content(item["content"]) or "")
+        ]
+
+    def anthropic_messages(
+        items: list[dict[str, Any]],
+        *,
+        inject_dummy_user_message: bool,
+        inject_trailing_user_message: bool,
+    ) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = []
+        current_role: str | None = None
+        content: list[dict[str, Any]] = []
+
+        def flush() -> None:
+            nonlocal content, current_role
+            if current_role is not None and content:
+                messages.append({"role": current_role, "content": content})
+                content = []
+
+        for item in items:
+            if item["type"] == "message" and item["role"] == "system":
+                continue
+            if item["type"] == "message":
+                role = "assistant" if item["role"] == "assistant" else "user"
+                if role != current_role:
+                    flush()
+                    current_role = role
+                content.extend(anthropic_content_parts(item["content"]))
+                continue
+            if item["type"] == "function_call":
+                args = json.loads(item.get("arguments") or "{}")
+                if current_role != "assistant":
+                    flush()
+                    current_role = "assistant"
+                content.append(
+                    {
+                        "id": item["call_id"],
+                        "type": "tool_use",
+                        "name": item["name"],
+                        "input": args,
+                    }
+                )
+                continue
+            if item["type"] == "function_call_output":
+                if current_role != "user":
+                    flush()
+                    current_role = "user"
+                content.append(
+                    {
+                        "tool_use_id": item["call_id"],
+                        "type": "tool_result",
+                        "content": anthropic_tool_result_content(str(item["output"])),
+                        "is_error": bool(item.get("is_error", False)),
+                    }
+                )
+        flush()
+        if inject_dummy_user_message and (not messages or messages[0]["role"] != "user"):
+            messages.insert(
+                0,
+                {"role": "user", "content": [{"text": "(empty)", "type": "text"}]},
+            )
+        if inject_trailing_user_message and messages and messages[-1]["role"] == "assistant":
+            messages.append({"role": "user", "content": [{"text": " ", "type": "text"}]})
+        return messages
+
     def aws_image_part(part: dict[str, Any]) -> dict[str, Any]:
         image = str(part.get("image", ""))
         match = re.match(r"^data:image/([^;,]+);base64,(.*)$", image)
@@ -1781,6 +1861,12 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                         }
                     )
             return responses_items
+        if provider_format == "anthropic":
+            return anthropic_messages(
+                items,
+                inject_dummy_user_message=inject_dummy_user_message,
+                inject_trailing_user_message=inject_trailing_user_message,
+            )
         if provider_format == "mistralai":
             entries: list[dict[str, Any]] = []
             for item in items:
@@ -1943,6 +2029,8 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                     and (text_content(item["content"]) or "")
                 ]
             }
+        if provider_format == "anthropic":
+            extra = {"system_messages": anthropic_system_messages(items)}
         if provider_format == "mistralai":
             extra = {"instructions": mistral_instructions(items)}
         return {"messages": messages, "extra": extra}
