@@ -3064,6 +3064,17 @@ func runLLMValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "realtime_session_options_turn_detection":
+		options := lkllm.RealtimeSessionOptions{TurnDetection: map[string]any{"type": "server_vad"}}
+		return map[string]any{
+			"contract": "llm-value-objects",
+			"events": []map[string]any{
+				{
+					"name":           "realtime_session_options_turn_detection",
+					"turn_detection": options.TurnDetection,
+				},
+			},
+		}, nil
 	case "realtime_generate_reply_options":
 		options := lkllm.RealtimeGenerateReplyOptions{
 			Instructions: "answer briefly",
