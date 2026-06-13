@@ -226,7 +226,7 @@ if [[ "$TARGET_LANG" == "auto" ]]; then TARGET_LANG="$(auto_lang "$TARGET_DIR")"
 
 extract_python_symbols() {
   local root="$1"
-  find "$root" -type f -name '*.py' -print0 | sort -z | while IFS= read -r -d '' file; do
+  find "$root" -type f -name '*.py' -print0 | LC_ALL=C sort -z | while IFS= read -r -d '' file; do
     local rel="${file#$root/}"
     should_skip_dir_path "$rel" && continue
     is_test_path "$rel" && continue
@@ -296,7 +296,7 @@ extract_python_symbols() {
 
 extract_go_symbols() {
   local root="$1"
-  find "$root" -type f -name '*.go' -print0 | sort -z | while IFS= read -r -d '' file; do
+  find "$root" -type f -name '*.go' -print0 | LC_ALL=C sort -z | while IFS= read -r -d '' file; do
     local rel="${file#$root/}"
     should_skip_dir_path "$rel" && continue
     is_test_path "$rel" && continue

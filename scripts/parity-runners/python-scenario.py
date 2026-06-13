@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import importlib
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -42,11 +43,42 @@ def load_entrypoint(entrypoint: str) -> Callable[[Any], Any]:
     root = str(repo_root())
     if root not in sys.path:
         sys.path.insert(0, root)
-    module = importlib.import_module(module_name)
+    module = load_domain_module(module_name)
     function = getattr(module, function_name)
     if not callable(function):
         raise TypeError(f"{entrypoint} is not callable")
     return function
+
+
+def load_domain_module(module_name: str) -> Any:
+    scenarios_dir = repo_root() / "scripts/parity-runners/python-scenarios"
+    domain_path = scenarios_dir / f"{module_name}.py"
+    if not domain_path.exists():
+        return importlib.import_module(module_name)
+
+    load_common_module(scenarios_dir)
+
+    spec = importlib.util.spec_from_file_location(
+        f"rtp_agent_parity_python_scenarios_{module_name}",
+        domain_path,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load Python scenario module from {domain_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_common_module(scenarios_dir: Path) -> None:
+    if "common" in sys.modules:
+        return
+    common_path = scenarios_dir / "common.py"
+    spec = importlib.util.spec_from_file_location("common", common_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load Python scenario common module from {common_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["common"] = module
+    spec.loader.exec_module(module)
 
 
 def run_scenario(path: str) -> dict[str, Any]:
@@ -74,7 +106,7 @@ def run_scenario(path: str) -> dict[str, Any]:
 
 def main() -> int:
     if len(sys.argv) != 2:
-        print("usage: json-scenario-python.py SCENARIO_JSON", file=sys.stderr)
+        print("usage: python-scenario.py SCENARIO_JSON", file=sys.stderr)
         return 2
     try:
         output = run_scenario(sys.argv[1])

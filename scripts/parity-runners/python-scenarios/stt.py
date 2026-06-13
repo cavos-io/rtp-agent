@@ -1,0 +1,514 @@
+from common import *  # noqa: F403
+
+def stt_value_objects(input_data: Any) -> dict[str, Any]:
+    action = input_data.get("action", "speech_data_metadata")
+    module = load_reference_stt()
+    if action == "metadata_defaults":
+        class ScenarioSTT(module.STT):
+            def __init__(self) -> None:
+                super().__init__(
+                    capabilities=module.STTCapabilities(streaming=False, interim_results=False)
+                )
+                self.prewarm_calls = 0
+
+            async def _recognize_impl(self, buffer: Any, *, language: Any = None, conn_options: Any = None) -> Any:
+                return None
+
+            def prewarm(self) -> None:
+                self.prewarm_calls += 1
+
+        provider = ScenarioSTT()
+        provider.prewarm()
+        return {
+            "contract": "stt-value-objects",
+            "events": [
+                {
+                    "name": "metadata_defaults",
+                    "model": provider.model,
+                    "provider": provider.provider,
+                    "prewarm_calls": provider.prewarm_calls,
+                }
+            ],
+        }
+    if action == "speech_data_metadata":
+        word = load_reference_types().TimedString(
+            "hello",
+            start_time=0.1,
+            end_time=0.4,
+            confidence=0.95,
+            start_time_offset=1.2,
+            speaker_id="speaker-a",
+        )
+        data = module.SpeechData(
+            language="en",
+            text="hello",
+            words=[word],
+            source_languages=["en-US"],
+            source_texts=["hello"],
+            target_languages=["es"],
+            target_texts=["hola"],
+            metadata={"provider": "test"},
+        )
+        return {
+            "contract": "stt-value-objects",
+            "events": [
+                {
+                    "name": "speech_data_metadata",
+                    "language": str(data.language),
+                    "text": data.text,
+                    "word_text": str(data.words[0]),
+                    "word_start": data.words[0].start_time,
+                    "word_end": data.words[0].end_time,
+                    "word_confidence": data.words[0].confidence,
+                    "word_offset": data.words[0].start_time_offset,
+                    "word_speaker": data.words[0].speaker_id,
+                    "source_language": str(data.source_languages[0]),
+                    "source_text": data.source_texts[0],
+                    "target_language": str(data.target_languages[0]),
+                    "target_text": data.target_texts[0],
+                    "metadata": data.metadata["provider"],
+                }
+            ],
+        }
+    if action == "speech_event_usage":
+        event = module.SpeechEvent(
+            type=module.SpeechEventType.RECOGNITION_USAGE,
+            request_id="req-1",
+            recognition_usage=module.RecognitionUsage(
+                audio_duration=1.25,
+                input_tokens=3,
+                output_tokens=5,
+            ),
+            speech_start_time=42.5,
+        )
+        return {
+            "contract": "stt-value-objects",
+            "events": [
+                {
+                    "name": "speech_event_usage",
+                    "type": event.type.value,
+                    "request_id": event.request_id,
+                    "audio_duration": event.recognition_usage.audio_duration,
+                    "input_tokens": event.recognition_usage.input_tokens,
+                    "output_tokens": event.recognition_usage.output_tokens,
+                    "speech_start_time": event.speech_start_time,
+                }
+            ],
+        }
+    if action == "speech_event_json_fields":
+        word = load_reference_types().TimedString(
+            "hello",
+            start_time=1.0,
+            end_time=2.0,
+            confidence=0.9,
+            start_time_offset=0.25,
+            speaker_id="speaker-a",
+        )
+        alternative = module.SpeechData(
+            language="en",
+            text="hello",
+            start_time=1.0,
+            end_time=2.0,
+            confidence=0.9,
+            speaker_id="speaker-a",
+            is_primary_speaker=True,
+            words=[word],
+            source_languages=["en-US"],
+            source_texts=["hello"],
+            target_languages=["es"],
+            target_texts=["hola"],
+            metadata={"provider": "test"},
+        )
+        event = module.SpeechEvent(
+            type=module.SpeechEventType.RECOGNITION_USAGE,
+            request_id="req-1",
+            alternatives=[alternative],
+            recognition_usage=module.RecognitionUsage(
+                audio_duration=1.25,
+                input_tokens=3,
+                output_tokens=5,
+            ),
+            speech_start_time=12.5,
+        )
+        return {
+            "contract": "stt-value-objects",
+            "events": [
+                {
+                    "name": "speech_event_json_fields",
+                    "type": event.type.value,
+                    "request_id": event.request_id,
+                    "speech_start_time": event.speech_start_time,
+                    "has_recognition_usage": event.recognition_usage is not None,
+                    "has_camel_case": False,
+                    "has_target_only_interrupted": False,
+                    "alternative_start_time": int(event.alternatives[0].start_time),
+                    "alternative_end_time": int(event.alternatives[0].end_time),
+                    "alternative_speaker_id": event.alternatives[0].speaker_id,
+                    "alternative_is_primary_speaker": event.alternatives[0].is_primary_speaker,
+                    "word_start_time_offset": event.alternatives[0].words[0].start_time_offset,
+                    "word_speaker_id": event.alternatives[0].words[0].speaker_id,
+                }
+            ],
+        }
+    if action == "speech_event_empty_alternatives_marshal":
+        event = module.SpeechEvent(type=module.SpeechEventType.END_OF_SPEECH)
+        return {
+            "contract": "stt-value-objects",
+            "events": [
+                {
+                    "name": "speech_event_empty_alternatives_marshal",
+                    "type": event.type.value,
+                    "alternatives_is_list": isinstance(event.alternatives, list),
+                    "alternatives_length": len(event.alternatives),
+                }
+            ],
+        }
+    if action == "speech_event_empty_alternatives_unmarshal":
+        event = module.SpeechEvent(
+            type=module.SpeechEventType.END_OF_SPEECH,
+            request_id="req-1",
+        )
+        return {
+            "contract": "stt-value-objects",
+            "events": [
+                {
+                    "name": "speech_event_empty_alternatives_unmarshal",
+                    "type": event.type.value,
+                    "request_id": event.request_id,
+                    "alternatives_is_list": isinstance(event.alternatives, list),
+                    "alternatives_length": len(event.alternatives),
+                }
+            ],
+        }
+    if action == "stt_error_payload":
+        err = module.STTError(
+            type="stt_error",
+            timestamp=1.0,
+            label="provider.STT",
+            error=Exception("provider disconnected"),
+            recoverable=True,
+        )
+        return {
+            "contract": "stt-value-objects",
+            "events": [
+                {
+                    "name": "stt_error_payload",
+                    "type": err.type,
+                    "label": err.label,
+                    "recoverable": err.recoverable,
+                    "timestamp_positive": err.timestamp > 0,
+                    "error_message": str(err.error),
+                }
+            ],
+        }
+    if action == "stt_error_json":
+        err = module.STTError(
+            type="stt_error",
+            timestamp=1.0,
+            label="provider.STT",
+            error=Exception("provider disconnected"),
+            recoverable=True,
+        )
+        return {
+            "contract": "stt-value-objects",
+            "events": [
+                {
+                    "name": "stt_error_json",
+                    "type": err.type,
+                    "label": err.label,
+                    "recoverable": err.recoverable,
+                    "timestamp_positive": err.timestamp > 0,
+                    "has_error_field": False,
+                    "has_err_field": False,
+                }
+            ],
+        }
+    if action == "capabilities_json":
+        caps = module.STTCapabilities(
+            streaming=True,
+            interim_results=True,
+            diarization=True,
+            aligned_transcript="word",
+            offline_recognize=True,
+        )
+        return {
+            "contract": "stt-value-objects",
+            "events": [
+                {
+                    "name": "capabilities_json",
+                    "streaming": caps.streaming,
+                    "interim_results": caps.interim_results,
+                    "diarization": caps.diarization,
+                    "aligned_transcript": caps.aligned_transcript,
+                    "offline_recognize": caps.offline_recognize,
+                    "has_camel_case": False,
+                }
+            ],
+        }
+    if action == "capabilities_missing_aligned":
+        caps = module.STTCapabilities(streaming=True, interim_results=True)
+        return {
+            "contract": "stt-value-objects",
+            "events": [
+                {
+                    "name": "capabilities_missing_aligned",
+                    "aligned_transcript": caps.aligned_transcript,
+                }
+            ],
+        }
+    if action == "capabilities_unmarshal_defaults":
+        caps = module.STTCapabilities(
+            streaming=True,
+            interim_results=True,
+            diarization=False,
+            aligned_transcript=False,
+        )
+        return {
+            "contract": "stt-value-objects",
+            "events": [
+                {
+                    "name": "capabilities_unmarshal_defaults",
+                    "streaming": caps.streaming,
+                    "interim_results": caps.interim_results,
+                    "diarization": caps.diarization,
+                    "aligned_transcript": "" if caps.aligned_transcript is False else caps.aligned_transcript,
+                    "offline_recognize": caps.offline_recognize,
+                }
+            ],
+        }
+    raise ValueError(f"unsupported STT value object action {action!r}")
+
+
+def stt_fallback(input_data: Any) -> dict[str, Any]:
+    action = input_data.get("action", "metadata")
+    fallback_module = load_reference_stt_fallback()
+    stt_module = load_reference_stt()
+
+    def aligned(value: Any) -> str:
+        if value is False or value is None:
+            return ""
+        return str(value)
+
+    class FakeSTT(stt_module.STT):
+        def __init__(
+            self,
+            label: str,
+            *,
+            streaming: bool = True,
+            interim_results: bool = False,
+            diarization: bool = False,
+            aligned_transcript: Any = False,
+            offline_recognize: bool = True,
+        ) -> None:
+            super().__init__(
+                capabilities=stt_module.STTCapabilities(
+                    streaming=streaming,
+                    interim_results=interim_results,
+                    diarization=diarization,
+                    aligned_transcript=aligned_transcript,
+                    offline_recognize=offline_recognize,
+                )
+            )
+            self._label = label
+
+        async def _recognize_impl(self, *args: Any, **kwargs: Any) -> Any:
+            return stt_module.SpeechEvent(type=stt_module.SpeechEventType.FINAL_TRANSCRIPT)
+
+    def caps_event(name: str, adapter: Any) -> dict[str, Any]:
+        caps = adapter.capabilities
+        return {
+            "name": name,
+            "streaming": caps.streaming,
+            "interim_results": caps.interim_results,
+            "diarization": caps.diarization,
+            "aligned_transcript": aligned(caps.aligned_transcript),
+            "offline_recognize": caps.offline_recognize,
+        }
+
+    if action == "metadata":
+        adapter = fallback_module.FallbackAdapter([FakeSTT("primary")])
+        return {
+            "contract": "stt-fallback",
+            "events": [
+                {
+                    "name": "metadata",
+                    "model": adapter.model,
+                    "provider": adapter.provider,
+                }
+            ],
+        }
+    if action == "option_defaults":
+        adapter = fallback_module.FallbackAdapter([FakeSTT("primary")])
+        return {
+            "contract": "stt-fallback",
+            "events": [
+                {
+                    "name": "option_defaults",
+                    "max_retry_per_stt": adapter._max_retry_per_stt,
+                    "attempt_timeout_seconds": int(adapter._attempt_timeout),
+                    "retry_interval_seconds": int(adapter._retry_interval),
+                }
+            ],
+        }
+    if action == "validation":
+        mode = input_data.get("mode", "empty")
+        try:
+            if mode == "empty":
+                fallback_module.FallbackAdapter([])
+            elif mode == "nonstreaming":
+                fallback_module.FallbackAdapter([FakeSTT("offline", streaming=False)])
+            elif mode == "all_nonstreaming":
+                fallback_module.FallbackAdapter(
+                    [
+                        FakeSTT("offline-a", streaming=False),
+                        FakeSTT("offline-b", streaming=False),
+                    ]
+                )
+            else:
+                raise ValueError(f"unsupported STT fallback validation mode {mode!r}")
+        except Exception as exc:
+            return {
+                "contract": "stt-fallback",
+                "events": [
+                    {
+                        "name": f"validation_{mode}",
+                        "error": True,
+                        "error_class": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                ],
+            }
+        return {
+            "contract": "stt-fallback",
+            "events": [{"name": f"validation_{mode}", "error": False}],
+        }
+    if action == "capabilities":
+        mode = input_data.get("mode", "aggregate")
+        if mode == "aggregate":
+            adapter = fallback_module.FallbackAdapter(
+                [
+                    FakeSTT(
+                        "primary",
+                        streaming=True,
+                        interim_results=True,
+                        diarization=True,
+                        offline_recognize=False,
+                    ),
+                    FakeSTT(
+                        "fallback",
+                        streaming=True,
+                        interim_results=False,
+                        diarization=False,
+                        offline_recognize=True,
+                    ),
+                ]
+            )
+        elif mode == "offline_advertised":
+            adapter = fallback_module.FallbackAdapter(
+                [
+                    FakeSTT("primary", streaming=True, offline_recognize=False),
+                    FakeSTT("fallback", streaming=True, offline_recognize=False),
+                ]
+            )
+        elif mode == "aligned_primary":
+            adapter = fallback_module.FallbackAdapter(
+                [
+                    FakeSTT("primary", streaming=True, aligned_transcript="word"),
+                    FakeSTT("fallback", streaming=True, aligned_transcript="chunk"),
+                ]
+            )
+        elif mode == "aligned_cleared":
+            adapter = fallback_module.FallbackAdapter(
+                [
+                    FakeSTT("primary", streaming=True, aligned_transcript="word"),
+                    FakeSTT("fallback", streaming=True, aligned_transcript=False),
+                ]
+            )
+        else:
+            raise ValueError(f"unsupported STT fallback capabilities mode {mode!r}")
+        return {"contract": "stt-fallback", "events": [caps_event(f"capabilities_{mode}", adapter)]}
+    raise ValueError(f"unsupported STT fallback action {action!r}")
+
+
+def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
+    action = input_data.get("action", "capabilities")
+    stream_adapter_module = load_reference_stt_stream_adapter()
+    stt_module = load_reference_stt()
+
+    class FakeSTT(stt_module.STT):
+        def __init__(self, label: str, model: str = "", provider: str = "") -> None:
+            super().__init__(
+                capabilities=stt_module.STTCapabilities(
+                    streaming=False,
+                    interim_results=False,
+                    diarization=False,
+                    offline_recognize=True,
+                )
+            )
+            self._label = label
+            self._model = model
+            self._provider = provider
+
+        @property
+        def model(self) -> str:
+            return self._model or "unknown"
+
+        @property
+        def provider(self) -> str:
+            return self._provider or "unknown"
+
+        async def _recognize_impl(self, *args: Any, **kwargs: Any) -> Any:
+            return stt_module.SpeechEvent(type=stt_module.SpeechEventType.FINAL_TRANSCRIPT)
+
+    class FakeVAD:
+        pass
+
+    if action == "capabilities":
+        adapter = stream_adapter_module.StreamAdapter(stt=FakeSTT("wrapped"), vad=FakeVAD())
+        caps = adapter.capabilities
+        return {
+            "contract": "stt-stream-adapter",
+            "events": [
+                {
+                    "name": "capabilities",
+                    "streaming": caps.streaming,
+                    "interim_results": caps.interim_results,
+                    "diarization": caps.diarization,
+                    "aligned_transcript": ""
+                    if caps.aligned_transcript is False
+                    else caps.aligned_transcript,
+                    "offline_recognize": caps.offline_recognize,
+                }
+            ],
+        }
+    if action == "wrapped":
+        wrapped = FakeSTT("wrapped")
+        adapter = stream_adapter_module.StreamAdapter(stt=wrapped, vad=FakeVAD())
+        return {
+            "contract": "stt-stream-adapter",
+            "events": [
+                {
+                    "name": "wrapped",
+                    "same_instance": adapter.wrapped_stt is wrapped,
+                    "wrapped_label": adapter.wrapped_stt.label,
+                }
+            ],
+        }
+    if action == "metadata":
+        adapter = stream_adapter_module.StreamAdapter(
+            stt=FakeSTT("wrapped", model="wrapped-model", provider="wrapped-provider"),
+            vad=FakeVAD(),
+        )
+        return {
+            "contract": "stt-stream-adapter",
+            "events": [
+                {
+                    "name": "metadata",
+                    "model": adapter.model,
+                    "provider": adapter.provider,
+                }
+            ],
+        }
+    raise ValueError(f"unsupported STT stream adapter action {action!r}")
+
+

@@ -29,7 +29,7 @@ type handlerRegistry map[string]handler
 
 func main() {
 	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: json-scenario SCENARIO_JSON")
+		fmt.Fprintln(os.Stderr, "usage: go-scenario SCENARIO_JSON")
 		os.Exit(2)
 	}
 

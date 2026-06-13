@@ -1,0 +1,223 @@
+from common import *  # noqa: F403
+
+def tts_stream_adapter(input_data: Any) -> dict[str, Any]:
+    action = input_data.get("action", "metadata")
+    module = load_reference_tts_stream_adapter()
+
+    class ScenarioTTS(module.TTS):
+        def __init__(self) -> None:
+            super().__init__(
+                capabilities=module.TTSCapabilities(streaming=False),
+                sample_rate=24000,
+                num_channels=1,
+            )
+            self.prewarm_calls = 0
+            self.close_calls = 0
+
+        @property
+        def model(self) -> str:
+            return "voice-model"
+
+        @property
+        def provider(self) -> str:
+            return "voice-provider"
+
+        def synthesize(self, text: str, *, conn_options: Any = None) -> Any:
+            return None
+
+        def prewarm(self) -> None:
+            self.prewarm_calls += 1
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+
+    provider = ScenarioTTS()
+    adapter = module.StreamAdapter(tts=provider)
+
+    if action == "metadata":
+        return {
+            "contract": "tts-stream-adapter",
+            "events": [
+                {
+                    "name": "metadata",
+                    "model": adapter.model,
+                    "provider": adapter.provider,
+                    "sample_rate": adapter.sample_rate,
+                    "channels": adapter.num_channels,
+                    "streaming": adapter.capabilities.streaming,
+                    "aligned_transcript": adapter.capabilities.aligned_transcript,
+                }
+            ],
+        }
+    if action == "prewarm":
+        adapter.prewarm()
+        return {
+            "contract": "tts-stream-adapter",
+            "events": [{"name": "prewarm", "prewarm_calls": provider.prewarm_calls}],
+        }
+    if action == "close":
+        asyncio.run(adapter.aclose())
+        return {
+            "contract": "tts-stream-adapter",
+            "events": [{"name": "close", "close_calls": provider.close_calls}],
+        }
+    raise ValueError(f"unsupported TTS stream adapter action {action!r}")
+
+
+def tts_value_objects(input_data: Any) -> dict[str, Any]:
+    action = input_data.get("action", "metadata_defaults")
+    module = load_reference_tts()
+
+    class ScenarioTTS(module.TTS):
+        def synthesize(self, text: str, *, conn_options: Any = None) -> Any:
+            return None
+
+    tts = ScenarioTTS(
+        capabilities=module.TTSCapabilities(streaming=False),
+        sample_rate=24000,
+        num_channels=1,
+    )
+
+    if action == "metadata_defaults":
+        return {
+            "contract": "tts-value-objects",
+            "events": [
+                {
+                    "name": "metadata_defaults",
+                    "model": tts.model,
+                    "provider": tts.provider,
+                    "sample_rate": tts.sample_rate,
+                    "channels": tts.num_channels,
+                    "streaming": tts.capabilities.streaming,
+                }
+            ],
+        }
+    if action == "prewarm_noop":
+        tts.prewarm()
+        return {
+            "contract": "tts-value-objects",
+            "events": [
+                {"name": "prewarm_noop", "error": False},
+            ],
+        }
+    if action == "close_noop":
+        return {
+            "contract": "tts-value-objects",
+            "events": [
+                {"name": "close_noop", "error": False},
+            ],
+        }
+    if action == "tts_error_payload":
+        err = module.TTSError(
+            type="tts_error",
+            timestamp=1.0,
+            label="tts",
+            error=Exception("provider disconnected"),
+            recoverable=True,
+        )
+        return {
+            "contract": "tts-value-objects",
+            "events": [
+                {
+                    "name": "tts_error_payload",
+                    "type": err.type,
+                    "label": err.label,
+                    "recoverable": err.recoverable,
+                    "timestamp_positive": err.timestamp > 0,
+                    "error_message": str(err.error),
+                }
+            ],
+        }
+    raise ValueError(f"unsupported TTS value object action {action!r}")
+
+
+def tts_fallback(input_data: Any) -> dict[str, Any]:
+    action = input_data.get("action", "model_provider")
+    module = load_reference_tts_fallback()
+
+    class ScenarioTTS(module.TTS):
+        def synthesize(self, text: str, *, conn_options: Any = None) -> Any:
+            return None
+
+    provider = ScenarioTTS(
+        capabilities=module.TTSCapabilities(streaming=False),
+        sample_rate=24000,
+        num_channels=1,
+    )
+
+    if action == "model_provider":
+        adapter = module.FallbackAdapter([provider])
+        return {
+            "contract": "tts-fallback",
+            "events": [
+                {
+                    "name": "model_provider",
+                    "model": adapter.model,
+                    "provider": adapter.provider,
+                    "sample_rate": adapter.sample_rate,
+                    "channels": adapter.num_channels,
+                }
+            ],
+        }
+    if action == "sample_rate":
+        low = ScenarioTTS(
+            capabilities=module.TTSCapabilities(streaming=False),
+            sample_rate=16000,
+            num_channels=1,
+        )
+        high = ScenarioTTS(
+            capabilities=module.TTSCapabilities(streaming=False),
+            sample_rate=48000,
+            num_channels=1,
+        )
+        adapter = module.FallbackAdapter([low, high], sample_rate=24000)
+        return {
+            "contract": "tts-fallback",
+            "events": [
+                {
+                    "name": "sample_rate",
+                    "sample_rate": adapter.sample_rate,
+                    "channels": adapter.num_channels,
+                    "streaming": adapter.capabilities.streaming,
+                }
+            ],
+        }
+    if action == "validation":
+        mode = input_data.get("mode", "empty")
+        error = False
+        message = ""
+        try:
+            if mode == "empty":
+                module.FallbackAdapter([])
+            elif mode == "mixed_channels":
+                mono = ScenarioTTS(
+                    capabilities=module.TTSCapabilities(streaming=False),
+                    sample_rate=24000,
+                    num_channels=1,
+                )
+                stereo = ScenarioTTS(
+                    capabilities=module.TTSCapabilities(streaming=False),
+                    sample_rate=24000,
+                    num_channels=2,
+                )
+                module.FallbackAdapter([mono, stereo])
+            else:
+                raise ValueError(f"unsupported TTS fallback validation mode {mode!r}")
+        except ValueError as exc:
+            error = True
+            message = str(exc)
+        return {
+            "contract": "tts-fallback",
+            "events": [
+                {
+                    "name": "validation",
+                    "mode": mode,
+                    "error": error,
+                    "error_class": "error" if error else "",
+                    "message": message,
+                }
+            ],
+        }
+    raise ValueError(f"unsupported TTS fallback action {action!r}")
+
+
