@@ -329,6 +329,18 @@ func TestAPIStatusErrorStringQuotesApostrophesLikeReference(t *testing.T) {
 	}
 }
 
+func TestAPIStatusErrorStringFormatsFloatBodyLikeReference(t *testing.T) {
+	err := NewAPIStatusError("quota exceeded", 429, "req_123", map[string]any{
+		"ratio": 1.0,
+		"wait":  1.25,
+	})
+
+	want := "message='quota exceeded', status_code=429, retryable=True, request_id=req_123, body={'ratio': 1.0, 'wait': 1.25}"
+	if got := err.Error(); got != want {
+		t.Fatalf("Error() = %q, want %q", got, want)
+	}
+}
+
 func TestCreateAPIErrorFromHTTPFormatsReferenceMessage(t *testing.T) {
 	err := CreateAPIErrorFromHTTP("quota exceeded", 429, "req_123", map[string]any{"type": "rate_limit"})
 

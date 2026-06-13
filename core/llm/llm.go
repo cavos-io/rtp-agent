@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -813,6 +814,10 @@ func pyRepr(value any) string {
 		return pyStringRepr(v)
 	case bool:
 		return pyBool(v)
+	case float32:
+		return pyFloatRepr(float64(v), 32)
+	case float64:
+		return pyFloatRepr(v, 64)
 	case nil:
 		return "None"
 	case map[string]any:
@@ -859,6 +864,14 @@ func pyStringRepr(value string) string {
 		return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`, "\t", `\t`).Replace(value) + `"`
 	}
 	return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`, "\n", `\n`, "\r", `\r`, "\t", `\t`).Replace(value) + "'"
+}
+
+func pyFloatRepr(value float64, bitSize int) string {
+	formatted := strconv.FormatFloat(value, 'g', -1, bitSize)
+	if !strings.ContainsAny(formatted, ".eE") {
+		formatted += ".0"
+	}
+	return formatted
 }
 
 type APIConnectionError struct {
