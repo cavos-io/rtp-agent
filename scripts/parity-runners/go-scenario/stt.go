@@ -77,6 +77,42 @@ func runSTTValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "speech_data_required_fields":
+		requiredFields := []string{"language", "text"}
+		base := map[string]any{"language": "", "text": ""}
+		missingFields := make([]string, 0, len(requiredFields))
+		for _, fieldName := range requiredFields {
+			payload := make(map[string]any, len(base)-1)
+			for key, value := range base {
+				if key != fieldName {
+					payload[key] = value
+				}
+			}
+			data, err := json.Marshal(payload)
+			if err != nil {
+				return nil, err
+			}
+			var speechData lkstt.SpeechData
+			err = json.Unmarshal(data, &speechData)
+			if err != nil && strings.Contains(err.Error(), fieldName) {
+				missingFields = append(missingFields, fieldName)
+			}
+		}
+		var speechData lkstt.SpeechData
+		if err := json.Unmarshal([]byte(`{"language":"","text":""}`), &speechData); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "stt-speech-data-required-fields",
+			"events": []map[string]any{
+				{
+					"name":           "speech_data_required_fields",
+					"missing_fields": missingFields,
+					"language":       speechData.Language,
+					"text":           speechData.Text,
+				},
+			},
+		}, nil
 	case "timed_string_text":
 		timed := lkstt.TimedString{
 			Text:            "hello",

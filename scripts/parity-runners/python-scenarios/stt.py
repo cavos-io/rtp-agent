@@ -70,6 +70,30 @@ def stt_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "speech_data_required_fields":
+        required_fields = ["language", "text"]
+        base = {"language": "", "text": ""}
+        missing_fields = []
+        for field_name in required_fields:
+            kwargs = dict(base)
+            del kwargs[field_name]
+            try:
+                module.SpeechData(**kwargs)
+            except TypeError as exc:
+                if field_name in str(exc):
+                    missing_fields.append(field_name)
+        data = module.SpeechData(**base)
+        return {
+            "contract": "stt-speech-data-required-fields",
+            "events": [
+                {
+                    "name": "speech_data_required_fields",
+                    "missing_fields": missing_fields,
+                    "language": str(data.language),
+                    "text": data.text,
+                }
+            ],
+        }
     if action == "timed_string_text":
         timed = load_reference_types().TimedString(
             "hello",
