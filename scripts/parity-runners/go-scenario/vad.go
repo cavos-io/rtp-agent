@@ -112,6 +112,57 @@ func runVADValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "event_required_fields":
+		requiredFields := []string{
+			"type",
+			"samples_index",
+			"timestamp",
+			"speech_duration",
+			"silence_duration",
+		}
+		base := map[string]any{
+			"type":             lkvad.VADEventInferenceDone,
+			"samples_index":    0,
+			"timestamp":        0,
+			"speech_duration":  0,
+			"silence_duration": 0,
+		}
+		missingFields := make([]string, 0, len(requiredFields))
+		for _, fieldName := range requiredFields {
+			payload := make(map[string]any, len(base)-1)
+			for key, value := range base {
+				if key != fieldName {
+					payload[key] = value
+				}
+			}
+			data, err := json.Marshal(payload)
+			if err != nil {
+				return nil, err
+			}
+			var event lkvad.VADEvent
+			err = json.Unmarshal(data, &event)
+			if err != nil && strings.Contains(err.Error(), fieldName) {
+				missingFields = append(missingFields, fieldName)
+			}
+		}
+		var zero lkvad.VADEvent
+		if err := json.Unmarshal([]byte(`{"type":"inference_done","samples_index":0,"timestamp":0,"speech_duration":0,"silence_duration":0}`), &zero); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "vad-event-required-fields",
+			"events": []map[string]any{
+				{
+					"name":                  "event_required_fields",
+					"missing_fields":        missingFields,
+					"zero_type":             zero.Type,
+					"zero_samples_index":    zero.SamplesIndex,
+					"zero_timestamp":        zero.Timestamp,
+					"zero_speech_duration":  zero.SpeechDuration,
+					"zero_silence_duration": zero.SilenceDuration,
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported vad value-object action %q", payload.Action)
 	}

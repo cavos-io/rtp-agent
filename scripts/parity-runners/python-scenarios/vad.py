@@ -155,4 +155,43 @@ def vad_value_objects(input_data: Any) -> dict[str, Any]:  # noqa: F405
                 }
             ],
         }
+    if action == "event_required_fields":
+        required_fields = [
+            "type",
+            "samples_index",
+            "timestamp",
+            "speech_duration",
+            "silence_duration",
+        ]
+        base = {
+            "type": module.VADEventType.INFERENCE_DONE,
+            "samples_index": 0,
+            "timestamp": 0,
+            "speech_duration": 0,
+            "silence_duration": 0,
+        }
+        missing_fields = []
+        for field_name in required_fields:
+            kwargs = dict(base)
+            del kwargs[field_name]
+            try:
+                module.VADEvent(**kwargs)
+            except TypeError as exc:
+                if field_name in str(exc):
+                    missing_fields.append(field_name)
+        zero = module.VADEvent(**base)
+        return {
+            "contract": "vad-event-required-fields",
+            "events": [
+                {
+                    "name": "event_required_fields",
+                    "missing_fields": missing_fields,
+                    "zero_type": zero.type.value,
+                    "zero_samples_index": zero.samples_index,
+                    "zero_timestamp": zero.timestamp,
+                    "zero_speech_duration": zero.speech_duration,
+                    "zero_silence_duration": zero.silence_duration,
+                }
+            ],
+        }
     raise ValueError(f"unsupported vad value-object action {action!r}")
