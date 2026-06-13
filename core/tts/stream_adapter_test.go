@@ -83,15 +83,21 @@ func TestStreamAdapterForwardsPrewarm(t *testing.T) {
 	}
 }
 
-func TestStreamAdapterCloseDelegatesToWrappedProvider(t *testing.T) {
+func TestStreamAdapterCloseDoesNotCloseWrappedProvider(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{}
 	adapter := NewStreamAdapter(provider)
 
 	if err := adapter.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
-	if !provider.closed {
-		t.Fatal("Close did not delegate to wrapped provider")
+	if provider.closed {
+		t.Fatal("Close closed wrapped provider; reference StreamAdapter only detaches adapter-local listeners")
+	}
+	if err := adapter.Close(); err != nil {
+		t.Fatalf("second Close error = %v", err)
+	}
+	if provider.closed {
+		t.Fatal("second Close closed wrapped provider")
 	}
 }
 
