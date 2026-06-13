@@ -249,6 +249,18 @@ type SpeechCreatedEvent struct {
 
 func (e *SpeechCreatedEvent) GetType() string { return "speech_created" }
 
+func (e *SpeechCreatedEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":           e.GetType(),
+		"user_initiated": e.UserInitiated,
+		"source":         e.Source,
+		"created_at":     timeToUnixSeconds(e.CreatedAt),
+	})
+}
+
 type CloseReason string
 
 const (

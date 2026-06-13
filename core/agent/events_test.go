@@ -477,6 +477,40 @@ func TestUserTurnExceededEventMarshalJSONMatchesReferencePayload(t *testing.T) {
 	}
 }
 
+func TestSpeechCreatedEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	ev := &SpeechCreatedEvent{
+		UserInitiated: true,
+		Source:        "generate_reply",
+		SpeechHandle:  NewSpeechHandle(true, DefaultInputDetails()),
+		CreatedAt:     time.Unix(25, 125_000_000),
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal SpeechCreatedEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled SpeechCreatedEvent returned error: %v", err)
+	}
+	if payload["type"] != "speech_created" {
+		t.Fatalf("type = %#v, want speech_created", payload["type"])
+	}
+	if payload["user_initiated"] != true || payload["source"] != "generate_reply" {
+		t.Fatalf("payload = %#v, want reference speech created public fields", payload)
+	}
+	if payload["created_at"] != 25.125 {
+		t.Fatalf("created_at = %#v, want 25.125", payload["created_at"])
+	}
+	if _, ok := payload["speech_handle"]; ok {
+		t.Fatalf("payload serialized excluded speech_handle: %#v", payload)
+	}
+	if _, ok := payload["SpeechHandle"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
+	}
+}
+
 func TestOverlappingSpeechEventIsTypedAndCarriesTimingAndPredictionFields(t *testing.T) {
 	overlapStartedAt := time.Now().Add(-250 * time.Millisecond)
 	detectedAt := time.Now()
