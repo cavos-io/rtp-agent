@@ -1493,6 +1493,22 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             out.append(data)
         return {"items": out}
 
+    def google_prepared_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        prepared: list[dict[str, Any]] = []
+        first_system_seen = False
+        for item in items:
+            if item["type"] == "message" and item["role"] in ("system", "developer"):
+                text = text_content(item["content"]) or ""
+                if first_system_seen and text:
+                    updated = dict(item)
+                    updated["role"] = "user"
+                    updated["content"] = [f"<instructions>\n{text}\n</instructions>"]
+                    prepared.append(updated)
+                    continue
+                first_system_seen = True
+            prepared.append(item)
+        return prepared
+
     def to_provider_format(
         items: list[dict[str, Any]],
         *,
@@ -1501,6 +1517,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         inject_trailing_user_message: bool = False,
         thought_signatures: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
+
         def openai_extra_content(extra: dict[str, Any]) -> dict[str, Any]:
             return {
                 key: value
@@ -1643,6 +1660,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         if provider_format not in ("google", "anthropic", "aws"):
             raise ValueError(f"unsupported provider format {provider_format!r}")
 
+        provider_items = google_prepared_items(items) if provider_format == "google" else items
         messages: list[dict[str, Any]] = []
         current_google_role: str | None = None
         current_google_parts: list[dict[str, Any]] = []
@@ -1653,7 +1671,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 messages.append({"role": current_google_role, "parts": current_google_parts})
                 current_google_parts = []
 
-        for item in items:
+        for item in provider_items:
             if provider_format == "google" and item["type"] == "message" and item["role"] == "system":
                 continue
             if item["type"] == "function_call":
@@ -1743,7 +1761,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             extra = {
                 "system_messages": [
                     text_content(item["content"]) or ""
-                    for item in items
+                    for item in google_prepared_items(items)
                     if item["type"] == "message"
                     and item["role"] == "system"
                     and (text_content(item["content"]) or "")
