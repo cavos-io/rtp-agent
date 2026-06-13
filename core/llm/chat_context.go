@@ -914,14 +914,14 @@ func agentConfigInstructionsFromJSON(data json.RawMessage) (*string, *Instructio
 
 func chatMessageFromJSON(data []byte) (*ChatMessage, error) {
 	var item struct {
-		ID                   string            `json:"id"`
-		Role                 *ChatRole         `json:"role"`
-		Content              []json.RawMessage `json:"content"`
-		Interrupted          bool              `json:"interrupted"`
-		TranscriptConfidence *float64          `json:"transcript_confidence"`
-		Extra                map[string]any    `json:"extra"`
-		Metrics              map[string]any    `json:"metrics"`
-		CreatedAt            *float64          `json:"created_at"`
+		ID                   string             `json:"id"`
+		Role                 *ChatRole          `json:"role"`
+		Content              *[]json.RawMessage `json:"content"`
+		Interrupted          bool               `json:"interrupted"`
+		TranscriptConfidence *float64           `json:"transcript_confidence"`
+		Extra                map[string]any     `json:"extra"`
+		Metrics              map[string]any     `json:"metrics"`
+		CreatedAt            *float64           `json:"created_at"`
 	}
 	if err := json.Unmarshal(data, &item); err != nil {
 		return nil, err
@@ -932,9 +932,12 @@ func chatMessageFromJSON(data []byte) (*ChatMessage, error) {
 	if *item.Role != ChatRoleDeveloper && *item.Role != ChatRoleSystem && *item.Role != ChatRoleUser && *item.Role != ChatRoleAssistant {
 		return nil, fmt.Errorf("unsupported message role %q", *item.Role)
 	}
+	if item.Content == nil {
+		return nil, fmt.Errorf("message content is required")
+	}
 
-	content := make([]ChatContent, 0, len(item.Content))
-	for _, rawContent := range item.Content {
+	content := make([]ChatContent, 0, len(*item.Content))
+	for _, rawContent := range *item.Content {
 		parsed, err := chatContentFromJSON(rawContent)
 		if err != nil {
 			return nil, err

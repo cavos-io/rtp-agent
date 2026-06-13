@@ -1906,6 +1906,21 @@ func TestChatContextUnmarshalJSONRejectsMessageMissingRole(t *testing.T) {
 	}
 }
 
+func TestChatContextUnmarshalJSONRejectsMessageMissingContent(t *testing.T) {
+	var ctx ChatContext
+	data := []byte(`{
+		"items": [{
+			"id": "message",
+			"type": "message",
+			"role": "user"
+		}]
+	}`)
+
+	if err := json.Unmarshal(data, &ctx); err == nil {
+		t.Fatal("Unmarshal ChatContext error = nil, want missing message content error")
+	}
+}
+
 func TestChatContextItemsDefaultIDs(t *testing.T) {
 	data := []byte(`{
 		"items": [
