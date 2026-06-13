@@ -1,7 +1,7 @@
 import ast
 import base64
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Literal
 
 from common import *  # noqa: F403
@@ -90,6 +90,43 @@ def load_reference_llm_realtime_class(class_name: str):
     }
     exec(compile(module, str(path), "exec"), namespace)
     return namespace[class_name]
+
+
+@dataclass
+class RemoteScenarioChatContext:
+    items: list[Any]
+
+
+@dataclass
+class RemoteScenarioMessage:
+    id: str
+    role: str
+    content: list[str]
+
+
+def load_reference_remote_chat_context_class():
+    path = repo_root() / "refs/agents/livekit-agents/livekit/agents/llm/remote_chat_context.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    body = [
+        node
+        for node in tree.body
+        if not (
+            isinstance(node, ast.ImportFrom)
+            and node.level == 1
+            and node.module == "chat_context"
+        )
+    ]
+    module = ast.Module(body=body, type_ignores=[])
+    ast.fix_missing_locations(module)
+    namespace = {
+        "Any": Any,
+        "ChatContext": RemoteScenarioChatContext,
+        "ChatItem": Any,
+        "dataclass": dataclass,
+        "field": field,
+    }
+    exec(compile(module, str(path), "exec"), namespace)
+    return namespace["RemoteChatContext"]
 
 
 def load_reference_completion_usage():
@@ -407,6 +444,47 @@ def llm_api_errors(input_data: Any) -> dict[str, Any]:
             ],
         }
     raise ValueError(f"unsupported api errors action {action!r}")
+
+
+def llm_remote_chat_context(input_data: Any) -> dict[str, Any]:
+    action = input_data.get("action", "order")
+    if action != "order":
+        raise ValueError(f"unsupported remote chat context action {action!r}")
+
+    context_class = load_reference_remote_chat_context_class()
+    context = context_class()
+
+    for operation in input_data.get("operations", []):
+        op = operation.get("op")
+        if op == "insert":
+            message = RemoteScenarioMessage(
+                id=str(operation.get("id", "")),
+                role=str(operation.get("role", "")),
+                content=[str(operation.get("text", ""))],
+            )
+            context.insert(operation.get("previous_item_id"), message)
+            continue
+        if op == "delete":
+            context.delete(str(operation.get("id", "")))
+            continue
+        raise ValueError(f"unsupported remote chat context operation {op!r}")
+
+    chat_context = context.to_chat_ctx()
+    lookup_id = str(input_data.get("lookup_id", ""))
+    lookup = context.get(lookup_id) if lookup_id else None
+    lookup_item = lookup.item if lookup is not None else None
+
+    return {
+        "contract": "llm-remote-chat-context",
+        "events": [
+            {
+                "name": "order",
+                "item_ids": [item.id for item in chat_context.items],
+                "lookup_id": getattr(lookup_item, "id", None),
+                "lookup_exists": lookup_item is not None,
+            }
+        ],
+    }
 
 
 def llm_value_objects(input_data: Any) -> dict[str, Any]:

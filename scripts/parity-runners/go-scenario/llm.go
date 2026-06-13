@@ -325,6 +325,68 @@ func runLLMAPIErrors(input json.RawMessage) (any, error) {
 	}
 }
 
+func runLLMRemoteChatContext(input json.RawMessage) (any, error) {
+	var payload struct {
+		Action     string `json:"action"`
+		LookupID   string `json:"lookup_id"`
+		Operations []struct {
+			Op             string  `json:"op"`
+			ID             string  `json:"id"`
+			Role           string  `json:"role"`
+			Text           string  `json:"text"`
+			PreviousItemID *string `json:"previous_item_id"`
+		} `json:"operations"`
+	}
+	if err := json.Unmarshal(input, &payload); err != nil {
+		return nil, err
+	}
+	if payload.Action == "" {
+		payload.Action = "order"
+	}
+	if payload.Action != "order" {
+		return nil, fmt.Errorf("unsupported remote chat context action %q", payload.Action)
+	}
+
+	ctx := lkllm.NewRemoteChatContext()
+	for _, operation := range payload.Operations {
+		switch operation.Op {
+		case "insert":
+			message := &lkllm.ChatMessage{
+				ID:      operation.ID,
+				Role:    lkllm.ChatRole(operation.Role),
+				Content: []lkllm.ChatContent{{Text: operation.Text}},
+			}
+			if err := ctx.Insert(operation.PreviousItemID, message); err != nil {
+				return nil, err
+			}
+		case "delete":
+			if err := ctx.Delete(operation.ID); err != nil {
+				return nil, err
+			}
+		default:
+			return nil, fmt.Errorf("unsupported remote chat context operation %q", operation.Op)
+		}
+	}
+
+	chatCtx := ctx.ToChatCtx()
+	lookup := ctx.Get(payload.LookupID)
+	lookupID := any(nil)
+	if lookup != nil {
+		lookupID = lookup.GetID()
+	}
+	return map[string]any{
+		"contract": "llm-remote-chat-context",
+		"events": []map[string]any{
+			{
+				"name":          "order",
+				"item_ids":      chatItemIDs(chatCtx.Items),
+				"lookup_id":     lookupID,
+				"lookup_exists": lookup != nil,
+			},
+		},
+	}, nil
+}
+
 func runLLMChatContext(input json.RawMessage) (any, error) {
 	var payload struct {
 		Action string `json:"action"`

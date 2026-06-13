@@ -34,6 +34,7 @@ func registeredHandlers() handlerRegistry {
 		"llm_function_arguments":       runLLMFunctionArguments,
 		"llm_function_output":          runLLMFunctionOutput,
 		"llm_image_serialization":      runLLMImageSerialization,
+		"llm_remote_chat_context":      runLLMRemoteChatContext,
 		"llm_thinking_tokens":          runLLMThinkingTokens,
 		"llm_tool_context":             runLLMToolContext,
 		"llm_value_objects":            runLLMValueObjects,
