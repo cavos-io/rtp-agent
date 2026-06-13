@@ -1311,6 +1311,9 @@ func (s *realtimeSession) eventLoop() {
 			}
 			realtimeEvent = s.trackRealtimeEvent(realtimeEvent)
 			s.eventCh <- realtimeEvent
+			if trackedOK {
+				s.eventCh <- trackedEvent
+			}
 		}
 	}
 }
@@ -1383,7 +1386,12 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 			}
 		}
 	case "response.done":
+		hadGeneration := s.generation != nil
+		response, _ := ev["response"].(map[string]any)
 		s.closeRealtimeGeneration()
+		if hadGeneration {
+			return openAIRealtimeResponseDoneError(response)
+		}
 	case "conversation.item.deleted":
 		itemID, hasItemID := ev["item_id"].(string)
 		if !hasItemID {
@@ -1415,6 +1423,29 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 		}, true
 	}
 	return llm.RealtimeEvent{}, false
+}
+
+func openAIRealtimeResponseDoneError(response map[string]any) (llm.RealtimeEvent, bool) {
+	status, _ := response["status"].(string)
+	if status != "failed" {
+		return llm.RealtimeEvent{}, false
+	}
+	statusDetails, _ := response["status_details"].(map[string]any)
+	errorBody, hasError := statusDetails["error"].(map[string]any)
+	message := "OpenAI Realtime API response failed with unknown error"
+	var body any
+	if hasError {
+		errorType := openAIRealtimeString(errorBody["type"])
+		if errorType == "" {
+			errorType = "unknown"
+		}
+		message = fmt.Sprintf("OpenAI Realtime API response failed with error type: %s", errorType)
+		body = errorBody
+	}
+	return llm.RealtimeEvent{
+		Type:  llm.RealtimeEventTypeError,
+		Error: llm.NewAPIError(message, body, true),
+	}, true
 }
 
 func (s *realtimeSession) trackRealtimeEvent(ev llm.RealtimeEvent) llm.RealtimeEvent {

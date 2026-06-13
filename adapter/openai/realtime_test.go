@@ -889,6 +889,20 @@ func newOpenAIRealtimeTestWebsocketDialer(t *testing.T, handler func(*websocket.
 	}
 }
 
+func assertRealtimeEventType(t *testing.T, eventCh <-chan llm.RealtimeEvent, want llm.RealtimeEventType) llm.RealtimeEvent {
+	t.Helper()
+	select {
+	case ev := <-eventCh:
+		if ev.Type != want {
+			t.Fatalf("event type = %q, want %q", ev.Type, want)
+		}
+		return ev
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s event", want)
+		return llm.RealtimeEvent{}
+	}
+}
+
 type openAISingleConnListener struct {
 	mu     sync.Mutex
 	once   sync.Once
@@ -3326,6 +3340,90 @@ func TestRealtimeEventMapsResponseDoneMetrics(t *testing.T) {
 	}
 	if ev.Metrics.OutputTokenDetails.TextTokens != 5 || ev.Metrics.OutputTokenDetails.AudioTokens != 2 {
 		t.Fatalf("output details = %#v, want text/audio output usage", ev.Metrics.OutputTokenDetails)
+	}
+}
+
+func TestRealtimeResponseDoneFailedReportsRecoverableError(t *testing.T) {
+	responseDone := map[string]any{
+		"type": "response.done",
+		"response": map[string]any{
+			"id":     "resp_failed",
+			"status": "failed",
+			"status_details": map[string]any{
+				"error": map[string]any{
+					"type": "invalid_request_error",
+					"code": "inference_rate_limit_exceeded",
+				},
+			},
+			"usage": map[string]any{"total_tokens": 3.0},
+		},
+	}
+
+	metricsEvent, ok := openAIRealtimeEvent(responseDone)
+	if !ok || metricsEvent.Type != llm.RealtimeEventTypeMetricsCollected {
+		t.Fatalf("openAIRealtimeEvent = %#v, %v; want metrics event", metricsEvent, ok)
+	}
+
+	session := &realtimeSession{
+		generation: &realtimeGeneration{
+			messages:   map[string]*realtimeMessageGeneration{},
+			messageCh:  make(chan llm.MessageGeneration),
+			functionCh: make(chan *llm.FunctionCall),
+		},
+	}
+	errorEvent, ok := session.trackOpenAIRealtimeEvent(responseDone)
+	if !ok {
+		t.Fatal("trackOpenAIRealtimeEvent returned ok=false, want failed response error event")
+	}
+	if errorEvent.Type != llm.RealtimeEventTypeError {
+		t.Fatalf("event type = %q, want error", errorEvent.Type)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(errorEvent.Error, &apiErr) {
+		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
+	}
+	if apiErr.Message != "OpenAI Realtime API response failed with error type: invalid_request_error" {
+		t.Fatalf("APIError message = %q", apiErr.Message)
+	}
+	if !apiErr.Retryable {
+		t.Fatal("APIError Retryable = false, want true")
+	}
+
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]any{
+			"type": "response.created",
+			"response": map[string]any{
+				"id": "resp_failed",
+			},
+		}); err != nil {
+			t.Errorf("Write response.created error = %v", err)
+			return
+		}
+		if err := conn.WriteJSON(responseDone); err != nil {
+			t.Errorf("Write response.done error = %v", err)
+			return
+		}
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	liveSession, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer liveSession.Close()
+
+	assertRealtimeEventType(t, liveSession.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	assertRealtimeEventType(t, liveSession.EventCh(), llm.RealtimeEventTypeMetricsCollected)
+	liveErrorEvent := assertRealtimeEventType(t, liveSession.EventCh(), llm.RealtimeEventTypeError)
+	var liveAPIErr *llm.APIError
+	if !errors.As(liveErrorEvent.Error, &liveAPIErr) || !liveAPIErr.Retryable {
+		t.Fatalf("live error = %T %v, want retryable APIError", liveErrorEvent.Error, liveErrorEvent.Error)
 	}
 }
 
