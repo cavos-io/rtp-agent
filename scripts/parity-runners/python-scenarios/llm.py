@@ -1,4 +1,5 @@
 import ast
+import re
 from typing import Literal
 
 from common import *  # noqa: F403
@@ -1509,6 +1510,19 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             prepared.append(item)
         return prepared
 
+    def google_image_part(part: dict[str, Any]) -> dict[str, Any]:
+        image = str(part.get("image", ""))
+        match = re.match(r"^data:([^;,]+);base64,(.*)$", image)
+        if match:
+            return {
+                "inline_data": {
+                    "data": match.group(2),
+                    "mime_type": match.group(1),
+                }
+            }
+        mime_type = str(part.get("mime_type") or "image/jpeg")
+        return {"file_data": {"file_uri": image, "mime_type": mime_type}}
+
     def to_provider_format(
         items: list[dict[str, Any]],
         *,
@@ -1713,7 +1727,16 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 if current_google_role != role:
                     flush_google_parts()
                     current_google_role = role
-                current_google_parts.append({"text": text_content(item["content"]) or ""})
+                for part in item["content"]:
+                    if isinstance(part, str):
+                        if part:
+                            current_google_parts.append({"text": part})
+                        continue
+                    if isinstance(part, dict) and part.get("type") == "image_content":
+                        current_google_parts.append(google_image_part(part))
+                        continue
+                    if isinstance(part, dict) and part:
+                        current_google_parts.append({"text": json.dumps(part)})
                 continue
             messages.append(
                 {
