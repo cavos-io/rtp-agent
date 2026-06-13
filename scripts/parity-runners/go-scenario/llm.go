@@ -464,6 +464,30 @@ func runLLMStrictSchema(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "nested_description":
+		type location struct {
+			City string `json:"city"`
+		}
+		type request struct {
+			Location *location `json:"location,omitempty" jsonschema:"user location"`
+		}
+		schema := lkllm.GenerateStrictJSONSchema(reflect.TypeOf(request{}))
+		props, _ := schema["properties"].(map[string]interface{})
+		locationSchema, _ := props["location"].(map[string]interface{})
+		return map[string]any{
+			"contract": "llm-strict-schema",
+			"events": []map[string]any{
+				{
+					"name":                           "nested_description",
+					"root_additional_properties":     schema["additionalProperties"],
+					"required":                       schema["required"],
+					"location_type":                  locationSchema["type"],
+					"location_description":           locationSchema["description"],
+					"location_additional_properties": locationSchema["additionalProperties"],
+					"location_required":              locationSchema["required"],
+				},
+			},
+		}, nil
 	case "pointer_map_value_schema":
 		type request struct {
 			Metadata *map[string]int `json:"metadata,omitempty"`

@@ -564,6 +564,45 @@ def llm_strict_schema(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "nested_description":
+        schema = {
+            "type": "object",
+            "$defs": {
+                "Location": {
+                    "type": "object",
+                    "properties": {
+                        "city": {"type": "string"},
+                    },
+                }
+            },
+            "properties": {
+                "location": {
+                    "$ref": "#/$defs/Location",
+                    "type": ["object", "null"],
+                    "default": None,
+                    "description": "user location",
+                }
+            },
+        }
+        strict = copy.deepcopy(schema)
+        strict = normalizer(strict, path=(), root=strict)
+        location = strict["properties"]["location"]
+        return {
+            "contract": "llm-strict-schema",
+            "events": [
+                {
+                    "name": "nested_description",
+                    "root_additional_properties": strict.get("additionalProperties"),
+                    "required": strict.get("required"),
+                    "location_type": location.get("type"),
+                    "location_description": location.get("description"),
+                    "location_additional_properties": location.get(
+                        "additionalProperties"
+                    ),
+                    "location_required": location.get("required"),
+                }
+            ],
+        }
     if action == "pointer_map_value_schema":
         schema = {
             "type": "object",
