@@ -2,6 +2,7 @@ package tts
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -49,6 +50,38 @@ func (e TTSError) MarshalJSON() ([]byte, error) {
 		Label:       e.Label,
 		Recoverable: e.Recoverable,
 	})
+}
+
+func (e *TTSError) UnmarshalJSON(data []byte) error {
+	type ttsErrorPayload struct {
+		Type        string   `json:"type"`
+		Timestamp   *float64 `json:"timestamp"`
+		Label       *string  `json:"label"`
+		Recoverable *bool    `json:"recoverable"`
+	}
+	var payload ttsErrorPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	if payload.Timestamp == nil {
+		return fmt.Errorf("tts error timestamp is required")
+	}
+	if payload.Label == nil {
+		return fmt.Errorf("tts error label is required")
+	}
+	if payload.Recoverable == nil {
+		return fmt.Errorf("tts error recoverable is required")
+	}
+
+	e.Type = payload.Type
+	if e.Type == "" {
+		e.Type = TTSErrorType
+	}
+	e.Timestamp = time.Unix(0, int64(*payload.Timestamp*float64(time.Second)))
+	e.Label = *payload.Label
+	e.Recoverable = *payload.Recoverable
+	e.Err = nil
+	return nil
 }
 
 type TTSErrorHandler func(TTSError)

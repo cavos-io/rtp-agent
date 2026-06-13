@@ -232,6 +232,60 @@ func TestTTSErrorMarshalJSONMatchesReferencePayload(t *testing.T) {
 	}
 }
 
+func TestTTSErrorUnmarshalJSONRejectsMissingReferenceFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{
+			name:    "timestamp",
+			payload: `{"label":"provider.TTS","recoverable":true}`,
+			want:    "timestamp",
+		},
+		{
+			name:    "label",
+			payload: `{"timestamp":1.25,"recoverable":true}`,
+			want:    "label",
+		},
+		{
+			name:    "recoverable",
+			payload: `{"timestamp":1.25,"label":"provider.TTS"}`,
+			want:    "recoverable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var ttsErr TTSError
+			err := json.Unmarshal([]byte(tt.payload), &ttsErr)
+			if err == nil {
+				t.Fatal("Unmarshal TTSError returned nil error, want missing required field error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want it to mention %q", err, tt.want)
+			}
+		})
+	}
+
+	var ttsErr TTSError
+	if err := json.Unmarshal([]byte(`{"timestamp":1.25,"label":"provider.TTS","recoverable":false}`), &ttsErr); err != nil {
+		t.Fatalf("Unmarshal TTSError with required fields returned error: %v", err)
+	}
+	if ttsErr.Type != TTSErrorType {
+		t.Fatalf("Type = %q, want %q", ttsErr.Type, TTSErrorType)
+	}
+	if ttsErr.Timestamp.UnixNano() != 1250*int64(time.Millisecond) {
+		t.Fatalf("Timestamp = %v, want 1.25 Unix seconds", ttsErr.Timestamp)
+	}
+	if ttsErr.Label != "provider.TTS" {
+		t.Fatalf("Label = %q, want provider.TTS", ttsErr.Label)
+	}
+	if ttsErr.Recoverable {
+		t.Fatal("Recoverable = true, want false")
+	}
+}
+
 func TestTTSCapabilitiesMarshalJSONMatchesReferencePayload(t *testing.T) {
 	data, err := json.Marshal(TTSCapabilities{
 		Streaming:         true,
