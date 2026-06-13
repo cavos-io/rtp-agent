@@ -319,6 +319,49 @@ func TestSynthesizedAudioMarshalJSONMatchesReferencePayload(t *testing.T) {
 	}
 }
 
+func TestSynthesizedAudioUnmarshalJSONRejectsMissingRequiredFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{
+			name:    "frame",
+			payload: `{"request_id":"req-a"}`,
+			want:    "frame",
+		},
+		{
+			name:    "request_id",
+			payload: `{"frame":null}`,
+			want:    "request_id",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var audio SynthesizedAudio
+			err := json.Unmarshal([]byte(tt.payload), &audio)
+			if err == nil {
+				t.Fatal("Unmarshal SynthesizedAudio returned nil error, want missing required field error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want it to mention %q", err, tt.want)
+			}
+		})
+	}
+
+	var explicitNullFrame SynthesizedAudio
+	if err := json.Unmarshal([]byte(`{"frame":null,"request_id":""}`), &explicitNullFrame); err != nil {
+		t.Fatalf("Unmarshal SynthesizedAudio with explicit required fields returned error: %v", err)
+	}
+	if explicitNullFrame.Frame != nil {
+		t.Fatalf("Frame = %#v, want nil from explicit null", explicitNullFrame.Frame)
+	}
+	if explicitNullFrame.RequestID != "" {
+		t.Fatalf("RequestID = %q, want empty string from explicit value", explicitNullFrame.RequestID)
+	}
+}
+
 func TestTimedStringMarshalJSONMatchesReferencePayload(t *testing.T) {
 	data, err := json.Marshal(TimedString{
 		Text:            "hello",

@@ -17,6 +17,27 @@ type SynthesizedAudio struct {
 	TimedTranscript []TimedString     `json:"timed_transcript,omitempty"`
 }
 
+func (a *SynthesizedAudio) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if _, ok := fields["frame"]; !ok {
+		return fmt.Errorf("synthesized audio frame is required")
+	}
+	if _, ok := fields["request_id"]; !ok {
+		return fmt.Errorf("synthesized audio request_id is required")
+	}
+
+	type synthesizedAudioPayload SynthesizedAudio
+	var payload synthesizedAudioPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	*a = SynthesizedAudio(payload)
+	return nil
+}
+
 type TimedString struct {
 	Text            string  `json:"text"`
 	StartTime       float64 `json:"start_time"`
