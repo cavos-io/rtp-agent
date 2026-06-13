@@ -2399,6 +2399,32 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 item for item in target_items if item.get("type") == "message"
             ]
             return
+        if op == "truncate":
+            max_items = int(step.get("args", {}).get("max_items", 0))
+            if len(target_items) > max_items:
+                instructions = next(
+                    (
+                        item
+                        for item in target_items
+                        if item.get("type") == "message"
+                        and item.get("role") in ("system", "developer")
+                    ),
+                    None,
+                )
+                start = -max_items
+                new_items = target_items[start:]
+                while new_items and new_items[0].get("type") in (
+                    "function_call",
+                    "function_call_output",
+                ):
+                    new_items.pop(0)
+                if instructions and not any(
+                    item.get("id") == instructions.get("id") for item in new_items
+                ):
+                    new_items.insert(0, instructions)
+                target_items[:] = new_items
+            variables[step["assign"]] = target
+            return
         if op == "index":
             variables[step["assign"]] = ids.index(item_id) if item_id in ids else None
             return

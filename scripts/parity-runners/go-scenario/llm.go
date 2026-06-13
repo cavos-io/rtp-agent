@@ -1381,6 +1381,12 @@ func runLLMChatContextCallStep(state *llmScenarioState, step llmScenarioStepSpec
 		state.vars[step.Assign] = ctx.GetByID(id)
 	case "messages":
 		state.vars[step.Assign] = ctx.Messages()
+	case "truncate":
+		maxItems, ok := scenarioIntArg(step.Args, "max_items")
+		if !ok {
+			return errors.New("truncate requires max_items")
+		}
+		state.vars[step.Assign] = ctx.Truncate(maxItems)
 	case "index":
 		index := ctx.IndexByID(id)
 		if index == nil {
