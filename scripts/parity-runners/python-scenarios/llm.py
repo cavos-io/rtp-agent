@@ -1294,7 +1294,13 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         return [item["id"] for item in items]
 
     def text_content(parts: list[Any]) -> str | None:
-        text_parts = [part for part in parts if isinstance(part, str)]
+        text_parts = [
+            instruction_string(part)
+            if isinstance(part, dict) and part.get("type") == "instructions"
+            else part
+            for part in parts
+            if isinstance(part, str) or (isinstance(part, dict) and part.get("type") == "instructions")
+        ]
         if not text_parts:
             return None
         return "\n".join(text_parts)
@@ -1456,6 +1462,27 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             out.append(data)
         return {"items": out}
 
+    def to_provider_format(
+        items: list[dict[str, Any]],
+        *,
+        provider_format: str,
+        inject_dummy_user_message: bool = True,
+    ) -> list[dict[str, Any]]:
+        if provider_format != "openai":
+            raise ValueError(f"unsupported provider format {provider_format!r}")
+        _ = inject_dummy_user_message
+        messages: list[dict[str, Any]] = []
+        for item in items:
+            if item["type"] != "message":
+                continue
+            messages.append(
+                {
+                    "role": item["role"],
+                    "content": text_content(item["content"]) or "",
+                }
+            )
+        return messages
+
     def build_declarative_fixture(fixture: dict[str, Any]) -> Any:
         factory = fixture.get("factory")
         if factory == "llm_chat_context.empty":
@@ -1532,13 +1559,14 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 continue
             part_type = str(part.get("type", ""))
             if part_type == "instructions":
-                content.append(
-                    {
-                        "type": "instructions",
-                        "audio": str(part.get("audio", "")),
-                        "text": str(part.get("text", "")),
-                    }
+                inst = instruction(
+                    str(part.get("audio", "")),
+                    str(part["text"]) if "text" in part else None,
                 )
+                if "active" in part:
+                    inst = instruction_as_modality(inst, str(part.get("active", "")))
+                inst["type"] = "instructions"
+                content.append(inst)
                 continue
             if part_type == "image_content":
                 content.append(
@@ -1634,6 +1662,14 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 target_items,
                 exclude_function_call=bool(args.get("exclude_function_call", False)),
                 exclude_config_update=bool(args.get("exclude_config_update", False)),
+            )
+            return
+        if op == "to_provider_format":
+            args = step.get("args", {})
+            variables[step["assign"]] = to_provider_format(
+                target_items,
+                provider_format=str(args.get("format", "openai")),
+                inject_dummy_user_message=bool(args.get("inject_dummy_user_message", True)),
             )
             return
         if op == "add_message":
@@ -1797,6 +1833,8 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             return first_serialized_instruction(value)["text"]
         if transform == "dict_first_instruction_text_present":
             return "text" in first_serialized_instruction(value)
+        if transform == "provider_first_content":
+            return None if not value else value[0].get("content")
         raise ValueError(f"unsupported transform {transform!r}")
 
     def first_serialized_instruction(value: dict[str, Any]) -> dict[str, Any]:

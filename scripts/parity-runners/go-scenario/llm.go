@@ -1263,11 +1263,15 @@ func buildLLMScenarioContentPart(part map[string]any) (lkllm.ChatContent, error)
 	partType, _ := part["type"].(string)
 	switch partType {
 	case "instructions":
+		instructions := lkllm.NewInstructions(
+			stringArg(part, "audio"),
+			stringArg(part, "text"),
+		)
+		if active := stringArg(part, "active"); active != "" {
+			instructions = instructions.AsModality(active)
+		}
 		return lkllm.ChatContent{
-			Instructions: lkllm.NewInstructions(
-				stringArg(part, "audio"),
-				stringArg(part, "text"),
-			),
+			Instructions: instructions,
 		}, nil
 	case "image_content":
 		return lkllm.ChatContent{
@@ -1358,6 +1362,17 @@ func runLLMChatContextCallStep(state *llmScenarioState, step llmScenarioStepSpec
 			ExcludeFunctionCall: scenarioBoolArg(step.Args, "exclude_function_call"),
 			ExcludeConfigUpdate: scenarioBoolArg(step.Args, "exclude_config_update"),
 		})
+	case "to_provider_format":
+		options := lkllm.ChatContextProviderFormatOptions{}
+		if _, ok := step.Args["inject_dummy_user_message"]; ok {
+			value := scenarioBoolArg(step.Args, "inject_dummy_user_message")
+			options.InjectDummyUserMessage = &value
+		}
+		formatted, _, providerErr := ctx.ToProviderFormatE(stringArg(step.Args, "format"), options)
+		if providerErr != nil {
+			return providerErr
+		}
+		state.vars[step.Assign] = formatted
 	case "add_message":
 		role, _ := step.Args["role"].(string)
 		text, _ := step.Args["text"].(string)
@@ -1670,6 +1685,15 @@ func transformLLMScenarioField(state *llmScenarioState, value any, transform str
 		}
 		_, ok := instructions["text"]
 		return ok, nil
+	case "provider_first_content":
+		messages, ok := value.([]map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use provider_first_content", value)
+		}
+		if len(messages) == 0 {
+			return nil, nil
+		}
+		return messages[0]["content"], nil
 	default:
 		return nil, fmt.Errorf("unsupported transform %q", transform)
 	}
