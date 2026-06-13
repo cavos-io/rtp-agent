@@ -1618,6 +1618,10 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 	evType, _ := ev["type"].(string)
 	switch evType {
 	case "error":
+		errorBody, _ := ev["error"].(map[string]any)
+		if strings.HasPrefix(openAIRealtimeString(errorBody["message"]), "Cancellation failed") {
+			return llm.RealtimeEvent{}, false
+		}
 		return llm.RealtimeEvent{
 			Type:  llm.RealtimeEventTypeError,
 			Error: fmt.Errorf("openai error: %v", ev),

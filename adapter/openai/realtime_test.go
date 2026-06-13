@@ -1853,6 +1853,32 @@ func TestRealtimeSessionClosesOutputMessageStreamsWhenItemDone(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeIgnoresCancellationFailedErrorEvent(t *testing.T) {
+	if ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "error",
+		"error": map[string]any{
+			"message": "Cancellation failed: no active response",
+			"type":    "invalid_request_error",
+		},
+	}); ok {
+		t.Fatalf("openAIRealtimeEvent = %#v, true; want benign cancellation error ignored", ev)
+	}
+
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "error",
+		"error": map[string]any{
+			"message": "invalid request",
+			"type":    "invalid_request_error",
+		},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want ordinary provider error event")
+	}
+	if ev.Type != llm.RealtimeEventTypeError {
+		t.Fatalf("event type = %q, want error", ev.Type)
+	}
+}
+
 func TestRealtimeSessionClosesOutputMessageWithEmptyIDWhenItemDone(t *testing.T) {
 	session := &realtimeSession{}
 	created := session.trackRealtimeEvent(llm.RealtimeEvent{
