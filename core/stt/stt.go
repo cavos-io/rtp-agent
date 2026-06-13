@@ -104,6 +104,24 @@ func (s TimedString) MarshalJSON() ([]byte, error) {
 	})
 }
 
+func (s *TimedString) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if _, ok := fields["text"]; !ok {
+		return fmt.Errorf("timed string text is required")
+	}
+
+	type timedStringPayload TimedString
+	var payload timedStringPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	*s = TimedString(payload)
+	return nil
+}
+
 func optionalStringPointer(value string) *string {
 	if value == "" {
 		return nil
