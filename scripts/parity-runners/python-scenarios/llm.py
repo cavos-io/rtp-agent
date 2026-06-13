@@ -1510,8 +1510,21 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
 
         if provider_format == "openai":
             messages: list[dict[str, Any]] = []
+            function_call_ids = {
+                str(item.get("call_id", ""))
+                for item in items
+                if item.get("type") == "function_call"
+            }
+            function_output_ids = {
+                str(item.get("call_id", ""))
+                for item in items
+                if item.get("type") == "function_call_output"
+            }
+            valid_call_ids = function_call_ids & function_output_ids
             for item in items:
                 if item["type"] == "function_call":
+                    if item["call_id"] not in valid_call_ids:
+                        continue
                     if not messages or messages[-1].get("role") != "assistant":
                         messages.append({"role": "assistant"})
                     tool_call: dict[str, Any] = {
@@ -1528,6 +1541,8 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                     messages[-1].setdefault("tool_calls", []).append(tool_call)
                     continue
                 if item["type"] == "function_call_output":
+                    if item["call_id"] not in valid_call_ids:
+                        continue
                     messages.append(
                         {
                             "role": "tool",
