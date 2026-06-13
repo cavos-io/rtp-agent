@@ -2018,6 +2018,54 @@ func TestRealtimeSessionClosesGenerationStreamsWhenResponseDone(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionPersistsAudioTranscriptOnResponseDone(t *testing.T) {
+	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
+	if err := session.remote.Insert(nil, &llm.ChatMessage{
+		ID:      "msg_123",
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{},
+	}); err != nil {
+		t.Fatalf("Insert remote message error = %v", err)
+	}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+		},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "response.output_audio_transcript.delta",
+		"item_id": "msg_123",
+		"delta":   "hello ",
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "response.output_audio_transcript.delta",
+		"item_id": "msg_123",
+		"delta":   "world",
+	})
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":     "response.done",
+		"response": map[string]any{"id": "resp_123", "status": "completed"},
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
+	}
+
+	msg, ok := session.remote.Get("msg_123").(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("remote item = %T, want *llm.ChatMessage", session.remote.Get("msg_123"))
+	}
+	if got := msg.TextContent(); got != "hello world" {
+		t.Fatalf("remote text content = %q, want accumulated audio transcript", got)
+	}
+}
+
 func TestRealtimeSessionResolvesDefaultModalitiesWhenResponseDone(t *testing.T) {
 	session := &realtimeSession{}
 	created := session.trackRealtimeEvent(llm.RealtimeEvent{
