@@ -1377,6 +1377,11 @@ func runLLMChatContextCallStep(state *llmScenarioState, step llmScenarioStepSpec
 			return providerErr
 		}
 		state.vars[step.Assign] = formatted
+	case "to_provider_format_capture_error":
+		_, _, providerErr := ctx.ToProviderFormatE(stringArg(step.Args, "format"))
+		state.vars[step.Assign] = map[string]any{
+			"error": providerErr != nil,
+		}
 	case "add_message":
 		role, _ := step.Args["role"].(string)
 		text, _ := step.Args["text"].(string)
@@ -1735,6 +1740,13 @@ func transformLLMScenarioField(state *llmScenarioState, value any, transform str
 			return content[0]["text"], nil
 		}
 		return messages[len(messages)-1]["content"], nil
+	case "provider_error_exists":
+		data, ok := value.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use provider_error_exists", value)
+		}
+		exists, _ := data["error"].(bool)
+		return exists, nil
 	default:
 		return nil, fmt.Errorf("unsupported transform %q", transform)
 	}

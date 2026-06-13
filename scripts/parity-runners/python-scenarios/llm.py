@@ -1495,6 +1495,9 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
 
         messages: list[dict[str, Any]] = []
         for item in items:
+            if item["type"] == "function_call":
+                json.loads(item.get("arguments") or "{}")
+                continue
             if item["type"] != "message":
                 continue
             if provider_format == "google":
@@ -1521,6 +1524,17 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         if provider_format == "anthropic" and inject_trailing_user_message and messages and messages[-1]["role"] == "assistant":
             messages.append({"role": "user", "content": [{"text": " ", "type": "text"}]})
         return messages
+
+    def provider_format_error(
+        items: list[dict[str, Any]],
+        *,
+        provider_format: str,
+    ) -> dict[str, Any]:
+        try:
+            to_provider_format(items, provider_format=provider_format)
+        except Exception as exc:
+            return {"error": True, "error_class": type(exc).__name__}
+        return {"error": False, "error_class": ""}
 
     def build_declarative_fixture(fixture: dict[str, Any]) -> Any:
         factory = fixture.get("factory")
@@ -1712,6 +1726,13 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 inject_trailing_user_message=bool(args.get("inject_trailing_user_message", False)),
             )
             return
+        if op == "to_provider_format_capture_error":
+            args = step.get("args", {})
+            variables[step["assign"]] = provider_format_error(
+                target_items,
+                provider_format=str(args.get("format", "openai")),
+            )
+            return
         if op == "add_message":
             args = step.get("args", {})
             variables[step["assign"]] = add_message(
@@ -1888,6 +1909,8 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             if isinstance(content, list) and content:
                 return content[0].get("text")
             return content
+        if transform == "provider_error_exists":
+            return bool(value.get("error"))
         raise ValueError(f"unsupported transform {transform!r}")
 
     def first_serialized_instruction(value: dict[str, Any]) -> dict[str, Any]:
