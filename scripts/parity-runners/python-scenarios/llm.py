@@ -1562,6 +1562,33 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             content.append({"text": "", "type": "text"})
         return content
 
+    def aws_image_part(part: dict[str, Any]) -> dict[str, Any]:
+        image = str(part.get("image", ""))
+        match = re.match(r"^data:image/([^;,]+);base64,(.*)$", image)
+        if not match:
+            raise ValueError("external_url is not supported by AWS Bedrock.")
+        base64.b64decode(match.group(2), validate=True)
+        return {
+            "image": {
+                "format": match.group(1),
+                "source": {"bytes": match.group(2)},
+            }
+        }
+
+    def aws_content_parts(parts: list[Any]) -> list[dict[str, Any]]:
+        content: list[dict[str, Any]] = []
+        for part in parts:
+            if isinstance(part, str):
+                if part:
+                    content.append({"text": part})
+                continue
+            if isinstance(part, dict) and part.get("type") == "image_content":
+                content.append(aws_image_part(part))
+                continue
+            if isinstance(part, dict) and part:
+                content.append({"text": json.dumps(part)})
+        return content
+
     def to_provider_format(
         items: list[dict[str, Any]],
         *,
@@ -1782,6 +1809,8 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                     "role": "assistant" if item["role"] == "assistant" else "user",
                     "content": anthropic_content_parts(item["content"])
                     if provider_format == "anthropic"
+                    else aws_content_parts(item["content"])
+                    if provider_format == "aws"
                     else [{"text": text_content(item["content"]) or ""}],
                 }
             )
