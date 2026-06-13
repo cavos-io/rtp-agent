@@ -36,6 +36,20 @@ type UserInputTranscribedEvent struct {
 
 func (e *UserInputTranscribedEvent) GetType() string { return "user_input_transcribed" }
 
+func (e *UserInputTranscribedEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":       e.GetType(),
+		"transcript": e.Transcript,
+		"is_final":   e.IsFinal,
+		"speaker_id": e.SpeakerID,
+		"language":   e.Language,
+		"created_at": timeToUnixSeconds(e.CreatedAt),
+	})
+}
+
 type AgentOutputTranscribedEvent struct {
 	Language   string
 	Transcript string
@@ -44,6 +58,19 @@ type AgentOutputTranscribedEvent struct {
 }
 
 func (e *AgentOutputTranscribedEvent) GetType() string { return "agent_output_transcribed" }
+
+func (e *AgentOutputTranscribedEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":       e.GetType(),
+		"transcript": e.Transcript,
+		"is_final":   e.IsFinal,
+		"language":   e.Language,
+		"created_at": timeToUnixSeconds(e.CreatedAt),
+	})
+}
 
 type UserTurnExceededEvent struct {
 	Transcript            string

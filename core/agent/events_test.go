@@ -310,6 +310,75 @@ func TestFunctionToolsExecutedEventReplyAndHandoffFlagsCanBeCanceled(t *testing.
 	}
 }
 
+func TestUserInputTranscribedEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	ev := &UserInputTranscribedEvent{
+		Language:   "en-US",
+		Transcript: "hello there",
+		IsFinal:    true,
+		SpeakerID:  "speaker-1",
+		CreatedAt:  time.Unix(20, 125_000_000),
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal UserInputTranscribedEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled UserInputTranscribedEvent returned error: %v", err)
+	}
+	if payload["type"] != "user_input_transcribed" {
+		t.Fatalf("type = %#v, want user_input_transcribed", payload["type"])
+	}
+	if payload["transcript"] != "hello there" || payload["is_final"] != true {
+		t.Fatalf("payload transcript/finality = %#v, want reference transcript fields", payload)
+	}
+	if payload["speaker_id"] != "speaker-1" || payload["language"] != "en-US" {
+		t.Fatalf("payload speaker/language = %#v, want reference optional fields", payload)
+	}
+	if payload["created_at"] != 20.125 {
+		t.Fatalf("created_at = %#v, want 20.125", payload["created_at"])
+	}
+	if _, ok := payload["IsFinal"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
+	}
+}
+
+func TestAgentOutputTranscribedEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	ev := &AgentOutputTranscribedEvent{
+		Language:   "en-US",
+		Transcript: "assistant reply",
+		IsFinal:    false,
+		CreatedAt:  time.Unix(21, 750_000_000),
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal AgentOutputTranscribedEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled AgentOutputTranscribedEvent returned error: %v", err)
+	}
+	if payload["type"] != "agent_output_transcribed" {
+		t.Fatalf("type = %#v, want agent_output_transcribed", payload["type"])
+	}
+	if payload["transcript"] != "assistant reply" || payload["is_final"] != false {
+		t.Fatalf("payload transcript/finality = %#v, want reference transcript fields", payload)
+	}
+	if payload["language"] != "en-US" {
+		t.Fatalf("language = %#v, want en-US", payload["language"])
+	}
+	if payload["created_at"] != 21.75 {
+		t.Fatalf("created_at = %#v, want 21.75", payload["created_at"])
+	}
+	if _, ok := payload["IsFinal"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
+	}
+}
+
 func TestAgentFalseInterruptionEventIsTypedAndTimestamped(t *testing.T) {
 	before := time.Now()
 	ev := NewAgentFalseInterruptionEvent(true)
