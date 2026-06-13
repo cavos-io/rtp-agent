@@ -119,6 +119,25 @@ func TestSpeechEventCarriesReferenceUsageAndSpeechStartTime(t *testing.T) {
 	}
 }
 
+func TestRecognitionUsageUnmarshalJSONRejectsMissingAudioDuration(t *testing.T) {
+	var missing RecognitionUsage
+	err := json.Unmarshal([]byte(`{"input_tokens":3,"output_tokens":5}`), &missing)
+	if err == nil {
+		t.Fatal("Unmarshal RecognitionUsage returned nil error, want missing audio_duration error")
+	}
+	if !strings.Contains(err.Error(), "audio_duration") {
+		t.Fatalf("error = %v, want it to mention audio_duration", err)
+	}
+
+	var usage RecognitionUsage
+	if err := json.Unmarshal([]byte(`{"audio_duration":0}`), &usage); err != nil {
+		t.Fatalf("Unmarshal RecognitionUsage with explicit audio_duration returned error: %v", err)
+	}
+	if usage.AudioDuration != 0 || usage.InputTokens != 0 || usage.OutputTokens != 0 {
+		t.Fatalf("decoded usage = %#v, want explicit zero duration with default token counts", usage)
+	}
+}
+
 func TestSpeechEventMarshalJSONMatchesReferenceFieldNames(t *testing.T) {
 	isPrimary := true
 	speechStartTime := 12.5

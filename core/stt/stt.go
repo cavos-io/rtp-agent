@@ -97,6 +97,24 @@ type RecognitionUsage struct {
 	OutputTokens  int     `json:"output_tokens"`
 }
 
+func (u *RecognitionUsage) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if _, ok := fields["audio_duration"]; !ok {
+		return fmt.Errorf("recognition usage audio_duration is required")
+	}
+
+	type recognitionUsagePayload RecognitionUsage
+	var payload recognitionUsagePayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	*u = RecognitionUsage(payload)
+	return nil
+}
+
 type TimedString struct {
 	Text            string  `json:"text"`
 	StartTime       float64 `json:"start_time"`
