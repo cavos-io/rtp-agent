@@ -1411,6 +1411,7 @@ func runLLMChatContextCallStep(state *llmScenarioState, step llmScenarioStepSpec
 			ExcludeConfigUpdate: scenarioBoolArg(step.Args, "exclude_config_update"),
 			ExcludeMetrics:      scenarioBoolArg(step.Args, "exclude_metrics"),
 			IncludeImage:        scenarioBoolArg(step.Args, "include_image"),
+			IncludeTimestamp:    scenarioBoolArg(step.Args, "include_timestamp"),
 		})
 	case "from_dict":
 		sourceName := stringArg(step.Args, "source")
@@ -1725,6 +1726,20 @@ func transformLLMScenarioField(state *llmScenarioState, value any, transform str
 			return nil, fmt.Errorf("value %T cannot use item_created_at_set", value)
 		}
 		return !item.GetCreatedAt().IsZero(), nil
+	case "dict_item_created_at_values":
+		data, ok := value.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use dict_item_created_at_values", value)
+		}
+		items, ok := data["items"].([]map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("dict items are %T, want []map[string]any", data["items"])
+		}
+		values := make([]any, 0, len(items))
+		for _, item := range items {
+			values = append(values, item["created_at"])
+		}
+		return values, nil
 	case "context_item_ids":
 		ctx, ok := value.(*lkllm.ChatContext)
 		if !ok {

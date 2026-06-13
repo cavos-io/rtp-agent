@@ -1565,6 +1565,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         exclude_config_update: bool = False,
         exclude_metrics: bool = False,
         include_image: bool = False,
+        include_timestamp: bool = False,
     ) -> dict[str, Any]:
         out: list[dict[str, Any]] = []
         for item in items:
@@ -1574,7 +1575,8 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             if exclude_config_update and item_type == "agent_config_update":
                 continue
             data = dict(item)
-            data.pop("created_at", None)
+            if not include_timestamp:
+                data.pop("created_at", None)
             if item_type == "message":
                 content = []
                 for part in item["content"]:
@@ -2509,6 +2511,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 exclude_config_update=bool(args.get("exclude_config_update", False)),
                 exclude_metrics=bool(args.get("exclude_metrics", False)),
                 include_image=bool(args.get("include_image", False)),
+                include_timestamp=bool(args.get("include_timestamp", False)),
             )
             return
         if op == "from_dict":
@@ -2747,6 +2750,14 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             return text_content(value["content"])
         if transform == "item_created_at_set":
             return has_created_at(value)
+        if transform == "dict_item_created_at_values":
+            values: list[Any] = []
+            for item in value.get("items", []):
+                created_at = item.get("created_at")
+                if isinstance(created_at, float) and created_at.is_integer():
+                    created_at = int(created_at)
+                values.append(created_at)
+            return values
         if transform == "context_item_ids":
             return item_ids(value_items)
         if transform == "context_item_types":
