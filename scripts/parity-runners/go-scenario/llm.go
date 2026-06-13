@@ -2551,6 +2551,39 @@ func runLLMValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "realtime_capabilities_payload":
+		caps := lkllm.RealtimeCapabilities{
+			MessageTruncation:       true,
+			TurnDetection:           true,
+			UserTranscription:       true,
+			AutoToolReplyGeneration: true,
+			AudioOutput:             true,
+			ManualFunctionCalls:     true,
+			MutableChatContext:      true,
+			MutableInstructions:     true,
+			MutableTools:            true,
+			PerResponseToolChoice:   true,
+			SupportsSay:             true,
+		}
+		data, err := json.Marshal(caps)
+		if err != nil {
+			return nil, err
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(data, &payload); err != nil {
+			return nil, err
+		}
+		_, goFieldPresent := payload["MessageTruncation"]
+		return map[string]any{
+			"contract": "llm-value-objects",
+			"events": []map[string]any{
+				{
+					"name":             "realtime_capabilities_payload",
+					"payload":          payload,
+					"go_field_present": goFieldPresent,
+				},
+			},
+		}, nil
 	case "realtime_metadata_defaults":
 		model := &fakeScenarioRealtimeModel{}
 		return map[string]any{

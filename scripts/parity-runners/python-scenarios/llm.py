@@ -1,6 +1,7 @@
 import ast
 import base64
 import re
+from dataclasses import asdict, dataclass
 from typing import Literal
 
 from common import *  # noqa: F403
@@ -64,6 +65,28 @@ def load_reference_llm_value_class(class_name: str):
         "Field": Field,
         "FunctionToolCall": object,
         "Literal": Literal,
+    }
+    exec(compile(module, str(path), "exec"), namespace)
+    return namespace[class_name]
+
+
+def load_reference_llm_realtime_class(class_name: str):
+    path = repo_root() / "refs/agents/livekit-agents/livekit/agents/llm/realtime.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    class_node = next(
+        (
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == class_name
+        ),
+        None,
+    )
+    if class_node is None:
+        raise RuntimeError(f"cannot find {class_name} in {path}")
+    module = ast.Module(body=[class_node], type_ignores=[])
+    ast.fix_missing_locations(module)
+    namespace = {
+        "dataclass": dataclass,
     }
     exec(compile(module, str(path), "exec"), namespace)
     return namespace[class_name]
@@ -646,6 +669,34 @@ def llm_value_objects(input_data: Any) -> dict[str, Any]:
                     "mutable_tools": True,
                     "per_response_tool_choice": True,
                     "supports_say": True,
+                }
+            ],
+        }
+    if action == "realtime_capabilities_payload":
+        realtime_capabilities = load_reference_llm_realtime_class(
+            "RealtimeCapabilities"
+        )
+        caps = realtime_capabilities(
+            message_truncation=True,
+            turn_detection=True,
+            user_transcription=True,
+            auto_tool_reply_generation=True,
+            audio_output=True,
+            manual_function_calls=True,
+            mutable_chat_context=True,
+            mutable_instructions=True,
+            mutable_tools=True,
+            per_response_tool_choice=True,
+            supports_say=True,
+        )
+        payload = asdict(caps)
+        return {
+            "contract": "llm-value-objects",
+            "events": [
+                {
+                    "name": "realtime_capabilities_payload",
+                    "payload": payload,
+                    "go_field_present": "MessageTruncation" in payload,
                 }
             ],
         }
