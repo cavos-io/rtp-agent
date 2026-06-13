@@ -95,6 +95,25 @@ def vad_value_objects(input_data: Any) -> dict[str, Any]:  # noqa: F405
                 }
             ],
         }
+    if action == "capabilities_required_update_interval":
+        missing_field = ""
+        try:
+            module.VADCapabilities()
+        except TypeError as exc:
+            if "update_interval" in str(exc):
+                missing_field = "update_interval"
+        zero = module.VADCapabilities(update_interval=0)
+        return {
+            "contract": "vad-capabilities-required-field",
+            "events": [
+                {
+                    "name": "capabilities_required_update_interval",
+                    "missing_required": missing_field == "update_interval",
+                    "missing_field": missing_field,
+                    "zero_update_interval": zero.update_interval,
+                }
+            ],
+        }
     if action == "event_json":
         event = module.VADEvent(
             type=module.VADEventType.INFERENCE_DONE,

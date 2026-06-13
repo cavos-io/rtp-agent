@@ -3,14 +3,15 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	lkvad "github.com/cavos-io/rtp-agent/core/vad"
 )
 
 func runVADValueObjects(input json.RawMessage) (any, error) {
 	var payload struct {
-		Action         string  `json:"action"`
-		UpdateInterval float64 `json:"update_interval"`
+		Action         string   `json:"action"`
+		UpdateInterval *float64 `json:"update_interval"`
 	}
 	if err := json.Unmarshal(input, &payload); err != nil {
 		return nil, err
@@ -18,13 +19,14 @@ func runVADValueObjects(input json.RawMessage) (any, error) {
 	if payload.Action == "" {
 		payload.Action = "capabilities_json"
 	}
-	if payload.UpdateInterval == 0 {
-		payload.UpdateInterval = 0.5
+	updateInterval := 0.5
+	if payload.UpdateInterval != nil {
+		updateInterval = *payload.UpdateInterval
 	}
 
 	switch payload.Action {
 	case "capabilities_json":
-		data, err := json.Marshal(lkvad.VADCapabilities{UpdateInterval: payload.UpdateInterval})
+		data, err := json.Marshal(lkvad.VADCapabilities{UpdateInterval: updateInterval})
 		if err != nil {
 			return nil, err
 		}
@@ -39,6 +41,28 @@ func runVADValueObjects(input json.RawMessage) (any, error) {
 					"name":               "capabilities_json",
 					"update_interval":    fields["update_interval"],
 					"has_go_field_names": hasAnyKey(fields, "UpdateInterval"),
+				},
+			},
+		}, nil
+	case "capabilities_required_update_interval":
+		var missing lkvad.VADCapabilities
+		err := json.Unmarshal([]byte(`{}`), &missing)
+		missingField := ""
+		if err != nil && strings.Contains(err.Error(), "update_interval") {
+			missingField = "update_interval"
+		}
+		var zero lkvad.VADCapabilities
+		if err := json.Unmarshal([]byte(`{"update_interval":0}`), &zero); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "vad-capabilities-required-field",
+			"events": []map[string]any{
+				{
+					"name":                 "capabilities_required_update_interval",
+					"missing_required":     missingField == "update_interval",
+					"missing_field":        missingField,
+					"zero_update_interval": zero.UpdateInterval,
 				},
 			},
 		}, nil
