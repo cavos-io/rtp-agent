@@ -812,7 +812,7 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 			ID        string         `json:"id"`
 			CallID    *string        `json:"call_id"`
 			Name      *string        `json:"name"`
-			Arguments string         `json:"arguments"`
+			Arguments *string        `json:"arguments"`
 			Extra     map[string]any `json:"extra"`
 			GroupID   *string        `json:"group_id"`
 			CreatedAt *float64       `json:"created_at"`
@@ -826,11 +826,14 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 		if item.Name == nil {
 			return nil, fmt.Errorf("function_call name is required")
 		}
+		if item.Arguments == nil {
+			return nil, fmt.Errorf("function_call arguments is required")
+		}
 		return &FunctionCall{
 			ID:        itemIDOrDefault(item.ID),
 			CallID:    *item.CallID,
 			Name:      *item.Name,
-			Arguments: item.Arguments,
+			Arguments: *item.Arguments,
 			Extra:     item.Extra,
 			GroupID:   item.GroupID,
 			CreatedAt: chatItemCreatedAtOrDefault(item.CreatedAt),
