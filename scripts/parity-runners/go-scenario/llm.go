@@ -2754,6 +2754,27 @@ func runLLMToolContext(input json.RawMessage) (any, error) {
 			"contract": "llm-tool-context",
 			"events":   []map[string]any{summary(ctx, "flatten_provider_order", nil)},
 		}, nil
+	case "sync_flattened":
+		lookup := newTool("lookup", "lookup")
+		weather := newTool("weather", "weather")
+		replacement := newTool("replacement", "replacement")
+		toolset := &scenarioLLMToolset{id: "tools", tools: []lkllm.Tool{lookup, weather}}
+		ctx := lkllm.NewToolContext([]interface{}{toolset})
+		if err := ctx.SyncFlattened([]lkllm.Tool{weather, replacement}); err != nil {
+			return nil, err
+		}
+		toolsets := ctx.Toolsets()
+		return map[string]any{
+			"contract": "llm-tool-context",
+			"events": []map[string]any{
+				summary(ctx, "sync_flattened", map[string]any{
+					"lookup_found":      ctx.GetFunctionTool("lookup") != nil,
+					"weather_found":     ctx.GetFunctionTool("weather") == weather,
+					"replacement_found": ctx.GetFunctionTool("replacement") == replacement,
+					"toolset_preserved": len(toolsets) == 1 && toolsets[0] == toolset,
+				}),
+			},
+		}, nil
 	case "close_toolsets":
 		lookup := newTool("lookup", "lookup")
 		toolset := &scenarioLLMToolset{id: "tools", tools: []lkllm.Tool{lookup}}

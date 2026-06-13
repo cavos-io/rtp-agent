@@ -1020,6 +1020,28 @@ def llm_tool_context(input_data: Any) -> dict[str, Any]:
             "contract": "llm-tool-context",
             "events": [summarize(ctx, "flatten_provider_order")],
         }
+    if action == "sync_flattened":
+        lookup = fn_tool("lookup")
+        weather = fn_tool("weather")
+        replacement = fn_tool("replacement")
+        toolset = module.Toolset(id="tools", tools=[lookup, weather])
+        ctx = module.ToolContext([toolset])
+        ctx._sync_flattened([weather, replacement])
+        return {
+            "contract": "llm-tool-context",
+            "events": [
+                summarize(
+                    ctx,
+                    "sync_flattened",
+                    {
+                        "lookup_found": ctx.get_function_tool("lookup") is not None,
+                        "weather_found": ctx.get_function_tool("weather") is weather,
+                        "replacement_found": ctx.get_function_tool("replacement") is replacement,
+                        "toolset_preserved": len(ctx.toolsets) == 1 and ctx.toolsets[0] is toolset,
+                    },
+                )
+            ],
+        }
     if action == "close_toolsets":
         class ClosingToolset(module.Toolset):
             def __init__(self) -> None:
