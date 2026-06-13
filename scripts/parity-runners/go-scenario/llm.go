@@ -1952,6 +1952,33 @@ func runLLMValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "choice_delta_payload":
+		delta := lkllm.ChoiceDelta{
+			Role:    lkllm.ChatRoleAssistant,
+			Content: "hello",
+			Extra:   map[string]any{"reasoning": "visible"},
+		}
+		payload, err := choiceDeltaPayload(delta)
+		if err != nil {
+			return nil, err
+		}
+		minimal, err := choiceDeltaPayloadFromJSON([]byte(`{}`))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "llm-value-objects",
+			"events": []map[string]any{
+				{
+					"name":    "choice_delta_payload",
+					"payload": payload,
+				},
+				{
+					"name":            "choice_delta_defaults",
+					"minimal_payload": minimal,
+				},
+			},
+		}, nil
 	case "realtime_error_payload":
 		underlying := errors.New("session disconnected")
 		err := lkllm.NewRealtimeModelError("openai.RealtimeModel", underlying, false)
@@ -2715,6 +2742,26 @@ func functionToolCallPayloadFromJSON(data []byte) (map[string]any, error) {
 		return nil, err
 	}
 	return functionToolCallPayload(toolCall)
+}
+
+func choiceDeltaPayload(delta lkllm.ChoiceDelta) (map[string]any, error) {
+	data, err := json.Marshal(delta)
+	if err != nil {
+		return nil, err
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func choiceDeltaPayloadFromJSON(data []byte) (map[string]any, error) {
+	var delta lkllm.ChoiceDelta
+	if err := json.Unmarshal(data, &delta); err != nil {
+		return nil, err
+	}
+	return choiceDeltaPayload(delta)
 }
 
 type scenarioLLMToolset struct {

@@ -5,6 +5,11 @@ from common import *  # noqa: F403
 
 
 def load_reference_llm_value_class(class_name: str):
+    def Field(default=..., **kwargs: Any) -> Any:
+        if "default_factory" in kwargs:
+            return kwargs["default_factory"]()
+        return default
+
     class BaseModel:
         def __init__(self, **kwargs: Any) -> None:
             annotations = getattr(self.__class__, "__annotations__", {})
@@ -39,13 +44,22 @@ def load_reference_llm_value_class(class_name: str):
         raise RuntimeError(f"cannot find {class_name} in {path}")
     module = ast.Module(body=[class_node], type_ignores=[])
     ast.fix_missing_locations(module)
-    namespace = {"Any": Any, "BaseModel": BaseModel, "Literal": Literal}
+    namespace = {
+        "Any": Any,
+        "BaseModel": BaseModel,
+        "ChatRole": str,
+        "CompletionUsage": object,
+        "Field": Field,
+        "FunctionToolCall": object,
+        "Literal": Literal,
+    }
     exec(compile(module, str(path), "exec"), namespace)
     return namespace[class_name]
 
 
 def load_reference_completion_usage():
     return load_reference_llm_value_class("CompletionUsage")
+
 
 def llm_api_connect_options(input_data: Any) -> dict[str, Any]:
     action = input_data.get("action", "defaults")
@@ -382,6 +396,27 @@ def llm_value_objects(input_data: Any) -> dict[str, Any]:
                 {
                     "name": "function_tool_call_required_fields",
                     "missing_fields": missing_fields,
+                    "minimal_payload": minimal.model_dump(),
+                },
+            ],
+        }
+    if action == "choice_delta_payload":
+        choice_delta = load_reference_llm_value_class("ChoiceDelta")
+        delta = choice_delta(
+            role="assistant",
+            content="hello",
+            extra={"reasoning": "visible"},
+        )
+        minimal = choice_delta()
+        return {
+            "contract": "llm-value-objects",
+            "events": [
+                {
+                    "name": "choice_delta_payload",
+                    "payload": delta.model_dump(),
+                },
+                {
+                    "name": "choice_delta_defaults",
                     "minimal_payload": minimal.model_dump(),
                 },
             ],
