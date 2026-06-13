@@ -1368,6 +1368,10 @@ func runLLMChatContextCallStep(state *llmScenarioState, step llmScenarioStepSpec
 			value := scenarioBoolArg(step.Args, "inject_dummy_user_message")
 			options.InjectDummyUserMessage = &value
 		}
+		if _, ok := step.Args["inject_trailing_user_message"]; ok {
+			value := scenarioBoolArg(step.Args, "inject_trailing_user_message")
+			options.InjectTrailingUserMessage = &value
+		}
 		formatted, _, providerErr := ctx.ToProviderFormatE(stringArg(step.Args, "format"), options)
 		if providerErr != nil {
 			return providerErr
@@ -1703,6 +1707,34 @@ func transformLLMScenarioField(state *llmScenarioState, value any, transform str
 			return nil, nil
 		}
 		return messages[0]["role"], nil
+	case "provider_message_count":
+		messages, ok := value.([]map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use provider_message_count", value)
+		}
+		return len(messages), nil
+	case "provider_last_role":
+		messages, ok := value.([]map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use provider_last_role", value)
+		}
+		if len(messages) == 0 {
+			return nil, nil
+		}
+		return messages[len(messages)-1]["role"], nil
+	case "provider_last_text":
+		messages, ok := value.([]map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use provider_last_text", value)
+		}
+		if len(messages) == 0 {
+			return nil, nil
+		}
+		content, ok := messages[len(messages)-1]["content"].([]map[string]any)
+		if ok && len(content) > 0 {
+			return content[0]["text"], nil
+		}
+		return messages[len(messages)-1]["content"], nil
 	default:
 		return nil, fmt.Errorf("unsupported transform %q", transform)
 	}

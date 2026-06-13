@@ -1476,6 +1476,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         *,
         provider_format: str,
         inject_dummy_user_message: bool = True,
+        inject_trailing_user_message: bool = False,
     ) -> list[dict[str, Any]]:
         if provider_format == "openai":
             messages: list[dict[str, Any]] = []
@@ -1517,6 +1518,8 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             elif not messages or messages[0]["role"] != "user":
                 content = [{"text": "(empty)", "type": "text"}] if provider_format == "anthropic" else [{"text": "(empty)"}]
                 messages.insert(0, {"role": "user", "content": content})
+        if provider_format == "anthropic" and inject_trailing_user_message and messages and messages[-1]["role"] == "assistant":
+            messages.append({"role": "user", "content": [{"text": " ", "type": "text"}]})
         return messages
 
     def build_declarative_fixture(fixture: dict[str, Any]) -> Any:
@@ -1706,6 +1709,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 target_items,
                 provider_format=str(args.get("format", "openai")),
                 inject_dummy_user_message=bool(args.get("inject_dummy_user_message", True)),
+                inject_trailing_user_message=bool(args.get("inject_trailing_user_message", False)),
             )
             return
         if op == "add_message":
@@ -1873,6 +1877,17 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             return None if not value else value[0].get("content")
         if transform == "provider_first_role":
             return None if not value else value[0].get("role")
+        if transform == "provider_message_count":
+            return len(value)
+        if transform == "provider_last_role":
+            return None if not value else value[-1].get("role")
+        if transform == "provider_last_text":
+            if not value:
+                return None
+            content = value[-1].get("content")
+            if isinstance(content, list) and content:
+                return content[0].get("text")
+            return content
         raise ValueError(f"unsupported transform {transform!r}")
 
     def first_serialized_instruction(value: dict[str, Any]) -> dict[str, Any]:
