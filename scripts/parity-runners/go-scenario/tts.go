@@ -13,9 +13,11 @@ import (
 
 func runTTSValueObjects(input json.RawMessage) (any, error) {
 	var payload struct {
-		Action     string   `json:"action"`
-		Chunks     []string `json:"chunks"`
-		Transforms []string `json:"transforms"`
+		Action        string            `json:"action"`
+		Chunks        []string          `json:"chunks"`
+		Transforms    []string          `json:"transforms"`
+		Replacements  map[string]string `json:"replacements"`
+		CaseSensitive bool              `json:"case_sensitive"`
 	}
 	if err := json.Unmarshal(input, &payload); err != nil {
 		return nil, err
@@ -349,6 +351,34 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 					"name":   "text_transform",
 					"chunks": chunks,
 					"joined": joined,
+				},
+			},
+		}, nil
+	case "text_replace":
+		buffer := lktts.NewTextReplaceBuffer(payload.Replacements, payload.CaseSensitive)
+		chunks := []string{}
+		for _, chunk := range payload.Chunks {
+			chunks = append(chunks, buffer.Push(chunk)...)
+		}
+		chunks = append(chunks, buffer.Flush()...)
+		joined := ""
+		for _, chunk := range chunks {
+			joined += chunk
+		}
+		containsOriginal := false
+		for old := range payload.Replacements {
+			if strings.Contains(joined, old) {
+				containsOriginal = true
+				break
+			}
+		}
+		return map[string]any{
+			"contract": "tts-text-replacements",
+			"events": []map[string]any{
+				{
+					"name":              "text_replace",
+					"joined":            joined,
+					"contains_original": containsOriginal,
 				},
 			},
 		}, nil
