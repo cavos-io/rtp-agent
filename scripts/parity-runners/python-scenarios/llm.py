@@ -2255,6 +2255,16 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
     def build_declarative_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [build_declarative_item(item) for item in items]
 
+    def declarative_item_id(item: dict[str, Any]) -> str:
+        return str(item["id"]) if "id" in item else generated_id()
+
+    def declarative_created_at(item: dict[str, Any]) -> float:
+        if "created_at_unix" in item:
+            return float(item["created_at_unix"])
+        if "created_at" in item:
+            return float(item["created_at"])
+        return generated_time()
+
     def build_declarative_item(item: dict[str, Any]) -> dict[str, Any]:
         item_type = str(item.get("type", "message"))
         if item_type == "message":
@@ -2265,34 +2275,34 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             else:
                 content = []
             return message(
-                str(item.get("id", "")),
+                declarative_item_id(item),
                 str(item.get("role", "")),
                 content,
-                created_at=float(item.get("created_at_unix", 0.0)),
+                created_at=declarative_created_at(item),
                 extra=item.get("extra", {}),
                 metrics=item.get("metrics", {}),
             )
         if item_type == "function_call":
             return function_call(
-                str(item.get("id", "")),
+                declarative_item_id(item),
                 str(item.get("name", "")),
                 call_id=str(item.get("call_id", "")),
                 arguments=str(item.get("arguments", "")),
                 extra=item.get("extra", {}),
-                created_at=float(item.get("created_at_unix", 0.0)),
+                created_at=declarative_created_at(item),
             )
         if item_type == "function_call_output":
             return function_output(
-                str(item.get("id", "")),
+                declarative_item_id(item),
                 str(item.get("name", "")),
                 call_id=str(item.get("call_id", "")),
                 output=str(item.get("output", "")),
-                created_at=float(item.get("created_at_unix", 0.0)),
+                created_at=declarative_created_at(item),
             )
         if item_type == "agent_handoff":
-            return handoff(str(item.get("id", "")), created_at=float(item.get("created_at_unix", 0.0)))
+            return handoff(declarative_item_id(item), created_at=declarative_created_at(item))
         if item_type == "agent_config_update":
-            return config(str(item.get("id", "")), created_at=float(item.get("created_at_unix", 0.0)))
+            return config(declarative_item_id(item), created_at=declarative_created_at(item))
         raise ValueError(f"unsupported item type {item_type!r}")
 
     def build_declarative_content(parts: list[Any]) -> list[Any]:
