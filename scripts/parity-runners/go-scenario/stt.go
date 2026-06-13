@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 
 	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
 	lkstt "github.com/cavos-io/rtp-agent/core/stt"
+	lkvad "github.com/cavos-io/rtp-agent/core/vad"
 )
 
 func runSTTValueObjects(input json.RawMessage) (any, error) {
@@ -437,10 +439,50 @@ func runSTTFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "vad_wrap":
+		adapter := lkstt.NewFallbackAdapterWithVAD(
+			[]lkstt.STT{fakeScenarioSTT{label: "offline", capabilities: lkstt.STTCapabilities{OfflineRecognize: true}}},
+			fakeScenarioVAD{},
+		)
+		caps := adapter.Capabilities()
+		return map[string]any{
+			"contract": "stt-fallback",
+			"events": []map[string]any{
+				{
+					"name":               "vad_wrap",
+					"streaming":          caps.Streaming,
+					"interim_results":    caps.InterimResults,
+					"diarization":        caps.Diarization,
+					"aligned_transcript": caps.AlignedTranscript,
+					"offline_recognize":  caps.OfflineRecognize,
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported STT fallback action %q", payload.Action)
 	}
 }
+
+type fakeScenarioVAD struct{}
+
+func (fakeScenarioVAD) Label() string                       { return "scenario.VAD" }
+func (fakeScenarioVAD) Model() string                       { return "" }
+func (fakeScenarioVAD) Provider() string                    { return "" }
+func (fakeScenarioVAD) Capabilities() lkvad.VADCapabilities { return lkvad.VADCapabilities{} }
+func (fakeScenarioVAD) OnMetricsCollected(lkvad.VADMetricsHandler) func() {
+	return func() {}
+}
+func (fakeScenarioVAD) Stream(context.Context) (lkvad.VADStream, error) {
+	return fakeScenarioVADStream{}, nil
+}
+
+type fakeScenarioVADStream struct{}
+
+func (fakeScenarioVADStream) PushFrame(*audiomodel.AudioFrame) error { return nil }
+func (fakeScenarioVADStream) Flush() error                           { return nil }
+func (fakeScenarioVADStream) EndInput() error                        { return nil }
+func (fakeScenarioVADStream) Close() error                           { return nil }
+func (fakeScenarioVADStream) Next() (*lkvad.VADEvent, error)         { return nil, io.EOF }
 
 func runSTTStreamAdapter(input json.RawMessage) (any, error) {
 	var payload struct {
