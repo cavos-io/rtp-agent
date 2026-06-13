@@ -1379,6 +1379,8 @@ func runLLMChatContextCallStep(state *llmScenarioState, step llmScenarioStepSpec
 		state.vars[step.Assign] = ctx.GetToolNames(tools)
 	case "lookup_by_id":
 		state.vars[step.Assign] = ctx.GetByID(id)
+	case "messages":
+		state.vars[step.Assign] = ctx.Messages()
 	case "index":
 		index := ctx.IndexByID(id)
 		if index == nil {
@@ -1728,6 +1730,25 @@ func transformLLMScenarioField(state *llmScenarioState, value any, transform str
 			return nil, fmt.Errorf("value %T cannot use context_items_is_list", value)
 		}
 		return ctx.Items != nil, nil
+	case "message_list_is_list":
+		_, ok := value.([]*lkllm.ChatMessage)
+		return ok, nil
+	case "message_list_count":
+		messages, ok := value.([]*lkllm.ChatMessage)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use message_list_count", value)
+		}
+		return len(messages), nil
+	case "message_list_ids":
+		messages, ok := value.([]*lkllm.ChatMessage)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use message_list_ids", value)
+		}
+		ids := make([]string, 0, len(messages))
+		for _, message := range messages {
+			ids = append(ids, message.ID)
+		}
+		return ids, nil
 	case "context_first_message_text_content":
 		ctx, ok := value.(*lkllm.ChatContext)
 		if !ok {

@@ -2394,6 +2394,11 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 None,
             )
             return
+        if op == "messages":
+            variables[step["assign"]] = [
+                item for item in target_items if item.get("type") == "message"
+            ]
+            return
         if op == "index":
             variables[step["assign"]] = ids.index(item_id) if item_id in ids else None
             return
@@ -2609,6 +2614,12 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             return len(value_items)
         if transform == "context_items_is_list":
             return isinstance(value_items, list)
+        if transform == "message_list_is_list":
+            return isinstance(value, list)
+        if transform == "message_list_count":
+            return len(value)
+        if transform == "message_list_ids":
+            return item_ids(value)
         if transform == "context_first_message_text_content":
             return None if not value_items else text_content(value_items[0]["content"])
         if transform == "context_first_item_type":
