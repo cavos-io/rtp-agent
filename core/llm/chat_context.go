@@ -996,14 +996,17 @@ func chatContentFromJSON(data []byte) (ChatContent, error) {
 		}}, nil
 	case "audio_content":
 		var audio struct {
-			Frames     []any  `json:"frame"`
+			Frames     *[]any `json:"frame"`
 			Transcript string `json:"transcript"`
 		}
 		if err := json.Unmarshal(data, &audio); err != nil {
 			return ChatContent{}, err
 		}
+		if audio.Frames == nil {
+			return ChatContent{}, fmt.Errorf("audio_content frame is required")
+		}
 		return ChatContent{Audio: &AudioContent{
-			Frames:     audio.Frames,
+			Frames:     *audio.Frames,
 			Transcript: audio.Transcript,
 		}}, nil
 	default:

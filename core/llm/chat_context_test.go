@@ -1637,6 +1637,7 @@ func TestChatContextUnmarshalJSONRestoresTypedItems(t *testing.T) {
 					},
 					{
 						"type": "audio_content",
+						"frame": [],
 						"transcript": "audio text"
 					}
 				],
@@ -1931,6 +1932,29 @@ func TestChatContextUnmarshalJSONRejectsMissingItems(t *testing.T) {
 				t.Fatalf("len(items) after rejected UnmarshalJSON = %d, want existing item preserved", len(ctx.Items))
 			}
 		})
+	}
+}
+
+func TestChatContextUnmarshalJSONRejectsAudioContentMissingFrame(t *testing.T) {
+	var ctx ChatContext
+	data := []byte(`{
+		"items": [
+			{
+				"id": "message",
+				"type": "message",
+				"role": "user",
+				"content": [
+					{
+						"type": "audio_content",
+						"transcript": "audio text"
+					}
+				]
+			}
+		]
+	}`)
+
+	if err := json.Unmarshal(data, &ctx); err == nil {
+		t.Fatal("Unmarshal ChatContext error = nil, want missing audio_content frame error")
 	}
 }
 
