@@ -1857,11 +1857,12 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 names.append(tool)
                 continue
             tool_type = str(tool.get("type", ""))
+            if not tool_type:
+                tool_type = "toolset" if "tools" in tool else "tool"
             if tool_type in ("name", "tool"):
                 names.append(str(tool.get("name", "")))
             elif tool_type == "toolset":
-                for child in tool.get("tools", []):
-                    names.append(str(child.get("name", "")))
+                names.extend(build_declarative_tool_names(tool.get("tools", [])))
         return names
 
     def transform_declarative_value(

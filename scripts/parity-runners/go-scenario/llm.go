@@ -1855,6 +1855,13 @@ func buildLLMScenarioTools(args map[string]any) ([]interface{}, error) {
 
 func buildLLMScenarioTool(spec map[string]any) (interface{}, error) {
 	toolType := stringArg(spec, "type")
+	if toolType == "" {
+		if _, ok := spec["tools"]; ok {
+			toolType = "toolset"
+		} else {
+			toolType = "tool"
+		}
+	}
 	switch toolType {
 	case "name":
 		return stringArg(spec, "name"), nil
@@ -1871,7 +1878,15 @@ func buildLLMScenarioTool(spec map[string]any) (interface{}, error) {
 			if !ok {
 				return nil, fmt.Errorf("toolset child %d is %T, want object", index, rawTool)
 			}
-			tools = append(tools, &scenarioTool{id: stringArg(childSpec, "id"), name: stringArg(childSpec, "name")})
+			child, err := buildLLMScenarioTool(childSpec)
+			if err != nil {
+				return nil, fmt.Errorf("toolset child %d: %w", index, err)
+			}
+			tool, ok := child.(lkllm.Tool)
+			if !ok {
+				return nil, fmt.Errorf("toolset child %d is %T, want tool", index, child)
+			}
+			tools = append(tools, tool)
 		}
 		return &scenarioToolset{id: stringArg(spec, "id"), tools: tools}, nil
 	case "ignored":
@@ -1966,8 +1981,12 @@ type scenarioToolset struct {
 	tools []lkllm.Tool
 }
 
-func (s *scenarioToolset) ID() string          { return s.id }
-func (s *scenarioToolset) Tools() []lkllm.Tool { return s.tools }
+func (s *scenarioToolset) ID() string                                      { return s.id }
+func (s *scenarioToolset) Name() string                                    { return s.id }
+func (s *scenarioToolset) Description() string                             { return "" }
+func (s *scenarioToolset) Parameters() map[string]any                      { return nil }
+func (s *scenarioToolset) Execute(context.Context, string) (string, error) { return "", nil }
+func (s *scenarioToolset) Tools() []lkllm.Tool                             { return s.tools }
 
 func runLLMValueObjects(input json.RawMessage) (any, error) {
 	var payload struct {

@@ -338,6 +338,67 @@ func TestRunLLMChatContextRunsDeclarativeToolNameFlatteningScenario(t *testing.T
 	}
 }
 
+func TestRunLLMChatContextRunsDeclarativeNestedToolNameFlatteningScenario(t *testing.T) {
+	input := json.RawMessage(`{
+		"spec_version": "1.0",
+		"kind": "parity-scenario",
+		"contract": "llm-chat-context",
+		"fixtures": [
+			{"name": "ctx", "factory": "llm_chat_context.empty"}
+		],
+		"steps": [
+			{
+				"kind": "call",
+				"op": "tool_names",
+				"target": "ctx",
+				"args": {
+					"tools": [
+						{
+							"type": "toolset",
+							"id": "outer",
+							"tools": [
+								{
+									"type": "toolset",
+									"id": "inner",
+									"tools": [
+										{"type": "tool", "id": "lookup", "name": "lookup"}
+									]
+								}
+							]
+						}
+					]
+				},
+				"assign": "names"
+			},
+			{
+				"kind": "emit",
+				"name": "nested_tool_name_flattening",
+				"fields": [
+					{"name": "names", "from": "names", "transform": "identity"}
+				]
+			}
+		]
+	}`)
+
+	got, err := runLLMChatContext(input)
+	if err != nil {
+		t.Fatalf("runLLMChatContext() error = %v", err)
+	}
+
+	want := map[string]any{
+		"contract": "llm-chat-context",
+		"events": []map[string]any{
+			{
+				"name":  "nested_tool_name_flattening",
+				"names": []string{"lookup"},
+			},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("runLLMChatContext() = %#v, want %#v", got, want)
+	}
+}
+
 func TestRunLLMChatContextRunsDeclarativeCopyShallowItemsScenario(t *testing.T) {
 	input := json.RawMessage(`{
 		"spec_version": "1.0",
