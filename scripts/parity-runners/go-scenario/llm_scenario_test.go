@@ -1392,6 +1392,69 @@ func TestRunLLMChatContextRunsDeclarativeImageDefaultsScenario(t *testing.T) {
 	}
 }
 
+func TestRunLLMChatContextRunsDeclarativeOpenAIImageContentScenario(t *testing.T) {
+	input := json.RawMessage(`{
+		"spec_version": "1.0",
+		"kind": "parity-scenario",
+		"contract": "llm-chat-context",
+		"fixtures": [
+			{
+				"name": "ctx",
+				"factory": "llm_chat_context.items",
+				"args": {
+					"items": [
+						{
+							"type": "message",
+							"id": "message",
+							"role": "user",
+							"content": [
+								"describe this",
+								{"type": "image_content", "image": "https://example.test/image.png", "inference_detail": "high"}
+							]
+						}
+					]
+				}
+			}
+		],
+		"steps": [
+			{"kind": "call", "op": "to_provider_format", "target": "ctx", "args": {"format": "openai"}, "assign": "messages"},
+			{
+				"kind": "emit",
+				"name": "openai_image_content",
+				"fields": [
+					{"name": "message_count", "from": "messages", "transform": "provider_message_count"},
+					{"name": "role", "from": "messages", "transform": "provider_first_role"},
+					{"name": "image_url", "from": "messages", "transform": "provider_first_image_url"},
+					{"name": "image_detail", "from": "messages", "transform": "provider_first_image_detail"},
+					{"name": "text", "from": "messages", "transform": "provider_first_text_part"}
+				]
+			}
+		]
+	}`)
+
+	got, err := runLLMChatContext(input)
+	if err != nil {
+		t.Fatalf("runLLMChatContext() error = %v", err)
+	}
+
+	want := map[string]any{
+		"contract": "llm-chat-context",
+		"events": []map[string]any{
+			{
+				"name":          "openai_image_content",
+				"message_count": 1,
+				"role":          "user",
+				"image_url":     "https://example.test/image.png",
+				"image_detail":  "high",
+				"text":          "describe this",
+			},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("runLLMChatContext() = %#v, want %#v", got, want)
+	}
+}
+
 func TestRunLLMChatContextRunsDeclarativeInstructionsScenario(t *testing.T) {
 	input := json.RawMessage(`{
 		"spec_version": "1.0",

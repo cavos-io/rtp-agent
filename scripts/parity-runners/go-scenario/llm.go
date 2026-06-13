@@ -1736,6 +1736,38 @@ func transformLLMScenarioField(state *llmScenarioState, value any, transform str
 			return nil, nil
 		}
 		return messages[0]["role"], nil
+	case "provider_first_image_url":
+		image, err := firstProviderImagePart(value)
+		if err != nil {
+			return nil, err
+		}
+		imageURL, _ := image["image_url"].(map[string]any)
+		return imageURL["url"], nil
+	case "provider_first_image_detail":
+		image, err := firstProviderImagePart(value)
+		if err != nil {
+			return nil, err
+		}
+		imageURL, _ := image["image_url"].(map[string]any)
+		return imageURL["detail"], nil
+	case "provider_first_text_part":
+		messages, ok := value.([]map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use provider_first_text_part", value)
+		}
+		if len(messages) == 0 {
+			return nil, nil
+		}
+		content, ok := messages[0]["content"].([]map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("provider first content is %T, want []map[string]any", messages[0]["content"])
+		}
+		for _, part := range content {
+			if part["type"] == "text" {
+				return part["text"], nil
+			}
+		}
+		return nil, nil
 	case "provider_message_count":
 		messages, ok := value.([]map[string]any)
 		if !ok {
@@ -1838,6 +1870,26 @@ func firstSerializedImage(value any) (map[string]any, error) {
 		}
 	}
 	return nil, errors.New("dict_first_image requires image content")
+}
+
+func firstProviderImagePart(value any) (map[string]any, error) {
+	messages, ok := value.([]map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("value %T cannot use provider_first_image transform", value)
+	}
+	if len(messages) == 0 {
+		return nil, errors.New("provider_first_image requires non-empty messages")
+	}
+	content, ok := messages[0]["content"].([]map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("provider first content is %T, want []map[string]any", messages[0]["content"])
+	}
+	for _, part := range content {
+		if part["type"] == "image_url" {
+			return part, nil
+		}
+	}
+	return nil, errors.New("provider_first_image requires image_url content")
 }
 
 func stringArg(args map[string]any, name string) string {

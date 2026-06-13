@@ -1504,10 +1504,29 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             for item in items:
                 if item["type"] != "message":
                     continue
+                parts: list[dict[str, Any]] = []
+                for part in item["content"]:
+                    if isinstance(part, dict) and part.get("type") == "image_content":
+                        parts.append(
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": part.get("image"),
+                                    "detail": part.get("inference_detail") or "auto",
+                                },
+                            }
+                        )
+                text = text_content(item["content"]) or ""
+                if parts:
+                    if text:
+                        parts.append({"type": "text", "text": text})
+                    content: Any = parts
+                else:
+                    content = text
                 messages.append(
                     {
                         "role": item["role"],
-                        "content": text_content(item["content"]) or "",
+                        "content": content,
                     }
                 )
             return messages
@@ -1961,6 +1980,15 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             return None if not value else value[0].get("content")
         if transform == "provider_first_role":
             return None if not value else value[0].get("role")
+        if transform == "provider_first_image_url":
+            return first_provider_image(value).get("image_url", {}).get("url")
+        if transform == "provider_first_image_detail":
+            return first_provider_image(value).get("image_url", {}).get("detail")
+        if transform == "provider_first_text_part":
+            for part in value[0].get("content", []):
+                if isinstance(part, dict) and part.get("type") == "text":
+                    return part.get("text")
+            return None
         if transform == "provider_message_count":
             return len(value)
         if transform == "provider_last_role":
@@ -1990,6 +2018,12 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             if isinstance(part, dict) and part.get("type") == "image_content":
                 return part
         raise ValueError("dict_first_image requires image content")
+
+    def first_provider_image(value: list[dict[str, Any]]) -> dict[str, Any]:
+        for part in value[0].get("content", []):
+            if isinstance(part, dict) and part.get("type") == "image_url":
+                return part
+        raise ValueError("provider_first_image requires image content")
 
     def run_declarative_emit(
         objects: dict[str, Any],
