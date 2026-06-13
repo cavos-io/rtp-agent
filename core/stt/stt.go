@@ -37,6 +37,39 @@ type SpeechData struct {
 	Metadata         map[string]any `json:"metadata"`
 }
 
+func (d SpeechData) MarshalJSON() ([]byte, error) {
+	type speechDataPayload struct {
+		Language         string         `json:"language"`
+		Text             string         `json:"text"`
+		StartTime        float64        `json:"start_time"`
+		EndTime          float64        `json:"end_time"`
+		Confidence       float64        `json:"confidence"`
+		SpeakerID        *string        `json:"speaker_id"`
+		IsPrimarySpeaker *bool          `json:"is_primary_speaker"`
+		Words            []TimedString  `json:"words"`
+		SourceLanguages  []string       `json:"source_languages"`
+		SourceTexts      []string       `json:"source_texts"`
+		TargetLanguages  []string       `json:"target_languages"`
+		TargetTexts      []string       `json:"target_texts"`
+		Metadata         map[string]any `json:"metadata"`
+	}
+	return json.Marshal(speechDataPayload{
+		Language:         d.Language,
+		Text:             d.Text,
+		StartTime:        d.StartTime,
+		EndTime:          d.EndTime,
+		Confidence:       d.Confidence,
+		SpeakerID:        optionalStringPointer(d.SpeakerID),
+		IsPrimarySpeaker: d.IsPrimarySpeaker,
+		Words:            d.Words,
+		SourceLanguages:  d.SourceLanguages,
+		SourceTexts:      d.SourceTexts,
+		TargetLanguages:  d.TargetLanguages,
+		TargetTexts:      d.TargetTexts,
+		Metadata:         d.Metadata,
+	})
+}
+
 type RecognitionUsage struct {
 	AudioDuration float64 `json:"audio_duration"`
 	InputTokens   int     `json:"input_tokens"`
@@ -50,6 +83,32 @@ type TimedString struct {
 	Confidence      float64 `json:"confidence"`
 	StartTimeOffset float64 `json:"start_time_offset"`
 	SpeakerID       string  `json:"speaker_id"`
+}
+
+func (s TimedString) MarshalJSON() ([]byte, error) {
+	type timedStringPayload struct {
+		Text            string  `json:"text"`
+		StartTime       float64 `json:"start_time"`
+		EndTime         float64 `json:"end_time"`
+		Confidence      float64 `json:"confidence"`
+		StartTimeOffset float64 `json:"start_time_offset"`
+		SpeakerID       *string `json:"speaker_id"`
+	}
+	return json.Marshal(timedStringPayload{
+		Text:            s.Text,
+		StartTime:       s.StartTime,
+		EndTime:         s.EndTime,
+		Confidence:      s.Confidence,
+		StartTimeOffset: s.StartTimeOffset,
+		SpeakerID:       optionalStringPointer(s.SpeakerID),
+	})
+}
+
+func optionalStringPointer(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 type SpeechEvent struct {
