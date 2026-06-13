@@ -76,6 +76,25 @@ func runSTTValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "timed_string_text":
+		timed := lkstt.TimedString{
+			Text:            "hello",
+			StartTime:       0.25,
+			EndTime:         0.5,
+			Confidence:      0.875,
+			StartTimeOffset: 1.25,
+			SpeakerID:       "speaker-a",
+		}
+		return map[string]any{
+			"contract": "stt-value-objects",
+			"events": []map[string]any{
+				{
+					"name":                   "timed_string_text",
+					"text":                   fmt.Sprint(timed),
+					"repr_includes_metadata": false,
+				},
+			},
+		}, nil
 	case "speech_event_usage":
 		startTime := 42.5
 		event := lkstt.SpeechEvent{

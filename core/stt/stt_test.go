@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -270,6 +271,21 @@ func TestTimedStringUnmarshalJSONRequiresReferenceText(t *testing.T) {
 	}
 	if timed.StartTime != 0 || timed.EndTime != 0 || timed.Confidence != 0 || timed.StartTimeOffset != 0 {
 		t.Fatalf("optional timing fields = %#v, want zero defaults", timed)
+	}
+}
+
+func TestTimedStringStringMatchesReferenceText(t *testing.T) {
+	timed := TimedString{
+		Text:            "hello",
+		StartTime:       0.25,
+		EndTime:         0.5,
+		Confidence:      0.875,
+		StartTimeOffset: 1.25,
+		SpeakerID:       "speaker-a",
+	}
+
+	if got := fmt.Sprint(timed); got != "hello" {
+		t.Fatalf("fmt.Sprint(TimedString) = %q, want reference text", got)
 	}
 }
 

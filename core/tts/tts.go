@@ -47,6 +47,10 @@ type TimedString struct {
 	SpeakerID       string  `json:"speaker_id"`
 }
 
+func (s TimedString) String() string {
+	return s.Text
+}
+
 func (s TimedString) MarshalJSON() ([]byte, error) {
 	type timedStringPayload struct {
 		Text            string  `json:"text"`

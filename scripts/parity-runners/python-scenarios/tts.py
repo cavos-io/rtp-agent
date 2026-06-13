@@ -179,6 +179,25 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "timed_string_text":
+        timed = load_reference_types().TimedString(
+            "hello",
+            start_time=0.25,
+            end_time=0.5,
+            confidence=0.875,
+            start_time_offset=1.25,
+            speaker_id="speaker-a",
+        )
+        return {
+            "contract": "tts-value-objects",
+            "events": [
+                {
+                    "name": "timed_string_text",
+                    "text": str(timed),
+                    "repr_includes_metadata": "start_time" in repr(timed),
+                }
+            ],
+        }
     if action == "tts_error_payload":
         err = module.TTSError(
             type="tts_error",

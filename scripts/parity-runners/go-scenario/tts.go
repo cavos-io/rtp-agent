@@ -150,6 +150,25 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "timed_string_text":
+		timed := lktts.TimedString{
+			Text:            "hello",
+			StartTime:       0.25,
+			EndTime:         0.5,
+			Confidence:      0.875,
+			StartTimeOffset: 1.25,
+			SpeakerID:       "speaker-a",
+		}
+		return map[string]any{
+			"contract": "tts-value-objects",
+			"events": []map[string]any{
+				{
+					"name":                   "timed_string_text",
+					"text":                   fmt.Sprint(timed),
+					"repr_includes_metadata": false,
+				},
+			},
+		}, nil
 	case "tts_error_payload":
 		err := lktts.TTSError{
 			Type:        lktts.TTSErrorType,
