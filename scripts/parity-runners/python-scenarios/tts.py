@@ -107,6 +107,19 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                 {"name": "close_noop", "error": False},
             ],
         }
+    if action == "capabilities_json":
+        caps = module.TTSCapabilities(streaming=True, aligned_transcript=True)
+        return {
+            "contract": "tts-value-objects",
+            "events": [
+                {
+                    "name": "capabilities_json",
+                    "streaming": caps.streaming,
+                    "aligned_transcript": caps.aligned_transcript,
+                    "has_camel_case": False,
+                }
+            ],
+        }
     if action == "tts_error_payload":
         err = module.TTSError(
             type="tts_error",
