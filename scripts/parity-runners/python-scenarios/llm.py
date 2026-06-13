@@ -1477,6 +1477,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         provider_format: str,
         inject_dummy_user_message: bool = True,
         inject_trailing_user_message: bool = False,
+        thought_signatures: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         if provider_format == "openai":
             messages: list[dict[str, Any]] = []
@@ -1494,15 +1495,41 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             raise ValueError(f"unsupported provider format {provider_format!r}")
 
         messages: list[dict[str, Any]] = []
+        current_google_role: str | None = None
+        current_google_parts: list[dict[str, Any]] = []
+
+        def flush_google_parts() -> None:
+            nonlocal current_google_parts, current_google_role
+            if current_google_role is not None and current_google_parts:
+                messages.append({"role": current_google_role, "parts": current_google_parts})
+                current_google_parts = []
+
         for item in items:
             if item["type"] == "function_call":
-                json.loads(item.get("arguments") or "{}")
+                args = json.loads(item.get("arguments") or "{}")
+                if provider_format == "google":
+                    if current_google_role != "model":
+                        flush_google_parts()
+                        current_google_role = "model"
+                    part = {
+                        "function_call": {
+                            "id": item["call_id"],
+                            "name": item["name"],
+                            "args": args,
+                        }
+                    }
+                    if thought_signatures and item["call_id"] in thought_signatures:
+                        part["thought_signature"] = thought_signatures[item["call_id"]]
+                    current_google_parts.append(part)
                 continue
             if item["type"] != "message":
                 continue
             if provider_format == "google":
                 role = "model" if item["role"] == "assistant" else "user"
-                messages.append({"role": role, "parts": [{"text": text_content(item["content"]) or ""}]})
+                if current_google_role != role:
+                    flush_google_parts()
+                    current_google_role = role
+                current_google_parts.append({"text": text_content(item["content"]) or ""})
                 continue
             messages.append(
                 {
@@ -1514,6 +1541,8 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                     ],
                 }
             )
+        if provider_format == "google":
+            flush_google_parts()
         if inject_dummy_user_message:
             if provider_format == "google":
                 if not messages or messages[-1]["role"] not in ("user", "tool"):
@@ -1724,6 +1753,12 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 provider_format=str(args.get("format", "openai")),
                 inject_dummy_user_message=bool(args.get("inject_dummy_user_message", True)),
                 inject_trailing_user_message=bool(args.get("inject_trailing_user_message", False)),
+                thought_signatures={
+                    str(key): str(value)
+                    for key, value in args.get("thought_signatures", {}).items()
+                }
+                if "thought_signatures" in args
+                else None,
             )
             return
         if op == "to_provider_format_capture_error":
@@ -1911,6 +1946,12 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             return content
         if transform == "provider_error_exists":
             return bool(value.get("error"))
+        if transform == "google_first_function_call_thought_signature":
+            for turn in value:
+                for part in turn.get("parts", []):
+                    if "function_call" in part:
+                        return part.get("thought_signature")
+            return None
         raise ValueError(f"unsupported transform {transform!r}")
 
     def first_serialized_instruction(value: dict[str, Any]) -> dict[str, Any]:

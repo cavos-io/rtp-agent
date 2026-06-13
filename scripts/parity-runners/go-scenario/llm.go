@@ -1372,6 +1372,12 @@ func runLLMChatContextCallStep(state *llmScenarioState, step llmScenarioStepSpec
 			value := scenarioBoolArg(step.Args, "inject_trailing_user_message")
 			options.InjectTrailingUserMessage = &value
 		}
+		if raw, ok := step.Args["thought_signatures"].(map[string]any); ok {
+			options.ThoughtSignatures = map[string][]byte{}
+			for key, value := range raw {
+				options.ThoughtSignatures[key] = []byte(fmt.Sprint(value))
+			}
+		}
 		formatted, _, providerErr := ctx.ToProviderFormatE(stringArg(step.Args, "format"), options)
 		if providerErr != nil {
 			return providerErr
@@ -1747,6 +1753,28 @@ func transformLLMScenarioField(state *llmScenarioState, value any, transform str
 		}
 		exists, _ := data["error"].(bool)
 		return exists, nil
+	case "google_first_function_call_thought_signature":
+		messages, ok := value.([]map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use google_first_function_call_thought_signature", value)
+		}
+		for _, message := range messages {
+			parts, ok := message["parts"].([]map[string]any)
+			if !ok {
+				continue
+			}
+			for _, part := range parts {
+				if _, ok := part["function_call"]; !ok {
+					continue
+				}
+				signature, ok := part["thought_signature"].([]byte)
+				if ok {
+					return string(signature), nil
+				}
+				return part["thought_signature"], nil
+			}
+		}
+		return nil, nil
 	default:
 		return nil, fmt.Errorf("unsupported transform %q", transform)
 	}
