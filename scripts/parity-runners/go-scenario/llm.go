@@ -1804,6 +1804,24 @@ func transformLLMScenarioField(state *llmScenarioState, value any, transform str
 			return nil, err
 		}
 		return len(extra) > 0, nil
+	case "provider_first_tool_call_ids":
+		messages, ok := value.([]map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use provider_first_tool_call_ids", value)
+		}
+		if len(messages) == 0 {
+			return nil, nil
+		}
+		toolCalls, ok := messages[0]["tool_calls"].([]map[string]any)
+		if !ok {
+			return []string{}, nil
+		}
+		ids := make([]string, 0, len(toolCalls))
+		for _, toolCall := range toolCalls {
+			id, _ := toolCall["id"].(string)
+			ids = append(ids, id)
+		}
+		return ids, nil
 	case "provider_tool_output_contents":
 		messages, ok := value.([]map[string]any)
 		if !ok {

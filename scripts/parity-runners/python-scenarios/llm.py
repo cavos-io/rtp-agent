@@ -2047,6 +2047,10 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 for tool_call in message_item.get("tool_calls", []):
                     return bool(tool_call.get("extra_content", {}))
             return False
+        if transform == "provider_first_tool_call_ids":
+            if not value:
+                return None
+            return [tool_call.get("id", "") for tool_call in value[0].get("tool_calls", [])]
         if transform == "provider_tool_output_contents":
             return [
                 message_item.get("content", "")
