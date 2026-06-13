@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -111,6 +112,63 @@ func TestLLMErrorMarshalJSONMatchesReferencePayload(t *testing.T) {
 	}
 	if _, ok := payload["error"]; ok {
 		t.Fatalf("error serialized in payload: %s", data)
+	}
+}
+
+func TestLLMErrorUnmarshalJSONRejectsMissingReferenceFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{
+			name:    "timestamp",
+			payload: `{"label":"openai.LLM","recoverable":true}`,
+			want:    "timestamp",
+		},
+		{
+			name:    "label",
+			payload: `{"timestamp":1.25,"recoverable":true}`,
+			want:    "label",
+		},
+		{
+			name:    "recoverable",
+			payload: `{"timestamp":1.25,"label":"openai.LLM"}`,
+			want:    "recoverable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var llmErr LLMError
+			err := json.Unmarshal([]byte(tt.payload), &llmErr)
+			if err == nil {
+				t.Fatal("Unmarshal LLMError returned nil error, want missing required field error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want it to mention %q", err, tt.want)
+			}
+		})
+	}
+
+	var llmErr LLMError
+	if err := json.Unmarshal([]byte(`{"timestamp":1.25,"label":"openai.LLM","recoverable":false}`), &llmErr); err != nil {
+		t.Fatalf("Unmarshal LLMError with required fields returned error: %v", err)
+	}
+	if llmErr.Type != "llm_error" {
+		t.Fatalf("Type = %q, want llm_error", llmErr.Type)
+	}
+	if llmErr.Timestamp.UnixNano() != 1250*int64(time.Millisecond) {
+		t.Fatalf("Timestamp = %v, want 1.25 Unix seconds", llmErr.Timestamp)
+	}
+	if llmErr.Label != "openai.LLM" {
+		t.Fatalf("Label = %q, want openai.LLM", llmErr.Label)
+	}
+	if llmErr.Recoverable {
+		t.Fatal("Recoverable = true, want false")
+	}
+	if llmErr.Err != nil {
+		t.Fatalf("Err = %v, want nil for public JSON payload", llmErr.Err)
 	}
 }
 
@@ -393,6 +451,63 @@ func TestRealtimeErrorCanCarryMessageOnly(t *testing.T) {
 	}
 	if errors.Unwrap(err) != nil {
 		t.Fatalf("Unwrap() = %v, want nil", errors.Unwrap(err))
+	}
+}
+
+func TestRealtimeModelErrorUnmarshalJSONRejectsMissingReferenceFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{
+			name:    "timestamp",
+			payload: `{"label":"openai.RealtimeModel","recoverable":true}`,
+			want:    "timestamp",
+		},
+		{
+			name:    "label",
+			payload: `{"timestamp":1.25,"recoverable":true}`,
+			want:    "label",
+		},
+		{
+			name:    "recoverable",
+			payload: `{"timestamp":1.25,"label":"openai.RealtimeModel"}`,
+			want:    "recoverable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var modelErr RealtimeModelError
+			err := json.Unmarshal([]byte(tt.payload), &modelErr)
+			if err == nil {
+				t.Fatal("Unmarshal RealtimeModelError returned nil error, want missing required field error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want it to mention %q", err, tt.want)
+			}
+		})
+	}
+
+	var modelErr RealtimeModelError
+	if err := json.Unmarshal([]byte(`{"timestamp":1.25,"label":"openai.RealtimeModel","recoverable":false}`), &modelErr); err != nil {
+		t.Fatalf("Unmarshal RealtimeModelError with required fields returned error: %v", err)
+	}
+	if modelErr.Type != "realtime_model_error" {
+		t.Fatalf("Type = %q, want realtime_model_error", modelErr.Type)
+	}
+	if modelErr.Timestamp.UnixNano() != 1250*int64(time.Millisecond) {
+		t.Fatalf("Timestamp = %v, want 1.25 Unix seconds", modelErr.Timestamp)
+	}
+	if modelErr.Label != "openai.RealtimeModel" {
+		t.Fatalf("Label = %q, want openai.RealtimeModel", modelErr.Label)
+	}
+	if modelErr.Recoverable {
+		t.Fatal("Recoverable = true, want false")
+	}
+	if modelErr.Err != nil {
+		t.Fatalf("Err = %v, want nil for public JSON payload", modelErr.Err)
 	}
 }
 

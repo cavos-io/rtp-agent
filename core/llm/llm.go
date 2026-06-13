@@ -577,6 +577,38 @@ func (e *LLMError) MarshalJSON() ([]byte, error) {
 	})
 }
 
+func (e *LLMError) UnmarshalJSON(data []byte) error {
+	type llmErrorPayload struct {
+		Type        string   `json:"type"`
+		Timestamp   *float64 `json:"timestamp"`
+		Label       *string  `json:"label"`
+		Recoverable *bool    `json:"recoverable"`
+	}
+	var payload llmErrorPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	if payload.Timestamp == nil {
+		return fmt.Errorf("llm error timestamp is required")
+	}
+	if payload.Label == nil {
+		return fmt.Errorf("llm error label is required")
+	}
+	if payload.Recoverable == nil {
+		return fmt.Errorf("llm error recoverable is required")
+	}
+
+	e.Type = payload.Type
+	if e.Type == "" {
+		e.Type = "llm_error"
+	}
+	e.Timestamp = time.Unix(0, int64(*payload.Timestamp*float64(time.Second)))
+	e.Label = *payload.Label
+	e.Recoverable = *payload.Recoverable
+	e.Err = nil
+	return nil
+}
+
 type Tool interface {
 	ID() string
 	Name() string
@@ -963,6 +995,38 @@ func (e *RealtimeModelError) MarshalJSON() ([]byte, error) {
 		Label:       e.Label,
 		Recoverable: e.Recoverable,
 	})
+}
+
+func (e *RealtimeModelError) UnmarshalJSON(data []byte) error {
+	type realtimeModelErrorPayload struct {
+		Type        string   `json:"type"`
+		Timestamp   *float64 `json:"timestamp"`
+		Label       *string  `json:"label"`
+		Recoverable *bool    `json:"recoverable"`
+	}
+	var payload realtimeModelErrorPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	if payload.Timestamp == nil {
+		return fmt.Errorf("realtime model error timestamp is required")
+	}
+	if payload.Label == nil {
+		return fmt.Errorf("realtime model error label is required")
+	}
+	if payload.Recoverable == nil {
+		return fmt.Errorf("realtime model error recoverable is required")
+	}
+
+	e.Type = payload.Type
+	if e.Type == "" {
+		e.Type = "realtime_model_error"
+	}
+	e.Timestamp = time.Unix(0, int64(*payload.Timestamp*float64(time.Second)))
+	e.Label = *payload.Label
+	e.Recoverable = *payload.Recoverable
+	e.Err = nil
+	return nil
 }
 
 type labelProviderRealtimeModel interface {
