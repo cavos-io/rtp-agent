@@ -2,6 +2,7 @@ package vad
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -27,6 +28,15 @@ type VADEvent struct {
 	Speaking              bool                `json:"speaking"`
 	RawAccumulatedSilence float64             `json:"raw_accumulated_silence"`
 	RawAccumulatedSpeech  float64             `json:"raw_accumulated_speech"`
+}
+
+func (e VADEvent) MarshalJSON() ([]byte, error) {
+	type vadEventPayload VADEvent
+	payload := vadEventPayload(e)
+	if payload.Frames == nil {
+		payload.Frames = []*model.AudioFrame{}
+	}
+	return json.Marshal(payload)
 }
 
 type VADCapabilities struct {

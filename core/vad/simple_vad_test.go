@@ -81,6 +81,25 @@ func TestVADEventMarshalJSONMatchesReferencePayload(t *testing.T) {
 	}
 }
 
+func TestVADEventMarshalJSONDefaultsFramesToEmptyList(t *testing.T) {
+	data, err := json.Marshal(VADEvent{Type: VADEventInferenceDone})
+	if err != nil {
+		t.Fatalf("Marshal VADEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled VADEvent returned error: %v", err)
+	}
+	frames, ok := payload["frames"].([]any)
+	if !ok {
+		t.Fatalf("frames = %#v, want empty JSON array; payload %s", payload["frames"], data)
+	}
+	if len(frames) != 0 {
+		t.Fatalf("frames length = %d, want 0", len(frames))
+	}
+}
+
 func TestVADCapabilitiesMarshalJSONMatchesReferencePayload(t *testing.T) {
 	data, err := json.Marshal(VADCapabilities{UpdateInterval: 0.5})
 	if err != nil {
