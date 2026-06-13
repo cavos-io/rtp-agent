@@ -811,7 +811,7 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 		var item struct {
 			ID        string         `json:"id"`
 			CallID    *string        `json:"call_id"`
-			Name      string         `json:"name"`
+			Name      *string        `json:"name"`
 			Arguments string         `json:"arguments"`
 			Extra     map[string]any `json:"extra"`
 			GroupID   *string        `json:"group_id"`
@@ -823,10 +823,13 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 		if item.CallID == nil {
 			return nil, fmt.Errorf("function_call call_id is required")
 		}
+		if item.Name == nil {
+			return nil, fmt.Errorf("function_call name is required")
+		}
 		return &FunctionCall{
 			ID:        itemIDOrDefault(item.ID),
 			CallID:    *item.CallID,
-			Name:      item.Name,
+			Name:      *item.Name,
 			Arguments: item.Arguments,
 			Extra:     item.Extra,
 			GroupID:   item.GroupID,
