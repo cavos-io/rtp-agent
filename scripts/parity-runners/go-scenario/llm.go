@@ -1403,6 +1403,17 @@ func runLLMChatContextCallStep(state *llmScenarioState, step llmScenarioStepSpec
 			ExcludeMetrics:      scenarioBoolArg(step.Args, "exclude_metrics"),
 			IncludeImage:        scenarioBoolArg(step.Args, "include_image"),
 		})
+	case "from_dict":
+		sourceName := stringArg(step.Args, "source")
+		source, ok := state.vars[sourceName].(map[string]any)
+		if !ok {
+			return fmt.Errorf("from_dict source %q is %T, want map[string]any", sourceName, state.vars[sourceName])
+		}
+		restored, err := lkllm.ChatContextFromDict(source)
+		if err != nil {
+			return err
+		}
+		state.vars[step.Assign] = restored
 	case "to_provider_format":
 		options := lkllm.ChatContextProviderFormatOptions{}
 		if _, ok := step.Args["inject_dummy_user_message"]; ok {

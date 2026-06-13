@@ -2441,6 +2441,10 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 include_image=bool(args.get("include_image", False)),
             )
             return
+        if op == "from_dict":
+            source = variables[str(step.get("args", {}).get("source", ""))]
+            variables[step["assign"]] = build_declarative_items(source["items"])
+            return
         if op == "to_provider_format":
             args = step.get("args", {})
             variables[step["assign"]] = to_provider_format(
