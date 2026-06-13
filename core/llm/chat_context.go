@@ -834,7 +834,7 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 			CallID:    *item.CallID,
 			Name:      *item.Name,
 			Arguments: *item.Arguments,
-			Extra:     item.Extra,
+			Extra:     nonNilMap(item.Extra),
 			GroupID:   item.GroupID,
 			CreatedAt: chatItemCreatedAtOrDefault(item.CreatedAt),
 		}, nil

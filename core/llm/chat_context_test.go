@@ -2035,6 +2035,30 @@ func TestChatContextUnmarshalJSONRejectsAgentHandoffMissingNewAgentID(t *testing
 	}
 }
 
+func TestChatContextUnmarshalJSONDefaultsFunctionCallExtra(t *testing.T) {
+	var ctx ChatContext
+	data := []byte(`{
+		"items": [{
+			"id": "call",
+			"type": "function_call",
+			"call_id": "call_lookup",
+			"name": "lookup",
+			"arguments": "{}"
+		}]
+	}`)
+
+	if err := json.Unmarshal(data, &ctx); err != nil {
+		t.Fatalf("Unmarshal ChatContext error = %v", err)
+	}
+	call := ctx.Items[0].(*FunctionCall)
+	if call.Extra == nil {
+		t.Fatal("FunctionCall.Extra = nil, want empty map")
+	}
+	if len(call.Extra) != 0 {
+		t.Fatalf("FunctionCall.Extra = %#v, want empty map", call.Extra)
+	}
+}
+
 func TestChatContextItemsDefaultIDs(t *testing.T) {
 	data := []byte(`{
 		"items": [
