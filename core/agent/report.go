@@ -307,6 +307,15 @@ func errorReportValue(err error) any {
 	if err == nil {
 		return nil
 	}
+	if marshaler, ok := err.(json.Marshaler); ok {
+		data, marshalErr := marshaler.MarshalJSON()
+		if marshalErr == nil {
+			var out any
+			if unmarshalErr := json.Unmarshal(data, &out); unmarshalErr == nil {
+				return out
+			}
+		}
+	}
 	return err.Error()
 }
 

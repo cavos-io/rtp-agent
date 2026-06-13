@@ -168,6 +168,38 @@ func TestSessionReportToDictSerializesErrorEventLLMSourceMetadata(t *testing.T) 
 	}
 }
 
+func TestSessionReportToDictSerializesStructuredLLMErrorEvent(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	source := &reportMetadataLLM{model: "gpt-report", provider: "openai"}
+	session.EmitError(ErrorEvent{Error: llm.NewLLMError("openai.LLM", errors.New("failed"), false), Source: source})
+
+	data := NewSessionReport(session).ToDict()
+	events := data["events"].([]map[string]any)
+	errorData, ok := events[0]["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("error = %T %#v, want reference structured error payload", events[0]["error"], events[0]["error"])
+	}
+	if errorData["type"] != "llm_error" {
+		t.Fatalf("error.type = %#v, want llm_error", errorData["type"])
+	}
+	if errorData["label"] != "openai.LLM" {
+		t.Fatalf("error.label = %#v, want openai.LLM", errorData["label"])
+	}
+	if errorData["recoverable"] != false {
+		t.Fatalf("error.recoverable = %#v, want false", errorData["recoverable"])
+	}
+	timestamp, ok := errorData["timestamp"].(float64)
+	if !ok || timestamp <= 0 {
+		t.Fatalf("error.timestamp = %#v, want positive Unix seconds", errorData["timestamp"])
+	}
+	if _, ok := errorData["error"]; ok {
+		t.Fatalf("error payload serialized internal exception: %#v", errorData)
+	}
+	if _, ok := errorData["err"]; ok {
+		t.Fatalf("error payload serialized internal err: %#v", errorData)
+	}
+}
+
 func TestSessionReportToDictFiltersEmptyMessagesAndDuplicateConfigUpdates(t *testing.T) {
 	report := NewSessionReport(nil)
 	now := time.Unix(10, 0)
