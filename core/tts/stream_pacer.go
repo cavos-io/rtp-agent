@@ -55,21 +55,17 @@ type pacerSentence struct {
 }
 
 type SentenceStreamPacerOptions struct {
-	MinRemainingAudio time.Duration
-	MaxTextLength     int
-}
-
-func NewSentenceStreamPacer(ctx context.Context, underlying SynthesizeStream, minRemainingAudio time.Duration) *SentenceStreamPacer {
-	return NewSentenceStreamPacerWithOptions(ctx, underlying, SentenceStreamPacerOptions{
-		MinRemainingAudio: minRemainingAudio,
-	})
+	MinRemainingAudio    time.Duration
+	MinRemainingAudioSet bool
+	MaxTextLength        int
+	MaxTextLengthSet     bool
 }
 
 func NewSentenceStreamPacerWithOptions(ctx context.Context, underlying SynthesizeStream, opts SentenceStreamPacerOptions) *SentenceStreamPacer {
-	if opts.MinRemainingAudio == 0 {
+	if opts.MinRemainingAudio == 0 && !opts.MinRemainingAudioSet {
 		opts.MinRemainingAudio = 5 * time.Second
 	}
-	if opts.MaxTextLength == 0 {
+	if opts.MaxTextLength == 0 && !opts.MaxTextLengthSet {
 		opts.MaxTextLength = 300
 	}
 

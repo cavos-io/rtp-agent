@@ -4171,9 +4171,11 @@ func agentSessionOptionsFromConfig(cfg AppConfig) (agent.AgentSessionOptions, er
 		pacer := coretts.SentenceStreamPacerOptions{}
 		if cfg.TTSStreamPacerMinRemainingAudioMS != nil {
 			pacer.MinRemainingAudio = time.Duration(*cfg.TTSStreamPacerMinRemainingAudioMS) * time.Millisecond
+			pacer.MinRemainingAudioSet = true
 		}
 		if cfg.TTSStreamPacerMaxTextLength != nil {
 			pacer.MaxTextLength = *cfg.TTSStreamPacerMaxTextLength
+			pacer.MaxTextLengthSet = true
 		}
 		opts.TTSStreamPacer = &pacer
 	}

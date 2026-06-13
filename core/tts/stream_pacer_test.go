@@ -36,6 +36,24 @@ func TestSentenceStreamPacerBatchesQueuedSentencesByMaxTextLength(t *testing.T) 
 	}
 }
 
+func TestSentenceStreamPacerOptionsPreserveExplicitZeroValues(t *testing.T) {
+	underlying := newFakePacerStream()
+	pacer := NewSentenceStreamPacerWithOptions(context.Background(), underlying, SentenceStreamPacerOptions{
+		MinRemainingAudio:    0,
+		MinRemainingAudioSet: true,
+		MaxTextLength:        0,
+		MaxTextLengthSet:     true,
+	})
+	defer pacer.Close()
+
+	if pacer.minRemainingAudio != 0 {
+		t.Fatalf("minRemainingAudio = %v, want explicit zero", pacer.minRemainingAudio)
+	}
+	if pacer.maxTextLength != 0 {
+		t.Fatalf("maxTextLength = %d, want explicit zero", pacer.maxTextLength)
+	}
+}
+
 func TestSentenceStreamPacerWaitsForGenerationProgressBeforeDrainingFlush(t *testing.T) {
 	underlying := newFakePacerStream()
 	underlying.blockAudio = true

@@ -3946,6 +3946,35 @@ func TestDefaultConfigFromEnvConfiguresTTSStreamPacer(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvPreservesExplicitZeroTTSStreamPacerOptions(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_STREAM_PACER_ENABLED", "true")
+	t.Setenv("RTP_AGENT_TTS_STREAM_PACER_MIN_REMAINING_AUDIO_MS", "0")
+	t.Setenv("RTP_AGENT_TTS_STREAM_PACER_MAX_TEXT_LENGTH", "0")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.Options.TTSStreamPacer == nil {
+		t.Fatal("Session TTSStreamPacer is nil")
+	}
+	if got := app.Session.Options.TTSStreamPacer.MinRemainingAudio; got != 0 {
+		t.Fatalf("MinRemainingAudio = %v, want explicit zero", got)
+	}
+	if !app.Session.Options.TTSStreamPacer.MinRemainingAudioSet {
+		t.Fatal("MinRemainingAudioSet = false, want true for explicit env zero")
+	}
+	if got := app.Session.Options.TTSStreamPacer.MaxTextLength; got != 0 {
+		t.Fatalf("MaxTextLength = %d, want explicit zero", got)
+	}
+	if !app.Session.Options.TTSStreamPacer.MaxTextLengthSet {
+		t.Fatal("MaxTextLengthSet = false, want true for explicit env zero")
+	}
+}
+
 func TestDefaultConfigFromEnvConfiguresTTSTextReplacements(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_TEXT_REPLACEMENTS", "OpenAI=Open A I,world=there")
 
