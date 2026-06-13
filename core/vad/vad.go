@@ -41,6 +41,10 @@ func (e VADEvent) MarshalJSON() ([]byte, error) {
 }
 
 func (e *VADEvent) UnmarshalJSON(data []byte) error {
+	if err := requireJSONFields(data, "vad event", "type", "samples_index", "timestamp", "speech_duration", "silence_duration"); err != nil {
+		return err
+	}
+
 	type vadEventPayload VADEvent
 	var payload vadEventPayload
 	if err := json.Unmarshal(data, &payload); err != nil {
@@ -58,12 +62,8 @@ type VADCapabilities struct {
 }
 
 func (c *VADCapabilities) UnmarshalJSON(data []byte) error {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
+	if err := requireJSONFields(data, "vad capabilities", "update_interval"); err != nil {
 		return err
-	}
-	if _, ok := fields["update_interval"]; !ok {
-		return fmt.Errorf("vad capabilities update_interval is required")
 	}
 
 	type vadCapabilitiesPayload VADCapabilities
@@ -72,6 +72,19 @@ func (c *VADCapabilities) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*c = VADCapabilities(payload)
+	return nil
+}
+
+func requireJSONFields(data []byte, context string, names ...string) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for _, name := range names {
+		if _, ok := fields[name]; !ok {
+			return fmt.Errorf("%s %s is required", context, name)
+		}
+	}
 	return nil
 }
 
