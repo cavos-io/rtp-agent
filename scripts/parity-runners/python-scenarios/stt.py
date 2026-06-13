@@ -70,6 +70,21 @@ def stt_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "speech_data_optional_speaker":
+        word = load_reference_types().TimedString("hello")
+        data = module.SpeechData(language="en", text="hello", words=[word])
+        return {
+            "contract": "stt-speech-data-optional-speaker",
+            "events": [
+                {
+                    "name": "speech_data_optional_speaker",
+                    "speaker_id": data.speaker_id,
+                    "speaker_is_none": data.speaker_id is None,
+                    "word_speaker_id": data.words[0].speaker_id,
+                    "word_speaker_is_none": data.words[0].speaker_id is None,
+                }
+            ],
+        }
     if action == "speech_data_required_fields":
         required_fields = ["language", "text"]
         base = {"language": "", "text": ""}

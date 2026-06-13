@@ -77,6 +77,35 @@ func runSTTValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "speech_data_optional_speaker":
+		data, marshalErr := json.Marshal(lkstt.SpeechData{
+			Language: "en",
+			Text:     "hello",
+			Words: []lkstt.TimedString{{
+				Text: "hello",
+			}},
+		})
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		var payload map[string]any
+		if unmarshalErr := json.Unmarshal(data, &payload); unmarshalErr != nil {
+			return nil, unmarshalErr
+		}
+		words, _ := payload["words"].([]any)
+		word, _ := words[0].(map[string]any)
+		return map[string]any{
+			"contract": "stt-speech-data-optional-speaker",
+			"events": []map[string]any{
+				{
+					"name":                 "speech_data_optional_speaker",
+					"speaker_id":           payload["speaker_id"],
+					"speaker_is_none":      payload["speaker_id"] == nil,
+					"word_speaker_id":      word["speaker_id"],
+					"word_speaker_is_none": word["speaker_id"] == nil,
+				},
+			},
+		}, nil
 	case "speech_data_required_fields":
 		requiredFields := []string{"language", "text"}
 		base := map[string]any{"language": "", "text": ""}
