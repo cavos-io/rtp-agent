@@ -1227,6 +1227,32 @@ func TestChatContextToDictIncludesAndExcludesMessageMetrics(t *testing.T) {
 	}
 }
 
+func TestChatContextToDictOmitsReferenceNoneOptionalFields(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&FunctionCall{
+			ID:        "call_item",
+			CallID:    "call_lookup",
+			Name:      "lookup",
+			Arguments: `{}`,
+			CreatedAt: time.Unix(10, 0),
+		},
+		&AgentHandoff{
+			ID:         "handoff_item",
+			NewAgentID: "new_agent",
+			CreatedAt:  time.Unix(11, 0),
+		},
+	}
+
+	items := ctx.ToDict(ChatContextDictOptions{IncludeTimestamp: true})["items"].([]map[string]any)
+	if _, ok := items[0]["group_id"]; ok {
+		t.Fatalf("function_call group_id = %#v, want omitted like reference exclude_none to_dict", items[0]["group_id"])
+	}
+	if _, ok := items[1]["old_agent_id"]; ok {
+		t.Fatalf("agent_handoff old_agent_id = %#v, want omitted like reference exclude_none to_dict", items[1]["old_agent_id"])
+	}
+}
+
 func TestChatContextMarshalJSONIncludesTimestampsForReports(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{

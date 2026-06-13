@@ -17,6 +17,7 @@ type ChatContextDictOptions struct {
 	IncludeImage        bool
 	IncludeAudio        bool
 	IncludeTimestamp    bool
+	IncludeOptionalNull bool
 	ExcludeFunctionCall bool
 	ExcludeMetrics      bool
 	ExcludeConfigUpdate bool
@@ -662,9 +663,10 @@ func (m *ChatMessage) MarshalJSON() ([]byte, error) {
 		return json.Marshal(nil)
 	}
 	return json.Marshal(chatItemToDict(m, ChatContextDictOptions{
-		IncludeImage:     true,
-		IncludeAudio:     true,
-		IncludeTimestamp: true,
+		IncludeImage:        true,
+		IncludeAudio:        true,
+		IncludeTimestamp:    true,
+		IncludeOptionalNull: true,
 	}))
 }
 
@@ -672,28 +674,28 @@ func (f *FunctionCall) MarshalJSON() ([]byte, error) {
 	if f == nil {
 		return json.Marshal(nil)
 	}
-	return json.Marshal(chatItemToDict(f, ChatContextDictOptions{IncludeTimestamp: true}))
+	return json.Marshal(chatItemToDict(f, ChatContextDictOptions{IncludeTimestamp: true, IncludeOptionalNull: true}))
 }
 
 func (f *FunctionCallOutput) MarshalJSON() ([]byte, error) {
 	if f == nil {
 		return json.Marshal(nil)
 	}
-	return json.Marshal(chatItemToDict(f, ChatContextDictOptions{IncludeTimestamp: true}))
+	return json.Marshal(chatItemToDict(f, ChatContextDictOptions{IncludeTimestamp: true, IncludeOptionalNull: true}))
 }
 
 func (a *AgentHandoff) MarshalJSON() ([]byte, error) {
 	if a == nil {
 		return json.Marshal(nil)
 	}
-	return json.Marshal(chatItemToDict(a, ChatContextDictOptions{IncludeTimestamp: true}))
+	return json.Marshal(chatItemToDict(a, ChatContextDictOptions{IncludeTimestamp: true, IncludeOptionalNull: true}))
 }
 
 func (a *AgentConfigUpdate) MarshalJSON() ([]byte, error) {
 	if a == nil {
 		return json.Marshal(nil)
 	}
-	return json.Marshal(chatItemToDict(a, ChatContextDictOptions{IncludeTimestamp: true}))
+	return json.Marshal(chatItemToDict(a, ChatContextDictOptions{IncludeTimestamp: true, IncludeOptionalNull: true}))
 }
 
 func ChatContextFromDict(data map[string]any) (*ChatContext, error) {
@@ -987,10 +989,11 @@ func chatItemToDict(item ChatItem, opts ChatContextDictOptions) map[string]any {
 			"arguments": it.Arguments,
 			"name":      it.Name,
 			"extra":     nonNilMap(it.Extra),
-			"group_id":  nil,
 		}
 		if it.GroupID != nil {
 			data["group_id"] = *it.GroupID
+		} else if opts.IncludeOptionalNull {
+			data["group_id"] = nil
 		}
 		addCreatedAt(data, it.CreatedAt, opts)
 		return data
@@ -1011,11 +1014,12 @@ func chatItemToDict(item ChatItem, opts ChatContextDictOptions) map[string]any {
 		data := map[string]any{
 			"id":           it.ID,
 			"type":         "agent_handoff",
-			"old_agent_id": nil,
 			"new_agent_id": it.NewAgentID,
 		}
 		if it.OldAgentID != nil {
 			data["old_agent_id"] = *it.OldAgentID
+		} else if opts.IncludeOptionalNull {
+			data["old_agent_id"] = nil
 		}
 		addCreatedAt(data, it.CreatedAt, opts)
 		return data
