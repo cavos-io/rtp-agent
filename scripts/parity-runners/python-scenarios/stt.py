@@ -138,6 +138,27 @@ def stt_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "recognition_usage_required_duration":
+        missing_field = ""
+        try:
+            module.RecognitionUsage(input_tokens=3, output_tokens=5)
+        except TypeError as exc:
+            if "audio_duration" in str(exc):
+                missing_field = "audio_duration"
+        zero = module.RecognitionUsage(audio_duration=0)
+        return {
+            "contract": "stt-recognition-usage-required-field",
+            "events": [
+                {
+                    "name": "recognition_usage_required_duration",
+                    "missing_required": missing_field == "audio_duration",
+                    "missing_field": missing_field,
+                    "zero_audio_duration": zero.audio_duration,
+                    "zero_input_tokens": zero.input_tokens,
+                    "zero_output_tokens": zero.output_tokens,
+                }
+            ],
+        }
     if action == "speech_event_json_fields":
         word = load_reference_types().TimedString(
             "hello",

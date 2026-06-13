@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
 	lkstt "github.com/cavos-io/rtp-agent/core/stt"
@@ -149,6 +150,30 @@ func runSTTValueObjects(input json.RawMessage) (any, error) {
 					"input_tokens":      event.RecognitionUsage.InputTokens,
 					"output_tokens":     event.RecognitionUsage.OutputTokens,
 					"speech_start_time": *event.SpeechStartTime,
+				},
+			},
+		}, nil
+	case "recognition_usage_required_duration":
+		var missing lkstt.RecognitionUsage
+		err := json.Unmarshal([]byte(`{"input_tokens":3,"output_tokens":5}`), &missing)
+		missingField := ""
+		if err != nil && strings.Contains(err.Error(), "audio_duration") {
+			missingField = "audio_duration"
+		}
+		var zero lkstt.RecognitionUsage
+		if err := json.Unmarshal([]byte(`{"audio_duration":0}`), &zero); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "stt-recognition-usage-required-field",
+			"events": []map[string]any{
+				{
+					"name":                "recognition_usage_required_duration",
+					"missing_required":    missingField == "audio_duration",
+					"missing_field":       missingField,
+					"zero_audio_duration": zero.AudioDuration,
+					"zero_input_tokens":   zero.InputTokens,
+					"zero_output_tokens":  zero.OutputTokens,
 				},
 			},
 		}, nil
