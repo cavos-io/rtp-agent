@@ -1296,6 +1296,10 @@ func (s *realtimeSession) eventLoop() {
 				continue
 			}
 
+			if openAIRealtimeString(ev["type"]) == "response.done" && s.generation == nil {
+				continue
+			}
+
 			trackedEvent, trackedOK := s.trackOpenAIRealtimeEvent(ev)
 			realtimeEvent, ok := openAIRealtimeEvent(ev)
 			if !ok {

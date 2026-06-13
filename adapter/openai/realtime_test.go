@@ -2018,6 +2018,47 @@ func TestRealtimeSessionClosesGenerationStreamsWhenResponseDone(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionIgnoresResponseDoneWithoutGeneration(t *testing.T) {
+	releaseServer := make(chan struct{})
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]any{
+			"type": "response.done",
+			"response": map[string]any{
+				"id":     "stale_response",
+				"status": "completed",
+				"usage":  map[string]any{"total_tokens": 1.0},
+			},
+		}); err != nil {
+			t.Errorf("Write response.done error = %v", err)
+			return
+		}
+		<-releaseServer
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	defer close(releaseServer)
+
+	select {
+	case ev, ok := <-session.EventCh():
+		if !ok {
+			t.Fatal("EventCh closed before response.done was ignored")
+		}
+		t.Fatalf("EventCh emitted %#v, want stale response.done ignored", ev)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestRealtimeSessionPersistsAudioTranscriptOnResponseDone(t *testing.T) {
 	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
 	if err := session.remote.Insert(nil, &llm.ChatMessage{
