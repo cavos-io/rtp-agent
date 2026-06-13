@@ -229,6 +229,17 @@ type SessionUsageUpdatedEvent struct {
 
 func (e *SessionUsageUpdatedEvent) GetType() string { return "session_usage_updated" }
 
+func (e *SessionUsageUpdatedEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":       e.GetType(),
+		"usage":      e.Usage,
+		"created_at": timeToUnixSeconds(e.CreatedAt),
+	})
+}
+
 type ErrorEvent struct {
 	Error     error
 	Source    any

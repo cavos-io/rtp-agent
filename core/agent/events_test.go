@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -539,6 +540,63 @@ func TestSpeechCreatedEventMarshalJSONMatchesReferencePayload(t *testing.T) {
 		t.Fatalf("payload serialized excluded speech_handle: %#v", payload)
 	}
 	if _, ok := payload["SpeechHandle"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
+	}
+}
+
+func TestSessionUsageUpdatedEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	ev := &SessionUsageUpdatedEvent{
+		Usage: telemetry.AgentSessionUsage{ModelUsage: []telemetry.ModelUsage{
+			&telemetry.LLMModelUsage{
+				Type:              "llm_usage",
+				Provider:          "openai",
+				Model:             "gpt-4o-mini",
+				InputTokens:       17,
+				InputCachedTokens: 3,
+				OutputTokens:      11,
+				SessionDuration:   2.5,
+			},
+		}},
+		CreatedAt: time.Unix(27, 250_000_000),
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal SessionUsageUpdatedEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled SessionUsageUpdatedEvent returned error: %v", err)
+	}
+	if payload["type"] != "session_usage_updated" {
+		t.Fatalf("type = %#v, want session_usage_updated", payload["type"])
+	}
+	usage, ok := payload["usage"].(map[string]any)
+	if !ok {
+		t.Fatalf("usage = %T %#v, want reference usage object", payload["usage"], payload["usage"])
+	}
+	modelUsage, ok := usage["model_usage"].([]any)
+	if !ok || len(modelUsage) != 1 {
+		t.Fatalf("model_usage = %T %#v, want one usage entry", usage["model_usage"], usage["model_usage"])
+	}
+	llmUsage, ok := modelUsage[0].(map[string]any)
+	if !ok {
+		t.Fatalf("model_usage[0] = %T %#v, want object", modelUsage[0], modelUsage[0])
+	}
+	if llmUsage["type"] != "llm_usage" || llmUsage["provider"] != "openai" || llmUsage["model"] != "gpt-4o-mini" {
+		t.Fatalf("llm usage identity = %#v, want reference type/provider/model", llmUsage)
+	}
+	if llmUsage["input_tokens"] != float64(17) || llmUsage["input_cached_tokens"] != float64(3) || llmUsage["output_tokens"] != float64(11) {
+		t.Fatalf("llm token usage = %#v, want reference token fields", llmUsage)
+	}
+	if llmUsage["session_duration"] != 2.5 {
+		t.Fatalf("session_duration = %#v, want 2.5", llmUsage["session_duration"])
+	}
+	if payload["created_at"] != 27.25 {
+		t.Fatalf("created_at = %#v, want 27.25", payload["created_at"])
+	}
+	if _, ok := payload["Usage"]; ok {
 		t.Fatalf("payload used Go field names: %#v", payload)
 	}
 }
