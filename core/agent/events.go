@@ -92,6 +92,20 @@ func NewUserTurnExceededEvent(transcript string, accumulatedTranscript string, a
 
 func (e *UserTurnExceededEvent) GetType() string { return "user_turn_exceeded" }
 
+func (e *UserTurnExceededEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":                   e.GetType(),
+		"transcript":             e.Transcript,
+		"accumulated_transcript": e.AccumulatedTranscript,
+		"accumulated_word_count": e.AccumulatedWordCount,
+		"duration":               e.Duration.Seconds(),
+		"created_at":             timeToUnixSeconds(e.CreatedAt),
+	})
+}
+
 type OverlappingSpeechEvent struct {
 	CreatedAt          time.Time
 	DetectedAt         time.Time

@@ -439,6 +439,44 @@ func TestUserTurnExceededEventIsTypedAndTimestamped(t *testing.T) {
 	}
 }
 
+func TestUserTurnExceededEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	ev := &UserTurnExceededEvent{
+		Transcript:            "latest words",
+		AccumulatedTranscript: "all accumulated words",
+		AccumulatedWordCount:  3,
+		Duration:              1500 * time.Millisecond,
+		CreatedAt:             time.Unix(24, 250_000_000),
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal UserTurnExceededEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled UserTurnExceededEvent returned error: %v", err)
+	}
+	if payload["type"] != "user_turn_exceeded" {
+		t.Fatalf("type = %#v, want user_turn_exceeded", payload["type"])
+	}
+	if payload["transcript"] != "latest words" || payload["accumulated_transcript"] != "all accumulated words" {
+		t.Fatalf("transcript payload = %#v, want reference transcript fields", payload)
+	}
+	if payload["accumulated_word_count"] != float64(3) {
+		t.Fatalf("accumulated_word_count = %#v, want 3", payload["accumulated_word_count"])
+	}
+	if payload["duration"] != 1.5 {
+		t.Fatalf("duration = %#v, want 1.5", payload["duration"])
+	}
+	if payload["created_at"] != 24.25 {
+		t.Fatalf("created_at = %#v, want 24.25", payload["created_at"])
+	}
+	if _, ok := payload["AccumulatedTranscript"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
+	}
+}
+
 func TestOverlappingSpeechEventIsTypedAndCarriesTimingAndPredictionFields(t *testing.T) {
 	overlapStartedAt := time.Now().Add(-250 * time.Millisecond)
 	detectedAt := time.Now()
