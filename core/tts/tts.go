@@ -16,12 +16,12 @@ type SynthesizedAudio struct {
 }
 
 type TimedString struct {
-	Text            string
-	StartTime       float64
-	EndTime         float64
-	Confidence      float64
-	StartTimeOffset float64
-	SpeakerID       string
+	Text            string  `json:"text"`
+	StartTime       float64 `json:"start_time"`
+	EndTime         float64 `json:"end_time"`
+	Confidence      float64 `json:"confidence"`
+	StartTimeOffset float64 `json:"start_time_offset"`
+	SpeakerID       string  `json:"speaker_id"`
 }
 
 type TTSCapabilities struct {
