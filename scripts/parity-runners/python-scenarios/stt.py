@@ -389,6 +389,34 @@ def stt_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "capabilities_required_fields":
+        required_fields = ["streaming", "interim_results"]
+        base = {"streaming": True, "interim_results": True}
+        missing_fields = []
+        for field_name in required_fields:
+            kwargs = dict(base)
+            del kwargs[field_name]
+            try:
+                module.STTCapabilities(**kwargs)
+            except TypeError as exc:
+                if field_name in str(exc):
+                    missing_fields.append(field_name)
+        caps = module.STTCapabilities(**base)
+        aligned = "" if caps.aligned_transcript is False else caps.aligned_transcript
+        return {
+            "contract": "stt-capabilities-required-fields",
+            "events": [
+                {
+                    "name": "capabilities_required_fields",
+                    "missing_fields": missing_fields,
+                    "streaming": caps.streaming,
+                    "interim_results": caps.interim_results,
+                    "diarization": caps.diarization,
+                    "aligned_transcript": aligned,
+                    "offline_recognize": caps.offline_recognize,
+                }
+            ],
+        }
     raise ValueError(f"unsupported STT value object action {action!r}")
 
 

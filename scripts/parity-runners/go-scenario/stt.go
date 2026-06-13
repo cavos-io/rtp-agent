@@ -448,6 +448,45 @@ func runSTTValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "capabilities_required_fields":
+		requiredFields := []string{"streaming", "interim_results"}
+		base := map[string]any{"streaming": true, "interim_results": true}
+		missingFields := make([]string, 0, len(requiredFields))
+		for _, fieldName := range requiredFields {
+			payload := make(map[string]any, len(base)-1)
+			for key, value := range base {
+				if key != fieldName {
+					payload[key] = value
+				}
+			}
+			data, err := json.Marshal(payload)
+			if err != nil {
+				return nil, err
+			}
+			var caps lkstt.STTCapabilities
+			err = json.Unmarshal(data, &caps)
+			if err != nil && strings.Contains(err.Error(), fieldName) {
+				missingFields = append(missingFields, fieldName)
+			}
+		}
+		var caps lkstt.STTCapabilities
+		if err := json.Unmarshal([]byte(`{"streaming":true,"interim_results":true}`), &caps); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "stt-capabilities-required-fields",
+			"events": []map[string]any{
+				{
+					"name":               "capabilities_required_fields",
+					"missing_fields":     missingFields,
+					"streaming":          caps.Streaming,
+					"interim_results":    caps.InterimResults,
+					"diarization":        caps.Diarization,
+					"aligned_transcript": caps.AlignedTranscript,
+					"offline_recognize":  caps.OfflineRecognize,
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported STT value object action %q", payload.Action)
 	}
