@@ -964,13 +964,16 @@ func chatContentFromJSON(data []byte) (ChatContent, error) {
 	switch discriminator.Type {
 	case "instructions":
 		var instructions struct {
-			Audio string `json:"audio"`
-			Text  string `json:"text"`
+			Audio string  `json:"audio"`
+			Text  *string `json:"text"`
 		}
 		if err := json.Unmarshal(data, &instructions); err != nil {
 			return ChatContent{}, err
 		}
-		return ChatContent{Instructions: NewInstructions(instructions.Audio, instructionsTextOrDefault(instructions.Audio, instructions.Text))}, nil
+		if instructions.Text == nil {
+			return ChatContent{Instructions: NewInstructions(instructions.Audio)}, nil
+		}
+		return ChatContent{Instructions: NewInstructions(instructions.Audio, *instructions.Text)}, nil
 	case "image_content":
 		var image struct {
 			ID              string `json:"id"`
@@ -1133,13 +1136,6 @@ func instructionsToDict(instructions *Instructions) map[string]any {
 		data["text"] = instructions.Text
 	}
 	return data
-}
-
-func instructionsTextOrDefault(audio string, text string) string {
-	if text == "" {
-		return audio
-	}
-	return text
 }
 
 func imageContentToDict(image *ImageContent) map[string]any {

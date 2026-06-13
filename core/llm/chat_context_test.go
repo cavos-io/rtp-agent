@@ -624,6 +624,40 @@ func TestChatContextInstructionsSerializeAndRoundTrip(t *testing.T) {
 	}
 }
 
+func TestChatContextInstructionsRoundTripPreservesAbsentTextVariant(t *testing.T) {
+	ctx, err := ChatContextFromDict(map[string]any{
+		"items": []any{
+			map[string]any{
+				"id":   "system",
+				"type": "message",
+				"role": "system",
+				"content": []any{
+					map[string]any{
+						"type":  "instructions",
+						"audio": "audio instructions",
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ChatContextFromDict() error = %v", err)
+	}
+
+	msg := ctx.Items[0].(*ChatMessage)
+	if got := msg.Content[0].Instructions.AsModality("text").String(); got != "audio instructions" {
+		t.Fatalf("round-trip fallback text = %q, want audio instructions", got)
+	}
+
+	data := ctx.ToDict()
+	items := data["items"].([]map[string]any)
+	content := items[0]["content"].([]any)
+	instructions := content[0].(map[string]any)
+	if _, ok := instructions["text"]; ok {
+		t.Fatalf("serialized instructions = %#v, want text omitted when reference input omitted text", instructions)
+	}
+}
+
 func TestChatContextInstructionsSerializeExplicitTextVariantMatchingAudio(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
