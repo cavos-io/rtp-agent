@@ -3,6 +3,7 @@ package vad
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -54,6 +55,24 @@ func (e *VADEvent) UnmarshalJSON(data []byte) error {
 
 type VADCapabilities struct {
 	UpdateInterval float64 `json:"update_interval"`
+}
+
+func (c *VADCapabilities) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if _, ok := fields["update_interval"]; !ok {
+		return fmt.Errorf("vad capabilities update_interval is required")
+	}
+
+	type vadCapabilitiesPayload VADCapabilities
+	var payload vadCapabilitiesPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	*c = VADCapabilities(payload)
+	return nil
 }
 
 type VADMetricsHandler func(*telemetry.VADMetrics)

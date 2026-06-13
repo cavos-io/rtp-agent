@@ -136,6 +136,25 @@ func TestVADCapabilitiesMarshalJSONMatchesReferencePayload(t *testing.T) {
 	}
 }
 
+func TestVADCapabilitiesUnmarshalJSONRequiresReferenceUpdateInterval(t *testing.T) {
+	var missing VADCapabilities
+	err := json.Unmarshal([]byte(`{}`), &missing)
+	if err == nil {
+		t.Fatal("Unmarshal VADCapabilities returned nil error, want missing update_interval error")
+	}
+	if !strings.Contains(err.Error(), "update_interval") {
+		t.Fatalf("error = %v, want it to mention update_interval", err)
+	}
+
+	var capabilities VADCapabilities
+	if err := json.Unmarshal([]byte(`{"update_interval":0}`), &capabilities); err != nil {
+		t.Fatalf("Unmarshal VADCapabilities with explicit update_interval returned error: %v", err)
+	}
+	if capabilities.UpdateInterval != 0 {
+		t.Fatalf("UpdateInterval = %v, want explicit zero", capabilities.UpdateInterval)
+	}
+}
+
 func TestSimpleVADEmitsMetricsCollected(t *testing.T) {
 	detector := NewSimpleVADWithOptions(SimpleVADOptions{UpdateInterval: 1})
 	metricsCh := make(chan *telemetry.VADMetrics, 1)
