@@ -1842,6 +1842,62 @@ func runLLMValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "completion_usage_payload":
+		usage := lkllm.CompletionUsage{
+			CompletionTokens:    7,
+			PromptTokens:        11,
+			PromptCachedTokens:  3,
+			CacheCreationTokens: 2,
+			CacheReadTokens:     5,
+			TotalTokens:         18,
+			ServiceTier:         "priority",
+		}
+		payload, err := completionUsagePayload(usage)
+		if err != nil {
+			return nil, err
+		}
+		minimal, err := completionUsagePayloadFromJSON([]byte(`{"completion_tokens":7,"prompt_tokens":11,"total_tokens":18,"service_tier":null}`))
+		if err != nil {
+			return nil, err
+		}
+		requiredCases := []struct {
+			field   string
+			payload string
+		}{
+			{
+				field:   "completion_tokens",
+				payload: `{"prompt_tokens":11,"total_tokens":18}`,
+			},
+			{
+				field:   "prompt_tokens",
+				payload: `{"completion_tokens":7,"total_tokens":18}`,
+			},
+			{
+				field:   "total_tokens",
+				payload: `{"completion_tokens":7,"prompt_tokens":11}`,
+			},
+		}
+		missingFields := make([]string, 0, len(requiredCases))
+		for _, test := range requiredCases {
+			var decoded lkllm.CompletionUsage
+			if err := json.Unmarshal([]byte(test.payload), &decoded); err != nil {
+				missingFields = append(missingFields, test.field)
+			}
+		}
+		return map[string]any{
+			"contract": "llm-value-objects",
+			"events": []map[string]any{
+				{
+					"name":    "completion_usage_payload",
+					"payload": payload,
+				},
+				{
+					"name":            "completion_usage_required_fields",
+					"missing_fields":  missingFields,
+					"minimal_payload": minimal,
+				},
+			},
+		}, nil
 	case "realtime_error_payload":
 		underlying := errors.New("session disconnected")
 		err := lkllm.NewRealtimeModelError("openai.RealtimeModel", underlying, false)
@@ -2566,6 +2622,26 @@ type scenarioLLMProviderTool struct {
 }
 
 func (t *scenarioLLMProviderTool) IsProviderTool() bool { return true }
+
+func completionUsagePayload(usage lkllm.CompletionUsage) (map[string]any, error) {
+	data, err := json.Marshal(usage)
+	if err != nil {
+		return nil, err
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func completionUsagePayloadFromJSON(data []byte) (map[string]any, error) {
+	var usage lkllm.CompletionUsage
+	if err := json.Unmarshal(data, &usage); err != nil {
+		return nil, err
+	}
+	return completionUsagePayload(usage)
+}
 
 type scenarioLLMToolset struct {
 	id         string

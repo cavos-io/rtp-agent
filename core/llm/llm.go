@@ -385,6 +385,71 @@ type CompletionUsage struct {
 	ServiceTier         string
 }
 
+func (u CompletionUsage) MarshalJSON() ([]byte, error) {
+	type payload struct {
+		CompletionTokens    int     `json:"completion_tokens"`
+		PromptTokens        int     `json:"prompt_tokens"`
+		PromptCachedTokens  int     `json:"prompt_cached_tokens"`
+		CacheCreationTokens int     `json:"cache_creation_tokens"`
+		CacheReadTokens     int     `json:"cache_read_tokens"`
+		TotalTokens         int     `json:"total_tokens"`
+		ServiceTier         *string `json:"service_tier"`
+	}
+
+	var serviceTier *string
+	if u.ServiceTier != "" {
+		serviceTier = &u.ServiceTier
+	}
+
+	return json.Marshal(payload{
+		CompletionTokens:    u.CompletionTokens,
+		PromptTokens:        u.PromptTokens,
+		PromptCachedTokens:  u.PromptCachedTokens,
+		CacheCreationTokens: u.CacheCreationTokens,
+		CacheReadTokens:     u.CacheReadTokens,
+		TotalTokens:         u.TotalTokens,
+		ServiceTier:         serviceTier,
+	})
+}
+
+func (u *CompletionUsage) UnmarshalJSON(data []byte) error {
+	type payload struct {
+		CompletionTokens    *int    `json:"completion_tokens"`
+		PromptTokens        *int    `json:"prompt_tokens"`
+		PromptCachedTokens  int     `json:"prompt_cached_tokens"`
+		CacheCreationTokens int     `json:"cache_creation_tokens"`
+		CacheReadTokens     int     `json:"cache_read_tokens"`
+		TotalTokens         *int    `json:"total_tokens"`
+		ServiceTier         *string `json:"service_tier"`
+	}
+
+	var decoded payload
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if decoded.CompletionTokens == nil {
+		return errors.New("completion usage completion_tokens is required")
+	}
+	if decoded.PromptTokens == nil {
+		return errors.New("completion usage prompt_tokens is required")
+	}
+	if decoded.TotalTokens == nil {
+		return errors.New("completion usage total_tokens is required")
+	}
+
+	u.CompletionTokens = *decoded.CompletionTokens
+	u.PromptTokens = *decoded.PromptTokens
+	u.PromptCachedTokens = decoded.PromptCachedTokens
+	u.CacheCreationTokens = decoded.CacheCreationTokens
+	u.CacheReadTokens = decoded.CacheReadTokens
+	u.TotalTokens = *decoded.TotalTokens
+	u.ServiceTier = ""
+	if decoded.ServiceTier != nil {
+		u.ServiceTier = *decoded.ServiceTier
+	}
+	return nil
+}
+
 type ChoiceDelta struct {
 	Role      ChatRole
 	Content   string

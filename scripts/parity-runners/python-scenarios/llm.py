@@ -1,4 +1,46 @@
+import ast
+
 from common import *  # noqa: F403
+
+
+def load_reference_completion_usage():
+    class BaseModel:
+        def __init__(self, **kwargs: Any) -> None:
+            annotations = getattr(self.__class__, "__annotations__", {})
+            for field in annotations:
+                if field in kwargs:
+                    value = kwargs.pop(field)
+                elif field in self.__class__.__dict__:
+                    value = self.__class__.__dict__[field]
+                else:
+                    raise ValueError(f"{field} is required")
+                setattr(self, field, value)
+            for field, value in kwargs.items():
+                setattr(self, field, value)
+
+        def model_dump(self) -> dict[str, Any]:
+            return {
+                field: getattr(self, field)
+                for field in getattr(self.__class__, "__annotations__", {})
+            }
+
+    path = repo_root() / "refs/agents/livekit-agents/livekit/agents/llm/llm.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    class_node = next(
+        (
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "CompletionUsage"
+        ),
+        None,
+    )
+    if class_node is None:
+        raise RuntimeError(f"cannot find CompletionUsage in {path}")
+    module = ast.Module(body=[class_node], type_ignores=[])
+    ast.fix_missing_locations(module)
+    namespace = {"BaseModel": BaseModel}
+    exec(compile(module, str(path), "exec"), namespace)
+    return namespace["CompletionUsage"]
 
 def llm_api_connect_options(input_data: Any) -> dict[str, Any]:
     action = input_data.get("action", "defaults")
@@ -239,6 +281,57 @@ def llm_value_objects(input_data: Any) -> dict[str, Any]:
                     "timestamp_positive": True,
                     "error_message": str(err),
                 }
+            ],
+        }
+    if action == "completion_usage_payload":
+        completion_usage = load_reference_completion_usage()
+        usage = completion_usage(
+            completion_tokens=7,
+            prompt_tokens=11,
+            prompt_cached_tokens=3,
+            cache_creation_tokens=2,
+            cache_read_tokens=5,
+            total_tokens=18,
+            service_tier="priority",
+        )
+        minimal = completion_usage(
+            completion_tokens=7,
+            prompt_tokens=11,
+            total_tokens=18,
+            service_tier=None,
+        )
+        required_cases = [
+            (
+                "completion_tokens",
+                {"prompt_tokens": 11, "total_tokens": 18},
+            ),
+            (
+                "prompt_tokens",
+                {"completion_tokens": 7, "total_tokens": 18},
+            ),
+            (
+                "total_tokens",
+                {"completion_tokens": 7, "prompt_tokens": 11},
+            ),
+        ]
+        missing_fields = []
+        for field, kwargs in required_cases:
+            try:
+                completion_usage(**kwargs)
+            except Exception:
+                missing_fields.append(field)
+        return {
+            "contract": "llm-value-objects",
+            "events": [
+                {
+                    "name": "completion_usage_payload",
+                    "payload": usage.model_dump(),
+                },
+                {
+                    "name": "completion_usage_required_fields",
+                    "missing_fields": missing_fields,
+                    "minimal_payload": minimal.model_dump(),
+                },
             ],
         }
     if action == "realtime_error_payload":
@@ -2100,5 +2193,3 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         }
 
     raise ValueError(f"unsupported LLM chat context action {action!r}")
-
-
