@@ -1589,6 +1589,43 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 content.append({"text": json.dumps(part)})
         return content
 
+    def mistral_image_url(part: dict[str, Any]) -> str:
+        image = str(part.get("image", ""))
+        match = re.match(r"^data:([^;,]+);base64,(.*)$", image)
+        if match:
+            base64.b64decode(match.group(2), validate=True)
+            return image
+        return image
+
+    def mistral_content(parts: list[Any]) -> Any:
+        list_content: list[dict[str, Any]] = []
+        text_parts: list[str] = []
+        for part in parts:
+            if isinstance(part, str):
+                if part:
+                    text_parts.append(part)
+                continue
+            if isinstance(part, dict) and part.get("type") == "image_content":
+                list_content.append({"type": "image_url", "image_url": mistral_image_url(part)})
+                continue
+            if isinstance(part, dict) and part:
+                text_parts.append(json.dumps(part))
+        text = "\n".join(text_parts)
+        if not list_content:
+            return text
+        if text:
+            list_content.append({"type": "text", "text": text})
+        return list_content
+
+    def mistral_instructions(items: list[dict[str, Any]]) -> str | None:
+        instructions: str | None = None
+        for item in items:
+            if item["type"] != "message" or item["role"] not in ("system", "developer"):
+                continue
+            text_parts = [part for part in item["content"] if isinstance(part, str)]
+            instructions = "\n".join(text_parts) if text_parts else None
+        return instructions
+
     def to_provider_format(
         items: list[dict[str, Any]],
         *,
@@ -1737,6 +1774,49 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                         }
                     )
             return responses_items
+        if provider_format == "mistralai":
+            entries: list[dict[str, Any]] = []
+            for item in items:
+                if item["type"] == "message":
+                    if item["role"] in ("system", "developer"):
+                        continue
+                    if item["role"] == "user":
+                        entries.append(
+                            {
+                                "type": "message.input",
+                                "role": "user",
+                                "content": mistral_content(item["content"]),
+                            }
+                        )
+                        continue
+                    if item["role"] == "assistant":
+                        entries.append(
+                            {
+                                "type": "message.output",
+                                "role": "assistant",
+                                "content": mistral_content(item["content"]),
+                            }
+                        )
+                        continue
+                if item["type"] == "function_call":
+                    entries.append(
+                        {
+                            "type": "function.call",
+                            "tool_call_id": item["call_id"],
+                            "name": item["name"],
+                            "arguments": item["arguments"],
+                        }
+                    )
+                    continue
+                if item["type"] == "function_call_output":
+                    entries.append(
+                        {
+                            "type": "function.result",
+                            "tool_call_id": item["call_id"],
+                            "result": item["output"],
+                        }
+                    )
+            return entries
         if provider_format not in ("google", "anthropic", "aws"):
             raise ValueError(f"unsupported provider format {provider_format!r}")
 
@@ -1856,6 +1936,8 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                     and (text_content(item["content"]) or "")
                 ]
             }
+        if provider_format == "mistralai":
+            extra = {"instructions": mistral_instructions(items)}
         return {"messages": messages, "extra": extra}
 
     def provider_format_error(
