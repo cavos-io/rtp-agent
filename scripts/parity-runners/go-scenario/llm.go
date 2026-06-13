@@ -1263,10 +1263,10 @@ func buildLLMScenarioContentPart(part map[string]any) (lkllm.ChatContent, error)
 	partType, _ := part["type"].(string)
 	switch partType {
 	case "instructions":
-		instructions := lkllm.NewInstructions(
-			stringArg(part, "audio"),
-			stringArg(part, "text"),
-		)
+		instructions := lkllm.NewInstructions(stringArg(part, "audio"))
+		if _, ok := part["text"]; ok {
+			instructions = lkllm.NewInstructions(stringArg(part, "audio"), stringArg(part, "text"))
+		}
 		if active := stringArg(part, "active"); active != "" {
 			instructions = instructions.AsModality(active)
 		}

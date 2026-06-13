@@ -1457,6 +1457,15 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 for part in item["content"]:
                     if isinstance(part, dict) and part.get("type") in ("image_content", "audio_content"):
                         continue
+                    if isinstance(part, dict) and part.get("type") == "instructions":
+                        serialized = {
+                            "type": "instructions",
+                            "audio": part["audio"],
+                        }
+                        if part["text_set"]:
+                            serialized["text"] = part["text"]
+                        content.append(serialized)
+                        continue
                     content.append(part)
                 data["content"] = content
             out.append(data)
