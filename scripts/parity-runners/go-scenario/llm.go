@@ -1365,6 +1365,7 @@ func runLLMChatContextCallStep(state *llmScenarioState, step llmScenarioStepSpec
 			ExcludeFunctionCall: scenarioBoolArg(step.Args, "exclude_function_call"),
 			ExcludeConfigUpdate: scenarioBoolArg(step.Args, "exclude_config_update"),
 			ExcludeMetrics:      scenarioBoolArg(step.Args, "exclude_metrics"),
+			IncludeImage:        scenarioBoolArg(step.Args, "include_image"),
 		})
 	case "to_provider_format":
 		options := lkllm.ChatContextProviderFormatOptions{}
@@ -1704,6 +1705,19 @@ func transformLLMScenarioField(state *llmScenarioState, value any, transform str
 		}
 		_, ok := instructions["text"]
 		return ok, nil
+	case "dict_first_image_id_has_prefix":
+		image, err := firstSerializedImage(value)
+		if err != nil {
+			return nil, err
+		}
+		id, _ := image["id"].(string)
+		return strings.HasPrefix(id, "img_"), nil
+	case "dict_first_image_inference_detail":
+		image, err := firstSerializedImage(value)
+		if err != nil {
+			return nil, err
+		}
+		return image["inference_detail"], nil
 	case "provider_first_content":
 		messages, ok := value.([]map[string]any)
 		if !ok {
@@ -1802,6 +1816,28 @@ func firstSerializedInstruction(value any) (map[string]any, error) {
 		return nil, fmt.Errorf("first content is %T, want object", rawContent[0])
 	}
 	return instructions, nil
+}
+
+func firstSerializedImage(value any) (map[string]any, error) {
+	data, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("value %T cannot use dict_first_image transform", value)
+	}
+	rawItems, ok := data["items"].([]map[string]any)
+	if !ok || len(rawItems) == 0 {
+		return nil, errors.New("dict_first_image requires non-empty items")
+	}
+	rawContent, ok := rawItems[0]["content"].([]any)
+	if !ok || len(rawContent) == 0 {
+		return nil, errors.New("dict_first_image requires non-empty content")
+	}
+	for _, part := range rawContent {
+		image, ok := part.(map[string]any)
+		if ok && image["type"] == "image_content" {
+			return image, nil
+		}
+	}
+	return nil, errors.New("dict_first_image requires image content")
 }
 
 func stringArg(args map[string]any, name string) string {

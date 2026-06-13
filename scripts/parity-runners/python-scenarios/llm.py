@@ -1252,11 +1252,17 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         }
 
     generated_id_counter = 0
+    generated_image_id_counter = 0
 
     def generated_id() -> str:
         nonlocal generated_id_counter
         generated_id_counter += 1
         return f"item_{generated_id_counter}"
+
+    def generated_image_id() -> str:
+        nonlocal generated_image_id_counter
+        generated_image_id_counter += 1
+        return f"img_{generated_image_id_counter}"
 
     def generated_time() -> float:
         return 1000.0 + generated_id_counter
@@ -1444,6 +1450,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         exclude_function_call: bool = False,
         exclude_config_update: bool = False,
         exclude_metrics: bool = False,
+        include_image: bool = False,
     ) -> dict[str, Any]:
         out: list[dict[str, Any]] = []
         for item in items:
@@ -1457,7 +1464,16 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             if item_type == "message":
                 content = []
                 for part in item["content"]:
-                    if isinstance(part, dict) and part.get("type") in ("image_content", "audio_content"):
+                    if isinstance(part, dict) and part.get("type") == "image_content":
+                        if include_image:
+                            serialized = dict(part)
+                            if not serialized.get("id"):
+                                serialized["id"] = generated_image_id()
+                            if not serialized.get("inference_detail"):
+                                serialized["inference_detail"] = "auto"
+                            content.append(serialized)
+                        continue
+                    if isinstance(part, dict) and part.get("type") == "audio_content":
                         continue
                     if isinstance(part, dict) and part.get("type") == "instructions":
                         serialized = {
@@ -1750,6 +1766,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 exclude_function_call=bool(args.get("exclude_function_call", False)),
                 exclude_config_update=bool(args.get("exclude_config_update", False)),
                 exclude_metrics=bool(args.get("exclude_metrics", False)),
+                include_image=bool(args.get("include_image", False)),
             )
             return
         if op == "to_provider_format":
@@ -1936,6 +1953,10 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             return first_serialized_instruction(value)["text"]
         if transform == "dict_first_instruction_text_present":
             return "text" in first_serialized_instruction(value)
+        if transform == "dict_first_image_id_has_prefix":
+            return str(first_serialized_image(value).get("id", "")).startswith("img_")
+        if transform == "dict_first_image_inference_detail":
+            return first_serialized_image(value).get("inference_detail")
         if transform == "provider_first_content":
             return None if not value else value[0].get("content")
         if transform == "provider_first_role":
@@ -1963,6 +1984,12 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
 
     def first_serialized_instruction(value: dict[str, Any]) -> dict[str, Any]:
         return value["items"][0]["content"][0]
+
+    def first_serialized_image(value: dict[str, Any]) -> dict[str, Any]:
+        for part in value["items"][0]["content"]:
+            if isinstance(part, dict) and part.get("type") == "image_content":
+                return part
+        raise ValueError("dict_first_image requires image content")
 
     def run_declarative_emit(
         objects: dict[str, Any],
