@@ -409,6 +409,7 @@ type AppConfig struct {
 	TTSEncoding                             string
 	TTSSampleRate                           *int
 	TTSSpeed                                float64
+	TTSSpeedSet                             bool
 	TTSTemperature                          *float64
 	TTSTopP                                 *float64
 	TTSMaxTokens                            *int
@@ -771,6 +772,7 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSEncoding:                             os.Getenv("RTP_AGENT_TTS_ENCODING"),
 		TTSSampleRate:                           getenvOptionalInt("RTP_AGENT_TTS_SAMPLE_RATE"),
 		TTSSpeed:                                getenvFloat("RTP_AGENT_TTS_SPEED"),
+		TTSSpeedSet:                             envIsSet("RTP_AGENT_TTS_SPEED"),
 		TTSTemperature:                          getenvOptionalFloat("RTP_AGENT_TTS_TEMPERATURE"),
 		TTSTopP:                                 getenvOptionalFloat("RTP_AGENT_TTS_TOP_P"),
 		TTSMaxTokens:                            getenvOptionalInt("RTP_AGENT_TTS_MAX_TOKENS"),
@@ -2029,6 +2031,10 @@ func configureTTSFallbacks(cfg AppConfig, a *agent.Agent) error {
 	return nil
 }
 
+func appTTSSpeedConfigured(cfg AppConfig) bool {
+	return cfg.TTSSpeedSet || cfg.TTSSpeed != 0
+}
+
 func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error) {
 	switch normalizeProvider(provider) {
 	case providerOpenAI:
@@ -2039,7 +2045,7 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSVoice != "" {
 			ttsOpts = append(ttsOpts, openai.WithOpenAITTSVoice(goopenai.SpeechVoice(cfg.TTSVoice)))
 		}
-		if cfg.TTSSpeed != 0 {
+		if appTTSSpeedConfigured(cfg) {
 			ttsOpts = append(ttsOpts, openai.WithOpenAITTSSpeed(cfg.TTSSpeed))
 		}
 		if cfg.TTSInstructions != "" {
@@ -4111,7 +4117,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSVoice != "" {
 			ttsOpts = append(ttsOpts, openai.WithOpenAITTSVoice(goopenai.SpeechVoice(cfg.TTSVoice)))
 		}
-		if cfg.TTSSpeed != 0 {
+		if appTTSSpeedConfigured(cfg) {
 			ttsOpts = append(ttsOpts, openai.WithOpenAITTSSpeed(cfg.TTSSpeed))
 		}
 		if cfg.TTSInstructions != "" {
@@ -4281,6 +4287,11 @@ func firstEnv(names ...string) string {
 		}
 	}
 	return ""
+}
+
+func envIsSet(name string) bool {
+	_, ok := os.LookupEnv(name)
+	return ok
 }
 
 func getenvBool(name string) bool {

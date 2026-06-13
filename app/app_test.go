@@ -499,6 +499,42 @@ func TestDefaultConfigFromEnvSelectsOpenAIProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvPreservesOpenAITTSExplicitZeroSpeed(t *testing.T) {
+	var body []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var err error
+		body, err = io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"type\":\"speech.audio.done\"}\n\n")
+	}))
+	t.Cleanup(server.Close)
+
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", server.URL)
+	t.Setenv("RTP_AGENT_TTS_SPEED", "0")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	stream, err := app.Session.TTS.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next error = %v, want EOF", err)
+	}
+	if !strings.Contains(string(body), `"speed":0`) {
+		t.Fatalf("request body %s missing explicit zero speed", body)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsPerplexityLLM(t *testing.T) {
 	t.Setenv("PERPLEXITY_API_KEY", "test-perplexity-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "perplexity")
