@@ -987,6 +987,7 @@ func chatItemToDict(item ChatItem, opts ChatContextDictOptions) map[string]any {
 			"arguments": it.Arguments,
 			"name":      it.Name,
 			"extra":     nonNilMap(it.Extra),
+			"group_id":  nil,
 		}
 		if it.GroupID != nil {
 			data["group_id"] = *it.GroupID
@@ -1010,6 +1011,7 @@ func chatItemToDict(item ChatItem, opts ChatContextDictOptions) map[string]any {
 		data := map[string]any{
 			"id":           it.ID,
 			"type":         "agent_handoff",
+			"old_agent_id": nil,
 			"new_agent_id": it.NewAgentID,
 		}
 		if it.OldAgentID != nil {

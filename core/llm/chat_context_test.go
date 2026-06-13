@@ -1430,6 +1430,55 @@ func TestChatItemMarshalJSONMatchesReferencePayloads(t *testing.T) {
 	}
 }
 
+func TestChatItemMarshalJSONMatchesReferenceOptionalFields(t *testing.T) {
+	items := []struct {
+		name          string
+		item          ChatItem
+		optionalField string
+	}{
+		{
+			name: "function_call_group",
+			item: &FunctionCall{
+				ID:        "call_item",
+				CallID:    "call_lookup",
+				Name:      "lookup",
+				Arguments: `{}`,
+				CreatedAt: time.Unix(10, 0),
+			},
+			optionalField: "group_id",
+		},
+		{
+			name: "agent_handoff_old_agent",
+			item: &AgentHandoff{
+				ID:         "handoff_item",
+				NewAgentID: "new_agent",
+				CreatedAt:  time.Unix(11, 0),
+			},
+			optionalField: "old_agent_id",
+		},
+	}
+
+	for _, tc := range items {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(tc.item)
+			if err != nil {
+				t.Fatalf("Marshal %s returned error: %v", tc.name, err)
+			}
+
+			var got map[string]any
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatalf("Unmarshal marshaled %s returned error: %v", tc.name, err)
+			}
+			if _, ok := got[tc.optionalField]; !ok {
+				t.Fatalf("%s missing from marshaled %s: %s", tc.optionalField, tc.name, data)
+			}
+			if got[tc.optionalField] != nil {
+				t.Fatalf("%s = %v, want JSON null; payload %s", tc.optionalField, got[tc.optionalField], data)
+			}
+		})
+	}
+}
+
 func TestChatContextUnmarshalJSONRestoresTypedItems(t *testing.T) {
 	data := []byte(`{
 		"items": [
