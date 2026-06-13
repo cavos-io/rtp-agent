@@ -3,6 +3,7 @@ package vad
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"math"
@@ -28,6 +29,73 @@ func TestSimpleVADMetadataAndCapabilities(t *testing.T) {
 	}
 	if detector.Capabilities().UpdateInterval != 0.5 {
 		t.Fatalf("Capabilities().UpdateInterval = %v, want 0.5", detector.Capabilities().UpdateInterval)
+	}
+}
+
+func TestVADEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	event := VADEvent{
+		Type:                  VADEventInferenceDone,
+		SamplesIndex:          320,
+		Timestamp:             1.25,
+		SpeechDuration:        0.5,
+		SilenceDuration:       0.75,
+		Frames:                []*model.AudioFrame{{Data: []byte{1, 2, 3}}},
+		Probability:           0.875,
+		InferenceDuration:     0.01,
+		Speaking:              true,
+		RawAccumulatedSilence: 0.125,
+		RawAccumulatedSpeech:  0.25,
+	}
+
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("Marshal VADEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled VADEvent returned error: %v", err)
+	}
+	want := map[string]any{
+		"type":                    string(VADEventInferenceDone),
+		"samples_index":           float64(320),
+		"timestamp":               1.25,
+		"speech_duration":         0.5,
+		"silence_duration":        0.75,
+		"probability":             0.875,
+		"inference_duration":      0.01,
+		"speaking":                true,
+		"raw_accumulated_silence": 0.125,
+		"raw_accumulated_speech":  0.25,
+	}
+	for key, value := range want {
+		if payload[key] != value {
+			t.Fatalf("%s = %v, want %v; payload %s", key, payload[key], value, data)
+		}
+	}
+	if _, ok := payload["SamplesIndex"]; ok {
+		t.Fatalf("Go field name SamplesIndex leaked into JSON: %s", data)
+	}
+	if _, ok := payload["InferenceDuration"]; ok {
+		t.Fatalf("Go field name InferenceDuration leaked into JSON: %s", data)
+	}
+}
+
+func TestVADCapabilitiesMarshalJSONMatchesReferencePayload(t *testing.T) {
+	data, err := json.Marshal(VADCapabilities{UpdateInterval: 0.5})
+	if err != nil {
+		t.Fatalf("Marshal VADCapabilities returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled VADCapabilities returned error: %v", err)
+	}
+	if payload["update_interval"] != 0.5 {
+		t.Fatalf("update_interval = %v, want 0.5; payload %s", payload["update_interval"], data)
+	}
+	if _, ok := payload["UpdateInterval"]; ok {
+		t.Fatalf("Go field name UpdateInterval leaked into JSON: %s", data)
 	}
 }
 
