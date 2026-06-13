@@ -128,6 +128,28 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "tts_error_json":
+        err = module.TTSError(
+            type="tts_error",
+            timestamp=1.0,
+            label="provider.TTS",
+            error=Exception("provider disconnected"),
+            recoverable=True,
+        )
+        return {
+            "contract": "tts-value-objects",
+            "events": [
+                {
+                    "name": "tts_error_json",
+                    "type": err.type,
+                    "label": err.label,
+                    "recoverable": err.recoverable,
+                    "timestamp_positive": err.timestamp > 0,
+                    "has_error_field": False,
+                    "has_err_field": False,
+                }
+            ],
+        }
     raise ValueError(f"unsupported TTS value object action {action!r}")
 
 
@@ -225,4 +247,3 @@ def tts_fallback(input_data: Any) -> dict[str, Any]:
             ],
         }
     raise ValueError(f"unsupported TTS fallback action {action!r}")
-

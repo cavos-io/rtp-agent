@@ -73,6 +73,37 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "tts_error_json":
+		err := lktts.TTSError{
+			Type:        lktts.TTSErrorType,
+			Timestamp:   time.Now(),
+			Label:       "provider.TTS",
+			Err:         errors.New("provider disconnected"),
+			Recoverable: true,
+		}
+		data, marshalErr := json.Marshal(err)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		var payload map[string]any
+		if unmarshalErr := json.Unmarshal(data, &payload); unmarshalErr != nil {
+			return nil, unmarshalErr
+		}
+		timestamp, _ := payload["timestamp"].(float64)
+		return map[string]any{
+			"contract": "tts-value-objects",
+			"events": []map[string]any{
+				{
+					"name":               "tts_error_json",
+					"type":               payload["type"],
+					"label":              payload["label"],
+					"recoverable":        payload["recoverable"],
+					"timestamp_positive": timestamp > 0,
+					"has_error_field":    hasAnyKey(payload, "error"),
+					"has_err_field":      hasAnyKey(payload, "err"),
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported TTS value object action %q", payload.Action)
 	}
