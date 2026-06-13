@@ -205,6 +205,26 @@ def llm_api_errors(input_data: Any) -> dict[str, Any]:
                 }
             )
         return {"contract": "llm-api-errors", "events": events}
+    if action == "status_string":
+        err = module.APIStatusError(
+            "quota exceeded",
+            status_code=429,
+            request_id="req_123",
+            body={"type": "rate_limit"},
+        )
+        return {
+            "contract": "llm-api-errors",
+            "events": [
+                {
+                    "name": "status_string",
+                    "error": str(err),
+                    "message": err.message,
+                    "status": err.status_code,
+                    "request_id": err.request_id,
+                    "retryable": err.retryable,
+                }
+            ],
+        }
     if action == "base_error":
         err = module.APIError(
             "provider failed",
