@@ -1872,6 +1872,25 @@ func TestChatContextUnmarshalJSONRejectsImageContentMissingImage(t *testing.T) {
 	}
 }
 
+func TestChatContextUnmarshalJSONRejectsInstructionsMissingAudio(t *testing.T) {
+	var ctx ChatContext
+	data := []byte(`{
+		"items": [{
+			"id": "message",
+			"type": "message",
+			"role": "developer",
+			"content": [{
+				"type": "instructions",
+				"text": "text instructions"
+			}]
+		}]
+	}`)
+
+	if err := json.Unmarshal(data, &ctx); err == nil {
+		t.Fatal("Unmarshal ChatContext error = nil, want missing instructions audio error")
+	}
+}
+
 func TestChatContextItemsDefaultIDs(t *testing.T) {
 	data := []byte(`{
 		"items": [

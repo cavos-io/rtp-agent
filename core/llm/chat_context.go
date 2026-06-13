@@ -964,16 +964,19 @@ func chatContentFromJSON(data []byte) (ChatContent, error) {
 	switch discriminator.Type {
 	case "instructions":
 		var instructions struct {
-			Audio string  `json:"audio"`
+			Audio *string `json:"audio"`
 			Text  *string `json:"text"`
 		}
 		if err := json.Unmarshal(data, &instructions); err != nil {
 			return ChatContent{}, err
 		}
-		if instructions.Text == nil {
-			return ChatContent{Instructions: NewInstructions(instructions.Audio)}, nil
+		if instructions.Audio == nil {
+			return ChatContent{}, fmt.Errorf("instructions audio is required")
 		}
-		return ChatContent{Instructions: NewInstructions(instructions.Audio, *instructions.Text)}, nil
+		if instructions.Text == nil {
+			return ChatContent{Instructions: NewInstructions(*instructions.Audio)}, nil
+		}
+		return ChatContent{Instructions: NewInstructions(*instructions.Audio, *instructions.Text)}, nil
 	case "image_content":
 		var image struct {
 			ID              string `json:"id"`
