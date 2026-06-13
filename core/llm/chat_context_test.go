@@ -1279,6 +1279,48 @@ func TestChatContextMarshalJSONIncludesTimestampsForReports(t *testing.T) {
 	}
 }
 
+func TestChatMessageMarshalJSONMatchesReferencePayload(t *testing.T) {
+	confidence := 0.875
+	message := &ChatMessage{
+		ID:                   "message_item",
+		Role:                 ChatRoleAssistant,
+		Content:              []ChatContent{{Text: "hello"}, {Text: ""}},
+		Interrupted:          true,
+		TranscriptConfidence: &confidence,
+		Extra:                map[string]any{"provider": "openai"},
+		Metrics:              map[string]any{"ttft": 0.25},
+		CreatedAt:            time.Unix(14, 500_000_000),
+	}
+
+	data, err := json.Marshal(message)
+	if err != nil {
+		t.Fatalf("Marshal ChatMessage returned error: %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal marshaled ChatMessage returned error: %v", err)
+	}
+
+	want := map[string]any{
+		"id":                    "message_item",
+		"type":                  "message",
+		"role":                  "assistant",
+		"content":               []any{"hello", ""},
+		"interrupted":           true,
+		"transcript_confidence": 0.875,
+		"extra":                 map[string]any{"provider": "openai"},
+		"metrics":               map[string]any{"ttft": 0.25},
+		"created_at":            14.5,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("marshaled ChatMessage = %#v, want %#v", got, want)
+	}
+	if _, ok := got["TranscriptConfidence"]; ok {
+		t.Fatalf("marshaled ChatMessage leaked Go field name TranscriptConfidence: %#v", got)
+	}
+}
+
 func TestChatItemMarshalJSONMatchesReferencePayloads(t *testing.T) {
 	groupID := "parallel_group"
 	oldAgentID := "old_agent"

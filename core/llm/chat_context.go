@@ -657,6 +657,17 @@ func (c *ChatContext) MarshalJSON() ([]byte, error) {
 	}))
 }
 
+func (m *ChatMessage) MarshalJSON() ([]byte, error) {
+	if m == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(chatItemToDict(m, ChatContextDictOptions{
+		IncludeImage:     true,
+		IncludeAudio:     true,
+		IncludeTimestamp: true,
+	}))
+}
+
 func (f *FunctionCall) MarshalJSON() ([]byte, error) {
 	if f == nil {
 		return json.Marshal(nil)
