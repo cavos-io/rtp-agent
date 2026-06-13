@@ -343,6 +343,9 @@ func runLLMRemoteChatContext(input json.RawMessage) (any, error) {
 	if payload.Action == "" {
 		payload.Action = "order"
 	}
+	if payload.Action == "errors" {
+		return runLLMRemoteChatContextErrors()
+	}
 	if payload.Action != "order" {
 		return nil, fmt.Errorf("unsupported remote chat context action %q", payload.Action)
 	}
@@ -385,6 +388,49 @@ func runLLMRemoteChatContext(input json.RawMessage) (any, error) {
 			},
 		},
 	}, nil
+}
+
+func runLLMRemoteChatContextErrors() (any, error) {
+	ctx := lkllm.NewRemoteChatContext()
+	if err := ctx.Insert(nil, &lkllm.ChatMessage{ID: "first", Role: lkllm.ChatRoleUser, Content: []lkllm.ChatContent{{Text: "first"}}}); err != nil {
+		return nil, err
+	}
+
+	events := make([]map[string]any, 0, 3)
+	for _, test := range []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "duplicate",
+			run: func() error {
+				return ctx.Insert(nil, &lkllm.ChatMessage{ID: "first", Role: lkllm.ChatRoleUser})
+			},
+		},
+		{
+			name: "missing_previous",
+			run: func() error {
+				missing := "missing"
+				return ctx.Insert(&missing, &lkllm.ChatMessage{ID: "second", Role: lkllm.ChatRoleAssistant})
+			},
+		},
+		{
+			name: "missing_delete",
+			run: func() error {
+				return ctx.Delete("missing")
+			},
+		},
+	} {
+		message := ""
+		if err := test.run(); err != nil {
+			message = err.Error()
+		}
+		events = append(events, map[string]any{
+			"name":          test.name,
+			"error_message": message,
+		})
+	}
+	return map[string]any{"contract": "llm-remote-chat-context", "events": events}, nil
 }
 
 func runLLMChatContext(input json.RawMessage) (any, error) {

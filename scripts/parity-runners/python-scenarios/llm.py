@@ -448,21 +448,48 @@ def llm_api_errors(input_data: Any) -> dict[str, Any]:
 
 def llm_remote_chat_context(input_data: Any) -> dict[str, Any]:
     action = input_data.get("action", "order")
-    if action != "order":
-        raise ValueError(f"unsupported remote chat context action {action!r}")
-
     context_class = load_reference_remote_chat_context_class()
     context = context_class()
+
+    def message(item_id: str, role: str = "user", text: str = "") -> RemoteScenarioMessage:
+        return RemoteScenarioMessage(id=item_id, role=role, content=[text])
+
+    if action == "errors":
+        context.insert(None, message("first", text="first"))
+        events: list[dict[str, Any]] = []
+        for name, callback in [
+            ("duplicate", lambda: context.insert(None, message("first"))),
+            (
+                "missing_previous",
+                lambda: context.insert(
+                    "missing",
+                    message("second", role="assistant"),
+                ),
+            ),
+            ("missing_delete", lambda: context.delete("missing")),
+        ]:
+            error_message = ""
+            try:
+                callback()
+            except Exception as exc:
+                error_message = str(exc)
+            events.append({"name": name, "error_message": error_message})
+        return {"contract": "llm-remote-chat-context", "events": events}
+
+    if action != "order":
+        raise ValueError(f"unsupported remote chat context action {action!r}")
 
     for operation in input_data.get("operations", []):
         op = operation.get("op")
         if op == "insert":
-            message = RemoteScenarioMessage(
-                id=str(operation.get("id", "")),
-                role=str(operation.get("role", "")),
-                content=[str(operation.get("text", ""))],
+            context.insert(
+                operation.get("previous_item_id"),
+                message(
+                    str(operation.get("id", "")),
+                    role=str(operation.get("role", "")),
+                    text=str(operation.get("text", "")),
+                ),
             )
-            context.insert(operation.get("previous_item_id"), message)
             continue
         if op == "delete":
             context.delete(str(operation.get("id", "")))
