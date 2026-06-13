@@ -187,6 +187,18 @@ func NewErrorEvent(err error, source any) *ErrorEvent {
 
 func (e *ErrorEvent) GetType() string { return "error" }
 
+func (e *ErrorEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":       e.GetType(),
+		"error":      errorReportValue(e.Error),
+		"source":     errorReportSourceValue(e.Source),
+		"created_at": timeToUnixSeconds(e.CreatedAt),
+	})
+}
+
 type SpeechCreatedEvent struct {
 	UserInitiated bool
 	Source        string // "say" or "generate_reply"
@@ -213,6 +225,18 @@ type CloseEvent struct {
 }
 
 func (e *CloseEvent) GetType() string { return "close" }
+
+func (e *CloseEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":       e.GetType(),
+		"reason":     e.Reason,
+		"error":      errorReportValue(e.Error),
+		"created_at": timeToUnixSeconds(e.CreatedAt),
+	})
+}
 
 type RunContext struct {
 	Session          *AgentSession

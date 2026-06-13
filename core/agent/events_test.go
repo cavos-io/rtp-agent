@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -435,6 +436,85 @@ func TestErrorEventIsTypedAndTimestamped(t *testing.T) {
 	}
 	if ev.CreatedAt.IsZero() || ev.CreatedAt.Before(before) {
 		t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
+	}
+}
+
+func TestErrorEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	createdAt := time.Unix(12, 250_000_000)
+	ev := &ErrorEvent{
+		Error:     llm.NewLLMError("openai.LLM", errors.New("failed"), false),
+		Source:    &reportMetadataLLM{model: "gpt-report", provider: "openai"},
+		CreatedAt: createdAt,
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal ErrorEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled ErrorEvent returned error: %v", err)
+	}
+	if payload["type"] != "error" {
+		t.Fatalf("type = %#v, want error", payload["type"])
+	}
+	errorData, ok := payload["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("error = %T %#v, want structured error payload", payload["error"], payload["error"])
+	}
+	if errorData["type"] != "llm_error" || errorData["label"] != "openai.LLM" || errorData["recoverable"] != false {
+		t.Fatalf("error = %#v, want reference LLMError payload", errorData)
+	}
+	if _, ok := errorData["err"]; ok {
+		t.Fatalf("error payload serialized internal err: %#v", errorData)
+	}
+	sourceData, ok := payload["source"].(map[string]any)
+	if !ok {
+		t.Fatalf("source = %T %#v, want structured source payload", payload["source"], payload["source"])
+	}
+	if sourceData["model"] != "gpt-report" || sourceData["provider"] != "openai" {
+		t.Fatalf("source = %#v, want model/provider metadata", sourceData)
+	}
+	if payload["created_at"] != 12.25 {
+		t.Fatalf("created_at = %#v, want 12.25", payload["created_at"])
+	}
+	if _, ok := payload["Error"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
+	}
+}
+
+func TestCloseEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	ev := &CloseEvent{
+		Reason:    CloseReasonError,
+		Error:     llm.NewLLMError("openai.LLM", errors.New("failed"), false),
+		CreatedAt: time.Unix(14, 500_000_000),
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal CloseEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled CloseEvent returned error: %v", err)
+	}
+	if payload["type"] != "close" {
+		t.Fatalf("type = %#v, want close", payload["type"])
+	}
+	if payload["reason"] != string(CloseReasonError) {
+		t.Fatalf("reason = %#v, want error", payload["reason"])
+	}
+	errorData, ok := payload["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("error = %T %#v, want structured error payload", payload["error"], payload["error"])
+	}
+	if errorData["type"] != "llm_error" || errorData["label"] != "openai.LLM" {
+		t.Fatalf("error = %#v, want reference LLMError payload", errorData)
+	}
+	if payload["created_at"] != 14.5 {
+		t.Fatalf("created_at = %#v, want 14.5", payload["created_at"])
 	}
 }
 
