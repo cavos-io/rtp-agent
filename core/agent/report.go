@@ -292,6 +292,13 @@ func optionalTimeToUnixSeconds(t *time.Time) any {
 	return timeToUnixSeconds(*t)
 }
 
+func optionalStringValue(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
 func audioRecordingPathToDict(value *string) any {
 	if value == nil {
 		return nil
