@@ -464,6 +464,27 @@ func runLLMStrictSchema(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "pointer_map_value_schema":
+		type request struct {
+			Metadata *map[string]int `json:"metadata,omitempty"`
+		}
+		schema := lkllm.GenerateStrictJSONSchema(reflect.TypeOf(request{}))
+		props, _ := schema["properties"].(map[string]interface{})
+		metadata, _ := props["metadata"].(map[string]interface{})
+		_, hasDefault := metadata["default"]
+		return map[string]any{
+			"contract": "llm-strict-schema",
+			"events": []map[string]any{
+				{
+					"name":                           "pointer_map_value_schema",
+					"root_additional_properties":     schema["additionalProperties"],
+					"required":                       schema["required"],
+					"metadata_type":                  metadata["type"],
+					"metadata_has_default":           hasDefault,
+					"metadata_additional_properties": metadata["additionalProperties"],
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported strict schema action %q", payload.Action)
 	}

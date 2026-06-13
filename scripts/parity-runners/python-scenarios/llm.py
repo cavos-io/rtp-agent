@@ -564,6 +564,35 @@ def llm_strict_schema(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "pointer_map_value_schema":
+        schema = {
+            "type": "object",
+            "properties": {
+                "metadata": {
+                    "type": ["object", "null"],
+                    "default": None,
+                    "additionalProperties": {"type": "integer"},
+                }
+            },
+        }
+        strict = copy.deepcopy(schema)
+        strict = normalizer(strict, path=(), root=strict)
+        metadata = strict["properties"]["metadata"]
+        return {
+            "contract": "llm-strict-schema",
+            "events": [
+                {
+                    "name": "pointer_map_value_schema",
+                    "root_additional_properties": strict.get("additionalProperties"),
+                    "required": strict.get("required"),
+                    "metadata_type": metadata.get("type"),
+                    "metadata_has_default": "default" in metadata,
+                    "metadata_additional_properties": metadata.get(
+                        "additionalProperties"
+                    ),
+                }
+            ],
+        }
     raise ValueError(f"unsupported strict schema action {action!r}")
 
 
