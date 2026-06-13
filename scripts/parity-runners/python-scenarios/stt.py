@@ -113,6 +113,36 @@ def stt_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "timed_string_required_text":
+        types_module = load_reference_types()
+        missing_required = False
+        try:
+            types_module.TimedString()
+        except TypeError as exc:
+            missing_required = "text" in str(exc)
+        timed = types_module.TimedString("hello")
+        return {
+            "contract": "stt-timed-string-required-text",
+            "events": [
+                {
+                    "name": "timed_string_required_text",
+                    "missing_required": missing_required,
+                    "text": str(timed),
+                    "start_time_default": 0
+                    if timed.start_time is types_module.NOT_GIVEN
+                    else timed.start_time,
+                    "end_time_default": 0
+                    if timed.end_time is types_module.NOT_GIVEN
+                    else timed.end_time,
+                    "confidence_default": 0
+                    if timed.confidence is types_module.NOT_GIVEN
+                    else timed.confidence,
+                    "start_time_offset_default": 0
+                    if timed.start_time_offset is types_module.NOT_GIVEN
+                    else timed.start_time_offset,
+                }
+            ],
+        }
     if action == "timed_string_json":
         timed = load_reference_types().TimedString(
             "hello",

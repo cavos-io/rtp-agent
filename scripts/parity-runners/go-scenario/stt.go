@@ -132,6 +132,27 @@ func runSTTValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "timed_string_required_text":
+		var missing lkstt.TimedString
+		err := json.Unmarshal([]byte(`{"start_time":0.25}`), &missing)
+		var timed lkstt.TimedString
+		if unmarshalErr := json.Unmarshal([]byte(`{"text":"hello"}`), &timed); unmarshalErr != nil {
+			return nil, unmarshalErr
+		}
+		return map[string]any{
+			"contract": "stt-timed-string-required-text",
+			"events": []map[string]any{
+				{
+					"name":                      "timed_string_required_text",
+					"missing_required":          err != nil && strings.Contains(err.Error(), "text"),
+					"text":                      timed.Text,
+					"start_time_default":        timed.StartTime,
+					"end_time_default":          timed.EndTime,
+					"confidence_default":        timed.Confidence,
+					"start_time_offset_default": timed.StartTimeOffset,
+				},
+			},
+		}, nil
 	case "timed_string_json":
 		data, marshalErr := json.Marshal(lkstt.TimedString{
 			Text:            "hello",
