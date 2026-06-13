@@ -1386,14 +1386,14 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 				logger.Logger.Warnw("dropping OpenAI realtime function call for full stream", nil, "item_id", itemID)
 			}
 		}
+	case "response.output_text.delta", "response.text.delta":
+		itemID, _ := ev["item_id"].(string)
+		delta, _ := ev["delta"].(string)
+		s.trackRealtimeOutputTranscript(itemID, delta)
 	case "response.output_audio_transcript.delta", "response.audio_transcript.delta":
 		itemID, _ := ev["item_id"].(string)
 		delta, _ := ev["delta"].(string)
-		if s.generation != nil && itemID != "" {
-			if msg := s.generation.messages[itemID]; msg != nil {
-				msg.transcript += delta
-			}
-		}
+		s.trackRealtimeOutputTranscript(itemID, delta)
 	case "response.done":
 		hadGeneration := s.generation != nil
 		response, _ := ev["response"].(map[string]any)
@@ -1433,6 +1433,15 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 		}, true
 	}
 	return llm.RealtimeEvent{}, false
+}
+
+func (s *realtimeSession) trackRealtimeOutputTranscript(itemID, delta string) {
+	if s.generation == nil || itemID == "" {
+		return
+	}
+	if msg := s.generation.messages[itemID]; msg != nil {
+		msg.transcript += delta
+	}
 }
 
 func (s *realtimeSession) persistRealtimeAudioTranscripts() {
