@@ -3053,6 +3053,17 @@ func runLLMValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "realtime_session_options_tracing":
+		options := lkllm.RealtimeSessionOptions{Tracing: map[string]any{"workflow_name": "checkout"}}
+		return map[string]any{
+			"contract": "llm-value-objects",
+			"events": []map[string]any{
+				{
+					"name":    "realtime_session_options_tracing",
+					"tracing": options.Tracing,
+				},
+			},
+		}, nil
 	case "realtime_generate_reply_options":
 		options := lkllm.RealtimeGenerateReplyOptions{
 			Instructions: "answer briefly",
