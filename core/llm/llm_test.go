@@ -308,6 +308,18 @@ func TestAPIStatusErrorStringIncludesReferenceMetadata(t *testing.T) {
 	}
 }
 
+func TestAPIStatusErrorStringFormatsNestedBodyLikeReference(t *testing.T) {
+	err := NewAPIStatusError("quota exceeded", 429, "req_123", map[string]any{
+		"errors": []any{"rate", "quota"},
+		"meta":   map[string]any{"retry": false},
+	})
+
+	want := "message='quota exceeded', status_code=429, retryable=True, request_id=req_123, body={'errors': ['rate', 'quota'], 'meta': {'retry': False}}"
+	if got := err.Error(); got != want {
+		t.Fatalf("Error() = %q, want %q", got, want)
+	}
+}
+
 func TestCreateAPIErrorFromHTTPFormatsReferenceMessage(t *testing.T) {
 	err := CreateAPIErrorFromHTTP("quota exceeded", 429, "req_123", map[string]any{"type": "rate_limit"})
 

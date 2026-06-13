@@ -827,6 +827,29 @@ func pyRepr(value any) string {
 		}
 		return "{" + strings.Join(parts, ", ") + "}"
 	default:
+		rv := reflect.ValueOf(value)
+		switch rv.Kind() {
+		case reflect.Slice, reflect.Array:
+			parts := make([]string, 0, rv.Len())
+			for i := 0; i < rv.Len(); i++ {
+				parts = append(parts, pyRepr(rv.Index(i).Interface()))
+			}
+			return "[" + strings.Join(parts, ", ") + "]"
+		case reflect.Map:
+			if rv.Type().Key().Kind() == reflect.String {
+				keys := make([]string, 0, rv.Len())
+				iter := rv.MapRange()
+				for iter.Next() {
+					keys = append(keys, iter.Key().String())
+				}
+				sort.Strings(keys)
+				parts := make([]string, 0, len(keys))
+				for _, key := range keys {
+					parts = append(parts, fmt.Sprintf("%s: %s", pyRepr(key), pyRepr(rv.MapIndex(reflect.ValueOf(key)).Interface())))
+				}
+				return "{" + strings.Join(parts, ", ") + "}"
+			}
+		}
 		return fmt.Sprintf("%v", value)
 	}
 }

@@ -173,6 +173,24 @@ func runLLMAPIErrors(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "status_string_nested_body":
+		err := lkllm.NewAPIStatusError("quota exceeded", 429, "req_123", map[string]any{
+			"errors": []any{"rate", "quota"},
+			"meta":   map[string]any{"retry": false},
+		})
+		return map[string]any{
+			"contract": "llm-api-errors",
+			"events": []map[string]any{
+				{
+					"name":       "status_string_nested_body",
+					"error":      err.Error(),
+					"message":    err.Message,
+					"status":     err.StatusCode,
+					"request_id": err.RequestID,
+					"retryable":  err.Retryable,
+				},
+			},
+		}, nil
 	case "base_error":
 		err := lkllm.NewAPIError("provider failed", map[string]any{"code": "overloaded"}, true)
 		body, _ := err.Body.(map[string]any)
