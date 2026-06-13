@@ -2453,6 +2453,26 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             if data.get("items") is None:
                 variables[step["assign"]] = "items_list_required"
                 return
+            for item in data.get("items", []):
+                item_type = str(item.get("type", "message"))
+                if item_type == "message" and (
+                    "role" not in item or ("content" not in item and "text" not in item)
+                ):
+                    variables[step["assign"]] = "invalid_items"
+                    return
+                if item_type == "function_call" and not all(
+                    key in item for key in ("call_id", "name", "arguments")
+                ):
+                    variables[step["assign"]] = "invalid_items"
+                    return
+                if item_type == "function_call_output" and not all(
+                    key in item for key in ("call_id", "output", "is_error")
+                ):
+                    variables[step["assign"]] = "invalid_items"
+                    return
+                if item_type == "agent_handoff" and "new_agent_id" not in item:
+                    variables[step["assign"]] = "invalid_items"
+                    return
             try:
                 target_items[:] = build_declarative_items(data["items"])
             except Exception:
