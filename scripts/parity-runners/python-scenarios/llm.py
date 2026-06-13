@@ -1,5 +1,6 @@
 import ast
 import base64
+import copy
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Literal
@@ -127,6 +128,25 @@ def load_reference_remote_chat_context_class():
     }
     exec(compile(module, str(path), "exec"), namespace)
     return namespace["RemoteChatContext"]
+
+
+def load_reference_strict_schema_normalizer():
+    path = repo_root() / "refs/agents/livekit-agents/livekit/agents/llm/_strict.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    body = [
+        node
+        for node in tree.body
+        if not (isinstance(node, ast.ImportFrom) and node.module == "pydantic")
+    ]
+    module = ast.Module(body=body, type_ignores=[])
+    ast.fix_missing_locations(module)
+    namespace = {
+        "Any": Any,
+        "BaseModel": object,
+        "TypeAdapter": object,
+    }
+    exec(compile(module, str(path), "exec"), namespace)
+    return namespace["_ensure_strict_json_schema"]
 
 
 def load_reference_completion_usage():
@@ -512,6 +532,39 @@ def llm_remote_chat_context(input_data: Any) -> dict[str, Any]:
             }
         ],
     }
+
+
+def llm_strict_schema(input_data: Any) -> dict[str, Any]:
+    action = input_data.get("action", "map_value_schema")
+    normalizer = load_reference_strict_schema_normalizer()
+    if action == "map_value_schema":
+        schema = {
+            "type": "object",
+            "properties": {
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                }
+            },
+        }
+        strict = copy.deepcopy(schema)
+        strict = normalizer(strict, path=(), root=strict)
+        metadata = strict["properties"]["metadata"]
+        return {
+            "contract": "llm-strict-schema",
+            "events": [
+                {
+                    "name": "map_value_schema",
+                    "root_additional_properties": strict.get("additionalProperties"),
+                    "required": strict.get("required"),
+                    "metadata_type": metadata.get("type"),
+                    "metadata_additional_properties": metadata.get(
+                        "additionalProperties"
+                    ),
+                }
+            ],
+        }
+    raise ValueError(f"unsupported strict schema action {action!r}")
 
 
 def llm_value_objects(input_data: Any) -> dict[str, Any]:

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"strings"
 	"time"
 
@@ -431,6 +432,41 @@ func runLLMRemoteChatContextErrors() (any, error) {
 		})
 	}
 	return map[string]any{"contract": "llm-remote-chat-context", "events": events}, nil
+}
+
+func runLLMStrictSchema(input json.RawMessage) (any, error) {
+	var payload struct {
+		Action string `json:"action"`
+	}
+	if err := json.Unmarshal(input, &payload); err != nil {
+		return nil, err
+	}
+	if payload.Action == "" {
+		payload.Action = "map_value_schema"
+	}
+	switch payload.Action {
+	case "map_value_schema":
+		type request struct {
+			Metadata map[string]string `json:"metadata"`
+		}
+		schema := lkllm.GenerateStrictJSONSchema(reflect.TypeOf(request{}))
+		props, _ := schema["properties"].(map[string]interface{})
+		metadata, _ := props["metadata"].(map[string]interface{})
+		return map[string]any{
+			"contract": "llm-strict-schema",
+			"events": []map[string]any{
+				{
+					"name":                           "map_value_schema",
+					"root_additional_properties":     schema["additionalProperties"],
+					"required":                       schema["required"],
+					"metadata_type":                  metadata["type"],
+					"metadata_additional_properties": metadata["additionalProperties"],
+				},
+			},
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported strict schema action %q", payload.Action)
+	}
 }
 
 func runLLMChatContext(input json.RawMessage) (any, error) {
