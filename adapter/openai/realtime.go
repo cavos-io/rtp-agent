@@ -243,6 +243,7 @@ type realtimeMessageGeneration struct {
 	modalitiesCh  chan []string
 	modalities    []string
 	transcript    string
+	audioClosed   bool
 	streamsClosed bool
 }
 
@@ -1345,6 +1346,11 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 			audioCh:      make(chan *model.AudioFrame, 100),
 			modalitiesCh: make(chan []string, 1),
 		}
+		if s.model != nil && !s.model.Capabilities().AudioOutput {
+			msg.modalities = []string{"text"}
+			msg.modalitiesCh <- msg.modalities
+			s.closeRealtimeMessageAudioStream(msg)
+		}
 		s.generation.messages[itemID] = msg
 		message := llm.MessageGeneration{
 			MessageID:    itemID,
@@ -1603,8 +1609,16 @@ func (s *realtimeSession) closeRealtimeMessageStreams(msg *realtimeMessageGenera
 		return
 	}
 	close(msg.textCh)
-	close(msg.audioCh)
+	s.closeRealtimeMessageAudioStream(msg)
 	msg.streamsClosed = true
+}
+
+func (s *realtimeSession) closeRealtimeMessageAudioStream(msg *realtimeMessageGeneration) {
+	if msg == nil || msg.audioClosed {
+		return
+	}
+	close(msg.audioCh)
+	msg.audioClosed = true
 }
 
 func (s *realtimeSession) trackRealtimeRemoteItemAdded(ev llm.RealtimeEvent) {

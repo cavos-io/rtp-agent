@@ -1659,6 +1659,53 @@ func TestRealtimeSessionRoutesOutputMessageTextDeltasToGenerationStream(t *testi
 	}
 }
 
+func TestRealtimeSessionTextOnlyOutputMessageClosesAudioStream(t *testing.T) {
+	session := &realtimeSession{
+		model: NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeModalities([]string{"text"})),
+	}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{
+			ResponseID: "resp_123",
+		},
+	})
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+		},
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
+	}
+
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	select {
+	case _, ok := <-msg.AudioCh:
+		if ok {
+			t.Fatal("AudioCh open for text-only realtime model, want closed")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for text-only audio stream close")
+	}
+
+	select {
+	case modalities := <-msg.ModalitiesCh:
+		if len(modalities) != 1 || modalities[0] != "text" {
+			t.Fatalf("modalities = %#v, want text", modalities)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for text-only modalities")
+	}
+}
+
 func TestRealtimeSessionRoutesOutputMessageWithEmptyID(t *testing.T) {
 	session := &realtimeSession{}
 	created := session.trackRealtimeEvent(llm.RealtimeEvent{
