@@ -310,6 +310,17 @@ func TestSpeechEventUnmarshalJSONDefaultsAlternativesToEmptyList(t *testing.T) {
 	}
 }
 
+func TestSpeechEventUnmarshalJSONRejectsMissingType(t *testing.T) {
+	var event SpeechEvent
+	err := json.Unmarshal([]byte(`{"request_id":"req-1"}`), &event)
+	if err == nil {
+		t.Fatal("Unmarshal SpeechEvent returned nil error, want missing type error")
+	}
+	if !strings.Contains(err.Error(), "type") {
+		t.Fatalf("error = %v, want it to mention type", err)
+	}
+}
+
 func TestSTTCapabilitiesMarshalJSONMatchesReferenceFieldNames(t *testing.T) {
 	data, err := json.Marshal(STTCapabilities{
 		Streaming:         true,

@@ -187,6 +187,14 @@ func (e SpeechEvent) MarshalJSON() ([]byte, error) {
 }
 
 func (e *SpeechEvent) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if _, ok := fields["type"]; !ok {
+		return fmt.Errorf("speech event type is required")
+	}
+
 	type speechEventPayload SpeechEvent
 	var payload speechEventPayload
 	if err := json.Unmarshal(data, &payload); err != nil {
