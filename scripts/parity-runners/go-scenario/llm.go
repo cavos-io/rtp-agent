@@ -1380,6 +1380,13 @@ func runLLMChatContextCallStep(state *llmScenarioState, step llmScenarioStepSpec
 			return fmt.Errorf("is_equivalent other %q is %T, want *llm.ChatContext", otherName, state.objects[otherName])
 		}
 		state.vars[step.Assign] = ctx.IsEquivalent(other)
+	case "function_call_item_to_message":
+		item := ctx.GetByID(id)
+		if item == nil {
+			state.vars[step.Assign] = nil
+			return nil
+		}
+		state.vars[step.Assign] = lkllm.FunctionCallItemToMessage(item)
 	case "tool_names":
 		tools, err := buildLLMScenarioTools(step.Args)
 		if err != nil {
@@ -1720,6 +1727,12 @@ func transformLLMScenarioField(state *llmScenarioState, value any, transform str
 			return nil, fmt.Errorf("value %T cannot use message_text_content", value)
 		}
 		return message.TextContent(), nil
+	case "message_extra":
+		message, ok := value.(*lkllm.ChatMessage)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use message_extra", value)
+		}
+		return message.Extra, nil
 	case "item_created_at_set":
 		item, ok := value.(lkllm.ChatItem)
 		if !ok {

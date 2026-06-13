@@ -2293,6 +2293,48 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                     return False
         return True
 
+    def xml_string(tag_name: str, content: str | None = None, attrs: dict[str, Any] | None = None) -> str:
+        attrs_str = " ".join([f'{key}="{value}"' for key, value in (attrs or {}).items()])
+        open_tag = f"{tag_name} {attrs_str}" if attrs_str else tag_name
+        if content:
+            return "\n".join([f"<{open_tag}>", content, f"</{tag_name}>"])
+        return f"<{open_tag} />"
+
+    def function_call_item_to_message(item: dict[str, Any]) -> dict[str, Any]:
+        item_type = item.get("type")
+        if item_type == "function_call":
+            return message(
+                "",
+                "user",
+                [
+                    xml_string(
+                        "function_call",
+                        str(item.get("arguments", "")),
+                        {"name": item.get("name", ""), "call_id": item.get("call_id", "")},
+                    )
+                ],
+                created_at=float(item.get("created_at", 0.0)),
+                extra={"is_function_call": True},
+            )
+        if item_type == "function_call_output":
+            output = str(item.get("output", ""))
+            if bool(item.get("is_error")):
+                output = xml_string("error", output)
+            return message(
+                "",
+                "assistant",
+                [
+                    xml_string(
+                        "function_call_output",
+                        output,
+                        {"call_id": item.get("call_id", ""), "name": item.get("name", "")},
+                    )
+                ],
+                created_at=float(item.get("created_at", 0.0)),
+                extra={"is_function_call_output": True},
+            )
+        raise ValueError(f"unsupported function call item type {item_type!r}")
+
     def declarative_item_id(item: dict[str, Any]) -> str:
         return str(item["id"]) if "id" in item else generated_id()
 
@@ -2454,6 +2496,16 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         if op == "is_equivalent":
             other = objects[str(step.get("args", {}).get("other", ""))]
             variables[step["assign"]] = contexts_equivalent(target_items, other)
+            return
+        if op == "function_call_item_to_message":
+            item = next(
+                (candidate for candidate in target_items if candidate.get("id") == item_id),
+                None,
+            )
+            if item is None:
+                variables[step["assign"]] = None
+                return
+            variables[step["assign"]] = function_call_item_to_message(item)
             return
         if op == "tool_names":
             variables[step["assign"]] = build_declarative_tool_names(
@@ -2748,6 +2800,8 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             return value["role"]
         if transform == "message_text_content":
             return text_content(value["content"])
+        if transform == "message_extra":
+            return value.get("extra", {})
         if transform == "item_created_at_set":
             return has_created_at(value)
         if transform == "dict_item_created_at_values":
