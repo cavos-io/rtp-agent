@@ -1669,6 +1669,73 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 content.append({"text": json.dumps(part)})
         return content
 
+    def aws_system_messages(items: list[dict[str, Any]]) -> list[str]:
+        return [
+            text_content(item["content"]) or ""
+            for item in items
+            if item["type"] == "message"
+            and item["role"] == "system"
+            and (text_content(item["content"]) or "")
+        ]
+
+    def aws_messages(
+        items: list[dict[str, Any]],
+        *,
+        inject_dummy_user_message: bool,
+    ) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = []
+        current_role: str | None = None
+        content: list[dict[str, Any]] = []
+
+        def flush() -> None:
+            nonlocal content, current_role
+            if current_role is not None and content:
+                messages.append({"role": current_role, "content": content})
+                content = []
+
+        for item in items:
+            if item["type"] == "message" and item["role"] == "system":
+                continue
+            if item["type"] == "message":
+                role = "assistant" if item["role"] == "assistant" else "user"
+                if role != current_role:
+                    flush()
+                    current_role = role
+                content.extend(aws_content_parts(item["content"]))
+                continue
+            if item["type"] == "function_call":
+                args = json.loads(item.get("arguments") or "{}")
+                if current_role != "assistant":
+                    flush()
+                    current_role = "assistant"
+                content.append(
+                    {
+                        "toolUse": {
+                            "toolUseId": item["call_id"],
+                            "name": item["name"],
+                            "input": args,
+                        }
+                    }
+                )
+                continue
+            if item["type"] == "function_call_output":
+                if current_role != "user":
+                    flush()
+                    current_role = "user"
+                content.append(
+                    {
+                        "toolResult": {
+                            "toolUseId": item["call_id"],
+                            "content": [{"text": item["output"]}],
+                            "status": "success",
+                        }
+                    }
+                )
+        flush()
+        if inject_dummy_user_message and (not messages or messages[0]["role"] != "user"):
+            messages.insert(0, {"role": "user", "content": [{"text": "(empty)"}]})
+        return messages
+
     def mistral_image_url(part: dict[str, Any]) -> str:
         image = str(part.get("image", ""))
         match = re.match(r"^data:([^;,]+);base64,(.*)$", image)
@@ -1867,6 +1934,8 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 inject_dummy_user_message=inject_dummy_user_message,
                 inject_trailing_user_message=inject_trailing_user_message,
             )
+        if provider_format == "aws":
+            return aws_messages(items, inject_dummy_user_message=inject_dummy_user_message)
         if provider_format == "mistralai":
             entries: list[dict[str, Any]] = []
             for item in items:
@@ -2031,6 +2100,8 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             }
         if provider_format == "anthropic":
             extra = {"system_messages": anthropic_system_messages(items)}
+        if provider_format == "aws":
+            extra = {"system_messages": aws_system_messages(items)}
         if provider_format == "mistralai":
             extra = {"instructions": mistral_instructions(items)}
         return {"messages": messages, "extra": extra}
