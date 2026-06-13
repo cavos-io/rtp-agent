@@ -165,6 +165,26 @@ func TestChatContextAppendAssignsReferenceItemDefaults(t *testing.T) {
 	}
 }
 
+func TestChatContextAppendAssignsReferenceMessageMetadataDefaults(t *testing.T) {
+	ctx := NewChatContext()
+	message := &ChatMessage{Role: ChatRoleUser, Content: []ChatContent{{Text: "hello"}}}
+
+	ctx.Append(message)
+
+	if message.Extra == nil {
+		t.Fatal("ChatMessage.Extra after Append = nil, want empty map")
+	}
+	if len(message.Extra) != 0 {
+		t.Fatalf("ChatMessage.Extra after Append = %#v, want empty map", message.Extra)
+	}
+	if message.Metrics == nil {
+		t.Fatal("ChatMessage.Metrics after Append = nil, want empty map")
+	}
+	if len(message.Metrics) != 0 {
+		t.Fatalf("ChatMessage.Metrics after Append = %#v, want empty map", message.Metrics)
+	}
+}
+
 func TestChatContextUpsertAssignsReferenceConfigUpdateDefaults(t *testing.T) {
 	ctx := NewChatContext()
 	config := &AgentConfigUpdate{}
@@ -264,6 +284,25 @@ func TestChatContextGetToolNamesRecursesNestedToolsets(t *testing.T) {
 
 	if got, want := strings.Join(names, ","), "lookup"; got != want {
 		t.Fatalf("GetToolNames() = %q, want recursive nested tool names %q", got, want)
+	}
+}
+
+func TestChatContextMessagesReturnsReferenceEmptyList(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&FunctionCall{ID: "call", Name: "lookup"},
+		&FunctionCallOutput{ID: "output", Name: "lookup"},
+		&AgentHandoff{ID: "handoff", NewAgentID: "next"},
+		&AgentConfigUpdate{ID: "config"},
+	}
+
+	messages := ctx.Messages()
+
+	if messages == nil {
+		t.Fatal("Messages() = nil, want empty slice")
+	}
+	if len(messages) != 0 {
+		t.Fatalf("len(Messages()) = %d, want 0", len(messages))
 	}
 }
 
@@ -1950,6 +1989,135 @@ func TestChatContextUnmarshalJSONRejectsFunctionCallMissingName(t *testing.T) {
 
 	if err := json.Unmarshal(data, &ctx); err == nil {
 		t.Fatal("Unmarshal ChatContext error = nil, want missing function_call name error")
+	}
+}
+
+func TestChatContextUnmarshalJSONRejectsFunctionCallMissingArguments(t *testing.T) {
+	var ctx ChatContext
+	data := []byte(`{
+		"items": [{
+			"id": "call",
+			"type": "function_call",
+			"call_id": "call_lookup",
+			"name": "lookup"
+		}]
+	}`)
+
+	if err := json.Unmarshal(data, &ctx); err == nil {
+		t.Fatal("Unmarshal ChatContext error = nil, want missing function_call arguments error")
+	}
+}
+
+func TestChatContextUnmarshalJSONRejectsFunctionCallOutputMissingCallID(t *testing.T) {
+	var ctx ChatContext
+	data := []byte(`{
+		"items": [{
+			"id": "output",
+			"type": "function_call_output",
+			"name": "lookup",
+			"output": "ok",
+			"is_error": false
+		}]
+	}`)
+
+	if err := json.Unmarshal(data, &ctx); err == nil {
+		t.Fatal("Unmarshal ChatContext error = nil, want missing function_call_output call_id error")
+	}
+}
+
+func TestChatContextUnmarshalJSONRejectsFunctionCallOutputMissingOutput(t *testing.T) {
+	var ctx ChatContext
+	data := []byte(`{
+		"items": [{
+			"id": "output",
+			"type": "function_call_output",
+			"call_id": "call_lookup",
+			"name": "lookup",
+			"is_error": false
+		}]
+	}`)
+
+	if err := json.Unmarshal(data, &ctx); err == nil {
+		t.Fatal("Unmarshal ChatContext error = nil, want missing function_call_output output error")
+	}
+}
+
+func TestChatContextUnmarshalJSONRejectsFunctionCallOutputMissingIsError(t *testing.T) {
+	var ctx ChatContext
+	data := []byte(`{
+		"items": [{
+			"id": "output",
+			"type": "function_call_output",
+			"call_id": "call_lookup",
+			"name": "lookup",
+			"output": "ok"
+		}]
+	}`)
+
+	if err := json.Unmarshal(data, &ctx); err == nil {
+		t.Fatal("Unmarshal ChatContext error = nil, want missing function_call_output is_error error")
+	}
+}
+
+func TestChatContextUnmarshalJSONRejectsAgentHandoffMissingNewAgentID(t *testing.T) {
+	var ctx ChatContext
+	data := []byte(`{
+		"items": [{
+			"id": "handoff",
+			"type": "agent_handoff",
+			"old_agent_id": "previous"
+		}]
+	}`)
+
+	if err := json.Unmarshal(data, &ctx); err == nil {
+		t.Fatal("Unmarshal ChatContext error = nil, want missing agent_handoff new_agent_id error")
+	}
+}
+
+func TestChatContextUnmarshalJSONDefaultsFunctionCallExtra(t *testing.T) {
+	var ctx ChatContext
+	data := []byte(`{
+		"items": [{
+			"id": "call",
+			"type": "function_call",
+			"call_id": "call_lookup",
+			"name": "lookup",
+			"arguments": "{}"
+		}]
+	}`)
+
+	if err := json.Unmarshal(data, &ctx); err != nil {
+		t.Fatalf("Unmarshal ChatContext error = %v", err)
+	}
+	call := ctx.Items[0].(*FunctionCall)
+	if call.Extra == nil {
+		t.Fatal("FunctionCall.Extra = nil, want empty map")
+	}
+	if len(call.Extra) != 0 {
+		t.Fatalf("FunctionCall.Extra = %#v, want empty map", call.Extra)
+	}
+}
+
+func TestChatContextUnmarshalJSONDefaultsMessageExtra(t *testing.T) {
+	var ctx ChatContext
+	data := []byte(`{
+		"items": [{
+			"id": "message",
+			"type": "message",
+			"role": "user",
+			"content": ["hello"]
+		}]
+	}`)
+
+	if err := json.Unmarshal(data, &ctx); err != nil {
+		t.Fatalf("Unmarshal ChatContext error = %v", err)
+	}
+	msg := ctx.Items[0].(*ChatMessage)
+	if msg.Extra == nil {
+		t.Fatal("ChatMessage.Extra = nil, want empty map")
+	}
+	if len(msg.Extra) != 0 {
+		t.Fatalf("ChatMessage.Extra = %#v, want empty map", msg.Extra)
 	}
 }
 

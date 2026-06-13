@@ -81,6 +81,43 @@ func TestVADEventMarshalJSONMatchesReferencePayload(t *testing.T) {
 	}
 }
 
+func TestVADEventMarshalJSONDefaultsFramesToEmptyList(t *testing.T) {
+	data, err := json.Marshal(VADEvent{Type: VADEventInferenceDone})
+	if err != nil {
+		t.Fatalf("Marshal VADEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled VADEvent returned error: %v", err)
+	}
+	frames, ok := payload["frames"].([]any)
+	if !ok {
+		t.Fatalf("frames = %#v, want empty JSON array; payload %s", payload["frames"], data)
+	}
+	if len(frames) != 0 {
+		t.Fatalf("frames length = %d, want 0", len(frames))
+	}
+}
+
+func TestVADEventUnmarshalJSONDefaultsFramesToEmptyList(t *testing.T) {
+	var event VADEvent
+	data := []byte(`{"type":"inference_done","samples_index":320}`)
+
+	if err := json.Unmarshal(data, &event); err != nil {
+		t.Fatalf("Unmarshal VADEvent returned error: %v", err)
+	}
+	if event.Frames == nil {
+		t.Fatal("Frames = nil, want empty slice")
+	}
+	if len(event.Frames) != 0 {
+		t.Fatalf("Frames length = %d, want 0", len(event.Frames))
+	}
+	if event.Type != VADEventInferenceDone || event.SamplesIndex != 320 {
+		t.Fatalf("decoded event = %#v, want inference_done sample index 320", event)
+	}
+}
+
 func TestVADCapabilitiesMarshalJSONMatchesReferencePayload(t *testing.T) {
 	data, err := json.Marshal(VADCapabilities{UpdateInterval: 0.5})
 	if err != nil {

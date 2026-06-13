@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -193,6 +194,26 @@ func TestSpeechDataMarshalJSONMatchesReferenceOptionalSpeakerID(t *testing.T) {
 	}
 }
 
+func TestTimedStringUnmarshalJSONRequiresReferenceText(t *testing.T) {
+	var missing TimedString
+	if err := json.Unmarshal([]byte(`{"start_time":0.25}`), &missing); err == nil {
+		t.Fatal("Unmarshal TimedString returned nil error, want missing text error")
+	} else if !strings.Contains(err.Error(), "text") {
+		t.Fatalf("error = %v, want it to mention text", err)
+	}
+
+	var timed TimedString
+	if err := json.Unmarshal([]byte(`{"text":"hello"}`), &timed); err != nil {
+		t.Fatalf("Unmarshal TimedString with text returned error: %v", err)
+	}
+	if timed.Text != "hello" {
+		t.Fatalf("Text = %q, want hello", timed.Text)
+	}
+	if timed.StartTime != 0 || timed.EndTime != 0 || timed.Confidence != 0 || timed.StartTimeOffset != 0 {
+		t.Fatalf("optional timing fields = %#v, want zero defaults", timed)
+	}
+}
+
 func TestSpeechEventMarshalJSONDefaultsAlternativesToEmptyList(t *testing.T) {
 	data, err := json.Marshal(SpeechEvent{Type: SpeechEventEndOfSpeech})
 	if err != nil {
@@ -309,6 +330,44 @@ func TestSTTCapabilitiesUnmarshalJSONDefaultsOfflineRecognizeToTrue(t *testing.T
 	}
 	if !caps.OfflineRecognize {
 		t.Fatalf("OfflineRecognize = false, want reference default true")
+	}
+}
+
+func TestSTTCapabilitiesUnmarshalJSONRejectsMissingRequiredFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{
+			name: "streaming",
+			payload: `{
+				"interim_results": true,
+				"aligned_transcript": false
+			}`,
+			want: "streaming",
+		},
+		{
+			name: "interim_results",
+			payload: `{
+				"streaming": true,
+				"aligned_transcript": false
+			}`,
+			want: "interim_results",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var caps STTCapabilities
+			err := json.Unmarshal([]byte(tt.payload), &caps)
+			if err == nil {
+				t.Fatal("Unmarshal STTCapabilities returned nil error, want missing required field error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want it to mention %q", err, tt.want)
+			}
+		})
 	}
 }
 

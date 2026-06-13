@@ -104,6 +104,24 @@ func (s TimedString) MarshalJSON() ([]byte, error) {
 	})
 }
 
+func (s *TimedString) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if _, ok := fields["text"]; !ok {
+		return fmt.Errorf("timed string text is required")
+	}
+
+	type timedStringPayload TimedString
+	var payload timedStringPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	*s = TimedString(payload)
+	return nil
+}
+
 func optionalStringPointer(value string) *string {
 	if value == "" {
 		return nil
@@ -173,8 +191,8 @@ func (c STTCapabilities) MarshalJSON() ([]byte, error) {
 
 func (c *STTCapabilities) UnmarshalJSON(data []byte) error {
 	type sttCapabilitiesPayload struct {
-		Streaming         bool            `json:"streaming"`
-		InterimResults    bool            `json:"interim_results"`
+		Streaming         *bool           `json:"streaming"`
+		InterimResults    *bool           `json:"interim_results"`
 		Diarization       bool            `json:"diarization"`
 		AlignedTranscript json.RawMessage `json:"aligned_transcript"`
 		OfflineRecognize  *bool           `json:"offline_recognize"`
@@ -183,13 +201,19 @@ func (c *STTCapabilities) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return err
 	}
+	if payload.Streaming == nil {
+		return fmt.Errorf("stt capabilities streaming is required")
+	}
+	if payload.InterimResults == nil {
+		return fmt.Errorf("stt capabilities interim_results is required")
+	}
 
 	alignedTranscript, err := decodeAlignedTranscript(payload.AlignedTranscript)
 	if err != nil {
 		return err
 	}
-	c.Streaming = payload.Streaming
-	c.InterimResults = payload.InterimResults
+	c.Streaming = *payload.Streaming
+	c.InterimResults = *payload.InterimResults
 	c.Diarization = payload.Diarization
 	c.AlignedTranscript = alignedTranscript
 	c.OfflineRecognize = true

@@ -3,6 +3,7 @@ package tts
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 )
@@ -14,6 +15,27 @@ type SynthesizedAudio struct {
 	SegmentID       string            `json:"segment_id"`
 	DeltaText       string            `json:"delta_text"`
 	TimedTranscript []TimedString     `json:"timed_transcript,omitempty"`
+}
+
+func (a *SynthesizedAudio) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if _, ok := fields["frame"]; !ok {
+		return fmt.Errorf("synthesized audio frame is required")
+	}
+	if _, ok := fields["request_id"]; !ok {
+		return fmt.Errorf("synthesized audio request_id is required")
+	}
+
+	type synthesizedAudioPayload SynthesizedAudio
+	var payload synthesizedAudioPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	*a = SynthesizedAudio(payload)
+	return nil
 }
 
 type TimedString struct {
@@ -44,6 +66,24 @@ func (s TimedString) MarshalJSON() ([]byte, error) {
 	})
 }
 
+func (s *TimedString) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if _, ok := fields["text"]; !ok {
+		return fmt.Errorf("timed string text is required")
+	}
+
+	type timedStringPayload TimedString
+	var payload timedStringPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	*s = TimedString(payload)
+	return nil
+}
+
 func optionalStringPointer(value string) *string {
 	if value == "" {
 		return nil
@@ -54,6 +94,23 @@ func optionalStringPointer(value string) *string {
 type TTSCapabilities struct {
 	Streaming         bool `json:"streaming"`
 	AlignedTranscript bool `json:"aligned_transcript"`
+}
+
+func (c *TTSCapabilities) UnmarshalJSON(data []byte) error {
+	type ttsCapabilitiesPayload struct {
+		Streaming         *bool `json:"streaming"`
+		AlignedTranscript bool  `json:"aligned_transcript"`
+	}
+	var payload ttsCapabilitiesPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	if payload.Streaming == nil {
+		return fmt.Errorf("tts capabilities streaming is required")
+	}
+	c.Streaming = *payload.Streaming
+	c.AlignedTranscript = payload.AlignedTranscript
+	return nil
 }
 
 type TTS interface {

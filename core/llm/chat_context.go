@@ -168,6 +168,12 @@ func ensureChatItemDefaults(item ChatItem) {
 		if it.CreatedAt.IsZero() {
 			it.CreatedAt = now
 		}
+		if it.Extra == nil {
+			it.Extra = make(map[string]any)
+		}
+		if it.Metrics == nil {
+			it.Metrics = make(map[string]any)
+		}
 	case *FunctionCall:
 		it.ID = itemIDOrDefault(it.ID)
 		if it.CreatedAt.IsZero() {
@@ -281,7 +287,7 @@ func functionChatItemName(item ChatItem) string {
 }
 
 func (c *ChatContext) Messages() []*ChatMessage {
-	var msgs []*ChatMessage
+	msgs := make([]*ChatMessage, 0)
 	for _, item := range c.Items {
 		if msg, ok := item.(*ChatMessage); ok {
 			msgs = append(msgs, msg)
@@ -812,7 +818,7 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 			ID        string         `json:"id"`
 			CallID    *string        `json:"call_id"`
 			Name      *string        `json:"name"`
-			Arguments string         `json:"arguments"`
+			Arguments *string        `json:"arguments"`
 			Extra     map[string]any `json:"extra"`
 			GroupID   *string        `json:"group_id"`
 			CreatedAt *float64       `json:"created_at"`
@@ -826,49 +832,64 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 		if item.Name == nil {
 			return nil, fmt.Errorf("function_call name is required")
 		}
+		if item.Arguments == nil {
+			return nil, fmt.Errorf("function_call arguments is required")
+		}
 		return &FunctionCall{
 			ID:        itemIDOrDefault(item.ID),
 			CallID:    *item.CallID,
 			Name:      *item.Name,
-			Arguments: item.Arguments,
-			Extra:     item.Extra,
+			Arguments: *item.Arguments,
+			Extra:     nonNilMap(item.Extra),
 			GroupID:   item.GroupID,
 			CreatedAt: chatItemCreatedAtOrDefault(item.CreatedAt),
 		}, nil
 	case "function_call_output":
 		var item struct {
 			ID        string   `json:"id"`
-			CallID    string   `json:"call_id"`
+			CallID    *string  `json:"call_id"`
 			Name      string   `json:"name"`
-			Output    string   `json:"output"`
-			IsError   bool     `json:"is_error"`
+			Output    *string  `json:"output"`
+			IsError   *bool    `json:"is_error"`
 			CreatedAt *float64 `json:"created_at"`
 		}
 		if err := json.Unmarshal(data, &item); err != nil {
 			return nil, err
 		}
+		if item.CallID == nil {
+			return nil, fmt.Errorf("function_call_output call_id is required")
+		}
+		if item.Output == nil {
+			return nil, fmt.Errorf("function_call_output output is required")
+		}
+		if item.IsError == nil {
+			return nil, fmt.Errorf("function_call_output is_error is required")
+		}
 		return &FunctionCallOutput{
 			ID:        itemIDOrDefault(item.ID),
-			CallID:    item.CallID,
+			CallID:    *item.CallID,
 			Name:      item.Name,
-			Output:    item.Output,
-			IsError:   item.IsError,
+			Output:    *item.Output,
+			IsError:   *item.IsError,
 			CreatedAt: chatItemCreatedAtOrDefault(item.CreatedAt),
 		}, nil
 	case "agent_handoff":
 		var item struct {
 			ID         string   `json:"id"`
 			OldAgentID *string  `json:"old_agent_id"`
-			NewAgentID string   `json:"new_agent_id"`
+			NewAgentID *string  `json:"new_agent_id"`
 			CreatedAt  *float64 `json:"created_at"`
 		}
 		if err := json.Unmarshal(data, &item); err != nil {
 			return nil, err
 		}
+		if item.NewAgentID == nil {
+			return nil, fmt.Errorf("agent_handoff new_agent_id is required")
+		}
 		return &AgentHandoff{
 			ID:         itemIDOrDefault(item.ID),
 			OldAgentID: item.OldAgentID,
-			NewAgentID: item.NewAgentID,
+			NewAgentID: *item.NewAgentID,
 			CreatedAt:  chatItemCreatedAtOrDefault(item.CreatedAt),
 		}, nil
 	case "agent_config_update":
@@ -957,7 +978,7 @@ func chatMessageFromJSON(data []byte) (*ChatMessage, error) {
 		Content:              content,
 		Interrupted:          item.Interrupted,
 		TranscriptConfidence: item.TranscriptConfidence,
-		Extra:                item.Extra,
+		Extra:                nonNilMap(item.Extra),
 		Metrics:              nonNilMap(item.Metrics),
 		CreatedAt:            chatItemCreatedAtOrDefault(item.CreatedAt),
 	}, nil
