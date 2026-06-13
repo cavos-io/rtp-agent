@@ -261,7 +261,7 @@ func TestToolContextUpdateToolsRejectsNonComparableDuplicateName(t *testing.T) {
 	requireToolContextErrorString(t, "UpdateTools()", err, "duplicate function name: lookup")
 }
 
-func TestToolContextFlattenSortsFunctionToolsByName(t *testing.T) {
+func TestToolContextFlattenPreservesFunctionToolInsertionOrder(t *testing.T) {
 	ctx := EmptyToolContext()
 	if err := ctx.UpdateTools([]interface{}{
 		&testTool{id: "zeta", name: "zeta"},
@@ -276,8 +276,11 @@ func TestToolContextFlattenSortsFunctionToolsByName(t *testing.T) {
 	for _, tool := range flattened {
 		names = append(names, tool.Name())
 	}
+	if got := ctx.GetFunctionTool("alpha"); got == nil || got.Name() != "alpha" {
+		t.Fatalf("GetFunctionTool(alpha) = %#v, want alpha tool after preserving insertion order", got)
+	}
 
-	want := []string{"alpha", "middle", "zeta"}
+	want := []string{"zeta", "alpha", "middle"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("Flatten() names = %v, want %v", names, want)
 	}

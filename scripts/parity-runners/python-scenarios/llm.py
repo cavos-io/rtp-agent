@@ -1006,6 +1006,12 @@ def llm_tool_context(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "flatten_function_order":
+        ctx = module.ToolContext([fn_tool("zeta"), fn_tool("alpha"), fn_tool("middle")])
+        return {
+            "contract": "llm-tool-context",
+            "events": [summarize(ctx, "flatten_function_order")],
+        }
     if action == "close_toolsets":
         class ClosingToolset(module.Toolset):
             def __init__(self) -> None:

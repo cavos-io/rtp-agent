@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 	"time"
 
@@ -2617,10 +2616,6 @@ func runLLMToolContext(input json.RawMessage) (any, error) {
 	}
 	summary := func(ctx *lkllm.ToolContext, name string, extra map[string]any) map[string]any {
 		functionNames := make([]string, 0, len(ctx.FunctionTools()))
-		for name := range ctx.FunctionTools() {
-			functionNames = append(functionNames, name)
-		}
-		sort.Strings(functionNames)
 		providerNames := make([]string, 0, len(ctx.ProviderTools()))
 		for _, tool := range ctx.ProviderTools() {
 			providerNames = append(providerNames, tool.ID())
@@ -2628,6 +2623,9 @@ func runLLMToolContext(input json.RawMessage) (any, error) {
 		flattenNames := make([]string, 0, len(ctx.Flatten()))
 		for _, tool := range ctx.Flatten() {
 			flattenNames = append(flattenNames, tool.ID())
+			if _, ok := tool.(lkllm.ProviderTool); !ok {
+				functionNames = append(functionNames, tool.ID())
+			}
 		}
 		event := map[string]any{
 			"name":           name,
@@ -2735,6 +2733,16 @@ func runLLMToolContext(input json.RawMessage) (any, error) {
 			"events": []map[string]any{
 				{"name": "equal_identity", "same_identity_equal": left.Equal(right), "different_function_equal": left.Equal(other)},
 			},
+		}, nil
+	case "flatten_function_order":
+		ctx := lkllm.NewToolContext([]interface{}{
+			newTool("zeta", "zeta"),
+			newTool("alpha", "alpha"),
+			newTool("middle", "middle"),
+		})
+		return map[string]any{
+			"contract": "llm-tool-context",
+			"events":   []map[string]any{summary(ctx, "flatten_function_order", nil)},
 		}, nil
 	case "close_toolsets":
 		lookup := newTool("lookup", "lookup")
