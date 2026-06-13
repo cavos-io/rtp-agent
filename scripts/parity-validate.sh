@@ -550,7 +550,7 @@ run_symbol_report_case() {
     local out="$target_dir/${rel%.fixture}"
     mkdir -p "$(dirname "$out")"
     cp "$fixture" "$out"
-  done < <(find "$case_dir/target" -type f -name '*.go.fixture' -print0 | sort -z)
+  done < <(find "$case_dir/target" -type f -name '*.go.fixture' -print0 | LC_ALL=C sort -z)
 
   "$REPO_ROOT/scripts/parity-check.sh" \
     --source-dir "$source_dir" \
