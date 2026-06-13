@@ -1898,6 +1898,60 @@ func runLLMValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "function_tool_call_payload":
+		toolCall := lkllm.FunctionToolCall{
+			Type:      "function",
+			Name:      "lookup_weather",
+			Arguments: `{"city":"Paris"}`,
+			CallID:    "call_123",
+			Extra:     map[string]any{"provider": "openai"},
+		}
+		payload, err := functionToolCallPayload(toolCall)
+		if err != nil {
+			return nil, err
+		}
+		minimal, err := functionToolCallPayloadFromJSON([]byte(`{"name":"lookup_weather","arguments":"{}","call_id":"call_456"}`))
+		if err != nil {
+			return nil, err
+		}
+		requiredCases := []struct {
+			field   string
+			payload string
+		}{
+			{
+				field:   "name",
+				payload: `{"arguments":"{}","call_id":"call_123"}`,
+			},
+			{
+				field:   "arguments",
+				payload: `{"name":"lookup_weather","call_id":"call_123"}`,
+			},
+			{
+				field:   "call_id",
+				payload: `{"name":"lookup_weather","arguments":"{}"}`,
+			},
+		}
+		missingFields := make([]string, 0, len(requiredCases))
+		for _, test := range requiredCases {
+			var decoded lkllm.FunctionToolCall
+			if err := json.Unmarshal([]byte(test.payload), &decoded); err != nil {
+				missingFields = append(missingFields, test.field)
+			}
+		}
+		return map[string]any{
+			"contract": "llm-value-objects",
+			"events": []map[string]any{
+				{
+					"name":    "function_tool_call_payload",
+					"payload": payload,
+				},
+				{
+					"name":            "function_tool_call_required_fields",
+					"missing_fields":  missingFields,
+					"minimal_payload": minimal,
+				},
+			},
+		}, nil
 	case "realtime_error_payload":
 		underlying := errors.New("session disconnected")
 		err := lkllm.NewRealtimeModelError("openai.RealtimeModel", underlying, false)
@@ -2641,6 +2695,26 @@ func completionUsagePayloadFromJSON(data []byte) (map[string]any, error) {
 		return nil, err
 	}
 	return completionUsagePayload(usage)
+}
+
+func functionToolCallPayload(toolCall lkllm.FunctionToolCall) (map[string]any, error) {
+	data, err := json.Marshal(toolCall)
+	if err != nil {
+		return nil, err
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func functionToolCallPayloadFromJSON(data []byte) (map[string]any, error) {
+	var toolCall lkllm.FunctionToolCall
+	if err := json.Unmarshal(data, &toolCall); err != nil {
+		return nil, err
+	}
+	return functionToolCallPayload(toolCall)
 }
 
 type scenarioLLMToolset struct {

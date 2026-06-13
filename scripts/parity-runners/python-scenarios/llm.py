@@ -1,9 +1,10 @@
 import ast
+from typing import Literal
 
 from common import *  # noqa: F403
 
 
-def load_reference_completion_usage():
+def load_reference_llm_value_class(class_name: str):
     class BaseModel:
         def __init__(self, **kwargs: Any) -> None:
             annotations = getattr(self.__class__, "__annotations__", {})
@@ -30,17 +31,21 @@ def load_reference_completion_usage():
         (
             node
             for node in tree.body
-            if isinstance(node, ast.ClassDef) and node.name == "CompletionUsage"
+            if isinstance(node, ast.ClassDef) and node.name == class_name
         ),
         None,
     )
     if class_node is None:
-        raise RuntimeError(f"cannot find CompletionUsage in {path}")
+        raise RuntimeError(f"cannot find {class_name} in {path}")
     module = ast.Module(body=[class_node], type_ignores=[])
     ast.fix_missing_locations(module)
-    namespace = {"BaseModel": BaseModel}
+    namespace = {"Any": Any, "BaseModel": BaseModel, "Literal": Literal}
     exec(compile(module, str(path), "exec"), namespace)
-    return namespace["CompletionUsage"]
+    return namespace[class_name]
+
+
+def load_reference_completion_usage():
+    return load_reference_llm_value_class("CompletionUsage")
 
 def llm_api_connect_options(input_data: Any) -> dict[str, Any]:
     action = input_data.get("action", "defaults")
@@ -329,6 +334,53 @@ def llm_value_objects(input_data: Any) -> dict[str, Any]:
                 },
                 {
                     "name": "completion_usage_required_fields",
+                    "missing_fields": missing_fields,
+                    "minimal_payload": minimal.model_dump(),
+                },
+            ],
+        }
+    if action == "function_tool_call_payload":
+        function_tool_call = load_reference_llm_value_class("FunctionToolCall")
+        tool_call = function_tool_call(
+            name="lookup_weather",
+            arguments='{"city":"Paris"}',
+            call_id="call_123",
+            extra={"provider": "openai"},
+        )
+        minimal = function_tool_call(
+            name="lookup_weather",
+            arguments="{}",
+            call_id="call_456",
+        )
+        required_cases = [
+            (
+                "name",
+                {"arguments": "{}", "call_id": "call_123"},
+            ),
+            (
+                "arguments",
+                {"name": "lookup_weather", "call_id": "call_123"},
+            ),
+            (
+                "call_id",
+                {"name": "lookup_weather", "arguments": "{}"},
+            ),
+        ]
+        missing_fields = []
+        for field, kwargs in required_cases:
+            try:
+                function_tool_call(**kwargs)
+            except Exception:
+                missing_fields.append(field)
+        return {
+            "contract": "llm-value-objects",
+            "events": [
+                {
+                    "name": "function_tool_call_payload",
+                    "payload": tool_call.model_dump(),
+                },
+                {
+                    "name": "function_tool_call_required_fields",
                     "missing_fields": missing_fields,
                     "minimal_payload": minimal.model_dump(),
                 },

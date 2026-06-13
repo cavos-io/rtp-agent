@@ -466,6 +466,67 @@ type FunctionToolCall struct {
 	Extra     map[string]any
 }
 
+func (c FunctionToolCall) MarshalJSON() ([]byte, error) {
+	type payload struct {
+		Type      string         `json:"type"`
+		Name      string         `json:"name"`
+		Arguments string         `json:"arguments"`
+		CallID    string         `json:"call_id"`
+		Extra     map[string]any `json:"extra"`
+	}
+
+	callType := c.Type
+	if callType == "" {
+		callType = "function"
+	}
+
+	return json.Marshal(payload{
+		Type:      callType,
+		Name:      c.Name,
+		Arguments: c.Arguments,
+		CallID:    c.CallID,
+		Extra:     c.Extra,
+	})
+}
+
+func (c *FunctionToolCall) UnmarshalJSON(data []byte) error {
+	type payload struct {
+		Type      *string        `json:"type"`
+		Name      *string        `json:"name"`
+		Arguments *string        `json:"arguments"`
+		CallID    *string        `json:"call_id"`
+		Extra     map[string]any `json:"extra"`
+	}
+
+	var decoded payload
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if decoded.Name == nil {
+		return errors.New("function tool call name is required")
+	}
+	if decoded.Arguments == nil {
+		return errors.New("function tool call arguments is required")
+	}
+	if decoded.CallID == nil {
+		return errors.New("function tool call call_id is required")
+	}
+
+	c.ID = ""
+	c.Type = "function"
+	if decoded.Type != nil {
+		if *decoded.Type != "function" {
+			return fmt.Errorf("function tool call type = %q, want function", *decoded.Type)
+		}
+		c.Type = *decoded.Type
+	}
+	c.Name = *decoded.Name
+	c.Arguments = *decoded.Arguments
+	c.CallID = *decoded.CallID
+	c.Extra = decoded.Extra
+	return nil
+}
+
 type ChatChunk struct {
 	ID    string
 	Delta *ChoiceDelta
