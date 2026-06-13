@@ -177,6 +177,23 @@ def llm_api_connect_options(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "explicit_connect_options":
+        options = module.APIConnectOptions(
+            max_retry=1,
+            retry_interval=0.05,
+            timeout=1.0,
+        )
+        return {
+            "contract": "llm-api-connect-options",
+            "events": [
+                {
+                    "name": "explicit_connect_options",
+                    "max_retry": options.max_retry,
+                    "retry_interval_ms": int(options.retry_interval * 1000),
+                    "timeout_ms": int(options.timeout * 1000),
+                }
+            ],
+        }
     raise ValueError(f"unsupported api connect options action {action!r}")
 
 

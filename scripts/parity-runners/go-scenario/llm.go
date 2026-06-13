@@ -103,6 +103,28 @@ func runLLMAPIConnectOptions(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "explicit_connect_options":
+		connectOptions := lkllm.APIConnectOptions{
+			MaxRetry:      1,
+			RetryInterval: 50 * time.Millisecond,
+			Timeout:       time.Second,
+		}
+		options := &lkllm.ChatOptions{}
+		lkllm.WithConnectOptions(connectOptions)(options)
+		if options.ConnectOptions == nil {
+			return nil, errors.New("connect options were not stored")
+		}
+		return map[string]any{
+			"contract": "llm-api-connect-options",
+			"events": []map[string]any{
+				{
+					"name":              "explicit_connect_options",
+					"max_retry":         options.ConnectOptions.MaxRetry,
+					"retry_interval_ms": int(options.ConnectOptions.RetryInterval / time.Millisecond),
+					"timeout_ms":        int(options.ConnectOptions.Timeout / time.Millisecond),
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported api connect options action %q", payload.Action)
 	}
