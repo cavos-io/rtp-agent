@@ -1525,6 +1525,43 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         mime_type = str(part.get("mime_type") or "image/jpeg")
         return {"file_data": {"file_uri": image, "mime_type": mime_type}}
 
+    def anthropic_image_part(part: dict[str, Any]) -> dict[str, Any]:
+        image = str(part.get("image", ""))
+        match = re.match(r"^data:([^;,]+);base64,(.*)$", image)
+        if match:
+            base64.b64decode(match.group(2), validate=True)
+            return {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": match.group(1),
+                    "data": match.group(2),
+                },
+            }
+        return {
+            "type": "image",
+            "source": {
+                "type": "url",
+                "url": image,
+            },
+        }
+
+    def anthropic_content_parts(parts: list[Any]) -> list[dict[str, Any]]:
+        content: list[dict[str, Any]] = []
+        for part in parts:
+            if isinstance(part, str):
+                if part:
+                    content.append({"text": part, "type": "text"})
+                continue
+            if isinstance(part, dict) and part.get("type") == "image_content":
+                content.append(anthropic_image_part(part))
+                continue
+            if isinstance(part, dict) and part:
+                content.append({"text": json.dumps(part), "type": "text"})
+        if not content:
+            content.append({"text": "", "type": "text"})
+        return content
+
     def to_provider_format(
         items: list[dict[str, Any]],
         *,
@@ -1743,11 +1780,9 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             messages.append(
                 {
                     "role": "assistant" if item["role"] == "assistant" else "user",
-                    "content": [
-                        {"text": text_content(item["content"]) or "", "type": "text"}
-                        if provider_format == "anthropic"
-                        else {"text": text_content(item["content"]) or ""}
-                    ],
+                    "content": anthropic_content_parts(item["content"])
+                    if provider_format == "anthropic"
+                    else [{"text": text_content(item["content"]) or ""}],
                 }
             )
         if provider_format == "google":
