@@ -1,4 +1,43 @@
 from common import *  # noqa: F403
+from collections.abc import AsyncIterable
+
+def load_reference_text_transforms():
+    base = repo_root() / "refs/agents/livekit-agents/livekit/agents/voice/transcription"
+    voice_mod = sys.modules.get("livekit.agents.voice") or types.ModuleType("livekit.agents.voice")
+    transcription_mod = sys.modules.get("livekit.agents.voice.transcription") or types.ModuleType(
+        "livekit.agents.voice.transcription"
+    )
+    sys.modules["livekit.agents.voice"] = voice_mod
+    sys.modules["livekit.agents.voice.transcription"] = transcription_mod
+
+    filters_spec = importlib.util.spec_from_file_location(
+        "livekit.agents.voice.transcription.filters", base / "filters.py"
+    )
+    if filters_spec is None or filters_spec.loader is None:
+        raise RuntimeError("cannot load reference transcription filters.py")
+    filters_module = importlib.util.module_from_spec(filters_spec)
+    sys.modules["livekit.agents.voice.transcription.filters"] = filters_module
+    filters_spec.loader.exec_module(filters_module)
+
+    transforms_spec = importlib.util.spec_from_file_location(
+        "livekit.agents.voice.transcription.text_transforms",
+        base / "text_transforms.py",
+    )
+    if transforms_spec is None or transforms_spec.loader is None:
+        raise RuntimeError("cannot load reference transcription text_transforms.py")
+    transforms_module = importlib.util.module_from_spec(transforms_spec)
+    sys.modules["livekit.agents.voice.transcription.text_transforms"] = transforms_module
+    transforms_spec.loader.exec_module(transforms_module)
+    return transforms_module
+
+
+async def collect_text_transform_chunks(module: Any, chunks: list[str], transforms: list[str]) -> list[str]:
+    async def source() -> AsyncIterable[str]:
+        for chunk in chunks:
+            yield chunk
+
+    return [chunk async for chunk in module._apply_text_transforms(source(), transforms)]
+
 
 def tts_stream_adapter(input_data: Any) -> dict[str, Any]:
     action = input_data.get("action", "metadata")
@@ -238,6 +277,21 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                     "timestamp_positive": err.timestamp > 0,
                     "has_error_field": False,
                     "has_err_field": False,
+                }
+            ],
+        }
+    if action == "text_transform":
+        transform_module = load_reference_text_transforms()
+        chunks = [str(chunk) for chunk in input_data.get("chunks", [])]
+        transforms = [str(transform) for transform in input_data.get("transforms", ["filter_markdown"])]
+        output = asyncio.run(collect_text_transform_chunks(transform_module, chunks, transforms))
+        return {
+            "contract": "tts-text-transforms",
+            "events": [
+                {
+                    "name": "text_transform",
+                    "chunks": output,
+                    "joined": "".join(output),
                 }
             ],
         }

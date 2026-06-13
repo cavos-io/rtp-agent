@@ -12,7 +12,9 @@ import (
 
 func runTTSValueObjects(input json.RawMessage) (any, error) {
 	var payload struct {
-		Action string `json:"action"`
+		Action     string   `json:"action"`
+		Chunks     []string `json:"chunks"`
+		Transforms []string `json:"transforms"`
 	}
 	if err := json.Unmarshal(input, &payload); err != nil {
 		return nil, err
@@ -218,6 +220,36 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 					"timestamp_positive": timestamp > 0,
 					"has_error_field":    hasAnyKey(payload, "error"),
 					"has_err_field":      hasAnyKey(payload, "err"),
+				},
+			},
+		}, nil
+	case "text_transform":
+		transforms := payload.Transforms
+		if len(transforms) == 0 {
+			transforms = []string{"filter_markdown"}
+		}
+		for _, transform := range transforms {
+			if transform != "filter_markdown" {
+				return nil, fmt.Errorf("unsupported TTS text transform %q", transform)
+			}
+		}
+		buffer := lktts.NewTextTransformBuffer()
+		chunks := []string{}
+		for _, chunk := range payload.Chunks {
+			chunks = append(chunks, buffer.Push(chunk)...)
+		}
+		chunks = append(chunks, buffer.Flush()...)
+		joined := ""
+		for _, chunk := range chunks {
+			joined += chunk
+		}
+		return map[string]any{
+			"contract": "tts-text-transforms",
+			"events": []map[string]any{
+				{
+					"name":   "text_transform",
+					"chunks": chunks,
+					"joined": joined,
 				},
 			},
 		}, nil
