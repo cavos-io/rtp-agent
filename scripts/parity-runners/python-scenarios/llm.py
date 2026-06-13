@@ -700,6 +700,45 @@ def llm_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "realtime_capabilities_required_fields":
+        realtime_capabilities = load_reference_llm_realtime_class(
+            "RealtimeCapabilities"
+        )
+        required_fields = [
+            "message_truncation",
+            "turn_detection",
+            "user_transcription",
+            "auto_tool_reply_generation",
+            "audio_output",
+            "manual_function_calls",
+        ]
+        base = {
+            "message_truncation": False,
+            "turn_detection": False,
+            "user_transcription": False,
+            "auto_tool_reply_generation": False,
+            "audio_output": False,
+            "manual_function_calls": False,
+        }
+        missing_fields = []
+        for field in required_fields:
+            kwargs = dict(base)
+            del kwargs[field]
+            try:
+                realtime_capabilities(**kwargs)
+            except TypeError:
+                missing_fields.append(field)
+        minimal = realtime_capabilities(**base)
+        return {
+            "contract": "llm-value-objects",
+            "events": [
+                {
+                    "name": "realtime_capabilities_required_fields",
+                    "missing_fields": missing_fields,
+                    "minimal_payload": asdict(minimal),
+                }
+            ],
+        }
     if action == "realtime_metadata_defaults":
         return {
             "contract": "llm-value-objects",

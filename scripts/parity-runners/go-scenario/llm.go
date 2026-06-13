@@ -2584,6 +2584,66 @@ func runLLMValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "realtime_capabilities_required_fields":
+		requiredFields := []string{
+			"message_truncation",
+			"turn_detection",
+			"user_transcription",
+			"auto_tool_reply_generation",
+			"audio_output",
+			"manual_function_calls",
+		}
+		base := map[string]bool{
+			"message_truncation":         false,
+			"turn_detection":             false,
+			"user_transcription":         false,
+			"auto_tool_reply_generation": false,
+			"audio_output":               false,
+			"manual_function_calls":      false,
+		}
+		missingFields := make([]string, 0, len(requiredFields))
+		for _, field := range requiredFields {
+			testPayload := make(map[string]bool, len(base)-1)
+			for key, value := range base {
+				if key != field {
+					testPayload[key] = value
+				}
+			}
+			data, err := json.Marshal(testPayload)
+			if err != nil {
+				return nil, err
+			}
+			var decoded lkllm.RealtimeCapabilities
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				missingFields = append(missingFields, field)
+			}
+		}
+		baseData, err := json.Marshal(base)
+		if err != nil {
+			return nil, err
+		}
+		var minimal lkllm.RealtimeCapabilities
+		if err := json.Unmarshal(baseData, &minimal); err != nil {
+			return nil, err
+		}
+		minimalData, err := json.Marshal(minimal)
+		if err != nil {
+			return nil, err
+		}
+		var minimalPayload map[string]any
+		if err := json.Unmarshal(minimalData, &minimalPayload); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "llm-value-objects",
+			"events": []map[string]any{
+				{
+					"name":            "realtime_capabilities_required_fields",
+					"missing_fields":  missingFields,
+					"minimal_payload": minimalPayload,
+				},
+			},
+		}, nil
 	case "realtime_metadata_defaults":
 		model := &fakeScenarioRealtimeModel{}
 		return map[string]any{
