@@ -1012,6 +1012,14 @@ def llm_tool_context(input_data: Any) -> dict[str, Any]:
             "contract": "llm-tool-context",
             "events": [summarize(ctx, "flatten_function_order")],
         }
+    if action == "flatten_provider_order":
+        ctx = module.ToolContext(
+            [provider_tool("zeta-provider"), fn_tool("lookup"), provider_tool("alpha-provider")]
+        )
+        return {
+            "contract": "llm-tool-context",
+            "events": [summarize(ctx, "flatten_provider_order")],
+        }
     if action == "close_toolsets":
         class ClosingToolset(module.Toolset):
             def __init__(self) -> None:

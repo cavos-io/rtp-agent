@@ -151,8 +151,8 @@ func TestToolContextAddToolUpdatesFlattenedTools(t *testing.T) {
 		t.Fatalf("GetFunctionTool(weather) = %p, want %p", got, weather)
 	}
 	providerTools := ctx.ProviderTools()
-	if len(providerTools) != 2 || providerTools[0] != nestedProvider || providerTools[1] != provider {
-		t.Fatalf("ProviderTools() = %#v, want sorted providers including nested provider", providerTools)
+	if len(providerTools) != 2 || providerTools[0] != provider || providerTools[1] != nestedProvider {
+		t.Fatalf("ProviderTools() = %#v, want added provider before nested provider", providerTools)
 	}
 	toolsets := ctx.Toolsets()
 	if len(toolsets) != 1 || toolsets[0] != toolset {
@@ -286,7 +286,7 @@ func TestToolContextFlattenPreservesFunctionToolInsertionOrder(t *testing.T) {
 	}
 }
 
-func TestToolContextSeparatesAndSortsProviderTools(t *testing.T) {
+func TestToolContextSeparatesAndPreservesProviderToolOrder(t *testing.T) {
 	providerZ := &testProviderTool{testTool: testTool{id: "zeta-provider", name: "zeta-provider"}}
 	providerA := &testProviderTool{testTool: testTool{id: "alpha-provider", name: "alpha-provider"}}
 	function := &testTool{id: "lookup", name: "lookup"}
@@ -300,13 +300,17 @@ func TestToolContextSeparatesAndSortsProviderTools(t *testing.T) {
 		t.Fatalf("FunctionTools() = %#v, want only lookup function tool", ctx.FunctionTools())
 	}
 	providerTools := ctx.ProviderTools()
-	if len(providerTools) != 2 || providerTools[0] != providerA || providerTools[1] != providerZ {
-		t.Fatalf("ProviderTools() = %#v, want sorted provider tools", providerTools)
+	if len(providerTools) != 2 || providerTools[0] != providerZ || providerTools[1] != providerA {
+		t.Fatalf("ProviderTools() = %#v, want provider insertion order", providerTools)
+	}
+	providerTools[0] = providerA
+	if copied := ctx.ProviderTools(); copied[0] != providerZ {
+		t.Fatalf("ProviderTools() returned mutable backing slice; first provider = %#v, want zeta provider", copied[0])
 	}
 
 	flattened := ctx.Flatten()
-	if len(flattened) != 3 || flattened[0] != function || flattened[1] != providerA || flattened[2] != providerZ {
-		t.Fatalf("Flatten() = %#v, want function tools followed by sorted provider tools", flattened)
+	if len(flattened) != 3 || flattened[0] != function || flattened[1] != providerZ || flattened[2] != providerA {
+		t.Fatalf("Flatten() = %#v, want function tools followed by provider insertion order", flattened)
 	}
 }
 

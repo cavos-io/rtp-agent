@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"sort"
 )
 
 type ToolContext struct {
@@ -98,9 +97,6 @@ func (c *ToolContext) addToolValue(tool interface{}, topLevel bool, exclude []To
 			return nil
 		}
 		c.providerTools = append(c.providerTools, t)
-		sort.Slice(c.providerTools, func(i, j int) bool {
-			return c.providerTools[i].ID() < c.providerTools[j].ID()
-		})
 		if topLevel {
 			c.tools = append(c.tools, tool)
 		}
@@ -151,9 +147,6 @@ func (c *ToolContext) updateTools(tools []interface{}, exclude []Tool) error {
 			return err
 		}
 	}
-	sort.Slice(c.providerTools, func(i, j int) bool {
-		return c.providerTools[i].ID() < c.providerTools[j].ID()
-	})
 	return nil
 }
 

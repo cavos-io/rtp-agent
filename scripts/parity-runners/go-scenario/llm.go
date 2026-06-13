@@ -2744,6 +2744,16 @@ func runLLMToolContext(input json.RawMessage) (any, error) {
 			"contract": "llm-tool-context",
 			"events":   []map[string]any{summary(ctx, "flatten_function_order", nil)},
 		}, nil
+	case "flatten_provider_order":
+		ctx := lkllm.NewToolContext([]interface{}{
+			&scenarioLLMProviderTool{scenarioLLMTool: scenarioLLMTool{id: "zeta-provider", name: "zeta-provider"}},
+			newTool("lookup", "lookup"),
+			&scenarioLLMProviderTool{scenarioLLMTool: scenarioLLMTool{id: "alpha-provider", name: "alpha-provider"}},
+		})
+		return map[string]any{
+			"contract": "llm-tool-context",
+			"events":   []map[string]any{summary(ctx, "flatten_provider_order", nil)},
+		}, nil
 	case "close_toolsets":
 		lookup := newTool("lookup", "lookup")
 		toolset := &scenarioLLMToolset{id: "tools", tools: []lkllm.Tool{lookup}}
