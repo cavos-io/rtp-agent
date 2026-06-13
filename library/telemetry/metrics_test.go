@@ -2,7 +2,9 @@ package telemetry
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -34,6 +36,73 @@ func TestUsageSummaryNilSettersAreNoops(t *testing.T) {
 	var summary *UsageSummary
 	summary.SetLLMInputTokens(7)
 	summary.SetLLMOutputTokens(11)
+}
+
+func TestRealtimeModelMetricsMarshalJSONMatchesReferenceTokenDetails(t *testing.T) {
+	metrics := &RealtimeModelMetrics{
+		Label:           "agent.Realtime",
+		RequestID:       "resp_123",
+		Timestamp:       time.Unix(30, 125_000_000),
+		Duration:        1.5,
+		SessionDuration: 2.5,
+		TTFT:            0.25,
+		InputTokens:     9,
+		OutputTokens:    11,
+		TotalTokens:     20,
+		InputTokenDetails: InputTokenDetails{
+			AudioTokens:  3,
+			TextTokens:   4,
+			ImageTokens:  2,
+			CachedTokens: 5,
+			CachedTokensDetails: &CachedTokenDetails{
+				AudioTokens: 1,
+				TextTokens:  2,
+				ImageTokens: 3,
+			},
+		},
+		OutputTokenDetails: OutputTokenDetails{
+			AudioTokens: 7,
+			TextTokens:  8,
+			ImageTokens: 9,
+		},
+	}
+
+	data, err := json.Marshal(metrics)
+	if err != nil {
+		t.Fatalf("Marshal RealtimeModelMetrics returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled RealtimeModelMetrics returned error: %v", err)
+	}
+	if payload["type"] != "realtime_model_metrics" || payload["timestamp"] != 30.125 {
+		t.Fatalf("payload identity/timestamp = %#v, want reference realtime metrics fields", payload)
+	}
+	inputDetails, ok := payload["input_token_details"].(map[string]any)
+	if !ok {
+		t.Fatalf("input_token_details = %T %#v, want object", payload["input_token_details"], payload["input_token_details"])
+	}
+	if inputDetails["audio_tokens"] != float64(3) || inputDetails["text_tokens"] != float64(4) || inputDetails["image_tokens"] != float64(2) || inputDetails["cached_tokens"] != float64(5) {
+		t.Fatalf("input_token_details = %#v, want reference token detail fields", inputDetails)
+	}
+	cachedDetails, ok := inputDetails["cached_tokens_details"].(map[string]any)
+	if !ok {
+		t.Fatalf("cached_tokens_details = %T %#v, want object", inputDetails["cached_tokens_details"], inputDetails["cached_tokens_details"])
+	}
+	if cachedDetails["audio_tokens"] != float64(1) || cachedDetails["text_tokens"] != float64(2) || cachedDetails["image_tokens"] != float64(3) {
+		t.Fatalf("cached_tokens_details = %#v, want reference cached token fields", cachedDetails)
+	}
+	outputDetails, ok := payload["output_token_details"].(map[string]any)
+	if !ok {
+		t.Fatalf("output_token_details = %T %#v, want object", payload["output_token_details"], payload["output_token_details"])
+	}
+	if outputDetails["audio_tokens"] != float64(7) || outputDetails["text_tokens"] != float64(8) || outputDetails["image_tokens"] != float64(9) {
+		t.Fatalf("output_token_details = %#v, want reference token detail fields", outputDetails)
+	}
+	if _, ok := inputDetails["AudioTokens"]; ok {
+		t.Fatalf("input token details used Go field names: %#v", inputDetails)
+	}
 }
 
 func TestModelUsageCollectorAggregatesByProviderAndModel(t *testing.T) {

@@ -222,6 +222,17 @@ type MetricsCollectedEvent struct {
 
 func (e *MetricsCollectedEvent) GetType() string { return "metrics_collected" }
 
+func (e *MetricsCollectedEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":       e.GetType(),
+		"metrics":    e.Metrics,
+		"created_at": timeToUnixSeconds(e.CreatedAt),
+	})
+}
+
 type SessionUsageUpdatedEvent struct {
 	Usage     telemetry.AgentSessionUsage
 	CreatedAt time.Time

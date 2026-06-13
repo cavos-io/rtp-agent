@@ -601,6 +601,75 @@ func TestSessionUsageUpdatedEventMarshalJSONMatchesReferencePayload(t *testing.T
 	}
 }
 
+func TestMetricsCollectedEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	ev := &MetricsCollectedEvent{
+		Metrics: &telemetry.LLMMetrics{
+			Label:              "agent.LLM",
+			RequestID:          "req_123",
+			Timestamp:          time.Unix(28, 500_000_000),
+			Duration:           1.25,
+			TTFT:               0.35,
+			Cancelled:          false,
+			CompletionTokens:   13,
+			PromptTokens:       17,
+			PromptCachedTokens: 5,
+			TotalTokens:        30,
+			TokensPerSecond:    24,
+			SpeechID:           "speech_123",
+			Metadata: &telemetry.Metadata{
+				ModelName:     "gpt-4o-mini",
+				ModelProvider: "openai",
+			},
+		},
+		CreatedAt: time.Unix(29, 750_000_000),
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal MetricsCollectedEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled MetricsCollectedEvent returned error: %v", err)
+	}
+	if payload["type"] != "metrics_collected" {
+		t.Fatalf("type = %#v, want metrics_collected", payload["type"])
+	}
+	metrics, ok := payload["metrics"].(map[string]any)
+	if !ok {
+		t.Fatalf("metrics = %T %#v, want reference metrics object", payload["metrics"], payload["metrics"])
+	}
+	if metrics["type"] != "llm_metrics" || metrics["label"] != "agent.LLM" || metrics["request_id"] != "req_123" {
+		t.Fatalf("metrics identity = %#v, want reference type/label/request_id", metrics)
+	}
+	if metrics["timestamp"] != 28.5 || metrics["duration"] != 1.25 || metrics["ttft"] != 0.35 {
+		t.Fatalf("metrics timing = %#v, want reference seconds fields", metrics)
+	}
+	if metrics["completion_tokens"] != float64(13) || metrics["prompt_tokens"] != float64(17) || metrics["prompt_cached_tokens"] != float64(5) || metrics["total_tokens"] != float64(30) {
+		t.Fatalf("metrics tokens = %#v, want reference token fields", metrics)
+	}
+	if metrics["tokens_per_second"] != float64(24) || metrics["speech_id"] != "speech_123" {
+		t.Fatalf("metrics throughput/speech = %#v, want reference fields", metrics)
+	}
+	metadata, ok := metrics["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("metadata = %T %#v, want reference metadata object", metrics["metadata"], metrics["metadata"])
+	}
+	if metadata["model_name"] != "gpt-4o-mini" || metadata["model_provider"] != "openai" {
+		t.Fatalf("metadata = %#v, want reference model metadata fields", metadata)
+	}
+	if payload["created_at"] != 29.75 {
+		t.Fatalf("created_at = %#v, want 29.75", payload["created_at"])
+	}
+	if _, ok := payload["Metrics"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
+	}
+	if _, ok := metrics["RequestID"]; ok {
+		t.Fatalf("metrics used Go field names: %#v", metrics)
+	}
+}
+
 func TestOverlappingSpeechEventIsTypedAndCarriesTimingAndPredictionFields(t *testing.T) {
 	overlapStartedAt := time.Now().Add(-250 * time.Millisecond)
 	detectedAt := time.Now()
