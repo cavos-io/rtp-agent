@@ -95,6 +95,37 @@ func runSTTValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "timed_string_json":
+		data, marshalErr := json.Marshal(lkstt.TimedString{
+			Text:            "hello",
+			StartTime:       0.25,
+			EndTime:         0.5,
+			Confidence:      0.875,
+			StartTimeOffset: 1.25,
+			SpeakerID:       "speaker-a",
+		})
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		var payload map[string]any
+		if unmarshalErr := json.Unmarshal(data, &payload); unmarshalErr != nil {
+			return nil, unmarshalErr
+		}
+		return map[string]any{
+			"contract": "stt-value-objects",
+			"events": []map[string]any{
+				{
+					"name":               "timed_string_json",
+					"text":               payload["text"],
+					"start_time":         payload["start_time"],
+					"end_time":           payload["end_time"],
+					"confidence":         payload["confidence"],
+					"start_time_offset":  payload["start_time_offset"],
+					"speaker_id":         payload["speaker_id"],
+					"has_go_field_names": hasAnyKey(payload, "StartTime", "EndTime", "StartTimeOffset", "SpeakerID"),
+				},
+			},
+		}, nil
 	case "speech_event_usage":
 		startTime := 42.5
 		event := lkstt.SpeechEvent{
