@@ -1279,6 +1279,115 @@ func TestChatContextMarshalJSONIncludesTimestampsForReports(t *testing.T) {
 	}
 }
 
+func TestChatItemMarshalJSONMatchesReferencePayloads(t *testing.T) {
+	groupID := "parallel_group"
+	oldAgentID := "old_agent"
+	instructions := "use the handoff"
+
+	items := []struct {
+		name string
+		item ChatItem
+		want map[string]any
+	}{
+		{
+			name: "function_call",
+			item: &FunctionCall{
+				ID:        "call_item",
+				CallID:    "call_lookup",
+				Name:      "lookup",
+				Arguments: `{"city":"Paris"}`,
+				Extra:     map[string]any{"provider": "openai"},
+				GroupID:   &groupID,
+				CreatedAt: time.Unix(10, 250_000_000),
+			},
+			want: map[string]any{
+				"id":         "call_item",
+				"type":       "function_call",
+				"call_id":    "call_lookup",
+				"name":       "lookup",
+				"arguments":  `{"city":"Paris"}`,
+				"extra":      map[string]any{"provider": "openai"},
+				"group_id":   "parallel_group",
+				"created_at": 10.25,
+			},
+		},
+		{
+			name: "function_call_output",
+			item: &FunctionCallOutput{
+				ID:        "output_item",
+				CallID:    "call_lookup",
+				Name:      "lookup",
+				Output:    "sunny",
+				IsError:   false,
+				CreatedAt: time.Unix(11, 500_000_000),
+			},
+			want: map[string]any{
+				"id":         "output_item",
+				"type":       "function_call_output",
+				"name":       "lookup",
+				"call_id":    "call_lookup",
+				"output":     "sunny",
+				"is_error":   false,
+				"created_at": 11.5,
+			},
+		},
+		{
+			name: "agent_handoff",
+			item: &AgentHandoff{
+				ID:         "handoff_item",
+				OldAgentID: &oldAgentID,
+				NewAgentID: "new_agent",
+				CreatedAt:  time.Unix(12, 750_000_000),
+			},
+			want: map[string]any{
+				"id":           "handoff_item",
+				"type":         "agent_handoff",
+				"old_agent_id": "old_agent",
+				"new_agent_id": "new_agent",
+				"created_at":   12.75,
+			},
+		},
+		{
+			name: "agent_config_update",
+			item: &AgentConfigUpdate{
+				ID:           "config_item",
+				Instructions: &instructions,
+				ToolsAdded:   []string{"lookup"},
+				ToolsRemoved: []string{"legacy"},
+				CreatedAt:    time.Unix(13, 125_000_000),
+			},
+			want: map[string]any{
+				"id":            "config_item",
+				"type":          "agent_config_update",
+				"instructions":  "use the handoff",
+				"tools_added":   []any{"lookup"},
+				"tools_removed": []any{"legacy"},
+				"created_at":    13.125,
+			},
+		},
+	}
+
+	for _, tc := range items {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(tc.item)
+			if err != nil {
+				t.Fatalf("Marshal %s returned error: %v", tc.name, err)
+			}
+
+			var got map[string]any
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatalf("Unmarshal marshaled %s returned error: %v", tc.name, err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("marshaled %s = %#v, want %#v", tc.name, got, tc.want)
+			}
+			if _, ok := got["CallID"]; ok {
+				t.Fatalf("marshaled %s leaked Go field name CallID: %#v", tc.name, got)
+			}
+		})
+	}
+}
+
 func TestChatContextUnmarshalJSONRestoresTypedItems(t *testing.T) {
 	data := []byte(`{
 		"items": [

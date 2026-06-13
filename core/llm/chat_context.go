@@ -657,6 +657,34 @@ func (c *ChatContext) MarshalJSON() ([]byte, error) {
 	}))
 }
 
+func (f *FunctionCall) MarshalJSON() ([]byte, error) {
+	if f == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(chatItemToDict(f, ChatContextDictOptions{IncludeTimestamp: true}))
+}
+
+func (f *FunctionCallOutput) MarshalJSON() ([]byte, error) {
+	if f == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(chatItemToDict(f, ChatContextDictOptions{IncludeTimestamp: true}))
+}
+
+func (a *AgentHandoff) MarshalJSON() ([]byte, error) {
+	if a == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(chatItemToDict(a, ChatContextDictOptions{IncludeTimestamp: true}))
+}
+
+func (a *AgentConfigUpdate) MarshalJSON() ([]byte, error) {
+	if a == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(chatItemToDict(a, ChatContextDictOptions{IncludeTimestamp: true}))
+}
+
 func ChatContextFromDict(data map[string]any) (*ChatContext, error) {
 	ctx := NewChatContext()
 	if err := ctx.FromDict(data); err != nil {
