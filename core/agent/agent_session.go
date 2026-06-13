@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"sync"
@@ -735,6 +736,18 @@ type AgentStateChangedEvent struct {
 
 func (e *AgentStateChangedEvent) GetType() string { return "agent_state_changed" }
 
+func (e *AgentStateChangedEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":       e.GetType(),
+		"old_state":  e.OldState,
+		"new_state":  e.NewState,
+		"created_at": timeToUnixSeconds(e.CreatedAt),
+	})
+}
+
 type UserStateChangedEvent struct {
 	OldState  UserState
 	NewState  UserState
@@ -742,6 +755,18 @@ type UserStateChangedEvent struct {
 }
 
 func (e *UserStateChangedEvent) GetType() string { return "user_state_changed" }
+
+func (e *UserStateChangedEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":       e.GetType(),
+		"old_state":  e.OldState,
+		"new_state":  e.NewState,
+		"created_at": timeToUnixSeconds(e.CreatedAt),
+	})
+}
 
 func (s *AgentSession) AgentStateChangedEvents() <-chan AgentStateChangedEvent {
 	return s.agentStateChangedEvents()

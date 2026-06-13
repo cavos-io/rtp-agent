@@ -36,6 +36,20 @@ type UserInputTranscribedEvent struct {
 
 func (e *UserInputTranscribedEvent) GetType() string { return "user_input_transcribed" }
 
+func (e *UserInputTranscribedEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":       e.GetType(),
+		"transcript": e.Transcript,
+		"is_final":   e.IsFinal,
+		"speaker_id": e.SpeakerID,
+		"language":   e.Language,
+		"created_at": timeToUnixSeconds(e.CreatedAt),
+	})
+}
+
 type AgentOutputTranscribedEvent struct {
 	Language   string
 	Transcript string
@@ -44,6 +58,19 @@ type AgentOutputTranscribedEvent struct {
 }
 
 func (e *AgentOutputTranscribedEvent) GetType() string { return "agent_output_transcribed" }
+
+func (e *AgentOutputTranscribedEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":       e.GetType(),
+		"transcript": e.Transcript,
+		"is_final":   e.IsFinal,
+		"language":   e.Language,
+		"created_at": timeToUnixSeconds(e.CreatedAt),
+	})
+}
 
 type UserTurnExceededEvent struct {
 	Transcript            string
@@ -64,6 +91,20 @@ func NewUserTurnExceededEvent(transcript string, accumulatedTranscript string, a
 }
 
 func (e *UserTurnExceededEvent) GetType() string { return "user_turn_exceeded" }
+
+func (e *UserTurnExceededEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":                   e.GetType(),
+		"transcript":             e.Transcript,
+		"accumulated_transcript": e.AccumulatedTranscript,
+		"accumulated_word_count": e.AccumulatedWordCount,
+		"duration":               e.Duration.Seconds(),
+		"created_at":             timeToUnixSeconds(e.CreatedAt),
+	})
+}
 
 type OverlappingSpeechEvent struct {
 	CreatedAt          time.Time
@@ -103,6 +144,23 @@ func NewAgentFalseInterruptionEvent(resumed bool) *AgentFalseInterruptionEvent {
 }
 
 func (e *AgentFalseInterruptionEvent) GetType() string { return "agent_false_interruption" }
+
+func (e *AgentFalseInterruptionEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	var extraInstructions any
+	if e.ExtraInstructions != "" {
+		extraInstructions = e.ExtraInstructions
+	}
+	return json.Marshal(map[string]any{
+		"type":               e.GetType(),
+		"resumed":            e.Resumed,
+		"message":            e.Message,
+		"extra_instructions": extraInstructions,
+		"created_at":         timeToUnixSeconds(e.CreatedAt),
+	})
+}
 
 type FunctionToolsExecutedEvent struct {
 	FunctionCalls       []*llm.FunctionCall
@@ -164,12 +222,34 @@ type MetricsCollectedEvent struct {
 
 func (e *MetricsCollectedEvent) GetType() string { return "metrics_collected" }
 
+func (e *MetricsCollectedEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":       e.GetType(),
+		"metrics":    e.Metrics,
+		"created_at": timeToUnixSeconds(e.CreatedAt),
+	})
+}
+
 type SessionUsageUpdatedEvent struct {
 	Usage     telemetry.AgentSessionUsage
 	CreatedAt time.Time
 }
 
 func (e *SessionUsageUpdatedEvent) GetType() string { return "session_usage_updated" }
+
+func (e *SessionUsageUpdatedEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":       e.GetType(),
+		"usage":      e.Usage,
+		"created_at": timeToUnixSeconds(e.CreatedAt),
+	})
+}
 
 type ErrorEvent struct {
 	Error     error
@@ -187,6 +267,18 @@ func NewErrorEvent(err error, source any) *ErrorEvent {
 
 func (e *ErrorEvent) GetType() string { return "error" }
 
+func (e *ErrorEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":       e.GetType(),
+		"error":      errorReportValue(e.Error),
+		"source":     errorReportSourceValue(e.Source),
+		"created_at": timeToUnixSeconds(e.CreatedAt),
+	})
+}
+
 type SpeechCreatedEvent struct {
 	UserInitiated bool
 	Source        string // "say" or "generate_reply"
@@ -195,6 +287,18 @@ type SpeechCreatedEvent struct {
 }
 
 func (e *SpeechCreatedEvent) GetType() string { return "speech_created" }
+
+func (e *SpeechCreatedEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":           e.GetType(),
+		"user_initiated": e.UserInitiated,
+		"source":         e.Source,
+		"created_at":     timeToUnixSeconds(e.CreatedAt),
+	})
+}
 
 type CloseReason string
 
@@ -213,6 +317,18 @@ type CloseEvent struct {
 }
 
 func (e *CloseEvent) GetType() string { return "close" }
+
+func (e *CloseEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":       e.GetType(),
+		"reason":     e.Reason,
+		"error":      errorReportValue(e.Error),
+		"created_at": timeToUnixSeconds(e.CreatedAt),
+	})
+}
 
 type RunContext struct {
 	Session          *AgentSession

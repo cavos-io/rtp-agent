@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -4502,6 +4503,66 @@ func TestAgentSessionUpdateUserStateEmitsTypedTimestampedEvent(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("UpdateUserState did not emit an event")
+	}
+}
+
+func TestAgentStateChangedEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	ev := &AgentStateChangedEvent{
+		OldState:  AgentStateInitializing,
+		NewState:  AgentStateListening,
+		CreatedAt: time.Unix(22, 250_000_000),
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal AgentStateChangedEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled AgentStateChangedEvent returned error: %v", err)
+	}
+	if payload["type"] != "agent_state_changed" {
+		t.Fatalf("type = %#v, want agent_state_changed", payload["type"])
+	}
+	if payload["old_state"] != string(AgentStateInitializing) || payload["new_state"] != string(AgentStateListening) {
+		t.Fatalf("state payload = %#v, want reference old_state/new_state", payload)
+	}
+	if payload["created_at"] != 22.25 {
+		t.Fatalf("created_at = %#v, want 22.25", payload["created_at"])
+	}
+	if _, ok := payload["OldState"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
+	}
+}
+
+func TestUserStateChangedEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	ev := &UserStateChangedEvent{
+		OldState:  UserStateListening,
+		NewState:  UserStateSpeaking,
+		CreatedAt: time.Unix(23, 500_000_000),
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal UserStateChangedEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled UserStateChangedEvent returned error: %v", err)
+	}
+	if payload["type"] != "user_state_changed" {
+		t.Fatalf("type = %#v, want user_state_changed", payload["type"])
+	}
+	if payload["old_state"] != string(UserStateListening) || payload["new_state"] != string(UserStateSpeaking) {
+		t.Fatalf("state payload = %#v, want reference old_state/new_state", payload)
+	}
+	if payload["created_at"] != 23.5 {
+		t.Fatalf("created_at = %#v, want 23.5", payload["created_at"])
+	}
+	if _, ok := payload["OldState"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
 	}
 }
 

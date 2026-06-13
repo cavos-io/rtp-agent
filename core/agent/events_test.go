@@ -2,11 +2,13 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -309,6 +311,75 @@ func TestFunctionToolsExecutedEventReplyAndHandoffFlagsCanBeCanceled(t *testing.
 	}
 }
 
+func TestUserInputTranscribedEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	ev := &UserInputTranscribedEvent{
+		Language:   "en-US",
+		Transcript: "hello there",
+		IsFinal:    true,
+		SpeakerID:  "speaker-1",
+		CreatedAt:  time.Unix(20, 125_000_000),
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal UserInputTranscribedEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled UserInputTranscribedEvent returned error: %v", err)
+	}
+	if payload["type"] != "user_input_transcribed" {
+		t.Fatalf("type = %#v, want user_input_transcribed", payload["type"])
+	}
+	if payload["transcript"] != "hello there" || payload["is_final"] != true {
+		t.Fatalf("payload transcript/finality = %#v, want reference transcript fields", payload)
+	}
+	if payload["speaker_id"] != "speaker-1" || payload["language"] != "en-US" {
+		t.Fatalf("payload speaker/language = %#v, want reference optional fields", payload)
+	}
+	if payload["created_at"] != 20.125 {
+		t.Fatalf("created_at = %#v, want 20.125", payload["created_at"])
+	}
+	if _, ok := payload["IsFinal"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
+	}
+}
+
+func TestAgentOutputTranscribedEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	ev := &AgentOutputTranscribedEvent{
+		Language:   "en-US",
+		Transcript: "assistant reply",
+		IsFinal:    false,
+		CreatedAt:  time.Unix(21, 750_000_000),
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal AgentOutputTranscribedEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled AgentOutputTranscribedEvent returned error: %v", err)
+	}
+	if payload["type"] != "agent_output_transcribed" {
+		t.Fatalf("type = %#v, want agent_output_transcribed", payload["type"])
+	}
+	if payload["transcript"] != "assistant reply" || payload["is_final"] != false {
+		t.Fatalf("payload transcript/finality = %#v, want reference transcript fields", payload)
+	}
+	if payload["language"] != "en-US" {
+		t.Fatalf("language = %#v, want en-US", payload["language"])
+	}
+	if payload["created_at"] != 21.75 {
+		t.Fatalf("created_at = %#v, want 21.75", payload["created_at"])
+	}
+	if _, ok := payload["IsFinal"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
+	}
+}
+
 func TestAgentFalseInterruptionEventIsTypedAndTimestamped(t *testing.T) {
 	before := time.Now()
 	ev := NewAgentFalseInterruptionEvent(true)
@@ -344,6 +415,38 @@ func TestAgentFalseInterruptionEventPreservesDeprecatedCompatibilityFields(t *te
 	}
 }
 
+func TestAgentFalseInterruptionEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	ev := &AgentFalseInterruptionEvent{
+		Resumed:   true,
+		CreatedAt: time.Unix(26, 500_000_000),
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal AgentFalseInterruptionEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled AgentFalseInterruptionEvent returned error: %v", err)
+	}
+	if payload["type"] != "agent_false_interruption" {
+		t.Fatalf("type = %#v, want agent_false_interruption", payload["type"])
+	}
+	if payload["resumed"] != true {
+		t.Fatalf("resumed = %#v, want true", payload["resumed"])
+	}
+	if payload["message"] != nil || payload["extra_instructions"] != nil {
+		t.Fatalf("deprecated fields = %#v/%#v, want null reference fields", payload["message"], payload["extra_instructions"])
+	}
+	if payload["created_at"] != 26.5 {
+		t.Fatalf("created_at = %#v, want 26.5", payload["created_at"])
+	}
+	if _, ok := payload["ExtraInstructions"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
+	}
+}
+
 func TestUserTurnExceededEventIsTypedAndTimestamped(t *testing.T) {
 	before := time.Now()
 	ev := NewUserTurnExceededEvent("latest words", "all accumulated words", 3, 4*time.Second)
@@ -366,6 +469,204 @@ func TestUserTurnExceededEventIsTypedAndTimestamped(t *testing.T) {
 	}
 	if ev.CreatedAt.IsZero() || ev.CreatedAt.Before(before) {
 		t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
+	}
+}
+
+func TestUserTurnExceededEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	ev := &UserTurnExceededEvent{
+		Transcript:            "latest words",
+		AccumulatedTranscript: "all accumulated words",
+		AccumulatedWordCount:  3,
+		Duration:              1500 * time.Millisecond,
+		CreatedAt:             time.Unix(24, 250_000_000),
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal UserTurnExceededEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled UserTurnExceededEvent returned error: %v", err)
+	}
+	if payload["type"] != "user_turn_exceeded" {
+		t.Fatalf("type = %#v, want user_turn_exceeded", payload["type"])
+	}
+	if payload["transcript"] != "latest words" || payload["accumulated_transcript"] != "all accumulated words" {
+		t.Fatalf("transcript payload = %#v, want reference transcript fields", payload)
+	}
+	if payload["accumulated_word_count"] != float64(3) {
+		t.Fatalf("accumulated_word_count = %#v, want 3", payload["accumulated_word_count"])
+	}
+	if payload["duration"] != 1.5 {
+		t.Fatalf("duration = %#v, want 1.5", payload["duration"])
+	}
+	if payload["created_at"] != 24.25 {
+		t.Fatalf("created_at = %#v, want 24.25", payload["created_at"])
+	}
+	if _, ok := payload["AccumulatedTranscript"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
+	}
+}
+
+func TestSpeechCreatedEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	ev := &SpeechCreatedEvent{
+		UserInitiated: true,
+		Source:        "generate_reply",
+		SpeechHandle:  NewSpeechHandle(true, DefaultInputDetails()),
+		CreatedAt:     time.Unix(25, 125_000_000),
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal SpeechCreatedEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled SpeechCreatedEvent returned error: %v", err)
+	}
+	if payload["type"] != "speech_created" {
+		t.Fatalf("type = %#v, want speech_created", payload["type"])
+	}
+	if payload["user_initiated"] != true || payload["source"] != "generate_reply" {
+		t.Fatalf("payload = %#v, want reference speech created public fields", payload)
+	}
+	if payload["created_at"] != 25.125 {
+		t.Fatalf("created_at = %#v, want 25.125", payload["created_at"])
+	}
+	if _, ok := payload["speech_handle"]; ok {
+		t.Fatalf("payload serialized excluded speech_handle: %#v", payload)
+	}
+	if _, ok := payload["SpeechHandle"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
+	}
+}
+
+func TestSessionUsageUpdatedEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	ev := &SessionUsageUpdatedEvent{
+		Usage: telemetry.AgentSessionUsage{ModelUsage: []telemetry.ModelUsage{
+			&telemetry.LLMModelUsage{
+				Type:              "llm_usage",
+				Provider:          "openai",
+				Model:             "gpt-4o-mini",
+				InputTokens:       17,
+				InputCachedTokens: 3,
+				OutputTokens:      11,
+				SessionDuration:   2.5,
+			},
+		}},
+		CreatedAt: time.Unix(27, 250_000_000),
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal SessionUsageUpdatedEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled SessionUsageUpdatedEvent returned error: %v", err)
+	}
+	if payload["type"] != "session_usage_updated" {
+		t.Fatalf("type = %#v, want session_usage_updated", payload["type"])
+	}
+	usage, ok := payload["usage"].(map[string]any)
+	if !ok {
+		t.Fatalf("usage = %T %#v, want reference usage object", payload["usage"], payload["usage"])
+	}
+	modelUsage, ok := usage["model_usage"].([]any)
+	if !ok || len(modelUsage) != 1 {
+		t.Fatalf("model_usage = %T %#v, want one usage entry", usage["model_usage"], usage["model_usage"])
+	}
+	llmUsage, ok := modelUsage[0].(map[string]any)
+	if !ok {
+		t.Fatalf("model_usage[0] = %T %#v, want object", modelUsage[0], modelUsage[0])
+	}
+	if llmUsage["type"] != "llm_usage" || llmUsage["provider"] != "openai" || llmUsage["model"] != "gpt-4o-mini" {
+		t.Fatalf("llm usage identity = %#v, want reference type/provider/model", llmUsage)
+	}
+	if llmUsage["input_tokens"] != float64(17) || llmUsage["input_cached_tokens"] != float64(3) || llmUsage["output_tokens"] != float64(11) {
+		t.Fatalf("llm token usage = %#v, want reference token fields", llmUsage)
+	}
+	if llmUsage["session_duration"] != 2.5 {
+		t.Fatalf("session_duration = %#v, want 2.5", llmUsage["session_duration"])
+	}
+	if payload["created_at"] != 27.25 {
+		t.Fatalf("created_at = %#v, want 27.25", payload["created_at"])
+	}
+	if _, ok := payload["Usage"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
+	}
+}
+
+func TestMetricsCollectedEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	ev := &MetricsCollectedEvent{
+		Metrics: &telemetry.LLMMetrics{
+			Label:              "agent.LLM",
+			RequestID:          "req_123",
+			Timestamp:          time.Unix(28, 500_000_000),
+			Duration:           1.25,
+			TTFT:               0.35,
+			Cancelled:          false,
+			CompletionTokens:   13,
+			PromptTokens:       17,
+			PromptCachedTokens: 5,
+			TotalTokens:        30,
+			TokensPerSecond:    24,
+			SpeechID:           "speech_123",
+			Metadata: &telemetry.Metadata{
+				ModelName:     "gpt-4o-mini",
+				ModelProvider: "openai",
+			},
+		},
+		CreatedAt: time.Unix(29, 750_000_000),
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal MetricsCollectedEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled MetricsCollectedEvent returned error: %v", err)
+	}
+	if payload["type"] != "metrics_collected" {
+		t.Fatalf("type = %#v, want metrics_collected", payload["type"])
+	}
+	metrics, ok := payload["metrics"].(map[string]any)
+	if !ok {
+		t.Fatalf("metrics = %T %#v, want reference metrics object", payload["metrics"], payload["metrics"])
+	}
+	if metrics["type"] != "llm_metrics" || metrics["label"] != "agent.LLM" || metrics["request_id"] != "req_123" {
+		t.Fatalf("metrics identity = %#v, want reference type/label/request_id", metrics)
+	}
+	if metrics["timestamp"] != 28.5 || metrics["duration"] != 1.25 || metrics["ttft"] != 0.35 {
+		t.Fatalf("metrics timing = %#v, want reference seconds fields", metrics)
+	}
+	if metrics["completion_tokens"] != float64(13) || metrics["prompt_tokens"] != float64(17) || metrics["prompt_cached_tokens"] != float64(5) || metrics["total_tokens"] != float64(30) {
+		t.Fatalf("metrics tokens = %#v, want reference token fields", metrics)
+	}
+	if metrics["tokens_per_second"] != float64(24) || metrics["speech_id"] != "speech_123" {
+		t.Fatalf("metrics throughput/speech = %#v, want reference fields", metrics)
+	}
+	metadata, ok := metrics["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("metadata = %T %#v, want reference metadata object", metrics["metadata"], metrics["metadata"])
+	}
+	if metadata["model_name"] != "gpt-4o-mini" || metadata["model_provider"] != "openai" {
+		t.Fatalf("metadata = %#v, want reference model metadata fields", metadata)
+	}
+	if payload["created_at"] != 29.75 {
+		t.Fatalf("created_at = %#v, want 29.75", payload["created_at"])
+	}
+	if _, ok := payload["Metrics"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
+	}
+	if _, ok := metrics["RequestID"]; ok {
+		t.Fatalf("metrics used Go field names: %#v", metrics)
 	}
 }
 
@@ -435,6 +736,85 @@ func TestErrorEventIsTypedAndTimestamped(t *testing.T) {
 	}
 	if ev.CreatedAt.IsZero() || ev.CreatedAt.Before(before) {
 		t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
+	}
+}
+
+func TestErrorEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	createdAt := time.Unix(12, 250_000_000)
+	ev := &ErrorEvent{
+		Error:     llm.NewLLMError("openai.LLM", errors.New("failed"), false),
+		Source:    &reportMetadataLLM{model: "gpt-report", provider: "openai"},
+		CreatedAt: createdAt,
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal ErrorEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled ErrorEvent returned error: %v", err)
+	}
+	if payload["type"] != "error" {
+		t.Fatalf("type = %#v, want error", payload["type"])
+	}
+	errorData, ok := payload["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("error = %T %#v, want structured error payload", payload["error"], payload["error"])
+	}
+	if errorData["type"] != "llm_error" || errorData["label"] != "openai.LLM" || errorData["recoverable"] != false {
+		t.Fatalf("error = %#v, want reference LLMError payload", errorData)
+	}
+	if _, ok := errorData["err"]; ok {
+		t.Fatalf("error payload serialized internal err: %#v", errorData)
+	}
+	sourceData, ok := payload["source"].(map[string]any)
+	if !ok {
+		t.Fatalf("source = %T %#v, want structured source payload", payload["source"], payload["source"])
+	}
+	if sourceData["model"] != "gpt-report" || sourceData["provider"] != "openai" {
+		t.Fatalf("source = %#v, want model/provider metadata", sourceData)
+	}
+	if payload["created_at"] != 12.25 {
+		t.Fatalf("created_at = %#v, want 12.25", payload["created_at"])
+	}
+	if _, ok := payload["Error"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
+	}
+}
+
+func TestCloseEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	ev := &CloseEvent{
+		Reason:    CloseReasonError,
+		Error:     llm.NewLLMError("openai.LLM", errors.New("failed"), false),
+		CreatedAt: time.Unix(14, 500_000_000),
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal CloseEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled CloseEvent returned error: %v", err)
+	}
+	if payload["type"] != "close" {
+		t.Fatalf("type = %#v, want close", payload["type"])
+	}
+	if payload["reason"] != string(CloseReasonError) {
+		t.Fatalf("reason = %#v, want error", payload["reason"])
+	}
+	errorData, ok := payload["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("error = %T %#v, want structured error payload", payload["error"], payload["error"])
+	}
+	if errorData["type"] != "llm_error" || errorData["label"] != "openai.LLM" {
+		t.Fatalf("error = %#v, want reference LLMError payload", errorData)
+	}
+	if payload["created_at"] != 14.5 {
+		t.Fatalf("created_at = %#v, want 14.5", payload["created_at"])
 	}
 }
 

@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -9,6 +10,16 @@ import (
 type Metadata struct {
 	ModelName     string
 	ModelProvider string
+}
+
+func (m *Metadata) MarshalJSON() ([]byte, error) {
+	if m == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"model_name":     m.ModelName,
+		"model_provider": m.ModelProvider,
+	})
 }
 
 type AgentMetrics interface {
@@ -33,6 +44,28 @@ type LLMMetrics struct {
 
 func (m *LLMMetrics) GetType() string { return "llm_metrics" }
 
+func (m *LLMMetrics) MarshalJSON() ([]byte, error) {
+	if m == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":                 m.GetType(),
+		"label":                m.Label,
+		"request_id":           m.RequestID,
+		"timestamp":            timeToUnixSeconds(m.Timestamp),
+		"duration":             m.Duration,
+		"ttft":                 m.TTFT,
+		"cancelled":            m.Cancelled,
+		"completion_tokens":    m.CompletionTokens,
+		"prompt_tokens":        m.PromptTokens,
+		"prompt_cached_tokens": m.PromptCachedTokens,
+		"total_tokens":         m.TotalTokens,
+		"tokens_per_second":    m.TokensPerSecond,
+		"speech_id":            optionalString(m.SpeechID),
+		"metadata":             m.Metadata,
+	})
+}
+
 type STTMetrics struct {
 	Label            string
 	RequestID        string
@@ -48,6 +81,26 @@ type STTMetrics struct {
 }
 
 func (m *STTMetrics) GetType() string { return "stt_metrics" }
+
+func (m *STTMetrics) MarshalJSON() ([]byte, error) {
+	if m == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":              m.GetType(),
+		"label":             m.Label,
+		"request_id":        m.RequestID,
+		"timestamp":         timeToUnixSeconds(m.Timestamp),
+		"duration":          m.Duration,
+		"audio_duration":    m.AudioDuration,
+		"input_tokens":      m.InputTokens,
+		"output_tokens":     m.OutputTokens,
+		"streamed":          m.Streamed,
+		"acquire_time":      m.AcquireTime,
+		"connection_reused": m.ConnectionReused,
+		"metadata":          m.Metadata,
+	})
+}
 
 type TTSMetrics struct {
 	Label            string
@@ -70,6 +123,31 @@ type TTSMetrics struct {
 
 func (m *TTSMetrics) GetType() string { return "tts_metrics" }
 
+func (m *TTSMetrics) MarshalJSON() ([]byte, error) {
+	if m == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":              m.GetType(),
+		"label":             m.Label,
+		"request_id":        m.RequestID,
+		"timestamp":         timeToUnixSeconds(m.Timestamp),
+		"ttfb":              m.TTFB,
+		"duration":          m.Duration,
+		"audio_duration":    m.AudioDuration,
+		"cancelled":         m.Cancelled,
+		"characters_count":  m.CharactersCount,
+		"input_tokens":      m.InputTokens,
+		"output_tokens":     m.OutputTokens,
+		"streamed":          m.Streamed,
+		"segment_id":        optionalString(m.SegmentID),
+		"speech_id":         optionalString(m.SpeechID),
+		"acquire_time":      m.AcquireTime,
+		"connection_reused": m.ConnectionReused,
+		"metadata":          m.Metadata,
+	})
+}
+
 type VADMetrics struct {
 	Label                  string
 	Timestamp              time.Time
@@ -81,6 +159,21 @@ type VADMetrics struct {
 
 func (m *VADMetrics) GetType() string { return "vad_metrics" }
 
+func (m *VADMetrics) MarshalJSON() ([]byte, error) {
+	if m == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":                     m.GetType(),
+		"label":                    m.Label,
+		"timestamp":                timeToUnixSeconds(m.Timestamp),
+		"idle_time":                m.IdleTime,
+		"inference_duration_total": m.InferenceDurationTotal,
+		"inference_count":          m.InferenceCount,
+		"metadata":                 m.Metadata,
+	})
+}
+
 type EOUMetrics struct {
 	Timestamp                time.Time
 	EndOfUtteranceDelay      float64
@@ -91,6 +184,21 @@ type EOUMetrics struct {
 }
 
 func (m *EOUMetrics) GetType() string { return "eou_metrics" }
+
+func (m *EOUMetrics) MarshalJSON() ([]byte, error) {
+	if m == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":                         m.GetType(),
+		"timestamp":                    timeToUnixSeconds(m.Timestamp),
+		"end_of_utterance_delay":       m.EndOfUtteranceDelay,
+		"transcription_delay":          m.TranscriptionDelay,
+		"on_user_turn_completed_delay": m.OnUserTurnCompletedDelay,
+		"speech_id":                    optionalString(m.SpeechID),
+		"metadata":                     m.Metadata,
+	})
+}
 
 type InterruptionMetrics struct {
 	Label              string
@@ -106,6 +214,23 @@ type InterruptionMetrics struct {
 
 func (m *InterruptionMetrics) GetType() string { return "interruption_metrics" }
 
+func (m *InterruptionMetrics) MarshalJSON() ([]byte, error) {
+	if m == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":                m.GetType(),
+		"timestamp":           timeToUnixSeconds(m.Timestamp),
+		"total_duration":      m.TotalDuration,
+		"prediction_duration": m.PredictionDuration,
+		"detection_delay":     m.DetectionDelay,
+		"num_interruptions":   m.NumInterruptions,
+		"num_backchannels":    m.NumBackchannels,
+		"num_requests":        m.NumRequests,
+		"metadata":            m.Metadata,
+	})
+}
+
 type AvatarMetrics struct {
 	Label              string
 	Timestamp          time.Time
@@ -117,10 +242,32 @@ type AvatarMetrics struct {
 
 func (m *AvatarMetrics) GetType() string { return "avatar_metrics" }
 
+func (m *AvatarMetrics) MarshalJSON() ([]byte, error) {
+	if m == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":                 m.GetType(),
+		"timestamp":            timeToUnixSeconds(m.Timestamp),
+		"playback_latency":     m.PlaybackLatency,
+		"session_started_time": optionalUnixSeconds(m.SessionStartedTime),
+		"avatar_joined_time":   optionalUnixSeconds(m.AvatarJoinedTime),
+		"metadata":             m.Metadata,
+	})
+}
+
 type CachedTokenDetails struct {
 	AudioTokens int
 	TextTokens  int
 	ImageTokens int
+}
+
+func (d CachedTokenDetails) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"audio_tokens": d.AudioTokens,
+		"text_tokens":  d.TextTokens,
+		"image_tokens": d.ImageTokens,
+	})
 }
 
 type InputTokenDetails struct {
@@ -131,10 +278,28 @@ type InputTokenDetails struct {
 	CachedTokensDetails *CachedTokenDetails
 }
 
+func (d InputTokenDetails) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"audio_tokens":          d.AudioTokens,
+		"text_tokens":           d.TextTokens,
+		"image_tokens":          d.ImageTokens,
+		"cached_tokens":         d.CachedTokens,
+		"cached_tokens_details": d.CachedTokensDetails,
+	})
+}
+
 type OutputTokenDetails struct {
 	TextTokens  int
 	AudioTokens int
 	ImageTokens int
+}
+
+func (d OutputTokenDetails) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"text_tokens":  d.TextTokens,
+		"audio_tokens": d.AudioTokens,
+		"image_tokens": d.ImageTokens,
+	})
 }
 
 type RealtimeModelMetrics struct {
@@ -157,6 +322,52 @@ type RealtimeModelMetrics struct {
 }
 
 func (m *RealtimeModelMetrics) GetType() string { return "realtime_model_metrics" }
+
+func (m *RealtimeModelMetrics) MarshalJSON() ([]byte, error) {
+	if m == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":                 m.GetType(),
+		"label":                m.Label,
+		"request_id":           m.RequestID,
+		"timestamp":            timeToUnixSeconds(m.Timestamp),
+		"duration":             m.Duration,
+		"session_duration":     m.SessionDuration,
+		"ttft":                 m.TTFT,
+		"cancelled":            m.Cancelled,
+		"input_tokens":         m.InputTokens,
+		"output_tokens":        m.OutputTokens,
+		"total_tokens":         m.TotalTokens,
+		"tokens_per_second":    m.TokensPerSecond,
+		"input_token_details":  m.InputTokenDetails,
+		"output_token_details": m.OutputTokenDetails,
+		"acquire_time":         m.AcquireTime,
+		"connection_reused":    m.ConnectionReused,
+		"metadata":             m.Metadata,
+	})
+}
+
+func timeToUnixSeconds(t time.Time) float64 {
+	if t.IsZero() {
+		return 0
+	}
+	return float64(t.UnixNano()) / 1e9
+}
+
+func optionalUnixSeconds(t *time.Time) any {
+	if t == nil {
+		return nil
+	}
+	return timeToUnixSeconds(*t)
+}
+
+func optionalString(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
 
 type ModelUsage interface {
 	GetType() string
