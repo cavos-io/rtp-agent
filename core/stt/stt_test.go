@@ -499,6 +499,63 @@ func TestSTTErrorMarshalJSONMatchesReferencePayload(t *testing.T) {
 	}
 }
 
+func TestSTTErrorUnmarshalJSONRejectsMissingReferenceFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{
+			name:    "timestamp",
+			payload: `{"label":"provider.STT","recoverable":true}`,
+			want:    "timestamp",
+		},
+		{
+			name:    "label",
+			payload: `{"timestamp":1.25,"recoverable":true}`,
+			want:    "label",
+		},
+		{
+			name:    "recoverable",
+			payload: `{"timestamp":1.25,"label":"provider.STT"}`,
+			want:    "recoverable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var sttErr STTError
+			err := json.Unmarshal([]byte(tt.payload), &sttErr)
+			if err == nil {
+				t.Fatal("Unmarshal STTError returned nil error, want missing required field error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want it to mention %q", err, tt.want)
+			}
+		})
+	}
+
+	var sttErr STTError
+	if err := json.Unmarshal([]byte(`{"timestamp":1.25,"label":"provider.STT","recoverable":false}`), &sttErr); err != nil {
+		t.Fatalf("Unmarshal STTError with required fields returned error: %v", err)
+	}
+	if sttErr.Type != STTErrorType {
+		t.Fatalf("Type = %q, want %q", sttErr.Type, STTErrorType)
+	}
+	if sttErr.Timestamp.UnixNano() != 1250*int64(time.Millisecond) {
+		t.Fatalf("Timestamp = %v, want 1.25 Unix seconds", sttErr.Timestamp)
+	}
+	if sttErr.Label != "provider.STT" {
+		t.Fatalf("Label = %q, want provider.STT", sttErr.Label)
+	}
+	if sttErr.Recoverable {
+		t.Fatal("Recoverable = true, want false")
+	}
+	if sttErr.Err != nil {
+		t.Fatalf("Err = %v, want nil for public JSON payload", sttErr.Err)
+	}
+}
+
 func TestSTTMetricsEmitterPanicDoesNotBlockOtherHandlers(t *testing.T) {
 	var emitter MetricsEmitter
 	metrics := &telemetry.STTMetrics{RequestID: "req"}
