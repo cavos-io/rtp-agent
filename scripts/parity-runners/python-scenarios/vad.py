@@ -155,6 +155,25 @@ def vad_value_objects(input_data: Any) -> dict[str, Any]:  # noqa: F405
                 }
             ],
         }
+    if action == "event_frames_empty_list":
+        event = module.VADEvent(
+            type=module.VADEventType.INFERENCE_DONE,
+            samples_index=0,
+            timestamp=0,
+            speech_duration=0,
+            silence_duration=0,
+        )
+        payload = asdict(event)
+        return {
+            "contract": "vad-event-frames-default",
+            "events": [
+                {
+                    "name": "event_frames_empty_list",
+                    "frames_is_list": isinstance(payload["frames"], list),
+                    "frames_length": len(payload["frames"]),
+                }
+            ],
+        }
     if action == "event_required_fields":
         required_fields = [
             "type",

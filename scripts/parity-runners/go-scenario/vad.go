@@ -112,6 +112,32 @@ func runVADValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "event_frames_empty_list":
+		data, err := json.Marshal(lkvad.VADEvent{
+			Type:            lkvad.VADEventInferenceDone,
+			SamplesIndex:    0,
+			Timestamp:       0,
+			SpeechDuration:  0,
+			SilenceDuration: 0,
+		})
+		if err != nil {
+			return nil, err
+		}
+		var fields map[string]any
+		if err := json.Unmarshal(data, &fields); err != nil {
+			return nil, err
+		}
+		frames, ok := fields["frames"].([]any)
+		return map[string]any{
+			"contract": "vad-event-frames-default",
+			"events": []map[string]any{
+				{
+					"name":           "event_frames_empty_list",
+					"frames_is_list": ok,
+					"frames_length":  len(frames),
+				},
+			},
+		}, nil
 	case "event_required_fields":
 		requiredFields := []string{
 			"type",
