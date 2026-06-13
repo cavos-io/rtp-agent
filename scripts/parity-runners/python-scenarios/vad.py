@@ -174,6 +174,26 @@ def vad_value_objects(input_data: Any) -> dict[str, Any]:  # noqa: F405
                 }
             ],
         }
+    if action == "event_decode_omitted_frames":
+        event = module.VADEvent(
+            type=module.VADEventType.INFERENCE_DONE,
+            samples_index=320,
+            timestamp=1.25,
+            speech_duration=0,
+            silence_duration=0,
+        )
+        return {
+            "contract": "vad-event-frames-default",
+            "events": [
+                {
+                    "name": "event_decode_omitted_frames",
+                    "frames_is_list": isinstance(event.frames, list),
+                    "frames_length": len(event.frames),
+                    "type": event.type.value,
+                    "samples_index": event.samples_index,
+                }
+            ],
+        }
     if action == "event_required_fields":
         required_fields = [
             "type",

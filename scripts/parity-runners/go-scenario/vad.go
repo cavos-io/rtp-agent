@@ -138,6 +138,23 @@ func runVADValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "event_decode_omitted_frames":
+		var event lkvad.VADEvent
+		if err := json.Unmarshal([]byte(`{"type":"inference_done","samples_index":320,"timestamp":1.25,"speech_duration":0,"silence_duration":0}`), &event); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "vad-event-frames-default",
+			"events": []map[string]any{
+				{
+					"name":           "event_decode_omitted_frames",
+					"frames_is_list": event.Frames != nil,
+					"frames_length":  len(event.Frames),
+					"type":           event.Type,
+					"samples_index":  event.SamplesIndex,
+				},
+			},
+		}, nil
 	case "event_required_fields":
 		requiredFields := []string{
 			"type",
