@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	lktts "github.com/cavos-io/rtp-agent/core/tts"
@@ -168,6 +169,27 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 					"name":                   "timed_string_text",
 					"text":                   fmt.Sprint(timed),
 					"repr_includes_metadata": false,
+				},
+			},
+		}, nil
+	case "timed_string_required_text":
+		var missing lktts.TimedString
+		err := json.Unmarshal([]byte(`{"start_time":0.25}`), &missing)
+		var timed lktts.TimedString
+		if unmarshalErr := json.Unmarshal([]byte(`{"text":"hello"}`), &timed); unmarshalErr != nil {
+			return nil, unmarshalErr
+		}
+		return map[string]any{
+			"contract": "tts-timed-string-required-text",
+			"events": []map[string]any{
+				{
+					"name":                      "timed_string_required_text",
+					"missing_required":          err != nil && strings.Contains(err.Error(), "text"),
+					"text":                      timed.Text,
+					"start_time_default":        timed.StartTime,
+					"end_time_default":          timed.EndTime,
+					"confidence_default":        timed.Confidence,
+					"start_time_offset_default": timed.StartTimeOffset,
 				},
 			},
 		}, nil
