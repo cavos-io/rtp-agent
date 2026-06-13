@@ -39,6 +39,19 @@ func (e VADEvent) MarshalJSON() ([]byte, error) {
 	return json.Marshal(payload)
 }
 
+func (e *VADEvent) UnmarshalJSON(data []byte) error {
+	type vadEventPayload VADEvent
+	var payload vadEventPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	*e = VADEvent(payload)
+	if e.Frames == nil {
+		e.Frames = []*model.AudioFrame{}
+	}
+	return nil
+}
+
 type VADCapabilities struct {
 	UpdateInterval float64 `json:"update_interval"`
 }
