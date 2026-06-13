@@ -739,6 +739,13 @@ func (a *AudioContent) MarshalJSON() ([]byte, error) {
 	return json.Marshal(data)
 }
 
+func (i *Instructions) MarshalJSON() ([]byte, error) {
+	if i == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(instructionsToDict(i))
+}
+
 func ChatContextFromDict(data map[string]any) (*ChatContext, error) {
 	ctx := NewChatContext()
 	if err := ctx.FromDict(data); err != nil {

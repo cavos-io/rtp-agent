@@ -1513,6 +1513,23 @@ func TestChatContentMarshalJSONMatchesReferencePayloads(t *testing.T) {
 		want map[string]any
 	}{
 		{
+			name: "instructions_audio_only",
+			item: NewInstructions("voice instructions"),
+			want: map[string]any{
+				"type":  "instructions",
+				"audio": "voice instructions",
+			},
+		},
+		{
+			name: "instructions_text_variant",
+			item: NewInstructions("voice instructions", "text instructions").AsModality("text"),
+			want: map[string]any{
+				"type":  "instructions",
+				"audio": "voice instructions",
+				"text":  "text instructions",
+			},
+		},
+		{
 			name: "image_content",
 			item: &ImageContent{
 				ID:             "image_item",
@@ -1557,6 +1574,9 @@ func TestChatContentMarshalJSONMatchesReferencePayloads(t *testing.T) {
 				t.Fatalf("marshaled %s = %#v, want %#v", tc.name, got, tc.want)
 			}
 			if _, ok := got["InferenceWidth"]; ok {
+				t.Fatalf("marshaled %s leaked Go field names: %#v", tc.name, got)
+			}
+			if _, ok := got["Audio"]; ok {
 				t.Fatalf("marshaled %s leaked Go field names: %#v", tc.name, got)
 			}
 		})
