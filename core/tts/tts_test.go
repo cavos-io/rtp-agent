@@ -232,6 +232,34 @@ func TestTTSErrorMarshalJSONMatchesReferencePayload(t *testing.T) {
 	}
 }
 
+func TestTTSCapabilitiesMarshalJSONMatchesReferencePayload(t *testing.T) {
+	data, err := json.Marshal(TTSCapabilities{
+		Streaming:         true,
+		AlignedTranscript: true,
+	})
+	if err != nil {
+		t.Fatalf("Marshal TTSCapabilities returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled TTSCapabilities returned error: %v", err)
+	}
+
+	if payload["streaming"] != true {
+		t.Fatalf("streaming = %v, want true", payload["streaming"])
+	}
+	if payload["aligned_transcript"] != true {
+		t.Fatalf("aligned_transcript = %v, want true", payload["aligned_transcript"])
+	}
+	if _, ok := payload["Streaming"]; ok {
+		t.Fatalf("Go field name Streaming leaked into JSON: %s", data)
+	}
+	if _, ok := payload["AlignedTranscript"]; ok {
+		t.Fatalf("Go field name AlignedTranscript leaked into JSON: %s", data)
+	}
+}
+
 func TestTTSErrorEmitterPanicDoesNotBlockOtherHandlers(t *testing.T) {
 	var emitter ErrorEmitter
 	cause := context.Canceled

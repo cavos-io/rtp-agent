@@ -25,8 +25,8 @@ type TimedString struct {
 }
 
 type TTSCapabilities struct {
-	Streaming         bool
-	AlignedTranscript bool
+	Streaming         bool `json:"streaming"`
+	AlignedTranscript bool `json:"aligned_transcript"`
 }
 
 type TTS interface {
