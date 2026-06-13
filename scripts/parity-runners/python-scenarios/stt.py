@@ -70,6 +70,49 @@ def stt_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "timed_string_text":
+        timed = load_reference_types().TimedString(
+            "hello",
+            start_time=0.25,
+            end_time=0.5,
+            confidence=0.875,
+            start_time_offset=1.25,
+            speaker_id="speaker-a",
+        )
+        return {
+            "contract": "stt-value-objects",
+            "events": [
+                {
+                    "name": "timed_string_text",
+                    "text": str(timed),
+                    "repr_includes_metadata": "start_time" in repr(timed),
+                }
+            ],
+        }
+    if action == "timed_string_json":
+        timed = load_reference_types().TimedString(
+            "hello",
+            start_time=0.25,
+            end_time=0.5,
+            confidence=0.875,
+            start_time_offset=1.25,
+            speaker_id="speaker-a",
+        )
+        return {
+            "contract": "stt-value-objects",
+            "events": [
+                {
+                    "name": "timed_string_json",
+                    "text": str(timed),
+                    "start_time": timed.start_time,
+                    "end_time": timed.end_time,
+                    "confidence": timed.confidence,
+                    "start_time_offset": timed.start_time_offset,
+                    "speaker_id": timed.speaker_id,
+                    "has_go_field_names": False,
+                }
+            ],
+        }
     if action == "speech_event_usage":
         event = module.SpeechEvent(
             type=module.SpeechEventType.RECOGNITION_USAGE,
@@ -519,4 +562,3 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
             ],
         }
     raise ValueError(f"unsupported STT stream adapter action {action!r}")
-

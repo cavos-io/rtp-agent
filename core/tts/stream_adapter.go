@@ -44,7 +44,7 @@ func (a *StreamAdapter) Prewarm() {
 }
 
 func (a *StreamAdapter) Close() error {
-	return Close(a.tts)
+	return nil
 }
 
 func (a *StreamAdapter) OnMetricsCollected(handler TTSMetricsHandler) func() {

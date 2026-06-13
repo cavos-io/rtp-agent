@@ -107,6 +107,97 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                 {"name": "close_noop", "error": False},
             ],
         }
+    if action == "capabilities_json":
+        caps = module.TTSCapabilities(streaming=True, aligned_transcript=True)
+        return {
+            "contract": "tts-value-objects",
+            "events": [
+                {
+                    "name": "capabilities_json",
+                    "streaming": caps.streaming,
+                    "aligned_transcript": caps.aligned_transcript,
+                    "has_camel_case": False,
+                }
+            ],
+        }
+    if action == "capabilities_default_aligned":
+        caps = module.TTSCapabilities(streaming=True)
+        return {
+            "contract": "tts-value-objects",
+            "events": [
+                {
+                    "name": "capabilities_default_aligned",
+                    "streaming": caps.streaming,
+                    "aligned_transcript": caps.aligned_transcript,
+                }
+            ],
+        }
+    if action == "synthesized_audio_json":
+        audio = module.SynthesizedAudio(
+            frame=None,
+            request_id="req-a",
+            is_final=True,
+            segment_id="segment-a",
+            delta_text="hello",
+        )
+        return {
+            "contract": "tts-value-objects",
+            "events": [
+                {
+                    "name": "synthesized_audio_json",
+                    "frame_is_none": audio.frame is None,
+                    "request_id": audio.request_id,
+                    "is_final": audio.is_final,
+                    "segment_id": audio.segment_id,
+                    "delta_text": audio.delta_text,
+                    "has_go_field_names": False,
+                    "has_timed_transcript": False,
+                }
+            ],
+        }
+    if action == "timed_string_json":
+        timed = load_reference_types().TimedString(
+            "hello",
+            start_time=0.25,
+            end_time=0.5,
+            confidence=0.875,
+            start_time_offset=1.25,
+            speaker_id="speaker-a",
+        )
+        return {
+            "contract": "tts-value-objects",
+            "events": [
+                {
+                    "name": "timed_string_json",
+                    "text": str(timed),
+                    "start_time": timed.start_time,
+                    "end_time": timed.end_time,
+                    "confidence": timed.confidence,
+                    "start_time_offset": timed.start_time_offset,
+                    "speaker_id": timed.speaker_id,
+                    "has_go_field_names": False,
+                }
+            ],
+        }
+    if action == "timed_string_text":
+        timed = load_reference_types().TimedString(
+            "hello",
+            start_time=0.25,
+            end_time=0.5,
+            confidence=0.875,
+            start_time_offset=1.25,
+            speaker_id="speaker-a",
+        )
+        return {
+            "contract": "tts-value-objects",
+            "events": [
+                {
+                    "name": "timed_string_text",
+                    "text": str(timed),
+                    "repr_includes_metadata": "start_time" in repr(timed),
+                }
+            ],
+        }
     if action == "tts_error_payload":
         err = module.TTSError(
             type="tts_error",
@@ -125,6 +216,28 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                     "recoverable": err.recoverable,
                     "timestamp_positive": err.timestamp > 0,
                     "error_message": str(err.error),
+                }
+            ],
+        }
+    if action == "tts_error_json":
+        err = module.TTSError(
+            type="tts_error",
+            timestamp=1.0,
+            label="provider.TTS",
+            error=Exception("provider disconnected"),
+            recoverable=True,
+        )
+        return {
+            "contract": "tts-value-objects",
+            "events": [
+                {
+                    "name": "tts_error_json",
+                    "type": err.type,
+                    "label": err.label,
+                    "recoverable": err.recoverable,
+                    "timestamp_positive": err.timestamp > 0,
+                    "has_error_field": False,
+                    "has_err_field": False,
                 }
             ],
         }
@@ -225,4 +338,3 @@ def tts_fallback(input_data: Any) -> dict[str, Any]:
             ],
         }
     raise ValueError(f"unsupported TTS fallback action {action!r}")
-

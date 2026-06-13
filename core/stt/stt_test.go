@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -253,6 +254,45 @@ func TestSpeechDataMarshalJSONMatchesReferenceOptionalSpeakerID(t *testing.T) {
 	}
 }
 
+func TestTimedStringMarshalJSONMatchesReferencePayload(t *testing.T) {
+	data, err := json.Marshal(TimedString{
+		Text:            "hello",
+		StartTime:       0.25,
+		EndTime:         0.5,
+		Confidence:      0.875,
+		StartTimeOffset: 1.25,
+		SpeakerID:       "speaker-a",
+	})
+	if err != nil {
+		t.Fatalf("Marshal TimedString returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled TimedString returned error: %v", err)
+	}
+
+	want := map[string]any{
+		"text":              "hello",
+		"start_time":        0.25,
+		"end_time":          0.5,
+		"confidence":        0.875,
+		"start_time_offset": 1.25,
+		"speaker_id":        "speaker-a",
+	}
+	for key, value := range want {
+		if payload[key] != value {
+			t.Fatalf("%s = %v, want %v; payload %s", key, payload[key], value, data)
+		}
+	}
+	if _, ok := payload["StartTimeOffset"]; ok {
+		t.Fatalf("Go field name StartTimeOffset leaked into JSON: %s", data)
+	}
+	if _, ok := payload["SpeakerID"]; ok {
+		t.Fatalf("Go field name SpeakerID leaked into JSON: %s", data)
+	}
+}
+
 func TestTimedStringUnmarshalJSONRequiresReferenceText(t *testing.T) {
 	var missing TimedString
 	if err := json.Unmarshal([]byte(`{"start_time":0.25}`), &missing); err == nil {
@@ -270,6 +310,21 @@ func TestTimedStringUnmarshalJSONRequiresReferenceText(t *testing.T) {
 	}
 	if timed.StartTime != 0 || timed.EndTime != 0 || timed.Confidence != 0 || timed.StartTimeOffset != 0 {
 		t.Fatalf("optional timing fields = %#v, want zero defaults", timed)
+	}
+}
+
+func TestTimedStringStringMatchesReferenceText(t *testing.T) {
+	timed := TimedString{
+		Text:            "hello",
+		StartTime:       0.25,
+		EndTime:         0.5,
+		Confidence:      0.875,
+		StartTimeOffset: 1.25,
+		SpeakerID:       "speaker-a",
+	}
+
+	if got := fmt.Sprint(timed); got != "hello" {
+		t.Fatalf("fmt.Sprint(TimedString) = %q, want reference text", got)
 	}
 }
 

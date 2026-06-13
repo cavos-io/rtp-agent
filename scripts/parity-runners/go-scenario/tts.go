@@ -52,6 +52,123 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 				{"name": "close_noop", "error": err != nil},
 			},
 		}, nil
+	case "capabilities_json":
+		data, marshalErr := json.Marshal(lktts.TTSCapabilities{
+			Streaming:         true,
+			AlignedTranscript: true,
+		})
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		var payload map[string]any
+		if unmarshalErr := json.Unmarshal(data, &payload); unmarshalErr != nil {
+			return nil, unmarshalErr
+		}
+		return map[string]any{
+			"contract": "tts-value-objects",
+			"events": []map[string]any{
+				{
+					"name":               "capabilities_json",
+					"streaming":          payload["streaming"],
+					"aligned_transcript": payload["aligned_transcript"],
+					"has_camel_case":     hasAnyKey(payload, "Streaming", "AlignedTranscript"),
+				},
+			},
+		}, nil
+	case "capabilities_default_aligned":
+		var caps lktts.TTSCapabilities
+		if err := json.Unmarshal([]byte(`{"streaming":true}`), &caps); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "tts-value-objects",
+			"events": []map[string]any{
+				{
+					"name":               "capabilities_default_aligned",
+					"streaming":          caps.Streaming,
+					"aligned_transcript": caps.AlignedTranscript,
+				},
+			},
+		}, nil
+	case "synthesized_audio_json":
+		data, marshalErr := json.Marshal(lktts.SynthesizedAudio{
+			RequestID: "req-a",
+			IsFinal:   true,
+			SegmentID: "segment-a",
+			DeltaText: "hello",
+		})
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		var payload map[string]any
+		if unmarshalErr := json.Unmarshal(data, &payload); unmarshalErr != nil {
+			return nil, unmarshalErr
+		}
+		return map[string]any{
+			"contract": "tts-value-objects",
+			"events": []map[string]any{
+				{
+					"name":                 "synthesized_audio_json",
+					"frame_is_none":        payload["frame"] == nil,
+					"request_id":           payload["request_id"],
+					"is_final":             payload["is_final"],
+					"segment_id":           payload["segment_id"],
+					"delta_text":           payload["delta_text"],
+					"has_go_field_names":   hasAnyKey(payload, "RequestID", "IsFinal", "SegmentID", "DeltaText"),
+					"has_timed_transcript": hasAnyKey(payload, "timed_transcript"),
+				},
+			},
+		}, nil
+	case "timed_string_json":
+		data, marshalErr := json.Marshal(lktts.TimedString{
+			Text:            "hello",
+			StartTime:       0.25,
+			EndTime:         0.5,
+			Confidence:      0.875,
+			StartTimeOffset: 1.25,
+			SpeakerID:       "speaker-a",
+		})
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		var payload map[string]any
+		if unmarshalErr := json.Unmarshal(data, &payload); unmarshalErr != nil {
+			return nil, unmarshalErr
+		}
+		return map[string]any{
+			"contract": "tts-value-objects",
+			"events": []map[string]any{
+				{
+					"name":               "timed_string_json",
+					"text":               payload["text"],
+					"start_time":         payload["start_time"],
+					"end_time":           payload["end_time"],
+					"confidence":         payload["confidence"],
+					"start_time_offset":  payload["start_time_offset"],
+					"speaker_id":         payload["speaker_id"],
+					"has_go_field_names": hasAnyKey(payload, "StartTime", "EndTime", "StartTimeOffset", "SpeakerID"),
+				},
+			},
+		}, nil
+	case "timed_string_text":
+		timed := lktts.TimedString{
+			Text:            "hello",
+			StartTime:       0.25,
+			EndTime:         0.5,
+			Confidence:      0.875,
+			StartTimeOffset: 1.25,
+			SpeakerID:       "speaker-a",
+		}
+		return map[string]any{
+			"contract": "tts-value-objects",
+			"events": []map[string]any{
+				{
+					"name":                   "timed_string_text",
+					"text":                   fmt.Sprint(timed),
+					"repr_includes_metadata": false,
+				},
+			},
+		}, nil
 	case "tts_error_payload":
 		err := lktts.TTSError{
 			Type:        lktts.TTSErrorType,
@@ -70,6 +187,37 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 					"recoverable":        err.Recoverable,
 					"timestamp_positive": err.Timestamp.UnixNano() > 0,
 					"error_message":      err.Error(),
+				},
+			},
+		}, nil
+	case "tts_error_json":
+		err := lktts.TTSError{
+			Type:        lktts.TTSErrorType,
+			Timestamp:   time.Now(),
+			Label:       "provider.TTS",
+			Err:         errors.New("provider disconnected"),
+			Recoverable: true,
+		}
+		data, marshalErr := json.Marshal(err)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		var payload map[string]any
+		if unmarshalErr := json.Unmarshal(data, &payload); unmarshalErr != nil {
+			return nil, unmarshalErr
+		}
+		timestamp, _ := payload["timestamp"].(float64)
+		return map[string]any{
+			"contract": "tts-value-objects",
+			"events": []map[string]any{
+				{
+					"name":               "tts_error_json",
+					"type":               payload["type"],
+					"label":              payload["label"],
+					"recoverable":        payload["recoverable"],
+					"timestamp_positive": timestamp > 0,
+					"has_error_field":    hasAnyKey(payload, "error"),
+					"has_err_field":      hasAnyKey(payload, "err"),
 				},
 			},
 		}, nil
