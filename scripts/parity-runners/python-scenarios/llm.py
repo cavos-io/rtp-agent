@@ -1642,6 +1642,13 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 if key in ("google", "livekit", "xai") and bool(value)
             }
 
+        def openai_image_url(part: dict[str, Any]) -> str:
+            image = str(part.get("image", ""))
+            match = re.match(r"^data:([^;,]+);base64,(.*)$", image)
+            if match:
+                base64.b64decode(match.group(2), validate=True)
+            return image
+
         def openai_valid_call_ids() -> set[str]:
             function_call_ids = {
                 str(item.get("call_id", ""))
@@ -1697,7 +1704,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                             {
                                 "type": "image_url",
                                 "image_url": {
-                                    "url": part.get("image"),
+                                    "url": openai_image_url(part),
                                     "detail": part.get("inference_detail") or "auto",
                                 },
                             }
@@ -1731,7 +1738,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                             parts.append(
                                 {
                                     "type": "input_image",
-                                    "image_url": part.get("image"),
+                                    "image_url": openai_image_url(part),
                                     "detail": part.get("inference_detail") or "auto",
                                 }
                             )
