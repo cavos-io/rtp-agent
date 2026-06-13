@@ -1394,6 +1394,30 @@ func runLLMChatContextCallStep(state *llmScenarioState, step llmScenarioStepSpec
 			return providerErr
 		}
 		state.vars[step.Assign] = formatted
+	case "to_provider_format_with_extra":
+		options := lkllm.ChatContextProviderFormatOptions{}
+		if _, ok := step.Args["inject_dummy_user_message"]; ok {
+			value := scenarioBoolArg(step.Args, "inject_dummy_user_message")
+			options.InjectDummyUserMessage = &value
+		}
+		if _, ok := step.Args["inject_trailing_user_message"]; ok {
+			value := scenarioBoolArg(step.Args, "inject_trailing_user_message")
+			options.InjectTrailingUserMessage = &value
+		}
+		if raw, ok := step.Args["thought_signatures"].(map[string]any); ok {
+			options.ThoughtSignatures = map[string][]byte{}
+			for key, value := range raw {
+				options.ThoughtSignatures[key] = []byte(fmt.Sprint(value))
+			}
+		}
+		formatted, extra, providerErr := ctx.ToProviderFormatE(stringArg(step.Args, "format"), options)
+		if providerErr != nil {
+			return providerErr
+		}
+		state.vars[step.Assign] = map[string]any{
+			"messages": formatted,
+			"extra":    extra,
+		}
 	case "to_provider_format_capture_error":
 		_, _, providerErr := ctx.ToProviderFormatE(stringArg(step.Args, "format"))
 		state.vars[step.Assign] = map[string]any{

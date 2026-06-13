@@ -1654,6 +1654,8 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 current_google_parts = []
 
         for item in items:
+            if provider_format == "google" and item["type"] == "message" and item["role"] == "system":
+                continue
             if item["type"] == "function_call":
                 args = json.loads(item.get("arguments") or "{}")
                 if provider_format == "google":
@@ -1670,6 +1672,21 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                     if thought_signatures and item["call_id"] in thought_signatures:
                         part["thought_signature"] = thought_signatures[item["call_id"]]
                     current_google_parts.append(part)
+                continue
+            if item["type"] == "function_call_output":
+                if provider_format == "google":
+                    if current_google_role != "tool":
+                        flush_google_parts()
+                        current_google_role = "tool"
+                    current_google_parts.append(
+                        {
+                            "function_response": {
+                                "id": item["call_id"],
+                                "name": item["name"],
+                                "response": {"output": item["output"]},
+                            }
+                        }
+                    )
                 continue
             if item["type"] != "message":
                 continue
@@ -1692,6 +1709,9 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             )
         if provider_format == "google":
             flush_google_parts()
+            for message in messages:
+                if message["role"] == "tool":
+                    message["role"] = "user"
         if inject_dummy_user_message:
             if provider_format == "google":
                 if not messages or messages[-1]["role"] not in ("user", "tool"):
@@ -1702,6 +1722,34 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         if provider_format == "anthropic" and inject_trailing_user_message and messages and messages[-1]["role"] == "assistant":
             messages.append({"role": "user", "content": [{"text": " ", "type": "text"}]})
         return messages
+
+    def to_provider_format_with_extra(
+        items: list[dict[str, Any]],
+        *,
+        provider_format: str,
+        inject_dummy_user_message: bool = True,
+        inject_trailing_user_message: bool = False,
+        thought_signatures: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        messages = to_provider_format(
+            items,
+            provider_format=provider_format,
+            inject_dummy_user_message=inject_dummy_user_message,
+            inject_trailing_user_message=inject_trailing_user_message,
+            thought_signatures=thought_signatures,
+        )
+        extra: Any = None
+        if provider_format == "google":
+            extra = {
+                "system_messages": [
+                    text_content(item["content"]) or ""
+                    for item in items
+                    if item["type"] == "message"
+                    and item["role"] == "system"
+                    and (text_content(item["content"]) or "")
+                ]
+            }
+        return {"messages": messages, "extra": extra}
 
     def provider_format_error(
         items: list[dict[str, Any]],
@@ -1903,6 +1951,21 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         if op == "to_provider_format":
             args = step.get("args", {})
             variables[step["assign"]] = to_provider_format(
+                target_items,
+                provider_format=str(args.get("format", "openai")),
+                inject_dummy_user_message=bool(args.get("inject_dummy_user_message", True)),
+                inject_trailing_user_message=bool(args.get("inject_trailing_user_message", False)),
+                thought_signatures={
+                    str(key): str(value)
+                    for key, value in args.get("thought_signatures", {}).items()
+                }
+                if "thought_signatures" in args
+                else None,
+            )
+            return
+        if op == "to_provider_format_with_extra":
+            args = step.get("args", {})
+            variables[step["assign"]] = to_provider_format_with_extra(
                 target_items,
                 provider_format=str(args.get("format", "openai")),
                 inject_dummy_user_message=bool(args.get("inject_dummy_user_message", True)),
