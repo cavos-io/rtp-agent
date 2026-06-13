@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	lktts "github.com/cavos-io/rtp-agent/core/tts"
@@ -90,6 +91,24 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "capabilities_required_streaming":
+		var missing lktts.TTSCapabilities
+		err := json.Unmarshal([]byte(`{"aligned_transcript":true}`), &missing)
+		var caps lktts.TTSCapabilities
+		if unmarshalErr := json.Unmarshal([]byte(`{"streaming":true}`), &caps); unmarshalErr != nil {
+			return nil, unmarshalErr
+		}
+		return map[string]any{
+			"contract": "tts-capabilities-required-streaming",
+			"events": []map[string]any{
+				{
+					"name":               "capabilities_required_streaming",
+					"missing_required":   err != nil && strings.Contains(err.Error(), "streaming"),
+					"streaming":          caps.Streaming,
+					"aligned_transcript": caps.AlignedTranscript,
+				},
+			},
+		}, nil
 	case "synthesized_audio_json":
 		data, marshalErr := json.Marshal(lktts.SynthesizedAudio{
 			RequestID: "req-a",
@@ -116,6 +135,45 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 					"delta_text":           payload["delta_text"],
 					"has_go_field_names":   hasAnyKey(payload, "RequestID", "IsFinal", "SegmentID", "DeltaText"),
 					"has_timed_transcript": hasAnyKey(payload, "timed_transcript"),
+				},
+			},
+		}, nil
+	case "synthesized_audio_required_fields":
+		requiredFields := []string{"frame", "request_id"}
+		base := map[string]any{"frame": nil, "request_id": ""}
+		missingFields := make([]string, 0, len(requiredFields))
+		for _, fieldName := range requiredFields {
+			payload := make(map[string]any, len(base)-1)
+			for key, value := range base {
+				if key != fieldName {
+					payload[key] = value
+				}
+			}
+			data, err := json.Marshal(payload)
+			if err != nil {
+				return nil, err
+			}
+			var audio lktts.SynthesizedAudio
+			err = json.Unmarshal(data, &audio)
+			if err != nil && strings.Contains(err.Error(), fieldName) {
+				missingFields = append(missingFields, fieldName)
+			}
+		}
+		var audio lktts.SynthesizedAudio
+		if err := json.Unmarshal([]byte(`{"frame":null,"request_id":""}`), &audio); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "tts-synthesized-audio-required-fields",
+			"events": []map[string]any{
+				{
+					"name":           "synthesized_audio_required_fields",
+					"missing_fields": missingFields,
+					"frame_is_none":  audio.Frame == nil,
+					"request_id":     audio.RequestID,
+					"is_final":       audio.IsFinal,
+					"segment_id":     audio.SegmentID,
+					"delta_text":     audio.DeltaText,
 				},
 			},
 		}, nil
@@ -150,6 +208,26 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "timed_string_optional_speaker":
+		data, marshalErr := json.Marshal(lktts.TimedString{Text: "hello"})
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		var payload map[string]any
+		if unmarshalErr := json.Unmarshal(data, &payload); unmarshalErr != nil {
+			return nil, unmarshalErr
+		}
+		return map[string]any{
+			"contract": "tts-timed-string-optional-speaker",
+			"events": []map[string]any{
+				{
+					"name":            "timed_string_optional_speaker",
+					"text":            payload["text"],
+					"speaker_id":      payload["speaker_id"],
+					"speaker_is_none": payload["speaker_id"] == nil,
+				},
+			},
+		}, nil
 	case "timed_string_text":
 		timed := lktts.TimedString{
 			Text:            "hello",
@@ -166,6 +244,27 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 					"name":                   "timed_string_text",
 					"text":                   fmt.Sprint(timed),
 					"repr_includes_metadata": false,
+				},
+			},
+		}, nil
+	case "timed_string_required_text":
+		var missing lktts.TimedString
+		err := json.Unmarshal([]byte(`{"start_time":0.25}`), &missing)
+		var timed lktts.TimedString
+		if unmarshalErr := json.Unmarshal([]byte(`{"text":"hello"}`), &timed); unmarshalErr != nil {
+			return nil, unmarshalErr
+		}
+		return map[string]any{
+			"contract": "tts-timed-string-required-text",
+			"events": []map[string]any{
+				{
+					"name":                      "timed_string_required_text",
+					"missing_required":          err != nil && strings.Contains(err.Error(), "text"),
+					"text":                      timed.Text,
+					"start_time_default":        timed.StartTime,
+					"end_time_default":          timed.EndTime,
+					"confidence_default":        timed.Confidence,
+					"start_time_offset_default": timed.StartTimeOffset,
 				},
 			},
 		}, nil

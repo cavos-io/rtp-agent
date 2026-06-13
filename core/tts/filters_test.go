@@ -91,14 +91,17 @@ func TestTextTransformBufferYieldsBeforeTrailingSplitToken(t *testing.T) {
 	}
 }
 
-func TestTextTransformBufferKeepsTerminalPunctuationWithChunk(t *testing.T) {
+func TestTextTransformBufferSplitsTerminalPunctuationLikeReference(t *testing.T) {
 	buffer := NewTextTransformBuffer()
 
 	chunks := append(buffer.Push("Halo, ada yang bisa saya bantu?"), buffer.Flush()...)
 
-	want := []string{"Halo, ada yang bisa saya bantu?"}
+	want := []string{"Halo, ada yang bisa saya bantu", "?"}
 	if !equalStringSlices(chunks, want) {
 		t.Fatalf("chunks = %#v, want %#v", chunks, want)
+	}
+	if got := strings.Join(chunks, ""); got != "Halo, ada yang bisa saya bantu?" {
+		t.Fatalf("joined chunks = %q, want original utterance", got)
 	}
 }
 

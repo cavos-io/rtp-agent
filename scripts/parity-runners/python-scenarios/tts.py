@@ -132,6 +132,24 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "capabilities_required_streaming":
+        missing_required = False
+        try:
+            module.TTSCapabilities(aligned_transcript=True)
+        except TypeError as exc:
+            missing_required = "streaming" in str(exc)
+        caps = module.TTSCapabilities(streaming=True)
+        return {
+            "contract": "tts-capabilities-required-streaming",
+            "events": [
+                {
+                    "name": "capabilities_required_streaming",
+                    "missing_required": missing_required,
+                    "streaming": caps.streaming,
+                    "aligned_transcript": caps.aligned_transcript,
+                }
+            ],
+        }
     if action == "synthesized_audio_json":
         audio = module.SynthesizedAudio(
             frame=None,
@@ -152,6 +170,33 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                     "delta_text": audio.delta_text,
                     "has_go_field_names": False,
                     "has_timed_transcript": False,
+                }
+            ],
+        }
+    if action == "synthesized_audio_required_fields":
+        required_fields = ["frame", "request_id"]
+        base = {"frame": None, "request_id": ""}
+        missing_fields = []
+        for field_name in required_fields:
+            kwargs = dict(base)
+            del kwargs[field_name]
+            try:
+                module.SynthesizedAudio(**kwargs)
+            except TypeError as exc:
+                if field_name in str(exc):
+                    missing_fields.append(field_name)
+        audio = module.SynthesizedAudio(**base)
+        return {
+            "contract": "tts-synthesized-audio-required-fields",
+            "events": [
+                {
+                    "name": "synthesized_audio_required_fields",
+                    "missing_fields": missing_fields,
+                    "frame_is_none": audio.frame is None,
+                    "request_id": audio.request_id,
+                    "is_final": audio.is_final,
+                    "segment_id": audio.segment_id,
+                    "delta_text": audio.delta_text,
                 }
             ],
         }
@@ -179,6 +224,19 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "timed_string_optional_speaker":
+        timed = load_reference_types().TimedString("hello")
+        return {
+            "contract": "tts-timed-string-optional-speaker",
+            "events": [
+                {
+                    "name": "timed_string_optional_speaker",
+                    "text": str(timed),
+                    "speaker_id": timed.speaker_id,
+                    "speaker_is_none": timed.speaker_id is None,
+                }
+            ],
+        }
     if action == "timed_string_text":
         timed = load_reference_types().TimedString(
             "hello",
@@ -195,6 +253,36 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                     "name": "timed_string_text",
                     "text": str(timed),
                     "repr_includes_metadata": "start_time" in repr(timed),
+                }
+            ],
+        }
+    if action == "timed_string_required_text":
+        types_module = load_reference_types()
+        missing_required = False
+        try:
+            types_module.TimedString()
+        except TypeError as exc:
+            missing_required = "text" in str(exc)
+        timed = types_module.TimedString("hello")
+        return {
+            "contract": "tts-timed-string-required-text",
+            "events": [
+                {
+                    "name": "timed_string_required_text",
+                    "missing_required": missing_required,
+                    "text": str(timed),
+                    "start_time_default": 0
+                    if timed.start_time is types_module.NOT_GIVEN
+                    else timed.start_time,
+                    "end_time_default": 0
+                    if timed.end_time is types_module.NOT_GIVEN
+                    else timed.end_time,
+                    "confidence_default": 0
+                    if timed.confidence is types_module.NOT_GIVEN
+                    else timed.confidence,
+                    "start_time_offset_default": 0
+                    if timed.start_time_offset is types_module.NOT_GIVEN
+                    else timed.start_time_offset,
                 }
             ],
         }

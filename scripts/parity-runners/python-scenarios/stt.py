@@ -70,6 +70,45 @@ def stt_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "speech_data_optional_speaker":
+        word = load_reference_types().TimedString("hello")
+        data = module.SpeechData(language="en", text="hello", words=[word])
+        return {
+            "contract": "stt-speech-data-optional-speaker",
+            "events": [
+                {
+                    "name": "speech_data_optional_speaker",
+                    "speaker_id": data.speaker_id,
+                    "speaker_is_none": data.speaker_id is None,
+                    "word_speaker_id": data.words[0].speaker_id,
+                    "word_speaker_is_none": data.words[0].speaker_id is None,
+                }
+            ],
+        }
+    if action == "speech_data_required_fields":
+        required_fields = ["language", "text"]
+        base = {"language": "", "text": ""}
+        missing_fields = []
+        for field_name in required_fields:
+            kwargs = dict(base)
+            del kwargs[field_name]
+            try:
+                module.SpeechData(**kwargs)
+            except TypeError as exc:
+                if field_name in str(exc):
+                    missing_fields.append(field_name)
+        data = module.SpeechData(**base)
+        return {
+            "contract": "stt-speech-data-required-fields",
+            "events": [
+                {
+                    "name": "speech_data_required_fields",
+                    "missing_fields": missing_fields,
+                    "language": str(data.language),
+                    "text": data.text,
+                }
+            ],
+        }
     if action == "timed_string_text":
         timed = load_reference_types().TimedString(
             "hello",
@@ -86,6 +125,36 @@ def stt_value_objects(input_data: Any) -> dict[str, Any]:
                     "name": "timed_string_text",
                     "text": str(timed),
                     "repr_includes_metadata": "start_time" in repr(timed),
+                }
+            ],
+        }
+    if action == "timed_string_required_text":
+        types_module = load_reference_types()
+        missing_required = False
+        try:
+            types_module.TimedString()
+        except TypeError as exc:
+            missing_required = "text" in str(exc)
+        timed = types_module.TimedString("hello")
+        return {
+            "contract": "stt-timed-string-required-text",
+            "events": [
+                {
+                    "name": "timed_string_required_text",
+                    "missing_required": missing_required,
+                    "text": str(timed),
+                    "start_time_default": 0
+                    if timed.start_time is types_module.NOT_GIVEN
+                    else timed.start_time,
+                    "end_time_default": 0
+                    if timed.end_time is types_module.NOT_GIVEN
+                    else timed.end_time,
+                    "confidence_default": 0
+                    if timed.confidence is types_module.NOT_GIVEN
+                    else timed.confidence,
+                    "start_time_offset_default": 0
+                    if timed.start_time_offset is types_module.NOT_GIVEN
+                    else timed.start_time_offset,
                 }
             ],
         }
@@ -315,6 +384,34 @@ def stt_value_objects(input_data: Any) -> dict[str, Any]:
                     "interim_results": caps.interim_results,
                     "diarization": caps.diarization,
                     "aligned_transcript": "" if caps.aligned_transcript is False else caps.aligned_transcript,
+                    "offline_recognize": caps.offline_recognize,
+                }
+            ],
+        }
+    if action == "capabilities_required_fields":
+        required_fields = ["streaming", "interim_results"]
+        base = {"streaming": True, "interim_results": True}
+        missing_fields = []
+        for field_name in required_fields:
+            kwargs = dict(base)
+            del kwargs[field_name]
+            try:
+                module.STTCapabilities(**kwargs)
+            except TypeError as exc:
+                if field_name in str(exc):
+                    missing_fields.append(field_name)
+        caps = module.STTCapabilities(**base)
+        aligned = "" if caps.aligned_transcript is False else caps.aligned_transcript
+        return {
+            "contract": "stt-capabilities-required-fields",
+            "events": [
+                {
+                    "name": "capabilities_required_fields",
+                    "missing_fields": missing_fields,
+                    "streaming": caps.streaming,
+                    "interim_results": caps.interim_results,
+                    "diarization": caps.diarization,
+                    "aligned_transcript": aligned,
                     "offline_recognize": caps.offline_recognize,
                 }
             ],

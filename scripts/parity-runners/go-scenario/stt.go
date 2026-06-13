@@ -76,6 +76,71 @@ func runSTTValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "speech_data_optional_speaker":
+		data, marshalErr := json.Marshal(lkstt.SpeechData{
+			Language: "en",
+			Text:     "hello",
+			Words: []lkstt.TimedString{{
+				Text: "hello",
+			}},
+		})
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		var payload map[string]any
+		if unmarshalErr := json.Unmarshal(data, &payload); unmarshalErr != nil {
+			return nil, unmarshalErr
+		}
+		words, _ := payload["words"].([]any)
+		word, _ := words[0].(map[string]any)
+		return map[string]any{
+			"contract": "stt-speech-data-optional-speaker",
+			"events": []map[string]any{
+				{
+					"name":                 "speech_data_optional_speaker",
+					"speaker_id":           payload["speaker_id"],
+					"speaker_is_none":      payload["speaker_id"] == nil,
+					"word_speaker_id":      word["speaker_id"],
+					"word_speaker_is_none": word["speaker_id"] == nil,
+				},
+			},
+		}, nil
+	case "speech_data_required_fields":
+		requiredFields := []string{"language", "text"}
+		base := map[string]any{"language": "", "text": ""}
+		missingFields := make([]string, 0, len(requiredFields))
+		for _, fieldName := range requiredFields {
+			payload := make(map[string]any, len(base)-1)
+			for key, value := range base {
+				if key != fieldName {
+					payload[key] = value
+				}
+			}
+			data, err := json.Marshal(payload)
+			if err != nil {
+				return nil, err
+			}
+			var speechData lkstt.SpeechData
+			err = json.Unmarshal(data, &speechData)
+			if err != nil && strings.Contains(err.Error(), fieldName) {
+				missingFields = append(missingFields, fieldName)
+			}
+		}
+		var speechData lkstt.SpeechData
+		if err := json.Unmarshal([]byte(`{"language":"","text":""}`), &speechData); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "stt-speech-data-required-fields",
+			"events": []map[string]any{
+				{
+					"name":           "speech_data_required_fields",
+					"missing_fields": missingFields,
+					"language":       speechData.Language,
+					"text":           speechData.Text,
+				},
+			},
+		}, nil
 	case "timed_string_text":
 		timed := lkstt.TimedString{
 			Text:            "hello",
@@ -92,6 +157,27 @@ func runSTTValueObjects(input json.RawMessage) (any, error) {
 					"name":                   "timed_string_text",
 					"text":                   fmt.Sprint(timed),
 					"repr_includes_metadata": false,
+				},
+			},
+		}, nil
+	case "timed_string_required_text":
+		var missing lkstt.TimedString
+		err := json.Unmarshal([]byte(`{"start_time":0.25}`), &missing)
+		var timed lkstt.TimedString
+		if unmarshalErr := json.Unmarshal([]byte(`{"text":"hello"}`), &timed); unmarshalErr != nil {
+			return nil, unmarshalErr
+		}
+		return map[string]any{
+			"contract": "stt-timed-string-required-text",
+			"events": []map[string]any{
+				{
+					"name":                      "timed_string_required_text",
+					"missing_required":          err != nil && strings.Contains(err.Error(), "text"),
+					"text":                      timed.Text,
+					"start_time_default":        timed.StartTime,
+					"end_time_default":          timed.EndTime,
+					"confidence_default":        timed.Confidence,
+					"start_time_offset_default": timed.StartTimeOffset,
 				},
 			},
 		}, nil
@@ -354,6 +440,45 @@ func runSTTValueObjects(input json.RawMessage) (any, error) {
 			"events": []map[string]any{
 				{
 					"name":               "capabilities_unmarshal_defaults",
+					"streaming":          caps.Streaming,
+					"interim_results":    caps.InterimResults,
+					"diarization":        caps.Diarization,
+					"aligned_transcript": caps.AlignedTranscript,
+					"offline_recognize":  caps.OfflineRecognize,
+				},
+			},
+		}, nil
+	case "capabilities_required_fields":
+		requiredFields := []string{"streaming", "interim_results"}
+		base := map[string]any{"streaming": true, "interim_results": true}
+		missingFields := make([]string, 0, len(requiredFields))
+		for _, fieldName := range requiredFields {
+			payload := make(map[string]any, len(base)-1)
+			for key, value := range base {
+				if key != fieldName {
+					payload[key] = value
+				}
+			}
+			data, err := json.Marshal(payload)
+			if err != nil {
+				return nil, err
+			}
+			var caps lkstt.STTCapabilities
+			err = json.Unmarshal(data, &caps)
+			if err != nil && strings.Contains(err.Error(), fieldName) {
+				missingFields = append(missingFields, fieldName)
+			}
+		}
+		var caps lkstt.STTCapabilities
+		if err := json.Unmarshal([]byte(`{"streaming":true,"interim_results":true}`), &caps); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "stt-capabilities-required-fields",
+			"events": []map[string]any{
+				{
+					"name":               "capabilities_required_fields",
+					"missing_fields":     missingFields,
 					"streaming":          caps.Streaming,
 					"interim_results":    caps.InterimResults,
 					"diarization":        caps.Diarization,
