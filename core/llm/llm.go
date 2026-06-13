@@ -590,6 +590,37 @@ type ChatChunk struct {
 	Usage *CompletionUsage
 }
 
+func (c ChatChunk) MarshalJSON() ([]byte, error) {
+	type payload struct {
+		ID    string           `json:"id"`
+		Delta *ChoiceDelta     `json:"delta"`
+		Usage *CompletionUsage `json:"usage"`
+	}
+
+	return json.Marshal(payload(c))
+}
+
+func (c *ChatChunk) UnmarshalJSON(data []byte) error {
+	type payload struct {
+		ID    *string          `json:"id"`
+		Delta *ChoiceDelta     `json:"delta"`
+		Usage *CompletionUsage `json:"usage"`
+	}
+
+	var decoded payload
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if decoded.ID == nil {
+		return errors.New("chat chunk id is required")
+	}
+
+	c.ID = *decoded.ID
+	c.Delta = decoded.Delta
+	c.Usage = decoded.Usage
+	return nil
+}
+
 type CollectedResponse struct {
 	Text      string
 	ToolCalls []FunctionToolCall

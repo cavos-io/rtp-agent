@@ -25,8 +25,17 @@ def load_reference_llm_value_class(class_name: str):
                 setattr(self, field, value)
 
         def model_dump(self) -> dict[str, Any]:
+            def dump_value(value: Any) -> Any:
+                if hasattr(value, "model_dump"):
+                    return value.model_dump()
+                if isinstance(value, list):
+                    return [dump_value(item) for item in value]
+                if isinstance(value, dict):
+                    return {key: dump_value(item) for key, item in value.items()}
+                return value
+
             return {
-                field: getattr(self, field)
+                field: dump_value(getattr(self, field))
                 for field in getattr(self.__class__, "__annotations__", {})
             }
 
@@ -48,6 +57,7 @@ def load_reference_llm_value_class(class_name: str):
         "Any": Any,
         "BaseModel": BaseModel,
         "ChatRole": str,
+        "ChoiceDelta": object,
         "CompletionUsage": object,
         "Field": Field,
         "FunctionToolCall": object,
@@ -417,6 +427,25 @@ def llm_value_objects(input_data: Any) -> dict[str, Any]:
                 },
                 {
                     "name": "choice_delta_defaults",
+                    "minimal_payload": minimal.model_dump(),
+                },
+            ],
+        }
+    if action == "chat_chunk_payload":
+        choice_delta = load_reference_llm_value_class("ChoiceDelta")
+        chat_chunk = load_reference_llm_value_class("ChatChunk")
+        delta = choice_delta(role="assistant", content="hello")
+        chunk = chat_chunk(id="chunk_123", delta=delta)
+        minimal = chat_chunk(id="chunk_empty")
+        return {
+            "contract": "llm-value-objects",
+            "events": [
+                {
+                    "name": "chat_chunk_payload",
+                    "payload": chunk.model_dump(),
+                },
+                {
+                    "name": "chat_chunk_defaults",
                     "minimal_payload": minimal.model_dump(),
                 },
             ],

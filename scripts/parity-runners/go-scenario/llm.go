@@ -1979,6 +1979,35 @@ func runLLMValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "chat_chunk_payload":
+		chunk := lkllm.ChatChunk{
+			ID: "chunk_123",
+			Delta: &lkllm.ChoiceDelta{
+				Role:    lkllm.ChatRoleAssistant,
+				Content: "hello",
+			},
+		}
+		payload, err := chatChunkPayload(chunk)
+		if err != nil {
+			return nil, err
+		}
+		minimal, err := chatChunkPayloadFromJSON([]byte(`{"id":"chunk_empty"}`))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "llm-value-objects",
+			"events": []map[string]any{
+				{
+					"name":    "chat_chunk_payload",
+					"payload": payload,
+				},
+				{
+					"name":            "chat_chunk_defaults",
+					"minimal_payload": minimal,
+				},
+			},
+		}, nil
 	case "realtime_error_payload":
 		underlying := errors.New("session disconnected")
 		err := lkllm.NewRealtimeModelError("openai.RealtimeModel", underlying, false)
@@ -2762,6 +2791,26 @@ func choiceDeltaPayloadFromJSON(data []byte) (map[string]any, error) {
 		return nil, err
 	}
 	return choiceDeltaPayload(delta)
+}
+
+func chatChunkPayload(chunk lkllm.ChatChunk) (map[string]any, error) {
+	data, err := json.Marshal(chunk)
+	if err != nil {
+		return nil, err
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func chatChunkPayloadFromJSON(data []byte) (map[string]any, error) {
+	var chunk lkllm.ChatChunk
+	if err := json.Unmarshal(data, &chunk); err != nil {
+		return nil, err
+	}
+	return chatChunkPayload(chunk)
 }
 
 type scenarioLLMToolset struct {
