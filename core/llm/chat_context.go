@@ -844,7 +844,7 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 			CallID    *string  `json:"call_id"`
 			Name      string   `json:"name"`
 			Output    *string  `json:"output"`
-			IsError   bool     `json:"is_error"`
+			IsError   *bool    `json:"is_error"`
 			CreatedAt *float64 `json:"created_at"`
 		}
 		if err := json.Unmarshal(data, &item); err != nil {
@@ -856,12 +856,15 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 		if item.Output == nil {
 			return nil, fmt.Errorf("function_call_output output is required")
 		}
+		if item.IsError == nil {
+			return nil, fmt.Errorf("function_call_output is_error is required")
+		}
 		return &FunctionCallOutput{
 			ID:        itemIDOrDefault(item.ID),
 			CallID:    *item.CallID,
 			Name:      item.Name,
 			Output:    *item.Output,
-			IsError:   item.IsError,
+			IsError:   *item.IsError,
 			CreatedAt: chatItemCreatedAtOrDefault(item.CreatedAt),
 		}, nil
 	case "agent_handoff":
