@@ -172,6 +172,213 @@ func TestLLMErrorUnmarshalJSONRejectsMissingReferenceFields(t *testing.T) {
 	}
 }
 
+func TestCompletionUsageJSONMatchesReferencePayload(t *testing.T) {
+	data, err := json.Marshal(CompletionUsage{
+		CompletionTokens:    7,
+		PromptTokens:        11,
+		PromptCachedTokens:  3,
+		CacheCreationTokens: 2,
+		CacheReadTokens:     5,
+		TotalTokens:         18,
+		ServiceTier:         "priority",
+	})
+	if err != nil {
+		t.Fatalf("Marshal CompletionUsage returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal CompletionUsage payload returned error: %v", err)
+	}
+	for _, key := range []string{"completion_tokens", "prompt_tokens", "prompt_cached_tokens", "cache_creation_tokens", "cache_read_tokens", "total_tokens", "service_tier"} {
+		if _, ok := payload[key]; !ok {
+			t.Fatalf("%s missing from payload: %s", key, data)
+		}
+	}
+	if payload["service_tier"] != "priority" {
+		t.Fatalf("service_tier = %v, want priority", payload["service_tier"])
+	}
+	if _, ok := payload["CompletionTokens"]; ok {
+		t.Fatalf("Go field name CompletionTokens serialized in payload: %s", data)
+	}
+
+	var minimal CompletionUsage
+	if err := json.Unmarshal([]byte(`{"completion_tokens":7,"prompt_tokens":11,"total_tokens":18,"service_tier":null}`), &minimal); err != nil {
+		t.Fatalf("Unmarshal minimal CompletionUsage returned error: %v", err)
+	}
+	if minimal.PromptCachedTokens != 0 || minimal.CacheCreationTokens != 0 || minimal.CacheReadTokens != 0 || minimal.ServiceTier != "" {
+		t.Fatalf("minimal CompletionUsage = %#v, want zero optional counters and empty service tier", minimal)
+	}
+
+	for _, tt := range []struct {
+		field   string
+		payload string
+	}{
+		{field: "completion_tokens", payload: `{"prompt_tokens":11,"total_tokens":18}`},
+		{field: "prompt_tokens", payload: `{"completion_tokens":7,"total_tokens":18}`},
+		{field: "total_tokens", payload: `{"completion_tokens":7,"prompt_tokens":11}`},
+	} {
+		var usage CompletionUsage
+		if err := json.Unmarshal([]byte(tt.payload), &usage); err == nil || !strings.Contains(err.Error(), tt.field) {
+			t.Fatalf("Unmarshal missing %s error = %v, want field-specific error", tt.field, err)
+		}
+	}
+}
+
+func TestFunctionToolCallJSONMatchesReferencePayload(t *testing.T) {
+	data, err := json.Marshal(FunctionToolCall{
+		Name:      "lookup_weather",
+		Arguments: `{"city":"Paris"}`,
+		CallID:    "call_123",
+		Extra:     map[string]any{"provider": "openai"},
+	})
+	if err != nil {
+		t.Fatalf("Marshal FunctionToolCall returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal FunctionToolCall payload returned error: %v", err)
+	}
+	if payload["type"] != "function" || payload["name"] != "lookup_weather" || payload["arguments"] != `{"city":"Paris"}` || payload["call_id"] != "call_123" {
+		t.Fatalf("payload = %#v, want reference function tool call fields", payload)
+	}
+	if _, ok := payload["CallID"]; ok {
+		t.Fatalf("Go field name CallID serialized in payload: %s", data)
+	}
+
+	var minimal FunctionToolCall
+	if err := json.Unmarshal([]byte(`{"name":"lookup_weather","arguments":"{}","call_id":"call_456"}`), &minimal); err != nil {
+		t.Fatalf("Unmarshal minimal FunctionToolCall returned error: %v", err)
+	}
+	if minimal.Type != "function" || minimal.Name != "lookup_weather" || minimal.CallID != "call_456" {
+		t.Fatalf("minimal FunctionToolCall = %#v, want default function type and required fields", minimal)
+	}
+
+	for _, tt := range []struct {
+		field   string
+		payload string
+	}{
+		{field: "name", payload: `{"arguments":"{}","call_id":"call_123"}`},
+		{field: "arguments", payload: `{"name":"lookup_weather","call_id":"call_123"}`},
+		{field: "call_id", payload: `{"name":"lookup_weather","arguments":"{}"}`},
+	} {
+		var toolCall FunctionToolCall
+		if err := json.Unmarshal([]byte(tt.payload), &toolCall); err == nil || !strings.Contains(err.Error(), tt.field) {
+			t.Fatalf("Unmarshal missing %s error = %v, want field-specific error", tt.field, err)
+		}
+	}
+}
+
+func TestChoiceDeltaJSONMatchesReferenceDefaults(t *testing.T) {
+	data, err := json.Marshal(ChoiceDelta{
+		Role:    ChatRoleAssistant,
+		Content: "hello",
+		Extra:   map[string]any{"reasoning": "visible"},
+	})
+	if err != nil {
+		t.Fatalf("Marshal ChoiceDelta returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal ChoiceDelta payload returned error: %v", err)
+	}
+	if payload["role"] != string(ChatRoleAssistant) || payload["content"] != "hello" {
+		t.Fatalf("payload = %#v, want assistant text delta", payload)
+	}
+	toolCalls, ok := payload["tool_calls"].([]any)
+	if !ok || len(toolCalls) != 0 {
+		t.Fatalf("tool_calls = %#v, want empty list", payload["tool_calls"])
+	}
+
+	var minimal ChoiceDelta
+	if err := json.Unmarshal([]byte(`{}`), &minimal); err != nil {
+		t.Fatalf("Unmarshal minimal ChoiceDelta returned error: %v", err)
+	}
+	if minimal.Role != "" || minimal.Content != "" || len(minimal.ToolCalls) != 0 || minimal.Extra != nil {
+		t.Fatalf("minimal ChoiceDelta = %#v, want nil role/content/extra and empty tool calls", minimal)
+	}
+}
+
+func TestChatChunkJSONMatchesReferencePayload(t *testing.T) {
+	data, err := json.Marshal(ChatChunk{
+		ID: "chunk_123",
+		Delta: &ChoiceDelta{
+			Role:    ChatRoleAssistant,
+			Content: "hello",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal ChatChunk returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal ChatChunk payload returned error: %v", err)
+	}
+	if payload["id"] != "chunk_123" || payload["delta"] == nil {
+		t.Fatalf("payload = %#v, want id and delta", payload)
+	}
+	if _, ok := payload["ID"]; ok {
+		t.Fatalf("Go field name ID serialized in payload: %s", data)
+	}
+
+	var minimal ChatChunk
+	if err := json.Unmarshal([]byte(`{"id":"chunk_empty"}`), &minimal); err != nil {
+		t.Fatalf("Unmarshal minimal ChatChunk returned error: %v", err)
+	}
+	if minimal.ID != "chunk_empty" || minimal.Delta != nil || minimal.Usage != nil {
+		t.Fatalf("minimal ChatChunk = %#v, want id with nil delta and usage", minimal)
+	}
+
+	var missing ChatChunk
+	if err := json.Unmarshal([]byte(`{}`), &missing); err == nil || !strings.Contains(err.Error(), "id") {
+		t.Fatalf("Unmarshal missing id error = %v, want id required error", err)
+	}
+}
+
+func TestCollectedResponseJSONMatchesReferenceDefaults(t *testing.T) {
+	data, err := json.Marshal(CollectedResponse{
+		Text: "hello",
+		ToolCalls: []FunctionToolCall{{
+			Name:      "lookup_weather",
+			Arguments: `{"city":"Paris"}`,
+			CallID:    "call_123",
+			Extra:     map[string]any{"provider": "openai"},
+		}},
+		Usage: &CompletionUsage{
+			CompletionTokens: 3,
+			PromptTokens:     4,
+			TotalTokens:      7,
+			ServiceTier:      "priority",
+		},
+		Extra: map[string]any{"reasoning": "visible"},
+	})
+	if err != nil {
+		t.Fatalf("Marshal CollectedResponse returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal CollectedResponse payload returned error: %v", err)
+	}
+	if payload["text"] != "hello" || payload["tool_calls"] == nil || payload["usage"] == nil || payload["extra"] == nil {
+		t.Fatalf("payload = %#v, want reference collected response fields", payload)
+	}
+	if _, ok := payload["ToolCalls"]; ok {
+		t.Fatalf("Go field name ToolCalls serialized in payload: %s", data)
+	}
+
+	var minimal CollectedResponse
+	if err := json.Unmarshal([]byte(`{}`), &minimal); err != nil {
+		t.Fatalf("Unmarshal minimal CollectedResponse returned error: %v", err)
+	}
+	if minimal.Text != "" || len(minimal.ToolCalls) != 0 || minimal.Usage != nil || len(minimal.Extra) != 0 {
+		t.Fatalf("minimal CollectedResponse = %#v, want empty text, tool calls, extra, and nil usage", minimal)
+	}
+}
+
 func TestLLMMetricsEmitterPanicDoesNotBlockOtherHandlers(t *testing.T) {
 	var emitter MetricsEmitter
 	metrics := &telemetry.LLMMetrics{RequestID: "req"}
