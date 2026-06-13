@@ -90,6 +90,35 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "synthesized_audio_json":
+		data, marshalErr := json.Marshal(lktts.SynthesizedAudio{
+			RequestID: "req-a",
+			IsFinal:   true,
+			SegmentID: "segment-a",
+			DeltaText: "hello",
+		})
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		var payload map[string]any
+		if unmarshalErr := json.Unmarshal(data, &payload); unmarshalErr != nil {
+			return nil, unmarshalErr
+		}
+		return map[string]any{
+			"contract": "tts-value-objects",
+			"events": []map[string]any{
+				{
+					"name":                 "synthesized_audio_json",
+					"frame_is_none":        payload["frame"] == nil,
+					"request_id":           payload["request_id"],
+					"is_final":             payload["is_final"],
+					"segment_id":           payload["segment_id"],
+					"delta_text":           payload["delta_text"],
+					"has_go_field_names":   hasAnyKey(payload, "RequestID", "IsFinal", "SegmentID", "DeltaText"),
+					"has_timed_transcript": hasAnyKey(payload, "timed_transcript"),
+				},
+			},
+		}, nil
 	case "tts_error_payload":
 		err := lktts.TTSError{
 			Type:        lktts.TTSErrorType,

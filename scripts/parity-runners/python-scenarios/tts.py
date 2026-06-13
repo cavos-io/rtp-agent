@@ -132,6 +132,29 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "synthesized_audio_json":
+        audio = module.SynthesizedAudio(
+            frame=None,
+            request_id="req-a",
+            is_final=True,
+            segment_id="segment-a",
+            delta_text="hello",
+        )
+        return {
+            "contract": "tts-value-objects",
+            "events": [
+                {
+                    "name": "synthesized_audio_json",
+                    "frame_is_none": audio.frame is None,
+                    "request_id": audio.request_id,
+                    "is_final": audio.is_final,
+                    "segment_id": audio.segment_id,
+                    "delta_text": audio.delta_text,
+                    "has_go_field_names": False,
+                    "has_timed_transcript": False,
+                }
+            ],
+        }
     if action == "tts_error_payload":
         err = module.TTSError(
             type="tts_error",
