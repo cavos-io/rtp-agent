@@ -750,6 +750,52 @@ func TestOverlappingSpeechEventMarshalJSONMatchesReferencePayload(t *testing.T) 
 	}
 }
 
+func TestConversationItemAddedEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	msg := &llm.ChatMessage{
+		ID:        "msg_123",
+		Role:      llm.ChatRoleAssistant,
+		Content:   []llm.ChatContent{{Text: "hello there"}},
+		CreatedAt: time.Unix(33, 125_000_000),
+	}
+	ev := &ConversationItemAddedEvent{
+		Item:      msg,
+		CreatedAt: time.Unix(34, 500_000_000),
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal ConversationItemAddedEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled ConversationItemAddedEvent returned error: %v", err)
+	}
+	if payload["type"] != "conversation_item_added" {
+		t.Fatalf("type = %#v, want conversation_item_added", payload["type"])
+	}
+	item, ok := payload["item"].(map[string]any)
+	if !ok {
+		t.Fatalf("item = %T %#v, want reference chat item object", payload["item"], payload["item"])
+	}
+	if item["type"] != "message" || item["id"] != "msg_123" || item["role"] != string(llm.ChatRoleAssistant) {
+		t.Fatalf("item identity = %#v, want reference chat message fields", item)
+	}
+	content, ok := item["content"].([]any)
+	if !ok || len(content) != 1 || content[0] != "hello there" {
+		t.Fatalf("content = %#v, want single hello there content part", item["content"])
+	}
+	if item["created_at"] != 33.125 {
+		t.Fatalf("item created_at = %#v, want 33.125", item["created_at"])
+	}
+	if payload["created_at"] != 34.5 {
+		t.Fatalf("event created_at = %#v, want 34.5", payload["created_at"])
+	}
+	if _, ok := payload["Item"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
+	}
+}
+
 func TestCloseReasonIncludesTaskCompleted(t *testing.T) {
 	ev := &CloseEvent{Reason: CloseReasonTaskCompleted, CreatedAt: time.Now()}
 

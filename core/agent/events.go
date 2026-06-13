@@ -149,6 +149,17 @@ type ConversationItemAddedEvent struct {
 
 func (e *ConversationItemAddedEvent) GetType() string { return "conversation_item_added" }
 
+func (e *ConversationItemAddedEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":       e.GetType(),
+		"item":       chatItemReportDict(e.Item),
+		"created_at": timeToUnixSeconds(e.CreatedAt),
+	})
+}
+
 type AgentFalseInterruptionEvent struct {
 	Resumed           bool
 	CreatedAt         time.Time
