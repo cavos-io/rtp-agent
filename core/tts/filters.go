@@ -4,8 +4,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 )
@@ -110,11 +108,7 @@ func (b *TextTransformBuffer) Push(text string) []string {
 
 	lastSplitPos := strings.LastIndexAny(b.buffer, inlineSplitTokens)
 	if lastSplitPos >= 1 {
-		r, size := utf8.DecodeRuneInString(b.buffer[lastSplitPos:])
 		splitEnd := lastSplitPos
-		if !unicode.IsSpace(r) {
-			splitEnd += size
-		}
 		processable := b.buffer[:splitEnd]
 		rest := b.buffer[splitEnd:]
 		if !hasIncompleteMarkdownPattern(processable) {
