@@ -212,6 +212,33 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "synthesized_audio_required_fields":
+        required_fields = ["frame", "request_id"]
+        base = {"frame": None, "request_id": ""}
+        missing_fields = []
+        for field_name in required_fields:
+            kwargs = dict(base)
+            del kwargs[field_name]
+            try:
+                module.SynthesizedAudio(**kwargs)
+            except TypeError as exc:
+                if field_name in str(exc):
+                    missing_fields.append(field_name)
+        audio = module.SynthesizedAudio(**base)
+        return {
+            "contract": "tts-synthesized-audio-required-fields",
+            "events": [
+                {
+                    "name": "synthesized_audio_required_fields",
+                    "missing_fields": missing_fields,
+                    "frame_is_none": audio.frame is None,
+                    "request_id": audio.request_id,
+                    "is_final": audio.is_final,
+                    "segment_id": audio.segment_id,
+                    "delta_text": audio.delta_text,
+                }
+            ],
+        }
     if action == "timed_string_json":
         timed = load_reference_types().TimedString(
             "hello",

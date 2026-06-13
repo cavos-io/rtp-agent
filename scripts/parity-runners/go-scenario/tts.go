@@ -140,6 +140,45 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "synthesized_audio_required_fields":
+		requiredFields := []string{"frame", "request_id"}
+		base := map[string]any{"frame": nil, "request_id": ""}
+		missingFields := make([]string, 0, len(requiredFields))
+		for _, fieldName := range requiredFields {
+			payload := make(map[string]any, len(base)-1)
+			for key, value := range base {
+				if key != fieldName {
+					payload[key] = value
+				}
+			}
+			data, err := json.Marshal(payload)
+			if err != nil {
+				return nil, err
+			}
+			var audio lktts.SynthesizedAudio
+			err = json.Unmarshal(data, &audio)
+			if err != nil && strings.Contains(err.Error(), fieldName) {
+				missingFields = append(missingFields, fieldName)
+			}
+		}
+		var audio lktts.SynthesizedAudio
+		if err := json.Unmarshal([]byte(`{"frame":null,"request_id":""}`), &audio); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "tts-synthesized-audio-required-fields",
+			"events": []map[string]any{
+				{
+					"name":           "synthesized_audio_required_fields",
+					"missing_fields": missingFields,
+					"frame_is_none":  audio.Frame == nil,
+					"request_id":     audio.RequestID,
+					"is_final":       audio.IsFinal,
+					"segment_id":     audio.SegmentID,
+					"delta_text":     audio.DeltaText,
+				},
+			},
+		}, nil
 	case "timed_string_json":
 		data, marshalErr := json.Marshal(lktts.TimedString{
 			Text:            "hello",
