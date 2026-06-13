@@ -1459,6 +1459,28 @@ def llm_tool_context(input_data: Any) -> dict[str, Any]:
                     {"name": "add_duplicate", "error": True, "error_message": str(exc)}
                 ],
             }
+    if action == "confirm_duplicate_schema":
+        base = {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+        }
+        params = module._inject_confirm_duplicate(base)
+        confirm = params["properties"][module.CONFIRM_DUPLICATE_PARAM]
+        return {
+            "contract": "llm-tool-context",
+            "events": [
+                {
+                    "name": "confirm_duplicate_schema",
+                    "confirm_type": confirm.get("type"),
+                    "confirm_description": confirm.get("description"),
+                    "required": params.get("required"),
+                    "base_has_confirm_property": module.CONFIRM_DUPLICATE_PARAM
+                    in base["properties"],
+                    "base_required": base["required"],
+                }
+            ],
+        }
     if action == "equal_identity":
         lookup = fn_tool("lookup")
         provider = provider_tool("provider")

@@ -3573,6 +3573,34 @@ func runLLMToolContext(input json.RawMessage) (any, error) {
 			message = err.Error()
 		}
 		return map[string]any{"contract": "llm-tool-context", "events": []map[string]any{{"name": "add_duplicate", "error": err != nil, "error_message": message}}}, nil
+	case "confirm_duplicate_schema":
+		base := map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"city": map[string]any{"type": "string"},
+			},
+			"required": []string{"city"},
+		}
+		tool := newTool("lookup", "lookup")
+		tool.params = base
+		tool.duplicateMode = lkllm.ToolDuplicateModeConfirm
+		params := lkllm.ToolParameters(tool)
+		props, _ := params["properties"].(map[string]any)
+		confirm, _ := props[lkllm.ConfirmDuplicateParam].(map[string]any)
+		originalProps, _ := base["properties"].(map[string]any)
+		return map[string]any{
+			"contract": "llm-tool-context",
+			"events": []map[string]any{
+				{
+					"name":                      "confirm_duplicate_schema",
+					"confirm_type":              confirm["type"],
+					"confirm_description":       confirm["description"],
+					"required":                  params["required"],
+					"base_has_confirm_property": originalProps[lkllm.ConfirmDuplicateParam] != nil,
+					"base_required":             base["required"],
+				},
+			},
+		}, nil
 	case "equal_identity":
 		lookup := newTool("lookup", "lookup")
 		provider := &scenarioLLMProviderTool{scenarioLLMTool: scenarioLLMTool{id: "provider", name: "provider"}}
@@ -3645,14 +3673,19 @@ func runLLMToolContext(input json.RawMessage) (any, error) {
 }
 
 type scenarioLLMTool struct {
-	id   string
-	name string
+	id            string
+	name          string
+	params        map[string]any
+	duplicateMode lkllm.ToolDuplicateMode
 }
 
 func (t *scenarioLLMTool) ID() string                 { return t.id }
 func (t *scenarioLLMTool) Name() string               { return t.name }
 func (t *scenarioLLMTool) Description() string        { return "" }
-func (t *scenarioLLMTool) Parameters() map[string]any { return nil }
+func (t *scenarioLLMTool) Parameters() map[string]any { return t.params }
+func (t *scenarioLLMTool) ToolDuplicateMode() lkllm.ToolDuplicateMode {
+	return t.duplicateMode
+}
 func (t *scenarioLLMTool) Execute(context.Context, string) (string, error) {
 	return "", nil
 }
