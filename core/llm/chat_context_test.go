@@ -624,6 +624,40 @@ func TestChatContextInstructionsSerializeAndRoundTrip(t *testing.T) {
 	}
 }
 
+func TestChatContextInstructionsRoundTripPreservesAbsentTextVariant(t *testing.T) {
+	ctx, err := ChatContextFromDict(map[string]any{
+		"items": []any{
+			map[string]any{
+				"id":   "system",
+				"type": "message",
+				"role": "system",
+				"content": []any{
+					map[string]any{
+						"type":  "instructions",
+						"audio": "audio instructions",
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ChatContextFromDict() error = %v", err)
+	}
+
+	msg := ctx.Items[0].(*ChatMessage)
+	if got := msg.Content[0].Instructions.AsModality("text").String(); got != "audio instructions" {
+		t.Fatalf("round-trip fallback text = %q, want audio instructions", got)
+	}
+
+	data := ctx.ToDict()
+	items := data["items"].([]map[string]any)
+	content := items[0]["content"].([]any)
+	instructions := content[0].(map[string]any)
+	if _, ok := instructions["text"]; ok {
+		t.Fatalf("serialized instructions = %#v, want text omitted when reference input omitted text", instructions)
+	}
+}
+
 func TestChatContextInstructionsSerializeExplicitTextVariantMatchingAudio(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
@@ -1227,6 +1261,32 @@ func TestChatContextToDictIncludesAndExcludesMessageMetrics(t *testing.T) {
 	}
 }
 
+func TestChatContextToDictOmitsReferenceNoneOptionalFields(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&FunctionCall{
+			ID:        "call_item",
+			CallID:    "call_lookup",
+			Name:      "lookup",
+			Arguments: `{}`,
+			CreatedAt: time.Unix(10, 0),
+		},
+		&AgentHandoff{
+			ID:         "handoff_item",
+			NewAgentID: "new_agent",
+			CreatedAt:  time.Unix(11, 0),
+		},
+	}
+
+	items := ctx.ToDict(ChatContextDictOptions{IncludeTimestamp: true})["items"].([]map[string]any)
+	if _, ok := items[0]["group_id"]; ok {
+		t.Fatalf("function_call group_id = %#v, want omitted like reference exclude_none to_dict", items[0]["group_id"])
+	}
+	if _, ok := items[1]["old_agent_id"]; ok {
+		t.Fatalf("agent_handoff old_agent_id = %#v, want omitted like reference exclude_none to_dict", items[1]["old_agent_id"])
+	}
+}
+
 func TestChatContextMarshalJSONIncludesTimestampsForReports(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
@@ -1430,6 +1490,133 @@ func TestChatItemMarshalJSONMatchesReferencePayloads(t *testing.T) {
 	}
 }
 
+func TestChatItemMarshalJSONMatchesReferenceOptionalFields(t *testing.T) {
+	items := []struct {
+		name          string
+		item          ChatItem
+		optionalField string
+	}{
+		{
+			name: "function_call_group",
+			item: &FunctionCall{
+				ID:        "call_item",
+				CallID:    "call_lookup",
+				Name:      "lookup",
+				Arguments: `{}`,
+				CreatedAt: time.Unix(10, 0),
+			},
+			optionalField: "group_id",
+		},
+		{
+			name: "agent_handoff_old_agent",
+			item: &AgentHandoff{
+				ID:         "handoff_item",
+				NewAgentID: "new_agent",
+				CreatedAt:  time.Unix(11, 0),
+			},
+			optionalField: "old_agent_id",
+		},
+	}
+
+	for _, tc := range items {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(tc.item)
+			if err != nil {
+				t.Fatalf("Marshal %s returned error: %v", tc.name, err)
+			}
+
+			var got map[string]any
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatalf("Unmarshal marshaled %s returned error: %v", tc.name, err)
+			}
+			if _, ok := got[tc.optionalField]; !ok {
+				t.Fatalf("%s missing from marshaled %s: %s", tc.optionalField, tc.name, data)
+			}
+			if got[tc.optionalField] != nil {
+				t.Fatalf("%s = %v, want JSON null; payload %s", tc.optionalField, got[tc.optionalField], data)
+			}
+		})
+	}
+}
+
+func TestChatContentMarshalJSONMatchesReferencePayloads(t *testing.T) {
+	width := 320
+	content := []struct {
+		name string
+		item any
+		want map[string]any
+	}{
+		{
+			name: "instructions_audio_only",
+			item: NewInstructions("voice instructions"),
+			want: map[string]any{
+				"type":  "instructions",
+				"audio": "voice instructions",
+			},
+		},
+		{
+			name: "instructions_text_variant",
+			item: NewInstructions("voice instructions", "text instructions").AsModality("text"),
+			want: map[string]any{
+				"type":  "instructions",
+				"audio": "voice instructions",
+				"text":  "text instructions",
+			},
+		},
+		{
+			name: "image_content",
+			item: &ImageContent{
+				ID:             "image_item",
+				Image:          "https://example.test/image.png",
+				InferenceWidth: &width,
+			},
+			want: map[string]any{
+				"id":               "image_item",
+				"type":             "image_content",
+				"image":            "https://example.test/image.png",
+				"inference_width":  320.0,
+				"inference_height": nil,
+				"inference_detail": "auto",
+				"mime_type":        nil,
+			},
+		},
+		{
+			name: "audio_content",
+			item: &AudioContent{
+				Frames: []any{},
+			},
+			want: map[string]any{
+				"type":       "audio_content",
+				"frame":      []any{},
+				"transcript": nil,
+			},
+		},
+	}
+
+	for _, tc := range content {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(tc.item)
+			if err != nil {
+				t.Fatalf("Marshal %s returned error: %v", tc.name, err)
+			}
+
+			var got map[string]any
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatalf("Unmarshal marshaled %s returned error: %v", tc.name, err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("marshaled %s = %#v, want %#v", tc.name, got, tc.want)
+			}
+			if _, ok := got["InferenceWidth"]; ok {
+				t.Fatalf("marshaled %s leaked Go field names: %#v", tc.name, got)
+			}
+			if _, ok := got["Audio"]; ok {
+				t.Fatalf("marshaled %s leaked Go field names: %#v", tc.name, got)
+			}
+		})
+	}
+}
+
 func TestChatContextUnmarshalJSONRestoresTypedItems(t *testing.T) {
 	data := []byte(`{
 		"items": [
@@ -1450,6 +1637,7 @@ func TestChatContextUnmarshalJSONRestoresTypedItems(t *testing.T) {
 					},
 					{
 						"type": "audio_content",
+						"frame": [],
 						"transcript": "audio text"
 					}
 				],
@@ -1666,6 +1854,105 @@ func TestChatContextImageContentDefaultsID(t *testing.T) {
 	}
 }
 
+func TestChatContextUnmarshalJSONRejectsImageContentMissingImage(t *testing.T) {
+	var ctx ChatContext
+	data := []byte(`{
+		"items": [{
+			"id": "message",
+			"type": "message",
+			"role": "user",
+			"content": [{
+				"type": "image_content"
+			}]
+		}]
+	}`)
+
+	if err := json.Unmarshal(data, &ctx); err == nil {
+		t.Fatal("Unmarshal ChatContext error = nil, want missing image_content image error")
+	}
+}
+
+func TestChatContextUnmarshalJSONRejectsInstructionsMissingAudio(t *testing.T) {
+	var ctx ChatContext
+	data := []byte(`{
+		"items": [{
+			"id": "message",
+			"type": "message",
+			"role": "developer",
+			"content": [{
+				"type": "instructions",
+				"text": "text instructions"
+			}]
+		}]
+	}`)
+
+	if err := json.Unmarshal(data, &ctx); err == nil {
+		t.Fatal("Unmarshal ChatContext error = nil, want missing instructions audio error")
+	}
+}
+
+func TestChatContextUnmarshalJSONRejectsMessageMissingRole(t *testing.T) {
+	var ctx ChatContext
+	data := []byte(`{
+		"items": [{
+			"id": "message",
+			"type": "message",
+			"content": ["hello"]
+		}]
+	}`)
+
+	if err := json.Unmarshal(data, &ctx); err == nil {
+		t.Fatal("Unmarshal ChatContext error = nil, want missing message role error")
+	}
+}
+
+func TestChatContextUnmarshalJSONRejectsMessageMissingContent(t *testing.T) {
+	var ctx ChatContext
+	data := []byte(`{
+		"items": [{
+			"id": "message",
+			"type": "message",
+			"role": "user"
+		}]
+	}`)
+
+	if err := json.Unmarshal(data, &ctx); err == nil {
+		t.Fatal("Unmarshal ChatContext error = nil, want missing message content error")
+	}
+}
+
+func TestChatContextUnmarshalJSONRejectsFunctionCallMissingCallID(t *testing.T) {
+	var ctx ChatContext
+	data := []byte(`{
+		"items": [{
+			"id": "call",
+			"type": "function_call",
+			"name": "lookup",
+			"arguments": "{}"
+		}]
+	}`)
+
+	if err := json.Unmarshal(data, &ctx); err == nil {
+		t.Fatal("Unmarshal ChatContext error = nil, want missing function_call call_id error")
+	}
+}
+
+func TestChatContextUnmarshalJSONRejectsFunctionCallMissingName(t *testing.T) {
+	var ctx ChatContext
+	data := []byte(`{
+		"items": [{
+			"id": "call",
+			"type": "function_call",
+			"call_id": "call_lookup",
+			"arguments": "{}"
+		}]
+	}`)
+
+	if err := json.Unmarshal(data, &ctx); err == nil {
+		t.Fatal("Unmarshal ChatContext error = nil, want missing function_call name error")
+	}
+}
+
 func TestChatContextItemsDefaultIDs(t *testing.T) {
 	data := []byte(`{
 		"items": [
@@ -1744,6 +2031,29 @@ func TestChatContextUnmarshalJSONRejectsMissingItems(t *testing.T) {
 				t.Fatalf("len(items) after rejected UnmarshalJSON = %d, want existing item preserved", len(ctx.Items))
 			}
 		})
+	}
+}
+
+func TestChatContextUnmarshalJSONRejectsAudioContentMissingFrame(t *testing.T) {
+	var ctx ChatContext
+	data := []byte(`{
+		"items": [
+			{
+				"id": "message",
+				"type": "message",
+				"role": "user",
+				"content": [
+					{
+						"type": "audio_content",
+						"transcript": "audio text"
+					}
+				]
+			}
+		]
+	}`)
+
+	if err := json.Unmarshal(data, &ctx); err == nil {
+		t.Fatal("Unmarshal ChatContext error = nil, want missing audio_content frame error")
 	}
 }
 

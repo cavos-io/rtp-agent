@@ -44,8 +44,8 @@ func (e *UserInputTranscribedEvent) MarshalJSON() ([]byte, error) {
 		"type":       e.GetType(),
 		"transcript": e.Transcript,
 		"is_final":   e.IsFinal,
-		"speaker_id": e.SpeakerID,
-		"language":   e.Language,
+		"speaker_id": optionalStringValue(e.SpeakerID),
+		"language":   optionalStringValue(e.Language),
 		"created_at": timeToUnixSeconds(e.CreatedAt),
 	})
 }

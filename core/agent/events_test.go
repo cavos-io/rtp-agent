@@ -437,6 +437,36 @@ func TestUserInputTranscribedEventMarshalJSONMatchesReferencePayload(t *testing.
 	}
 }
 
+func TestUserInputTranscribedEventMarshalJSONMatchesReferenceOptionalFields(t *testing.T) {
+	ev := &UserInputTranscribedEvent{
+		Transcript: "hello there",
+		IsFinal:    true,
+		CreatedAt:  time.Unix(20, 125_000_000),
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal UserInputTranscribedEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled UserInputTranscribedEvent returned error: %v", err)
+	}
+	if _, ok := payload["speaker_id"]; !ok {
+		t.Fatalf("speaker_id missing from payload: %s", data)
+	}
+	if payload["speaker_id"] != nil {
+		t.Fatalf("speaker_id = %#v, want JSON null; payload %s", payload["speaker_id"], data)
+	}
+	if _, ok := payload["language"]; !ok {
+		t.Fatalf("language missing from payload: %s", data)
+	}
+	if payload["language"] != nil {
+		t.Fatalf("language = %#v, want JSON null; payload %s", payload["language"], data)
+	}
+}
+
 func TestAgentOutputTranscribedEventMarshalJSONMatchesReferencePayload(t *testing.T) {
 	ev := &AgentOutputTranscribedEvent{
 		Language:   "en-US",

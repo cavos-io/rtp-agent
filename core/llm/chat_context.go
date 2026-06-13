@@ -17,6 +17,7 @@ type ChatContextDictOptions struct {
 	IncludeImage        bool
 	IncludeAudio        bool
 	IncludeTimestamp    bool
+	IncludeOptionalNull bool
 	ExcludeFunctionCall bool
 	ExcludeMetrics      bool
 	ExcludeConfigUpdate bool
@@ -662,9 +663,10 @@ func (m *ChatMessage) MarshalJSON() ([]byte, error) {
 		return json.Marshal(nil)
 	}
 	return json.Marshal(chatItemToDict(m, ChatContextDictOptions{
-		IncludeImage:     true,
-		IncludeAudio:     true,
-		IncludeTimestamp: true,
+		IncludeImage:        true,
+		IncludeAudio:        true,
+		IncludeTimestamp:    true,
+		IncludeOptionalNull: true,
 	}))
 }
 
@@ -672,28 +674,76 @@ func (f *FunctionCall) MarshalJSON() ([]byte, error) {
 	if f == nil {
 		return json.Marshal(nil)
 	}
-	return json.Marshal(chatItemToDict(f, ChatContextDictOptions{IncludeTimestamp: true}))
+	return json.Marshal(chatItemToDict(f, ChatContextDictOptions{IncludeTimestamp: true, IncludeOptionalNull: true}))
 }
 
 func (f *FunctionCallOutput) MarshalJSON() ([]byte, error) {
 	if f == nil {
 		return json.Marshal(nil)
 	}
-	return json.Marshal(chatItemToDict(f, ChatContextDictOptions{IncludeTimestamp: true}))
+	return json.Marshal(chatItemToDict(f, ChatContextDictOptions{IncludeTimestamp: true, IncludeOptionalNull: true}))
 }
 
 func (a *AgentHandoff) MarshalJSON() ([]byte, error) {
 	if a == nil {
 		return json.Marshal(nil)
 	}
-	return json.Marshal(chatItemToDict(a, ChatContextDictOptions{IncludeTimestamp: true}))
+	return json.Marshal(chatItemToDict(a, ChatContextDictOptions{IncludeTimestamp: true, IncludeOptionalNull: true}))
 }
 
 func (a *AgentConfigUpdate) MarshalJSON() ([]byte, error) {
 	if a == nil {
 		return json.Marshal(nil)
 	}
-	return json.Marshal(chatItemToDict(a, ChatContextDictOptions{IncludeTimestamp: true}))
+	return json.Marshal(chatItemToDict(a, ChatContextDictOptions{IncludeTimestamp: true, IncludeOptionalNull: true}))
+}
+
+func (i *ImageContent) MarshalJSON() ([]byte, error) {
+	if i == nil {
+		return json.Marshal(nil)
+	}
+	i.ID = imageIDOrDefault(i.ID)
+	data := map[string]any{
+		"id":               i.ID,
+		"type":             "image_content",
+		"image":            i.Image,
+		"inference_width":  nil,
+		"inference_height": nil,
+		"inference_detail": imageInferenceDetailOrDefault(i.InferenceDetail),
+		"mime_type":        nil,
+	}
+	if i.InferenceWidth != nil {
+		data["inference_width"] = *i.InferenceWidth
+	}
+	if i.InferenceHeight != nil {
+		data["inference_height"] = *i.InferenceHeight
+	}
+	if i.MimeType != "" {
+		data["mime_type"] = i.MimeType
+	}
+	return json.Marshal(data)
+}
+
+func (a *AudioContent) MarshalJSON() ([]byte, error) {
+	if a == nil {
+		return json.Marshal(nil)
+	}
+	data := map[string]any{
+		"type":       "audio_content",
+		"frame":      a.Frames,
+		"transcript": nil,
+	}
+	if a.Transcript != "" {
+		data["transcript"] = a.Transcript
+	}
+	return json.Marshal(data)
+}
+
+func (i *Instructions) MarshalJSON() ([]byte, error) {
+	if i == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(instructionsToDict(i))
 }
 
 func ChatContextFromDict(data map[string]any) (*ChatContext, error) {
@@ -760,8 +810,8 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 	case "function_call":
 		var item struct {
 			ID        string         `json:"id"`
-			CallID    string         `json:"call_id"`
-			Name      string         `json:"name"`
+			CallID    *string        `json:"call_id"`
+			Name      *string        `json:"name"`
 			Arguments string         `json:"arguments"`
 			Extra     map[string]any `json:"extra"`
 			GroupID   *string        `json:"group_id"`
@@ -770,10 +820,16 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 		if err := json.Unmarshal(data, &item); err != nil {
 			return nil, err
 		}
+		if item.CallID == nil {
+			return nil, fmt.Errorf("function_call call_id is required")
+		}
+		if item.Name == nil {
+			return nil, fmt.Errorf("function_call name is required")
+		}
 		return &FunctionCall{
 			ID:        itemIDOrDefault(item.ID),
-			CallID:    item.CallID,
-			Name:      item.Name,
+			CallID:    *item.CallID,
+			Name:      *item.Name,
 			Arguments: item.Arguments,
 			Extra:     item.Extra,
 			GroupID:   item.GroupID,
@@ -864,21 +920,30 @@ func agentConfigInstructionsFromJSON(data json.RawMessage) (*string, *Instructio
 
 func chatMessageFromJSON(data []byte) (*ChatMessage, error) {
 	var item struct {
-		ID                   string            `json:"id"`
-		Role                 ChatRole          `json:"role"`
-		Content              []json.RawMessage `json:"content"`
-		Interrupted          bool              `json:"interrupted"`
-		TranscriptConfidence *float64          `json:"transcript_confidence"`
-		Extra                map[string]any    `json:"extra"`
-		Metrics              map[string]any    `json:"metrics"`
-		CreatedAt            *float64          `json:"created_at"`
+		ID                   string             `json:"id"`
+		Role                 *ChatRole          `json:"role"`
+		Content              *[]json.RawMessage `json:"content"`
+		Interrupted          bool               `json:"interrupted"`
+		TranscriptConfidence *float64           `json:"transcript_confidence"`
+		Extra                map[string]any     `json:"extra"`
+		Metrics              map[string]any     `json:"metrics"`
+		CreatedAt            *float64           `json:"created_at"`
 	}
 	if err := json.Unmarshal(data, &item); err != nil {
 		return nil, err
 	}
+	if item.Role == nil {
+		return nil, fmt.Errorf("message role is required")
+	}
+	if *item.Role != ChatRoleDeveloper && *item.Role != ChatRoleSystem && *item.Role != ChatRoleUser && *item.Role != ChatRoleAssistant {
+		return nil, fmt.Errorf("unsupported message role %q", *item.Role)
+	}
+	if item.Content == nil {
+		return nil, fmt.Errorf("message content is required")
+	}
 
-	content := make([]ChatContent, 0, len(item.Content))
-	for _, rawContent := range item.Content {
+	content := make([]ChatContent, 0, len(*item.Content))
+	for _, rawContent := range *item.Content {
 		parsed, err := chatContentFromJSON(rawContent)
 		if err != nil {
 			return nil, err
@@ -888,7 +953,7 @@ func chatMessageFromJSON(data []byte) (*ChatMessage, error) {
 
 	return &ChatMessage{
 		ID:                   itemIDOrDefault(item.ID),
-		Role:                 item.Role,
+		Role:                 *item.Role,
 		Content:              content,
 		Interrupted:          item.Interrupted,
 		TranscriptConfidence: item.TranscriptConfidence,
@@ -914,17 +979,23 @@ func chatContentFromJSON(data []byte) (ChatContent, error) {
 	switch discriminator.Type {
 	case "instructions":
 		var instructions struct {
-			Audio string `json:"audio"`
-			Text  string `json:"text"`
+			Audio *string `json:"audio"`
+			Text  *string `json:"text"`
 		}
 		if err := json.Unmarshal(data, &instructions); err != nil {
 			return ChatContent{}, err
 		}
-		return ChatContent{Instructions: NewInstructions(instructions.Audio, instructionsTextOrDefault(instructions.Audio, instructions.Text))}, nil
+		if instructions.Audio == nil {
+			return ChatContent{}, fmt.Errorf("instructions audio is required")
+		}
+		if instructions.Text == nil {
+			return ChatContent{Instructions: NewInstructions(*instructions.Audio)}, nil
+		}
+		return ChatContent{Instructions: NewInstructions(*instructions.Audio, *instructions.Text)}, nil
 	case "image_content":
 		var image struct {
 			ID              string `json:"id"`
-			Image           any    `json:"image"`
+			Image           *any   `json:"image"`
 			InferenceWidth  *int   `json:"inference_width"`
 			InferenceHeight *int   `json:"inference_height"`
 			InferenceDetail string `json:"inference_detail"`
@@ -933,9 +1004,12 @@ func chatContentFromJSON(data []byte) (ChatContent, error) {
 		if err := json.Unmarshal(data, &image); err != nil {
 			return ChatContent{}, err
 		}
+		if image.Image == nil {
+			return ChatContent{}, fmt.Errorf("image_content image is required")
+		}
 		return ChatContent{Image: &ImageContent{
 			ID:              imageIDOrDefault(image.ID),
-			Image:           image.Image,
+			Image:           *image.Image,
 			InferenceWidth:  image.InferenceWidth,
 			InferenceHeight: image.InferenceHeight,
 			InferenceDetail: imageInferenceDetailOrDefault(image.InferenceDetail),
@@ -943,14 +1017,17 @@ func chatContentFromJSON(data []byte) (ChatContent, error) {
 		}}, nil
 	case "audio_content":
 		var audio struct {
-			Frames     []any  `json:"frame"`
+			Frames     *[]any `json:"frame"`
 			Transcript string `json:"transcript"`
 		}
 		if err := json.Unmarshal(data, &audio); err != nil {
 			return ChatContent{}, err
 		}
+		if audio.Frames == nil {
+			return ChatContent{}, fmt.Errorf("audio_content frame is required")
+		}
 		return ChatContent{Audio: &AudioContent{
-			Frames:     audio.Frames,
+			Frames:     *audio.Frames,
 			Transcript: audio.Transcript,
 		}}, nil
 	default:
@@ -990,6 +1067,8 @@ func chatItemToDict(item ChatItem, opts ChatContextDictOptions) map[string]any {
 		}
 		if it.GroupID != nil {
 			data["group_id"] = *it.GroupID
+		} else if opts.IncludeOptionalNull {
+			data["group_id"] = nil
 		}
 		addCreatedAt(data, it.CreatedAt, opts)
 		return data
@@ -1014,6 +1093,8 @@ func chatItemToDict(item ChatItem, opts ChatContextDictOptions) map[string]any {
 		}
 		if it.OldAgentID != nil {
 			data["old_agent_id"] = *it.OldAgentID
+		} else if opts.IncludeOptionalNull {
+			data["old_agent_id"] = nil
 		}
 		addCreatedAt(data, it.CreatedAt, opts)
 		return data
@@ -1079,13 +1160,6 @@ func instructionsToDict(instructions *Instructions) map[string]any {
 		data["text"] = instructions.Text
 	}
 	return data
-}
-
-func instructionsTextOrDefault(audio string, text string) string {
-	if text == "" {
-		return audio
-	}
-	return text
 }
 
 func imageContentToDict(image *ImageContent) map[string]any {

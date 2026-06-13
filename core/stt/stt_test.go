@@ -160,6 +160,39 @@ func TestSpeechEventMarshalJSONMatchesReferenceFieldNames(t *testing.T) {
 	}
 }
 
+func TestSpeechDataMarshalJSONMatchesReferenceOptionalSpeakerID(t *testing.T) {
+	data, err := json.Marshal(SpeechData{
+		Language: "en",
+		Text:     "hello",
+		Words: []TimedString{{
+			Text: "hello",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Marshal SpeechData returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal SpeechData payload returned error: %v", err)
+	}
+	if _, ok := payload["speaker_id"]; !ok {
+		t.Fatalf("speaker_id missing from payload: %s", data)
+	}
+	if payload["speaker_id"] != nil {
+		t.Fatalf("speaker_id = %v, want JSON null; payload %s", payload["speaker_id"], data)
+	}
+
+	words := payload["words"].([]any)
+	word := words[0].(map[string]any)
+	if _, ok := word["speaker_id"]; !ok {
+		t.Fatalf("word speaker_id missing from payload: %s", data)
+	}
+	if word["speaker_id"] != nil {
+		t.Fatalf("word speaker_id = %v, want JSON null; payload %s", word["speaker_id"], data)
+	}
+}
+
 func TestSpeechEventMarshalJSONDefaultsAlternativesToEmptyList(t *testing.T) {
 	data, err := json.Marshal(SpeechEvent{Type: SpeechEventEndOfSpeech})
 	if err != nil {

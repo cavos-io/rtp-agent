@@ -338,6 +338,26 @@ func TestTimedStringMarshalJSONMatchesReferencePayload(t *testing.T) {
 	}
 }
 
+func TestTimedStringMarshalJSONMatchesReferenceOptionalSpeakerID(t *testing.T) {
+	data, err := json.Marshal(TimedString{
+		Text: "hello",
+	})
+	if err != nil {
+		t.Fatalf("Marshal TimedString returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled TimedString returned error: %v", err)
+	}
+	if _, ok := payload["speaker_id"]; !ok {
+		t.Fatalf("speaker_id missing from payload: %s", data)
+	}
+	if payload["speaker_id"] != nil {
+		t.Fatalf("speaker_id = %v, want JSON null; payload %s", payload["speaker_id"], data)
+	}
+}
+
 func TestTTSErrorEmitterPanicDoesNotBlockOtherHandlers(t *testing.T) {
 	var emitter ErrorEmitter
 	cause := context.Canceled
