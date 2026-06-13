@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -411,6 +412,67 @@ func TestRealtimeCapabilitiesExposeReferenceFlags(t *testing.T) {
 
 	if !capabilities.ManualFunctionCalls || !capabilities.MutableChatContext || !capabilities.MutableInstructions || !capabilities.MutableTools || !capabilities.PerResponseToolChoice || !capabilities.SupportsSay {
 		t.Fatalf("capabilities missing reference flags: %#v", capabilities)
+	}
+}
+
+func TestRealtimeCapabilitiesUnmarshalJSONRequiresReferenceFlags(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{
+			name:    "message_truncation",
+			payload: `{"turn_detection":false,"user_transcription":false,"auto_tool_reply_generation":false,"audio_output":false,"manual_function_calls":false}`,
+			want:    "message_truncation",
+		},
+		{
+			name:    "turn_detection",
+			payload: `{"message_truncation":false,"user_transcription":false,"auto_tool_reply_generation":false,"audio_output":false,"manual_function_calls":false}`,
+			want:    "turn_detection",
+		},
+		{
+			name:    "user_transcription",
+			payload: `{"message_truncation":false,"turn_detection":false,"auto_tool_reply_generation":false,"audio_output":false,"manual_function_calls":false}`,
+			want:    "user_transcription",
+		},
+		{
+			name:    "auto_tool_reply_generation",
+			payload: `{"message_truncation":false,"turn_detection":false,"user_transcription":false,"audio_output":false,"manual_function_calls":false}`,
+			want:    "auto_tool_reply_generation",
+		},
+		{
+			name:    "audio_output",
+			payload: `{"message_truncation":false,"turn_detection":false,"user_transcription":false,"auto_tool_reply_generation":false,"manual_function_calls":false}`,
+			want:    "audio_output",
+		},
+		{
+			name:    "manual_function_calls",
+			payload: `{"message_truncation":false,"turn_detection":false,"user_transcription":false,"auto_tool_reply_generation":false,"audio_output":false}`,
+			want:    "manual_function_calls",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var capabilities RealtimeCapabilities
+			err := json.Unmarshal([]byte(tt.payload), &capabilities)
+			if err == nil {
+				t.Fatal("Unmarshal RealtimeCapabilities returned nil error, want missing required field error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want it to mention %q", err, tt.want)
+			}
+		})
+	}
+
+	var capabilities RealtimeCapabilities
+	err := json.Unmarshal([]byte(`{"message_truncation":false,"turn_detection":false,"user_transcription":false,"auto_tool_reply_generation":false,"audio_output":false,"manual_function_calls":false}`), &capabilities)
+	if err != nil {
+		t.Fatalf("Unmarshal RealtimeCapabilities with required fields returned error: %v", err)
+	}
+	if capabilities.MutableChatContext || capabilities.MutableInstructions || capabilities.MutableTools || capabilities.PerResponseToolChoice || capabilities.SupportsSay {
+		t.Fatalf("optional capability flags = %#v, want false defaults", capabilities)
 	}
 }
 

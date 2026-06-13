@@ -817,6 +817,57 @@ type RealtimeCapabilities struct {
 	SupportsSay             bool
 }
 
+func (c *RealtimeCapabilities) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	required := []string{
+		"message_truncation",
+		"turn_detection",
+		"user_transcription",
+		"auto_tool_reply_generation",
+		"audio_output",
+		"manual_function_calls",
+	}
+	for _, field := range required {
+		if _, ok := fields[field]; !ok {
+			return fmt.Errorf("realtime capabilities %s is required", field)
+		}
+	}
+
+	var payload struct {
+		MessageTruncation       bool `json:"message_truncation"`
+		TurnDetection           bool `json:"turn_detection"`
+		UserTranscription       bool `json:"user_transcription"`
+		AutoToolReplyGeneration bool `json:"auto_tool_reply_generation"`
+		AudioOutput             bool `json:"audio_output"`
+		ManualFunctionCalls     bool `json:"manual_function_calls"`
+		MutableChatContext      bool `json:"mutable_chat_context"`
+		MutableInstructions     bool `json:"mutable_instructions"`
+		MutableTools            bool `json:"mutable_tools"`
+		PerResponseToolChoice   bool `json:"per_response_tool_choice"`
+		SupportsSay             bool `json:"supports_say"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	*c = RealtimeCapabilities{
+		MessageTruncation:       payload.MessageTruncation,
+		TurnDetection:           payload.TurnDetection,
+		UserTranscription:       payload.UserTranscription,
+		AutoToolReplyGeneration: payload.AutoToolReplyGeneration,
+		AudioOutput:             payload.AudioOutput,
+		ManualFunctionCalls:     payload.ManualFunctionCalls,
+		MutableChatContext:      payload.MutableChatContext,
+		MutableInstructions:     payload.MutableInstructions,
+		MutableTools:            payload.MutableTools,
+		PerResponseToolChoice:   payload.PerResponseToolChoice,
+		SupportsSay:             payload.SupportsSay,
+	}
+	return nil
+}
+
 type RealtimeModel interface {
 	Capabilities() RealtimeCapabilities
 	Session() (RealtimeSession, error)
