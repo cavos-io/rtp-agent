@@ -3,6 +3,7 @@ package tts
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 )
@@ -54,6 +55,23 @@ func optionalStringPointer(value string) *string {
 type TTSCapabilities struct {
 	Streaming         bool `json:"streaming"`
 	AlignedTranscript bool `json:"aligned_transcript"`
+}
+
+func (c *TTSCapabilities) UnmarshalJSON(data []byte) error {
+	type ttsCapabilitiesPayload struct {
+		Streaming         *bool `json:"streaming"`
+		AlignedTranscript bool  `json:"aligned_transcript"`
+	}
+	var payload ttsCapabilitiesPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	if payload.Streaming == nil {
+		return fmt.Errorf("tts capabilities streaming is required")
+	}
+	c.Streaming = *payload.Streaming
+	c.AlignedTranscript = payload.AlignedTranscript
+	return nil
 }
 
 type TTS interface {

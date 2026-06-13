@@ -260,6 +260,26 @@ func TestTTSCapabilitiesMarshalJSONMatchesReferencePayload(t *testing.T) {
 	}
 }
 
+func TestTTSCapabilitiesUnmarshalJSONRequiresReferenceStreaming(t *testing.T) {
+	var missing TTSCapabilities
+	if err := json.Unmarshal([]byte(`{"aligned_transcript": true}`), &missing); err == nil {
+		t.Fatal("Unmarshal TTSCapabilities returned nil error, want missing streaming error")
+	} else if !strings.Contains(err.Error(), "streaming") {
+		t.Fatalf("error = %v, want it to mention streaming", err)
+	}
+
+	var caps TTSCapabilities
+	if err := json.Unmarshal([]byte(`{"streaming": true}`), &caps); err != nil {
+		t.Fatalf("Unmarshal TTSCapabilities with required field returned error: %v", err)
+	}
+	if !caps.Streaming {
+		t.Fatal("Streaming = false, want true")
+	}
+	if caps.AlignedTranscript {
+		t.Fatal("AlignedTranscript = true, want reference default false")
+	}
+}
+
 func TestSynthesizedAudioMarshalJSONMatchesReferencePayload(t *testing.T) {
 	data, err := json.Marshal(SynthesizedAudio{
 		RequestID: "req-a",
