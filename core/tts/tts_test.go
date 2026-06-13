@@ -2,10 +2,12 @@ package tts
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -188,6 +190,46 @@ func TestTTSErrorEmitterIgnoresNilHandler(t *testing.T) {
 	unsubscribe()
 
 	emitter.EmitError(TTSError{Label: "tts", Err: context.Canceled})
+}
+
+func TestTTSErrorMarshalJSONMatchesReferencePayload(t *testing.T) {
+	ttsErr := TTSError{
+		Type:        TTSErrorType,
+		Timestamp:   time.Now(),
+		Label:       "provider.TTS",
+		Err:         errors.New("provider disconnected"),
+		Recoverable: true,
+	}
+
+	data, err := json.Marshal(ttsErr)
+	if err != nil {
+		t.Fatalf("MarshalJSON returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled TTSError returned error: %v", err)
+	}
+
+	if payload["type"] != TTSErrorType {
+		t.Fatalf("type = %v, want %q", payload["type"], TTSErrorType)
+	}
+	if payload["label"] != "provider.TTS" {
+		t.Fatalf("label = %v, want provider.TTS", payload["label"])
+	}
+	if payload["recoverable"] != true {
+		t.Fatalf("recoverable = %v, want true", payload["recoverable"])
+	}
+	timestamp, ok := payload["timestamp"].(float64)
+	if !ok || timestamp <= 0 {
+		t.Fatalf("timestamp = %v, want positive numeric Unix seconds", payload["timestamp"])
+	}
+	if _, ok := payload["err"]; ok {
+		t.Fatalf("err serialized in payload: %s", data)
+	}
+	if _, ok := payload["error"]; ok {
+		t.Fatalf("error serialized in payload: %s", data)
+	}
 }
 
 func TestTTSErrorEmitterPanicDoesNotBlockOtherHandlers(t *testing.T) {
