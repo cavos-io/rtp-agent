@@ -245,6 +245,26 @@ def llm_api_errors(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "status_string_quotes":
+        err = module.APIStatusError(
+            "can't retry",
+            status_code=400,
+            request_id="req_400",
+            body={"detail": "can't retry"},
+        )
+        return {
+            "contract": "llm-api-errors",
+            "events": [
+                {
+                    "name": "status_string_quotes",
+                    "error": str(err),
+                    "message": err.message,
+                    "status": err.status_code,
+                    "request_id": err.request_id,
+                    "retryable": err.retryable,
+                }
+            ],
+        }
     if action == "base_error":
         err = module.APIError(
             "provider failed",

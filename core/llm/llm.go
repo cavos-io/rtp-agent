@@ -810,7 +810,7 @@ func pyTruthy(value any) bool {
 func pyRepr(value any) string {
 	switch v := value.(type) {
 	case string:
-		return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`, "\n", `\n`, "\r", `\r`, "\t", `\t`).Replace(v) + "'"
+		return pyStringRepr(v)
 	case bool:
 		return pyBool(v)
 	case nil:
@@ -852,6 +852,13 @@ func pyRepr(value any) string {
 		}
 		return fmt.Sprintf("%v", value)
 	}
+}
+
+func pyStringRepr(value string) string {
+	if strings.Contains(value, "'") && !strings.Contains(value, `"`) {
+		return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`, "\t", `\t`).Replace(value) + `"`
+	}
+	return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`, "\n", `\n`, "\r", `\r`, "\t", `\t`).Replace(value) + "'"
 }
 
 type APIConnectionError struct {

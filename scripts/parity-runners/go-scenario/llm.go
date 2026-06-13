@@ -191,6 +191,21 @@ func runLLMAPIErrors(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "status_string_quotes":
+		err := lkllm.NewAPIStatusError("can't retry", 400, "req_400", map[string]any{"detail": "can't retry"})
+		return map[string]any{
+			"contract": "llm-api-errors",
+			"events": []map[string]any{
+				{
+					"name":       "status_string_quotes",
+					"error":      err.Error(),
+					"message":    err.Message,
+					"status":     err.StatusCode,
+					"request_id": err.RequestID,
+					"retryable":  err.Retryable,
+				},
+			},
+		}, nil
 	case "base_error":
 		err := lkllm.NewAPIError("provider failed", map[string]any{"code": "overloaded"}, true)
 		body, _ := err.Body.(map[string]any)

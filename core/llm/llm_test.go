@@ -320,6 +320,15 @@ func TestAPIStatusErrorStringFormatsNestedBodyLikeReference(t *testing.T) {
 	}
 }
 
+func TestAPIStatusErrorStringQuotesApostrophesLikeReference(t *testing.T) {
+	err := NewAPIStatusError("can't retry", 400, "req_400", map[string]any{"detail": "can't retry"})
+
+	want := `message="can't retry", status_code=400, retryable=False, request_id=req_400, body={'detail': "can't retry"}`
+	if got := err.Error(); got != want {
+		t.Fatalf("Error() = %q, want %q", got, want)
+	}
+}
+
 func TestCreateAPIErrorFromHTTPFormatsReferenceMessage(t *testing.T) {
 	err := CreateAPIErrorFromHTTP("quota exceeded", 429, "req_123", map[string]any{"type": "rate_limit"})
 
