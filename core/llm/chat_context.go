@@ -168,6 +168,12 @@ func ensureChatItemDefaults(item ChatItem) {
 		if it.CreatedAt.IsZero() {
 			it.CreatedAt = now
 		}
+		if it.Extra == nil {
+			it.Extra = make(map[string]any)
+		}
+		if it.Metrics == nil {
+			it.Metrics = make(map[string]any)
+		}
 	case *FunctionCall:
 		it.ID = itemIDOrDefault(it.ID)
 		if it.CreatedAt.IsZero() {

@@ -165,6 +165,26 @@ func TestChatContextAppendAssignsReferenceItemDefaults(t *testing.T) {
 	}
 }
 
+func TestChatContextAppendAssignsReferenceMessageMetadataDefaults(t *testing.T) {
+	ctx := NewChatContext()
+	message := &ChatMessage{Role: ChatRoleUser, Content: []ChatContent{{Text: "hello"}}}
+
+	ctx.Append(message)
+
+	if message.Extra == nil {
+		t.Fatal("ChatMessage.Extra after Append = nil, want empty map")
+	}
+	if len(message.Extra) != 0 {
+		t.Fatalf("ChatMessage.Extra after Append = %#v, want empty map", message.Extra)
+	}
+	if message.Metrics == nil {
+		t.Fatal("ChatMessage.Metrics after Append = nil, want empty map")
+	}
+	if len(message.Metrics) != 0 {
+		t.Fatalf("ChatMessage.Metrics after Append = %#v, want empty map", message.Metrics)
+	}
+}
+
 func TestChatContextUpsertAssignsReferenceConfigUpdateDefaults(t *testing.T) {
 	ctx := NewChatContext()
 	config := &AgentConfigUpdate{}
