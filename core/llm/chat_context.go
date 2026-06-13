@@ -972,7 +972,7 @@ func chatMessageFromJSON(data []byte) (*ChatMessage, error) {
 		Content:              content,
 		Interrupted:          item.Interrupted,
 		TranscriptConfidence: item.TranscriptConfidence,
-		Extra:                item.Extra,
+		Extra:                nonNilMap(item.Extra),
 		Metrics:              nonNilMap(item.Metrics),
 		CreatedAt:            chatItemCreatedAtOrDefault(item.CreatedAt),
 	}, nil

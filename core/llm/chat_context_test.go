@@ -2059,6 +2059,29 @@ func TestChatContextUnmarshalJSONDefaultsFunctionCallExtra(t *testing.T) {
 	}
 }
 
+func TestChatContextUnmarshalJSONDefaultsMessageExtra(t *testing.T) {
+	var ctx ChatContext
+	data := []byte(`{
+		"items": [{
+			"id": "message",
+			"type": "message",
+			"role": "user",
+			"content": ["hello"]
+		}]
+	}`)
+
+	if err := json.Unmarshal(data, &ctx); err != nil {
+		t.Fatalf("Unmarshal ChatContext error = %v", err)
+	}
+	msg := ctx.Items[0].(*ChatMessage)
+	if msg.Extra == nil {
+		t.Fatal("ChatMessage.Extra = nil, want empty map")
+	}
+	if len(msg.Extra) != 0 {
+		t.Fatalf("ChatMessage.Extra = %#v, want empty map", msg.Extra)
+	}
+}
+
 func TestChatContextItemsDefaultIDs(t *testing.T) {
 	data := []byte(`{
 		"items": [
