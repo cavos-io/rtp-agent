@@ -1969,6 +1969,23 @@ func TestChatContextUnmarshalJSONRejectsFunctionCallMissingArguments(t *testing.
 	}
 }
 
+func TestChatContextUnmarshalJSONRejectsFunctionCallOutputMissingCallID(t *testing.T) {
+	var ctx ChatContext
+	data := []byte(`{
+		"items": [{
+			"id": "output",
+			"type": "function_call_output",
+			"name": "lookup",
+			"output": "ok",
+			"is_error": false
+		}]
+	}`)
+
+	if err := json.Unmarshal(data, &ctx); err == nil {
+		t.Fatal("Unmarshal ChatContext error = nil, want missing function_call_output call_id error")
+	}
+}
+
 func TestChatContextItemsDefaultIDs(t *testing.T) {
 	data := []byte(`{
 		"items": [
