@@ -1508,8 +1508,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 if key in ("google", "livekit", "xai") and bool(value)
             }
 
-        if provider_format == "openai":
-            messages: list[dict[str, Any]] = []
+        def openai_valid_call_ids() -> set[str]:
             function_call_ids = {
                 str(item.get("call_id", ""))
                 for item in items
@@ -1520,7 +1519,11 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 for item in items
                 if item.get("type") == "function_call_output"
             }
-            valid_call_ids = function_call_ids & function_output_ids
+            return function_call_ids & function_output_ids
+
+        if provider_format == "openai":
+            messages: list[dict[str, Any]] = []
+            valid_call_ids = openai_valid_call_ids()
             for item in items:
                 if item["type"] == "function_call":
                     if item["call_id"] not in valid_call_ids:
@@ -1582,6 +1585,61 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 if extra_content:
                     messages[-1]["extra_content"] = extra_content
             return messages
+        if provider_format == "openai.responses":
+            responses_items: list[dict[str, Any]] = []
+            valid_call_ids = openai_valid_call_ids()
+            for item in items:
+                if item["type"] == "message":
+                    parts: list[dict[str, Any]] = []
+                    text = text_content(item["content"]) or ""
+                    for part in item["content"]:
+                        if isinstance(part, dict) and part.get("type") == "image_content":
+                            parts.append(
+                                {
+                                    "type": "input_image",
+                                    "image_url": part.get("image"),
+                                    "detail": part.get("inference_detail") or "auto",
+                                }
+                            )
+                    if parts:
+                        if text:
+                            parts.append({"type": "input_text", "text": text})
+                        content: Any = parts
+                    else:
+                        content = text
+                    response_item: dict[str, Any] = {
+                        "role": item["role"],
+                        "content": content,
+                    }
+                    if item["role"] == "assistant":
+                        phase = item.get("extra", {}).get("openai", {}).get("phase")
+                        if phase is not None:
+                            response_item["phase"] = phase
+                    responses_items.append(response_item)
+                    continue
+                if item["type"] == "function_call":
+                    if item["call_id"] not in valid_call_ids:
+                        continue
+                    responses_items.append(
+                        {
+                            "call_id": item["call_id"],
+                            "type": "function_call",
+                            "name": item["name"],
+                            "arguments": item["arguments"],
+                        }
+                    )
+                    continue
+                if item["type"] == "function_call_output":
+                    if item["call_id"] not in valid_call_ids:
+                        continue
+                    responses_items.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": item["call_id"],
+                            "output": item["output"],
+                        }
+                    )
+            return responses_items
         if provider_format not in ("google", "anthropic", "aws"):
             raise ValueError(f"unsupported provider format {provider_format!r}")
 
