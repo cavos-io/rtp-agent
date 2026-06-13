@@ -2460,6 +2460,20 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 ):
                     variables[step["assign"]] = "invalid_items"
                     return
+                if item_type == "message":
+                    for part in item.get("content", []):
+                        if not isinstance(part, dict):
+                            continue
+                        part_type = str(part.get("type", ""))
+                        if part_type == "audio_content" and "frame" not in part:
+                            variables[step["assign"]] = "invalid_items"
+                            return
+                        if part_type == "image_content" and "image" not in part:
+                            variables[step["assign"]] = "invalid_items"
+                            return
+                        if part_type == "instructions" and "audio" not in part:
+                            variables[step["assign"]] = "invalid_items"
+                            return
                 if item_type == "function_call" and not all(
                     key in item for key in ("call_id", "name", "arguments")
                 ):
