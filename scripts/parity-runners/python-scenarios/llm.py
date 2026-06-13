@@ -1355,12 +1355,15 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             "created_at": created_at,
         }
 
-    def config(item_id: str, *, created_at: float = 0.0) -> dict[str, Any]:
-        return {
+    def config(item_id: str, *, created_at: float = 0.0, instructions: Any = None) -> dict[str, Any]:
+        item = {
             "id": item_id,
             "type": "agent_config_update",
             "created_at": created_at,
         }
+        if instructions is not None:
+            item["instructions"] = instructions
+        return item
 
     generated_id_counter = 0
     generated_image_id_counter = 0
@@ -2302,7 +2305,24 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         if item_type == "agent_handoff":
             return handoff(declarative_item_id(item), created_at=declarative_created_at(item))
         if item_type == "agent_config_update":
-            return config(declarative_item_id(item), created_at=declarative_created_at(item))
+            instructions: Any = None
+            if "instructions" in item:
+                raw_instructions = item["instructions"]
+                if isinstance(raw_instructions, dict):
+                    parsed_instructions = build_declarative_content([raw_instructions])[0]
+                    instructions = {
+                        "type": "instructions",
+                        "audio": parsed_instructions["audio"],
+                    }
+                    if parsed_instructions["text_set"]:
+                        instructions["text"] = parsed_instructions["text"]
+                else:
+                    instructions = str(raw_instructions)
+            return config(
+                declarative_item_id(item),
+                created_at=declarative_created_at(item),
+                instructions=instructions,
+            )
         raise ValueError(f"unsupported item type {item_type!r}")
 
     def build_declarative_content(parts: list[Any]) -> list[Any]:
