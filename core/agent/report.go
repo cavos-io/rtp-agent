@@ -285,6 +285,13 @@ func timeToUnixSeconds(t time.Time) float64 {
 	return float64(t.UnixNano()) / 1e9
 }
 
+func optionalTimeToUnixSeconds(t *time.Time) any {
+	if t == nil {
+		return nil
+	}
+	return timeToUnixSeconds(*t)
+}
+
 func audioRecordingPathToDict(value *string) any {
 	if value == nil {
 		return nil

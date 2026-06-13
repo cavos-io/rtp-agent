@@ -311,6 +311,97 @@ func TestFunctionToolsExecutedEventReplyAndHandoffFlagsCanBeCanceled(t *testing.
 	}
 }
 
+func TestFunctionToolsExecutedEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	ev, err := NewFunctionToolsExecutedEvent(
+		[]*llm.FunctionCall{
+			{
+				ID:        "call_item",
+				CallID:    "call_lookup",
+				Name:      "lookup",
+				Arguments: `{"city":"Paris"}`,
+				CreatedAt: time.Unix(35, 125_000_000),
+			},
+			{
+				ID:        "call_suppressed",
+				CallID:    "call_suppressed",
+				Name:      "stop",
+				Arguments: `{}`,
+				CreatedAt: time.Unix(36, 250_000_000),
+			},
+		},
+		[]*llm.FunctionCallOutput{
+			{
+				ID:        "output_item",
+				CallID:    "call_lookup",
+				Name:      "lookup",
+				Output:    "sunny",
+				IsError:   false,
+				CreatedAt: time.Unix(37, 500_000_000),
+			},
+			nil,
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewFunctionToolsExecutedEvent error = %v, want nil", err)
+	}
+	ev.ReplyRequired = true
+	ev.HandoffRequired = true
+	ev.CreatedAt = time.Unix(38, 750_000_000)
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal FunctionToolsExecutedEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled FunctionToolsExecutedEvent returned error: %v", err)
+	}
+	if payload["type"] != "function_tools_executed" {
+		t.Fatalf("type = %#v, want function_tools_executed", payload["type"])
+	}
+	calls, ok := payload["function_calls"].([]any)
+	if !ok || len(calls) != 2 {
+		t.Fatalf("function_calls = %T %#v, want two calls", payload["function_calls"], payload["function_calls"])
+	}
+	firstCall, ok := calls[0].(map[string]any)
+	if !ok {
+		t.Fatalf("function_calls[0] = %T %#v, want object", calls[0], calls[0])
+	}
+	if firstCall["type"] != "function_call" || firstCall["call_id"] != "call_lookup" || firstCall["name"] != "lookup" || firstCall["arguments"] != `{"city":"Paris"}` {
+		t.Fatalf("first function call = %#v, want reference call fields", firstCall)
+	}
+	if firstCall["created_at"] != 35.125 {
+		t.Fatalf("first function call created_at = %#v, want 35.125", firstCall["created_at"])
+	}
+	outputs, ok := payload["function_call_outputs"].([]any)
+	if !ok || len(outputs) != 2 {
+		t.Fatalf("function_call_outputs = %T %#v, want two outputs", payload["function_call_outputs"], payload["function_call_outputs"])
+	}
+	firstOutput, ok := outputs[0].(map[string]any)
+	if !ok {
+		t.Fatalf("function_call_outputs[0] = %T %#v, want object", outputs[0], outputs[0])
+	}
+	if firstOutput["type"] != "function_call_output" || firstOutput["call_id"] != "call_lookup" || firstOutput["name"] != "lookup" || firstOutput["output"] != "sunny" || firstOutput["is_error"] != false {
+		t.Fatalf("first function output = %#v, want reference output fields", firstOutput)
+	}
+	if firstOutput["created_at"] != 37.5 {
+		t.Fatalf("first function output created_at = %#v, want 37.5", firstOutput["created_at"])
+	}
+	if outputs[1] != nil {
+		t.Fatalf("function_call_outputs[1] = %#v, want nil for suppressed tool output", outputs[1])
+	}
+	if payload["created_at"] != 38.75 {
+		t.Fatalf("created_at = %#v, want 38.75", payload["created_at"])
+	}
+	if _, ok := payload["FunctionCalls"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
+	}
+	if _, ok := payload["ReplyRequired"]; ok {
+		t.Fatalf("payload serialized private reply flag: %#v", payload)
+	}
+}
+
 func TestUserInputTranscribedEventMarshalJSONMatchesReferencePayload(t *testing.T) {
 	ev := &UserInputTranscribedEvent{
 		Language:   "en-US",
@@ -702,6 +793,97 @@ func TestOverlappingSpeechEventIsTypedAndCarriesTimingAndPredictionFields(t *tes
 	}
 	if len(ev.SpeechInput) != 2 || len(ev.Probabilities) != 2 || ev.Probability != 0.9 || ev.NumRequests != 2 {
 		t.Fatalf("prediction fields = %#v, want preserved samples/probability/request count", ev)
+	}
+}
+
+func TestOverlappingSpeechEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	overlapStartedAt := time.Unix(30, 125_000_000)
+	ev := &OverlappingSpeechEvent{
+		CreatedAt:          time.Unix(31, 250_000_000),
+		DetectedAt:         time.Unix(32, 500_000_000),
+		IsInterruption:     true,
+		TotalDuration:      120 * time.Millisecond,
+		PredictionDuration: 35 * time.Millisecond,
+		DetectionDelay:     250 * time.Millisecond,
+		OverlapStartedAt:   &overlapStartedAt,
+		SpeechInput:        []int16{1, -1},
+		Probabilities:      []float32{0.1, 0.9},
+		Probability:        0.9,
+		NumRequests:        2,
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal OverlappingSpeechEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled OverlappingSpeechEvent returned error: %v", err)
+	}
+	if payload["type"] != "overlapping_speech" {
+		t.Fatalf("type = %#v, want overlapping_speech", payload["type"])
+	}
+	if payload["created_at"] != 31.25 || payload["detected_at"] != 32.5 || payload["overlap_started_at"] != 30.125 {
+		t.Fatalf("timestamps = %#v, want reference seconds fields", payload)
+	}
+	if payload["is_interruption"] != true || payload["probability"] != 0.9 || payload["num_requests"] != float64(2) {
+		t.Fatalf("prediction fields = %#v, want reference prediction fields", payload)
+	}
+	if payload["total_duration"] != 0.12 || payload["prediction_duration"] != 0.035 || payload["detection_delay"] != 0.25 {
+		t.Fatalf("duration fields = %#v, want seconds durations", payload)
+	}
+	if payload["speech_input"] != nil || payload["probabilities"] != nil {
+		t.Fatalf("raw arrays = %#v/%#v, want null reference serialization", payload["speech_input"], payload["probabilities"])
+	}
+	if _, ok := payload["TotalDuration"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
+	}
+}
+
+func TestConversationItemAddedEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	msg := &llm.ChatMessage{
+		ID:        "msg_123",
+		Role:      llm.ChatRoleAssistant,
+		Content:   []llm.ChatContent{{Text: "hello there"}},
+		CreatedAt: time.Unix(33, 125_000_000),
+	}
+	ev := &ConversationItemAddedEvent{
+		Item:      msg,
+		CreatedAt: time.Unix(34, 500_000_000),
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal ConversationItemAddedEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled ConversationItemAddedEvent returned error: %v", err)
+	}
+	if payload["type"] != "conversation_item_added" {
+		t.Fatalf("type = %#v, want conversation_item_added", payload["type"])
+	}
+	item, ok := payload["item"].(map[string]any)
+	if !ok {
+		t.Fatalf("item = %T %#v, want reference chat item object", payload["item"], payload["item"])
+	}
+	if item["type"] != "message" || item["id"] != "msg_123" || item["role"] != string(llm.ChatRoleAssistant) {
+		t.Fatalf("item identity = %#v, want reference chat message fields", item)
+	}
+	content, ok := item["content"].([]any)
+	if !ok || len(content) != 1 || content[0] != "hello there" {
+		t.Fatalf("content = %#v, want single hello there content part", item["content"])
+	}
+	if item["created_at"] != 33.125 {
+		t.Fatalf("item created_at = %#v, want 33.125", item["created_at"])
+	}
+	if payload["created_at"] != 34.5 {
+		t.Fatalf("event created_at = %#v, want 34.5", payload["created_at"])
+	}
+	if _, ok := payload["Item"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
 	}
 }
 

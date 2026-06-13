@@ -122,12 +122,43 @@ type OverlappingSpeechEvent struct {
 
 func (e *OverlappingSpeechEvent) GetType() string { return "overlapping_speech" }
 
+func (e *OverlappingSpeechEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":                e.GetType(),
+		"created_at":          timeToUnixSeconds(e.CreatedAt),
+		"detected_at":         timeToUnixSeconds(e.DetectedAt),
+		"is_interruption":     e.IsInterruption,
+		"total_duration":      e.TotalDuration.Seconds(),
+		"prediction_duration": e.PredictionDuration.Seconds(),
+		"detection_delay":     e.DetectionDelay.Seconds(),
+		"overlap_started_at":  optionalTimeToUnixSeconds(e.OverlapStartedAt),
+		"speech_input":        nil,
+		"probabilities":       nil,
+		"probability":         e.Probability,
+		"num_requests":        e.NumRequests,
+	})
+}
+
 type ConversationItemAddedEvent struct {
 	Item      llm.ChatItem
 	CreatedAt time.Time
 }
 
 func (e *ConversationItemAddedEvent) GetType() string { return "conversation_item_added" }
+
+func (e *ConversationItemAddedEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":       e.GetType(),
+		"item":       chatItemReportDict(e.Item),
+		"created_at": timeToUnixSeconds(e.CreatedAt),
+	})
+}
 
 type AgentFalseInterruptionEvent struct {
 	Resumed           bool
@@ -187,6 +218,18 @@ func NewFunctionToolsExecutedEvent(calls []*llm.FunctionCall, outputs []*llm.Fun
 }
 
 func (e *FunctionToolsExecutedEvent) GetType() string { return "function_tools_executed" }
+
+func (e *FunctionToolsExecutedEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":                  e.GetType(),
+		"function_calls":        chatItemsReportDict(e.FunctionCalls),
+		"function_call_outputs": functionCallOutputsReportDict(e.FunctionCallOutputs),
+		"created_at":            timeToUnixSeconds(e.CreatedAt),
+	})
+}
 
 func (e *FunctionToolsExecutedEvent) Zipped() []FunctionToolExecutionPair {
 	pairs := make([]FunctionToolExecutionPair, len(e.FunctionCalls))

@@ -16,21 +16,21 @@ const (
 )
 
 type VADEvent struct {
-	Type                  VADEventType
-	SamplesIndex          int
-	Timestamp             float64
-	SpeechDuration        float64
-	SilenceDuration       float64
-	Frames                []*model.AudioFrame
-	Probability           float64
-	InferenceDuration     float64
-	Speaking              bool
-	RawAccumulatedSilence float64
-	RawAccumulatedSpeech  float64
+	Type                  VADEventType        `json:"type"`
+	SamplesIndex          int                 `json:"samples_index"`
+	Timestamp             float64             `json:"timestamp"`
+	SpeechDuration        float64             `json:"speech_duration"`
+	SilenceDuration       float64             `json:"silence_duration"`
+	Frames                []*model.AudioFrame `json:"frames"`
+	Probability           float64             `json:"probability"`
+	InferenceDuration     float64             `json:"inference_duration"`
+	Speaking              bool                `json:"speaking"`
+	RawAccumulatedSilence float64             `json:"raw_accumulated_silence"`
+	RawAccumulatedSpeech  float64             `json:"raw_accumulated_speech"`
 }
 
 type VADCapabilities struct {
-	UpdateInterval float64
+	UpdateInterval float64 `json:"update_interval"`
 }
 
 type VADMetricsHandler func(*telemetry.VADMetrics)
