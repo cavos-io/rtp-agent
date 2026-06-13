@@ -450,6 +450,42 @@ def llm_value_objects(input_data: Any) -> dict[str, Any]:
                 },
             ],
         }
+    if action == "collected_response_payload":
+        completion_usage = load_reference_llm_value_class("CompletionUsage")
+        function_tool_call = load_reference_llm_value_class("FunctionToolCall")
+        collected_response = load_reference_llm_value_class("CollectedResponse")
+        usage = completion_usage(
+            completion_tokens=3,
+            prompt_tokens=4,
+            total_tokens=7,
+            service_tier="priority",
+        )
+        tool_call = function_tool_call(
+            name="lookup_weather",
+            arguments='{"city":"Paris"}',
+            call_id="call_123",
+            extra={"provider": "openai"},
+        )
+        response = collected_response(
+            text="hello",
+            tool_calls=[tool_call],
+            usage=usage,
+            extra={"reasoning": "visible"},
+        )
+        minimal = collected_response()
+        return {
+            "contract": "llm-value-objects",
+            "events": [
+                {
+                    "name": "collected_response_payload",
+                    "payload": response.model_dump(),
+                },
+                {
+                    "name": "collected_response_defaults",
+                    "minimal_payload": minimal.model_dump(),
+                },
+            ],
+        }
     if action == "realtime_error_payload":
         err = Exception("session disconnected")
         return {

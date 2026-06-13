@@ -628,6 +628,60 @@ type CollectedResponse struct {
 	Extra     map[string]any
 }
 
+func (r CollectedResponse) MarshalJSON() ([]byte, error) {
+	type payload struct {
+		Text      string             `json:"text"`
+		ToolCalls []FunctionToolCall `json:"tool_calls"`
+		Usage     *CompletionUsage   `json:"usage"`
+		Extra     map[string]any     `json:"extra"`
+	}
+
+	toolCalls := r.ToolCalls
+	if toolCalls == nil {
+		toolCalls = []FunctionToolCall{}
+	}
+	extra := r.Extra
+	if extra == nil {
+		extra = map[string]any{}
+	}
+
+	return json.Marshal(payload{
+		Text:      r.Text,
+		ToolCalls: toolCalls,
+		Usage:     r.Usage,
+		Extra:     extra,
+	})
+}
+
+func (r *CollectedResponse) UnmarshalJSON(data []byte) error {
+	type payload struct {
+		Text      *string            `json:"text"`
+		ToolCalls []FunctionToolCall `json:"tool_calls"`
+		Usage     *CompletionUsage   `json:"usage"`
+		Extra     map[string]any     `json:"extra"`
+	}
+
+	var decoded payload
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+
+	r.Text = ""
+	if decoded.Text != nil {
+		r.Text = *decoded.Text
+	}
+	r.ToolCalls = decoded.ToolCalls
+	if r.ToolCalls == nil {
+		r.ToolCalls = []FunctionToolCall{}
+	}
+	r.Usage = decoded.Usage
+	r.Extra = decoded.Extra
+	if r.Extra == nil {
+		r.Extra = map[string]any{}
+	}
+	return nil
+}
+
 type LLMError struct {
 	Type        string
 	Timestamp   time.Time

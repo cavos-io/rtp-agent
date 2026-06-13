@@ -2008,6 +2008,46 @@ func runLLMValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "collected_response_payload":
+		response := lkllm.CollectedResponse{
+			Text: "hello",
+			ToolCalls: []lkllm.FunctionToolCall{
+				{
+					Name:      "lookup_weather",
+					Arguments: `{"city":"Paris"}`,
+					CallID:    "call_123",
+					Extra:     map[string]any{"provider": "openai"},
+				},
+			},
+			Usage: &lkllm.CompletionUsage{
+				CompletionTokens: 3,
+				PromptTokens:     4,
+				TotalTokens:      7,
+				ServiceTier:      "priority",
+			},
+			Extra: map[string]any{"reasoning": "visible"},
+		}
+		payload, err := collectedResponsePayload(response)
+		if err != nil {
+			return nil, err
+		}
+		minimal, err := collectedResponsePayloadFromJSON([]byte(`{}`))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "llm-value-objects",
+			"events": []map[string]any{
+				{
+					"name":    "collected_response_payload",
+					"payload": payload,
+				},
+				{
+					"name":            "collected_response_defaults",
+					"minimal_payload": minimal,
+				},
+			},
+		}, nil
 	case "realtime_error_payload":
 		underlying := errors.New("session disconnected")
 		err := lkllm.NewRealtimeModelError("openai.RealtimeModel", underlying, false)
@@ -2811,6 +2851,26 @@ func chatChunkPayloadFromJSON(data []byte) (map[string]any, error) {
 		return nil, err
 	}
 	return chatChunkPayload(chunk)
+}
+
+func collectedResponsePayload(response lkllm.CollectedResponse) (map[string]any, error) {
+	data, err := json.Marshal(response)
+	if err != nil {
+		return nil, err
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func collectedResponsePayloadFromJSON(data []byte) (map[string]any, error) {
+	var response lkllm.CollectedResponse
+	if err := json.Unmarshal(data, &response); err != nil {
+		return nil, err
+	}
+	return collectedResponsePayload(response)
 }
 
 type scenarioLLMToolset struct {
