@@ -282,6 +282,23 @@ func TestAPIStatusErrorDefaultsRetryabilityLikeReference(t *testing.T) {
 	}
 }
 
+func TestAPIStatusErrorOverridesRetryableForReferenceClientErrors(t *testing.T) {
+	clientErr := NewAPIStatusErrorWithRetryable("bad request", 400, "req_400", nil, true)
+	if clientErr.Retryable {
+		t.Fatal("Retryable = true for explicit retryable 400, want false like reference")
+	}
+
+	transientErr := NewAPIStatusErrorWithRetryable("rate limited", 429, "req_429", nil, true)
+	if !transientErr.Retryable {
+		t.Fatal("Retryable = false for explicit retryable 429, want true")
+	}
+
+	serverErr := NewAPIStatusErrorWithRetryable("server failed", 500, "req_500", nil, false)
+	if serverErr.Retryable {
+		t.Fatal("Retryable = true for explicit non-retryable 500, want caller override preserved")
+	}
+}
+
 func TestCreateAPIErrorFromHTTPFormatsReferenceMessage(t *testing.T) {
 	err := CreateAPIErrorFromHTTP("quota exceeded", 429, "req_123", map[string]any{"type": "rate_limit"})
 

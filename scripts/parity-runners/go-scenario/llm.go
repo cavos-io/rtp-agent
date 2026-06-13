@@ -134,6 +134,30 @@ func runLLMAPIErrors(input json.RawMessage) (any, error) {
 			})
 		}
 		return map[string]any{"contract": "llm-api-errors", "events": events}, nil
+	case "status_retryable_override":
+		tests := []struct {
+			name      string
+			status    int
+			retryable bool
+		}{
+			{name: "client_forces_false", status: 400, retryable: true},
+			{name: "transient_keeps_true", status: 429, retryable: true},
+			{name: "server_keeps_false", status: 500, retryable: false},
+		}
+		events := make([]map[string]any, 0, len(tests))
+		for _, test := range tests {
+			err := lkllm.NewAPIStatusErrorWithRetryable(test.name, test.status, fmt.Sprintf("req_%d", test.status), nil, test.retryable)
+			events = append(events, map[string]any{
+				"name":        "status_retryable_override",
+				"case":        test.name,
+				"status":      err.StatusCode,
+				"request_id":  err.RequestID,
+				"retryable":   err.Retryable,
+				"message":     err.Message,
+				"body_is_nil": err.Body == nil,
+			})
+		}
+		return map[string]any{"contract": "llm-api-errors", "events": events}, nil
 	case "base_error":
 		err := lkllm.NewAPIError("provider failed", map[string]any{"code": "overloaded"}, true)
 		body, _ := err.Body.(map[string]any)

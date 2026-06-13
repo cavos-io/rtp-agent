@@ -178,6 +178,33 @@ def llm_api_errors(input_data: Any) -> dict[str, Any]:
                 }
             )
         return {"contract": "llm-api-errors", "events": events}
+    if action == "status_retryable_override":
+        cases = [
+            ("client_forces_false", 400, True),
+            ("transient_keeps_true", 429, True),
+            ("server_keeps_false", 500, False),
+        ]
+        events = []
+        for name, status, retryable in cases:
+            err = module.APIStatusError(
+                name,
+                status_code=status,
+                request_id=f"req_{status}",
+                body=None,
+                retryable=retryable,
+            )
+            events.append(
+                {
+                    "name": "status_retryable_override",
+                    "case": name,
+                    "status": err.status_code,
+                    "request_id": err.request_id,
+                    "retryable": err.retryable,
+                    "message": err.message,
+                    "body_is_nil": err.body is None,
+                }
+            )
+        return {"contract": "llm-api-errors", "events": events}
     if action == "base_error":
         err = module.APIError(
             "provider failed",

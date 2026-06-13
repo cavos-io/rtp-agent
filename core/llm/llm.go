@@ -722,6 +722,7 @@ func NewAPIStatusError(message string, statusCode int, requestID string, body an
 }
 
 func NewAPIStatusErrorWithRetryable(message string, statusCode int, requestID string, body any, retryable bool) *APIStatusError {
+	retryable = applyAPIStatusRetryableOverride(statusCode, retryable)
 	return &APIStatusError{
 		APIError:   NewAPIError(message, body, retryable),
 		StatusCode: statusCode,
@@ -749,10 +750,14 @@ func (e *APIStatusError) Unwrap() error {
 }
 
 func apiStatusDefaultRetryable(statusCode int) bool {
+	return applyAPIStatusRetryableOverride(statusCode, true)
+}
+
+func applyAPIStatusRetryableOverride(statusCode int, retryable bool) bool {
 	if statusCode >= 400 && statusCode < 500 {
 		return statusCode == 408 || statusCode == 429 || statusCode == 499
 	}
-	return true
+	return retryable
 }
 
 type APIConnectionError struct {
