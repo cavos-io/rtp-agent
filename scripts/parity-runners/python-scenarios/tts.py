@@ -120,6 +120,18 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "capabilities_default_aligned":
+        caps = module.TTSCapabilities(streaming=True)
+        return {
+            "contract": "tts-value-objects",
+            "events": [
+                {
+                    "name": "capabilities_default_aligned",
+                    "streaming": caps.streaming,
+                    "aligned_transcript": caps.aligned_transcript,
+                }
+            ],
+        }
     if action == "tts_error_payload":
         err = module.TTSError(
             type="tts_error",

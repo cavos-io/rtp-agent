@@ -75,6 +75,21 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "capabilities_default_aligned":
+		var caps lktts.TTSCapabilities
+		if err := json.Unmarshal([]byte(`{"streaming":true}`), &caps); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "tts-value-objects",
+			"events": []map[string]any{
+				{
+					"name":               "capabilities_default_aligned",
+					"streaming":          caps.Streaming,
+					"aligned_transcript": caps.AlignedTranscript,
+				},
+			},
+		}, nil
 	case "tts_error_payload":
 		err := lktts.TTSError{
 			Type:        lktts.TTSErrorType,
