@@ -1891,6 +1891,20 @@ func TestOpenAIRealtimeIgnoresCancellationFailedErrorEvent(t *testing.T) {
 	if ev.Type != llm.RealtimeEventTypeError {
 		t.Fatalf("event type = %q, want error", ev.Type)
 	}
+	var apiErr *llm.APIError
+	if !errors.As(ev.Error, &apiErr) {
+		t.Fatalf("event error = %T %v, want APIError", ev.Error, ev.Error)
+	}
+	if apiErr.Message != "OpenAI Realtime API returned an error" {
+		t.Fatalf("APIError message = %q", apiErr.Message)
+	}
+	if !apiErr.Retryable {
+		t.Fatal("APIError Retryable = false, want true")
+	}
+	body, ok := apiErr.Body.(map[string]any)
+	if !ok || body["message"] != "invalid request" {
+		t.Fatalf("APIError body = %#v, want provider error body", apiErr.Body)
+	}
 }
 
 func TestRealtimeSessionClosesOutputMessageWithEmptyIDWhenItemDone(t *testing.T) {

@@ -1655,7 +1655,7 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 		}
 		return llm.RealtimeEvent{
 			Type:  llm.RealtimeEventTypeError,
-			Error: fmt.Errorf("openai error: %v", ev),
+			Error: llm.NewAPIError("OpenAI Realtime API returned an error", errorBody, true),
 		}, true
 	case "response.output_text.delta", "response.text.delta":
 		if delta, ok := ev["delta"].(string); ok {
