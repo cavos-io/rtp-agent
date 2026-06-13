@@ -705,6 +705,51 @@ func TestOverlappingSpeechEventIsTypedAndCarriesTimingAndPredictionFields(t *tes
 	}
 }
 
+func TestOverlappingSpeechEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	overlapStartedAt := time.Unix(30, 125_000_000)
+	ev := &OverlappingSpeechEvent{
+		CreatedAt:          time.Unix(31, 250_000_000),
+		DetectedAt:         time.Unix(32, 500_000_000),
+		IsInterruption:     true,
+		TotalDuration:      120 * time.Millisecond,
+		PredictionDuration: 35 * time.Millisecond,
+		DetectionDelay:     250 * time.Millisecond,
+		OverlapStartedAt:   &overlapStartedAt,
+		SpeechInput:        []int16{1, -1},
+		Probabilities:      []float32{0.1, 0.9},
+		Probability:        0.9,
+		NumRequests:        2,
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal OverlappingSpeechEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled OverlappingSpeechEvent returned error: %v", err)
+	}
+	if payload["type"] != "overlapping_speech" {
+		t.Fatalf("type = %#v, want overlapping_speech", payload["type"])
+	}
+	if payload["created_at"] != 31.25 || payload["detected_at"] != 32.5 || payload["overlap_started_at"] != 30.125 {
+		t.Fatalf("timestamps = %#v, want reference seconds fields", payload)
+	}
+	if payload["is_interruption"] != true || payload["probability"] != 0.9 || payload["num_requests"] != float64(2) {
+		t.Fatalf("prediction fields = %#v, want reference prediction fields", payload)
+	}
+	if payload["total_duration"] != 0.12 || payload["prediction_duration"] != 0.035 || payload["detection_delay"] != 0.25 {
+		t.Fatalf("duration fields = %#v, want seconds durations", payload)
+	}
+	if payload["speech_input"] != nil || payload["probabilities"] != nil {
+		t.Fatalf("raw arrays = %#v/%#v, want null reference serialization", payload["speech_input"], payload["probabilities"])
+	}
+	if _, ok := payload["TotalDuration"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
+	}
+}
+
 func TestCloseReasonIncludesTaskCompleted(t *testing.T) {
 	ev := &CloseEvent{Reason: CloseReasonTaskCompleted, CreatedAt: time.Now()}
 

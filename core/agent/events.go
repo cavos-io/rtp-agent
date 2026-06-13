@@ -122,6 +122,26 @@ type OverlappingSpeechEvent struct {
 
 func (e *OverlappingSpeechEvent) GetType() string { return "overlapping_speech" }
 
+func (e *OverlappingSpeechEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":                e.GetType(),
+		"created_at":          timeToUnixSeconds(e.CreatedAt),
+		"detected_at":         timeToUnixSeconds(e.DetectedAt),
+		"is_interruption":     e.IsInterruption,
+		"total_duration":      e.TotalDuration.Seconds(),
+		"prediction_duration": e.PredictionDuration.Seconds(),
+		"detection_delay":     e.DetectionDelay.Seconds(),
+		"overlap_started_at":  optionalTimeToUnixSeconds(e.OverlapStartedAt),
+		"speech_input":        nil,
+		"probabilities":       nil,
+		"probability":         e.Probability,
+		"num_requests":        e.NumRequests,
+	})
+}
+
 type ConversationItemAddedEvent struct {
 	Item      llm.ChatItem
 	CreatedAt time.Time
