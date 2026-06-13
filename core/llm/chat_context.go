@@ -977,7 +977,7 @@ func chatContentFromJSON(data []byte) (ChatContent, error) {
 	case "image_content":
 		var image struct {
 			ID              string `json:"id"`
-			Image           any    `json:"image"`
+			Image           *any   `json:"image"`
 			InferenceWidth  *int   `json:"inference_width"`
 			InferenceHeight *int   `json:"inference_height"`
 			InferenceDetail string `json:"inference_detail"`
@@ -986,9 +986,12 @@ func chatContentFromJSON(data []byte) (ChatContent, error) {
 		if err := json.Unmarshal(data, &image); err != nil {
 			return ChatContent{}, err
 		}
+		if image.Image == nil {
+			return ChatContent{}, fmt.Errorf("image_content image is required")
+		}
 		return ChatContent{Image: &ImageContent{
 			ID:              imageIDOrDefault(image.ID),
-			Image:           image.Image,
+			Image:           *image.Image,
 			InferenceWidth:  image.InferenceWidth,
 			InferenceHeight: image.InferenceHeight,
 			InferenceDetail: imageInferenceDetailOrDefault(image.InferenceDetail),
