@@ -287,7 +287,7 @@ func functionChatItemName(item ChatItem) string {
 }
 
 func (c *ChatContext) Messages() []*ChatMessage {
-	var msgs []*ChatMessage
+	msgs := make([]*ChatMessage, 0)
 	for _, item := range c.Items {
 		if msg, ok := item.(*ChatMessage); ok {
 			msgs = append(msgs, msg)

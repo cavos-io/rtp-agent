@@ -287,6 +287,25 @@ func TestChatContextGetToolNamesRecursesNestedToolsets(t *testing.T) {
 	}
 }
 
+func TestChatContextMessagesReturnsReferenceEmptyList(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&FunctionCall{ID: "call", Name: "lookup"},
+		&FunctionCallOutput{ID: "output", Name: "lookup"},
+		&AgentHandoff{ID: "handoff", NewAgentID: "next"},
+		&AgentConfigUpdate{ID: "config"},
+	}
+
+	messages := ctx.Messages()
+
+	if messages == nil {
+		t.Fatal("Messages() = nil, want empty slice")
+	}
+	if len(messages) != 0 {
+		t.Fatalf("len(Messages()) = %d, want 0", len(messages))
+	}
+}
+
 func TestChatContextCopyFiltersOutFunctionItemsOutsideTools(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
