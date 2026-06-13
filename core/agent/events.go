@@ -145,6 +145,23 @@ func NewAgentFalseInterruptionEvent(resumed bool) *AgentFalseInterruptionEvent {
 
 func (e *AgentFalseInterruptionEvent) GetType() string { return "agent_false_interruption" }
 
+func (e *AgentFalseInterruptionEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	var extraInstructions any
+	if e.ExtraInstructions != "" {
+		extraInstructions = e.ExtraInstructions
+	}
+	return json.Marshal(map[string]any{
+		"type":               e.GetType(),
+		"resumed":            e.Resumed,
+		"message":            e.Message,
+		"extra_instructions": extraInstructions,
+		"created_at":         timeToUnixSeconds(e.CreatedAt),
+	})
+}
+
 type FunctionToolsExecutedEvent struct {
 	FunctionCalls       []*llm.FunctionCall
 	FunctionCallOutputs []*llm.FunctionCallOutput

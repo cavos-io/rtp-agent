@@ -414,6 +414,38 @@ func TestAgentFalseInterruptionEventPreservesDeprecatedCompatibilityFields(t *te
 	}
 }
 
+func TestAgentFalseInterruptionEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	ev := &AgentFalseInterruptionEvent{
+		Resumed:   true,
+		CreatedAt: time.Unix(26, 500_000_000),
+	}
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal AgentFalseInterruptionEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled AgentFalseInterruptionEvent returned error: %v", err)
+	}
+	if payload["type"] != "agent_false_interruption" {
+		t.Fatalf("type = %#v, want agent_false_interruption", payload["type"])
+	}
+	if payload["resumed"] != true {
+		t.Fatalf("resumed = %#v, want true", payload["resumed"])
+	}
+	if payload["message"] != nil || payload["extra_instructions"] != nil {
+		t.Fatalf("deprecated fields = %#v/%#v, want null reference fields", payload["message"], payload["extra_instructions"])
+	}
+	if payload["created_at"] != 26.5 {
+		t.Fatalf("created_at = %#v, want 26.5", payload["created_at"])
+	}
+	if _, ok := payload["ExtraInstructions"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
+	}
+}
+
 func TestUserTurnExceededEventIsTypedAndTimestamped(t *testing.T) {
 	before := time.Now()
 	ev := NewUserTurnExceededEvent("latest words", "all accumulated words", 3, 4*time.Second)
