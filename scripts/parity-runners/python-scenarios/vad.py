@@ -95,4 +95,45 @@ def vad_value_objects(input_data: Any) -> dict[str, Any]:  # noqa: F405
                 }
             ],
         }
+    if action == "event_json":
+        event = module.VADEvent(
+            type=module.VADEventType.INFERENCE_DONE,
+            samples_index=320,
+            timestamp=1.25,
+            speech_duration=0.5,
+            silence_duration=0.75,
+            probability=0.875,
+            inference_duration=0.01,
+            speaking=True,
+            raw_accumulated_silence=0.125,
+            raw_accumulated_speech=0.25,
+        )
+        payload = asdict(event)
+        return {
+            "contract": "vad-event-json",
+            "events": [
+                {
+                    "name": "event_json",
+                    "type": payload["type"].value,
+                    "samples_index": payload["samples_index"],
+                    "timestamp": payload["timestamp"],
+                    "speech_duration": payload["speech_duration"],
+                    "silence_duration": payload["silence_duration"],
+                    "frames_length": len(payload["frames"]),
+                    "probability": payload["probability"],
+                    "inference_duration": payload["inference_duration"],
+                    "speaking": payload["speaking"],
+                    "raw_accumulated_silence": payload["raw_accumulated_silence"],
+                    "raw_accumulated_speech": payload["raw_accumulated_speech"],
+                    "has_go_field_names": any(
+                        name in payload
+                        for name in [
+                            "SamplesIndex",
+                            "SpeechDuration",
+                            "InferenceDuration",
+                        ]
+                    ),
+                }
+            ],
+        }
     raise ValueError(f"unsupported vad value-object action {action!r}")
