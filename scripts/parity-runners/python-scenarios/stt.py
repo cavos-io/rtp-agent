@@ -244,6 +244,31 @@ def stt_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "speech_event_required_type":
+        missing_field = ""
+        try:
+            module.SpeechEvent(request_id="req-1")
+        except TypeError as exc:
+            if "type" in str(exc):
+                missing_field = "type"
+        event = module.SpeechEvent(
+            type=module.SpeechEventType.END_OF_SPEECH,
+            request_id="req-1",
+        )
+        return {
+            "contract": "stt-speech-event-required-type",
+            "events": [
+                {
+                    "name": "speech_event_required_type",
+                    "missing_required": missing_field == "type",
+                    "missing_field": missing_field,
+                    "type": event.type.value,
+                    "request_id": event.request_id,
+                    "alternatives_is_list": isinstance(event.alternatives, list),
+                    "alternatives_length": len(event.alternatives),
+                }
+            ],
+        }
     if action == "stt_error_payload":
         err = module.STTError(
             type="stt_error",

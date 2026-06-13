@@ -279,6 +279,31 @@ func runSTTValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "speech_event_required_type":
+		var missing lkstt.SpeechEvent
+		err := json.Unmarshal([]byte(`{"request_id":"req-1"}`), &missing)
+		missingField := ""
+		if err != nil && strings.Contains(err.Error(), "type") {
+			missingField = "type"
+		}
+		var event lkstt.SpeechEvent
+		if err := json.Unmarshal([]byte(`{"type":"end_of_speech","request_id":"req-1"}`), &event); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "stt-speech-event-required-type",
+			"events": []map[string]any{
+				{
+					"name":                 "speech_event_required_type",
+					"missing_required":     missingField == "type",
+					"missing_field":        missingField,
+					"type":                 event.Type,
+					"request_id":           event.RequestID,
+					"alternatives_is_list": event.Alternatives != nil,
+					"alternatives_length":  len(event.Alternatives),
+				},
+			},
+		}, nil
 	case "stt_error_payload":
 		underlying := errors.New("provider disconnected")
 		sttErr := lkstt.NewSTTError("provider.STT", underlying, true)
