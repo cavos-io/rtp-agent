@@ -93,6 +93,24 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "capabilities_required_streaming":
+		var missing lktts.TTSCapabilities
+		err := json.Unmarshal([]byte(`{"aligned_transcript":true}`), &missing)
+		var caps lktts.TTSCapabilities
+		if unmarshalErr := json.Unmarshal([]byte(`{"streaming":true}`), &caps); unmarshalErr != nil {
+			return nil, unmarshalErr
+		}
+		return map[string]any{
+			"contract": "tts-capabilities-required-streaming",
+			"events": []map[string]any{
+				{
+					"name":               "capabilities_required_streaming",
+					"missing_required":   err != nil && strings.Contains(err.Error(), "streaming"),
+					"streaming":          caps.Streaming,
+					"aligned_transcript": caps.AlignedTranscript,
+				},
+			},
+		}, nil
 	case "synthesized_audio_json":
 		data, marshalErr := json.Marshal(lktts.SynthesizedAudio{
 			RequestID: "req-a",

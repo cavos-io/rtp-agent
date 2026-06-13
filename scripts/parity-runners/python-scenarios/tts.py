@@ -171,6 +171,24 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "capabilities_required_streaming":
+        missing_required = False
+        try:
+            module.TTSCapabilities(aligned_transcript=True)
+        except TypeError as exc:
+            missing_required = "streaming" in str(exc)
+        caps = module.TTSCapabilities(streaming=True)
+        return {
+            "contract": "tts-capabilities-required-streaming",
+            "events": [
+                {
+                    "name": "capabilities_required_streaming",
+                    "missing_required": missing_required,
+                    "streaming": caps.streaming,
+                    "aligned_transcript": caps.aligned_transcript,
+                }
+            ],
+        }
     if action == "synthesized_audio_json":
         audio = module.SynthesizedAudio(
             frame=None,
