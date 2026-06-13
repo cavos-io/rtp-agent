@@ -263,6 +263,19 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "timed_string_optional_speaker":
+        timed = load_reference_types().TimedString("hello")
+        return {
+            "contract": "tts-timed-string-optional-speaker",
+            "events": [
+                {
+                    "name": "timed_string_optional_speaker",
+                    "text": str(timed),
+                    "speaker_id": timed.speaker_id,
+                    "speaker_is_none": timed.speaker_id is None,
+                }
+            ],
+        }
     if action == "timed_string_text":
         timed = load_reference_types().TimedString(
             "hello",

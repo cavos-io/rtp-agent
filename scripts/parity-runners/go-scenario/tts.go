@@ -210,6 +210,26 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "timed_string_optional_speaker":
+		data, marshalErr := json.Marshal(lktts.TimedString{Text: "hello"})
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		var payload map[string]any
+		if unmarshalErr := json.Unmarshal(data, &payload); unmarshalErr != nil {
+			return nil, unmarshalErr
+		}
+		return map[string]any{
+			"contract": "tts-timed-string-optional-speaker",
+			"events": []map[string]any{
+				{
+					"name":            "timed_string_optional_speaker",
+					"text":            payload["text"],
+					"speaker_id":      payload["speaker_id"],
+					"speaker_is_none": payload["speaker_id"] == nil,
+				},
+			},
+		}, nil
 	case "timed_string_text":
 		timed := lktts.TimedString{
 			Text:            "hello",
