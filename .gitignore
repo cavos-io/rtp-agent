@@ -6,6 +6,9 @@ resources/models/*
 !resources/models/.gitkeep
 refs/
 
+# cache
+__pycache__
+
 # Git worktrees
 worktrees/
 

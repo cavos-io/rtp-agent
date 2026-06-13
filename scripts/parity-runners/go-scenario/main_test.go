@@ -13,7 +13,7 @@ func TestLoadScenarioReadsGenericFields(t *testing.T) {
 		"name": "dev-mode-env-json-scenario",
 		"case_type": "cross-runtime",
 		"input": {"env_values": ["1", ""]},
-		"python_entrypoint": "scripts.parity_scenario_entries:dev_mode_env_exact",
+		"python_entrypoint": "utils:dev_mode_env_exact",
 		"go_handler": "dev_mode_env_exact",
 		"compare_mode": "json_equal",
 		"ignored_fields": ["timestamp", "duration", "trace_id"]
@@ -27,7 +27,7 @@ func TestLoadScenarioReadsGenericFields(t *testing.T) {
 	if scenario.Name != "dev-mode-env-json-scenario" {
 		t.Fatalf("Name = %q", scenario.Name)
 	}
-	if scenario.PythonEntrypoint != "scripts.parity_scenario_entries:dev_mode_env_exact" {
+	if scenario.PythonEntrypoint != "utils:dev_mode_env_exact" {
 		t.Fatalf("PythonEntrypoint = %q", scenario.PythonEntrypoint)
 	}
 	if scenario.GoHandler != "dev_mode_env_exact" {
@@ -43,7 +43,7 @@ func TestRunScenarioDispatchesRegisteredHandlerWithInputOnly(t *testing.T) {
 		"name": "echo-json-scenario",
 		"case_type": "cross-runtime",
 		"input": {"text": "hello", "trace_id": "ignored"},
-		"python_entrypoint": "scripts.parity_scenario_entries:echo",
+		"python_entrypoint": "utils:echo",
 		"go_handler": "echo",
 		"compare_mode": "json_equal",
 		"ignored_fields": ["trace_id"]
@@ -80,7 +80,7 @@ func TestRunScenarioReportsExpectedErrorsAsJSON(t *testing.T) {
 		"name": "expected-error-json-scenario",
 		"case_type": "cross-runtime",
 		"input": {"text": "boom"},
-		"python_entrypoint": "scripts.parity_scenario_entries:error",
+		"python_entrypoint": "utils:error",
 		"go_handler": "error",
 		"compare_mode": "json_equal",
 		"expected_error_substring": "boom"

@@ -17,6 +17,7 @@ exclude:
 
 excludeFiles:
   - ".*_test\\.go"
+  - "scripts/parity-runners/go-scenario/.*\\.go"
 
 components:
   app:

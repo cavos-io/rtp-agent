@@ -14,7 +14,7 @@ cat > "$SCENARIO" <<'JSON'
   "name": "dev-mode-json-scenario",
   "case_type": "cross-runtime",
   "input": {"env_values": ["1", "", "true", "on"]},
-  "python_entrypoint": "scripts.parity_scenario_entries:dev_mode_env_exact",
+  "python_entrypoint": "utils:dev_mode_env_exact",
   "go_handler": "dev_mode_env_exact",
   "compare_mode": "json_equal",
   "ignored_fields": ["timestamp", "duration", "trace_id"]
@@ -25,7 +25,7 @@ cat > "$MANIFEST" <<'TSV'
 case_name	type	source_ref	target_ref	go_package	go_test	python_runner	go_runner	input_json	contract	behavior	notes
 dev-mode-cross	cross-runtime	refs/agents/livekit-agents/livekit/agents/utils/misc.py	library/utils/misc.go			python3 scripts/parity-runners/python-utils.py	go run ./scripts/parity-runners/go-utils	{"env_values":["1","","true","on"]}	dev-mode-env-exact	Development mode is enabled only when LIVEKIT_DEV_MODE is exactly 1.	Smoke test for changed-file gate selection.
 TSV
-printf 'dev-mode-json-scenario\tjson-scenario\trefs/agents/livekit-agents/livekit/agents/utils/misc.py\tscripts/parity-runners/json-scenario\t\t\tpython3 scripts/parity-runners/json-scenario-python.py\tgo run ./scripts/parity-runners/json-scenario\t%s\tdev-mode-env-exact\tDevelopment mode is enabled only when LIVEKIT_DEV_MODE is exactly 1.\tSmoke test for changed-file JSON scenario selection.\n' "$SCENARIO" >> "$MANIFEST"
+printf 'dev-mode-json-scenario\tjson-scenario\trefs/agents/livekit-agents/livekit/agents/utils/misc.py\tscripts/parity-runners/go-scenario\t\t\tpython3 scripts/parity-runners/python-scenario.py\tgo run ./scripts/parity-runners/go-scenario\t%s\tdev-mode-env-exact\tDevelopment mode is enabled only when LIVEKIT_DEV_MODE is exactly 1.\tSmoke test for changed-file JSON scenario selection.\n' "$SCENARIO" >> "$MANIFEST"
 
 bash -n "$ROOT/scripts/parity-gate.sh"
 
