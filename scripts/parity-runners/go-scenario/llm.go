@@ -485,6 +485,27 @@ func runLLMStrictSchema(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "nullable_defaults":
+		type request struct {
+			Limit int `json:"limit" jsonschema:"maximum results" default:"10"`
+		}
+		schema := lkllm.GenerateStrictJSONSchema(reflect.TypeOf(request{}))
+		props, _ := schema["properties"].(map[string]interface{})
+		limit, _ := props["limit"].(map[string]interface{})
+		_, hasDefault := limit["default"]
+		return map[string]any{
+			"contract": "llm-strict-schema",
+			"events": []map[string]any{
+				{
+					"name":                       "nullable_defaults",
+					"root_additional_properties": schema["additionalProperties"],
+					"required":                   schema["required"],
+					"limit_type":                 limit["type"],
+					"limit_has_default":          hasDefault,
+					"limit_description":          limit["description"],
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported strict schema action %q", payload.Action)
 	}

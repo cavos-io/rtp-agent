@@ -593,6 +593,33 @@ def llm_strict_schema(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "nullable_defaults":
+        schema = {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "default": 10,
+                    "description": "maximum results",
+                }
+            },
+        }
+        strict = copy.deepcopy(schema)
+        strict = normalizer(strict, path=(), root=strict)
+        limit = strict["properties"]["limit"]
+        return {
+            "contract": "llm-strict-schema",
+            "events": [
+                {
+                    "name": "nullable_defaults",
+                    "root_additional_properties": strict.get("additionalProperties"),
+                    "required": strict.get("required"),
+                    "limit_type": limit.get("type"),
+                    "limit_has_default": "default" in limit,
+                    "limit_description": limit.get("description"),
+                }
+            ],
+        }
     raise ValueError(f"unsupported strict schema action {action!r}")
 
 
