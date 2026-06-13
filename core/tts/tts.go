@@ -2,6 +2,7 @@ package tts
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 )
@@ -22,6 +23,32 @@ type TimedString struct {
 	Confidence      float64 `json:"confidence"`
 	StartTimeOffset float64 `json:"start_time_offset"`
 	SpeakerID       string  `json:"speaker_id"`
+}
+
+func (s TimedString) MarshalJSON() ([]byte, error) {
+	type timedStringPayload struct {
+		Text            string  `json:"text"`
+		StartTime       float64 `json:"start_time"`
+		EndTime         float64 `json:"end_time"`
+		Confidence      float64 `json:"confidence"`
+		StartTimeOffset float64 `json:"start_time_offset"`
+		SpeakerID       *string `json:"speaker_id"`
+	}
+	return json.Marshal(timedStringPayload{
+		Text:            s.Text,
+		StartTime:       s.StartTime,
+		EndTime:         s.EndTime,
+		Confidence:      s.Confidence,
+		StartTimeOffset: s.StartTimeOffset,
+		SpeakerID:       optionalStringPointer(s.SpeakerID),
+	})
+}
+
+func optionalStringPointer(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 type TTSCapabilities struct {
