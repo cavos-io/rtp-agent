@@ -4,14 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"sort"
 )
 
 type ToolContext struct {
-	tools         []interface{} // Tool | Toolset
-	functionTools map[string]Tool
-	providerTools []ProviderTool
-	toolsets      []Toolset
+	tools             []interface{} // Tool | Toolset
+	functionTools     map[string]Tool
+	functionToolOrder []string
+	providerTools     []ProviderTool
+	toolsets          []Toolset
 }
 
 type closeableToolset interface {
@@ -70,13 +70,8 @@ func (c *ToolContext) Close() error {
 }
 
 func (c *ToolContext) Flatten() []Tool {
-	tools := make([]Tool, 0)
-	names := make([]string, 0, len(c.functionTools))
-	for name := range c.functionTools {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
+	tools := make([]Tool, 0, len(c.functionTools)+len(c.providerTools))
+	for _, name := range c.functionToolOrder {
 		tools = append(tools, c.functionTools[name])
 	}
 	for _, tool := range c.providerTools {
@@ -102,9 +97,6 @@ func (c *ToolContext) addToolValue(tool interface{}, topLevel bool, exclude []To
 			return nil
 		}
 		c.providerTools = append(c.providerTools, t)
-		sort.Slice(c.providerTools, func(i, j int) bool {
-			return c.providerTools[i].ID() < c.providerTools[j].ID()
-		})
 		if topLevel {
 			c.tools = append(c.tools, tool)
 		}
@@ -146,6 +138,7 @@ func (c *ToolContext) UpdateTools(tools []interface{}) error {
 func (c *ToolContext) updateTools(tools []interface{}, exclude []Tool) error {
 	c.tools = make([]interface{}, 0, len(tools))
 	c.functionTools = make(map[string]Tool)
+	c.functionToolOrder = make([]string, 0)
 	c.providerTools = make([]ProviderTool, 0)
 	c.toolsets = make([]Toolset, 0)
 
@@ -154,9 +147,6 @@ func (c *ToolContext) updateTools(tools []interface{}, exclude []Tool) error {
 			return err
 		}
 	}
-	sort.Slice(c.providerTools, func(i, j int) bool {
-		return c.providerTools[i].ID() < c.providerTools[j].ID()
-	})
 	return nil
 }
 
@@ -169,6 +159,7 @@ func (c *ToolContext) addTool(tool Tool) error {
 		return fmt.Errorf("duplicate function name: %s", name)
 	}
 	c.functionTools[name] = tool
+	c.functionToolOrder = append(c.functionToolOrder, name)
 	return nil
 }
 

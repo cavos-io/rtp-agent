@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 	"time"
 
@@ -2617,10 +2616,6 @@ func runLLMToolContext(input json.RawMessage) (any, error) {
 	}
 	summary := func(ctx *lkllm.ToolContext, name string, extra map[string]any) map[string]any {
 		functionNames := make([]string, 0, len(ctx.FunctionTools()))
-		for name := range ctx.FunctionTools() {
-			functionNames = append(functionNames, name)
-		}
-		sort.Strings(functionNames)
 		providerNames := make([]string, 0, len(ctx.ProviderTools()))
 		for _, tool := range ctx.ProviderTools() {
 			providerNames = append(providerNames, tool.ID())
@@ -2628,6 +2623,9 @@ func runLLMToolContext(input json.RawMessage) (any, error) {
 		flattenNames := make([]string, 0, len(ctx.Flatten()))
 		for _, tool := range ctx.Flatten() {
 			flattenNames = append(flattenNames, tool.ID())
+			if _, ok := tool.(lkllm.ProviderTool); !ok {
+				functionNames = append(functionNames, tool.ID())
+			}
 		}
 		event := map[string]any{
 			"name":           name,
@@ -2734,6 +2732,47 @@ func runLLMToolContext(input json.RawMessage) (any, error) {
 			"contract": "llm-tool-context",
 			"events": []map[string]any{
 				{"name": "equal_identity", "same_identity_equal": left.Equal(right), "different_function_equal": left.Equal(other)},
+			},
+		}, nil
+	case "flatten_function_order":
+		ctx := lkllm.NewToolContext([]interface{}{
+			newTool("zeta", "zeta"),
+			newTool("alpha", "alpha"),
+			newTool("middle", "middle"),
+		})
+		return map[string]any{
+			"contract": "llm-tool-context",
+			"events":   []map[string]any{summary(ctx, "flatten_function_order", nil)},
+		}, nil
+	case "flatten_provider_order":
+		ctx := lkllm.NewToolContext([]interface{}{
+			&scenarioLLMProviderTool{scenarioLLMTool: scenarioLLMTool{id: "zeta-provider", name: "zeta-provider"}},
+			newTool("lookup", "lookup"),
+			&scenarioLLMProviderTool{scenarioLLMTool: scenarioLLMTool{id: "alpha-provider", name: "alpha-provider"}},
+		})
+		return map[string]any{
+			"contract": "llm-tool-context",
+			"events":   []map[string]any{summary(ctx, "flatten_provider_order", nil)},
+		}, nil
+	case "sync_flattened":
+		lookup := newTool("lookup", "lookup")
+		weather := newTool("weather", "weather")
+		replacement := newTool("replacement", "replacement")
+		toolset := &scenarioLLMToolset{id: "tools", tools: []lkllm.Tool{lookup, weather}}
+		ctx := lkllm.NewToolContext([]interface{}{toolset})
+		if err := ctx.SyncFlattened([]lkllm.Tool{weather, replacement}); err != nil {
+			return nil, err
+		}
+		toolsets := ctx.Toolsets()
+		return map[string]any{
+			"contract": "llm-tool-context",
+			"events": []map[string]any{
+				summary(ctx, "sync_flattened", map[string]any{
+					"lookup_found":      ctx.GetFunctionTool("lookup") != nil,
+					"weather_found":     ctx.GetFunctionTool("weather") == weather,
+					"replacement_found": ctx.GetFunctionTool("replacement") == replacement,
+					"toolset_preserved": len(toolsets) == 1 && toolsets[0] == toolset,
+				}),
 			},
 		}, nil
 	case "close_toolsets":

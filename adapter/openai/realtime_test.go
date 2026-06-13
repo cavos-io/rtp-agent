@@ -1659,6 +1659,53 @@ func TestRealtimeSessionRoutesOutputMessageTextDeltasToGenerationStream(t *testi
 	}
 }
 
+func TestRealtimeSessionTextOnlyOutputMessageClosesAudioStream(t *testing.T) {
+	session := &realtimeSession{
+		model: NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeModalities([]string{"text"})),
+	}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{
+			ResponseID: "resp_123",
+		},
+	})
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+		},
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
+	}
+
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	select {
+	case _, ok := <-msg.AudioCh:
+		if ok {
+			t.Fatal("AudioCh open for text-only realtime model, want closed")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for text-only audio stream close")
+	}
+
+	select {
+	case modalities := <-msg.ModalitiesCh:
+		if len(modalities) != 1 || modalities[0] != "text" {
+			t.Fatalf("modalities = %#v, want text", modalities)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for text-only modalities")
+	}
+}
+
 func TestRealtimeSessionRoutesOutputMessageWithEmptyID(t *testing.T) {
 	session := &realtimeSession{}
 	created := session.trackRealtimeEvent(llm.RealtimeEvent{
@@ -1891,6 +1938,20 @@ func TestOpenAIRealtimeIgnoresCancellationFailedErrorEvent(t *testing.T) {
 	if ev.Type != llm.RealtimeEventTypeError {
 		t.Fatalf("event type = %q, want error", ev.Type)
 	}
+	var apiErr *llm.APIError
+	if !errors.As(ev.Error, &apiErr) {
+		t.Fatalf("event error = %T %v, want APIError", ev.Error, ev.Error)
+	}
+	if apiErr.Message != "OpenAI Realtime API returned an error" {
+		t.Fatalf("APIError message = %q", apiErr.Message)
+	}
+	if !apiErr.Retryable {
+		t.Fatal("APIError Retryable = false, want true")
+	}
+	body, ok := apiErr.Body.(map[string]any)
+	if !ok || body["message"] != "invalid request" {
+		t.Fatalf("APIError body = %#v, want provider error body", apiErr.Body)
+	}
 }
 
 func TestRealtimeSessionClosesOutputMessageWithEmptyIDWhenItemDone(t *testing.T) {
@@ -2001,6 +2062,143 @@ func TestRealtimeSessionClosesGenerationStreamsWhenResponseDone(t *testing.T) {
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for generation function stream close")
+	}
+}
+
+func TestRealtimeSessionIgnoresResponseDoneWithoutGeneration(t *testing.T) {
+	releaseServer := make(chan struct{})
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]any{
+			"type": "response.done",
+			"response": map[string]any{
+				"id":     "stale_response",
+				"status": "completed",
+				"usage":  map[string]any{"total_tokens": 1.0},
+			},
+		}); err != nil {
+			t.Errorf("Write response.done error = %v", err)
+			return
+		}
+		<-releaseServer
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	defer close(releaseServer)
+
+	select {
+	case ev, ok := <-session.EventCh():
+		if !ok {
+			t.Fatal("EventCh closed before response.done was ignored")
+		}
+		t.Fatalf("EventCh emitted %#v, want stale response.done ignored", ev)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestRealtimeSessionPersistsAudioTranscriptOnResponseDone(t *testing.T) {
+	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
+	if err := session.remote.Insert(nil, &llm.ChatMessage{
+		ID:      "msg_123",
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{},
+	}); err != nil {
+		t.Fatalf("Insert remote message error = %v", err)
+	}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+		},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "response.output_audio_transcript.delta",
+		"item_id": "msg_123",
+		"delta":   "hello ",
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "response.output_audio_transcript.delta",
+		"item_id": "msg_123",
+		"delta":   "world",
+	})
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":     "response.done",
+		"response": map[string]any{"id": "resp_123", "status": "completed"},
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
+	}
+
+	msg, ok := session.remote.Get("msg_123").(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("remote item = %T, want *llm.ChatMessage", session.remote.Get("msg_123"))
+	}
+	if got := msg.TextContent(); got != "hello world" {
+		t.Fatalf("remote text content = %q, want accumulated audio transcript", got)
+	}
+}
+
+func TestRealtimeSessionPersistsTextDeltaOnResponseDone(t *testing.T) {
+	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
+	if err := session.remote.Insert(nil, &llm.ChatMessage{
+		ID:      "msg_text",
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{},
+	}); err != nil {
+		t.Fatalf("Insert remote message error = %v", err)
+	}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "msg_text",
+			"type": "message",
+		},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "response.output_text.delta",
+		"item_id": "msg_text",
+		"delta":   "text ",
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "response.text.delta",
+		"item_id": "msg_text",
+		"delta":   "alias",
+	})
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":     "response.done",
+		"response": map[string]any{"id": "resp_text", "status": "completed"},
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
+	}
+
+	msg, ok := session.remote.Get("msg_text").(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("remote item = %T, want *llm.ChatMessage", session.remote.Get("msg_text"))
+	}
+	if got := msg.TextContent(); got != "text alias" {
+		t.Fatalf("remote text content = %q, want accumulated text delta", got)
 	}
 }
 

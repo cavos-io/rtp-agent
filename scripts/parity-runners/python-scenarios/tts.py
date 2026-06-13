@@ -136,14 +136,21 @@ def tts_fallback(input_data: Any) -> dict[str, Any]:
     module = load_reference_tts_fallback()
 
     class ScenarioTTS(module.TTS):
+        def __init__(self, *, sample_rate: int = 24000, num_channels: int = 1) -> None:
+            super().__init__(
+                capabilities=module.TTSCapabilities(streaming=False),
+                sample_rate=sample_rate,
+                num_channels=num_channels,
+            )
+            self.prewarm_calls = 0
+
         def synthesize(self, text: str, *, conn_options: Any = None) -> Any:
             return None
 
-    provider = ScenarioTTS(
-        capabilities=module.TTSCapabilities(streaming=False),
-        sample_rate=24000,
-        num_channels=1,
-    )
+        def prewarm(self) -> None:
+            self.prewarm_calls += 1
+
+    provider = ScenarioTTS()
 
     if action == "model_provider":
         adapter = module.FallbackAdapter([provider])
@@ -160,16 +167,8 @@ def tts_fallback(input_data: Any) -> dict[str, Any]:
             ],
         }
     if action == "sample_rate":
-        low = ScenarioTTS(
-            capabilities=module.TTSCapabilities(streaming=False),
-            sample_rate=16000,
-            num_channels=1,
-        )
-        high = ScenarioTTS(
-            capabilities=module.TTSCapabilities(streaming=False),
-            sample_rate=48000,
-            num_channels=1,
-        )
+        low = ScenarioTTS(sample_rate=16000)
+        high = ScenarioTTS(sample_rate=48000)
         adapter = module.FallbackAdapter([low, high], sample_rate=24000)
         return {
             "contract": "tts-fallback",
@@ -182,6 +181,21 @@ def tts_fallback(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "prewarm":
+        primary = ScenarioTTS()
+        fallback = ScenarioTTS()
+        adapter = module.FallbackAdapter([primary, fallback])
+        adapter.prewarm()
+        return {
+            "contract": "tts-fallback",
+            "events": [
+                {
+                    "name": "prewarm",
+                    "primary_prewarm_calls": primary.prewarm_calls,
+                    "fallback_prewarm_calls": fallback.prewarm_calls,
+                }
+            ],
+        }
     if action == "validation":
         mode = input_data.get("mode", "empty")
         error = False
@@ -190,16 +204,8 @@ def tts_fallback(input_data: Any) -> dict[str, Any]:
             if mode == "empty":
                 module.FallbackAdapter([])
             elif mode == "mixed_channels":
-                mono = ScenarioTTS(
-                    capabilities=module.TTSCapabilities(streaming=False),
-                    sample_rate=24000,
-                    num_channels=1,
-                )
-                stereo = ScenarioTTS(
-                    capabilities=module.TTSCapabilities(streaming=False),
-                    sample_rate=24000,
-                    num_channels=2,
-                )
+                mono = ScenarioTTS(num_channels=1)
+                stereo = ScenarioTTS(num_channels=2)
                 module.FallbackAdapter([mono, stereo])
             else:
                 raise ValueError(f"unsupported TTS fallback validation mode {mode!r}")
@@ -219,5 +225,4 @@ def tts_fallback(input_data: Any) -> dict[str, Any]:
             ],
         }
     raise ValueError(f"unsupported TTS fallback action {action!r}")
-
 

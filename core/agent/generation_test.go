@@ -137,8 +137,10 @@ func TestPerformLLMInferenceFlattensToolsBeforeChat(t *testing.T) {
 	if len(gotTools) != 2 {
 		t.Fatalf("len(Chat tools) = %d, want 2", len(gotTools))
 	}
-	if gotTools[0].Name() != "alpha" || gotTools[1].Name() != "zebra" {
-		t.Fatalf("Chat tools = [%s, %s], want flattened alpha/zebra order", gotTools[0].Name(), gotTools[1].Name())
+	gotNames := []string{gotTools[0].Name(), gotTools[1].Name()}
+	wantNames := []string{"zebra", "alpha"}
+	if strings.Join(gotNames, ",") != strings.Join(wantNames, ",") {
+		t.Fatalf("Chat tools = %v, want flattened insertion order %v", gotNames, wantNames)
 	}
 }
 

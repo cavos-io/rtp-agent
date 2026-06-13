@@ -544,7 +544,10 @@ func TestPipelineAgentGenerateReplyIncludesAgentToolsInChatOptions(t *testing.T)
 	if len(l.calls) != 1 {
 		t.Fatalf("LLM Chat calls = %d, want 1", len(l.calls))
 	}
-	if got, want := generationToolNames(l.calls[0].Tools), []string{"agent_tool", "session_tool"}; !stringSlicesEqual(got, want) {
+	if len(l.calls[0].Tools) != 2 {
+		t.Fatalf("LLM tools = %d, want session and agent tools", len(l.calls[0].Tools))
+	}
+	if got, want := generationToolNames(l.calls[0].Tools), []string{"session_tool", "agent_tool"}; !stringSlicesEqual(got, want) {
 		t.Fatalf("LLM tools = %#v, want %#v", got, want)
 	}
 }

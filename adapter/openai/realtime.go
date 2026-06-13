@@ -242,6 +242,8 @@ type realtimeMessageGeneration struct {
 	audioCh       chan *model.AudioFrame
 	modalitiesCh  chan []string
 	modalities    []string
+	transcript    string
+	audioClosed   bool
 	streamsClosed bool
 }
 
@@ -1295,6 +1297,10 @@ func (s *realtimeSession) eventLoop() {
 				continue
 			}
 
+			if openAIRealtimeString(ev["type"]) == "response.done" && s.generation == nil {
+				continue
+			}
+
 			trackedEvent, trackedOK := s.trackOpenAIRealtimeEvent(ev)
 			realtimeEvent, ok := openAIRealtimeEvent(ev)
 			if !ok {
@@ -1339,6 +1345,11 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 			textCh:       make(chan string, 100),
 			audioCh:      make(chan *model.AudioFrame, 100),
 			modalitiesCh: make(chan []string, 1),
+		}
+		if s.model != nil && !s.model.Capabilities().AudioOutput {
+			msg.modalities = []string{"text"}
+			msg.modalitiesCh <- msg.modalities
+			s.closeRealtimeMessageAudioStream(msg)
 		}
 		s.generation.messages[itemID] = msg
 		message := llm.MessageGeneration{
@@ -1385,9 +1396,18 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 				logger.Logger.Warnw("dropping OpenAI realtime function call for full stream", nil, "item_id", itemID)
 			}
 		}
+	case "response.output_text.delta", "response.text.delta":
+		itemID, _ := ev["item_id"].(string)
+		delta, _ := ev["delta"].(string)
+		s.trackRealtimeOutputTranscript(itemID, delta)
+	case "response.output_audio_transcript.delta", "response.audio_transcript.delta":
+		itemID, _ := ev["item_id"].(string)
+		delta, _ := ev["delta"].(string)
+		s.trackRealtimeOutputTranscript(itemID, delta)
 	case "response.done":
 		hadGeneration := s.generation != nil
 		response, _ := ev["response"].(map[string]any)
+		s.persistRealtimeAudioTranscripts()
 		s.closeRealtimeGeneration()
 		if hadGeneration {
 			return openAIRealtimeResponseDoneError(response)
@@ -1423,6 +1443,28 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 		}, true
 	}
 	return llm.RealtimeEvent{}, false
+}
+
+func (s *realtimeSession) trackRealtimeOutputTranscript(itemID, delta string) {
+	if s.generation == nil || itemID == "" {
+		return
+	}
+	if msg := s.generation.messages[itemID]; msg != nil {
+		msg.transcript += delta
+	}
+}
+
+func (s *realtimeSession) persistRealtimeAudioTranscripts() {
+	if s.generation == nil || s.remote == nil {
+		return
+	}
+	for itemID, generation := range s.generation.messages {
+		msg, ok := s.remote.Get(itemID).(*llm.ChatMessage)
+		if !ok {
+			continue
+		}
+		msg.Content = append(msg.Content, llm.ChatContent{Text: generation.transcript})
+	}
 }
 
 func openAIRealtimeResponseDoneError(response map[string]any) (llm.RealtimeEvent, bool) {
@@ -1567,8 +1609,16 @@ func (s *realtimeSession) closeRealtimeMessageStreams(msg *realtimeMessageGenera
 		return
 	}
 	close(msg.textCh)
-	close(msg.audioCh)
+	s.closeRealtimeMessageAudioStream(msg)
 	msg.streamsClosed = true
+}
+
+func (s *realtimeSession) closeRealtimeMessageAudioStream(msg *realtimeMessageGeneration) {
+	if msg == nil || msg.audioClosed {
+		return
+	}
+	close(msg.audioCh)
+	msg.audioClosed = true
 }
 
 func (s *realtimeSession) trackRealtimeRemoteItemAdded(ev llm.RealtimeEvent) {
@@ -1655,7 +1705,7 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 		}
 		return llm.RealtimeEvent{
 			Type:  llm.RealtimeEventTypeError,
-			Error: fmt.Errorf("openai error: %v", ev),
+			Error: llm.NewAPIError("OpenAI Realtime API returned an error", errorBody, true),
 		}, true
 	case "response.output_text.delta", "response.text.delta":
 		if delta, ok := ev["delta"].(string); ok {

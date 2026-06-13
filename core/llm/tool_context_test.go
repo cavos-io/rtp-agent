@@ -151,8 +151,8 @@ func TestToolContextAddToolUpdatesFlattenedTools(t *testing.T) {
 		t.Fatalf("GetFunctionTool(weather) = %p, want %p", got, weather)
 	}
 	providerTools := ctx.ProviderTools()
-	if len(providerTools) != 2 || providerTools[0] != nestedProvider || providerTools[1] != provider {
-		t.Fatalf("ProviderTools() = %#v, want sorted providers including nested provider", providerTools)
+	if len(providerTools) != 2 || providerTools[0] != provider || providerTools[1] != nestedProvider {
+		t.Fatalf("ProviderTools() = %#v, want added provider before nested provider", providerTools)
 	}
 	toolsets := ctx.Toolsets()
 	if len(toolsets) != 1 || toolsets[0] != toolset {
@@ -261,7 +261,7 @@ func TestToolContextUpdateToolsRejectsNonComparableDuplicateName(t *testing.T) {
 	requireToolContextErrorString(t, "UpdateTools()", err, "duplicate function name: lookup")
 }
 
-func TestToolContextFlattenSortsFunctionToolsByName(t *testing.T) {
+func TestToolContextFlattenPreservesFunctionToolInsertionOrder(t *testing.T) {
 	ctx := EmptyToolContext()
 	if err := ctx.UpdateTools([]interface{}{
 		&testTool{id: "zeta", name: "zeta"},
@@ -276,14 +276,17 @@ func TestToolContextFlattenSortsFunctionToolsByName(t *testing.T) {
 	for _, tool := range flattened {
 		names = append(names, tool.Name())
 	}
+	if got := ctx.GetFunctionTool("alpha"); got == nil || got.Name() != "alpha" {
+		t.Fatalf("GetFunctionTool(alpha) = %#v, want alpha tool after preserving insertion order", got)
+	}
 
-	want := []string{"alpha", "middle", "zeta"}
+	want := []string{"zeta", "alpha", "middle"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("Flatten() names = %v, want %v", names, want)
 	}
 }
 
-func TestToolContextSeparatesAndSortsProviderTools(t *testing.T) {
+func TestToolContextSeparatesAndPreservesProviderToolOrder(t *testing.T) {
 	providerZ := &testProviderTool{testTool: testTool{id: "zeta-provider", name: "zeta-provider"}}
 	providerA := &testProviderTool{testTool: testTool{id: "alpha-provider", name: "alpha-provider"}}
 	function := &testTool{id: "lookup", name: "lookup"}
@@ -297,13 +300,17 @@ func TestToolContextSeparatesAndSortsProviderTools(t *testing.T) {
 		t.Fatalf("FunctionTools() = %#v, want only lookup function tool", ctx.FunctionTools())
 	}
 	providerTools := ctx.ProviderTools()
-	if len(providerTools) != 2 || providerTools[0] != providerA || providerTools[1] != providerZ {
-		t.Fatalf("ProviderTools() = %#v, want sorted provider tools", providerTools)
+	if len(providerTools) != 2 || providerTools[0] != providerZ || providerTools[1] != providerA {
+		t.Fatalf("ProviderTools() = %#v, want provider insertion order", providerTools)
+	}
+	providerTools[0] = providerA
+	if copied := ctx.ProviderTools(); copied[0] != providerZ {
+		t.Fatalf("ProviderTools() returned mutable backing slice; first provider = %#v, want zeta provider", copied[0])
 	}
 
 	flattened := ctx.Flatten()
-	if len(flattened) != 3 || flattened[0] != function || flattened[1] != providerA || flattened[2] != providerZ {
-		t.Fatalf("Flatten() = %#v, want function tools followed by sorted provider tools", flattened)
+	if len(flattened) != 3 || flattened[0] != function || flattened[1] != providerZ || flattened[2] != providerA {
+		t.Fatalf("Flatten() = %#v, want function tools followed by provider insertion order", flattened)
 	}
 }
 

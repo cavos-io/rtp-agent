@@ -427,6 +427,15 @@ def stt_fallback(input_data: Any) -> dict[str, Any]:
         else:
             raise ValueError(f"unsupported STT fallback capabilities mode {mode!r}")
         return {"contract": "stt-fallback", "events": [caps_event(f"capabilities_{mode}", adapter)]}
+    if action == "vad_wrap":
+        class FakeVAD:
+            pass
+
+        adapter = fallback_module.FallbackAdapter(
+            [FakeSTT("offline", streaming=False, offline_recognize=True)],
+            vad=FakeVAD(),
+        )
+        return {"contract": "stt-fallback", "events": [caps_event("vad_wrap", adapter)]}
     raise ValueError(f"unsupported STT fallback action {action!r}")
 
 
@@ -510,5 +519,4 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
             ],
         }
     raise ValueError(f"unsupported STT stream adapter action {action!r}")
-
 
