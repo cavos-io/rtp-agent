@@ -1055,6 +1055,16 @@ def llm_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "realtime_session_options_speed":
+        return {
+            "contract": "llm-value-objects",
+            "events": [
+                {
+                    "name": "realtime_session_options_speed",
+                    "speed": 1.25,
+                }
+            ],
+        }
     if action == "realtime_generate_reply_options":
         return {
             "contract": "llm-value-objects",
