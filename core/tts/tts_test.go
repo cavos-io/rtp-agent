@@ -260,6 +260,45 @@ func TestTTSCapabilitiesMarshalJSONMatchesReferencePayload(t *testing.T) {
 	}
 }
 
+func TestSynthesizedAudioMarshalJSONMatchesReferencePayload(t *testing.T) {
+	data, err := json.Marshal(SynthesizedAudio{
+		RequestID: "req-a",
+		IsFinal:   true,
+		SegmentID: "segment-a",
+		DeltaText: "hello",
+	})
+	if err != nil {
+		t.Fatalf("Marshal SynthesizedAudio returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled SynthesizedAudio returned error: %v", err)
+	}
+
+	want := map[string]any{
+		"frame":      nil,
+		"request_id": "req-a",
+		"is_final":   true,
+		"segment_id": "segment-a",
+		"delta_text": "hello",
+	}
+	for key, value := range want {
+		if payload[key] != value {
+			t.Fatalf("%s = %v, want %v; payload %s", key, payload[key], value, data)
+		}
+	}
+	if _, ok := payload["RequestID"]; ok {
+		t.Fatalf("Go field name RequestID leaked into JSON: %s", data)
+	}
+	if _, ok := payload["IsFinal"]; ok {
+		t.Fatalf("Go field name IsFinal leaked into JSON: %s", data)
+	}
+	if _, ok := payload["timed_transcript"]; ok {
+		t.Fatalf("Go-only timed transcript extension leaked when empty: %s", data)
+	}
+}
+
 func TestTimedStringMarshalJSONMatchesReferencePayload(t *testing.T) {
 	data, err := json.Marshal(TimedString{
 		Text:            "hello",

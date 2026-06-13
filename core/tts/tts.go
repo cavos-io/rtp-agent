@@ -7,12 +7,12 @@ import (
 )
 
 type SynthesizedAudio struct {
-	Frame           *model.AudioFrame
-	RequestID       string
-	IsFinal         bool
-	SegmentID       string
-	DeltaText       string
-	TimedTranscript []TimedString
+	Frame           *model.AudioFrame `json:"frame"`
+	RequestID       string            `json:"request_id"`
+	IsFinal         bool              `json:"is_final"`
+	SegmentID       string            `json:"segment_id"`
+	DeltaText       string            `json:"delta_text"`
+	TimedTranscript []TimedString     `json:"timed_transcript,omitempty"`
 }
 
 type TimedString struct {
