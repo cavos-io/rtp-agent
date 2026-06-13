@@ -51,6 +51,46 @@ func TestSpeechDataCarriesReferenceMetadataFields(t *testing.T) {
 	}
 }
 
+func TestSpeechDataUnmarshalJSONRejectsMissingRequiredFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{
+			name:    "language",
+			payload: `{"text":"hello"}`,
+			want:    "language",
+		},
+		{
+			name:    "text",
+			payload: `{"language":"en"}`,
+			want:    "text",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var data SpeechData
+			err := json.Unmarshal([]byte(tt.payload), &data)
+			if err == nil {
+				t.Fatal("Unmarshal SpeechData returned nil error, want missing required field error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want it to mention %q", err, tt.want)
+			}
+		})
+	}
+
+	var data SpeechData
+	if err := json.Unmarshal([]byte(`{"language":"","text":""}`), &data); err != nil {
+		t.Fatalf("Unmarshal SpeechData with explicit required fields returned error: %v", err)
+	}
+	if data.Language != "" || data.Text != "" {
+		t.Fatalf("decoded required fields = %#v, want explicit empty values", data)
+	}
+}
+
 func TestSpeechEventCarriesReferenceUsageAndSpeechStartTime(t *testing.T) {
 	usage := &RecognitionUsage{
 		AudioDuration: 1.25,
