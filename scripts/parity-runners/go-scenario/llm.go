@@ -3075,6 +3075,17 @@ func runLLMValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "realtime_session_options_input_audio_transcription":
+		options := lkllm.RealtimeSessionOptions{InputAudioTranscription: map[string]any{"model": "gpt-4o-transcribe"}}
+		return map[string]any{
+			"contract": "llm-value-objects",
+			"events": []map[string]any{
+				{
+					"name":                      "realtime_session_options_input_audio_transcription",
+					"input_audio_transcription": options.InputAudioTranscription,
+				},
+			},
+		}, nil
 	case "realtime_generate_reply_options":
 		options := lkllm.RealtimeGenerateReplyOptions{
 			Instructions: "answer briefly",

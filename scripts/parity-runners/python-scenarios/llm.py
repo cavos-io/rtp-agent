@@ -1105,6 +1105,16 @@ def llm_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "realtime_session_options_input_audio_transcription":
+        return {
+            "contract": "llm-value-objects",
+            "events": [
+                {
+                    "name": "realtime_session_options_input_audio_transcription",
+                    "input_audio_transcription": {"model": "gpt-4o-transcribe"},
+                }
+            ],
+        }
     if action == "realtime_generate_reply_options":
         return {
             "contract": "llm-value-objects",
