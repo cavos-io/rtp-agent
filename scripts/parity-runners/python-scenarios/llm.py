@@ -1186,6 +1186,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         content: list[Any] | None = None,
         *,
         created_at: float = 0.0,
+        extra: dict[str, Any] | None = None,
         metrics: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return {
@@ -1194,7 +1195,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             "role": role,
             "content": list(content or []),
             "interrupted": False,
-            "extra": {},
+            "extra": dict(extra or {}),
             "metrics": dict(metrics or {}),
             "created_at": created_at,
         }
@@ -1205,6 +1206,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         *,
         call_id: str = "",
         arguments: str = "",
+        extra: dict[str, Any] | None = None,
         created_at: float = 0.0,
     ) -> dict[str, Any]:
         return {
@@ -1213,7 +1215,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             "call_id": call_id,
             "arguments": arguments,
             "name": name,
-            "extra": {},
+            "extra": dict(extra or {}),
             "created_at": created_at,
         }
 
@@ -1499,9 +1501,32 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         inject_trailing_user_message: bool = False,
         thought_signatures: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
+        def openai_extra_content(extra: dict[str, Any]) -> dict[str, Any]:
+            return {
+                key: value
+                for key, value in extra.items()
+                if key in ("google", "livekit", "xai") and bool(value)
+            }
+
         if provider_format == "openai":
             messages: list[dict[str, Any]] = []
             for item in items:
+                if item["type"] == "function_call":
+                    if not messages or messages[-1].get("role") != "assistant":
+                        messages.append({"role": "assistant"})
+                    tool_call: dict[str, Any] = {
+                        "id": item["call_id"],
+                        "type": "function",
+                        "function": {
+                            "name": item["name"],
+                            "arguments": item["arguments"],
+                        },
+                    }
+                    extra_content = openai_extra_content(item.get("extra", {}))
+                    if extra_content:
+                        tool_call["extra_content"] = extra_content
+                    messages[-1].setdefault("tool_calls", []).append(tool_call)
+                    continue
                 if item["type"] != "message":
                     continue
                 parts: list[dict[str, Any]] = []
@@ -1529,6 +1554,9 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                         "content": content,
                     }
                 )
+                extra_content = openai_extra_content(item.get("extra", {}))
+                if extra_content:
+                    messages[-1]["extra_content"] = extra_content
             return messages
         if provider_format not in ("google", "anthropic", "aws"):
             raise ValueError(f"unsupported provider format {provider_format!r}")
@@ -1649,6 +1677,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 str(item.get("role", "")),
                 content,
                 created_at=float(item.get("created_at_unix", 0.0)),
+                extra=item.get("extra", {}),
                 metrics=item.get("metrics", {}),
             )
         if item_type == "function_call":
@@ -1657,6 +1686,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 str(item.get("name", "")),
                 call_id=str(item.get("call_id", "")),
                 arguments=str(item.get("arguments", "")),
+                extra=item.get("extra", {}),
                 created_at=float(item.get("created_at_unix", 0.0)),
             )
         if item_type == "function_call_output":
@@ -1922,6 +1952,18 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         if transform.startswith("context_last_identity_matches:"):
             var_name = transform.removeprefix("context_last_identity_matches:")
             return bool(value_items) and value_items[-1] is variables[var_name]
+        if transform.startswith("provider_first_extra_has:"):
+            key = transform.removeprefix("provider_first_extra_has:")
+            if not value:
+                return False
+            extra = value[0].get("extra_content", {})
+            return key in extra
+        if transform.startswith("provider_first_tool_call_extra_has:"):
+            key = transform.removeprefix("provider_first_tool_call_extra_has:")
+            for message_item in value:
+                for tool_call in message_item.get("tool_calls", []):
+                    return key in tool_call.get("extra_content", {})
+            return False
         if transform in ("", "identity"):
             return value
         if transform == "exists":
@@ -1989,6 +2031,13 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 if isinstance(part, dict) and part.get("type") == "text":
                     return part.get("text")
             return None
+        if transform == "provider_first_extra_exists":
+            return bool(value and value[0].get("extra_content", {}))
+        if transform == "provider_first_tool_call_extra_exists":
+            for message_item in value:
+                for tool_call in message_item.get("tool_calls", []):
+                    return bool(tool_call.get("extra_content", {}))
+            return False
         if transform == "provider_message_count":
             return len(value)
         if transform == "provider_last_role":

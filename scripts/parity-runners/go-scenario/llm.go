@@ -1175,6 +1175,9 @@ func buildLLMScenarioItem(item map[string]any) (lkllm.ChatItem, error) {
 			Name:      stringArg(item, "name"),
 			Arguments: stringArg(item, "arguments"),
 		}
+		if extra, ok := item["extra"].(map[string]any); ok {
+			functionCall.Extra = extra
+		}
 		if createdAt, ok := scenarioIntArg(item, "created_at_unix"); ok {
 			functionCall.CreatedAt = time.Unix(int64(createdAt), 0)
 		}
@@ -1219,6 +1222,9 @@ func buildLLMScenarioMessage(item map[string]any) (*lkllm.ChatMessage, error) {
 		ID:      stringArg(item, "id"),
 		Role:    lkllm.ChatRole(stringArg(item, "role")),
 		Content: []lkllm.ChatContent{{Text: stringArg(item, "text")}},
+	}
+	if extra, ok := item["extra"].(map[string]any); ok {
+		message.Extra = extra
 	}
 	if metrics, ok := item["metrics"].(map[string]any); ok {
 		message.Metrics = metrics
@@ -1510,6 +1516,24 @@ func runLLMChatContextEmitStep(state *llmScenarioState, step llmScenarioStepSpec
 }
 
 func transformLLMScenarioField(state *llmScenarioState, value any, transform string) (any, error) {
+	if strings.HasPrefix(transform, "provider_first_extra_has:") {
+		key := strings.TrimPrefix(transform, "provider_first_extra_has:")
+		extra, err := firstProviderMessageExtra(value)
+		if err != nil {
+			return nil, err
+		}
+		_, ok := extra[key]
+		return ok, nil
+	}
+	if strings.HasPrefix(transform, "provider_first_tool_call_extra_has:") {
+		key := strings.TrimPrefix(transform, "provider_first_tool_call_extra_has:")
+		extra, err := firstProviderToolCallExtra(value)
+		if err != nil {
+			return nil, err
+		}
+		_, ok := extra[key]
+		return ok, nil
+	}
 	if strings.HasPrefix(transform, "context_first_id_matches:") {
 		ctx, ok := value.(*lkllm.ChatContext)
 		if !ok {
@@ -1768,6 +1792,18 @@ func transformLLMScenarioField(state *llmScenarioState, value any, transform str
 			}
 		}
 		return nil, nil
+	case "provider_first_extra_exists":
+		extra, err := firstProviderMessageExtra(value)
+		if err != nil {
+			return nil, err
+		}
+		return len(extra) > 0, nil
+	case "provider_first_tool_call_extra_exists":
+		extra, err := firstProviderToolCallExtra(value)
+		if err != nil {
+			return nil, err
+		}
+		return len(extra) > 0, nil
 	case "provider_message_count":
 		messages, ok := value.([]map[string]any)
 		if !ok {
@@ -1890,6 +1926,42 @@ func firstProviderImagePart(value any) (map[string]any, error) {
 		}
 	}
 	return nil, errors.New("provider_first_image requires image_url content")
+}
+
+func firstProviderMessageExtra(value any) (map[string]any, error) {
+	messages, ok := value.([]map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("value %T cannot use provider_first_extra transform", value)
+	}
+	if len(messages) == 0 {
+		return nil, errors.New("provider_first_extra requires non-empty messages")
+	}
+	extra, ok := messages[0]["extra_content"].(map[string]any)
+	if !ok {
+		return map[string]any{}, nil
+	}
+	return extra, nil
+}
+
+func firstProviderToolCallExtra(value any) (map[string]any, error) {
+	messages, ok := value.([]map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("value %T cannot use provider_first_tool_call_extra transform", value)
+	}
+	for _, message := range messages {
+		toolCalls, ok := message["tool_calls"].([]map[string]any)
+		if !ok {
+			continue
+		}
+		for _, toolCall := range toolCalls {
+			extra, ok := toolCall["extra_content"].(map[string]any)
+			if !ok {
+				return map[string]any{}, nil
+			}
+			return extra, nil
+		}
+	}
+	return map[string]any{}, nil
 }
 
 func stringArg(args map[string]any, name string) string {

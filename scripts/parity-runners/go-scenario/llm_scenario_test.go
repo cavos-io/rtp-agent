@@ -1455,6 +1455,154 @@ func TestRunLLMChatContextRunsDeclarativeOpenAIImageContentScenario(t *testing.T
 	}
 }
 
+func TestRunLLMChatContextRunsDeclarativeOpenAIExtraContentScenario(t *testing.T) {
+	input := json.RawMessage(`{
+		"spec_version": "1.0",
+		"kind": "parity-scenario",
+		"contract": "llm-chat-context",
+		"fixtures": [
+			{
+				"name": "ctx",
+				"factory": "llm_chat_context.items",
+				"args": {
+					"items": [
+						{
+							"type": "message",
+							"id": "user",
+							"role": "user",
+							"text": "hello",
+							"extra": {
+								"google": {"thought_signature": "sig"},
+								"ignored": "value"
+							}
+						},
+						{"type": "message", "id": "assistant", "role": "assistant", "text": "checking"},
+						{
+							"type": "function_call",
+							"id": "assistant/tool",
+							"call_id": "call_lookup",
+							"name": "lookup",
+							"arguments": "{}",
+							"extra": {
+								"xai": {"reasoning": "trace"},
+								"ignored": "value"
+							}
+						},
+						{"type": "function_call_output", "id": "output", "call_id": "call_lookup", "name": "lookup", "output": "ok"}
+					]
+				}
+			}
+		],
+		"steps": [
+			{"kind": "call", "op": "to_provider_format", "target": "ctx", "args": {"format": "openai"}, "assign": "messages"},
+			{
+				"kind": "emit",
+				"name": "openai_extra_content",
+				"fields": [
+					{"name": "user_google", "from": "messages", "transform": "provider_first_extra_has:google"},
+					{"name": "user_ignored", "from": "messages", "transform": "provider_first_extra_has:ignored"},
+					{"name": "tool_xai", "from": "messages", "transform": "provider_first_tool_call_extra_has:xai"},
+					{"name": "tool_ignored", "from": "messages", "transform": "provider_first_tool_call_extra_has:ignored"}
+				]
+			}
+		]
+	}`)
+
+	got, err := runLLMChatContext(input)
+	if err != nil {
+		t.Fatalf("runLLMChatContext() error = %v", err)
+	}
+
+	want := map[string]any{
+		"contract": "llm-chat-context",
+		"events": []map[string]any{
+			{
+				"name":         "openai_extra_content",
+				"user_google":  true,
+				"user_ignored": false,
+				"tool_xai":     true,
+				"tool_ignored": false,
+			},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("runLLMChatContext() = %#v, want %#v", got, want)
+	}
+}
+
+func TestRunLLMChatContextRunsDeclarativeOpenAIEmptyExtraContentScenario(t *testing.T) {
+	input := json.RawMessage(`{
+		"spec_version": "1.0",
+		"kind": "parity-scenario",
+		"contract": "llm-chat-context",
+		"fixtures": [
+			{
+				"name": "ctx",
+				"factory": "llm_chat_context.items",
+				"args": {
+					"items": [
+						{
+							"type": "message",
+							"id": "user",
+							"role": "user",
+							"text": "hello",
+							"extra": {
+								"google": false,
+								"livekit": "",
+								"xai": {}
+							}
+						},
+						{"type": "message", "id": "assistant", "role": "assistant", "text": "checking"},
+						{
+							"type": "function_call",
+							"id": "assistant/tool",
+							"call_id": "call_lookup",
+							"name": "lookup",
+							"arguments": "{}",
+							"extra": {
+								"google": [],
+								"livekit": 0,
+								"xai": null
+							}
+						},
+						{"type": "function_call_output", "id": "output", "call_id": "call_lookup", "name": "lookup", "output": "ok"}
+					]
+				}
+			}
+		],
+		"steps": [
+			{"kind": "call", "op": "to_provider_format", "target": "ctx", "args": {"format": "openai"}, "assign": "messages"},
+			{
+				"kind": "emit",
+				"name": "openai_empty_extra_content",
+				"fields": [
+					{"name": "user_extra_exists", "from": "messages", "transform": "provider_first_extra_exists"},
+					{"name": "tool_extra_exists", "from": "messages", "transform": "provider_first_tool_call_extra_exists"}
+				]
+			}
+		]
+	}`)
+
+	got, err := runLLMChatContext(input)
+	if err != nil {
+		t.Fatalf("runLLMChatContext() error = %v", err)
+	}
+
+	want := map[string]any{
+		"contract": "llm-chat-context",
+		"events": []map[string]any{
+			{
+				"name":              "openai_empty_extra_content",
+				"user_extra_exists": false,
+				"tool_extra_exists": false,
+			},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("runLLMChatContext() = %#v, want %#v", got, want)
+	}
+}
+
 func TestRunLLMChatContextRunsDeclarativeInstructionsScenario(t *testing.T) {
 	input := json.RawMessage(`{
 		"spec_version": "1.0",
