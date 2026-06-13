@@ -1311,7 +1311,24 @@ func closeUnbalancedJSONContainers(value string) string {
 		}
 	}
 
-	if inString || len(stack) == 0 {
+	if inString {
+		insertAt := len(value)
+		pending := append([]byte(nil), stack...)
+		for len(pending) > 0 && insertAt > 0 && value[insertAt-1] == pending[len(pending)-1] {
+			insertAt--
+			pending = pending[:len(pending)-1]
+		}
+		var b strings.Builder
+		b.Grow(len(value) + 1 + len(pending))
+		b.WriteString(value[:insertAt])
+		b.WriteByte('"')
+		b.WriteString(value[insertAt:])
+		for i := len(pending) - 1; i >= 0; i-- {
+			b.WriteByte(pending[i])
+		}
+		return b.String()
+	}
+	if len(stack) == 0 {
 		return value
 	}
 	var b strings.Builder

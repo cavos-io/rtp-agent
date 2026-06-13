@@ -305,6 +305,17 @@ func TestParseFunctionArgumentsRepairsRawControlStringValues(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsUnterminatedDoubleQuotedValue(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"city":"Paris}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" {
+		t.Fatalf("city = %#v, want unterminated string value repaired", args["city"])
+	}
+}
+
 func TestParseFunctionArgumentsRepairsJSONComments(t *testing.T) {
 	args, err := ParseFunctionArguments("{\"city\":\"Paris\", // destination\n \"limit\":3, /* priority */ \"unit\":\"km\"}")
 	if err != nil {
