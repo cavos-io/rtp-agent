@@ -311,6 +311,97 @@ func TestFunctionToolsExecutedEventReplyAndHandoffFlagsCanBeCanceled(t *testing.
 	}
 }
 
+func TestFunctionToolsExecutedEventMarshalJSONMatchesReferencePayload(t *testing.T) {
+	ev, err := NewFunctionToolsExecutedEvent(
+		[]*llm.FunctionCall{
+			{
+				ID:        "call_item",
+				CallID:    "call_lookup",
+				Name:      "lookup",
+				Arguments: `{"city":"Paris"}`,
+				CreatedAt: time.Unix(35, 125_000_000),
+			},
+			{
+				ID:        "call_suppressed",
+				CallID:    "call_suppressed",
+				Name:      "stop",
+				Arguments: `{}`,
+				CreatedAt: time.Unix(36, 250_000_000),
+			},
+		},
+		[]*llm.FunctionCallOutput{
+			{
+				ID:        "output_item",
+				CallID:    "call_lookup",
+				Name:      "lookup",
+				Output:    "sunny",
+				IsError:   false,
+				CreatedAt: time.Unix(37, 500_000_000),
+			},
+			nil,
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewFunctionToolsExecutedEvent error = %v, want nil", err)
+	}
+	ev.ReplyRequired = true
+	ev.HandoffRequired = true
+	ev.CreatedAt = time.Unix(38, 750_000_000)
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal FunctionToolsExecutedEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled FunctionToolsExecutedEvent returned error: %v", err)
+	}
+	if payload["type"] != "function_tools_executed" {
+		t.Fatalf("type = %#v, want function_tools_executed", payload["type"])
+	}
+	calls, ok := payload["function_calls"].([]any)
+	if !ok || len(calls) != 2 {
+		t.Fatalf("function_calls = %T %#v, want two calls", payload["function_calls"], payload["function_calls"])
+	}
+	firstCall, ok := calls[0].(map[string]any)
+	if !ok {
+		t.Fatalf("function_calls[0] = %T %#v, want object", calls[0], calls[0])
+	}
+	if firstCall["type"] != "function_call" || firstCall["call_id"] != "call_lookup" || firstCall["name"] != "lookup" || firstCall["arguments"] != `{"city":"Paris"}` {
+		t.Fatalf("first function call = %#v, want reference call fields", firstCall)
+	}
+	if firstCall["created_at"] != 35.125 {
+		t.Fatalf("first function call created_at = %#v, want 35.125", firstCall["created_at"])
+	}
+	outputs, ok := payload["function_call_outputs"].([]any)
+	if !ok || len(outputs) != 2 {
+		t.Fatalf("function_call_outputs = %T %#v, want two outputs", payload["function_call_outputs"], payload["function_call_outputs"])
+	}
+	firstOutput, ok := outputs[0].(map[string]any)
+	if !ok {
+		t.Fatalf("function_call_outputs[0] = %T %#v, want object", outputs[0], outputs[0])
+	}
+	if firstOutput["type"] != "function_call_output" || firstOutput["call_id"] != "call_lookup" || firstOutput["name"] != "lookup" || firstOutput["output"] != "sunny" || firstOutput["is_error"] != false {
+		t.Fatalf("first function output = %#v, want reference output fields", firstOutput)
+	}
+	if firstOutput["created_at"] != 37.5 {
+		t.Fatalf("first function output created_at = %#v, want 37.5", firstOutput["created_at"])
+	}
+	if outputs[1] != nil {
+		t.Fatalf("function_call_outputs[1] = %#v, want nil for suppressed tool output", outputs[1])
+	}
+	if payload["created_at"] != 38.75 {
+		t.Fatalf("created_at = %#v, want 38.75", payload["created_at"])
+	}
+	if _, ok := payload["FunctionCalls"]; ok {
+		t.Fatalf("payload used Go field names: %#v", payload)
+	}
+	if _, ok := payload["ReplyRequired"]; ok {
+		t.Fatalf("payload serialized private reply flag: %#v", payload)
+	}
+}
+
 func TestUserInputTranscribedEventMarshalJSONMatchesReferencePayload(t *testing.T) {
 	ev := &UserInputTranscribedEvent{
 		Language:   "en-US",

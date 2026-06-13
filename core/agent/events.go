@@ -219,6 +219,18 @@ func NewFunctionToolsExecutedEvent(calls []*llm.FunctionCall, outputs []*llm.Fun
 
 func (e *FunctionToolsExecutedEvent) GetType() string { return "function_tools_executed" }
 
+func (e *FunctionToolsExecutedEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":                  e.GetType(),
+		"function_calls":        chatItemsReportDict(e.FunctionCalls),
+		"function_call_outputs": functionCallOutputsReportDict(e.FunctionCallOutputs),
+		"created_at":            timeToUnixSeconds(e.CreatedAt),
+	})
+}
+
 func (e *FunctionToolsExecutedEvent) Zipped() []FunctionToolExecutionPair {
 	pairs := make([]FunctionToolExecutionPair, len(e.FunctionCalls))
 	for i := range e.FunctionCalls {
