@@ -1694,6 +1694,15 @@ func transformLLMScenarioField(state *llmScenarioState, value any, transform str
 			return nil, nil
 		}
 		return messages[0]["content"], nil
+	case "provider_first_role":
+		messages, ok := value.([]map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use provider_first_role", value)
+		}
+		if len(messages) == 0 {
+			return nil, nil
+		}
+		return messages[0]["role"], nil
 	default:
 		return nil, fmt.Errorf("unsupported transform %q", transform)
 	}

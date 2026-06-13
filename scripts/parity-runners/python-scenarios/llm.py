@@ -1477,19 +1477,46 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         provider_format: str,
         inject_dummy_user_message: bool = True,
     ) -> list[dict[str, Any]]:
-        if provider_format != "openai":
+        if provider_format == "openai":
+            messages: list[dict[str, Any]] = []
+            for item in items:
+                if item["type"] != "message":
+                    continue
+                messages.append(
+                    {
+                        "role": item["role"],
+                        "content": text_content(item["content"]) or "",
+                    }
+                )
+            return messages
+        if provider_format not in ("google", "anthropic", "aws"):
             raise ValueError(f"unsupported provider format {provider_format!r}")
-        _ = inject_dummy_user_message
+
         messages: list[dict[str, Any]] = []
         for item in items:
             if item["type"] != "message":
                 continue
+            if provider_format == "google":
+                role = "model" if item["role"] == "assistant" else "user"
+                messages.append({"role": role, "parts": [{"text": text_content(item["content"]) or ""}]})
+                continue
             messages.append(
                 {
-                    "role": item["role"],
-                    "content": text_content(item["content"]) or "",
+                    "role": "assistant" if item["role"] == "assistant" else "user",
+                    "content": [
+                        {"text": text_content(item["content"]) or "", "type": "text"}
+                        if provider_format == "anthropic"
+                        else {"text": text_content(item["content"]) or ""}
+                    ],
                 }
             )
+        if inject_dummy_user_message:
+            if provider_format == "google":
+                if not messages or messages[-1]["role"] not in ("user", "tool"):
+                    messages.append({"role": "user", "parts": [{"text": "."}]})
+            elif not messages or messages[0]["role"] != "user":
+                content = [{"text": "(empty)", "type": "text"}] if provider_format == "anthropic" else [{"text": "(empty)"}]
+                messages.insert(0, {"role": "user", "content": content})
         return messages
 
     def build_declarative_fixture(fixture: dict[str, Any]) -> Any:
@@ -1844,6 +1871,8 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             return "text" in first_serialized_instruction(value)
         if transform == "provider_first_content":
             return None if not value else value[0].get("content")
+        if transform == "provider_first_role":
+            return None if not value else value[0].get("role")
         raise ValueError(f"unsupported transform {transform!r}")
 
     def first_serialized_instruction(value: dict[str, Any]) -> dict[str, Any]:
