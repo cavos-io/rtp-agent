@@ -1952,6 +1952,102 @@ func runLLMValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "choice_delta_payload":
+		delta := lkllm.ChoiceDelta{
+			Role:    lkllm.ChatRoleAssistant,
+			Content: "hello",
+			Extra:   map[string]any{"reasoning": "visible"},
+		}
+		payload, err := choiceDeltaPayload(delta)
+		if err != nil {
+			return nil, err
+		}
+		minimal, err := choiceDeltaPayloadFromJSON([]byte(`{}`))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "llm-value-objects",
+			"events": []map[string]any{
+				{
+					"name":    "choice_delta_payload",
+					"payload": payload,
+				},
+				{
+					"name":            "choice_delta_defaults",
+					"minimal_payload": minimal,
+				},
+			},
+		}, nil
+	case "chat_chunk_payload":
+		chunk := lkllm.ChatChunk{
+			ID: "chunk_123",
+			Delta: &lkllm.ChoiceDelta{
+				Role:    lkllm.ChatRoleAssistant,
+				Content: "hello",
+			},
+		}
+		payload, err := chatChunkPayload(chunk)
+		if err != nil {
+			return nil, err
+		}
+		minimal, err := chatChunkPayloadFromJSON([]byte(`{"id":"chunk_empty"}`))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "llm-value-objects",
+			"events": []map[string]any{
+				{
+					"name":    "chat_chunk_payload",
+					"payload": payload,
+				},
+				{
+					"name":            "chat_chunk_defaults",
+					"minimal_payload": minimal,
+				},
+			},
+		}, nil
+	case "collected_response_payload":
+		response := lkllm.CollectedResponse{
+			Text: "hello",
+			ToolCalls: []lkllm.FunctionToolCall{
+				{
+					Name:      "lookup_weather",
+					Arguments: `{"city":"Paris"}`,
+					CallID:    "call_123",
+					Extra:     map[string]any{"provider": "openai"},
+				},
+			},
+			Usage: &lkllm.CompletionUsage{
+				CompletionTokens: 3,
+				PromptTokens:     4,
+				TotalTokens:      7,
+				ServiceTier:      "priority",
+			},
+			Extra: map[string]any{"reasoning": "visible"},
+		}
+		payload, err := collectedResponsePayload(response)
+		if err != nil {
+			return nil, err
+		}
+		minimal, err := collectedResponsePayloadFromJSON([]byte(`{}`))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "llm-value-objects",
+			"events": []map[string]any{
+				{
+					"name":    "collected_response_payload",
+					"payload": payload,
+				},
+				{
+					"name":            "collected_response_defaults",
+					"minimal_payload": minimal,
+				},
+			},
+		}, nil
 	case "realtime_error_payload":
 		underlying := errors.New("session disconnected")
 		err := lkllm.NewRealtimeModelError("openai.RealtimeModel", underlying, false)
@@ -2715,6 +2811,66 @@ func functionToolCallPayloadFromJSON(data []byte) (map[string]any, error) {
 		return nil, err
 	}
 	return functionToolCallPayload(toolCall)
+}
+
+func choiceDeltaPayload(delta lkllm.ChoiceDelta) (map[string]any, error) {
+	data, err := json.Marshal(delta)
+	if err != nil {
+		return nil, err
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func choiceDeltaPayloadFromJSON(data []byte) (map[string]any, error) {
+	var delta lkllm.ChoiceDelta
+	if err := json.Unmarshal(data, &delta); err != nil {
+		return nil, err
+	}
+	return choiceDeltaPayload(delta)
+}
+
+func chatChunkPayload(chunk lkllm.ChatChunk) (map[string]any, error) {
+	data, err := json.Marshal(chunk)
+	if err != nil {
+		return nil, err
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func chatChunkPayloadFromJSON(data []byte) (map[string]any, error) {
+	var chunk lkllm.ChatChunk
+	if err := json.Unmarshal(data, &chunk); err != nil {
+		return nil, err
+	}
+	return chatChunkPayload(chunk)
+}
+
+func collectedResponsePayload(response lkllm.CollectedResponse) (map[string]any, error) {
+	data, err := json.Marshal(response)
+	if err != nil {
+		return nil, err
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func collectedResponsePayloadFromJSON(data []byte) (map[string]any, error) {
+	var response lkllm.CollectedResponse
+	if err := json.Unmarshal(data, &response); err != nil {
+		return nil, err
+	}
+	return collectedResponsePayload(response)
 }
 
 type scenarioLLMToolset struct {

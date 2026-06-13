@@ -457,6 +457,63 @@ type ChoiceDelta struct {
 	Extra     map[string]any
 }
 
+func (d ChoiceDelta) MarshalJSON() ([]byte, error) {
+	type payload struct {
+		Role      *ChatRole          `json:"role"`
+		Content   *string            `json:"content"`
+		ToolCalls []FunctionToolCall `json:"tool_calls"`
+		Extra     map[string]any     `json:"extra"`
+	}
+
+	var role *ChatRole
+	if d.Role != "" {
+		role = &d.Role
+	}
+	var content *string
+	if d.Content != "" {
+		content = &d.Content
+	}
+	toolCalls := d.ToolCalls
+	if toolCalls == nil {
+		toolCalls = []FunctionToolCall{}
+	}
+
+	return json.Marshal(payload{
+		Role:      role,
+		Content:   content,
+		ToolCalls: toolCalls,
+		Extra:     d.Extra,
+	})
+}
+
+func (d *ChoiceDelta) UnmarshalJSON(data []byte) error {
+	type payload struct {
+		Role      *ChatRole          `json:"role"`
+		Content   *string            `json:"content"`
+		ToolCalls []FunctionToolCall `json:"tool_calls"`
+		Extra     map[string]any     `json:"extra"`
+	}
+
+	var decoded payload
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	d.Role = ""
+	if decoded.Role != nil {
+		d.Role = *decoded.Role
+	}
+	d.Content = ""
+	if decoded.Content != nil {
+		d.Content = *decoded.Content
+	}
+	d.ToolCalls = decoded.ToolCalls
+	if d.ToolCalls == nil {
+		d.ToolCalls = []FunctionToolCall{}
+	}
+	d.Extra = decoded.Extra
+	return nil
+}
+
 type FunctionToolCall struct {
 	ID        string `json:"-"`
 	Type      string
@@ -533,11 +590,96 @@ type ChatChunk struct {
 	Usage *CompletionUsage
 }
 
+func (c ChatChunk) MarshalJSON() ([]byte, error) {
+	type payload struct {
+		ID    string           `json:"id"`
+		Delta *ChoiceDelta     `json:"delta"`
+		Usage *CompletionUsage `json:"usage"`
+	}
+
+	return json.Marshal(payload(c))
+}
+
+func (c *ChatChunk) UnmarshalJSON(data []byte) error {
+	type payload struct {
+		ID    *string          `json:"id"`
+		Delta *ChoiceDelta     `json:"delta"`
+		Usage *CompletionUsage `json:"usage"`
+	}
+
+	var decoded payload
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if decoded.ID == nil {
+		return errors.New("chat chunk id is required")
+	}
+
+	c.ID = *decoded.ID
+	c.Delta = decoded.Delta
+	c.Usage = decoded.Usage
+	return nil
+}
+
 type CollectedResponse struct {
 	Text      string
 	ToolCalls []FunctionToolCall
 	Usage     *CompletionUsage
 	Extra     map[string]any
+}
+
+func (r CollectedResponse) MarshalJSON() ([]byte, error) {
+	type payload struct {
+		Text      string             `json:"text"`
+		ToolCalls []FunctionToolCall `json:"tool_calls"`
+		Usage     *CompletionUsage   `json:"usage"`
+		Extra     map[string]any     `json:"extra"`
+	}
+
+	toolCalls := r.ToolCalls
+	if toolCalls == nil {
+		toolCalls = []FunctionToolCall{}
+	}
+	extra := r.Extra
+	if extra == nil {
+		extra = map[string]any{}
+	}
+
+	return json.Marshal(payload{
+		Text:      r.Text,
+		ToolCalls: toolCalls,
+		Usage:     r.Usage,
+		Extra:     extra,
+	})
+}
+
+func (r *CollectedResponse) UnmarshalJSON(data []byte) error {
+	type payload struct {
+		Text      *string            `json:"text"`
+		ToolCalls []FunctionToolCall `json:"tool_calls"`
+		Usage     *CompletionUsage   `json:"usage"`
+		Extra     map[string]any     `json:"extra"`
+	}
+
+	var decoded payload
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+
+	r.Text = ""
+	if decoded.Text != nil {
+		r.Text = *decoded.Text
+	}
+	r.ToolCalls = decoded.ToolCalls
+	if r.ToolCalls == nil {
+		r.ToolCalls = []FunctionToolCall{}
+	}
+	r.Usage = decoded.Usage
+	r.Extra = decoded.Extra
+	if r.Extra == nil {
+		r.Extra = map[string]any{}
+	}
+	return nil
 }
 
 type LLMError struct {

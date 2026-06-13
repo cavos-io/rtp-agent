@@ -5,6 +5,11 @@ from common import *  # noqa: F403
 
 
 def load_reference_llm_value_class(class_name: str):
+    def Field(default=..., **kwargs: Any) -> Any:
+        if "default_factory" in kwargs:
+            return kwargs["default_factory"]()
+        return default
+
     class BaseModel:
         def __init__(self, **kwargs: Any) -> None:
             annotations = getattr(self.__class__, "__annotations__", {})
@@ -20,8 +25,17 @@ def load_reference_llm_value_class(class_name: str):
                 setattr(self, field, value)
 
         def model_dump(self) -> dict[str, Any]:
+            def dump_value(value: Any) -> Any:
+                if hasattr(value, "model_dump"):
+                    return value.model_dump()
+                if isinstance(value, list):
+                    return [dump_value(item) for item in value]
+                if isinstance(value, dict):
+                    return {key: dump_value(item) for key, item in value.items()}
+                return value
+
             return {
-                field: getattr(self, field)
+                field: dump_value(getattr(self, field))
                 for field in getattr(self.__class__, "__annotations__", {})
             }
 
@@ -39,13 +53,23 @@ def load_reference_llm_value_class(class_name: str):
         raise RuntimeError(f"cannot find {class_name} in {path}")
     module = ast.Module(body=[class_node], type_ignores=[])
     ast.fix_missing_locations(module)
-    namespace = {"Any": Any, "BaseModel": BaseModel, "Literal": Literal}
+    namespace = {
+        "Any": Any,
+        "BaseModel": BaseModel,
+        "ChatRole": str,
+        "ChoiceDelta": object,
+        "CompletionUsage": object,
+        "Field": Field,
+        "FunctionToolCall": object,
+        "Literal": Literal,
+    }
     exec(compile(module, str(path), "exec"), namespace)
     return namespace[class_name]
 
 
 def load_reference_completion_usage():
     return load_reference_llm_value_class("CompletionUsage")
+
 
 def llm_api_connect_options(input_data: Any) -> dict[str, Any]:
     action = input_data.get("action", "defaults")
@@ -382,6 +406,82 @@ def llm_value_objects(input_data: Any) -> dict[str, Any]:
                 {
                     "name": "function_tool_call_required_fields",
                     "missing_fields": missing_fields,
+                    "minimal_payload": minimal.model_dump(),
+                },
+            ],
+        }
+    if action == "choice_delta_payload":
+        choice_delta = load_reference_llm_value_class("ChoiceDelta")
+        delta = choice_delta(
+            role="assistant",
+            content="hello",
+            extra={"reasoning": "visible"},
+        )
+        minimal = choice_delta()
+        return {
+            "contract": "llm-value-objects",
+            "events": [
+                {
+                    "name": "choice_delta_payload",
+                    "payload": delta.model_dump(),
+                },
+                {
+                    "name": "choice_delta_defaults",
+                    "minimal_payload": minimal.model_dump(),
+                },
+            ],
+        }
+    if action == "chat_chunk_payload":
+        choice_delta = load_reference_llm_value_class("ChoiceDelta")
+        chat_chunk = load_reference_llm_value_class("ChatChunk")
+        delta = choice_delta(role="assistant", content="hello")
+        chunk = chat_chunk(id="chunk_123", delta=delta)
+        minimal = chat_chunk(id="chunk_empty")
+        return {
+            "contract": "llm-value-objects",
+            "events": [
+                {
+                    "name": "chat_chunk_payload",
+                    "payload": chunk.model_dump(),
+                },
+                {
+                    "name": "chat_chunk_defaults",
+                    "minimal_payload": minimal.model_dump(),
+                },
+            ],
+        }
+    if action == "collected_response_payload":
+        completion_usage = load_reference_llm_value_class("CompletionUsage")
+        function_tool_call = load_reference_llm_value_class("FunctionToolCall")
+        collected_response = load_reference_llm_value_class("CollectedResponse")
+        usage = completion_usage(
+            completion_tokens=3,
+            prompt_tokens=4,
+            total_tokens=7,
+            service_tier="priority",
+        )
+        tool_call = function_tool_call(
+            name="lookup_weather",
+            arguments='{"city":"Paris"}',
+            call_id="call_123",
+            extra={"provider": "openai"},
+        )
+        response = collected_response(
+            text="hello",
+            tool_calls=[tool_call],
+            usage=usage,
+            extra={"reasoning": "visible"},
+        )
+        minimal = collected_response()
+        return {
+            "contract": "llm-value-objects",
+            "events": [
+                {
+                    "name": "collected_response_payload",
+                    "payload": response.model_dump(),
+                },
+                {
+                    "name": "collected_response_defaults",
                     "minimal_payload": minimal.model_dump(),
                 },
             ],

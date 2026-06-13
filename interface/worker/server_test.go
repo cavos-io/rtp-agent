@@ -3835,6 +3835,27 @@ func TestRTCSessionLoadsAgentNameFromEnvironmentAtRegistration(t *testing.T) {
 	}
 }
 
+func TestRTCSessionAgentNameOverrideTakesPrecedence(t *testing.T) {
+	t.Setenv("LIVEKIT_AGENT_NAME", "env-agent")
+	t.Setenv("LIVEKIT_AGENT_NAME_OVERRIDE", "override-agent")
+	server := NewAgentServer(WorkerOptions{AgentName: "explicit-agent"})
+
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	if server.Options.AgentName != "override-agent" {
+		t.Fatalf("AgentName = %q, want override-agent", server.Options.AgentName)
+	}
+	if !server.Options.AgentNameIsEnv {
+		t.Fatal("AgentNameIsEnv = false, want true for environment override")
+	}
+	register := server.registerWorkerRequest().GetRegister()
+	if register.GetAgentName() != "override-agent" {
+		t.Fatalf("register.AgentName = %q, want override-agent", register.GetAgentName())
+	}
+}
+
 func TestExecuteRunningJobSetsCurrentJobContext(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	server.workerID = "worker-current"
