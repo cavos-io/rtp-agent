@@ -334,6 +334,39 @@ func TestRealtimeModelErrorCarriesReferenceFields(t *testing.T) {
 	}
 }
 
+func TestRealtimeModelErrorMarshalJSONMatchesReferencePayload(t *testing.T) {
+	err := NewRealtimeModelError("openai.RealtimeModel", errors.New("session disconnected"), false)
+
+	data, marshalErr := json.Marshal(err)
+	if marshalErr != nil {
+		t.Fatalf("Marshal RealtimeModelError returned error: %v", marshalErr)
+	}
+
+	var payload map[string]any
+	if unmarshalErr := json.Unmarshal(data, &payload); unmarshalErr != nil {
+		t.Fatalf("Unmarshal RealtimeModelError payload returned error: %v", unmarshalErr)
+	}
+	if payload["type"] != "realtime_model_error" {
+		t.Fatalf("type = %v, want realtime_model_error", payload["type"])
+	}
+	if payload["label"] != "openai.RealtimeModel" {
+		t.Fatalf("label = %v, want openai.RealtimeModel", payload["label"])
+	}
+	if payload["recoverable"] != false {
+		t.Fatalf("recoverable = %v, want false", payload["recoverable"])
+	}
+	timestamp, ok := payload["timestamp"].(float64)
+	if !ok || timestamp <= 0 {
+		t.Fatalf("timestamp = %v, want positive numeric Unix seconds", payload["timestamp"])
+	}
+	if _, ok := payload["err"]; ok {
+		t.Fatalf("err serialized in payload: %s", data)
+	}
+	if _, ok := payload["error"]; ok {
+		t.Fatalf("error serialized in payload: %s", data)
+	}
+}
+
 func TestRealtimeErrorCarriesMessageAndCause(t *testing.T) {
 	cause := errors.New("timeout")
 	err := NewRealtimeError("update chat context failed", cause)
