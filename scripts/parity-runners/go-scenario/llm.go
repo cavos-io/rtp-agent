@@ -1206,10 +1206,11 @@ func buildLLMScenarioItem(item map[string]any) (lkllm.ChatItem, error) {
 		return functionCall, nil
 	case "function_call_output":
 		output := &lkllm.FunctionCallOutput{
-			ID:     stringArg(item, "id"),
-			CallID: stringArg(item, "call_id"),
-			Name:   stringArg(item, "name"),
-			Output: stringArg(item, "output"),
+			ID:      stringArg(item, "id"),
+			CallID:  stringArg(item, "call_id"),
+			Name:    stringArg(item, "name"),
+			Output:  stringArg(item, "output"),
+			IsError: scenarioBoolArg(item, "is_error"),
 		}
 		if createdAt, ok := scenarioIntArg(item, "created_at_unix"); ok {
 			output.CreatedAt = time.Unix(int64(createdAt), 0)
@@ -1241,9 +1242,10 @@ func buildLLMScenarioMessage(item map[string]any) (*lkllm.ChatMessage, error) {
 		return nil, err
 	}
 	message := &lkllm.ChatMessage{
-		ID:      stringArg(item, "id"),
-		Role:    lkllm.ChatRole(stringArg(item, "role")),
-		Content: []lkllm.ChatContent{{Text: stringArg(item, "text")}},
+		ID:          stringArg(item, "id"),
+		Role:        lkllm.ChatRole(stringArg(item, "role")),
+		Content:     []lkllm.ChatContent{{Text: stringArg(item, "text")}},
+		Interrupted: scenarioBoolArg(item, "interrupted"),
 	}
 	if extra, ok := item["extra"].(map[string]any); ok {
 		message.Extra = extra
@@ -1371,6 +1373,13 @@ func runLLMChatContextCallStep(state *llmScenarioState, step llmScenarioStepSpec
 			ExcludeInstructions: scenarioBoolArg(step.Args, "exclude_instructions"),
 			ExcludeConfigUpdate: scenarioBoolArg(step.Args, "exclude_config_update"),
 		})
+	case "is_equivalent":
+		otherName := stringArg(step.Args, "other")
+		other, ok := state.objects[otherName].(*lkllm.ChatContext)
+		if !ok {
+			return fmt.Errorf("is_equivalent other %q is %T, want *llm.ChatContext", otherName, state.objects[otherName])
+		}
+		state.vars[step.Assign] = ctx.IsEquivalent(other)
 	case "tool_names":
 		tools, err := buildLLMScenarioTools(step.Args)
 		if err != nil {

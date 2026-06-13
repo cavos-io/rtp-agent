@@ -2258,6 +2258,39 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
     def build_declarative_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [build_declarative_item(item) for item in items]
 
+    def contexts_equivalent(left: list[dict[str, Any]], right: list[dict[str, Any]]) -> bool:
+        if left is right:
+            return True
+        if len(left) != len(right):
+            return False
+        for left_item, right_item in zip(left, right):
+            if left_item.get("id") != right_item.get("id") or left_item.get("type") != right_item.get("type"):
+                return False
+            item_type = left_item.get("type")
+            if item_type == "message":
+                if (
+                    left_item.get("role") != right_item.get("role")
+                    or bool(left_item.get("interrupted")) != bool(right_item.get("interrupted"))
+                    or left_item.get("content") != right_item.get("content")
+                ):
+                    return False
+            elif item_type == "function_call":
+                if (
+                    left_item.get("name") != right_item.get("name")
+                    or left_item.get("call_id") != right_item.get("call_id")
+                    or left_item.get("arguments") != right_item.get("arguments")
+                ):
+                    return False
+            elif item_type == "function_call_output":
+                if (
+                    left_item.get("name") != right_item.get("name")
+                    or left_item.get("call_id") != right_item.get("call_id")
+                    or left_item.get("output") != right_item.get("output")
+                    or bool(left_item.get("is_error")) != bool(right_item.get("is_error"))
+                ):
+                    return False
+        return True
+
     def declarative_item_id(item: dict[str, Any]) -> str:
         return str(item["id"]) if "id" in item else generated_id()
 
@@ -2277,7 +2310,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 content = [str(item.get("text", ""))]
             else:
                 content = []
-            return message(
+            msg = message(
                 declarative_item_id(item),
                 str(item.get("role", "")),
                 content,
@@ -2285,6 +2318,8 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 extra=item.get("extra", {}),
                 metrics=item.get("metrics", {}),
             )
+            msg["interrupted"] = bool(item.get("interrupted", False))
+            return msg
         if item_type == "function_call":
             return function_call(
                 declarative_item_id(item),
@@ -2300,6 +2335,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 str(item.get("name", "")),
                 call_id=str(item.get("call_id", "")),
                 output=str(item.get("output", "")),
+                is_error=bool(item.get("is_error", False)),
                 created_at=declarative_created_at(item),
             )
         if item_type == "agent_handoff":
@@ -2412,6 +2448,10 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 exclude_config_update=bool(args.get("exclude_config_update", False)),
             )
             objects[step["target"]] = variables[step["assign"]]
+            return
+        if op == "is_equivalent":
+            other = objects[str(step.get("args", {}).get("other", ""))]
+            variables[step["assign"]] = contexts_equivalent(target_items, other)
             return
         if op == "tool_names":
             variables[step["assign"]] = build_declarative_tool_names(
