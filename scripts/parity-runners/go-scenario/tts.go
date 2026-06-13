@@ -382,6 +382,30 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "text_replace_words":
+		buffer := lktts.NewTextReplaceBuffer(payload.Replacements, false)
+		chunks := []string{}
+		for _, chunk := range payload.Chunks {
+			chunks = append(chunks, buffer.Push(chunk)...)
+		}
+		chunks = append(chunks, buffer.Flush()...)
+		joined := ""
+		for _, chunk := range chunks {
+			joined += chunk
+		}
+		return map[string]any{
+			"contract": "tts-text-replacements",
+			"events": []map[string]any{
+				{
+					"name":                  "text_replace_words",
+					"joined":                joined,
+					"workflow_preserved":    strings.Contains(joined, "workflow"),
+					"substring_replaced":    strings.Contains(joined, "workstream"),
+					"punctuation_preserved": strings.Contains(joined, "stream,"),
+					"final_word_replaced":   strings.HasSuffix(joined, "stream!"),
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported TTS value object action %q", payload.Action)
 	}

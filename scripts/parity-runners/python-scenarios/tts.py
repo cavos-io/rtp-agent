@@ -409,6 +409,42 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "text_replace_words":
+        tokenize_utils = load_python_utils_runner().load_reference_tokenize_utils()
+        chunks = [str(chunk) for chunk in input_data.get("chunks", [])]
+        replacements = {
+            str(old): str(new)
+            for old, new in input_data.get("replacements", {}).items()
+        }
+
+        async def source() -> AsyncIterable[str]:
+            for chunk in chunks:
+                yield chunk
+
+        async def collect() -> list[str]:
+            return [
+                chunk
+                async for chunk in tokenize_utils.replace_words(
+                    text=source(),
+                    replacements=replacements,
+                )
+            ]
+
+        output = asyncio.run(collect())
+        joined = "".join(output)
+        return {
+            "contract": "tts-text-replacements",
+            "events": [
+                {
+                    "name": "text_replace_words",
+                    "joined": joined,
+                    "workflow_preserved": "workflow" in joined,
+                    "substring_replaced": "workstream" in joined,
+                    "punctuation_preserved": "stream," in joined,
+                    "final_word_replaced": joined.endswith("stream!"),
+                }
+            ],
+        }
     raise ValueError(f"unsupported TTS value object action {action!r}")
 
 
