@@ -102,7 +102,7 @@ func TestVADEventMarshalJSONDefaultsFramesToEmptyList(t *testing.T) {
 
 func TestVADEventUnmarshalJSONDefaultsFramesToEmptyList(t *testing.T) {
 	var event VADEvent
-	data := []byte(`{"type":"inference_done","samples_index":320}`)
+	data := []byte(`{"type":"inference_done","samples_index":320,"timestamp":1.25,"speech_duration":0,"silence_duration":0}`)
 
 	if err := json.Unmarshal(data, &event); err != nil {
 		t.Fatalf("Unmarshal VADEvent returned error: %v", err)
@@ -115,6 +115,47 @@ func TestVADEventUnmarshalJSONDefaultsFramesToEmptyList(t *testing.T) {
 	}
 	if event.Type != VADEventInferenceDone || event.SamplesIndex != 320 {
 		t.Fatalf("decoded event = %#v, want inference_done sample index 320", event)
+	}
+}
+
+func TestVADEventUnmarshalJSONRequiresReferenceFields(t *testing.T) {
+	required := []string{
+		"type",
+		"samples_index",
+		"timestamp",
+		"speech_duration",
+		"silence_duration",
+	}
+
+	for _, missing := range required {
+		payload := map[string]any{
+			"type":             string(VADEventInferenceDone),
+			"samples_index":    float64(320),
+			"timestamp":        1.25,
+			"speech_duration":  0.5,
+			"silence_duration": 0.75,
+		}
+		delete(payload, missing)
+
+		data, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("Marshal VADEvent test payload without %s returned error: %v", missing, err)
+		}
+
+		var event VADEvent
+		err = json.Unmarshal(data, &event)
+		if err == nil {
+			t.Fatalf("Unmarshal VADEvent without %s returned nil error", missing)
+		}
+		if !strings.Contains(err.Error(), missing) {
+			t.Fatalf("error = %v, want it to mention %s", err, missing)
+		}
+	}
+
+	var event VADEvent
+	data := []byte(`{"type":"inference_done","samples_index":0,"timestamp":0,"speech_duration":0,"silence_duration":0}`)
+	if err := json.Unmarshal(data, &event); err != nil {
+		t.Fatalf("Unmarshal VADEvent with explicit zero required fields returned error: %v", err)
 	}
 }
 
@@ -133,6 +174,25 @@ func TestVADCapabilitiesMarshalJSONMatchesReferencePayload(t *testing.T) {
 	}
 	if _, ok := payload["UpdateInterval"]; ok {
 		t.Fatalf("Go field name UpdateInterval leaked into JSON: %s", data)
+	}
+}
+
+func TestVADCapabilitiesUnmarshalJSONRequiresReferenceUpdateInterval(t *testing.T) {
+	var missing VADCapabilities
+	err := json.Unmarshal([]byte(`{}`), &missing)
+	if err == nil {
+		t.Fatal("Unmarshal VADCapabilities returned nil error, want missing update_interval error")
+	}
+	if !strings.Contains(err.Error(), "update_interval") {
+		t.Fatalf("error = %v, want it to mention update_interval", err)
+	}
+
+	var capabilities VADCapabilities
+	if err := json.Unmarshal([]byte(`{"update_interval":0}`), &capabilities); err != nil {
+		t.Fatalf("Unmarshal VADCapabilities with explicit update_interval returned error: %v", err)
+	}
+	if capabilities.UpdateInterval != 0 {
+		t.Fatalf("UpdateInterval = %v, want explicit zero", capabilities.UpdateInterval)
 	}
 }
 

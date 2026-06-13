@@ -51,6 +51,46 @@ func TestSpeechDataCarriesReferenceMetadataFields(t *testing.T) {
 	}
 }
 
+func TestSpeechDataUnmarshalJSONRejectsMissingRequiredFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{
+			name:    "language",
+			payload: `{"text":"hello"}`,
+			want:    "language",
+		},
+		{
+			name:    "text",
+			payload: `{"language":"en"}`,
+			want:    "text",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var data SpeechData
+			err := json.Unmarshal([]byte(tt.payload), &data)
+			if err == nil {
+				t.Fatal("Unmarshal SpeechData returned nil error, want missing required field error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want it to mention %q", err, tt.want)
+			}
+		})
+	}
+
+	var data SpeechData
+	if err := json.Unmarshal([]byte(`{"language":"","text":""}`), &data); err != nil {
+		t.Fatalf("Unmarshal SpeechData with explicit required fields returned error: %v", err)
+	}
+	if data.Language != "" || data.Text != "" {
+		t.Fatalf("decoded required fields = %#v, want explicit empty values", data)
+	}
+}
+
 func TestSpeechEventCarriesReferenceUsageAndSpeechStartTime(t *testing.T) {
 	usage := &RecognitionUsage{
 		AudioDuration: 1.25,
@@ -76,6 +116,25 @@ func TestSpeechEventCarriesReferenceUsageAndSpeechStartTime(t *testing.T) {
 	}
 	if event.SpeechStartTime == nil || *event.SpeechStartTime != 42.5 {
 		t.Fatalf("SpeechStartTime = %v, want 42.5", event.SpeechStartTime)
+	}
+}
+
+func TestRecognitionUsageUnmarshalJSONRejectsMissingAudioDuration(t *testing.T) {
+	var missing RecognitionUsage
+	err := json.Unmarshal([]byte(`{"input_tokens":3,"output_tokens":5}`), &missing)
+	if err == nil {
+		t.Fatal("Unmarshal RecognitionUsage returned nil error, want missing audio_duration error")
+	}
+	if !strings.Contains(err.Error(), "audio_duration") {
+		t.Fatalf("error = %v, want it to mention audio_duration", err)
+	}
+
+	var usage RecognitionUsage
+	if err := json.Unmarshal([]byte(`{"audio_duration":0}`), &usage); err != nil {
+		t.Fatalf("Unmarshal RecognitionUsage with explicit audio_duration returned error: %v", err)
+	}
+	if usage.AudioDuration != 0 || usage.InputTokens != 0 || usage.OutputTokens != 0 {
+		t.Fatalf("decoded usage = %#v, want explicit zero duration with default token counts", usage)
 	}
 }
 
@@ -248,6 +307,17 @@ func TestSpeechEventUnmarshalJSONDefaultsAlternativesToEmptyList(t *testing.T) {
 	}
 	if event.Type != SpeechEventEndOfSpeech || event.RequestID != "req-1" {
 		t.Fatalf("decoded event = %#v, want end_of_speech req-1", event)
+	}
+}
+
+func TestSpeechEventUnmarshalJSONRejectsMissingType(t *testing.T) {
+	var event SpeechEvent
+	err := json.Unmarshal([]byte(`{"request_id":"req-1"}`), &event)
+	if err == nil {
+		t.Fatal("Unmarshal SpeechEvent returned nil error, want missing type error")
+	}
+	if !strings.Contains(err.Error(), "type") {
+		t.Fatalf("error = %v, want it to mention type", err)
 	}
 }
 

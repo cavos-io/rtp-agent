@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -109,6 +112,63 @@ func TestLLMErrorMarshalJSONMatchesReferencePayload(t *testing.T) {
 	}
 	if _, ok := payload["error"]; ok {
 		t.Fatalf("error serialized in payload: %s", data)
+	}
+}
+
+func TestLLMErrorUnmarshalJSONRejectsMissingReferenceFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{
+			name:    "timestamp",
+			payload: `{"label":"openai.LLM","recoverable":true}`,
+			want:    "timestamp",
+		},
+		{
+			name:    "label",
+			payload: `{"timestamp":1.25,"recoverable":true}`,
+			want:    "label",
+		},
+		{
+			name:    "recoverable",
+			payload: `{"timestamp":1.25,"label":"openai.LLM"}`,
+			want:    "recoverable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var llmErr LLMError
+			err := json.Unmarshal([]byte(tt.payload), &llmErr)
+			if err == nil {
+				t.Fatal("Unmarshal LLMError returned nil error, want missing required field error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want it to mention %q", err, tt.want)
+			}
+		})
+	}
+
+	var llmErr LLMError
+	if err := json.Unmarshal([]byte(`{"timestamp":1.25,"label":"openai.LLM","recoverable":false}`), &llmErr); err != nil {
+		t.Fatalf("Unmarshal LLMError with required fields returned error: %v", err)
+	}
+	if llmErr.Type != "llm_error" {
+		t.Fatalf("Type = %q, want llm_error", llmErr.Type)
+	}
+	if llmErr.Timestamp.UnixNano() != 1250*int64(time.Millisecond) {
+		t.Fatalf("Timestamp = %v, want 1.25 Unix seconds", llmErr.Timestamp)
+	}
+	if llmErr.Label != "openai.LLM" {
+		t.Fatalf("Label = %q, want openai.LLM", llmErr.Label)
+	}
+	if llmErr.Recoverable {
+		t.Fatal("Recoverable = true, want false")
+	}
+	if llmErr.Err != nil {
+		t.Fatalf("Err = %v, want nil for public JSON payload", llmErr.Err)
 	}
 }
 
@@ -394,6 +454,63 @@ func TestRealtimeErrorCanCarryMessageOnly(t *testing.T) {
 	}
 }
 
+func TestRealtimeModelErrorUnmarshalJSONRejectsMissingReferenceFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{
+			name:    "timestamp",
+			payload: `{"label":"openai.RealtimeModel","recoverable":true}`,
+			want:    "timestamp",
+		},
+		{
+			name:    "label",
+			payload: `{"timestamp":1.25,"recoverable":true}`,
+			want:    "label",
+		},
+		{
+			name:    "recoverable",
+			payload: `{"timestamp":1.25,"label":"openai.RealtimeModel"}`,
+			want:    "recoverable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var modelErr RealtimeModelError
+			err := json.Unmarshal([]byte(tt.payload), &modelErr)
+			if err == nil {
+				t.Fatal("Unmarshal RealtimeModelError returned nil error, want missing required field error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want it to mention %q", err, tt.want)
+			}
+		})
+	}
+
+	var modelErr RealtimeModelError
+	if err := json.Unmarshal([]byte(`{"timestamp":1.25,"label":"openai.RealtimeModel","recoverable":false}`), &modelErr); err != nil {
+		t.Fatalf("Unmarshal RealtimeModelError with required fields returned error: %v", err)
+	}
+	if modelErr.Type != "realtime_model_error" {
+		t.Fatalf("Type = %q, want realtime_model_error", modelErr.Type)
+	}
+	if modelErr.Timestamp.UnixNano() != 1250*int64(time.Millisecond) {
+		t.Fatalf("Timestamp = %v, want 1.25 Unix seconds", modelErr.Timestamp)
+	}
+	if modelErr.Label != "openai.RealtimeModel" {
+		t.Fatalf("Label = %q, want openai.RealtimeModel", modelErr.Label)
+	}
+	if modelErr.Recoverable {
+		t.Fatal("Recoverable = true, want false")
+	}
+	if modelErr.Err != nil {
+		t.Fatalf("Err = %v, want nil for public JSON payload", modelErr.Err)
+	}
+}
+
 func TestRealtimeCapabilitiesExposeReferenceFlags(t *testing.T) {
 	capabilities := RealtimeCapabilities{
 		MessageTruncation:       true,
@@ -411,6 +528,110 @@ func TestRealtimeCapabilitiesExposeReferenceFlags(t *testing.T) {
 
 	if !capabilities.ManualFunctionCalls || !capabilities.MutableChatContext || !capabilities.MutableInstructions || !capabilities.MutableTools || !capabilities.PerResponseToolChoice || !capabilities.SupportsSay {
 		t.Fatalf("capabilities missing reference flags: %#v", capabilities)
+	}
+}
+
+func TestRealtimeCapabilitiesMarshalJSONMatchesReferencePayload(t *testing.T) {
+	data, err := json.Marshal(RealtimeCapabilities{
+		MessageTruncation:       true,
+		TurnDetection:           true,
+		UserTranscription:       true,
+		AutoToolReplyGeneration: true,
+		AudioOutput:             true,
+		ManualFunctionCalls:     true,
+		MutableChatContext:      true,
+		MutableInstructions:     true,
+		MutableTools:            true,
+		PerResponseToolChoice:   true,
+		SupportsSay:             true,
+	})
+	if err != nil {
+		t.Fatalf("Marshal RealtimeCapabilities returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal RealtimeCapabilities payload returned error: %v", err)
+	}
+	want := map[string]any{
+		"message_truncation":         true,
+		"turn_detection":             true,
+		"user_transcription":         true,
+		"auto_tool_reply_generation": true,
+		"audio_output":               true,
+		"manual_function_calls":      true,
+		"mutable_chat_context":       true,
+		"mutable_instructions":       true,
+		"mutable_tools":              true,
+		"per_response_tool_choice":   true,
+		"supports_say":               true,
+	}
+	if !reflect.DeepEqual(payload, want) {
+		t.Fatalf("marshaled RealtimeCapabilities = %#v, want %#v", payload, want)
+	}
+	if _, ok := payload["MessageTruncation"]; ok {
+		t.Fatalf("marshaled RealtimeCapabilities leaked Go field name: %#v", payload)
+	}
+}
+
+func TestRealtimeCapabilitiesUnmarshalJSONRequiresReferenceFlags(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{
+			name:    "message_truncation",
+			payload: `{"turn_detection":false,"user_transcription":false,"auto_tool_reply_generation":false,"audio_output":false,"manual_function_calls":false}`,
+			want:    "message_truncation",
+		},
+		{
+			name:    "turn_detection",
+			payload: `{"message_truncation":false,"user_transcription":false,"auto_tool_reply_generation":false,"audio_output":false,"manual_function_calls":false}`,
+			want:    "turn_detection",
+		},
+		{
+			name:    "user_transcription",
+			payload: `{"message_truncation":false,"turn_detection":false,"auto_tool_reply_generation":false,"audio_output":false,"manual_function_calls":false}`,
+			want:    "user_transcription",
+		},
+		{
+			name:    "auto_tool_reply_generation",
+			payload: `{"message_truncation":false,"turn_detection":false,"user_transcription":false,"audio_output":false,"manual_function_calls":false}`,
+			want:    "auto_tool_reply_generation",
+		},
+		{
+			name:    "audio_output",
+			payload: `{"message_truncation":false,"turn_detection":false,"user_transcription":false,"auto_tool_reply_generation":false,"manual_function_calls":false}`,
+			want:    "audio_output",
+		},
+		{
+			name:    "manual_function_calls",
+			payload: `{"message_truncation":false,"turn_detection":false,"user_transcription":false,"auto_tool_reply_generation":false,"audio_output":false}`,
+			want:    "manual_function_calls",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var capabilities RealtimeCapabilities
+			err := json.Unmarshal([]byte(tt.payload), &capabilities)
+			if err == nil {
+				t.Fatal("Unmarshal RealtimeCapabilities returned nil error, want missing required field error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want it to mention %q", err, tt.want)
+			}
+		})
+	}
+
+	var capabilities RealtimeCapabilities
+	err := json.Unmarshal([]byte(`{"message_truncation":false,"turn_detection":false,"user_transcription":false,"auto_tool_reply_generation":false,"audio_output":false,"manual_function_calls":false}`), &capabilities)
+	if err != nil {
+		t.Fatalf("Unmarshal RealtimeCapabilities with required fields returned error: %v", err)
+	}
+	if capabilities.MutableChatContext || capabilities.MutableInstructions || capabilities.MutableTools || capabilities.PerResponseToolChoice || capabilities.SupportsSay {
+		t.Fatalf("optional capability flags = %#v, want false defaults", capabilities)
 	}
 }
 

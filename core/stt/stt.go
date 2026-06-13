@@ -37,6 +37,27 @@ type SpeechData struct {
 	Metadata         map[string]any `json:"metadata"`
 }
 
+func (d *SpeechData) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if _, ok := fields["language"]; !ok {
+		return fmt.Errorf("speech data language is required")
+	}
+	if _, ok := fields["text"]; !ok {
+		return fmt.Errorf("speech data text is required")
+	}
+
+	type speechDataPayload SpeechData
+	var payload speechDataPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	*d = SpeechData(payload)
+	return nil
+}
+
 func (d SpeechData) MarshalJSON() ([]byte, error) {
 	type speechDataPayload struct {
 		Language         string         `json:"language"`
@@ -74,6 +95,24 @@ type RecognitionUsage struct {
 	AudioDuration float64 `json:"audio_duration"`
 	InputTokens   int     `json:"input_tokens"`
 	OutputTokens  int     `json:"output_tokens"`
+}
+
+func (u *RecognitionUsage) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if _, ok := fields["audio_duration"]; !ok {
+		return fmt.Errorf("recognition usage audio_duration is required")
+	}
+
+	type recognitionUsagePayload RecognitionUsage
+	var payload recognitionUsagePayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	*u = RecognitionUsage(payload)
+	return nil
 }
 
 type TimedString struct {
@@ -148,6 +187,14 @@ func (e SpeechEvent) MarshalJSON() ([]byte, error) {
 }
 
 func (e *SpeechEvent) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if _, ok := fields["type"]; !ok {
+		return fmt.Errorf("speech event type is required")
+	}
+
 	type speechEventPayload SpeechEvent
 	var payload speechEventPayload
 	if err := json.Unmarshal(data, &payload); err != nil {

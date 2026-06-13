@@ -335,11 +335,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		return nil, err
 	}
 	if options.StreamPacer != nil {
-		if options.StreamPacer.MaxTextLength == 0 {
-			stream = tts.NewSentenceStreamPacer(ctx, stream, options.StreamPacer.MinRemainingAudio)
-		} else {
-			stream = tts.NewSentenceStreamPacerWithOptions(ctx, stream, *options.StreamPacer)
-		}
+		stream = tts.NewSentenceStreamPacerWithOptions(ctx, stream, *options.StreamPacer)
 	}
 
 	go func() {

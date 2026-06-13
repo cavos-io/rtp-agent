@@ -3,6 +3,7 @@ package vad
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -40,6 +41,10 @@ func (e VADEvent) MarshalJSON() ([]byte, error) {
 }
 
 func (e *VADEvent) UnmarshalJSON(data []byte) error {
+	if err := requireJSONFields(data, "vad event", "type", "samples_index", "timestamp", "speech_duration", "silence_duration"); err != nil {
+		return err
+	}
+
 	type vadEventPayload VADEvent
 	var payload vadEventPayload
 	if err := json.Unmarshal(data, &payload); err != nil {
@@ -54,6 +59,33 @@ func (e *VADEvent) UnmarshalJSON(data []byte) error {
 
 type VADCapabilities struct {
 	UpdateInterval float64 `json:"update_interval"`
+}
+
+func (c *VADCapabilities) UnmarshalJSON(data []byte) error {
+	if err := requireJSONFields(data, "vad capabilities", "update_interval"); err != nil {
+		return err
+	}
+
+	type vadCapabilitiesPayload VADCapabilities
+	var payload vadCapabilitiesPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	*c = VADCapabilities(payload)
+	return nil
+}
+
+func requireJSONFields(data []byte, context string, names ...string) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for _, name := range names {
+		if _, ok := fields[name]; !ok {
+			return fmt.Errorf("%s %s is required", context, name)
+		}
+	}
+	return nil
 }
 
 type VADMetricsHandler func(*telemetry.VADMetrics)
