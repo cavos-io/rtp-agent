@@ -915,7 +915,7 @@ func agentConfigInstructionsFromJSON(data json.RawMessage) (*string, *Instructio
 func chatMessageFromJSON(data []byte) (*ChatMessage, error) {
 	var item struct {
 		ID                   string            `json:"id"`
-		Role                 ChatRole          `json:"role"`
+		Role                 *ChatRole         `json:"role"`
 		Content              []json.RawMessage `json:"content"`
 		Interrupted          bool              `json:"interrupted"`
 		TranscriptConfidence *float64          `json:"transcript_confidence"`
@@ -925,6 +925,12 @@ func chatMessageFromJSON(data []byte) (*ChatMessage, error) {
 	}
 	if err := json.Unmarshal(data, &item); err != nil {
 		return nil, err
+	}
+	if item.Role == nil {
+		return nil, fmt.Errorf("message role is required")
+	}
+	if *item.Role != ChatRoleDeveloper && *item.Role != ChatRoleSystem && *item.Role != ChatRoleUser && *item.Role != ChatRoleAssistant {
+		return nil, fmt.Errorf("unsupported message role %q", *item.Role)
 	}
 
 	content := make([]ChatContent, 0, len(item.Content))
@@ -938,7 +944,7 @@ func chatMessageFromJSON(data []byte) (*ChatMessage, error) {
 
 	return &ChatMessage{
 		ID:                   itemIDOrDefault(item.ID),
-		Role:                 item.Role,
+		Role:                 *item.Role,
 		Content:              content,
 		Interrupted:          item.Interrupted,
 		TranscriptConfidence: item.TranscriptConfidence,

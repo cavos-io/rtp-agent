@@ -1891,6 +1891,21 @@ func TestChatContextUnmarshalJSONRejectsInstructionsMissingAudio(t *testing.T) {
 	}
 }
 
+func TestChatContextUnmarshalJSONRejectsMessageMissingRole(t *testing.T) {
+	var ctx ChatContext
+	data := []byte(`{
+		"items": [{
+			"id": "message",
+			"type": "message",
+			"content": ["hello"]
+		}]
+	}`)
+
+	if err := json.Unmarshal(data, &ctx); err == nil {
+		t.Fatal("Unmarshal ChatContext error = nil, want missing message role error")
+	}
+}
+
 func TestChatContextItemsDefaultIDs(t *testing.T) {
 	data := []byte(`{
 		"items": [
