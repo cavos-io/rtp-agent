@@ -345,6 +345,38 @@ func (e *STTError) MarshalJSON() ([]byte, error) {
 	})
 }
 
+func (e *STTError) UnmarshalJSON(data []byte) error {
+	type sttErrorPayload struct {
+		Type        string   `json:"type"`
+		Timestamp   *float64 `json:"timestamp"`
+		Label       *string  `json:"label"`
+		Recoverable *bool    `json:"recoverable"`
+	}
+	var payload sttErrorPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	if payload.Timestamp == nil {
+		return fmt.Errorf("stt error timestamp is required")
+	}
+	if payload.Label == nil {
+		return fmt.Errorf("stt error label is required")
+	}
+	if payload.Recoverable == nil {
+		return fmt.Errorf("stt error recoverable is required")
+	}
+
+	e.Type = payload.Type
+	if e.Type == "" {
+		e.Type = STTErrorType
+	}
+	e.Timestamp = time.Unix(0, int64(*payload.Timestamp*float64(time.Second)))
+	e.Label = *payload.Label
+	e.Recoverable = *payload.Recoverable
+	e.Err = nil
+	return nil
+}
+
 type STT interface {
 	Label() string
 	Capabilities() STTCapabilities

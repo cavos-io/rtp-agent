@@ -9,6 +9,19 @@ trap 'rm -rf "$WORKDIR"' EXIT
 VALID_MANIFEST="$WORKDIR/test-cases.tsv"
 BAD_MANIFEST="$WORKDIR/bad-test-cases.tsv"
 INCOMPLETE_CROSS_MANIFEST="$WORKDIR/incomplete-cross-test-cases.tsv"
+JSON_SCENARIO="$WORKDIR/dev-mode-json-scenario.json"
+
+cat > "$JSON_SCENARIO" <<'JSON'
+{
+  "name": "dev-mode-json-scenario",
+  "case_type": "cross-runtime",
+  "input": {"env_values": ["1", "", "true", "on"]},
+  "python_entrypoint": "scripts.parity_scenario_entries:dev_mode_env_exact",
+  "go_handler": "dev_mode_env_exact",
+  "compare_mode": "json_equal",
+  "ignored_fields": ["timestamp", "duration", "trace_id"]
+}
+JSON
 
 cat > "$VALID_MANIFEST" <<'TSV'
 case_name	type	source_ref	target_ref	go_package	go_test	python_runner	go_runner	input_json	contract	behavior	notes
@@ -22,6 +35,7 @@ exp-filter-cross	cross-runtime	refs/agents/livekit-agents/livekit/agents/utils/e
 moving-average-cross	cross-runtime	refs/agents/livekit-agents/livekit/agents/utils/moving_average.py	library/math/filter.go			python3 scripts/parity-runners/python-utils.py	go run ./scripts/parity-runners/go-utils	{"contract":"moving-average-window","window_size":3,"sample_values":[1,2,3,4]}	moving-average-window	MovingAverage tracks rolling average, size, and reset behavior.	Smoke test for rolling-window cross-runtime runner dispatch.
 bounded-dict-cross	cross-runtime	refs/agents/livekit-agents/livekit/agents/utils/bounded_dict.py	library/utils/bounded_dict.go			python3 scripts/parity-runners/python-utils.py	go run ./scripts/parity-runners/go-utils	{"contract":"bounded-dict-pop-if-order"}	bounded-dict-pop-if-order	BoundedDict PopIf follows reference predicate and oldest-pop order.	Smoke test for object-result cross-runtime runner dispatch.
 TSV
+printf 'dev-mode-json-scenario\tjson-scenario\trefs/agents/livekit-agents/livekit/agents/utils/misc.py\tscripts/parity-runners/json-scenario\t\t\tpython3 scripts/parity-runners/json-scenario-python.py\tgo run ./scripts/parity-runners/json-scenario\t%s\tdev-mode-env-exact\tDevelopment mode is enabled only when LIVEKIT_DEV_MODE is exactly 1.\tSmoke test for JSON scenario runner dispatch.\n' "$JSON_SCENARIO" >> "$VALID_MANIFEST"
 
 cat > "$BAD_MANIFEST" <<'TSV'
 case_name	type	source_ref	target_ref	go_package	go_test	python_runner	go_runner	input_json	contract	behavior	notes
@@ -86,6 +100,8 @@ PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --li
   | grep -Fxq 'moving-average-cross'
 PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --list \
   | grep -Fxq 'bounded-dict-cross'
+PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --list \
+  | grep -Fxq 'dev-mode-json-scenario'
 
 PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --case dev-mode-cross > "$WORKDIR/cross.out" 2>&1
 grep -q '^\[dev-mode-cross\] ok$' "$WORKDIR/cross.out"
@@ -108,6 +124,9 @@ grep -q '^\[moving-average-cross\] ok$' "$WORKDIR/moving-average-cross.out"
 PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --case bounded-dict-cross > "$WORKDIR/bounded-dict-cross.out" 2>&1
 grep -q '^\[bounded-dict-cross\] ok$' "$WORKDIR/bounded-dict-cross.out"
 
+PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --case dev-mode-json-scenario > "$WORKDIR/dev-mode-json-scenario.out" 2>&1
+grep -q '^\[dev-mode-json-scenario\] ok$' "$WORKDIR/dev-mode-json-scenario.out"
+
 PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" > "$WORKDIR/all-cross.out" 2>&1
 grep -q '^\[go-dev-mode\] ok$' "$WORKDIR/all-cross.out"
 grep -q '^\[go-hosted-mode\] ok$' "$WORKDIR/all-cross.out"
@@ -118,6 +137,7 @@ grep -q '^\[camel-cross\] ok$' "$WORKDIR/all-cross.out"
 grep -q '^\[exp-filter-cross\] ok$' "$WORKDIR/all-cross.out"
 grep -q '^\[moving-average-cross\] ok$' "$WORKDIR/all-cross.out"
 grep -q '^\[bounded-dict-cross\] ok$' "$WORKDIR/all-cross.out"
+grep -q '^\[dev-mode-json-scenario\] ok$' "$WORKDIR/all-cross.out"
 
 if PARITY_TEST_CASES_FILE="$INCOMPLETE_CROSS_MANIFEST" "$ROOT/scripts/parity-validate.sh" --case missing-runner > "$WORKDIR/incomplete-cross.out" 2>&1; then
   echo "cross-runtime case with a missing runner unexpectedly passed" >&2

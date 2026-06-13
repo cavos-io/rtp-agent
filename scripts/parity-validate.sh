@@ -30,6 +30,9 @@ Case types:
   cross-runtime  Runs Python reference and Go target runners with the same
                  input JSON and compares normalized JSON envelopes:
                  {"contract":"<contract>","events":[...]}.
+  json-scenario  Runs generic Python and Go scenario runners against one
+                 scenario JSON file from input_json, normalizes ignored fields,
+                 and compares outputs with the scenario compare_mode.
 EOF
 }
 
@@ -303,6 +306,52 @@ PY
   fi
 }
 
+normalize_scenario_json_output() {
+  local case_name="$1" runtime="$2" scenario_path="$3" input="$4" output="$5"
+  if ! python3 - "$scenario_path" "$input" "$output" <<'PY'
+import json
+import sys
+
+scenario_path, input_path, output_path = sys.argv[1:4]
+with open(scenario_path, "r", encoding="utf-8") as file:
+    scenario = json.load(file)
+if not isinstance(scenario, dict):
+    raise SystemExit("scenario JSON must be an object")
+name = scenario.get("name")
+if not isinstance(name, str) or not name:
+    raise SystemExit("scenario name is required")
+if scenario.get("case_type") != "cross-runtime":
+    raise SystemExit(f"[{name}] case_type must be cross-runtime")
+if scenario.get("compare_mode") != "json_equal":
+    raise SystemExit(f"[{name}] unsupported compare_mode {scenario.get('compare_mode')!r}")
+ignored_fields = scenario.get("ignored_fields", [])
+if not isinstance(ignored_fields, list) or not all(isinstance(field, str) for field in ignored_fields):
+    raise SystemExit(f"[{name}] ignored_fields must be a list of strings")
+ignored = set(ignored_fields)
+
+with open(input_path, "r", encoding="utf-8") as file:
+    data = json.load(file)
+
+def scrub(value):
+    if isinstance(value, dict):
+        return {key: scrub(child) for key, child in value.items() if key not in ignored}
+    if isinstance(value, list):
+        return [scrub(child) for child in value]
+    return value
+
+with open(output_path, "w", encoding="utf-8") as file:
+    json.dump(scrub(data), file, sort_keys=True, separators=(",", ":"))
+    file.write("\n")
+PY
+  then
+    echo "[$case_name] $runtime runner did not emit valid scenario JSON" >&2
+    echo "[$case_name] scenario: $scenario_path" >&2
+    echo "[$case_name] $runtime raw output:" >&2
+    cat "$input" >&2
+    return 1
+  fi
+}
+
 run_cross_runtime_manifest_case() {
   local case_name="$1" tmpdir="$2"
   local source_ref target_ref python_runner go_runner input_json contract behavior input_path
@@ -345,6 +394,65 @@ run_cross_runtime_manifest_case() {
     echo "[$case_name] Go raw output:" >&2
     cat "$go_raw" >&2
     echo "[$case_name] normalized diff:" >&2
+    cat "$diff_path" >&2
+    return 1
+  fi
+}
+
+run_json_scenario_manifest_case() {
+  local case_name="$1" tmpdir="$2"
+  local source_ref target_ref python_runner go_runner input_json contract behavior scenario_path
+  local scenario_name python_raw python_err python_norm go_raw go_err go_norm diff_path
+  source_ref="$(case_field "$case_name" 3)"
+  target_ref="$(case_field "$case_name" 4)"
+  python_runner="$(case_field "$case_name" 7)"
+  go_runner="$(case_field "$case_name" 8)"
+  input_json="$(case_field "$case_name" 9)"
+  contract="$(case_field "$case_name" 10)"
+  behavior="$(case_field "$case_name" 11)"
+
+  if [[ -z "$source_ref" || -z "$target_ref" || -z "$python_runner" || -z "$go_runner" || -z "$input_json" || -z "$contract" || -z "$behavior" ]]; then
+    echo "[$case_name] json-scenario rows must set source_ref, target_ref, python_runner, go_runner, input_json, contract, and behavior" >&2
+    return 2
+  fi
+
+  scenario_path="$tmpdir/scenario.json"
+  materialize_input_json "$input_json" "$tmpdir" "$scenario_path" || return
+  scenario_name="$(python3 - "$scenario_path" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as file:
+    data = json.load(file)
+print(data.get("name", ""))
+PY
+)"
+  if [[ -z "$scenario_name" ]]; then
+    echo "[$case_name] scenario name is required in $input_json" >&2
+    return 2
+  fi
+
+  python_raw="$tmpdir/python.raw.json"
+  python_err="$tmpdir/python.stderr"
+  python_norm="$tmpdir/python.normalized.json"
+  go_raw="$tmpdir/go.raw.json"
+  go_err="$tmpdir/go.stderr"
+  go_norm="$tmpdir/go.normalized.json"
+  diff_path="$tmpdir/json-scenario.diff"
+
+  run_json_runner "$case_name" "python" "$python_runner" "$scenario_path" "$python_raw" "$python_err" || return
+  run_json_runner "$case_name" "go" "$go_runner" "$scenario_path" "$go_raw" "$go_err" || return
+  normalize_scenario_json_output "$case_name" "python" "$scenario_path" "$python_raw" "$python_norm" || return
+  normalize_scenario_json_output "$case_name" "go" "$scenario_path" "$go_raw" "$go_norm" || return
+
+  if ! diff -u "$python_norm" "$go_norm" > "$diff_path"; then
+    echo "[$case_name] JSON scenario output differs for scenario $scenario_name." >&2
+    echo "[$case_name] Python runner: $python_runner" >&2
+    echo "[$case_name] Go runner: $go_runner" >&2
+    echo "[$case_name] Python stderr:" >&2
+    cat "$python_err" >&2
+    echo "[$case_name] Go stderr:" >&2
+    cat "$go_err" >&2
+    echo "[$case_name] normalized JSON diff:" >&2
     cat "$diff_path" >&2
     return 1
   fi
@@ -519,6 +627,12 @@ run_case() {
       ;;
     cross-runtime)
       if ! run_cross_runtime_manifest_case "$case_name" "$tmpdir"; then
+        echo "Temp dir: $tmpdir" >&2
+        return 1
+      fi
+      ;;
+    json-scenario)
+      if ! run_json_scenario_manifest_case "$case_name" "$tmpdir"; then
         echo "Temp dir: $tmpdir" >&2
         return 1
       fi
