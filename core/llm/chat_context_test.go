@@ -1505,6 +1505,64 @@ func TestChatItemMarshalJSONMatchesReferenceOptionalFields(t *testing.T) {
 	}
 }
 
+func TestChatContentMarshalJSONMatchesReferencePayloads(t *testing.T) {
+	width := 320
+	content := []struct {
+		name string
+		item any
+		want map[string]any
+	}{
+		{
+			name: "image_content",
+			item: &ImageContent{
+				ID:             "image_item",
+				Image:          "https://example.test/image.png",
+				InferenceWidth: &width,
+			},
+			want: map[string]any{
+				"id":               "image_item",
+				"type":             "image_content",
+				"image":            "https://example.test/image.png",
+				"inference_width":  320.0,
+				"inference_height": nil,
+				"inference_detail": "auto",
+				"mime_type":        nil,
+			},
+		},
+		{
+			name: "audio_content",
+			item: &AudioContent{
+				Frames: []any{},
+			},
+			want: map[string]any{
+				"type":       "audio_content",
+				"frame":      []any{},
+				"transcript": nil,
+			},
+		},
+	}
+
+	for _, tc := range content {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(tc.item)
+			if err != nil {
+				t.Fatalf("Marshal %s returned error: %v", tc.name, err)
+			}
+
+			var got map[string]any
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatalf("Unmarshal marshaled %s returned error: %v", tc.name, err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("marshaled %s = %#v, want %#v", tc.name, got, tc.want)
+			}
+			if _, ok := got["InferenceWidth"]; ok {
+				t.Fatalf("marshaled %s leaked Go field names: %#v", tc.name, got)
+			}
+		})
+	}
+}
+
 func TestChatContextUnmarshalJSONRestoresTypedItems(t *testing.T) {
 	data := []byte(`{
 		"items": [

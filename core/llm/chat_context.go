@@ -698,6 +698,47 @@ func (a *AgentConfigUpdate) MarshalJSON() ([]byte, error) {
 	return json.Marshal(chatItemToDict(a, ChatContextDictOptions{IncludeTimestamp: true, IncludeOptionalNull: true}))
 }
 
+func (i *ImageContent) MarshalJSON() ([]byte, error) {
+	if i == nil {
+		return json.Marshal(nil)
+	}
+	i.ID = imageIDOrDefault(i.ID)
+	data := map[string]any{
+		"id":               i.ID,
+		"type":             "image_content",
+		"image":            i.Image,
+		"inference_width":  nil,
+		"inference_height": nil,
+		"inference_detail": imageInferenceDetailOrDefault(i.InferenceDetail),
+		"mime_type":        nil,
+	}
+	if i.InferenceWidth != nil {
+		data["inference_width"] = *i.InferenceWidth
+	}
+	if i.InferenceHeight != nil {
+		data["inference_height"] = *i.InferenceHeight
+	}
+	if i.MimeType != "" {
+		data["mime_type"] = i.MimeType
+	}
+	return json.Marshal(data)
+}
+
+func (a *AudioContent) MarshalJSON() ([]byte, error) {
+	if a == nil {
+		return json.Marshal(nil)
+	}
+	data := map[string]any{
+		"type":       "audio_content",
+		"frame":      a.Frames,
+		"transcript": nil,
+	}
+	if a.Transcript != "" {
+		data["transcript"] = a.Transcript
+	}
+	return json.Marshal(data)
+}
+
 func ChatContextFromDict(data map[string]any) (*ChatContext, error) {
 	ctx := NewChatContext()
 	if err := ctx.FromDict(data); err != nil {
