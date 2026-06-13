@@ -120,6 +120,21 @@ func runTTSFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "prewarm":
+		primary := &fakeScenarioTTS{}
+		fallback := &fakeScenarioTTS{}
+		adapter := lktts.NewFallbackAdapter([]lktts.TTS{primary, fallback})
+		adapter.Prewarm()
+		return map[string]any{
+			"contract": "tts-fallback",
+			"events": []map[string]any{
+				{
+					"name":                   "prewarm",
+					"primary_prewarm_calls":  primary.prewarmCalls,
+					"fallback_prewarm_calls": fallback.prewarmCalls,
+				},
+			},
+		}, nil
 	case "validation":
 		mode := payload.Mode
 		if mode == "" {
