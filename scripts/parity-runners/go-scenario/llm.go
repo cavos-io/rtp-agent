@@ -933,6 +933,47 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "availability_handlers":
+		primary := &fakeScenarioLLM{label: "primary", streams: []lkllm.LLMStream{
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{{err: errors.New("primary stream failed")}}},
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "recovery probe"}}},
+			}},
+		}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		handlerEvents := make(chan map[string]any, 2)
+		adapter.OnAvailabilityChanged(func(event lkllm.FallbackAvailabilityChangedEvent) {
+			handlerEvents <- map[string]any{
+				"available": event.Available,
+				"label":     lkllm.Label(event.LLM),
+			}
+		})
+		stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		chunks, err := collectScenarioLLMStreamChunks(stream)
+		if err != nil {
+			return nil, err
+		}
+		if err := waitForScenarioLLMHandlerEvents(handlerEvents, 2); err != nil {
+			return nil, err
+		}
+		events := collectScenarioLLMHandlerEvents(handlerEvents)
+		return map[string]any{
+			"contract": "llm-fallback-availability-handlers",
+			"events": []map[string]any{
+				{
+					"name":               "availability_handlers",
+					"chunks":             chunks,
+					"handler_events":     events,
+					"handler_call_count": len(events),
+				},
+			},
+		}, nil
 	case "mark_unavailable_after_chunk_failure":
 		primaryErr := errors.New("primary stream failed after output")
 		primary := &fakeScenarioLLM{label: "primary", streams: []lkllm.LLMStream{
@@ -1157,6 +1198,29 @@ func collectScenarioLLMAvailability(adapter *lkllm.FallbackAdapter) []map[string
 				"available": event.Available,
 				"label":     lkllm.Label(event.LLM),
 			})
+		default:
+			return events
+		}
+	}
+}
+
+func waitForScenarioLLMHandlerEvents(events <-chan map[string]any, count int) error {
+	deadline := time.Now().Add(2 * time.Second)
+	for len(events) < count && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(events) < count {
+		return fmt.Errorf("timed out waiting for handler events, got %d want %d", len(events), count)
+	}
+	return nil
+}
+
+func collectScenarioLLMHandlerEvents(handlerEvents <-chan map[string]any) []map[string]any {
+	events := []map[string]any{}
+	for {
+		select {
+		case event := <-handlerEvents:
+			events = append(events, event)
 		default:
 			return events
 		}
