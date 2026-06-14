@@ -1115,10 +1115,12 @@ func (a *App) runAgora(ctx context.Context) error {
 	transport := workeragora.NewTransport(opts, client)
 	audioInput := workeragora.NewAudioInput(ctx, a.Session)
 	transport.SetAudioHandler(audioInput.HandleAudioFrame)
+	eventsCtx, stopObservingEvents := context.WithCancel(ctx)
+	defer stopObservingEvents()
+	go observeAgoraTransportEvents(eventsCtx, transport.Events())
 	if err := transport.Join(ctx); err != nil {
 		return err
 	}
-	go observeAgoraTransportEvents(ctx, transport.Events())
 	audioOutput := workeragora.NewAudioOutput(transport)
 	a.Session.EnsureAssistant().SetPublishAudio(func(frame *model.AudioFrame) error {
 		return audioOutput.PublishAudio(ctx, frame)

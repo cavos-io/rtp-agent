@@ -116,6 +116,7 @@ type fakeAppAgoraChannelClient struct {
 	audio       workeragora.AudioHandler
 	joinedCh    chan struct{}
 	publishedCh chan workeragora.PCMFrame
+	joinEvent   *workeragora.Event
 	joinErr     error
 	leaveErr    error
 	published   []workeragora.PCMFrame
@@ -149,6 +150,9 @@ func (f *fakeAppAgoraChannelClient) Join(ctx context.Context, opts worker.AgoraO
 	f.joinOptions = opts
 	f.handler = handler
 	f.audio = audio
+	if f.joinEvent != nil && f.handler != nil {
+		f.handler(*f.joinEvent)
+	}
 	if f.joinErr != nil {
 		return f.joinErr
 	}
@@ -651,6 +655,65 @@ func TestRunAgoraLogsConnectedTransportEvent(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("runAgora() did not return after cancellation")
+	}
+}
+
+func TestRunAgoraLogsJoinErrorTransportEvent(t *testing.T) {
+	previousLogger := logutil.Logger
+	recorder := &appRecordingLogger{entriesCh: make(chan appLogEntry, 8)}
+	logutil.Logger = recorder
+	t.Cleanup(func() {
+		logutil.Logger = previousLogger
+	})
+
+	joinErr := errors.New("join failed")
+	eventErr := errors.New("sdk denied")
+	client := &fakeAppAgoraChannelClient{
+		joinErr: joinErr,
+		joinEvent: &workeragora.Event{
+			Kind:    workeragora.EventError,
+			Channel: "support",
+			Reason:  110,
+			Err:     eventErr,
+		},
+	}
+	oldNewAgoraChannelClient := appNewAgoraChannelClient
+	appNewAgoraChannelClient = func() (workeragora.ChannelClient, error) {
+		return client, nil
+	}
+	t.Cleanup(func() {
+		appNewAgoraChannelClient = oldNewAgoraChannelClient
+	})
+
+	rtpApp := &App{
+		Session: agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{}),
+		Server: worker.NewAgentServer(worker.WorkerOptions{
+			Agora: worker.AgoraOptions{
+				AppID:   "app",
+				Channel: "support",
+				UID:     "agent",
+				Token:   "token",
+			},
+		}),
+	}
+
+	err := rtpApp.runAgora(context.Background())
+	if !errors.Is(err, joinErr) {
+		t.Fatalf("runAgora() error = %v, want join failed", err)
+	}
+	select {
+	case entry := <-recorder.entriesCh:
+		if entry.msg != "agora transport event error" {
+			t.Fatalf("log msg = %q, want agora transport event error", entry.msg)
+		}
+		if got := entry.value("channel"); got != "support" {
+			t.Fatalf("log channel = %#v, want support", got)
+		}
+		if got := entry.value("reason"); got != 110 {
+			t.Fatalf("log reason = %#v, want 110", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Agora join error log")
 	}
 }
 
