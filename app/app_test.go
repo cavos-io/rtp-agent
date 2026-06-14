@@ -4601,6 +4601,125 @@ func TestMinimaxTTSFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestInworldTTSFallbackPassesReferenceOptions(t *testing.T) {
+	bitRate := 128000
+	sampleRate := 44100
+	speakingRate := 1.2
+	temperature := 0.8
+	textNormalization := false
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"audioContent":"AAE="}` + "\n")),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		InworldAPIKey:                 "test-inworld-key",
+		TTSBaseURL:                    "https://inworld.example/",
+		TTSWebsocketURL:               "wss://inworld.example/",
+		TTSVoice:                      "Ava",
+		TTSModel:                      "inworld-tts-2",
+		TTSEncoding:                   "MP3",
+		TTSBitRate:                    &bitRate,
+		TTSSampleRate:                 &sampleRate,
+		TTSSpeakingRate:               &speakingRate,
+		TTSTemperature:                &temperature,
+		TTSLanguage:                   "en-US",
+		TTSTimestampType:              "WORD",
+		TTSTextNormalization:          &textNormalization,
+		TTSDeliveryMode:               "STABLE",
+		TTSTimestampTransportStrategy: "SYNC",
+	}, providerInworld)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*inworld.InworldTTS); !ok {
+		t.Fatalf("provider type = %T, want *inworld.InworldTTS", provider)
+	}
+	if got, want := provider.Label(), "inworld.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 44100; got != want {
+		t.Fatalf("SampleRate() = %d, want configured reference sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "inworld-tts-2"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "Inworld"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference streaming with aligned transcript when timestamp type is WORD", caps)
+	}
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://inworld.example/tts/v1/voice:stream"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("Authorization"), "Basic test-inworld-key"; got != want {
+		t.Fatalf("Authorization = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["text"], "hello"; got != want {
+		t.Fatalf("payload text = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["voiceId"], "Ava"; got != want {
+		t.Fatalf("payload voiceId = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["modelId"], "inworld-tts-2"; got != want {
+		t.Fatalf("payload modelId = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["language"], "en-US"; got != want {
+		t.Fatalf("payload language = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["timestampType"], "WORD"; got != want {
+		t.Fatalf("payload timestampType = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["applyTextNormalization"], "OFF"; got != want {
+		t.Fatalf("payload applyTextNormalization = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["deliveryMode"], "STABLE"; got != want {
+		t.Fatalf("payload deliveryMode = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["timestampTransportStrategy"], "SYNC"; got != want {
+		t.Fatalf("payload timestampTransportStrategy = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["temperature"], float64(0.8); got != want {
+		t.Fatalf("payload temperature = %#v, want %#v", got, want)
+	}
+	audioConfig, _ := gotPayload["audioConfig"].(map[string]any)
+	if got, want := audioConfig["audioEncoding"], "MP3"; got != want {
+		t.Fatalf("audioConfig.audioEncoding = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+	if got, want := audioConfig["sampleRateHertz"], float64(44100); got != want {
+		t.Fatalf("audioConfig.sampleRateHertz = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+	if got, want := audioConfig["bitrate"], float64(128000); got != want {
+		t.Fatalf("audioConfig.bitrate = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+	if got, want := audioConfig["speakingRate"], float64(1.2); got != want {
+		t.Fatalf("audioConfig.speakingRate = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsTelnyxTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "telnyx")

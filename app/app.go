@@ -2301,6 +2301,57 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, hume.WithHumeTTSContextUtterances(cfg.TTSContextUtterances))
 		}
 		return hume.NewHumeTTS(cfg.HumeAPIKey, "", ttsOpts...), nil
+	case providerInworld:
+		ttsOpts := []inworld.InworldTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSWebsocketURL != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSWebsocketURL(cfg.TTSWebsocketURL))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSEncoding(cfg.TTSEncoding))
+		}
+		if cfg.TTSBitRate != nil {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSBitRate(*cfg.TTSBitRate))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSSpeakingRate != nil {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSSpeakingRate(*cfg.TTSSpeakingRate))
+		}
+		if cfg.TTSTemperature != nil {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSTemperature(*cfg.TTSTemperature))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSTimestampType != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSTimestampType(cfg.TTSTimestampType))
+		}
+		if cfg.TTSTextNormalization != nil {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSTextNormalization(*cfg.TTSTextNormalization))
+		}
+		if cfg.TTSDeliveryMode != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSDeliveryMode(cfg.TTSDeliveryMode))
+		}
+		if cfg.TTSTimestampTransportStrategy != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSTimestampTransportStrategy(cfg.TTSTimestampTransportStrategy))
+		}
+		if cfg.TTSBufferCharThreshold != nil {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSBufferCharThreshold(*cfg.TTSBufferCharThreshold))
+		}
+		if cfg.TTSMaxBufferDelayMS != nil {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSMaxBufferDelayMS(*cfg.TTSMaxBufferDelayMS))
+		}
+		return inworld.NewInworldTTS(cfg.InworldAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerGroq:
 		ttsOpts := []groq.GroqTTSOption{}
 		if cfg.TTSBaseURL != "" {
