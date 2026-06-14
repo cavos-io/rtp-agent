@@ -80,6 +80,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/spitch"
 	"github.com/cavos-io/rtp-agent/adapter/tavus"
 	"github.com/cavos-io/rtp-agent/adapter/telnyx"
+	"github.com/cavos-io/rtp-agent/adapter/ten"
 	"github.com/cavos-io/rtp-agent/adapter/trugen"
 	"github.com/cavos-io/rtp-agent/adapter/turndetector"
 	"github.com/cavos-io/rtp-agent/adapter/ultravox"
@@ -179,6 +180,7 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		spitch.PluginPackage:       {title: spitch.PluginTitle, version: spitch.PluginVersion},
 		tavus.PluginPackage:        {title: tavus.PluginTitle, version: tavus.PluginVersion},
 		telnyx.PluginPackage:       {title: telnyx.PluginTitle, version: telnyx.PluginVersion},
+		ten.PluginPackage:          {title: ten.PluginTitle, version: ten.PluginVersion},
 		trugen.PluginPackage:       {title: trugen.PluginTitle, version: trugen.PluginVersion},
 		turndetector.PluginPackage: {title: turndetector.PluginTitle, version: turndetector.PluginVersion},
 		ultravox.PluginPackage:     {title: ultravox.PluginTitle, version: ultravox.PluginVersion},
@@ -311,6 +313,22 @@ func TestAppRegistersPipecatPluginDownloader(t *testing.T) {
 		return
 	}
 	t.Fatal("Pipecat plugin downloader was not registered")
+}
+
+func TestAppRegistersTenPluginDownloader(t *testing.T) {
+	for _, registered := range plugin.RegisteredPlugins() {
+		if registered.Package() != ten.PluginPackage {
+			continue
+		}
+		if registered.Title() != ten.PluginTitle {
+			t.Fatalf("plugin title = %q, want %q", registered.Title(), ten.PluginTitle)
+		}
+		if registered.Version() != ten.PluginVersion {
+			t.Fatalf("plugin version = %q, want %q", registered.Version(), ten.PluginVersion)
+		}
+		return
+	}
+	t.Fatal("TEN plugin downloader was not registered")
 }
 
 func TestNewAppInstallsConfiguredLogger(t *testing.T) {
@@ -982,6 +1000,32 @@ func TestDefaultConfigFromEnvSelectsSileroVAD(t *testing.T) {
 	}
 	if caps := app.Session.VAD.Capabilities(); caps.UpdateInterval != 0.064 {
 		t.Fatalf("VAD capabilities = %+v, want update interval 0.064", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsTenVAD(t *testing.T) {
+	t.Setenv("RTP_AGENT_VAD_PROVIDER", "ten")
+	t.Setenv("RTP_AGENT_VAD_SAMPLE_RATE", "16000")
+	t.Setenv("RTP_AGENT_VAD_MIN_SPEECH_DURATION", "0.032")
+	t.Setenv("RTP_AGENT_VAD_MIN_SILENCE_DURATION", "0.096")
+	t.Setenv("RTP_AGENT_VAD_PREFIX_PADDING_DURATION", "0.048")
+	t.Setenv("RTP_AGENT_VAD_MAX_BUFFERED_SPEECH", "2.5")
+	t.Setenv("RTP_AGENT_VAD_ACTIVATION_THRESHOLD", "0.7")
+	t.Setenv("RTP_AGENT_VAD_DEACTIVATION_THRESHOLD", "0.4")
+	t.Setenv("RTP_AGENT_VAD_UPDATE_INTERVAL", "0.016")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.VAD == nil {
+		t.Fatal("Session VAD is nil")
+	}
+	if got := app.Session.VAD.Label(); got != "ten.VAD" {
+		t.Fatalf("VAD label = %q, want ten.VAD", got)
+	}
+	if caps := app.Session.VAD.Capabilities(); caps.UpdateInterval != 0.016 {
+		t.Fatalf("VAD capabilities = %+v, want update interval 0.016", caps)
 	}
 }
 
