@@ -1,11 +1,11 @@
-package turndetector
+package livekit
 
 import "errors"
 
 const (
-	PluginTitle   = "rtp-agent.plugins.turn_detector"
+	PluginTitle   = "rtp-agent.plugins.livekit"
 	PluginVersion = "1.5.15"
-	PluginPackage = "rtp-agent.plugins.turn_detector"
+	PluginPackage = "rtp-agent.plugins.livekit"
 )
 
 type Plugin struct{}

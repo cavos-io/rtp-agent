@@ -53,7 +53,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/langchain"
 	"github.com/cavos-io/rtp-agent/adapter/lemonslice"
 	"github.com/cavos-io/rtp-agent/adapter/liveavatar"
-	"github.com/cavos-io/rtp-agent/adapter/livekit/turndetector"
+	adapterlivekit "github.com/cavos-io/rtp-agent/adapter/livekit"
 	"github.com/cavos-io/rtp-agent/adapter/lmnt"
 	"github.com/cavos-io/rtp-agent/adapter/minimal"
 	"github.com/cavos-io/rtp-agent/adapter/minimax"
@@ -175,22 +175,25 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 			title:   simplismart.PluginTitle,
 			version: simplismart.PluginVersion,
 		},
-		smallestai.PluginPackage:   {title: smallestai.PluginTitle, version: smallestai.PluginVersion},
-		soniox.PluginPackage:       {title: soniox.PluginTitle, version: soniox.PluginVersion},
-		speechify.PluginPackage:    {title: speechify.PluginTitle, version: speechify.PluginVersion},
-		speechmatics.PluginPackage: {title: speechmatics.PluginTitle, version: speechmatics.PluginVersion},
-		spitch.PluginPackage:       {title: spitch.PluginTitle, version: spitch.PluginVersion},
-		tavus.PluginPackage:        {title: tavus.PluginTitle, version: tavus.PluginVersion},
-		telnyx.PluginPackage:       {title: telnyx.PluginTitle, version: telnyx.PluginVersion},
-		ten.PluginPackage:          {title: ten.PluginTitle, version: ten.PluginVersion},
-		trugen.PluginPackage:       {title: trugen.PluginTitle, version: trugen.PluginVersion},
-		turndetector.PluginPackage: {title: turndetector.PluginTitle, version: turndetector.PluginVersion},
-		ultravox.PluginPackage:     {title: ultravox.PluginTitle, version: ultravox.PluginVersion},
-		upliftai.PluginPackage:     {title: upliftai.PluginTitle, version: upliftai.PluginVersion},
-		xai.PluginPackage:          {title: xai.PluginTitle, version: xai.PluginVersion},
+		smallestai.PluginPackage:     {title: smallestai.PluginTitle, version: smallestai.PluginVersion},
+		soniox.PluginPackage:         {title: soniox.PluginTitle, version: soniox.PluginVersion},
+		speechify.PluginPackage:      {title: speechify.PluginTitle, version: speechify.PluginVersion},
+		speechmatics.PluginPackage:   {title: speechmatics.PluginTitle, version: speechmatics.PluginVersion},
+		spitch.PluginPackage:         {title: spitch.PluginTitle, version: spitch.PluginVersion},
+		tavus.PluginPackage:          {title: tavus.PluginTitle, version: tavus.PluginVersion},
+		telnyx.PluginPackage:         {title: telnyx.PluginTitle, version: telnyx.PluginVersion},
+		ten.PluginPackage:            {title: ten.PluginTitle, version: ten.PluginVersion},
+		trugen.PluginPackage:         {title: trugen.PluginTitle, version: trugen.PluginVersion},
+		adapterlivekit.PluginPackage: {title: adapterlivekit.PluginTitle, version: adapterlivekit.PluginVersion},
+		ultravox.PluginPackage:       {title: ultravox.PluginTitle, version: ultravox.PluginVersion},
+		upliftai.PluginPackage:       {title: upliftai.PluginTitle, version: upliftai.PluginVersion},
+		xai.PluginPackage:            {title: xai.PluginTitle, version: xai.PluginVersion},
 	}
-	if expected[turndetector.PluginPackage].title != "rtp-agent.plugins.turn_detector" {
-		t.Fatalf("turn detector plugin title = %q, want rtp-agent.plugins.turn_detector", expected[turndetector.PluginPackage].title)
+	if expected[adapterlivekit.PluginPackage].title != "rtp-agent.plugins.livekit" {
+		t.Fatalf("livekit plugin title = %q, want rtp-agent.plugins.livekit", expected[adapterlivekit.PluginPackage].title)
+	}
+	if expected[adapterlivekit.PluginPackage].version != adapterlivekit.PluginVersion {
+		t.Fatalf("livekit plugin version = %q, want %q", expected[adapterlivekit.PluginPackage].version, adapterlivekit.PluginVersion)
 	}
 
 	for _, registered := range plugin.RegisteredPlugins() {
