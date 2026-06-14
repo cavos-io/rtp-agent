@@ -60,6 +60,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/adapter/perplexity"
 	"github.com/cavos-io/rtp-agent/adapter/phonic"
+	"github.com/cavos-io/rtp-agent/adapter/pipecat"
 	"github.com/cavos-io/rtp-agent/adapter/resemble"
 	"github.com/cavos-io/rtp-agent/adapter/respeecher"
 	"github.com/cavos-io/rtp-agent/adapter/rime"
@@ -150,6 +151,7 @@ func init() {
 	plugin.RegisterPluginMetadata(openai.PluginTitle, openai.PluginVersion, openai.PluginPackage)
 	plugin.RegisterPluginMetadata(perplexity.PluginTitle, perplexity.PluginVersion, perplexity.PluginPackage)
 	plugin.RegisterPluginMetadata(phonic.PluginTitle, phonic.PluginVersion, phonic.PluginPackage)
+	plugin.RegisterPluginDownloader(pipecat.PluginTitle, pipecat.PluginVersion, pipecat.PluginPackage, pipecat.Plugin{}.DownloadFiles)
 	plugin.RegisterPluginMetadata(resemble.PluginTitle, resemble.PluginVersion, resemble.PluginPackage)
 	plugin.RegisterPluginMetadata(respeecher.PluginTitle, respeecher.PluginVersion, respeecher.PluginPackage)
 	plugin.RegisterPluginMetadata(rime.PluginTitle, rime.PluginVersion, rime.PluginPackage)
@@ -178,6 +180,9 @@ var (
 	appInitLoggerProvider     = telemetry.InitLoggerProvider
 	appShutdownLoggerProvider = telemetry.ShutdownLoggerProvider
 	appNewMCPServerHTTP       = llm.NewMCPServerHTTP
+	appNewPipecatSmartTurn    = func() (agent.AudioTurnDetector, error) {
+		return pipecat.NewLocalSmartTurn()
+	}
 )
 
 const (
@@ -232,6 +237,7 @@ const (
 	providerOVHCloud     = "ovhcloud"
 	providerPerplexity   = "perplexity"
 	providerPhonic       = "phonic"
+	providerPipecat      = "pipecat"
 	providerResemble     = "resemble"
 	providerRespeecher   = "respeecher"
 	providerRime         = "rime"
@@ -1796,6 +1802,13 @@ func configureTurnDetector(cfg AppConfig, a *agent.Agent) error {
 			return fmt.Errorf("RTP_AGENT_TURN_DETECTOR_PROVIDER=llm requires RTP_AGENT_LLM_PROVIDER")
 		}
 		a.TurnDetector = agent.NewLLMTurnDetector(a.LLM)
+		return nil
+	case providerPipecat:
+		detector, err := appNewPipecatSmartTurn()
+		if err != nil {
+			return err
+		}
+		a.AudioTurnDetector = detector
 		return nil
 	default:
 		return fmt.Errorf("unsupported RTP_AGENT_TURN_DETECTOR_PROVIDER %q", cfg.TurnDetectorProvider)
