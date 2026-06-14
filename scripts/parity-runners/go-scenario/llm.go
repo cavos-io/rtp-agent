@@ -3086,6 +3086,17 @@ func runLLMValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "realtime_session_options_input_audio_noise_reduction":
+		options := lkllm.RealtimeSessionOptions{InputAudioNoiseReduction: map[string]any{"type": "near_field"}}
+		return map[string]any{
+			"contract": "llm-value-objects",
+			"events": []map[string]any{
+				{
+					"name":                        "realtime_session_options_input_audio_noise_reduction",
+					"input_audio_noise_reduction": options.InputAudioNoiseReduction,
+				},
+			},
+		}, nil
 	case "realtime_generate_reply_options":
 		options := lkllm.RealtimeGenerateReplyOptions{
 			Instructions: "answer briefly",
