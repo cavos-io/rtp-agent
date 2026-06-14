@@ -1115,10 +1115,20 @@ func (a *App) runAgora(ctx context.Context) error {
 	transport := workeragora.NewTransport(opts, client)
 	audioInput := workeragora.NewAudioInput(ctx, a.Session)
 	transport.SetAudioHandler(audioInput.HandleAudioFrame)
+	eventsCtx, stopObservingEvents := context.WithCancel(context.Background())
+	eventsDone := make(chan struct{})
+	go func() {
+		defer close(eventsDone)
+		observeAgoraTransportEvents(eventsCtx, transport.Events())
+	}()
 	if err := transport.Join(ctx); err != nil {
+		if closeErr := transport.Close(context.Background()); closeErr != nil {
+			logutil.Logger.Errorw("failed to close Agora transport after join error", closeErr)
+		}
+		<-eventsDone
+		stopObservingEvents()
 		return err
 	}
-	go observeAgoraTransportEvents(ctx, transport.Events())
 	audioOutput := workeragora.NewAudioOutput(transport)
 	a.Session.EnsureAssistant().SetPublishAudio(func(frame *model.AudioFrame) error {
 		return audioOutput.PublishAudio(ctx, frame)
@@ -1127,6 +1137,8 @@ func (a *App) runAgora(ctx context.Context) error {
 		if err := transport.Close(context.Background()); err != nil {
 			logutil.Logger.Errorw("failed to close Agora transport", err)
 		}
+		<-eventsDone
+		stopObservingEvents()
 	}()
 	if err := a.runSession(nil); err != nil {
 		return err

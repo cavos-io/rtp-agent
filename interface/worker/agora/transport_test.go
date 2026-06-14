@@ -16,6 +16,7 @@ type fakeChannelClient struct {
 	handler      EventHandler
 	audioHandler AudioHandler
 	pcmFrame     PCMFrame
+	publishCtx   context.Context
 	joinErr      error
 	leaveErr     error
 	publishErr   error
@@ -47,6 +48,7 @@ func (f *fakeChannelClient) Leave(ctx context.Context) error {
 
 func (f *fakeChannelClient) PublishPCM(ctx context.Context, frame PCMFrame) error {
 	f.publishCount++
+	f.publishCtx = ctx
 	f.pcmFrame = frame
 	if f.publishErr != nil {
 		return f.publishErr
@@ -226,6 +228,24 @@ func TestTransportPublishPCMValidatesAndDelegates(t *testing.T) {
 	}
 }
 
+func TestTransportPublishPCMNormalizesNilContext(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	frame := PCMFrame{
+		Data:       []byte{1, 2, 3, 4},
+		SampleRate: 100,
+		Channels:   2,
+	}
+
+	var nilCtx context.Context
+	if err := tr.PublishPCM(nilCtx, frame); err != nil {
+		t.Fatalf("PublishPCM() error = %v", err)
+	}
+	if client.publishCtx == nil {
+		t.Fatal("PublishPCM() passed nil context to channel client")
+	}
+}
+
 func TestTransportPublishPCMRejectsNonTenMillisecondFrames(t *testing.T) {
 	client := &fakeChannelClient{}
 	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
@@ -241,6 +261,27 @@ func TestTransportPublishPCMRejectsNonTenMillisecondFrames(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "10 ms") {
 		t.Fatalf("PublishPCM() error = %v, want 10 ms validation error", err)
+	}
+	if client.publishCount != 0 {
+		t.Fatalf("publish count = %d, want 0", client.publishCount)
+	}
+}
+
+func TestTransportPublishPCMRejectsTwentyMillisecondFrames(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	frame := PCMFrame{
+		Data:       make([]byte, 640),
+		SampleRate: 16000,
+		Channels:   1,
+	}
+
+	err := tr.PublishPCM(context.Background(), frame)
+	if err == nil {
+		t.Fatal("PublishPCM() error = nil, want exact 10 ms validation error")
+	}
+	if !strings.Contains(err.Error(), "exactly 10 ms") {
+		t.Fatalf("PublishPCM() error = %v, want exactly 10 ms validation error", err)
 	}
 	if client.publishCount != 0 {
 		t.Fatalf("publish count = %d, want 0", client.publishCount)

@@ -116,6 +116,8 @@ type fakeAppAgoraChannelClient struct {
 	audio       workeragora.AudioHandler
 	joinedCh    chan struct{}
 	publishedCh chan workeragora.PCMFrame
+	joinEvent   *workeragora.Event
+	leaveEvent  *workeragora.Event
 	joinErr     error
 	leaveErr    error
 	published   []workeragora.PCMFrame
@@ -149,6 +151,9 @@ func (f *fakeAppAgoraChannelClient) Join(ctx context.Context, opts worker.AgoraO
 	f.joinOptions = opts
 	f.handler = handler
 	f.audio = audio
+	if f.joinEvent != nil && f.handler != nil {
+		f.handler(*f.joinEvent)
+	}
 	if f.joinErr != nil {
 		return f.joinErr
 	}
@@ -165,6 +170,9 @@ func (f *fakeAppAgoraChannelClient) Join(ctx context.Context, opts worker.AgoraO
 func (f *fakeAppAgoraChannelClient) Leave(ctx context.Context) error {
 	if f.leaveErr != nil {
 		return f.leaveErr
+	}
+	if f.leaveEvent != nil && f.handler != nil {
+		f.handler(*f.leaveEvent)
 	}
 	f.left = true
 	return nil
@@ -651,6 +659,174 @@ func TestRunAgoraLogsConnectedTransportEvent(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("runAgora() did not return after cancellation")
+	}
+}
+
+func TestRunAgoraWaitsForDisconnectEventOnShutdown(t *testing.T) {
+	previousLogger := logutil.Logger
+	recorder := &appRecordingLogger{
+		blockMsg:     "agora transport disconnected",
+		blockStarted: make(chan struct{}, 1),
+		unblock:      make(chan struct{}),
+	}
+	logutil.Logger = recorder
+	t.Cleanup(func() {
+		logutil.Logger = previousLogger
+	})
+
+	client := &fakeAppAgoraChannelClient{
+		joinedCh: make(chan struct{}, 1),
+		leaveEvent: &workeragora.Event{
+			Kind:    workeragora.EventDisconnected,
+			Channel: "support",
+			Reason:  99,
+		},
+	}
+	oldNewAgoraChannelClient := appNewAgoraChannelClient
+	appNewAgoraChannelClient = func() (workeragora.ChannelClient, error) {
+		return client, nil
+	}
+	t.Cleanup(func() {
+		appNewAgoraChannelClient = oldNewAgoraChannelClient
+	})
+
+	rtpApp := &App{
+		Session: agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{}),
+		Server: worker.NewAgentServer(worker.WorkerOptions{
+			Agora: worker.AgoraOptions{
+				AppID:   "app",
+				Channel: "support",
+				UID:     "agent",
+				Token:   "token",
+			},
+		}),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- rtpApp.runAgora(ctx)
+	}()
+
+	select {
+	case <-client.joinedCh:
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not join Agora channel")
+	}
+	cancel()
+
+	select {
+	case err := <-doneCh:
+		t.Fatalf("runAgora() returned before disconnect event observer drained: %v", err)
+	case <-recorder.blockStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for disconnect event log")
+	}
+	select {
+	case err := <-doneCh:
+		t.Fatalf("runAgora() returned while disconnect event log was blocked: %v", err)
+	default:
+	}
+	close(recorder.unblock)
+
+	select {
+	case err := <-doneCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("runAgora() error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not return after disconnect event observer drained")
+	}
+}
+
+func TestRunAgoraLogsJoinErrorTransportEvent(t *testing.T) {
+	previousLogger := logutil.Logger
+	recorder := &appRecordingLogger{entriesCh: make(chan appLogEntry, 8)}
+	logutil.Logger = recorder
+	t.Cleanup(func() {
+		logutil.Logger = previousLogger
+	})
+
+	joinErr := errors.New("join failed")
+	eventErr := errors.New("sdk denied")
+	client := &fakeAppAgoraChannelClient{
+		joinErr: joinErr,
+		joinEvent: &workeragora.Event{
+			Kind:    workeragora.EventError,
+			Channel: "support",
+			Reason:  110,
+			Err:     eventErr,
+		},
+	}
+	oldNewAgoraChannelClient := appNewAgoraChannelClient
+	appNewAgoraChannelClient = func() (workeragora.ChannelClient, error) {
+		return client, nil
+	}
+	t.Cleanup(func() {
+		appNewAgoraChannelClient = oldNewAgoraChannelClient
+	})
+
+	rtpApp := &App{
+		Session: agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{}),
+		Server: worker.NewAgentServer(worker.WorkerOptions{
+			Agora: worker.AgoraOptions{
+				AppID:   "app",
+				Channel: "support",
+				UID:     "agent",
+				Token:   "token",
+			},
+		}),
+	}
+
+	err := rtpApp.runAgora(context.Background())
+	if !errors.Is(err, joinErr) {
+		t.Fatalf("runAgora() error = %v, want join failed", err)
+	}
+	select {
+	case entry := <-recorder.entriesCh:
+		if entry.msg != "agora transport event error" {
+			t.Fatalf("log msg = %q, want agora transport event error", entry.msg)
+		}
+		if got := entry.value("channel"); got != "support" {
+			t.Fatalf("log channel = %#v, want support", got)
+		}
+		if got := entry.value("reason"); got != 110 {
+			t.Fatalf("log reason = %#v, want 110", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Agora join error log")
+	}
+}
+
+func TestRunAgoraClosesTransportWhenJoinFails(t *testing.T) {
+	joinErr := errors.New("join failed")
+	client := &fakeAppAgoraChannelClient{joinErr: joinErr}
+	oldNewAgoraChannelClient := appNewAgoraChannelClient
+	appNewAgoraChannelClient = func() (workeragora.ChannelClient, error) {
+		return client, nil
+	}
+	t.Cleanup(func() {
+		appNewAgoraChannelClient = oldNewAgoraChannelClient
+	})
+
+	rtpApp := &App{
+		Session: agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{}),
+		Server: worker.NewAgentServer(worker.WorkerOptions{
+			Agora: worker.AgoraOptions{
+				AppID:   "app",
+				Channel: "support",
+				UID:     "agent",
+				Token:   "token",
+			},
+		}),
+	}
+
+	err := rtpApp.runAgora(context.Background())
+	if !errors.Is(err, joinErr) {
+		t.Fatalf("runAgora() error = %v, want join failed", err)
+	}
+	if !client.left {
+		t.Fatal("Agora client left = false, want true after join failure")
 	}
 }
 
@@ -11094,12 +11270,26 @@ func (e appLogEntry) value(key string) any {
 }
 
 type appRecordingLogger struct {
-	mu        sync.Mutex
-	entries   []appLogEntry
-	entriesCh chan appLogEntry
+	mu           sync.Mutex
+	entries      []appLogEntry
+	entriesCh    chan appLogEntry
+	blockMsg     string
+	blockStarted chan struct{}
+	unblock      chan struct{}
 }
 
 func (l *appRecordingLogger) record(entry appLogEntry) {
+	if l.blockMsg != "" && entry.msg == l.blockMsg {
+		if l.blockStarted != nil {
+			select {
+			case l.blockStarted <- struct{}{}:
+			default:
+			}
+		}
+		if l.unblock != nil {
+			<-l.unblock
+		}
+	}
 	l.mu.Lock()
 	l.entries = append(l.entries, entry)
 	ch := l.entriesCh

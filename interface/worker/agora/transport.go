@@ -49,10 +49,17 @@ func (f PCMFrame) Validate() error {
 		return fmt.Errorf("agora PCM frame sample rate must produce whole 10 ms frames")
 	}
 	bytesPer10MS := (f.SampleRate / 100) * f.Channels * 2
-	if len(f.Data)%bytesPer10MS != 0 {
-		return fmt.Errorf("agora PCM frame data must be an exact multiple of 10 ms 16-bit interleaved PCM")
+	if len(f.Data) != bytesPer10MS {
+		return fmt.Errorf("agora PCM frame data must be exactly 10 ms of 16-bit interleaved PCM")
 	}
 	return nil
+}
+
+func normalizeContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
 }
 
 type ChannelClient interface {
@@ -111,14 +118,14 @@ func (t *Transport) Join(ctx context.Context) error {
 	t.mu.Lock()
 	audio := t.audio
 	t.mu.Unlock()
-	return t.client.Join(ctx, opts, t.emit, audio)
+	return t.client.Join(normalizeContext(ctx), opts, t.emit, audio)
 }
 
 func (t *Transport) Leave(ctx context.Context) error {
 	if t == nil || t.client == nil {
 		return nil
 	}
-	return t.client.Leave(ctx)
+	return t.client.Leave(normalizeContext(ctx))
 }
 
 func (t *Transport) PublishPCM(ctx context.Context, frame PCMFrame) error {
@@ -131,7 +138,7 @@ func (t *Transport) PublishPCM(ctx context.Context, frame PCMFrame) error {
 	if t.client == nil {
 		return fmt.Errorf("agora channel client is required")
 	}
-	return t.client.PublishPCM(ctx, frame)
+	return t.client.PublishPCM(normalizeContext(ctx), frame)
 }
 
 func (t *Transport) Close(ctx context.Context) error {
@@ -140,7 +147,7 @@ func (t *Transport) Close(ctx context.Context) error {
 	}
 	var err error
 	t.closeOnce.Do(func() {
-		err = t.Leave(ctx)
+		err = t.Leave(normalizeContext(ctx))
 		t.mu.Lock()
 		if !t.closed {
 			t.closed = true

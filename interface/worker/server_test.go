@@ -3509,6 +3509,39 @@ func TestValidateRunPreconditionsAcceptsAgoraTransportConfig(t *testing.T) {
 	}
 }
 
+func TestRunRequiresAgoraTransportRunFunc(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		Transport: WorkerTransportAgora,
+		Agora: AgoraOptions{
+			AppID:   "app",
+			Channel: "support",
+			UID:     "agent",
+		},
+	})
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.Run(ctx)
+	}()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("Run() error = nil, want missing Agora transport runner")
+		}
+		if !strings.Contains(err.Error(), "agora transport run function") {
+			t.Fatalf("Run() error = %q, want agora transport run function", err.Error())
+		}
+	case <-ctx.Done():
+		t.Fatal("Run() did not return missing Agora transport runner error")
+	}
+}
+
 func TestValidateRunPreconditionsReportsSpecificMissingCredential(t *testing.T) {
 	tests := []struct {
 		name    string

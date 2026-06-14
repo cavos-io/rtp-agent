@@ -19,6 +19,7 @@ import (
 
 type sdkChannelClient struct {
 	mu         sync.Mutex
+	joining    bool
 	connection *agoraservice.RtcConnection
 }
 
@@ -29,6 +30,11 @@ var (
 )
 
 const defaultSDKJoinTimeout = 10 * time.Second
+
+const (
+	remoteAudioStateStopped        = 0
+	remoteAudioReasonRemoteOffline = 7
+)
 
 func NewSDKChannelClient() (ChannelClient, error) {
 	return &sdkChannelClient{}, nil
@@ -102,13 +108,12 @@ func sdkAudioFrameToModel(frame *agoraservice.AudioFrame) *model.AudioFrame {
 	if frame == nil || len(frame.Buffer) == 0 || frame.SamplesPerSec <= 0 || frame.Channels <= 0 {
 		return nil
 	}
+	if frame.Type != agoraservice.AudioFrameTypePCM16 || frame.BytesPerSample != 2 {
+		return nil
+	}
 	samplesPerChannel := frame.SamplesPerChannel
 	if samplesPerChannel <= 0 {
-		bytesPerSample := frame.BytesPerSample
-		if bytesPerSample <= 0 {
-			bytesPerSample = 2
-		}
-		samplesPerChannel = len(frame.Buffer) / frame.Channels / bytesPerSample
+		samplesPerChannel = len(frame.Buffer) / frame.Channels / 2
 	}
 	if samplesPerChannel <= 0 {
 		return nil
@@ -122,6 +127,7 @@ func sdkAudioFrameToModel(frame *agoraservice.AudioFrame) *model.AudioFrame {
 }
 
 func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, handler EventHandler, audioHandler AudioHandler) error {
+	ctx = normalizeContext(ctx)
 	if err := opts.Validate(); err != nil {
 		return err
 	}
@@ -134,6 +140,22 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 		return ctx.Err()
 	default:
 	}
+	c.mu.Lock()
+	if c.connection != nil || c.joining {
+		c.mu.Unlock()
+		return fmt.Errorf("agora SDK channel is already joined")
+	}
+	c.joining = true
+	c.mu.Unlock()
+	joined := false
+	defer func() {
+		if joined {
+			return
+		}
+		c.mu.Lock()
+		c.joining = false
+		c.mu.Unlock()
+	}()
 
 	cfg := agoraservice.NewAgoraServiceConfig()
 	cfg.AppId = opts.AppID
@@ -144,6 +166,9 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 	cfg.AudioScenario = agoraservice.AudioScenarioChorus
 	cfg.UseStringUid = true
 	runtimeDir := sdkRuntimeDir()
+	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
+		return fmt.Errorf("agora SDK runtime directory setup failed: %w", err)
+	}
 	cfg.LogPath = filepath.Join(runtimeDir, "agorasdk.log")
 	cfg.ConfigDir = runtimeDir
 	cfg.DataDir = runtimeDir
@@ -172,7 +197,7 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 	}
 	connectedCh := make(chan struct{}, 1)
 	joinErrCh := make(chan error, 1)
-	connection.RegisterObserver(&agoraservice.RtcConnectionObserver{
+	if ret := connection.RegisterObserver(&agoraservice.RtcConnectionObserver{
 		OnConnected: func(_ *agoraservice.RtcConnection, info *agoraservice.RtcConnectionInfo, reason int) {
 			event := Event{Kind: EventConnected, Channel: opts.Channel, Reason: reason}
 			if info != nil && info.ChannelId != "" {
@@ -216,13 +241,31 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 		OnAIQoSCapabilityMissing: func(_ *agoraservice.RtcConnection, fallback int) int {
 			return fallback
 		},
-	})
+	}); ret != 0 {
+		connection.Release()
+		_ = releaseSDKService()
+		return fmt.Errorf("agora SDK register connection observer failed: %d", ret)
+	}
 	if audioHandler != nil {
 		localUser := connection.GetLocalUser()
 		if localUser == nil {
 			connection.Release()
 			_ = releaseSDKService()
 			return fmt.Errorf("agora SDK local user creation failed")
+		}
+		if ret := connection.RegisterLocalUserObserver(&agoraservice.LocalUserObserver{
+			OnUserAudioTrackSubscribed: func(_ *agoraservice.LocalUser, uid string, _ *agoraservice.RemoteAudioTrack) {
+				emitSDKEvent(handler, Event{Kind: EventUserJoined, Channel: opts.Channel, UserID: uid})
+			},
+			OnUserAudioTrackStateChanged: func(_ *agoraservice.LocalUser, uid string, _ *agoraservice.RemoteAudioTrack, state int, reason int, _ int) {
+				if state == remoteAudioStateStopped && reason == remoteAudioReasonRemoteOffline {
+					emitSDKEvent(handler, Event{Kind: EventUserLeft, Channel: opts.Channel, UserID: uid, Reason: reason})
+				}
+			},
+		}); ret != 0 {
+			connection.Release()
+			_ = releaseSDKService()
+			return fmt.Errorf("agora SDK register local user observer failed: %d", ret)
 		}
 		if ret := localUser.SetPlaybackAudioFrameBeforeMixingParameters(1, 16000); ret != 0 {
 			connection.Release()
@@ -248,17 +291,27 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 		_ = releaseSDKService()
 		return fmt.Errorf("agora SDK connect failed: %d", ret)
 	}
+
+	c.mu.Lock()
+	c.connection = connection
+	c.joining = false
+	joined = true
+	c.mu.Unlock()
+	if err := c.waitConnected(ctx, connection, connectedCh, joinErrCh); err != nil {
+		return err
+	}
 	if ret := connection.PublishAudio(); ret != 0 {
-		connection.Disconnect()
+		c.mu.Lock()
+		if c.connection == connection {
+			c.connection = nil
+		}
+		c.mu.Unlock()
+		_ = connection.Disconnect()
 		connection.Release()
 		_ = releaseSDKService()
 		return fmt.Errorf("agora SDK publish audio failed: %d", ret)
 	}
-
-	c.mu.Lock()
-	c.connection = connection
-	c.mu.Unlock()
-	return c.waitConnected(ctx, connection, connectedCh, joinErrCh)
+	return nil
 }
 
 func (c *sdkChannelClient) waitConnected(ctx context.Context, connection *agoraservice.RtcConnection, connectedCh <-chan struct{}, joinErrCh <-chan error) error {
@@ -274,6 +327,7 @@ func (c *sdkChannelClient) waitConnected(ctx context.Context, connection *agoras
 		if c.connection == connection {
 			c.connection = nil
 		}
+		c.joining = false
 		c.mu.Unlock()
 		_ = releaseSDKService()
 		return err
@@ -284,6 +338,7 @@ func (c *sdkChannelClient) waitConnected(ctx context.Context, connection *agoras
 		if c.connection == connection {
 			c.connection = nil
 		}
+		c.joining = false
 		c.mu.Unlock()
 		_ = releaseSDKService()
 		return fmt.Errorf("agora SDK connect timed out after %s", sdkJoinTimeout())
@@ -294,6 +349,7 @@ func (c *sdkChannelClient) waitConnected(ctx context.Context, connection *agoras
 		if c.connection == connection {
 			c.connection = nil
 		}
+		c.joining = false
 		c.mu.Unlock()
 		_ = releaseSDKService()
 		return ctx.Err()
@@ -301,16 +357,17 @@ func (c *sdkChannelClient) waitConnected(ctx context.Context, connection *agoras
 }
 
 func (c *sdkChannelClient) Leave(ctx context.Context) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
+	ctx = normalizeContext(ctx)
 	c.mu.Lock()
 	connection := c.connection
 	c.connection = nil
 	c.mu.Unlock()
 	if connection == nil {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		return nil
 	}
 	var err error
@@ -321,10 +378,18 @@ func (c *sdkChannelClient) Leave(ctx context.Context) error {
 	if releaseErr := releaseSDKService(); releaseErr != nil && err == nil {
 		err = releaseErr
 	}
+	select {
+	case <-ctx.Done():
+		if err == nil {
+			err = ctx.Err()
+		}
+	default:
+	}
 	return err
 }
 
 func (c *sdkChannelClient) PublishPCM(ctx context.Context, frame PCMFrame) error {
+	ctx = normalizeContext(ctx)
 	if err := frame.Validate(); err != nil {
 		return err
 	}

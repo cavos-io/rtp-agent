@@ -59,6 +59,40 @@ func TestSDKClientImplementationRegistersInboundAudioObserver(t *testing.T) {
 	}
 }
 
+func TestSDKClientImplementationRequiresPCM16InboundAudio(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"frame.Type != agoraservice.AudioFrameTypePCM16",
+		"frame.BytesPerSample != 2",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}
+
+func TestSDKClientImplementationRegistersLocalUserObserver(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"RegisterLocalUserObserver",
+		"OnUserAudioTrackSubscribed",
+		"OnUserAudioTrackStateChanged",
+		"agora SDK register local user observer failed",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}
+
 func TestSDKClientImplementationUsesCurrentConnectSignature(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {
@@ -87,6 +121,7 @@ func TestSDKClientImplementationConfiguresRuntimeDirectories(t *testing.T) {
 	text := string(source)
 	for _, want := range []string{
 		"AGORA_SDK_DATA_DIR",
+		"os.MkdirAll(runtimeDir",
 		"cfg.LogPath",
 		"cfg.ConfigDir",
 		"cfg.DataDir",
@@ -107,7 +142,25 @@ func TestSDKClientImplementationWaitsForConnectedEvent(t *testing.T) {
 		"connectedCh := make(chan struct{}, 1)",
 		"joinErrCh := make(chan error, 1)",
 		"case connectedCh <- struct{}{}",
-		"return c.waitConnected",
+		"if err := c.waitConnected",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}
+
+func TestSDKClientImplementationChecksConnectionObserverRegistration(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"if ret := connection.RegisterObserver",
+		"agora SDK register connection observer failed",
+		"connection.Release()",
+		"releaseSDKService()",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("sdk.go missing %q", want)
@@ -146,5 +199,100 @@ func TestSDKClientImplementationReleasesServiceOnLeave(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("sdk.go missing %q", want)
 		}
+	}
+}
+
+func TestSDKClientImplementationLeavesBeforeCheckingContext(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	leaveIndex := strings.Index(text, "func (c *sdkChannelClient) Leave")
+	if leaveIndex < 0 {
+		t.Fatal("sdk.go missing sdkChannelClient.Leave")
+	}
+	leaveBody := text[leaveIndex:]
+	connectionIndex := strings.Index(leaveBody, "connection := c.connection")
+	contextIndex := strings.Index(leaveBody, "case <-ctx.Done()")
+	if connectionIndex < 0 {
+		t.Fatal("sdk.go Leave missing connection cleanup")
+	}
+	if contextIndex >= 0 && contextIndex < connectionIndex {
+		t.Fatal("sdk.go Leave must release the active connection before returning context cancellation")
+	}
+}
+
+func TestSDKClientImplementationNormalizesNilContexts(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, method := range []string{"Join", "Leave", "PublishPCM"} {
+		funcIndex := strings.Index(text, "func (c *sdkChannelClient) "+method)
+		if funcIndex < 0 {
+			t.Fatalf("sdk.go missing sdkChannelClient.%s", method)
+		}
+		body := text[funcIndex:]
+		if nextFunc := strings.Index(body[len("func "):], "\nfunc "); nextFunc >= 0 {
+			body = body[:len("func ")+nextFunc]
+		}
+		if !strings.Contains(body, "ctx = normalizeContext(ctx)") {
+			t.Fatalf("sdk.go %s must normalize nil contexts before using ctx.Done", method)
+		}
+	}
+}
+
+func TestSDKClientImplementationRejectsDuplicateJoin(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"if c.connection != nil",
+		"agora SDK channel is already joined",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}
+
+func TestSDKClientImplementationRejectsConcurrentJoin(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"joining    bool",
+		"if c.connection != nil || c.joining",
+		"c.joining = true",
+		"c.joining = false",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}
+
+func TestSDKClientImplementationPublishesAfterConnected(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	waitIndex := strings.Index(text, "c.waitConnected")
+	publishIndex := strings.Index(text, "connection.PublishAudio()")
+	if waitIndex < 0 {
+		t.Fatal("sdk.go missing waitConnected call")
+	}
+	if publishIndex < 0 {
+		t.Fatal("sdk.go missing PublishAudio call")
+	}
+	if waitIndex > publishIndex {
+		t.Fatal("sdk.go must wait for Agora connected event before publishing audio")
 	}
 }

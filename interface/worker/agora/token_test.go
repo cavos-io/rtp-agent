@@ -25,6 +25,37 @@ func TestResolveJoinOptionsPreservesExplicitToken(t *testing.T) {
 	}
 }
 
+func TestResolveJoinOptionsTrimsJoinFields(t *testing.T) {
+	opts := worker.AgoraOptions{
+		AppID:          " app ",
+		AppCertificate: " cert ",
+		Channel:        " support ",
+		UID:            " agent ",
+		Token:          " token ",
+	}
+
+	resolved, err := ResolveJoinOptions(opts)
+	if err != nil {
+		t.Fatalf("ResolveJoinOptions() error = %v", err)
+	}
+
+	if resolved.AppID != "app" {
+		t.Fatalf("resolved AppID = %q, want app", resolved.AppID)
+	}
+	if resolved.AppCertificate != "cert" {
+		t.Fatalf("resolved AppCertificate = %q, want cert", resolved.AppCertificate)
+	}
+	if resolved.Channel != "support" {
+		t.Fatalf("resolved Channel = %q, want support", resolved.Channel)
+	}
+	if resolved.UID != "agent" {
+		t.Fatalf("resolved UID = %q, want agent", resolved.UID)
+	}
+	if resolved.Token != "token" {
+		t.Fatalf("resolved Token = %q, want token", resolved.Token)
+	}
+}
+
 func TestResolveJoinOptionsBuildsTokenFromCertificate(t *testing.T) {
 	opts := worker.AgoraOptions{
 		AppID:          "970CA35de60c44645bbae8a215061b33",
