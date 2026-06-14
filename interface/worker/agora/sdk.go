@@ -19,6 +19,7 @@ import (
 
 type sdkChannelClient struct {
 	mu         sync.Mutex
+	joining    bool
 	connection *agoraservice.RtcConnection
 }
 
@@ -135,11 +136,21 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 	default:
 	}
 	c.mu.Lock()
-	if c.connection != nil {
+	if c.connection != nil || c.joining {
 		c.mu.Unlock()
 		return fmt.Errorf("agora SDK channel is already joined")
 	}
+	c.joining = true
 	c.mu.Unlock()
+	joined := false
+	defer func() {
+		if joined {
+			return
+		}
+		c.mu.Lock()
+		c.joining = false
+		c.mu.Unlock()
+	}()
 
 	cfg := agoraservice.NewAgoraServiceConfig()
 	cfg.AppId = opts.AppID
@@ -263,6 +274,8 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 
 	c.mu.Lock()
 	c.connection = connection
+	c.joining = false
+	joined = true
 	c.mu.Unlock()
 	return c.waitConnected(ctx, connection, connectedCh, joinErrCh)
 }
@@ -280,6 +293,7 @@ func (c *sdkChannelClient) waitConnected(ctx context.Context, connection *agoras
 		if c.connection == connection {
 			c.connection = nil
 		}
+		c.joining = false
 		c.mu.Unlock()
 		_ = releaseSDKService()
 		return err
@@ -290,6 +304,7 @@ func (c *sdkChannelClient) waitConnected(ctx context.Context, connection *agoras
 		if c.connection == connection {
 			c.connection = nil
 		}
+		c.joining = false
 		c.mu.Unlock()
 		_ = releaseSDKService()
 		return fmt.Errorf("agora SDK connect timed out after %s", sdkJoinTimeout())
@@ -300,6 +315,7 @@ func (c *sdkChannelClient) waitConnected(ctx context.Context, connection *agoras
 		if c.connection == connection {
 			c.connection = nil
 		}
+		c.joining = false
 		c.mu.Unlock()
 		_ = releaseSDKService()
 		return ctx.Err()

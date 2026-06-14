@@ -164,3 +164,21 @@ func TestSDKClientImplementationRejectsDuplicateJoin(t *testing.T) {
 		}
 	}
 }
+
+func TestSDKClientImplementationRejectsConcurrentJoin(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"joining    bool",
+		"if c.connection != nil || c.joining",
+		"c.joining = true",
+		"c.joining = false",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}
