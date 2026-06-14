@@ -2081,6 +2081,36 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTSampleRate(*cfg.STTSampleRate))
 		}
 		return elevenlabs.NewElevenLabsSTT(cfg.ElevenLabsAPIKey, sttOpts...), nil
+	case providerFireworks:
+		sttOpts := []fireworksai.FireworksSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, fireworksai.WithFireworksBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, fireworksai.WithFireworksModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, fireworksai.WithFireworksLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTPrompt != "" {
+			sttOpts = append(sttOpts, fireworksai.WithFireworksPrompt(cfg.STTPrompt))
+		}
+		if cfg.STTTemperature != nil {
+			sttOpts = append(sttOpts, fireworksai.WithFireworksTemperature(*cfg.STTTemperature))
+		}
+		if cfg.STTSkipVAD != nil {
+			sttOpts = append(sttOpts, fireworksai.WithFireworksSkipVAD(*cfg.STTSkipVAD))
+		}
+		if len(cfg.STTVADKwargs) > 0 {
+			sttOpts = append(sttOpts, fireworksai.WithFireworksVADKwargs(cfg.STTVADKwargs))
+		}
+		if cfg.STTTextTimeoutSeconds != nil {
+			sttOpts = append(sttOpts, fireworksai.WithFireworksTextTimeoutSeconds(*cfg.STTTextTimeoutSeconds))
+		}
+		if len(cfg.STTTimestampGranularities) > 0 {
+			sttOpts = append(sttOpts, fireworksai.WithFireworksTimestampGranularities(cfg.STTTimestampGranularities))
+		}
+		return fireworksai.NewFireworksSTT(cfg.FireworksAPIKey, sttOpts...), nil
 	case providerGradium:
 		sttOpts := []gradium.GradiumSTTOption{}
 		if cfg.STTBaseURL != "" {

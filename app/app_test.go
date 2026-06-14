@@ -3619,6 +3619,132 @@ func TestCartesiaSTTFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestFireworksSTTFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("FIREWORKS_API_KEY", "test-fireworks-key")
+	type wsRecord struct {
+		path          string
+		query         map[string][]string
+		authorization string
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		query := map[string][]string{}
+		for key, values := range r.URL.Query() {
+			query[key] = append([]string(nil), values...)
+		}
+		records <- wsRecord{
+			path:          r.URL.Path,
+			query:         query,
+			authorization: r.Header.Get("Authorization"),
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	temperature := 0.2
+	skipVAD := true
+	textTimeoutSeconds := 2.5
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTBaseURL:                "ws" + strings.TrimPrefix(server.URL, "http"),
+		STTModel:                  "whisper-v3",
+		STTLanguage:               "en",
+		STTPrompt:                 "domain prompt",
+		STTTemperature:            &temperature,
+		STTSkipVAD:                &skipVAD,
+		STTVADKwargs:              map[string]any{"threshold": "0.15"},
+		STTTextTimeoutSeconds:     &textTimeoutSeconds,
+		STTTimestampGranularities: []string{"word", "segment"},
+	}, providerFireworks)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*fireworksai.FireworksSTT); !ok {
+		t.Fatalf("provider type = %T, want *fireworksai.FireworksSTT", provider)
+	}
+	if got, want := provider.Label(), "fireworks.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "whisper-v3"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "FireworksAI"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.AlignedTranscript != "" || caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming interim-only", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		query := record.query
+		if got, want := record.path, "/audio_streaming"; got != want {
+			t.Fatalf("path = %q, want %q", got, want)
+		}
+		if got, want := record.authorization, "test-fireworks-key"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		if got, want := firstQueryValue(query, "model"), "whisper-v3"; got != want {
+			t.Fatalf("query model = %q, want %q", got, want)
+		}
+		if got, want := firstQueryValue(query, "language"), "en"; got != want {
+			t.Fatalf("query language = %q, want %q", got, want)
+		}
+		if got, want := firstQueryValue(query, "prompt"), "domain prompt"; got != want {
+			t.Fatalf("query prompt = %q, want %q", got, want)
+		}
+		if got, want := firstQueryValue(query, "temperature"), "0.2"; got != want {
+			t.Fatalf("query temperature = %q, want %q", got, want)
+		}
+		if got, want := firstQueryValue(query, "skip_vad"), "true"; got != want {
+			t.Fatalf("query skip_vad = %q, want %q", got, want)
+		}
+		if got, want := firstQueryValue(query, "vad_kwargs"), `{"threshold":"0.15"}`; got != want {
+			t.Fatalf("query vad_kwargs = %q, want %q", got, want)
+		}
+		if got, want := firstQueryValue(query, "text_timeout_seconds"), "2.5"; got != want {
+			t.Fatalf("query text_timeout_seconds = %q, want %q", got, want)
+		}
+		if got, want := firstQueryValue(query, "response_format"), "verbose_json"; got != want {
+			t.Fatalf("query response_format = %q, want %q", got, want)
+		}
+		if got, want := strings.Join(query["timestamp_granularities"], ","), "word,segment"; got != want {
+			t.Fatalf("query timestamp_granularities = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Fireworks STT websocket request")
+	}
+}
+
+func firstQueryValue(values map[string][]string, key string) string {
+	if len(values[key]) == 0 {
+		return ""
+	}
+	return values[key][0]
+}
+
 func TestDefaultConfigFromEnvWrapsTTSFallbackProviders(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "cartesia")
