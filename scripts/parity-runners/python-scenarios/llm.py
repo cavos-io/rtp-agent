@@ -182,7 +182,10 @@ def load_reference_llm_fallback():
 
         def emit(self, event: str, *args: Any, **kwargs: Any) -> None:
             for handler in list(self._handlers.get(event, [])):
-                handler(*args, **kwargs)
+                try:
+                    handler(*args, **kwargs)
+                except Exception:
+                    pass
 
     class Logger:
         def info(self, *args: Any, **kwargs: Any) -> None:
@@ -976,6 +979,49 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
                         "chunks": chunks,
                         "handler_events": handler_events,
                         "handler_call_count": len(handler_events),
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "availability_panic_isolated":
+        primary = FakeLLM("primary", [RuntimeError("primary stream failed")])
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter([primary, fallback])
+        handler_events: list[dict[str, Any]] = []
+
+        def failing_handler(event: Any) -> None:
+            raise RuntimeError("availability handler failed")
+
+        def recording_handler(event: Any) -> None:
+            handler_events.append(
+                {
+                    "available": event.available,
+                    "label": event.llm.label,
+                }
+            )
+
+        adapter.on("llm_availability_changed", failing_handler)
+        adapter.on("llm_availability_changed", recording_handler)
+
+        async def run() -> dict[str, Any]:
+            escaped_error = False
+            chunks: list[str] = []
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            try:
+                await stream._run()
+                chunks = [chunk_kind(chunk) for chunk in stream._event_ch.items]
+            except RuntimeError:
+                escaped_error = True
+            return {
+                "contract": "llm-fallback-availability-panic-isolated",
+                "events": [
+                    {
+                        "name": "availability_panic_isolated",
+                        "chunks": chunks,
+                        "handler_events": handler_events,
+                        "handler_call_count": len(handler_events),
+                        "escaped_error": escaped_error,
                     }
                 ],
             }

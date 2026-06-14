@@ -1011,6 +1011,55 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "availability_panic_isolated":
+		primary := &fakeScenarioLLM{label: "primary", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{err: errors.New("primary stream failed")},
+		}}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		handlerEvents := make(chan map[string]any, 1)
+		adapter.OnAvailabilityChanged(func(lkllm.FallbackAvailabilityChangedEvent) {
+			panic("availability handler failed")
+		})
+		adapter.OnAvailabilityChanged(func(event lkllm.FallbackAvailabilityChangedEvent) {
+			handlerEvents <- map[string]any{
+				"available": event.Available,
+				"label":     lkllm.Label(event.LLM),
+			}
+		})
+		escapedError := false
+		chunks := []string{}
+		func() {
+			defer func() {
+				if recover() != nil {
+					escapedError = true
+				}
+			}()
+			stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+			if err != nil {
+				escapedError = true
+				return
+			}
+			chunks, err = collectScenarioLLMStreamChunks(stream)
+			if err != nil {
+				escapedError = true
+			}
+		}()
+		events := collectScenarioLLMHandlerEvents(handlerEvents)
+		return map[string]any{
+			"contract": "llm-fallback-availability-panic-isolated",
+			"events": []map[string]any{
+				{
+					"name":               "availability_panic_isolated",
+					"chunks":             chunks,
+					"handler_events":     events,
+					"handler_call_count": len(events),
+					"escaped_error":      escapedError,
+				},
+			},
+		}, nil
 	case "mark_unavailable_after_chunk_failure":
 		primaryErr := errors.New("primary stream failed after output")
 		primary := &fakeScenarioLLM{label: "primary", streams: []lkllm.LLMStream{
