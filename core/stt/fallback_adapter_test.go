@@ -128,25 +128,33 @@ func TestFallbackAdapterForwardsProviderMetrics(t *testing.T) {
 	}
 }
 
-func TestFallbackAdapterForwardsProviderErrors(t *testing.T) {
+func TestFallbackAdapterDoesNotForwardProviderErrors(t *testing.T) {
 	primary := &metadataSTT{label: "primary", capabilities: STTCapabilities{Streaming: true}}
 	fallback := &metadataSTT{label: "fallback", capabilities: STTCapabilities{Streaming: true}}
 	adapter := NewFallbackAdapter([]STT{primary, fallback})
-	errCh := make(chan error, 2)
+	labelsCh := make(chan string, 3)
 
 	unsubscribe := adapter.OnError(func(err *STTError) {
-		errCh <- err
+		labelsCh <- err.Label
 	})
 	defer unsubscribe()
 
-	primaryCause := errors.New("primary failed")
-	fallbackCause := errors.New("fallback failed")
-	primary.EmitError(NewSTTError("primary", primaryCause, true))
-	fallback.EmitError(NewSTTError("fallback", fallbackCause, true))
+	primary.EmitError(NewSTTError("primary", errors.New("primary failed"), true))
+	fallback.EmitError(NewSTTError("fallback", errors.New("fallback failed"), true))
+	adapter.EmitError(NewSTTError("adapter", errors.New("adapter failed"), true))
 
-	got := []error{<-errCh, <-errCh}
-	if !errors.Is(got[0], primaryCause) || !errors.Is(got[1], fallbackCause) {
-		t.Fatalf("forwarded errors = %#v, want primary then fallback causes", got)
+	select {
+	case label := <-labelsCh:
+		if label != "adapter" {
+			t.Fatalf("error label = %q, want adapter-local error only", label)
+		}
+	default:
+		t.Fatal("error handler was not called")
+	}
+	select {
+	case label := <-labelsCh:
+		t.Fatalf("unexpected forwarded provider error label %q", label)
+	default:
 	}
 }
 

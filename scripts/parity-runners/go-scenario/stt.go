@@ -580,6 +580,24 @@ func runSTTFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "provider_error_not_forwarded":
+		primary := &fakeScenarioSTT{label: "primary", capabilities: lkstt.STTCapabilities{Streaming: true}}
+		fallback := &fakeScenarioSTT{label: "fallback", capabilities: lkstt.STTCapabilities{Streaming: true}}
+		adapter := lkstt.NewFallbackAdapter([]lkstt.STT{primary, fallback})
+		labels := make([]string, 0, 3)
+		unsubscribe := adapter.OnError(func(err *lkstt.STTError) {
+			labels = append(labels, err.Label)
+		})
+		defer unsubscribe()
+		primary.EmitError(lkstt.NewSTTError("primary", errors.New("primary failed"), true))
+		fallback.EmitError(lkstt.NewSTTError("fallback", errors.New("fallback failed"), true))
+		adapter.EmitError(lkstt.NewSTTError("adapter", errors.New("adapter failed"), true))
+		return map[string]any{
+			"contract": "stt-fallback-provider-error-not-forwarded",
+			"events": []map[string]any{
+				{"name": "provider_error_not_forwarded", "labels": labels},
+			},
+		}, nil
 	case "validation":
 		mode := payload.Mode
 		if mode == "" {

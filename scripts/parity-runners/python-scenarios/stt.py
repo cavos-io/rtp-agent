@@ -536,6 +536,21 @@ def stt_fallback(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "provider_error_not_forwarded":
+        primary = FakeSTT("primary")
+        fallback = FakeSTT("fallback")
+        adapter = fallback_module.FallbackAdapter([primary, fallback])
+        labels: list[str] = []
+        adapter.on("error", lambda error: labels.append(error.label))
+        primary.emit("error", type("Error", (), {"label": "primary"})())
+        fallback.emit("error", type("Error", (), {"label": "fallback"})())
+        adapter.emit("error", type("Error", (), {"label": "adapter"})())
+        return {
+            "contract": "stt-fallback-provider-error-not-forwarded",
+            "events": [
+                {"name": "provider_error_not_forwarded", "labels": labels}
+            ],
+        }
     if action == "validation":
         mode = input_data.get("mode", "empty")
         try:
