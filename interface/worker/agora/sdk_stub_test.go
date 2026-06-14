@@ -78,3 +78,21 @@ func TestSDKClientImplementationUsesVoidReleaseSignature(t *testing.T) {
 		t.Fatal("sdk.go must not treat RtcConnection.Release as returning a status code")
 	}
 }
+
+func TestSDKClientImplementationConfiguresRuntimeDirectories(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"AGORA_SDK_DATA_DIR",
+		"cfg.LogPath",
+		"cfg.ConfigDir",
+		"cfg.DataDir",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}

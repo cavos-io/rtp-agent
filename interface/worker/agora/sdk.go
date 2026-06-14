@@ -5,6 +5,8 @@ package agora
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -22,6 +24,13 @@ var sdkServiceMu sync.Mutex
 
 func NewSDKChannelClient() (ChannelClient, error) {
 	return &sdkChannelClient{}, nil
+}
+
+func sdkRuntimeDir() string {
+	if dir := os.Getenv("AGORA_SDK_DATA_DIR"); dir != "" {
+		return dir
+	}
+	return filepath.Join(os.TempDir(), "rtp-agent-agora")
 }
 
 func emitSDKEvent(handler EventHandler, event Event) {
@@ -76,6 +85,10 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 	cfg.ChannelProfile = agoraservice.ChannelProfileLiveBroadcasting
 	cfg.AudioScenario = agoraservice.AudioScenarioChorus
 	cfg.UseStringUid = true
+	runtimeDir := sdkRuntimeDir()
+	cfg.LogPath = filepath.Join(runtimeDir, "agorasdk.log")
+	cfg.ConfigDir = runtimeDir
+	cfg.DataDir = runtimeDir
 	if ret := agoraservice.Initialize(cfg); ret != 0 {
 		sdkServiceMu.Unlock()
 		return fmt.Errorf("agora SDK initialize failed: %d", ret)

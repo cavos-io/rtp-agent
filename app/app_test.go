@@ -697,10 +697,22 @@ func TestRunAgoraPublishesAssistantAudioToChannel(t *testing.T) {
 	if !ok {
 		t.Fatalf("session assistant = %T, want *agent.PipelineAgent", session.Assistant)
 	}
-	if pipeline.PublishAudio == nil {
-		t.Fatal("session assistant PublishAudio was not connected to Agora transport")
+	var publishAudio func(*model.AudioFrame) error
+	timeout := time.After(time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for publishAudio == nil {
+		publishAudio = pipeline.PublishAudio
+		if publishAudio != nil {
+			break
+		}
+		select {
+		case <-timeout:
+			t.Fatal("session assistant PublishAudio was not connected to Agora transport")
+		case <-ticker.C:
+		}
 	}
-	if err := pipeline.PublishAudio(&model.AudioFrame{
+	if err := publishAudio(&model.AudioFrame{
 		Data:              make([]byte, 320),
 		SampleRate:        16000,
 		NumChannels:       1,

@@ -68,3 +68,20 @@ RTC token for the configured channel and UID. `AGORA_TOKEN` is optional only
 when authentication is disabled for the Agora project or `AGORA_APP_CERTIFICATE`
 is available for token generation. If `AGORA_UID` is omitted, the SDK transport
 uses `"0"`, matching the Agora server SDK examples.
+
+## Smoke Test
+
+With valid Agora credentials, run:
+
+```sh
+AGORA_GO_SDK_DIR=/path/to/Agora-Golang-Server-SDK \
+  AGORA_APP_ID=... \
+  AGORA_APP_CERTIFICATE=... \
+  AGORA_CHANNEL=... \
+  AGORA_UID=agent-0 \
+  scripts/smoke-agora-rtc.sh
+```
+
+The smoke test builds the tagged binary, starts the worker with
+`RTP_AGENT_TRANSPORT=agora`, waits for the `agora transport connected` log, and
+fails fast if the SDK emits an Agora transport error event.
