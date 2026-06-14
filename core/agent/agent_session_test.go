@@ -1194,6 +1194,12 @@ func TestNewAgentSessionAppliesReferenceOptionDefaults(t *testing.T) {
 	if opts.SessionCloseTranscriptTimeout != 2.0 {
 		t.Fatalf("SessionCloseTranscriptTimeout = %v, want 2.0", opts.SessionCloseTranscriptTimeout)
 	}
+	if !opts.TTSTextTransformsSet {
+		t.Fatal("TTSTextTransformsSet = false, want default transform list marked set")
+	}
+	if want := []string{"filter_markdown", "filter_emoji"}; !reflect.DeepEqual(opts.TTSTextTransforms, want) {
+		t.Fatalf("TTSTextTransforms = %#v, want %#v", opts.TTSTextTransforms, want)
+	}
 }
 
 func TestNewAgentSessionPreservesExplicitFalseTurnOptions(t *testing.T) {

@@ -899,6 +899,10 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	if !opts.PreemptiveGenerationSet {
 		opts.PreemptiveGeneration = true
 	}
+	if !opts.DisableTTSTextTransforms && !opts.TTSTextTransformsSet {
+		opts.TTSTextTransforms = []string{"filter_markdown", "filter_emoji"}
+		opts.TTSTextTransformsSet = true
+	}
 	if !opts.AECWarmupDurationSet && opts.AECWarmupDuration == 0 {
 		opts.AECWarmupDuration = 3.0
 	}
