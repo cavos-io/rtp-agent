@@ -102,6 +102,14 @@ func WithMurfTTSSampleRate(sampleRate int) MurfTTSOption {
 	}
 }
 
+func WithMurfTTSEncoding(encoding string) MurfTTSOption {
+	return func(t *MurfTTS) {
+		if encoding != "" {
+			t.encoding = encoding
+		}
+	}
+}
+
 func NewMurfTTS(apiKey string, voice string, opts ...MurfTTSOption) *MurfTTS {
 	if apiKey == "" {
 		apiKey = os.Getenv("MURF_API_KEY")

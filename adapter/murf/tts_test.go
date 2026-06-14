@@ -128,6 +128,7 @@ func TestMurfTTSOptionsMatchReference(t *testing.T) {
 		WithMurfTTSSpeed(12),
 		WithMurfTTSPitch(-4),
 		WithMurfTTSSampleRate(44100),
+		WithMurfTTSEncoding("mp3"),
 	)
 
 	req, err := buildMurfTTSRequest(context.Background(), provider, "hello")
@@ -152,6 +153,7 @@ func TestMurfTTSOptionsMatchReference(t *testing.T) {
 	if payload["pitch"] != float64(-4) {
 		t.Fatalf("pitch = %#v, want -4", payload["pitch"])
 	}
+	assertMurfPayload(t, payload, "format", "mp3")
 	if payload["sample_rate"] != float64(44100) {
 		t.Fatalf("sample_rate = %#v, want 44100", payload["sample_rate"])
 	}

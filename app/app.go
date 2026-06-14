@@ -3583,6 +3583,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, murf.WithMurfTTSSampleRate(*cfg.TTSSampleRate))
 		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, murf.WithMurfTTSEncoding(cfg.TTSEncoding))
+		}
 		return murf.NewMurfTTS(cfg.MurfAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerSpeechify:
 		ttsOpts := []speechify.SpeechifyTTSOption{}
@@ -5172,6 +5175,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, murf.WithMurfTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, murf.WithMurfTTSEncoding(cfg.TTSEncoding))
 		}
 		a.TTS = murf.NewMurfTTS(cfg.MurfAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerNvidia:
