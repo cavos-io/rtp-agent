@@ -2133,6 +2133,27 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		return adapteraws.NewAWSTTS(context.Background(), cfg.AWSRegion, cfg.TTSVoice, ttsOpts...)
 	case providerAzure:
 		return azure.NewAzureTTS("", "", cfg.TTSVoice, cfg.TTSLanguage)
+	case providerBaseten:
+		ttsOpts := []baseten.BasetenTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, baseten.WithBasetenTTSModelEndpoint(cfg.TTSBaseURL))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, baseten.WithBasetenTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, baseten.WithBasetenTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSTemperature != nil {
+			ttsOpts = append(ttsOpts, baseten.WithBasetenTTSTemperature(*cfg.TTSTemperature))
+		}
+		if cfg.TTSMaxTokens != nil {
+			ttsOpts = append(ttsOpts, baseten.WithBasetenTTSMaxTokens(*cfg.TTSMaxTokens))
+		}
+		if cfg.TTSBufferSize != nil {
+			ttsOpts = append(ttsOpts, baseten.WithBasetenTTSBufferSize(*cfg.TTSBufferSize))
+		}
+		return baseten.NewBasetenTTS("", cfg.TTSModel, ttsOpts...)
 	case providerAsyncAI:
 		ttsOpts := []asyncai.AsyncAITTSOption{}
 		if cfg.TTSBaseURL != "" {

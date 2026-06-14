@@ -3389,6 +3389,79 @@ func TestAzureTTSFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestBasetenTTSFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("BASETEN_API_KEY", "test-baseten-key")
+	temperature := 0.72
+	maxTokens := 1200
+	bufferSize := 6
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeaders = r.Header.Clone()
+		if err := json.NewDecoder(r.Body).Decode(&gotPayload); err != nil {
+			t.Errorf("decode baseten payload: %v", err)
+			return
+		}
+		_, _ = w.Write([]byte("audio"))
+	}))
+	defer server.Close()
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		TTSBaseURL:     server.URL,
+		TTSVoice:       "tara-custom",
+		TTSLanguage:    "es",
+		TTSTemperature: &temperature,
+		TTSMaxTokens:   &maxTokens,
+		TTSBufferSize:  &bufferSize,
+	}, providerBaseten)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*baseten.BasetenTTS); !ok {
+		t.Fatalf("provider type = %T, want *baseten.BasetenTTS", provider)
+	}
+	if got, want := provider.Label(), "baseten.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 24000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference default sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "unknown"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "Baseten"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotHeaders.Get("Authorization"), "Api-Key test-baseten-key"; got != want {
+		t.Fatalf("Authorization = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["prompt"], "hello"; got != want {
+		t.Fatalf("payload.prompt = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["voice"], "tara-custom"; got != want {
+		t.Fatalf("payload.voice = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["language"], "es"; got != want {
+		t.Fatalf("payload.language = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["temperature"], 0.72; got != want {
+		t.Fatalf("payload.temperature = %#v, want %#v", got, want)
+	}
+}
+
 func TestGradiumTTSFallbackPassesReferenceOptions(t *testing.T) {
 	type wsRecord struct {
 		apiKey    string
