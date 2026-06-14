@@ -356,7 +356,7 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 			},
 		}, nil
 	case "text_replace":
-		buffer := lktts.NewTextReplaceBuffer(payload.Replacements, payload.CaseSensitive)
+		buffer := lktts.NewTextRegexReplaceBuffer(payload.Replacements, payload.CaseSensitive)
 		chunks := []string{}
 		for _, chunk := range payload.Chunks {
 			chunks = append(chunks, buffer.Push(chunk)...)

@@ -57,6 +57,13 @@ type TextReplaceBuffer struct {
 	buffer        string
 }
 
+type TextRegexReplaceBuffer struct {
+	replacements  []textReplacement
+	caseSensitive bool
+	buffer        string
+	tailLen       int
+}
+
 type textReplacement struct {
 	old string
 	new string
@@ -82,6 +89,38 @@ func NewTextReplaceBuffer(replacements map[string]string, caseSensitive bool) *T
 		replacements:  ordered,
 		caseSensitive: caseSensitive,
 	}
+}
+
+func NewTextRegexReplaceBuffer(replacements map[string]string, caseSensitive bool) *TextRegexReplaceBuffer {
+	ordered := orderedTextReplacements(replacements)
+	tailLen := 0
+	for _, replacement := range ordered {
+		if len(replacement.old) > tailLen {
+			tailLen = len(replacement.old)
+		}
+	}
+	if tailLen > 0 {
+		tailLen--
+	}
+	return &TextRegexReplaceBuffer{
+		replacements:  ordered,
+		caseSensitive: caseSensitive,
+		tailLen:       tailLen,
+	}
+}
+
+func orderedTextReplacements(replacements map[string]string) []textReplacement {
+	keys := make([]string, 0, len(replacements))
+	for old := range replacements {
+		keys = append(keys, old)
+	}
+	sort.Strings(keys)
+
+	ordered := make([]textReplacement, 0, len(keys))
+	for _, old := range keys {
+		ordered = append(ordered, textReplacement{old: old, new: replacements[old]})
+	}
+	return ordered
 }
 
 func (b *TextTransformBuffer) Push(text string) []string {
@@ -122,6 +161,36 @@ func (b *TextTransformBuffer) Push(text string) []string {
 	return nil
 }
 
+func (b *TextRegexReplaceBuffer) Push(text string) []string {
+	if text == "" {
+		return nil
+	}
+	b.buffer += text
+	if len(b.replacements) == 0 {
+		out := b.buffer
+		b.buffer = ""
+		return []string{out}
+	}
+	if len(b.buffer) <= b.tailLen {
+		return nil
+	}
+
+	b.buffer = b.apply(b.buffer)
+	flushTo := len(b.buffer) - b.tailLen
+	if flushTo < 0 {
+		flushTo = len(b.buffer) + flushTo
+		if flushTo < 0 {
+			flushTo = 0
+		}
+	}
+	out := b.buffer[:flushTo]
+	b.buffer = b.buffer[flushTo:]
+	if out == "" {
+		return nil
+	}
+	return []string{out}
+}
+
 func (b *TextReplaceBuffer) Push(text string) []string {
 	if text == "" {
 		return nil
@@ -149,6 +218,18 @@ func (b *TextReplaceBuffer) Push(text string) []string {
 	return []string{out}
 }
 
+func (b *TextRegexReplaceBuffer) Flush() []string {
+	if b.buffer == "" {
+		return nil
+	}
+	text := b.apply(b.buffer)
+	b.buffer = ""
+	if text == "" {
+		return nil
+	}
+	return []string{text}
+}
+
 func (b *TextTransformBuffer) Flush() []string {
 	return b.flush()
 }
@@ -163,6 +244,23 @@ func (b *TextReplaceBuffer) Flush() []string {
 		return nil
 	}
 	return []string{text}
+}
+
+func (b *TextRegexReplaceBuffer) apply(text string) string {
+	for _, replacement := range b.replacements {
+		if replacement.old == "" {
+			continue
+		}
+		if b.caseSensitive {
+			text = strings.ReplaceAll(text, replacement.old, replacement.new)
+			continue
+		}
+		pattern := regexp.MustCompile("(?i)" + regexp.QuoteMeta(replacement.old))
+		text = pattern.ReplaceAllStringFunc(text, func(string) string {
+			return replacement.new
+		})
+	}
+	return text
 }
 
 func (b *TextReplaceBuffer) apply(text string) string {

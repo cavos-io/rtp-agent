@@ -345,7 +345,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		defer span.End()
 
 		startTime := time.Now()
-		replaceBuffer := tts.NewTextReplaceBuffer(options.TextReplacements, false)
+		replaceBuffer := tts.NewTextRegexReplaceBuffer(options.TextReplacements, false)
 
 		if options.DisableTextTransforms {
 			for text := range textCh {
