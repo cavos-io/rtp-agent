@@ -310,6 +310,13 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 		}
 	}
 
+	select {
+	case <-ctx.Done():
+		connection.Release()
+		_ = releaseSDKService()
+		return ctx.Err()
+	default:
+	}
 	if ret := connection.Connect(opts.Token, opts.Channel, uid, ""); ret != 0 {
 		connection.Release()
 		_ = releaseSDKService()

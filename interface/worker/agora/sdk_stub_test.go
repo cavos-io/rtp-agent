@@ -198,6 +198,38 @@ func TestSDKClientImplementationChecksConnectionObserverRegistration(t *testing.
 	}
 }
 
+func TestSDKClientImplementationChecksContextBeforeConnect(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	joinIndex := strings.Index(text, "func (c *sdkChannelClient) Join")
+	if joinIndex < 0 {
+		t.Fatal("sdk.go missing sdkChannelClient.Join")
+	}
+	joinBody := text[joinIndex:]
+	if nextFunc := strings.Index(joinBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		joinBody = joinBody[:len("func ")+nextFunc]
+	}
+	setupIndex := strings.Index(joinBody, "if ret := connection.RegisterObserver")
+	connectIndex := strings.Index(joinBody, "connection.Connect(")
+	if setupIndex < 0 || connectIndex < 0 {
+		t.Fatal("Join missing observer setup or Connect call")
+	}
+	setupToConnect := joinBody[setupIndex:connectIndex]
+	contextIndex := strings.LastIndex(setupToConnect, "case <-ctx.Done():")
+	if contextIndex < 0 {
+		t.Fatal("Join must recheck context cancellation after SDK observer setup and before Connect")
+	}
+	contextBranch := setupToConnect[contextIndex:]
+	for _, want := range []string{"connection.Release()", "releaseSDKService()", "return ctx.Err()"} {
+		if !strings.Contains(contextBranch, want) {
+			t.Fatalf("pre-Connect cancellation branch missing %q", want)
+		}
+	}
+}
+
 func TestSDKClientImplementationHasJoinTimeout(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {
