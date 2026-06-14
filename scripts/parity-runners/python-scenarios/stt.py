@@ -71,6 +71,41 @@ def stt_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "multi_speaker_prewarm":
+        multi_speaker_module = load_reference_stt_multi_speaker()
+
+        class ScenarioSTT(module.STT):
+            def __init__(self) -> None:
+                super().__init__(
+                    capabilities=module.STTCapabilities(
+                        streaming=True,
+                        interim_results=True,
+                        diarization=True,
+                    )
+                )
+                self.prewarm_calls = 0
+
+            def prewarm(self) -> None:
+                self.prewarm_calls += 1
+
+            async def _recognize_impl(
+                self, buffer: Any, *, language: Any = None, conn_options: Any = None
+            ) -> Any:
+                return None
+
+        wrapped = ScenarioSTT()
+        adapter = multi_speaker_module.MultiSpeakerAdapter(stt=wrapped)
+        adapter.prewarm()
+        return {
+            "contract": "stt-multi-speaker-prewarm",
+            "events": [
+                {
+                    "name": "multi_speaker_prewarm",
+                    "wrapped_prewarm_calls": wrapped.prewarm_calls,
+                    "adapter_capability_diarization": adapter.capabilities.diarization,
+                }
+            ],
+        }
     if action == "metrics_panic_isolated":
         class ScenarioSTT(module.STT):
             def __init__(self) -> None:

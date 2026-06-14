@@ -63,6 +63,26 @@ func runSTTValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "multi_speaker_prewarm":
+		wrapped := &fakeScenarioSTT{
+			label:        "wrapped",
+			capabilities: lkstt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: true},
+		}
+		adapter, err := lkstt.NewMultiSpeakerAdapter(wrapped, true, false, "{text}", "{text}", nil)
+		if err != nil {
+			return nil, err
+		}
+		lkstt.Prewarm(adapter)
+		return map[string]any{
+			"contract": "stt-multi-speaker-prewarm",
+			"events": []map[string]any{
+				{
+					"name":                           "multi_speaker_prewarm",
+					"wrapped_prewarm_calls":          wrapped.prewarmCalls,
+					"adapter_capability_diarization": adapter.Capabilities().Diarization,
+				},
+			},
+		}, nil
 	case "metrics_panic_isolated":
 		var emitter lkstt.MetricsEmitter
 		metrics := &telemetry.STTMetrics{RequestID: "req"}
