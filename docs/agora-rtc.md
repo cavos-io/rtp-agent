@@ -38,18 +38,28 @@ Before a tagged build, run the preflight check:
 AGORA_GO_SDK_DIR=/path/to/Agora-Golang-Server-SDK scripts/check-agora-sdk.sh
 ```
 
-## Running
-
-Build with the tag and configure Agora credentials:
+Build the `rtp-agent` command with the SDK tag and a temporary local module
+replacement:
 
 ```sh
-go build -tags agora_sdk ./cmd
+AGORA_GO_SDK_DIR=/path/to/Agora-Golang-Server-SDK \
+  OUT=.tmp/rtp-agent-agora \
+  scripts/build-agora-sdk.sh
+```
 
+## Running
+
+Configure Agora credentials and run the tagged binary:
+
+```sh
 export RTP_AGENT_TRANSPORT=agora
 export AGORA_APP_ID=...
 export AGORA_APP_CERTIFICATE=...
 export AGORA_CHANNEL=...
 export AGORA_UID=agent-0
+export LD_LIBRARY_PATH=/path/to/Agora-Golang-Server-SDK/agora_sdk:$LD_LIBRARY_PATH
+
+.tmp/rtp-agent-agora start
 ```
 
 If `AGORA_TOKEN` is set, the worker uses it as-is. If `AGORA_TOKEN` is empty
