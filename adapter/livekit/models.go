@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 	"unicode"
@@ -47,6 +48,8 @@ type Model struct {
 	remoteInferenceBase string
 	httpClient          *http.Client
 	languageThresholds  map[string]float64
+	languagesPath       string
+	languagesLoaded     bool
 	runner              TurnDetectorRunner
 }
 
@@ -88,6 +91,13 @@ func WithUnlikelyThreshold(threshold float64) ModelOption {
 func WithLanguageThresholds(thresholds map[string]float64) ModelOption {
 	return func(model *Model) {
 		model.languageThresholds = copyLanguageThresholds(thresholds)
+		model.languagesLoaded = len(thresholds) > 0
+	}
+}
+
+func WithLanguagesPath(path string) ModelOption {
+	return func(model *Model) {
+		model.languagesPath = path
 	}
 }
 
@@ -220,6 +230,7 @@ func copyLanguageThresholds(thresholds map[string]float64) map[string]float64 {
 }
 
 func (m *Model) lookupLanguageThreshold(language string) (float64, bool) {
+	m.loadLanguageThresholds()
 	if len(m.languageThresholds) == 0 {
 		return 0, false
 	}
@@ -232,6 +243,44 @@ func (m *Model) lookupLanguageThreshold(language string) (float64, bool) {
 	}
 	threshold, ok := m.languageThresholds[base]
 	return threshold, ok
+}
+
+func (m *Model) loadLanguageThresholds() {
+	if m.languagesLoaded {
+		return
+	}
+	m.languagesLoaded = true
+	path := m.languagesPath
+	if path == "" {
+		var err error
+		path, err = ModelLanguagesPath(m.modelType)
+		if err != nil {
+			return
+		}
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	thresholds, err := parseLanguageThresholds(content)
+	if err != nil {
+		return
+	}
+	m.languageThresholds = thresholds
+}
+
+func parseLanguageThresholds(content []byte) (map[string]float64, error) {
+	var languages map[string]struct {
+		Threshold float64 `json:"threshold"`
+	}
+	if err := json.Unmarshal(content, &languages); err != nil {
+		return nil, err
+	}
+	thresholds := make(map[string]float64, len(languages))
+	for language, data := range languages {
+		thresholds[language] = data.Threshold
+	}
+	return thresholds, nil
 }
 
 func (m *Model) fetchRemoteThreshold(language string) (float64, bool) {

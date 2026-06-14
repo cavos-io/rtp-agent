@@ -108,6 +108,35 @@ func TestTurnDetectorUnlikelyThresholdUsesFullAndBaseLanguage(t *testing.T) {
 	}
 }
 
+func TestTurnDetectorUnlikelyThresholdLoadsLanguagesJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "languages.json")
+	content := `{
+		"en": {"threshold": 0.31},
+		"id-ID": {"threshold": 0.46}
+	}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile languages.json error = %v", err)
+	}
+
+	model := NewMultilingualModel(WithLanguagesPath(path))
+
+	got, ok := model.UnlikelyThreshold("id-ID")
+	if !ok {
+		t.Fatal("UnlikelyThreshold(id-ID) ok = false, want threshold from languages.json")
+	}
+	if got != 0.46 {
+		t.Fatalf("UnlikelyThreshold(id-ID) = %v, want languages.json threshold", got)
+	}
+
+	got, ok = model.UnlikelyThreshold("en-US")
+	if !ok {
+		t.Fatal("UnlikelyThreshold(en-US) ok = false, want base language threshold from languages.json")
+	}
+	if got != 0.31 {
+		t.Fatalf("UnlikelyThreshold(en-US) = %v, want base languages.json threshold", got)
+	}
+}
+
 func TestTurnDetectorUnlikelyThresholdFetchesRemoteThreshold(t *testing.T) {
 	calls := 0
 	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
