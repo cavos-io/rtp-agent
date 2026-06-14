@@ -9,8 +9,15 @@ gomodcache="${GOMODCACHE:-.tmp/gomodcache}"
 gocache="${GOCACHE:-.tmp/gocache}"
 gotmpdir="${GOTMPDIR:-.tmp/gotmp}"
 
+trim_space() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
 cleanup_modfile=0
-if [ -z "$modfile" ]; then
+if [ -z "$(trim_space "$modfile")" ]; then
   modfile=".tmp/agora-sdk-$$.mod"
   cleanup_modfile=1
 fi
@@ -22,7 +29,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [ -z "$sdk_dir" ]; then
+if [ -z "$(trim_space "$sdk_dir")" ]; then
   echo "AGORA_GO_SDK_DIR is required and must point to an Agora-Golang-Server-SDK checkout with native assets." >&2
   exit 1
 fi
