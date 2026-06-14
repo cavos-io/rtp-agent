@@ -114,6 +114,15 @@ func (c *sdkChannelClient) releaseActiveConnection(connection *agoraservice.RtcC
 	return true
 }
 
+func (c *sdkChannelClient) publishActiveAudio(connection *agoraservice.RtcConnection) (int, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.connection != connection {
+		return 0, false
+	}
+	return connection.PublishAudio(), true
+}
+
 func emitSDKEvent(handler EventHandler, event Event) {
 	if handler != nil {
 		handler(event)
@@ -316,7 +325,11 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 	if err := c.waitConnected(ctx, connection, connectedCh, joinErrCh); err != nil {
 		return err
 	}
-	if ret := connection.PublishAudio(); ret != 0 {
+	ret, ok := c.publishActiveAudio(connection)
+	if !ok {
+		return fmt.Errorf("agora SDK channel left before publish audio")
+	}
+	if ret != 0 {
 		c.releaseActiveConnection(connection)
 		return fmt.Errorf("agora SDK publish audio failed: %d", ret)
 	}

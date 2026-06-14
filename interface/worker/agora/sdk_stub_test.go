@@ -341,12 +341,12 @@ func TestSDKClientImplementationPublishesAfterConnected(t *testing.T) {
 	}
 	text := string(source)
 	waitIndex := strings.Index(text, "c.waitConnected")
-	publishIndex := strings.Index(text, "connection.PublishAudio()")
+	publishIndex := strings.Index(text, "c.publishActiveAudio(connection)")
 	if waitIndex < 0 {
 		t.Fatal("sdk.go missing waitConnected call")
 	}
 	if publishIndex < 0 {
-		t.Fatal("sdk.go missing PublishAudio call")
+		t.Fatal("sdk.go missing publishActiveAudio call")
 	}
 	if waitIndex > publishIndex {
 		t.Fatal("sdk.go must wait for Agora connected event before publishing audio")
@@ -367,9 +367,9 @@ func TestSDKClientImplementationReleasesPublishFailureOnlyWhenOwned(t *testing.T
 	if nextFunc := strings.Index(joinBody[len("func "):], "\nfunc "); nextFunc >= 0 {
 		joinBody = joinBody[:len("func ")+nextFunc]
 	}
-	publishIndex := strings.Index(joinBody, "if ret := connection.PublishAudio()")
+	publishIndex := strings.Index(joinBody, "c.publishActiveAudio(connection)")
 	if publishIndex < 0 {
-		t.Fatal("Join missing PublishAudio call")
+		t.Fatal("Join missing publishActiveAudio call")
 	}
 	publishFailureBody := joinBody[publishIndex:]
 	publishFailureIndex := strings.Index(publishFailureBody, "agora SDK publish audio failed")
@@ -382,6 +382,48 @@ func TestSDKClientImplementationReleasesPublishFailureOnlyWhenOwned(t *testing.T
 	}
 	if !strings.Contains(publishFailureBody, "c.releaseActiveConnection(connection)") {
 		t.Fatal("publish-audio failure must release through releaseActiveConnection")
+	}
+}
+
+func TestSDKClientImplementationSerializesStartupPublishWithLeave(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	if !strings.Contains(text, "func (c *sdkChannelClient) publishActiveAudio") {
+		t.Fatal("sdk.go missing publishActiveAudio helper")
+	}
+	joinIndex := strings.Index(text, "func (c *sdkChannelClient) Join")
+	if joinIndex < 0 {
+		t.Fatal("sdk.go missing sdkChannelClient.Join")
+	}
+	joinBody := text[joinIndex:]
+	if nextFunc := strings.Index(joinBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		joinBody = joinBody[:len("func ")+nextFunc]
+	}
+	if !strings.Contains(joinBody, "c.publishActiveAudio(connection)") {
+		t.Fatal("Join must publish startup audio through publishActiveAudio")
+	}
+	helperIndex := strings.Index(text, "func (c *sdkChannelClient) publishActiveAudio")
+	helperBody := text[helperIndex:]
+	if nextFunc := strings.Index(helperBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		helperBody = helperBody[:len("func ")+nextFunc]
+	}
+	lockIndex := strings.Index(helperBody, "c.mu.Lock()")
+	publishIndex := strings.Index(helperBody, "connection.PublishAudio()")
+	deferUnlockIndex := strings.Index(helperBody, "defer c.mu.Unlock()")
+	if lockIndex < 0 || publishIndex < 0 {
+		t.Fatal("publishActiveAudio must lock before PublishAudio")
+	}
+	if lockIndex > publishIndex {
+		t.Fatal("publishActiveAudio must lock before PublishAudio")
+	}
+	if deferUnlockIndex < 0 {
+		t.Fatal("publishActiveAudio must hold the lock through PublishAudio")
+	}
+	if !strings.Contains(helperBody, "if c.connection != connection") {
+		t.Fatal("publishActiveAudio must verify active connection ownership")
 	}
 }
 
