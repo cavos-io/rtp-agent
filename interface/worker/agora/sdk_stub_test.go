@@ -115,6 +115,24 @@ func TestSDKClientImplementationWaitsForConnectedEvent(t *testing.T) {
 	}
 }
 
+func TestSDKClientImplementationChecksConnectionObserverRegistration(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"if ret := connection.RegisterObserver",
+		"agora SDK register connection observer failed",
+		"connection.Release()",
+		"releaseSDKService()",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}
+
 func TestSDKClientImplementationHasJoinTimeout(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {

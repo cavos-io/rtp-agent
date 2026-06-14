@@ -189,7 +189,7 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 	}
 	connectedCh := make(chan struct{}, 1)
 	joinErrCh := make(chan error, 1)
-	connection.RegisterObserver(&agoraservice.RtcConnectionObserver{
+	if ret := connection.RegisterObserver(&agoraservice.RtcConnectionObserver{
 		OnConnected: func(_ *agoraservice.RtcConnection, info *agoraservice.RtcConnectionInfo, reason int) {
 			event := Event{Kind: EventConnected, Channel: opts.Channel, Reason: reason}
 			if info != nil && info.ChannelId != "" {
@@ -233,7 +233,11 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 		OnAIQoSCapabilityMissing: func(_ *agoraservice.RtcConnection, fallback int) int {
 			return fallback
 		},
-	})
+	}); ret != 0 {
+		connection.Release()
+		_ = releaseSDKService()
+		return fmt.Errorf("agora SDK register connection observer failed: %d", ret)
+	}
 	if audioHandler != nil {
 		localUser := connection.GetLocalUser()
 		if localUser == nil {
