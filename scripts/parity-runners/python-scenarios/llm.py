@@ -1,4 +1,5 @@
 import ast
+import asyncio
 import base64
 import copy
 import re
@@ -212,8 +213,35 @@ def load_reference_llm_fallback():
         def provider(self) -> str:
             return "unknown"
 
+    class EventChannel:
+        def __init__(self) -> None:
+            self.items: list[Any] = []
+
+        def send_nowait(self, item: Any) -> None:
+            self.items.append(item)
+
     class LLMStream:
-        pass
+        def __init__(
+            self,
+            llm: Any,
+            *,
+            chat_ctx: Any,
+            tools: list[Any] | None = None,
+            conn_options: Any = None,
+        ) -> None:
+            self._llm = llm
+            self._chat_ctx = chat_ctx
+            self._tools = tools or []
+            self._conn_options = conn_options
+            self._event_ch = EventChannel()
+
+        def __aiter__(self) -> Any:
+            return self._iter_events()
+
+        async def _iter_events(self) -> Any:
+            await self._run()
+            for item in self._event_ch.items:
+                yield item
 
     class ChatChunk:
         pass
@@ -261,10 +289,62 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
     action = input_data.get("action", "provider_error_not_forwarded")
     module = load_reference_llm_fallback()
 
+    class FakeDelta:
+        def __init__(self, content: str = "") -> None:
+            self.content = content
+            self.tool_calls: list[Any] = []
+
+    class FakeChunk:
+        def __init__(self, content: str) -> None:
+            self.delta = FakeDelta(content)
+
+    class FakeStream:
+        def __init__(
+            self,
+            events: list[Any],
+            *,
+            chat_ctx: Any,
+            tools: list[Any] | None = None,
+        ) -> None:
+            self._events = events
+            self._chat_ctx = chat_ctx
+            self._tools = tools or []
+
+        @property
+        def chat_ctx(self) -> Any:
+            return self._chat_ctx
+
+        @property
+        def tools(self) -> list[Any]:
+            return self._tools
+
+        async def __aenter__(self) -> Any:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        def __aiter__(self) -> Any:
+            return self._iter_events()
+
+        async def _iter_events(self) -> Any:
+            for event in self._events:
+                if isinstance(event, BaseException):
+                    raise event
+                yield event
+
     class FakeLLM(module.LLM):
-        def __init__(self, label: str) -> None:
+        def __init__(self, label: str, events: list[Any] | None = None) -> None:
             super().__init__()
             self._label = label
+            self._events = events or []
+
+        def chat(self, **kwargs: Any) -> FakeStream:
+            return FakeStream(
+                self._events,
+                chat_ctx=kwargs["chat_ctx"],
+                tools=kwargs.get("tools") or [],
+            )
 
     if action == "provider_error_not_forwarded":
         primary = FakeLLM("primary")
@@ -304,6 +384,24 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
                 {"name": "forward_metrics", "request_ids": request_ids}
             ],
         }
+    if action == "next_provider_before_chunk":
+        primary = FakeLLM("primary", [RuntimeError("primary stream failed")])
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter([primary, fallback])
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            chunks: list[str] = []
+            async for chunk in stream:
+                chunks.append(chunk.delta.content)
+            return {
+                "contract": "llm-fallback-next-provider-before-chunk",
+                "events": [
+                    {"name": "next_provider_before_chunk", "chunks": chunks}
+                ],
+            }
+
+        return asyncio.run(run())
     raise ValueError(f"unsupported LLM fallback action {action!r}")
 
 

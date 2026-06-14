@@ -374,6 +374,38 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 				{"name": "forward_metrics", "request_ids": requestIDs},
 			},
 		}, nil
+	case "next_provider_before_chunk":
+		primary := &fakeScenarioLLM{label: "primary", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{err: errors.New("primary stream failed")},
+		}}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		defer stream.Close()
+		chunks := []string{}
+		for {
+			chunk, err := stream.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return nil, err
+			}
+			if chunk != nil && chunk.Delta != nil {
+				chunks = append(chunks, chunk.Delta.Content)
+			}
+		}
+		return map[string]any{
+			"contract": "llm-fallback-next-provider-before-chunk",
+			"events": []map[string]any{
+				{"name": "next_provider_before_chunk", "chunks": chunks},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported LLM fallback action %q", payload.Action)
 	}
@@ -4083,10 +4115,24 @@ type fakeScenarioLLM struct {
 	label        string
 	model        string
 	provider     string
+	stream       lkllm.LLMStream
+	streams      []lkllm.LLMStream
+	err          error
 	prewarmCalls int
 }
 
 func (f *fakeScenarioLLM) Chat(context.Context, *lkllm.ChatContext, ...lkllm.ChatOption) (lkllm.LLMStream, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if len(f.streams) > 0 {
+		stream := f.streams[0]
+		f.streams = f.streams[1:]
+		return stream, nil
+	}
+	if f.stream != nil {
+		return f.stream, nil
+	}
 	return nil, errors.New("chat unsupported")
 }
 
@@ -4104,6 +4150,34 @@ func (f *fakeScenarioLLM) Provider() string {
 
 func (f *fakeScenarioLLM) Prewarm() {
 	f.prewarmCalls++
+}
+
+type fakeScenarioLLMEvent struct {
+	chunk *lkllm.ChatChunk
+	err   error
+}
+
+type fakeScenarioLLMStream struct {
+	events []fakeScenarioLLMEvent
+	index  int
+	closed bool
+}
+
+func (f *fakeScenarioLLMStream) Next() (*lkllm.ChatChunk, error) {
+	if f.index >= len(f.events) {
+		return nil, io.EOF
+	}
+	event := f.events[f.index]
+	f.index++
+	if event.err != nil {
+		return nil, event.err
+	}
+	return event.chunk, nil
+}
+
+func (f *fakeScenarioLLMStream) Close() error {
+	f.closed = true
+	return nil
 }
 
 type fakeScenarioRealtimeModel struct {
