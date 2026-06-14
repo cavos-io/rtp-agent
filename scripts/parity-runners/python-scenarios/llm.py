@@ -950,6 +950,65 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
             }
 
         return asyncio.run(run())
+    if action == "retry_failed_recovery":
+        primary = FakeLLM(
+            "primary",
+            streams=[
+                [RuntimeError("primary stream failed")],
+                [RuntimeError("recovery probe failed")],
+                [FakeChunk("second recovery probe")],
+            ],
+        )
+        fallback = FakeLLM(
+            "fallback",
+            streams=[
+                [FakeChunk("fallback first")],
+                [FakeChunk("fallback second")],
+            ],
+        )
+        adapter = module.FallbackAdapter([primary, fallback])
+        availability_events: list[dict[str, Any]] = []
+        adapter.on(
+            "llm_availability_changed",
+            lambda event: availability_events.append(
+                {
+                    "available": event.available,
+                    "label": event.llm.label,
+                }
+            ),
+        )
+
+        async def run() -> dict[str, Any]:
+            first = adapter.chat(chat_ctx=module.ChatContext())
+            await first._run()
+            first_chunks = [chunk_kind(chunk) for chunk in first._event_ch.items]
+
+            deadline = time.monotonic() + 2
+            while primary.calls < 2 and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+
+            second = adapter.chat(chat_ctx=module.ChatContext())
+            await second._run()
+            second_chunks = [chunk_kind(chunk) for chunk in second._event_ch.items]
+
+            deadline = time.monotonic() + 2
+            while primary.calls < 3 and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+
+            return {
+                "contract": "llm-fallback-retry-failed-recovery",
+                "events": [
+                    {
+                        "name": "retry_failed_recovery",
+                        "first_chunks": first_chunks,
+                        "second_chunks": second_chunks,
+                        "availability_events": availability_events,
+                        "primary_calls": primary.calls,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
     raise ValueError(f"unsupported LLM fallback action {action!r}")
 
 
