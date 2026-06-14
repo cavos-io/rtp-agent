@@ -8658,6 +8658,101 @@ func TestDefaultConfigFromEnvAcceptsLMNTTTSFallbackProvider(t *testing.T) {
 	}
 }
 
+func TestLMNTTTSFallbackPassesReferenceOptions(t *testing.T) {
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/wav"}},
+			Body:       io.NopCloser(strings.NewReader("audio")),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	sampleRate := 16000
+	temperature := 0.4
+	topP := 0.6
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		LMNTAPIKey:        "test-lmnt-key",
+		TTSModel:          "aurora",
+		TTSVoice:          "ava",
+		TTSLanguage:       "en",
+		TTSResponseFormat: "wav",
+		TTSSampleRate:     &sampleRate,
+		TTSTemperature:    &temperature,
+		TTSTopP:           &topP,
+	}, providerLMNT)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*lmnt.LMNTTTS); !ok {
+		t.Fatalf("provider type = %T, want *lmnt.LMNTTTS", provider)
+	}
+	if got, want := provider.Label(), "lmnt.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 16000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference configured sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "aurora"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "LMNT"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://api.lmnt.com/v1/ai/speech/bytes"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("X-API-Key"), "test-lmnt-key"; got != want {
+		t.Fatalf("X-API-Key = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["text"], "hello"; got != want {
+		t.Fatalf("payload text = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["voice"], "ava"; got != want {
+		t.Fatalf("payload voice = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["language"], "en"; got != want {
+		t.Fatalf("payload language = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["sample_rate"], float64(16000); got != want {
+		t.Fatalf("payload sample_rate = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["model"], "aurora"; got != want {
+		t.Fatalf("payload model = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["format"], "wav"; got != want {
+		t.Fatalf("payload format = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["temperature"], 0.4; got != want {
+		t.Fatalf("payload temperature = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["top_p"], 0.6; got != want {
+		t.Fatalf("payload top_p = %#v, want %#v", got, want)
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsNeuphonicTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "neuphonic")
