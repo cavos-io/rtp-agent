@@ -31,6 +31,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/browser"
 	"github.com/cavos-io/rtp-agent/adapter/cambai"
 	"github.com/cavos-io/rtp-agent/adapter/cartesia"
+	"github.com/cavos-io/rtp-agent/adapter/cavos"
 	"github.com/cavos-io/rtp-agent/adapter/cerebras"
 	"github.com/cavos-io/rtp-agent/adapter/clova"
 	"github.com/cavos-io/rtp-agent/adapter/deepgram"
@@ -125,6 +126,7 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		browser.PluginPackage:    {title: browser.PluginTitle, version: browser.PluginVersion},
 		cambai.PluginPackage:     {title: cambai.PluginTitle, version: cambai.PluginVersion},
 		cartesia.PluginPackage:   {title: cartesia.PluginTitle, version: cartesia.PluginVersion},
+		cavos.PluginPackage:      {title: cavos.PluginTitle, version: cavos.PluginVersion},
 		cerebras.PluginPackage:   {title: cerebras.PluginTitle, version: cerebras.PluginVersion},
 		clova.PluginPackage:      {title: clova.PluginTitle, version: clova.PluginVersion},
 		deepgram.PluginPackage:   {title: deepgram.PluginTitle, version: deepgram.PluginVersion},
@@ -8628,6 +8630,55 @@ func TestDefaultConfigFromEnvSelectsGroqProviders(t *testing.T) {
 	}
 	if got := app.Session.TTS.SampleRate(); got != 48000 {
 		t.Fatalf("TTS sample rate = %d, want 48000", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsCavosSpeechProviders(t *testing.T) {
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "cavos")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://steno.example/v1")
+	t.Setenv("RTP_AGENT_STT_MODEL", "small")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "id")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "cavos")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://cacatua.example/v1")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "supertonic-3")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "gisa_300521")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "id")
+	t.Setenv("RTP_AGENT_TTS_RESPONSE_FORMAT", "pcm")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "44100")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.STT == nil {
+		t.Fatal("Session STT is nil")
+	}
+	if got := app.Session.STT.Label(); got != "cavos.STT" {
+		t.Fatalf("STT label = %q, want cavos.STT", got)
+	}
+	if got := stt.Provider(app.Session.STT); got != "cavos" {
+		t.Fatalf("STT provider = %q, want cavos", got)
+	}
+	if got := stt.Model(app.Session.STT); got != "small" {
+		t.Fatalf("STT model = %q, want small", got)
+	}
+	if app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "cavos.TTS" {
+		t.Fatalf("TTS label = %q, want cavos.TTS", got)
+	}
+	if got := tts.Provider(app.Session.TTS); got != "cavos" {
+		t.Fatalf("TTS provider = %q, want cavos", got)
+	}
+	if got := tts.Model(app.Session.TTS); got != "supertonic-3" {
+		t.Fatalf("TTS model = %q, want supertonic-3", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 44100 {
+		t.Fatalf("TTS sample rate = %d, want 44100", got)
 	}
 }
 

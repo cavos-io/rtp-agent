@@ -28,6 +28,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/browser"
 	"github.com/cavos-io/rtp-agent/adapter/cambai"
 	"github.com/cavos-io/rtp-agent/adapter/cartesia"
+	"github.com/cavos-io/rtp-agent/adapter/cavos"
 	"github.com/cavos-io/rtp-agent/adapter/cerebras"
 	"github.com/cavos-io/rtp-agent/adapter/clova"
 	"github.com/cavos-io/rtp-agent/adapter/deepgram"
@@ -119,6 +120,7 @@ func init() {
 	plugin.RegisterPluginDownloader(browser.PluginTitle, browser.PluginVersion, browser.PluginPackage, browser.Plugin{}.DownloadFiles)
 	plugin.RegisterPluginMetadata(cambai.PluginTitle, cambai.PluginVersion, cambai.PluginPackage)
 	plugin.RegisterPluginMetadata(cartesia.PluginTitle, cartesia.PluginVersion, cartesia.PluginPackage)
+	plugin.RegisterPluginMetadata(cavos.PluginTitle, cavos.PluginVersion, cavos.PluginPackage)
 	plugin.RegisterPluginMetadata(cerebras.PluginTitle, cerebras.PluginVersion, cerebras.PluginPackage)
 	plugin.RegisterPluginDownloader(clova.PluginTitle, clova.PluginVersion, clova.PluginPackage, clova.Plugin{}.DownloadFiles)
 	plugin.RegisterPluginMetadata(deepgram.PluginTitle, deepgram.PluginVersion, deepgram.PluginPackage)
@@ -201,6 +203,7 @@ const (
 	providerBitHuman     = "bithuman"
 	providerCambai       = "cambai"
 	providerCartesia     = "cartesia"
+	providerCavos        = "cavos"
 	providerCerebras     = "cerebras"
 	providerClova        = "clova"
 	providerCometAPI     = "cometapi"
@@ -2041,6 +2044,8 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTTags(cfg.STTTags))
 		}
 		return deepgram.NewDeepgramSTT("", cfg.STTModel, sttOpts...), nil
+	case providerCavos:
+		return cavosSTTFromConfig(cfg), nil
 	case providerOpenAI:
 		sttOpts := []openai.OpenAISTTOption{openai.WithOpenAISTTRealtime(true)}
 		if cfg.STTLanguage != "" {
@@ -2789,6 +2794,46 @@ func appTTSSpeedConfigured(cfg AppConfig) bool {
 	return cfg.TTSSpeedSet || cfg.TTSSpeed != 0
 }
 
+func cavosSTTFromConfig(cfg AppConfig) corestt.STT {
+	sttOpts := []cavos.STTOption{}
+	if cfg.STTBaseURL != "" {
+		sttOpts = append(sttOpts, cavos.WithSTTBaseURL(cfg.STTBaseURL))
+	}
+	if cfg.STTModel != "" {
+		sttOpts = append(sttOpts, cavos.WithSTTModel(cfg.STTModel))
+	}
+	if cfg.STTLanguage != "" {
+		sttOpts = append(sttOpts, cavos.WithSTTLanguage(cfg.STTLanguage))
+	}
+	if cfg.STTPrompt != "" {
+		sttOpts = append(sttOpts, cavos.WithSTTPrompt(cfg.STTPrompt))
+	}
+	return cavos.NewSTT(sttOpts...)
+}
+
+func cavosTTSFromConfig(cfg AppConfig) coretts.TTS {
+	ttsOpts := []cavos.TTSOption{}
+	if cfg.TTSBaseURL != "" {
+		ttsOpts = append(ttsOpts, cavos.WithTTSBaseURL(cfg.TTSBaseURL))
+	}
+	if cfg.TTSModel != "" {
+		ttsOpts = append(ttsOpts, cavos.WithTTSModel(cfg.TTSModel))
+	}
+	if cfg.TTSVoice != "" {
+		ttsOpts = append(ttsOpts, cavos.WithTTSVoice(cfg.TTSVoice))
+	}
+	if cfg.TTSLanguage != "" {
+		ttsOpts = append(ttsOpts, cavos.WithTTSLanguage(cfg.TTSLanguage))
+	}
+	if cfg.TTSResponseFormat != "" {
+		ttsOpts = append(ttsOpts, cavos.WithTTSResponseFormat(cfg.TTSResponseFormat))
+	}
+	if cfg.TTSSampleRate != nil {
+		ttsOpts = append(ttsOpts, cavos.WithTTSSampleRate(*cfg.TTSSampleRate))
+	}
+	return cavos.NewTTS(ttsOpts...)
+}
+
 func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error) {
 	switch normalizeProvider(provider) {
 	case providerOpenAI:
@@ -2937,6 +2982,8 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, cartesia.WithCartesiaPronunciationDictID(cfg.TTSPronunciationDictID))
 		}
 		return cartesia.NewCartesiaTTS("", cfg.TTSVoice, cfg.TTSModel, ttsOpts...), nil
+	case providerCavos:
+		return cavosTTSFromConfig(cfg), nil
 	case providerDeepgram:
 		ttsOpts := []deepgram.DeepgramTTSOption{}
 		if cfg.TTSBaseURL != "" {
@@ -4568,6 +4615,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			sttOpts = append(sttOpts, assemblyai.WithAssemblyAISTTDomain(cfg.STTDomain))
 		}
 		a.STT = assemblyai.NewAssemblyAISTT(os.Getenv("ASSEMBLYAI_API_KEY"), sttOpts...)
+	case providerCavos:
+		a.STT = cavosSTTFromConfig(cfg)
 	case providerOpenAI:
 		sttOpts := []openai.OpenAISTTOption{openai.WithOpenAISTTRealtime(true)}
 		if cfg.STTLanguage != "" {
@@ -4754,6 +4803,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, cartesia.WithCartesiaPronunciationDictID(cfg.TTSPronunciationDictID))
 		}
 		a.TTS = cartesia.NewCartesiaTTS("", cfg.TTSVoice, cfg.TTSModel, ttsOpts...)
+	case providerCavos:
+		a.TTS = cavosTTSFromConfig(cfg)
 	case providerClova:
 		a.TTS = clova.NewClovaTTS(cfg.ClovaClientID, cfg.ClovaClientSecret, cfg.TTSVoice)
 	case providerDeepgram:
