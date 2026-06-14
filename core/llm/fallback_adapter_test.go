@@ -566,9 +566,11 @@ func TestFallbackAdapterFallsBackOnClientClosedStatusBeforeOutput(t *testing.T) 
 func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T) {
 	firstErr := errors.New("primary unavailable")
 	secondErr := errors.New("fallback unavailable")
+	primary := &fakeFallbackLLM{label: "primary.LLM", err: firstErr}
+	fallback := &fakeFallbackLLM{label: "fallback.LLM", err: secondErr}
 	adapter := NewFallbackAdapter([]LLM{
-		&fakeFallbackLLM{label: "primary.LLM", err: firstErr},
-		&fakeFallbackLLM{label: "fallback.LLM", err: secondErr},
+		primary,
+		fallback,
 	})
 
 	_, err := adapter.Chat(context.Background(), NewChatContext())
@@ -597,6 +599,9 @@ func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T
 	}
 	if !strings.Contains(err.Error(), "primary.LLM") || !strings.Contains(err.Error(), "fallback.LLM") {
 		t.Fatalf("Chat error = %q, want exhausted provider labels", err)
+	}
+	if primary.calls != 1 || fallback.calls != 1 {
+		t.Fatalf("provider calls = (%d, %d), want one startup attempt per provider", primary.calls, fallback.calls)
 	}
 }
 

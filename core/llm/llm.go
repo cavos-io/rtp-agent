@@ -1889,7 +1889,7 @@ func (s *fallbackLLMStream) markUnavailable(index int, recover bool) {
 	if changed {
 		s.adapter.emitAvailabilityChanged(index, false)
 	}
-	go s.adapter.recoverLLM(index, llm, chatCtx, opts)
+	s.adapter.scheduleRecovery(index, llm, chatCtx, opts)
 }
 
 func (s *fallbackLLMStream) tryRecovery(index int) {
@@ -1904,7 +1904,17 @@ func (s *fallbackLLMStream) tryRecovery(index int) {
 	s.adapter.recovering[index] = true
 	s.adapter.mu.Unlock()
 
-	go s.adapter.recoverLLM(index, llm, chatCtx, opts)
+	s.adapter.scheduleRecovery(index, llm, chatCtx, opts)
+}
+
+func (f *FallbackAdapter) scheduleRecovery(index int, llm LLM, chatCtx *ChatContext, opts []ChatOption) {
+	go func() {
+		if f.retryInterval > 0 {
+			timer := time.NewTimer(f.retryInterval)
+			<-timer.C
+		}
+		f.recoverLLM(index, llm, chatCtx, opts)
+	}()
 }
 
 func (f *FallbackAdapter) recoverLLM(index int, llm LLM, chatCtx *ChatContext, opts []ChatOption) {
