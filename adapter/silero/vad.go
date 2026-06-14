@@ -121,6 +121,9 @@ func WithONNXRuntime() VADOption {
 	}
 }
 
+// WithONNXFilePath configures the Silero ONNX model file used when
+// WithONNXRuntime is enabled. Clients that do not want cwd-dependent resource
+// lookup can pass ModelPathIn(appRoot) or any absolute model path.
 func WithONNXFilePath(path string) VADOption {
 	return func(o *VADOptions) {
 		o.ONNXFilePath = path
