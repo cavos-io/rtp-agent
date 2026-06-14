@@ -60,8 +60,15 @@ func NewSmartTurnWithONNX(options SmartTurnONNXOptions, opts ...SmartTurnOption)
 	if err != nil {
 		return nil, err
 	}
+	return newSmartTurnWithONNXRunner(options.FeatureExtractor, runner, opts...)
+}
+
+func newSmartTurnWithONNXRunner(extractor FeatureExtractor, runner smartTurnONNXRunner, opts ...SmartTurnOption) (*SmartTurn, error) {
+	if extractor == nil {
+		extractor = NewWhisperFeatureExtractor().Extract
+	}
 	detector := NewSmartTurn(append([]SmartTurnOption{
-		WithProbabilityEstimator(newSmartTurnONNXEstimator(options.FeatureExtractor, runner)),
+		WithProbabilityEstimator(newSmartTurnONNXEstimator(extractor, runner)),
 	}, opts...)...)
 	return detector, nil
 }

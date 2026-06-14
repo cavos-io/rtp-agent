@@ -40,6 +40,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.44.0
 	golang.org/x/image v0.42.0
 	golang.org/x/text v0.38.0
+	gonum.org/v1/gonum v0.17.0
 	google.golang.org/api v0.284.0
 	google.golang.org/genai v1.60.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260610212136-7ab31c22f7ad
