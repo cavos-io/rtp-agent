@@ -58,6 +58,7 @@ export AGORA_APP_CERTIFICATE=...
 export AGORA_CHANNEL=...
 export AGORA_UID=agent-0
 export AGORA_JOIN_TIMEOUT=10s
+export AGORA_SDK_DATA_DIR=.tmp/agora-sdk-runtime
 export LD_LIBRARY_PATH=/path/to/Agora-Golang-Server-SDK/agora_sdk:$LD_LIBRARY_PATH
 
 .tmp/rtp-agent-agora start
@@ -74,6 +75,10 @@ uses `"0"`, matching the Agora server SDK examples.
 event before startup fails. It accepts Go duration strings such as `10s` or a
 number of seconds.
 
+`AGORA_SDK_DATA_DIR` controls where the native Agora SDK writes logs, config,
+and cache files. Set it to a writable runtime directory instead of letting SDK
+artifacts appear in the process working directory.
+
 ## Smoke Test
 
 With valid Agora credentials, run:
@@ -84,9 +89,14 @@ AGORA_GO_SDK_DIR=/path/to/Agora-Golang-Server-SDK \
   AGORA_APP_CERTIFICATE=... \
   AGORA_CHANNEL=... \
   AGORA_UID=agent-0 \
+  AGORA_SMOKE_STABLE_SECONDS=2 \
   scripts/smoke-agora-rtc.sh
 ```
 
 The smoke test builds the tagged binary, starts the worker with
 `RTP_AGENT_TRANSPORT=agora`, waits for the `agora transport connected` log, and
-fails fast if the SDK emits an Agora transport error event.
+then requires the worker to stay healthy for `AGORA_SMOKE_STABLE_SECONDS`
+seconds before printing `Agora RTC connected`. It fails fast if the SDK emits an
+Agora transport error event or the worker logs an error. The smoke helper also
+defaults Go build caches and SDK runtime output under `.tmp/` so the check can
+run in a restricted workspace.
