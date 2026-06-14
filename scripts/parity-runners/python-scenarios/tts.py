@@ -627,12 +627,16 @@ def tts_fallback(input_data: Any) -> dict[str, Any]:
                 num_channels=num_channels,
             )
             self.prewarm_calls = 0
+            self.close_calls = 0
 
         def synthesize(self, text: str, *, conn_options: Any = None) -> Any:
             return None
 
         def prewarm(self) -> None:
             self.prewarm_calls += 1
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
 
     provider = ScenarioTTS()
 
@@ -720,6 +724,21 @@ def tts_fallback(input_data: Any) -> dict[str, Any]:
             "contract": "tts-fallback-close-unsubscribes-provider-metrics",
             "events": [
                 {"name": "close_unsubscribes_provider_metrics", "request_ids": request_ids}
+            ],
+        }
+    if action == "close_provider_ownership":
+        primary = ScenarioTTS()
+        fallback = ScenarioTTS()
+        adapter = module.FallbackAdapter([primary, fallback])
+        asyncio.run(adapter.aclose())
+        return {
+            "contract": "tts-fallback-close-provider-ownership",
+            "events": [
+                {
+                    "name": "close_provider_ownership",
+                    "primary_close_calls": primary.close_calls,
+                    "fallback_close_calls": fallback.close_calls,
+                }
             ],
         }
     if action == "validation":

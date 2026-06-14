@@ -166,14 +166,7 @@ func (f *FallbackAdapter) Close() error {
 		unsubscribe()
 	}
 	f.recoveryWG.Wait()
-
-	var errs []error
-	for _, tts := range f.ttss {
-		if err := Close(tts); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
+	return nil
 }
 
 func (f *FallbackAdapter) OnAvailabilityChanged(handler AvailabilityChangedHandler) func() {

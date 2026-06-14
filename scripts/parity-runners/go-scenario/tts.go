@@ -606,6 +606,23 @@ func runTTSFallback(input json.RawMessage) (any, error) {
 				{"name": "close_unsubscribes_provider_metrics", "request_ids": requestIDs},
 			},
 		}, nil
+	case "close_provider_ownership":
+		primary := &fakeScenarioTTS{}
+		fallback := &fakeScenarioTTS{}
+		adapter := lktts.NewFallbackAdapter([]lktts.TTS{primary, fallback})
+		if err := adapter.Close(); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "tts-fallback-close-provider-ownership",
+			"events": []map[string]any{
+				{
+					"name":                 "close_provider_ownership",
+					"primary_close_calls":  primary.closeCalls,
+					"fallback_close_calls": fallback.closeCalls,
+				},
+			},
+		}, nil
 	case "validation":
 		mode := payload.Mode
 		if mode == "" {

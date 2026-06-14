@@ -72,7 +72,7 @@ func TestFallbackAdapterPrewarmsPrimaryProviderOnly(t *testing.T) {
 	}
 }
 
-func TestFallbackAdapterCloseClosesAllProviders(t *testing.T) {
+func TestFallbackAdapterClosePreservesProviderOwnership(t *testing.T) {
 	primary := &metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1}
 	secondary := &metadataTTS{label: "secondary", sampleRate: 24000, numChannels: 1}
 	adapter := NewFallbackAdapter([]TTS{primary, secondary})
@@ -80,11 +80,14 @@ func TestFallbackAdapterCloseClosesAllProviders(t *testing.T) {
 	if err := adapter.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
-	if !primary.closed {
-		t.Fatal("Close did not close primary provider")
+	if err := adapter.Close(); err != nil {
+		t.Fatalf("second Close error = %v", err)
 	}
-	if !secondary.closed {
-		t.Fatal("Close did not close secondary provider")
+	if primary.closed {
+		t.Fatal("Close closed primary provider, want fallback adapter to preserve provider ownership")
+	}
+	if secondary.closed {
+		t.Fatal("Close closed secondary provider, want fallback adapter to preserve provider ownership")
 	}
 }
 
