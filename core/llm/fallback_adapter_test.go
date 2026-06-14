@@ -512,7 +512,7 @@ func TestFallbackAdapterDoesNotRetryCleanEOF(t *testing.T) {
 	}
 }
 
-func TestFallbackAdapterTreatsClientClosedStatusAsCleanEOF(t *testing.T) {
+func TestFallbackAdapterFallsBackOnClientClosedStatusBeforeOutput(t *testing.T) {
 	second := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
 		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
 	}}}
@@ -528,12 +528,15 @@ func TestFallbackAdapterTreatsClientClosedStatusAsCleanEOF(t *testing.T) {
 		t.Fatalf("Chat returned error: %v", err)
 	}
 
-	_, err = stream.Next()
-	if !errors.Is(err, io.EOF) {
-		t.Fatalf("Next error = %v, want EOF for 499 client closed", err)
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want fallback chunk", err)
 	}
-	if second.calls != 0 {
-		t.Fatalf("fallback LLM calls = %d, want 0 for client closed", second.calls)
+	if got := chunk.Delta.Content; got != "fallback" {
+		t.Fatalf("chunk content = %q, want fallback", got)
+	}
+	if second.calls != 1 {
+		t.Fatalf("fallback LLM calls = %d, want 1 for client closed fallback", second.calls)
 	}
 }
 

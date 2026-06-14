@@ -1991,10 +1991,6 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 		if errors.Is(err, io.EOF) {
 			return nil, err
 		}
-		if isClientClosedLLMError(err) {
-			s.closeActive()
-			return nil, io.EOF
-		}
 		if s.outputSent && !s.adapter.retryOnChunkSent {
 			s.markUnavailable(s.activeIndex, false)
 			return nil, err
@@ -2009,11 +2005,6 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 			return nil, startErr
 		}
 	}
-}
-
-func isClientClosedLLMError(err error) bool {
-	var statusErr *APIStatusError
-	return errors.As(err, &statusErr) && statusErr.StatusCode == 499
 }
 
 func (f *FallbackAdapter) attemptOptions(opts []ChatOption) []ChatOption {
