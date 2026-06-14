@@ -2,6 +2,7 @@
 set -euo pipefail
 
 timeout_seconds="${AGORA_SMOKE_TIMEOUT:-30}"
+stable_seconds="${AGORA_SMOKE_STABLE_SECONDS:-2}"
 log_file="${AGORA_SMOKE_LOG:-.tmp/agora-smoke.log}"
 binary="${OUT:-.tmp/rtp-agent-agora}"
 sdk_dir="${AGORA_GO_SDK_DIR:-}"
@@ -68,11 +69,8 @@ has_sdk_event_error() {
 }
 
 deadline=$((SECONDS + timeout_seconds))
+connected_at=-1
 while kill -0 "$pid" >/dev/null 2>&1; do
-  if has_connected_event; then
-    echo "Agora RTC connected"
-    exit 0
-  fi
   if has_sdk_event_error; then
     echo "Agora RTC smoke failed with SDK event error:" >&2
     tail -n 40 "$log_abs" >&2
@@ -83,6 +81,15 @@ while kill -0 "$pid" >/dev/null 2>&1; do
     tail -n 40 "$log_abs" >&2
     exit 1
   fi
+  if has_connected_event; then
+    if [ "$connected_at" -lt 0 ]; then
+      connected_at=$SECONDS
+    fi
+    if [ $((SECONDS - connected_at)) -ge "$stable_seconds" ]; then
+      echo "Agora RTC connected"
+      exit 0
+    fi
+  fi
   if [ "$SECONDS" -ge "$deadline" ]; then
     echo "Timed out waiting for Agora RTC connected event:" >&2
     tail -n 40 "$log_abs" >&2
@@ -91,7 +98,7 @@ while kill -0 "$pid" >/dev/null 2>&1; do
   sleep 1
 done
 
-if has_connected_event; then
+if has_connected_event && [ "$stable_seconds" -le 0 ]; then
   echo "Agora RTC connected"
   exit 0
 fi
