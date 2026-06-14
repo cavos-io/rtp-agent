@@ -75,6 +75,30 @@ func TestSDKClientImplementationRequiresPCM16InboundAudio(t *testing.T) {
 	}
 }
 
+func TestSDKClientImplementationValidatesInboundPCMBufferShape(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	helperIndex := strings.Index(text, "func sdkAudioFrameToModel")
+	if helperIndex < 0 {
+		t.Fatal("sdk.go missing sdkAudioFrameToModel")
+	}
+	helperBody := text[helperIndex:]
+	if nextFunc := strings.Index(helperBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		helperBody = helperBody[:len("func ")+nextFunc]
+	}
+	for _, want := range []string{
+		"len(frame.Buffer)%bytesPerInterleavedSample != 0",
+		"len(frame.Buffer) != samplesPerChannel*bytesPerInterleavedSample",
+	} {
+		if !strings.Contains(helperBody, want) {
+			t.Fatalf("sdkAudioFrameToModel missing %q", want)
+		}
+	}
+}
+
 func TestSDKClientImplementationRegistersLocalUserObserver(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {
