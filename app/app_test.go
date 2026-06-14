@@ -523,6 +523,7 @@ func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 	t.Setenv("AGORA_APP_CERTIFICATE", "agora-cert")
 	t.Setenv("AGORA_CHANNEL", "support-room")
 	t.Setenv("AGORA_UID", "agent-42")
+	t.Setenv("AGORA_TOKEN", "agora-token")
 
 	cfg := DefaultConfigFromEnv()
 
@@ -540,6 +541,9 @@ func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 	}
 	if cfg.WorkerOptions.Agora.UID != "agent-42" {
 		t.Fatalf("Agora.UID = %q, want agent-42", cfg.WorkerOptions.Agora.UID)
+	}
+	if cfg.WorkerOptions.Agora.Token != "agora-token" {
+		t.Fatalf("Agora.Token = %q, want agora-token", cfg.WorkerOptions.Agora.Token)
 	}
 }
 
