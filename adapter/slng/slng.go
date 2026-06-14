@@ -43,6 +43,7 @@ type STT struct {
 	apiKey                  string
 	model                   string
 	endpoint                string
+	modelEndpoints          []string
 	regionOverride          string
 	sampleRate              int
 	bufferSizeSeconds       float64
@@ -64,6 +65,7 @@ func WithSTTBaseURL(baseURL string) STTOption {
 	return func(s *STT) {
 		if baseURL != "" {
 			s.endpoint = defaultSTTEndpoint(strings.TrimRight(baseURL, "/"), s.model)
+			s.modelEndpoints = nil
 		}
 	}
 }
@@ -73,6 +75,7 @@ func WithSTTModel(modelName string) STTOption {
 		if modelName != "" {
 			s.model = modelName
 			s.endpoint = defaultSTTEndpoint(defaultSLNGBaseURL, modelName)
+			s.modelEndpoints = nil
 		}
 	}
 }
@@ -81,6 +84,29 @@ func WithSTTEndpoint(endpoint string) STTOption {
 	return func(s *STT) {
 		if endpoint != "" {
 			s.endpoint = endpoint
+			s.modelEndpoints = []string{endpoint}
+			if model := extractSTTModelFromEndpoint(endpoint); model != "" {
+				s.model = model
+			}
+		}
+	}
+}
+
+func WithSTTModelEndpoints(endpoints ...string) STTOption {
+	return func(s *STT) {
+		cleaned := make([]string, 0, len(endpoints))
+		for _, endpoint := range endpoints {
+			if endpoint != "" {
+				cleaned = append(cleaned, endpoint)
+			}
+		}
+		if len(cleaned) == 0 {
+			return
+		}
+		s.modelEndpoints = cleaned
+		s.endpoint = cleaned[0]
+		if model := extractSTTModelFromEndpoint(cleaned[0]); model != "" {
+			s.model = model
 		}
 	}
 }
@@ -268,22 +294,62 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 }
 
 func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, s.endpoint, buildSTTWebsocketHeaders(s))
-	if err != nil {
-		return nil, fmt.Errorf("failed to dial slng stt websocket: %w", err)
+	endpoints := s.sttEndpoints()
+	var lastErr error
+	for _, endpoint := range endpoints {
+		attempt := *s
+		attempt.endpoint = endpoint
+		if model := extractSTTModelFromEndpoint(endpoint); model != "" {
+			attempt.model = model
+		}
+		conn, _, err := websocket.DefaultDialer.DialContext(ctx, endpoint, buildSTTWebsocketHeaders(&attempt))
+		if err != nil {
+			lastErr = fmt.Errorf("failed to dial slng stt websocket: %w", err)
+			continue
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, buildSTTInitPayload(&attempt)); err != nil {
+			conn.Close()
+			lastErr = err
+			continue
+		}
+		s.endpoint = endpoint
+		s.model = attempt.model
+		return &sttStream{
+			conn:              conn,
+			language:          s.resolveLanguage(language),
+			partials:          s.enablePartialTranscript,
+			sampleRate:        s.sampleRate,
+			bufferSizeSeconds: s.bufferSizeSeconds,
+			encoding:          s.encoding,
+		}, nil
 	}
-	if err := conn.WriteMessage(websocket.TextMessage, buildSTTInitPayload(s)); err != nil {
-		conn.Close()
-		return nil, err
+	if lastErr != nil {
+		return nil, lastErr
 	}
-	return &sttStream{
-		conn:              conn,
-		language:          s.resolveLanguage(language),
-		partials:          s.enablePartialTranscript,
-		sampleRate:        s.sampleRate,
-		bufferSizeSeconds: s.bufferSizeSeconds,
-		encoding:          s.encoding,
-	}, nil
+	return nil, errors.New("slng stt websocket endpoint is empty")
+}
+
+func (s *STT) sttEndpoints() []string {
+	if len(s.modelEndpoints) > 0 {
+		return s.modelEndpoints
+	}
+	if s.endpoint == "" {
+		return nil
+	}
+	return []string{s.endpoint}
+}
+
+func extractSTTModelFromEndpoint(endpoint string) string {
+	marker := "/v1/stt/"
+	index := strings.Index(endpoint, marker)
+	if index < 0 {
+		return ""
+	}
+	model := endpoint[index+len(marker):]
+	if query := strings.IndexAny(model, "?#"); query >= 0 {
+		model = model[:query]
+	}
+	return strings.TrimRight(model, "/")
 }
 
 func (s *STT) resolveLanguage(language string) string {
