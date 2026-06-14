@@ -2711,6 +2711,20 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		if cfg.STTInterimResults != nil {
 			sttOpts = append(sttOpts, slng.WithSTTPartialTranscripts(*cfg.STTInterimResults))
 		}
+		if cfg.STTDiarization != nil {
+			minSpeakers := 0
+			if cfg.STTMinSpeakers != nil {
+				minSpeakers = *cfg.STTMinSpeakers
+			}
+			maxSpeakers := 0
+			if cfg.STTMaxSpeakers != nil {
+				maxSpeakers = *cfg.STTMaxSpeakers
+			}
+			sttOpts = append(sttOpts, slng.WithSTTDiarization(*cfg.STTDiarization, minSpeakers, maxSpeakers))
+		}
+		if len(cfg.STTModelOptions) > 0 {
+			sttOpts = append(sttOpts, slng.WithSTTModelOptions(cfg.STTModelOptions))
+		}
 		return slng.NewSTT(cfg.SLNGAPIKey, sttOpts...), nil
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_STT_FALLBACK_PROVIDERS entry %q", provider)

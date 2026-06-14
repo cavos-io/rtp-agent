@@ -5760,6 +5760,104 @@ func TestSarvamSTTFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestSLNGSTTFallbackPassesModelOptions(t *testing.T) {
+	initPayloads := make(chan map[string]any, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read init payload: %v", err)
+			return
+		}
+		var init map[string]any
+		if err := json.Unmarshal(payload, &init); err != nil {
+			t.Errorf("decode init payload: %v", err)
+			return
+		}
+		initPayloads <- init
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	minSpeakers := 2
+	maxSpeakers := 4
+	interimResults := false
+	diarization := true
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		SLNGAPIKey:        "test-slng-key",
+		STTBaseURL:        endpoint,
+		STTModel:          "deepgram/nova:3",
+		STTLanguage:       "en",
+		STTEncoding:       "pcm_s16le",
+		STTInterimResults: &interimResults,
+		STTDiarization:    &diarization,
+		STTMinSpeakers:    &minSpeakers,
+		STTMaxSpeakers:    &maxSpeakers,
+		STTModelOptions:   map[string]any{"target_language_code": "en-US", "enable_partials": true, "custom_flag": "kept"},
+	}, providerSLNG)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+	if got, want := provider.Label(), "slng.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults {
+		t.Fatalf("Capabilities() = %+v, want streaming interim STT", caps)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case init := <-initPayloads:
+		if got, want := init["type"], "init"; got != want {
+			t.Fatalf("init.type = %#v, want %#v", got, want)
+		}
+		if got, want := init["model"], "nova-3"; got != want {
+			t.Fatalf("init.model = %#v, want %#v", got, want)
+		}
+		config, ok := init["config"].(map[string]any)
+		if !ok {
+			t.Fatalf("init.config = %#v, want object", init["config"])
+		}
+		wantConfig := map[string]any{
+			"language":                   "en-US",
+			"encoding":                   "linear16",
+			"enable_diarization":         true,
+			"min_speakers":               float64(2),
+			"max_speakers":               float64(4),
+			"enable_partials":            true,
+			"enable_partial_transcripts": true,
+			"custom_flag":                "kept",
+		}
+		for key, want := range wantConfig {
+			if got := config[key]; got != want {
+				t.Fatalf("config.%s = %#v, want %#v", key, got, want)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SLNG STT init payload")
+	}
+}
+
 func firstQueryValue(values map[string][]string, key string) string {
 	if len(values[key]) == 0 {
 		return ""
