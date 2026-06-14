@@ -131,3 +131,20 @@ func TestSDKClientImplementationHasJoinTimeout(t *testing.T) {
 		}
 	}
 }
+
+func TestSDKClientImplementationReleasesServiceOnLeave(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"agoraservice.Initialize(cfg)",
+		"releaseSDKService()",
+		"agoraservice.Release()",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}
