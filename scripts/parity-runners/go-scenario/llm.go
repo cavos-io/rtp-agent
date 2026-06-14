@@ -974,6 +974,43 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "availability_unsubscribe":
+		primary := &fakeScenarioLLM{label: "primary", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{err: errors.New("primary stream failed")},
+		}}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		handlerEvents := make(chan map[string]any, 1)
+		unsubscribe := adapter.OnAvailabilityChanged(func(event lkllm.FallbackAvailabilityChangedEvent) {
+			handlerEvents <- map[string]any{
+				"available": event.Available,
+				"label":     lkllm.Label(event.LLM),
+			}
+		})
+		unsubscribe()
+		unsubscribe()
+		stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		chunks, err := collectScenarioLLMStreamChunks(stream)
+		if err != nil {
+			return nil, err
+		}
+		events := collectScenarioLLMHandlerEvents(handlerEvents)
+		return map[string]any{
+			"contract": "llm-fallback-availability-unsubscribe",
+			"events": []map[string]any{
+				{
+					"name":               "availability_unsubscribe",
+					"chunks":             chunks,
+					"handler_events":     events,
+					"handler_call_count": len(events),
+				},
+			},
+		}, nil
 	case "mark_unavailable_after_chunk_failure":
 		primaryErr := errors.New("primary stream failed after output")
 		primary := &fakeScenarioLLM{label: "primary", streams: []lkllm.LLMStream{

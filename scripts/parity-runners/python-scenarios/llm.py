@@ -947,6 +947,40 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
             }
 
         return asyncio.run(run())
+    if action == "availability_unsubscribe":
+        primary = FakeLLM("primary", [RuntimeError("primary stream failed")])
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter([primary, fallback])
+        handler_events: list[dict[str, Any]] = []
+
+        def handler(event: Any) -> None:
+            handler_events.append(
+                {
+                    "available": event.available,
+                    "label": event.llm.label,
+                }
+            )
+
+        adapter.on("llm_availability_changed", handler)
+        adapter.off("llm_availability_changed", handler)
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            await stream._run()
+            chunks = [chunk_kind(chunk) for chunk in stream._event_ch.items]
+            return {
+                "contract": "llm-fallback-availability-unsubscribe",
+                "events": [
+                    {
+                        "name": "availability_unsubscribe",
+                        "chunks": chunks,
+                        "handler_events": handler_events,
+                        "handler_call_count": len(handler_events),
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
     if action == "mark_unavailable_after_chunk_failure":
         primary = FakeLLM(
             "primary",
