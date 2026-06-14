@@ -134,6 +134,12 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 		return ctx.Err()
 	default:
 	}
+	c.mu.Lock()
+	if c.connection != nil {
+		c.mu.Unlock()
+		return fmt.Errorf("agora SDK channel is already joined")
+	}
+	c.mu.Unlock()
 
 	cfg := agoraservice.NewAgoraServiceConfig()
 	cfg.AppId = opts.AppID

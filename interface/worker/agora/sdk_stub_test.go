@@ -148,3 +148,19 @@ func TestSDKClientImplementationReleasesServiceOnLeave(t *testing.T) {
 		}
 	}
 }
+
+func TestSDKClientImplementationRejectsDuplicateJoin(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"if c.connection != nil",
+		"agora SDK channel is already joined",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}
