@@ -3631,6 +3631,12 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSMaxTokens != nil {
 			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSMaxTokens(*cfg.TTSMaxTokens))
 		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSLanguage(cfg.TTSLanguage))
+		}
+		if leadingSilence := modelOptionBool(cfg.TTSModelOptions, "leading_silence"); leadingSilence != nil {
+			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSLeadingSilence(*leadingSilence))
+		}
 		return simplismart.NewSimplismartTTS(cfg.SimplismartAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerSmallestAI:
 		ttsOpts := []smallestai.SmallestAITTSOption{}
@@ -5390,6 +5396,12 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.TTSMaxTokens != nil {
 			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSMaxTokens(*cfg.TTSMaxTokens))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSLanguage(cfg.TTSLanguage))
+		}
+		if leadingSilence := modelOptionBool(cfg.TTSModelOptions, "leading_silence"); leadingSilence != nil {
+			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSLeadingSilence(*leadingSilence))
 		}
 		a.TTS = simplismart.NewSimplismartTTS(cfg.SimplismartAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerSmallestAI:

@@ -9225,6 +9225,71 @@ func TestSimplismartTTSFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestSimplismartTTSFallbackPassesQwenReferenceOptions(t *testing.T) {
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/L16"}},
+			Body:       io.NopCloser(strings.NewReader("audio")),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		SimplismartAPIKey: "test-simplismart-key",
+		TTSModel:          "qwen-tts",
+		TTSLanguage:       "Indonesian",
+		TTSModelOptions: map[string]any{
+			"leading_silence": false,
+		},
+	}, providerSimplismart)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "halo")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://api.simplismart.live/v1/audio/speech"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("Accept"), "audio/L16"; got != want {
+		t.Fatalf("Accept = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["model"], "qwen-tts"; got != want {
+		t.Fatalf("payload model = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["text"], "halo"; got != want {
+		t.Fatalf("payload text = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["language"], "Indonesian"; got != want {
+		t.Fatalf("payload language = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["voice"], "Chelsie"; got != want {
+		t.Fatalf("payload voice = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["leading_silence"], false; got != want {
+		t.Fatalf("payload leading_silence = %#v, want %#v", got, want)
+	}
+	if _, ok := gotPayload["prompt"]; ok {
+		t.Fatalf("payload prompt = %#v, want omitted for Qwen reference payload", gotPayload["prompt"])
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsUltravoxTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "ultravox")

@@ -139,6 +139,43 @@ func TestSimplismartTTSOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestSimplismartTTSQwenRequestMatchesReference(t *testing.T) {
+	provider := NewSimplismartTTS("test-key", "",
+		WithSimplismartTTSModel("qwen-tts"),
+		WithSimplismartTTSLanguage("Indonesian"),
+		WithSimplismartTTSLeadingSilence(false),
+	)
+
+	req, err := buildSimplismartTTSRequest(context.Background(), provider, "halo")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if req.URL.String() != "https://api.simplismart.live/v1/audio/speech" {
+		t.Fatalf("url = %q, want reference Qwen endpoint", req.URL.String())
+	}
+	if got := req.Header.Get("Authorization"); got != "Bearer test-key" {
+		t.Fatalf("authorization = %q, want bearer token", got)
+	}
+	if got := req.Header.Get("Accept"); got != "audio/L16" {
+		t.Fatalf("accept = %q, want audio/L16", got)
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode request body: %v", err)
+	}
+	assertSimplismartTTSPayload(t, payload, "model", "qwen-tts")
+	assertSimplismartTTSPayload(t, payload, "text", "halo")
+	assertSimplismartTTSPayload(t, payload, "language", "Indonesian")
+	assertSimplismartTTSPayload(t, payload, "voice", "Chelsie")
+	if got := payload["leading_silence"]; got != false {
+		t.Fatalf("leading_silence = %#v, want false", got)
+	}
+	if _, ok := payload["prompt"]; ok {
+		t.Fatalf("prompt = %#v, want omitted for Qwen reference payload", payload["prompt"])
+	}
+}
+
 func assertSimplismartTTSPayload(t *testing.T, payload map[string]any, key string, want string) {
 	t.Helper()
 	if got := payload[key]; got != want {
