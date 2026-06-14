@@ -3,8 +3,8 @@
 package ten
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../../refs/ten-vad/include
-#cgo LDFLAGS: -L${SRCDIR}/../../refs/ten-vad/lib/Linux/x64 -lten_vad -Wl,-rpath,${SRCDIR}/../../refs/ten-vad/lib/Linux/x64
+#cgo CFLAGS: -I${SRCDIR}/native/linux_amd64/include
+#cgo LDFLAGS: -L${SRCDIR}/native/linux_amd64/lib -lten_vad -Wl,-rpath,${SRCDIR}/native/linux_amd64/lib
 #include "ten_vad.h"
 */
 import "C"
