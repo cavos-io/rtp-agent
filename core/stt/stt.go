@@ -360,23 +360,26 @@ func (e *STTError) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return err
 	}
-	if payload.Timestamp == nil {
-		return fmt.Errorf("stt error timestamp is required")
-	}
-	if payload.Label == nil {
-		return fmt.Errorf("stt error label is required")
-	}
-	if payload.Recoverable == nil {
-		return fmt.Errorf("stt error recoverable is required")
-	}
 
 	e.Type = payload.Type
 	if e.Type == "" {
 		e.Type = STTErrorType
 	}
-	e.Timestamp = time.Unix(0, int64(*payload.Timestamp*float64(time.Second)))
-	e.Label = *payload.Label
-	e.Recoverable = *payload.Recoverable
+	if payload.Timestamp != nil {
+		e.Timestamp = time.Unix(0, int64(*payload.Timestamp*float64(time.Second)))
+	} else {
+		e.Timestamp = time.Time{}
+	}
+	if payload.Label != nil {
+		e.Label = *payload.Label
+	} else {
+		e.Label = ""
+	}
+	if payload.Recoverable != nil {
+		e.Recoverable = *payload.Recoverable
+	} else {
+		e.Recoverable = false
+	}
 	e.Err = nil
 	return nil
 }
