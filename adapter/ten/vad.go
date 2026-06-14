@@ -3,7 +3,6 @@ package ten
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -453,10 +452,6 @@ func finiteBetweenZeroAndOne(value float64) bool {
 
 func invalidDuration(value float64) bool {
 	return math.IsNaN(value) || math.IsInf(value, 0) || value < 0
-}
-
-func newNativeProbabilityEstimatorFactory(VADOptions) (vad.ProbabilityEstimatorFactory, error) {
-	return nil, errors.New("TEN VAD native library integration is not implemented")
 }
 
 func estimateRMSProbability(frame *model.AudioFrame) (float64, error) {
