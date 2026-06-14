@@ -901,6 +901,38 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "availability_recovered":
+		primary := &fakeScenarioLLM{label: "primary", streams: []lkllm.LLMStream{
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{{err: errors.New("primary stream failed")}}},
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "recovery probe"}}},
+			}},
+		}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		chunks, err := collectScenarioLLMStreamChunks(stream)
+		if err != nil {
+			return nil, err
+		}
+		if err := waitForScenarioLLMCalls(primary, 2); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "llm-fallback-availability-recovered",
+			"events": []map[string]any{
+				{
+					"name":                "availability_recovered",
+					"chunks":              chunks,
+					"availability_events": collectScenarioLLMAvailability(adapter),
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported LLM fallback action %q", payload.Action)
 	}
@@ -943,6 +975,17 @@ func collectScenarioLLMStreamChunks(stream lkllm.LLMStream) ([]string, error) {
 		}
 		chunks = append(chunks, scenarioLLMChunkKind(chunk))
 	}
+}
+
+func waitForScenarioLLMCalls(llm *fakeScenarioLLM, calls int) error {
+	deadline := time.Now().Add(2 * time.Second)
+	for llm.calls < calls && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if llm.calls < calls {
+		return fmt.Errorf("timed out waiting for %s calls, got %d want %d", llm.label, llm.calls, calls)
+	}
+	return nil
 }
 
 func drainScenarioLLMAvailability(adapter *lkllm.FallbackAdapter) {

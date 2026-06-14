@@ -863,6 +863,47 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
             }
 
         return asyncio.run(run())
+    if action == "availability_recovered":
+        primary = FakeLLM(
+            "primary",
+            streams=[
+                [RuntimeError("primary stream failed")],
+                [FakeChunk("recovery probe")],
+            ],
+        )
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter([primary, fallback])
+        availability_events: list[dict[str, Any]] = []
+        adapter.on(
+            "llm_availability_changed",
+            lambda event: availability_events.append(
+                {
+                    "available": event.available,
+                    "label": event.llm.label,
+                }
+            ),
+        )
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            await stream._run()
+            chunks = [chunk_kind(chunk) for chunk in stream._event_ch.items]
+
+            deadline = time.monotonic() + 2
+            while len(availability_events) < 2 and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            return {
+                "contract": "llm-fallback-availability-recovered",
+                "events": [
+                    {
+                        "name": "availability_recovered",
+                        "chunks": chunks,
+                        "availability_events": availability_events,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
     raise ValueError(f"unsupported LLM fallback action {action!r}")
 
 
