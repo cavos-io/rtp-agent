@@ -82,6 +82,14 @@ func NewMultilingualModel(opts ...ModelOption) *Model {
 	return newModel(ModelMultilingual, multilingualInferenceMethod, opts...)
 }
 
+func NewLocalEnglishModel(opts ...ModelOption) (*Model, error) {
+	return newLocalModel(ModelEnglish, englishInferenceMethod, opts...)
+}
+
+func NewLocalMultilingualModel(opts ...ModelOption) (*Model, error) {
+	return newLocalModel(ModelMultilingual, multilingualInferenceMethod, opts...)
+}
+
 func WithUnlikelyThreshold(threshold float64) ModelOption {
 	return func(model *Model) {
 		model.unlikelyThreshold = &threshold
@@ -176,6 +184,27 @@ func newModel(modelType ModelType, inferenceMethod string, opts ...ModelOption) 
 		opt(model)
 	}
 	return model
+}
+
+func newLocalModel(modelType ModelType, inferenceMethod string, opts ...ModelOption) (*Model, error) {
+	tokenizerPath, err := ModelTokenizerPath(modelType)
+	if err != nil {
+		return nil, err
+	}
+	tokenizer, err := NewHuggingFaceTurnDetectorTokenizer(modelType, tokenizerPath)
+	if err != nil {
+		return nil, err
+	}
+	onnxPath, err := ModelONNXPath(modelType)
+	if err != nil {
+		return nil, err
+	}
+	inputRunner, err := NewTurnDetectorONNXInputRunner(TurnDetectorONNXOptions{ModelPath: onnxPath})
+	if err != nil {
+		return nil, err
+	}
+	localRunner := NewLocalTurnDetectorRunner(tokenizer, inputRunner)
+	return newModel(modelType, inferenceMethod, append([]ModelOption{WithTurnDetectorRunner(localRunner)}, opts...)...), nil
 }
 
 func (m *Model) inferenceMessages(chatCtx *llm.ChatContext) []inferenceMessage {
