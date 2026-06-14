@@ -107,7 +107,7 @@ func TestSDKClientImplementationWaitsForConnectedEvent(t *testing.T) {
 		"connectedCh := make(chan struct{}, 1)",
 		"joinErrCh := make(chan error, 1)",
 		"case connectedCh <- struct{}{}",
-		"return c.waitConnected",
+		"if err := c.waitConnected",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("sdk.go missing %q", want)
@@ -180,5 +180,24 @@ func TestSDKClientImplementationRejectsConcurrentJoin(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("sdk.go missing %q", want)
 		}
+	}
+}
+
+func TestSDKClientImplementationPublishesAfterConnected(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	waitIndex := strings.Index(text, "c.waitConnected")
+	publishIndex := strings.Index(text, "connection.PublishAudio()")
+	if waitIndex < 0 {
+		t.Fatal("sdk.go missing waitConnected call")
+	}
+	if publishIndex < 0 {
+		t.Fatal("sdk.go missing PublishAudio call")
+	}
+	if waitIndex > publishIndex {
+		t.Fatal("sdk.go must wait for Agora connected event before publishing audio")
 	}
 }

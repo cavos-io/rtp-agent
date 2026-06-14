@@ -265,19 +265,27 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 		_ = releaseSDKService()
 		return fmt.Errorf("agora SDK connect failed: %d", ret)
 	}
-	if ret := connection.PublishAudio(); ret != 0 {
-		connection.Disconnect()
-		connection.Release()
-		_ = releaseSDKService()
-		return fmt.Errorf("agora SDK publish audio failed: %d", ret)
-	}
 
 	c.mu.Lock()
 	c.connection = connection
 	c.joining = false
 	joined = true
 	c.mu.Unlock()
-	return c.waitConnected(ctx, connection, connectedCh, joinErrCh)
+	if err := c.waitConnected(ctx, connection, connectedCh, joinErrCh); err != nil {
+		return err
+	}
+	if ret := connection.PublishAudio(); ret != 0 {
+		c.mu.Lock()
+		if c.connection == connection {
+			c.connection = nil
+		}
+		c.mu.Unlock()
+		_ = connection.Disconnect()
+		connection.Release()
+		_ = releaseSDKService()
+		return fmt.Errorf("agora SDK publish audio failed: %d", ret)
+	}
+	return nil
 }
 
 func (c *sdkChannelClient) waitConnected(ctx context.Context, connection *agoraservice.RtcConnection, connectedCh <-chan struct{}, joinErrCh <-chan error) error {
