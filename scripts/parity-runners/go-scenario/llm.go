@@ -19,6 +19,7 @@ import (
 func runLLMAPIConnectOptions(input json.RawMessage) (any, error) {
 	var payload struct {
 		Action string `json:"action"`
+		Mode   string `json:"mode"`
 	}
 	if err := json.Unmarshal(input, &payload); err != nil {
 		return nil, err
@@ -136,6 +137,7 @@ func runLLMAPIConnectOptions(input json.RawMessage) (any, error) {
 func runLLMAPIErrors(input json.RawMessage) (any, error) {
 	var payload struct {
 		Action string `json:"action"`
+		Mode   string `json:"mode"`
 	}
 	if err := json.Unmarshal(input, &payload); err != nil {
 		return nil, err
@@ -331,6 +333,7 @@ func runLLMAPIErrors(input json.RawMessage) (any, error) {
 func runLLMFallback(input json.RawMessage) (any, error) {
 	var payload struct {
 		Action string `json:"action"`
+		Mode   string `json:"mode"`
 	}
 	if err := json.Unmarshal(input, &payload); err != nil {
 		return nil, err
@@ -339,6 +342,38 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 		payload.Action = "provider_error_not_forwarded"
 	}
 	switch payload.Action {
+	case "validation":
+		mode := payload.Mode
+		if mode == "" {
+			mode = "empty"
+		}
+		errorClass := ""
+		message := ""
+		switch mode {
+		case "empty":
+			func() {
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						errorClass = "error"
+						message = fmt.Sprint(recovered)
+					}
+				}()
+				lkllm.NewFallbackAdapter(nil)
+			}()
+		default:
+			return nil, fmt.Errorf("unsupported LLM fallback validation mode %q", mode)
+		}
+		return map[string]any{
+			"contract": "llm-fallback",
+			"events": []map[string]any{
+				{
+					"name":        "validation",
+					"mode":        mode,
+					"error_class": errorClass,
+					"message":     message,
+				},
+			},
+		}, nil
 	case "provider_error_not_forwarded":
 		primary := &fakeScenarioLLM{label: "primary"}
 		fallback := &fakeScenarioLLM{label: "fallback"}

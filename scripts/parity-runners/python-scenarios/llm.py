@@ -376,6 +376,30 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
                 tools=kwargs.get("tools") or [],
             )
 
+    if action == "validation":
+        mode = input_data.get("mode", "empty")
+        error_class = ""
+        message = ""
+        if mode == "empty":
+            try:
+                module.FallbackAdapter([])
+            except ValueError as exc:
+                error_class = "error"
+                message = str(exc)
+        else:
+            raise ValueError(f"unsupported LLM fallback validation mode {mode!r}")
+        return {
+            "contract": "llm-fallback",
+            "events": [
+                {
+                    "name": "validation",
+                    "mode": mode,
+                    "error_class": error_class,
+                    "message": message,
+                }
+            ],
+        }
+
     if action == "provider_error_not_forwarded":
         primary = FakeLLM("primary")
         fallback = FakeLLM("fallback")
