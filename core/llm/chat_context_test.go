@@ -2352,6 +2352,32 @@ func TestChatContextToOpenAIProviderFormatGroupsToolCallsWithOutputs(t *testing.
 	}
 }
 
+func TestChatContextToOpenAIProviderFormatCombinesTextOnlyParts(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:   "multi-text",
+			Role: ChatRoleUser,
+			Content: []ChatContent{
+				{Text: "first"},
+				{Text: "second"},
+			},
+		},
+	}
+
+	messages, extra := ctx.ToProviderFormat("openai")
+
+	if extra != nil {
+		t.Fatalf("ToProviderFormat() extra = %#v, want nil", extra)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("len(messages) = %d, want 1: %#v", len(messages), messages)
+	}
+	if got, want := messages[0]["content"], "first\nsecond"; got != want {
+		t.Fatalf("content = %#v, want %q", got, want)
+	}
+}
+
 func TestChatContextToOpenAIProviderFormatPreservesMultipleMatchedToolOutputs(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
