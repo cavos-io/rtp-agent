@@ -95,6 +95,7 @@ import (
 	corestt "github.com/cavos-io/rtp-agent/core/stt"
 	coretts "github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/interface/worker"
+	workeragora "github.com/cavos-io/rtp-agent/interface/worker/agora"
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/plugin"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -104,6 +105,8 @@ import (
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	goopenai "github.com/sashabaranov/go-openai"
 )
+
+var appNewAgoraChannelClient = workeragora.NewSDKChannelClient
 
 func init() {
 	plugin.RegisterPluginMetadata(anam.PluginTitle, anam.PluginVersion, anam.PluginPackage)
@@ -1079,6 +1082,9 @@ func NewApp(cfg AppConfig) (*App, error) {
 		MetricsRegistry: metricsRegistry,
 		Config:          cfg,
 	}
+	if opts.Transport == worker.WorkerTransportAgora {
+		server.SetTransportRunFunc(app.runAgora)
+	}
 	if cfg.TelemetryLogsEndpoint != "" {
 		if err := appInitLoggerProvider(context.Background(), cfg.TelemetryLogsEndpoint, cfg.TelemetryLogsHeaders); err != nil {
 			app.closeMCPServers()
@@ -1091,6 +1097,34 @@ func NewApp(cfg AppConfig) (*App, error) {
 		return nil, err
 	}
 	return app, nil
+}
+
+func (a *App) runAgora(ctx context.Context) error {
+	if a.Session == nil {
+		return fmt.Errorf("agent session is not configured")
+	}
+	opts := a.Server.Options.Agora
+	if err := opts.Validate(); err != nil {
+		return err
+	}
+	client, err := appNewAgoraChannelClient()
+	if err != nil {
+		return err
+	}
+	transport := workeragora.NewTransport(opts, client)
+	if err := transport.Join(ctx); err != nil {
+		return err
+	}
+	defer func() {
+		if err := transport.Close(context.Background()); err != nil {
+			logutil.Logger.Errorw("failed to close Agora transport", err)
+		}
+	}()
+	if err := a.runSession(nil); err != nil {
+		return err
+	}
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 func (a *App) Close(ctx context.Context) error {
