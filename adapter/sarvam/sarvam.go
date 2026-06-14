@@ -752,7 +752,7 @@ func (s *sarvamSTTStreamEventSequencer) EventsFromStreamMessage(payload []byte, 
 		return nil, err
 	}
 	data := sarvamMap(message["data"])
-	if requestID := sarvamString(data["request_id"]); requestID != "" {
+	if requestID := sarvamSTTReferenceRequestID(data); requestID != "" {
 		s.serverRequestID = requestID
 	}
 
@@ -782,6 +782,7 @@ func (s *sarvamSTTStreamEventSequencer) EventsFromStreamMessage(payload []byte, 
 	if err != nil {
 		return nil, err
 	}
+	s.applyServerRequestID(events)
 	if messageType == "data" && sarvamString(data["transcript"]) != "" {
 		if !sarvamSTTEventsContainUsage(events) {
 			events = append([]*stt.SpeechEvent{{
@@ -799,6 +800,17 @@ func (s *sarvamSTTStreamEventSequencer) EventsFromStreamMessage(payload []byte, 
 		}
 	}
 	return events, nil
+}
+
+func (s *sarvamSTTStreamEventSequencer) applyServerRequestID(events []*stt.SpeechEvent) {
+	if s.serverRequestID == "" {
+		return
+	}
+	for _, event := range events {
+		if event.RequestID == "" {
+			event.RequestID = s.serverRequestID
+		}
+	}
 }
 
 func (s *sarvamSTTStreamEventSequencer) PendingEndOfSpeechEvent() *stt.SpeechEvent {
@@ -843,6 +855,16 @@ func sarvamSTTEventsContainUsage(events []*stt.SpeechEvent) bool {
 		}
 	}
 	return false
+}
+
+func sarvamSTTReferenceRequestID(data map[string]any) string {
+	if requestID := sarvamString(data["request_id"]); requestID != "" {
+		return requestID
+	}
+	if requestID := sarvamString(sarvamMap(data["data"])["request_id"]); requestID != "" {
+		return requestID
+	}
+	return sarvamString(sarvamMap(data["metadata"])["request_id"])
 }
 
 func (s *sarvamSTTRecognizeStream) emitPendingEndOfSpeechAfterTimeout() {

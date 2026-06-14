@@ -451,6 +451,30 @@ func TestSarvamSTTStreamSequencerEmitsFallbackEOSWhenFinalMissing(t *testing.T) 
 	}
 }
 
+func TestSarvamSTTStreamSequencerCapturesNestedReferenceRequestID(t *testing.T) {
+	sequencer := newSarvamSTTStreamEventSequencer("en-IN")
+
+	events, err := sequencer.EventsFromStreamMessage([]byte(`{"type":"events","data":{"signal_type":"START_SPEECH","metadata":{"request_id":"req-meta"}}}`), 0)
+	if err != nil {
+		t.Fatalf("start event: %v", err)
+	}
+	if len(events) != 1 || events[0].RequestID != "req-meta" {
+		t.Fatalf("start events = %+v, want nested metadata request id", events)
+	}
+
+	events, err = sequencer.EventsFromStreamMessage([]byte(`{"type":"event","data":{"signal_type":"END_SPEECH","data":{"request_id":"req-nested"}}}`), 0.25)
+	if err != nil {
+		t.Fatalf("end event: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("end events = %+v, want pending EOS", events)
+	}
+	event := sequencer.PendingEndOfSpeechEvent()
+	if event == nil || event.RequestID != "req-nested" {
+		t.Fatalf("fallback event = %+v, want nested data request id", event)
+	}
+}
+
 func TestSarvamSTTStreamEOSFallbackTimeoutMatchesReference(t *testing.T) {
 	if sarvamSTTEOSFallbackTimeout != time.Second {
 		t.Fatalf("EOS fallback timeout = %v, want reference 1s", sarvamSTTEOSFallbackTimeout)
