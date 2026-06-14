@@ -2214,6 +2214,14 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		if cfg.STTSampleRate != nil {
 			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTSampleRate(*cfg.STTSampleRate))
 		}
+		if cfg.STTVADThreshold != nil || cfg.STTVADSilenceThresholdSeconds != nil {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTServerVAD(elevenlabs.ElevenLabsVADOptions{
+				VADSilenceThresholdSecs: cfg.STTVADSilenceThresholdSeconds,
+				VADThreshold:            cfg.STTVADThreshold,
+				MinSpeechDurationMS:     cfg.STTMinTurnSilence,
+				MinSilenceDurationMS:    cfg.STTMaxTurnSilence,
+			}))
+		}
 		if len(cfg.STTKeytermsPrompt) > 0 {
 			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTKeyterms(cfg.STTKeytermsPrompt))
 		}

@@ -3447,6 +3447,52 @@ func TestElevenLabsSTTFallbackPassesReferenceKeyterms(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTFallbackPassesReferenceServerVAD(t *testing.T) {
+	vadThreshold := 0.42
+	vadSilence := 0.8
+	minSpeech := 120
+	minSilence := 900
+	includeTimestamps := true
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		ElevenLabsAPIKey:              "test-eleven-key",
+		STTModel:                      "scribe_v2_realtime",
+		STTLanguage:                   "en",
+		STTVADThreshold:               &vadThreshold,
+		STTVADSilenceThresholdSeconds: &vadSilence,
+		STTMinTurnSilence:             &minSpeech,
+		STTMaxTurnSilence:             &minSilence,
+		STTIncludeTimestamps:          &includeTimestamps,
+	}, providerElevenLabs)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	elevenProvider, ok := provider.(*elevenlabs.ElevenLabsSTT)
+	if !ok {
+		t.Fatalf("provider type = %T, want *elevenlabs.ElevenLabsSTT", provider)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.AlignedTranscript != "word" || caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming word-aligned interim fallback", caps)
+	}
+	serverVAD := reflect.ValueOf(elevenProvider).Elem().FieldByName("serverVAD")
+	if serverVAD.IsNil() {
+		t.Fatal("serverVAD is nil, want reference VAD options")
+	}
+	vad := serverVAD.Elem()
+	if got, want := vad.FieldByName("VADThreshold").Elem().Float(), vadThreshold; got != want {
+		t.Fatalf("VADThreshold = %v, want %v", got, want)
+	}
+	if got, want := vad.FieldByName("VADSilenceThresholdSecs").Elem().Float(), vadSilence; got != want {
+		t.Fatalf("VADSilenceThresholdSecs = %v, want %v", got, want)
+	}
+	if got, want := int(vad.FieldByName("MinSpeechDurationMS").Elem().Int()), minSpeech; got != want {
+		t.Fatalf("MinSpeechDurationMS = %v, want %v", got, want)
+	}
+	if got, want := int(vad.FieldByName("MinSilenceDurationMS").Elem().Int()), minSilence; got != want {
+		t.Fatalf("MinSilenceDurationMS = %v, want %v", got, want)
+	}
+}
+
 func TestGradiumSTTFallbackPassesReferenceOptions(t *testing.T) {
 	type wsRecord struct {
 		apiKey    string
