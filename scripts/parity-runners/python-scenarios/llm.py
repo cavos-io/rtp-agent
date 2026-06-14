@@ -454,6 +454,34 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
 
         return asyncio.run(run())
 
+    if action == "option_overrides":
+        primary = FakeLLM("primary", [FakeChunk("ok")])
+        adapter = module.FallbackAdapter(
+            [primary],
+            attempt_timeout=0.05,
+            max_retry_per_llm=2,
+            retry_interval=0.025,
+        )
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            async for _ in stream:
+                break
+            options = primary.options[0]
+            return {
+                "contract": "llm-fallback-options",
+                "events": [
+                    {
+                        "name": "option_overrides",
+                        "max_retry": options.max_retry,
+                        "retry_interval_ms": int(options.retry_interval * 1000),
+                        "timeout_ms": int(options.timeout * 1000),
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+
     if action == "provider_error_not_forwarded":
         primary = FakeLLM("primary")
         fallback = FakeLLM("fallback")
