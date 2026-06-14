@@ -2356,6 +2356,42 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSTopP(*cfg.TTSTopP))
 		}
 		return lmnt.NewLMNTTTS(cfg.LMNTAPIKey, "", ttsOpts...), nil
+	case providerMinimax:
+		ttsOpts := []minimax.MinimaxTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSBitRate != nil {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSBitrate(*cfg.TTSBitRate))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSAudioFormat(cfg.TTSResponseFormat))
+		}
+		if cfg.TTSEmotion != "" {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSEmotion(cfg.TTSEmotion))
+		}
+		if cfg.TTSSpeed != 0 {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSSpeed(cfg.TTSSpeed))
+		}
+		if cfg.TTSVolume != nil {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSVolume(*cfg.TTSVolume))
+		}
+		if cfg.TTSPitch != nil {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSPitch(*cfg.TTSPitch))
+		}
+		if cfg.TTSTextNormalization != nil {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSTextNormalization(*cfg.TTSTextNormalization))
+		}
+		return minimax.NewMinimaxTTS(cfg.MinimaxAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerNeuphonic:
 		ttsOpts := []neuphonic.NeuphonicTTSOption{}
 		if cfg.TTSBaseURL != "" {

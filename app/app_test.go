@@ -4487,6 +4487,120 @@ func TestHumeTTSFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestMinimaxTTSFallbackPassesReferenceOptions(t *testing.T) {
+	sampleRate := 44100
+	bitRate := 256000
+	volume := 2.0
+	pitch := -2
+	textNormalization := true
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("data:{}\n")),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		MinimaxAPIKey:        "test-minimax-key",
+		TTSBaseURL:           "https://minimax.example/",
+		TTSModel:             "speech-2.6-hd",
+		TTSVoice:             "voice-2",
+		TTSSampleRate:        &sampleRate,
+		TTSBitRate:           &bitRate,
+		TTSResponseFormat:    "wav",
+		TTSEmotion:           "fluent",
+		TTSSpeed:             1.4,
+		TTSVolume:            &volume,
+		TTSPitch:             &pitch,
+		TTSTextNormalization: &textNormalization,
+	}, providerMinimax)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*minimax.MinimaxTTS); !ok {
+		t.Fatalf("provider type = %T, want *minimax.MinimaxTTS", provider)
+	}
+	if got, want := provider.Label(), "minimax.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 44100; got != want {
+		t.Fatalf("SampleRate() = %d, want configured reference sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "speech-2.6-hd"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "MiniMax"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference streaming without aligned transcript", caps)
+	}
+	stream, err := provider.Synthesize(context.Background(), "hola")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://minimax.example/v1/t2a_v2"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("Authorization"), "Bearer test-minimax-key"; got != want {
+		t.Fatalf("Authorization = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["model"], "speech-2.6-hd"; got != want {
+		t.Fatalf("payload model = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["text"], "hola"; got != want {
+		t.Fatalf("payload text = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["stream"], true; got != want {
+		t.Fatalf("payload stream = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["text_normalization"], true; got != want {
+		t.Fatalf("payload text_normalization = %#v, want %#v", got, want)
+	}
+	voiceSetting, _ := gotPayload["voice_setting"].(map[string]any)
+	if got, want := voiceSetting["voice_id"], "voice-2"; got != want {
+		t.Fatalf("voice_setting.voice_id = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+	if got, want := voiceSetting["emotion"], "fluent"; got != want {
+		t.Fatalf("voice_setting.emotion = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+	if got, want := voiceSetting["speed"], float64(1.4); got != want {
+		t.Fatalf("voice_setting.speed = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+	if got, want := voiceSetting["vol"], float64(2.0); got != want {
+		t.Fatalf("voice_setting.vol = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+	if got, want := voiceSetting["pitch"], float64(-2); got != want {
+		t.Fatalf("voice_setting.pitch = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+	audioSetting, _ := gotPayload["audio_setting"].(map[string]any)
+	if got, want := audioSetting["sample_rate"], float64(44100); got != want {
+		t.Fatalf("audio_setting.sample_rate = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+	if got, want := audioSetting["bitrate"], float64(256000); got != want {
+		t.Fatalf("audio_setting.bitrate = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+	if got, want := audioSetting["format"], "wav"; got != want {
+		t.Fatalf("audio_setting.format = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsTelnyxTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "telnyx")
