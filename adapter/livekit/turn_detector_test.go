@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -162,13 +164,76 @@ func TestTurnDetectorRemoteInferenceURLMatchesReference(t *testing.T) {
 	}
 }
 
-func TestTurnDetectorPluginDownloadFilesIsExplicitlyUnsupported(t *testing.T) {
-	err := (Plugin{}).DownloadFiles()
-	if err == nil {
-		t.Fatal("DownloadFiles() error = nil, want explicit unsupported error")
+func TestTurnDetectorPluginDownloadFilesDownloadsReferenceFiles(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	var gotURLs []string
+	downloadTurnDetectorFile = func(url string, path string) error {
+		gotURLs = append(gotURLs, url)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(path, []byte("model"), 0o600)
 	}
-	if !strings.Contains(err.Error(), "Hugging Face") || !strings.Contains(err.Error(), "ONNX") {
-		t.Fatalf("DownloadFiles() error = %q, want Hugging Face/ONNX unsupported detail", err.Error())
+	t.Cleanup(func() { downloadTurnDetectorFile = downloadFile })
+
+	if err := (Plugin{}).DownloadFiles(); err != nil {
+		t.Fatalf("DownloadFiles() error = %v", err)
+	}
+
+	wantURLs := []string{
+		"https://huggingface.co/livekit/turn-detector/resolve/v1.2.2-en/onnx/model_q8.onnx",
+		"https://huggingface.co/livekit/turn-detector/resolve/v1.2.2-en/languages.json",
+		"https://huggingface.co/livekit/turn-detector/resolve/v0.4.1-intl/onnx/model_q8.onnx",
+		"https://huggingface.co/livekit/turn-detector/resolve/v0.4.1-intl/languages.json",
+	}
+	if strings.Join(gotURLs, "\n") != strings.Join(wantURLs, "\n") {
+		t.Fatalf("download URLs = %#v, want %#v", gotURLs, wantURLs)
+	}
+
+	for _, modelType := range []ModelType{ModelEnglish, ModelMultilingual} {
+		onnxPath, err := ModelONNXPath(modelType)
+		if err != nil {
+			t.Fatalf("ModelONNXPath(%s) error = %v", modelType, err)
+		}
+		if _, err := os.Stat(onnxPath); err != nil {
+			t.Fatalf("downloaded ONNX stat error = %v", err)
+		}
+		languagesPath, err := ModelLanguagesPath(modelType)
+		if err != nil {
+			t.Fatalf("ModelLanguagesPath(%s) error = %v", modelType, err)
+		}
+		if _, err := os.Stat(languagesPath); err != nil {
+			t.Fatalf("downloaded languages stat error = %v", err)
+		}
+	}
+}
+
+func TestTurnDetectorPluginDownloadFilesSkipsExistingReferenceFiles(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	for _, modelType := range []ModelType{ModelEnglish, ModelMultilingual} {
+		for _, pathFunc := range []func(ModelType) (string, error){ModelONNXPath, ModelLanguagesPath} {
+			path, err := pathFunc(modelType)
+			if err != nil {
+				t.Fatalf("pathFunc(%s) error = %v", modelType, err)
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatalf("MkdirAll error = %v", err)
+			}
+			if err := os.WriteFile(path, []byte("existing"), 0o600); err != nil {
+				t.Fatalf("WriteFile error = %v", err)
+			}
+		}
+	}
+	downloadTurnDetectorFile = func(string, string) error {
+		t.Fatal("download called for existing turn detector files")
+		return nil
+	}
+	t.Cleanup(func() { downloadTurnDetectorFile = downloadFile })
+
+	if err := (Plugin{}).DownloadFiles(); err != nil {
+		t.Fatalf("DownloadFiles() error = %v", err)
 	}
 }
 
@@ -323,4 +388,20 @@ func jsonResponse(status int, body string) *http.Response {
 		Header:     make(http.Header),
 		Body:       io.NopCloser(strings.NewReader(body)),
 	}
+}
+
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd error = %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(wd); err != nil {
+			t.Fatalf("restore Chdir error = %v", err)
+		}
+	})
 }

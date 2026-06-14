@@ -172,7 +172,7 @@ func init() {
 	plugin.RegisterPluginMetadata(telnyx.PluginTitle, telnyx.PluginVersion, telnyx.PluginPackage)
 	plugin.RegisterPluginDownloader(ten.PluginTitle, ten.PluginVersion, ten.PluginPackage, ten.Plugin{}.DownloadFiles)
 	plugin.RegisterPluginMetadata(trugen.PluginTitle, trugen.PluginVersion, trugen.PluginPackage)
-	plugin.RegisterPluginMetadata(adapterlivekit.PluginTitle, adapterlivekit.PluginVersion, adapterlivekit.PluginPackage)
+	plugin.RegisterPluginDownloader(adapterlivekit.PluginTitle, adapterlivekit.PluginVersion, adapterlivekit.PluginPackage, adapterlivekit.Plugin{}.DownloadFiles)
 	plugin.RegisterPluginMetadata(ultravox.PluginTitle, ultravox.PluginVersion, ultravox.PluginPackage)
 	plugin.RegisterPluginMetadata(upliftai.PluginTitle, upliftai.PluginVersion, upliftai.PluginPackage)
 	plugin.RegisterPluginMetadata(xai.PluginTitle, xai.PluginVersion, xai.PluginPackage)
