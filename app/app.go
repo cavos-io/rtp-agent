@@ -2049,6 +2049,8 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		return azure.NewAzureSTT("", "")
 	case providerFal:
 		return falSTTFromConfig(cfg), nil
+	case providerSpitch:
+		return spitch.NewSpitchSTT(cfg.SpitchAPIKey), nil
 	case providerDeepgram:
 		sttOpts := []deepgram.DeepgramSTTOption{}
 		if cfg.STTBaseURL != "" {
