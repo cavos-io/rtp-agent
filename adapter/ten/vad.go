@@ -144,6 +144,9 @@ func WithNativeLibrary(path string) VADOption {
 	}
 }
 
+// WithModelPath configures the TEN ONNX model file used by the native
+// tenvad_native build. Clients that do not want cwd-dependent resource lookup
+// can pass ModelPathIn(appRoot) or any absolute model path.
 func WithModelPath(path string) VADOption {
 	return func(o *VADOptions) {
 		o.ModelPath = path

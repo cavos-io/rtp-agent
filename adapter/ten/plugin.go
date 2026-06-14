@@ -41,12 +41,21 @@ func (Plugin) DownloadFiles() error {
 	return nil
 }
 
+// ModelPath returns the default TEN model path under the current working
+// directory: resources/models/ten-vad.onnx.
 func ModelPath() (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(cwd, "resources", "models", modelFileName), nil
+	return ModelPathIn(cwd), nil
+}
+
+// ModelPathIn returns the TEN model path under rootDir without consulting the
+// process working directory. Use this with WithModelPath when embedding this
+// library in a service with an explicit application root.
+func ModelPathIn(rootDir string) string {
+	return filepath.Join(rootDir, "resources", "models", modelFileName)
 }
 
 func downloadFile(url, path string) error {
