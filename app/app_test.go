@@ -4069,6 +4069,125 @@ func TestFishAudioTTSFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestAsyncAITTSFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("ASYNCAI_API_KEY", "test-asyncai-key")
+	sampleRate := 24000
+	initPayloads := make(chan map[string]any, 1)
+	requests := make(chan *http.Request, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests <- r.Clone(r.Context())
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read asyncai init payload: %v", err)
+			return
+		}
+		var init map[string]any
+		if err := json.Unmarshal(payload, &init); err != nil {
+			t.Errorf("decode asyncai init payload: %v", err)
+			return
+		}
+		initPayloads <- init
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		TTSBaseURL:    server.URL,
+		TTSModel:      "async_custom",
+		TTSVoice:      "voice-2",
+		TTSLanguage:   "hi",
+		TTSEncoding:   "pcm_mulaw",
+		TTSSampleRate: &sampleRate,
+	}, providerAsyncAI)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*asyncai.AsyncAITTS); !ok {
+		t.Fatalf("provider type = %T, want *asyncai.AsyncAITTS", provider)
+	}
+	if got, want := provider.Label(), "asyncai.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 24000; got != want {
+		t.Fatalf("SampleRate() = %d, want configured reference sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "async_custom"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "AsyncAI"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference streaming without aligned transcript", caps)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case req := <-requests:
+		if got, want := req.URL.Path, "/text_to_speech/websocket/ws"; got != want {
+			t.Fatalf("websocket path = %q, want %q", got, want)
+		}
+		if got, want := req.URL.Query().Get("api_key"), "test-asyncai-key"; got != want {
+			t.Fatalf("api_key query = %q, want %q", got, want)
+		}
+		if got, want := req.URL.Query().Get("version"), "v1"; got != want {
+			t.Fatalf("version query = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for AsyncAI websocket request")
+	}
+
+	select {
+	case init := <-initPayloads:
+		if got, want := init["model_id"], "async_custom"; got != want {
+			t.Fatalf("model_id = %#v, want %#v", got, want)
+		}
+		if got, want := init["language"], "hi"; got != want {
+			t.Fatalf("language = %#v, want %#v", got, want)
+		}
+		voice, _ := init["voice"].(map[string]any)
+		if got, want := voice["mode"], "id"; got != want {
+			t.Fatalf("voice.mode = %#v, want %#v in %#v", got, want, init)
+		}
+		if got, want := voice["id"], "voice-2"; got != want {
+			t.Fatalf("voice.id = %#v, want %#v in %#v", got, want, init)
+		}
+		output, _ := init["output_format"].(map[string]any)
+		if got, want := output["container"], "raw"; got != want {
+			t.Fatalf("output_format.container = %#v, want %#v in %#v", got, want, init)
+		}
+		if got, want := output["encoding"], "pcm_mulaw"; got != want {
+			t.Fatalf("output_format.encoding = %#v, want %#v in %#v", got, want, init)
+		}
+		if got, want := output["sample_rate"], float64(24000); got != want {
+			t.Fatalf("output_format.sample_rate = %#v, want %#v in %#v", got, want, init)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for AsyncAI init payload")
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsTelnyxTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "telnyx")
