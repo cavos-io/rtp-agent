@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	lktts "github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
@@ -623,6 +625,66 @@ func runTTSFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "availability_panic_isolated":
+		primary := &fakeScenarioTTS{
+			provider:     "primary",
+			chunkedError: errors.New("primary unavailable"),
+		}
+		fallback := &fakeScenarioTTS{
+			provider: "fallback",
+			chunkedEvents: []*lktts.SynthesizedAudio{{
+				Frame: &model.AudioFrame{Data: []byte("ok")},
+			}},
+		}
+		adapter := lktts.NewFallbackAdapterWithOptions([]lktts.TTS{primary, fallback}, lktts.FallbackAdapterOptions{DisableRetries: true})
+		delivered := make([]map[string]any, 0, 1)
+		adapter.OnAvailabilityChanged(func(event lktts.AvailabilityChangedEvent) {
+			panic("availability handler failed")
+		})
+		adapter.OnAvailabilityChanged(func(event lktts.AvailabilityChangedEvent) {
+			delivered = append(delivered, map[string]any{
+				"provider":  "primary",
+				"available": event.Available,
+			})
+		})
+		if err := runTTSFallbackSynthesize(adapter); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "tts-fallback-availability-panic-isolated",
+			"events": []map[string]any{
+				{"name": "availability_panic_isolated", "delivered": delivered},
+			},
+		}, nil
+	case "availability_unsubscribe":
+		primary := &fakeScenarioTTS{
+			provider:     "primary",
+			chunkedError: errors.New("primary unavailable"),
+		}
+		fallback := &fakeScenarioTTS{
+			provider: "fallback",
+			chunkedEvents: []*lktts.SynthesizedAudio{{
+				Frame: &model.AudioFrame{Data: []byte("ok")},
+			}},
+		}
+		adapter := lktts.NewFallbackAdapterWithOptions([]lktts.TTS{primary, fallback}, lktts.FallbackAdapterOptions{DisableRetries: true})
+		delivered := make([]map[string]any, 0, 1)
+		unsubscribe := adapter.OnAvailabilityChanged(func(event lktts.AvailabilityChangedEvent) {
+			delivered = append(delivered, map[string]any{
+				"provider":  "primary",
+				"available": event.Available,
+			})
+		})
+		unsubscribe()
+		if err := runTTSFallbackSynthesize(adapter); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "tts-fallback-availability-unsubscribe",
+			"events": []map[string]any{
+				{"name": "availability_unsubscribe", "delivered": delivered},
+			},
+		}, nil
 	case "validation":
 		mode := payload.Mode
 		if mode == "" {
@@ -832,16 +894,28 @@ func orderedTTSReplacements(input json.RawMessage, fallback map[string]string) (
 	return ordered, nil
 }
 
+func runTTSFallbackSynthesize(adapter *lktts.FallbackAdapter) error {
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
+	_, err = stream.Next()
+	return err
+}
+
 type fakeScenarioTTS struct {
 	lktts.MetricsEmitter
 	lktts.ErrorEmitter
 
-	sampleRate   int
-	numChannels  int
-	model        string
-	provider     string
-	prewarmCalls int
-	closeCalls   int
+	sampleRate    int
+	numChannels   int
+	model         string
+	provider      string
+	prewarmCalls  int
+	closeCalls    int
+	chunkedEvents []*lktts.SynthesizedAudio
+	chunkedError  error
 }
 
 func (fakeScenarioTTS) Label() string { return "fake-scenario-tts" }
@@ -873,9 +947,33 @@ func (t *fakeScenarioTTS) Close() error {
 	t.closeCalls++
 	return nil
 }
-func (fakeScenarioTTS) Synthesize(context.Context, string) (lktts.ChunkedStream, error) {
+func (t fakeScenarioTTS) Synthesize(context.Context, string) (lktts.ChunkedStream, error) {
+	if t.chunkedError != nil {
+		return nil, t.chunkedError
+	}
+	if t.chunkedEvents != nil {
+		return &fakeScenarioChunkedStream{events: append([]*lktts.SynthesizedAudio(nil), t.chunkedEvents...)}, nil
+	}
 	return nil, nil
 }
 func (fakeScenarioTTS) Stream(context.Context) (lktts.SynthesizeStream, error) {
 	return nil, nil
+}
+
+type fakeScenarioChunkedStream struct {
+	events []*lktts.SynthesizedAudio
+	index  int
+}
+
+func (s *fakeScenarioChunkedStream) Next() (*lktts.SynthesizedAudio, error) {
+	if s.index >= len(s.events) {
+		return nil, io.EOF
+	}
+	event := s.events[s.index]
+	s.index++
+	return event, nil
+}
+
+func (*fakeScenarioChunkedStream) Close() error {
+	return nil
 }

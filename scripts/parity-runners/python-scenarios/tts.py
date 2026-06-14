@@ -741,6 +741,59 @@ def tts_fallback(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "availability_panic_isolated":
+        primary = ScenarioTTS()
+        adapter = module.FallbackAdapter([primary])
+        delivered: list[dict[str, Any]] = []
+
+        def failing_handler(event: Any) -> None:
+            raise RuntimeError("availability handler failed")
+
+        adapter.on("tts_availability_changed", failing_handler)
+        adapter.on(
+            "tts_availability_changed",
+            lambda event: delivered.append(
+                {
+                    "provider": "primary" if event.tts is primary else "other",
+                    "available": event.available,
+                }
+            ),
+        )
+        adapter.emit(
+            "tts_availability_changed",
+            module.AvailabilityChangedEvent(tts=primary, available=False),
+        )
+        return {
+            "contract": "tts-fallback-availability-panic-isolated",
+            "events": [
+                {"name": "availability_panic_isolated", "delivered": delivered}
+            ],
+        }
+    if action == "availability_unsubscribe":
+        primary = ScenarioTTS()
+        adapter = module.FallbackAdapter([primary])
+        delivered: list[dict[str, Any]] = []
+
+        def handler(event: Any) -> None:
+            delivered.append(
+                {
+                    "provider": "primary" if event.tts is primary else "other",
+                    "available": event.available,
+                }
+            )
+
+        adapter.on("tts_availability_changed", handler)
+        adapter.off("tts_availability_changed", handler)
+        adapter.emit(
+            "tts_availability_changed",
+            module.AvailabilityChangedEvent(tts=primary, available=False),
+        )
+        return {
+            "contract": "tts-fallback-availability-unsubscribe",
+            "events": [
+                {"name": "availability_unsubscribe", "delivered": delivered}
+            ],
+        }
     if action == "validation":
         mode = input_data.get("mode", "empty")
         error = False
