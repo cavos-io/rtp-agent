@@ -1928,6 +1928,8 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 			llmOpts = append(llmOpts, anthropic.WithAnthropicBaseURL(cfg.LLMBaseURL))
 		}
 		return anthropic.NewAnthropicLLM(cfg.AnthropicAPIKey, cfg.LLMModel, llmOpts...)
+	case providerGoogle:
+		return adaptergoogle.NewGoogleLLM(cfg.GoogleAPIKey, cfg.LLMModel)
 	case providerMistralAI:
 		return mistralai.NewMistralLLM(cfg.MistralAPIKey, cfg.LLMModel), nil
 	case providerNvidia:
