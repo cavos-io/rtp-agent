@@ -23,6 +23,12 @@ if [ -z "${AGORA_CHANNEL:-}" ]; then
   echo "AGORA_CHANNEL is required." >&2
   exit 1
 fi
+case "$stable_seconds" in
+  ''|*[!0-9]*)
+    echo "AGORA_SMOKE_STABLE_SECONDS must be a non-negative integer number of seconds." >&2
+    exit 1
+    ;;
+esac
 
 mkdir -p "$gomodcache" "$gocache" "$gotmpdir"
 export GOMODCACHE="$(cd "$gomodcache" && pwd)"

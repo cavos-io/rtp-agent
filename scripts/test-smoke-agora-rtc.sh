@@ -78,6 +78,28 @@ run_smoke() {
     scripts/smoke-agora-rtc.sh
 }
 
+run_smoke_without_stable_window() {
+  cd "$WORKDIR"
+  env -u GOMODCACHE -u GOCACHE -u GOTMPDIR \
+    AGORA_GO_SDK_DIR="$WORKDIR/sdk" \
+    AGORA_APP_ID="app" \
+    AGORA_CHANNEL="support" \
+    AGORA_SMOKE_TIMEOUT=5 \
+    AGORA_SMOKE_STABLE_SECONDS=0 \
+    scripts/smoke-agora-rtc.sh
+}
+
+run_smoke_with_invalid_stable_window() {
+  cd "$WORKDIR"
+  env -u GOMODCACHE -u GOCACHE -u GOTMPDIR \
+    AGORA_GO_SDK_DIR="$WORKDIR/sdk" \
+    AGORA_APP_ID="app" \
+    AGORA_CHANNEL="support" \
+    AGORA_SMOKE_TIMEOUT=5 \
+    AGORA_SMOKE_STABLE_SECONDS=soon \
+    scripts/smoke-agora-rtc.sh
+}
+
 if run_smoke >"$WORKDIR/out-worker-error.txt" 2>"$WORKDIR/err-worker-error.txt"; then
   echo "smoke script unexpectedly passed after worker error" >&2
   exit 1
@@ -100,6 +122,21 @@ if FAKE_AGORA_WORKER_MODE=connected-exit run_smoke >"$WORKDIR/out-connected-exit
 fi
 
 grep -q '^Agora RTC worker exited before stable connected window:$' "$WORKDIR/err-connected-exit.txt"
+
+if ! FAKE_AGORA_WORKER_MODE=connected-exit run_smoke_without_stable_window >"$WORKDIR/out-connected-exit-no-stable.txt" 2>"$WORKDIR/err-connected-exit-no-stable.txt"; then
+  echo "smoke script did not pass when stable window was disabled" >&2
+  cat "$WORKDIR/err-connected-exit-no-stable.txt" >&2
+  exit 1
+fi
+
+grep -q '^Agora RTC connected$' "$WORKDIR/out-connected-exit-no-stable.txt"
+
+if FAKE_AGORA_WORKER_MODE=connected run_smoke_with_invalid_stable_window >"$WORKDIR/out-invalid-stable.txt" 2>"$WORKDIR/err-invalid-stable.txt"; then
+  echo "smoke script unexpectedly passed with invalid stable window" >&2
+  exit 1
+fi
+
+grep -q '^AGORA_SMOKE_STABLE_SECONDS must be a non-negative integer number of seconds.$' "$WORKDIR/err-invalid-stable.txt"
 
 if FAKE_AGORA_WORKER_MODE=connected-then-worker-error run_smoke >"$WORKDIR/out-connected-then-worker-error.txt" 2>"$WORKDIR/err-connected-then-worker-error.txt"; then
   echo "smoke script unexpectedly passed after connected log followed by worker error" >&2
