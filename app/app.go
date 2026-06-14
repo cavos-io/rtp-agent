@@ -2178,6 +2178,69 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, soniox.WithSonioxOneWayTranslation(cfg.STTTranslationTargetLanguages[0]))
 		}
 		return soniox.NewSonioxSTT(cfg.SonioxAPIKey, sttOpts...), nil
+	case providerSpeechmatics:
+		sttOpts := []speechmatics.SpeechmaticsSTTOption{}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTEncoding != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTAudioEncoding(cfg.STTEncoding))
+		}
+		if cfg.STTDomain != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTDomain(cfg.STTDomain))
+		}
+		if cfg.STTOutputLocale != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTOutputLocale(cfg.STTOutputLocale))
+		}
+		if cfg.STTInterimResults != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTIncludePartials(*cfg.STTInterimResults))
+		}
+		if cfg.STTDiarization != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTEnableDiarization(*cfg.STTDiarization))
+		}
+		if len(cfg.STTKeytermsPrompt) > 0 {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTAdditionalVocab(speechmaticsAdditionalVocab(cfg.STTKeytermsPrompt)))
+		}
+		focusSpeakers := modelOptionStringList(cfg.STTModelOptions, "focus_speakers")
+		ignoreSpeakers := modelOptionStringList(cfg.STTModelOptions, "ignore_speakers")
+		focusMode := modelOptionString(cfg.STTModelOptions, "focus_mode")
+		if len(focusSpeakers) > 0 || len(ignoreSpeakers) > 0 || focusMode != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTSpeakerFocus(focusSpeakers, ignoreSpeakers, focusMode))
+		}
+		if speakers := speechmaticsKnownSpeakers(modelOptionString(cfg.STTModelOptions, "known_speakers")); len(speakers) > 0 {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTKnownSpeakers(speakers))
+		}
+		if cfg.STTOperatingPoint != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTOperatingPoint(cfg.STTOperatingPoint))
+		}
+		if cfg.STTTextTimeoutSeconds != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTMaxDelay(*cfg.STTTextTimeoutSeconds))
+		}
+		if cfg.STTVADSilenceThresholdSeconds != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(*cfg.STTVADSilenceThresholdSeconds))
+		}
+		if cfg.STTMaxDurationWithoutEndpointingSeconds != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTEndOfUtteranceMaxDelay(*cfg.STTMaxDurationWithoutEndpointingSeconds))
+		}
+		if overrides := speechmaticsPunctuationOverrides(cfg.STTModelOptions); len(overrides) > 0 {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTPunctuationOverrides(overrides))
+		}
+		if sensitivity := modelOptionFloat(cfg.STTModelOptions, "speaker_sensitivity"); sensitivity != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTSpeakerSensitivity(*sensitivity))
+		}
+		if cfg.STTMaxSpeakers != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTMaxSpeakers(*cfg.STTMaxSpeakers))
+		}
+		if cfg.STTPreferCurrentSpeaker != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTPreferCurrentSpeaker(*cfg.STTPreferCurrentSpeaker))
+		}
+		return speechmatics.NewSpeechmaticsSTT(cfg.SpeechmaticsAPIKey, sttOpts...), nil
 	case providerSLNG:
 		sttOpts := []slng.STTOption{}
 		if cfg.STTModel != "" {

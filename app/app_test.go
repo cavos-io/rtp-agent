@@ -3865,6 +3865,190 @@ func TestSonioxSTTFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("SPEECHMATICS_API_KEY", "test-speechmatics-key")
+	type wsRecord struct {
+		authorization string
+		message       map[string]any
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read speechmatics start message: %v", err)
+			return
+		}
+		var message map[string]any
+		if err := json.Unmarshal(payload, &message); err != nil {
+			t.Errorf("decode speechmatics start message: %v", err)
+			return
+		}
+		records <- wsRecord{
+			authorization: r.Header.Get("Authorization"),
+			message:       message,
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	sampleRate := 8000
+	includePartials := false
+	diarization := true
+	maxDelay := 1.25
+	silenceTrigger := 0.55
+	maxUtteranceDelay := 2.5
+	maxSpeakers := 3
+	preferCurrentSpeaker := true
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTBaseURL:                              "ws" + strings.TrimPrefix(server.URL, "http"),
+		STTLanguage:                             "en",
+		STTSampleRate:                           &sampleRate,
+		STTEncoding:                             "pcm_mulaw",
+		STTDomain:                               "finance",
+		STTOutputLocale:                         "en-GB",
+		STTInterimResults:                       &includePartials,
+		STTDiarization:                          &diarization,
+		STTKeytermsPrompt:                       []string{"LiveKit:live kit|livekit"},
+		STTModelOptions:                         map[string]any{"focus_speakers": "agent|user", "ignore_speakers": "noise", "focus_mode": "retain", "known_speakers": "agent:spk-1", "speaker_sensitivity": "0.7"},
+		STTOperatingPoint:                       "enhanced",
+		STTTextTimeoutSeconds:                   &maxDelay,
+		STTVADSilenceThresholdSeconds:           &silenceTrigger,
+		STTMaxDurationWithoutEndpointingSeconds: &maxUtteranceDelay,
+		STTMaxSpeakers:                          &maxSpeakers,
+		STTPreferCurrentSpeaker:                 &preferCurrentSpeaker,
+	}, providerSpeechmatics)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*speechmatics.SpeechmaticsSTT); !ok {
+		t.Fatalf("provider type = %T, want *speechmatics.SpeechmaticsSTT", provider)
+	}
+	if got, want := provider.Label(), "speechmatics.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "enhanced"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Speechmatics"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || !caps.Diarization || caps.AlignedTranscript != "chunk" || caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming interim diarization chunk-aligned", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.authorization, "Bearer test-speechmatics-key"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		message := record.message
+		if got, want := message["message"], "StartRecognition"; got != want {
+			t.Fatalf("message = %#v, want %#v", got, want)
+		}
+		audioFormat, _ := message["audio_format"].(map[string]any)
+		if got, want := audioFormat["encoding"], "pcm_mulaw"; got != want {
+			t.Fatalf("audio encoding = %#v, want %#v", got, want)
+		}
+		if got, want := audioFormat["sample_rate"], float64(8000); got != want {
+			t.Fatalf("audio sample_rate = %#v, want %#v", got, want)
+		}
+		config, _ := message["transcription_config"].(map[string]any)
+		if got, want := config["language"], "en"; got != want {
+			t.Fatalf("language = %#v, want %#v", got, want)
+		}
+		if got, want := config["domain"], "finance"; got != want {
+			t.Fatalf("domain = %#v, want %#v", got, want)
+		}
+		if got, want := config["output_locale"], "en-GB"; got != want {
+			t.Fatalf("output_locale = %#v, want %#v", got, want)
+		}
+		if got, want := config["enable_partials"], false; got != want {
+			t.Fatalf("enable_partials = %#v, want %#v", got, want)
+		}
+		if got, want := config["diarization"], "speaker"; got != want {
+			t.Fatalf("diarization = %#v, want %#v", got, want)
+		}
+		if got, want := config["operating_point"], "enhanced"; got != want {
+			t.Fatalf("operating_point = %#v, want %#v", got, want)
+		}
+		if got, want := config["max_delay"], 1.25; got != want {
+			t.Fatalf("max_delay = %#v, want %#v", got, want)
+		}
+		if got, want := config["end_of_utterance_silence_trigger"], 0.55; got != want {
+			t.Fatalf("end_of_utterance_silence_trigger = %#v, want %#v", got, want)
+		}
+		if got, want := config["end_of_utterance_max_delay"], 2.5; got != want {
+			t.Fatalf("end_of_utterance_max_delay = %#v, want %#v", got, want)
+		}
+		if got, want := config["speaker_sensitivity"], 0.7; got != want {
+			t.Fatalf("speaker_sensitivity = %#v, want %#v", got, want)
+		}
+		if got, want := config["max_speakers"], float64(3); got != want {
+			t.Fatalf("max_speakers = %#v, want %#v", got, want)
+		}
+		if got, want := config["prefer_current_speaker"], true; got != want {
+			t.Fatalf("prefer_current_speaker = %#v, want %#v", got, want)
+		}
+		vocab, _ := config["additional_vocab"].([]any)
+		if len(vocab) != 1 {
+			t.Fatalf("additional_vocab length = %d, want 1", len(vocab))
+		}
+		firstVocab, _ := vocab[0].(map[string]any)
+		if got, want := firstVocab["content"], "LiveKit"; got != want {
+			t.Fatalf("vocab content = %#v, want %#v", got, want)
+		}
+		if got, want := fmt.Sprint(firstVocab["sounds_like"]), "[live kit livekit]"; got != want {
+			t.Fatalf("vocab sounds_like = %#v, want %q", firstVocab["sounds_like"], want)
+		}
+		speakerConfig, _ := config["speaker_config"].(map[string]any)
+		if got, want := fmt.Sprint(speakerConfig["focus_speakers"]), "[agent user]"; got != want {
+			t.Fatalf("focus_speakers = %#v, want %q", speakerConfig["focus_speakers"], want)
+		}
+		if got, want := fmt.Sprint(speakerConfig["ignore_speakers"]), "[noise]"; got != want {
+			t.Fatalf("ignore_speakers = %#v, want %q", speakerConfig["ignore_speakers"], want)
+		}
+		if got, want := speakerConfig["focus_mode"], "retain"; got != want {
+			t.Fatalf("focus_mode = %#v, want %#v", got, want)
+		}
+		knownSpeakers, _ := config["known_speakers"].([]any)
+		if len(knownSpeakers) != 1 {
+			t.Fatalf("known_speakers length = %d, want 1", len(knownSpeakers))
+		}
+		knownSpeaker, _ := knownSpeakers[0].(map[string]any)
+		if got, want := knownSpeaker["label"], "agent"; got != want {
+			t.Fatalf("known speaker label = %#v, want %#v", got, want)
+		}
+		if got, want := knownSpeaker["speaker_id"], "spk-1"; got != want {
+			t.Fatalf("known speaker id = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Speechmatics STT start message")
+	}
+}
+
 func firstQueryValue(values map[string][]string, key string) string {
 	if len(values[key]) == 0 {
 		return ""
