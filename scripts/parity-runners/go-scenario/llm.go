@@ -987,6 +987,51 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "background_recovery":
+		primary := &fakeScenarioLLM{label: "primary", streams: []lkllm.LLMStream{
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{{err: errors.New("primary stream failed")}}},
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "recovery probe"}}},
+			}},
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "primary active"}}},
+			}},
+		}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		first, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		firstChunks, err := collectScenarioLLMStreamChunks(first)
+		if err != nil {
+			return nil, err
+		}
+		if err := waitForScenarioLLMCalls(primary, 2); err != nil {
+			return nil, err
+		}
+		second, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		secondChunks, err := collectScenarioLLMStreamChunks(second)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "llm-fallback-background-recovery",
+			"events": []map[string]any{
+				{
+					"name":                "background_recovery",
+					"first_chunks":        firstChunks,
+					"second_chunks":       secondChunks,
+					"availability_events": collectScenarioLLMAvailability(adapter),
+					"primary_calls":       primary.calls,
+				},
+			},
+		}, nil
 	case "retry_failed_recovery":
 		primary := &fakeScenarioLLM{label: "primary", streams: []lkllm.LLMStream{
 			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{{err: errors.New("primary stream failed")}}},

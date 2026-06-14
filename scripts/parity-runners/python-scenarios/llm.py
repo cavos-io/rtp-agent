@@ -950,6 +950,55 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
             }
 
         return asyncio.run(run())
+    if action == "background_recovery":
+        primary = FakeLLM(
+            "primary",
+            streams=[
+                [RuntimeError("primary stream failed")],
+                [FakeChunk("recovery probe")],
+                [FakeChunk("primary active")],
+            ],
+        )
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter([primary, fallback])
+        availability_events: list[dict[str, Any]] = []
+        adapter.on(
+            "llm_availability_changed",
+            lambda event: availability_events.append(
+                {
+                    "available": event.available,
+                    "label": event.llm.label,
+                }
+            ),
+        )
+
+        async def run() -> dict[str, Any]:
+            first = adapter.chat(chat_ctx=module.ChatContext())
+            await first._run()
+            first_chunks = [chunk_kind(chunk) for chunk in first._event_ch.items]
+
+            deadline = time.monotonic() + 2
+            while primary.calls < 2 and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+
+            second = adapter.chat(chat_ctx=module.ChatContext())
+            await second._run()
+            second_chunks = [chunk_kind(chunk) for chunk in second._event_ch.items]
+
+            return {
+                "contract": "llm-fallback-background-recovery",
+                "events": [
+                    {
+                        "name": "background_recovery",
+                        "first_chunks": first_chunks,
+                        "second_chunks": second_chunks,
+                        "availability_events": availability_events,
+                        "primary_calls": primary.calls,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
     if action == "retry_failed_recovery":
         primary = FakeLLM(
             "primary",
