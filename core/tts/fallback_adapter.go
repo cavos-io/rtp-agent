@@ -343,7 +343,7 @@ func (f *FallbackAdapter) tryRecoverChunked(index int, text string) {
 		f.mu.Unlock()
 		return
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := f.attemptContext(context.Background())
 	f.nextRecoveryID++
 	recoveryID := f.nextRecoveryID
 	f.status[index].recovering = true
@@ -414,7 +414,7 @@ func (f *FallbackAdapter) tryRecoverStream(index int, inputs []fallbackSynthesiz
 		f.mu.Unlock()
 		return
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := f.attemptContext(context.Background())
 	f.nextRecoveryID++
 	recoveryID := f.nextRecoveryID
 	f.status[index].recovering = true

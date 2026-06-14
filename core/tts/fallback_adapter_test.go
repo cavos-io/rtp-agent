@@ -2354,6 +2354,39 @@ func TestFallbackChunkedRecoveryKeepsProviderUnavailableWhenReplayAudioInvalid(t
 	}
 }
 
+func TestFallbackChunkedRecoveryTimesOutBlockedProvider(t *testing.T) {
+	primary := &contextAwareRecoveryTTS{
+		metadataTTS: metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1},
+		started:     make(chan struct{}, 1),
+		cancelled:   make(chan struct{}, 1),
+	}
+	adapter := NewFallbackAdapterWithOptions([]TTS{primary}, FallbackAdapterOptions{
+		AttemptTimeout: 20 * time.Millisecond,
+	})
+	adapter.status[0].available = false
+
+	adapter.tryRecoverChunked(0, "hello")
+
+	select {
+	case <-primary.started:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("recovery synthesize was not attempted")
+	}
+	select {
+	case <-primary.cancelled:
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("recovery synthesize context was not cancelled after attempt timeout")
+	}
+	waitForFallbackCondition(t, func() bool {
+		adapter.mu.Lock()
+		defer adapter.mu.Unlock()
+		return !adapter.status[0].recovering
+	})
+	if adapter.status[0].available {
+		t.Fatal("provider available = true after blocked recovery probe, want false")
+	}
+}
+
 func TestFallbackSynthesizeStreamReturnsEOFWhenProviderCompletes(t *testing.T) {
 	firstStream := &metadataSynthesizeStream{
 		events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte{1}}}},
@@ -3186,6 +3219,47 @@ func TestFallbackSynthesizeRecoveryKeepsProviderUnavailableWhenReplayAudioInvali
 	}
 }
 
+func TestFallbackSynthesizeRecoveryTimesOutBlockedProvider(t *testing.T) {
+	stream := &contextAwareRecoverySynthesizeStream{
+		started:   make(chan struct{}, 1),
+		cancelled: make(chan struct{}, 1),
+	}
+	primary := &contextAwareRecoveryStreamTTS{
+		metadataTTS: metadataTTS{
+			label:        "primary",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+		},
+		stream: stream,
+	}
+	adapter := NewFallbackAdapterWithOptions([]TTS{primary}, FallbackAdapterOptions{
+		AttemptTimeout: 20 * time.Millisecond,
+	})
+	adapter.status[0].available = false
+
+	adapter.tryRecoverStream(0, []fallbackSynthesizeInput{{text: "hello"}})
+
+	select {
+	case <-stream.started:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("recovery stream was not attempted")
+	}
+	select {
+	case <-stream.cancelled:
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("recovery stream context was not cancelled after attempt timeout")
+	}
+	waitForFallbackCondition(t, func() bool {
+		adapter.mu.Lock()
+		defer adapter.mu.Unlock()
+		return !adapter.status[0].recovering
+	})
+	if adapter.status[0].available {
+		t.Fatal("provider available = true after blocked recovery probe, want false")
+	}
+}
+
 func waitForFallbackCondition(t *testing.T, condition func() bool) {
 	t.Helper()
 
@@ -3577,6 +3651,48 @@ func (s *contextAwareRecoveryChunkedStream) Next() (*SynthesizedAudio, error) {
 
 func (s *contextAwareRecoveryChunkedStream) Close() error {
 	return nil
+}
+
+type contextAwareRecoverySynthesizeStream struct {
+	ctx       context.Context
+	started   chan struct{}
+	cancelled chan struct{}
+}
+
+type contextAwareRecoveryStreamTTS struct {
+	metadataTTS
+	stream *contextAwareRecoverySynthesizeStream
+}
+
+func (t *contextAwareRecoveryStreamTTS) Stream(ctx context.Context) (SynthesizeStream, error) {
+	t.streamCalls++
+	t.stream.ctx = ctx
+	return t.stream, nil
+}
+
+func (s *contextAwareRecoverySynthesizeStream) PushText(string) error {
+	return nil
+}
+
+func (s *contextAwareRecoverySynthesizeStream) Flush() error {
+	return nil
+}
+
+func (s *contextAwareRecoverySynthesizeStream) Close() error {
+	return nil
+}
+
+func (s *contextAwareRecoverySynthesizeStream) Next() (*SynthesizedAudio, error) {
+	select {
+	case s.started <- struct{}{}:
+	default:
+	}
+	<-s.ctx.Done()
+	select {
+	case s.cancelled <- struct{}{}:
+	default:
+	}
+	return nil, s.ctx.Err()
 }
 
 func (n *notifyStreamTTS) Stream(ctx context.Context) (SynthesizeStream, error) {
