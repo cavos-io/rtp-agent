@@ -9,6 +9,8 @@ trap 'rm -rf "$WORKDIR"' EXIT
 mkdir -p "$WORKDIR/scripts" "$WORKDIR/sdk/agora_sdk"
 cp "$ROOT/scripts/smoke-agora-rtc.sh" "$WORKDIR/scripts/smoke-agora-rtc.sh"
 
+grep -q '^has_sdk_event_error() {' "$WORKDIR/scripts/smoke-agora-rtc.sh"
+
 cat > "$WORKDIR/scripts/build-agora-sdk.sh" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -23,6 +25,9 @@ case "${FAKE_AGORA_WORKER_MODE:-worker-error}" in
     ;;
   worker-error)
     echo '{"msg":"Worker error","error":"agora SDK connect timed out after 3s"}'
+    ;;
+  sdk-event-error)
+    echo '{"msg":"agora transport event error","channel":"support","reason":110}'
     ;;
 esac
 BIN
@@ -54,3 +59,11 @@ if ! FAKE_AGORA_WORKER_MODE=connected run_smoke >"$WORKDIR/out-connected.txt" 2>
 fi
 
 grep -q '^Agora RTC connected$' "$WORKDIR/out-connected.txt"
+
+if FAKE_AGORA_WORKER_MODE=sdk-event-error run_smoke >"$WORKDIR/out-sdk-event-error.txt" 2>"$WORKDIR/err-sdk-event-error.txt"; then
+  echo "smoke script unexpectedly passed after SDK event error" >&2
+  exit 1
+fi
+
+grep -q '^Agora RTC smoke failed with SDK event error:$' "$WORKDIR/err-sdk-event-error.txt"
+grep -q '"msg":"agora transport event error"' "$WORKDIR/err-sdk-event-error.txt"
