@@ -65,6 +65,7 @@ def load_reference_llm_value_class(class_name: str):
         "ChatRole": str,
         "ChoiceDelta": object,
         "CompletionUsage": object,
+        "ConfigDict": lambda **kwargs: kwargs,
         "Field": Field,
         "FunctionToolCall": object,
         "Literal": Literal,
@@ -1831,6 +1832,36 @@ def llm_value_objects(input_data: Any) -> dict[str, Any]:
                     "recoverable": True,
                     "timestamp_positive": True,
                     "error_message": str(err),
+                }
+            ],
+        }
+    if action == "llm_error_required_fields":
+        llm_error = load_reference_llm_value_class("LLMError")
+        base = {
+            "timestamp": 1.25,
+            "label": "openai.LLM",
+            "error": Exception("provider unavailable"),
+            "recoverable": True,
+        }
+        rejected_missing_fields = []
+        for field_name in ["timestamp", "label", "recoverable"]:
+            kwargs = dict(base)
+            del kwargs[field_name]
+            try:
+                llm_error(**kwargs)
+            except Exception:
+                rejected_missing_fields.append(field_name)
+        err = llm_error(**base)
+        return {
+            "contract": "llm-error-required-fields",
+            "events": [
+                {
+                    "name": "llm_error_required_fields",
+                    "rejected_missing_fields": rejected_missing_fields,
+                    "type": err.type,
+                    "timestamp": err.timestamp,
+                    "label": err.label,
+                    "recoverable": err.recoverable,
                 }
             ],
         }

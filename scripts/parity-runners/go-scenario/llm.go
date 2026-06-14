@@ -3664,6 +3664,46 @@ func runLLMValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "llm_error_required_fields":
+		base := map[string]any{
+			"timestamp":   1.25,
+			"label":       "openai.LLM",
+			"recoverable": true,
+		}
+		rejectedMissingFields := make([]string, 0, 3)
+		for _, fieldName := range []string{"timestamp", "label", "recoverable"} {
+			payload := make(map[string]any, len(base)-1)
+			for key, value := range base {
+				if key != fieldName {
+					payload[key] = value
+				}
+			}
+			data, err := json.Marshal(payload)
+			if err != nil {
+				return nil, err
+			}
+			var llmErr lkllm.LLMError
+			if err := json.Unmarshal(data, &llmErr); err != nil && strings.Contains(err.Error(), fieldName) {
+				rejectedMissingFields = append(rejectedMissingFields, fieldName)
+			}
+		}
+		var llmErr lkllm.LLMError
+		if err := json.Unmarshal([]byte(`{"timestamp":1.25,"label":"openai.LLM","recoverable":true}`), &llmErr); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "llm-error-required-fields",
+			"events": []map[string]any{
+				{
+					"name":                    "llm_error_required_fields",
+					"rejected_missing_fields": rejectedMissingFields,
+					"type":                    llmErr.Type,
+					"timestamp":               float64(llmErr.Timestamp.UnixNano()) / float64(1e9),
+					"label":                   llmErr.Label,
+					"recoverable":             llmErr.Recoverable,
+				},
+			},
+		}, nil
 	case "completion_usage_payload":
 		usage := lkllm.CompletionUsage{
 			CompletionTokens:    7,
