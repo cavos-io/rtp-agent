@@ -140,6 +140,40 @@ func TestAudioOutputRejectsPartialSampleFrames(t *testing.T) {
 	}
 }
 
+func TestAudioOutputRejectsSampleCountMismatch(t *testing.T) {
+	publisher := &fakePCMPublisher{}
+	output := NewAudioOutput(publisher)
+
+	err := output.PublishAudio(context.Background(), &model.AudioFrame{
+		Data:              make([]byte, 320),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 999,
+	})
+	if err == nil {
+		t.Fatal("PublishAudio() error = nil, want sample count mismatch")
+	}
+	if !strings.Contains(err.Error(), "samples per channel") {
+		t.Fatalf("PublishAudio() error = %q, want samples per channel mismatch", err.Error())
+	}
+	if len(publisher.frames) != 0 {
+		t.Fatalf("published frames after invalid metadata = %d, want 0", len(publisher.frames))
+	}
+
+	err = output.PublishAudio(context.Background(), &model.AudioFrame{
+		Data:              make([]byte, 320),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	})
+	if err != nil {
+		t.Fatalf("PublishAudio(valid) error = %v", err)
+	}
+	if len(publisher.frames) != 1 {
+		t.Fatalf("published frames after valid input = %d, want 1", len(publisher.frames))
+	}
+}
+
 func TestAudioOutputBuffersPartialPCMFrames(t *testing.T) {
 	publisher := &fakePCMPublisher{}
 	output := NewAudioOutput(publisher)
