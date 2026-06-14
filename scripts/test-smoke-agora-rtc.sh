@@ -111,6 +111,28 @@ run_smoke_with_invalid_timeout() {
     scripts/smoke-agora-rtc.sh
 }
 
+run_smoke_with_blank_app_id() {
+  cd "$WORKDIR"
+  env -u GOMODCACHE -u GOCACHE -u GOTMPDIR \
+    AGORA_GO_SDK_DIR="$WORKDIR/sdk" \
+    AGORA_APP_ID="   " \
+    AGORA_CHANNEL="support" \
+    AGORA_SMOKE_TIMEOUT=5 \
+    AGORA_SMOKE_STABLE_SECONDS=1 \
+    scripts/smoke-agora-rtc.sh
+}
+
+run_smoke_with_blank_channel() {
+  cd "$WORKDIR"
+  env -u GOMODCACHE -u GOCACHE -u GOTMPDIR \
+    AGORA_GO_SDK_DIR="$WORKDIR/sdk" \
+    AGORA_APP_ID="app" \
+    AGORA_CHANNEL="   " \
+    AGORA_SMOKE_TIMEOUT=5 \
+    AGORA_SMOKE_STABLE_SECONDS=1 \
+    scripts/smoke-agora-rtc.sh
+}
+
 if run_smoke >"$WORKDIR/out-worker-error.txt" 2>"$WORKDIR/err-worker-error.txt"; then
   echo "smoke script unexpectedly passed after worker error" >&2
   exit 1
@@ -155,6 +177,20 @@ if FAKE_AGORA_WORKER_MODE=connected run_smoke_with_invalid_timeout >"$WORKDIR/ou
 fi
 
 grep -q '^AGORA_SMOKE_TIMEOUT must be a non-negative integer number of seconds.$' "$WORKDIR/err-invalid-timeout.txt"
+
+if FAKE_AGORA_WORKER_MODE=connected run_smoke_with_blank_app_id >"$WORKDIR/out-blank-app-id.txt" 2>"$WORKDIR/err-blank-app-id.txt"; then
+  echo "smoke script unexpectedly passed with blank app ID" >&2
+  exit 1
+fi
+
+grep -q '^AGORA_APP_ID is required.$' "$WORKDIR/err-blank-app-id.txt"
+
+if FAKE_AGORA_WORKER_MODE=connected run_smoke_with_blank_channel >"$WORKDIR/out-blank-channel.txt" 2>"$WORKDIR/err-blank-channel.txt"; then
+  echo "smoke script unexpectedly passed with blank channel" >&2
+  exit 1
+fi
+
+grep -q '^AGORA_CHANNEL is required.$' "$WORKDIR/err-blank-channel.txt"
 
 if FAKE_AGORA_WORKER_MODE=connected-then-worker-error run_smoke >"$WORKDIR/out-connected-then-worker-error.txt" 2>"$WORKDIR/err-connected-then-worker-error.txt"; then
   echo "smoke script unexpectedly passed after connected log followed by worker error" >&2

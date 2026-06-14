@@ -11,15 +11,22 @@ gomodcache="${GOMODCACHE:-.tmp/gomodcache}"
 gocache="${GOCACHE:-.tmp/gocache}"
 gotmpdir="${GOTMPDIR:-.tmp/gotmp}"
 
-if [ -z "$sdk_dir" ]; then
+trim_space() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+if [ -z "$(trim_space "$sdk_dir")" ]; then
   echo "AGORA_GO_SDK_DIR is required." >&2
   exit 1
 fi
-if [ -z "${AGORA_APP_ID:-}" ]; then
+if [ -z "$(trim_space "${AGORA_APP_ID:-}")" ]; then
   echo "AGORA_APP_ID is required." >&2
   exit 1
 fi
-if [ -z "${AGORA_CHANNEL:-}" ]; then
+if [ -z "$(trim_space "${AGORA_CHANNEL:-}")" ]; then
   echo "AGORA_CHANNEL is required." >&2
   exit 1
 fi
