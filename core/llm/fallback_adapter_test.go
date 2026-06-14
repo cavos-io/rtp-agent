@@ -122,6 +122,26 @@ func TestFallbackAdapterRetriesNextLLMWhenStreamFailsBeforeChunk(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterErrorUnsubscribeRemovesLocalHandler(t *testing.T) {
+	primary := &fakeFallbackLLM{label: "primary.LLM"}
+	adapter := NewFallbackAdapter([]LLM{primary})
+	labelsCh := make(chan string, 1)
+	unsubscribe := adapter.OnError(func(err *LLMError) {
+		labelsCh <- err.Label
+	})
+	unsubscribe()
+	unsubscribe()
+
+	primary.EmitError(NewLLMError("primary", errors.New("primary failed"), true))
+	adapter.EmitError(NewLLMError("adapter", errors.New("adapter failed"), true))
+
+	select {
+	case label := <-labelsCh:
+		t.Fatalf("received error after unsubscribe: %q", label)
+	default:
+	}
+}
+
 func TestFallbackAdapterReportsReferenceMetadata(t *testing.T) {
 	adapter := NewFallbackAdapter([]LLM{
 		&fakeFallbackLLM{label: "primary.LLM"},

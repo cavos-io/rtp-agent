@@ -452,6 +452,22 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 				{"name": "provider_error_not_forwarded", "labels": labels},
 			},
 		}, nil
+	case "error_unsubscribe_local":
+		primary := &fakeScenarioLLM{label: "primary"}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary})
+		labels := make([]string, 0, 1)
+		unsubscribe := adapter.OnError(func(err *lkllm.LLMError) {
+			labels = append(labels, err.Label)
+		})
+		unsubscribe()
+		primary.EmitError(lkllm.NewLLMError("primary", errors.New("primary failed"), true))
+		adapter.EmitError(lkllm.NewLLMError("adapter", errors.New("adapter failed"), true))
+		return map[string]any{
+			"contract": "llm-fallback-error-unsubscribe-local",
+			"events": []map[string]any{
+				{"name": "error_unsubscribe_local", "labels": labels},
+			},
+		}, nil
 	case "forward_metrics":
 		primary := &fakeScenarioLLM{label: "primary"}
 		fallback := &fakeScenarioLLM{label: "fallback"}
