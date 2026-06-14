@@ -38,6 +38,11 @@ func (i *AudioInput) HandleAudioFrame(frame *model.AudioFrame) {
 	if i == nil || i.receiver == nil || frame == nil || len(frame.Data) == 0 {
 		return
 	}
+	select {
+	case <-i.ctx.Done():
+		return
+	default:
+	}
 	cloned := *frame
 	cloned.Data = append([]byte(nil), frame.Data...)
 	i.receiver.OnAudioFrame(i.ctx, &cloned)

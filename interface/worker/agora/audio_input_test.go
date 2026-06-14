@@ -66,3 +66,21 @@ func TestAudioInputHandleAudioFrameClonesBeforeForwarding(t *testing.T) {
 		t.Fatalf("forwarded frame data was not cloned, first byte = %d, want 1", receiver.frames[0].Data[0])
 	}
 }
+
+func TestAudioInputDropsFramesAfterContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	receiver := &fakeAudioReceiver{}
+	input := NewAudioInput(ctx, receiver)
+	cancel()
+
+	input.HandleAudioFrame(&model.AudioFrame{
+		Data:              []byte{1, 2, 3},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	})
+
+	if len(receiver.frames) != 0 {
+		t.Fatalf("received frames after context cancellation = %d, want 0", len(receiver.frames))
+	}
+}
