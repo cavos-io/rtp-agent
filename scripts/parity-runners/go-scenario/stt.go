@@ -69,6 +69,36 @@ func runSTTValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "error_panic_isolated":
+		var emitter lkstt.ErrorEmitter
+		err := lkstt.NewSTTError("provider.STT", context.Canceled, true)
+		receivedLabels := []string{}
+		emitter.OnError(func(*lkstt.STTError) {
+			panic("error handler failed")
+		})
+		emitter.OnError(func(err *lkstt.STTError) {
+			receivedLabels = append(receivedLabels, err.Label)
+		})
+		escapedError := false
+		func() {
+			defer func() {
+				if recover() != nil {
+					escapedError = true
+				}
+			}()
+			emitter.EmitError(err)
+		}()
+		return map[string]any{
+			"contract": "stt-error-reference-panic-isolated",
+			"events": []map[string]any{
+				{
+					"name":               "error_panic_isolated",
+					"escaped_error":      escapedError,
+					"handler_call_count": len(receivedLabels),
+					"labels":             receivedLabels,
+				},
+			},
+		}, nil
 	case "speech_data_metadata":
 		data := lkstt.SpeechData{
 			Language: "en",
