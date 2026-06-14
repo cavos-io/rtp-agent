@@ -3189,6 +3189,7 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 		envValue string
 		model    string
 	}{
+		{name: "aws", provider: "aws", envKey: "AWS_REGION", envValue: "us-west-2"},
 		{name: "cerebras", provider: "cerebras", envKey: "CEREBRAS_API_KEY", envValue: "test-cerebras-key"},
 		{name: "fireworks", provider: "fireworks", envKey: "FIREWORKS_API_KEY", envValue: "test-fireworks-key"},
 		{name: "anthropic", provider: "anthropic", envKey: "ANTHROPIC_API_KEY", envValue: "test-anthropic-key"},

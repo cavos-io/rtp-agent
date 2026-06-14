@@ -1916,6 +1916,8 @@ func configureLLMFallbacks(cfg AppConfig, a *agent.Agent) error {
 
 func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 	switch normalizeProvider(provider) {
+	case providerAWS:
+		return adapteraws.NewAWSLLM(context.Background(), cfg.AWSRegion, cfg.LLMModel)
 	case providerMinimal:
 		return minimal.NewMinimalLLM(cfg.MinimalAPIKey, cfg.LLMModel), nil
 	case providerCerebras:
