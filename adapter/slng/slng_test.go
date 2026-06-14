@@ -162,6 +162,14 @@ func TestSLNGGatewayPayloadsMatchReference(t *testing.T) {
 	assertSLNGNestedField(t, ttsPayload, "config", "speed", float64(1.1))
 }
 
+func TestSLNGTTSInitPayloadPreservesExplicitZeroSpeed(t *testing.T) {
+	provider := NewTTS("test-key", WithTTSSpeed(0))
+
+	payload := buildTTSInitPayload(provider)
+
+	assertSLNGNestedField(t, payload, "config", "speed", float64(0))
+}
+
 func TestSLNGTTSReceivedEventParsesReferenceShapes(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString([]byte{1, 2, 3})
 	audio, done, err := ttsAudioFromMessage([]byte(`{"type":"audio_chunk","data":"`+encoded+`"}`), 24000)

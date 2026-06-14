@@ -359,9 +359,7 @@ func WithTTSSampleRate(sampleRate int) TTSOption {
 
 func WithTTSSpeed(speed float64) TTSOption {
 	return func(t *TTS) {
-		if speed > 0 {
-			t.speed = speed
-		}
+		t.speed = speed
 	}
 }
 
