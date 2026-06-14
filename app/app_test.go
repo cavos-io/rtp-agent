@@ -4188,6 +4188,96 @@ func TestAsyncAITTSFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestCambaiTTSFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("CAMB_API_KEY", "test-cambai-key")
+	enhanceNamedEntities := true
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("audio")),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		TTSBaseURL:              "https://cambai.example/apis/",
+		TTSVoice:                "42",
+		TTSLanguage:             "fr-fr",
+		TTSModel:                "mars-pro",
+		TTSEncoding:             "wav",
+		TTSInstructions:         "warm and concise",
+		TTSEnhanceNamedEntities: &enhanceNamedEntities,
+	}, providerCambai)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*cambai.CambaiTTS); !ok {
+		t.Fatalf("provider type = %T, want *cambai.CambaiTTS", provider)
+	}
+	if got, want := provider.Label(), "cambai.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 48000; got != want {
+		t.Fatalf("SampleRate() = %d, want mars-pro reference sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "mars-pro"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "Camb.ai"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
+	}
+	stream, err := provider.Synthesize(context.Background(), "bonjour")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://cambai.example/apis/tts-stream"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("x-api-key"), "test-cambai-key"; got != want {
+		t.Fatalf("x-api-key = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["text"], "bonjour"; got != want {
+		t.Fatalf("payload text = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["voice_id"], float64(42); got != want {
+		t.Fatalf("payload voice_id = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["language"], "fr-fr"; got != want {
+		t.Fatalf("payload language = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["speech_model"], "mars-pro"; got != want {
+		t.Fatalf("payload speech_model = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["user_instructions"], "warm and concise"; got != want {
+		t.Fatalf("payload user_instructions = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["enhance_named_entities_pronunciation"], true; got != want {
+		t.Fatalf("payload enhance_named_entities_pronunciation = %#v, want %#v", got, want)
+	}
+	outputConfig, _ := gotPayload["output_configuration"].(map[string]any)
+	if got, want := outputConfig["format"], "wav"; got != want {
+		t.Fatalf("payload output_configuration.format = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsTelnyxTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "telnyx")

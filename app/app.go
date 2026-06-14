@@ -2134,6 +2134,32 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, asyncai.WithAsyncAITTSSampleRate(*cfg.TTSSampleRate))
 		}
 		return asyncai.NewAsyncAITTS(os.Getenv("ASYNCAI_API_KEY"), cfg.TTSVoice, ttsOpts...), nil
+	case providerCambai:
+		ttsOpts := []cambai.CambaiTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, cambai.WithCambaiTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSVoice != "" {
+			if voiceID, err := strconv.Atoi(cfg.TTSVoice); err == nil {
+				ttsOpts = append(ttsOpts, cambai.WithCambaiTTSVoiceID(voiceID))
+			}
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, cambai.WithCambaiTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, cambai.WithCambaiTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, cambai.WithCambaiTTSOutputFormat(cfg.TTSEncoding))
+		}
+		if cfg.TTSInstructions != "" {
+			ttsOpts = append(ttsOpts, cambai.WithCambaiTTSUserInstructions(cfg.TTSInstructions))
+		}
+		if cfg.TTSEnhanceNamedEntities != nil {
+			ttsOpts = append(ttsOpts, cambai.WithCambaiTTSEnhanceNamedEntities(*cfg.TTSEnhanceNamedEntities))
+		}
+		return cambai.NewCambaiTTS("", "", ttsOpts...)
 	case providerCartesia:
 		ttsOpts := []cartesia.CartesiaTTSOption{}
 		if cfg.TTSBaseURL != "" {
