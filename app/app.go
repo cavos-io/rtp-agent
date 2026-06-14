@@ -1934,6 +1934,8 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return baseten.NewBasetenLLM("", cfg.LLMModel)
 	case providerFal:
 		return fal.NewFalLLM(cfg.FalAPIKey, cfg.LLMModel), nil
+	case providerGradium:
+		return gradium.NewGradiumLLM(cfg.GradiumAPIKey, cfg.LLMModel), nil
 	case providerMistralAI:
 		return mistralai.NewMistralLLM(cfg.MistralAPIKey, cfg.LLMModel), nil
 	case providerNvidia:
