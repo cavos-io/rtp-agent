@@ -2317,6 +2317,8 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSTextNormalization(*cfg.TTSTextNormalization))
 		}
 		return speechify.NewSpeechifyTTS(cfg.SpeechifyAPIKey, cfg.TTSVoice, ttsOpts...), nil
+	case providerSimplismart:
+		return simplismart.NewSimplismartTTS(cfg.SimplismartAPIKey, cfg.TTSVoice), nil
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {
