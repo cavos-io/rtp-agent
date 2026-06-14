@@ -2045,6 +2045,12 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 	switch normalizeProvider(provider) {
 	case providerAWS:
 		return awsSTTFromConfig(cfg)
+	case providerAzure:
+		return azure.NewAzureSTT("", "")
+	case providerFal:
+		return falSTTFromConfig(cfg), nil
+	case providerSpitch:
+		return spitch.NewSpitchSTT(cfg.SpitchAPIKey), nil
 	case providerDeepgram:
 		sttOpts := []deepgram.DeepgramSTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -2207,6 +2213,17 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		}
 		if cfg.STTSampleRate != nil {
 			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTVADThreshold != nil || cfg.STTVADSilenceThresholdSeconds != nil {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTServerVAD(elevenlabs.ElevenLabsVADOptions{
+				VADSilenceThresholdSecs: cfg.STTVADSilenceThresholdSeconds,
+				VADThreshold:            cfg.STTVADThreshold,
+				MinSpeechDurationMS:     cfg.STTMinTurnSilence,
+				MinSilenceDurationMS:    cfg.STTMaxTurnSilence,
+			}))
+		}
+		if len(cfg.STTKeytermsPrompt) > 0 {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTKeyterms(cfg.STTKeytermsPrompt))
 		}
 		return elevenlabs.NewElevenLabsSTT(cfg.ElevenLabsAPIKey, sttOpts...), nil
 	case providerFireworks:
@@ -2445,6 +2462,8 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		}
 		if cfg.STTLanguageOptions != "" {
 			sttOpts = append(sttOpts, soniox.WithSonioxLanguageHints(splitStringList(cfg.STTLanguageOptions)))
+		} else if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, soniox.WithSonioxLanguageHints([]string{cfg.STTLanguage}))
 		}
 		if strict := modelOptionBool(cfg.STTModelOptions, "language_hints_strict"); strict != nil {
 			sttOpts = append(sttOpts, soniox.WithSonioxLanguageHintsStrict(*strict))
@@ -2886,6 +2905,23 @@ func awsSTTFromConfig(cfg AppConfig) (*adapteraws.AWSSTT, error) {
 	return adapteraws.NewAWSSTT(context.Background(), cfg.AWSRegion, sttOpts...)
 }
 
+func falSTTFromConfig(cfg AppConfig) *fal.FalSTT {
+	sttOpts := []fal.FalSTTOption{}
+	if cfg.STTLanguage != "" {
+		sttOpts = append(sttOpts, fal.WithFalSTTLanguage(cfg.STTLanguage))
+	}
+	if cfg.STTTask != "" {
+		sttOpts = append(sttOpts, fal.WithFalSTTTask(cfg.STTTask))
+	}
+	if cfg.STTChunkLevel != "" {
+		sttOpts = append(sttOpts, fal.WithFalSTTChunkLevel(cfg.STTChunkLevel))
+	}
+	if cfg.STTVersion != "" {
+		sttOpts = append(sttOpts, fal.WithFalSTTVersion(cfg.STTVersion))
+	}
+	return fal.NewFalSTT(cfg.FalAPIKey, sttOpts...)
+}
+
 func configureTTSFallbacks(cfg AppConfig, a *agent.Agent) error {
 	if len(cfg.TTSFallbackProviders) == 0 {
 		return nil
@@ -3301,7 +3337,20 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		return groq.NewGroqTTS(cfg.GroqAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerNvidia:
-		return nvidia.NewNvidiaTTS(cfg.NvidiaAPIKey, cfg.TTSVoice)
+		ttsOpts := []nvidia.NvidiaTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, nvidia.WithNvidiaTTSServer(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, nvidia.WithNvidiaTTSFunctionID(cfg.TTSModel))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, nvidia.WithNvidiaTTSLanguageCode(cfg.TTSLanguage))
+		}
+		if useSSL := modelOptionBool(cfg.TTSModelOptions, "use_ssl"); useSSL != nil {
+			ttsOpts = append(ttsOpts, nvidia.WithNvidiaTTSUseSSL(*useSSL))
+		}
+		return nvidia.NewNvidiaTTS(cfg.NvidiaAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerMistralAI:
 		ttsOpts := []mistralai.MistralAITTSOption{}
 		if cfg.TTSBaseURL != "" {
@@ -4057,20 +4106,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.STT = deepgram.NewDeepgramSTT("", cfg.STTModel, sttOpts...)
 	case providerFal:
-		sttOpts := []fal.FalSTTOption{}
-		if cfg.STTLanguage != "" {
-			sttOpts = append(sttOpts, fal.WithFalSTTLanguage(cfg.STTLanguage))
-		}
-		if cfg.STTTask != "" {
-			sttOpts = append(sttOpts, fal.WithFalSTTTask(cfg.STTTask))
-		}
-		if cfg.STTChunkLevel != "" {
-			sttOpts = append(sttOpts, fal.WithFalSTTChunkLevel(cfg.STTChunkLevel))
-		}
-		if cfg.STTVersion != "" {
-			sttOpts = append(sttOpts, fal.WithFalSTTVersion(cfg.STTVersion))
-		}
-		a.STT = fal.NewFalSTT(cfg.FalAPIKey, sttOpts...)
+		a.STT = falSTTFromConfig(cfg)
 	case providerFireworks:
 		sttOpts := []fireworksai.FireworksSTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -5139,7 +5175,20 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = murf.NewMurfTTS(cfg.MurfAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerNvidia:
-		provider, err := nvidia.NewNvidiaTTS(cfg.NvidiaAPIKey, cfg.TTSVoice)
+		ttsOpts := []nvidia.NvidiaTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, nvidia.WithNvidiaTTSServer(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, nvidia.WithNvidiaTTSFunctionID(cfg.TTSModel))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, nvidia.WithNvidiaTTSLanguageCode(cfg.TTSLanguage))
+		}
+		if useSSL := modelOptionBool(cfg.TTSModelOptions, "use_ssl"); useSSL != nil {
+			ttsOpts = append(ttsOpts, nvidia.WithNvidiaTTSUseSSL(*useSSL))
+		}
+		provider, err := nvidia.NewNvidiaTTS(cfg.NvidiaAPIKey, cfg.TTSVoice, ttsOpts...)
 		if err != nil {
 			return nil, err
 		}

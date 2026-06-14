@@ -964,6 +964,57 @@ func TestDefaultConfigFromEnvSelectsNvidiaTTS(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsNvidiaTTSWithReferenceOptions(t *testing.T) {
+	t.Setenv("NVIDIA_API_KEY", "test-nvidia-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "nvidia")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "localhost:50051")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "local-function")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "Magpie-Multilingual.ID-ID.Ayu")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "id-ID")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	nvidiaProvider, ok := app.Session.TTS.(*nvidia.NvidiaTTS)
+	if !ok {
+		t.Fatalf("TTS provider type = %T, want *nvidia.NvidiaTTS", app.Session.TTS)
+	}
+	state := reflect.ValueOf(nvidiaProvider).Elem()
+	if got, want := state.FieldByName("server").String(), "localhost:50051"; got != want {
+		t.Fatalf("server = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("functionID").String(), "local-function"; got != want {
+		t.Fatalf("functionID = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("voice").String(), "Magpie-Multilingual.ID-ID.Ayu"; got != want {
+		t.Fatalf("voice = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("languageCode").String(), "id-ID"; got != want {
+		t.Fatalf("languageCode = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsNvidiaTTSLocalRivaWithoutAPIKey(t *testing.T) {
+	t.Setenv("NVIDIA_API_KEY", "")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "nvidia")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "localhost:50051")
+	t.Setenv("RTP_AGENT_TTS_MODEL_OPTIONS", "use_ssl=false")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	nvidiaProvider, ok := app.Session.TTS.(*nvidia.NvidiaTTS)
+	if !ok {
+		t.Fatalf("TTS provider type = %T, want *nvidia.NvidiaTTS", app.Session.TTS)
+	}
+	useSSL := reflect.ValueOf(nvidiaProvider).Elem().FieldByName("useSSL").Bool()
+	if useSSL {
+		t.Fatal("useSSL = true, want false for local Riva")
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsUltravoxTTS(t *testing.T) {
 	t.Setenv("ULTRAVOX_API_KEY", "test-ultravox-key")
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "ultravox")
@@ -2179,6 +2230,29 @@ func TestDefaultConfigFromEnvSelectsSonioxSpeechProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsSonioxSTTWithReferenceLanguageHintFallback(t *testing.T) {
+	t.Setenv("SONIOX_API_KEY", "test-soniox-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "soniox")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "id")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	sonioxProvider, ok := app.Session.STT.(*soniox.SonioxSTT)
+	if !ok {
+		t.Fatalf("STT provider type = %T, want *soniox.SonioxSTT", app.Session.STT)
+	}
+	languageHints := reflect.ValueOf(sonioxProvider).Elem().FieldByName("languageHints")
+	got := make([]string, 0, languageHints.Len())
+	for i := 0; i < languageHints.Len(); i++ {
+		got = append(got, languageHints.Index(i).String())
+	}
+	if want := []string{"id"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("languageHints = %#v, want %#v", got, want)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsSpeechifyTTS(t *testing.T) {
 	t.Setenv("SPEECHIFY_API_KEY", "test-speechify-key")
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "speechify")
@@ -3318,6 +3392,51 @@ func TestDefaultConfigFromEnvAcceptsAWSSTTFallbackProvider(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvAcceptsAzureSTTFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
+	t.Setenv("RTP_AGENT_STT_FALLBACK_PROVIDERS", "azure")
+	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
+	t.Setenv("AZURE_SPEECH_REGION", "eastus")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.STT.Label(); got != "FallbackAdapter(deepgram.STT)" {
+		t.Fatalf("STT label = %q, want fallback adapter around primary deepgram STT", got)
+	}
+}
+
+func TestDefaultConfigFromEnvAcceptsFalSTTFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
+	t.Setenv("RTP_AGENT_STT_FALLBACK_PROVIDERS", "fal")
+	t.Setenv("RTP_AGENT_VAD_PROVIDER", "silero")
+	t.Setenv("FAL_KEY", "test-fal-key")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.STT.Label(); got != "FallbackAdapter(deepgram.STT)" {
+		t.Fatalf("STT label = %q, want fallback adapter around primary deepgram STT", got)
+	}
+}
+
+func TestDefaultConfigFromEnvAcceptsSpitchSTTFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
+	t.Setenv("RTP_AGENT_STT_FALLBACK_PROVIDERS", "spitch")
+	t.Setenv("RTP_AGENT_VAD_PROVIDER", "silero")
+	t.Setenv("SPITCH_API_KEY", "test-spitch-key")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.STT.Label(); got != "FallbackAdapter(deepgram.STT)" {
+		t.Fatalf("STT label = %q, want fallback adapter around primary deepgram STT", got)
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsOVHCloudSTTFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
 	t.Setenv("RTP_AGENT_STT_FALLBACK_PROVIDERS", "ovhcloud")
@@ -3349,6 +3468,102 @@ func TestDefaultConfigFromEnvWrapsNonStreamingSTTFallbackWithVAD(t *testing.T) {
 	}
 	if app.Session.VAD == nil {
 		t.Fatal("Session VAD is nil")
+	}
+}
+
+func TestElevenLabsSTTFallbackPassesReferenceKeyterms(t *testing.T) {
+	tagAudioEvents := false
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		ElevenLabsAPIKey:  "test-eleven-key",
+		STTBaseURL:        "https://eleven.example/v1",
+		STTModel:          "scribe_v2",
+		STTLanguage:       "en",
+		STTTagAudioEvents: &tagAudioEvents,
+		STTKeytermsPrompt: []string{"LiveKit", "Cavos"},
+	}, providerElevenLabs)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	elevenProvider, ok := provider.(*elevenlabs.ElevenLabsSTT)
+	if !ok {
+		t.Fatalf("provider type = %T, want *elevenlabs.ElevenLabsSTT", provider)
+	}
+	if got, want := provider.Label(), "elevenlabs.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "scribe_v2"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || !caps.InterimResults || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want offline recognize interim fallback", caps)
+	}
+	state := reflect.ValueOf(elevenProvider).Elem()
+	if got, want := state.FieldByName("apiKey").String(), "test-eleven-key"; got != want {
+		t.Fatalf("apiKey = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("baseURL").String(), "https://eleven.example/v1"; got != want {
+		t.Fatalf("baseURL = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("languageCode").String(), "en"; got != want {
+		t.Fatalf("languageCode = %q, want %q", got, want)
+	}
+	if got := state.FieldByName("tagAudioEvents").Bool(); got {
+		t.Fatalf("tagAudioEvents = %v, want false", got)
+	}
+	keytermsField := state.FieldByName("keyterms")
+	gotKeyterms := make([]string, 0, keytermsField.Len())
+	for i := 0; i < keytermsField.Len(); i++ {
+		gotKeyterms = append(gotKeyterms, keytermsField.Index(i).String())
+	}
+	if want := []string{"LiveKit", "Cavos"}; !reflect.DeepEqual(gotKeyterms, want) {
+		t.Fatalf("keyterms = %#v, want %#v", gotKeyterms, want)
+	}
+}
+
+func TestElevenLabsSTTFallbackPassesReferenceServerVAD(t *testing.T) {
+	vadThreshold := 0.42
+	vadSilence := 0.8
+	minSpeech := 120
+	minSilence := 900
+	includeTimestamps := true
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		ElevenLabsAPIKey:              "test-eleven-key",
+		STTModel:                      "scribe_v2_realtime",
+		STTLanguage:                   "en",
+		STTVADThreshold:               &vadThreshold,
+		STTVADSilenceThresholdSeconds: &vadSilence,
+		STTMinTurnSilence:             &minSpeech,
+		STTMaxTurnSilence:             &minSilence,
+		STTIncludeTimestamps:          &includeTimestamps,
+	}, providerElevenLabs)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	elevenProvider, ok := provider.(*elevenlabs.ElevenLabsSTT)
+	if !ok {
+		t.Fatalf("provider type = %T, want *elevenlabs.ElevenLabsSTT", provider)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.AlignedTranscript != "word" || caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming word-aligned interim fallback", caps)
+	}
+	serverVAD := reflect.ValueOf(elevenProvider).Elem().FieldByName("serverVAD")
+	if serverVAD.IsNil() {
+		t.Fatal("serverVAD is nil, want reference VAD options")
+	}
+	vad := serverVAD.Elem()
+	if got, want := vad.FieldByName("VADThreshold").Elem().Float(), vadThreshold; got != want {
+		t.Fatalf("VADThreshold = %v, want %v", got, want)
+	}
+	if got, want := vad.FieldByName("VADSilenceThresholdSecs").Elem().Float(), vadSilence; got != want {
+		t.Fatalf("VADSilenceThresholdSecs = %v, want %v", got, want)
+	}
+	if got, want := int(vad.FieldByName("MinSpeechDurationMS").Elem().Int()), minSpeech; got != want {
+		t.Fatalf("MinSpeechDurationMS = %v, want %v", got, want)
+	}
+	if got, want := int(vad.FieldByName("MinSilenceDurationMS").Elem().Int()), minSilence; got != want {
+		t.Fatalf("MinSilenceDurationMS = %v, want %v", got, want)
 	}
 }
 
@@ -3924,6 +4139,30 @@ func TestSonioxSTTFallbackPassesReferenceOptions(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for Soniox STT config")
+	}
+}
+
+func TestSonioxSTTFallbackUsesReferenceLanguageHintFallback(t *testing.T) {
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		SonioxAPIKey: "test-soniox-key",
+		STTLanguage:  "id",
+	}, providerSoniox)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	sonioxProvider, ok := provider.(*soniox.SonioxSTT)
+	if !ok {
+		t.Fatalf("provider type = %T, want *soniox.SonioxSTT", provider)
+	}
+	state := reflect.ValueOf(sonioxProvider).Elem()
+	languageHints := state.FieldByName("languageHints")
+	got := make([]string, 0, languageHints.Len())
+	for i := 0; i < languageHints.Len(); i++ {
+		got = append(got, languageHints.Index(i).String())
+	}
+	if want := []string{"id"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("languageHints = %#v, want %#v", got, want)
 	}
 }
 
@@ -8150,6 +8389,79 @@ func TestDefaultConfigFromEnvAcceptsGroqTTSFallbackProvider(t *testing.T) {
 	}
 }
 
+func TestGroqTTSFallbackPassesReferenceOptions(t *testing.T) {
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/wav"}},
+			Body:       io.NopCloser(strings.NewReader("audio")),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		GroqAPIKey: "test-groq-key",
+		TTSBaseURL: "https://groq.example/openai/v1/",
+		TTSModel:   "canopylabs/orpheus-arabic-saudi",
+		TTSVoice:   "noura",
+	}, providerGroq)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*groq.GroqTTS); !ok {
+		t.Fatalf("provider type = %T, want *groq.GroqTTS", provider)
+	}
+	if got, want := provider.Label(), "groq.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := tts.Model(provider), "canopylabs/orpheus-arabic-saudi"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "Groq"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://groq.example/openai/v1/audio/speech"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("Authorization"), "Bearer test-groq-key"; got != want {
+		t.Fatalf("Authorization = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["model"], "canopylabs/orpheus-arabic-saudi"; got != want {
+		t.Fatalf("payload model = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["voice"], "noura"; got != want {
+		t.Fatalf("payload voice = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["input"], "hello"; got != want {
+		t.Fatalf("payload input = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["response_format"], "wav"; got != want {
+		t.Fatalf("payload response_format = %#v, want %#v", got, want)
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsNvidiaTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "nvidia")
@@ -8163,6 +8475,59 @@ func TestDefaultConfigFromEnvAcceptsNvidiaTTSFallbackProvider(t *testing.T) {
 	}
 	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
 		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	}
+}
+
+func TestNvidiaTTSFallbackPassesReferenceLanguage(t *testing.T) {
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		NvidiaAPIKey: "test-nvidia-key",
+		TTSVoice:     "Magpie-Multilingual.ID-ID.Ayu",
+		TTSLanguage:  "id-ID",
+	}, providerNvidia)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	nvidiaProvider, ok := provider.(*nvidia.NvidiaTTS)
+	if !ok {
+		t.Fatalf("provider type = %T, want *nvidia.NvidiaTTS", provider)
+	}
+	if got, want := nvidiaProvider.Label(), "nvidia.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := nvidiaProvider.SampleRate(), 16000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference sample rate %d", got, want)
+	}
+	state := reflect.ValueOf(nvidiaProvider).Elem()
+	if got, want := state.FieldByName("voice").String(), "Magpie-Multilingual.ID-ID.Ayu"; got != want {
+		t.Fatalf("voice = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("languageCode").String(), "id-ID"; got != want {
+		t.Fatalf("languageCode = %q, want %q", got, want)
+	}
+}
+
+func TestNvidiaTTSFallbackAllowsLocalRivaWithoutAPIKey(t *testing.T) {
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		TTSBaseURL: "localhost:50051",
+		TTSModelOptions: map[string]any{
+			"use_ssl": false,
+		},
+	}, providerNvidia)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	nvidiaProvider, ok := provider.(*nvidia.NvidiaTTS)
+	if !ok {
+		t.Fatalf("provider type = %T, want *nvidia.NvidiaTTS", provider)
+	}
+	state := reflect.ValueOf(nvidiaProvider).Elem()
+	if got, want := state.FieldByName("server").String(), "localhost:50051"; got != want {
+		t.Fatalf("server = %q, want %q", got, want)
+	}
+	if state.FieldByName("useSSL").Bool() {
+		t.Fatal("useSSL = true, want false for local Riva")
 	}
 }
 
@@ -8181,6 +8546,96 @@ func TestDefaultConfigFromEnvAcceptsMistralAITTSFallbackProvider(t *testing.T) {
 	}
 	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
 		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	}
+}
+
+func TestMistralAITTSFallbackPassesReferenceOptions(t *testing.T) {
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+				`data: {"event":"speech.audio.delta","data":{"audio_data":"YXVkaW8="}}`,
+				`data: {"event":"speech.audio.done","data":{"usage":{"prompt_tokens":2,"completion_tokens":4,"total_tokens":6}}}`,
+				"",
+			}, "\n"))),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		MistralAPIKey:     "test-mistral-key",
+		TTSBaseURL:        "https://mistral.example/v1/",
+		TTSModel:          "voxtral-mini-tts-2603",
+		TTSVoice:          "voice-1",
+		TTSResponseFormat: "opus",
+	}, providerMistralAI)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*mistralai.MistralAITTS); !ok {
+		t.Fatalf("provider type = %T, want *mistralai.MistralAITTS", provider)
+	}
+	if got, want := provider.Label(), "mistralai.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 24000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "voxtral-mini-tts-2603"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "MistralAI"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://mistral.example/v1/audio/speech"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("Authorization"), "Bearer test-mistral-key"; got != want {
+		t.Fatalf("Authorization = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("Accept"), "text/event-stream"; got != want {
+		t.Fatalf("Accept = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["model"], "voxtral-mini-tts-2603"; got != want {
+		t.Fatalf("payload model = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["voice_id"], "voice-1"; got != want {
+		t.Fatalf("payload voice_id = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["input"], "hello"; got != want {
+		t.Fatalf("payload input = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["response_format"], "opus"; got != want {
+		t.Fatalf("payload response_format = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["stream"], true; got != want {
+		t.Fatalf("payload stream = %#v, want %#v", got, want)
+	}
+	if _, ok := gotPayload["ref_audio"]; ok {
+		t.Fatalf("payload ref_audio present with voice request: %#v", gotPayload)
 	}
 }
 
@@ -8203,6 +8658,101 @@ func TestDefaultConfigFromEnvAcceptsLMNTTTSFallbackProvider(t *testing.T) {
 	}
 }
 
+func TestLMNTTTSFallbackPassesReferenceOptions(t *testing.T) {
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/wav"}},
+			Body:       io.NopCloser(strings.NewReader("audio")),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	sampleRate := 16000
+	temperature := 0.4
+	topP := 0.6
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		LMNTAPIKey:        "test-lmnt-key",
+		TTSModel:          "aurora",
+		TTSVoice:          "ava",
+		TTSLanguage:       "en",
+		TTSResponseFormat: "wav",
+		TTSSampleRate:     &sampleRate,
+		TTSTemperature:    &temperature,
+		TTSTopP:           &topP,
+	}, providerLMNT)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*lmnt.LMNTTTS); !ok {
+		t.Fatalf("provider type = %T, want *lmnt.LMNTTTS", provider)
+	}
+	if got, want := provider.Label(), "lmnt.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 16000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference configured sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "aurora"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "LMNT"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://api.lmnt.com/v1/ai/speech/bytes"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("X-API-Key"), "test-lmnt-key"; got != want {
+		t.Fatalf("X-API-Key = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["text"], "hello"; got != want {
+		t.Fatalf("payload text = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["voice"], "ava"; got != want {
+		t.Fatalf("payload voice = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["language"], "en"; got != want {
+		t.Fatalf("payload language = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["sample_rate"], float64(16000); got != want {
+		t.Fatalf("payload sample_rate = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["model"], "aurora"; got != want {
+		t.Fatalf("payload model = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["format"], "wav"; got != want {
+		t.Fatalf("payload format = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["temperature"], 0.4; got != want {
+		t.Fatalf("payload temperature = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["top_p"], 0.6; got != want {
+		t.Fatalf("payload top_p = %#v, want %#v", got, want)
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsNeuphonicTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "neuphonic")
@@ -8220,6 +8770,96 @@ func TestDefaultConfigFromEnvAcceptsNeuphonicTTSFallbackProvider(t *testing.T) {
 	}
 	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
 		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	}
+}
+
+func TestNeuphonicTTSFallbackPassesReferenceOptions(t *testing.T) {
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+				`event: message`,
+				`data: {"status_code":200,"data":{"audio":"AQI="}}`,
+				"",
+			}, "\n"))),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	sampleRate := 16000
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		NeuphonicAPIKey: "test-neuphonic-key",
+		TTSBaseURL:      "https://neuphonic.example/",
+		TTSVoice:        "voice-2",
+		TTSLanguage:     "es",
+		TTSEncoding:     "pcm_mulaw",
+		TTSSampleRate:   &sampleRate,
+		TTSSpeed:        0.75,
+	}, providerNeuphonic)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*neuphonic.NeuphonicTTS); !ok {
+		t.Fatalf("provider type = %T, want *neuphonic.NeuphonicTTS", provider)
+	}
+	if got, want := provider.Label(), "neuphonic.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 16000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference configured sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "Octave"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "Neuphonic"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference streaming without aligned transcript", caps)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hola")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://neuphonic.example/sse/speak/es"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("x-api-key"), "test-neuphonic-key"; got != want {
+		t.Fatalf("x-api-key = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["text"], "hola"; got != want {
+		t.Fatalf("payload text = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["voice_id"], "voice-2"; got != want {
+		t.Fatalf("payload voice_id = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["lang_code"], "es"; got != want {
+		t.Fatalf("payload lang_code = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["encoding"], "pcm_mulaw"; got != want {
+		t.Fatalf("payload encoding = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["sampling_rate"], float64(16000); got != want {
+		t.Fatalf("payload sampling_rate = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["speed"], 0.75; got != want {
+		t.Fatalf("payload speed = %#v, want %#v", got, want)
 	}
 }
 
