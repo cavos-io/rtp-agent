@@ -598,6 +598,23 @@ func runSTTFallback(input json.RawMessage) (any, error) {
 				{"name": "provider_error_not_forwarded", "labels": labels},
 			},
 		}, nil
+	case "forward_metrics":
+		primary := &fakeScenarioSTT{label: "primary", capabilities: lkstt.STTCapabilities{Streaming: true}}
+		fallback := &fakeScenarioSTT{label: "fallback", capabilities: lkstt.STTCapabilities{Streaming: true}}
+		adapter := lkstt.NewFallbackAdapter([]lkstt.STT{primary, fallback})
+		requestIDs := make([]string, 0, 2)
+		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		defer unsubscribe()
+		primary.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "primary-req"})
+		fallback.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "fallback-req"})
+		return map[string]any{
+			"contract": "stt-fallback-forward-provider-metrics",
+			"events": []map[string]any{
+				{"name": "forward_metrics", "request_ids": requestIDs},
+			},
+		}, nil
 	case "validation":
 		mode := payload.Mode
 		if mode == "" {
