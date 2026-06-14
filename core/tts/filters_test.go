@@ -179,6 +179,19 @@ func TestTextRegexReplaceBufferReplacesReferenceSubstringsAcrossChunks(t *testin
 	}
 }
 
+func TestTextRegexReplaceBufferPreservesReferenceReplacementOrder(t *testing.T) {
+	buffer := NewOrderedTextRegexReplaceBuffer([]TextReplacement{
+		{Old: "ab", New: "X"},
+		{Old: "a", New: "Y"},
+	}, true)
+
+	chunks := append(buffer.Push("ab"), buffer.Flush()...)
+
+	if got, want := strings.Join(chunks, ""), "X"; got != want {
+		t.Fatalf("joined output = %q, want reference ordered replacement %q; chunks = %#v", got, want, chunks)
+	}
+}
+
 func TestTextReplaceBufferReplacesWholeWordsAndPreservesPunctuation(t *testing.T) {
 	buffer := NewTextReplaceBuffer(map[string]string{"flow": "stream"}, false)
 

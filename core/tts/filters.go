@@ -64,6 +64,11 @@ type TextRegexReplaceBuffer struct {
 	tailLen       int
 }
 
+type TextReplacement struct {
+	Old string
+	New string
+}
+
 type textReplacement struct {
 	old string
 	new string
@@ -93,6 +98,18 @@ func NewTextReplaceBuffer(replacements map[string]string, caseSensitive bool) *T
 
 func NewTextRegexReplaceBuffer(replacements map[string]string, caseSensitive bool) *TextRegexReplaceBuffer {
 	ordered := orderedTextReplacements(replacements)
+	return newTextRegexReplaceBuffer(ordered, caseSensitive)
+}
+
+func NewOrderedTextRegexReplaceBuffer(replacements []TextReplacement, caseSensitive bool) *TextRegexReplaceBuffer {
+	ordered := make([]textReplacement, 0, len(replacements))
+	for _, replacement := range replacements {
+		ordered = append(ordered, textReplacement{old: replacement.Old, new: replacement.New})
+	}
+	return newTextRegexReplaceBuffer(ordered, caseSensitive)
+}
+
+func newTextRegexReplaceBuffer(ordered []textReplacement, caseSensitive bool) *TextRegexReplaceBuffer {
 	tailLen := 0
 	for _, replacement := range ordered {
 		if len(replacement.old) > tailLen {

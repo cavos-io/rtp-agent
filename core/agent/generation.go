@@ -229,6 +229,7 @@ type TTSGenerationData struct {
 type TTSInferenceOptions struct {
 	StreamPacer             *tts.SentenceStreamPacerOptions
 	TextReplacements        map[string]string
+	OrderedTextReplacements []tts.TextReplacement
 	DisableTextTransforms   bool
 	PreserveTimedTranscript bool
 }
@@ -244,6 +245,12 @@ func WithTTSStreamPacer(opts tts.SentenceStreamPacerOptions) TTSInferenceOption 
 func WithTTSTextReplacements(replacements map[string]string) TTSInferenceOption {
 	return func(options *TTSInferenceOptions) {
 		options.TextReplacements = replacements
+	}
+}
+
+func WithOrderedTTSTextReplacements(replacements []tts.TextReplacement) TTSInferenceOption {
+	return func(options *TTSInferenceOptions) {
+		options.OrderedTextReplacements = append([]tts.TextReplacement(nil), replacements...)
 	}
 }
 
@@ -285,7 +292,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			if !options.DisableTextTransforms {
 				ttsText = tts.ApplyTextTransforms(ttsText)
 			}
-			transformedText := strings.TrimSpace(applyTTSTextReplacements(ttsText, options.TextReplacements))
+			transformedText := strings.TrimSpace(applyTTSTextReplacements(ttsText, options))
 			if transformedText == "" {
 				return
 			}
@@ -345,7 +352,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		defer span.End()
 
 		startTime := time.Now()
-		replaceBuffer := tts.NewTextRegexReplaceBuffer(options.TextReplacements, false)
+		replaceBuffer := newTTSReplacementBuffer(options)
 
 		if options.DisableTextTransforms {
 			for text := range textCh {
@@ -398,8 +405,20 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 	return data, nil
 }
 
-func applyTTSTextReplacements(text string, replacements map[string]string) string {
-	return tokenize.ReplaceWords(text, replacements)
+func applyTTSTextReplacements(text string, options TTSInferenceOptions) string {
+	if len(options.OrderedTextReplacements) == 0 {
+		return tokenize.ReplaceWords(text, options.TextReplacements)
+	}
+	buffer := tts.NewOrderedTextRegexReplaceBuffer(options.OrderedTextReplacements, false)
+	chunks := append(buffer.Push(text), buffer.Flush()...)
+	return strings.Join(chunks, "")
+}
+
+func newTTSReplacementBuffer(options TTSInferenceOptions) *tts.TextRegexReplaceBuffer {
+	if len(options.OrderedTextReplacements) > 0 {
+		return tts.NewOrderedTextRegexReplaceBuffer(options.OrderedTextReplacements, false)
+	}
+	return tts.NewTextRegexReplaceBuffer(options.TextReplacements, false)
 }
 
 func pushTTSReplacementChunks(stream tts.SynthesizeStream, chunks []string, data *TTSGenerationData) bool {
