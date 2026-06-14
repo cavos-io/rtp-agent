@@ -1,9 +1,16 @@
 package livekit
 
 import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cavos-io/rtp-agent/core/llm"
+	"golang.org/x/text/unicode/norm"
 )
 
 func TestTurnDetectorPluginMetadataMatchesReference(t *testing.T) {
@@ -99,5 +106,158 @@ func TestTurnDetectorPluginDownloadFilesIsExplicitlyUnsupported(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Hugging Face") || !strings.Contains(err.Error(), "ONNX") {
 		t.Fatalf("DownloadFiles() error = %q, want Hugging Face/ONNX unsupported detail", err.Error())
+	}
+}
+
+func TestTurnDetectorInferencePayloadKeepsLastSixUserAssistantMessages(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleSystem, Text: "ignore instructions"})
+	for i := 0; i < 7; i++ {
+		role := llm.ChatRoleUser
+		if i%2 == 1 {
+			role = llm.ChatRoleAssistant
+		}
+		chatCtx.AddMessage(llm.ChatMessageArgs{Role: role, Text: "message " + string(rune('a'+i))})
+	}
+
+	payload, err := NewEnglishModel().InferencePayload(chatCtx)
+	if err != nil {
+		t.Fatalf("InferencePayload() error = %v", err)
+	}
+
+	var got struct {
+		ChatCtx []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"chat_ctx"`
+	}
+	if err := json.Unmarshal(payload, &got); err != nil {
+		t.Fatalf("payload JSON error = %v", err)
+	}
+	if len(got.ChatCtx) != MaxHistoryTurns {
+		t.Fatalf("chat_ctx len = %d, want %d", len(got.ChatCtx), MaxHistoryTurns)
+	}
+	if got.ChatCtx[0].Content != "message b" {
+		t.Fatalf("first retained content = %q, want message b", got.ChatCtx[0].Content)
+	}
+	if got.ChatCtx[5].Content != "message g" {
+		t.Fatalf("last retained content = %q, want message g", got.ChatCtx[5].Content)
+	}
+}
+
+func TestTurnDetectorEnglishPayloadPreservesReferenceText(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "Hello, WORLD!"})
+
+	payload, err := NewEnglishModel().InferencePayload(chatCtx)
+	if err != nil {
+		t.Fatalf("InferencePayload() error = %v", err)
+	}
+
+	if !strings.Contains(string(payload), "Hello, WORLD!") {
+		t.Fatalf("payload = %s, want original english text", string(payload))
+	}
+}
+
+func TestTurnDetectorMultilingualPayloadNormalizesLikeReference(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: norm.NFKC.String("Hi, WORLD! Don't-stop.")})
+	chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "NEXT\tline?"})
+
+	payload, err := NewMultilingualModel().InferencePayload(chatCtx)
+	if err != nil {
+		t.Fatalf("InferencePayload() error = %v", err)
+	}
+
+	var got struct {
+		ChatCtx []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"chat_ctx"`
+	}
+	if err := json.Unmarshal(payload, &got); err != nil {
+		t.Fatalf("payload JSON error = %v", err)
+	}
+	if len(got.ChatCtx) != 2 {
+		t.Fatalf("chat_ctx len = %d, want 2", len(got.ChatCtx))
+	}
+	if got.ChatCtx[0].Content != "hi world don't-stop" {
+		t.Fatalf("normalized first content = %q, want reference normalization", got.ChatCtx[0].Content)
+	}
+	if got.ChatCtx[1].Content != "next line" {
+		t.Fatalf("normalized second content = %q, want collapsed whitespace and punctuation removal", got.ChatCtx[1].Content)
+	}
+}
+
+func TestTurnDetectorPredictEndOfTurnUsesRemoteInferenceURL(t *testing.T) {
+	var gotPath string
+	var gotRequest struct {
+		ChatCtx []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"chat_ctx"`
+	}
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		gotPath = r.URL.Path
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotRequest); err != nil {
+			t.Fatalf("request decode error = %v", err)
+		}
+		return jsonResponse(200, `{"probability":0.73}`), nil
+	})}
+
+	chatCtx := llm.NewChatContext()
+	chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "Need more time"})
+
+	probability, err := NewMultilingualModel(
+		WithRemoteInferenceBaseURL("https://turn.example"),
+		WithHTTPClient(client),
+	).
+		PredictEndOfTurn(context.Background(), chatCtx)
+	if err != nil {
+		t.Fatalf("PredictEndOfTurn() error = %v", err)
+	}
+	if gotPath != "/eot/multi" {
+		t.Fatalf("path = %q, want /eot/multi", gotPath)
+	}
+	if len(gotRequest.ChatCtx) != 1 || gotRequest.ChatCtx[0].Content != "need more time" {
+		t.Fatalf("request chat_ctx = %#v, want normalized user message", gotRequest.ChatCtx)
+	}
+	if probability != 0.73 {
+		t.Fatalf("probability = %v, want 0.73", probability)
+	}
+}
+
+func TestTurnDetectorPredictEndOfTurnDefaultsToOneForInvalidRemoteProbability(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(200, `{"probability":-1}`), nil
+	})}
+
+	probability, err := NewMultilingualModel(
+		WithRemoteInferenceBaseURL("https://turn.example"),
+		WithHTTPClient(client),
+	).
+		PredictEndOfTurn(context.Background(), llm.NewChatContext())
+	if err != nil {
+		t.Fatalf("PredictEndOfTurn() error = %v", err)
+	}
+	if probability != 1 {
+		t.Fatalf("probability = %v, want 1 for invalid remote probability", probability)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func jsonResponse(status int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
 	}
 }

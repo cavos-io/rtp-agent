@@ -27,6 +27,10 @@ type TurnDetector interface {
 	PredictEndOfTurn(ctx context.Context, chatCtx *llm.ChatContext) (float64, error)
 }
 
+type turnDetectorThreshold interface {
+	UnlikelyThreshold(language string) (float64, bool)
+}
+
 type AudioTurnDetector interface {
 	PredictEndOfTurnAudio(ctx context.Context, frames []*model.AudioFrame) (float64, error)
 }

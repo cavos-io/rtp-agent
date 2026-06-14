@@ -8888,6 +8888,35 @@ func TestDefaultConfigFromEnvConfiguresPipecatAudioTurnDetector(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvConfiguresLiveKitTurnDetector(t *testing.T) {
+	t.Setenv("RTP_AGENT_TURN_DETECTOR_PROVIDER", "livekit")
+	t.Setenv("LIVEKIT_REMOTE_EOT_URL", "https://turn.example")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Agent == nil {
+		t.Fatal("Agent is nil")
+	}
+	if got := fmt.Sprintf("%T", app.Agent.TurnDetector); got != "*livekit.Model" {
+		t.Fatalf("TurnDetector type = %q, want *livekit.Model", got)
+	}
+	model, ok := app.Agent.TurnDetector.(*adapterlivekit.Model)
+	if !ok {
+		t.Fatalf("TurnDetector = %T, want *livekit.Model", app.Agent.TurnDetector)
+	}
+	if model.Model() != adapterlivekit.ModelMultilingual {
+		t.Fatalf("TurnDetector model = %q, want multilingual", model.Model())
+	}
+	if got := model.RemoteInferenceURL(); got != "https://turn.example/eot/multi" {
+		t.Fatalf("RemoteInferenceURL() = %q, want configured remote EOT URL", got)
+	}
+	if app.Agent.AudioTurnDetector != nil {
+		t.Fatalf("AudioTurnDetector = %T, want nil for LiveKit text turn detector", app.Agent.AudioTurnDetector)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsPhonicRealtimeModel(t *testing.T) {
 	t.Setenv("PHONIC_API_KEY", "test-phonic-key")
 	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "phonic")

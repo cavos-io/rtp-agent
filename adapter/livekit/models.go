@@ -1,6 +1,15 @@
 package livekit
 
-import "time"
+import (
+	"encoding/json"
+	"net/http"
+	"strings"
+	"time"
+	"unicode"
+
+	"github.com/cavos-io/rtp-agent/core/llm"
+	"golang.org/x/text/unicode/norm"
+)
 
 const (
 	HGModel          = "livekit/turn-detector"
@@ -33,6 +42,16 @@ type Model struct {
 	inferenceMethod     string
 	unlikelyThreshold   *float64
 	remoteInferenceBase string
+	httpClient          *http.Client
+}
+
+type inferenceMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type inferencePayload struct {
+	ChatCtx []inferenceMessage `json:"chat_ctx"`
 }
 
 type ModelOption func(*Model)
@@ -54,6 +73,12 @@ func WithUnlikelyThreshold(threshold float64) ModelOption {
 func WithRemoteInferenceBaseURL(urlBase string) ModelOption {
 	return func(model *Model) {
 		model.remoteInferenceBase = urlBase
+	}
+}
+
+func WithHTTPClient(client *http.Client) ModelOption {
+	return func(model *Model) {
+		model.httpClient = client
 	}
 }
 
@@ -84,6 +109,11 @@ func (m *Model) RemoteInferenceURL() string {
 	return RemoteInferenceURL(m.remoteInferenceBase)
 }
 
+func (m *Model) InferencePayload(chatCtx *llm.ChatContext) ([]byte, error) {
+	messages := m.inferenceMessages(chatCtx)
+	return json.Marshal(inferencePayload{ChatCtx: messages})
+}
+
 func RemoteInferenceURL(urlBase string) string {
 	if urlBase == "" {
 		return ""
@@ -100,4 +130,44 @@ func newModel(modelType ModelType, inferenceMethod string, opts ...ModelOption) 
 		opt(model)
 	}
 	return model
+}
+
+func (m *Model) inferenceMessages(chatCtx *llm.ChatContext) []inferenceMessage {
+	if chatCtx == nil {
+		return nil
+	}
+	messages := make([]inferenceMessage, 0, MaxHistoryTurns)
+	for _, item := range chatCtx.Items {
+		msg, ok := item.(*llm.ChatMessage)
+		if !ok || (msg.Role != llm.ChatRoleUser && msg.Role != llm.ChatRoleAssistant) {
+			continue
+		}
+		content := msg.TextContent()
+		if strings.TrimSpace(content) == "" {
+			continue
+		}
+		if m.modelType == ModelMultilingual {
+			content = normalizeTurnDetectorText(content)
+		}
+		messages = append(messages, inferenceMessage{
+			Role:    string(msg.Role),
+			Content: content,
+		})
+		if len(messages) > MaxHistoryTurns {
+			copy(messages, messages[1:])
+			messages = messages[:MaxHistoryTurns]
+		}
+	}
+	return messages
+}
+
+func normalizeTurnDetectorText(text string) string {
+	text = norm.NFKC.String(strings.ToLower(text))
+	text = strings.Map(func(r rune) rune {
+		if unicode.IsPunct(r) && r != '\'' && r != '-' {
+			return -1
+		}
+		return r
+	}, text)
+	return strings.Join(strings.Fields(text), " ")
 }

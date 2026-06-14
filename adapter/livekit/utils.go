@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cavos-io/rtp-agent/library/inferencecontext"
+	"github.com/cavos-io/rtp-agent/library/inference"
 	"github.com/livekit/protocol/auth"
 )
 
@@ -18,14 +18,14 @@ const (
 	InferenceAccessTokenTTL = 10 * time.Minute
 
 	HeaderUserAgent         = "User-Agent"
-	HeaderRoomID            = inferencecontext.HeaderRoomID
-	HeaderJobID             = inferencecontext.HeaderJobID
-	HeaderInferenceProvider = inferencecontext.HeaderInferenceProvider
-	HeaderInferencePriority = inferencecontext.HeaderInferencePriority
+	HeaderRoomID            = inference.HeaderRoomID
+	HeaderJobID             = inference.HeaderJobID
+	HeaderInferenceProvider = inference.HeaderInferenceProvider
+	HeaderInferencePriority = inference.HeaderInferencePriority
 )
 
 func SetContextHeadersProvider(provider func() map[string]string) func() {
-	return inferencecontext.SetHeadersProvider(provider)
+	return inference.SetHeadersProvider(provider)
 }
 
 func InferenceHeaders() http.Header {
@@ -36,7 +36,7 @@ func InferenceHeaders() http.Header {
 }
 
 func AddContextHeaders(headers http.Header) {
-	inferencecontext.AddHeaders(headers)
+	inference.AddHeaders(headers)
 }
 
 func inferenceUserAgent() string {
