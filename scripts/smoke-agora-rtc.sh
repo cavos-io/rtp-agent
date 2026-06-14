@@ -18,7 +18,8 @@ trim_space() {
   printf '%s' "$value"
 }
 
-if [ -z "$(trim_space "$sdk_dir")" ]; then
+sdk_dir="$(trim_space "$sdk_dir")"
+if [ -z "$sdk_dir" ]; then
   echo "AGORA_GO_SDK_DIR is required." >&2
   exit 1
 fi

@@ -16,6 +16,10 @@ cat > "$WORKDIR/scripts/build-agora-sdk.sh" <<'SH'
 set -euo pipefail
 
 binary="${OUT:-.tmp/rtp-agent-agora}"
+if [ "${AGORA_GO_SDK_DIR:-}" != "$PWD/sdk" ]; then
+  echo "AGORA_GO_SDK_DIR = ${AGORA_GO_SDK_DIR:-}, want $PWD/sdk" >&2
+  exit 1
+fi
 for var_name in GOMODCACHE GOCACHE GOTMPDIR; do
   var_value="${!var_name:-}"
   if [ -z "$var_value" ]; then
@@ -71,6 +75,17 @@ run_smoke() {
   cd "$WORKDIR"
   env -u GOMODCACHE -u GOCACHE -u GOTMPDIR \
     AGORA_GO_SDK_DIR="$WORKDIR/sdk" \
+    AGORA_APP_ID="app" \
+    AGORA_CHANNEL="support" \
+    AGORA_SMOKE_TIMEOUT=5 \
+    AGORA_SMOKE_STABLE_SECONDS=1 \
+    scripts/smoke-agora-rtc.sh
+}
+
+run_smoke_with_padded_sdk_dir() {
+  cd "$WORKDIR"
+  env -u GOMODCACHE -u GOCACHE -u GOTMPDIR \
+    AGORA_GO_SDK_DIR="  $WORKDIR/sdk  " \
     AGORA_APP_ID="app" \
     AGORA_CHANNEL="support" \
     AGORA_SMOKE_TIMEOUT=5 \
@@ -148,6 +163,14 @@ if ! FAKE_AGORA_WORKER_MODE=connected run_smoke >"$WORKDIR/out-connected.txt" 2>
 fi
 
 grep -q '^Agora RTC connected$' "$WORKDIR/out-connected.txt"
+
+if ! FAKE_AGORA_WORKER_MODE=connected run_smoke_with_padded_sdk_dir >"$WORKDIR/out-padded-sdk.txt" 2>"$WORKDIR/err-padded-sdk.txt"; then
+  echo "smoke script did not pass with padded SDK dir" >&2
+  cat "$WORKDIR/err-padded-sdk.txt" >&2
+  exit 1
+fi
+
+grep -q '^Agora RTC connected$' "$WORKDIR/out-padded-sdk.txt"
 
 if FAKE_AGORA_WORKER_MODE=connected-exit run_smoke >"$WORKDIR/out-connected-exit.txt" 2>"$WORKDIR/err-connected-exit.txt"; then
   echo "smoke script unexpectedly passed after connected log followed by early exit" >&2

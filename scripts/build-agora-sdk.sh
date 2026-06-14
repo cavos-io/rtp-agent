@@ -29,7 +29,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [ -z "$(trim_space "$sdk_dir")" ]; then
+sdk_dir="$(trim_space "$sdk_dir")"
+if [ -z "$sdk_dir" ]; then
   echo "AGORA_GO_SDK_DIR is required and must point to an Agora-Golang-Server-SDK checkout with native assets." >&2
   exit 1
 fi
