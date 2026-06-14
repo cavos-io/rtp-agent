@@ -126,11 +126,15 @@ type fakeAppAgoraChannelClient struct {
 }
 
 type fakeAppSessionAssistant struct {
-	audioCh chan *model.AudioFrame
-	publish func(frame *model.AudioFrame) error
+	audioCh  chan *model.AudioFrame
+	startCtx context.Context
+	publish  func(frame *model.AudioFrame) error
 }
 
-func (f *fakeAppSessionAssistant) Start(context.Context, *agent.AgentSession) error { return nil }
+func (f *fakeAppSessionAssistant) Start(ctx context.Context, s *agent.AgentSession) error {
+	f.startCtx = ctx
+	return nil
+}
 
 func (f *fakeAppSessionAssistant) OnAudioFrame(ctx context.Context, frame *model.AudioFrame) {
 	copied := *frame
@@ -519,6 +523,7 @@ func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 	t.Setenv("AGORA_APP_CERTIFICATE", "agora-cert")
 	t.Setenv("AGORA_CHANNEL", "support-room")
 	t.Setenv("AGORA_UID", "agent-42")
+	t.Setenv("AGORA_TOKEN", "agora-token")
 
 	cfg := DefaultConfigFromEnv()
 
@@ -536,6 +541,9 @@ func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 	}
 	if cfg.WorkerOptions.Agora.UID != "agent-42" {
 		t.Fatalf("Agora.UID = %q, want agent-42", cfg.WorkerOptions.Agora.UID)
+	}
+	if cfg.WorkerOptions.Agora.Token != "agora-token" {
+		t.Fatalf("Agora.Token = %q, want agora-token", cfg.WorkerOptions.Agora.Token)
 	}
 }
 
@@ -982,6 +990,64 @@ func TestRunAgoraForwardsChannelAudioToSession(t *testing.T) {
 	}
 
 	cancel()
+	select {
+	case err := <-doneCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("runAgora() error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not return after cancellation")
+	}
+}
+
+func TestRunAgoraStartsSessionWithWorkerContext(t *testing.T) {
+	client := &fakeAppAgoraChannelClient{joinedCh: make(chan struct{}, 1)}
+	oldNewAgoraChannelClient := appNewAgoraChannelClient
+	appNewAgoraChannelClient = func() (workeragora.ChannelClient, error) {
+		return client, nil
+	}
+	t.Cleanup(func() {
+		appNewAgoraChannelClient = oldNewAgoraChannelClient
+	})
+
+	assistant := &fakeAppSessionAssistant{}
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	session.Assistant = assistant
+	session.LLM = &fakeAppLLM{}
+	rtpApp := &App{
+		Session: session,
+		Server: worker.NewAgentServer(worker.WorkerOptions{
+			Agora: worker.AgoraOptions{
+				AppID:   "app",
+				Channel: "support",
+				UID:     "agent",
+				Token:   "token",
+			},
+		}),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- rtpApp.runAgora(ctx)
+	}()
+
+	select {
+	case <-client.joinedCh:
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not join Agora channel")
+	}
+	if assistant.startCtx == nil {
+		t.Fatal("assistant Start context = nil, want worker context")
+	}
+	cancel()
+	select {
+	case <-assistant.startCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("assistant Start context was not canceled when worker context canceled")
+	}
+
 	select {
 	case err := <-doneCh:
 		if !errors.Is(err, context.Canceled) {

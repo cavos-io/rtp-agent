@@ -69,13 +69,16 @@ type ChannelClient interface {
 }
 
 type Transport struct {
-	opts      worker.AgoraOptions
-	client    ChannelClient
-	events    chan Event
-	audio     AudioHandler
-	closeOnce sync.Once
-	mu        sync.Mutex
-	closed    bool
+	opts       worker.AgoraOptions
+	client     ChannelClient
+	events     chan Event
+	audio      AudioHandler
+	closeOnce  sync.Once
+	mu         sync.Mutex
+	joinCancel context.CancelFunc
+	joinSeq    uint64
+	closing    bool
+	closed     bool
 }
 
 func NewTransport(opts worker.AgoraOptions, client ChannelClient) *Transport {
@@ -115,10 +118,27 @@ func (t *Transport) Join(ctx context.Context) error {
 	if t.client == nil {
 		return fmt.Errorf("agora channel client is required")
 	}
+	joinCtx, cancel := context.WithCancel(normalizeContext(ctx))
 	t.mu.Lock()
+	if t.closing || t.closed {
+		t.mu.Unlock()
+		cancel()
+		return fmt.Errorf("agora transport is closed")
+	}
 	audio := t.audio
+	t.joinSeq++
+	joinSeq := t.joinSeq
+	t.joinCancel = cancel
 	t.mu.Unlock()
-	return t.client.Join(normalizeContext(ctx), opts, t.emit, audio)
+	defer func() {
+		t.mu.Lock()
+		if t.joinSeq == joinSeq {
+			t.joinCancel = nil
+		}
+		t.mu.Unlock()
+		cancel()
+	}()
+	return t.client.Join(joinCtx, opts, t.emit, audio)
 }
 
 func (t *Transport) Leave(ctx context.Context) error {
@@ -135,6 +155,12 @@ func (t *Transport) PublishPCM(ctx context.Context, frame PCMFrame) error {
 	if err := frame.Validate(); err != nil {
 		return err
 	}
+	t.mu.Lock()
+	closed := t.closing || t.closed
+	t.mu.Unlock()
+	if closed {
+		return fmt.Errorf("agora transport is closed")
+	}
 	if t.client == nil {
 		return fmt.Errorf("agora channel client is required")
 	}
@@ -147,6 +173,13 @@ func (t *Transport) Close(ctx context.Context) error {
 	}
 	var err error
 	t.closeOnce.Do(func() {
+		t.mu.Lock()
+		cancelJoin := t.joinCancel
+		t.closing = true
+		t.mu.Unlock()
+		if cancelJoin != nil {
+			cancelJoin()
+		}
 		err = t.Leave(normalizeContext(ctx))
 		t.mu.Lock()
 		if !t.closed {

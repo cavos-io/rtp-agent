@@ -98,6 +98,31 @@ func releaseSDKService() error {
 	return nil
 }
 
+func (c *sdkChannelClient) releaseActiveConnection(connection *agoraservice.RtcConnection) bool {
+	c.mu.Lock()
+	if c.connection != connection {
+		c.mu.Unlock()
+		return false
+	}
+	c.connection = nil
+	c.joining = false
+	c.mu.Unlock()
+
+	_ = connection.Disconnect()
+	connection.Release()
+	_ = releaseSDKService()
+	return true
+}
+
+func (c *sdkChannelClient) publishActiveAudio(connection *agoraservice.RtcConnection) (int, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.connection != connection {
+		return 0, false
+	}
+	return connection.PublishAudio(), true
+}
+
 func emitSDKEvent(handler EventHandler, event Event) {
 	if handler != nil {
 		handler(event)
@@ -195,7 +220,7 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 		_ = releaseSDKService()
 		return fmt.Errorf("agora SDK connection creation failed")
 	}
-	connectedCh := make(chan struct{}, 1)
+	connectedCh := make(chan Event, 1)
 	joinErrCh := make(chan error, 1)
 	if ret := connection.RegisterObserver(&agoraservice.RtcConnectionObserver{
 		OnConnected: func(_ *agoraservice.RtcConnection, info *agoraservice.RtcConnectionInfo, reason int) {
@@ -203,9 +228,8 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 			if info != nil && info.ChannelId != "" {
 				event.Channel = info.ChannelId
 			}
-			emitSDKEvent(handler, event)
 			select {
-			case connectedCh <- struct{}{}:
+			case connectedCh <- event:
 			default:
 			}
 		},
@@ -297,62 +321,58 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 	c.joining = false
 	joined = true
 	c.mu.Unlock()
-	if err := c.waitConnected(ctx, connection, connectedCh, joinErrCh); err != nil {
+	connectedEvent, err := c.waitConnected(ctx, connection, connectedCh, joinErrCh)
+	if err != nil {
 		return err
 	}
-	if ret := connection.PublishAudio(); ret != 0 {
-		c.mu.Lock()
-		if c.connection == connection {
-			c.connection = nil
-		}
-		c.mu.Unlock()
-		_ = connection.Disconnect()
-		connection.Release()
-		_ = releaseSDKService()
+	ret, ok := c.publishActiveAudio(connection)
+	if !ok {
+		return fmt.Errorf("agora SDK channel left before publish audio")
+	}
+	if ret != 0 {
+		c.releaseActiveConnection(connection)
 		return fmt.Errorf("agora SDK publish audio failed: %d", ret)
 	}
+	if err, ok := pendingJoinError(joinErrCh); ok {
+		c.releaseActiveConnection(connection)
+		return err
+	}
+	emitSDKEvent(handler, connectedEvent)
 	return nil
 }
 
-func (c *sdkChannelClient) waitConnected(ctx context.Context, connection *agoraservice.RtcConnection, connectedCh <-chan struct{}, joinErrCh <-chan error) error {
+func (c *sdkChannelClient) waitConnected(ctx context.Context, connection *agoraservice.RtcConnection, connectedCh <-chan Event, joinErrCh <-chan error) (Event, error) {
 	timer := time.NewTimer(sdkJoinTimeout())
 	defer timer.Stop()
+	if err, ok := pendingJoinError(joinErrCh); ok {
+		c.releaseActiveConnection(connection)
+		return Event{}, err
+	}
 	select {
-	case <-connectedCh:
-		return nil
+	case event := <-connectedCh:
+		if err, ok := pendingJoinError(joinErrCh); ok {
+			c.releaseActiveConnection(connection)
+			return Event{}, err
+		}
+		return event, nil
 	case err := <-joinErrCh:
-		_ = connection.Disconnect()
-		connection.Release()
-		c.mu.Lock()
-		if c.connection == connection {
-			c.connection = nil
-		}
-		c.joining = false
-		c.mu.Unlock()
-		_ = releaseSDKService()
-		return err
+		c.releaseActiveConnection(connection)
+		return Event{}, err
 	case <-timer.C:
-		_ = connection.Disconnect()
-		connection.Release()
-		c.mu.Lock()
-		if c.connection == connection {
-			c.connection = nil
-		}
-		c.joining = false
-		c.mu.Unlock()
-		_ = releaseSDKService()
-		return fmt.Errorf("agora SDK connect timed out after %s", sdkJoinTimeout())
+		c.releaseActiveConnection(connection)
+		return Event{}, fmt.Errorf("agora SDK connect timed out after %s", sdkJoinTimeout())
 	case <-ctx.Done():
-		_ = connection.Disconnect()
-		connection.Release()
-		c.mu.Lock()
-		if c.connection == connection {
-			c.connection = nil
-		}
-		c.joining = false
-		c.mu.Unlock()
-		_ = releaseSDKService()
-		return ctx.Err()
+		c.releaseActiveConnection(connection)
+		return Event{}, ctx.Err()
+	}
+}
+
+func pendingJoinError(joinErrCh <-chan error) (error, bool) {
+	select {
+	case err := <-joinErrCh:
+		return err, true
+	default:
+		return nil, false
 	}
 }
 
@@ -399,12 +419,11 @@ func (c *sdkChannelClient) PublishPCM(ctx context.Context, frame PCMFrame) error
 	default:
 	}
 	c.mu.Lock()
-	connection := c.connection
-	c.mu.Unlock()
-	if connection == nil {
+	defer c.mu.Unlock()
+	if c.connection == nil {
 		return fmt.Errorf("agora SDK channel is not joined")
 	}
-	if ret := connection.PushAudioPcmData(frame.Data, frame.SampleRate, frame.Channels, frame.StartPTSMS); ret != 0 {
+	if ret := c.connection.PushAudioPcmData(frame.Data, frame.SampleRate, frame.Channels, frame.StartPTSMS); ret != 0 {
 		return fmt.Errorf("agora SDK push PCM failed: %d", ret)
 	}
 	return nil

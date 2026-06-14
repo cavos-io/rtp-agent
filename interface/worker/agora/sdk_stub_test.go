@@ -139,14 +139,44 @@ func TestSDKClientImplementationWaitsForConnectedEvent(t *testing.T) {
 	}
 	text := string(source)
 	for _, want := range []string{
-		"connectedCh := make(chan struct{}, 1)",
+		"connectedCh := make(chan Event, 1)",
 		"joinErrCh := make(chan error, 1)",
-		"case connectedCh <- struct{}{}",
-		"if err := c.waitConnected",
+		"case connectedCh <- event",
+		"connectedEvent, err := c.waitConnected",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("sdk.go missing %q", want)
 		}
+	}
+}
+
+func TestSDKClientImplementationPrioritizesStartupErrorOverConnected(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	waitIndex := strings.Index(text, "func (c *sdkChannelClient) waitConnected")
+	if waitIndex < 0 {
+		t.Fatal("sdk.go missing waitConnected")
+	}
+	waitBody := text[waitIndex:]
+	if nextFunc := strings.Index(waitBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		waitBody = waitBody[:len("func ")+nextFunc]
+	}
+	preferIndex := strings.Index(waitBody, "err, ok := pendingJoinError(joinErrCh)")
+	connectedIndex := strings.Index(waitBody, "case event := <-connectedCh")
+	if preferIndex < 0 {
+		t.Fatal("waitConnected must check pending join errors before waiting on connected events")
+	}
+	if connectedIndex < 0 {
+		t.Fatal("waitConnected missing connected event case")
+	}
+	if preferIndex > connectedIndex {
+		t.Fatal("waitConnected must prefer pending join errors over connected events")
+	}
+	if !strings.Contains(text, "func pendingJoinError(joinErrCh <-chan error)") {
+		t.Fatal("sdk.go missing pendingJoinError helper")
 	}
 }
 
@@ -182,6 +212,62 @@ func TestSDKClientImplementationHasJoinTimeout(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("sdk.go missing %q", want)
 		}
+	}
+}
+
+func TestSDKClientImplementationReleasesWaitConnectionOnlyWhenOwned(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	if !strings.Contains(text, "func (c *sdkChannelClient) releaseActiveConnection") {
+		t.Fatal("sdk.go missing releaseActiveConnection ownership helper")
+	}
+	waitIndex := strings.Index(text, "func (c *sdkChannelClient) waitConnected")
+	if waitIndex < 0 {
+		t.Fatal("sdk.go missing waitConnected")
+	}
+	waitBody := text[waitIndex:]
+	if nextFunc := strings.Index(waitBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		waitBody = waitBody[:len("func ")+nextFunc]
+	}
+	if strings.Contains(waitBody, "connection.Release()") {
+		t.Fatal("waitConnected must not release the SDK connection without ownership")
+	}
+	if !strings.Contains(waitBody, "c.releaseActiveConnection(connection)") {
+		t.Fatal("waitConnected must release through releaseActiveConnection")
+	}
+}
+
+func TestSDKClientImplementationDoesNotClearJoiningForStaleWaitCleanup(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	helperIndex := strings.Index(text, "func (c *sdkChannelClient) releaseActiveConnection")
+	if helperIndex < 0 {
+		t.Fatal("sdk.go missing releaseActiveConnection")
+	}
+	helperBody := text[helperIndex:]
+	if nextFunc := strings.Index(helperBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		helperBody = helperBody[:len("func ")+nextFunc]
+	}
+	staleIndex := strings.Index(helperBody, "if c.connection != connection")
+	ownerIndex := strings.LastIndex(helperBody, "c.joining = false")
+	if staleIndex < 0 {
+		t.Fatal("releaseActiveConnection missing stale connection branch")
+	}
+	if ownerIndex < 0 {
+		t.Fatal("releaseActiveConnection missing owner joining reset")
+	}
+	if ownerIndex < staleIndex {
+		t.Fatal("releaseActiveConnection must reset joining only after ownership is confirmed")
+	}
+	staleBranch := helperBody[staleIndex:ownerIndex]
+	if strings.Contains(staleBranch, "c.joining = false") {
+		t.Fatal("stale wait cleanup must not clear another in-progress join")
 	}
 }
 
@@ -285,14 +371,178 @@ func TestSDKClientImplementationPublishesAfterConnected(t *testing.T) {
 	}
 	text := string(source)
 	waitIndex := strings.Index(text, "c.waitConnected")
-	publishIndex := strings.Index(text, "connection.PublishAudio()")
+	publishIndex := strings.Index(text, "c.publishActiveAudio(connection)")
 	if waitIndex < 0 {
 		t.Fatal("sdk.go missing waitConnected call")
 	}
 	if publishIndex < 0 {
-		t.Fatal("sdk.go missing PublishAudio call")
+		t.Fatal("sdk.go missing publishActiveAudio call")
 	}
 	if waitIndex > publishIndex {
 		t.Fatal("sdk.go must wait for Agora connected event before publishing audio")
+	}
+}
+
+func TestSDKClientImplementationEmitsConnectedAfterPublishAudio(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	onConnectedIndex := strings.Index(text, "OnConnected: func")
+	if onConnectedIndex < 0 {
+		t.Fatal("sdk.go missing OnConnected callback")
+	}
+	onConnectedBody := text[onConnectedIndex:]
+	if nextCallback := strings.Index(onConnectedBody[len("OnConnected: func"):], "\n\t\t},"); nextCallback >= 0 {
+		onConnectedBody = onConnectedBody[:len("OnConnected: func")+nextCallback]
+	}
+	if strings.Contains(onConnectedBody, "emitSDKEvent(handler, event)") {
+		t.Fatal("OnConnected must not emit connected before startup PublishAudio succeeds")
+	}
+	joinIndex := strings.Index(text, "func (c *sdkChannelClient) Join")
+	if joinIndex < 0 {
+		t.Fatal("sdk.go missing sdkChannelClient.Join")
+	}
+	joinBody := text[joinIndex:]
+	if nextFunc := strings.Index(joinBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		joinBody = joinBody[:len("func ")+nextFunc]
+	}
+	waitIndex := strings.Index(joinBody, "c.waitConnected")
+	publishIndex := strings.Index(joinBody, "c.publishActiveAudio(connection)")
+	emitIndex := strings.Index(joinBody, "emitSDKEvent(handler, connectedEvent)")
+	if waitIndex < 0 || publishIndex < 0 || emitIndex < 0 {
+		t.Fatal("Join must wait, publish startup audio, then emit connected event")
+	}
+	if !(waitIndex < publishIndex && publishIndex < emitIndex) {
+		t.Fatal("Join must emit connected only after waitConnected and PublishAudio succeed")
+	}
+}
+
+func TestSDKClientImplementationChecksStartupErrorBeforeConnectedEmit(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	joinIndex := strings.Index(text, "func (c *sdkChannelClient) Join")
+	if joinIndex < 0 {
+		t.Fatal("sdk.go missing sdkChannelClient.Join")
+	}
+	joinBody := text[joinIndex:]
+	if nextFunc := strings.Index(joinBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		joinBody = joinBody[:len("func ")+nextFunc]
+	}
+	publishIndex := strings.Index(joinBody, "c.publishActiveAudio(connection)")
+	errorCheckIndex := strings.LastIndex(joinBody, "err, ok := pendingJoinError(joinErrCh)")
+	emitIndex := strings.Index(joinBody, "emitSDKEvent(handler, connectedEvent)")
+	if publishIndex < 0 || errorCheckIndex < 0 || emitIndex < 0 {
+		t.Fatal("Join must publish audio, recheck pending startup errors, then emit connected")
+	}
+	if !(publishIndex < errorCheckIndex && errorCheckIndex < emitIndex) {
+		t.Fatal("Join must recheck pending startup errors after PublishAudio and before connected emit")
+	}
+}
+
+func TestSDKClientImplementationReleasesPublishFailureOnlyWhenOwned(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	joinIndex := strings.Index(text, "func (c *sdkChannelClient) Join")
+	if joinIndex < 0 {
+		t.Fatal("sdk.go missing sdkChannelClient.Join")
+	}
+	joinBody := text[joinIndex:]
+	if nextFunc := strings.Index(joinBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		joinBody = joinBody[:len("func ")+nextFunc]
+	}
+	publishIndex := strings.Index(joinBody, "c.publishActiveAudio(connection)")
+	if publishIndex < 0 {
+		t.Fatal("Join missing publishActiveAudio call")
+	}
+	publishFailureBody := joinBody[publishIndex:]
+	publishFailureIndex := strings.Index(publishFailureBody, "agora SDK publish audio failed")
+	if publishFailureIndex < 0 {
+		t.Fatal("Join missing publish-audio failure branch")
+	}
+	publishFailureBody = publishFailureBody[:publishFailureIndex]
+	if strings.Contains(publishFailureBody, "connection.Release()") {
+		t.Fatal("publish-audio failure must not release the SDK connection without ownership")
+	}
+	if !strings.Contains(publishFailureBody, "c.releaseActiveConnection(connection)") {
+		t.Fatal("publish-audio failure must release through releaseActiveConnection")
+	}
+}
+
+func TestSDKClientImplementationSerializesStartupPublishWithLeave(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	if !strings.Contains(text, "func (c *sdkChannelClient) publishActiveAudio") {
+		t.Fatal("sdk.go missing publishActiveAudio helper")
+	}
+	joinIndex := strings.Index(text, "func (c *sdkChannelClient) Join")
+	if joinIndex < 0 {
+		t.Fatal("sdk.go missing sdkChannelClient.Join")
+	}
+	joinBody := text[joinIndex:]
+	if nextFunc := strings.Index(joinBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		joinBody = joinBody[:len("func ")+nextFunc]
+	}
+	if !strings.Contains(joinBody, "c.publishActiveAudio(connection)") {
+		t.Fatal("Join must publish startup audio through publishActiveAudio")
+	}
+	helperIndex := strings.Index(text, "func (c *sdkChannelClient) publishActiveAudio")
+	helperBody := text[helperIndex:]
+	if nextFunc := strings.Index(helperBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		helperBody = helperBody[:len("func ")+nextFunc]
+	}
+	lockIndex := strings.Index(helperBody, "c.mu.Lock()")
+	publishIndex := strings.Index(helperBody, "connection.PublishAudio()")
+	deferUnlockIndex := strings.Index(helperBody, "defer c.mu.Unlock()")
+	if lockIndex < 0 || publishIndex < 0 {
+		t.Fatal("publishActiveAudio must lock before PublishAudio")
+	}
+	if lockIndex > publishIndex {
+		t.Fatal("publishActiveAudio must lock before PublishAudio")
+	}
+	if deferUnlockIndex < 0 {
+		t.Fatal("publishActiveAudio must hold the lock through PublishAudio")
+	}
+	if !strings.Contains(helperBody, "if c.connection != connection") {
+		t.Fatal("publishActiveAudio must verify active connection ownership")
+	}
+}
+
+func TestSDKClientImplementationSerializesPublishPCMWithLeave(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	publishIndex := strings.Index(text, "func (c *sdkChannelClient) PublishPCM")
+	if publishIndex < 0 {
+		t.Fatal("sdk.go missing sdkChannelClient.PublishPCM")
+	}
+	publishBody := text[publishIndex:]
+	if nextFunc := strings.Index(publishBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		publishBody = publishBody[:len("func ")+nextFunc]
+	}
+	lockIndex := strings.Index(publishBody, "c.mu.Lock()")
+	pushIndex := strings.Index(publishBody, "PushAudioPcmData")
+	unlockIndex := strings.Index(publishBody, "c.mu.Unlock()")
+	deferUnlockIndex := strings.Index(publishBody, "defer c.mu.Unlock()")
+	if lockIndex < 0 || pushIndex < 0 {
+		t.Fatal("PublishPCM must lock before pushing PCM to the SDK connection")
+	}
+	if unlockIndex >= 0 && unlockIndex < pushIndex && !strings.Contains(publishBody[unlockIndex-6:unlockIndex], "defer ") {
+		t.Fatal("PublishPCM must not unlock before PushAudioPcmData returns")
+	}
+	if deferUnlockIndex < 0 {
+		t.Fatal("PublishPCM must defer unlock while using the SDK connection")
 	}
 }

@@ -4,16 +4,42 @@ set -euo pipefail
 module="github.com/AgoraIO-Extensions/Agora-Golang-Server-SDK/v2"
 sdk_dir="${AGORA_GO_SDK_DIR:-}"
 out="${OUT:-.tmp/rtp-agent-agora}"
-modfile="${AGORA_GO_MODFILE:-.tmp/agora-sdk.mod}"
+modfile="${AGORA_GO_MODFILE:-}"
+gomodcache="${GOMODCACHE:-.tmp/gomodcache}"
+gocache="${GOCACHE:-.tmp/gocache}"
+gotmpdir="${GOTMPDIR:-.tmp/gotmp}"
 
-if [ -z "$sdk_dir" ]; then
+trim_space() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+cleanup_modfile=0
+if [ -z "$(trim_space "$modfile")" ]; then
+  modfile=".tmp/agora-sdk-$$.mod"
+  cleanup_modfile=1
+fi
+
+cleanup() {
+  if [ "$cleanup_modfile" -eq 1 ]; then
+    rm -f "$modfile" "${modfile%.mod}.sum"
+  fi
+}
+trap cleanup EXIT
+
+if [ -z "$(trim_space "$sdk_dir")" ]; then
   echo "AGORA_GO_SDK_DIR is required and must point to an Agora-Golang-Server-SDK checkout with native assets." >&2
   exit 1
 fi
 
 AGORA_GO_SDK_DIR="$sdk_dir" scripts/check-agora-sdk.sh >/dev/null
 
-mkdir -p "$(dirname "$modfile")" "$(dirname "$out")"
+mkdir -p "$(dirname "$modfile")" "$(dirname "$out")" "$gomodcache" "$gocache" "$gotmpdir"
+export GOMODCACHE="$(cd "$gomodcache" && pwd)"
+export GOCACHE="$(cd "$gocache" && pwd)"
+export GOTMPDIR="$(cd "$gotmpdir" && pwd)"
 cp go.mod "$modfile"
 cp go.sum "${modfile%.mod}.sum"
 go mod edit -modfile="$modfile" -replace="$module=$sdk_dir"
