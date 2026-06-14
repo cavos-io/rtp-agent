@@ -1096,6 +1096,8 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
             self._label = label
             self._model = model
             self._provider = provider
+            self.recognize_calls = 0
+            self.recognize_frame_counts: list[int] = []
 
         @property
         def model(self) -> str:
@@ -1106,10 +1108,47 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
             return self._provider or "unknown"
 
         async def _recognize_impl(self, *args: Any, **kwargs: Any) -> Any:
-            return stt_module.SpeechEvent(type=stt_module.SpeechEventType.FINAL_TRANSCRIPT)
+            buffer = kwargs.get("buffer")
+            if buffer is None and args:
+                buffer = args[0]
+            self.recognize_calls += 1
+            self.recognize_frame_counts.append(len(buffer) if isinstance(buffer, list) else 1)
+            return stt_module.SpeechEvent(
+                type=stt_module.SpeechEventType.FINAL_TRANSCRIPT,
+                alternatives=[stt_module.SpeechData(language="en", text="empty vad speech")],
+            )
 
     class FakeVAD:
-        pass
+        def __init__(self, events: list[Any] | None = None) -> None:
+            self._events = events or []
+
+        def stream(self) -> Any:
+            return FakeVADStream(self._events)
+
+    class FakeVADStream:
+        def __init__(self, events: list[Any]) -> None:
+            self._events = list(events)
+            self.closed = False
+
+        def push_frame(self, frame: Any) -> None:
+            pass
+
+        def flush(self) -> None:
+            pass
+
+        def end_input(self) -> None:
+            pass
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+        def __aiter__(self) -> Any:
+            return self
+
+        async def __anext__(self) -> Any:
+            if not self._events:
+                raise StopAsyncIteration
+            return self._events.pop(0)
 
     if action == "capabilities":
         adapter = stream_adapter_module.StreamAdapter(stt=FakeSTT("wrapped"), vad=FakeVAD())
@@ -1291,6 +1330,127 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
                     "name": "metadata",
                     "model": adapter.model,
                     "provider": adapter.provider,
+                }
+            ],
+        }
+    if action == "empty_vad_end":
+        aio_mod = sys.modules["livekit.agents.utils.aio"]
+
+        class ScenarioChan:
+            _sentinel = object()
+
+            def __init__(self) -> None:
+                self._queue: asyncio.Queue[Any] = asyncio.Queue()
+                self.closed = False
+
+            def __class_getitem__(cls, item: Any) -> type:
+                return cls
+
+            def send_nowait(self, item: Any) -> None:
+                if self.closed:
+                    raise RuntimeError("channel is closed")
+                self._queue.put_nowait(item)
+
+            def close(self) -> None:
+                if not self.closed:
+                    self.closed = True
+                    self._queue.put_nowait(self._sentinel)
+
+            def __aiter__(self) -> Any:
+                return self
+
+            async def __anext__(self) -> Any:
+                item = await self._queue.get()
+                if item is self._sentinel:
+                    raise StopAsyncIteration
+                return item
+
+        class ScenarioTeeResult(tuple):
+            def __new__(cls, iterators: list[Any], task: asyncio.Task[Any]) -> Any:
+                obj = super().__new__(cls, iterators)
+                obj._task = task
+                return obj
+
+            async def aclose(self) -> None:
+                self._task.cancel()
+                try:
+                    await self._task
+                except BaseException:
+                    pass
+
+        class ScenarioTeeIterator:
+            def __init__(self, queue: asyncio.Queue[Any], sentinel: object) -> None:
+                self._queue = queue
+                self._sentinel = sentinel
+
+            def __aiter__(self) -> Any:
+                return self
+
+            async def __anext__(self) -> Any:
+                item = await self._queue.get()
+                if item is self._sentinel:
+                    raise StopAsyncIteration
+                return item
+
+        class ScenarioItertools:
+            @staticmethod
+            def tee(source: Any, n: int) -> Any:
+                sentinel = object()
+                queues = [asyncio.Queue() for _ in range(n)]
+
+                async def fanout() -> None:
+                    async for item in source:
+                        for queue in queues:
+                            queue.put_nowait(item)
+                    for queue in queues:
+                        queue.put_nowait(sentinel)
+
+                task = asyncio.create_task(fanout())
+                return ScenarioTeeResult(
+                    [ScenarioTeeIterator(queue, sentinel) for queue in queues], task
+                )
+
+        async def cancel_and_wait(*tasks: asyncio.Task[Any]) -> None:
+            for task in tasks:
+                task.cancel()
+            for task in tasks:
+                try:
+                    await task
+                except BaseException:
+                    pass
+
+        aio_mod.Chan = ScenarioChan
+        aio_mod.itertools = ScenarioItertools
+        aio_mod.cancel_and_wait = cancel_and_wait
+
+        wrapped = FakeSTT("wrapped")
+        vad_event = type(
+            "VADEvent",
+            (),
+            {"type": "end_of_speech", "frames": []},
+        )()
+        adapter = stream_adapter_module.StreamAdapter(stt=wrapped, vad=FakeVAD([vad_event]))
+
+        async def run_stream() -> list[Any]:
+            stream = adapter.stream(language="en")
+            events: list[Any] = []
+            async for event in stream:
+                events.append(event)
+                if len(events) == 2:
+                    break
+            await stream.aclose()
+            return events
+
+        events = asyncio.run(run_stream())
+        return {
+            "contract": "stt-stream-adapter-empty-vad-end",
+            "events": [
+                {
+                    "name": "empty_vad_end",
+                    "event_types": [event.type.value for event in events],
+                    "final_text": events[-1].alternatives[0].text if events[-1].alternatives else "",
+                    "recognize_calls": wrapped.recognize_calls,
+                    "recognize_frame_counts": wrapped.recognize_frame_counts,
                 }
             ],
         }
