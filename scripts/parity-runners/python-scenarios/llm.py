@@ -1539,6 +1539,29 @@ def llm_tool_context(input_data: Any) -> dict[str, Any]:
                     {"name": "add_duplicate", "error": True, "error_message": str(exc)}
                 ],
             }
+    if action == "add_updates_flattened":
+        lookup = fn_tool("lookup")
+        provider = provider_tool("provider")
+        nested_provider = provider_tool("nested-provider")
+        weather = fn_tool("weather")
+        toolset = module.Toolset(id="set", tools=[weather, nested_provider])
+        ctx = module.ToolContext([lookup])
+        ctx.update_tools([*ctx._tools, provider])
+        ctx.update_tools([*ctx._tools, toolset])
+        return {
+            "contract": "llm-tool-context",
+            "events": [
+                summarize(
+                    ctx,
+                    "add_updates_flattened",
+                    {
+                        "lookup_found": ctx.get_function_tool("lookup") is lookup,
+                        "weather_found": ctx.get_function_tool("weather") is weather,
+                        "toolset_names": [toolset.id for toolset in ctx.toolsets],
+                    },
+                )
+            ],
+        }
     if action == "confirm_duplicate_schema":
         base = {
             "type": "object",

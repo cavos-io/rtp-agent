@@ -3661,6 +3661,33 @@ func runLLMToolContext(input json.RawMessage) (any, error) {
 			message = err.Error()
 		}
 		return map[string]any{"contract": "llm-tool-context", "events": []map[string]any{{"name": "add_duplicate", "error": err != nil, "error_message": message}}}, nil
+	case "add_updates_flattened":
+		lookup := newTool("lookup", "lookup")
+		provider := &scenarioLLMProviderTool{scenarioLLMTool: scenarioLLMTool{id: "provider", name: "provider"}}
+		nestedProvider := &scenarioLLMProviderTool{scenarioLLMTool: scenarioLLMTool{id: "nested-provider", name: "nested-provider"}}
+		weather := newTool("weather", "weather")
+		toolset := &scenarioLLMToolset{id: "set", tools: []lkllm.Tool{weather, nestedProvider}}
+		ctx := lkllm.NewToolContext([]interface{}{lookup})
+		if err := ctx.AddTool(provider); err != nil {
+			return nil, err
+		}
+		if err := ctx.AddTool(toolset); err != nil {
+			return nil, err
+		}
+		toolsetNames := make([]string, 0, len(ctx.Toolsets()))
+		for _, toolset := range ctx.Toolsets() {
+			toolsetNames = append(toolsetNames, toolset.ID())
+		}
+		return map[string]any{
+			"contract": "llm-tool-context",
+			"events": []map[string]any{
+				summary(ctx, "add_updates_flattened", map[string]any{
+					"lookup_found":  ctx.GetFunctionTool("lookup") == lookup,
+					"weather_found": ctx.GetFunctionTool("weather") == weather,
+					"toolset_names": toolsetNames,
+				}),
+			},
+		}, nil
 	case "confirm_duplicate_schema":
 		base := map[string]any{
 			"type": "object",
