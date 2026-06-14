@@ -1118,6 +1118,7 @@ func (a *App) runAgora(ctx context.Context) error {
 	if err := transport.Join(ctx); err != nil {
 		return err
 	}
+	go observeAgoraTransportEvents(ctx, transport.Events())
 	audioOutput := workeragora.NewAudioOutput(transport)
 	a.Session.EnsureAssistant().SetPublishAudio(func(frame *model.AudioFrame) error {
 		return audioOutput.PublishAudio(ctx, frame)
@@ -1132,6 +1133,35 @@ func (a *App) runAgora(ctx context.Context) error {
 	}
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+func observeAgoraTransportEvents(ctx context.Context, events <-chan workeragora.Event) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok := <-events:
+			if !ok {
+				return
+			}
+			logAgoraTransportEvent(event)
+		}
+	}
+}
+
+func logAgoraTransportEvent(event workeragora.Event) {
+	switch event.Kind {
+	case workeragora.EventConnected:
+		logutil.Logger.Infow("agora transport connected", "channel", event.Channel, "reason", event.Reason)
+	case workeragora.EventDisconnected:
+		logutil.Logger.Infow("agora transport disconnected", "channel", event.Channel, "reason", event.Reason)
+	case workeragora.EventUserJoined:
+		logutil.Logger.Infow("agora participant joined", "channel", event.Channel, "userID", event.UserID)
+	case workeragora.EventUserLeft:
+		logutil.Logger.Infow("agora participant left", "channel", event.Channel, "userID", event.UserID, "reason", event.Reason)
+	case workeragora.EventError:
+		logutil.Logger.Warnw("agora transport event error", event.Err, "channel", event.Channel, "reason", event.Reason)
+	}
 }
 
 func (a *App) Close(ctx context.Context) error {
