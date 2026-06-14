@@ -481,6 +481,23 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "metrics_unsubscribe":
+		requestIDs := make([]string, 0, 1)
+		unsubscribe := provider.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		unsubscribe()
+		unsubscribe()
+		provider.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "after-unsubscribe"})
+		return map[string]any{
+			"contract": "tts-metrics-reference-unsubscribe",
+			"events": []map[string]any{
+				{
+					"name":        "metrics_unsubscribe",
+					"request_ids": requestIDs,
+				},
+			},
+		}, nil
 	case "error_panic_isolated":
 		labels := make([]string, 0, 1)
 		escapedError := false
@@ -505,6 +522,23 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 					"name":          "error_panic_isolated",
 					"labels":        labels,
 					"escaped_error": escapedError,
+				},
+			},
+		}, nil
+	case "error_unsubscribe":
+		labels := make([]string, 0, 1)
+		unsubscribe := provider.OnError(func(err lktts.TTSError) {
+			labels = append(labels, err.Label)
+		})
+		unsubscribe()
+		unsubscribe()
+		provider.EmitError(lktts.TTSError{Label: "after-unsubscribe", Err: errors.New("tts failed")})
+		return map[string]any{
+			"contract": "tts-error-emitter-unsubscribe",
+			"events": []map[string]any{
+				{
+					"name":   "error_unsubscribe",
+					"labels": labels,
 				},
 			},
 		}, nil

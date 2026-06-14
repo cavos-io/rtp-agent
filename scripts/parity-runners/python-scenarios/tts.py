@@ -604,6 +604,27 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "metrics_unsubscribe":
+        request_ids: list[str] = []
+
+        def handler(metrics: Any) -> None:
+            request_ids.append(metrics.request_id)
+
+        tts.on("metrics_collected", handler)
+        tts.off("metrics_collected", handler)
+        tts.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "after-unsubscribe"})(),
+        )
+        return {
+            "contract": "tts-metrics-reference-unsubscribe",
+            "events": [
+                {
+                    "name": "metrics_unsubscribe",
+                    "request_ids": request_ids,
+                }
+            ],
+        }
     if action == "error_panic_isolated":
         labels: list[str] = []
         escaped_error = False
@@ -624,6 +645,24 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                     "name": "error_panic_isolated",
                     "labels": labels,
                     "escaped_error": escaped_error,
+                }
+            ],
+        }
+    if action == "error_unsubscribe":
+        labels: list[str] = []
+
+        def handler(error: Any) -> None:
+            labels.append(error.label)
+
+        tts.on("error", handler)
+        tts.off("error", handler)
+        tts.emit("error", type("Error", (), {"label": "after-unsubscribe"})())
+        return {
+            "contract": "tts-error-emitter-unsubscribe",
+            "events": [
+                {
+                    "name": "error_unsubscribe",
+                    "labels": labels,
                 }
             ],
         }
