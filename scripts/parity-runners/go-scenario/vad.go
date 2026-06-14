@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	lkvad "github.com/cavos-io/rtp-agent/core/vad"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
 func runVADValueObjects(input json.RawMessage) (any, error) {
@@ -206,7 +210,66 @@ func runVADValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "metrics_panic_isolated":
+		detector := lkvad.NewSimpleVADWithOptions(lkvad.SimpleVADOptions{UpdateInterval: 1})
+		received := make(chan struct{}, 1)
+		escapedError := false
+		detector.OnMetricsCollected(func(*telemetry.VADMetrics) {
+			panic("metrics handler failed")
+		})
+		detector.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
+			received <- struct{}{}
+		})
+		stream, err := detector.Stream(context.Background())
+		if err != nil {
+			return nil, err
+		}
+		defer stream.Close()
+		func() {
+			defer func() {
+				if recover() != nil {
+					escapedError = true
+				}
+			}()
+			if err := stream.PushFrame(vadScenarioAudioFrame(16000, 160, 6000)); err != nil {
+				escapedError = true
+				return
+			}
+			if _, err := stream.Next(); err != nil {
+				escapedError = true
+			}
+		}()
+		receivedCount := 0
+		select {
+		case <-received:
+			receivedCount++
+		case <-time.After(500 * time.Millisecond):
+		}
+		return map[string]any{
+			"contract": "vad-metrics-panic-isolated",
+			"events": []map[string]any{
+				{
+					"name":           "metrics_panic_isolated",
+					"received_count": receivedCount,
+					"escaped_error":  escapedError,
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported vad value-object action %q", payload.Action)
+	}
+}
+
+func vadScenarioAudioFrame(sampleRate uint32, samples int, value int16) *model.AudioFrame {
+	data := make([]byte, samples*2)
+	for i := 0; i < samples; i++ {
+		data[i*2] = byte(value)
+		data[i*2+1] = byte(uint16(value) >> 8)
+	}
+	return &model.AudioFrame{
+		Data:              data,
+		SampleRate:        sampleRate,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(samples),
 	}
 }

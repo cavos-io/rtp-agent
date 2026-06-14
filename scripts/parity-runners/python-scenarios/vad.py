@@ -19,10 +19,17 @@ def load_reference_vad():
             return cls
 
         def __init__(self) -> None:
-            pass
+            self._listeners: dict[str, list[Any]] = {}
 
-        def emit(self, *_args: Any, **_kwargs: Any) -> None:  # noqa: F405
-            pass
+        def on(self, event: str, callback: Any) -> None:  # noqa: F405
+            self._listeners.setdefault(event, []).append(callback)
+
+        def emit(self, event: str, *args: Any, **kwargs: Any) -> None:  # noqa: F405
+            for listener in list(self._listeners.get(event, [])):
+                try:
+                    listener(*args, **kwargs)
+                except Exception:
+                    continue
 
     class AudioFrame:
         pass
@@ -230,6 +237,43 @@ def vad_value_objects(input_data: Any) -> dict[str, Any]:  # noqa: F405
                     "zero_timestamp": zero.timestamp,
                     "zero_speech_duration": zero.speech_duration,
                     "zero_silence_duration": zero.silence_duration,
+                }
+            ],
+        }
+    if action == "metrics_panic_isolated":
+        class ScenarioVAD(module.VAD):
+            def stream(self) -> Any:
+                return None
+
+        detector = ScenarioVAD(
+            capabilities=module.VADCapabilities(update_interval=1),
+        )
+        received_count = 0
+        escaped_error = False
+
+        def bad_handler(metrics: Any) -> None:
+            raise RuntimeError("metrics handler failed")
+
+        def good_handler(metrics: Any) -> None:
+            nonlocal received_count
+            received_count += 1
+
+        detector.on("metrics_collected", bad_handler)
+        detector.on("metrics_collected", good_handler)
+        try:
+            detector.emit(
+                "metrics_collected",
+                type("Metrics", (), {"label": "vad"})(),
+            )
+        except RuntimeError:
+            escaped_error = True
+        return {
+            "contract": "vad-metrics-panic-isolated",
+            "events": [
+                {
+                    "name": "metrics_panic_isolated",
+                    "received_count": received_count,
+                    "escaped_error": escaped_error,
                 }
             ],
         }
