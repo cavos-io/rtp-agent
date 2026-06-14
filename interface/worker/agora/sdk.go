@@ -220,7 +220,7 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 		_ = releaseSDKService()
 		return fmt.Errorf("agora SDK connection creation failed")
 	}
-	connectedCh := make(chan struct{}, 1)
+	connectedCh := make(chan Event, 1)
 	joinErrCh := make(chan error, 1)
 	if ret := connection.RegisterObserver(&agoraservice.RtcConnectionObserver{
 		OnConnected: func(_ *agoraservice.RtcConnection, info *agoraservice.RtcConnectionInfo, reason int) {
@@ -228,9 +228,8 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 			if info != nil && info.ChannelId != "" {
 				event.Channel = info.ChannelId
 			}
-			emitSDKEvent(handler, event)
 			select {
-			case connectedCh <- struct{}{}:
+			case connectedCh <- event:
 			default:
 			}
 		},
@@ -322,7 +321,8 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 	c.joining = false
 	joined = true
 	c.mu.Unlock()
-	if err := c.waitConnected(ctx, connection, connectedCh, joinErrCh); err != nil {
+	connectedEvent, err := c.waitConnected(ctx, connection, connectedCh, joinErrCh)
+	if err != nil {
 		return err
 	}
 	ret, ok := c.publishActiveAudio(connection)
@@ -333,24 +333,25 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 		c.releaseActiveConnection(connection)
 		return fmt.Errorf("agora SDK publish audio failed: %d", ret)
 	}
+	emitSDKEvent(handler, connectedEvent)
 	return nil
 }
 
-func (c *sdkChannelClient) waitConnected(ctx context.Context, connection *agoraservice.RtcConnection, connectedCh <-chan struct{}, joinErrCh <-chan error) error {
+func (c *sdkChannelClient) waitConnected(ctx context.Context, connection *agoraservice.RtcConnection, connectedCh <-chan Event, joinErrCh <-chan error) (Event, error) {
 	timer := time.NewTimer(sdkJoinTimeout())
 	defer timer.Stop()
 	select {
-	case <-connectedCh:
-		return nil
+	case event := <-connectedCh:
+		return event, nil
 	case err := <-joinErrCh:
 		c.releaseActiveConnection(connection)
-		return err
+		return Event{}, err
 	case <-timer.C:
 		c.releaseActiveConnection(connection)
-		return fmt.Errorf("agora SDK connect timed out after %s", sdkJoinTimeout())
+		return Event{}, fmt.Errorf("agora SDK connect timed out after %s", sdkJoinTimeout())
 	case <-ctx.Done():
 		c.releaseActiveConnection(connection)
-		return ctx.Err()
+		return Event{}, ctx.Err()
 	}
 }
 

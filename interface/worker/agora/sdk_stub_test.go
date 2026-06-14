@@ -139,10 +139,10 @@ func TestSDKClientImplementationWaitsForConnectedEvent(t *testing.T) {
 	}
 	text := string(source)
 	for _, want := range []string{
-		"connectedCh := make(chan struct{}, 1)",
+		"connectedCh := make(chan Event, 1)",
 		"joinErrCh := make(chan error, 1)",
-		"case connectedCh <- struct{}{}",
-		"if err := c.waitConnected",
+		"case connectedCh <- event",
+		"connectedEvent, err := c.waitConnected",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("sdk.go missing %q", want)
@@ -350,6 +350,42 @@ func TestSDKClientImplementationPublishesAfterConnected(t *testing.T) {
 	}
 	if waitIndex > publishIndex {
 		t.Fatal("sdk.go must wait for Agora connected event before publishing audio")
+	}
+}
+
+func TestSDKClientImplementationEmitsConnectedAfterPublishAudio(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	onConnectedIndex := strings.Index(text, "OnConnected: func")
+	if onConnectedIndex < 0 {
+		t.Fatal("sdk.go missing OnConnected callback")
+	}
+	onConnectedBody := text[onConnectedIndex:]
+	if nextCallback := strings.Index(onConnectedBody[len("OnConnected: func"):], "\n\t\t},"); nextCallback >= 0 {
+		onConnectedBody = onConnectedBody[:len("OnConnected: func")+nextCallback]
+	}
+	if strings.Contains(onConnectedBody, "emitSDKEvent(handler, event)") {
+		t.Fatal("OnConnected must not emit connected before startup PublishAudio succeeds")
+	}
+	joinIndex := strings.Index(text, "func (c *sdkChannelClient) Join")
+	if joinIndex < 0 {
+		t.Fatal("sdk.go missing sdkChannelClient.Join")
+	}
+	joinBody := text[joinIndex:]
+	if nextFunc := strings.Index(joinBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		joinBody = joinBody[:len("func ")+nextFunc]
+	}
+	waitIndex := strings.Index(joinBody, "c.waitConnected")
+	publishIndex := strings.Index(joinBody, "c.publishActiveAudio(connection)")
+	emitIndex := strings.Index(joinBody, "emitSDKEvent(handler, connectedEvent)")
+	if waitIndex < 0 || publishIndex < 0 || emitIndex < 0 {
+		t.Fatal("Join must wait, publish startup audio, then emit connected event")
+	}
+	if !(waitIndex < publishIndex && publishIndex < emitIndex) {
+		t.Fatal("Join must emit connected only after waitConnected and PublishAudio succeed")
 	}
 }
 
