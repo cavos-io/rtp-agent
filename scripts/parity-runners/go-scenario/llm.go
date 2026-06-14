@@ -12,6 +12,7 @@ import (
 
 	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
 	lkllm "github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
 func runLLMAPIConnectOptions(input json.RawMessage) (any, error) {
@@ -355,8 +356,624 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 				{"name": "provider_error_not_forwarded", "labels": labels},
 			},
 		}, nil
+	case "forward_metrics":
+		primary := &fakeScenarioLLM{label: "primary"}
+		fallback := &fakeScenarioLLM{label: "fallback"}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		requestIDs := make([]string, 0, 2)
+		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.LLMMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		defer unsubscribe()
+		primary.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "primary-req"})
+		fallback.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "fallback-req"})
+		return map[string]any{
+			"contract": "llm-fallback-forward-provider-metrics",
+			"events": []map[string]any{
+				{"name": "forward_metrics", "request_ids": requestIDs},
+			},
+		}, nil
+	case "next_provider_before_chunk":
+		primary := &fakeScenarioLLM{label: "primary", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{err: errors.New("primary stream failed")},
+		}}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		defer stream.Close()
+		chunks := []string{}
+		for {
+			chunk, err := stream.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return nil, err
+			}
+			if chunk != nil && chunk.Delta != nil {
+				chunks = append(chunks, chunk.Delta.Content)
+			}
+		}
+		return map[string]any{
+			"contract": "llm-fallback-next-provider-before-chunk",
+			"events": []map[string]any{
+				{"name": "next_provider_before_chunk", "chunks": chunks},
+			},
+		}, nil
+	case "stream_chat_context":
+		originalCtx := lkllm.NewChatContext()
+		providerCtx := lkllm.NewChatContext()
+		provider := &fakeScenarioLLM{label: "provider", stream: &fakeScenarioLLMStream{
+			chatCtx: providerCtx,
+			events: []fakeScenarioLLMEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "ok"}}},
+			},
+		}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{provider})
+		stream, err := adapter.Chat(context.Background(), originalCtx)
+		if err != nil {
+			return nil, err
+		}
+		defer stream.Close()
+		streamWithChatCtx, ok := stream.(interface{ ChatCtx() *lkllm.ChatContext })
+		if !ok {
+			return nil, errors.New("fallback stream does not expose ChatCtx")
+		}
+		beforeIsOriginal := streamWithChatCtx.ChatCtx() == originalCtx
+		if _, err := stream.Next(); err != nil {
+			return nil, err
+		}
+		afterIsProvider := streamWithChatCtx.ChatCtx() == providerCtx
+		return map[string]any{
+			"contract": "llm-fallback-stream-exposes-chat-context",
+			"events": []map[string]any{
+				{
+					"name":               "stream_chat_context",
+					"before_is_original": beforeIsOriginal,
+					"after_is_provider":  afterIsProvider,
+				},
+			},
+		}, nil
+	case "no_retry_after_chunk":
+		primaryErr := errors.New("primary stream failed")
+		primary := &fakeScenarioLLM{label: "primary", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "partial"}}},
+			{err: primaryErr},
+		}}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		defer stream.Close()
+		chunks := []string{}
+		errored := false
+		for {
+			chunk, err := stream.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				errored = true
+				break
+			}
+			if chunk != nil && chunk.Delta != nil {
+				chunks = append(chunks, chunk.Delta.Content)
+			}
+		}
+		return map[string]any{
+			"contract": "llm-fallback-no-retry-after-chunk",
+			"events": []map[string]any{
+				{
+					"name":    "no_retry_after_chunk",
+					"chunks":  chunks,
+					"errored": errored,
+				},
+			},
+		}, nil
+	case "retry_after_chunk_enabled":
+		primaryErr := errors.New("primary stream failed")
+		primary := &fakeScenarioLLM{label: "primary", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "partial"}}},
+			{err: primaryErr},
+		}}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapterWithOptions([]lkllm.LLM{primary, fallback}, lkllm.FallbackAdapterOptions{RetryOnChunkSent: true})
+		stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		defer stream.Close()
+		chunks := []string{}
+		errored := false
+		for {
+			chunk, err := stream.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				errored = true
+				break
+			}
+			if chunk != nil && chunk.Delta != nil {
+				chunks = append(chunks, chunk.Delta.Content)
+			}
+		}
+		return map[string]any{
+			"contract": "llm-fallback-retry-after-chunk-enabled",
+			"events": []map[string]any{
+				{
+					"name":    "retry_after_chunk_enabled",
+					"chunks":  chunks,
+					"errored": errored,
+				},
+			},
+		}, nil
+	case "retry_after_usage_only":
+		primaryErr := errors.New("primary stream failed")
+		primary := &fakeScenarioLLM{label: "primary", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Usage: &lkllm.CompletionUsage{TotalTokens: 1}}},
+			{err: primaryErr},
+		}}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		defer stream.Close()
+		chunks := []string{}
+		errored := false
+		for {
+			chunk, err := stream.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				errored = true
+				break
+			}
+			chunks = append(chunks, scenarioLLMChunkKind(chunk))
+		}
+		return map[string]any{
+			"contract": "llm-fallback-retry-after-usage-only",
+			"events": []map[string]any{
+				{
+					"name":    "retry_after_usage_only",
+					"chunks":  chunks,
+					"errored": errored,
+				},
+			},
+		}, nil
+	case "retries_same_provider":
+		primaryErr := errors.New("primary stream failed")
+		primary := &fakeScenarioLLM{label: "primary", streams: []lkllm.LLMStream{
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{{err: primaryErr}}},
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "primary recovered"}}},
+			}},
+		}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapterWithOptions([]lkllm.LLM{primary, fallback}, lkllm.FallbackAdapterOptions{
+			MaxRetryPerLLM: 1,
+			RetryInterval:  time.Nanosecond,
+		})
+		stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		defer stream.Close()
+		chunks := []string{}
+		for {
+			chunk, err := stream.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return nil, err
+			}
+			chunks = append(chunks, scenarioLLMChunkKind(chunk))
+		}
+		return map[string]any{
+			"contract": "llm-fallback-retries-same-provider",
+			"events": []map[string]any{
+				{
+					"name":           "retries_same_provider",
+					"chunks":         chunks,
+					"primary_calls":  primary.calls,
+					"fallback_calls": fallback.calls,
+				},
+			},
+		}, nil
+	case "all_failed_error":
+		primary := &fakeScenarioLLM{label: "primary", err: errors.New("primary unavailable")}
+		fallback := &fakeScenarioLLM{label: "fallback", err: errors.New("fallback unavailable")}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		_, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		message := ""
+		if err != nil {
+			message = err.Error()
+		}
+		var connectionErr *lkllm.APIConnectionError
+		return map[string]any{
+			"contract": "llm-fallback-all-failed-error",
+			"events": []map[string]any{
+				{
+					"name":                   "all_failed_error",
+					"errored":                err != nil,
+					"error_class":            scenarioLLMConnectionErrorClass(err),
+					"retryable":              errors.As(err, &connectionErr) && connectionErr.Retryable,
+					"message_has_all_failed": strings.Contains(message, "all LLMs failed"),
+					"message_has_primary":    strings.Contains(message, "primary"),
+					"message_has_fallback":   strings.Contains(message, "fallback"),
+					"primary_calls":          primary.calls,
+					"fallback_calls":         fallback.calls,
+				},
+			},
+		}, nil
+	case "clean_eof":
+		primary := &fakeScenarioLLM{label: "primary", stream: &fakeScenarioLLMStream{}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		defer stream.Close()
+		chunks := []string{}
+		errored := false
+		for {
+			chunk, err := stream.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				errored = true
+				break
+			}
+			chunks = append(chunks, scenarioLLMChunkKind(chunk))
+		}
+		return map[string]any{
+			"contract": "llm-fallback-no-retry-clean-eof",
+			"events": []map[string]any{
+				{
+					"name":           "clean_eof",
+					"chunks":         chunks,
+					"errored":        errored,
+					"primary_calls":  primary.calls,
+					"fallback_calls": fallback.calls,
+				},
+			},
+		}, nil
+	case "client_closed_clean_eof":
+		primary := &fakeScenarioLLM{label: "primary", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{err: lkllm.NewAPIStatusError("client closed", 499, "req_123", nil)},
+		}}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		defer stream.Close()
+		chunks := []string{}
+		errored := false
+		for {
+			chunk, err := stream.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				errored = true
+				break
+			}
+			chunks = append(chunks, scenarioLLMChunkKind(chunk))
+		}
+		return map[string]any{
+			"contract": "llm-fallback-client-closed-clean-eof",
+			"events": []map[string]any{
+				{
+					"name":           "client_closed_clean_eof",
+					"chunks":         chunks,
+					"errored":        errored,
+					"primary_calls":  primary.calls,
+					"fallback_calls": fallback.calls,
+				},
+			},
+		}, nil
+	case "nonretryable_api_error_before_chunk":
+		primary := &fakeScenarioLLM{label: "primary", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{err: lkllm.NewAPIStatusError("bad request", 400, "req_123", nil)},
+		}}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		defer stream.Close()
+		chunks := []string{}
+		errored := false
+		for {
+			chunk, err := stream.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				errored = true
+				break
+			}
+			chunks = append(chunks, scenarioLLMChunkKind(chunk))
+		}
+		return map[string]any{
+			"contract": "llm-fallback-nonretryable-api-error-before-chunk",
+			"events": []map[string]any{
+				{
+					"name":           "nonretryable_api_error_before_chunk",
+					"chunks":         chunks,
+					"errored":        errored,
+					"primary_calls":  primary.calls,
+					"fallback_calls": fallback.calls,
+				},
+			},
+		}, nil
+	case "all_unavailable_main_success_no_recovered":
+		primary := &fakeScenarioLLM{label: "primary", streams: []lkllm.LLMStream{
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{{err: errors.New("primary stream failed")}}},
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{{err: errors.New("recovery failed")}}},
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "primary active"}}},
+			}},
+		}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary})
+		first, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		if _, err := first.Next(); err == nil {
+			return nil, errors.New("initial all-unavailable setup unexpectedly succeeded")
+		}
+		_ = first.Close()
+		deadline := time.Now().Add(2 * time.Second)
+		for primary.calls < 2 && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if primary.calls < 2 {
+			return nil, fmt.Errorf("timed out waiting for recovery probe, calls=%d", primary.calls)
+		}
+		drainScenarioLLMAvailability(adapter)
+
+		second, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		defer second.Close()
+		chunks := []string{}
+		for {
+			chunk, err := second.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return nil, err
+			}
+			chunks = append(chunks, scenarioLLMChunkKind(chunk))
+		}
+		return map[string]any{
+			"contract": "llm-fallback-all-unavailable-main-success-no-recovered",
+			"events": []map[string]any{
+				{
+					"name":                "all_unavailable_main_success_no_recovered",
+					"chunks":              chunks,
+					"availability_events": collectScenarioLLMAvailability(adapter),
+					"primary_calls":       primary.calls,
+				},
+			},
+		}, nil
+	case "skip_unavailable_provider":
+		primary := &fakeScenarioLLM{label: "primary", streams: []lkllm.LLMStream{
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{{err: errors.New("primary stream failed")}}},
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{{err: errors.New("recovery failed")}}},
+		}}
+		fallback := &fakeScenarioLLM{label: "fallback", streams: []lkllm.LLMStream{
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback first"}}},
+			}},
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback second"}}},
+			}},
+		}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		first, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		firstChunks, err := collectScenarioLLMStreamChunks(first)
+		if err != nil {
+			return nil, err
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		for primary.calls < 2 && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if primary.calls < 2 {
+			return nil, fmt.Errorf("timed out waiting for recovery probe, calls=%d", primary.calls)
+		}
+
+		second, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		secondChunks, err := collectScenarioLLMStreamChunks(second)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "llm-fallback-skip-unavailable-provider",
+			"events": []map[string]any{
+				{
+					"name":           "skip_unavailable_provider",
+					"first_chunks":   firstChunks,
+					"second_chunks":  secondChunks,
+					"fallback_calls": fallback.calls,
+				},
+			},
+		}, nil
+	case "availability_failed":
+		primary := &fakeScenarioLLM{label: "primary", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{err: errors.New("primary stream failed")},
+		}}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		chunks, err := collectScenarioLLMStreamChunks(stream)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "llm-fallback-availability-failed",
+			"events": []map[string]any{
+				{
+					"name":                "availability_failed",
+					"chunks":              chunks,
+					"availability_events": collectScenarioLLMAvailability(adapter),
+				},
+			},
+		}, nil
+	case "availability_recovered":
+		primary := &fakeScenarioLLM{label: "primary", streams: []lkllm.LLMStream{
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{{err: errors.New("primary stream failed")}}},
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "recovery probe"}}},
+			}},
+		}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		chunks, err := collectScenarioLLMStreamChunks(stream)
+		if err != nil {
+			return nil, err
+		}
+		if err := waitForScenarioLLMCalls(primary, 2); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "llm-fallback-availability-recovered",
+			"events": []map[string]any{
+				{
+					"name":                "availability_recovered",
+					"chunks":              chunks,
+					"availability_events": collectScenarioLLMAvailability(adapter),
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported LLM fallback action %q", payload.Action)
+	}
+}
+
+func scenarioLLMConnectionErrorClass(err error) string {
+	var connectionErr *lkllm.APIConnectionError
+	if errors.As(err, &connectionErr) {
+		return "api_connection"
+	}
+	if err == nil {
+		return ""
+	}
+	return fmt.Sprintf("%T", err)
+}
+
+func scenarioLLMChunkKind(chunk *lkllm.ChatChunk) string {
+	if chunk == nil {
+		return "nil"
+	}
+	if chunk.Usage != nil {
+		return "usage"
+	}
+	if chunk.Delta != nil && chunk.Delta.Content != "" {
+		return "content:" + chunk.Delta.Content
+	}
+	return "empty"
+}
+
+func collectScenarioLLMStreamChunks(stream lkllm.LLMStream) ([]string, error) {
+	defer stream.Close()
+	chunks := []string{}
+	for {
+		chunk, err := stream.Next()
+		if errors.Is(err, io.EOF) {
+			return chunks, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		chunks = append(chunks, scenarioLLMChunkKind(chunk))
+	}
+}
+
+func waitForScenarioLLMCalls(llm *fakeScenarioLLM, calls int) error {
+	deadline := time.Now().Add(2 * time.Second)
+	for llm.calls < calls && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if llm.calls < calls {
+		return fmt.Errorf("timed out waiting for %s calls, got %d want %d", llm.label, llm.calls, calls)
+	}
+	return nil
+}
+
+func drainScenarioLLMAvailability(adapter *lkllm.FallbackAdapter) {
+	for {
+		select {
+		case <-adapter.AvailabilityChangedCh():
+		default:
+			return
+		}
+	}
+}
+
+func collectScenarioLLMAvailability(adapter *lkllm.FallbackAdapter) []map[string]any {
+	events := []map[string]any{}
+	for {
+		select {
+		case event := <-adapter.AvailabilityChangedCh():
+			events = append(events, map[string]any{
+				"available": event.Available,
+				"label":     lkllm.Label(event.LLM),
+			})
+		default:
+			return events
+		}
 	}
 }
 
@@ -3271,10 +3888,26 @@ type fakeScenarioLLM struct {
 	label        string
 	model        string
 	provider     string
+	stream       lkllm.LLMStream
+	streams      []lkllm.LLMStream
+	err          error
+	calls        int
 	prewarmCalls int
 }
 
 func (f *fakeScenarioLLM) Chat(context.Context, *lkllm.ChatContext, ...lkllm.ChatOption) (lkllm.LLMStream, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	if len(f.streams) > 0 {
+		stream := f.streams[0]
+		f.streams = f.streams[1:]
+		return stream, nil
+	}
+	if f.stream != nil {
+		return f.stream, nil
+	}
 	return nil, errors.New("chat unsupported")
 }
 
@@ -3292,6 +3925,39 @@ func (f *fakeScenarioLLM) Provider() string {
 
 func (f *fakeScenarioLLM) Prewarm() {
 	f.prewarmCalls++
+}
+
+type fakeScenarioLLMEvent struct {
+	chunk *lkllm.ChatChunk
+	err   error
+}
+
+type fakeScenarioLLMStream struct {
+	events  []fakeScenarioLLMEvent
+	chatCtx *lkllm.ChatContext
+	index   int
+	closed  bool
+}
+
+func (f *fakeScenarioLLMStream) Next() (*lkllm.ChatChunk, error) {
+	if f.index >= len(f.events) {
+		return nil, io.EOF
+	}
+	event := f.events[f.index]
+	f.index++
+	if event.err != nil {
+		return nil, event.err
+	}
+	return event.chunk, nil
+}
+
+func (f *fakeScenarioLLMStream) Close() error {
+	f.closed = true
+	return nil
+}
+
+func (f *fakeScenarioLLMStream) ChatCtx() *lkllm.ChatContext {
+	return f.chatCtx
 }
 
 type fakeScenarioRealtimeModel struct {

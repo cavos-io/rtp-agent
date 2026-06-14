@@ -1,4 +1,6 @@
 import ast
+import asyncio
+import time
 from dataclasses import asdict, dataclass
 from typing import Literal
 
@@ -133,6 +135,9 @@ def load_reference_llm_fallback():
         def error(self, *args: Any, **kwargs: Any) -> None:
             pass
 
+        def exception(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
     class LLM(EventEmitter):
         def __init__(self) -> None:
             super().__init__()
@@ -153,8 +158,35 @@ def load_reference_llm_fallback():
         def provider(self) -> str:
             return "unknown"
 
+    class EventChannel:
+        def __init__(self) -> None:
+            self.items: list[Any] = []
+
+        def send_nowait(self, item: Any) -> None:
+            self.items.append(item)
+
     class LLMStream:
-        pass
+        def __init__(
+            self,
+            llm: Any,
+            *,
+            chat_ctx: Any,
+            tools: list[Any] | None = None,
+            conn_options: Any = None,
+        ) -> None:
+            self._llm = llm
+            self._chat_ctx = chat_ctx
+            self._tools = tools or []
+            self._conn_options = conn_options
+            self._event_ch = EventChannel()
+
+        def __aiter__(self) -> Any:
+            return self._iter_events()
+
+        async def _iter_events(self) -> Any:
+            await self._run()
+            for item in self._event_ch.items:
+                yield item
 
     class ChatChunk:
         pass
@@ -202,10 +234,89 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
     action = input_data.get("action", "provider_error_not_forwarded")
     module = load_reference_llm_fallback()
 
+    class FakeDelta:
+        def __init__(self, content: str = "") -> None:
+            self.content = content
+            self.tool_calls: list[Any] = []
+
+    class FakeChunk:
+        def __init__(self, content: str = "", *, usage: bool = False) -> None:
+            self.delta = FakeDelta(content)
+            self.usage = usage
+
+    def chunk_kind(chunk: Any) -> str:
+        if getattr(chunk, "usage", False):
+            return "usage"
+        delta = getattr(chunk, "delta", None)
+        content = getattr(delta, "content", "")
+        if content:
+            return f"content:{content}"
+        return "empty"
+
+    class FakeStream:
+        def __init__(
+            self,
+            events: list[Any],
+            *,
+            chat_ctx: Any,
+            tools: list[Any] | None = None,
+        ) -> None:
+            self._events = events
+            self._chat_ctx = chat_ctx
+            self._tools = tools or []
+
+        @property
+        def chat_ctx(self) -> Any:
+            return self._chat_ctx
+
+        @property
+        def tools(self) -> list[Any]:
+            return self._tools
+
+        async def __aenter__(self) -> Any:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        def __aiter__(self) -> Any:
+            return self._iter_events()
+
+        async def _iter_events(self) -> Any:
+            for event in self._events:
+                if isinstance(event, BaseException):
+                    raise event
+                yield event
+
     class FakeLLM(module.LLM):
-        def __init__(self, label: str) -> None:
+        def __init__(
+            self,
+            label: str,
+            events: list[Any] | None = None,
+            streams: list[list[Any]] | None = None,
+            stream_chat_ctx: Any | None = None,
+            chat_error: BaseException | None = None,
+        ) -> None:
             super().__init__()
             self._label = label
+            self._events = events or []
+            self._streams = streams or []
+            self._stream_chat_ctx = stream_chat_ctx
+            self._chat_error = chat_error
+            self.calls = 0
+
+        def chat(self, **kwargs: Any) -> FakeStream:
+            self.calls += 1
+            if self._chat_error is not None:
+                raise self._chat_error
+            events = self._events
+            if self._streams:
+                events = self._streams.pop(0)
+            return FakeStream(
+                events,
+                chat_ctx=self._stream_chat_ctx or kwargs["chat_ctx"],
+                tools=kwargs.get("tools") or [],
+            )
 
     if action == "provider_error_not_forwarded":
         primary = FakeLLM("primary")
@@ -222,6 +333,494 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
                 {"name": "provider_error_not_forwarded", "labels": labels}
             ],
         }
+    if action == "forward_metrics":
+        primary = FakeLLM("primary")
+        fallback = FakeLLM("fallback")
+        adapter = module.FallbackAdapter([primary, fallback])
+        request_ids: list[str] = []
+        adapter.on(
+            "metrics_collected",
+            lambda metrics: request_ids.append(metrics.request_id),
+        )
+        primary.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "primary-req"})(),
+        )
+        fallback.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "fallback-req"})(),
+        )
+        return {
+            "contract": "llm-fallback-forward-provider-metrics",
+            "events": [
+                {"name": "forward_metrics", "request_ids": request_ids}
+            ],
+        }
+    if action == "next_provider_before_chunk":
+        primary = FakeLLM("primary", [RuntimeError("primary stream failed")])
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter([primary, fallback])
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            chunks: list[str] = []
+            async for chunk in stream:
+                chunks.append(chunk.delta.content)
+            return {
+                "contract": "llm-fallback-next-provider-before-chunk",
+                "events": [
+                    {"name": "next_provider_before_chunk", "chunks": chunks}
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "stream_chat_context":
+        original_ctx = module.ChatContext()
+        provider_ctx = module.ChatContext()
+        provider = FakeLLM(
+            "provider",
+            [FakeChunk("ok")],
+            stream_chat_ctx=provider_ctx,
+        )
+        adapter = module.FallbackAdapter([provider])
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=original_ctx)
+            before_is_original = stream.chat_ctx is original_ctx
+            async for _ in stream:
+                break
+            after_is_provider = stream.chat_ctx is provider_ctx
+            return {
+                "contract": "llm-fallback-stream-exposes-chat-context",
+                "events": [
+                    {
+                        "name": "stream_chat_context",
+                        "before_is_original": before_is_original,
+                        "after_is_provider": after_is_provider,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "no_retry_after_chunk":
+        primary = FakeLLM(
+            "primary",
+            [FakeChunk("partial"), RuntimeError("primary stream failed")],
+        )
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter([primary, fallback])
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            errored = False
+            try:
+                await stream._run()
+            except RuntimeError:
+                errored = True
+            chunks = [chunk.delta.content for chunk in stream._event_ch.items]
+            return {
+                "contract": "llm-fallback-no-retry-after-chunk",
+                "events": [
+                    {
+                        "name": "no_retry_after_chunk",
+                        "chunks": chunks,
+                        "errored": errored,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "retry_after_chunk_enabled":
+        primary = FakeLLM(
+            "primary",
+            [FakeChunk("partial"), RuntimeError("primary stream failed")],
+        )
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter(
+            [primary, fallback],
+            retry_on_chunk_sent=True,
+        )
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            errored = False
+            try:
+                await stream._run()
+            except RuntimeError:
+                errored = True
+            chunks = [chunk.delta.content for chunk in stream._event_ch.items]
+            return {
+                "contract": "llm-fallback-retry-after-chunk-enabled",
+                "events": [
+                    {
+                        "name": "retry_after_chunk_enabled",
+                        "chunks": chunks,
+                        "errored": errored,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "retry_after_usage_only":
+        primary = FakeLLM(
+            "primary",
+            [FakeChunk(usage=True), RuntimeError("primary stream failed")],
+        )
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter([primary, fallback])
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            errored = False
+            try:
+                await stream._run()
+            except RuntimeError:
+                errored = True
+            events = [chunk_kind(chunk) for chunk in stream._event_ch.items]
+            return {
+                "contract": "llm-fallback-retry-after-usage-only",
+                "events": [
+                    {
+                        "name": "retry_after_usage_only",
+                        "chunks": events,
+                        "errored": errored,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "retries_same_provider":
+        primary = FakeLLM(
+            "primary",
+            streams=[
+                [RuntimeError("primary stream failed")],
+                [FakeChunk("primary recovered")],
+            ],
+        )
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter(
+            [primary, fallback],
+            max_retry_per_llm=1,
+            retry_interval=0,
+        )
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            await stream._run()
+            chunks = [chunk_kind(chunk) for chunk in stream._event_ch.items]
+            return {
+                "contract": "llm-fallback-retries-same-provider",
+                "events": [
+                    {
+                        "name": "retries_same_provider",
+                        "chunks": chunks,
+                        "primary_calls": primary.calls,
+                        "fallback_calls": fallback.calls,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "all_failed_error":
+        primary = FakeLLM("primary", chat_error=RuntimeError("primary unavailable"))
+        fallback = FakeLLM("fallback", chat_error=RuntimeError("fallback unavailable"))
+        adapter = module.FallbackAdapter([primary, fallback])
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            error = None
+            try:
+                await stream._run()
+            except BaseException as exc:  # noqa: BLE001 - scenario records stable error contract
+                error = exc
+            message = str(error) if error is not None else ""
+            retryable = bool(getattr(error, "retryable", False))
+            return {
+                "contract": "llm-fallback-all-failed-error",
+                "events": [
+                    {
+                        "name": "all_failed_error",
+                        "errored": error is not None,
+                        "error_class": "api_connection"
+                        if isinstance(error, module.APIConnectionError)
+                        else type(error).__name__ if error is not None else "",
+                        "retryable": retryable,
+                        "message_has_all_failed": "all LLMs failed" in message,
+                        "message_has_primary": "primary" in message,
+                        "message_has_fallback": "fallback" in message,
+                        "primary_calls": primary.calls,
+                        "fallback_calls": fallback.calls,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "clean_eof":
+        primary = FakeLLM("primary", [])
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter([primary, fallback])
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            errored = False
+            try:
+                await stream._run()
+            except BaseException:  # noqa: BLE001 - scenario records stable error contract
+                errored = True
+            chunks = [chunk_kind(chunk) for chunk in stream._event_ch.items]
+            return {
+                "contract": "llm-fallback-no-retry-clean-eof",
+                "events": [
+                    {
+                        "name": "clean_eof",
+                        "chunks": chunks,
+                        "errored": errored,
+                        "primary_calls": primary.calls,
+                        "fallback_calls": fallback.calls,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "client_closed_clean_eof":
+        exceptions = sys.modules["livekit.agents._exceptions"]
+        primary = FakeLLM(
+            "primary",
+            [
+                exceptions.APIStatusError(
+                    message="client closed",
+                    status_code=499,
+                    request_id="req_123",
+                    body=None,
+                )
+            ],
+        )
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter([primary, fallback])
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            errored = False
+            try:
+                await stream._run()
+            except BaseException:  # noqa: BLE001 - scenario records stable error contract
+                errored = True
+            chunks = [chunk_kind(chunk) for chunk in stream._event_ch.items]
+            return {
+                "contract": "llm-fallback-client-closed-clean-eof",
+                "events": [
+                    {
+                        "name": "client_closed_clean_eof",
+                        "chunks": chunks,
+                        "errored": errored,
+                        "primary_calls": primary.calls,
+                        "fallback_calls": fallback.calls,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "nonretryable_api_error_before_chunk":
+        exceptions = sys.modules["livekit.agents._exceptions"]
+        primary = FakeLLM(
+            "primary",
+            [
+                exceptions.APIStatusError(
+                    message="bad request",
+                    status_code=400,
+                    request_id="req_123",
+                    body=None,
+                )
+            ],
+        )
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter([primary, fallback])
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            errored = False
+            try:
+                await stream._run()
+            except BaseException:  # noqa: BLE001 - scenario records stable error contract
+                errored = True
+            chunks = [chunk_kind(chunk) for chunk in stream._event_ch.items]
+            return {
+                "contract": "llm-fallback-nonretryable-api-error-before-chunk",
+                "events": [
+                    {
+                        "name": "nonretryable_api_error_before_chunk",
+                        "chunks": chunks,
+                        "errored": errored,
+                        "primary_calls": primary.calls,
+                        "fallback_calls": fallback.calls,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "all_unavailable_main_success_no_recovered":
+        primary = FakeLLM(
+            "primary",
+            streams=[
+                [RuntimeError("primary stream failed")],
+                [RuntimeError("recovery failed")],
+                [FakeChunk("primary active")],
+            ],
+        )
+        adapter = module.FallbackAdapter([primary])
+        availability_events: list[dict[str, Any]] = []
+        adapter.on(
+            "llm_availability_changed",
+            lambda event: availability_events.append(
+                {
+                    "available": event.available,
+                    "label": event.llm.label,
+                }
+            ),
+        )
+
+        async def run() -> dict[str, Any]:
+            first = adapter.chat(chat_ctx=module.ChatContext())
+            try:
+                await first._run()
+            except BaseException:  # noqa: BLE001 - setup expects reference all-failed error
+                pass
+
+            deadline = time.monotonic() + 2
+            while primary.calls < 2 and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            availability_events.clear()
+
+            second = adapter.chat(chat_ctx=module.ChatContext())
+            await second._run()
+            chunks = [chunk_kind(chunk) for chunk in second._event_ch.items]
+            return {
+                "contract": "llm-fallback-all-unavailable-main-success-no-recovered",
+                "events": [
+                    {
+                        "name": "all_unavailable_main_success_no_recovered",
+                        "chunks": chunks,
+                        "availability_events": availability_events,
+                        "primary_calls": primary.calls,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "skip_unavailable_provider":
+        primary = FakeLLM(
+            "primary",
+            streams=[
+                [RuntimeError("primary stream failed")],
+                [RuntimeError("recovery failed")],
+            ],
+        )
+        fallback = FakeLLM(
+            "fallback",
+            streams=[
+                [FakeChunk("fallback first")],
+                [FakeChunk("fallback second")],
+            ],
+        )
+        adapter = module.FallbackAdapter([primary, fallback])
+
+        async def run() -> dict[str, Any]:
+            first = adapter.chat(chat_ctx=module.ChatContext())
+            await first._run()
+            first_chunks = [chunk_kind(chunk) for chunk in first._event_ch.items]
+
+            deadline = time.monotonic() + 2
+            while primary.calls < 2 and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+
+            second = adapter.chat(chat_ctx=module.ChatContext())
+            await second._run()
+            second_chunks = [chunk_kind(chunk) for chunk in second._event_ch.items]
+            return {
+                "contract": "llm-fallback-skip-unavailable-provider",
+                "events": [
+                    {
+                        "name": "skip_unavailable_provider",
+                        "first_chunks": first_chunks,
+                        "second_chunks": second_chunks,
+                        "fallback_calls": fallback.calls,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "availability_failed":
+        primary = FakeLLM("primary", [RuntimeError("primary stream failed")])
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter([primary, fallback])
+        availability_events: list[dict[str, Any]] = []
+        adapter.on(
+            "llm_availability_changed",
+            lambda event: availability_events.append(
+                {
+                    "available": event.available,
+                    "label": event.llm.label,
+                }
+            ),
+        )
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            await stream._run()
+            chunks = [chunk_kind(chunk) for chunk in stream._event_ch.items]
+            return {
+                "contract": "llm-fallback-availability-failed",
+                "events": [
+                    {
+                        "name": "availability_failed",
+                        "chunks": chunks,
+                        "availability_events": availability_events,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "availability_recovered":
+        primary = FakeLLM(
+            "primary",
+            streams=[
+                [RuntimeError("primary stream failed")],
+                [FakeChunk("recovery probe")],
+            ],
+        )
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter([primary, fallback])
+        availability_events: list[dict[str, Any]] = []
+        adapter.on(
+            "llm_availability_changed",
+            lambda event: availability_events.append(
+                {
+                    "available": event.available,
+                    "label": event.llm.label,
+                }
+            ),
+        )
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            await stream._run()
+            chunks = [chunk_kind(chunk) for chunk in stream._event_ch.items]
+
+            deadline = time.monotonic() + 2
+            while len(availability_events) < 2 and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            return {
+                "contract": "llm-fallback-availability-recovered",
+                "events": [
+                    {
+                        "name": "availability_recovered",
+                        "chunks": chunks,
+                        "availability_events": availability_events,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
     raise ValueError(f"unsupported LLM fallback action {action!r}")
 
 
