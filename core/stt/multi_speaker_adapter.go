@@ -86,14 +86,6 @@ func (a *MultiSpeakerAdapter) Capabilities() STTCapabilities {
 	return a.stt.Capabilities()
 }
 
-func (a *MultiSpeakerAdapter) Model() string {
-	return Model(a.stt)
-}
-
-func (a *MultiSpeakerAdapter) Provider() string {
-	return Provider(a.stt)
-}
-
 func (a *MultiSpeakerAdapter) Prewarm() {
 	Prewarm(a.stt)
 }

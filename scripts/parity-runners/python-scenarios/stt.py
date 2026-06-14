@@ -30,6 +30,47 @@ def stt_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "multi_speaker_metadata":
+        multi_speaker_module = load_reference_stt_multi_speaker()
+
+        class ScenarioSTT(module.STT):
+            def __init__(self) -> None:
+                super().__init__(
+                    capabilities=module.STTCapabilities(
+                        streaming=True,
+                        interim_results=True,
+                        diarization=True,
+                    )
+                )
+
+            @property
+            def model(self) -> str:
+                return "wrapped-model"
+
+            @property
+            def provider(self) -> str:
+                return "wrapped-provider"
+
+            async def _recognize_impl(
+                self, buffer: Any, *, language: Any = None, conn_options: Any = None
+            ) -> Any:
+                return None
+
+        wrapped = ScenarioSTT()
+        adapter = multi_speaker_module.MultiSpeakerAdapter(stt=wrapped)
+        return {
+            "contract": "stt-multi-speaker-metadata",
+            "events": [
+                {
+                    "name": "multi_speaker_metadata",
+                    "model": adapter.model,
+                    "provider": adapter.provider,
+                    "wrapped_model": wrapped.model,
+                    "wrapped_provider": wrapped.provider,
+                    "diarization": adapter.capabilities.diarization,
+                }
+            ],
+        }
     if action == "metrics_panic_isolated":
         class ScenarioSTT(module.STT):
             def __init__(self) -> None:

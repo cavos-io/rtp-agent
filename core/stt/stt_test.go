@@ -809,11 +809,17 @@ func TestMultiSpeakerAdapterForwardsWrappedMetadata(t *testing.T) {
 		t.Fatalf("NewMultiSpeakerAdapter returned error: %v", err)
 	}
 
-	if got := Model(adapter); got != "diarized-model" {
-		t.Fatalf("MultiSpeakerAdapter Model = %q, want wrapped model", got)
+	if got := Model(wrapped); got != "diarized-model" {
+		t.Fatalf("wrapped Model = %q, want diarized-model", got)
 	}
-	if got := Provider(adapter); got != "diarized-provider" {
-		t.Fatalf("MultiSpeakerAdapter Provider = %q, want wrapped provider", got)
+	if got := Provider(wrapped); got != "diarized-provider" {
+		t.Fatalf("wrapped Provider = %q, want diarized-provider", got)
+	}
+	if got := Model(adapter); got != "unknown" {
+		t.Fatalf("MultiSpeakerAdapter Model = %q, want reference default unknown", got)
+	}
+	if got := Provider(adapter); got != "unknown" {
+		t.Fatalf("MultiSpeakerAdapter Provider = %q, want reference default unknown", got)
 	}
 }
 
