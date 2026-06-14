@@ -207,6 +207,27 @@ def stt_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "recognition_usage_required_duration":
+        missing_field = ""
+        try:
+            module.RecognitionUsage(input_tokens=3, output_tokens=5)
+        except TypeError as exc:
+            if "audio_duration" in str(exc):
+                missing_field = "audio_duration"
+        zero = module.RecognitionUsage(audio_duration=0)
+        return {
+            "contract": "stt-recognition-usage-required-field",
+            "events": [
+                {
+                    "name": "recognition_usage_required_duration",
+                    "missing_required": missing_field == "audio_duration",
+                    "missing_field": missing_field,
+                    "zero_audio_duration": zero.audio_duration,
+                    "zero_input_tokens": zero.input_tokens,
+                    "zero_output_tokens": zero.output_tokens,
+                }
+            ],
+        }
     if action == "speech_event_json_fields":
         word = load_reference_types().TimedString(
             "hello",
@@ -285,6 +306,31 @@ def stt_value_objects(input_data: Any) -> dict[str, Any]:
             "events": [
                 {
                     "name": "speech_event_empty_alternatives_unmarshal",
+                    "type": event.type.value,
+                    "request_id": event.request_id,
+                    "alternatives_is_list": isinstance(event.alternatives, list),
+                    "alternatives_length": len(event.alternatives),
+                }
+            ],
+        }
+    if action == "speech_event_required_type":
+        missing_field = ""
+        try:
+            module.SpeechEvent(request_id="req-1")
+        except TypeError as exc:
+            if "type" in str(exc):
+                missing_field = "type"
+        event = module.SpeechEvent(
+            type=module.SpeechEventType.END_OF_SPEECH,
+            request_id="req-1",
+        )
+        return {
+            "contract": "stt-speech-event-required-type",
+            "events": [
+                {
+                    "name": "speech_event_required_type",
+                    "missing_required": missing_field == "type",
+                    "missing_field": missing_field,
                     "type": event.type.value,
                     "request_id": event.request_id,
                     "alternatives_is_list": isinstance(event.alternatives, list),
@@ -439,6 +485,7 @@ def stt_fallback(input_data: Any) -> dict[str, Any]:
             diarization: bool = False,
             aligned_transcript: Any = False,
             offline_recognize: bool = True,
+            recognize_error: bool = False,
         ) -> None:
             super().__init__(
                 capabilities=stt_module.STTCapabilities(
@@ -450,8 +497,11 @@ def stt_fallback(input_data: Any) -> dict[str, Any]:
                 )
             )
             self._label = label
+            self._recognize_error = recognize_error
 
         async def _recognize_impl(self, *args: Any, **kwargs: Any) -> Any:
+            if self._recognize_error:
+                raise RuntimeError(f"{self._label} failed")
             return stt_module.SpeechEvent(type=stt_module.SpeechEventType.FINAL_TRANSCRIPT)
 
     def caps_event(name: str, adapter: Any) -> dict[str, Any]:
@@ -526,6 +576,73 @@ def stt_fallback(input_data: Any) -> dict[str, Any]:
             "contract": "stt-fallback-forward-provider-metrics",
             "events": [
                 {"name": "forward_metrics", "request_ids": request_ids}
+            ],
+        }
+    if action == "availability_panic_isolated":
+        primary = FakeSTT("primary", recognize_error=True)
+        fallback = FakeSTT("fallback")
+        adapter = fallback_module.FallbackAdapter(
+            [primary, fallback],
+            max_retry_per_stt=0,
+        )
+        received_count = 0
+        escaped_error = False
+
+        def bad_handler(event: Any) -> None:
+            raise RuntimeError("availability handler failed")
+
+        def good_handler(event: Any) -> None:
+            nonlocal received_count
+            if event.stt is primary and event.available is False:
+                received_count += 1
+
+        adapter.on("stt_availability_changed", bad_handler)
+        adapter.on("stt_availability_changed", good_handler)
+
+        async def run_recognize() -> None:
+            await adapter.recognize([])
+
+        try:
+            asyncio.run(run_recognize())
+        except RuntimeError:
+            escaped_error = True
+        return {
+            "contract": "stt-fallback-availability-panic-isolated",
+            "events": [
+                {
+                    "name": "availability_panic_isolated",
+                    "received_count": received_count,
+                    "escaped_error": escaped_error,
+                }
+            ],
+        }
+    if action == "availability_unsubscribe":
+        primary = FakeSTT("primary", recognize_error=True)
+        fallback = FakeSTT("fallback")
+        adapter = fallback_module.FallbackAdapter(
+            [primary, fallback],
+            max_retry_per_stt=0,
+        )
+        received_count = 0
+
+        def handler(event: Any) -> None:
+            nonlocal received_count
+            received_count += 1
+
+        adapter.on("stt_availability_changed", handler)
+        adapter.off("stt_availability_changed", handler)
+
+        async def run_recognize() -> None:
+            await adapter.recognize([])
+
+        asyncio.run(run_recognize())
+        return {
+            "contract": "stt-fallback-availability-unsubscribe",
+            "events": [
+                {
+                    "name": "availability_unsubscribe",
+                    "received_count": received_count,
+                }
             ],
         }
     if action == "validation":

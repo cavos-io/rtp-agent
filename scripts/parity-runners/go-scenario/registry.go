@@ -51,6 +51,7 @@ func registeredHandlers() handlerRegistry {
 		"tts_fallback":                 runTTSFallback,
 		"tts_stream_adapter":           runTTSStreamAdapter,
 		"tts_value_objects":            runTTSValueObjects,
+		"vad_value_objects":            runVADValueObjects,
 		"llm_api_connect_options":      runLLMAPIConnectOptions,
 		"tokenize_format_words":        runTokenizeFormatWords,
 		"tokenize_hyphenate_words":     runTokenizeHyphenateWords,

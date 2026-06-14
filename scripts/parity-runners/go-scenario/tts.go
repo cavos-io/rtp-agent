@@ -321,6 +321,60 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "metrics_panic_isolated":
+		requestIDs := make([]string, 0, 1)
+		escapedError := false
+		provider.OnMetricsCollected(func(*telemetry.TTSMetrics) {
+			panic("metrics handler failed")
+		})
+		provider.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		func() {
+			defer func() {
+				if recover() != nil {
+					escapedError = true
+				}
+			}()
+			provider.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "req-1"})
+		}()
+		return map[string]any{
+			"contract": "tts-metrics-panic-isolated",
+			"events": []map[string]any{
+				{
+					"name":          "metrics_panic_isolated",
+					"request_ids":   requestIDs,
+					"escaped_error": escapedError,
+				},
+			},
+		}, nil
+	case "error_panic_isolated":
+		labels := make([]string, 0, 1)
+		escapedError := false
+		provider.OnError(func(lktts.TTSError) {
+			panic("error handler failed")
+		})
+		provider.OnError(func(err lktts.TTSError) {
+			labels = append(labels, err.Label)
+		})
+		func() {
+			defer func() {
+				if recover() != nil {
+					escapedError = true
+				}
+			}()
+			provider.EmitError(lktts.TTSError{Label: "tts", Err: errors.New("tts failed")})
+		}()
+		return map[string]any{
+			"contract": "tts-error-panic-isolated",
+			"events": []map[string]any{
+				{
+					"name":          "error_panic_isolated",
+					"labels":        labels,
+					"escaped_error": escapedError,
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported TTS value object action %q", payload.Action)
 	}

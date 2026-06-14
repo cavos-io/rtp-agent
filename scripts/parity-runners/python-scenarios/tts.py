@@ -413,6 +413,58 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "metrics_panic_isolated":
+        request_ids: list[str] = []
+        escaped_error = False
+
+        def bad_handler(metrics: Any) -> None:
+            raise RuntimeError("metrics handler failed")
+
+        tts.on("metrics_collected", bad_handler)
+        tts.on(
+            "metrics_collected",
+            lambda metrics: request_ids.append(metrics.request_id),
+        )
+        try:
+            tts.emit(
+                "metrics_collected",
+                type("Metrics", (), {"request_id": "req-1"})(),
+            )
+        except RuntimeError:
+            escaped_error = True
+        return {
+            "contract": "tts-metrics-panic-isolated",
+            "events": [
+                {
+                    "name": "metrics_panic_isolated",
+                    "request_ids": request_ids,
+                    "escaped_error": escaped_error,
+                }
+            ],
+        }
+    if action == "error_panic_isolated":
+        labels: list[str] = []
+        escaped_error = False
+
+        def bad_handler(error: Any) -> None:
+            raise RuntimeError("error handler failed")
+
+        tts.on("error", bad_handler)
+        tts.on("error", lambda error: labels.append(error.label))
+        try:
+            tts.emit("error", type("Error", (), {"label": "tts"})())
+        except RuntimeError:
+            escaped_error = True
+        return {
+            "contract": "tts-error-panic-isolated",
+            "events": [
+                {
+                    "name": "error_panic_isolated",
+                    "labels": labels,
+                    "escaped_error": escaped_error,
+                }
+            ],
+        }
     raise ValueError(f"unsupported TTS value object action {action!r}")
 
 

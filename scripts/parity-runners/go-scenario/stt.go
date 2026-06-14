@@ -240,6 +240,30 @@ func runSTTValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "recognition_usage_required_duration":
+		var missing lkstt.RecognitionUsage
+		err := json.Unmarshal([]byte(`{"input_tokens":3,"output_tokens":5}`), &missing)
+		missingField := ""
+		if err != nil && strings.Contains(err.Error(), "audio_duration") {
+			missingField = "audio_duration"
+		}
+		var zero lkstt.RecognitionUsage
+		if err := json.Unmarshal([]byte(`{"audio_duration":0}`), &zero); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "stt-recognition-usage-required-field",
+			"events": []map[string]any{
+				{
+					"name":                "recognition_usage_required_duration",
+					"missing_required":    missingField == "audio_duration",
+					"missing_field":       missingField,
+					"zero_audio_duration": zero.AudioDuration,
+					"zero_input_tokens":   zero.InputTokens,
+					"zero_output_tokens":  zero.OutputTokens,
+				},
+			},
+		}, nil
 	case "speech_event_json_fields":
 		isPrimary := true
 		speechStartTime := 12.5
@@ -335,6 +359,31 @@ func runSTTValueObjects(input json.RawMessage) (any, error) {
 			"events": []map[string]any{
 				{
 					"name":                 "speech_event_empty_alternatives_unmarshal",
+					"type":                 event.Type,
+					"request_id":           event.RequestID,
+					"alternatives_is_list": event.Alternatives != nil,
+					"alternatives_length":  len(event.Alternatives),
+				},
+			},
+		}, nil
+	case "speech_event_required_type":
+		var missing lkstt.SpeechEvent
+		err := json.Unmarshal([]byte(`{"request_id":"req-1"}`), &missing)
+		missingField := ""
+		if err != nil && strings.Contains(err.Error(), "type") {
+			missingField = "type"
+		}
+		var event lkstt.SpeechEvent
+		if err := json.Unmarshal([]byte(`{"type":"end_of_speech","request_id":"req-1"}`), &event); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "stt-speech-event-required-type",
+			"events": []map[string]any{
+				{
+					"name":                 "speech_event_required_type",
+					"missing_required":     missingField == "type",
+					"missing_field":        missingField,
 					"type":                 event.Type,
 					"request_id":           event.RequestID,
 					"alternatives_is_list": event.Alternatives != nil,
@@ -564,6 +613,75 @@ func runSTTFallback(input json.RawMessage) (any, error) {
 			"contract": "stt-fallback-forward-provider-metrics",
 			"events": []map[string]any{
 				{"name": "forward_metrics", "request_ids": requestIDs},
+			},
+		}, nil
+	case "availability_panic_isolated":
+		primary := &fakeScenarioSTT{label: "primary", capabilities: lkstt.STTCapabilities{Streaming: true}, recognizeErr: errors.New("primary failed")}
+		fallback := &fakeScenarioSTT{label: "fallback", capabilities: lkstt.STTCapabilities{Streaming: true}}
+		adapter := lkstt.NewFallbackAdapterWithOptions([]lkstt.STT{primary, fallback}, lkstt.FallbackAdapterOptions{MaxRetryPerSTT: 0})
+		received := make(chan struct{}, 1)
+		escapedError := false
+		adapter.OnAvailabilityChanged(func(lkstt.AvailabilityChangedEvent) {
+			panic("availability handler failed")
+		})
+		adapter.OnAvailabilityChanged(func(event lkstt.AvailabilityChangedEvent) {
+			if event.STT == primary && !event.Available {
+				received <- struct{}{}
+			}
+		})
+		func() {
+			defer func() {
+				if recover() != nil {
+					escapedError = true
+				}
+			}()
+			_, err := adapter.Recognize(context.Background(), nil, "en")
+			if err != nil {
+				escapedError = true
+			}
+		}()
+		receivedCount := 0
+		select {
+		case <-received:
+			receivedCount++
+		default:
+		}
+		return map[string]any{
+			"contract": "stt-fallback-availability-panic-isolated",
+			"events": []map[string]any{
+				{
+					"name":           "availability_panic_isolated",
+					"received_count": receivedCount,
+					"escaped_error":  escapedError,
+				},
+			},
+		}, nil
+	case "availability_unsubscribe":
+		primary := &fakeScenarioSTT{label: "primary", capabilities: lkstt.STTCapabilities{Streaming: true}, recognizeErr: errors.New("primary failed")}
+		fallback := &fakeScenarioSTT{label: "fallback", capabilities: lkstt.STTCapabilities{Streaming: true}}
+		adapter := lkstt.NewFallbackAdapterWithOptions([]lkstt.STT{primary, fallback}, lkstt.FallbackAdapterOptions{MaxRetryPerSTT: 0})
+		received := make(chan struct{}, 1)
+		unsubscribe := adapter.OnAvailabilityChanged(func(lkstt.AvailabilityChangedEvent) {
+			received <- struct{}{}
+		})
+		unsubscribe()
+		unsubscribe()
+		if _, err := adapter.Recognize(context.Background(), nil, "en"); err != nil {
+			return nil, err
+		}
+		receivedCount := 0
+		select {
+		case <-received:
+			receivedCount++
+		default:
+		}
+		return map[string]any{
+			"contract": "stt-fallback-availability-unsubscribe",
+			"events": []map[string]any{
+				{
+					"name":           "availability_unsubscribe",
+					"received_count": receivedCount,
+				},
 			},
 		}, nil
 	case "validation":
@@ -821,6 +939,7 @@ type fakeScenarioSTT struct {
 	provider     string
 	capabilities lkstt.STTCapabilities
 	prewarmCalls int
+	recognizeErr error
 }
 
 func sttFallbackErrorClass(ok bool) string {
@@ -858,5 +977,8 @@ func (s fakeScenarioSTT) Stream(context.Context, string) (lkstt.RecognizeStream,
 }
 
 func (s fakeScenarioSTT) Recognize(context.Context, []*audiomodel.AudioFrame, string) (*lkstt.SpeechEvent, error) {
+	if s.recognizeErr != nil {
+		return nil, s.recognizeErr
+	}
 	return &lkstt.SpeechEvent{Type: lkstt.SpeechEventFinalTranscript}, nil
 }

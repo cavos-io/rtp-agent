@@ -202,7 +202,10 @@ def load_reference_stt():
 
         def emit(self, event: str, *args: Any, **kwargs: Any) -> None:
             for listener in list(self._listeners.get(event, [])):
-                listener(*args, **kwargs)
+                try:
+                    listener(*args, **kwargs)
+                except Exception:
+                    continue
 
     class AudioFrame:
         pass
@@ -1241,5 +1244,4 @@ async def _token_stream_next(stream: Any) -> dict[str, Any]:
     except Exception:
         return {"name": "next", "error": True, "error_class": "error"}
     return {"name": "next", "error": False, "error_class": "", "token": token.token}
-
 
