@@ -1130,23 +1130,27 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
     class FakeVAD:
         def __init__(self, events: list[Any] | None = None) -> None:
             self._events = events or []
+            self.last_stream: Any | None = None
 
         def stream(self) -> Any:
-            return FakeVADStream(self._events)
+            self.last_stream = FakeVADStream(self._events)
+            return self.last_stream
 
     class FakeVADStream:
         def __init__(self, events: list[Any]) -> None:
             self._events = list(events)
             self.closed = False
+            self.flush_calls = 0
+            self.end_input_calls = 0
 
         def push_frame(self, frame: Any) -> None:
             pass
 
         def flush(self) -> None:
-            pass
+            self.flush_calls += 1
 
         def end_input(self) -> None:
-            pass
+            self.end_input_calls += 1
 
         async def aclose(self) -> None:
             self.closed = True
@@ -1261,6 +1265,12 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
 
     def event_type_value(event: Any) -> str:
         return event.type.value if hasattr(event.type, "value") else str(event.type)
+
+    async def wait_for(predicate: Any) -> None:
+        for _ in range(20):
+            if predicate():
+                return
+            await asyncio.sleep(0.001)
 
     if action == "capabilities":
         adapter = stream_adapter_module.StreamAdapter(stt=FakeSTT("wrapped"), vad=FakeVAD())
@@ -1490,6 +1500,37 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
                     "final_alternative_count": len(final_event.alternatives),
                     "recognize_calls": wrapped.recognize_calls,
                     "recognize_frame_counts": wrapped.recognize_frame_counts,
+                }
+            ],
+        }
+    if action == "forwards_flush":
+        install_stream_adapter_runtime_shims()
+        vad = FakeVAD()
+        wrapped = FakeSTT("wrapped")
+        adapter = stream_adapter_module.StreamAdapter(stt=wrapped, vad=vad)
+
+        async def run_flush() -> dict[str, Any]:
+            stream = adapter.stream(language="en")
+            stream.flush()
+            await wait_for(lambda: vad.last_stream is not None and vad.last_stream.flush_calls > 0)
+            flush_calls = vad.last_stream.flush_calls if vad.last_stream is not None else 0
+            end_input_calls = (
+                vad.last_stream.end_input_calls if vad.last_stream is not None else 0
+            )
+            await stream.aclose()
+            return {
+                "flush_calls": flush_calls,
+                "end_input_calls": end_input_calls,
+                "recognize_calls": wrapped.recognize_calls,
+            }
+
+        result = asyncio.run(run_flush())
+        return {
+            "contract": "stt-stream-adapter-forwards-flush",
+            "events": [
+                {
+                    "name": "forwards_flush",
+                    **result,
                 }
             ],
         }

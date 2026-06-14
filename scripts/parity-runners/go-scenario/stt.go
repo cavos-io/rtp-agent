@@ -1067,7 +1067,9 @@ func runSTTFallback(input json.RawMessage) (any, error) {
 }
 
 type fakeScenarioVAD struct {
-	events []*lkvad.VADEvent
+	events     []*lkvad.VADEvent
+	flushCount *atomic.Int32
+	flushCh    chan struct{}
 }
 
 func (fakeScenarioVAD) Label() string                       { return "scenario.VAD" }
@@ -1079,17 +1081,41 @@ func (fakeScenarioVAD) OnMetricsCollected(lkvad.VADMetricsHandler) func() {
 }
 func (v fakeScenarioVAD) Stream(context.Context) (lkvad.VADStream, error) {
 	events := append([]*lkvad.VADEvent(nil), v.events...)
-	return &fakeScenarioVADStream{events: events, done: make(chan struct{})}, nil
+	return &fakeScenarioVADStream{
+		events:     events,
+		done:       make(chan struct{}),
+		flushCount: v.flushCount,
+		flushCh:    v.flushCh,
+	}, nil
 }
 
 type fakeScenarioVADStream struct {
-	events []*lkvad.VADEvent
-	done   chan struct{}
+	events        []*lkvad.VADEvent
+	done          chan struct{}
+	flushCount    *atomic.Int32
+	flushCh       chan struct{}
+	endInputCount *atomic.Int32
 }
 
 func (fakeScenarioVADStream) PushFrame(*audiomodel.AudioFrame) error { return nil }
-func (fakeScenarioVADStream) Flush() error                           { return nil }
-func (fakeScenarioVADStream) EndInput() error                        { return nil }
+func (s *fakeScenarioVADStream) Flush() error {
+	if s.flushCount != nil {
+		s.flushCount.Add(1)
+	}
+	if s.flushCh != nil {
+		select {
+		case s.flushCh <- struct{}{}:
+		default:
+		}
+	}
+	return nil
+}
+func (s *fakeScenarioVADStream) EndInput() error {
+	if s.endInputCount != nil {
+		s.endInputCount.Add(1)
+	}
+	return nil
+}
 func (s *fakeScenarioVADStream) Close() error {
 	select {
 	case <-s.done:
@@ -1353,6 +1379,41 @@ func runSTTStreamAdapter(input json.RawMessage) (any, error) {
 					"final_alternative_count": len(second.Alternatives),
 					"recognize_calls":         recognizeCalls.Load(),
 					"recognize_frame_counts":  []int32{recognizeFrameCount.Load()},
+				},
+			},
+		}, nil
+	case "forwards_flush":
+		flushCount := &atomic.Int32{}
+		flushCh := make(chan struct{}, 1)
+		recognizeCalls := &atomic.Int32{}
+		adapter := lkstt.NewStreamAdapter(fakeScenarioSTT{
+			label:          "wrapped",
+			capabilities:   lkstt.STTCapabilities{OfflineRecognize: true},
+			recognizeCalls: recognizeCalls,
+		}, fakeScenarioVAD{flushCount: flushCount, flushCh: flushCh})
+		stream, err := adapter.Stream(context.Background(), "en")
+		if err != nil {
+			return nil, err
+		}
+		if err := stream.Flush(); err != nil {
+			stream.Close()
+			return nil, err
+		}
+		select {
+		case <-flushCh:
+		case <-time.After(200 * time.Millisecond):
+		}
+		if err := stream.Close(); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "stt-stream-adapter-forwards-flush",
+			"events": []map[string]any{
+				{
+					"name":            "forwards_flush",
+					"flush_calls":     flushCount.Load(),
+					"end_input_calls": int32(0),
+					"recognize_calls": recognizeCalls.Load(),
 				},
 			},
 		}, nil
