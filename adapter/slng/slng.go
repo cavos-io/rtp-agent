@@ -137,9 +137,7 @@ func WithSTTVADThreshold(threshold float64) STTOption {
 
 func WithSTTVADMinSilenceDurationMS(milliseconds int) STTOption {
 	return func(s *STT) {
-		if milliseconds > 0 {
-			s.vadMinSilenceDurationMS = milliseconds
-		}
+		s.vadMinSilenceDurationMS = milliseconds
 	}
 }
 

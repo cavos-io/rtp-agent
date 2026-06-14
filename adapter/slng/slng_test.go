@@ -184,6 +184,14 @@ func TestSLNGTTSInitPayloadUsesTargetLanguageWithoutLeakingOption(t *testing.T) 
 	assertSLNGNestedFieldAbsent(t, payload, "config", "target_language_code")
 }
 
+func TestSLNGSTTInitPayloadPreservesExplicitZeroVADSilence(t *testing.T) {
+	provider := NewSTT("test-key", WithSTTVADMinSilenceDurationMS(0))
+
+	payload := buildSTTInitPayload(provider)
+
+	assertSLNGNestedField(t, payload, "config", "vad_min_silence_duration_ms", float64(0))
+}
+
 func TestSLNGTTSReceivedEventParsesReferenceShapes(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString([]byte{1, 2, 3})
 	audio, done, err := ttsAudioFromMessage([]byte(`{"type":"audio_chunk","data":"`+encoded+`"}`), 24000)
