@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"reflect"
 	"strings"
@@ -3150,6 +3151,43 @@ func runLLMValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "text_stream_only_text_deltas":
+		stream := &scenarioLLMTextStream{
+			events: []scenarioLLMTextStreamEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "hello"}}},
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{ToolCalls: []lkllm.FunctionToolCall{{Name: "lookup"}}}}},
+				{chunk: &lkllm.ChatChunk{Usage: &lkllm.CompletionUsage{TotalTokens: 2}}},
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: " world"}}},
+			},
+		}
+		textStream, err := lkllm.NewTextStream(stream)
+		if err != nil {
+			return nil, err
+		}
+		texts := make([]string, 0, 2)
+		eof := false
+		for {
+			text, err := textStream.Next()
+			if err != nil {
+				eof = errors.Is(err, io.EOF)
+				if !eof {
+					return nil, err
+				}
+				break
+			}
+			texts = append(texts, text)
+		}
+		return map[string]any{
+			"contract": "llm-text-stream",
+			"events": []map[string]any{
+				{
+					"name":   "text_stream_only_text_deltas",
+					"texts":  texts,
+					"closed": stream.closed,
+					"eof":    eof,
+				},
+			},
+		}, nil
 	case "realtime_event_payloads":
 		return runLLMRealtimeEventPayloads(payload.Mode)
 	default:
@@ -3810,6 +3848,33 @@ type scenarioLLMProviderTool struct {
 }
 
 func (t *scenarioLLMProviderTool) IsProviderTool() bool { return true }
+
+type scenarioLLMTextStreamEvent struct {
+	chunk *lkllm.ChatChunk
+	err   error
+}
+
+type scenarioLLMTextStream struct {
+	events []scenarioLLMTextStreamEvent
+	closed bool
+}
+
+func (s *scenarioLLMTextStream) Next() (*lkllm.ChatChunk, error) {
+	if len(s.events) == 0 {
+		return nil, io.EOF
+	}
+	event := s.events[0]
+	s.events = s.events[1:]
+	if event.err != nil {
+		return nil, event.err
+	}
+	return event.chunk, nil
+}
+
+func (s *scenarioLLMTextStream) Close() error {
+	s.closed = true
+	return nil
+}
 
 func completionUsagePayload(usage lkllm.CompletionUsage) (map[string]any, error) {
 	data, err := json.Marshal(usage)

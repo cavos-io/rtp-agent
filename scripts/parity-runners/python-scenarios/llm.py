@@ -1249,6 +1249,31 @@ def llm_value_objects(input_data: Any) -> dict[str, Any]:
                 ],
             }
         raise ValueError(f"unsupported realtime event payload mode {mode!r}")
+    if action == "text_stream_only_text_deltas":
+        choice_delta = load_reference_llm_value_class("ChoiceDelta")
+        chat_chunk = load_reference_llm_value_class("ChatChunk")
+        chunks = [
+            chat_chunk(id="chunk-1", delta=choice_delta(content="hello")),
+            chat_chunk(id="chunk-2", delta=choice_delta(tool_calls=[{"name": "lookup"}])),
+            chat_chunk(id="chunk-3", usage={"total_tokens": 2}),
+            chat_chunk(id="chunk-4", delta=choice_delta(content=" world")),
+        ]
+        texts = [
+            chunk.delta.content
+            for chunk in chunks
+            if chunk.delta and chunk.delta.content
+        ]
+        return {
+            "contract": "llm-text-stream",
+            "events": [
+                {
+                    "name": "text_stream_only_text_deltas",
+                    "texts": texts,
+                    "closed": True,
+                    "eof": True,
+                }
+            ],
+        }
     raise ValueError(f"unsupported LLM value object action {action!r}")
 
 
