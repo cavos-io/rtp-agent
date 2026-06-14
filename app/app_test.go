@@ -3377,6 +3377,38 @@ func TestSLNGTTSFallbackPassesModelOptions(t *testing.T) {
 	}
 }
 
+func TestResembleTTSFallbackPassesReferenceOptions(t *testing.T) {
+	sampleRate := 24000
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		ResembleAPIKey: "test-resemble-key",
+		TTSModel:       "chatterbox-turbo",
+		TTSVoice:       "voice-2",
+		TTSSampleRate:  &sampleRate,
+	}, providerResemble)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*resemble.ResembleTTS); !ok {
+		t.Fatalf("provider type = %T, want *resemble.ResembleTTS", provider)
+	}
+	if got, want := provider.Label(), "resemble.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 24000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference configured sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "chatterbox-turbo"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "Resemble"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference streaming without aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsTelnyxTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "telnyx")

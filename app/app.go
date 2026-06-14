@@ -2242,6 +2242,18 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, neuphonic.WithNeuphonicTTSSpeed(cfg.TTSSpeed))
 		}
 		return neuphonic.NewNeuphonicTTS(cfg.NeuphonicAPIKey, "", ttsOpts...), nil
+	case providerResemble:
+		ttsOpts := []resemble.ResembleTTSOption{}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, resemble.WithResembleTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, resemble.WithResembleTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, resemble.WithResembleTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		return resemble.NewResembleTTS(cfg.ResembleAPIKey, "", ttsOpts...), nil
 	case providerRime:
 		ttsOpts := []rime.RimeTTSOption{}
 		if cfg.TTSBaseURL != "" {
