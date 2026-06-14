@@ -3290,6 +3290,335 @@ func TestDefaultConfigFromEnvWrapsNonStreamingSTTFallbackWithVAD(t *testing.T) {
 	}
 }
 
+func TestGradiumSTTFallbackPassesReferenceOptions(t *testing.T) {
+	type wsRecord struct {
+		apiKey    string
+		apiSource string
+		setup     map[string]any
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read gradium stt setup payload: %v", err)
+			return
+		}
+		var setup map[string]any
+		if err := json.Unmarshal(payload, &setup); err != nil {
+			t.Errorf("decode gradium stt setup payload: %v", err)
+			return
+		}
+		records <- wsRecord{
+			apiKey:    r.Header.Get("x-api-key"),
+			apiSource: r.Header.Get("x-api-source"),
+			setup:     setup,
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	temperature := 0.35
+	vadBucket := 4
+	vadFlush := false
+	bufferSizeSeconds := 0.12
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		GradiumAPIKey:        "test-gradium-key",
+		STTBaseURL:           endpoint,
+		STTModel:             "asr-test",
+		STTLanguage:          "en",
+		STTTemperature:       &temperature,
+		STTVADBucket:         &vadBucket,
+		STTVADFlush:          &vadFlush,
+		STTBufferSizeSeconds: &bufferSizeSeconds,
+	}, providerGradium)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*gradium.GradiumSTT); !ok {
+		t.Fatalf("provider type = %T, want *gradium.GradiumSTT", provider)
+	}
+	if got, want := provider.Label(), "gradium.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "unknown"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Gradium"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming interim-only", caps)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.apiKey, "test-gradium-key"; got != want {
+			t.Fatalf("x-api-key = %q, want %q", got, want)
+		}
+		if got, want := record.apiSource, "livekit"; got != want {
+			t.Fatalf("x-api-source = %q, want %q", got, want)
+		}
+		if got, want := record.setup["type"], "setup"; got != want {
+			t.Fatalf("setup.type = %#v, want %#v", got, want)
+		}
+		if got, want := record.setup["model_name"], "asr-test"; got != want {
+			t.Fatalf("setup.model_name = %#v, want %#v", got, want)
+		}
+		if got, want := record.setup["input_format"], "pcm"; got != want {
+			t.Fatalf("setup.input_format = %#v, want %#v", got, want)
+		}
+		config, _ := record.setup["json_config"].(map[string]any)
+		if got, want := config["language"], "en"; got != want {
+			t.Fatalf("json_config.language = %#v, want %#v", got, want)
+		}
+		if got, want := config["temp"], 0.35; got != want {
+			t.Fatalf("json_config.temp = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Gradium STT setup payload")
+	}
+}
+
+func TestBasetenSTTFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("BASETEN_API_KEY", "test-baseten-key")
+	type wsRecord struct {
+		authorization string
+		metadata      map[string]any
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read baseten stt metadata: %v", err)
+			return
+		}
+		var metadata map[string]any
+		if err := json.Unmarshal(payload, &metadata); err != nil {
+			t.Errorf("decode baseten stt metadata: %v", err)
+			return
+		}
+		records <- wsRecord{
+			authorization: r.Header.Get("Authorization"),
+			metadata:      metadata,
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	sampleRate := 8000
+	bufferSizeSeconds := 0.064
+	vadThreshold := 0.7
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTBaseURL:           endpoint,
+		STTLanguage:          "auto",
+		STTEncoding:          "pcm_mulaw",
+		STTSampleRate:        &sampleRate,
+		STTBufferSizeSeconds: &bufferSizeSeconds,
+		STTVADThreshold:      &vadThreshold,
+	}, providerBaseten)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*baseten.BasetenSTT); !ok {
+		t.Fatalf("provider type = %T, want *baseten.BasetenSTT", provider)
+	}
+	if got, want := provider.Label(), "baseten.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "unknown"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Baseten"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.AlignedTranscript != "word" || caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming word-aligned interim-only", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.authorization, "Api-Key test-baseten-key"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		whisper, _ := record.metadata["whisper_params"].(map[string]any)
+		if got, want := whisper["audio_language"], "auto"; got != want {
+			t.Fatalf("whisper.audio_language = %#v, want %#v", got, want)
+		}
+		if got, want := whisper["show_word_timestamps"], true; got != want {
+			t.Fatalf("whisper.show_word_timestamps = %#v, want %#v", got, want)
+		}
+		streaming, _ := record.metadata["streaming_params"].(map[string]any)
+		if got, want := streaming["encoding"], "pcm_mulaw"; got != want {
+			t.Fatalf("streaming.encoding = %#v, want %#v", got, want)
+		}
+		if got, want := streaming["sample_rate"], float64(8000); got != want {
+			t.Fatalf("streaming.sample_rate = %#v, want %#v", got, want)
+		}
+		if got, want := streaming["enable_partial_transcripts"], true; got != want {
+			t.Fatalf("streaming.enable_partial_transcripts = %#v, want %#v", got, want)
+		}
+		if got, want := streaming["partial_transcript_interval_s"], float64(1); got != want {
+			t.Fatalf("streaming.partial_transcript_interval_s = %#v, want %#v", got, want)
+		}
+		vad, _ := record.metadata["streaming_vad_config"].(map[string]any)
+		if got, want := vad["threshold"], 0.7; got != want {
+			t.Fatalf("vad.threshold = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Baseten STT metadata")
+	}
+}
+
+func TestCartesiaSTTFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("CARTESIA_API_KEY", "test-cartesia-key")
+	type wsRecord struct {
+		path       string
+		query      map[string]string
+		apiKey     string
+		apiVersion string
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		query := map[string]string{}
+		for key, values := range r.URL.Query() {
+			if len(values) > 0 {
+				query[key] = values[0]
+			}
+		}
+		records <- wsRecord{
+			path:       r.URL.Path,
+			query:      query,
+			apiKey:     r.Header.Get("X-API-Key"),
+			apiVersion: r.Header.Get("Cartesia-Version"),
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	sampleRate := 8000
+	chunkDurationMS := 120
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTBaseURL:              server.URL,
+		STTModel:                "ink-2",
+		STTLanguage:             "en",
+		STTEncoding:             "pcm_mulaw",
+		STTSampleRate:           &sampleRate,
+		STTAudioChunkDurationMS: &chunkDurationMS,
+	}, providerCartesia)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*cartesia.CartesiaSTT); !ok {
+		t.Fatalf("provider type = %T, want *cartesia.CartesiaSTT", provider)
+	}
+	if got, want := provider.Label(), "cartesia.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "ink-2"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Cartesia"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.AlignedTranscript != "" || caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming interim without alignment", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.path, "/stt/turns/websocket"; got != want {
+			t.Fatalf("path = %q, want %q", got, want)
+		}
+		if got, want := record.query["model"], "ink-2"; got != want {
+			t.Fatalf("query model = %q, want %q", got, want)
+		}
+		if got, want := record.query["sample_rate"], "8000"; got != want {
+			t.Fatalf("query sample_rate = %q, want %q", got, want)
+		}
+		if got, want := record.query["encoding"], "pcm_mulaw"; got != want {
+			t.Fatalf("query encoding = %q, want %q", got, want)
+		}
+		if got, want := record.apiKey, "test-cartesia-key"; got != want {
+			t.Fatalf("X-API-Key = %q, want %q", got, want)
+		}
+		if got, want := record.apiVersion, "2025-04-16"; got != want {
+			t.Fatalf("Cartesia-Version = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Cartesia STT websocket request")
+	}
+}
+
 func TestDefaultConfigFromEnvWrapsTTSFallbackProviders(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "cartesia")
@@ -3301,6 +3630,272 @@ func TestDefaultConfigFromEnvWrapsTTSFallbackProviders(t *testing.T) {
 	}
 	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
 		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	}
+}
+
+func TestAWSTTSFallbackPassesReferenceOptions(t *testing.T) {
+	sampleRate := 22050
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		AWSRegion:     "us-west-2",
+		TTSVoice:      "Joanna",
+		TTSModel:      "standard",
+		TTSTextType:   "ssml",
+		TTSLanguage:   "en-US",
+		TTSSampleRate: &sampleRate,
+	}, providerAWS)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	awsProvider, ok := provider.(*adapteraws.AWSTTS)
+	if !ok {
+		t.Fatalf("provider type = %T, want *aws.AWSTTS", provider)
+	}
+	if got, want := provider.Label(), "aws.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 22050; got != want {
+		t.Fatalf("SampleRate() = %d, want reference configured sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "standard"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "Amazon Polly"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
+	}
+
+	state := reflect.ValueOf(awsProvider).Elem()
+	if got, want := state.FieldByName("voice").String(), "Joanna"; got != want {
+		t.Fatalf("voice = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("engine").String(), "standard"; got != want {
+		t.Fatalf("engine = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("textType").String(), "ssml"; got != want {
+		t.Fatalf("textType = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("language").String(), "en-US"; got != want {
+		t.Fatalf("language = %q, want %q", got, want)
+	}
+}
+
+func TestAzureTTSFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
+	t.Setenv("AZURE_SPEECH_REGION", "eastus")
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		TTSVoice:    "id-ID-GadisNeural",
+		TTSLanguage: "id-ID",
+	}, providerAzure)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	azureProvider, ok := provider.(*azure.AzureTTS)
+	if !ok {
+		t.Fatalf("provider type = %T, want *azure.AzureTTS", provider)
+	}
+	if got, want := azureProvider.Label(), "azure.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := azureProvider.SampleRate(), 24000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference default sample rate %d", got, want)
+	}
+	if got, want := tts.Model(azureProvider), "unknown"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(azureProvider), "Azure TTS"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if got, want := azureProvider.Language(), "id-ID"; got != want {
+		t.Fatalf("Language() = %q, want %q", got, want)
+	}
+	if caps := azureProvider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
+	}
+}
+
+func TestBasetenTTSFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("BASETEN_API_KEY", "test-baseten-key")
+	temperature := 0.72
+	maxTokens := 1200
+	bufferSize := 6
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeaders = r.Header.Clone()
+		if err := json.NewDecoder(r.Body).Decode(&gotPayload); err != nil {
+			t.Errorf("decode baseten payload: %v", err)
+			return
+		}
+		_, _ = w.Write([]byte("audio"))
+	}))
+	defer server.Close()
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		TTSBaseURL:     server.URL,
+		TTSVoice:       "tara-custom",
+		TTSLanguage:    "es",
+		TTSTemperature: &temperature,
+		TTSMaxTokens:   &maxTokens,
+		TTSBufferSize:  &bufferSize,
+	}, providerBaseten)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*baseten.BasetenTTS); !ok {
+		t.Fatalf("provider type = %T, want *baseten.BasetenTTS", provider)
+	}
+	if got, want := provider.Label(), "baseten.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 24000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference default sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "unknown"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "Baseten"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotHeaders.Get("Authorization"), "Api-Key test-baseten-key"; got != want {
+		t.Fatalf("Authorization = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["prompt"], "hello"; got != want {
+		t.Fatalf("payload.prompt = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["voice"], "tara-custom"; got != want {
+		t.Fatalf("payload.voice = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["language"], "es"; got != want {
+		t.Fatalf("payload.language = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["temperature"], 0.72; got != want {
+		t.Fatalf("payload.temperature = %#v, want %#v", got, want)
+	}
+}
+
+func TestCartesiaTTSFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("CARTESIA_API_KEY", "test-cartesia-key")
+	sampleRate := 16000
+	wordTimestamps := false
+	volume := 1.1
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeaders = r.Header.Clone()
+		if got, want := r.URL.Path, "/tts/bytes"; got != want {
+			t.Errorf("request path = %q, want %q", got, want)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotPayload); err != nil {
+			t.Errorf("decode cartesia payload: %v", err)
+			return
+		}
+		_, _ = w.Write([]byte("audio"))
+	}))
+	defer server.Close()
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		TTSBaseURL:             server.URL,
+		TTSModel:               "sonic-3",
+		TTSVoice:               "voice-id-ignored-for-embedding",
+		TTSVoiceEmbedding:      []float64{0.1, 0.2, 0.3},
+		TTSLanguage:            "es",
+		TTSEncoding:            "pcm_mulaw",
+		TTSSampleRate:          &sampleRate,
+		TTSAPIVersion:          "2025-01-01",
+		TTSWordTimestamps:      &wordTimestamps,
+		TTSSpeed:               1.2,
+		TTSEmotion:             "happy",
+		TTSVolume:              &volume,
+		TTSPronunciationDictID: "dict-1",
+	}, providerCartesia)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*cartesia.CartesiaTTS); !ok {
+		t.Fatalf("provider type = %T, want *cartesia.CartesiaTTS", provider)
+	}
+	if got, want := provider.Label(), "cartesia.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 16000; got != want {
+		t.Fatalf("SampleRate() = %d, want configured sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "sonic-3"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "Cartesia"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want streaming without aligned transcript", caps)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hola")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotHeaders.Get("X-API-Key"), "test-cartesia-key"; got != want {
+		t.Fatalf("X-API-Key = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("Cartesia-Version"), "2025-01-01"; got != want {
+		t.Fatalf("Cartesia-Version = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["transcript"], "hola"; got != want {
+		t.Fatalf("transcript = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["language"], "es"; got != want {
+		t.Fatalf("language = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["pronunciation_dict_id"], "dict-1"; got != want {
+		t.Fatalf("pronunciation_dict_id = %#v, want %#v", got, want)
+	}
+	voice, _ := gotPayload["voice"].(map[string]any)
+	if got, want := voice["mode"], "embedding"; got != want {
+		t.Fatalf("voice.mode = %#v, want %#v in %#v", got, want, voice)
+	}
+	embedding, _ := voice["embedding"].([]any)
+	if len(embedding) != 3 || embedding[0] != 0.1 || embedding[1] != 0.2 || embedding[2] != 0.3 {
+		t.Fatalf("voice.embedding = %#v, want [0.1 0.2 0.3]", voice["embedding"])
+	}
+	outputFormat, _ := gotPayload["output_format"].(map[string]any)
+	if got, want := outputFormat["encoding"], "pcm_mulaw"; got != want {
+		t.Fatalf("output_format.encoding = %#v, want %#v", got, want)
+	}
+	if got, want := outputFormat["sample_rate"], float64(16000); got != want {
+		t.Fatalf("output_format.sample_rate = %#v, want %#v", got, want)
+	}
+	generationConfig, _ := gotPayload["generation_config"].(map[string]any)
+	if got, want := generationConfig["speed"], 1.2; got != want {
+		t.Fatalf("generation_config.speed = %#v, want %#v", got, want)
+	}
+	if got, want := generationConfig["emotion"], "happy"; got != want {
+		t.Fatalf("generation_config.emotion = %#v, want %#v", got, want)
+	}
+	if got, want := generationConfig["volume"], 1.1; got != want {
+		t.Fatalf("generation_config.volume = %#v, want %#v", got, want)
 	}
 }
 

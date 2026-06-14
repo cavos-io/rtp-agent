@@ -2015,6 +2015,51 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, openai.WithOpenAISTTBaseURL(cfg.STTBaseURL))
 		}
 		return openai.NewOVHCloudOpenAISTT(cfg.STTModel, cfg.OVHCloudAPIKey, sttOpts...)
+	case providerBaseten:
+		sttOpts := []baseten.BasetenSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, baseten.WithBasetenSTTModelEndpoint(cfg.STTBaseURL))
+		}
+		if cfg.STTChainID != "" {
+			sttOpts = append(sttOpts, baseten.WithBasetenSTTChainID(cfg.STTChainID))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, baseten.WithBasetenSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTEncoding != "" {
+			sttOpts = append(sttOpts, baseten.WithBasetenSTTEncoding(cfg.STTEncoding))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, baseten.WithBasetenSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTBufferSizeSeconds != nil {
+			sttOpts = append(sttOpts, baseten.WithBasetenSTTBufferSizeSeconds(*cfg.STTBufferSizeSeconds))
+		}
+		if cfg.STTVADThreshold != nil {
+			sttOpts = append(sttOpts, baseten.WithBasetenSTTVADThreshold(*cfg.STTVADThreshold))
+		}
+		return baseten.NewBasetenSTT("", cfg.STTModel, sttOpts...)
+	case providerCartesia:
+		sttOpts := []cartesia.CartesiaSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTEncoding != "" {
+			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTEncoding(cfg.STTEncoding))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTAudioChunkDurationMS != nil {
+			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTAudioChunkDurationMS(*cfg.STTAudioChunkDurationMS))
+		}
+		return cartesia.NewCartesiaSTT("", sttOpts...), nil
 	case providerElevenLabs:
 		sttOpts := []elevenlabs.ElevenLabsSTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -2036,6 +2081,30 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTSampleRate(*cfg.STTSampleRate))
 		}
 		return elevenlabs.NewElevenLabsSTT(cfg.ElevenLabsAPIKey, sttOpts...), nil
+	case providerGradium:
+		sttOpts := []gradium.GradiumSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTModelEndpoint(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTModelName(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTTemperature != nil {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTTemperature(*cfg.STTTemperature))
+		}
+		if cfg.STTVADBucket != nil {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTVADBucket(cfg.STTVADBucket))
+		}
+		if cfg.STTVADFlush != nil {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTVADFlush(*cfg.STTVADFlush))
+		}
+		if cfg.STTBufferSizeSeconds != nil {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTBufferSizeSeconds(*cfg.STTBufferSizeSeconds))
+		}
+		return gradium.NewGradiumSTT(cfg.GradiumAPIKey, sttOpts...), nil
 	case providerSLNG:
 		sttOpts := []slng.STTOption{}
 		if cfg.STTModel != "" {
@@ -2113,6 +2182,47 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, openai.WithOpenAITTSBaseURL(cfg.TTSBaseURL))
 		}
 		return openai.NewOpenAITTS(cfg.OpenAIAPIKey, "", "", ttsOpts...)
+	case providerAWS:
+		ttsOpts := []adapteraws.AWSTTSOption{}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, adapteraws.WithAWSTTSVoice(awspollytypes.VoiceId(cfg.TTSVoice)))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, adapteraws.WithAWSTTSEngine(awspollytypes.Engine(cfg.TTSModel)))
+		}
+		if cfg.TTSTextType != "" {
+			ttsOpts = append(ttsOpts, adapteraws.WithAWSTTSTextType(awspollytypes.TextType(cfg.TTSTextType)))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, adapteraws.WithAWSTTSLanguage(awspollytypes.LanguageCode(cfg.TTSLanguage)))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, adapteraws.WithAWSTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		return adapteraws.NewAWSTTS(context.Background(), cfg.AWSRegion, cfg.TTSVoice, ttsOpts...)
+	case providerAzure:
+		return azure.NewAzureTTS("", "", cfg.TTSVoice, cfg.TTSLanguage)
+	case providerBaseten:
+		ttsOpts := []baseten.BasetenTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, baseten.WithBasetenTTSModelEndpoint(cfg.TTSBaseURL))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, baseten.WithBasetenTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, baseten.WithBasetenTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSTemperature != nil {
+			ttsOpts = append(ttsOpts, baseten.WithBasetenTTSTemperature(*cfg.TTSTemperature))
+		}
+		if cfg.TTSMaxTokens != nil {
+			ttsOpts = append(ttsOpts, baseten.WithBasetenTTSMaxTokens(*cfg.TTSMaxTokens))
+		}
+		if cfg.TTSBufferSize != nil {
+			ttsOpts = append(ttsOpts, baseten.WithBasetenTTSBufferSize(*cfg.TTSBufferSize))
+		}
+		return baseten.NewBasetenTTS("", cfg.TTSModel, ttsOpts...)
 	case providerAsyncAI:
 		ttsOpts := []asyncai.AsyncAITTSOption{}
 		if cfg.TTSBaseURL != "" {
@@ -2180,6 +2290,21 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		if cfg.TTSWordTimestamps != nil {
 			ttsOpts = append(ttsOpts, cartesia.WithCartesiaWordTimestamps(*cfg.TTSWordTimestamps))
+		}
+		if len(cfg.TTSVoiceEmbedding) > 0 {
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaVoiceEmbedding(cfg.TTSVoiceEmbedding))
+		}
+		if cfg.TTSSpeed != 0 {
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaSpeed(cfg.TTSSpeed))
+		}
+		if cfg.TTSEmotion != "" {
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaEmotion(cfg.TTSEmotion))
+		}
+		if cfg.TTSVolume != nil {
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaVolume(*cfg.TTSVolume))
+		}
+		if cfg.TTSPronunciationDictID != "" {
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaPronunciationDictID(cfg.TTSPronunciationDictID))
 		}
 		return cartesia.NewCartesiaTTS("", cfg.TTSVoice, cfg.TTSModel, ttsOpts...), nil
 	case providerDeepgram:
