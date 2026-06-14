@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
-	"github.com/cavos-io/rtp-agent/core/inference"
 	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
+	"github.com/cavos-io/rtp-agent/library/inferencecontext"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/go-jose/go-jose/v3/jwt"
@@ -31,7 +31,7 @@ var currentJobContexts sync.Map
 const errNoJobContext = "no job context found, are you running this code inside a job entrypoint?"
 
 func init() {
-	inference.SetContextHeadersProvider(currentInferenceContextHeaders)
+	inferencecontext.SetHeadersProvider(currentInferenceContextHeaders)
 }
 
 func currentInferenceContextHeaders() map[string]string {
@@ -41,10 +41,10 @@ func currentInferenceContextHeaders() map[string]string {
 	}
 	headers := map[string]string{}
 	if jobID := ctx.Job.GetId(); jobID != "" {
-		headers[inference.HeaderJobID] = jobID
+		headers[inferencecontext.HeaderJobID] = jobID
 	}
 	if room := ctx.Job.GetRoom(); room != nil && room.GetSid() != "" {
-		headers[inference.HeaderRoomID] = room.GetSid()
+		headers[inferencecontext.HeaderRoomID] = room.GetSid()
 	}
 	return headers
 }

@@ -5237,6 +5237,138 @@ func TestClovaSTTFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("DEEPGRAM_API_KEY", "test-deepgram-key")
+	type wsRecord struct {
+		authorization string
+		query         map[string][]string
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		records <- wsRecord{
+			authorization: r.Header.Get("Authorization"),
+			query:         map[string][]string(r.URL.Query()),
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	interim := false
+	punctuate := false
+	smartFormat := true
+	noDelay := true
+	endpointing := 25
+	diarization := true
+	fillerWords := true
+	sampleRate := 8000
+	numChannels := 2
+	vadEvents := true
+	profanityFilter := true
+	numerals := true
+	mipOptOut := true
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTBaseURL:          "ws" + strings.TrimPrefix(server.URL, "http"),
+		STTModel:            "nova-2",
+		STTInterimResults:   &interim,
+		STTPunctuate:        &punctuate,
+		STTSmartFormat:      &smartFormat,
+		STTNoDelay:          &noDelay,
+		STTEndpointingMS:    &endpointing,
+		STTDiarization:      &diarization,
+		STTFillerWords:      &fillerWords,
+		STTSampleRate:       &sampleRate,
+		STTNumberOfChannels: &numChannels,
+		STTVADEvents:        &vadEvents,
+		STTProfanityFilter:  &profanityFilter,
+		STTNumerals:         &numerals,
+		STTMIPOptOut:        &mipOptOut,
+		STTKeywords:         []deepgram.DeepgramKeyword{{Keyword: "cavos", Boost: 2.5}},
+		STTRedact:           []string{"pci", "ssn"},
+		STTTags:             []string{"agent", "fallback"},
+	}, providerDeepgram)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*deepgram.DeepgramSTT); !ok {
+		t.Fatalf("provider type = %T, want *deepgram.DeepgramSTT", provider)
+	}
+	if got, want := provider.Label(), "deepgram.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "nova-2"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Deepgram"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.InterimResults || !caps.Diarization || caps.AlignedTranscript != "word" || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming diarization word-aligned offline without interim", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.authorization, "Token test-deepgram-key"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		expectedQuery := map[string]string{
+			"model":            "nova-2",
+			"punctuate":        "false",
+			"smart_format":     "true",
+			"no_delay":         "true",
+			"interim_results":  "false",
+			"encoding":         "linear16",
+			"sample_rate":      "8000",
+			"channels":         "2",
+			"endpointing":      "25",
+			"vad_events":       "true",
+			"filler_words":     "true",
+			"diarize":          "true",
+			"profanity_filter": "true",
+			"numerals":         "true",
+			"mip_opt_out":      "true",
+		}
+		for key, want := range expectedQuery {
+			if got := firstQueryValue(record.query, key); got != want {
+				t.Fatalf("query %s = %q, want %q", key, got, want)
+			}
+		}
+		if got, want := record.query["keywords"], []string{"cavos:2.5"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("keywords = %#v, want %#v", got, want)
+		}
+		if got, want := record.query["redact"], []string{"pci", "ssn"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("redact = %#v, want %#v", got, want)
+		}
+		if got, want := record.query["tag"], []string{"agent", "fallback"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("tag = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Deepgram STT websocket request")
+	}
+}
+
 func TestRtzrSTTFallbackPassesReferenceOptions(t *testing.T) {
 	type wsRecord struct {
 		authorization string
@@ -5625,6 +5757,324 @@ func TestSarvamSTTFallbackPassesReferenceOptions(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for Sarvam STT websocket config")
+	}
+}
+
+func TestSLNGSTTFallbackPassesModelOptions(t *testing.T) {
+	initPayloads := make(chan map[string]any, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read init payload: %v", err)
+			return
+		}
+		var init map[string]any
+		if err := json.Unmarshal(payload, &init); err != nil {
+			t.Errorf("decode init payload: %v", err)
+			return
+		}
+		initPayloads <- init
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	minSpeakers := 2
+	maxSpeakers := 4
+	interimResults := false
+	diarization := true
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		SLNGAPIKey:        "test-slng-key",
+		STTBaseURL:        endpoint,
+		STTModel:          "deepgram/nova:3",
+		STTLanguage:       "en",
+		STTEncoding:       "pcm_s16le",
+		STTInterimResults: &interimResults,
+		STTDiarization:    &diarization,
+		STTMinSpeakers:    &minSpeakers,
+		STTMaxSpeakers:    &maxSpeakers,
+		STTModelOptions:   map[string]any{"target_language_code": "en-US", "enable_partials": true, "custom_flag": "kept"},
+	}, providerSLNG)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+	if got, want := provider.Label(), "slng.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults {
+		t.Fatalf("Capabilities() = %+v, want streaming interim STT", caps)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case init := <-initPayloads:
+		if got, want := init["type"], "init"; got != want {
+			t.Fatalf("init.type = %#v, want %#v", got, want)
+		}
+		if got, want := init["model"], "nova-3"; got != want {
+			t.Fatalf("init.model = %#v, want %#v", got, want)
+		}
+		config, ok := init["config"].(map[string]any)
+		if !ok {
+			t.Fatalf("init.config = %#v, want object", init["config"])
+		}
+		wantConfig := map[string]any{
+			"language":                   "en-US",
+			"encoding":                   "linear16",
+			"enable_diarization":         true,
+			"min_speakers":               float64(2),
+			"max_speakers":               float64(4),
+			"enable_partials":            true,
+			"enable_partial_transcripts": true,
+			"custom_flag":                "kept",
+		}
+		for key, want := range wantConfig {
+			if got := config[key]; got != want {
+				t.Fatalf("config.%s = %#v, want %#v", key, got, want)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SLNG STT init payload")
+	}
+}
+
+func TestSLNGSTTFallbackPassesAudioAndVADOptions(t *testing.T) {
+	initPayloads := make(chan map[string]any, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read init payload: %v", err)
+			return
+		}
+		var init map[string]any
+		if err := json.Unmarshal(payload, &init); err != nil {
+			t.Errorf("decode init payload: %v", err)
+			return
+		}
+		initPayloads <- init
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	sampleRate := 8000
+	vadThreshold := 0.73
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		SLNGAPIKey:      "test-slng-key",
+		STTBaseURL:      endpoint,
+		STTSampleRate:   &sampleRate,
+		STTVADThreshold: &vadThreshold,
+	}, providerSLNG)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case init := <-initPayloads:
+		config, ok := init["config"].(map[string]any)
+		if !ok {
+			t.Fatalf("init.config = %#v, want object", init["config"])
+		}
+		if got, want := config["sample_rate"], float64(8000); got != want {
+			t.Fatalf("config.sample_rate = %#v, want %#v", got, want)
+		}
+		if got, want := config["vad_threshold"], 0.73; got != want {
+			t.Fatalf("config.vad_threshold = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SLNG STT init payload")
+	}
+}
+
+func TestSLNGSTTFallbackPassesVADSilenceOption(t *testing.T) {
+	initPayloads := make(chan map[string]any, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read init payload: %v", err)
+			return
+		}
+		var init map[string]any
+		if err := json.Unmarshal(payload, &init); err != nil {
+			t.Errorf("decode init payload: %v", err)
+			return
+		}
+		initPayloads <- init
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	silenceSeconds := 0.45
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		SLNGAPIKey:                    "test-slng-key",
+		STTBaseURL:                    endpoint,
+		STTVADSilenceThresholdSeconds: &silenceSeconds,
+	}, providerSLNG)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case init := <-initPayloads:
+		config, ok := init["config"].(map[string]any)
+		if !ok {
+			t.Fatalf("init.config = %#v, want object", init["config"])
+		}
+		if got, want := config["vad_min_silence_duration_ms"], float64(450); got != want {
+			t.Fatalf("config.vad_min_silence_duration_ms = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SLNG STT init payload")
+	}
+}
+
+func TestSLNGSTTFallbackBuffersAudioByReferenceWindow(t *testing.T) {
+	binaryLengths := make(chan int, 2)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read init payload: %v", err)
+			return
+		}
+		for {
+			msgType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if msgType == websocket.BinaryMessage {
+				binaryLengths <- len(payload)
+			}
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	sampleRate := 8000
+	bufferSizeSeconds := 0.02
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		SLNGAPIKey:           "test-slng-key",
+		STTBaseURL:           endpoint,
+		STTSampleRate:        &sampleRate,
+		STTBufferSizeSeconds: &bufferSizeSeconds,
+	}, providerSLNG)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	halfWindow := make([]byte, 160)
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              halfWindow,
+		SampleRate:        uint32(sampleRate),
+		NumChannels:       1,
+		SamplesPerChannel: 80,
+	}); err != nil {
+		t.Fatalf("PushFrame(first half) error = %v", err)
+	}
+	select {
+	case got := <-binaryLengths:
+		t.Fatalf("sent %d bytes before reference buffer window was full", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              halfWindow,
+		SampleRate:        uint32(sampleRate),
+		NumChannels:       1,
+		SamplesPerChannel: 80,
+	}); err != nil {
+		t.Fatalf("PushFrame(second half) error = %v", err)
+	}
+	select {
+	case got := <-binaryLengths:
+		if want := 320; got != want {
+			t.Fatalf("buffered binary length = %d, want %d", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SLNG buffered audio")
 	}
 }
 

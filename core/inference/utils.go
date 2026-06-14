@@ -6,9 +6,9 @@ import (
 	"os"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/library/inferencecontext"
 	"github.com/livekit/protocol/auth"
 )
 
@@ -18,27 +18,14 @@ const (
 	InferenceAccessTokenTTL = 10 * time.Minute
 
 	HeaderUserAgent         = "User-Agent"
-	HeaderRoomID            = "X-LiveKit-Room-ID"
-	HeaderJobID             = "X-LiveKit-Job-ID"
-	HeaderInferenceProvider = "X-LiveKit-Inference-Provider"
-	HeaderInferencePriority = "X-LiveKit-Inference-Priority"
+	HeaderRoomID            = inferencecontext.HeaderRoomID
+	HeaderJobID             = inferencecontext.HeaderJobID
+	HeaderInferenceProvider = inferencecontext.HeaderInferenceProvider
+	HeaderInferencePriority = inferencecontext.HeaderInferencePriority
 )
 
-var inferenceContextHeadersProvider = struct {
-	mu       sync.RWMutex
-	provider func() map[string]string
-}{}
-
 func SetContextHeadersProvider(provider func() map[string]string) func() {
-	inferenceContextHeadersProvider.mu.Lock()
-	previous := inferenceContextHeadersProvider.provider
-	inferenceContextHeadersProvider.provider = provider
-	inferenceContextHeadersProvider.mu.Unlock()
-	return func() {
-		inferenceContextHeadersProvider.mu.Lock()
-		inferenceContextHeadersProvider.provider = previous
-		inferenceContextHeadersProvider.mu.Unlock()
-	}
+	return inferencecontext.SetHeadersProvider(provider)
 }
 
 func InferenceHeaders() http.Header {
@@ -49,20 +36,7 @@ func InferenceHeaders() http.Header {
 }
 
 func AddContextHeaders(headers http.Header) {
-	if headers == nil {
-		return
-	}
-	inferenceContextHeadersProvider.mu.RLock()
-	provider := inferenceContextHeadersProvider.provider
-	inferenceContextHeadersProvider.mu.RUnlock()
-	if provider == nil {
-		return
-	}
-	for key, value := range provider() {
-		if key != "" && value != "" {
-			headers.Set(key, value)
-		}
-	}
+	inferencecontext.AddHeaders(headers)
 }
 
 func inferenceUserAgent() string {
