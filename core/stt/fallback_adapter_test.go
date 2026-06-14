@@ -181,6 +181,26 @@ func TestFallbackAdapterDoesNotForwardProviderErrors(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterErrorUnsubscribeRemovesLocalHandler(t *testing.T) {
+	primary := &metadataSTT{label: "primary", capabilities: STTCapabilities{Streaming: true}}
+	adapter := NewFallbackAdapter([]STT{primary})
+	labelsCh := make(chan string, 1)
+	unsubscribe := adapter.OnError(func(err *STTError) {
+		labelsCh <- err.Label
+	})
+	unsubscribe()
+	unsubscribe()
+
+	primary.EmitError(NewSTTError("primary", errors.New("primary failed"), true))
+	adapter.EmitError(NewSTTError("adapter", errors.New("adapter failed"), true))
+
+	select {
+	case label := <-labelsCh:
+		t.Fatalf("received error after unsubscribe: %q", label)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestFallbackStreamSeedsStartTime(t *testing.T) {
 	inner := &metadataRecognizeStream{events: []*SpeechEvent{{Type: SpeechEventFinalTranscript}}}
 	adapter := NewFallbackAdapter([]STT{

@@ -740,6 +740,24 @@ def stt_fallback(input_data: Any) -> dict[str, Any]:
                 {"name": "provider_error_not_forwarded", "labels": labels}
             ],
         }
+    if action == "error_unsubscribe_local":
+        primary = FakeSTT("primary")
+        adapter = fallback_module.FallbackAdapter([primary])
+        labels: list[str] = []
+
+        def handler(error: Any) -> None:
+            labels.append(error.label)
+
+        adapter.on("error", handler)
+        adapter.off("error", handler)
+        primary.emit("error", type("Error", (), {"label": "primary"})())
+        adapter.emit("error", type("Error", (), {"label": "adapter"})())
+        return {
+            "contract": "stt-fallback-error-unsubscribe-local",
+            "events": [
+                {"name": "error_unsubscribe_local", "labels": labels}
+            ],
+        }
     if action == "forward_metrics":
         primary = FakeSTT("primary")
         fallback = FakeSTT("fallback")
@@ -1126,6 +1144,24 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
             "contract": "stt-stream-adapter-provider-error-not-forwarded",
             "events": [
                 {"name": "provider_error_not_forwarded", "labels": labels}
+            ],
+        }
+    if action == "error_unsubscribe_local":
+        wrapped = FakeSTT("wrapped")
+        adapter = stream_adapter_module.StreamAdapter(stt=wrapped, vad=FakeVAD())
+        labels: list[str] = []
+
+        def handler(error: Any) -> None:
+            labels.append(error.label)
+
+        adapter.on("error", handler)
+        adapter.off("error", handler)
+        wrapped.emit("error", type("Error", (), {"label": "wrapped"})())
+        adapter.emit("error", type("Error", (), {"label": "adapter"})())
+        return {
+            "contract": "stt-stream-adapter-error-unsubscribe-local",
+            "events": [
+                {"name": "error_unsubscribe_local", "labels": labels}
             ],
         }
     if action == "metadata":

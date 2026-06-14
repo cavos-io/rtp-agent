@@ -746,6 +746,22 @@ func runSTTFallback(input json.RawMessage) (any, error) {
 				{"name": "provider_error_not_forwarded", "labels": labels},
 			},
 		}, nil
+	case "error_unsubscribe_local":
+		primary := &fakeScenarioSTT{label: "primary", capabilities: lkstt.STTCapabilities{Streaming: true}}
+		adapter := lkstt.NewFallbackAdapter([]lkstt.STT{primary})
+		labels := make([]string, 0, 1)
+		unsubscribe := adapter.OnError(func(err *lkstt.STTError) {
+			labels = append(labels, err.Label)
+		})
+		unsubscribe()
+		primary.EmitError(lkstt.NewSTTError("primary", errors.New("primary failed"), true))
+		adapter.EmitError(lkstt.NewSTTError("adapter", errors.New("adapter failed"), true))
+		return map[string]any{
+			"contract": "stt-fallback-error-unsubscribe-local",
+			"events": []map[string]any{
+				{"name": "error_unsubscribe_local", "labels": labels},
+			},
+		}, nil
 	case "forward_metrics":
 		primary := &fakeScenarioSTT{label: "primary", capabilities: lkstt.STTCapabilities{Streaming: true}}
 		fallback := &fakeScenarioSTT{label: "fallback", capabilities: lkstt.STTCapabilities{Streaming: true}}
@@ -1130,6 +1146,22 @@ func runSTTStreamAdapter(input json.RawMessage) (any, error) {
 			"contract": "stt-stream-adapter-provider-error-not-forwarded",
 			"events": []map[string]any{
 				{"name": "provider_error_not_forwarded", "labels": labels},
+			},
+		}, nil
+	case "error_unsubscribe_local":
+		wrapped := &fakeScenarioSTT{label: "wrapped", capabilities: lkstt.STTCapabilities{OfflineRecognize: true}}
+		adapter := lkstt.NewStreamAdapter(wrapped, nil)
+		labels := make([]string, 0, 1)
+		unsubscribe := adapter.OnError(func(err *lkstt.STTError) {
+			labels = append(labels, err.Label)
+		})
+		unsubscribe()
+		wrapped.EmitError(lkstt.NewSTTError("wrapped", errors.New("wrapped stt failed"), true))
+		adapter.EmitError(lkstt.NewSTTError("adapter", errors.New("adapter failed"), true))
+		return map[string]any{
+			"contract": "stt-stream-adapter-error-unsubscribe-local",
+			"events": []map[string]any{
+				{"name": "error_unsubscribe_local", "labels": labels},
 			},
 		}, nil
 	case "metadata":
