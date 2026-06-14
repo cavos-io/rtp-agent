@@ -233,38 +233,54 @@ func TestTTSErrorMarshalJSONMatchesReferencePayload(t *testing.T) {
 	}
 }
 
-func TestTTSErrorUnmarshalJSONRejectsMissingReferenceFields(t *testing.T) {
+func TestTTSErrorUnmarshalJSONAcceptsMissingReferenceOptionalFields(t *testing.T) {
 	tests := []struct {
-		name    string
-		payload string
-		want    string
+		name            string
+		payload         string
+		wantZeroTime    bool
+		wantLabel       string
+		wantRecoverable bool
 	}{
 		{
-			name:    "timestamp",
-			payload: `{"label":"provider.TTS","recoverable":true}`,
-			want:    "timestamp",
+			name:            "timestamp",
+			payload:         `{"label":"provider.TTS","recoverable":true}`,
+			wantZeroTime:    true,
+			wantLabel:       "provider.TTS",
+			wantRecoverable: true,
 		},
 		{
-			name:    "label",
-			payload: `{"timestamp":1.25,"recoverable":true}`,
-			want:    "label",
+			name:            "label",
+			payload:         `{"timestamp":1.25,"recoverable":true}`,
+			wantZeroTime:    false,
+			wantLabel:       "",
+			wantRecoverable: true,
 		},
 		{
-			name:    "recoverable",
-			payload: `{"timestamp":1.25,"label":"provider.TTS"}`,
-			want:    "recoverable",
+			name:            "recoverable",
+			payload:         `{"timestamp":1.25,"label":"provider.TTS"}`,
+			wantZeroTime:    false,
+			wantLabel:       "provider.TTS",
+			wantRecoverable: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var ttsErr TTSError
-			err := json.Unmarshal([]byte(tt.payload), &ttsErr)
-			if err == nil {
-				t.Fatal("Unmarshal TTSError returned nil error, want missing required field error")
+			if err := json.Unmarshal([]byte(tt.payload), &ttsErr); err != nil {
+				t.Fatalf("Unmarshal TTSError returned error = %v, want reference-compatible missing-field decode", err)
 			}
-			if !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("error = %v, want it to mention %q", err, tt.want)
+			if ttsErr.Type != TTSErrorType {
+				t.Fatalf("Type = %q, want %q", ttsErr.Type, TTSErrorType)
+			}
+			if ttsErr.Timestamp.IsZero() != tt.wantZeroTime {
+				t.Fatalf("Timestamp.IsZero() = %v, want %v", ttsErr.Timestamp.IsZero(), tt.wantZeroTime)
+			}
+			if ttsErr.Label != tt.wantLabel {
+				t.Fatalf("Label = %q, want %q", ttsErr.Label, tt.wantLabel)
+			}
+			if ttsErr.Recoverable != tt.wantRecoverable {
+				t.Fatalf("Recoverable = %v, want %v", ttsErr.Recoverable, tt.wantRecoverable)
 			}
 		})
 	}

@@ -452,6 +452,37 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "tts_error_required_fields":
+        required_fields = ["timestamp", "label", "recoverable"]
+        base = {
+            "timestamp": 1.25,
+            "label": "provider.TTS",
+            "error": Exception("provider disconnected"),
+            "recoverable": True,
+        }
+        accepted_missing_fields = []
+        for field_name in required_fields:
+            kwargs = dict(base)
+            del kwargs[field_name]
+            try:
+                module.TTSError(**kwargs)
+                accepted_missing_fields.append(field_name)
+            except Exception:
+                pass
+        err = module.TTSError(**base)
+        return {
+            "contract": "tts-error-required-fields",
+            "events": [
+                {
+                    "name": "tts_error_required_fields",
+                    "accepted_missing_fields": accepted_missing_fields,
+                    "type": err.type,
+                    "timestamp": err.timestamp,
+                    "label": err.label,
+                    "recoverable": err.recoverable,
+                }
+            ],
+        }
     if action == "text_transform":
         transform_module = load_reference_text_transforms()
         chunks = [str(chunk) for chunk in input_data.get("chunks", [])]

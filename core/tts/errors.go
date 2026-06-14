@@ -2,7 +2,6 @@ package tts
 
 import (
 	"encoding/json"
-	"fmt"
 	"sync"
 	"time"
 )
@@ -63,23 +62,26 @@ func (e *TTSError) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return err
 	}
-	if payload.Timestamp == nil {
-		return fmt.Errorf("tts error timestamp is required")
-	}
-	if payload.Label == nil {
-		return fmt.Errorf("tts error label is required")
-	}
-	if payload.Recoverable == nil {
-		return fmt.Errorf("tts error recoverable is required")
-	}
 
 	e.Type = payload.Type
 	if e.Type == "" {
 		e.Type = TTSErrorType
 	}
-	e.Timestamp = time.Unix(0, int64(*payload.Timestamp*float64(time.Second)))
-	e.Label = *payload.Label
-	e.Recoverable = *payload.Recoverable
+	if payload.Timestamp != nil {
+		e.Timestamp = time.Unix(0, int64(*payload.Timestamp*float64(time.Second)))
+	} else {
+		e.Timestamp = time.Time{}
+	}
+	if payload.Label != nil {
+		e.Label = *payload.Label
+	} else {
+		e.Label = ""
+	}
+	if payload.Recoverable != nil {
+		e.Recoverable = *payload.Recoverable
+	} else {
+		e.Recoverable = false
+	}
 	e.Err = nil
 	return nil
 }
@@ -95,10 +97,6 @@ type ErrorEmitter struct {
 type ttsErrorHandlerSubscription struct {
 	id      uint64
 	handler TTSErrorHandler
-}
-
-type errorCollectorTTS interface {
-	OnError(TTSErrorHandler) func()
 }
 
 type errorEmitterTTS interface {
