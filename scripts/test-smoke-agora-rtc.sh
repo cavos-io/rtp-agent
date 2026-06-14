@@ -17,8 +17,7 @@ binary="${OUT:-.tmp/rtp-agent-agora}"
 mkdir -p "$(dirname "$binary")"
 cat > "$binary" <<'BIN'
 #!/usr/bin/env bash
-echo 'Worker error: agora SDK error 110: denied'
-sleep 5
+echo '{"msg":"Worker error","error":"agora SDK connect timed out after 3s"}'
 BIN
 chmod +x "$binary"
 SH
@@ -37,4 +36,4 @@ if (
 fi
 
 grep -q '^Agora RTC smoke failed with worker error:$' "$WORKDIR/err.txt"
-grep -q 'Worker error: agora SDK error 110: denied' "$WORKDIR/err.txt"
+grep -q '"msg":"Worker error"' "$WORKDIR/err.txt"
