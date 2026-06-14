@@ -558,6 +558,29 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "error_panic_isolated":
+        labels: list[str] = []
+        escaped_error = False
+
+        def bad_handler(error: Any) -> None:
+            raise RuntimeError("error handler failed")
+
+        tts.on("error", bad_handler)
+        tts.on("error", lambda error: labels.append(error.label))
+        try:
+            tts.emit("error", type("Error", (), {"label": "tts"})())
+        except RuntimeError:
+            escaped_error = True
+        return {
+            "contract": "tts-error-panic-isolated",
+            "events": [
+                {
+                    "name": "error_panic_isolated",
+                    "labels": labels,
+                    "escaped_error": escaped_error,
+                }
+            ],
+        }
     raise ValueError(f"unsupported TTS value object action {action!r}")
 
 
