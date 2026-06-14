@@ -150,6 +150,36 @@ func TestSDKClientImplementationWaitsForConnectedEvent(t *testing.T) {
 	}
 }
 
+func TestSDKClientImplementationPrioritizesStartupErrorOverConnected(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	waitIndex := strings.Index(text, "func (c *sdkChannelClient) waitConnected")
+	if waitIndex < 0 {
+		t.Fatal("sdk.go missing waitConnected")
+	}
+	waitBody := text[waitIndex:]
+	if nextFunc := strings.Index(waitBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		waitBody = waitBody[:len("func ")+nextFunc]
+	}
+	preferIndex := strings.Index(waitBody, "err, ok := pendingJoinError(joinErrCh)")
+	connectedIndex := strings.Index(waitBody, "case event := <-connectedCh")
+	if preferIndex < 0 {
+		t.Fatal("waitConnected must check pending join errors before waiting on connected events")
+	}
+	if connectedIndex < 0 {
+		t.Fatal("waitConnected missing connected event case")
+	}
+	if preferIndex > connectedIndex {
+		t.Fatal("waitConnected must prefer pending join errors over connected events")
+	}
+	if !strings.Contains(text, "func pendingJoinError(joinErrCh <-chan error)") {
+		t.Fatal("sdk.go missing pendingJoinError helper")
+	}
+}
+
 func TestSDKClientImplementationChecksConnectionObserverRegistration(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {

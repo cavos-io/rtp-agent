@@ -340,8 +340,16 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 func (c *sdkChannelClient) waitConnected(ctx context.Context, connection *agoraservice.RtcConnection, connectedCh <-chan Event, joinErrCh <-chan error) (Event, error) {
 	timer := time.NewTimer(sdkJoinTimeout())
 	defer timer.Stop()
+	if err, ok := pendingJoinError(joinErrCh); ok {
+		c.releaseActiveConnection(connection)
+		return Event{}, err
+	}
 	select {
 	case event := <-connectedCh:
+		if err, ok := pendingJoinError(joinErrCh); ok {
+			c.releaseActiveConnection(connection)
+			return Event{}, err
+		}
 		return event, nil
 	case err := <-joinErrCh:
 		c.releaseActiveConnection(connection)
@@ -352,6 +360,15 @@ func (c *sdkChannelClient) waitConnected(ctx context.Context, connection *agoras
 	case <-ctx.Done():
 		c.releaseActiveConnection(connection)
 		return Event{}, ctx.Err()
+	}
+}
+
+func pendingJoinError(joinErrCh <-chan error) (error, bool) {
+	select {
+	case err := <-joinErrCh:
+		return err, true
+	default:
+		return nil, false
 	}
 }
 
