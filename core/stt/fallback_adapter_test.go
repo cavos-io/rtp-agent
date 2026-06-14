@@ -1790,6 +1790,70 @@ func TestFallbackStreamTimesOutBlockedProvider(t *testing.T) {
 	}
 }
 
+func TestFallbackStreamTimesOutBlockedStreamStart(t *testing.T) {
+	primary := &blockingStreamStartSTT{
+		started: make(chan struct{}, 1),
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		stream: &metadataRecognizeStream{events: []*SpeechEvent{{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback stream"}},
+		}}},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+		AttemptTimeout: 20 * time.Millisecond,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type streamResult struct {
+		stream RecognizeStream
+		err    error
+	}
+	resultCh := make(chan streamResult, 1)
+	go func() {
+		stream, err := adapter.Stream(ctx, "en")
+		resultCh <- streamResult{stream: stream, err: err}
+	}()
+
+	select {
+	case <-primary.started:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for primary stream start attempt")
+	}
+
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			t.Fatalf("Stream returned error: %v", result.err)
+		}
+		defer result.stream.Close()
+
+		event, err := result.stream.Next()
+		if err != nil {
+			t.Fatalf("Next returned error: %v", err)
+		}
+		if got := event.Alternatives[0].Text; got != "fallback stream" {
+			t.Fatalf("stream text = %q, want fallback stream", got)
+		}
+	case <-time.After(100 * time.Millisecond):
+		cancel()
+		t.Fatal("timed out waiting for fallback stream after blocked stream start")
+	}
+	if !primary.wasCanceled() {
+		t.Fatal("primary stream start context was not canceled after attempt timeout")
+	}
+	if adapter.isAvailable(0) {
+		t.Fatal("primary provider is still available after timed-out stream start")
+	}
+	if fallback.streamCalls != 1 {
+		t.Fatalf("fallback stream calls = %d, want 1", fallback.streamCalls)
+	}
+}
+
 func TestFallbackStreamTimesOutBlockedRecoveryProvider(t *testing.T) {
 	primaryFailure := &blockingFailRecognizeStream{
 		err:     errors.New("primary stream failed"),
@@ -2150,6 +2214,42 @@ func (s *blockingContextSTT) Recognize(ctx context.Context, _ []*model.AudioFram
 }
 
 func (s *blockingContextSTT) wasCanceled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.canceled
+}
+
+type blockingStreamStartSTT struct {
+	mu       sync.Mutex
+	started  chan struct{}
+	canceled bool
+}
+
+func (s *blockingStreamStartSTT) Label() string {
+	return "primary"
+}
+
+func (s *blockingStreamStartSTT) Capabilities() STTCapabilities {
+	return STTCapabilities{Streaming: true}
+}
+
+func (s *blockingStreamStartSTT) Stream(ctx context.Context, _ string) (RecognizeStream, error) {
+	select {
+	case s.started <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	s.mu.Lock()
+	s.canceled = true
+	s.mu.Unlock()
+	return nil, ctx.Err()
+}
+
+func (s *blockingStreamStartSTT) Recognize(context.Context, []*model.AudioFrame, string) (*SpeechEvent, error) {
+	return nil, errors.New("recognize unsupported")
+}
+
+func (s *blockingStreamStartSTT) wasCanceled() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.canceled

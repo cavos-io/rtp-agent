@@ -474,6 +474,7 @@ type fallbackRecognizeStream struct {
 
 	mu           sync.Mutex
 	activeStream RecognizeStream
+	activeCancel context.CancelFunc
 	activeIndex  int
 	retries      map[int]int
 	inputBuffer  []fallbackRecognizeInput
@@ -532,8 +533,11 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 		}
 		for {
 			stt := s.adapter.stts[i]
-			stream, err := stt.Stream(s.ctx, s.language)
+			stream, streamCancel, err := s.startProviderStream(s.ctx, stt)
 			if err == nil && isNilRecognizeStream(stream) {
+				if streamCancel != nil {
+					streamCancel()
+				}
 				err = errors.New("STT returned nil stream")
 			}
 			if err != nil {
@@ -554,6 +558,9 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 
 			if err := s.replayBufferedFrames(stream); err != nil {
 				stream.Close()
+				if streamCancel != nil {
+					streamCancel()
+				}
 				lastErr = err
 				if s.canRetrySTT(i) {
 					s.retries[i]++
@@ -571,6 +578,7 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 			s.applyTiming(stream)
 			s.adapter.setAvailable(i, true)
 			s.activeStream = stream
+			s.activeCancel = streamCancel
 			s.activeIndex = i
 			return nil
 		}
@@ -580,6 +588,45 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 		return s.allFailedError(lastErr)
 	}
 	return s.allFailedError(s.lastErr)
+}
+
+func (s *fallbackRecognizeStream) startProviderStream(ctx context.Context, stt STT) (RecognizeStream, context.CancelFunc, error) {
+	startCtx, cancel := context.WithCancel(ctx)
+	type streamResult struct {
+		stream RecognizeStream
+		err    error
+	}
+	resultCh := make(chan streamResult, 1)
+	go func() {
+		stream, err := stt.Stream(startCtx, s.language)
+		resultCh <- streamResult{stream: stream, err: err}
+	}()
+
+	if s.adapter.attemptTimeout <= 0 {
+		result := <-resultCh
+		if result.err != nil {
+			cancel()
+			return nil, nil, result.err
+		}
+		return result.stream, cancel, nil
+	}
+
+	timer := time.NewTimer(s.adapter.attemptTimeout)
+	defer timer.Stop()
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			cancel()
+			return nil, nil, result.err
+		}
+		return result.stream, cancel, nil
+	case <-timer.C:
+		cancel()
+		return nil, nil, context.DeadlineExceeded
+	case <-ctx.Done():
+		cancel()
+		return nil, nil, ctx.Err()
+	}
 }
 
 func (s *fallbackRecognizeStream) allFailedError(err error) error {
@@ -669,6 +716,12 @@ func (s *fallbackRecognizeStream) monitorStream() {
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				_ = stream.Close()
+				s.mu.Lock()
+				if s.activeCancel != nil {
+					s.activeCancel()
+					s.activeCancel = nil
+				}
+				s.mu.Unlock()
 				s.finish(io.EOF)
 				return
 			}
@@ -682,6 +735,10 @@ func (s *fallbackRecognizeStream) monitorStream() {
 			// Try fallback
 			logger.Logger.Warnw("STT stream failed, attempting fallback", err, "failed_stt", s.adapter.stts[s.activeIndex].Label())
 			stream.Close()
+			if s.activeCancel != nil {
+				s.activeCancel()
+				s.activeCancel = nil
+			}
 			s.lastErr = err
 
 			nextIndex := s.activeIndex + 1
@@ -786,8 +843,11 @@ func (s *fallbackRecognizeStream) tryRecoverStream(index int) {
 	}
 	recoveryCtx := context.WithoutCancel(s.ctx)
 	stt := s.adapter.stts[index]
-	stream, err := stt.Stream(recoveryCtx, s.language)
+	stream, streamCancel, err := s.startProviderStream(recoveryCtx, stt)
 	if err != nil || isNilRecognizeStream(stream) {
+		if streamCancel != nil {
+			streamCancel()
+		}
 		s.adapter.clearRecoveringStream(index)
 		return
 	}
@@ -798,6 +858,7 @@ func (s *fallbackRecognizeStream) tryRecoverStream(index int) {
 
 	go func() {
 		defer stream.Close()
+		defer streamCancel()
 		defer s.removeRecovery(stream)
 		defer s.adapter.setRecoveryStream(index, nil)
 		defer s.adapter.clearRecoveringStream(index)
@@ -943,11 +1004,16 @@ func (s *fallbackRecognizeStream) Close() error {
 	}
 	s.closed = true
 	activeStream := s.activeStream
+	activeCancel := s.activeCancel
+	s.activeCancel = nil
 	recoveries := s.detachRecoveriesLocked()
 	close(s.closeCh)
 	s.mu.Unlock()
 
 	closeStreams(recoveries)
+	if activeCancel != nil {
+		activeCancel()
+	}
 	return activeStream.Close()
 }
 
