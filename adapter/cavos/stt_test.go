@@ -16,8 +16,8 @@ import (
 func TestCavosSTTDefaultsMatchStenoEndpoint(t *testing.T) {
 	provider := NewSTT()
 
-	if provider.baseURL != "http://localhost:8080/v1" {
-		t.Fatalf("baseURL = %q, want Steno local v1 endpoint", provider.baseURL)
+	if provider.baseURL != "http://steno.dev.cavos.internal/v1" {
+		t.Fatalf("baseURL = %q, want Steno dev internal v1 endpoint", provider.baseURL)
 	}
 	if provider.model != "whisper-1" {
 		t.Fatalf("model = %q, want OpenAI-compatible whisper-1 default", provider.model)

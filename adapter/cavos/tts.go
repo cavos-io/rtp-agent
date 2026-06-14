@@ -15,6 +15,7 @@ import (
 )
 
 const (
+	defaultTTSBaseURL        = "http://cacatua.dev.cavos.internal/v1"
 	defaultTTSModel          = "supertonic-3"
 	defaultTTSVoice          = "F1"
 	defaultTTSLanguage       = "en"
@@ -37,7 +38,7 @@ type TTSOption func(*TTS)
 func NewTTS(opts ...TTSOption) *TTS {
 	provider := &TTS{
 		httpClient:     http.DefaultClient,
-		baseURL:        defaultBaseURL,
+		baseURL:        defaultTTSBaseURL,
 		model:          defaultTTSModel,
 		voice:          defaultTTSVoice,
 		language:       defaultTTSLanguage,
