@@ -144,6 +144,37 @@ def stt_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "metrics_unsubscribe":
+        class ScenarioSTT(module.STT):
+            def __init__(self) -> None:
+                super().__init__(
+                    capabilities=module.STTCapabilities(streaming=False, interim_results=False)
+                )
+
+            async def _recognize_impl(self, buffer: Any, *, language: Any = None, conn_options: Any = None) -> Any:
+                return None
+
+        provider = ScenarioSTT()
+        request_ids: list[str] = []
+
+        def handler(metrics: Any) -> None:
+            request_ids.append(metrics.request_id)
+
+        provider.on("metrics_collected", handler)
+        provider.off("metrics_collected", handler)
+        provider.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "after-unsubscribe"})(),
+        )
+        return {
+            "contract": "stt-metrics-reference-unsubscribe",
+            "events": [
+                {
+                    "name": "metrics_unsubscribe",
+                    "request_ids": request_ids,
+                }
+            ],
+        }
     if action == "error_panic_isolated":
         class ScenarioSTT(module.STT):
             def __init__(self) -> None:
@@ -179,6 +210,34 @@ def stt_value_objects(input_data: Any) -> dict[str, Any]:
                     "escaped_error": escaped_error,
                     "handler_call_count": len(received_labels),
                     "labels": received_labels,
+                }
+            ],
+        }
+    if action == "error_unsubscribe":
+        class ScenarioSTT(module.STT):
+            def __init__(self) -> None:
+                super().__init__(
+                    capabilities=module.STTCapabilities(streaming=False, interim_results=False)
+                )
+
+            async def _recognize_impl(self, buffer: Any, *, language: Any = None, conn_options: Any = None) -> Any:
+                return None
+
+        provider = ScenarioSTT()
+        labels: list[str] = []
+
+        def handler(error: Any) -> None:
+            labels.append(error.label)
+
+        provider.on("error", handler)
+        provider.off("error", handler)
+        provider.emit("error", type("Error", (), {"label": "after-unsubscribe"})())
+        return {
+            "contract": "stt-error-reference-unsubscribe",
+            "events": [
+                {
+                    "name": "error_unsubscribe",
+                    "labels": labels,
                 }
             ],
         }

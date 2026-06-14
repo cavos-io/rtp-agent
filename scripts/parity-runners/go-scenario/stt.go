@@ -115,6 +115,24 @@ func runSTTValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "metrics_unsubscribe":
+		var emitter lkstt.MetricsEmitter
+		requestIDs := []string{}
+		unsubscribe := emitter.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		unsubscribe()
+		unsubscribe()
+		emitter.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "after-unsubscribe"})
+		return map[string]any{
+			"contract": "stt-metrics-reference-unsubscribe",
+			"events": []map[string]any{
+				{
+					"name":        "metrics_unsubscribe",
+					"request_ids": requestIDs,
+				},
+			},
+		}, nil
 	case "error_panic_isolated":
 		var emitter lkstt.ErrorEmitter
 		err := lkstt.NewSTTError("provider.STT", context.Canceled, true)
@@ -142,6 +160,24 @@ func runSTTValueObjects(input json.RawMessage) (any, error) {
 					"escaped_error":      escapedError,
 					"handler_call_count": len(receivedLabels),
 					"labels":             receivedLabels,
+				},
+			},
+		}, nil
+	case "error_unsubscribe":
+		var emitter lkstt.ErrorEmitter
+		labels := []string{}
+		unsubscribe := emitter.OnError(func(err *lkstt.STTError) {
+			labels = append(labels, err.Label)
+		})
+		unsubscribe()
+		unsubscribe()
+		emitter.EmitError(lkstt.NewSTTError("provider.STT", context.Canceled, true))
+		return map[string]any{
+			"contract": "stt-error-reference-unsubscribe",
+			"events": []map[string]any{
+				{
+					"name":   "error_unsubscribe",
+					"labels": labels,
 				},
 			},
 		}, nil
