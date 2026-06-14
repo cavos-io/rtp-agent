@@ -10,10 +10,12 @@ import (
 
 type fakePCMPublisher struct {
 	frames []PCMFrame
+	ctxs   []context.Context
 	err    error
 }
 
 func (f *fakePCMPublisher) PublishPCM(ctx context.Context, frame PCMFrame) error {
+	f.ctxs = append(f.ctxs, ctx)
 	if f.err != nil {
 		return f.err
 	}
@@ -52,6 +54,28 @@ func TestAudioOutputPublishesTenMillisecondPCMFrames(t *testing.T) {
 	}
 	if len(published.Data) != 320 {
 		t.Fatalf("published data length = %d, want 320", len(published.Data))
+	}
+}
+
+func TestAudioOutputPublishAudioNormalizesNilContext(t *testing.T) {
+	publisher := &fakePCMPublisher{}
+	output := NewAudioOutput(publisher)
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 320),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	}
+	var nilCtx context.Context
+
+	if err := output.PublishAudio(nilCtx, frame); err != nil {
+		t.Fatalf("PublishAudio() error = %v", err)
+	}
+	if len(publisher.ctxs) != 1 {
+		t.Fatalf("published contexts = %d, want 1", len(publisher.ctxs))
+	}
+	if publisher.ctxs[0] == nil {
+		t.Fatal("PublishAudio() passed nil context to PCM publisher")
 	}
 }
 

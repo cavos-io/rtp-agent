@@ -27,6 +27,7 @@ func NewAudioOutput(publisher PCMFramePublisher) *AudioOutput {
 }
 
 func (o *AudioOutput) PublishAudio(ctx context.Context, frame *model.AudioFrame) error {
+	ctx = normalizeContext(ctx)
 	if o == nil {
 		return fmt.Errorf("agora audio output is nil")
 	}
