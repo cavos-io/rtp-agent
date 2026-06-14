@@ -3705,6 +3705,73 @@ func TestSonioxTTSFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSFallbackPassesReferenceOptions(t *testing.T) {
+	sampleRate := 24000
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]string
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("audio")),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		SpeechmaticsAPIKey: "test-speechmatics-key",
+		TTSBaseURL:         "https://tts.example.com",
+		TTSVoice:           "theo",
+		TTSSampleRate:      &sampleRate,
+	}, providerSpeechmatics)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*speechmatics.SpeechmaticsTTS); !ok {
+		t.Fatalf("provider type = %T, want *speechmatics.SpeechmaticsTTS", provider)
+	}
+	if got, want := provider.Label(), "speechmatics.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 24000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference configured sample rate %d", got, want)
+	}
+	if got, want := tts.Provider(provider), "Speechmatics"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
+	}
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if !strings.HasPrefix(gotURL, "https://tts.example.com/generate/theo?") {
+		t.Fatalf("request URL = %q, want configured generate endpoint", gotURL)
+	}
+	if !strings.Contains(gotURL, "output_format=pcm_24000") {
+		t.Fatalf("request URL = %q, want output_format=pcm_24000", gotURL)
+	}
+	if got, want := gotHeaders.Get("Authorization"), "Bearer test-speechmatics-key"; got != want {
+		t.Fatalf("Authorization = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["text"], "hello"; got != want {
+		t.Fatalf("payload text = %q, want %q", got, want)
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsTelnyxTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "telnyx")

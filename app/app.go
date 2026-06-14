@@ -2454,6 +2454,18 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSBitrate(*cfg.TTSBitRate))
 		}
 		return soniox.NewSonioxTTS(cfg.SonioxAPIKey, ttsOpts...), nil
+	case providerSpeechmatics:
+		ttsOpts := []speechmatics.SpeechmaticsTTSOption{}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, speechmatics.WithSpeechmaticsTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, speechmatics.WithSpeechmaticsTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, speechmatics.WithSpeechmaticsTTSBaseURL(cfg.TTSBaseURL))
+		}
+		return speechmatics.NewSpeechmaticsTTS(cfg.SpeechmaticsAPIKey, ttsOpts...), nil
 	case providerUltravox:
 		return ultravox.NewUltravoxTTS(cfg.UltravoxAPIKey, cfg.TTSVoice), nil
 	case providerUpliftAI:
