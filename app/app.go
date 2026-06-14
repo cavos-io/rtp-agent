@@ -2267,6 +2267,24 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, gnani.WithLanguage(cfg.TTSLanguage))
 		}
 		return gnani.NewTTS(cfg.GnaniAPIKey, ttsOpts...), nil
+	case providerGradium:
+		ttsOpts := []gradium.GradiumTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, gradium.WithGradiumTTSModelEndpoint(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, gradium.WithGradiumTTSModelName(cfg.TTSModel))
+		}
+		if cfg.TTSVoiceID != "" {
+			ttsOpts = append(ttsOpts, gradium.WithGradiumTTSVoiceID(cfg.TTSVoiceID))
+		}
+		if cfg.TTSPronunciationDictID != "" {
+			ttsOpts = append(ttsOpts, gradium.WithGradiumTTSPronunciationID(cfg.TTSPronunciationDictID))
+		}
+		if len(cfg.TTSJSONConfig) > 0 {
+			ttsOpts = append(ttsOpts, gradium.WithGradiumTTSJSONConfig(cfg.TTSJSONConfig))
+		}
+		return gradium.NewGradiumTTS(cfg.GradiumAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerHume:
 		ttsOpts := []hume.HumeTTSOption{}
 		if cfg.TTSBaseURL != "" {
