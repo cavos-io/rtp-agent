@@ -137,6 +137,19 @@ func TestTextTransformBufferCanApplyEmojiOnlyTransform(t *testing.T) {
 	}
 }
 
+func TestTextTransformBufferCanApplyEmptyTransformList(t *testing.T) {
+	buffer, err := NewTextTransformBufferWithTransforms([]string{})
+	if err != nil {
+		t.Fatalf("NewTextTransformBufferWithTransforms error = %v", err)
+	}
+
+	chunks := append(buffer.Push("Say **hi** 😊"), buffer.Flush()...)
+
+	if want := []string{"Say **hi** 😊"}; !equalStringSlices(chunks, want) {
+		t.Fatalf("chunks = %#v, want %#v", chunks, want)
+	}
+}
+
 func TestTextTransformBufferFiltersEndCallToolMarkersAcrossChunks(t *testing.T) {
 	buffer := NewTextTransformBuffer()
 

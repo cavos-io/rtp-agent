@@ -333,7 +333,7 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 		}, nil
 	case "text_transform":
 		transforms := payload.Transforms
-		if len(transforms) == 0 {
+		if !hasJSONField(input, "transforms") {
 			transforms = []string{"filter_markdown"}
 		}
 		buffer, err := lktts.NewTextTransformBufferWithTransforms(transforms)
@@ -713,6 +713,15 @@ func runTTSStreamAdapter(input json.RawMessage) (any, error) {
 	default:
 		return nil, fmt.Errorf("unsupported TTS stream adapter action %q", payload.Action)
 	}
+}
+
+func hasJSONField(input json.RawMessage, name string) bool {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(input, &fields); err != nil {
+		return false
+	}
+	_, ok := fields[name]
+	return ok
 }
 
 func orderedTTSReplacements(input json.RawMessage, fallback map[string]string) ([]lktts.TextReplacement, error) {
