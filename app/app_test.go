@@ -4331,6 +4331,122 @@ func TestXaiSTTFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestSmallestAISTTFallbackPassesReferenceOptions(t *testing.T) {
+	type wsRecord struct {
+		authorization string
+		source        string
+		path          string
+		query         map[string]string
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		query := map[string]string{}
+		for key, values := range r.URL.Query() {
+			if len(values) > 0 {
+				query[key] = values[0]
+			}
+		}
+		records <- wsRecord{
+			authorization: r.Header.Get("Authorization"),
+			source:        r.Header.Get("X-Source"),
+			path:          r.URL.Path,
+			query:         query,
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	sampleRate := 8000
+	wordTimestamps := false
+	diarization := true
+	endpointingMS := 500
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		SmallestAIAPIKey:  "test-smallest-key",
+		STTBaseURL:        server.URL,
+		STTModel:          "pulse",
+		STTLanguage:       "multi",
+		STTSampleRate:     &sampleRate,
+		STTEncoding:       "mulaw",
+		STTWordTimestamps: &wordTimestamps,
+		STTDiarization:    &diarization,
+		STTEndpointingMS:  &endpointingMS,
+	}, providerSmallestAI)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*smallestai.SmallestAISTT); !ok {
+		t.Fatalf("provider type = %T, want *smallestai.SmallestAISTT", provider)
+	}
+	if got, want := provider.Label(), "smallestai.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "pulse"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "SmallestAI"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || !caps.Diarization || caps.AlignedTranscript != "" || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming interim diarization offline without alignment", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.authorization, "Bearer test-smallest-key"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		if got, want := record.source, "livekit"; got != want {
+			t.Fatalf("X-Source = %q, want %q", got, want)
+		}
+		if got, want := record.path, "/pulse/get_text"; got != want {
+			t.Fatalf("path = %q, want %q", got, want)
+		}
+		if got, want := record.query["language"], "multi"; got != want {
+			t.Fatalf("query language = %q, want %q", got, want)
+		}
+		if got, want := record.query["encoding"], "mulaw"; got != want {
+			t.Fatalf("query encoding = %q, want %q", got, want)
+		}
+		if got, want := record.query["sample_rate"], "8000"; got != want {
+			t.Fatalf("query sample_rate = %q, want %q", got, want)
+		}
+		if got, want := record.query["word_timestamps"], "false"; got != want {
+			t.Fatalf("query word_timestamps = %q, want %q", got, want)
+		}
+		if got, want := record.query["diarize"], "true"; got != want {
+			t.Fatalf("query diarize = %q, want %q", got, want)
+		}
+		if got, want := record.query["eou_timeout_ms"], "500"; got != want {
+			t.Fatalf("query eou_timeout_ms = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SmallestAI STT websocket request")
+	}
+}
+
 func firstQueryValue(values map[string][]string, key string) string {
 	if len(values[key]) == 0 {
 		return ""

@@ -2214,6 +2214,33 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, gradium.WithGradiumSTTBufferSizeSeconds(*cfg.STTBufferSizeSeconds))
 		}
 		return gradium.NewGradiumSTT(cfg.GradiumAPIKey, sttOpts...), nil
+	case providerSmallestAI:
+		sttOpts := []smallestai.SmallestAISTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTEncoding != "" {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTEncoding(cfg.STTEncoding))
+		}
+		if cfg.STTWordTimestamps != nil {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTWordTimestamps(*cfg.STTWordTimestamps))
+		}
+		if cfg.STTDiarization != nil {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTDiarize(*cfg.STTDiarization))
+		}
+		if cfg.STTEndpointingMS != nil {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTEOUTimeoutMS(*cfg.STTEndpointingMS))
+		}
+		return smallestai.NewSmallestAISTT(cfg.SmallestAIAPIKey, sttOpts...), nil
 	case providerSoniox:
 		sttOpts := []soniox.SonioxSTTOption{}
 		if cfg.STTBaseURL != "" {
