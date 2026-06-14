@@ -2262,6 +2262,24 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, gradium.WithGradiumSTTBufferSizeSeconds(*cfg.STTBufferSizeSeconds))
 		}
 		return gradium.NewGradiumSTT(cfg.GradiumAPIKey, sttOpts...), nil
+	case providerGnani:
+		sttOpts := []gnani.STTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, gnani.WithSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, gnani.WithSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, gnani.WithSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTOrganizationID != "" {
+			sttOpts = append(sttOpts, gnani.WithSTTOrganizationID(cfg.STTOrganizationID))
+		}
+		if cfg.STTUserID != "" {
+			sttOpts = append(sttOpts, gnani.WithSTTUserID(cfg.STTUserID))
+		}
+		return gnani.NewSTT(cfg.GnaniAPIKey, sttOpts...), nil
 	case providerSmallestAI:
 		sttOpts := []smallestai.SmallestAISTTOption{}
 		if cfg.STTBaseURL != "" {

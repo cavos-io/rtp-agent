@@ -4830,6 +4830,181 @@ func TestAssemblyAISTTFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestGnaniSTTFallbackPassesReferenceOptions(t *testing.T) {
+	type wsRecord struct {
+		apiKey   string
+		language string
+		path     string
+	}
+	type restRecord struct {
+		apiKey         string
+		organizationID string
+		userID         string
+		path           string
+		fields         map[string]string
+		filename       string
+		contentType    string
+		audio          []byte
+	}
+	wsRecords := make(chan wsRecord, 1)
+	restRecords := make(chan restRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/stt/v3/stream":
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("upgrade websocket: %v", err)
+				return
+			}
+			defer conn.Close()
+			wsRecords <- wsRecord{
+				apiKey:   r.Header.Get("x-api-key-id"),
+				language: r.Header.Get("lang_code"),
+				path:     r.URL.Path,
+			}
+		case "/stt/v3":
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Errorf("parse gnani stt multipart request: %v", err)
+				return
+			}
+			file, header, err := r.FormFile("audio_file")
+			if err != nil {
+				t.Errorf("read gnani stt audio file: %v", err)
+				return
+			}
+			defer file.Close()
+			audio, err := io.ReadAll(file)
+			if err != nil {
+				t.Errorf("read gnani stt audio bytes: %v", err)
+				return
+			}
+			fields := map[string]string{}
+			for key, values := range r.MultipartForm.Value {
+				if len(values) > 0 {
+					fields[key] = values[0]
+				}
+			}
+			restRecords <- restRecord{
+				apiKey:         r.Header.Get("X-API-Key-ID"),
+				organizationID: r.Header.Get("X-Organization-ID"),
+				userID:         r.Header.Get("X-API-User-ID"),
+				path:           r.URL.Path,
+				fields:         fields,
+				filename:       header.Filename,
+				contentType:    header.Header.Get("Content-Type"),
+				audio:          audio,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"transcript":"namaste","request_id":"req-1","language":"hi-IN","confidence":0.91}`))
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	sampleRate := 8000
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		GnaniAPIKey:       "test-gnani-key",
+		STTBaseURL:        server.URL,
+		STTLanguage:       "hi-IN",
+		STTSampleRate:     &sampleRate,
+		STTOrganizationID: "org-123",
+		STTUserID:         "user-456",
+	}, providerGnani)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*gnani.STT); !ok {
+		t.Fatalf("provider type = %T, want *gnani.STT", provider)
+	}
+	if got, want := provider.Label(), "gnani.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "vachana-stt-v3"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Gnani"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.InterimResults || caps.Diarization || caps.AlignedTranscript != "" || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming offline without interim/diarization", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-wsRecords:
+		if got, want := record.apiKey, "test-gnani-key"; got != want {
+			t.Fatalf("websocket x-api-key-id = %q, want %q", got, want)
+		}
+		if got, want := record.language, "hi-IN"; got != want {
+			t.Fatalf("websocket lang_code = %q, want %q", got, want)
+		}
+		if got, want := record.path, "/stt/v3/stream"; got != want {
+			t.Fatalf("websocket path = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Gnani STT websocket request")
+	}
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "ta-IN")
+	if err != nil {
+		t.Fatalf("Recognize() error = %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %+v, want one final transcript", event)
+	}
+	alt := event.Alternatives[0]
+	if alt.Text != "namaste" || alt.Language != "ta-IN" || alt.Confidence != 1 {
+		t.Fatalf("alternative = %+v, want mapped Gnani transcript", alt)
+	}
+
+	select {
+	case record := <-restRecords:
+		if got, want := record.apiKey, "test-gnani-key"; got != want {
+			t.Fatalf("REST X-API-Key-ID = %q, want %q", got, want)
+		}
+		if got, want := record.organizationID, "org-123"; got != want {
+			t.Fatalf("REST X-Organization-ID = %q, want %q", got, want)
+		}
+		if got, want := record.userID, "user-456"; got != want {
+			t.Fatalf("REST X-API-User-ID = %q, want %q", got, want)
+		}
+		if got, want := record.path, "/stt/v3"; got != want {
+			t.Fatalf("REST path = %q, want %q", got, want)
+		}
+		if got, want := record.fields["language_code"], "ta-IN"; got != want {
+			t.Fatalf("language_code = %q, want %q", got, want)
+		}
+		if got, want := record.filename, "audio.wav"; got != want {
+			t.Fatalf("filename = %q, want %q", got, want)
+		}
+		if got, want := record.contentType, "audio/wav"; got != want {
+			t.Fatalf("file content type = %q, want %q", got, want)
+		}
+		if got, want := fmt.Sprintf("%x", record.audio), "0102"; got != want {
+			t.Fatalf("audio bytes = %s, want %s", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Gnani STT REST request")
+	}
+}
+
 func TestRtzrSTTFallbackPassesReferenceOptions(t *testing.T) {
 	type wsRecord struct {
 		authorization string
