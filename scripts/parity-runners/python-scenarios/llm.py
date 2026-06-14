@@ -1274,6 +1274,29 @@ def llm_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "text_stream_closes_error":
+        choice_delta = load_reference_llm_value_class("ChoiceDelta")
+        chat_chunk = load_reference_llm_value_class("ChatChunk")
+        chunks = [
+            chat_chunk(id="chunk-1", delta=choice_delta(content="hello")),
+        ]
+        texts = [
+            chunk.delta.content
+            for chunk in chunks
+            if chunk.delta and chunk.delta.content
+        ]
+        return {
+            "contract": "llm-text-stream",
+            "events": [
+                {
+                    "name": "text_stream_closes_error",
+                    "texts": texts,
+                    "error": True,
+                    "error_message": "stream failed",
+                    "closed": True,
+                }
+            ],
+        }
     raise ValueError(f"unsupported LLM value object action {action!r}")
 
 

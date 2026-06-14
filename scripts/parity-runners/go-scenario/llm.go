@@ -3188,6 +3188,41 @@ func runLLMValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "text_stream_closes_error":
+		streamErr := errors.New("stream failed")
+		stream := &scenarioLLMTextStream{
+			events: []scenarioLLMTextStreamEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "hello"}}},
+				{err: streamErr},
+			},
+		}
+		textStream, err := lkllm.NewTextStream(stream)
+		if err != nil {
+			return nil, err
+		}
+		texts := make([]string, 0, 1)
+		first, err := textStream.Next()
+		if err != nil {
+			return nil, err
+		}
+		texts = append(texts, first)
+		_, err = textStream.Next()
+		message := ""
+		if err != nil {
+			message = err.Error()
+		}
+		return map[string]any{
+			"contract": "llm-text-stream",
+			"events": []map[string]any{
+				{
+					"name":          "text_stream_closes_error",
+					"texts":         texts,
+					"error":         errors.Is(err, streamErr),
+					"error_message": message,
+					"closed":        stream.closed,
+				},
+			},
+		}, nil
 	case "realtime_event_payloads":
 		return runLLMRealtimeEventPayloads(payload.Mode)
 	default:
