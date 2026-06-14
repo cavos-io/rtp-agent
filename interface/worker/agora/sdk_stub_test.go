@@ -91,6 +91,7 @@ func TestSDKClientImplementationValidatesInboundPCMBufferShape(t *testing.T) {
 	}
 	for _, want := range []string{
 		"len(frame.Buffer)%bytesPerInterleavedSample != 0",
+		"samplesPerChannel < 0",
 		"len(frame.Buffer) != samplesPerChannel*bytesPerInterleavedSample",
 	} {
 		if !strings.Contains(helperBody, want) {
