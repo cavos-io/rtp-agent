@@ -210,6 +210,37 @@ func TestSDKClientImplementationReleasesWaitConnectionOnlyWhenOwned(t *testing.T
 	}
 }
 
+func TestSDKClientImplementationDoesNotClearJoiningForStaleWaitCleanup(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	helperIndex := strings.Index(text, "func (c *sdkChannelClient) releaseActiveConnection")
+	if helperIndex < 0 {
+		t.Fatal("sdk.go missing releaseActiveConnection")
+	}
+	helperBody := text[helperIndex:]
+	if nextFunc := strings.Index(helperBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		helperBody = helperBody[:len("func ")+nextFunc]
+	}
+	staleIndex := strings.Index(helperBody, "if c.connection != connection")
+	ownerIndex := strings.LastIndex(helperBody, "c.joining = false")
+	if staleIndex < 0 {
+		t.Fatal("releaseActiveConnection missing stale connection branch")
+	}
+	if ownerIndex < 0 {
+		t.Fatal("releaseActiveConnection missing owner joining reset")
+	}
+	if ownerIndex < staleIndex {
+		t.Fatal("releaseActiveConnection must reset joining only after ownership is confirmed")
+	}
+	staleBranch := helperBody[staleIndex:ownerIndex]
+	if strings.Contains(staleBranch, "c.joining = false") {
+		t.Fatal("stale wait cleanup must not clear another in-progress join")
+	}
+}
+
 func TestSDKClientImplementationReleasesServiceOnLeave(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {

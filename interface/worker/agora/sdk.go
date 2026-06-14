@@ -101,7 +101,6 @@ func releaseSDKService() error {
 func (c *sdkChannelClient) releaseActiveConnection(connection *agoraservice.RtcConnection) bool {
 	c.mu.Lock()
 	if c.connection != connection {
-		c.joining = false
 		c.mu.Unlock()
 		return false
 	}
