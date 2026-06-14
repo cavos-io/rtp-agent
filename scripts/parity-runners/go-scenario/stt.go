@@ -11,6 +11,7 @@ import (
 	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
 	lkstt "github.com/cavos-io/rtp-agent/core/stt"
 	lkvad "github.com/cavos-io/rtp-agent/core/vad"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
 func runSTTValueObjects(input json.RawMessage) (any, error) {
@@ -737,7 +738,7 @@ func runSTTStreamAdapter(input json.RawMessage) (any, error) {
 			},
 		}, nil
 	case "wrapped":
-		wrapped := fakeScenarioSTT{label: "wrapped", capabilities: lkstt.STTCapabilities{OfflineRecognize: true}}
+		wrapped := &fakeScenarioSTT{label: "wrapped", capabilities: lkstt.STTCapabilities{OfflineRecognize: true}}
 		adapter := lkstt.NewStreamAdapter(wrapped, nil)
 		return map[string]any{
 			"contract": "stt-stream-adapter",
@@ -769,6 +770,25 @@ func runSTTStreamAdapter(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "forward_metrics":
+		wrapped := &fakeScenarioSTT{label: "wrapped", capabilities: lkstt.STTCapabilities{OfflineRecognize: true}}
+		adapter := lkstt.NewStreamAdapter(wrapped, nil)
+		requestIDs := make([]string, 0, 1)
+		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		defer unsubscribe()
+		wrapped.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "req-1"})
+		return map[string]any{
+			"contract": "stt-stream-adapter",
+			"events": []map[string]any{
+				{
+					"name":        "forward_metrics",
+					"request_ids": requestIDs,
+					"count":       len(requestIDs),
+				},
+			},
+		}, nil
 	case "metadata":
 		adapter := lkstt.NewStreamAdapter(fakeScenarioSTT{
 			label:        "wrapped",
@@ -792,6 +812,7 @@ func runSTTStreamAdapter(input json.RawMessage) (any, error) {
 }
 
 type fakeScenarioSTT struct {
+	lkstt.MetricsEmitter
 	label        string
 	model        string
 	provider     string

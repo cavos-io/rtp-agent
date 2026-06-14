@@ -712,6 +712,28 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "forward_metrics":
+        wrapped = FakeSTT("wrapped")
+        adapter = stream_adapter_module.StreamAdapter(stt=wrapped, vad=FakeVAD())
+        request_ids: list[str] = []
+        adapter.on(
+            "metrics_collected",
+            lambda metrics: request_ids.append(metrics.request_id),
+        )
+        wrapped.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "req-1"})(),
+        )
+        return {
+            "contract": "stt-stream-adapter",
+            "events": [
+                {
+                    "name": "forward_metrics",
+                    "request_ids": request_ids,
+                    "count": len(request_ids),
+                }
+            ],
+        }
     if action == "metadata":
         adapter = stream_adapter_module.StreamAdapter(
             stt=FakeSTT("wrapped", model="wrapped-model", provider="wrapped-provider"),
