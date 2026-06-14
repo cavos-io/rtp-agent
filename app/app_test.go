@@ -4689,6 +4689,162 @@ func TestInworldSTTFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestSarvamSTTFallbackPassesReferenceOptions(t *testing.T) {
+	type wsRecord struct {
+		apiKey    string
+		userAgent string
+		query     map[string]string
+		message   map[string]any
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		query := map[string]string{}
+		for key, values := range r.URL.Query() {
+			if len(values) > 0 {
+				query[key] = values[0]
+			}
+		}
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read sarvam stt config message: %v", err)
+			return
+		}
+		var message map[string]any
+		if err := json.Unmarshal(payload, &message); err != nil {
+			t.Errorf("decode sarvam stt config message: %v", err)
+			return
+		}
+		records <- wsRecord{
+			apiKey:    r.Header.Get("api-subscription-key"),
+			userAgent: r.Header.Get("User-Agent"),
+			query:     query,
+			message:   message,
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	sampleRate := 8000
+	highVAD := true
+	flushSignal := false
+	positiveSpeech := 0.6
+	negativeSpeech := 0.2
+	minSpeechFrames := 3
+	firstTurnMinSpeechFrames := 5
+	negativeFramesCount := 2
+	negativeFramesWindow := 4
+	startSpeechVolume := 0.1
+	interruptMinSpeechFrames := 6
+	preSpeechPadFrames := 7
+	numInitialIgnoredFrames := 8
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		SarvamAPIKey:                  "test-sarvam-key",
+		STTStreamingURL:               "ws" + strings.TrimPrefix(server.URL, "http"),
+		STTModel:                      "saaras:v3",
+		STTLanguage:                   "hi-IN",
+		STTTask:                       "translate",
+		STTPrompt:                     "domain prompt",
+		STTSampleRate:                 &sampleRate,
+		STTVADEvents:                  &highVAD,
+		STTVADFlush:                   &flushSignal,
+		STTEncoding:                   "audio/pcm",
+		STTPositiveSpeechThreshold:    &positiveSpeech,
+		STTNegativeSpeechThreshold:    &negativeSpeech,
+		STTMinSpeechFrames:            &minSpeechFrames,
+		STTFirstTurnMinSpeechFrames:   &firstTurnMinSpeechFrames,
+		STTNegativeFramesCount:        &negativeFramesCount,
+		STTNegativeFramesWindow:       &negativeFramesWindow,
+		STTStartSpeechVolumeThreshold: &startSpeechVolume,
+		STTInterruptMinSpeechFrames:   &interruptMinSpeechFrames,
+		STTPreSpeechPadFrames:         &preSpeechPadFrames,
+		STTNumInitialIgnoredFrames:    &numInitialIgnoredFrames,
+	}, providerSarvam)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*sarvam.SarvamSTT); !ok {
+		t.Fatalf("provider type = %T, want *sarvam.SarvamSTT", provider)
+	}
+	if got, want := provider.Label(), "sarvam.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "saaras:v3"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Sarvam"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.Diarization || caps.AlignedTranscript != "" || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming interim offline without diarization", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.apiKey, "test-sarvam-key"; got != want {
+			t.Fatalf("api-subscription-key = %q, want %q", got, want)
+		}
+		if got, want := record.userAgent, "LiveKit Agents Sarvam Plugin/Go"; got != want {
+			t.Fatalf("User-Agent = %q, want %q", got, want)
+		}
+		expectedQuery := map[string]string{
+			"language-code":                 "hi-IN",
+			"model":                         "saaras:v3",
+			"mode":                          "translate",
+			"vad_signals":                   "true",
+			"sample_rate":                   "8000",
+			"high_vad_sensitivity":          "true",
+			"flush_signal":                  "false",
+			"input_audio_codec":             "audio/pcm",
+			"positive_speech_threshold":     "0.6",
+			"negative_speech_threshold":     "0.2",
+			"min_speech_frames":             "3",
+			"first_turn_min_speech_frames":  "5",
+			"negative_frames_count":         "2",
+			"negative_frames_window":        "4",
+			"start_speech_volume_threshold": "0.1",
+			"interrupt_min_speech_frames":   "6",
+			"pre_speech_pad_frames":         "7",
+			"num_initial_ignored_frames":    "8",
+		}
+		for key, want := range expectedQuery {
+			if got := record.query[key]; got != want {
+				t.Fatalf("query %s = %q, want %q", key, got, want)
+			}
+		}
+		if got, want := record.message["type"], "config"; got != want {
+			t.Fatalf("config type = %#v, want %#v", got, want)
+		}
+		if got, want := record.message["prompt"], "domain prompt"; got != want {
+			t.Fatalf("config prompt = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Sarvam STT websocket config")
+	}
+}
+
 func firstQueryValue(values map[string][]string, key string) string {
 	if len(values[key]) == 0 {
 		return ""

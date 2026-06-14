@@ -2419,6 +2419,73 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, xai.WithXaiSTTEndpointing(*cfg.STTEndpointingMS))
 		}
 		return xai.NewXaiSTT(cfg.XAIAPIKey, sttOpts...), nil
+	case providerSarvam:
+		sttOpts := []sarvam.SarvamSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTStreamingURL != "" {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTStreamingURL(cfg.STTStreamingURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTTask != "" {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTMode(cfg.STTTask))
+		}
+		if cfg.STTPrompt != "" {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTPrompt(cfg.STTPrompt))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTVADEvents != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTHighVADSensitivity(*cfg.STTVADEvents))
+		}
+		if cfg.STTVADFlush != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTFlushSignal(*cfg.STTVADFlush))
+		}
+		if cfg.STTEncoding != "" {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTInputAudioCodec(cfg.STTEncoding))
+		}
+		if cfg.STTPositiveSpeechThreshold != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTPositiveSpeechThreshold(*cfg.STTPositiveSpeechThreshold))
+		}
+		if cfg.STTNegativeSpeechThreshold != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTNegativeSpeechThreshold(*cfg.STTNegativeSpeechThreshold))
+		}
+		if cfg.STTMinSpeechFrames != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTMinSpeechFrames(*cfg.STTMinSpeechFrames))
+		}
+		if cfg.STTFirstTurnMinSpeechFrames != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTFirstTurnMinSpeechFrames(*cfg.STTFirstTurnMinSpeechFrames))
+		}
+		if cfg.STTNegativeFramesCount != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTNegativeFramesCount(*cfg.STTNegativeFramesCount))
+		}
+		if cfg.STTNegativeFramesWindow != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTNegativeFramesWindow(*cfg.STTNegativeFramesWindow))
+		}
+		if cfg.STTStartSpeechVolumeThreshold != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTStartSpeechVolumeThreshold(*cfg.STTStartSpeechVolumeThreshold))
+		}
+		if cfg.STTInterruptMinSpeechFrames != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTInterruptMinSpeechFrames(*cfg.STTInterruptMinSpeechFrames))
+		}
+		if cfg.STTPreSpeechPadFrames != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTPreSpeechPadFrames(*cfg.STTPreSpeechPadFrames))
+		}
+		if cfg.STTNumInitialIgnoredFrames != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTNumInitialIgnoredFrames(*cfg.STTNumInitialIgnoredFrames))
+		}
+		provider := sarvam.NewSarvamSTT(cfg.SarvamAPIKey, sttOpts...)
+		if provider == nil {
+			return nil, fmt.Errorf("invalid sarvam STT configuration")
+		}
+		return provider, nil
 	case providerSLNG:
 		sttOpts := []slng.STTOption{}
 		if cfg.STTModel != "" {
