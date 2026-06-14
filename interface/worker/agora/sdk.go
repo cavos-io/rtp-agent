@@ -31,6 +31,11 @@ var (
 
 const defaultSDKJoinTimeout = 10 * time.Second
 
+const (
+	remoteAudioStateStopped        = 0
+	remoteAudioReasonRemoteOffline = 7
+)
+
 func NewSDKChannelClient() (ChannelClient, error) {
 	return &sdkChannelClient{}, nil
 }
@@ -244,6 +249,20 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 			connection.Release()
 			_ = releaseSDKService()
 			return fmt.Errorf("agora SDK local user creation failed")
+		}
+		if ret := connection.RegisterLocalUserObserver(&agoraservice.LocalUserObserver{
+			OnUserAudioTrackSubscribed: func(_ *agoraservice.LocalUser, uid string, _ *agoraservice.RemoteAudioTrack) {
+				emitSDKEvent(handler, Event{Kind: EventUserJoined, Channel: opts.Channel, UserID: uid})
+			},
+			OnUserAudioTrackStateChanged: func(_ *agoraservice.LocalUser, uid string, _ *agoraservice.RemoteAudioTrack, state int, reason int, _ int) {
+				if state == remoteAudioStateStopped && reason == remoteAudioReasonRemoteOffline {
+					emitSDKEvent(handler, Event{Kind: EventUserLeft, Channel: opts.Channel, UserID: uid, Reason: reason})
+				}
+			},
+		}); ret != 0 {
+			connection.Release()
+			_ = releaseSDKService()
+			return fmt.Errorf("agora SDK register local user observer failed: %d", ret)
 		}
 		if ret := localUser.SetPlaybackAudioFrameBeforeMixingParameters(1, 16000); ret != 0 {
 			connection.Release()

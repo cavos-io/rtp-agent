@@ -59,6 +59,24 @@ func TestSDKClientImplementationRegistersInboundAudioObserver(t *testing.T) {
 	}
 }
 
+func TestSDKClientImplementationRegistersLocalUserObserver(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"RegisterLocalUserObserver",
+		"OnUserAudioTrackSubscribed",
+		"OnUserAudioTrackStateChanged",
+		"agora SDK register local user observer failed",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}
+
 func TestSDKClientImplementationUsesCurrentConnectSignature(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {
