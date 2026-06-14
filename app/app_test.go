@@ -4689,6 +4689,133 @@ func TestInworldSTTFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestMistralAISTTFallbackPassesReferenceOptions(t *testing.T) {
+	type requestRecord struct {
+		apiKey      string
+		path        string
+		fields      map[string]string
+		filename    string
+		contentType string
+		audio       []byte
+	}
+	records := make(chan requestRecord, 1)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("parse mistralai stt multipart request: %v", err)
+			return
+		}
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			t.Errorf("read mistralai stt audio file: %v", err)
+			return
+		}
+		defer file.Close()
+		audio, err := io.ReadAll(file)
+		if err != nil {
+			t.Errorf("read mistralai stt audio bytes: %v", err)
+			return
+		}
+		fields := map[string]string{}
+		for key, values := range r.MultipartForm.Value {
+			if len(values) > 0 {
+				fields[key] = values[0]
+			}
+		}
+		records <- requestRecord{
+			apiKey:      r.Header.Get("x-api-key"),
+			path:        r.URL.Path,
+			fields:      fields,
+			filename:    header.Filename,
+			contentType: header.Header.Get("Content-Type"),
+			audio:       audio,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"text":"bonjour monde","language":"fr","segments":[{"text":"bonjour","start":0.2,"end":0.7},{"text":"monde","start":0.8,"end":1.1}]}`))
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test HTTP server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		MistralAPIKey:     "test-mistral-key",
+		STTBaseURL:        server.URL,
+		STTModel:          "voxtral-mini-2507",
+		STTLanguage:       "fr",
+		STTKeytermsPrompt: []string{"Chicago", "Joplin"},
+	}, providerMistralAI)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*mistralai.MistralAISTT); !ok {
+		t.Fatalf("provider type = %T, want *mistralai.MistralAISTT", provider)
+	}
+	if got, want := provider.Label(), "mistralai.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "voxtral-mini-2507"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "MistralAI"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || caps.InterimResults || caps.Diarization || caps.AlignedTranscript != "" || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want offline-only without streaming/interim/diarization", caps)
+	}
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
+	if err != nil {
+		t.Fatalf("Recognize() error = %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %+v, want one final transcript", event)
+	}
+	alt := event.Alternatives[0]
+	if alt.Text != "bonjour monde" || alt.Language != "fr" || alt.StartTime != 0.2 || alt.EndTime != 1.1 {
+		t.Fatalf("alternative = %+v, want mapped MistralAI transcript", alt)
+	}
+
+	select {
+	case record := <-records:
+		if got, want := record.apiKey, "test-mistral-key"; got != want {
+			t.Fatalf("x-api-key = %q, want %q", got, want)
+		}
+		if got, want := record.path, "/audio/transcriptions"; got != want {
+			t.Fatalf("path = %q, want %q", got, want)
+		}
+		if got, want := record.fields["model"], "voxtral-mini-2507"; got != want {
+			t.Fatalf("model = %q, want %q", got, want)
+		}
+		if got, want := record.fields["language"], "fr"; got != want {
+			t.Fatalf("language = %q, want %q", got, want)
+		}
+		if got, want := record.fields["context_bias"], "Chicago,Joplin"; got != want {
+			t.Fatalf("context_bias = %q, want %q", got, want)
+		}
+		if _, ok := record.fields["timestamp_granularities"]; ok {
+			t.Fatalf("timestamp_granularities present with language: %#v", record.fields)
+		}
+		if got, want := record.filename, "audio.wav"; got != want {
+			t.Fatalf("filename = %q, want %q", got, want)
+		}
+		if got, want := record.contentType, "audio/wav"; got != want {
+			t.Fatalf("file content type = %q, want %q", got, want)
+		}
+		if got, want := fmt.Sprintf("%x", record.audio), "0102"; got != want {
+			t.Fatalf("audio bytes = %s, want %s", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for MistralAI STT recognize request")
+	}
+}
+
 func TestSarvamSTTFallbackPassesReferenceOptions(t *testing.T) {
 	type wsRecord struct {
 		apiKey    string
