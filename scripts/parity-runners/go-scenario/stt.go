@@ -716,6 +716,34 @@ func runSTTFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "availability_unsubscribe":
+		primary := &fakeScenarioSTT{label: "primary", capabilities: lkstt.STTCapabilities{Streaming: true}, recognizeErr: errors.New("primary failed")}
+		fallback := &fakeScenarioSTT{label: "fallback", capabilities: lkstt.STTCapabilities{Streaming: true}}
+		adapter := lkstt.NewFallbackAdapterWithOptions([]lkstt.STT{primary, fallback}, lkstt.FallbackAdapterOptions{MaxRetryPerSTT: 0})
+		received := make(chan struct{}, 1)
+		unsubscribe := adapter.OnAvailabilityChanged(func(lkstt.AvailabilityChangedEvent) {
+			received <- struct{}{}
+		})
+		unsubscribe()
+		unsubscribe()
+		if _, err := adapter.Recognize(context.Background(), nil, "en"); err != nil {
+			return nil, err
+		}
+		receivedCount := 0
+		select {
+		case <-received:
+			receivedCount++
+		default:
+		}
+		return map[string]any{
+			"contract": "stt-fallback-availability-unsubscribe",
+			"events": []map[string]any{
+				{
+					"name":           "availability_unsubscribe",
+					"received_count": receivedCount,
+				},
+			},
+		}, nil
 	case "validation":
 		mode := payload.Mode
 		if mode == "" {

@@ -692,6 +692,35 @@ def stt_fallback(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "availability_unsubscribe":
+        primary = FakeSTT("primary", recognize_error=True)
+        fallback = FakeSTT("fallback")
+        adapter = fallback_module.FallbackAdapter(
+            [primary, fallback],
+            max_retry_per_stt=0,
+        )
+        received_count = 0
+
+        def handler(event: Any) -> None:
+            nonlocal received_count
+            received_count += 1
+
+        adapter.on("stt_availability_changed", handler)
+        adapter.off("stt_availability_changed", handler)
+
+        async def run_recognize() -> None:
+            await adapter.recognize([])
+
+        asyncio.run(run_recognize())
+        return {
+            "contract": "stt-fallback-availability-unsubscribe",
+            "events": [
+                {
+                    "name": "availability_unsubscribe",
+                    "received_count": received_count,
+                }
+            ],
+        }
     if action == "validation":
         mode = input_data.get("mode", "empty")
         try:
