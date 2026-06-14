@@ -4557,6 +4557,138 @@ func TestTelnyxSTTFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestInworldSTTFallbackPassesReferenceOptions(t *testing.T) {
+	type wsRecord struct {
+		authorization string
+		path          string
+		message       map[string]any
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read inworld config message: %v", err)
+			return
+		}
+		var message map[string]any
+		if err := json.Unmarshal(payload, &message); err != nil {
+			t.Errorf("decode inworld config message: %v", err)
+			return
+		}
+		records <- wsRecord{
+			authorization: r.Header.Get("Authorization"),
+			path:          r.URL.Path,
+			message:       message,
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	sampleRate := 8000
+	numChannels := 2
+	voiceProfile := true
+	voiceProfileTopN := 3
+	vadThreshold := 0.4
+	minSilence := 180
+	confidenceThreshold := 0.45
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		InworldAPIKey:                       "test-inworld-key",
+		STTBaseURL:                          server.URL,
+		STTModel:                            "inworld-stt-test",
+		STTLanguage:                         "en-US",
+		STTSampleRate:                       &sampleRate,
+		STTNumberOfChannels:                 &numChannels,
+		STTVoiceProfile:                     &voiceProfile,
+		STTVoiceProfileTopN:                 &voiceProfileTopN,
+		STTVADThreshold:                     &vadThreshold,
+		STTMinEndOfTurnSilenceWhenConfident: &minSilence,
+		STTEndOfTurnConfidenceThreshold:     &confidenceThreshold,
+	}, providerInworld)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*inworld.InworldSTT); !ok {
+		t.Fatalf("provider type = %T, want *inworld.InworldSTT", provider)
+	}
+	if got, want := provider.Label(), "inworld.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "inworld-stt-test"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Inworld"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming interim without offline", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.authorization, "Basic test-inworld-key"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		if got, want := record.path, "/stt/v1/transcribe:streamBidirectional"; got != want {
+			t.Fatalf("path = %q, want %q", got, want)
+		}
+		config, _ := record.message["transcribeConfig"].(map[string]any)
+		if got, want := config["modelId"], "inworld-stt-test"; got != want {
+			t.Fatalf("modelId = %#v, want %#v", got, want)
+		}
+		if got, want := config["language"], "en-US"; got != want {
+			t.Fatalf("language = %#v, want %#v", got, want)
+		}
+		if got, want := config["sampleRateHertz"], float64(8000); got != want {
+			t.Fatalf("sampleRateHertz = %#v, want %#v", got, want)
+		}
+		if got, want := config["numberOfChannels"], float64(2); got != want {
+			t.Fatalf("numberOfChannels = %#v, want %#v", got, want)
+		}
+		if got, want := config["endOfTurnConfidenceThreshold"], 0.45; got != want {
+			t.Fatalf("endOfTurnConfidenceThreshold = %#v, want %#v", got, want)
+		}
+		voiceConfig, _ := config["voiceProfileConfig"].(map[string]any)
+		if got, want := voiceConfig["enableVoiceProfile"], true; got != want {
+			t.Fatalf("enableVoiceProfile = %#v, want %#v", got, want)
+		}
+		if got, want := voiceConfig["topN"], float64(3); got != want {
+			t.Fatalf("voice topN = %#v, want %#v", got, want)
+		}
+		inworldConfig, _ := config["inworldSttV1Config"].(map[string]any)
+		if got, want := inworldConfig["minEndOfTurnSilenceWhenConfident"], float64(180); got != want {
+			t.Fatalf("minEndOfTurnSilenceWhenConfident = %#v, want %#v", got, want)
+		}
+		if got, want := inworldConfig["vadThreshold"], 0.4; got != want {
+			t.Fatalf("vadThreshold = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Inworld STT websocket config")
+	}
+}
+
 func firstQueryValue(values map[string][]string, key string) string {
 	if len(values[key]) == 0 {
 		return ""

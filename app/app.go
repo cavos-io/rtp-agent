@@ -2190,6 +2190,39 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, gladia.WithGladiaPreProcessing(boolValue(cfg.STTPreProcessingAudioEnhancer), speechThreshold))
 		}
 		return gladia.NewGladiaSTT(cfg.GladiaAPIKey, sttOpts...), nil
+	case providerInworld:
+		sttOpts := []inworld.InworldSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTNumberOfChannels != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTNumChannels(*cfg.STTNumberOfChannels))
+		}
+		if cfg.STTVoiceProfile != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTVoiceProfile(*cfg.STTVoiceProfile))
+		}
+		if cfg.STTVoiceProfileTopN != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTVoiceProfileTopN(*cfg.STTVoiceProfileTopN))
+		}
+		if cfg.STTVADThreshold != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTVADThreshold(*cfg.STTVADThreshold))
+		}
+		if cfg.STTMinEndOfTurnSilenceWhenConfident != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTMinEndOfTurnSilenceWhenConfident(*cfg.STTMinEndOfTurnSilenceWhenConfident))
+		}
+		if cfg.STTEndOfTurnConfidenceThreshold != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTEndOfTurnConfidenceThreshold(*cfg.STTEndOfTurnConfidenceThreshold))
+		}
+		return inworld.NewInworldSTT(cfg.InworldAPIKey, sttOpts...), nil
 	case providerGradium:
 		sttOpts := []gradium.GradiumSTTOption{}
 		if cfg.STTBaseURL != "" {
