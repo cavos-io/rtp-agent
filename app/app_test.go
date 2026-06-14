@@ -9135,6 +9135,96 @@ func TestDefaultConfigFromEnvAcceptsSimplismartTTSFallbackProvider(t *testing.T)
 	}
 }
 
+func TestSimplismartTTSFallbackPassesReferenceOptions(t *testing.T) {
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(strings.NewReader("audio")),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	sampleRate := 16000
+	temperature := 0.4
+	topP := 0.6
+	maxTokens := 256
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		SimplismartAPIKey: "test-simplismart-key",
+		TTSBaseURL:        "https://simplismart.example/tts",
+		TTSModel:          "canopylabs/orpheus-3b-test",
+		TTSVoice:          "leo",
+		TTSSampleRate:     &sampleRate,
+		TTSTemperature:    &temperature,
+		TTSTopP:           &topP,
+		TTSMaxTokens:      &maxTokens,
+	}, providerSimplismart)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*simplismart.SimplismartTTS); !ok {
+		t.Fatalf("provider type = %T, want *simplismart.SimplismartTTS", provider)
+	}
+	if got, want := provider.Label(), "simplismart.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 16000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference configured sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "canopylabs/orpheus-3b-test"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "SimpliSmart"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://simplismart.example/tts"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("Authorization"), "Bearer test-simplismart-key"; got != want {
+		t.Fatalf("Authorization = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["prompt"], "hello"; got != want {
+		t.Fatalf("payload prompt = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["voice"], "leo"; got != want {
+		t.Fatalf("payload voice = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["model"], "canopylabs/orpheus-3b-test"; got != want {
+		t.Fatalf("payload model = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["temperature"], 0.4; got != want {
+		t.Fatalf("payload temperature = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["top_p"], 0.6; got != want {
+		t.Fatalf("payload top_p = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["max_tokens"], float64(256); got != want {
+		t.Fatalf("payload max_tokens = %#v, want %#v", got, want)
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsUltravoxTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "ultravox")

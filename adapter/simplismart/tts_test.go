@@ -97,6 +97,48 @@ func TestSimplismartTTSDefaultsAndRequestMatchReference(t *testing.T) {
 	defer stream.Close()
 }
 
+func TestSimplismartTTSOptionsMatchReference(t *testing.T) {
+	provider := NewSimplismartTTS("test-key", "leo",
+		WithSimplismartTTSBaseURL("https://simplismart.example/tts"),
+		WithSimplismartTTSModel("canopylabs/orpheus-3b-test"),
+		WithSimplismartTTSSampleRate(16000),
+		WithSimplismartTTSTemperature(0.4),
+		WithSimplismartTTSTopP(0.6),
+		WithSimplismartTTSRepetitionPenalty(1.2),
+		WithSimplismartTTSMaxTokens(256),
+	)
+
+	req, err := buildSimplismartTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if req.URL.String() != "https://simplismart.example/tts" {
+		t.Fatalf("url = %q, want custom Simplismart endpoint", req.URL.String())
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode request body: %v", err)
+	}
+	assertSimplismartTTSPayload(t, payload, "voice", "leo")
+	assertSimplismartTTSPayload(t, payload, "model", "canopylabs/orpheus-3b-test")
+	if got := payload["temperature"]; got != 0.4 {
+		t.Fatalf("temperature = %#v, want 0.4", got)
+	}
+	if got := payload["top_p"]; got != 0.6 {
+		t.Fatalf("top_p = %#v, want 0.6", got)
+	}
+	if got := payload["repetition_penalty"]; got != 1.2 {
+		t.Fatalf("repetition_penalty = %#v, want 1.2", got)
+	}
+	if got := payload["max_tokens"]; got != float64(256) {
+		t.Fatalf("max_tokens = %#v, want 256", got)
+	}
+	if got := provider.SampleRate(); got != 16000 {
+		t.Fatalf("sample rate = %d, want configured sample rate", got)
+	}
+}
+
 func assertSimplismartTTSPayload(t *testing.T, payload map[string]any, key string, want string) {
 	t.Helper()
 	if got := payload[key]; got != want {

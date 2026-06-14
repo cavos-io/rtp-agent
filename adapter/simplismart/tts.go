@@ -36,14 +36,66 @@ type SimplismartTTS struct {
 	maxTokens         int
 }
 
-func NewSimplismartTTS(apiKey string, voice string) *SimplismartTTS {
+type SimplismartTTSOption func(*SimplismartTTS)
+
+func WithSimplismartTTSBaseURL(baseURL string) SimplismartTTSOption {
+	return func(t *SimplismartTTS) {
+		if baseURL != "" {
+			t.baseURL = baseURL
+		}
+	}
+}
+
+func WithSimplismartTTSModel(model string) SimplismartTTSOption {
+	return func(t *SimplismartTTS) {
+		if model != "" {
+			t.model = model
+		}
+	}
+}
+
+func WithSimplismartTTSSampleRate(sampleRate int) SimplismartTTSOption {
+	return func(t *SimplismartTTS) {
+		if sampleRate > 0 {
+			t.sampleRate = sampleRate
+		}
+	}
+}
+
+func WithSimplismartTTSTemperature(temperature float64) SimplismartTTSOption {
+	return func(t *SimplismartTTS) {
+		t.temperature = temperature
+	}
+}
+
+func WithSimplismartTTSTopP(topP float64) SimplismartTTSOption {
+	return func(t *SimplismartTTS) {
+		t.topP = topP
+	}
+}
+
+func WithSimplismartTTSRepetitionPenalty(repetitionPenalty float64) SimplismartTTSOption {
+	return func(t *SimplismartTTS) {
+		t.repetitionPenalty = repetitionPenalty
+	}
+}
+
+func WithSimplismartTTSMaxTokens(maxTokens int) SimplismartTTSOption {
+	return func(t *SimplismartTTS) {
+		if maxTokens > 0 {
+			t.maxTokens = maxTokens
+		}
+	}
+}
+
+func NewSimplismartTTS(apiKey string, voice string, opts ...SimplismartTTSOption) *SimplismartTTS {
 	if apiKey == "" {
 		apiKey = os.Getenv(simplismartAPIKeyEnv)
 	}
 	if voice == "" {
 		voice = defaultSimplismartTTSVoice
 	}
-	return &SimplismartTTS{
+	provider := &SimplismartTTS{
 		apiKey:            apiKey,
 		baseURL:           defaultSimplismartTTSBaseURL,
 		model:             defaultSimplismartTTSModel,
@@ -54,6 +106,10 @@ func NewSimplismartTTS(apiKey string, voice string) *SimplismartTTS {
 		repetitionPenalty: defaultSimplismartTTSRepetitionPenalty,
 		maxTokens:         defaultSimplismartTTSMaxTokens,
 	}
+	for _, opt := range opts {
+		opt(provider)
+	}
+	return provider
 }
 
 func (t *SimplismartTTS) Label() string { return "simplismart.TTS" }
