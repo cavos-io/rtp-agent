@@ -249,6 +249,25 @@ func TestTransportCloseCancelsInProgressJoin(t *testing.T) {
 	}
 }
 
+func TestTransportJoinAfterCloseReturnsError(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+
+	if err := tr.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	err := tr.Join(context.Background())
+	if err == nil {
+		t.Fatal("Join() error = nil, want closed transport error")
+	}
+	if !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("Join() error = %v, want closed transport error", err)
+	}
+	if client.joined {
+		t.Fatal("client joined after transport close")
+	}
+}
+
 func TestTransportPublishPCMValidatesAndDelegates(t *testing.T) {
 	client := &fakeChannelClient{}
 	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)

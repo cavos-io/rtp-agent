@@ -77,6 +77,7 @@ type Transport struct {
 	mu         sync.Mutex
 	joinCancel context.CancelFunc
 	joinSeq    uint64
+	closing    bool
 	closed     bool
 }
 
@@ -119,6 +120,11 @@ func (t *Transport) Join(ctx context.Context) error {
 	}
 	joinCtx, cancel := context.WithCancel(normalizeContext(ctx))
 	t.mu.Lock()
+	if t.closing || t.closed {
+		t.mu.Unlock()
+		cancel()
+		return fmt.Errorf("agora transport is closed")
+	}
 	audio := t.audio
 	t.joinSeq++
 	joinSeq := t.joinSeq
@@ -163,6 +169,7 @@ func (t *Transport) Close(ctx context.Context) error {
 	t.closeOnce.Do(func() {
 		t.mu.Lock()
 		cancelJoin := t.joinCancel
+		t.closing = true
 		t.mu.Unlock()
 		if cancelJoin != nil {
 			cancelJoin()
