@@ -3208,6 +3208,7 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 		{name: "sarvam", provider: "sarvam", envKey: "SARVAM_API_KEY", envValue: "test-sarvam-key", model: "sarvam-m"},
 		{name: "simli", provider: "simli", envKey: "SIMLI_API_KEY", envValue: "test-simli-key"},
 		{name: "simplismart", provider: "simplismart", envKey: "SIMPLISMART_API_KEY", envValue: "test-simplismart-key"},
+		{name: "smallestai", provider: "smallestai", envKey: "SMALLESTAI_API_KEY", envValue: "test-smallestai-key"},
 		{name: "telnyx", provider: "telnyx", envKey: "TELNYX_API_KEY", envValue: "test-telnyx-key"},
 	}
 
