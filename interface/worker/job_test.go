@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
+	adapterlivekit "github.com/cavos-io/rtp-agent/adapter/livekit"
 	"github.com/cavos-io/rtp-agent/core/agent"
-	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
@@ -75,12 +75,15 @@ func TestJobContextProvidesReferenceInferenceHeaders(t *testing.T) {
 		Room: &livekit.Room{Sid: "RM_inference", Name: "room-a"},
 	}, "", "", "")
 
-	if got := inference.InferenceHeaders().Get("X-LiveKit-Job-ID"); got != "" {
+	if got := adapterlivekit.InferenceHeaders().Get("X-LiveKit-Job-ID"); got != "" {
 		t.Fatalf("X-LiveKit-Job-ID outside job context = %q, want empty", got)
+	}
+	if got := adapterlivekit.InferenceHeaders().Get("User-Agent"); !strings.HasPrefix(got, "LiveKit Agents/") {
+		t.Fatalf("User-Agent outside job context = %q, want LiveKit Agents prefix", got)
 	}
 
 	if err := runWithJobContext(jobCtx, func() error {
-		headers := inference.InferenceHeaders()
+		headers := adapterlivekit.InferenceHeaders()
 		if got := headers.Get("X-LiveKit-Job-ID"); got != "job_inference" {
 			t.Fatalf("X-LiveKit-Job-ID = %q, want job_inference", got)
 		}

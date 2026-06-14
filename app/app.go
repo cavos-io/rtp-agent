@@ -50,6 +50,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/langchain"
 	"github.com/cavos-io/rtp-agent/adapter/lemonslice"
 	"github.com/cavos-io/rtp-agent/adapter/liveavatar"
+	adapterlivekit "github.com/cavos-io/rtp-agent/adapter/livekit"
 	"github.com/cavos-io/rtp-agent/adapter/lmnt"
 	"github.com/cavos-io/rtp-agent/adapter/minimal"
 	"github.com/cavos-io/rtp-agent/adapter/minimax"
@@ -90,7 +91,6 @@ import (
 	betatools "github.com/cavos-io/rtp-agent/core/beta/tools"
 	"github.com/cavos-io/rtp-agent/core/beta/workflows"
 	"github.com/cavos-io/rtp-agent/core/evals"
-	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	corestt "github.com/cavos-io/rtp-agent/core/stt"
 	coretts "github.com/cavos-io/rtp-agent/core/tts"
@@ -4581,7 +4581,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.STT = provider
 	case providerLiveKit:
-		a.STT = inference.NewSTT(cfg.STTModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret)
+		a.STT = adapterlivekit.NewSTT(cfg.STTModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret)
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_STT_PROVIDER %q", cfg.STTProvider)
 	}
@@ -5380,15 +5380,15 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = provider
 	case providerLiveKit:
-		ttsOpts := []inference.TTSOption{}
+		ttsOpts := []adapterlivekit.TTSOption{}
 		tokenizer, err := ttsSentenceTokenizer(cfg)
 		if err != nil {
 			return nil, err
 		}
 		if tokenizer != nil {
-			ttsOpts = append(ttsOpts, inference.WithSentenceTokenizer(tokenizer))
+			ttsOpts = append(ttsOpts, adapterlivekit.WithSentenceTokenizer(tokenizer))
 		}
-		a.TTS = inference.NewTTS(cfg.TTSModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret, ttsOpts...)
+		a.TTS = adapterlivekit.NewTTS(cfg.TTSModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret, ttsOpts...)
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_TTS_PROVIDER %q", cfg.TTSProvider)
 	}

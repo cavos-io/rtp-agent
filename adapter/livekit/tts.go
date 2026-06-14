@@ -1,9 +1,10 @@
-package inference
+package livekit
 
 import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -179,7 +180,65 @@ func (t *TTS) NumChannels() int {
 }
 
 func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	return tts.SynthesizeWithStream(ctx, t, text)
+	stream, err := t.Stream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if text != "" {
+		if err := stream.PushText(text); err != nil {
+			_ = stream.Close()
+			return nil, err
+		}
+	}
+	if ending, ok := stream.(interface{ EndInput() error }); ok {
+		if err := ending.EndInput(); err != nil {
+			_ = stream.Close()
+			return nil, err
+		}
+	} else if err := stream.Flush(); err != nil {
+		_ = stream.Close()
+		return nil, err
+	}
+	return &streamChunkedStream{stream: stream, text: text}, nil
+}
+
+type streamChunkedStream struct {
+	stream    tts.SynthesizeStream
+	text      string
+	audioSeen bool
+	done      bool
+	exception error
+}
+
+func (s *streamChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	audio, err := s.stream.Next()
+	if err != nil {
+		_ = s.stream.Close()
+		if errors.Is(err, io.EOF) {
+			s.done = true
+			if !s.audioSeen && strings.TrimSpace(s.text) != "" {
+				s.exception = fmt.Errorf("no audio frames were pushed for text: %s", s.text)
+				return nil, s.exception
+			}
+		} else {
+			s.exception = err
+		}
+		return nil, err
+	}
+	s.audioSeen = true
+	return audio, nil
+}
+
+func (s *streamChunkedStream) Close() error {
+	return s.stream.Close()
+}
+
+func (s *streamChunkedStream) Done() bool {
+	return s.done
+}
+
+func (s *streamChunkedStream) Exception() error {
+	return s.exception
 }
 
 func (t *TTS) Prewarm() {
