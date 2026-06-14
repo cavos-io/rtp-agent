@@ -100,6 +100,17 @@ run_smoke_with_invalid_stable_window() {
     scripts/smoke-agora-rtc.sh
 }
 
+run_smoke_with_invalid_timeout() {
+  cd "$WORKDIR"
+  env -u GOMODCACHE -u GOCACHE -u GOTMPDIR \
+    AGORA_GO_SDK_DIR="$WORKDIR/sdk" \
+    AGORA_APP_ID="app" \
+    AGORA_CHANNEL="support" \
+    AGORA_SMOKE_TIMEOUT=later \
+    AGORA_SMOKE_STABLE_SECONDS=1 \
+    scripts/smoke-agora-rtc.sh
+}
+
 if run_smoke >"$WORKDIR/out-worker-error.txt" 2>"$WORKDIR/err-worker-error.txt"; then
   echo "smoke script unexpectedly passed after worker error" >&2
   exit 1
@@ -137,6 +148,13 @@ if FAKE_AGORA_WORKER_MODE=connected run_smoke_with_invalid_stable_window >"$WORK
 fi
 
 grep -q '^AGORA_SMOKE_STABLE_SECONDS must be a non-negative integer number of seconds.$' "$WORKDIR/err-invalid-stable.txt"
+
+if FAKE_AGORA_WORKER_MODE=connected run_smoke_with_invalid_timeout >"$WORKDIR/out-invalid-timeout.txt" 2>"$WORKDIR/err-invalid-timeout.txt"; then
+  echo "smoke script unexpectedly passed with invalid timeout" >&2
+  exit 1
+fi
+
+grep -q '^AGORA_SMOKE_TIMEOUT must be a non-negative integer number of seconds.$' "$WORKDIR/err-invalid-timeout.txt"
 
 if FAKE_AGORA_WORKER_MODE=connected-then-worker-error run_smoke >"$WORKDIR/out-connected-then-worker-error.txt" 2>"$WORKDIR/err-connected-then-worker-error.txt"; then
   echo "smoke script unexpectedly passed after connected log followed by worker error" >&2
