@@ -3414,6 +3414,61 @@ func TestValidateRunPreconditionsRequiresCredentialsAfterRTCSession(t *testing.T
 	}
 }
 
+func TestValidateRunPreconditionsRejectsUnknownWorkerTransport(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		Transport: WorkerTransport("matrix"),
+		WSRL:      "wss://livekit.example",
+		APIKey:    "key",
+		APISecret: "secret",
+	})
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	err := server.validateRunPreconditions()
+	if err == nil {
+		t.Fatal("validateRunPreconditions() error = nil, want unknown transport error")
+	}
+	if !strings.Contains(err.Error(), "unknown worker transport") {
+		t.Fatalf("validateRunPreconditions() error = %q, want unknown worker transport", err.Error())
+	}
+}
+
+func TestValidateRunPreconditionsRequiresAgoraOptionsForAgoraTransport(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		Transport: WorkerTransportAgora,
+	})
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	err := server.validateRunPreconditions()
+	if err == nil {
+		t.Fatal("validateRunPreconditions() error = nil, want Agora config error")
+	}
+	if !strings.Contains(err.Error(), "AGORA_APP_ID") {
+		t.Fatalf("validateRunPreconditions() error = %q, want AGORA_APP_ID", err.Error())
+	}
+}
+
+func TestValidateRunPreconditionsAcceptsAgoraTransportConfig(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		Transport: WorkerTransportAgora,
+		Agora: AgoraOptions{
+			AppID:   "app",
+			Channel: "support",
+			UID:     "agent",
+		},
+	})
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	if err := server.validateRunPreconditions(); err != nil {
+		t.Fatalf("validateRunPreconditions() error = %v", err)
+	}
+}
+
 func TestValidateRunPreconditionsReportsSpecificMissingCredential(t *testing.T) {
 	tests := []struct {
 		name    string

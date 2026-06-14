@@ -223,6 +223,7 @@ type AgentServer struct {
 	registeredHandlers []WorkerRegisteredHandler
 
 	consoleSession any // Store local session for CLI console
+	transportRun   func(context.Context) error
 }
 
 func NewAgentServer(opts WorkerOptions) *AgentServer {
@@ -248,6 +249,12 @@ func (s *AgentServer) OnWorkerRegistered(handler WorkerRegisteredHandler) {
 	defer s.mu.Unlock()
 
 	s.registeredHandlers = append(s.registeredHandlers, handler)
+}
+
+func (s *AgentServer) SetTransportRunFunc(fn func(context.Context) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.transportRun = fn
 }
 
 func (s *AgentServer) ID() string {
@@ -1469,6 +1476,13 @@ func (s *AgentServer) validateRunPreconditions() error {
 	if s.entrypointFnc == nil {
 		return workerReferenceError(rtcSessionRequiredMessage)
 	}
+	transport := NormalizeWorkerTransport(string(s.Options.Transport))
+	if err := ValidateWorkerTransport(transport); err != nil {
+		return err
+	}
+	if transport == WorkerTransportAgora {
+		return s.Options.Agora.Validate()
+	}
 	if s.Options.WSRL == "" {
 		return fmt.Errorf("ws_url is required, or set LIVEKIT_URL environment variable")
 	}
@@ -1497,6 +1511,15 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		return err
 	}
 	defer s.finishRun()
+
+	if NormalizeWorkerTransport(string(s.Options.Transport)) == WorkerTransportAgora {
+		s.mu.Lock()
+		transportRun := s.transportRun
+		s.mu.Unlock()
+		if transportRun != nil {
+			return transportRun(ctx)
+		}
+	}
 
 	if err := s.validateRunPreconditions(); err != nil {
 		return err

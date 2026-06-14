@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -97,6 +98,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/interface/worker"
+	workeragora "github.com/cavos-io/rtp-agent/interface/worker/agora"
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/plugin"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -106,6 +108,44 @@ import (
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/vmihailenco/msgpack/v5"
 )
+
+type fakeAppAgoraChannelClient struct {
+	joinOptions worker.AgoraOptions
+	handler     workeragora.EventHandler
+	joinedCh    chan struct{}
+	joinErr     error
+	leaveErr    error
+	joined      bool
+	left        bool
+}
+
+func (f *fakeAppAgoraChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, handler workeragora.EventHandler) error {
+	f.joinOptions = opts
+	f.handler = handler
+	if f.joinErr != nil {
+		return f.joinErr
+	}
+	f.joined = true
+	if f.joinedCh != nil {
+		select {
+		case f.joinedCh <- struct{}{}:
+		default:
+		}
+	}
+	return nil
+}
+
+func (f *fakeAppAgoraChannelClient) Leave(ctx context.Context) error {
+	if f.leaveErr != nil {
+		return f.leaveErr
+	}
+	f.left = true
+	return nil
+}
+
+func (f *fakeAppAgoraChannelClient) PublishPCM(ctx context.Context, frame workeragora.PCMFrame) error {
+	return nil
+}
 
 func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 	expected := map[string]struct {
@@ -408,6 +448,96 @@ func TestDefaultConfigFromEnvConfiguresTelemetryLogs(t *testing.T) {
 	}
 	if got := cfg.TelemetryLogsHeaders["X-Scope"]; got != "agent" {
 		t.Fatalf("TelemetryLogsHeaders[X-Scope] = %q, want agent", got)
+	}
+}
+
+func TestDefaultConfigFromEnvDefaultsWorkerTransportToLiveKit(t *testing.T) {
+	t.Setenv("RTP_AGENT_TRANSPORT", "")
+
+	cfg := DefaultConfigFromEnv()
+
+	if cfg.WorkerOptions.Transport != worker.WorkerTransportLiveKit {
+		t.Fatalf("Transport = %q, want %q", cfg.WorkerOptions.Transport, worker.WorkerTransportLiveKit)
+	}
+}
+
+func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
+	t.Setenv("RTP_AGENT_TRANSPORT", "agora")
+	t.Setenv("AGORA_APP_ID", "agora-app")
+	t.Setenv("AGORA_APP_CERTIFICATE", "agora-cert")
+	t.Setenv("AGORA_CHANNEL", "support-room")
+	t.Setenv("AGORA_UID", "agent-42")
+
+	cfg := DefaultConfigFromEnv()
+
+	if cfg.WorkerOptions.Transport != worker.WorkerTransportAgora {
+		t.Fatalf("Transport = %q, want %q", cfg.WorkerOptions.Transport, worker.WorkerTransportAgora)
+	}
+	if cfg.WorkerOptions.Agora.AppID != "agora-app" {
+		t.Fatalf("Agora.AppID = %q, want agora-app", cfg.WorkerOptions.Agora.AppID)
+	}
+	if cfg.WorkerOptions.Agora.AppCertificate != "agora-cert" {
+		t.Fatalf("Agora.AppCertificate = %q, want agora-cert", cfg.WorkerOptions.Agora.AppCertificate)
+	}
+	if cfg.WorkerOptions.Agora.Channel != "support-room" {
+		t.Fatalf("Agora.Channel = %q, want support-room", cfg.WorkerOptions.Agora.Channel)
+	}
+	if cfg.WorkerOptions.Agora.UID != "agent-42" {
+		t.Fatalf("Agora.UID = %q, want agent-42", cfg.WorkerOptions.Agora.UID)
+	}
+}
+
+func TestAppRunUsesAgoraTransportWhenConfigured(t *testing.T) {
+	client := &fakeAppAgoraChannelClient{joinedCh: make(chan struct{}, 1)}
+	oldNewAgoraChannelClient := appNewAgoraChannelClient
+	appNewAgoraChannelClient = func() (workeragora.ChannelClient, error) {
+		return client, nil
+	}
+	t.Cleanup(func() {
+		appNewAgoraChannelClient = oldNewAgoraChannelClient
+	})
+
+	rtpApp, err := NewApp(AppConfig{
+		WorkerOptions: worker.WorkerOptions{
+			Transport: worker.WorkerTransportAgora,
+			Agora: worker.AgoraOptions{
+				AppID:   "app",
+				Channel: "support",
+				UID:     "agent",
+				Token:   "token",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- rtpApp.Server.Run(ctx)
+	}()
+
+	select {
+	case <-client.joinedCh:
+	case <-time.After(time.Second):
+		t.Fatal("App.Run() did not join Agora channel")
+	}
+	if client.joinOptions.Channel != "support" {
+		t.Fatalf("joined channel = %q, want support", client.joinOptions.Channel)
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Server.Run() error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Server.Run() did not return after cancellation")
+	}
+	if !client.left {
+		t.Fatal("Agora client left = false, want true after App.Run cancellation")
 	}
 }
 
