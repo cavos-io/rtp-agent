@@ -112,6 +112,7 @@ import (
 type fakeAppAgoraChannelClient struct {
 	joinOptions worker.AgoraOptions
 	handler     workeragora.EventHandler
+	audio       workeragora.AudioHandler
 	joinedCh    chan struct{}
 	publishedCh chan workeragora.PCMFrame
 	joinErr     error
@@ -121,9 +122,32 @@ type fakeAppAgoraChannelClient struct {
 	left        bool
 }
 
-func (f *fakeAppAgoraChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, handler workeragora.EventHandler) error {
+type fakeAppSessionAssistant struct {
+	audioCh chan *model.AudioFrame
+	publish func(frame *model.AudioFrame) error
+}
+
+func (f *fakeAppSessionAssistant) Start(context.Context, *agent.AgentSession) error { return nil }
+
+func (f *fakeAppSessionAssistant) OnAudioFrame(ctx context.Context, frame *model.AudioFrame) {
+	copied := *frame
+	copied.Data = append([]byte(nil), frame.Data...)
+	if f.audioCh != nil {
+		select {
+		case f.audioCh <- &copied:
+		default:
+		}
+	}
+}
+
+func (f *fakeAppSessionAssistant) SetPublishAudio(publish func(frame *model.AudioFrame) error) {
+	f.publish = publish
+}
+
+func (f *fakeAppAgoraChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, handler workeragora.EventHandler, audio workeragora.AudioHandler) error {
 	f.joinOptions = opts
 	f.handler = handler
+	f.audio = audio
 	if f.joinErr != nil {
 		return f.joinErr
 	}
@@ -156,6 +180,10 @@ func (f *fakeAppAgoraChannelClient) PublishPCM(ctx context.Context, frame worker
 		}
 	}
 	return nil
+}
+
+func (f *fakeAppAgoraChannelClient) emitAudio(frame *model.AudioFrame) {
+	f.audio(frame)
 }
 
 func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
@@ -620,6 +648,75 @@ func TestRunAgoraPublishesAssistantAudioToChannel(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("assistant audio was not published to Agora")
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("runAgora() error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not return after cancellation")
+	}
+}
+
+func TestRunAgoraForwardsChannelAudioToSession(t *testing.T) {
+	client := &fakeAppAgoraChannelClient{joinedCh: make(chan struct{}, 1)}
+	oldNewAgoraChannelClient := appNewAgoraChannelClient
+	appNewAgoraChannelClient = func() (workeragora.ChannelClient, error) {
+		return client, nil
+	}
+	t.Cleanup(func() {
+		appNewAgoraChannelClient = oldNewAgoraChannelClient
+	})
+
+	assistant := &fakeAppSessionAssistant{audioCh: make(chan *model.AudioFrame, 1)}
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	session.Assistant = assistant
+	rtpApp := &App{
+		Session: session,
+		Server: worker.NewAgentServer(worker.WorkerOptions{
+			Agora: worker.AgoraOptions{
+				AppID:   "app",
+				Channel: "support",
+				UID:     "agent",
+			},
+		}),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- rtpApp.runAgora(ctx)
+	}()
+
+	select {
+	case <-client.joinedCh:
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not join Agora channel")
+	}
+	if client.audio == nil {
+		t.Fatal("Agora client audio handler = nil, want session forwarding handler")
+	}
+	client.emitAudio(&model.AudioFrame{
+		Data:              []byte{1, 2, 3, 4},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	})
+
+	select {
+	case frame := <-assistant.audioCh:
+		if frame.SampleRate != 16000 {
+			t.Fatalf("session frame sample rate = %d, want 16000", frame.SampleRate)
+		}
+		if frame.SamplesPerChannel != 2 {
+			t.Fatalf("session frame samples per channel = %d, want 2", frame.SamplesPerChannel)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("session did not receive Agora audio frame")
 	}
 
 	cancel()

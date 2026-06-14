@@ -56,7 +56,7 @@ func (f PCMFrame) Validate() error {
 }
 
 type ChannelClient interface {
-	Join(context.Context, worker.AgoraOptions, EventHandler) error
+	Join(context.Context, worker.AgoraOptions, EventHandler, AudioHandler) error
 	Leave(context.Context) error
 	PublishPCM(context.Context, PCMFrame) error
 }
@@ -65,6 +65,7 @@ type Transport struct {
 	opts      worker.AgoraOptions
 	client    ChannelClient
 	events    chan Event
+	audio     AudioHandler
 	closeOnce sync.Once
 	mu        sync.Mutex
 	closed    bool
@@ -87,6 +88,15 @@ func (t *Transport) Events() <-chan Event {
 	return t.events
 }
 
+func (t *Transport) SetAudioHandler(handler AudioHandler) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.audio = handler
+	t.mu.Unlock()
+}
+
 func (t *Transport) Join(ctx context.Context) error {
 	if t == nil {
 		return fmt.Errorf("agora transport is nil")
@@ -97,7 +107,10 @@ func (t *Transport) Join(ctx context.Context) error {
 	if t.client == nil {
 		return fmt.Errorf("agora channel client is required")
 	}
-	return t.client.Join(ctx, t.opts, t.emit)
+	t.mu.Lock()
+	audio := t.audio
+	t.mu.Unlock()
+	return t.client.Join(ctx, t.opts, t.emit, audio)
 }
 
 func (t *Transport) Leave(ctx context.Context) error {

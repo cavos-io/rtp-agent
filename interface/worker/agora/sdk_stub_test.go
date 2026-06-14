@@ -31,3 +31,21 @@ func TestSDKClientImplementationUsesBuildTag(t *testing.T) {
 		t.Fatal("sdk.go does not reference the Agora Golang Server SDK")
 	}
 }
+
+func TestSDKClientImplementationRegistersInboundAudioObserver(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"SetPlaybackAudioFrameBeforeMixingParameters(1, 16000)",
+		"RegisterAudioFrameObserver",
+		"OnPlaybackAudioFrameBeforeMixing",
+		"audioHandler(audioFrame)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}

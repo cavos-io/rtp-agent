@@ -1113,6 +1113,8 @@ func (a *App) runAgora(ctx context.Context) error {
 		return err
 	}
 	transport := workeragora.NewTransport(opts, client)
+	audioInput := workeragora.NewAudioInput(ctx, a.Session)
+	transport.SetAudioHandler(audioInput.HandleAudioFrame)
 	if err := transport.Join(ctx); err != nil {
 		return err
 	}
