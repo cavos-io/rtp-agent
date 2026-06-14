@@ -626,6 +626,42 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "clean_eof":
+		primary := &fakeScenarioLLM{label: "primary", stream: &fakeScenarioLLMStream{}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		defer stream.Close()
+		chunks := []string{}
+		errored := false
+		for {
+			chunk, err := stream.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				errored = true
+				break
+			}
+			chunks = append(chunks, scenarioLLMChunkKind(chunk))
+		}
+		return map[string]any{
+			"contract": "llm-fallback-no-retry-clean-eof",
+			"events": []map[string]any{
+				{
+					"name":           "clean_eof",
+					"chunks":         chunks,
+					"errored":        errored,
+					"primary_calls":  primary.calls,
+					"fallback_calls": fallback.calls,
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported LLM fallback action %q", payload.Action)
 	}

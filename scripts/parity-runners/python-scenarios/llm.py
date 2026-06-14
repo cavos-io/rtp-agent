@@ -613,6 +613,33 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
             }
 
         return asyncio.run(run())
+    if action == "clean_eof":
+        primary = FakeLLM("primary", [])
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter([primary, fallback])
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            errored = False
+            try:
+                await stream._run()
+            except BaseException:  # noqa: BLE001 - scenario records stable error contract
+                errored = True
+            chunks = [chunk_kind(chunk) for chunk in stream._event_ch.items]
+            return {
+                "contract": "llm-fallback-no-retry-clean-eof",
+                "events": [
+                    {
+                        "name": "clean_eof",
+                        "chunks": chunks,
+                        "errored": errored,
+                        "primary_calls": primary.calls,
+                        "fallback_calls": fallback.calls,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
     raise ValueError(f"unsupported LLM fallback action {action!r}")
 
 
