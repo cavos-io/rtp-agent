@@ -3265,6 +3265,22 @@ func TestDefaultConfigFromEnvWrapsSTTFallbackProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvAcceptsLiveKitSTTFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
+	t.Setenv("RTP_AGENT_STT_FALLBACK_PROVIDERS", "livekit")
+	t.Setenv("RTP_AGENT_STT_MODEL", "deepgram/nova-3")
+	t.Setenv("LIVEKIT_INFERENCE_API_KEY", "test-livekit-key")
+	t.Setenv("LIVEKIT_INFERENCE_API_SECRET", "test-livekit-secret")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.STT.Label(); got != "FallbackAdapter(deepgram.STT)" {
+		t.Fatalf("STT label = %q, want fallback adapter around primary deepgram STT", got)
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsOVHCloudSTTFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
 	t.Setenv("RTP_AGENT_STT_FALLBACK_PROVIDERS", "ovhcloud")
@@ -6221,6 +6237,23 @@ func TestDefaultConfigFromEnvWrapsTTSFallbackProviders(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "cartesia")
 	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
+		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	}
+}
+
+func TestDefaultConfigFromEnvAcceptsLiveKitTTSFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "livekit")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "cartesia/sonic-3")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("LIVEKIT_INFERENCE_API_KEY", "test-livekit-key")
+	t.Setenv("LIVEKIT_INFERENCE_API_SECRET", "test-livekit-secret")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {

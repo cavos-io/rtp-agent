@@ -2767,6 +2767,8 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, slng.WithSTTModelOptions(cfg.STTModelOptions))
 		}
 		return slng.NewSTT(cfg.SLNGAPIKey, sttOpts...), nil
+	case providerLiveKit:
+		return adapterlivekit.NewSTT(cfg.STTModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret), nil
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_STT_FALLBACK_PROVIDERS entry %q", provider)
 	}
@@ -3578,6 +3580,16 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, telnyx.WithTelnyxTTSBaseURL(cfg.TTSBaseURL))
 		}
 		return telnyx.NewTelnyxTTS(cfg.TelnyxAPIKey, cfg.TTSVoice, ttsOpts...), nil
+	case providerLiveKit:
+		ttsOpts := []adapterlivekit.TTSOption{}
+		tokenizer, err := ttsSentenceTokenizer(cfg)
+		if err != nil {
+			return nil, err
+		}
+		if tokenizer != nil {
+			ttsOpts = append(ttsOpts, adapterlivekit.WithSentenceTokenizer(tokenizer))
+		}
+		return adapterlivekit.NewTTS(cfg.TTSModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret, ttsOpts...), nil
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_TTS_FALLBACK_PROVIDERS entry %q", provider)
 	}
