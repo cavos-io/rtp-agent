@@ -18,14 +18,17 @@ type remoteTurnDetectorResponse struct {
 }
 
 func (m *Model) PredictEndOfTurn(ctx context.Context, chatCtx *llm.ChatContext) (float64, error) {
-	url := m.RemoteInferenceURL()
-	if url == "" {
-		return 0, errors.New("livekit turn detector local inference is not implemented")
-	}
-
 	payload, err := m.InferencePayload(chatCtx)
 	if err != nil {
 		return 0, fmt.Errorf("build livekit turn detector request: %w", err)
+	}
+
+	url := m.RemoteInferenceURL()
+	if url == "" {
+		if m.runner == nil {
+			return 0, errors.New("livekit turn detector local inference is not implemented")
+		}
+		return m.runner.RunTurnDetector(ctx, payload)
 	}
 
 	if _, ok := ctx.Deadline(); !ok {

@@ -47,6 +47,7 @@ type Model struct {
 	remoteInferenceBase string
 	httpClient          *http.Client
 	languageThresholds  map[string]float64
+	runner              TurnDetectorRunner
 }
 
 type inferenceMessage struct {
@@ -56,6 +57,16 @@ type inferenceMessage struct {
 
 type inferencePayload struct {
 	ChatCtx []inferenceMessage `json:"chat_ctx"`
+}
+
+type TurnDetectorRunner interface {
+	RunTurnDetector(ctx context.Context, payload []byte) (float64, error)
+}
+
+type turnDetectorRunnerFunc func(context.Context, []byte) (float64, error)
+
+func (f turnDetectorRunnerFunc) RunTurnDetector(ctx context.Context, payload []byte) (float64, error) {
+	return f(ctx, payload)
 }
 
 type ModelOption func(*Model)
@@ -89,6 +100,12 @@ func WithRemoteInferenceBaseURL(urlBase string) ModelOption {
 func WithHTTPClient(client *http.Client) ModelOption {
 	return func(model *Model) {
 		model.httpClient = client
+	}
+}
+
+func WithTurnDetectorRunner(runner TurnDetectorRunner) ModelOption {
+	return func(model *Model) {
+		model.runner = runner
 	}
 }
 

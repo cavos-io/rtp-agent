@@ -376,6 +376,29 @@ func TestTurnDetectorPredictEndOfTurnDefaultsToOneForInvalidRemoteProbability(t 
 	}
 }
 
+func TestTurnDetectorPredictEndOfTurnUsesLocalRunnerWhenRemoteDisabled(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "Ready?"})
+	var gotPayload string
+	model := NewEnglishModel(WithTurnDetectorRunner(turnDetectorRunnerFunc(
+		func(ctx context.Context, payload []byte) (float64, error) {
+			gotPayload = string(payload)
+			return 0.82, nil
+		},
+	)))
+
+	probability, err := model.PredictEndOfTurn(context.Background(), chatCtx)
+	if err != nil {
+		t.Fatalf("PredictEndOfTurn() error = %v", err)
+	}
+	if probability != 0.82 {
+		t.Fatalf("probability = %v, want local runner probability", probability)
+	}
+	if !strings.Contains(gotPayload, "Ready?") {
+		t.Fatalf("runner payload = %s, want chat context payload", gotPayload)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
