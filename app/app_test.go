@@ -3200,6 +3200,7 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 		{name: "inworld", provider: "inworld", envKey: "INWORLD_API_KEY", envValue: "test-inworld-key"},
 		{name: "langchain", provider: "langchain", envKey: "LANGCHAIN_API_KEY", envValue: "test-langchain-key"},
 		{name: "lemonslice", provider: "lemonslice", envKey: "LEMONSLICE_API_KEY", envValue: "test-lemonslice-key"},
+		{name: "minimax", provider: "minimax", envKey: "MINIMAX_API_KEY", envValue: "test-minimax-key"},
 		{name: "mistralai", provider: "mistralai", envKey: "MISTRAL_API_KEY", envValue: "test-mistral-key"},
 		{name: "nvidia", provider: "nvidia", envKey: "NVIDIA_API_KEY", envValue: "test-nvidia-key"},
 		{name: "perplexity", provider: "perplexity", envKey: "PERPLEXITY_API_KEY", envValue: "test-perplexity-key"},

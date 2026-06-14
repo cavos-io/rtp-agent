@@ -1946,6 +1946,8 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return langchain.NewLangchainLLM(cfg.LangChainAPIKey, cfg.LLMModel), nil
 	case providerLemonSlice:
 		return lemonslice.NewLemonSliceLLM(cfg.LemonSliceAPIKey, cfg.LLMModel), nil
+	case providerMinimax:
+		return minimax.NewMinimaxLLM(cfg.MinimaxAPIKey, cfg.LLMModel), nil
 	case providerMistralAI:
 		return mistralai.NewMistralLLM(cfg.MistralAPIKey, cfg.LLMModel), nil
 	case providerNvidia:
