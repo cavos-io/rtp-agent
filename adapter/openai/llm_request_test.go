@@ -420,6 +420,9 @@ func TestNewDeepSeekOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"deepseek-chat"`) {
 		t.Fatalf("request body = %s, want default DeepSeek model", capture.requestBody)
 	}
+	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
+		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
+	}
 }
 
 func TestNewDeepSeekOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -459,6 +462,9 @@ func TestNewFireworksOpenAILLMDefaultsMatchReference(t *testing.T) {
 	}
 	if !strings.Contains(capture.requestBody, `"model":"accounts/fireworks/models/llama-v3p3-70b-instruct"`) {
 		t.Fatalf("request body = %s, want default Fireworks model", capture.requestBody)
+	}
+	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
+		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
 	}
 }
 
@@ -821,6 +827,9 @@ func TestNewSambaNovaOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"DeepSeek-R1-0528"`) {
 		t.Fatalf("request body = %s, want default SambaNova model", capture.requestBody)
 	}
+	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
+		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
+	}
 }
 
 func TestNewSambaNovaOpenAILLMOmitsStrictToolSchema(t *testing.T) {
@@ -958,6 +967,9 @@ func TestNewXAIOpenAILLMDefaultsMatchReference(t *testing.T) {
 	}
 	if !strings.Contains(capture.requestBody, `"model":"grok-3-fast"`) {
 		t.Fatalf("request body = %s, want default xAI model", capture.requestBody)
+	}
+	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
+		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
 	}
 }
 
