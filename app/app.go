@@ -1975,14 +1975,53 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		if cfg.STTInterimResults != nil {
 			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTInterimResults(*cfg.STTInterimResults))
 		}
+		if cfg.STTPunctuate != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTPunctuate(*cfg.STTPunctuate))
+		}
+		if cfg.STTSmartFormat != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTSmartFormat(*cfg.STTSmartFormat))
+		}
+		if cfg.STTNoDelay != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTNoDelay(*cfg.STTNoDelay))
+		}
+		if cfg.STTEndpointingMS != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTEndpointing(*cfg.STTEndpointingMS))
+		}
 		if cfg.STTDiarization != nil {
 			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTDiarization(*cfg.STTDiarization))
+		}
+		if cfg.STTFillerWords != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTFillerWords(*cfg.STTFillerWords))
 		}
 		if cfg.STTSampleRate != nil {
 			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTSampleRate(*cfg.STTSampleRate))
 		}
 		if cfg.STTNumberOfChannels != nil {
 			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTNumChannels(*cfg.STTNumberOfChannels))
+		}
+		if cfg.STTVADEvents != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTVADEvents(*cfg.STTVADEvents))
+		}
+		if cfg.STTProfanityFilter != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTProfanityFilter(*cfg.STTProfanityFilter))
+		}
+		if cfg.STTNumerals != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTNumerals(*cfg.STTNumerals))
+		}
+		if cfg.STTMIPOptOut != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTMipOptOut(*cfg.STTMIPOptOut))
+		}
+		if len(cfg.STTKeywords) > 0 {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTKeywords(cfg.STTKeywords))
+		}
+		if len(cfg.STTKeytermsPrompt) > 0 {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTKeyterms(cfg.STTKeytermsPrompt))
+		}
+		if len(cfg.STTRedact) > 0 {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTRedact(cfg.STTRedact))
+		}
+		if len(cfg.STTTags) > 0 {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTTags(cfg.STTTags))
 		}
 		return deepgram.NewDeepgramSTT("", cfg.STTModel, sttOpts...), nil
 	case providerOpenAI:

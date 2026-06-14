@@ -5237,6 +5237,138 @@ func TestClovaSTTFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("DEEPGRAM_API_KEY", "test-deepgram-key")
+	type wsRecord struct {
+		authorization string
+		query         map[string][]string
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		records <- wsRecord{
+			authorization: r.Header.Get("Authorization"),
+			query:         map[string][]string(r.URL.Query()),
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	interim := false
+	punctuate := false
+	smartFormat := true
+	noDelay := true
+	endpointing := 25
+	diarization := true
+	fillerWords := true
+	sampleRate := 8000
+	numChannels := 2
+	vadEvents := true
+	profanityFilter := true
+	numerals := true
+	mipOptOut := true
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTBaseURL:          "ws" + strings.TrimPrefix(server.URL, "http"),
+		STTModel:            "nova-2",
+		STTInterimResults:   &interim,
+		STTPunctuate:        &punctuate,
+		STTSmartFormat:      &smartFormat,
+		STTNoDelay:          &noDelay,
+		STTEndpointingMS:    &endpointing,
+		STTDiarization:      &diarization,
+		STTFillerWords:      &fillerWords,
+		STTSampleRate:       &sampleRate,
+		STTNumberOfChannels: &numChannels,
+		STTVADEvents:        &vadEvents,
+		STTProfanityFilter:  &profanityFilter,
+		STTNumerals:         &numerals,
+		STTMIPOptOut:        &mipOptOut,
+		STTKeywords:         []deepgram.DeepgramKeyword{{Keyword: "cavos", Boost: 2.5}},
+		STTRedact:           []string{"pci", "ssn"},
+		STTTags:             []string{"agent", "fallback"},
+	}, providerDeepgram)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*deepgram.DeepgramSTT); !ok {
+		t.Fatalf("provider type = %T, want *deepgram.DeepgramSTT", provider)
+	}
+	if got, want := provider.Label(), "deepgram.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "nova-2"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Deepgram"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.InterimResults || !caps.Diarization || caps.AlignedTranscript != "word" || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming diarization word-aligned offline without interim", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.authorization, "Token test-deepgram-key"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		expectedQuery := map[string]string{
+			"model":            "nova-2",
+			"punctuate":        "false",
+			"smart_format":     "true",
+			"no_delay":         "true",
+			"interim_results":  "false",
+			"encoding":         "linear16",
+			"sample_rate":      "8000",
+			"channels":         "2",
+			"endpointing":      "25",
+			"vad_events":       "true",
+			"filler_words":     "true",
+			"diarize":          "true",
+			"profanity_filter": "true",
+			"numerals":         "true",
+			"mip_opt_out":      "true",
+		}
+		for key, want := range expectedQuery {
+			if got := firstQueryValue(record.query, key); got != want {
+				t.Fatalf("query %s = %q, want %q", key, got, want)
+			}
+		}
+		if got, want := record.query["keywords"], []string{"cavos:2.5"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("keywords = %#v, want %#v", got, want)
+		}
+		if got, want := record.query["redact"], []string{"pci", "ssn"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("redact = %#v, want %#v", got, want)
+		}
+		if got, want := record.query["tag"], []string{"agent", "fallback"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("tag = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Deepgram STT websocket request")
+	}
+}
+
 func TestRtzrSTTFallbackPassesReferenceOptions(t *testing.T) {
 	type wsRecord struct {
 		authorization string
