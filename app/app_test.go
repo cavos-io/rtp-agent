@@ -53,6 +53,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/langchain"
 	"github.com/cavos-io/rtp-agent/adapter/lemonslice"
 	"github.com/cavos-io/rtp-agent/adapter/liveavatar"
+	"github.com/cavos-io/rtp-agent/adapter/livekit/turndetector"
 	"github.com/cavos-io/rtp-agent/adapter/lmnt"
 	"github.com/cavos-io/rtp-agent/adapter/minimal"
 	"github.com/cavos-io/rtp-agent/adapter/minimax"
@@ -83,7 +84,6 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/telnyx"
 	"github.com/cavos-io/rtp-agent/adapter/ten"
 	"github.com/cavos-io/rtp-agent/adapter/trugen"
-	"github.com/cavos-io/rtp-agent/adapter/turndetector"
 	"github.com/cavos-io/rtp-agent/adapter/ultravox"
 	"github.com/cavos-io/rtp-agent/adapter/upliftai"
 	"github.com/cavos-io/rtp-agent/adapter/xai"
@@ -188,6 +188,9 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		ultravox.PluginPackage:     {title: ultravox.PluginTitle, version: ultravox.PluginVersion},
 		upliftai.PluginPackage:     {title: upliftai.PluginTitle, version: upliftai.PluginVersion},
 		xai.PluginPackage:          {title: xai.PluginTitle, version: xai.PluginVersion},
+	}
+	if expected[turndetector.PluginPackage].title != "rtp-agent.plugins.turn_detector" {
+		t.Fatalf("turn detector plugin title = %q, want rtp-agent.plugins.turn_detector", expected[turndetector.PluginPackage].title)
 	}
 
 	for _, registered := range plugin.RegisteredPlugins() {
