@@ -3,6 +3,7 @@ import asyncio
 import base64
 import copy
 import re
+import time
 from dataclasses import asdict, dataclass, field
 from typing import Literal
 
@@ -735,6 +736,55 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
                         "errored": errored,
                         "primary_calls": primary.calls,
                         "fallback_calls": fallback.calls,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "all_unavailable_main_success_no_recovered":
+        primary = FakeLLM(
+            "primary",
+            streams=[
+                [RuntimeError("primary stream failed")],
+                [RuntimeError("recovery failed")],
+                [FakeChunk("primary active")],
+            ],
+        )
+        adapter = module.FallbackAdapter([primary])
+        availability_events: list[dict[str, Any]] = []
+        adapter.on(
+            "llm_availability_changed",
+            lambda event: availability_events.append(
+                {
+                    "available": event.available,
+                    "label": event.llm.label,
+                }
+            ),
+        )
+
+        async def run() -> dict[str, Any]:
+            first = adapter.chat(chat_ctx=module.ChatContext())
+            try:
+                await first._run()
+            except BaseException:  # noqa: BLE001 - setup expects reference all-failed error
+                pass
+
+            deadline = time.monotonic() + 2
+            while primary.calls < 2 and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            availability_events.clear()
+
+            second = adapter.chat(chat_ctx=module.ChatContext())
+            await second._run()
+            chunks = [chunk_kind(chunk) for chunk in second._event_ch.items]
+            return {
+                "contract": "llm-fallback-all-unavailable-main-success-no-recovered",
+                "events": [
+                    {
+                        "name": "all_unavailable_main_success_no_recovered",
+                        "chunks": chunks,
+                        "availability_events": availability_events,
+                        "primary_calls": primary.calls,
                     }
                 ],
             }

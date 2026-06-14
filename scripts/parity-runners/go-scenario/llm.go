@@ -773,6 +773,59 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "all_unavailable_main_success_no_recovered":
+		primary := &fakeScenarioLLM{label: "primary", streams: []lkllm.LLMStream{
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{{err: errors.New("primary stream failed")}}},
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{{err: errors.New("recovery failed")}}},
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "primary active"}}},
+			}},
+		}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary})
+		first, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		if _, err := first.Next(); err == nil {
+			return nil, errors.New("initial all-unavailable setup unexpectedly succeeded")
+		}
+		_ = first.Close()
+		deadline := time.Now().Add(2 * time.Second)
+		for primary.calls < 2 && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if primary.calls < 2 {
+			return nil, fmt.Errorf("timed out waiting for recovery probe, calls=%d", primary.calls)
+		}
+		drainScenarioLLMAvailability(adapter)
+
+		second, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		defer second.Close()
+		chunks := []string{}
+		for {
+			chunk, err := second.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return nil, err
+			}
+			chunks = append(chunks, scenarioLLMChunkKind(chunk))
+		}
+		return map[string]any{
+			"contract": "llm-fallback-all-unavailable-main-success-no-recovered",
+			"events": []map[string]any{
+				{
+					"name":                "all_unavailable_main_success_no_recovered",
+					"chunks":              chunks,
+					"availability_events": collectScenarioLLMAvailability(adapter),
+					"primary_calls":       primary.calls,
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported LLM fallback action %q", payload.Action)
 	}
@@ -800,6 +853,31 @@ func scenarioLLMChunkKind(chunk *lkllm.ChatChunk) string {
 		return "content:" + chunk.Delta.Content
 	}
 	return "empty"
+}
+
+func drainScenarioLLMAvailability(adapter *lkllm.FallbackAdapter) {
+	for {
+		select {
+		case <-adapter.AvailabilityChangedCh():
+		default:
+			return
+		}
+	}
+}
+
+func collectScenarioLLMAvailability(adapter *lkllm.FallbackAdapter) []map[string]any {
+	events := []map[string]any{}
+	for {
+		select {
+		case event := <-adapter.AvailabilityChangedCh():
+			events = append(events, map[string]any{
+				"available": event.Available,
+				"label":     lkllm.Label(event.LLM),
+			})
+		default:
+			return events
+		}
+	}
 }
 
 func runLLMRemoteChatContext(input json.RawMessage) (any, error) {
