@@ -154,7 +154,7 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 		}
 	}
 
-	if ret := connection.Connect(opts.Token, opts.Channel, uid); ret != 0 {
+	if ret := connection.Connect(opts.Token, opts.Channel, uid, ""); ret != 0 {
 		connection.Release()
 		return fmt.Errorf("agora SDK connect failed: %d", ret)
 	}

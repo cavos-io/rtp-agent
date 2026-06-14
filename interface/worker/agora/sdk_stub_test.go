@@ -49,3 +49,13 @@ func TestSDKClientImplementationRegistersInboundAudioObserver(t *testing.T) {
 		}
 	}
 }
+
+func TestSDKClientImplementationUsesCurrentConnectSignature(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	if !strings.Contains(string(source), `Connect(opts.Token, opts.Channel, uid, "")`) {
+		t.Fatal("sdk.go must call RtcConnection.Connect with token, channel, uid, and info arguments")
+	}
+}
