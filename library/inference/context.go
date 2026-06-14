@@ -1,4 +1,4 @@
-package inferencecontext
+package inference
 
 import (
 	"net/http"
