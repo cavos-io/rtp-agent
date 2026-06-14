@@ -938,6 +938,33 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "close_unsubscribes_provider_metrics":
+        wrapped = FakeSTT("wrapped")
+        adapter = stream_adapter_module.StreamAdapter(stt=wrapped, vad=FakeVAD())
+        request_ids: list[str] = []
+        adapter.on(
+            "metrics_collected",
+            lambda metrics: request_ids.append(metrics.request_id),
+        )
+        wrapped.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "before"})(),
+        )
+        asyncio.run(adapter.aclose())
+        wrapped.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "after"})(),
+        )
+        adapter.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "local"})(),
+        )
+        return {
+            "contract": "stt-stream-adapter-close-unsubscribes-provider-metrics",
+            "events": [
+                {"name": "close_unsubscribes_provider_metrics", "request_ids": request_ids}
+            ],
+        }
     if action == "provider_error_not_forwarded":
         wrapped = FakeSTT("wrapped")
         adapter = stream_adapter_module.StreamAdapter(stt=wrapped, vad=FakeVAD())

@@ -19,8 +19,10 @@ import (
 type StreamAdapter struct {
 	MetricsEmitter
 	ErrorEmitter
-	stt STT
-	vad vad.VAD
+	mu                  sync.Mutex
+	stt                 STT
+	vad                 vad.VAD
+	metricsUnsubscribes []func()
 }
 
 func NewStreamAdapter(stt STT, vad vad.VAD) *StreamAdapter {
@@ -54,15 +56,33 @@ func (a *StreamAdapter) Prewarm() {
 	Prewarm(a.stt)
 }
 
-func (a *StreamAdapter) OnMetricsCollected(handler STTMetricsHandler) func() {
-	unsubscribes := []func(){a.MetricsEmitter.OnMetricsCollected(handler)}
-	if collector, ok := a.stt.(metricsCollectorSTT); ok {
-		unsubscribes = append(unsubscribes, collector.OnMetricsCollected(handler))
+func (a *StreamAdapter) Close() error {
+	a.mu.Lock()
+	unsubscribes := append([]func(){}, a.metricsUnsubscribes...)
+	a.metricsUnsubscribes = nil
+	a.mu.Unlock()
+
+	for _, unsubscribe := range unsubscribes {
+		unsubscribe()
 	}
+	return nil
+}
+
+func (a *StreamAdapter) OnMetricsCollected(handler STTMetricsHandler) func() {
+	localUnsubscribe := a.MetricsEmitter.OnMetricsCollected(handler)
+	providerUnsubscribes := make([]func(), 0, 1)
+	if collector, ok := a.stt.(metricsCollectorSTT); ok {
+		providerUnsubscribes = append(providerUnsubscribes, collector.OnMetricsCollected(handler))
+	}
+	a.mu.Lock()
+	a.metricsUnsubscribes = append(a.metricsUnsubscribes, providerUnsubscribes...)
+	a.mu.Unlock()
+
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			for _, unsubscribe := range unsubscribes {
+			localUnsubscribe()
+			for _, unsubscribe := range providerUnsubscribes {
 				unsubscribe()
 			}
 		})

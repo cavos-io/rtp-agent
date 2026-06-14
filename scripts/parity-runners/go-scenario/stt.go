@@ -971,6 +971,26 @@ func runSTTStreamAdapter(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "close_unsubscribes_provider_metrics":
+		wrapped := &fakeScenarioSTT{label: "wrapped", capabilities: lkstt.STTCapabilities{OfflineRecognize: true}}
+		adapter := lkstt.NewStreamAdapter(wrapped, nil)
+		requestIDs := make([]string, 0, 2)
+		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		defer unsubscribe()
+		wrapped.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "before"})
+		if err := adapter.Close(); err != nil {
+			return nil, err
+		}
+		wrapped.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "after"})
+		adapter.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "local"})
+		return map[string]any{
+			"contract": "stt-stream-adapter-close-unsubscribes-provider-metrics",
+			"events": []map[string]any{
+				{"name": "close_unsubscribes_provider_metrics", "request_ids": requestIDs},
+			},
+		}, nil
 	case "provider_error_not_forwarded":
 		wrapped := &fakeScenarioSTT{label: "wrapped", capabilities: lkstt.STTCapabilities{OfflineRecognize: true}}
 		adapter := lkstt.NewStreamAdapter(wrapped, nil)
