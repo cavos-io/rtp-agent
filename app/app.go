@@ -1942,6 +1942,8 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return hume.NewHumeLLM(cfg.HumeAPIKey, cfg.LLMModel), nil
 	case providerInworld:
 		return inworld.NewInworldLLM(cfg.InworldAPIKey, cfg.LLMModel), nil
+	case providerLangChain:
+		return langchain.NewLangchainLLM(cfg.LangChainAPIKey, cfg.LLMModel), nil
 	case providerMistralAI:
 		return mistralai.NewMistralLLM(cfg.MistralAPIKey, cfg.LLMModel), nil
 	case providerNvidia:
