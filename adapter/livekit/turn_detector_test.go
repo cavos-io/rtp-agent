@@ -193,6 +193,16 @@ func TestTurnDetectorRemoteInferenceURLMatchesReference(t *testing.T) {
 	}
 }
 
+func TestNewLocalEnglishModelReturnsTokenizerErrorWhenFilesMissing(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	_, err := NewLocalEnglishModel()
+	if err == nil || !strings.Contains(err.Error(), "tokenizer") {
+		t.Fatalf("NewLocalEnglishModel() error = %v, want tokenizer error", err)
+	}
+}
+
 func TestTurnDetectorPluginDownloadFilesDownloadsReferenceFiles(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)

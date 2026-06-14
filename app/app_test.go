@@ -8917,6 +8917,16 @@ func TestDefaultConfigFromEnvConfiguresLiveKitTurnDetector(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvConfiguresLiveKitLocalTurnDetector(t *testing.T) {
+	chdirAppTest(t, t.TempDir())
+	t.Setenv("RTP_AGENT_TURN_DETECTOR_PROVIDER", "livekit")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil || !strings.Contains(err.Error(), "tokenizer") {
+		t.Fatalf("NewApp() error = %v, want missing local tokenizer error", err)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsPhonicRealtimeModel(t *testing.T) {
 	t.Setenv("PHONIC_API_KEY", "test-phonic-key")
 	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "phonic")
@@ -9088,6 +9098,22 @@ type fakeAppAudioTurnDetector struct{}
 
 func (f *fakeAppAudioTurnDetector) PredictEndOfTurnAudio(context.Context, []*model.AudioFrame) (float64, error) {
 	return 0.9, nil
+}
+
+func chdirAppTest(t *testing.T, dir string) {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd error = %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(wd); err != nil {
+			t.Fatalf("restore Chdir error = %v", err)
+		}
+	})
 }
 
 type appRecordingLogger struct{}
