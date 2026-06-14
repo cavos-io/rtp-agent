@@ -2043,6 +2043,8 @@ func configureSTTFallbacks(cfg AppConfig, a *agent.Agent) error {
 
 func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error) {
 	switch normalizeProvider(provider) {
+	case providerAWS:
+		return awsSTTFromConfig(cfg)
 	case providerDeepgram:
 		sttOpts := []deepgram.DeepgramSTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -2826,6 +2828,62 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_STT_FALLBACK_PROVIDERS entry %q", provider)
 	}
+}
+
+func awsSTTFromConfig(cfg AppConfig) (*adapteraws.AWSSTT, error) {
+	sttOpts := []adapteraws.AWSSTTOption{}
+	if cfg.STTSampleRate != nil {
+		sttOpts = append(sttOpts, adapteraws.WithAWSSTTSampleRate(int32(*cfg.STTSampleRate)))
+	}
+	if cfg.STTVocabularyName != "" {
+		sttOpts = append(sttOpts, adapteraws.WithAWSSTTVocabularyName(cfg.STTVocabularyName))
+	}
+	if cfg.STTSessionID != "" {
+		sttOpts = append(sttOpts, adapteraws.WithAWSSTTSessionID(cfg.STTSessionID))
+	}
+	if cfg.STTVocabularyFilterMethod != "" {
+		sttOpts = append(sttOpts, adapteraws.WithAWSSTTVocabularyFilterMethod(awstranscribetypes.VocabularyFilterMethod(cfg.STTVocabularyFilterMethod)))
+	}
+	if cfg.STTVocabularyFilterName != "" {
+		sttOpts = append(sttOpts, adapteraws.WithAWSSTTVocabularyFilterName(cfg.STTVocabularyFilterName))
+	}
+	if cfg.STTSpeakerLabels != nil {
+		sttOpts = append(sttOpts, adapteraws.WithAWSSTTShowSpeakerLabel(*cfg.STTSpeakerLabels))
+	}
+	if cfg.STTEnableChannelIdentification != nil {
+		sttOpts = append(sttOpts, adapteraws.WithAWSSTTEnableChannelIdentification(*cfg.STTEnableChannelIdentification))
+	}
+	if cfg.STTNumberOfChannels != nil {
+		sttOpts = append(sttOpts, adapteraws.WithAWSSTTNumberOfChannels(int32(*cfg.STTNumberOfChannels)))
+	}
+	if cfg.STTEnablePartialStabilization != nil {
+		sttOpts = append(sttOpts, adapteraws.WithAWSSTTEnablePartialResultsStabilization(*cfg.STTEnablePartialStabilization))
+	}
+	if cfg.STTPartialResultsStability != "" {
+		sttOpts = append(sttOpts, adapteraws.WithAWSSTTPartialResultsStability(awstranscribetypes.PartialResultsStability(cfg.STTPartialResultsStability)))
+	}
+	if cfg.STTLanguageModelName != "" {
+		sttOpts = append(sttOpts, adapteraws.WithAWSSTTLanguageModelName(cfg.STTLanguageModelName))
+	}
+	if cfg.STTIdentifyLanguage != nil {
+		sttOpts = append(sttOpts, adapteraws.WithAWSSTTIdentifyLanguage(*cfg.STTIdentifyLanguage))
+	}
+	if cfg.STTIdentifyMultipleLanguages != nil {
+		sttOpts = append(sttOpts, adapteraws.WithAWSSTTIdentifyMultipleLanguages(*cfg.STTIdentifyMultipleLanguages))
+	}
+	if cfg.STTLanguageOptions != "" {
+		sttOpts = append(sttOpts, adapteraws.WithAWSSTTLanguageOptions(cfg.STTLanguageOptions))
+	}
+	if cfg.STTPreferredLanguage != "" {
+		sttOpts = append(sttOpts, adapteraws.WithAWSSTTPreferredLanguage(awstranscribetypes.LanguageCode(cfg.STTPreferredLanguage)))
+	}
+	if cfg.STTVocabularyNames != "" {
+		sttOpts = append(sttOpts, adapteraws.WithAWSSTTVocabularyNames(cfg.STTVocabularyNames))
+	}
+	if cfg.STTVocabularyFilterNames != "" {
+		sttOpts = append(sttOpts, adapteraws.WithAWSSTTVocabularyFilterNames(cfg.STTVocabularyFilterNames))
+	}
+	return adapteraws.NewAWSSTT(context.Background(), cfg.AWSRegion, sttOpts...)
 }
 
 func configureTTSFallbacks(cfg AppConfig, a *agent.Agent) error {
@@ -3818,59 +3876,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 	switch normalizeProvider(cfg.STTProvider) {
 	case "":
 	case providerAWS:
-		sttOpts := []adapteraws.AWSSTTOption{}
-		if cfg.STTSampleRate != nil {
-			sttOpts = append(sttOpts, adapteraws.WithAWSSTTSampleRate(int32(*cfg.STTSampleRate)))
-		}
-		if cfg.STTVocabularyName != "" {
-			sttOpts = append(sttOpts, adapteraws.WithAWSSTTVocabularyName(cfg.STTVocabularyName))
-		}
-		if cfg.STTSessionID != "" {
-			sttOpts = append(sttOpts, adapteraws.WithAWSSTTSessionID(cfg.STTSessionID))
-		}
-		if cfg.STTVocabularyFilterMethod != "" {
-			sttOpts = append(sttOpts, adapteraws.WithAWSSTTVocabularyFilterMethod(awstranscribetypes.VocabularyFilterMethod(cfg.STTVocabularyFilterMethod)))
-		}
-		if cfg.STTVocabularyFilterName != "" {
-			sttOpts = append(sttOpts, adapteraws.WithAWSSTTVocabularyFilterName(cfg.STTVocabularyFilterName))
-		}
-		if cfg.STTSpeakerLabels != nil {
-			sttOpts = append(sttOpts, adapteraws.WithAWSSTTShowSpeakerLabel(*cfg.STTSpeakerLabels))
-		}
-		if cfg.STTEnableChannelIdentification != nil {
-			sttOpts = append(sttOpts, adapteraws.WithAWSSTTEnableChannelIdentification(*cfg.STTEnableChannelIdentification))
-		}
-		if cfg.STTNumberOfChannels != nil {
-			sttOpts = append(sttOpts, adapteraws.WithAWSSTTNumberOfChannels(int32(*cfg.STTNumberOfChannels)))
-		}
-		if cfg.STTEnablePartialStabilization != nil {
-			sttOpts = append(sttOpts, adapteraws.WithAWSSTTEnablePartialResultsStabilization(*cfg.STTEnablePartialStabilization))
-		}
-		if cfg.STTPartialResultsStability != "" {
-			sttOpts = append(sttOpts, adapteraws.WithAWSSTTPartialResultsStability(awstranscribetypes.PartialResultsStability(cfg.STTPartialResultsStability)))
-		}
-		if cfg.STTLanguageModelName != "" {
-			sttOpts = append(sttOpts, adapteraws.WithAWSSTTLanguageModelName(cfg.STTLanguageModelName))
-		}
-		if cfg.STTIdentifyLanguage != nil {
-			sttOpts = append(sttOpts, adapteraws.WithAWSSTTIdentifyLanguage(*cfg.STTIdentifyLanguage))
-		}
-		if cfg.STTIdentifyMultipleLanguages != nil {
-			sttOpts = append(sttOpts, adapteraws.WithAWSSTTIdentifyMultipleLanguages(*cfg.STTIdentifyMultipleLanguages))
-		}
-		if cfg.STTLanguageOptions != "" {
-			sttOpts = append(sttOpts, adapteraws.WithAWSSTTLanguageOptions(cfg.STTLanguageOptions))
-		}
-		if cfg.STTPreferredLanguage != "" {
-			sttOpts = append(sttOpts, adapteraws.WithAWSSTTPreferredLanguage(awstranscribetypes.LanguageCode(cfg.STTPreferredLanguage)))
-		}
-		if cfg.STTVocabularyNames != "" {
-			sttOpts = append(sttOpts, adapteraws.WithAWSSTTVocabularyNames(cfg.STTVocabularyNames))
-		}
-		if cfg.STTVocabularyFilterNames != "" {
-			sttOpts = append(sttOpts, adapteraws.WithAWSSTTVocabularyFilterNames(cfg.STTVocabularyFilterNames))
-		}
-		provider, err := adapteraws.NewAWSSTT(context.Background(), cfg.AWSRegion, sttOpts...)
+		provider, err := awsSTTFromConfig(cfg)
 		if err != nil {
 			return nil, err
 		}
