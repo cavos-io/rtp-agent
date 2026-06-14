@@ -24,6 +24,11 @@ def load_reference_vad():
         def on(self, event: str, callback: Any) -> None:  # noqa: F405
             self._listeners.setdefault(event, []).append(callback)
 
+        def off(self, event: str, callback: Any) -> None:  # noqa: F405
+            listeners = self._listeners.get(event, [])
+            if callback in listeners:
+                listeners.remove(callback)
+
         def emit(self, event: str, *args: Any, **kwargs: Any) -> None:  # noqa: F405
             for listener in list(self._listeners.get(event, [])):
                 try:
@@ -274,6 +279,35 @@ def vad_value_objects(input_data: Any) -> dict[str, Any]:  # noqa: F405
                     "name": "metrics_panic_isolated",
                     "received_count": received_count,
                     "escaped_error": escaped_error,
+                }
+            ],
+        }
+    if action == "metrics_unsubscribe":
+        class ScenarioVAD(module.VAD):
+            def stream(self) -> Any:
+                return None
+
+        detector = ScenarioVAD(
+            capabilities=module.VADCapabilities(update_interval=1),
+        )
+        received_count = 0
+
+        def handler(metrics: Any) -> None:
+            nonlocal received_count
+            received_count += 1
+
+        detector.on("metrics_collected", handler)
+        detector.off("metrics_collected", handler)
+        detector.emit(
+            "metrics_collected",
+            type("Metrics", (), {"label": "vad"})(),
+        )
+        return {
+            "contract": "vad-metrics-unsubscribe",
+            "events": [
+                {
+                    "name": "metrics_unsubscribe",
+                    "received_count": received_count,
                 }
             ],
         }
