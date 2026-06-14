@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,14 +42,14 @@ func NewSDKChannelClient() (ChannelClient, error) {
 }
 
 func sdkRuntimeDir() string {
-	if dir := os.Getenv("AGORA_SDK_DATA_DIR"); dir != "" {
+	if dir := strings.TrimSpace(os.Getenv("AGORA_SDK_DATA_DIR")); dir != "" {
 		return dir
 	}
 	return filepath.Join(os.TempDir(), "rtp-agent-agora")
 }
 
 func sdkJoinTimeout() time.Duration {
-	value := os.Getenv("AGORA_JOIN_TIMEOUT")
+	value := strings.TrimSpace(os.Getenv("AGORA_JOIN_TIMEOUT"))
 	if value == "" {
 		return defaultSDKJoinTimeout
 	}

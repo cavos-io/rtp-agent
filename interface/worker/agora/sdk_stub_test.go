@@ -132,6 +132,22 @@ func TestSDKClientImplementationConfiguresRuntimeDirectories(t *testing.T) {
 	}
 }
 
+func TestSDKClientImplementationTrimsRuntimeEnv(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		`strings.TrimSpace(os.Getenv("AGORA_SDK_DATA_DIR"))`,
+		`strings.TrimSpace(os.Getenv("AGORA_JOIN_TIMEOUT"))`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}
+
 func TestSDKClientImplementationWaitsForConnectedEvent(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {
