@@ -5927,6 +5927,93 @@ func TestSLNGSTTFallbackPassesAudioAndVADOptions(t *testing.T) {
 	}
 }
 
+func TestSLNGSTTFallbackBuffersAudioByReferenceWindow(t *testing.T) {
+	binaryLengths := make(chan int, 2)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read init payload: %v", err)
+			return
+		}
+		for {
+			msgType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if msgType == websocket.BinaryMessage {
+				binaryLengths <- len(payload)
+			}
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	sampleRate := 8000
+	bufferSizeSeconds := 0.02
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		SLNGAPIKey:           "test-slng-key",
+		STTBaseURL:           endpoint,
+		STTSampleRate:        &sampleRate,
+		STTBufferSizeSeconds: &bufferSizeSeconds,
+	}, providerSLNG)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	halfWindow := make([]byte, 160)
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              halfWindow,
+		SampleRate:        uint32(sampleRate),
+		NumChannels:       1,
+		SamplesPerChannel: 80,
+	}); err != nil {
+		t.Fatalf("PushFrame(first half) error = %v", err)
+	}
+	select {
+	case got := <-binaryLengths:
+		t.Fatalf("sent %d bytes before reference buffer window was full", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              halfWindow,
+		SampleRate:        uint32(sampleRate),
+		NumChannels:       1,
+		SamplesPerChannel: 80,
+	}); err != nil {
+		t.Fatalf("PushFrame(second half) error = %v", err)
+	}
+	select {
+	case got := <-binaryLengths:
+		if want := 320; got != want {
+			t.Fatalf("buffered binary length = %d, want %d", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SLNG buffered audio")
+	}
+}
+
 func firstQueryValue(values map[string][]string, key string) string {
 	if len(values[key]) == 0 {
 		return ""

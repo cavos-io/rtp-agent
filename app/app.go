@@ -2714,6 +2714,9 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		if cfg.STTSampleRate != nil {
 			sttOpts = append(sttOpts, slng.WithSTTSampleRate(*cfg.STTSampleRate))
 		}
+		if cfg.STTBufferSizeSeconds != nil {
+			sttOpts = append(sttOpts, slng.WithSTTBufferSizeSeconds(*cfg.STTBufferSizeSeconds))
+		}
 		if cfg.STTVADThreshold != nil {
 			sttOpts = append(sttOpts, slng.WithSTTVADThreshold(*cfg.STTVADThreshold))
 		}
@@ -4147,6 +4150,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.STTSampleRate != nil {
 			sttOpts = append(sttOpts, slng.WithSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTBufferSizeSeconds != nil {
+			sttOpts = append(sttOpts, slng.WithSTTBufferSizeSeconds(*cfg.STTBufferSizeSeconds))
 		}
 		if cfg.STTVADThreshold != nil {
 			sttOpts = append(sttOpts, slng.WithSTTVADThreshold(*cfg.STTVADThreshold))

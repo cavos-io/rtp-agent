@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -116,6 +117,14 @@ func WithSTTSampleRate(sampleRate int) STTOption {
 	return func(s *STT) {
 		if sampleRate > 0 {
 			s.sampleRate = sampleRate
+		}
+	}
+}
+
+func WithSTTBufferSizeSeconds(seconds float64) STTOption {
+	return func(s *STT) {
+		if seconds > 0 {
+			s.bufferSizeSeconds = seconds
 		}
 	}
 }
@@ -255,7 +264,14 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		conn.Close()
 		return nil, err
 	}
-	return &sttStream{conn: conn, language: s.resolveLanguage(language), partials: s.enablePartialTranscript}, nil
+	return &sttStream{
+		conn:              conn,
+		language:          s.resolveLanguage(language),
+		partials:          s.enablePartialTranscript,
+		sampleRate:        s.sampleRate,
+		bufferSizeSeconds: s.bufferSizeSeconds,
+		encoding:          s.encoding,
+	}, nil
 }
 
 func (s *STT) resolveLanguage(language string) string {
@@ -855,19 +871,62 @@ func normalizeSLNGResults(message map[string]any) map[string]any {
 }
 
 type sttStream struct {
-	conn     *websocket.Conn
-	language string
-	partials bool
+	conn              *websocket.Conn
+	language          string
+	partials          bool
+	sampleRate        int
+	bufferSizeSeconds float64
+	encoding          string
+	audioBuffer       []byte
 }
 
 func (s *sttStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	return s.conn.WriteMessage(websocket.BinaryMessage, frame.Data)
+	s.audioBuffer = append(s.audioBuffer, frame.Data...)
+	chunkSize := s.audioChunkBytes()
+	for len(s.audioBuffer) >= chunkSize {
+		chunk := append([]byte(nil), s.audioBuffer[:chunkSize]...)
+		if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
+			return err
+		}
+		s.audioBuffer = s.audioBuffer[chunkSize:]
+	}
+	return nil
 }
 
-func (s *sttStream) Flush() error { return nil }
+func (s *sttStream) Flush() error {
+	if len(s.audioBuffer) == 0 {
+		return nil
+	}
+	chunk := append([]byte(nil), s.audioBuffer...)
+	s.audioBuffer = nil
+	return s.conn.WriteMessage(websocket.BinaryMessage, chunk)
+}
+
+func (s *sttStream) audioChunkBytes() int {
+	sampleRate := s.sampleRate
+	if sampleRate <= 0 {
+		sampleRate = defaultSLNGSTTSampleRate
+	}
+	bufferSizeSeconds := s.bufferSizeSeconds
+	if bufferSizeSeconds <= 0 {
+		bufferSizeSeconds = defaultSLNGBufferSeconds
+	}
+	samplesPerBuffer := int(math.Round(float64(sampleRate) * bufferSizeSeconds))
+	if samplesPerBuffer < 1 {
+		samplesPerBuffer = 1
+	}
+	return samplesPerBuffer * slngSTTBytesPerSample(s.encoding)
+}
+
+func slngSTTBytesPerSample(encoding string) int {
+	if encoding == "pcm_mulaw" {
+		return 1
+	}
+	return 2
+}
 
 func (s *sttStream) Close() error {
 	if s.conn == nil {
