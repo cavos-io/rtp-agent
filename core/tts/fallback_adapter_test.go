@@ -320,6 +320,38 @@ func TestFallbackAdapterCanUnsubscribeMetricsCollected(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterCloseUnsubscribesProviderMetrics(t *testing.T) {
+	primary := &metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1}
+	adapter := NewFallbackAdapter([]TTS{primary})
+	metricsCh := make(chan string, 2)
+
+	unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+		metricsCh <- metrics.RequestID
+	})
+	defer unsubscribe()
+
+	primary.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "before"})
+	if got := receiveTTSMetricRequestID(t, metricsCh); got != "before" {
+		t.Fatalf("metric before Close = %q, want before", got)
+	}
+
+	if err := adapter.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	primary.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "after"})
+	adapter.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "local"})
+
+	if got := receiveTTSMetricRequestID(t, metricsCh); got != "local" {
+		t.Fatalf("metric after Close = %q, want adapter-local metric only", got)
+	}
+	select {
+	case requestID := <-metricsCh:
+		t.Fatalf("received provider metric after Close(): %q", requestID)
+	default:
+	}
+}
+
 func TestFallbackAdapterEmitsChunkedMetricsAfterFinalAudio(t *testing.T) {
 	adapter := NewFallbackAdapter([]TTS{
 		&metadataTTS{

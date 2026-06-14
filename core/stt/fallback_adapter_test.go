@@ -128,6 +128,29 @@ func TestFallbackAdapterForwardsProviderMetrics(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterCloseUnsubscribesProviderMetrics(t *testing.T) {
+	primary := &metadataSTT{label: "primary", capabilities: STTCapabilities{Streaming: true}}
+	adapter := NewFallbackAdapter([]STT{primary})
+	metricsCh := make(chan string, 1)
+
+	unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+		metricsCh <- metrics.RequestID
+	})
+	defer unsubscribe()
+
+	if err := adapter.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	primary.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "late"})
+
+	select {
+	case requestID := <-metricsCh:
+		t.Fatalf("received provider metric after Close(): %q", requestID)
+	default:
+	}
+}
+
 func TestFallbackAdapterDoesNotForwardProviderErrors(t *testing.T) {
 	primary := &metadataSTT{label: "primary", capabilities: STTCapabilities{Streaming: true}}
 	fallback := &metadataSTT{label: "fallback", capabilities: STTCapabilities{Streaming: true}}

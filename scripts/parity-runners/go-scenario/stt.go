@@ -615,6 +615,24 @@ func runSTTFallback(input json.RawMessage) (any, error) {
 				{"name": "forward_metrics", "request_ids": requestIDs},
 			},
 		}, nil
+	case "close_unsubscribes_provider_metrics":
+		primary := &fakeScenarioSTT{label: "primary", capabilities: lkstt.STTCapabilities{Streaming: true}}
+		adapter := lkstt.NewFallbackAdapter([]lkstt.STT{primary})
+		requestIDs := make([]string, 0, 1)
+		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		defer unsubscribe()
+		if err := adapter.Close(); err != nil {
+			return nil, err
+		}
+		primary.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "late"})
+		return map[string]any{
+			"contract": "stt-fallback-close-unsubscribes-provider-metrics",
+			"events": []map[string]any{
+				{"name": "close_unsubscribes_provider_metrics", "request_ids": requestIDs},
+			},
+		}, nil
 	case "availability_panic_isolated":
 		primary := &fakeScenarioSTT{label: "primary", capabilities: lkstt.STTCapabilities{Streaming: true}, recognizeErr: errors.New("primary failed")}
 		fallback := &fakeScenarioSTT{label: "fallback", capabilities: lkstt.STTCapabilities{Streaming: true}}
@@ -891,6 +909,26 @@ func runSTTStreamAdapter(input json.RawMessage) (any, error) {
 					"request_ids": requestIDs,
 					"count":       len(requestIDs),
 				},
+			},
+		}, nil
+	case "close_unsubscribes_provider_metrics":
+		wrapped := &fakeScenarioSTT{label: "wrapped", capabilities: lkstt.STTCapabilities{OfflineRecognize: true}}
+		adapter := lkstt.NewStreamAdapter(wrapped, nil)
+		requestIDs := make([]string, 0, 2)
+		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		defer unsubscribe()
+		wrapped.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "before"})
+		if err := adapter.Close(); err != nil {
+			return nil, err
+		}
+		wrapped.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "after"})
+		adapter.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "local"})
+		return map[string]any{
+			"contract": "stt-stream-adapter-close-unsubscribes-provider-metrics",
+			"events": []map[string]any{
+				{"name": "close_unsubscribes_provider_metrics", "request_ids": requestIDs},
 			},
 		}, nil
 	case "provider_error_not_forwarded":

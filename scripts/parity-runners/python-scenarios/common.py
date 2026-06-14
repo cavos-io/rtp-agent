@@ -198,7 +198,7 @@ def load_reference_stt():
 
         def off(self, event: str, callback: Any) -> None:
             listeners = self._listeners.get(event, [])
-            self._listeners[event] = [listener for listener in listeners if listener is not callback]
+            self._listeners[event] = [listener for listener in listeners if listener != callback]
 
         def emit(self, event: str, *args: Any, **kwargs: Any) -> None:
             for listener in list(self._listeners.get(event, [])):
@@ -393,7 +393,7 @@ def load_reference_tts():
 
         def off(self, event: str, callback: Any) -> None:
             listeners = self._listeners.get(event, [])
-            self._listeners[event] = [listener for listener in listeners if listener is not callback]
+            self._listeners[event] = [listener for listener in listeners if listener != callback]
 
         def emit(self, event: str, *args: Any, **kwargs: Any) -> None:
             for listener in list(self._listeners.get(event, [])):

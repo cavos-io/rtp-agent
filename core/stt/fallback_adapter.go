@@ -29,6 +29,7 @@ type FallbackAdapter struct {
 	recoveryCancels      []context.CancelFunc
 	recoveringStream     []bool
 	recoveryStreams      []RecognizeStream
+	metricsUnsubscribes  []func()
 	availabilityHandlers []availabilityHandlerSubscription
 	nextAvailabilityID   uint64
 }
@@ -201,6 +202,8 @@ func (f *FallbackAdapter) Close() error {
 	for i := range f.recoveryStreams {
 		f.recoveryStreams[i] = nil
 	}
+	metricsUnsubscribes := append([]func(){}, f.metricsUnsubscribes...)
+	f.metricsUnsubscribes = nil
 	f.mu.Unlock()
 
 	for _, cancel := range cancels {
@@ -208,21 +211,30 @@ func (f *FallbackAdapter) Close() error {
 			cancel()
 		}
 	}
+	for _, unsubscribe := range metricsUnsubscribes {
+		unsubscribe()
+	}
 	closeStreams(streams)
 	return nil
 }
 
 func (f *FallbackAdapter) OnMetricsCollected(handler STTMetricsHandler) func() {
-	unsubscribes := []func(){f.MetricsEmitter.OnMetricsCollected(handler)}
+	localUnsubscribe := f.MetricsEmitter.OnMetricsCollected(handler)
+	providerUnsubscribes := make([]func(), 0, len(f.stts))
 	for _, stt := range f.stts {
 		if collector, ok := stt.(metricsCollectorSTT); ok {
-			unsubscribes = append(unsubscribes, collector.OnMetricsCollected(handler))
+			providerUnsubscribes = append(providerUnsubscribes, collector.OnMetricsCollected(handler))
 		}
 	}
+	f.mu.Lock()
+	f.metricsUnsubscribes = append(f.metricsUnsubscribes, providerUnsubscribes...)
+	f.mu.Unlock()
+
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			for _, unsubscribe := range unsubscribes {
+			localUnsubscribe()
+			for _, unsubscribe := range providerUnsubscribes {
 				unsubscribe()
 			}
 		})

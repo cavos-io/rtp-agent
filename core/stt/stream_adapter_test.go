@@ -102,6 +102,48 @@ func TestStreamAdapterForwardsWrappedSTTMetrics(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterCloseUnsubscribesWrappedSTTMetrics(t *testing.T) {
+	wrapped := &fakeStreamAdapterSTT{}
+	adapter := NewStreamAdapter(wrapped, &fakeStreamAdapterVAD{})
+	metricsCh := make(chan string, 2)
+
+	unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+		metricsCh <- metrics.RequestID
+	})
+	defer unsubscribe()
+
+	wrapped.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "before"})
+	select {
+	case requestID := <-metricsCh:
+		if requestID != "before" {
+			t.Fatalf("metrics RequestID before Close = %q, want before", requestID)
+		}
+	default:
+		t.Fatal("wrapped metrics before Close were not forwarded")
+	}
+
+	if err := adapter.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	wrapped.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "after"})
+	adapter.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "local"})
+
+	select {
+	case requestID := <-metricsCh:
+		if requestID != "local" {
+			t.Fatalf("metrics RequestID after Close = %q, want adapter-local metric only", requestID)
+		}
+	default:
+		t.Fatal("adapter-local metrics after Close were not forwarded")
+	}
+	select {
+	case requestID := <-metricsCh:
+		t.Fatalf("received wrapped metric after Close(): %q", requestID)
+	default:
+	}
+}
+
 func TestStreamAdapterDoesNotForwardWrappedSTTErrors(t *testing.T) {
 	wrapped := &fakeStreamAdapterSTT{}
 	adapter := NewStreamAdapter(wrapped, &fakeStreamAdapterVAD{})

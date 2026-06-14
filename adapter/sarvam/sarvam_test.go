@@ -353,6 +353,39 @@ func TestSarvamSTTStreamEventsMapReferenceMessages(t *testing.T) {
 	}
 }
 
+func TestSarvamSTTStreamSequencerAddsReferenceEndOfSpeechMetadata(t *testing.T) {
+	sequencer := newSarvamSTTStreamEventSequencer("en-IN")
+
+	events, err := sequencer.EventsFromStreamMessage([]byte(`{"type":"data","data":{"transcript":"hello","language_code":"hi-IN","request_id":"req-1","speech_start":0.1}}`), 0.25)
+	if err != nil {
+		t.Fatalf("data event: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("data events = %d, want usage and final transcript", len(events))
+	}
+	if events[1].Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("data events = %+v, want final transcript", events)
+	}
+
+	events, err = sequencer.EventsFromStreamMessage([]byte(`{"type":"event","data":{"signal_type":"END_SPEECH","request_id":"req-1"}}`), 0.25)
+	if err != nil {
+		t.Fatalf("end event: %v", err)
+	}
+	if len(events) != 1 || events[0].Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("end events = %+v, want end of speech", events)
+	}
+	if events[0].RequestID != "req-1" {
+		t.Fatalf("end request id = %q, want server request id", events[0].RequestID)
+	}
+	if len(events[0].Alternatives) != 1 {
+		t.Fatalf("end alternatives = %+v, want metadata alternative", events[0].Alternatives)
+	}
+	alt := events[0].Alternatives[0]
+	if alt.Text != "" || alt.Language != "en-IN" || alt.EndTime != 0.25 {
+		t.Fatalf("end alternative = %+v, want reference metadata-only speech end", alt)
+	}
+}
+
 func TestSarvamSTTImplementsStreamingInterface(t *testing.T) {
 	var _ stt.STT = NewSarvamSTT("test-key")
 }

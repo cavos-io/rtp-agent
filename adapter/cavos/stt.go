@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	defaultBaseURL     = "http://localhost:8080/v1"
+	defaultSTTBaseURL  = "http://steno.dev.cavos.internal/v1"
 	defaultSTTModel    = "whisper-1"
 	defaultSTTLanguage = "id"
 )
@@ -38,7 +38,7 @@ type httpDoer interface {
 func NewSTT(opts ...STTOption) *STT {
 	provider := &STT{
 		httpClient: http.DefaultClient,
-		baseURL:    defaultBaseURL,
+		baseURL:    defaultSTTBaseURL,
 		model:      defaultSTTModel,
 		language:   defaultSTTLanguage,
 	}

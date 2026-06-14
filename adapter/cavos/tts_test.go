@@ -13,8 +13,8 @@ import (
 func TestCavosTTSDefaultsMatchCacatuaEndpoint(t *testing.T) {
 	provider := NewTTS()
 
-	if provider.baseURL != "http://localhost:8080/v1" {
-		t.Fatalf("baseURL = %q, want Cacatua local v1 endpoint", provider.baseURL)
+	if provider.baseURL != "http://cacatua.dev.cavos.internal/v1" {
+		t.Fatalf("baseURL = %q, want Cacatua dev internal v1 endpoint", provider.baseURL)
 	}
 	if provider.model != "supertonic-3" {
 		t.Fatalf("model = %q, want supertonic-3", provider.model)

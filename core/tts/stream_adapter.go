@@ -18,7 +18,9 @@ import (
 type StreamAdapter struct {
 	MetricsEmitter
 	ErrorEmitter
-	tts TTS
+	mu                  sync.Mutex
+	tts                 TTS
+	metricsUnsubscribes []func()
 }
 
 func NewStreamAdapter(t TTS) *StreamAdapter {
@@ -44,18 +46,32 @@ func (a *StreamAdapter) Prewarm() {
 }
 
 func (a *StreamAdapter) Close() error {
+	a.mu.Lock()
+	unsubscribes := append([]func(){}, a.metricsUnsubscribes...)
+	a.metricsUnsubscribes = nil
+	a.mu.Unlock()
+
+	for _, unsubscribe := range unsubscribes {
+		unsubscribe()
+	}
 	return nil
 }
 
 func (a *StreamAdapter) OnMetricsCollected(handler TTSMetricsHandler) func() {
-	unsubscribes := []func(){a.MetricsEmitter.OnMetricsCollected(handler)}
+	localUnsubscribe := a.MetricsEmitter.OnMetricsCollected(handler)
+	providerUnsubscribes := make([]func(), 0, 1)
 	if collector, ok := a.tts.(metricsCollectorTTS); ok {
-		unsubscribes = append(unsubscribes, collector.OnMetricsCollected(handler))
+		providerUnsubscribes = append(providerUnsubscribes, collector.OnMetricsCollected(handler))
 	}
+	a.mu.Lock()
+	a.metricsUnsubscribes = append(a.metricsUnsubscribes, providerUnsubscribes...)
+	a.mu.Unlock()
+
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			for _, unsubscribe := range unsubscribes {
+			localUnsubscribe()
+			for _, unsubscribe := range providerUnsubscribes {
 				unsubscribe()
 			}
 		})

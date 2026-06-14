@@ -124,7 +124,7 @@ func TestStreamAdapterForwardsMetricsCollected(t *testing.T) {
 	}
 }
 
-func TestStreamAdapterClosePreservesProviderMetricsForwarding(t *testing.T) {
+func TestStreamAdapterCloseUnsubscribesProviderMetrics(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{}
 	adapter := NewStreamAdapter(provider)
 	metricsCh := make(chan string, 3)
@@ -135,6 +135,15 @@ func TestStreamAdapterClosePreservesProviderMetricsForwarding(t *testing.T) {
 	defer unsubscribe()
 
 	provider.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "before"})
+	select {
+	case requestID := <-metricsCh:
+		if requestID != "before" {
+			t.Fatalf("metrics RequestID before Close = %q, want before", requestID)
+		}
+	default:
+		t.Fatal("provider metrics before Close were not forwarded")
+	}
+
 	if err := adapter.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
@@ -147,8 +156,8 @@ func TestStreamAdapterClosePreservesProviderMetricsForwarding(t *testing.T) {
 		case requestID := <-metricsCh:
 			got = append(got, requestID)
 		default:
-			if !reflect.DeepEqual(got, []string{"before", "after", "local"}) {
-				t.Fatalf("metrics request IDs = %#v, want provider forwarding before and after close plus local adapter event", got)
+			if !reflect.DeepEqual(got, []string{"local"}) {
+				t.Fatalf("metrics request IDs = %#v, want provider forwarding before close plus local adapter event", got)
 			}
 			return
 		}
