@@ -995,6 +995,26 @@ func TestDefaultConfigFromEnvSelectsNvidiaTTSWithReferenceOptions(t *testing.T) 
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsNvidiaTTSLocalRivaWithoutAPIKey(t *testing.T) {
+	t.Setenv("NVIDIA_API_KEY", "")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "nvidia")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "localhost:50051")
+	t.Setenv("RTP_AGENT_TTS_MODEL_OPTIONS", "use_ssl=false")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	nvidiaProvider, ok := app.Session.TTS.(*nvidia.NvidiaTTS)
+	if !ok {
+		t.Fatalf("TTS provider type = %T, want *nvidia.NvidiaTTS", app.Session.TTS)
+	}
+	useSSL := reflect.ValueOf(nvidiaProvider).Elem().FieldByName("useSSL").Bool()
+	if useSSL {
+		t.Fatal("useSSL = true, want false for local Riva")
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsUltravoxTTS(t *testing.T) {
 	t.Setenv("ULTRAVOX_API_KEY", "test-ultravox-key")
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "ultravox")
@@ -8411,6 +8431,30 @@ func TestNvidiaTTSFallbackPassesReferenceLanguage(t *testing.T) {
 	}
 	if got, want := state.FieldByName("languageCode").String(), "id-ID"; got != want {
 		t.Fatalf("languageCode = %q, want %q", got, want)
+	}
+}
+
+func TestNvidiaTTSFallbackAllowsLocalRivaWithoutAPIKey(t *testing.T) {
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		TTSBaseURL: "localhost:50051",
+		TTSModelOptions: map[string]any{
+			"use_ssl": false,
+		},
+	}, providerNvidia)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	nvidiaProvider, ok := provider.(*nvidia.NvidiaTTS)
+	if !ok {
+		t.Fatalf("provider type = %T, want *nvidia.NvidiaTTS", provider)
+	}
+	state := reflect.ValueOf(nvidiaProvider).Elem()
+	if got, want := state.FieldByName("server").String(), "localhost:50051"; got != want {
+		t.Fatalf("server = %q, want %q", got, want)
+	}
+	if state.FieldByName("useSSL").Bool() {
+		t.Fatal("useSSL = true, want false for local Riva")
 	}
 }
 

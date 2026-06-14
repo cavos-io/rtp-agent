@@ -3347,6 +3347,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSLanguage != "" {
 			ttsOpts = append(ttsOpts, nvidia.WithNvidiaTTSLanguageCode(cfg.TTSLanguage))
 		}
+		if useSSL := modelOptionBool(cfg.TTSModelOptions, "use_ssl"); useSSL != nil {
+			ttsOpts = append(ttsOpts, nvidia.WithNvidiaTTSUseSSL(*useSSL))
+		}
 		return nvidia.NewNvidiaTTS(cfg.NvidiaAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerMistralAI:
 		ttsOpts := []mistralai.MistralAITTSOption{}
@@ -5181,6 +5184,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.TTSLanguage != "" {
 			ttsOpts = append(ttsOpts, nvidia.WithNvidiaTTSLanguageCode(cfg.TTSLanguage))
+		}
+		if useSSL := modelOptionBool(cfg.TTSModelOptions, "use_ssl"); useSSL != nil {
+			ttsOpts = append(ttsOpts, nvidia.WithNvidiaTTSUseSSL(*useSSL))
 		}
 		provider, err := nvidia.NewNvidiaTTS(cfg.NvidiaAPIKey, cfg.TTSVoice, ttsOpts...)
 		if err != nil {
