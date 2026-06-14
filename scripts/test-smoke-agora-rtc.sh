@@ -16,6 +16,29 @@ cat > "$WORKDIR/scripts/build-agora-sdk.sh" <<'SH'
 set -euo pipefail
 
 binary="${OUT:-.tmp/rtp-agent-agora}"
+for var_name in GOMODCACHE GOCACHE GOTMPDIR; do
+  var_value="${!var_name:-}"
+  if [ -z "$var_value" ]; then
+    echo "$var_name is required" >&2
+    exit 1
+  fi
+  if [ ! -d "$var_value" ]; then
+    echo "$var_name directory does not exist: $var_value" >&2
+    exit 1
+  fi
+done
+if [ "$GOMODCACHE" != "$PWD/.tmp/gomodcache" ]; then
+  echo "GOMODCACHE = $GOMODCACHE, want $PWD/.tmp/gomodcache" >&2
+  exit 1
+fi
+if [ "$GOCACHE" != "$PWD/.tmp/gocache" ]; then
+  echo "GOCACHE = $GOCACHE, want $PWD/.tmp/gocache" >&2
+  exit 1
+fi
+if [ "$GOTMPDIR" != "$PWD/.tmp/gotmp" ]; then
+  echo "GOTMPDIR = $GOTMPDIR, want $PWD/.tmp/gotmp" >&2
+  exit 1
+fi
 mkdir -p "$(dirname "$binary")"
 cat > "$binary" <<'BIN'
 #!/usr/bin/env bash
@@ -37,7 +60,8 @@ chmod +x "$WORKDIR/scripts/build-agora-sdk.sh"
 
 run_smoke() {
   cd "$WORKDIR"
-  AGORA_GO_SDK_DIR="$WORKDIR/sdk" \
+  env -u GOMODCACHE -u GOCACHE -u GOTMPDIR \
+    AGORA_GO_SDK_DIR="$WORKDIR/sdk" \
     AGORA_APP_ID="app" \
     AGORA_CHANNEL="support" \
     AGORA_SMOKE_TIMEOUT=5 \

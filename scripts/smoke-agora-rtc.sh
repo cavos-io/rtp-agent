@@ -6,6 +6,9 @@ log_file="${AGORA_SMOKE_LOG:-.tmp/agora-smoke.log}"
 binary="${OUT:-.tmp/rtp-agent-agora}"
 sdk_dir="${AGORA_GO_SDK_DIR:-}"
 runtime_dir="${AGORA_SDK_DATA_DIR:-.tmp/agora-sdk-runtime}"
+gomodcache="${GOMODCACHE:-.tmp/gomodcache}"
+gocache="${GOCACHE:-.tmp/gocache}"
+gotmpdir="${GOTMPDIR:-.tmp/gotmp}"
 
 if [ -z "$sdk_dir" ]; then
   echo "AGORA_GO_SDK_DIR is required." >&2
@@ -19,6 +22,11 @@ if [ -z "${AGORA_CHANNEL:-}" ]; then
   echo "AGORA_CHANNEL is required." >&2
   exit 1
 fi
+
+mkdir -p "$gomodcache" "$gocache" "$gotmpdir"
+export GOMODCACHE="$(cd "$gomodcache" && pwd)"
+export GOCACHE="$(cd "$gocache" && pwd)"
+export GOTMPDIR="$(cd "$gotmpdir" && pwd)"
 
 OUT="$binary" AGORA_GO_SDK_DIR="$sdk_dir" scripts/build-agora-sdk.sh >/dev/null
 
