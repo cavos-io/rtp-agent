@@ -1313,6 +1313,49 @@ func runSTTStreamAdapter(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "first_alternative":
+		recognizeCalls := &atomic.Int32{}
+		recognizeFrameCount := &atomic.Int32{}
+		adapter := lkstt.NewStreamAdapter(fakeScenarioSTT{
+			label:               "wrapped",
+			capabilities:        lkstt.STTCapabilities{OfflineRecognize: true},
+			recognizeCalls:      recognizeCalls,
+			recognizeFrameCount: recognizeFrameCount,
+			recognizeTexts:      []string{"first", "second"},
+		}, fakeScenarioVAD{events: []*lkvad.VADEvent{{
+			Type:   lkvad.VADEventEndOfSpeech,
+			Frames: []*audiomodel.AudioFrame{{Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}},
+		}}})
+		stream, err := adapter.Stream(context.Background(), "en")
+		if err != nil {
+			return nil, err
+		}
+		defer stream.Close()
+		first, err := stream.Next()
+		if err != nil {
+			return nil, err
+		}
+		second, err := stream.Next()
+		if err != nil {
+			return nil, err
+		}
+		finalText := ""
+		if len(second.Alternatives) > 0 {
+			finalText = second.Alternatives[0].Text
+		}
+		return map[string]any{
+			"contract": "stt-stream-adapter-first-alternative",
+			"events": []map[string]any{
+				{
+					"name":                    "first_alternative",
+					"event_types":             []string{string(first.Type), string(second.Type)},
+					"final_text":              finalText,
+					"final_alternative_count": len(second.Alternatives),
+					"recognize_calls":         recognizeCalls.Load(),
+					"recognize_frame_counts":  []int32{recognizeFrameCount.Load()},
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported STT stream adapter action %q", payload.Action)
 	}
@@ -1330,6 +1373,7 @@ type fakeScenarioSTT struct {
 	recognizeCalls      *atomic.Int32
 	recognizeFrameCount *atomic.Int32
 	recognizeText       string
+	recognizeTexts      []string
 }
 
 func sttFallbackErrorClass(ok bool) string {
@@ -1377,8 +1421,12 @@ func (s fakeScenarioSTT) Recognize(_ context.Context, frames []*audiomodel.Audio
 		return nil, s.recognizeErr
 	}
 	event := &lkstt.SpeechEvent{Type: lkstt.SpeechEventFinalTranscript}
+	texts := s.recognizeTexts
 	if s.recognizeText != "" {
-		event.Alternatives = []lkstt.SpeechData{{Text: s.recognizeText}}
+		texts = []string{s.recognizeText}
+	}
+	for _, text := range texts {
+		event.Alternatives = append(event.Alternatives, lkstt.SpeechData{Text: text})
 	}
 	return event, nil
 }
