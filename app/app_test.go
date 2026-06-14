@@ -2179,6 +2179,29 @@ func TestDefaultConfigFromEnvSelectsSonioxSpeechProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsSonioxSTTWithReferenceLanguageHintFallback(t *testing.T) {
+	t.Setenv("SONIOX_API_KEY", "test-soniox-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "soniox")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "id")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	sonioxProvider, ok := app.Session.STT.(*soniox.SonioxSTT)
+	if !ok {
+		t.Fatalf("STT provider type = %T, want *soniox.SonioxSTT", app.Session.STT)
+	}
+	languageHints := reflect.ValueOf(sonioxProvider).Elem().FieldByName("languageHints")
+	got := make([]string, 0, languageHints.Len())
+	for i := 0; i < languageHints.Len(); i++ {
+		got = append(got, languageHints.Index(i).String())
+	}
+	if want := []string{"id"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("languageHints = %#v, want %#v", got, want)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsSpeechifyTTS(t *testing.T) {
 	t.Setenv("SPEECHIFY_API_KEY", "test-speechify-key")
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "speechify")
