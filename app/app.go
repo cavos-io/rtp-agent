@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -2720,6 +2721,9 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		if cfg.STTVADThreshold != nil {
 			sttOpts = append(sttOpts, slng.WithSTTVADThreshold(*cfg.STTVADThreshold))
 		}
+		if cfg.STTVADSilenceThresholdSeconds != nil {
+			sttOpts = append(sttOpts, slng.WithSTTVADMinSilenceDurationMS(int(math.Round(*cfg.STTVADSilenceThresholdSeconds*1000))))
+		}
 		if cfg.STTDiarization != nil {
 			minSpeakers := 0
 			if cfg.STTMinSpeakers != nil {
@@ -4156,6 +4160,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.STTVADThreshold != nil {
 			sttOpts = append(sttOpts, slng.WithSTTVADThreshold(*cfg.STTVADThreshold))
+		}
+		if cfg.STTVADSilenceThresholdSeconds != nil {
+			sttOpts = append(sttOpts, slng.WithSTTVADMinSilenceDurationMS(int(math.Round(*cfg.STTVADSilenceThresholdSeconds*1000))))
 		}
 		if cfg.STTDiarization != nil {
 			minSpeakers := 0

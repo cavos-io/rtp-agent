@@ -135,6 +135,14 @@ func WithSTTVADThreshold(threshold float64) STTOption {
 	}
 }
 
+func WithSTTVADMinSilenceDurationMS(milliseconds int) STTOption {
+	return func(s *STT) {
+		if milliseconds > 0 {
+			s.vadMinSilenceDurationMS = milliseconds
+		}
+	}
+}
+
 func WithSTTDiarization(enabled bool, minSpeakers, maxSpeakers int) STTOption {
 	return func(s *STT) {
 		s.enableDiarization = enabled
