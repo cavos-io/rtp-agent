@@ -2000,6 +2000,8 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel), nil
 	case providerTrugen:
 		return trugen.NewTrugenLLM(cfg.TrugenAPIKey, cfg.LLMModel), nil
+	case providerUpliftAI:
+		return upliftai.NewUpliftAILLM(cfg.UpliftAIAPIKey, cfg.LLMModel), nil
 	case providerGroq:
 		return groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel), nil
 	case providerXAI:

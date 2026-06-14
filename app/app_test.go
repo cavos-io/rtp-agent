@@ -3211,6 +3211,7 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 		{name: "smallestai", provider: "smallestai", envKey: "SMALLESTAI_API_KEY", envValue: "test-smallestai-key"},
 		{name: "telnyx", provider: "telnyx", envKey: "TELNYX_API_KEY", envValue: "test-telnyx-key"},
 		{name: "trugen", provider: "trugen", envKey: "TRUGEN_API_KEY", envValue: "test-trugen-key"},
+		{name: "upliftai", provider: "upliftai", envKey: "UPLIFTAI_API_KEY", envValue: "test-upliftai-key"},
 	}
 
 	for _, tt := range tests {
