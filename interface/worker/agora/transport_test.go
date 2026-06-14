@@ -16,6 +16,7 @@ type fakeChannelClient struct {
 	handler      EventHandler
 	audioHandler AudioHandler
 	pcmFrame     PCMFrame
+	publishCtx   context.Context
 	joinErr      error
 	leaveErr     error
 	publishErr   error
@@ -47,6 +48,7 @@ func (f *fakeChannelClient) Leave(ctx context.Context) error {
 
 func (f *fakeChannelClient) PublishPCM(ctx context.Context, frame PCMFrame) error {
 	f.publishCount++
+	f.publishCtx = ctx
 	f.pcmFrame = frame
 	if f.publishErr != nil {
 		return f.publishErr
@@ -223,6 +225,24 @@ func TestTransportPublishPCMValidatesAndDelegates(t *testing.T) {
 	}
 	if client.pcmFrame.StartPTSMS != 42 {
 		t.Fatalf("start PTS = %d, want 42", client.pcmFrame.StartPTSMS)
+	}
+}
+
+func TestTransportPublishPCMNormalizesNilContext(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	frame := PCMFrame{
+		Data:       []byte{1, 2, 3, 4},
+		SampleRate: 100,
+		Channels:   2,
+	}
+
+	var nilCtx context.Context
+	if err := tr.PublishPCM(nilCtx, frame); err != nil {
+		t.Fatalf("PublishPCM() error = %v", err)
+	}
+	if client.publishCtx == nil {
+		t.Fatal("PublishPCM() passed nil context to channel client")
 	}
 }
 
