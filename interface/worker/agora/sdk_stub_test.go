@@ -419,6 +419,31 @@ func TestSDKClientImplementationEmitsConnectedAfterPublishAudio(t *testing.T) {
 	}
 }
 
+func TestSDKClientImplementationChecksStartupErrorBeforeConnectedEmit(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	joinIndex := strings.Index(text, "func (c *sdkChannelClient) Join")
+	if joinIndex < 0 {
+		t.Fatal("sdk.go missing sdkChannelClient.Join")
+	}
+	joinBody := text[joinIndex:]
+	if nextFunc := strings.Index(joinBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		joinBody = joinBody[:len("func ")+nextFunc]
+	}
+	publishIndex := strings.Index(joinBody, "c.publishActiveAudio(connection)")
+	errorCheckIndex := strings.LastIndex(joinBody, "err, ok := pendingJoinError(joinErrCh)")
+	emitIndex := strings.Index(joinBody, "emitSDKEvent(handler, connectedEvent)")
+	if publishIndex < 0 || errorCheckIndex < 0 || emitIndex < 0 {
+		t.Fatal("Join must publish audio, recheck pending startup errors, then emit connected")
+	}
+	if !(publishIndex < errorCheckIndex && errorCheckIndex < emitIndex) {
+		t.Fatal("Join must recheck pending startup errors after PublishAudio and before connected emit")
+	}
+}
+
 func TestSDKClientImplementationReleasesPublishFailureOnlyWhenOwned(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {

@@ -333,6 +333,10 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 		c.releaseActiveConnection(connection)
 		return fmt.Errorf("agora SDK publish audio failed: %d", ret)
 	}
+	if err, ok := pendingJoinError(joinErrCh); ok {
+		c.releaseActiveConnection(connection)
+		return err
+	}
 	emitSDKEvent(handler, connectedEvent)
 	return nil
 }
