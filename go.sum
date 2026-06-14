@@ -20,6 +20,8 @@ cloud.google.com/go/speech v1.35.0 h1:jxWycO5+PfhBWxqnuJNDjNMi85zRK2Jcb4CVhOz6Jc
 cloud.google.com/go/speech v1.35.0/go.mod h1:shnf33sZbGnQQZyek1fdLOR5rRKV6D3jsNqpqyijvj8=
 cloud.google.com/go/texttospeech v1.21.0 h1:u1Zvij2JgV3Vci3M2YrotjqnmW4px0uhoVoW8Vv6IP0=
 cloud.google.com/go/texttospeech v1.21.0/go.mod h1:p/UVJILAo/S5vsJaWZVdDRzNzA7wXIA+hTACvpMeOBk=
+github.com/AgoraIO-Extensions/Agora-Golang-Server-SDK/v2 v2.6.1 h1:yNR1epGTsfaZMrEvH1NZB9cV5vfNqkk17dhUiZBoefY=
+github.com/AgoraIO-Extensions/Agora-Golang-Server-SDK/v2 v2.6.1/go.mod h1:hz5nM7owW3T3fE8M34ZjXkKV9Qb3YyNNv3cWYoUnU+E=
 github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
 github.com/antlr4-go/antlr/v4 v4.13.1 h1:SqQKkuVZ+zWkMMNkjy5FZe5mr5WURWnlpmOuzYWrPrQ=
