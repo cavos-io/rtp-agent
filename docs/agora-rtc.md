@@ -89,6 +89,7 @@ AGORA_GO_SDK_DIR=/path/to/Agora-Golang-Server-SDK \
   AGORA_APP_CERTIFICATE=... \
   AGORA_CHANNEL=... \
   AGORA_UID=agent-0 \
+  AGORA_SMOKE_TIMEOUT=30 \
   AGORA_SMOKE_STABLE_SECONDS=2 \
   scripts/smoke-agora-rtc.sh
 ```
@@ -100,3 +101,7 @@ seconds before printing `Agora RTC connected`. It fails fast if the SDK emits an
 Agora transport error event or the worker logs an error. The smoke helper also
 defaults Go build caches and SDK runtime output under `.tmp/` so the check can
 run in a restricted workspace.
+
+`AGORA_SMOKE_TIMEOUT` and `AGORA_SMOKE_STABLE_SECONDS` are non-negative integer
+second counts. The default timeout is 30 seconds, and the default stable window
+is 2 seconds.
