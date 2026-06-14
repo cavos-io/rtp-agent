@@ -909,6 +909,42 @@ done
 	}
 }
 
+func TestMCPServerStdioCloseReapsProcess(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "mcp-reap-on-close.sh")
+	script := `#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":1,"result":{}}\n'
+      ;;
+    *'"method":"initialized"'*)
+      :
+      ;;
+  esac
+done
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write helper script: %v", err)
+	}
+
+	server := NewMCPServerStdio("sh", []string{scriptPath})
+	if err := server.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+	cmd := server.cmd
+	if cmd == nil || cmd.Process == nil {
+		t.Fatal("server cmd/process = nil after Initialize, want running child process")
+	}
+
+	if err := server.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if cmd.ProcessState == nil {
+		t.Fatal("child process state = nil after Close, want reaped process")
+	}
+}
+
 func TestMCPServerStdioListToolsReturnsWhenTransportCloses(t *testing.T) {
 	tmpDir := t.TempDir()
 	scriptPath := filepath.Join(tmpDir, "mcp-exit-on-tools-list.sh")
