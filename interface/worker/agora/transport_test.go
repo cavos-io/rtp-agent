@@ -307,6 +307,26 @@ func TestTransportPublishPCMNormalizesNilContext(t *testing.T) {
 	}
 }
 
+func TestTransportPublishPCMRejectsCanceledContext(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	frame := PCMFrame{
+		Data:       []byte{1, 2, 3, 4},
+		SampleRate: 100,
+		Channels:   2,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := tr.PublishPCM(ctx, frame)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("PublishPCM() error = %v, want context canceled", err)
+	}
+	if client.publishCount != 0 {
+		t.Fatalf("publish count = %d, want 0", client.publishCount)
+	}
+}
+
 func TestTransportPublishPCMAfterCloseReturnsError(t *testing.T) {
 	client := &fakeChannelClient{}
 	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)

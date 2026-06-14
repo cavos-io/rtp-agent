@@ -155,6 +155,12 @@ func (t *Transport) PublishPCM(ctx context.Context, frame PCMFrame) error {
 	if err := frame.Validate(); err != nil {
 		return err
 	}
+	ctx = normalizeContext(ctx)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 	t.mu.Lock()
 	closed := t.closing || t.closed
 	t.mu.Unlock()
@@ -164,7 +170,7 @@ func (t *Transport) PublishPCM(ctx context.Context, frame PCMFrame) error {
 	if t.client == nil {
 		return fmt.Errorf("agora channel client is required")
 	}
-	return t.client.PublishPCM(normalizeContext(ctx), frame)
+	return t.client.PublishPCM(ctx, frame)
 }
 
 func (t *Transport) Close(ctx context.Context) error {
