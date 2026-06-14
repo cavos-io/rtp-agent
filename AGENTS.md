@@ -35,7 +35,7 @@ Use this map when deciding where reference behavior belongs:
 | `livekit/agents/stt/*`                    | `core/stt`                                     |
 | `livekit/agents/tts/*`                    | `core/tts`                                     |
 | `livekit/agents/vad.py`                   | `core/vad`                                     |
-| `livekit/agents/inference/*`              | `core/inference` for compatibility shims       |
+| `livekit/agents/inference/*`              | `adapter/livekit` for compatibility shims      |
 | `livekit/agents/evals/*`                  | `core/evals`                                   |
 | `livekit/agents/metrics/*`, `telemetry/*` | `library/telemetry`                            |
 | `livekit/agents/tokenize/*`               | `library/tokenize`                             |
