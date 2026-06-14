@@ -9,6 +9,7 @@ import (
 	"time"
 
 	lktts "github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
 func runTTSValueObjects(input json.RawMessage) (any, error) {
@@ -553,12 +554,27 @@ func runTTSStreamAdapter(input json.RawMessage) (any, error) {
 				{"name": "close", "close_calls": provider.closeCalls},
 			},
 		}, nil
+	case "forward_metrics":
+		requestIDs := make([]string, 0, 1)
+		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		defer unsubscribe()
+		provider.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "req-1"})
+		return map[string]any{
+			"contract": "tts-stream-adapter",
+			"events": []map[string]any{
+				{"name": "forward_metrics", "request_ids": requestIDs, "count": len(requestIDs)},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported TTS stream adapter action %q", payload.Action)
 	}
 }
 
 type fakeScenarioTTS struct {
+	lktts.MetricsEmitter
+
 	sampleRate   int
 	numChannels  int
 	model        string

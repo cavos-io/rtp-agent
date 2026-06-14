@@ -100,6 +100,22 @@ def tts_stream_adapter(input_data: Any) -> dict[str, Any]:
             "contract": "tts-stream-adapter",
             "events": [{"name": "close", "close_calls": provider.close_calls}],
         }
+    if action == "forward_metrics":
+        request_ids: list[str] = []
+        adapter.on(
+            "metrics_collected",
+            lambda metrics: request_ids.append(metrics.request_id),
+        )
+        provider.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "req-1"})(),
+        )
+        return {
+            "contract": "tts-stream-adapter",
+            "events": [
+                {"name": "forward_metrics", "request_ids": request_ids, "count": len(request_ids)}
+            ],
+        }
     raise ValueError(f"unsupported TTS stream adapter action {action!r}")
 
 
