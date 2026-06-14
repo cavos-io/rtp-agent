@@ -83,6 +83,69 @@ func TestTurnDetectorUnlikelyThresholdOverrideMatchesReference(t *testing.T) {
 	}
 }
 
+func TestTurnDetectorUnlikelyThresholdUsesFullAndBaseLanguage(t *testing.T) {
+	model := NewMultilingualModel(WithLanguageThresholds(map[string]float64{
+		"en":    0.31,
+		"en-US": 0.27,
+	}))
+
+	got, ok := model.UnlikelyThreshold("en-US")
+	if !ok {
+		t.Fatal("UnlikelyThreshold(en-US) ok = false, want true")
+	}
+	if got != 0.27 {
+		t.Fatalf("UnlikelyThreshold(en-US) = %v, want exact language threshold", got)
+	}
+
+	got, ok = model.UnlikelyThreshold("en-GB")
+	if !ok {
+		t.Fatal("UnlikelyThreshold(en-GB) ok = false, want base language threshold")
+	}
+	if got != 0.31 {
+		t.Fatalf("UnlikelyThreshold(en-GB) = %v, want base language threshold", got)
+	}
+}
+
+func TestTurnDetectorUnlikelyThresholdFetchesRemoteThreshold(t *testing.T) {
+	calls := 0
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		calls++
+		if r.URL.Path != "/eot/multi" {
+			t.Fatalf("path = %q, want /eot/multi", r.URL.Path)
+		}
+		var req struct {
+			Language string `json:"language"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("request decode error = %v", err)
+		}
+		if req.Language != "id-ID" {
+			t.Fatalf("language = %q, want id-ID", req.Language)
+		}
+		return jsonResponse(200, `{"threshold":0.44}`), nil
+	})}
+
+	model := NewMultilingualModel(
+		WithRemoteInferenceBaseURL("https://turn.example"),
+		WithHTTPClient(client),
+	)
+	got, ok := model.UnlikelyThreshold("id-ID")
+	if !ok {
+		t.Fatal("UnlikelyThreshold(id-ID) ok = false, want remote threshold")
+	}
+	if got != 0.44 {
+		t.Fatalf("UnlikelyThreshold(id-ID) = %v, want remote threshold", got)
+	}
+
+	got, ok = model.UnlikelyThreshold("id")
+	if !ok || got != 0.44 {
+		t.Fatalf("cached UnlikelyThreshold(id) = %v/%v, want 0.44/true", got, ok)
+	}
+	if calls != 1 {
+		t.Fatalf("remote threshold calls = %d, want cached single call", calls)
+	}
+}
+
 func TestTurnDetectorRemoteInferenceURLMatchesReference(t *testing.T) {
 	if got := RemoteInferenceURL(""); got != "" {
 		t.Fatalf("RemoteInferenceURL(empty) = %q, want empty", got)
