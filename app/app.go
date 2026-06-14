@@ -2214,6 +2214,9 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		if cfg.STTSampleRate != nil {
 			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTSampleRate(*cfg.STTSampleRate))
 		}
+		if len(cfg.STTKeytermsPrompt) > 0 {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTKeyterms(cfg.STTKeytermsPrompt))
+		}
 		return elevenlabs.NewElevenLabsSTT(cfg.ElevenLabsAPIKey, sttOpts...), nil
 	case providerFireworks:
 		sttOpts := []fireworksai.FireworksSTTOption{}

@@ -3397,6 +3397,56 @@ func TestDefaultConfigFromEnvWrapsNonStreamingSTTFallbackWithVAD(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTFallbackPassesReferenceKeyterms(t *testing.T) {
+	tagAudioEvents := false
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		ElevenLabsAPIKey:  "test-eleven-key",
+		STTBaseURL:        "https://eleven.example/v1",
+		STTModel:          "scribe_v2",
+		STTLanguage:       "en",
+		STTTagAudioEvents: &tagAudioEvents,
+		STTKeytermsPrompt: []string{"LiveKit", "Cavos"},
+	}, providerElevenLabs)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	elevenProvider, ok := provider.(*elevenlabs.ElevenLabsSTT)
+	if !ok {
+		t.Fatalf("provider type = %T, want *elevenlabs.ElevenLabsSTT", provider)
+	}
+	if got, want := provider.Label(), "elevenlabs.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "scribe_v2"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || !caps.InterimResults || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want offline recognize interim fallback", caps)
+	}
+	state := reflect.ValueOf(elevenProvider).Elem()
+	if got, want := state.FieldByName("apiKey").String(), "test-eleven-key"; got != want {
+		t.Fatalf("apiKey = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("baseURL").String(), "https://eleven.example/v1"; got != want {
+		t.Fatalf("baseURL = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("languageCode").String(), "en"; got != want {
+		t.Fatalf("languageCode = %q, want %q", got, want)
+	}
+	if got := state.FieldByName("tagAudioEvents").Bool(); got {
+		t.Fatalf("tagAudioEvents = %v, want false", got)
+	}
+	keytermsField := state.FieldByName("keyterms")
+	gotKeyterms := make([]string, 0, keytermsField.Len())
+	for i := 0; i < keytermsField.Len(); i++ {
+		gotKeyterms = append(gotKeyterms, keytermsField.Index(i).String())
+	}
+	if want := []string{"LiveKit", "Cavos"}; !reflect.DeepEqual(gotKeyterms, want) {
+		t.Fatalf("keyterms = %#v, want %#v", gotKeyterms, want)
+	}
+}
+
 func TestGradiumSTTFallbackPassesReferenceOptions(t *testing.T) {
 	type wsRecord struct {
 		apiKey    string
