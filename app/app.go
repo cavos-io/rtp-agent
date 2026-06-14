@@ -2045,6 +2045,8 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 	switch normalizeProvider(provider) {
 	case providerAWS:
 		return awsSTTFromConfig(cfg)
+	case providerAzure:
+		return azure.NewAzureSTT("", "")
 	case providerDeepgram:
 		sttOpts := []deepgram.DeepgramSTTOption{}
 		if cfg.STTBaseURL != "" {
