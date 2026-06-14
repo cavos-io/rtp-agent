@@ -341,6 +341,7 @@ type AppConfig struct {
 	STTPreProcessingSpeechThreshold         *float64
 	STTPrompt                               string
 	STTBaseURL                              string
+	STTModelEndpoints                       []string
 	STTStreamingURL                         string
 	STTSampleRate                           *int
 	STTBufferSizeSeconds                    *float64
@@ -705,6 +706,7 @@ func DefaultConfigFromEnv() AppConfig {
 		STTPreProcessingSpeechThreshold:         getenvOptionalFloat("RTP_AGENT_STT_PRE_PROCESSING_SPEECH_THRESHOLD"),
 		STTPrompt:                               os.Getenv("RTP_AGENT_STT_PROMPT"),
 		STTBaseURL:                              os.Getenv("RTP_AGENT_STT_BASE_URL"),
+		STTModelEndpoints:                       splitEnvList("RTP_AGENT_STT_MODEL_ENDPOINTS"),
 		STTStreamingURL:                         os.Getenv("RTP_AGENT_STT_STREAMING_URL"),
 		STTSampleRate:                           getenvOptionalInt("RTP_AGENT_STT_SAMPLE_RATE"),
 		STTBufferSizeSeconds:                    getenvOptionalFloat("RTP_AGENT_STT_BUFFER_SIZE_SECONDS"),
@@ -2707,7 +2709,9 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		if cfg.STTModel != "" {
 			sttOpts = append(sttOpts, slng.WithSTTModel(cfg.STTModel))
 		}
-		if cfg.STTBaseURL != "" {
+		if len(cfg.STTModelEndpoints) > 0 {
+			sttOpts = append(sttOpts, slng.WithSTTModelEndpoints(cfg.STTModelEndpoints...))
+		} else if cfg.STTBaseURL != "" {
 			if strings.HasPrefix(cfg.STTBaseURL, "ws://") || strings.HasPrefix(cfg.STTBaseURL, "wss://") || strings.HasPrefix(cfg.STTBaseURL, "http://") || strings.HasPrefix(cfg.STTBaseURL, "https://") {
 				sttOpts = append(sttOpts, slng.WithSTTEndpoint(cfg.STTBaseURL))
 			} else {
@@ -4150,7 +4154,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.STTModel != "" {
 			sttOpts = append(sttOpts, slng.WithSTTModel(cfg.STTModel))
 		}
-		if cfg.STTBaseURL != "" {
+		if len(cfg.STTModelEndpoints) > 0 {
+			sttOpts = append(sttOpts, slng.WithSTTModelEndpoints(cfg.STTModelEndpoints...))
+		} else if cfg.STTBaseURL != "" {
 			if strings.HasPrefix(cfg.STTBaseURL, "ws://") || strings.HasPrefix(cfg.STTBaseURL, "wss://") || strings.HasPrefix(cfg.STTBaseURL, "http://") || strings.HasPrefix(cfg.STTBaseURL, "https://") {
 				sttOpts = append(sttOpts, slng.WithSTTEndpoint(cfg.STTBaseURL))
 			} else {

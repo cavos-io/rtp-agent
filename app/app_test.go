@@ -6061,6 +6061,66 @@ func TestSLNGSTTFallbackPassesVADSpeechPadOption(t *testing.T) {
 	}
 }
 
+func TestSLNGSTTFallbackPassesModelEndpoints(t *testing.T) {
+	initPayloads := make(chan map[string]any, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read init payload: %v", err)
+			return
+		}
+		var init map[string]any
+		if err := json.Unmarshal(payload, &init); err != nil {
+			t.Errorf("decode init payload: %v", err)
+			return
+		}
+		initPayloads <- init
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		SLNGAPIKey: "test-slng-key",
+		STTModelEndpoints: []string{
+			"ws://127.0.0.1:1/v1/stt/deepgram/failing",
+			"ws" + strings.TrimPrefix(server.URL, "http") + "/v1/stt/deepgram/nova:3",
+		},
+	}, providerSLNG)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case init := <-initPayloads:
+		if got, want := init["model"], "nova-3"; got != want {
+			t.Fatalf("init.model = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for fallback SLNG STT init payload")
+	}
+}
+
 func TestSLNGSTTFallbackBuffersAudioByReferenceWindow(t *testing.T) {
 	binaryLengths := make(chan int, 2)
 	upgrader := websocket.Upgrader{}
