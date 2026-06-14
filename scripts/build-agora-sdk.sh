@@ -4,10 +4,23 @@ set -euo pipefail
 module="github.com/AgoraIO-Extensions/Agora-Golang-Server-SDK/v2"
 sdk_dir="${AGORA_GO_SDK_DIR:-}"
 out="${OUT:-.tmp/rtp-agent-agora}"
-modfile="${AGORA_GO_MODFILE:-.tmp/agora-sdk.mod}"
+modfile="${AGORA_GO_MODFILE:-}"
 gomodcache="${GOMODCACHE:-.tmp/gomodcache}"
 gocache="${GOCACHE:-.tmp/gocache}"
 gotmpdir="${GOTMPDIR:-.tmp/gotmp}"
+
+cleanup_modfile=0
+if [ -z "$modfile" ]; then
+  modfile=".tmp/agora-sdk-$$.mod"
+  cleanup_modfile=1
+fi
+
+cleanup() {
+  if [ "$cleanup_modfile" -eq 1 ]; then
+    rm -f "$modfile" "${modfile%.mod}.sum"
+  fi
+}
+trap cleanup EXIT
 
 if [ -z "$sdk_dir" ]; then
   echo "AGORA_GO_SDK_DIR is required and must point to an Agora-Golang-Server-SDK checkout with native assets." >&2
