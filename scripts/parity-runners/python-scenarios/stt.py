@@ -1128,12 +1128,20 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
             )
 
     class FakeVAD:
-        def __init__(self, events: list[Any] | None = None, next_error: Exception | None = None) -> None:
+        def __init__(
+            self,
+            events: list[Any] | None = None,
+            next_error: Exception | None = None,
+            start_error: Exception | None = None,
+        ) -> None:
             self._events = events or []
             self._next_error = next_error
+            self._start_error = start_error
             self.last_stream: Any | None = None
 
         def stream(self) -> Any:
+            if self._start_error is not None:
+                raise self._start_error
             self.last_stream = FakeVADStream(self._events, self._next_error)
             return self.last_stream
 
@@ -1644,6 +1652,38 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
             "events": [
                 {
                     "name": "vad_runtime_error",
+                    **result,
+                }
+            ],
+        }
+    if action == "vad_start_error":
+        install_stream_adapter_runtime_shims()
+        vad = FakeVAD(start_error=RuntimeError("vad start failed"))
+        adapter = stream_adapter_module.StreamAdapter(stt=FakeSTT("wrapped"), vad=vad)
+
+        async def run_vad_start_error() -> dict[str, Any]:
+            stream = adapter.stream(language="en")
+            error_seen = False
+            message_contains = False
+            try:
+                await stream.__anext__()
+            except Exception as exc:
+                error_seen = True
+                message_contains = "vad start failed" in str(exc)
+            await stream.aclose()
+            return {
+                "error_seen": error_seen,
+                "error_category": "start",
+                "message_contains": message_contains,
+                "vad_stream_created": vad.last_stream is not None,
+            }
+
+        result = asyncio.run(run_vad_start_error())
+        return {
+            "contract": "stt-stream-adapter-vad-start-error",
+            "events": [
+                {
+                    "name": "vad_start_error",
                     **result,
                 }
             ],

@@ -1069,6 +1069,7 @@ func runSTTFallback(input json.RawMessage) (any, error) {
 type fakeScenarioVAD struct {
 	events     []*lkvad.VADEvent
 	nextErr    error
+	startErr   error
 	flushCount *atomic.Int32
 	flushCh    chan struct{}
 	endCount   *atomic.Int32
@@ -1086,6 +1087,9 @@ func (fakeScenarioVAD) OnMetricsCollected(lkvad.VADMetricsHandler) func() {
 	return func() {}
 }
 func (v fakeScenarioVAD) Stream(context.Context) (lkvad.VADStream, error) {
+	if v.startErr != nil {
+		return nil, v.startErr
+	}
 	events := append([]*lkvad.VADEvent(nil), v.events...)
 	if v.createCh != nil {
 		select {
@@ -1565,6 +1569,34 @@ func runSTTStreamAdapter(input json.RawMessage) (any, error) {
 					"error_category":   "runtime",
 					"message_contains": messageContains,
 					"vad_closed":       true,
+				},
+			},
+		}, nil
+	case "vad_start_error":
+		startErr := errors.New("vad start failed")
+		adapter := lkstt.NewStreamAdapter(fakeScenarioSTT{
+			label:        "wrapped",
+			capabilities: lkstt.STTCapabilities{OfflineRecognize: true},
+		}, fakeScenarioVAD{startErr: startErr})
+		stream, err := adapter.Stream(context.Background(), "en")
+		if err != nil {
+			return nil, err
+		}
+		_, err = stream.Next()
+		errorSeen := err != nil
+		messageContains := err != nil && strings.Contains(err.Error(), "vad start failed")
+		if closeErr := stream.Close(); closeErr != nil {
+			return nil, closeErr
+		}
+		return map[string]any{
+			"contract": "stt-stream-adapter-vad-start-error",
+			"events": []map[string]any{
+				{
+					"name":               "vad_start_error",
+					"error_seen":         errorSeen,
+					"error_category":     "start",
+					"message_contains":   messageContains,
+					"vad_stream_created": false,
 				},
 			},
 		}, nil
