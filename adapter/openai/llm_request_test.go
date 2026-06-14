@@ -380,6 +380,9 @@ func TestNewOVHCloudOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"gpt-oss-120b"`) {
 		t.Fatalf("request body = %s, want default OVHcloud model", capture.requestBody)
 	}
+	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
+		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
+	}
 }
 
 func TestNewOVHCloudOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -506,6 +509,9 @@ func TestNewPerplexityOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"llama-3.1-sonar-small-128k-chat"`) {
 		t.Fatalf("request body = %s, want default Perplexity model", capture.requestBody)
 	}
+	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
+		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
+	}
 }
 
 func TestNewPerplexityOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -545,6 +551,9 @@ func TestNewTogetherOpenAILLMDefaultsMatchReference(t *testing.T) {
 	}
 	if !strings.Contains(capture.requestBody, `"model":"meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"`) {
 		t.Fatalf("request body = %s, want default Together model", capture.requestBody)
+	}
+	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
+		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
 	}
 }
 
@@ -586,6 +595,9 @@ func TestNewTelnyxOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"meta-llama/Meta-Llama-3.1-70B-Instruct"`) {
 		t.Fatalf("request body = %s, want default Telnyx model", capture.requestBody)
 	}
+	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
+		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
+	}
 }
 
 func TestNewTelnyxOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -625,6 +637,9 @@ func TestNewNebiusOpenAILLMDefaultsMatchReference(t *testing.T) {
 	}
 	if !strings.Contains(capture.requestBody, `"model":"meta-llama/Meta-Llama-3.1-70B-Instruct"`) {
 		t.Fatalf("request body = %s, want default Nebius model", capture.requestBody)
+	}
+	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
+		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
 	}
 }
 
@@ -716,6 +731,9 @@ func TestNewOllamaOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"llama3.1"`) {
 		t.Fatalf("request body = %s, want default Ollama model", capture.requestBody)
 	}
+	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
+		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
+	}
 }
 
 func TestNewCometAPIOpenAILLMDefaultsMatchReference(t *testing.T) {
@@ -746,6 +764,9 @@ func TestNewCometAPIOpenAILLMDefaultsMatchReference(t *testing.T) {
 	}
 	if !strings.Contains(capture.requestBody, `"model":"gpt-5-chat-latest"`) {
 		t.Fatalf("request body = %s, want default CometAPI model", capture.requestBody)
+	}
+	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
+		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
 	}
 }
 
@@ -786,6 +807,9 @@ func TestNewOctoAIOpenAILLMDefaultsMatchReference(t *testing.T) {
 	}
 	if !strings.Contains(capture.requestBody, `"model":"llama-2-13b-chat"`) {
 		t.Fatalf("request body = %s, want default OctoAI model", capture.requestBody)
+	}
+	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
+		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
 	}
 }
 
