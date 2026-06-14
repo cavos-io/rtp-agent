@@ -710,6 +710,7 @@ func (s *sarvamSTTRecognizeStream) readLoop() {
 		if msgType != websocket.TextMessage {
 			continue
 		}
+		isEndSpeech := sarvamSTTStreamMessageIsEndSpeech(payload)
 		events, err := s.sequencer.EventsFromStreamMessage(payload, s.currentAudioPosition())
 		if err != nil {
 			s.errCh <- err
@@ -717,17 +718,20 @@ func (s *sarvamSTTRecognizeStream) readLoop() {
 		}
 		for _, event := range events {
 			s.events <- event
-			if event.Type == stt.SpeechEventEndOfSpeech {
-				_ = s.Flush()
-			}
+		}
+		if isEndSpeech {
+			_ = s.Flush()
 		}
 	}
 }
 
 type sarvamSTTStreamEventSequencer struct {
-	defaultLanguage string
-	serverRequestID string
-	eosEmitted      bool
+	defaultLanguage     string
+	serverRequestID     string
+	finalEmitted        bool
+	pendingEOS          bool
+	pendingAudioEndTime float64
+	eosEmitted          bool
 }
 
 func newSarvamSTTStreamEventSequencer(defaultLanguage string) *sarvamSTTStreamEventSequencer {
@@ -746,6 +750,9 @@ func (s *sarvamSTTStreamEventSequencer) EventsFromStreamMessage(payload []byte, 
 
 	messageType := sarvamString(message["type"])
 	if (messageType == "events" || messageType == "event") && sarvamString(data["signal_type"]) == "START_SPEECH" {
+		s.finalEmitted = false
+		s.pendingEOS = false
+		s.pendingAudioEndTime = 0
 		s.eosEmitted = false
 	}
 	if (messageType == "events" || messageType == "event") && sarvamString(data["signal_type"]) == "END_SPEECH" {
@@ -755,16 +762,12 @@ func (s *sarvamSTTStreamEventSequencer) EventsFromStreamMessage(payload []byte, 
 		if s.eosEmitted {
 			return nil, nil
 		}
-		s.eosEmitted = true
-		return []*stt.SpeechEvent{{
-			Type:      stt.SpeechEventEndOfSpeech,
-			RequestID: s.serverRequestID,
-			Alternatives: []stt.SpeechData{{
-				Language: s.defaultLanguage,
-				Text:     "",
-				EndTime:  audioPosition,
-			}},
-		}}, nil
+		s.pendingEOS = true
+		s.pendingAudioEndTime = audioPosition
+		if !s.finalEmitted {
+			return nil, nil
+		}
+		return []*stt.SpeechEvent{s.endOfSpeechEvent(audioPosition)}, nil
 	}
 
 	events, err := sarvamSTTEventsFromStreamMessage(payload, s.defaultLanguage)
@@ -781,8 +784,38 @@ func (s *sarvamSTTStreamEventSequencer) EventsFromStreamMessage(payload []byte, 
 				},
 			}}, events...)
 		}
+		s.finalEmitted = true
+		if s.pendingEOS && !s.eosEmitted {
+			s.applyPendingEndTime(events)
+			events = append(events, s.endOfSpeechEvent(s.pendingAudioEndTime))
+		}
 	}
 	return events, nil
+}
+
+func (s *sarvamSTTStreamEventSequencer) endOfSpeechEvent(audioPosition float64) *stt.SpeechEvent {
+	s.eosEmitted = true
+	s.pendingEOS = false
+	return &stt.SpeechEvent{
+		Type:      stt.SpeechEventEndOfSpeech,
+		RequestID: s.serverRequestID,
+		Alternatives: []stt.SpeechData{{
+			Language: s.defaultLanguage,
+			Text:     "",
+			EndTime:  audioPosition,
+		}},
+	}
+}
+
+func (s *sarvamSTTStreamEventSequencer) applyPendingEndTime(events []*stt.SpeechEvent) {
+	for _, event := range events {
+		if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) == 0 {
+			continue
+		}
+		if event.Alternatives[0].EndTime == 0 {
+			event.Alternatives[0].EndTime = s.pendingAudioEndTime
+		}
+	}
 }
 
 func sarvamSTTEventsContainUsage(events []*stt.SpeechEvent) bool {
@@ -792,6 +825,18 @@ func sarvamSTTEventsContainUsage(events []*stt.SpeechEvent) bool {
 		}
 	}
 	return false
+}
+
+func sarvamSTTStreamMessageIsEndSpeech(payload []byte) bool {
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		return false
+	}
+	messageType := sarvamString(message["type"])
+	if messageType != "events" && messageType != "event" {
+		return false
+	}
+	return sarvamString(sarvamMap(message["data"])["signal_type"]) == "END_SPEECH"
 }
 
 func sarvamSTTChunkBytes(sampleRate int) int {

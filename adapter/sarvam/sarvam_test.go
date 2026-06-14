@@ -386,6 +386,40 @@ func TestSarvamSTTStreamSequencerAddsReferenceEndOfSpeechMetadata(t *testing.T) 
 	}
 }
 
+func TestSarvamSTTStreamSequencerWaitsForFinalAfterEndOfSpeech(t *testing.T) {
+	sequencer := newSarvamSTTStreamEventSequencer("en-IN")
+
+	events, err := sequencer.EventsFromStreamMessage([]byte(`{"type":"events","data":{"signal_type":"START_SPEECH","request_id":"req-2"}}`), 0)
+	if err != nil {
+		t.Fatalf("start event: %v", err)
+	}
+	if len(events) != 1 || events[0].Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("start events = %+v, want start of speech", events)
+	}
+
+	events, err = sequencer.EventsFromStreamMessage([]byte(`{"type":"event","data":{"signal_type":"END_SPEECH","request_id":"req-2"}}`), 0.5)
+	if err != nil {
+		t.Fatalf("end event: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("end events = %+v, want delayed EOS until final transcript", events)
+	}
+
+	events, err = sequencer.EventsFromStreamMessage([]byte(`{"type":"data","data":{"transcript":"late final","language_code":"hi-IN","request_id":"req-2","speech_start":0.2}}`), 0.5)
+	if err != nil {
+		t.Fatalf("final event: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("final events = %+v, want usage, final transcript, end of speech", events)
+	}
+	if events[1].Type != stt.SpeechEventFinalTranscript || events[2].Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("final events = %+v, want final transcript before EOS", events)
+	}
+	if events[2].Alternatives[0].EndTime != 0.5 {
+		t.Fatalf("EOS end time = %.2f, want pending audio position", events[2].Alternatives[0].EndTime)
+	}
+}
+
 func TestSarvamSTTImplementsStreamingInterface(t *testing.T) {
 	var _ stt.STT = NewSarvamSTT("test-key")
 }
