@@ -1068,6 +1068,7 @@ func runSTTFallback(input json.RawMessage) (any, error) {
 
 type fakeScenarioVAD struct {
 	events     []*lkvad.VADEvent
+	nextErr    error
 	flushCount *atomic.Int32
 	flushCh    chan struct{}
 	endCount   *atomic.Int32
@@ -1094,6 +1095,7 @@ func (v fakeScenarioVAD) Stream(context.Context) (lkvad.VADStream, error) {
 	}
 	return &fakeScenarioVADStream{
 		events:     events,
+		nextErr:    v.nextErr,
 		done:       make(chan struct{}),
 		flushCount: v.flushCount,
 		flushCh:    v.flushCh,
@@ -1106,6 +1108,7 @@ func (v fakeScenarioVAD) Stream(context.Context) (lkvad.VADStream, error) {
 
 type fakeScenarioVADStream struct {
 	events     []*lkvad.VADEvent
+	nextErr    error
 	done       chan struct{}
 	flushCount *atomic.Int32
 	flushCh    chan struct{}
@@ -1158,6 +1161,11 @@ func (s *fakeScenarioVADStream) Close() error {
 	return nil
 }
 func (s *fakeScenarioVADStream) Next() (*lkvad.VADEvent, error) {
+	if s.nextErr != nil {
+		err := s.nextErr
+		s.nextErr = nil
+		return nil, err
+	}
 	if len(s.events) == 0 {
 		<-s.done
 		return nil, io.EOF
@@ -1529,6 +1537,34 @@ func runSTTStreamAdapter(input json.RawMessage) (any, error) {
 					"vad_stream_created": created,
 					"vad_closed":         closed,
 					"close_calls":        closeCount.Load(),
+				},
+			},
+		}, nil
+	case "vad_runtime_error":
+		runtimeErr := errors.New("vad failed")
+		adapter := lkstt.NewStreamAdapter(fakeScenarioSTT{
+			label:        "wrapped",
+			capabilities: lkstt.STTCapabilities{OfflineRecognize: true},
+		}, fakeScenarioVAD{nextErr: runtimeErr})
+		stream, err := adapter.Stream(context.Background(), "en")
+		if err != nil {
+			return nil, err
+		}
+		_, err = stream.Next()
+		errorSeen := err != nil
+		messageContains := err != nil && strings.Contains(err.Error(), "vad failed")
+		if closeErr := stream.Close(); closeErr != nil {
+			return nil, closeErr
+		}
+		return map[string]any{
+			"contract": "stt-stream-adapter-vad-runtime-error",
+			"events": []map[string]any{
+				{
+					"name":             "vad_runtime_error",
+					"error_seen":       errorSeen,
+					"error_category":   "runtime",
+					"message_contains": messageContains,
+					"vad_closed":       true,
 				},
 			},
 		}, nil

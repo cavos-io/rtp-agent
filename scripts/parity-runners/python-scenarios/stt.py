@@ -1128,17 +1128,19 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
             )
 
     class FakeVAD:
-        def __init__(self, events: list[Any] | None = None) -> None:
+        def __init__(self, events: list[Any] | None = None, next_error: Exception | None = None) -> None:
             self._events = events or []
+            self._next_error = next_error
             self.last_stream: Any | None = None
 
         def stream(self) -> Any:
-            self.last_stream = FakeVADStream(self._events)
+            self.last_stream = FakeVADStream(self._events, self._next_error)
             return self.last_stream
 
     class FakeVADStream:
-        def __init__(self, events: list[Any]) -> None:
+        def __init__(self, events: list[Any], next_error: Exception | None = None) -> None:
             self._events = list(events)
+            self._next_error = next_error
             self.closed = False
             self.close_calls = 0
             self.flush_calls = 0
@@ -1161,6 +1163,10 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
             return self
 
         async def __anext__(self) -> Any:
+            if self._next_error is not None:
+                error = self._next_error
+                self._next_error = None
+                raise error
             if not self._events:
                 raise StopAsyncIteration
             return self._events.pop(0)
@@ -1606,6 +1612,38 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
             "events": [
                 {
                     "name": "close_closes_vad",
+                    **result,
+                }
+            ],
+        }
+    if action == "vad_runtime_error":
+        install_stream_adapter_runtime_shims()
+        vad = FakeVAD(next_error=RuntimeError("vad failed"))
+        adapter = stream_adapter_module.StreamAdapter(stt=FakeSTT("wrapped"), vad=vad)
+
+        async def run_vad_runtime_error() -> dict[str, Any]:
+            stream = adapter.stream(language="en")
+            error_seen = False
+            message_contains = False
+            try:
+                await stream.__anext__()
+            except Exception as exc:
+                error_seen = True
+                message_contains = "vad failed" in str(exc)
+            await stream.aclose()
+            return {
+                "error_seen": error_seen,
+                "error_category": "runtime",
+                "message_contains": message_contains,
+                "vad_closed": bool(vad.last_stream and vad.last_stream.closed),
+            }
+
+        result = asyncio.run(run_vad_runtime_error())
+        return {
+            "contract": "stt-stream-adapter-vad-runtime-error",
+            "events": [
+                {
+                    "name": "vad_runtime_error",
                     **result,
                 }
             ],
