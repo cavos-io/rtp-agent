@@ -36,6 +36,27 @@ func TestTurnDetectorTokenizerFormatsChatTemplateAndTruncatesLeft(t *testing.T) 
 	}
 }
 
+func TestTurnDetectorTokenizerNormalizesAndMergesAdjacentTurnsLikeReferenceRunner(t *testing.T) {
+	var gotText string
+	tokenizer := newTurnDetectorTokenizer(ModelEnglish, func(text string) ([]int, error) {
+		gotText = text
+		return []int{1}, nil
+	})
+
+	_, err := tokenizer.TokenizeTurnDetectorPayload(
+		context.Background(),
+		[]byte(`{"chat_ctx":[{"role":"user","content":"  Hello, WORLD!!!  "},{"role":"user","content":"NEXT\tline?"},{"role":"assistant","content":"Don't-stop."},{"role":"assistant","content":"  "},{"role":"assistant","content":"OK."}]}`),
+	)
+	if err != nil {
+		t.Fatalf("TokenizeTurnDetectorPayload() error = %v", err)
+	}
+
+	want := "<|im_start|>user\nhello world next line<|im_end|>\n<|im_start|>assistant\ndon't-stop ok"
+	if gotText != want {
+		t.Fatalf("formatted text = %q, want reference runner text %q", gotText, want)
+	}
+}
+
 func TestTurnDetectorTokenizerRejectsEmptyChatContext(t *testing.T) {
 	tokenizer := newTurnDetectorTokenizer(ModelEnglish, func(string) ([]int, error) {
 		t.Fatal("encoder called for empty chat_ctx")
