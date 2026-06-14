@@ -58,6 +58,11 @@ while kill -0 "$pid" >/dev/null 2>&1; do
     tail -n 40 "$log_abs" >&2
     exit 1
   fi
+  if grep -q 'Worker error:' "$log_abs"; then
+    echo "Agora RTC smoke failed with worker error:" >&2
+    tail -n 40 "$log_abs" >&2
+    exit 1
+  fi
   if [ "$SECONDS" -ge "$deadline" ]; then
     echo "Timed out waiting for Agora RTC connected event:" >&2
     tail -n 40 "$log_abs" >&2
