@@ -411,6 +411,42 @@ func TestDefaultConfigFromEnvConfiguresTelemetryLogs(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvDefaultsWorkerTransportToLiveKit(t *testing.T) {
+	t.Setenv("RTP_AGENT_TRANSPORT", "")
+
+	cfg := DefaultConfigFromEnv()
+
+	if cfg.WorkerOptions.Transport != worker.WorkerTransportLiveKit {
+		t.Fatalf("Transport = %q, want %q", cfg.WorkerOptions.Transport, worker.WorkerTransportLiveKit)
+	}
+}
+
+func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
+	t.Setenv("RTP_AGENT_TRANSPORT", "agora")
+	t.Setenv("AGORA_APP_ID", "agora-app")
+	t.Setenv("AGORA_APP_CERTIFICATE", "agora-cert")
+	t.Setenv("AGORA_CHANNEL", "support-room")
+	t.Setenv("AGORA_UID", "agent-42")
+
+	cfg := DefaultConfigFromEnv()
+
+	if cfg.WorkerOptions.Transport != worker.WorkerTransportAgora {
+		t.Fatalf("Transport = %q, want %q", cfg.WorkerOptions.Transport, worker.WorkerTransportAgora)
+	}
+	if cfg.WorkerOptions.Agora.AppID != "agora-app" {
+		t.Fatalf("Agora.AppID = %q, want agora-app", cfg.WorkerOptions.Agora.AppID)
+	}
+	if cfg.WorkerOptions.Agora.AppCertificate != "agora-cert" {
+		t.Fatalf("Agora.AppCertificate = %q, want agora-cert", cfg.WorkerOptions.Agora.AppCertificate)
+	}
+	if cfg.WorkerOptions.Agora.Channel != "support-room" {
+		t.Fatalf("Agora.Channel = %q, want support-room", cfg.WorkerOptions.Agora.Channel)
+	}
+	if cfg.WorkerOptions.Agora.UID != "agent-42" {
+		t.Fatalf("Agora.UID = %q, want agent-42", cfg.WorkerOptions.Agora.UID)
+	}
+}
+
 func TestSplitEnvMapParsesTypedModelOptions(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_MODEL_OPTIONS", "auto_mode=true,chunk_length_schedule=[80,120,180],speed=1.1,voice=alpha")
 

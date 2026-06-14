@@ -642,6 +642,16 @@ type EvaluationSummary struct {
 
 func DefaultConfigFromEnv() AppConfig {
 	return AppConfig{
+		WorkerOptions: worker.WorkerOptions{
+			Transport: worker.NormalizeWorkerTransport(os.Getenv("RTP_AGENT_TRANSPORT")),
+			Agora: worker.AgoraOptions{
+				AppID:          os.Getenv("AGORA_APP_ID"),
+				AppCertificate: os.Getenv("AGORA_APP_CERTIFICATE"),
+				Channel:        os.Getenv("AGORA_CHANNEL"),
+				UID:            os.Getenv("AGORA_UID"),
+				Token:          os.Getenv("AGORA_TOKEN"),
+			},
+		},
 		Instructions:                            getenvDefault("RTP_AGENT_INSTRUCTIONS", "You are a helpful realtime voice agent."),
 		TelemetryLogsEndpoint:                   os.Getenv("RTP_AGENT_OTLP_LOGS_ENDPOINT"),
 		TelemetryLogsHeaders:                    splitEnvStringMap("RTP_AGENT_OTLP_LOGS_HEADERS"),
