@@ -2,6 +2,7 @@ package agora
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -76,6 +77,29 @@ func TestAudioOutputPublishAudioNormalizesNilContext(t *testing.T) {
 	}
 	if publisher.ctxs[0] == nil {
 		t.Fatal("PublishAudio() passed nil context to PCM publisher")
+	}
+}
+
+func TestAudioOutputPublishAudioRejectsCanceledContext(t *testing.T) {
+	publisher := &fakePCMPublisher{}
+	output := NewAudioOutput(publisher)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := output.PublishAudio(ctx, &model.AudioFrame{
+		Data:              make([]byte, 320),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("PublishAudio() error = %v, want context canceled", err)
+	}
+	if len(publisher.frames) != 0 {
+		t.Fatalf("published frames = %d, want 0", len(publisher.frames))
+	}
+	if len(publisher.ctxs) != 0 {
+		t.Fatalf("publisher calls = %d, want 0", len(publisher.ctxs))
 	}
 }
 

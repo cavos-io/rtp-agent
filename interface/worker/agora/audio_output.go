@@ -34,6 +34,11 @@ func (o *AudioOutput) PublishAudio(ctx context.Context, frame *model.AudioFrame)
 	if o.publisher == nil {
 		return fmt.Errorf("agora audio output publisher is required")
 	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
