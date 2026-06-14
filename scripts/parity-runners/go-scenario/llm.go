@@ -3570,6 +3570,36 @@ func runLLMValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "metrics_panic_isolated":
+		var emitter lkllm.MetricsEmitter
+		metrics := &telemetry.LLMMetrics{RequestID: "req"}
+		receivedRequestIDs := []string{}
+		emitter.OnMetricsCollected(func(*telemetry.LLMMetrics) {
+			panic("metrics handler failed")
+		})
+		emitter.OnMetricsCollected(func(metrics *telemetry.LLMMetrics) {
+			receivedRequestIDs = append(receivedRequestIDs, metrics.RequestID)
+		})
+		escapedError := false
+		func() {
+			defer func() {
+				if recover() != nil {
+					escapedError = true
+				}
+			}()
+			emitter.EmitMetricsCollected(metrics)
+		}()
+		return map[string]any{
+			"contract": "llm-metrics-reference-panic-isolated",
+			"events": []map[string]any{
+				{
+					"name":               "metrics_panic_isolated",
+					"escaped_error":      escapedError,
+					"handler_call_count": len(receivedRequestIDs),
+					"request_ids":        receivedRequestIDs,
+				},
+			},
+		}, nil
 	case "llm_error_payload":
 		underlying := errors.New("provider unavailable")
 		err := lkllm.NewLLMError("openai.LLM", underlying, true)

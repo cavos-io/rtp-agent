@@ -1730,6 +1730,41 @@ def llm_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "metrics_panic_isolated":
+        module = load_reference_llm_fallback()
+
+        class MetricsLLM(module.LLM):
+            def chat(self, **kwargs: Any) -> Any:
+                raise NotImplementedError
+
+        llm = MetricsLLM()
+        received_request_ids: list[str] = []
+
+        def failing_handler(metrics: Any) -> None:
+            raise RuntimeError("metrics handler failed")
+
+        def recording_handler(metrics: Any) -> None:
+            received_request_ids.append(metrics.request_id)
+
+        llm.on("metrics_collected", failing_handler)
+        llm.on("metrics_collected", recording_handler)
+        escaped_error = False
+        metrics = type("Metrics", (), {"request_id": "req"})()
+        try:
+            llm.emit("metrics_collected", metrics)
+        except RuntimeError:
+            escaped_error = True
+        return {
+            "contract": "llm-metrics-reference-panic-isolated",
+            "events": [
+                {
+                    "name": "metrics_panic_isolated",
+                    "escaped_error": escaped_error,
+                    "handler_call_count": len(received_request_ids),
+                    "request_ids": received_request_ids,
+                }
+            ],
+        }
     if action == "llm_error_payload":
         err = Exception("provider unavailable")
         return {
