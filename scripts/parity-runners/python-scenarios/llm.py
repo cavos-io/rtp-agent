@@ -391,9 +391,11 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
             self._stream_chat_ctx = stream_chat_ctx
             self._chat_error = chat_error
             self.calls = 0
+            self.options: list[Any] = []
 
         def chat(self, **kwargs: Any) -> FakeStream:
             self.calls += 1
+            self.options.append(kwargs.get("conn_options"))
             if self._chat_error is not None:
                 raise self._chat_error
             events = self._events
@@ -428,6 +430,29 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+
+    if action == "option_defaults":
+        primary = FakeLLM("primary", [FakeChunk("ok")])
+        adapter = module.FallbackAdapter([primary])
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            async for _ in stream:
+                break
+            options = primary.options[0]
+            return {
+                "contract": "llm-fallback-options",
+                "events": [
+                    {
+                        "name": "option_defaults",
+                        "max_retry": options.max_retry,
+                        "retry_interval_ms": int(options.retry_interval * 1000),
+                        "timeout_ms": int(options.timeout * 1000),
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
 
     if action == "provider_error_not_forwarded":
         primary = FakeLLM("primary")
