@@ -170,6 +170,20 @@ func TestSLNGTTSInitPayloadPreservesExplicitZeroSpeed(t *testing.T) {
 	assertSLNGNestedField(t, payload, "config", "speed", float64(0))
 }
 
+func TestSLNGTTSInitPayloadUsesTargetLanguageWithoutLeakingOption(t *testing.T) {
+	provider := NewTTS("test-key",
+		WithTTSModel("sarvam/bulbul:v3"),
+		WithTTSLanguage("en"),
+		WithTTSModelOptions(map[string]any{"target_language_code": "hi"}),
+	)
+
+	payload := buildTTSInitPayload(provider)
+
+	assertSLNGField(t, payload, "language", "hi-IN")
+	assertSLNGNestedField(t, payload, "config", "language", "hi-IN")
+	assertSLNGNestedFieldAbsent(t, payload, "config", "target_language_code")
+}
+
 func TestSLNGTTSReceivedEventParsesReferenceShapes(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString([]byte{1, 2, 3})
 	audio, done, err := ttsAudioFromMessage([]byte(`{"type":"audio_chunk","data":"`+encoded+`"}`), 24000)
@@ -406,6 +420,21 @@ func assertSLNGNestedField(t *testing.T, payload []byte, parent, key string, wan
 	}
 	if got := parentMap[key]; got != want {
 		t.Fatalf("%s.%s = %#v, want %#v in %s", parent, key, got, want, string(payload))
+	}
+}
+
+func assertSLNGNestedFieldAbsent(t *testing.T, payload []byte, parent, key string) {
+	t.Helper()
+	var data map[string]any
+	if err := json.Unmarshal(payload, &data); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	parentMap, _ := data[parent].(map[string]any)
+	if parentMap == nil {
+		t.Fatalf("%s = %#v, want object in %s", parent, data[parent], string(payload))
+	}
+	if _, ok := parentMap[key]; ok {
+		t.Fatalf("%s.%s present in %s", parent, key, string(payload))
 	}
 }
 

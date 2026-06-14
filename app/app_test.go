@@ -6530,12 +6530,13 @@ func TestSLNGTTSFallbackPassesModelOptions(t *testing.T) {
 	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
 	provider, err := fallbackTTSFromProvider(AppConfig{
 		TTSBaseURL: endpoint,
-		TTSModel:   "elevenlabs/eleven-flash:2.5",
+		TTSModel:   "sarvam/bulbul:v3",
 		TTSVoice:   "voice-1",
 		TTSModelOptions: map[string]any{
-			"auto_mode":             true,
-			"enable_ssml_parsing":   true,
-			"chunk_length_schedule": []int{80, 120, 180},
+			"target_language_code": "hi",
+			"pace":                 0.85,
+			"min_buffer_size":      2,
+			"auto_mode":            true,
 		},
 		SLNGAPIKey: "test-slng-key",
 	}, providerSLNG)
@@ -6551,16 +6552,27 @@ func TestSLNGTTSFallbackPassesModelOptions(t *testing.T) {
 
 	select {
 	case init := <-initPayloads:
+		if init["language"] != "hi-IN" {
+			t.Fatalf("language = %#v, want hi-IN in %#v", init["language"], init)
+		}
 		config, _ := init["config"].(map[string]any)
-		if config["auto_mode"] != true {
-			t.Fatalf("config.auto_mode = %#v, want true in %#v", config["auto_mode"], init)
+		if config["language"] != "hi-IN" {
+			t.Fatalf("config.language = %#v, want hi-IN in %#v", config["language"], init)
 		}
-		if config["enable_ssml_parsing"] != true {
-			t.Fatalf("config.enable_ssml_parsing = %#v, want true in %#v", config["enable_ssml_parsing"], init)
+		if config["speech_sample_rate"] != "24000" {
+			t.Fatalf("config.speech_sample_rate = %#v, want 24000 in %#v", config["speech_sample_rate"], init)
 		}
-		schedule, _ := config["chunk_length_schedule"].([]any)
-		if len(schedule) != 3 || schedule[0] != float64(80) || schedule[1] != float64(120) || schedule[2] != float64(180) {
-			t.Fatalf("config.chunk_length_schedule = %#v, want [80 120 180] in %#v", config["chunk_length_schedule"], init)
+		if config["pace"] != 0.85 {
+			t.Fatalf("config.pace = %#v, want 0.85 in %#v", config["pace"], init)
+		}
+		if config["min_buffer_size"] != float64(2) {
+			t.Fatalf("config.min_buffer_size = %#v, want 2 in %#v", config["min_buffer_size"], init)
+		}
+		if _, ok := config["target_language_code"]; ok {
+			t.Fatalf("config.target_language_code present in %#v", init)
+		}
+		if _, ok := config["auto_mode"]; ok {
+			t.Fatalf("config.auto_mode present in %#v", init)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for SLNG init payload")
