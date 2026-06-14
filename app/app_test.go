@@ -3587,6 +3587,87 @@ func TestSarvamTTSFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestSmallestAITTSFallbackPassesReferenceOptions(t *testing.T) {
+	sampleRate := 44100
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("audio")),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		SmallestAIAPIKey:  "test-smallest-key",
+		TTSBaseURL:        "https://smallest.example/waves/v1/",
+		TTSWebsocketURL:   "wss://smallest.example/waves/v1/tts/live",
+		TTSModel:          "lightning_v3.1",
+		TTSVoice:          "sophia",
+		TTSSampleRate:     &sampleRate,
+		TTSSpeed:          1.4,
+		TTSLanguage:       "auto",
+		TTSResponseFormat: "wav",
+	}, providerSmallestAI)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if got, want := provider.Label(), "smallestai.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 44100; got != want {
+		t.Fatalf("SampleRate() = %d, want reference configured sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "lightning_v3.1"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "SmallestAI"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://smallest.example/waves/v1/tts"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("Authorization"), "Bearer test-smallest-key"; got != want {
+		t.Fatalf("Authorization = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["model"], "lightning_v3.1"; got != want {
+		t.Fatalf("model = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["voice_id"], "sophia"; got != want {
+		t.Fatalf("voice_id = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["sample_rate"], float64(44100); got != want {
+		t.Fatalf("sample_rate = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["speed"], float64(1.4); got != want {
+		t.Fatalf("speed = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["language"], "auto"; got != want {
+		t.Fatalf("language = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["output_format"], "wav"; got != want {
+		t.Fatalf("output_format = %#v, want %#v", got, want)
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsTelnyxTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "telnyx")
