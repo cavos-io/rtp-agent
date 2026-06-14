@@ -30,6 +30,44 @@ def stt_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "metrics_panic_isolated":
+        class ScenarioSTT(module.STT):
+            def __init__(self) -> None:
+                super().__init__(
+                    capabilities=module.STTCapabilities(streaming=False, interim_results=False)
+                )
+
+            async def _recognize_impl(self, buffer: Any, *, language: Any = None, conn_options: Any = None) -> Any:
+                return None
+
+        provider = ScenarioSTT()
+        received_request_ids: list[str] = []
+
+        def failing_handler(metrics: Any) -> None:
+            raise RuntimeError("metrics handler failed")
+
+        def recording_handler(metrics: Any) -> None:
+            received_request_ids.append(metrics.request_id)
+
+        provider.on("metrics_collected", failing_handler)
+        provider.on("metrics_collected", recording_handler)
+        escaped_error = False
+        metrics = type("Metrics", (), {"request_id": "req"})()
+        try:
+            provider.emit("metrics_collected", metrics)
+        except RuntimeError:
+            escaped_error = True
+        return {
+            "contract": "stt-metrics-reference-panic-isolated",
+            "events": [
+                {
+                    "name": "metrics_panic_isolated",
+                    "escaped_error": escaped_error,
+                    "handler_call_count": len(received_request_ids),
+                    "request_ids": received_request_ids,
+                }
+            ],
+        }
     if action == "speech_data_metadata":
         word = load_reference_types().TimedString(
             "hello",

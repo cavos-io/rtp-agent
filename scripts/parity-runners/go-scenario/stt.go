@@ -39,6 +39,36 @@ func runSTTValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "metrics_panic_isolated":
+		var emitter lkstt.MetricsEmitter
+		metrics := &telemetry.STTMetrics{RequestID: "req"}
+		receivedRequestIDs := []string{}
+		emitter.OnMetricsCollected(func(*telemetry.STTMetrics) {
+			panic("metrics handler failed")
+		})
+		emitter.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+			receivedRequestIDs = append(receivedRequestIDs, metrics.RequestID)
+		})
+		escapedError := false
+		func() {
+			defer func() {
+				if recover() != nil {
+					escapedError = true
+				}
+			}()
+			emitter.EmitMetricsCollected(metrics)
+		}()
+		return map[string]any{
+			"contract": "stt-metrics-reference-panic-isolated",
+			"events": []map[string]any{
+				{
+					"name":               "metrics_panic_isolated",
+					"escaped_error":      escapedError,
+					"handler_call_count": len(receivedRequestIDs),
+					"request_ids":        receivedRequestIDs,
+				},
+			},
+		}, nil
 	case "speech_data_metadata":
 		data := lkstt.SpeechData{
 			Language: "en",
