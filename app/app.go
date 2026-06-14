@@ -3583,6 +3583,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, murf.WithMurfTTSSampleRate(*cfg.TTSSampleRate))
 		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, murf.WithMurfTTSEncoding(cfg.TTSEncoding))
+		}
 		return murf.NewMurfTTS(cfg.MurfAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerSpeechify:
 		ttsOpts := []speechify.SpeechifyTTSOption{}
@@ -3609,7 +3612,32 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		return speechify.NewSpeechifyTTS(cfg.SpeechifyAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerSimplismart:
-		return simplismart.NewSimplismartTTS(cfg.SimplismartAPIKey, cfg.TTSVoice), nil
+		ttsOpts := []simplismart.SimplismartTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSTemperature != nil {
+			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSTemperature(*cfg.TTSTemperature))
+		}
+		if cfg.TTSTopP != nil {
+			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSTopP(*cfg.TTSTopP))
+		}
+		if cfg.TTSMaxTokens != nil {
+			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSMaxTokens(*cfg.TTSMaxTokens))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSLanguage(cfg.TTSLanguage))
+		}
+		if leadingSilence := modelOptionBool(cfg.TTSModelOptions, "leading_silence"); leadingSilence != nil {
+			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSLeadingSilence(*leadingSilence))
+		}
+		return simplismart.NewSimplismartTTS(cfg.SimplismartAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerSmallestAI:
 		ttsOpts := []smallestai.SmallestAITTSOption{}
 		if cfg.TTSBaseURL != "" {
@@ -5173,6 +5201,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, murf.WithMurfTTSSampleRate(*cfg.TTSSampleRate))
 		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, murf.WithMurfTTSEncoding(cfg.TTSEncoding))
+		}
 		a.TTS = murf.NewMurfTTS(cfg.MurfAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerNvidia:
 		ttsOpts := []nvidia.NvidiaTTSOption{}
@@ -5347,7 +5378,32 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = sarvam.NewSarvamTTS(cfg.SarvamAPIKey, "", ttsOpts...)
 	case providerSimplismart:
-		a.TTS = simplismart.NewSimplismartTTS(cfg.SimplismartAPIKey, cfg.TTSVoice)
+		ttsOpts := []simplismart.SimplismartTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSTemperature != nil {
+			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSTemperature(*cfg.TTSTemperature))
+		}
+		if cfg.TTSTopP != nil {
+			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSTopP(*cfg.TTSTopP))
+		}
+		if cfg.TTSMaxTokens != nil {
+			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSMaxTokens(*cfg.TTSMaxTokens))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSLanguage(cfg.TTSLanguage))
+		}
+		if leadingSilence := modelOptionBool(cfg.TTSModelOptions, "leading_silence"); leadingSilence != nil {
+			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSLeadingSilence(*leadingSilence))
+		}
+		a.TTS = simplismart.NewSimplismartTTS(cfg.SimplismartAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerSmallestAI:
 		ttsOpts := []smallestai.SmallestAITTSOption{}
 		if cfg.TTSBaseURL != "" {

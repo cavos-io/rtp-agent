@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -15,13 +16,17 @@ import (
 
 const (
 	defaultSimplismartTTSBaseURL           = "https://api.simplismart.live/tts"
+	defaultSimplismartTTSQwenBaseURL       = "https://api.simplismart.live/v1/audio/speech"
 	defaultSimplismartTTSModel             = "canopylabs/orpheus-3b-0.1-ft"
+	defaultSimplismartTTSQwenModel         = "qwen-tts"
 	defaultSimplismartTTSVoice             = "tara"
+	defaultSimplismartTTSQwenVoice         = "Chelsie"
 	defaultSimplismartTTSSampleRate        = 24000
 	defaultSimplismartTTSTemperature       = 0.7
 	defaultSimplismartTTSTopP              = 0.9
 	defaultSimplismartTTSRepetitionPenalty = 1.5
 	defaultSimplismartTTSMaxTokens         = 1000
+	defaultSimplismartTTSQwenLanguage      = "English"
 )
 
 type SimplismartTTS struct {
@@ -34,16 +39,83 @@ type SimplismartTTS struct {
 	topP              float64
 	repetitionPenalty float64
 	maxTokens         int
+	language          string
+	leadingSilence    *bool
+	baseURLExplicit   bool
 }
 
-func NewSimplismartTTS(apiKey string, voice string) *SimplismartTTS {
+type SimplismartTTSOption func(*SimplismartTTS)
+
+func WithSimplismartTTSBaseURL(baseURL string) SimplismartTTSOption {
+	return func(t *SimplismartTTS) {
+		if baseURL != "" {
+			t.baseURL = baseURL
+			t.baseURLExplicit = true
+		}
+	}
+}
+
+func WithSimplismartTTSModel(model string) SimplismartTTSOption {
+	return func(t *SimplismartTTS) {
+		if model != "" {
+			t.model = model
+		}
+	}
+}
+
+func WithSimplismartTTSSampleRate(sampleRate int) SimplismartTTSOption {
+	return func(t *SimplismartTTS) {
+		if sampleRate > 0 {
+			t.sampleRate = sampleRate
+		}
+	}
+}
+
+func WithSimplismartTTSTemperature(temperature float64) SimplismartTTSOption {
+	return func(t *SimplismartTTS) {
+		t.temperature = temperature
+	}
+}
+
+func WithSimplismartTTSTopP(topP float64) SimplismartTTSOption {
+	return func(t *SimplismartTTS) {
+		t.topP = topP
+	}
+}
+
+func WithSimplismartTTSRepetitionPenalty(repetitionPenalty float64) SimplismartTTSOption {
+	return func(t *SimplismartTTS) {
+		t.repetitionPenalty = repetitionPenalty
+	}
+}
+
+func WithSimplismartTTSMaxTokens(maxTokens int) SimplismartTTSOption {
+	return func(t *SimplismartTTS) {
+		if maxTokens > 0 {
+			t.maxTokens = maxTokens
+		}
+	}
+}
+
+func WithSimplismartTTSLanguage(language string) SimplismartTTSOption {
+	return func(t *SimplismartTTS) {
+		if language != "" {
+			t.language = language
+		}
+	}
+}
+
+func WithSimplismartTTSLeadingSilence(leadingSilence bool) SimplismartTTSOption {
+	return func(t *SimplismartTTS) {
+		t.leadingSilence = &leadingSilence
+	}
+}
+
+func NewSimplismartTTS(apiKey string, voice string, opts ...SimplismartTTSOption) *SimplismartTTS {
 	if apiKey == "" {
 		apiKey = os.Getenv(simplismartAPIKeyEnv)
 	}
-	if voice == "" {
-		voice = defaultSimplismartTTSVoice
-	}
-	return &SimplismartTTS{
+	provider := &SimplismartTTS{
 		apiKey:            apiKey,
 		baseURL:           defaultSimplismartTTSBaseURL,
 		model:             defaultSimplismartTTSModel,
@@ -54,6 +126,27 @@ func NewSimplismartTTS(apiKey string, voice string) *SimplismartTTS {
 		repetitionPenalty: defaultSimplismartTTSRepetitionPenalty,
 		maxTokens:         defaultSimplismartTTSMaxTokens,
 	}
+	for _, opt := range opts {
+		opt(provider)
+	}
+	if isSimplismartQwenModel(provider.model) {
+		if !provider.baseURLExplicit {
+			provider.baseURL = defaultSimplismartTTSQwenBaseURL
+		}
+		if provider.voice == "" {
+			provider.voice = defaultSimplismartTTSQwenVoice
+		}
+		if provider.language == "" {
+			provider.language = defaultSimplismartTTSQwenLanguage
+		}
+		if provider.leadingSilence == nil {
+			leadingSilence := true
+			provider.leadingSilence = &leadingSilence
+		}
+	} else if provider.voice == "" {
+		provider.voice = defaultSimplismartTTSVoice
+	}
+	return provider
 }
 
 func (t *SimplismartTTS) Label() string { return "simplismart.TTS" }
@@ -97,6 +190,9 @@ func (t *SimplismartTTS) Stream(ctx context.Context) (tts.SynthesizeStream, erro
 }
 
 func buildSimplismartTTSRequest(ctx context.Context, t *SimplismartTTS, text string) (*http.Request, error) {
+	if isSimplismartQwenModel(t.model) {
+		return buildSimplismartTTSQwenRequest(ctx, t, text)
+	}
 	reqBody := map[string]interface{}{
 		"prompt":             text,
 		"voice":              t.voice,
@@ -118,6 +214,36 @@ func buildSimplismartTTSRequest(ctx context.Context, t *SimplismartTTS, text str
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+t.apiKey)
 	return req, nil
+}
+
+func buildSimplismartTTSQwenRequest(ctx context.Context, t *SimplismartTTS, text string) (*http.Request, error) {
+	reqBody := map[string]interface{}{
+		"model":           t.model,
+		"text":            text,
+		"language":        t.language,
+		"voice":           t.voice,
+		"leading_silence": true,
+	}
+	if t.leadingSilence != nil {
+		reqBody["leading_silence"] = *t.leadingSilence
+	}
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.baseURL, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "audio/L16")
+	req.Header.Set("Authorization", "Bearer "+t.apiKey)
+	return req, nil
+}
+
+func isSimplismartQwenModel(model string) bool {
+	return strings.Contains(strings.ToLower(model), "qwen")
 }
 
 type simplismartTTSChunkedStream struct {
