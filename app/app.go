@@ -1852,6 +1852,11 @@ func configureTurnDetector(cfg AppConfig, a *agent.Agent) error {
 		}
 		a.AudioTurnDetector = detector
 		return nil
+	case providerLiveKit:
+		a.TurnDetector = adapterlivekit.NewMultilingualModel(
+			adapterlivekit.WithRemoteInferenceBaseURL(os.Getenv("LIVEKIT_REMOTE_EOT_URL")),
+		)
+		return nil
 	default:
 		return fmt.Errorf("unsupported RTP_AGENT_TURN_DETECTOR_PROVIDER %q", cfg.TurnDetectorProvider)
 	}
