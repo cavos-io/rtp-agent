@@ -75,6 +75,7 @@ type ttsErrorCollector interface {
 type EndOfTurnInfo struct {
 	SkipReply            bool
 	NewTranscript        string
+	Language             string
 	TranscriptConfidence float64
 	EndOfTurnDelay       float64
 	TranscriptionDelay   float64
@@ -1397,6 +1398,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	if turnDetection == TurnDetectionModeSTT {
 		a.runEOUDetection(EndOfTurnInfo{
 			NewTranscript:        transcript,
+			Language:             language,
 			TranscriptConfidence: confidence,
 			AudioFrames:          a.userAudioSnapshot(),
 		})
@@ -1604,6 +1606,7 @@ collect:
 	if _, err := a.completeUserTurn(ctx, EndOfTurnInfo{
 		SkipReply:            opts.SkipReply,
 		NewTranscript:        transcript,
+		Language:             fallbackLanguage,
 		TranscriptConfidence: confidence,
 	}); err != nil {
 		return transcript, err
@@ -1843,7 +1846,7 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 			if err == nil {
 				logger.Logger.Infow("EOU prediction", "probability", prob)
 				// Apply probability threshold logic
-				if prob < 0.5 {
+				if prob < a.turnDetectorThreshold(info.Language) {
 					endpointingDelay = a.maxEndpointingDelay()
 				}
 			} else {
@@ -1869,6 +1872,21 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 			}
 		}
 	}()
+}
+
+func (a *AgentActivity) turnDetectorThreshold(language string) float64 {
+	if a == nil || a.Agent == nil || a.Agent.TurnDetector == nil || language == "" {
+		return 0.5
+	}
+	detector, ok := a.Agent.TurnDetector.(turnDetectorThreshold)
+	if !ok {
+		return 0.5
+	}
+	threshold, ok := detector.UnlikelyThreshold(language)
+	if !ok {
+		return 0.5
+	}
+	return threshold
 }
 
 func (a *AgentActivity) minEndpointingDelay() float64 {

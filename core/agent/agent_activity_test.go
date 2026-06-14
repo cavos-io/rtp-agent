@@ -1372,6 +1372,36 @@ func TestAgentActivityUsesSessionMaxEndpointingDelay(t *testing.T) {
 	}
 }
 
+func TestAgentActivityUsesTurnDetectorLanguageThreshold(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.TurnDetector = thresholdTurnDetector{
+		probability: 0.4,
+		thresholds:  map[string]float64{"en-US": 0.3},
+	}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		MinEndpointingDelay: 0.01,
+		MaxEndpointingDelay: 0.2,
+	})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.runEOUDetection(EndOfTurnInfo{
+		NewTranscript:        "done now",
+		TranscriptConfidence: 0.9,
+		Language:             "en-US",
+	})
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "done now" {
+			t.Fatalf("turn message text = %q, want done now", msg.TextContent())
+		}
+	case <-time.After(80 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called after min delay; threshold was not applied")
+	}
+}
+
 func TestAgentActivityUsesAudioTurnDetectorMaxEndpointingDelay(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeSTT
@@ -2624,6 +2654,20 @@ type turnDetectorFunc func(context.Context, *llm.ChatContext) (float64, error)
 
 func (f turnDetectorFunc) PredictEndOfTurn(ctx context.Context, chatCtx *llm.ChatContext) (float64, error) {
 	return f(ctx, chatCtx)
+}
+
+type thresholdTurnDetector struct {
+	probability float64
+	thresholds  map[string]float64
+}
+
+func (d thresholdTurnDetector) PredictEndOfTurn(context.Context, *llm.ChatContext) (float64, error) {
+	return d.probability, nil
+}
+
+func (d thresholdTurnDetector) UnlikelyThreshold(language string) (float64, bool) {
+	threshold, ok := d.thresholds[language]
+	return threshold, ok
 }
 
 type recordingAudioTurnDetector struct {
