@@ -3409,6 +3409,84 @@ func TestResembleTTSFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestRespeecherTTSFallbackPassesReferenceOptions(t *testing.T) {
+	sampleRate := 16000
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("audio")),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		RespeecherAPIKey: "test-respeecher-key",
+		TTSBaseURL:       "https://respeecher.example/v1/",
+		TTSModel:         "/public/tts/ua-rt",
+		TTSVoice:         "custom-voice",
+		TTSSampleRate:    &sampleRate,
+		TTSJSONConfig: map[string]any{
+			"temperature": 0.45,
+			"pitch":       1.1,
+		},
+	}, providerRespeecher)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if got, want := provider.Label(), "respeecher.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 16000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference configured sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "/public/tts/ua-rt"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "Respeecher"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://respeecher.example/v1/public/tts/ua-rt/tts/bytes"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("X-API-Key"), "test-respeecher-key"; got != want {
+		t.Fatalf("X-API-Key = %q, want %q", got, want)
+	}
+	outputFormat, _ := gotPayload["output_format"].(map[string]any)
+	if got, want := outputFormat["sample_rate"], float64(16000); got != want {
+		t.Fatalf("output_format.sample_rate = %#v, want %#v", got, want)
+	}
+	voice, _ := gotPayload["voice"].(map[string]any)
+	if got, want := voice["id"], "custom-voice"; got != want {
+		t.Fatalf("voice.id = %#v, want %#v", got, want)
+	}
+	samplingParams, _ := voice["sampling_params"].(map[string]any)
+	if got, want := samplingParams["temperature"], float64(0.45); got != want {
+		t.Fatalf("sampling_params.temperature = %#v, want %#v", got, want)
+	}
+	if got, want := samplingParams["pitch"], float64(1.1); got != want {
+		t.Fatalf("sampling_params.pitch = %#v, want %#v", got, want)
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsTelnyxTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "telnyx")
