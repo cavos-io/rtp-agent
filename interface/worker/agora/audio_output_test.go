@@ -103,6 +103,43 @@ func TestAudioOutputPublishAudioRejectsCanceledContext(t *testing.T) {
 	}
 }
 
+func TestAudioOutputRejectsPartialSampleFrames(t *testing.T) {
+	publisher := &fakePCMPublisher{}
+	output := NewAudioOutput(publisher)
+
+	err := output.PublishAudio(context.Background(), &model.AudioFrame{
+		Data:              []byte{1, 2, 3},
+		SampleRate:        100,
+		NumChannels:       2,
+		SamplesPerChannel: 1,
+	})
+	if err == nil {
+		t.Fatal("PublishAudio() error = nil, want sample alignment error")
+	}
+	if !strings.Contains(err.Error(), "whole 16-bit interleaved samples") {
+		t.Fatalf("PublishAudio() error = %q, want whole sample alignment error", err.Error())
+	}
+	if len(publisher.frames) != 0 {
+		t.Fatalf("published frames after invalid input = %d, want 0", len(publisher.frames))
+	}
+
+	err = output.PublishAudio(context.Background(), &model.AudioFrame{
+		Data:              []byte{4, 5, 6, 7},
+		SampleRate:        100,
+		NumChannels:       2,
+		SamplesPerChannel: 1,
+	})
+	if err != nil {
+		t.Fatalf("PublishAudio(valid) error = %v", err)
+	}
+	if len(publisher.frames) != 1 {
+		t.Fatalf("published frames after valid input = %d, want 1", len(publisher.frames))
+	}
+	if got := publisher.frames[0].Data; len(got) != 4 || got[0] != 4 {
+		t.Fatalf("published data = %v, want only valid 4-byte frame", got)
+	}
+}
+
 func TestAudioOutputBuffersPartialPCMFrames(t *testing.T) {
 	publisher := &fakePCMPublisher{}
 	output := NewAudioOutput(publisher)

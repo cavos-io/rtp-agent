@@ -53,6 +53,10 @@ func (o *AudioOutput) PublishAudio(ctx context.Context, frame *model.AudioFrame)
 	if sampleRate%100 != 0 {
 		return fmt.Errorf("agora audio frame sample rate must produce whole 10 ms frames")
 	}
+	bytesPerInterleavedSample := channels * 2
+	if len(frame.Data)%bytesPerInterleavedSample != 0 {
+		return fmt.Errorf("agora audio frame data must contain whole 16-bit interleaved samples")
+	}
 	bytesPer10MS := (sampleRate / 100) * channels * 2
 	if bytesPer10MS <= 0 {
 		return fmt.Errorf("agora audio frame format is invalid")
