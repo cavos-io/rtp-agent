@@ -485,6 +485,23 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 				{"name": "forward_metrics", "request_ids": requestIDs},
 			},
 		}, nil
+	case "metrics_unsubscribe":
+		primary := &fakeScenarioLLM{label: "primary"}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary})
+		requestIDs := make([]string, 0, 1)
+		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.LLMMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		primary.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "before"})
+		unsubscribe()
+		primary.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "provider"})
+		adapter.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "adapter"})
+		return map[string]any{
+			"contract": "llm-fallback-metrics-unsubscribe",
+			"events": []map[string]any{
+				{"name": "metrics_unsubscribe", "request_ids": requestIDs},
+			},
+		}, nil
 	case "close_unsubscribes_provider_metrics":
 		primary := &fakeScenarioLLM{label: "primary"}
 		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary})

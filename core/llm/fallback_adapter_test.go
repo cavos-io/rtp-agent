@@ -55,6 +55,35 @@ func TestFallbackAdapterCloseUnsubscribesProviderMetrics(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterMetricsUnsubscribeRemovesLocalAndProviderHandlers(t *testing.T) {
+	primary := &fakeFallbackLLM{label: "primary.LLM"}
+	adapter := NewFallbackAdapter([]LLM{primary})
+	metricsCh := make(chan string, 2)
+	unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.LLMMetrics) {
+		metricsCh <- metrics.RequestID
+	})
+
+	primary.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "before"})
+	unsubscribe()
+	unsubscribe()
+	primary.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "provider"})
+	adapter.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "adapter"})
+
+	select {
+	case requestID := <-metricsCh:
+		if requestID != "before" {
+			t.Fatalf("metrics RequestID before unsubscribe = %q, want before", requestID)
+		}
+	default:
+		t.Fatal("metrics handler was not called before unsubscribe")
+	}
+	select {
+	case requestID := <-metricsCh:
+		t.Fatalf("received metrics after unsubscribe: %q", requestID)
+	default:
+	}
+}
+
 func TestFallbackAdapterRequiresAtLeastOneLLM(t *testing.T) {
 	defer func() {
 		r := recover()
