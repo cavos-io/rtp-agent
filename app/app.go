@@ -2135,6 +2135,49 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, gradium.WithGradiumSTTBufferSizeSeconds(*cfg.STTBufferSizeSeconds))
 		}
 		return gradium.NewGradiumSTT(cfg.GradiumAPIKey, sttOpts...), nil
+	case providerSoniox:
+		sttOpts := []soniox.SonioxSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, soniox.WithSonioxBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, soniox.WithSonioxModel(cfg.STTModel))
+		}
+		if cfg.STTLanguageOptions != "" {
+			sttOpts = append(sttOpts, soniox.WithSonioxLanguageHints(splitStringList(cfg.STTLanguageOptions)))
+		}
+		if strict := modelOptionBool(cfg.STTModelOptions, "language_hints_strict"); strict != nil {
+			sttOpts = append(sttOpts, soniox.WithSonioxLanguageHintsStrict(*strict))
+		}
+		if cfg.STTNumberOfChannels != nil {
+			sttOpts = append(sttOpts, soniox.WithSonioxNumChannels(*cfg.STTNumberOfChannels))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, soniox.WithSonioxSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTDiarization != nil {
+			sttOpts = append(sttOpts, soniox.WithSonioxSpeakerDiarization(*cfg.STTDiarization))
+		}
+		if cfg.STTLanguageDetection != nil {
+			sttOpts = append(sttOpts, soniox.WithSonioxLanguageIdentification(*cfg.STTLanguageDetection))
+		}
+		if cfg.STTEndpointingMS != nil {
+			sttOpts = append(sttOpts, soniox.WithSonioxMaxEndpointDelayMS(*cfg.STTEndpointingMS))
+		}
+		if cfg.STTSessionID != "" {
+			sttOpts = append(sttOpts, soniox.WithSonioxClientReferenceID(cfg.STTSessionID))
+		}
+		if context, ok := sonioxContextObjectFromModelOptions(cfg.STTModelOptions); ok {
+			sttOpts = append(sttOpts, soniox.WithSonioxContextObject(context))
+		} else if cfg.STTPrompt != "" {
+			sttOpts = append(sttOpts, soniox.WithSonioxContextText(cfg.STTPrompt))
+		}
+		if len(cfg.STTTranslationSourceLanguages) > 0 && len(cfg.STTTranslationTargetLanguages) > 0 {
+			sttOpts = append(sttOpts, soniox.WithSonioxTwoWayTranslation(cfg.STTTranslationSourceLanguages[0], cfg.STTTranslationTargetLanguages[0]))
+		} else if len(cfg.STTTranslationTargetLanguages) > 0 {
+			sttOpts = append(sttOpts, soniox.WithSonioxOneWayTranslation(cfg.STTTranslationTargetLanguages[0]))
+		}
+		return soniox.NewSonioxSTT(cfg.SonioxAPIKey, sttOpts...), nil
 	case providerSLNG:
 		sttOpts := []slng.STTOption{}
 		if cfg.STTModel != "" {

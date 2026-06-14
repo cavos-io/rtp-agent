@@ -3738,6 +3738,133 @@ func TestFireworksSTTFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestSonioxSTTFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("SONIOX_API_KEY", "test-soniox-key")
+	records := make(chan map[string]any, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read soniox config: %v", err)
+			return
+		}
+		var config map[string]any
+		if err := json.Unmarshal(payload, &config); err != nil {
+			t.Errorf("decode soniox config: %v", err)
+			return
+		}
+		records <- config
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	numChannels := 2
+	sampleRate := 8000
+	diarization := true
+	languageDetection := false
+	endpointingMS := 750
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTBaseURL:                    "ws" + strings.TrimPrefix(server.URL, "http"),
+		STTModel:                      "stt-rt-v4",
+		STTLanguageOptions:            "en,es",
+		STTNumberOfChannels:           &numChannels,
+		STTSampleRate:                 &sampleRate,
+		STTDiarization:                &diarization,
+		STTLanguageDetection:          &languageDetection,
+		STTEndpointingMS:              &endpointingMS,
+		STTSessionID:                  "client-1",
+		STTPrompt:                     "domain terms",
+		STTTranslationSourceLanguages: []string{"en"},
+		STTTranslationTargetLanguages: []string{"es"},
+	}, providerSoniox)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*soniox.SonioxSTT); !ok {
+		t.Fatalf("provider type = %T, want *soniox.SonioxSTT", provider)
+	}
+	if got, want := provider.Label(), "soniox.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "stt-rt-v4"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Soniox"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || !caps.Diarization || caps.AlignedTranscript != "chunk" || caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming interim diarization chunk-aligned", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case config := <-records:
+		if got, want := config["api_key"], "test-soniox-key"; got != want {
+			t.Fatalf("config api_key = %#v, want %#v", got, want)
+		}
+		if got, want := config["model"], "stt-rt-v4"; got != want {
+			t.Fatalf("config model = %#v, want %#v", got, want)
+		}
+		if got, want := fmt.Sprint(config["language_hints"]), "[en es]"; got != want {
+			t.Fatalf("config language_hints = %#v, want %q", config["language_hints"], want)
+		}
+		if got, want := config["num_channels"], float64(2); got != want {
+			t.Fatalf("config num_channels = %#v, want %#v", got, want)
+		}
+		if got, want := config["sample_rate"], float64(8000); got != want {
+			t.Fatalf("config sample_rate = %#v, want %#v", got, want)
+		}
+		if got, want := config["enable_speaker_diarization"], true; got != want {
+			t.Fatalf("config enable_speaker_diarization = %#v, want %#v", got, want)
+		}
+		if got, want := config["enable_language_identification"], false; got != want {
+			t.Fatalf("config enable_language_identification = %#v, want %#v", got, want)
+		}
+		if got, want := config["client_reference_id"], "client-1"; got != want {
+			t.Fatalf("config client_reference_id = %#v, want %#v", got, want)
+		}
+		if got, want := config["max_endpoint_delay_ms"], float64(750); got != want {
+			t.Fatalf("config max_endpoint_delay_ms = %#v, want %#v", got, want)
+		}
+		if got, want := config["context"], "domain terms"; got != want {
+			t.Fatalf("config context = %#v, want %#v", got, want)
+		}
+		translation, _ := config["translation"].(map[string]any)
+		if got, want := translation["type"], "two_way"; got != want {
+			t.Fatalf("translation type = %#v, want %#v", got, want)
+		}
+		if got, want := translation["language_a"], "en"; got != want {
+			t.Fatalf("translation language_a = %#v, want %#v", got, want)
+		}
+		if got, want := translation["language_b"], "es"; got != want {
+			t.Fatalf("translation language_b = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Soniox STT config")
+	}
+}
+
 func firstQueryValue(values map[string][]string, key string) string {
 	if len(values[key]) == 0 {
 		return ""
