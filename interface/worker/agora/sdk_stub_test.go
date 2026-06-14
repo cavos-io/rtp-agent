@@ -185,6 +185,27 @@ func TestSDKClientImplementationReleasesServiceOnLeave(t *testing.T) {
 	}
 }
 
+func TestSDKClientImplementationLeavesBeforeCheckingContext(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	leaveIndex := strings.Index(text, "func (c *sdkChannelClient) Leave")
+	if leaveIndex < 0 {
+		t.Fatal("sdk.go missing sdkChannelClient.Leave")
+	}
+	leaveBody := text[leaveIndex:]
+	connectionIndex := strings.Index(leaveBody, "connection := c.connection")
+	contextIndex := strings.Index(leaveBody, "case <-ctx.Done()")
+	if connectionIndex < 0 {
+		t.Fatal("sdk.go Leave missing connection cleanup")
+	}
+	if contextIndex >= 0 && contextIndex < connectionIndex {
+		t.Fatal("sdk.go Leave must release the active connection before returning context cancellation")
+	}
+}
+
 func TestSDKClientImplementationRejectsDuplicateJoin(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {

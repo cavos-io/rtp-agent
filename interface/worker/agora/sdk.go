@@ -354,16 +354,16 @@ func (c *sdkChannelClient) waitConnected(ctx context.Context, connection *agoras
 }
 
 func (c *sdkChannelClient) Leave(ctx context.Context) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
 	c.mu.Lock()
 	connection := c.connection
 	c.connection = nil
 	c.mu.Unlock()
 	if connection == nil {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		return nil
 	}
 	var err error
@@ -373,6 +373,13 @@ func (c *sdkChannelClient) Leave(ctx context.Context) error {
 	connection.Release()
 	if releaseErr := releaseSDKService(); releaseErr != nil && err == nil {
 		err = releaseErr
+	}
+	select {
+	case <-ctx.Done():
+		if err == nil {
+			err = ctx.Err()
+		}
+	default:
 	}
 	return err
 }
