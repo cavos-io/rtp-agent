@@ -749,6 +749,26 @@ func runSTTStreamAdapter(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "public_wrapper":
+		var wrapper *lkstt.StreamAdapterWrapper
+		_, isRecognizeStream := any(wrapper).(lkstt.RecognizeStream)
+		_, hasTiming := any(wrapper).(lkstt.StreamTiming)
+		_, hasEndInput := any(wrapper).(lkstt.InputEnding)
+		return map[string]any{
+			"contract": "stt-stream-adapter",
+			"events": []map[string]any{
+				{
+					"name":                  "public_wrapper",
+					"type_name":             "StreamAdapterWrapper",
+					"is_recognize_stream":   isRecognizeStream,
+					"has_push_frame":        isRecognizeStream,
+					"has_flush":             isRecognizeStream,
+					"has_end_input":         hasEndInput,
+					"has_start_time_offset": hasTiming,
+					"has_start_time":        hasTiming,
+				},
+			},
+		}, nil
 	case "metadata":
 		adapter := lkstt.NewStreamAdapter(fakeScenarioSTT{
 			label:        "wrapped",

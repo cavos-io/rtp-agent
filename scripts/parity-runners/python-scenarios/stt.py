@@ -689,6 +689,29 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "public_wrapper":
+        wrapper_cls = stream_adapter_module.StreamAdapterWrapper
+        is_recognize_stream = issubclass(
+            wrapper_cls, stt_module.RecognizeStream
+        ) or all(
+            hasattr(wrapper_cls, name)
+            for name in ("push_frame", "flush", "aclose", "__aiter__")
+        )
+        return {
+            "contract": "stt-stream-adapter",
+            "events": [
+                {
+                    "name": "public_wrapper",
+                    "type_name": wrapper_cls.__name__,
+                    "is_recognize_stream": is_recognize_stream,
+                    "has_push_frame": hasattr(wrapper_cls, "push_frame"),
+                    "has_flush": hasattr(wrapper_cls, "flush"),
+                    "has_end_input": hasattr(wrapper_cls, "end_input"),
+                    "has_start_time_offset": hasattr(wrapper_cls, "start_time_offset"),
+                    "has_start_time": hasattr(wrapper_cls, "start_time"),
+                }
+            ],
+        }
     if action == "metadata":
         adapter = stream_adapter_module.StreamAdapter(
             stt=FakeSTT("wrapped", model="wrapped-model", provider="wrapped-provider"),
