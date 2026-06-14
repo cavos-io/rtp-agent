@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -21,6 +22,7 @@ import (
 var ErrSpeechSchedulingPaused = errors.New("speech scheduling is paused")
 
 const agentInstructionsMessageID = "lk.agent_task.instructions"
+const audioTurnDetectorWindowSeconds = 8.0
 
 type instructionUpdatingAssistant interface {
 	UpdateInstructions(context.Context, string) error
@@ -78,6 +80,7 @@ type EndOfTurnInfo struct {
 	TranscriptionDelay   float64
 	StartedSpeakingAt    *float64
 	StoppedSpeakingAt    *float64
+	AudioFrames          []*model.AudioFrame
 }
 
 // AgentActivity handles the internal event loops, I/O processing, and
@@ -123,6 +126,9 @@ type AgentActivity struct {
 
 	userTurnExceededMu     sync.Mutex
 	userTurnExceededLocked bool
+
+	userAudioMu     sync.Mutex
+	userAudioFrames []*model.AudioFrame
 }
 
 func NewAgentActivity(agentIntf AgentInterface, session *AgentSession) *AgentActivity {
@@ -1263,6 +1269,7 @@ func (a *AgentActivity) nextSpeechIndexLocked() int {
 func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 	a.speaking = true
 	a.sttEOSReceived = false
+	a.clearUserAudioFrames()
 	if a.Session != nil {
 		a.Session.UpdateUserState(UserStateSpeaking)
 	}
@@ -1391,8 +1398,68 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 		a.runEOUDetection(EndOfTurnInfo{
 			NewTranscript:        transcript,
 			TranscriptConfidence: confidence,
+			AudioFrames:          a.userAudioSnapshot(),
 		})
 	}
+}
+
+func (a *AgentActivity) RecordUserAudioFrame(frame *model.AudioFrame) {
+	if a == nil || frame == nil {
+		return
+	}
+	copyFrame := copyAudioFrame(frame)
+	a.userAudioMu.Lock()
+	a.userAudioFrames = append(a.userAudioFrames, copyFrame)
+	a.trimUserAudioFramesLocked()
+	a.userAudioMu.Unlock()
+}
+
+func (a *AgentActivity) clearUserAudioFrames() {
+	a.userAudioMu.Lock()
+	a.userAudioFrames = nil
+	a.userAudioMu.Unlock()
+}
+
+func (a *AgentActivity) userAudioSnapshot() []*model.AudioFrame {
+	a.userAudioMu.Lock()
+	defer a.userAudioMu.Unlock()
+	frames := make([]*model.AudioFrame, len(a.userAudioFrames))
+	for i, frame := range a.userAudioFrames {
+		frames[i] = copyAudioFrame(frame)
+	}
+	return frames
+}
+
+func (a *AgentActivity) trimUserAudioFramesLocked() {
+	total := 0.0
+	start := len(a.userAudioFrames)
+	for start > 0 {
+		frame := a.userAudioFrames[start-1]
+		total += audioFrameDurationSeconds(frame)
+		start--
+		if total >= audioTurnDetectorWindowSeconds {
+			break
+		}
+	}
+	if start > 0 {
+		a.userAudioFrames = append([]*model.AudioFrame(nil), a.userAudioFrames[start:]...)
+	}
+}
+
+func copyAudioFrame(frame *model.AudioFrame) *model.AudioFrame {
+	if frame == nil {
+		return nil
+	}
+	copyFrame := *frame
+	copyFrame.Data = append([]byte(nil), frame.Data...)
+	return &copyFrame
+}
+
+func audioFrameDurationSeconds(frame *model.AudioFrame) float64 {
+	if frame == nil || frame.SampleRate == 0 {
+		return 0
+	}
+	return float64(frame.SamplesPerChannel) / float64(frame.SampleRate)
 }
 
 func (a *AgentActivity) realtimeUserTranscriptionEnabled() bool {
@@ -1754,7 +1821,17 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 
 		endpointingDelay := a.minEndpointingDelay()
 
-		if a.Agent.TurnDetector != nil && info.NewTranscript != "" {
+		if a.Agent.AudioTurnDetector != nil && len(info.AudioFrames) > 0 {
+			prob, err := a.Agent.AudioTurnDetector.PredictEndOfTurnAudio(ctx, info.AudioFrames)
+			if err == nil {
+				logger.Logger.Infow("Audio EOU prediction", "probability", prob)
+				if prob < 0.5 {
+					endpointingDelay = a.maxEndpointingDelay()
+				}
+			} else {
+				logger.Logger.Errorw("Audio EOU prediction failed", err)
+			}
+		} else if a.Agent.TurnDetector != nil && info.NewTranscript != "" {
 			// Predict end of turn
 			chatCtx := a.RetrieveChatCtx().Copy()
 			chatCtx.Append(&llm.ChatMessage{

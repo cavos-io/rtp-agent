@@ -311,8 +311,12 @@ type SipDTMFEvent struct {
 func (s *AgentSession) OnAudioFrame(ctx context.Context, frame *model.AudioFrame) {
 	s.mu.Lock()
 	assistant := s.Assistant
+	activity := s.activity
 	s.mu.Unlock()
 
+	if activity != nil {
+		activity.RecordUserAudioFrame(frame)
+	}
 	if assistant != nil {
 		assistant.OnAudioFrame(ctx, frame)
 	}

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"sync"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -26,6 +27,10 @@ type TurnDetector interface {
 	PredictEndOfTurn(ctx context.Context, chatCtx *llm.ChatContext) (float64, error)
 }
 
+type AudioTurnDetector interface {
+	PredictEndOfTurnAudio(ctx context.Context, frames []*model.AudioFrame) (float64, error)
+}
+
 type AgentInterface interface {
 	OnEnter()
 	OnExit()
@@ -42,14 +47,15 @@ type Agent struct {
 	ChatCtx             *llm.ChatContext
 	Tools               []llm.Tool
 
-	TurnDetection TurnDetectionMode
-	TurnDetector  TurnDetector
-	Avatar        AvatarProvider
-	STT           stt.STT
-	VAD           vad.VAD
-	LLM           llm.LLM
-	RealtimeModel llm.RealtimeModel
-	TTS           tts.TTS
+	TurnDetection     TurnDetectionMode
+	TurnDetector      TurnDetector
+	AudioTurnDetector AudioTurnDetector
+	Avatar            AvatarProvider
+	STT               stt.STT
+	VAD               vad.VAD
+	LLM               llm.LLM
+	RealtimeModel     llm.RealtimeModel
+	TTS               tts.TTS
 
 	AllowInterruptions         bool
 	AllowInterruptionsSet      bool
