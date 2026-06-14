@@ -964,6 +964,37 @@ func TestDefaultConfigFromEnvSelectsNvidiaTTS(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsNvidiaTTSWithReferenceOptions(t *testing.T) {
+	t.Setenv("NVIDIA_API_KEY", "test-nvidia-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "nvidia")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "localhost:50051")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "local-function")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "Magpie-Multilingual.ID-ID.Ayu")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "id-ID")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	nvidiaProvider, ok := app.Session.TTS.(*nvidia.NvidiaTTS)
+	if !ok {
+		t.Fatalf("TTS provider type = %T, want *nvidia.NvidiaTTS", app.Session.TTS)
+	}
+	state := reflect.ValueOf(nvidiaProvider).Elem()
+	if got, want := state.FieldByName("server").String(), "localhost:50051"; got != want {
+		t.Fatalf("server = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("functionID").String(), "local-function"; got != want {
+		t.Fatalf("functionID = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("voice").String(), "Magpie-Multilingual.ID-ID.Ayu"; got != want {
+		t.Fatalf("voice = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("languageCode").String(), "id-ID"; got != want {
+		t.Fatalf("languageCode = %q, want %q", got, want)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsUltravoxTTS(t *testing.T) {
 	t.Setenv("ULTRAVOX_API_KEY", "test-ultravox-key")
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "ultravox")
