@@ -704,6 +704,46 @@ func TestUpdateOptionsMergesConfiguredValuesBeforeRun(t *testing.T) {
 	}
 }
 
+func TestUpdateOptionsPreservesAgoraTransportConfig(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		Transport: WorkerTransportAgora,
+		Agora: AgoraOptions{
+			AppID:          "app",
+			AppCertificate: "cert",
+			Channel:        "support",
+			UID:            "agent",
+			Token:          "token",
+		},
+	})
+
+	err := server.UpdateOptions(WorkerOptions{
+		LogLevel: "DEBUG",
+		DevMode:  true,
+	})
+	if err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	if server.Options.Transport != WorkerTransportAgora {
+		t.Fatalf("Transport = %q, want %q", server.Options.Transport, WorkerTransportAgora)
+	}
+	if server.Options.Agora.AppID != "app" {
+		t.Fatalf("Agora.AppID = %q, want app", server.Options.Agora.AppID)
+	}
+	if server.Options.Agora.AppCertificate != "cert" {
+		t.Fatalf("Agora.AppCertificate = %q, want cert", server.Options.Agora.AppCertificate)
+	}
+	if server.Options.Agora.Channel != "support" {
+		t.Fatalf("Agora.Channel = %q, want support", server.Options.Agora.Channel)
+	}
+	if server.Options.Agora.UID != "agent" {
+		t.Fatalf("Agora.UID = %q, want agent", server.Options.Agora.UID)
+	}
+	if server.Options.Agora.Token != "token" {
+		t.Fatalf("Agora.Token = %q, want token", server.Options.Agora.Token)
+	}
+}
+
 func TestUpdateOptionsPreservesExplicitZeroPorts(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		Port:           8081,

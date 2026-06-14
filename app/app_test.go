@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -184,6 +185,10 @@ func (f *fakeAppAgoraChannelClient) PublishPCM(ctx context.Context, frame worker
 
 func (f *fakeAppAgoraChannelClient) emitAudio(frame *model.AudioFrame) {
 	f.audio(frame)
+}
+
+func (f *fakeAppAgoraChannelClient) emit(event workeragora.Event) {
+	f.handler(event)
 }
 
 func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
@@ -580,6 +585,75 @@ func TestAppRunUsesAgoraTransportWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestRunAgoraLogsConnectedTransportEvent(t *testing.T) {
+	previousLogger := logutil.Logger
+	recorder := &appRecordingLogger{entriesCh: make(chan appLogEntry, 8)}
+	logutil.Logger = recorder
+	t.Cleanup(func() {
+		logutil.Logger = previousLogger
+	})
+
+	client := &fakeAppAgoraChannelClient{joinedCh: make(chan struct{}, 1)}
+	oldNewAgoraChannelClient := appNewAgoraChannelClient
+	appNewAgoraChannelClient = func() (workeragora.ChannelClient, error) {
+		return client, nil
+	}
+	t.Cleanup(func() {
+		appNewAgoraChannelClient = oldNewAgoraChannelClient
+	})
+
+	rtpApp := &App{
+		Session: agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{}),
+		Server: worker.NewAgentServer(worker.WorkerOptions{
+			Agora: worker.AgoraOptions{
+				AppID:   "app",
+				Channel: "support",
+				UID:     "agent",
+				Token:   "token",
+			},
+		}),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- rtpApp.runAgora(ctx)
+	}()
+
+	select {
+	case <-client.joinedCh:
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not join Agora channel")
+	}
+	client.emit(workeragora.Event{Kind: workeragora.EventConnected, Channel: "support", Reason: 42})
+
+	select {
+	case entry := <-recorder.entriesCh:
+		if entry.msg != "agora transport connected" {
+			t.Fatalf("log msg = %q, want agora transport connected", entry.msg)
+		}
+		if got := entry.value("channel"); got != "support" {
+			t.Fatalf("log channel = %#v, want support", got)
+		}
+		if got := entry.value("reason"); got != 42 {
+			t.Fatalf("log reason = %#v, want 42", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Agora connected log")
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("runAgora() error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not return after cancellation")
+	}
+}
+
 func TestRunAgoraPublishesAssistantAudioToChannel(t *testing.T) {
 	client := &fakeAppAgoraChannelClient{
 		joinedCh:    make(chan struct{}, 1),
@@ -623,10 +697,22 @@ func TestRunAgoraPublishesAssistantAudioToChannel(t *testing.T) {
 	if !ok {
 		t.Fatalf("session assistant = %T, want *agent.PipelineAgent", session.Assistant)
 	}
-	if pipeline.PublishAudio == nil {
-		t.Fatal("session assistant PublishAudio was not connected to Agora transport")
+	var publishAudio func(*model.AudioFrame) error
+	timeout := time.After(time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for publishAudio == nil {
+		publishAudio = pipeline.PublishAudio
+		if publishAudio != nil {
+			break
+		}
+		select {
+		case <-timeout:
+			t.Fatal("session assistant PublishAudio was not connected to Agora transport")
+		case <-ticker.C:
+		}
 	}
-	if err := pipeline.PublishAudio(&model.AudioFrame{
+	if err := publishAudio(&model.AudioFrame{
 		Data:              make([]byte, 320),
 		SampleRate:        16000,
 		NumChannels:       1,
@@ -10991,12 +11077,53 @@ func chdirAppTest(t *testing.T, dir string) {
 	})
 }
 
-type appRecordingLogger struct{}
+type appLogEntry struct {
+	level string
+	msg   string
+	err   error
+	kv    []any
+}
 
-func (l *appRecordingLogger) Debugw(msg string, keysAndValues ...any)            {}
-func (l *appRecordingLogger) Infow(msg string, keysAndValues ...any)             {}
-func (l *appRecordingLogger) Warnw(msg string, err error, keysAndValues ...any)  {}
-func (l *appRecordingLogger) Errorw(msg string, err error, keysAndValues ...any) {}
+func (e appLogEntry) value(key string) any {
+	for i := 0; i+1 < len(e.kv); i += 2 {
+		if e.kv[i] == key {
+			return e.kv[i+1]
+		}
+	}
+	return nil
+}
+
+type appRecordingLogger struct {
+	mu        sync.Mutex
+	entries   []appLogEntry
+	entriesCh chan appLogEntry
+}
+
+func (l *appRecordingLogger) record(entry appLogEntry) {
+	l.mu.Lock()
+	l.entries = append(l.entries, entry)
+	ch := l.entriesCh
+	l.mu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- entry:
+		default:
+		}
+	}
+}
+
+func (l *appRecordingLogger) Debugw(msg string, keysAndValues ...any) {
+	l.record(appLogEntry{level: "debug", msg: msg, kv: append([]any(nil), keysAndValues...)})
+}
+func (l *appRecordingLogger) Infow(msg string, keysAndValues ...any) {
+	l.record(appLogEntry{level: "info", msg: msg, kv: append([]any(nil), keysAndValues...)})
+}
+func (l *appRecordingLogger) Warnw(msg string, err error, keysAndValues ...any) {
+	l.record(appLogEntry{level: "warn", msg: msg, err: err, kv: append([]any(nil), keysAndValues...)})
+}
+func (l *appRecordingLogger) Errorw(msg string, err error, keysAndValues ...any) {
+	l.record(appLogEntry{level: "error", msg: msg, err: err, kv: append([]any(nil), keysAndValues...)})
+}
 func (l *appRecordingLogger) WithValues(keysAndValues ...any) livekitlogger.Logger {
 	return l
 }
