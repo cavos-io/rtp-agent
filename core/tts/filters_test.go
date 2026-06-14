@@ -121,6 +121,22 @@ func TestTextTransformBufferFiltersMarkdownAcrossChunks(t *testing.T) {
 	}
 }
 
+func TestTextTransformBufferCanApplyEmojiOnlyTransform(t *testing.T) {
+	buffer, err := NewTextTransformBufferWithTransforms([]string{"filter_emoji"})
+	if err != nil {
+		t.Fatalf("NewTextTransformBufferWithTransforms error = %v", err)
+	}
+
+	chunks := append(buffer.Push("Say **hi** 😊"), buffer.Flush()...)
+
+	if want := []string{"Say **hi** "}; !equalStringSlices(chunks, want) {
+		t.Fatalf("chunks = %#v, want %#v", chunks, want)
+	}
+	if got, want := strings.Join(chunks, ""), "Say **hi** "; got != want {
+		t.Fatalf("joined output = %q, want %q; chunks = %#v", got, want, chunks)
+	}
+}
+
 func TestTextTransformBufferFiltersEndCallToolMarkersAcrossChunks(t *testing.T) {
 	buffer := NewTextTransformBuffer()
 

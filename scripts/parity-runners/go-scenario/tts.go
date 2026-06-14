@@ -336,12 +336,10 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 		if len(transforms) == 0 {
 			transforms = []string{"filter_markdown"}
 		}
-		for _, transform := range transforms {
-			if transform != "filter_markdown" {
-				return nil, fmt.Errorf("unsupported TTS text transform %q", transform)
-			}
+		buffer, err := lktts.NewTextTransformBufferWithTransforms(transforms)
+		if err != nil {
+			return nil, err
 		}
-		buffer := lktts.NewTextTransformBuffer()
 		chunks := []string{}
 		for _, chunk := range payload.Chunks {
 			chunks = append(chunks, buffer.Push(chunk)...)
