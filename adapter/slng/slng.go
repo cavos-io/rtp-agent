@@ -37,6 +37,7 @@ const (
 	slngAPIKeyEnv              = "SLNG_API_KEY"
 	slngNumChannels            = 1
 	slngFlushMessage           = `{"type":"flush"}`
+	slngCancelMessage          = `{"type":"cancel"}`
 )
 
 type STT struct {
@@ -734,6 +735,11 @@ func resolveDeepgramSTTModel(ref modelRef) string {
 	return ""
 }
 
+func isRimeArcanaModel(modelName string) bool {
+	ref, err := parseModelRef(modelName)
+	return err == nil && ref.routeProvider == "rime" && ref.routeModel == "arcana"
+}
+
 func normalizeLanguageForModel(modelName, language string, options map[string]any) string {
 	cleaned := strings.TrimSpace(language)
 	if candidate, ok := options["target_language_code"].(string); ok && strings.TrimSpace(candidate) != "" {
@@ -1082,6 +1088,9 @@ func (s *ttsStream) PushText(text string) error {
 }
 
 func (s *ttsStream) Flush() error {
+	if isRimeArcanaModel(s.model) {
+		return s.conn.WriteMessage(websocket.TextMessage, []byte(slngCancelMessage))
+	}
 	return s.conn.WriteMessage(websocket.TextMessage, []byte(slngFlushMessage))
 }
 

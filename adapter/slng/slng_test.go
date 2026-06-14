@@ -351,6 +351,70 @@ func TestSLNGTTSStreamNormalCloseAfterAudioReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestSLNGTTSRimeArcanaFlushSendsCancel(t *testing.T) {
+	messages := make(chan map[string]any, 3)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		for i := 0; i < 3; i++ {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				t.Errorf("read message %d: %v", i, err)
+				return
+			}
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Errorf("decode message %d: %v", i, err)
+				return
+			}
+			messages <- message
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	provider := NewTTS("test-key",
+		WithTTSModel("rime/arcana:en"),
+		WithTTSEndpoint("ws"+strings.TrimPrefix(server.URL, "http")),
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	for _, want := range []string{"init", "text", "cancel"} {
+		select {
+		case message := <-messages:
+			if got := message["type"]; got != want {
+				t.Fatalf("message type = %#v, want %#v in %#v", got, want, message)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for %s message", want)
+		}
+	}
+}
+
 func TestSLNGSTTStreamEventsMapReferenceMessages(t *testing.T) {
 	events, err := sttEventsFromMessage([]byte(`{"type":"Results","is_final":false,"language":"en","channel":{"alternatives":[{"transcript":"hel","confidence":0.5}]}}`), "en", true)
 	if err != nil {
