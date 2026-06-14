@@ -8,6 +8,15 @@ import (
 
 func TestNewSDKChannelClientReportsBuildTagRequirement(t *testing.T) {
 	client, err := NewSDKChannelClient()
+	if agoraSDKBuild {
+		if err != nil {
+			t.Fatalf("NewSDKChannelClient() error = %v, want nil with agora_sdk tag", err)
+		}
+		if client == nil {
+			t.Fatal("NewSDKChannelClient() client = nil, want SDK client with agora_sdk tag")
+		}
+		return
+	}
 	if err == nil {
 		t.Fatal("NewSDKChannelClient() error = nil, want build-tag requirement")
 	}
