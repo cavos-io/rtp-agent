@@ -172,6 +172,26 @@ func TestStreamAdapterDoesNotForwardWrappedSTTErrors(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterErrorUnsubscribeRemovesLocalHandler(t *testing.T) {
+	wrapped := &fakeStreamAdapterSTT{}
+	adapter := NewStreamAdapter(wrapped, &fakeStreamAdapterVAD{})
+	labelsCh := make(chan string, 1)
+	unsubscribe := adapter.OnError(func(err *STTError) {
+		labelsCh <- err.Label
+	})
+	unsubscribe()
+	unsubscribe()
+
+	wrapped.EmitError(NewSTTError("wrapped", errors.New("wrapped stt failed"), true))
+	adapter.EmitError(NewSTTError("adapter", errors.New("adapter failed"), true))
+
+	select {
+	case label := <-labelsCh:
+		t.Fatalf("received error after unsubscribe: %q", label)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestStreamAdapterWrapperIsPublicReferenceType(t *testing.T) {
 	var _ RecognizeStream = (*StreamAdapterWrapper)(nil)
 	var _ StreamTiming = (*StreamAdapterWrapper)(nil)

@@ -184,6 +184,21 @@ def tts_stream_adapter(input_data: Any) -> dict[str, Any]:
                 {"name": "provider_error_not_forwarded", "labels": labels}
             ],
         }
+    if action == "error_unsubscribe_local":
+        labels: list[str] = []
+
+        def handler(error: Any) -> None:
+            labels.append(error.label)
+
+        adapter.on("error", handler)
+        adapter.off("error", handler)
+        adapter.emit("error", type("Error", (), {"label": "adapter"})())
+        return {
+            "contract": "tts-stream-adapter-error-unsubscribe",
+            "events": [
+                {"name": "error_unsubscribe_local", "labels": labels}
+            ],
+        }
     raise ValueError(f"unsupported TTS stream adapter action {action!r}")
 
 
@@ -589,6 +604,27 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "metrics_unsubscribe":
+        request_ids: list[str] = []
+
+        def handler(metrics: Any) -> None:
+            request_ids.append(metrics.request_id)
+
+        tts.on("metrics_collected", handler)
+        tts.off("metrics_collected", handler)
+        tts.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "after-unsubscribe"})(),
+        )
+        return {
+            "contract": "tts-metrics-reference-unsubscribe",
+            "events": [
+                {
+                    "name": "metrics_unsubscribe",
+                    "request_ids": request_ids,
+                }
+            ],
+        }
     if action == "error_panic_isolated":
         labels: list[str] = []
         escaped_error = False
@@ -638,6 +674,24 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "error_unsubscribe":
+        labels: list[str] = []
+
+        def handler(error: Any) -> None:
+            labels.append(error.label)
+
+        tts.on("error", handler)
+        tts.off("error", handler)
+        tts.emit("error", type("Error", (), {"label": "after-unsubscribe"})())
+        return {
+            "contract": "tts-error-emitter-unsubscribe",
+            "events": [
+                {
+                    "name": "error_unsubscribe",
+                    "labels": labels,
+                }
+            ],
+        }
     raise ValueError(f"unsupported TTS value object action {action!r}")
 
 
@@ -653,12 +707,16 @@ def tts_fallback(input_data: Any) -> dict[str, Any]:
                 num_channels=num_channels,
             )
             self.prewarm_calls = 0
+            self.close_calls = 0
 
         def synthesize(self, text: str, *, conn_options: Any = None) -> Any:
             return None
 
         def prewarm(self) -> None:
             self.prewarm_calls += 1
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
 
     provider = ScenarioTTS()
 
@@ -721,6 +779,70 @@ def tts_fallback(input_data: Any) -> dict[str, Any]:
                 {"name": "provider_error_not_forwarded", "labels": labels}
             ],
         }
+    if action == "error_unsubscribe_local":
+        primary = ScenarioTTS()
+        adapter = module.FallbackAdapter([primary])
+        labels: list[str] = []
+
+        def handler(error: Any) -> None:
+            labels.append(error.label)
+
+        adapter.on("error", handler)
+        adapter.off("error", handler)
+        adapter.emit("error", type("Error", (), {"label": "adapter"})())
+        return {
+            "contract": "tts-fallback-error-unsubscribe-local",
+            "events": [
+                {"name": "error_unsubscribe_local", "labels": labels}
+            ],
+        }
+    if action == "forward_metrics":
+        primary = ScenarioTTS()
+        fallback = ScenarioTTS()
+        adapter = module.FallbackAdapter([primary, fallback])
+        request_ids: list[str] = []
+        adapter.on(
+            "metrics_collected",
+            lambda metrics: request_ids.append(metrics.request_id),
+        )
+        primary.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "primary-req"})(),
+        )
+        fallback.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "fallback-req"})(),
+        )
+        return {
+            "contract": "tts-fallback-forward-metrics",
+            "events": [
+                {"name": "forward_metrics", "request_ids": request_ids}
+            ],
+        }
+    if action == "metrics_unsubscribe":
+        primary = ScenarioTTS()
+        adapter = module.FallbackAdapter([primary])
+        request_ids: list[str] = []
+
+        def handler(metrics: Any) -> None:
+            request_ids.append(metrics.request_id)
+
+        adapter.on("metrics_collected", handler)
+        adapter.off("metrics_collected", handler)
+        primary.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "primary-req"})(),
+        )
+        adapter.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "adapter-req"})(),
+        )
+        return {
+            "contract": "tts-fallback-metrics-unsubscribe",
+            "events": [
+                {"name": "metrics_unsubscribe", "request_ids": request_ids}
+            ],
+        }
     if action == "close_unsubscribes_provider_metrics":
         primary = ScenarioTTS()
         adapter = module.FallbackAdapter([primary])
@@ -746,6 +868,74 @@ def tts_fallback(input_data: Any) -> dict[str, Any]:
             "contract": "tts-fallback-close-unsubscribes-provider-metrics",
             "events": [
                 {"name": "close_unsubscribes_provider_metrics", "request_ids": request_ids}
+            ],
+        }
+    if action == "close_provider_ownership":
+        primary = ScenarioTTS()
+        fallback = ScenarioTTS()
+        adapter = module.FallbackAdapter([primary, fallback])
+        asyncio.run(adapter.aclose())
+        return {
+            "contract": "tts-fallback-close-provider-ownership",
+            "events": [
+                {
+                    "name": "close_provider_ownership",
+                    "primary_close_calls": primary.close_calls,
+                    "fallback_close_calls": fallback.close_calls,
+                }
+            ],
+        }
+    if action == "availability_panic_isolated":
+        primary = ScenarioTTS()
+        adapter = module.FallbackAdapter([primary])
+        delivered: list[dict[str, Any]] = []
+
+        def failing_handler(event: Any) -> None:
+            raise RuntimeError("availability handler failed")
+
+        adapter.on("tts_availability_changed", failing_handler)
+        adapter.on(
+            "tts_availability_changed",
+            lambda event: delivered.append(
+                {
+                    "provider": "primary" if event.tts is primary else "other",
+                    "available": event.available,
+                }
+            ),
+        )
+        adapter.emit(
+            "tts_availability_changed",
+            module.AvailabilityChangedEvent(tts=primary, available=False),
+        )
+        return {
+            "contract": "tts-fallback-availability-panic-isolated",
+            "events": [
+                {"name": "availability_panic_isolated", "delivered": delivered}
+            ],
+        }
+    if action == "availability_unsubscribe":
+        primary = ScenarioTTS()
+        adapter = module.FallbackAdapter([primary])
+        delivered: list[dict[str, Any]] = []
+
+        def handler(event: Any) -> None:
+            delivered.append(
+                {
+                    "provider": "primary" if event.tts is primary else "other",
+                    "available": event.available,
+                }
+            )
+
+        adapter.on("tts_availability_changed", handler)
+        adapter.off("tts_availability_changed", handler)
+        adapter.emit(
+            "tts_availability_changed",
+            module.AvailabilityChangedEvent(tts=primary, available=False),
+        )
+        return {
+            "contract": "tts-fallback-availability-unsubscribe",
+            "events": [
+                {"name": "availability_unsubscribe", "delivered": delivered}
             ],
         }
     if action == "validation":

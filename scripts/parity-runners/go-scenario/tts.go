@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	lktts "github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
@@ -358,6 +360,23 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "metrics_unsubscribe":
+		requestIDs := make([]string, 0, 1)
+		unsubscribe := provider.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		unsubscribe()
+		unsubscribe()
+		provider.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "after-unsubscribe"})
+		return map[string]any{
+			"contract": "tts-metrics-reference-unsubscribe",
+			"events": []map[string]any{
+				{
+					"name":        "metrics_unsubscribe",
+					"request_ids": requestIDs,
+				},
+			},
+		}, nil
 	case "error_panic_isolated":
 		labels := make([]string, 0, 1)
 		escapedError := false
@@ -482,6 +501,23 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "error_unsubscribe":
+		labels := make([]string, 0, 1)
+		unsubscribe := provider.OnError(func(err lktts.TTSError) {
+			labels = append(labels, err.Label)
+		})
+		unsubscribe()
+		unsubscribe()
+		provider.EmitError(lktts.TTSError{Label: "after-unsubscribe", Err: errors.New("tts failed")})
+		return map[string]any{
+			"contract": "tts-error-emitter-unsubscribe",
+			"events": []map[string]any{
+				{
+					"name":   "error_unsubscribe",
+					"labels": labels,
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported TTS value object action %q", payload.Action)
 	}
@@ -562,6 +598,54 @@ func runTTSFallback(input json.RawMessage) (any, error) {
 				{"name": "provider_error_not_forwarded", "labels": labels},
 			},
 		}, nil
+	case "error_unsubscribe_local":
+		primary := &fakeScenarioTTS{provider: "primary"}
+		adapter := lktts.NewFallbackAdapter([]lktts.TTS{primary})
+		labels := make([]string, 0, 1)
+		unsubscribe := adapter.OnError(func(err lktts.TTSError) {
+			labels = append(labels, err.Label)
+		})
+		unsubscribe()
+		adapter.EmitError(lktts.TTSError{Label: "adapter", Err: errors.New("adapter failed")})
+		return map[string]any{
+			"contract": "tts-fallback-error-unsubscribe-local",
+			"events": []map[string]any{
+				{"name": "error_unsubscribe_local", "labels": labels},
+			},
+		}, nil
+	case "forward_metrics":
+		primary := &fakeScenarioTTS{provider: "primary"}
+		fallback := &fakeScenarioTTS{provider: "fallback"}
+		adapter := lktts.NewFallbackAdapter([]lktts.TTS{primary, fallback})
+		requestIDs := make([]string, 0, 2)
+		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		defer unsubscribe()
+		primary.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "primary-req"})
+		fallback.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "fallback-req"})
+		return map[string]any{
+			"contract": "tts-fallback-forward-metrics",
+			"events": []map[string]any{
+				{"name": "forward_metrics", "request_ids": requestIDs},
+			},
+		}, nil
+	case "metrics_unsubscribe":
+		primary := &fakeScenarioTTS{provider: "primary"}
+		adapter := lktts.NewFallbackAdapter([]lktts.TTS{primary})
+		requestIDs := make([]string, 0, 1)
+		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		unsubscribe()
+		primary.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "primary-req"})
+		adapter.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "adapter-req"})
+		return map[string]any{
+			"contract": "tts-fallback-metrics-unsubscribe",
+			"events": []map[string]any{
+				{"name": "metrics_unsubscribe", "request_ids": requestIDs},
+			},
+		}, nil
 	case "close_unsubscribes_provider_metrics":
 		primary := &fakeScenarioTTS{provider: "primary"}
 		adapter := lktts.NewFallbackAdapter([]lktts.TTS{primary})
@@ -580,6 +664,83 @@ func runTTSFallback(input json.RawMessage) (any, error) {
 			"contract": "tts-fallback-close-unsubscribes-provider-metrics",
 			"events": []map[string]any{
 				{"name": "close_unsubscribes_provider_metrics", "request_ids": requestIDs},
+			},
+		}, nil
+	case "close_provider_ownership":
+		primary := &fakeScenarioTTS{}
+		fallback := &fakeScenarioTTS{}
+		adapter := lktts.NewFallbackAdapter([]lktts.TTS{primary, fallback})
+		if err := adapter.Close(); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "tts-fallback-close-provider-ownership",
+			"events": []map[string]any{
+				{
+					"name":                 "close_provider_ownership",
+					"primary_close_calls":  primary.closeCalls,
+					"fallback_close_calls": fallback.closeCalls,
+				},
+			},
+		}, nil
+	case "availability_panic_isolated":
+		primary := &fakeScenarioTTS{
+			provider:     "primary",
+			chunkedError: errors.New("primary unavailable"),
+		}
+		fallback := &fakeScenarioTTS{
+			provider: "fallback",
+			chunkedEvents: []*lktts.SynthesizedAudio{{
+				Frame: &model.AudioFrame{Data: []byte("ok")},
+			}},
+		}
+		adapter := lktts.NewFallbackAdapterWithOptions([]lktts.TTS{primary, fallback}, lktts.FallbackAdapterOptions{DisableRetries: true})
+		delivered := make([]map[string]any, 0, 1)
+		adapter.OnAvailabilityChanged(func(event lktts.AvailabilityChangedEvent) {
+			panic("availability handler failed")
+		})
+		adapter.OnAvailabilityChanged(func(event lktts.AvailabilityChangedEvent) {
+			delivered = append(delivered, map[string]any{
+				"provider":  "primary",
+				"available": event.Available,
+			})
+		})
+		if err := runTTSFallbackSynthesize(adapter); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "tts-fallback-availability-panic-isolated",
+			"events": []map[string]any{
+				{"name": "availability_panic_isolated", "delivered": delivered},
+			},
+		}, nil
+	case "availability_unsubscribe":
+		primary := &fakeScenarioTTS{
+			provider:     "primary",
+			chunkedError: errors.New("primary unavailable"),
+		}
+		fallback := &fakeScenarioTTS{
+			provider: "fallback",
+			chunkedEvents: []*lktts.SynthesizedAudio{{
+				Frame: &model.AudioFrame{Data: []byte("ok")},
+			}},
+		}
+		adapter := lktts.NewFallbackAdapterWithOptions([]lktts.TTS{primary, fallback}, lktts.FallbackAdapterOptions{DisableRetries: true})
+		delivered := make([]map[string]any, 0, 1)
+		unsubscribe := adapter.OnAvailabilityChanged(func(event lktts.AvailabilityChangedEvent) {
+			delivered = append(delivered, map[string]any{
+				"provider":  "primary",
+				"available": event.Available,
+			})
+		})
+		unsubscribe()
+		if err := runTTSFallbackSynthesize(adapter); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "tts-fallback-availability-unsubscribe",
+			"events": []map[string]any{
+				{"name": "availability_unsubscribe", "delivered": delivered},
 			},
 		}, nil
 	case "validation":
@@ -727,6 +888,19 @@ func runTTSStreamAdapter(input json.RawMessage) (any, error) {
 				{"name": "provider_error_not_forwarded", "labels": labels},
 			},
 		}, nil
+	case "error_unsubscribe_local":
+		labels := make([]string, 0, 1)
+		unsubscribe := adapter.OnError(func(err lktts.TTSError) {
+			labels = append(labels, err.Label)
+		})
+		unsubscribe()
+		adapter.EmitError(lktts.TTSError{Label: "adapter", Err: errors.New("adapter failed")})
+		return map[string]any{
+			"contract": "tts-stream-adapter-error-unsubscribe",
+			"events": []map[string]any{
+				{"name": "error_unsubscribe_local", "labels": labels},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported TTS stream adapter action %q", payload.Action)
 	}
@@ -791,16 +965,28 @@ func orderedTTSReplacements(input json.RawMessage, fallback map[string]string) (
 	return ordered, nil
 }
 
+func runTTSFallbackSynthesize(adapter *lktts.FallbackAdapter) error {
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
+	_, err = stream.Next()
+	return err
+}
+
 type fakeScenarioTTS struct {
 	lktts.MetricsEmitter
 	lktts.ErrorEmitter
 
-	sampleRate   int
-	numChannels  int
-	model        string
-	provider     string
-	prewarmCalls int
-	closeCalls   int
+	sampleRate    int
+	numChannels   int
+	model         string
+	provider      string
+	prewarmCalls  int
+	closeCalls    int
+	chunkedEvents []*lktts.SynthesizedAudio
+	chunkedError  error
 }
 
 func (fakeScenarioTTS) Label() string { return "fake-scenario-tts" }
@@ -832,9 +1018,33 @@ func (t *fakeScenarioTTS) Close() error {
 	t.closeCalls++
 	return nil
 }
-func (fakeScenarioTTS) Synthesize(context.Context, string) (lktts.ChunkedStream, error) {
+func (t fakeScenarioTTS) Synthesize(context.Context, string) (lktts.ChunkedStream, error) {
+	if t.chunkedError != nil {
+		return nil, t.chunkedError
+	}
+	if t.chunkedEvents != nil {
+		return &fakeScenarioChunkedStream{events: append([]*lktts.SynthesizedAudio(nil), t.chunkedEvents...)}, nil
+	}
 	return nil, nil
 }
 func (fakeScenarioTTS) Stream(context.Context) (lktts.SynthesizeStream, error) {
 	return nil, nil
+}
+
+type fakeScenarioChunkedStream struct {
+	events []*lktts.SynthesizedAudio
+	index  int
+}
+
+func (s *fakeScenarioChunkedStream) Next() (*lktts.SynthesizedAudio, error) {
+	if s.index >= len(s.events) {
+		return nil, io.EOF
+	}
+	event := s.events[s.index]
+	s.index++
+	return event, nil
+}
+
+func (*fakeScenarioChunkedStream) Close() error {
+	return nil
 }

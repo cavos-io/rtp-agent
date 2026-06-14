@@ -681,8 +681,10 @@ def stt_fallback(input_data: Any) -> dict[str, Any]:
             )
             self._label = label
             self._recognize_error = recognize_error
+            self.recognize_calls = 0
 
         async def _recognize_impl(self, *args: Any, **kwargs: Any) -> Any:
+            self.recognize_calls += 1
             if self._recognize_error:
                 raise RuntimeError(f"{self._label} failed")
             return stt_module.SpeechEvent(type=stt_module.SpeechEventType.FINAL_TRANSCRIPT)
@@ -736,6 +738,24 @@ def stt_fallback(input_data: Any) -> dict[str, Any]:
             "contract": "stt-fallback-provider-error-not-forwarded",
             "events": [
                 {"name": "provider_error_not_forwarded", "labels": labels}
+            ],
+        }
+    if action == "error_unsubscribe_local":
+        primary = FakeSTT("primary")
+        adapter = fallback_module.FallbackAdapter([primary])
+        labels: list[str] = []
+
+        def handler(error: Any) -> None:
+            labels.append(error.label)
+
+        adapter.on("error", handler)
+        adapter.off("error", handler)
+        primary.emit("error", type("Error", (), {"label": "primary"})())
+        adapter.emit("error", type("Error", (), {"label": "adapter"})())
+        return {
+            "contract": "stt-fallback-error-unsubscribe-local",
+            "events": [
+                {"name": "error_unsubscribe_local", "labels": labels}
             ],
         }
     if action == "forward_metrics":
@@ -844,6 +864,41 @@ def stt_fallback(input_data: Any) -> dict[str, Any]:
                 {
                     "name": "availability_unsubscribe",
                     "received_count": received_count,
+                }
+            ],
+        }
+    if action == "all_failed_recognize":
+        if not hasattr(fallback_module.logger, "debug"):
+            fallback_module.logger.debug = lambda *args, **kwargs: None
+        if not hasattr(fallback_module.logger, "exception"):
+            fallback_module.logger.exception = lambda *args, **kwargs: None
+        primary = FakeSTT("primary", recognize_error=True)
+        fallback = FakeSTT("fallback", recognize_error=True)
+        adapter = fallback_module.FallbackAdapter(
+            [primary, fallback],
+            max_retry_per_stt=0,
+        )
+        error_class = ""
+        retryable = False
+
+        async def run_recognize() -> None:
+            await adapter.recognize([])
+
+        try:
+            asyncio.run(run_recognize())
+        except Exception as exc:
+            error_class = type(exc).__name__
+            retryable = getattr(exc, "retryable", False)
+
+        return {
+            "contract": "stt-fallback-all-failed-recognize",
+            "events": [
+                {
+                    "name": "all_failed_recognize",
+                    "error_class": error_class,
+                    "retryable": retryable,
+                    "primary_calls": primary.recognize_calls,
+                    "fallback_calls": fallback.recognize_calls,
                 }
             ],
         }
@@ -1089,6 +1144,24 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
             "contract": "stt-stream-adapter-provider-error-not-forwarded",
             "events": [
                 {"name": "provider_error_not_forwarded", "labels": labels}
+            ],
+        }
+    if action == "error_unsubscribe_local":
+        wrapped = FakeSTT("wrapped")
+        adapter = stream_adapter_module.StreamAdapter(stt=wrapped, vad=FakeVAD())
+        labels: list[str] = []
+
+        def handler(error: Any) -> None:
+            labels.append(error.label)
+
+        adapter.on("error", handler)
+        adapter.off("error", handler)
+        wrapped.emit("error", type("Error", (), {"label": "wrapped"})())
+        adapter.emit("error", type("Error", (), {"label": "adapter"})())
+        return {
+            "contract": "stt-stream-adapter-error-unsubscribe-local",
+            "events": [
+                {"name": "error_unsubscribe_local", "labels": labels}
             ],
         }
     if action == "metadata":

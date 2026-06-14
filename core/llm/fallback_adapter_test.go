@@ -55,6 +55,35 @@ func TestFallbackAdapterCloseUnsubscribesProviderMetrics(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterMetricsUnsubscribeRemovesLocalAndProviderHandlers(t *testing.T) {
+	primary := &fakeFallbackLLM{label: "primary.LLM"}
+	adapter := NewFallbackAdapter([]LLM{primary})
+	metricsCh := make(chan string, 2)
+	unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.LLMMetrics) {
+		metricsCh <- metrics.RequestID
+	})
+
+	primary.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "before"})
+	unsubscribe()
+	unsubscribe()
+	primary.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "provider"})
+	adapter.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "adapter"})
+
+	select {
+	case requestID := <-metricsCh:
+		if requestID != "before" {
+			t.Fatalf("metrics RequestID before unsubscribe = %q, want before", requestID)
+		}
+	default:
+		t.Fatal("metrics handler was not called before unsubscribe")
+	}
+	select {
+	case requestID := <-metricsCh:
+		t.Fatalf("received metrics after unsubscribe: %q", requestID)
+	default:
+	}
+}
+
 func TestFallbackAdapterRequiresAtLeastOneLLM(t *testing.T) {
 	defer func() {
 		r := recover()
@@ -119,6 +148,26 @@ func TestFallbackAdapterRetriesNextLLMWhenStreamFailsBeforeChunk(t *testing.T) {
 	}
 	if got := chunk.Delta.Content; got != "fallback" {
 		t.Fatalf("chunk content = %q, want fallback", got)
+	}
+}
+
+func TestFallbackAdapterErrorUnsubscribeRemovesLocalHandler(t *testing.T) {
+	primary := &fakeFallbackLLM{label: "primary.LLM"}
+	adapter := NewFallbackAdapter([]LLM{primary})
+	labelsCh := make(chan string, 1)
+	unsubscribe := adapter.OnError(func(err *LLMError) {
+		labelsCh <- err.Label
+	})
+	unsubscribe()
+	unsubscribe()
+
+	primary.EmitError(NewLLMError("primary", errors.New("primary failed"), true))
+	adapter.EmitError(NewLLMError("adapter", errors.New("adapter failed"), true))
+
+	select {
+	case label := <-labelsCh:
+		t.Fatalf("received error after unsubscribe: %q", label)
+	default:
 	}
 }
 
@@ -566,9 +615,11 @@ func TestFallbackAdapterFallsBackOnClientClosedStatusBeforeOutput(t *testing.T) 
 func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T) {
 	firstErr := errors.New("primary unavailable")
 	secondErr := errors.New("fallback unavailable")
+	primary := &fakeFallbackLLM{label: "primary.LLM", err: firstErr}
+	fallback := &fakeFallbackLLM{label: "fallback.LLM", err: secondErr}
 	adapter := NewFallbackAdapter([]LLM{
-		&fakeFallbackLLM{label: "primary.LLM", err: firstErr},
-		&fakeFallbackLLM{label: "fallback.LLM", err: secondErr},
+		primary,
+		fallback,
 	})
 
 	_, err := adapter.Chat(context.Background(), NewChatContext())
@@ -597,6 +648,9 @@ func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T
 	}
 	if !strings.Contains(err.Error(), "primary.LLM") || !strings.Contains(err.Error(), "fallback.LLM") {
 		t.Fatalf("Chat error = %q, want exhausted provider labels", err)
+	}
+	if primary.calls != 1 || fallback.calls != 1 {
+		t.Fatalf("provider calls = (%d, %d), want one startup attempt per provider", primary.calls, fallback.calls)
 	}
 }
 
