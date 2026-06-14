@@ -309,8 +309,8 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 					return
 				}
 			}
-			transformedText := strings.TrimSpace(applyTTSTextReplacements(ttsText, options))
-			if transformedText == "" {
+			transformedText := applyTTSTextReplacements(ttsText, options)
+			if strings.TrimSpace(transformedText) == "" {
 				return
 			}
 

@@ -742,8 +742,8 @@ func TestPerformTTSInferenceUsesSynthesizeForNonStreamingTTS(t *testing.T) {
 	if string(frame.Data) != "chunked" {
 		t.Fatalf("audio data = %q, want chunked", frame.Data)
 	}
-	if provider.synthesizeText != "Say hello" {
-		t.Fatalf("synthesize text = %q, want transformed text", provider.synthesizeText)
+	if want := "Say hello "; provider.synthesizeText != want {
+		t.Fatalf("synthesize text = %q, want reference transformed text %q", provider.synthesizeText, want)
 	}
 	if !provider.stream.closed {
 		t.Fatal("chunked stream was not closed")
@@ -784,6 +784,34 @@ func TestPerformTTSInferenceNonStreamingReplacesReferenceSubstrings(t *testing.T
 
 	if want := "Please condogenate dog."; provider.synthesizeText != want {
 		t.Fatalf("synthesize text = %q, want reference substring replacement %q", provider.synthesizeText, want)
+	}
+}
+
+func TestPerformTTSInferenceNonStreamingPreservesReferenceWhitespace(t *testing.T) {
+	provider := &fakeGenerationChunkedTTS{
+		stream: &fakeGenerationChunkedStream{
+			frames: []*model.AudioFrame{
+				{
+					Data:              []byte("chunked"),
+					SampleRate:        24000,
+					NumChannels:       1,
+					SamplesPerChannel: 3,
+				},
+			},
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- " hello "
+	close(textCh)
+
+	data, err := PerformTTSInference(context.Background(), provider, textCh, WithTTSTextTransformsDisabled())
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+	<-data.AudioCh
+
+	if want := " hello "; provider.synthesizeText != want {
+		t.Fatalf("synthesize text = %q, want reference whitespace-preserving input %q", provider.synthesizeText, want)
 	}
 }
 
