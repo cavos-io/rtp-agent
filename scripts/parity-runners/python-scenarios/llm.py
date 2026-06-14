@@ -1765,6 +1765,41 @@ def llm_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "error_panic_isolated":
+        module = load_reference_llm_fallback()
+
+        class ErrorLLM(module.LLM):
+            def chat(self, **kwargs: Any) -> Any:
+                raise NotImplementedError
+
+        llm = ErrorLLM()
+        received_labels: list[str] = []
+
+        def failing_handler(error: Any) -> None:
+            raise RuntimeError("error handler failed")
+
+        def recording_handler(error: Any) -> None:
+            received_labels.append(error.label)
+
+        llm.on("error", failing_handler)
+        llm.on("error", recording_handler)
+        escaped_error = False
+        err = type("Error", (), {"label": "openai.LLM"})()
+        try:
+            llm.emit("error", err)
+        except RuntimeError:
+            escaped_error = True
+        return {
+            "contract": "llm-error-reference-panic-isolated",
+            "events": [
+                {
+                    "name": "error_panic_isolated",
+                    "escaped_error": escaped_error,
+                    "handler_call_count": len(received_labels),
+                    "labels": received_labels,
+                }
+            ],
+        }
     if action == "llm_error_payload":
         err = Exception("provider unavailable")
         return {

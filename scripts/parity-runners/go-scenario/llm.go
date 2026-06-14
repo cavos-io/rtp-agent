@@ -3600,6 +3600,36 @@ func runLLMValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "error_panic_isolated":
+		var emitter lkllm.ErrorEmitter
+		err := lkllm.NewLLMError("openai.LLM", context.Canceled, true)
+		receivedLabels := []string{}
+		emitter.OnError(func(*lkllm.LLMError) {
+			panic("error handler failed")
+		})
+		emitter.OnError(func(err *lkllm.LLMError) {
+			receivedLabels = append(receivedLabels, err.Label)
+		})
+		escapedError := false
+		func() {
+			defer func() {
+				if recover() != nil {
+					escapedError = true
+				}
+			}()
+			emitter.EmitError(err)
+		}()
+		return map[string]any{
+			"contract": "llm-error-reference-panic-isolated",
+			"events": []map[string]any{
+				{
+					"name":               "error_panic_isolated",
+					"escaped_error":      escapedError,
+					"handler_call_count": len(receivedLabels),
+					"labels":             receivedLabels,
+				},
+			},
+		}, nil
 	case "llm_error_payload":
 		underlying := errors.New("provider unavailable")
 		err := lkllm.NewLLMError("openai.LLM", underlying, true)
