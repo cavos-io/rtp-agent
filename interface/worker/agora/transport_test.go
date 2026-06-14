@@ -16,10 +16,12 @@ type fakeChannelClient struct {
 	handler      EventHandler
 	audioHandler AudioHandler
 	pcmFrame     PCMFrame
+	joinCtx      context.Context
 	publishCtx   context.Context
 	joinErr      error
 	leaveErr     error
 	publishErr   error
+	blockJoin    bool
 	leaveCount   int
 	publishCount int
 	joined       bool
@@ -27,11 +29,16 @@ type fakeChannelClient struct {
 }
 
 func (f *fakeChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, handler EventHandler, audioHandler AudioHandler) error {
+	f.joinCtx = ctx
 	f.joinOptions = opts
 	f.handler = handler
 	f.audioHandler = audioHandler
 	if f.joinErr != nil {
 		return f.joinErr
+	}
+	if f.blockJoin {
+		<-ctx.Done()
+		return ctx.Err()
 	}
 	f.joined = true
 	return nil
@@ -204,6 +211,41 @@ func TestTransportCloseLeavesClientAndClosesEvents(t *testing.T) {
 	}
 	if _, ok := <-tr.Events(); ok {
 		t.Fatal("events channel open after Close(), want closed")
+	}
+}
+
+func TestTransportCloseCancelsInProgressJoin(t *testing.T) {
+	client := &fakeChannelClient{blockJoin: true}
+	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	joinDone := make(chan error, 1)
+
+	go func() {
+		joinDone <- tr.Join(context.Background())
+	}()
+
+	deadline := time.After(time.Second)
+	for {
+		if client.joinCtx != nil {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for Join to reach channel client")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if err := tr.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	select {
+	case err := <-joinDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Join() error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Join() did not return after Close canceled the transport")
 	}
 }
 
