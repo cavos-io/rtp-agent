@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -383,6 +384,100 @@ func TestSarvamSTTStreamSequencerAddsReferenceEndOfSpeechMetadata(t *testing.T) 
 	alt := events[0].Alternatives[0]
 	if alt.Text != "" || alt.Language != "en-IN" || alt.EndTime != 0.25 {
 		t.Fatalf("end alternative = %+v, want reference metadata-only speech end", alt)
+	}
+}
+
+func TestSarvamSTTStreamSequencerWaitsForFinalAfterEndOfSpeech(t *testing.T) {
+	sequencer := newSarvamSTTStreamEventSequencer("en-IN")
+
+	events, err := sequencer.EventsFromStreamMessage([]byte(`{"type":"events","data":{"signal_type":"START_SPEECH","request_id":"req-2"}}`), 0)
+	if err != nil {
+		t.Fatalf("start event: %v", err)
+	}
+	if len(events) != 1 || events[0].Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("start events = %+v, want start of speech", events)
+	}
+
+	events, err = sequencer.EventsFromStreamMessage([]byte(`{"type":"event","data":{"signal_type":"END_SPEECH","request_id":"req-2"}}`), 0.5)
+	if err != nil {
+		t.Fatalf("end event: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("end events = %+v, want delayed EOS until final transcript", events)
+	}
+
+	events, err = sequencer.EventsFromStreamMessage([]byte(`{"type":"data","data":{"transcript":"late final","language_code":"hi-IN","request_id":"req-2","speech_start":0.2}}`), 0.5)
+	if err != nil {
+		t.Fatalf("final event: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("final events = %+v, want usage, final transcript, end of speech", events)
+	}
+	if events[1].Type != stt.SpeechEventFinalTranscript || events[2].Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("final events = %+v, want final transcript before EOS", events)
+	}
+	if events[2].Alternatives[0].EndTime != 0.5 {
+		t.Fatalf("EOS end time = %.2f, want pending audio position", events[2].Alternatives[0].EndTime)
+	}
+}
+
+func TestSarvamSTTStreamSequencerEmitsFallbackEOSWhenFinalMissing(t *testing.T) {
+	sequencer := newSarvamSTTStreamEventSequencer("en-IN")
+
+	_, err := sequencer.EventsFromStreamMessage([]byte(`{"type":"events","data":{"signal_type":"START_SPEECH","request_id":"req-3"}}`), 0)
+	if err != nil {
+		t.Fatalf("start event: %v", err)
+	}
+	events, err := sequencer.EventsFromStreamMessage([]byte(`{"type":"event","data":{"signal_type":"END_SPEECH","request_id":"req-3"}}`), 0.75)
+	if err != nil {
+		t.Fatalf("end event: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("end events = %+v, want delayed EOS", events)
+	}
+
+	event := sequencer.PendingEndOfSpeechEvent()
+	if event == nil {
+		t.Fatal("fallback event = nil, want pending EOS")
+	}
+	if event.Type != stt.SpeechEventEndOfSpeech || event.RequestID != "req-3" {
+		t.Fatalf("fallback event = %+v, want END_OF_SPEECH with request id", event)
+	}
+	if len(event.Alternatives) != 1 || event.Alternatives[0].EndTime != 0.75 {
+		t.Fatalf("fallback alternatives = %+v, want pending end time", event.Alternatives)
+	}
+	if again := sequencer.PendingEndOfSpeechEvent(); again != nil {
+		t.Fatalf("second fallback event = %+v, want nil after emit", again)
+	}
+}
+
+func TestSarvamSTTStreamSequencerCapturesNestedReferenceRequestID(t *testing.T) {
+	sequencer := newSarvamSTTStreamEventSequencer("en-IN")
+
+	events, err := sequencer.EventsFromStreamMessage([]byte(`{"type":"events","data":{"signal_type":"START_SPEECH","metadata":{"request_id":"req-meta"}}}`), 0)
+	if err != nil {
+		t.Fatalf("start event: %v", err)
+	}
+	if len(events) != 1 || events[0].RequestID != "req-meta" {
+		t.Fatalf("start events = %+v, want nested metadata request id", events)
+	}
+
+	events, err = sequencer.EventsFromStreamMessage([]byte(`{"type":"event","data":{"signal_type":"END_SPEECH","data":{"request_id":"req-nested"}}}`), 0.25)
+	if err != nil {
+		t.Fatalf("end event: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("end events = %+v, want pending EOS", events)
+	}
+	event := sequencer.PendingEndOfSpeechEvent()
+	if event == nil || event.RequestID != "req-nested" {
+		t.Fatalf("fallback event = %+v, want nested data request id", event)
+	}
+}
+
+func TestSarvamSTTStreamEOSFallbackTimeoutMatchesReference(t *testing.T) {
+	if sarvamSTTEOSFallbackTimeout != time.Second {
+		t.Fatalf("EOS fallback timeout = %v, want reference 1s", sarvamSTTEOSFallbackTimeout)
 	}
 }
 

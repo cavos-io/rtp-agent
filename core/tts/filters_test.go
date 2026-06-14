@@ -162,6 +162,36 @@ func TestTextReplaceBufferReplacesTermsAcrossChunks(t *testing.T) {
 	}
 }
 
+func TestTextRegexReplaceBufferReplacesReferenceSubstringsAcrossChunks(t *testing.T) {
+	buffer := NewTextRegexReplaceBuffer(map[string]string{"cat": "dog"}, false)
+
+	chunks := append(buffer.Push("Please con"), buffer.Push("catenate cat.")...)
+	chunks = append(chunks, buffer.Flush()...)
+
+	if got, want := strings.Join(chunks, ""), "Please condogenate dog."; got != want {
+		t.Fatalf("joined output = %q, want reference substring replacement %q; chunks = %#v", got, want, chunks)
+	}
+
+	sensitive := NewTextRegexReplaceBuffer(map[string]string{"cat": "dog"}, true)
+	chunks = append(sensitive.Push("Cat cat"), sensitive.Flush()...)
+	if got, want := strings.Join(chunks, ""), "Cat dog"; got != want {
+		t.Fatalf("case-sensitive output = %q, want %q; chunks = %#v", got, want, chunks)
+	}
+}
+
+func TestTextRegexReplaceBufferPreservesReferenceReplacementOrder(t *testing.T) {
+	buffer := NewOrderedTextRegexReplaceBuffer([]TextReplacement{
+		{Old: "ab", New: "X"},
+		{Old: "a", New: "Y"},
+	}, true)
+
+	chunks := append(buffer.Push("ab"), buffer.Flush()...)
+
+	if got, want := strings.Join(chunks, ""), "X"; got != want {
+		t.Fatalf("joined output = %q, want reference ordered replacement %q; chunks = %#v", got, want, chunks)
+	}
+}
+
 func TestTextReplaceBufferReplacesWholeWordsAndPreservesPunctuation(t *testing.T) {
 	buffer := NewTextReplaceBuffer(map[string]string{"flow": "stream"}, false)
 

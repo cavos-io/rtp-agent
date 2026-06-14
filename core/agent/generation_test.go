@@ -602,6 +602,82 @@ func TestPerformTTSInferenceBuffersTextReplacementsAcrossRawChunks(t *testing.T)
 	}
 }
 
+func TestPerformTTSInferenceReplacesReferenceSubstrings(t *testing.T) {
+	providerStream := newEndInputGenerationTTSStream()
+	provider := &fakeGenerationTTS{stream: providerStream}
+	textCh := make(chan string, 2)
+	textCh <- "Please con"
+	textCh <- "catenate cat."
+	close(textCh)
+
+	data, err := PerformTTSInference(
+		context.Background(),
+		provider,
+		textCh,
+		WithTTSTextTransformsDisabled(),
+		WithTTSTextReplacements(map[string]string{
+			"cat": "dog",
+		}),
+	)
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+	<-data.AudioCh
+
+	got := providerStream.calls
+	if len(got) == 0 || got[len(got)-1] != "end_input" {
+		t.Fatalf("stream calls = %#v, want final end_input", got)
+	}
+	var pushed strings.Builder
+	for _, call := range got[:len(got)-1] {
+		if !strings.HasPrefix(call, "push:") {
+			t.Fatalf("stream calls = %#v, want only push calls before end_input", got)
+		}
+		pushed.WriteString(strings.TrimPrefix(call, "push:"))
+	}
+	if want := "Please condogenate dog."; pushed.String() != want {
+		t.Fatalf("pushed text = %q, want reference substring replacement %q; calls = %#v", pushed.String(), want, got)
+	}
+}
+
+func TestPerformTTSInferencePreservesOrderedTextReplacements(t *testing.T) {
+	providerStream := newEndInputGenerationTTSStream()
+	provider := &fakeGenerationTTS{stream: providerStream}
+	textCh := make(chan string, 1)
+	textCh <- "ab"
+	close(textCh)
+
+	data, err := PerformTTSInference(
+		context.Background(),
+		provider,
+		textCh,
+		WithTTSTextTransformsDisabled(),
+		WithOrderedTTSTextReplacements([]tts.TextReplacement{
+			{Old: "ab", New: "X"},
+			{Old: "a", New: "Y"},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+	<-data.AudioCh
+
+	got := providerStream.calls
+	if len(got) == 0 || got[len(got)-1] != "end_input" {
+		t.Fatalf("stream calls = %#v, want final end_input", got)
+	}
+	var pushed strings.Builder
+	for _, call := range got[:len(got)-1] {
+		if !strings.HasPrefix(call, "push:") {
+			t.Fatalf("stream calls = %#v, want only push calls before end_input", got)
+		}
+		pushed.WriteString(strings.TrimPrefix(call, "push:"))
+	}
+	if want := "X"; pushed.String() != want {
+		t.Fatalf("pushed text = %q, want reference ordered replacement %q; calls = %#v", pushed.String(), want, got)
+	}
+}
+
 func TestPerformTTSInferenceUsesSynthesizeForNonStreamingTTS(t *testing.T) {
 	provider := &fakeGenerationChunkedTTS{
 		stream: &fakeGenerationChunkedStream{
@@ -640,6 +716,40 @@ func TestPerformTTSInferenceUsesSynthesizeForNonStreamingTTS(t *testing.T) {
 	}
 	if _, ok := <-data.AudioCh; ok {
 		t.Fatal("AudioCh produced extra frame")
+	}
+}
+
+func TestPerformTTSInferenceNonStreamingReplacesReferenceSubstrings(t *testing.T) {
+	provider := &fakeGenerationChunkedTTS{
+		stream: &fakeGenerationChunkedStream{
+			frames: []*model.AudioFrame{
+				{
+					Data:              []byte("chunked"),
+					SampleRate:        24000,
+					NumChannels:       1,
+					SamplesPerChannel: 3,
+				},
+			},
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "Please concatenate cat."
+	close(textCh)
+
+	data, err := PerformTTSInference(
+		context.Background(),
+		provider,
+		textCh,
+		WithTTSTextTransformsDisabled(),
+		WithTTSTextReplacements(map[string]string{"cat": "dog"}),
+	)
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+	<-data.AudioCh
+
+	if want := "Please condogenate dog."; provider.synthesizeText != want {
+		t.Fatalf("synthesize text = %q, want reference substring replacement %q", provider.synthesizeText, want)
 	}
 }
 

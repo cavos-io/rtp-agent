@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,9 +16,17 @@ import (
 
 func runTTSValueObjects(input json.RawMessage) (any, error) {
 	var payload struct {
-		Action string `json:"action"`
+		Action        string            `json:"action"`
+		Chunks        []string          `json:"chunks"`
+		Transforms    []string          `json:"transforms"`
+		Replacements  map[string]string `json:"replacements"`
+		CaseSensitive bool              `json:"case_sensitive"`
 	}
 	if err := json.Unmarshal(input, &payload); err != nil {
+		return nil, err
+	}
+	orderedReplacements, err := orderedTTSReplacements(input, payload.Replacements)
+	if err != nil {
 		return nil, err
 	}
 	if payload.Action == "" {
@@ -375,6 +385,34 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "text_replace":
+		buffer := lktts.NewOrderedTextRegexReplaceBuffer(orderedReplacements, payload.CaseSensitive)
+		chunks := []string{}
+		for _, chunk := range payload.Chunks {
+			chunks = append(chunks, buffer.Push(chunk)...)
+		}
+		chunks = append(chunks, buffer.Flush()...)
+		joined := ""
+		for _, chunk := range chunks {
+			joined += chunk
+		}
+		containsOriginal := false
+		for old := range payload.Replacements {
+			if strings.Contains(joined, old) {
+				containsOriginal = true
+				break
+			}
+		}
+		return map[string]any{
+			"contract": "tts-text-replacements",
+			"events": []map[string]any{
+				{
+					"name":              "text_replace",
+					"joined":            joined,
+					"contains_original": containsOriginal,
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported TTS value object action %q", payload.Action)
 	}
@@ -623,6 +661,56 @@ func runTTSStreamAdapter(input json.RawMessage) (any, error) {
 	default:
 		return nil, fmt.Errorf("unsupported TTS stream adapter action %q", payload.Action)
 	}
+}
+
+func orderedTTSReplacements(input json.RawMessage, fallback map[string]string) ([]lktts.TextReplacement, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(input, &fields); err != nil {
+		return nil, err
+	}
+	raw, ok := fields["replacements"]
+	if !ok || len(raw) == 0 || string(raw) == "null" {
+		keys := make([]string, 0, len(fallback))
+		for old := range fallback {
+			keys = append(keys, old)
+		}
+		sort.Strings(keys)
+		ordered := make([]lktts.TextReplacement, 0, len(keys))
+		for _, old := range keys {
+			ordered = append(ordered, lktts.TextReplacement{Old: old, New: fallback[old]})
+		}
+		return ordered, nil
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	if delimiter, ok := token.(json.Delim); !ok || delimiter != '{' {
+		return nil, fmt.Errorf("replacements must be a JSON object")
+	}
+
+	ordered := []lktts.TextReplacement{}
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		old, ok := token.(string)
+		if !ok {
+			return nil, fmt.Errorf("replacement key must be a string")
+		}
+		var newValue string
+		if err := decoder.Decode(&newValue); err != nil {
+			return nil, err
+		}
+		ordered = append(ordered, lktts.TextReplacement{Old: old, New: newValue})
+	}
+	if _, err := decoder.Token(); err != nil {
+		return nil, err
+	}
+	return ordered, nil
 }
 
 type fakeScenarioTTS struct {

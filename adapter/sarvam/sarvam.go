@@ -31,6 +31,7 @@ const (
 	defaultSarvamSTTLanguage           = "en-IN"
 	defaultSarvamSTTMode               = "transcribe"
 	defaultSarvamSTTSampleRate         = 16000
+	sarvamSTTEOSFallbackTimeout        = time.Second
 	defaultSarvamTTSBaseURL            = "https://api.sarvam.ai/text-to-speech"
 	defaultSarvamTTSWSURL              = "wss://api.sarvam.ai/text-to-speech/ws"
 	defaultSarvamTTSModel              = "bulbul:v3"
@@ -710,6 +711,7 @@ func (s *sarvamSTTRecognizeStream) readLoop() {
 		if msgType != websocket.TextMessage {
 			continue
 		}
+		isEndSpeech := sarvamSTTStreamMessageIsEndSpeech(payload)
 		events, err := s.sequencer.EventsFromStreamMessage(payload, s.currentAudioPosition())
 		if err != nil {
 			s.errCh <- err
@@ -717,17 +719,24 @@ func (s *sarvamSTTRecognizeStream) readLoop() {
 		}
 		for _, event := range events {
 			s.events <- event
-			if event.Type == stt.SpeechEventEndOfSpeech {
-				_ = s.Flush()
+		}
+		if isEndSpeech {
+			_ = s.Flush()
+			if len(events) == 0 {
+				s.emitPendingEndOfSpeechAfterTimeout()
 			}
 		}
 	}
 }
 
 type sarvamSTTStreamEventSequencer struct {
-	defaultLanguage string
-	serverRequestID string
-	eosEmitted      bool
+	mu                  sync.Mutex
+	defaultLanguage     string
+	serverRequestID     string
+	finalEmitted        bool
+	pendingEOS          bool
+	pendingAudioEndTime float64
+	eosEmitted          bool
 }
 
 func newSarvamSTTStreamEventSequencer(defaultLanguage string) *sarvamSTTStreamEventSequencer {
@@ -735,17 +744,23 @@ func newSarvamSTTStreamEventSequencer(defaultLanguage string) *sarvamSTTStreamEv
 }
 
 func (s *sarvamSTTStreamEventSequencer) EventsFromStreamMessage(payload []byte, audioPosition float64) ([]*stt.SpeechEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	var message map[string]any
 	if err := json.Unmarshal(payload, &message); err != nil {
 		return nil, err
 	}
 	data := sarvamMap(message["data"])
-	if requestID := sarvamString(data["request_id"]); requestID != "" {
+	if requestID := sarvamSTTReferenceRequestID(data); requestID != "" {
 		s.serverRequestID = requestID
 	}
 
 	messageType := sarvamString(message["type"])
 	if (messageType == "events" || messageType == "event") && sarvamString(data["signal_type"]) == "START_SPEECH" {
+		s.finalEmitted = false
+		s.pendingEOS = false
+		s.pendingAudioEndTime = 0
 		s.eosEmitted = false
 	}
 	if (messageType == "events" || messageType == "event") && sarvamString(data["signal_type"]) == "END_SPEECH" {
@@ -755,22 +770,19 @@ func (s *sarvamSTTStreamEventSequencer) EventsFromStreamMessage(payload []byte, 
 		if s.eosEmitted {
 			return nil, nil
 		}
-		s.eosEmitted = true
-		return []*stt.SpeechEvent{{
-			Type:      stt.SpeechEventEndOfSpeech,
-			RequestID: s.serverRequestID,
-			Alternatives: []stt.SpeechData{{
-				Language: s.defaultLanguage,
-				Text:     "",
-				EndTime:  audioPosition,
-			}},
-		}}, nil
+		s.pendingEOS = true
+		s.pendingAudioEndTime = audioPosition
+		if !s.finalEmitted {
+			return nil, nil
+		}
+		return []*stt.SpeechEvent{s.endOfSpeechEvent(audioPosition)}, nil
 	}
 
 	events, err := sarvamSTTEventsFromStreamMessage(payload, s.defaultLanguage)
 	if err != nil {
 		return nil, err
 	}
+	s.applyServerRequestID(events)
 	if messageType == "data" && sarvamString(data["transcript"]) != "" {
 		if !sarvamSTTEventsContainUsage(events) {
 			events = append([]*stt.SpeechEvent{{
@@ -781,8 +793,59 @@ func (s *sarvamSTTStreamEventSequencer) EventsFromStreamMessage(payload []byte, 
 				},
 			}}, events...)
 		}
+		s.finalEmitted = true
+		if s.pendingEOS && !s.eosEmitted {
+			s.applyPendingEndTime(events)
+			events = append(events, s.endOfSpeechEvent(s.pendingAudioEndTime))
+		}
 	}
 	return events, nil
+}
+
+func (s *sarvamSTTStreamEventSequencer) applyServerRequestID(events []*stt.SpeechEvent) {
+	if s.serverRequestID == "" {
+		return
+	}
+	for _, event := range events {
+		if event.RequestID == "" {
+			event.RequestID = s.serverRequestID
+		}
+	}
+}
+
+func (s *sarvamSTTStreamEventSequencer) PendingEndOfSpeechEvent() *stt.SpeechEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.pendingEOS || s.eosEmitted {
+		return nil
+	}
+	return s.endOfSpeechEvent(s.pendingAudioEndTime)
+}
+
+func (s *sarvamSTTStreamEventSequencer) endOfSpeechEvent(audioPosition float64) *stt.SpeechEvent {
+	s.eosEmitted = true
+	s.pendingEOS = false
+	return &stt.SpeechEvent{
+		Type:      stt.SpeechEventEndOfSpeech,
+		RequestID: s.serverRequestID,
+		Alternatives: []stt.SpeechData{{
+			Language: s.defaultLanguage,
+			Text:     "",
+			EndTime:  audioPosition,
+		}},
+	}
+}
+
+func (s *sarvamSTTStreamEventSequencer) applyPendingEndTime(events []*stt.SpeechEvent) {
+	for _, event := range events {
+		if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) == 0 {
+			continue
+		}
+		if event.Alternatives[0].EndTime == 0 {
+			event.Alternatives[0].EndTime = s.pendingAudioEndTime
+		}
+	}
 }
 
 func sarvamSTTEventsContainUsage(events []*stt.SpeechEvent) bool {
@@ -792,6 +855,47 @@ func sarvamSTTEventsContainUsage(events []*stt.SpeechEvent) bool {
 		}
 	}
 	return false
+}
+
+func sarvamSTTReferenceRequestID(data map[string]any) string {
+	if requestID := sarvamString(data["request_id"]); requestID != "" {
+		return requestID
+	}
+	if requestID := sarvamString(sarvamMap(data["data"])["request_id"]); requestID != "" {
+		return requestID
+	}
+	return sarvamString(sarvamMap(data["metadata"])["request_id"])
+}
+
+func (s *sarvamSTTRecognizeStream) emitPendingEndOfSpeechAfterTimeout() {
+	go func() {
+		timer := time.NewTimer(sarvamSTTEOSFallbackTimeout)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			event := s.sequencer.PendingEndOfSpeechEvent()
+			if event == nil {
+				return
+			}
+			select {
+			case s.events <- event:
+			case <-s.ctx.Done():
+			}
+		case <-s.ctx.Done():
+		}
+	}()
+}
+
+func sarvamSTTStreamMessageIsEndSpeech(payload []byte) bool {
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		return false
+	}
+	messageType := sarvamString(message["type"])
+	if messageType != "events" && messageType != "event" {
+		return false
+	}
+	return sarvamString(sarvamMap(message["data"])["signal_type"]) == "END_SPEECH"
 }
 
 func sarvamSTTChunkBytes(sampleRate int) int {
