@@ -226,6 +226,9 @@ func (s *STT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+	if err := s.requireAPIKey(); err != nil {
+		return nil, err
+	}
 	var audio bytes.Buffer
 	for _, frame := range frames {
 		if frame != nil {
@@ -294,6 +297,9 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 }
 
 func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if err := s.requireAPIKey(); err != nil {
+		return nil, err
+	}
 	endpoints := s.sttEndpoints()
 	var lastErr error
 	for _, endpoint := range endpoints {
@@ -327,6 +333,13 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		return nil, lastErr
 	}
 	return nil, errors.New("slng stt websocket endpoint is empty")
+}
+
+func (s *STT) requireAPIKey() error {
+	if s.apiKey == "" {
+		return fmt.Errorf("api key is required, or set %s environment variable", slngAPIKeyEnv)
+	}
+	return nil
 }
 
 func (s *STT) sttEndpoints() []string {

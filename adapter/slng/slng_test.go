@@ -89,6 +89,18 @@ func TestNewSLNGSTTUsesEnvironmentAPIKey(t *testing.T) {
 	}
 }
 
+func TestSLNGSTTRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("SLNG_API_KEY", "")
+	provider := NewSTT("", WithSTTEndpoint("ws://127.0.0.1:1/v1/stt/deepgram/nova:3"))
+
+	if _, err := provider.Stream(context.Background(), ""); err == nil || !strings.Contains(err.Error(), "SLNG_API_KEY") {
+		t.Fatalf("Stream() error = %v, want SLNG_API_KEY guidance before dialing", err)
+	}
+	if _, err := provider.Recognize(context.Background(), nil, ""); err == nil || !strings.Contains(err.Error(), "SLNG_API_KEY") {
+		t.Fatalf("Recognize() error = %v, want SLNG_API_KEY guidance before request", err)
+	}
+}
+
 func TestNewSLNGTTSUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("SLNG_API_KEY", "env-key")
 
