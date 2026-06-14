@@ -2047,6 +2047,8 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		return awsSTTFromConfig(cfg)
 	case providerAzure:
 		return azure.NewAzureSTT("", "")
+	case providerFal:
+		return falSTTFromConfig(cfg), nil
 	case providerDeepgram:
 		sttOpts := []deepgram.DeepgramSTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -2886,6 +2888,23 @@ func awsSTTFromConfig(cfg AppConfig) (*adapteraws.AWSSTT, error) {
 		sttOpts = append(sttOpts, adapteraws.WithAWSSTTVocabularyFilterNames(cfg.STTVocabularyFilterNames))
 	}
 	return adapteraws.NewAWSSTT(context.Background(), cfg.AWSRegion, sttOpts...)
+}
+
+func falSTTFromConfig(cfg AppConfig) *fal.FalSTT {
+	sttOpts := []fal.FalSTTOption{}
+	if cfg.STTLanguage != "" {
+		sttOpts = append(sttOpts, fal.WithFalSTTLanguage(cfg.STTLanguage))
+	}
+	if cfg.STTTask != "" {
+		sttOpts = append(sttOpts, fal.WithFalSTTTask(cfg.STTTask))
+	}
+	if cfg.STTChunkLevel != "" {
+		sttOpts = append(sttOpts, fal.WithFalSTTChunkLevel(cfg.STTChunkLevel))
+	}
+	if cfg.STTVersion != "" {
+		sttOpts = append(sttOpts, fal.WithFalSTTVersion(cfg.STTVersion))
+	}
+	return fal.NewFalSTT(cfg.FalAPIKey, sttOpts...)
 }
 
 func configureTTSFallbacks(cfg AppConfig, a *agent.Agent) error {
@@ -4059,20 +4078,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.STT = deepgram.NewDeepgramSTT("", cfg.STTModel, sttOpts...)
 	case providerFal:
-		sttOpts := []fal.FalSTTOption{}
-		if cfg.STTLanguage != "" {
-			sttOpts = append(sttOpts, fal.WithFalSTTLanguage(cfg.STTLanguage))
-		}
-		if cfg.STTTask != "" {
-			sttOpts = append(sttOpts, fal.WithFalSTTTask(cfg.STTTask))
-		}
-		if cfg.STTChunkLevel != "" {
-			sttOpts = append(sttOpts, fal.WithFalSTTChunkLevel(cfg.STTChunkLevel))
-		}
-		if cfg.STTVersion != "" {
-			sttOpts = append(sttOpts, fal.WithFalSTTVersion(cfg.STTVersion))
-		}
-		a.STT = fal.NewFalSTT(cfg.FalAPIKey, sttOpts...)
+		a.STT = falSTTFromConfig(cfg)
 	case providerFireworks:
 		sttOpts := []fireworksai.FireworksSTTOption{}
 		if cfg.STTBaseURL != "" {
