@@ -78,6 +78,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/spitch"
 	"github.com/cavos-io/rtp-agent/adapter/tavus"
 	"github.com/cavos-io/rtp-agent/adapter/telnyx"
+	"github.com/cavos-io/rtp-agent/adapter/ten"
 	"github.com/cavos-io/rtp-agent/adapter/trugen"
 	"github.com/cavos-io/rtp-agent/adapter/turndetector"
 	"github.com/cavos-io/rtp-agent/adapter/ultravox"
@@ -169,6 +170,7 @@ func init() {
 	plugin.RegisterPluginMetadata(spitch.PluginTitle, spitch.PluginVersion, spitch.PluginPackage)
 	plugin.RegisterPluginMetadata(tavus.PluginTitle, tavus.PluginVersion, tavus.PluginPackage)
 	plugin.RegisterPluginMetadata(telnyx.PluginTitle, telnyx.PluginVersion, telnyx.PluginPackage)
+	plugin.RegisterPluginDownloader(ten.PluginTitle, ten.PluginVersion, ten.PluginPackage, ten.Plugin{}.DownloadFiles)
 	plugin.RegisterPluginMetadata(trugen.PluginTitle, trugen.PluginVersion, trugen.PluginPackage)
 	plugin.RegisterPluginMetadata(turndetector.PluginTitle, turndetector.PluginVersion, turndetector.PluginPackage)
 	plugin.RegisterPluginMetadata(ultravox.PluginTitle, ultravox.PluginVersion, ultravox.PluginPackage)
@@ -256,6 +258,7 @@ const (
 	providerSpitch       = "spitch"
 	providerTavus        = "tavus"
 	providerTelnyx       = "telnyx"
+	providerTen          = "ten"
 	providerTogether     = "together"
 	providerTrugen       = "trugen"
 	providerUltravox     = "ultravox"
@@ -1783,6 +1786,45 @@ func configureVAD(cfg AppConfig, a *agent.Agent) error {
 			return nil
 		}
 		detector, err := silero.NewSileroVADWithOptions(vadOpts...)
+		if err != nil {
+			return err
+		}
+		a.VAD = detector
+		return nil
+	case providerTen:
+		vadOpts := []ten.VADOption{}
+		if cfg.VADMinSpeechDuration != nil {
+			vadOpts = append(vadOpts, ten.WithMinSpeechDuration(*cfg.VADMinSpeechDuration))
+		}
+		if cfg.VADMinSilenceDuration != nil {
+			vadOpts = append(vadOpts, ten.WithMinSilenceDuration(*cfg.VADMinSilenceDuration))
+		}
+		if cfg.VADPrefixPaddingDuration != nil {
+			vadOpts = append(vadOpts, ten.WithPrefixPaddingDuration(*cfg.VADPrefixPaddingDuration))
+		}
+		if cfg.VADPaddingDuration != nil {
+			vadOpts = append(vadOpts, ten.WithPaddingDuration(*cfg.VADPaddingDuration))
+		}
+		if cfg.VADMaxBufferedSpeech != nil {
+			vadOpts = append(vadOpts, ten.WithMaxBufferedSpeech(*cfg.VADMaxBufferedSpeech))
+		}
+		if cfg.VADActivationThreshold != nil {
+			vadOpts = append(vadOpts, ten.WithActivationThreshold(*cfg.VADActivationThreshold))
+		}
+		if cfg.VADDeactivationThreshold != nil {
+			vadOpts = append(vadOpts, ten.WithDeactivationThreshold(*cfg.VADDeactivationThreshold))
+		}
+		if cfg.VADSampleRate != nil {
+			vadOpts = append(vadOpts, ten.WithSampleRate(*cfg.VADSampleRate))
+		}
+		if cfg.VADUpdateInterval != nil {
+			vadOpts = append(vadOpts, ten.WithUpdateInterval(*cfg.VADUpdateInterval))
+		}
+		if len(vadOpts) == 0 {
+			a.VAD = ten.NewVAD()
+			return nil
+		}
+		detector, err := ten.NewVADWithOptions(vadOpts...)
 		if err != nil {
 			return err
 		}
