@@ -49,8 +49,8 @@ func (f PCMFrame) Validate() error {
 		return fmt.Errorf("agora PCM frame sample rate must produce whole 10 ms frames")
 	}
 	bytesPer10MS := (f.SampleRate / 100) * f.Channels * 2
-	if len(f.Data)%bytesPer10MS != 0 {
-		return fmt.Errorf("agora PCM frame data must be an exact multiple of 10 ms 16-bit interleaved PCM")
+	if len(f.Data) != bytesPer10MS {
+		return fmt.Errorf("agora PCM frame data must be exactly 10 ms of 16-bit interleaved PCM")
 	}
 	return nil
 }

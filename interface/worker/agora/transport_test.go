@@ -266,3 +266,24 @@ func TestTransportPublishPCMRejectsNonTenMillisecondFrames(t *testing.T) {
 		t.Fatalf("publish count = %d, want 0", client.publishCount)
 	}
 }
+
+func TestTransportPublishPCMRejectsTwentyMillisecondFrames(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	frame := PCMFrame{
+		Data:       make([]byte, 640),
+		SampleRate: 16000,
+		Channels:   1,
+	}
+
+	err := tr.PublishPCM(context.Background(), frame)
+	if err == nil {
+		t.Fatal("PublishPCM() error = nil, want exact 10 ms validation error")
+	}
+	if !strings.Contains(err.Error(), "exactly 10 ms") {
+		t.Fatalf("PublishPCM() error = %v, want exactly 10 ms validation error", err)
+	}
+	if client.publishCount != 0 {
+		t.Fatalf("publish count = %d, want 0", client.publishCount)
+	}
+}
