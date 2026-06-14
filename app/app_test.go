@@ -5858,6 +5858,75 @@ func TestSLNGSTTFallbackPassesModelOptions(t *testing.T) {
 	}
 }
 
+func TestSLNGSTTFallbackPassesAudioAndVADOptions(t *testing.T) {
+	initPayloads := make(chan map[string]any, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read init payload: %v", err)
+			return
+		}
+		var init map[string]any
+		if err := json.Unmarshal(payload, &init); err != nil {
+			t.Errorf("decode init payload: %v", err)
+			return
+		}
+		initPayloads <- init
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	sampleRate := 8000
+	vadThreshold := 0.73
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		SLNGAPIKey:      "test-slng-key",
+		STTBaseURL:      endpoint,
+		STTSampleRate:   &sampleRate,
+		STTVADThreshold: &vadThreshold,
+	}, providerSLNG)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case init := <-initPayloads:
+		config, ok := init["config"].(map[string]any)
+		if !ok {
+			t.Fatalf("init.config = %#v, want object", init["config"])
+		}
+		if got, want := config["sample_rate"], float64(8000); got != want {
+			t.Fatalf("config.sample_rate = %#v, want %#v", got, want)
+		}
+		if got, want := config["vad_threshold"], 0.73; got != want {
+			t.Fatalf("config.vad_threshold = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SLNG STT init payload")
+	}
+}
+
 func firstQueryValue(values map[string][]string, key string) string {
 	if len(values[key]) == 0 {
 		return ""

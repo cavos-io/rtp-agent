@@ -112,6 +112,20 @@ func WithSTTPartialTranscripts(enabled bool) STTOption {
 	}
 }
 
+func WithSTTSampleRate(sampleRate int) STTOption {
+	return func(s *STT) {
+		if sampleRate > 0 {
+			s.sampleRate = sampleRate
+		}
+	}
+}
+
+func WithSTTVADThreshold(threshold float64) STTOption {
+	return func(s *STT) {
+		s.vadThreshold = threshold
+	}
+}
+
 func WithSTTDiarization(enabled bool, minSpeakers, maxSpeakers int) STTOption {
 	return func(s *STT) {
 		s.enableDiarization = enabled

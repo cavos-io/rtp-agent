@@ -2711,6 +2711,12 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		if cfg.STTInterimResults != nil {
 			sttOpts = append(sttOpts, slng.WithSTTPartialTranscripts(*cfg.STTInterimResults))
 		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, slng.WithSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTVADThreshold != nil {
+			sttOpts = append(sttOpts, slng.WithSTTVADThreshold(*cfg.STTVADThreshold))
+		}
 		if cfg.STTDiarization != nil {
 			minSpeakers := 0
 			if cfg.STTMinSpeakers != nil {
@@ -4138,6 +4144,12 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.STTInterimResults != nil {
 			sttOpts = append(sttOpts, slng.WithSTTPartialTranscripts(*cfg.STTInterimResults))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, slng.WithSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTVADThreshold != nil {
+			sttOpts = append(sttOpts, slng.WithSTTVADThreshold(*cfg.STTVADThreshold))
 		}
 		if cfg.STTDiarization != nil {
 			minSpeakers := 0
