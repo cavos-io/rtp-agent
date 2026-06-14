@@ -3516,6 +3516,109 @@ func TestBasetenSTTFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestCartesiaSTTFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("CARTESIA_API_KEY", "test-cartesia-key")
+	type wsRecord struct {
+		path       string
+		query      map[string]string
+		apiKey     string
+		apiVersion string
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		query := map[string]string{}
+		for key, values := range r.URL.Query() {
+			if len(values) > 0 {
+				query[key] = values[0]
+			}
+		}
+		records <- wsRecord{
+			path:       r.URL.Path,
+			query:      query,
+			apiKey:     r.Header.Get("X-API-Key"),
+			apiVersion: r.Header.Get("Cartesia-Version"),
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	sampleRate := 8000
+	chunkDurationMS := 120
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTBaseURL:              server.URL,
+		STTModel:                "ink-2",
+		STTLanguage:             "en",
+		STTEncoding:             "pcm_mulaw",
+		STTSampleRate:           &sampleRate,
+		STTAudioChunkDurationMS: &chunkDurationMS,
+	}, providerCartesia)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*cartesia.CartesiaSTT); !ok {
+		t.Fatalf("provider type = %T, want *cartesia.CartesiaSTT", provider)
+	}
+	if got, want := provider.Label(), "cartesia.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "ink-2"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Cartesia"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.AlignedTranscript != "" || caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming interim without alignment", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.path, "/stt/turns/websocket"; got != want {
+			t.Fatalf("path = %q, want %q", got, want)
+		}
+		if got, want := record.query["model"], "ink-2"; got != want {
+			t.Fatalf("query model = %q, want %q", got, want)
+		}
+		if got, want := record.query["sample_rate"], "8000"; got != want {
+			t.Fatalf("query sample_rate = %q, want %q", got, want)
+		}
+		if got, want := record.query["encoding"], "pcm_mulaw"; got != want {
+			t.Fatalf("query encoding = %q, want %q", got, want)
+		}
+		if got, want := record.apiKey, "test-cartesia-key"; got != want {
+			t.Fatalf("X-API-Key = %q, want %q", got, want)
+		}
+		if got, want := record.apiVersion, "2025-04-16"; got != want {
+			t.Fatalf("Cartesia-Version = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Cartesia STT websocket request")
+	}
+}
+
 func TestDefaultConfigFromEnvWrapsTTSFallbackProviders(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "cartesia")

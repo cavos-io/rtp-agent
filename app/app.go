@@ -2039,6 +2039,27 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, baseten.WithBasetenSTTVADThreshold(*cfg.STTVADThreshold))
 		}
 		return baseten.NewBasetenSTT("", cfg.STTModel, sttOpts...)
+	case providerCartesia:
+		sttOpts := []cartesia.CartesiaSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTEncoding != "" {
+			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTEncoding(cfg.STTEncoding))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTAudioChunkDurationMS != nil {
+			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTAudioChunkDurationMS(*cfg.STTAudioChunkDurationMS))
+		}
+		return cartesia.NewCartesiaSTT("", sttOpts...), nil
 	case providerElevenLabs:
 		sttOpts := []elevenlabs.ElevenLabsSTTOption{}
 		if cfg.STTBaseURL != "" {
