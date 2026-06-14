@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -120,6 +121,37 @@ func TestStreamAdapterForwardsMetricsCollected(t *testing.T) {
 		}
 	default:
 		t.Fatal("metrics handler was not called")
+	}
+}
+
+func TestStreamAdapterClosePreservesProviderMetricsForwarding(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{}
+	adapter := NewStreamAdapter(provider)
+	metricsCh := make(chan string, 3)
+
+	unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+		metricsCh <- metrics.RequestID
+	})
+	defer unsubscribe()
+
+	provider.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "before"})
+	if err := adapter.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	provider.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "after"})
+	adapter.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "local"})
+
+	var got []string
+	for {
+		select {
+		case requestID := <-metricsCh:
+			got = append(got, requestID)
+		default:
+			if !reflect.DeepEqual(got, []string{"before", "after", "local"}) {
+				t.Fatalf("metrics request IDs = %#v, want provider forwarding before and after close plus local adapter event", got)
+			}
+			return
+		}
 	}
 }
 

@@ -567,6 +567,24 @@ func runTTSStreamAdapter(input json.RawMessage) (any, error) {
 				{"name": "forward_metrics", "request_ids": requestIDs, "count": len(requestIDs)},
 			},
 		}, nil
+	case "close_preserves_metrics_forwarding":
+		requestIDs := make([]string, 0, 2)
+		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		defer unsubscribe()
+		provider.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "before"})
+		if err := adapter.Close(); err != nil {
+			return nil, err
+		}
+		provider.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "after"})
+		adapter.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "local"})
+		return map[string]any{
+			"contract": "tts-stream-adapter-close-preserves-metrics-forwarding",
+			"events": []map[string]any{
+				{"name": "close_preserves_metrics_forwarding", "request_ids": requestIDs},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported TTS stream adapter action %q", payload.Action)
 	}

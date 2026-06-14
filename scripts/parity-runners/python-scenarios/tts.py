@@ -116,6 +116,31 @@ def tts_stream_adapter(input_data: Any) -> dict[str, Any]:
                 {"name": "forward_metrics", "request_ids": request_ids, "count": len(request_ids)}
             ],
         }
+    if action == "close_preserves_metrics_forwarding":
+        request_ids: list[str] = []
+        adapter.on(
+            "metrics_collected",
+            lambda metrics: request_ids.append(metrics.request_id),
+        )
+        provider.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "before"})(),
+        )
+        asyncio.run(adapter.aclose())
+        provider.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "after"})(),
+        )
+        adapter.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "local"})(),
+        )
+        return {
+            "contract": "tts-stream-adapter-close-preserves-metrics-forwarding",
+            "events": [
+                {"name": "close_preserves_metrics_forwarding", "request_ids": request_ids}
+            ],
+        }
     raise ValueError(f"unsupported TTS stream adapter action {action!r}")
 
 
