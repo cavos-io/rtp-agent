@@ -790,6 +790,48 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
             }
 
         return asyncio.run(run())
+    if action == "skip_unavailable_provider":
+        primary = FakeLLM(
+            "primary",
+            streams=[
+                [RuntimeError("primary stream failed")],
+                [RuntimeError("recovery failed")],
+            ],
+        )
+        fallback = FakeLLM(
+            "fallback",
+            streams=[
+                [FakeChunk("fallback first")],
+                [FakeChunk("fallback second")],
+            ],
+        )
+        adapter = module.FallbackAdapter([primary, fallback])
+
+        async def run() -> dict[str, Any]:
+            first = adapter.chat(chat_ctx=module.ChatContext())
+            await first._run()
+            first_chunks = [chunk_kind(chunk) for chunk in first._event_ch.items]
+
+            deadline = time.monotonic() + 2
+            while primary.calls < 2 and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+
+            second = adapter.chat(chat_ctx=module.ChatContext())
+            await second._run()
+            second_chunks = [chunk_kind(chunk) for chunk in second._event_ch.items]
+            return {
+                "contract": "llm-fallback-skip-unavailable-provider",
+                "events": [
+                    {
+                        "name": "skip_unavailable_provider",
+                        "first_chunks": first_chunks,
+                        "second_chunks": second_chunks,
+                        "fallback_calls": fallback.calls,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
     raise ValueError(f"unsupported LLM fallback action {action!r}")
 
 

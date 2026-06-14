@@ -826,6 +826,55 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "skip_unavailable_provider":
+		primary := &fakeScenarioLLM{label: "primary", streams: []lkllm.LLMStream{
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{{err: errors.New("primary stream failed")}}},
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{{err: errors.New("recovery failed")}}},
+		}}
+		fallback := &fakeScenarioLLM{label: "fallback", streams: []lkllm.LLMStream{
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback first"}}},
+			}},
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback second"}}},
+			}},
+		}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		first, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		firstChunks, err := collectScenarioLLMStreamChunks(first)
+		if err != nil {
+			return nil, err
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		for primary.calls < 2 && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if primary.calls < 2 {
+			return nil, fmt.Errorf("timed out waiting for recovery probe, calls=%d", primary.calls)
+		}
+
+		second, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		secondChunks, err := collectScenarioLLMStreamChunks(second)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "llm-fallback-skip-unavailable-provider",
+			"events": []map[string]any{
+				{
+					"name":           "skip_unavailable_provider",
+					"first_chunks":   firstChunks,
+					"second_chunks":  secondChunks,
+					"fallback_calls": fallback.calls,
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported LLM fallback action %q", payload.Action)
 	}
@@ -853,6 +902,21 @@ func scenarioLLMChunkKind(chunk *lkllm.ChatChunk) string {
 		return "content:" + chunk.Delta.Content
 	}
 	return "empty"
+}
+
+func collectScenarioLLMStreamChunks(stream lkllm.LLMStream) ([]string, error) {
+	defer stream.Close()
+	chunks := []string{}
+	for {
+		chunk, err := stream.Next()
+		if errors.Is(err, io.EOF) {
+			return chunks, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		chunks = append(chunks, scenarioLLMChunkKind(chunk))
+	}
 }
 
 func drainScenarioLLMAvailability(adapter *lkllm.FallbackAdapter) {
