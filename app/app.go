@@ -2166,6 +2166,30 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEncoding(cfg.TTSEncoding))
 		}
 		return elevenlabs.NewElevenLabsTTS(cfg.ElevenLabsAPIKey, cfg.TTSVoice, cfg.TTSModel, ttsOpts...)
+	case providerFishAudio:
+		ttsOpts := []fishaudio.FishAudioTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSOutputFormat(cfg.TTSResponseFormat))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSLatencyMode != "" {
+			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSLatencyMode(cfg.TTSLatencyMode))
+		}
+		if cfg.TTSChunkLength != nil {
+			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSChunkLength(*cfg.TTSChunkLength))
+		}
+		return fishaudio.NewFishAudioTTS(cfg.FishAudioAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerGroq:
 		ttsOpts := []groq.GroqTTSOption{}
 		if cfg.TTSBaseURL != "" {

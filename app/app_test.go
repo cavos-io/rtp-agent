@@ -102,6 +102,7 @@ import (
 	"github.com/livekit/protocol/livekit"
 	livekitlogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
@@ -3968,6 +3969,103 @@ func TestXaiTTSFallbackPassesReferenceOptions(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for xai websocket request")
+	}
+}
+
+func TestFishAudioTTSFallbackPassesReferenceOptions(t *testing.T) {
+	sampleRate := 48000
+	chunkLength := 250
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			return nil, err
+		}
+		if err := msgpack.Unmarshal(body, &gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("audio")),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		FishAudioAPIKey:   "test-fish-key",
+		TTSBaseURL:        "https://fish.example/",
+		TTSModel:          "s1",
+		TTSVoice:          "voice-2",
+		TTSResponseFormat: "opus",
+		TTSSampleRate:     &sampleRate,
+		TTSLatencyMode:    "low",
+		TTSChunkLength:    &chunkLength,
+	}, providerFishAudio)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*fishaudio.FishAudioTTS); !ok {
+		t.Fatalf("provider type = %T, want *fishaudio.FishAudioTTS", provider)
+	}
+	if got, want := provider.Label(), "fishaudio.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 48000; got != want {
+		t.Fatalf("SampleRate() = %d, want configured reference sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "s1"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "FishAudio"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference streaming without aligned transcript", caps)
+	}
+	stream, err := provider.Synthesize(context.Background(), "hello fish")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://fish.example/v1/tts"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("Authorization"), "Bearer test-fish-key"; got != want {
+		t.Fatalf("Authorization = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("Content-Type"), "application/msgpack"; got != want {
+		t.Fatalf("Content-Type = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("model"), "s1"; got != want {
+		t.Fatalf("model header = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["text"], "hello fish"; got != want {
+		t.Fatalf("payload text = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["reference_id"], "voice-2"; got != want {
+		t.Fatalf("payload reference_id = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["format"], "opus"; got != want {
+		t.Fatalf("payload format = %#v, want %#v", got, want)
+	}
+	if got, want := fmt.Sprint(gotPayload["sample_rate"]), "48000"; got != want {
+		t.Fatalf("payload sample_rate = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["latency"], "low"; got != want {
+		t.Fatalf("payload latency = %#v, want %#v", got, want)
+	}
+	if got, want := fmt.Sprint(gotPayload["chunk_length"]), "250"; got != want {
+		t.Fatalf("payload chunk_length = %#v, want %#v", got, want)
 	}
 }
 
