@@ -302,7 +302,7 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 	}
 	endpoints := s.sttEndpoints()
 	var lastErr error
-	for _, endpoint := range endpoints {
+	for endpointIndex, endpoint := range endpoints {
 		attempt := *s
 		attempt.endpoint = endpoint
 		if model := extractSTTModelFromEndpoint(endpoint); model != "" {
@@ -320,6 +320,9 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		}
 		s.endpoint = endpoint
 		s.model = attempt.model
+		if len(s.modelEndpoints) > 0 && endpointIndex > 0 {
+			s.modelEndpoints = append([]string(nil), endpoints[endpointIndex:]...)
+		}
 		return &sttStream{
 			conn:              conn,
 			language:          s.resolveLanguage(language),

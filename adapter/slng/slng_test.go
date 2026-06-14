@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -483,6 +484,104 @@ func TestSLNGSTTStreamFallsBackToNextModelEndpoint(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for fallback SLNG STT init payload")
+	}
+}
+
+func TestSLNGSTTStreamStartsAtRememberedFallbackEndpoint(t *testing.T) {
+	failedEndpointHits := make(chan struct{}, 2)
+	failedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		failedEndpointHits <- struct{}{}
+		http.Error(w, "first endpoint unavailable", http.StatusServiceUnavailable)
+	})
+	failedListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen failed test websocket server: %v", err)
+	}
+	failedServer := &httptest.Server{
+		Listener: failedListener,
+		Config:   &http.Server{Handler: failedHandler},
+	}
+	failedServer.Start()
+	defer failedServer.Close()
+
+	var successHits atomic.Int32
+	initPayloads := make(chan map[string]any, 2)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		successHits.Add(1)
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read init payload: %v", err)
+			return
+		}
+		var init map[string]any
+		if err := json.Unmarshal(payload, &init); err != nil {
+			t.Errorf("decode init payload: %v", err)
+			return
+		}
+		initPayloads <- init
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	successServer := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	successServer.Start()
+	defer successServer.Close()
+
+	provider := NewSTT("test-key", WithSTTModelEndpoints(
+		"ws"+strings.TrimPrefix(failedServer.URL, "http")+"/v1/stt/deepgram/failing",
+		"ws"+strings.TrimPrefix(successServer.URL, "http")+"/v1/stt/deepgram/nova:3",
+	))
+	first, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("first Stream() error = %v", err)
+	}
+	defer first.Close()
+	select {
+	case <-failedEndpointHits:
+	case <-time.After(time.Second):
+		t.Fatal("first stream did not try the first endpoint")
+	}
+	select {
+	case init := <-initPayloads:
+		if got, want := init["model"], "nova-3"; got != want {
+			t.Fatalf("first init.model = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first fallback init payload")
+	}
+
+	second, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("second Stream() error = %v", err)
+	}
+	defer second.Close()
+	select {
+	case <-failedEndpointHits:
+		t.Fatal("second stream retried failed first endpoint after successful failover")
+	default:
+	}
+	select {
+	case init := <-initPayloads:
+		if got, want := init["model"], "nova-3"; got != want {
+			t.Fatalf("second init.model = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for second fallback init payload")
+	}
+	if got, want := successHits.Load(), int32(2); got != want {
+		t.Fatalf("success endpoint hits = %d, want %d", got, want)
 	}
 }
 
