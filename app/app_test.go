@@ -717,6 +717,38 @@ func TestRunAgoraLogsJoinErrorTransportEvent(t *testing.T) {
 	}
 }
 
+func TestRunAgoraClosesTransportWhenJoinFails(t *testing.T) {
+	joinErr := errors.New("join failed")
+	client := &fakeAppAgoraChannelClient{joinErr: joinErr}
+	oldNewAgoraChannelClient := appNewAgoraChannelClient
+	appNewAgoraChannelClient = func() (workeragora.ChannelClient, error) {
+		return client, nil
+	}
+	t.Cleanup(func() {
+		appNewAgoraChannelClient = oldNewAgoraChannelClient
+	})
+
+	rtpApp := &App{
+		Session: agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{}),
+		Server: worker.NewAgentServer(worker.WorkerOptions{
+			Agora: worker.AgoraOptions{
+				AppID:   "app",
+				Channel: "support",
+				UID:     "agent",
+				Token:   "token",
+			},
+		}),
+	}
+
+	err := rtpApp.runAgora(context.Background())
+	if !errors.Is(err, joinErr) {
+		t.Fatalf("runAgora() error = %v, want join failed", err)
+	}
+	if !client.left {
+		t.Fatal("Agora client left = false, want true after join failure")
+	}
+}
+
 func TestRunAgoraPublishesAssistantAudioToChannel(t *testing.T) {
 	client := &fakeAppAgoraChannelClient{
 		joinedCh:    make(chan struct{}, 1),
