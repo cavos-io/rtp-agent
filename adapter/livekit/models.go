@@ -1,8 +1,12 @@
 package livekit
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 	"unicode"
@@ -43,6 +47,10 @@ type Model struct {
 	unlikelyThreshold   *float64
 	remoteInferenceBase string
 	httpClient          *http.Client
+	languageThresholds  map[string]float64
+	languagesPath       string
+	languagesLoaded     bool
+	runner              TurnDetectorRunner
 }
 
 type inferenceMessage struct {
@@ -52,6 +60,16 @@ type inferenceMessage struct {
 
 type inferencePayload struct {
 	ChatCtx []inferenceMessage `json:"chat_ctx"`
+}
+
+type TurnDetectorRunner interface {
+	RunTurnDetector(ctx context.Context, payload []byte) (float64, error)
+}
+
+type turnDetectorRunnerFunc func(context.Context, []byte) (float64, error)
+
+func (f turnDetectorRunnerFunc) RunTurnDetector(ctx context.Context, payload []byte) (float64, error) {
+	return f(ctx, payload)
 }
 
 type ModelOption func(*Model)
@@ -70,6 +88,19 @@ func WithUnlikelyThreshold(threshold float64) ModelOption {
 	}
 }
 
+func WithLanguageThresholds(thresholds map[string]float64) ModelOption {
+	return func(model *Model) {
+		model.languageThresholds = copyLanguageThresholds(thresholds)
+		model.languagesLoaded = len(thresholds) > 0
+	}
+}
+
+func WithLanguagesPath(path string) ModelOption {
+	return func(model *Model) {
+		model.languagesPath = path
+	}
+}
+
 func WithRemoteInferenceBaseURL(urlBase string) ModelOption {
 	return func(model *Model) {
 		model.remoteInferenceBase = urlBase
@@ -79,6 +110,12 @@ func WithRemoteInferenceBaseURL(urlBase string) ModelOption {
 func WithHTTPClient(client *http.Client) ModelOption {
 	return func(model *Model) {
 		model.httpClient = client
+	}
+}
+
+func WithTurnDetectorRunner(runner TurnDetectorRunner) ModelOption {
+	return func(model *Model) {
+		model.runner = runner
 	}
 }
 
@@ -99,10 +136,19 @@ func (m *Model) InferenceMethod() string {
 }
 
 func (m *Model) UnlikelyThreshold(language string) (float64, bool) {
-	if language == "" || m.unlikelyThreshold == nil {
+	if language == "" {
 		return 0, false
 	}
-	return *m.unlikelyThreshold, true
+	if m.unlikelyThreshold != nil {
+		return *m.unlikelyThreshold, true
+	}
+	if threshold, ok := m.lookupLanguageThreshold(language); ok {
+		return threshold, true
+	}
+	if threshold, ok := m.fetchRemoteThreshold(language); ok {
+		return threshold, true
+	}
+	return 0, false
 }
 
 func (m *Model) RemoteInferenceURL() string {
@@ -170,4 +216,123 @@ func normalizeTurnDetectorText(text string) string {
 		return r
 	}, text)
 	return strings.Join(strings.Fields(text), " ")
+}
+
+func copyLanguageThresholds(thresholds map[string]float64) map[string]float64 {
+	if len(thresholds) == 0 {
+		return nil
+	}
+	copied := make(map[string]float64, len(thresholds))
+	for language, threshold := range thresholds {
+		copied[language] = threshold
+	}
+	return copied
+}
+
+func (m *Model) lookupLanguageThreshold(language string) (float64, bool) {
+	m.loadLanguageThresholds()
+	if len(m.languageThresholds) == 0 {
+		return 0, false
+	}
+	if threshold, ok := m.languageThresholds[language]; ok {
+		return threshold, true
+	}
+	base, _, ok := strings.Cut(language, "-")
+	if !ok {
+		return 0, false
+	}
+	threshold, ok := m.languageThresholds[base]
+	return threshold, ok
+}
+
+func (m *Model) loadLanguageThresholds() {
+	if m.languagesLoaded {
+		return
+	}
+	m.languagesLoaded = true
+	path := m.languagesPath
+	if path == "" {
+		var err error
+		path, err = ModelLanguagesPath(m.modelType)
+		if err != nil {
+			return
+		}
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	thresholds, err := parseLanguageThresholds(content)
+	if err != nil {
+		return
+	}
+	m.languageThresholds = thresholds
+}
+
+func parseLanguageThresholds(content []byte) (map[string]float64, error) {
+	var languages map[string]struct {
+		Threshold float64 `json:"threshold"`
+	}
+	if err := json.Unmarshal(content, &languages); err != nil {
+		return nil, err
+	}
+	thresholds := make(map[string]float64, len(languages))
+	for language, data := range languages {
+		thresholds[language] = data.Threshold
+	}
+	return thresholds, nil
+}
+
+func (m *Model) fetchRemoteThreshold(language string) (float64, bool) {
+	url := m.RemoteInferenceURL()
+	if url == "" {
+		return 0, false
+	}
+	payload, err := json.Marshal(map[string]string{"language": language})
+	if err != nil {
+		return 0, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), RemoteInferenceTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return 0, false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := m.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, false
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, false
+	}
+	var data struct {
+		Threshold float64 `json:"threshold"`
+	}
+	if err := json.Unmarshal(body, &data); err != nil || data.Threshold == 0 {
+		return 0, false
+	}
+	m.cacheLanguageThreshold(language, data.Threshold)
+	return data.Threshold, true
+}
+
+func (m *Model) cacheLanguageThreshold(language string, threshold float64) {
+	if m.languageThresholds == nil {
+		m.languageThresholds = make(map[string]float64)
+	}
+	base, _, ok := strings.Cut(language, "-")
+	if ok {
+		m.languageThresholds[base] = threshold
+		return
+	}
+	m.languageThresholds[language] = threshold
 }

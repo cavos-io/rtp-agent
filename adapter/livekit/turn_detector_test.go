@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -83,6 +85,98 @@ func TestTurnDetectorUnlikelyThresholdOverrideMatchesReference(t *testing.T) {
 	}
 }
 
+func TestTurnDetectorUnlikelyThresholdUsesFullAndBaseLanguage(t *testing.T) {
+	model := NewMultilingualModel(WithLanguageThresholds(map[string]float64{
+		"en":    0.31,
+		"en-US": 0.27,
+	}))
+
+	got, ok := model.UnlikelyThreshold("en-US")
+	if !ok {
+		t.Fatal("UnlikelyThreshold(en-US) ok = false, want true")
+	}
+	if got != 0.27 {
+		t.Fatalf("UnlikelyThreshold(en-US) = %v, want exact language threshold", got)
+	}
+
+	got, ok = model.UnlikelyThreshold("en-GB")
+	if !ok {
+		t.Fatal("UnlikelyThreshold(en-GB) ok = false, want base language threshold")
+	}
+	if got != 0.31 {
+		t.Fatalf("UnlikelyThreshold(en-GB) = %v, want base language threshold", got)
+	}
+}
+
+func TestTurnDetectorUnlikelyThresholdLoadsLanguagesJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "languages.json")
+	content := `{
+		"en": {"threshold": 0.31},
+		"id-ID": {"threshold": 0.46}
+	}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile languages.json error = %v", err)
+	}
+
+	model := NewMultilingualModel(WithLanguagesPath(path))
+
+	got, ok := model.UnlikelyThreshold("id-ID")
+	if !ok {
+		t.Fatal("UnlikelyThreshold(id-ID) ok = false, want threshold from languages.json")
+	}
+	if got != 0.46 {
+		t.Fatalf("UnlikelyThreshold(id-ID) = %v, want languages.json threshold", got)
+	}
+
+	got, ok = model.UnlikelyThreshold("en-US")
+	if !ok {
+		t.Fatal("UnlikelyThreshold(en-US) ok = false, want base language threshold from languages.json")
+	}
+	if got != 0.31 {
+		t.Fatalf("UnlikelyThreshold(en-US) = %v, want base languages.json threshold", got)
+	}
+}
+
+func TestTurnDetectorUnlikelyThresholdFetchesRemoteThreshold(t *testing.T) {
+	calls := 0
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		calls++
+		if r.URL.Path != "/eot/multi" {
+			t.Fatalf("path = %q, want /eot/multi", r.URL.Path)
+		}
+		var req struct {
+			Language string `json:"language"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("request decode error = %v", err)
+		}
+		if req.Language != "id-ID" {
+			t.Fatalf("language = %q, want id-ID", req.Language)
+		}
+		return jsonResponse(200, `{"threshold":0.44}`), nil
+	})}
+
+	model := NewMultilingualModel(
+		WithRemoteInferenceBaseURL("https://turn.example"),
+		WithHTTPClient(client),
+	)
+	got, ok := model.UnlikelyThreshold("id-ID")
+	if !ok {
+		t.Fatal("UnlikelyThreshold(id-ID) ok = false, want remote threshold")
+	}
+	if got != 0.44 {
+		t.Fatalf("UnlikelyThreshold(id-ID) = %v, want remote threshold", got)
+	}
+
+	got, ok = model.UnlikelyThreshold("id")
+	if !ok || got != 0.44 {
+		t.Fatalf("cached UnlikelyThreshold(id) = %v/%v, want 0.44/true", got, ok)
+	}
+	if calls != 1 {
+		t.Fatalf("remote threshold calls = %d, want cached single call", calls)
+	}
+}
+
 func TestTurnDetectorRemoteInferenceURLMatchesReference(t *testing.T) {
 	if got := RemoteInferenceURL(""); got != "" {
 		t.Fatalf("RemoteInferenceURL(empty) = %q, want empty", got)
@@ -99,13 +193,76 @@ func TestTurnDetectorRemoteInferenceURLMatchesReference(t *testing.T) {
 	}
 }
 
-func TestTurnDetectorPluginDownloadFilesIsExplicitlyUnsupported(t *testing.T) {
-	err := (Plugin{}).DownloadFiles()
-	if err == nil {
-		t.Fatal("DownloadFiles() error = nil, want explicit unsupported error")
+func TestTurnDetectorPluginDownloadFilesDownloadsReferenceFiles(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	var gotURLs []string
+	downloadTurnDetectorFile = func(url string, path string) error {
+		gotURLs = append(gotURLs, url)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(path, []byte("model"), 0o600)
 	}
-	if !strings.Contains(err.Error(), "Hugging Face") || !strings.Contains(err.Error(), "ONNX") {
-		t.Fatalf("DownloadFiles() error = %q, want Hugging Face/ONNX unsupported detail", err.Error())
+	t.Cleanup(func() { downloadTurnDetectorFile = downloadFile })
+
+	if err := (Plugin{}).DownloadFiles(); err != nil {
+		t.Fatalf("DownloadFiles() error = %v", err)
+	}
+
+	wantURLs := []string{
+		"https://huggingface.co/livekit/turn-detector/resolve/v1.2.2-en/onnx/model_q8.onnx",
+		"https://huggingface.co/livekit/turn-detector/resolve/v1.2.2-en/languages.json",
+		"https://huggingface.co/livekit/turn-detector/resolve/v0.4.1-intl/onnx/model_q8.onnx",
+		"https://huggingface.co/livekit/turn-detector/resolve/v0.4.1-intl/languages.json",
+	}
+	if strings.Join(gotURLs, "\n") != strings.Join(wantURLs, "\n") {
+		t.Fatalf("download URLs = %#v, want %#v", gotURLs, wantURLs)
+	}
+
+	for _, modelType := range []ModelType{ModelEnglish, ModelMultilingual} {
+		onnxPath, err := ModelONNXPath(modelType)
+		if err != nil {
+			t.Fatalf("ModelONNXPath(%s) error = %v", modelType, err)
+		}
+		if _, err := os.Stat(onnxPath); err != nil {
+			t.Fatalf("downloaded ONNX stat error = %v", err)
+		}
+		languagesPath, err := ModelLanguagesPath(modelType)
+		if err != nil {
+			t.Fatalf("ModelLanguagesPath(%s) error = %v", modelType, err)
+		}
+		if _, err := os.Stat(languagesPath); err != nil {
+			t.Fatalf("downloaded languages stat error = %v", err)
+		}
+	}
+}
+
+func TestTurnDetectorPluginDownloadFilesSkipsExistingReferenceFiles(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	for _, modelType := range []ModelType{ModelEnglish, ModelMultilingual} {
+		for _, pathFunc := range []func(ModelType) (string, error){ModelONNXPath, ModelLanguagesPath} {
+			path, err := pathFunc(modelType)
+			if err != nil {
+				t.Fatalf("pathFunc(%s) error = %v", modelType, err)
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatalf("MkdirAll error = %v", err)
+			}
+			if err := os.WriteFile(path, []byte("existing"), 0o600); err != nil {
+				t.Fatalf("WriteFile error = %v", err)
+			}
+		}
+	}
+	downloadTurnDetectorFile = func(string, string) error {
+		t.Fatal("download called for existing turn detector files")
+		return nil
+	}
+	t.Cleanup(func() { downloadTurnDetectorFile = downloadFile })
+
+	if err := (Plugin{}).DownloadFiles(); err != nil {
+		t.Fatalf("DownloadFiles() error = %v", err)
 	}
 }
 
@@ -248,6 +405,29 @@ func TestTurnDetectorPredictEndOfTurnDefaultsToOneForInvalidRemoteProbability(t 
 	}
 }
 
+func TestTurnDetectorPredictEndOfTurnUsesLocalRunnerWhenRemoteDisabled(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "Ready?"})
+	var gotPayload string
+	model := NewEnglishModel(WithTurnDetectorRunner(turnDetectorRunnerFunc(
+		func(ctx context.Context, payload []byte) (float64, error) {
+			gotPayload = string(payload)
+			return 0.82, nil
+		},
+	)))
+
+	probability, err := model.PredictEndOfTurn(context.Background(), chatCtx)
+	if err != nil {
+		t.Fatalf("PredictEndOfTurn() error = %v", err)
+	}
+	if probability != 0.82 {
+		t.Fatalf("probability = %v, want local runner probability", probability)
+	}
+	if !strings.Contains(gotPayload, "Ready?") {
+		t.Fatalf("runner payload = %s, want chat context payload", gotPayload)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -260,4 +440,20 @@ func jsonResponse(status int, body string) *http.Response {
 		Header:     make(http.Header),
 		Body:       io.NopCloser(strings.NewReader(body)),
 	}
+}
+
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd error = %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(wd); err != nil {
+			t.Fatalf("restore Chdir error = %v", err)
+		}
+	})
 }
