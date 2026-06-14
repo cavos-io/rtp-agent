@@ -8773,6 +8773,96 @@ func TestDefaultConfigFromEnvAcceptsNeuphonicTTSFallbackProvider(t *testing.T) {
 	}
 }
 
+func TestNeuphonicTTSFallbackPassesReferenceOptions(t *testing.T) {
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+				`event: message`,
+				`data: {"status_code":200,"data":{"audio":"AQI="}}`,
+				"",
+			}, "\n"))),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	sampleRate := 16000
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		NeuphonicAPIKey: "test-neuphonic-key",
+		TTSBaseURL:      "https://neuphonic.example/",
+		TTSVoice:        "voice-2",
+		TTSLanguage:     "es",
+		TTSEncoding:     "pcm_mulaw",
+		TTSSampleRate:   &sampleRate,
+		TTSSpeed:        0.75,
+	}, providerNeuphonic)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*neuphonic.NeuphonicTTS); !ok {
+		t.Fatalf("provider type = %T, want *neuphonic.NeuphonicTTS", provider)
+	}
+	if got, want := provider.Label(), "neuphonic.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 16000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference configured sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "Octave"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "Neuphonic"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference streaming without aligned transcript", caps)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hola")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://neuphonic.example/sse/speak/es"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("x-api-key"), "test-neuphonic-key"; got != want {
+		t.Fatalf("x-api-key = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["text"], "hola"; got != want {
+		t.Fatalf("payload text = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["voice_id"], "voice-2"; got != want {
+		t.Fatalf("payload voice_id = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["lang_code"], "es"; got != want {
+		t.Fatalf("payload lang_code = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["encoding"], "pcm_mulaw"; got != want {
+		t.Fatalf("payload encoding = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["sampling_rate"], float64(16000); got != want {
+		t.Fatalf("payload sampling_rate = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["speed"], 0.75; got != want {
+		t.Fatalf("payload speed = %#v, want %#v", got, want)
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsRimeTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "rime")
