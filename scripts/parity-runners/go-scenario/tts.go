@@ -588,6 +588,21 @@ func runTTSFallback(input json.RawMessage) (any, error) {
 				{"name": "provider_error_not_forwarded", "labels": labels},
 			},
 		}, nil
+	case "error_unsubscribe_local":
+		primary := &fakeScenarioTTS{provider: "primary"}
+		adapter := lktts.NewFallbackAdapter([]lktts.TTS{primary})
+		labels := make([]string, 0, 1)
+		unsubscribe := adapter.OnError(func(err lktts.TTSError) {
+			labels = append(labels, err.Label)
+		})
+		unsubscribe()
+		adapter.EmitError(lktts.TTSError{Label: "adapter", Err: errors.New("adapter failed")})
+		return map[string]any{
+			"contract": "tts-fallback-error-unsubscribe-local",
+			"events": []map[string]any{
+				{"name": "error_unsubscribe_local", "labels": labels},
+			},
+		}, nil
 	case "forward_metrics":
 		primary := &fakeScenarioTTS{provider: "primary"}
 		fallback := &fakeScenarioTTS{provider: "fallback"}
