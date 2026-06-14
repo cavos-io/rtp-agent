@@ -32,6 +32,12 @@ At runtime, include that directory in the dynamic linker path:
 export LD_LIBRARY_PATH=/path/to/Agora-Golang-Server-SDK/agora_sdk:$LD_LIBRARY_PATH
 ```
 
+Before a tagged build, run the preflight check:
+
+```sh
+AGORA_GO_SDK_DIR=/path/to/Agora-Golang-Server-SDK scripts/check-agora-sdk.sh
+```
+
 ## Running
 
 Build with the tag and configure Agora credentials:
