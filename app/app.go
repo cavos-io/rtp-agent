@@ -1936,7 +1936,7 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 	case providerTogether:
 		return openai.NewTogetherOpenAILLM(cfg.LLMModel, cfg.TogetherAPIKey)
 	case providerLiveKit:
-		return openai.NewLiveKitInferenceLLM(cfg.LLMModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret)
+		return adapterlivekit.NewLiveKitInferenceLLM(cfg.LLMModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret)
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_LLM_FALLBACK_PROVIDERS entry %q", provider)
 	}
@@ -3667,7 +3667,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 	case providerPerplexity:
 		a.LLM = perplexity.NewPerplexityLLM(cfg.PerplexityAPIKey, cfg.LLMModel)
 	case providerLiveKit:
-		provider, err := openai.NewLiveKitInferenceLLM(cfg.LLMModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret)
+		provider, err := adapterlivekit.NewLiveKitInferenceLLM(cfg.LLMModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret)
 		if err != nil {
 			return nil, err
 		}

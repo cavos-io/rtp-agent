@@ -1,4 +1,4 @@
-package openai
+package livekit
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/cavos-io/rtp-agent/adapter/livekit"
+	adapteropenai "github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	goopenai "github.com/sashabaranov/go-openai"
 )
@@ -44,12 +44,12 @@ func (c *liveKitInferenceHeadersHTTPClient) Do(req *http.Request) (*http.Respons
 		}
 	}
 	cloned.Header.Set("User-Agent", liveKitInferenceUserAgent())
-	livekit.AddContextHeaders(cloned.Header)
+	AddContextHeaders(cloned.Header)
 	if c.provider != "" {
-		cloned.Header.Set(livekit.HeaderInferenceProvider, c.provider)
+		cloned.Header.Set(HeaderInferenceProvider, c.provider)
 	}
 	if c.inferencePriority != "" {
-		cloned.Header.Set(livekit.HeaderInferencePriority, c.inferencePriority)
+		cloned.Header.Set(HeaderInferencePriority, c.inferencePriority)
 	}
 	return base.Do(cloned)
 }
@@ -140,7 +140,7 @@ func liveKitInferenceLLMURL() string {
 }
 
 func liveKitInferenceUserAgent() string {
-	return fmt.Sprintf("LiveKit Agents/%s (go %s)", PluginVersion, runtime.Version())
+	return fmt.Sprintf("LiveKit Agents/Go (go %s)", runtime.Version())
 }
 
 func (l *LiveKitInferenceLLM) Model() string {
@@ -158,7 +158,7 @@ func (l *LiveKitInferenceLLM) UpdateOptions(opts ...LiveKitInferenceLLMOption) {
 }
 
 func (l *LiveKitInferenceLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
-	token, err := livekit.CreateAccessToken(l.apiKey, l.apiSecret, livekit.InferenceAccessTokenTTL)
+	token, err := CreateAccessToken(l.apiKey, l.apiSecret, InferenceAccessTokenTTL)
 	if err != nil {
 		return nil, err
 	}
@@ -173,15 +173,12 @@ func (l *LiveKitInferenceLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext
 		extraHeaders = callHeaders
 	}
 	extraParams = liveKitInferenceLLMStreamOptions(extraParams)
-	inner := NewOpenAILLMWithBaseURLAndHTTPClient(token, l.model, l.baseURL, &liveKitInferenceHeadersHTTPClient{
+	inner := adapteropenai.NewOpenAILLMWithBaseURLAndHTTPClient(token, l.model, l.baseURL, &liveKitInferenceHeadersHTTPClient{
 		base:              l.httpClient,
 		extraHeaders:      extraHeaders,
 		provider:          l.provider,
 		inferencePriority: inferencePriority,
-	}, func(inner *OpenAILLM) {
-		inner.extraParams = extraParams
-		inner.defaultReasoning = false
-	})
+	}, adapteropenai.WithOpenAILLMExtraParams(extraParams), adapteropenai.WithOpenAILLMDefaultReasoning(false))
 	return inner.Chat(ctx, chatCtx, chatOpts...)
 }
 

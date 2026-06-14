@@ -1,12 +1,13 @@
-package openai
+package livekit
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/cavos-io/rtp-agent/adapter/livekit"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
@@ -132,10 +133,10 @@ func TestLiveKitInferenceLLMChatSendsReferenceInferenceHeaders(t *testing.T) {
 }
 
 func TestLiveKitInferenceLLMChatSendsReferenceContextHeaders(t *testing.T) {
-	restore := livekit.SetContextHeadersProvider(func() map[string]string {
+	restore := SetContextHeadersProvider(func() map[string]string {
 		return map[string]string{
-			livekit.HeaderRoomID: "RM_llm",
-			livekit.HeaderJobID:  "job_llm",
+			HeaderRoomID: "RM_llm",
+			HeaderJobID:  "job_llm",
 		}
 	})
 	defer restore()
@@ -155,10 +156,10 @@ func TestLiveKitInferenceLLMChatSendsReferenceContextHeaders(t *testing.T) {
 	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if capture.roomID != "RM_llm" {
-		t.Fatalf("%s = %q, want RM_llm", livekit.HeaderRoomID, capture.roomID)
+		t.Fatalf("%s = %q, want RM_llm", HeaderRoomID, capture.roomID)
 	}
 	if capture.jobID != "job_llm" {
-		t.Fatalf("%s = %q, want job_llm", livekit.HeaderJobID, capture.jobID)
+		t.Fatalf("%s = %q, want job_llm", HeaderJobID, capture.jobID)
 	}
 }
 
@@ -189,10 +190,10 @@ func TestLiveKitInferenceLLMChatSendsReferenceRoutingHeaders(t *testing.T) {
 	)
 
 	if capture.inferenceProvider != "google" {
-		t.Fatalf("%s = %q, want google", livekit.HeaderInferenceProvider, capture.inferenceProvider)
+		t.Fatalf("%s = %q, want google", HeaderInferenceProvider, capture.inferenceProvider)
 	}
 	if capture.inferencePriority != "priority" {
-		t.Fatalf("%s = %q, want priority", livekit.HeaderInferencePriority, capture.inferencePriority)
+		t.Fatalf("%s = %q, want priority", HeaderInferencePriority, capture.inferencePriority)
 	}
 	if strings.Contains(capture.requestBody, "inference_class") {
 		t.Fatalf("request body = %s, want inference_class consumed as header", capture.requestBody)
@@ -372,4 +373,60 @@ func TestLiveKitInferenceLLMChatSendsReferenceCallExtraHeaders(t *testing.T) {
 	if strings.Contains(capture.requestBody, "extra_headers") {
 		t.Fatalf("request body = %s, want call extra_headers consumed as headers", capture.requestBody)
 	}
+}
+
+type captureDeadlineHTTPClient struct {
+	err               error
+	hasDeadline       bool
+	remaining         time.Duration
+	statusCode        int
+	responseBody      string
+	header            http.Header
+	requestURL        string
+	requestBody       string
+	authorization     string
+	userAgent         string
+	roomID            string
+	jobID             string
+	inferenceProvider string
+	inferencePriority string
+}
+
+func (c *captureDeadlineHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	deadline, ok := req.Context().Deadline()
+	c.hasDeadline = ok
+	if ok {
+		c.remaining = time.Until(deadline)
+	}
+	c.header = req.Header.Clone()
+	c.requestURL = req.URL.String()
+	c.authorization = req.Header.Get("Authorization")
+	c.userAgent = req.Header.Get("User-Agent")
+	c.roomID = req.Header.Get(HeaderRoomID)
+	c.jobID = req.Header.Get(HeaderJobID)
+	c.inferenceProvider = req.Header.Get(HeaderInferenceProvider)
+	c.inferencePriority = req.Header.Get(HeaderInferencePriority)
+	if req.Body != nil {
+		body, _ := io.ReadAll(req.Body)
+		c.requestBody = string(body)
+		req.Body = io.NopCloser(strings.NewReader(c.requestBody))
+	}
+	if c.err != nil {
+		return nil, c.err
+	}
+	statusCode := c.statusCode
+	if statusCode == 0 {
+		statusCode = http.StatusOK
+	}
+	header := c.header
+	if header == nil {
+		header = make(http.Header)
+	}
+	return &http.Response{
+		StatusCode: statusCode,
+		Status:     http.StatusText(statusCode),
+		Body:       io.NopCloser(strings.NewReader(c.responseBody)),
+		Header:     header,
+		Request:    req,
+	}, nil
 }
