@@ -2111,6 +2111,85 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, fireworksai.WithFireworksTimestampGranularities(cfg.STTTimestampGranularities))
 		}
 		return fireworksai.NewFireworksSTT(cfg.FireworksAPIKey, sttOpts...), nil
+	case providerGladia:
+		sttOpts := []gladia.GladiaSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, gladia.WithGladiaBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, gladia.WithGladiaModel(cfg.STTModel))
+		}
+		if cfg.STTInterimResults != nil {
+			sttOpts = append(sttOpts, gladia.WithGladiaInterimResults(*cfg.STTInterimResults))
+		}
+		if cfg.STTLanguageOptions != "" {
+			sttOpts = append(sttOpts, gladia.WithGladiaLanguages(splitStringList(cfg.STTLanguageOptions)))
+		}
+		if cfg.STTCodeSwitching != nil {
+			sttOpts = append(sttOpts, gladia.WithGladiaCodeSwitching(*cfg.STTCodeSwitching))
+		}
+		sampleRate := 0
+		if cfg.STTSampleRate != nil {
+			sampleRate = *cfg.STTSampleRate
+		}
+		bitDepth := 0
+		if cfg.STTBitDepth != nil {
+			bitDepth = *cfg.STTBitDepth
+		}
+		channels := 0
+		if cfg.STTNumberOfChannels != nil {
+			channels = *cfg.STTNumberOfChannels
+		}
+		if sampleRate != 0 || bitDepth != 0 || channels != 0 || cfg.STTEncoding != "" {
+			sttOpts = append(sttOpts, gladia.WithGladiaAudioFormat(sampleRate, bitDepth, channels, cfg.STTEncoding))
+		}
+		if cfg.STTEndpointingSeconds != nil || cfg.STTMaxDurationWithoutEndpointingSeconds != nil {
+			endpointing := -1.0
+			if cfg.STTEndpointingSeconds != nil {
+				endpointing = *cfg.STTEndpointingSeconds
+			}
+			maxDuration := 0.0
+			if cfg.STTMaxDurationWithoutEndpointingSeconds != nil {
+				maxDuration = *cfg.STTMaxDurationWithoutEndpointingSeconds
+			}
+			sttOpts = append(sttOpts, gladia.WithGladiaEndpointing(endpointing, maxDuration))
+		}
+		if cfg.STTRegion != "" {
+			sttOpts = append(sttOpts, gladia.WithGladiaRegion(cfg.STTRegion))
+		}
+		if len(cfg.STTCustomVocabulary) > 0 {
+			sttOpts = append(sttOpts, gladia.WithGladiaCustomVocabulary(cfg.STTCustomVocabulary))
+		}
+		if len(cfg.STTCustomSpelling) > 0 {
+			sttOpts = append(sttOpts, gladia.WithGladiaCustomSpelling(cfg.STTCustomSpelling))
+		}
+		if len(cfg.STTTranslationTargetLanguages) > 0 {
+			matchOriginal := boolValue(cfg.STTTranslationMatchOriginalUtterances)
+			lipsync := boolValue(cfg.STTTranslationLipsync)
+			contextAdaptation := boolValue(cfg.STTTranslationContextAdaptation)
+			informal := boolValue(cfg.STTTranslationInformal)
+			if cfg.STTTranslationModel != "" || cfg.STTTranslationContext != "" || matchOriginal || lipsync || contextAdaptation || informal {
+				sttOpts = append(sttOpts, gladia.WithGladiaTranslationConfig(
+					cfg.STTTranslationTargetLanguages,
+					cfg.STTTranslationModel,
+					matchOriginal,
+					lipsync,
+					contextAdaptation,
+					cfg.STTTranslationContext,
+					informal,
+				))
+			} else {
+				sttOpts = append(sttOpts, gladia.WithGladiaTranslation(cfg.STTTranslationTargetLanguages))
+			}
+		}
+		if cfg.STTPreProcessingAudioEnhancer != nil || cfg.STTPreProcessingSpeechThreshold != nil {
+			speechThreshold := 0.0
+			if cfg.STTPreProcessingSpeechThreshold != nil {
+				speechThreshold = *cfg.STTPreProcessingSpeechThreshold
+			}
+			sttOpts = append(sttOpts, gladia.WithGladiaPreProcessing(boolValue(cfg.STTPreProcessingAudioEnhancer), speechThreshold))
+		}
+		return gladia.NewGladiaSTT(cfg.GladiaAPIKey, sttOpts...), nil
 	case providerGradium:
 		sttOpts := []gradium.GradiumSTTOption{}
 		if cfg.STTBaseURL != "" {

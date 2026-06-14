@@ -4049,6 +4049,190 @@ func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestGladiaSTTFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("GLADIA_API_KEY", "test-gladia-key")
+	type initRecord struct {
+		apiKey string
+		region string
+		body   map[string]any
+	}
+	records := make(chan initRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/ws" {
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("upgrade websocket: %v", err)
+				return
+			}
+			defer conn.Close()
+			_, _, _ = conn.ReadMessage()
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode gladia init body: %v", err)
+			return
+		}
+		records <- initRecord{
+			apiKey: r.Header.Get("X-Gladia-Key"),
+			region: r.URL.Query().Get("region"),
+			body:   body,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"id":"session-1","url":"ws://%s/ws"}`, r.Host)
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	interimResults := false
+	codeSwitching := true
+	sampleRate := 8000
+	bitDepth := 16
+	channels := 2
+	endpointing := 0.1
+	maxDuration := 4.0
+	matchOriginal := true
+	lipsync := true
+	contextAdaptation := true
+	informal := true
+	audioEnhancer := true
+	speechThreshold := 0.7
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTBaseURL:                              server.URL,
+		STTModel:                                "solaria-1",
+		STTInterimResults:                       &interimResults,
+		STTLanguageOptions:                      "en,fr",
+		STTCodeSwitching:                        &codeSwitching,
+		STTSampleRate:                           &sampleRate,
+		STTBitDepth:                             &bitDepth,
+		STTNumberOfChannels:                     &channels,
+		STTEncoding:                             "wav/ulaw",
+		STTEndpointingSeconds:                   &endpointing,
+		STTMaxDurationWithoutEndpointingSeconds: &maxDuration,
+		STTRegion:                               "us-west",
+		STTCustomVocabulary:                     []any{"LiveKit", map[string]any{"value": "Agents"}},
+		STTCustomSpelling:                       map[string][]string{"livekit": []string{"live kit", "live-kit"}},
+		STTTranslationTargetLanguages:           []string{"es", "de"},
+		STTTranslationModel:                     "base",
+		STTTranslationMatchOriginalUtterances:   &matchOriginal,
+		STTTranslationLipsync:                   &lipsync,
+		STTTranslationContextAdaptation:         &contextAdaptation,
+		STTTranslationContext:                   "support call",
+		STTTranslationInformal:                  &informal,
+		STTPreProcessingAudioEnhancer:           &audioEnhancer,
+		STTPreProcessingSpeechThreshold:         &speechThreshold,
+	}, providerGladia)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*gladia.GladiaSTT); !ok {
+		t.Fatalf("provider type = %T, want *gladia.GladiaSTT", provider)
+	}
+	if got, want := provider.Label(), "gladia.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "solaria-1"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Gladia"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.InterimResults || caps.AlignedTranscript != "word" || caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming word-aligned without interim", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.apiKey, "test-gladia-key"; got != want {
+			t.Fatalf("X-Gladia-Key = %q, want %q", got, want)
+		}
+		if got, want := record.region, "us-west"; got != want {
+			t.Fatalf("region = %q, want %q", got, want)
+		}
+		body := record.body
+		if got, want := body["model"], "solaria-1"; got != want {
+			t.Fatalf("model = %#v, want %#v", got, want)
+		}
+		if got, want := body["encoding"], "wav/ulaw"; got != want {
+			t.Fatalf("encoding = %#v, want %#v", got, want)
+		}
+		if got, want := body["sample_rate"], float64(8000); got != want {
+			t.Fatalf("sample_rate = %#v, want %#v", got, want)
+		}
+		if got, want := body["bit_depth"], float64(16); got != want {
+			t.Fatalf("bit_depth = %#v, want %#v", got, want)
+		}
+		if got, want := body["channels"], float64(2); got != want {
+			t.Fatalf("channels = %#v, want %#v", got, want)
+		}
+		if got, want := body["endpointing"], 0.1; got != want {
+			t.Fatalf("endpointing = %#v, want %#v", got, want)
+		}
+		if got, want := body["maximum_duration_without_endpointing"], 4.0; got != want {
+			t.Fatalf("maximum_duration_without_endpointing = %#v, want %#v", got, want)
+		}
+		languageConfig, _ := body["language_config"].(map[string]any)
+		if got, want := fmt.Sprint(languageConfig["languages"]), "[en fr]"; got != want {
+			t.Fatalf("languages = %#v, want %q", languageConfig["languages"], want)
+		}
+		if got, want := languageConfig["code_switching"], true; got != want {
+			t.Fatalf("code_switching = %#v, want %#v", got, want)
+		}
+		messagesConfig, _ := body["messages_config"].(map[string]any)
+		if got, want := messagesConfig["receive_partial_transcripts"], false; got != want {
+			t.Fatalf("receive_partial_transcripts = %#v, want %#v", got, want)
+		}
+		realtime, _ := body["realtime_processing"].(map[string]any)
+		if got, want := realtime["custom_vocabulary"], true; got != want {
+			t.Fatalf("custom_vocabulary = %#v, want %#v", got, want)
+		}
+		if got, want := realtime["custom_spelling"], true; got != want {
+			t.Fatalf("custom_spelling = %#v, want %#v", got, want)
+		}
+		if got, want := realtime["translation"], true; got != want {
+			t.Fatalf("translation = %#v, want %#v", got, want)
+		}
+		translationConfig, _ := realtime["translation_config"].(map[string]any)
+		if got, want := fmt.Sprint(translationConfig["target_languages"]), "[es de]"; got != want {
+			t.Fatalf("target_languages = %#v, want %q", translationConfig["target_languages"], want)
+		}
+		if got, want := translationConfig["context"], "support call"; got != want {
+			t.Fatalf("translation context = %#v, want %#v", got, want)
+		}
+		if got, want := translationConfig["context_adaptation"], true; got != want {
+			t.Fatalf("context_adaptation = %#v, want %#v", got, want)
+		}
+		if got, want := translationConfig["informal"], true; got != want {
+			t.Fatalf("informal = %#v, want %#v", got, want)
+		}
+		preProcessing, _ := body["pre_processing"].(map[string]any)
+		if got, want := preProcessing["audio_enhancer"], true; got != want {
+			t.Fatalf("audio_enhancer = %#v, want %#v", got, want)
+		}
+		if got, want := preProcessing["speech_threshold"], 0.7; got != want {
+			t.Fatalf("speech_threshold = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Gladia STT init request")
+	}
+}
+
 func firstQueryValue(values map[string][]string, key string) string {
 	if len(values[key]) == 0 {
 		return ""
