@@ -875,6 +875,32 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "availability_failed":
+		primary := &fakeScenarioLLM{label: "primary", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{err: errors.New("primary stream failed")},
+		}}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		chunks, err := collectScenarioLLMStreamChunks(stream)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "llm-fallback-availability-failed",
+			"events": []map[string]any{
+				{
+					"name":                "availability_failed",
+					"chunks":              chunks,
+					"availability_events": collectScenarioLLMAvailability(adapter),
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported LLM fallback action %q", payload.Action)
 	}
