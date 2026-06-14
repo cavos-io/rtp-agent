@@ -101,6 +101,24 @@ func TestTransportJoinPassesOptionsToClient(t *testing.T) {
 	}
 }
 
+func TestTransportJoinRejectsCanceledContext(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := tr.Join(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Join() error = %v, want context canceled", err)
+	}
+	if client.joinCtx != nil {
+		t.Fatal("Join() reached channel client after context cancellation")
+	}
+	if client.joined {
+		t.Fatal("client joined after context cancellation")
+	}
+}
+
 func TestTransportJoinGeneratesTokenFromCertificate(t *testing.T) {
 	client := &fakeChannelClient{}
 	opts := worker.AgoraOptions{

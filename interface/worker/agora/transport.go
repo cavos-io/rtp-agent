@@ -118,7 +118,13 @@ func (t *Transport) Join(ctx context.Context) error {
 	if t.client == nil {
 		return fmt.Errorf("agora channel client is required")
 	}
-	joinCtx, cancel := context.WithCancel(normalizeContext(ctx))
+	ctx = normalizeContext(ctx)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	joinCtx, cancel := context.WithCancel(ctx)
 	t.mu.Lock()
 	if t.closing || t.closed {
 		t.mu.Unlock()
