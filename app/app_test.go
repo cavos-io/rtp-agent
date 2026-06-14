@@ -3580,6 +3580,22 @@ func TestDefaultConfigFromEnvAcceptsUltravoxTTSFallbackProvider(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvAcceptsUpliftAITTSFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "upliftai")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("UPLIFTAI_API_KEY", "test-upliftai-key")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "v_meklc281")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
+		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	}
+}
+
 func TestEvaluateSessionReturnsEvaluationSummary(t *testing.T) {
 	baseAgent := agent.NewAgent("test")
 	session := agent.NewAgentSession(baseAgent, nil, agent.AgentSessionOptions{})
