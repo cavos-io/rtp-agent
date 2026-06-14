@@ -385,6 +385,75 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "tts_error_required_fields":
+		requiredFields := []string{"timestamp", "label", "recoverable"}
+		base := map[string]any{
+			"timestamp":   1.25,
+			"label":       "provider.TTS",
+			"recoverable": true,
+		}
+		acceptedMissingFields := make([]string, 0, len(requiredFields))
+		for _, fieldName := range requiredFields {
+			payload := make(map[string]any, len(base)-1)
+			for key, value := range base {
+				if key != fieldName {
+					payload[key] = value
+				}
+			}
+			data, err := json.Marshal(payload)
+			if err != nil {
+				return nil, err
+			}
+			var ttsErr lktts.TTSError
+			if err := json.Unmarshal(data, &ttsErr); err == nil {
+				acceptedMissingFields = append(acceptedMissingFields, fieldName)
+			}
+		}
+		var ttsErr lktts.TTSError
+		if err := json.Unmarshal([]byte(`{"timestamp":1.25,"label":"provider.TTS","recoverable":true}`), &ttsErr); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "tts-error-required-fields",
+			"events": []map[string]any{
+				{
+					"name":                    "tts_error_required_fields",
+					"accepted_missing_fields": acceptedMissingFields,
+					"type":                    ttsErr.Type,
+					"timestamp":               float64(ttsErr.Timestamp.UnixNano()) / float64(1e9),
+					"label":                   ttsErr.Label,
+					"recoverable":             ttsErr.Recoverable,
+				},
+			},
+		}, nil
+	case "text_transform":
+		transforms := payload.Transforms
+		if !hasJSONField(input, "transforms") {
+			transforms = []string{"filter_markdown"}
+		}
+		buffer, err := lktts.NewTextTransformBufferWithTransforms(transforms)
+		if err != nil {
+			return nil, err
+		}
+		chunks := []string{}
+		for _, chunk := range payload.Chunks {
+			chunks = append(chunks, buffer.Push(chunk)...)
+		}
+		chunks = append(chunks, buffer.Flush()...)
+		joined := ""
+		for _, chunk := range chunks {
+			joined += chunk
+		}
+		return map[string]any{
+			"contract": "tts-text-transforms",
+			"events": []map[string]any{
+				{
+					"name":   "text_transform",
+					"chunks": chunks,
+					"joined": joined,
+				},
+			},
+		}, nil
 	case "text_replace":
 		buffer := lktts.NewOrderedTextRegexReplaceBuffer(orderedReplacements, payload.CaseSensitive)
 		chunks := []string{}
@@ -661,6 +730,15 @@ func runTTSStreamAdapter(input json.RawMessage) (any, error) {
 	default:
 		return nil, fmt.Errorf("unsupported TTS stream adapter action %q", payload.Action)
 	}
+}
+
+func hasJSONField(input json.RawMessage, name string) bool {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(input, &fields); err != nil {
+		return false
+	}
+	_, ok := fields[name]
+	return ok
 }
 
 func orderedTTSReplacements(input json.RawMessage, fallback map[string]string) ([]lktts.TextReplacement, error) {

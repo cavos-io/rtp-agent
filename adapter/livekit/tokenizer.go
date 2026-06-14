@@ -56,11 +56,27 @@ func formatTurnDetectorPayload(payload []byte) (string, error) {
 		return "", errors.New("livekit turn detector chat_ctx is empty")
 	}
 
-	var builder strings.Builder
-	for i, msg := range parsed.ChatCtx {
+	messages := make([]inferenceMessage, 0, len(parsed.ChatCtx))
+	for _, msg := range parsed.ChatCtx {
 		if strings.TrimSpace(msg.Role) == "" || strings.TrimSpace(msg.Content) == "" {
 			continue
 		}
+		content := normalizeTurnDetectorText(msg.Content)
+		if content == "" {
+			continue
+		}
+		if len(messages) > 0 && messages[len(messages)-1].Role == msg.Role {
+			messages[len(messages)-1].Content += " " + content
+			continue
+		}
+		messages = append(messages, inferenceMessage{Role: msg.Role, Content: content})
+	}
+	if len(messages) == 0 {
+		return "", errors.New("livekit turn detector chat_ctx is empty")
+	}
+
+	var builder strings.Builder
+	for i, msg := range messages {
 		if builder.Len() > 0 {
 			builder.WriteByte('\n')
 		}
@@ -68,12 +84,9 @@ func formatTurnDetectorPayload(payload []byte) (string, error) {
 		builder.WriteString(msg.Role)
 		builder.WriteByte('\n')
 		builder.WriteString(msg.Content)
-		if i < len(parsed.ChatCtx)-1 {
+		if i < len(messages)-1 {
 			builder.WriteString("<|im_end|>")
 		}
-	}
-	if builder.Len() == 0 {
-		return "", errors.New("livekit turn detector chat_ctx is empty")
 	}
 	return builder.String(), nil
 }

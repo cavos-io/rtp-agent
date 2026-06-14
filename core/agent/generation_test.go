@@ -526,6 +526,40 @@ func TestPerformTTSInferenceCanDisableTextTransforms(t *testing.T) {
 	}
 }
 
+func TestPerformTTSInferenceCanSelectEmojiOnlyTextTransform(t *testing.T) {
+	providerStream := newEndInputGenerationTTSStream()
+	provider := &fakeGenerationTTS{stream: providerStream}
+	textCh := make(chan string, 1)
+	textCh <- "Say **hi** 😊"
+	close(textCh)
+
+	data, err := PerformTTSInference(
+		context.Background(),
+		provider,
+		textCh,
+		WithTTSTextTransforms([]string{"filter_emoji"}),
+	)
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+	<-data.AudioCh
+
+	got := providerStream.calls
+	if len(got) == 0 || got[len(got)-1] != "end_input" {
+		t.Fatalf("stream calls = %#v, want final end_input", got)
+	}
+	var pushed strings.Builder
+	for _, call := range got[:len(got)-1] {
+		if !strings.HasPrefix(call, "push:") {
+			t.Fatalf("stream calls = %#v, want only push calls before end_input", got)
+		}
+		pushed.WriteString(strings.TrimPrefix(call, "push:"))
+	}
+	if want := "Say **hi** "; pushed.String() != want {
+		t.Fatalf("pushed text = %q, want %q; calls = %#v", pushed.String(), want, got)
+	}
+}
+
 func TestPerformTTSInferenceAppliesTextReplacements(t *testing.T) {
 	providerStream := newEndInputGenerationTTSStream()
 	provider := &fakeGenerationTTS{stream: providerStream}
@@ -708,8 +742,8 @@ func TestPerformTTSInferenceUsesSynthesizeForNonStreamingTTS(t *testing.T) {
 	if string(frame.Data) != "chunked" {
 		t.Fatalf("audio data = %q, want chunked", frame.Data)
 	}
-	if provider.synthesizeText != "Say hello" {
-		t.Fatalf("synthesize text = %q, want transformed text", provider.synthesizeText)
+	if want := "Say hello "; provider.synthesizeText != want {
+		t.Fatalf("synthesize text = %q, want reference transformed text %q", provider.synthesizeText, want)
 	}
 	if !provider.stream.closed {
 		t.Fatal("chunked stream was not closed")
@@ -750,6 +784,34 @@ func TestPerformTTSInferenceNonStreamingReplacesReferenceSubstrings(t *testing.T
 
 	if want := "Please condogenate dog."; provider.synthesizeText != want {
 		t.Fatalf("synthesize text = %q, want reference substring replacement %q", provider.synthesizeText, want)
+	}
+}
+
+func TestPerformTTSInferenceNonStreamingPreservesReferenceWhitespace(t *testing.T) {
+	provider := &fakeGenerationChunkedTTS{
+		stream: &fakeGenerationChunkedStream{
+			frames: []*model.AudioFrame{
+				{
+					Data:              []byte("chunked"),
+					SampleRate:        24000,
+					NumChannels:       1,
+					SamplesPerChannel: 3,
+				},
+			},
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- " hello "
+	close(textCh)
+
+	data, err := PerformTTSInference(context.Background(), provider, textCh, WithTTSTextTransformsDisabled())
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+	<-data.AudioCh
+
+	if want := " hello "; provider.synthesizeText != want {
+		t.Fatalf("synthesize text = %q, want reference whitespace-preserving input %q", provider.synthesizeText, want)
 	}
 }
 

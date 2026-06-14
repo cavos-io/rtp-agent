@@ -1141,6 +1141,31 @@ func TestPipelineAgentSessionOptionDisablesTTSTextTransforms(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentSessionOptionSelectsTTSTextTransforms(t *testing.T) {
+	providerStream := &fakePipelineTTSStream{
+		frames: []*model.AudioFrame{{
+			Data:              []byte("audio"),
+			SampleRate:        24000,
+			NumChannels:       1,
+			SamplesPerChannel: 2,
+		}},
+	}
+	baseAgent := NewAgent("test")
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{
+		TTSTextTransforms:    []string{"filter_emoji"},
+		TTSTextTransformsSet: true,
+	})
+	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{stream: providerStream}, llm.NewChatContext())
+
+	if _, err := agent.synthesizeSpeech(context.Background(), session, singleTextChannel("Say **hi** 😊")); err != nil {
+		t.Fatalf("synthesizeSpeech error = %v", err)
+	}
+
+	if got, want := providerStream.text.String(), "Say **hi** "; got != want {
+		t.Fatalf("pushed TTS text = %q, want selected transform output %q", got, want)
+	}
+}
+
 func TestPipelineAgentUsesAgentTTSAlignedTranscriptOverride(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

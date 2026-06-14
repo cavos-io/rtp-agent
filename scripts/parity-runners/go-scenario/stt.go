@@ -432,6 +432,48 @@ func runSTTValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "stt_error_required_fields":
+		requiredFields := []string{"timestamp", "label", "recoverable"}
+		base := map[string]any{
+			"timestamp":   1.25,
+			"label":       "provider.STT",
+			"recoverable": true,
+		}
+		acceptedMissingFields := make([]string, 0, len(requiredFields))
+		for _, fieldName := range requiredFields {
+			payload := make(map[string]any, len(base)-1)
+			for key, value := range base {
+				if key != fieldName {
+					payload[key] = value
+				}
+			}
+			data, err := json.Marshal(payload)
+			if err != nil {
+				return nil, err
+			}
+			var sttErr lkstt.STTError
+			err = json.Unmarshal(data, &sttErr)
+			if err == nil {
+				acceptedMissingFields = append(acceptedMissingFields, fieldName)
+			}
+		}
+		var sttErr lkstt.STTError
+		if err := json.Unmarshal([]byte(`{"timestamp":1.25,"label":"provider.STT","recoverable":true}`), &sttErr); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "stt-error-required-fields",
+			"events": []map[string]any{
+				{
+					"name":                    "stt_error_required_fields",
+					"accepted_missing_fields": acceptedMissingFields,
+					"type":                    sttErr.Type,
+					"timestamp":               float64(sttErr.Timestamp.UnixNano()) / float64(1e9),
+					"label":                   sttErr.Label,
+					"recoverable":             sttErr.Recoverable,
+				},
+			},
+		}, nil
 	case "capabilities_json":
 		data, err := json.Marshal(lkstt.STTCapabilities{
 			Streaming:         true,

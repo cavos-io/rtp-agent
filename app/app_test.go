@@ -8894,6 +8894,27 @@ func TestDefaultConfigFromEnvDisablesTTSTextTransforms(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvConfiguresTTSTextTransforms(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_TEXT_TRANSFORMS", "filter_emoji, filter_markdown")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got, want := app.Config.TTSTextTransforms, []string{"filter_emoji", "filter_markdown"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Config.TTSTextTransforms = %#v, want %#v", got, want)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if !app.Session.Options.TTSTextTransformsSet {
+		t.Fatal("Session.Options.TTSTextTransformsSet = false, want true")
+	}
+	if got, want := app.Session.Options.TTSTextTransforms, []string{"filter_emoji", "filter_markdown"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Session.Options.TTSTextTransforms = %#v, want %#v", got, want)
+	}
+}
+
 func TestDefaultConfigFromEnvConfiguresBackgroundAudio(t *testing.T) {
 	t.Setenv("RTP_AGENT_BACKGROUND_AUDIO_AMBIENT", "city-ambience.ogg")
 	t.Setenv("RTP_AGENT_BACKGROUND_AUDIO_THINKING", "/tmp/thinking.wav")

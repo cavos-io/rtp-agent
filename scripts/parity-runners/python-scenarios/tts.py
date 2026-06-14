@@ -1,4 +1,43 @@
 from common import *  # noqa: F403
+from collections.abc import AsyncIterable
+
+def load_reference_text_transforms():
+    base = repo_root() / "refs/agents/livekit-agents/livekit/agents/voice/transcription"
+    voice_mod = sys.modules.get("livekit.agents.voice") or types.ModuleType("livekit.agents.voice")
+    transcription_mod = sys.modules.get("livekit.agents.voice.transcription") or types.ModuleType(
+        "livekit.agents.voice.transcription"
+    )
+    sys.modules["livekit.agents.voice"] = voice_mod
+    sys.modules["livekit.agents.voice.transcription"] = transcription_mod
+
+    filters_spec = importlib.util.spec_from_file_location(
+        "livekit.agents.voice.transcription.filters", base / "filters.py"
+    )
+    if filters_spec is None or filters_spec.loader is None:
+        raise RuntimeError("cannot load reference transcription filters.py")
+    filters_module = importlib.util.module_from_spec(filters_spec)
+    sys.modules["livekit.agents.voice.transcription.filters"] = filters_module
+    filters_spec.loader.exec_module(filters_module)
+
+    transforms_spec = importlib.util.spec_from_file_location(
+        "livekit.agents.voice.transcription.text_transforms",
+        base / "text_transforms.py",
+    )
+    if transforms_spec is None or transforms_spec.loader is None:
+        raise RuntimeError("cannot load reference transcription text_transforms.py")
+    transforms_module = importlib.util.module_from_spec(transforms_spec)
+    sys.modules["livekit.agents.voice.transcription.text_transforms"] = transforms_module
+    transforms_spec.loader.exec_module(transforms_module)
+    return transforms_module
+
+
+async def collect_text_transform_chunks(module: Any, chunks: list[str], transforms: list[str]) -> list[str]:
+    async def source() -> AsyncIterable[str]:
+        for chunk in chunks:
+            yield chunk
+
+    return [chunk async for chunk in module._apply_text_transforms(source(), transforms)]
+
 
 def tts_stream_adapter(input_data: Any) -> dict[str, Any]:
     action = input_data.get("action", "metadata")
@@ -383,32 +422,6 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
             "events": [
                 {
                     "name": "tts_error_payload",
-    if action == "text_replace":
-        transform_module = load_reference_text_transforms()
-        chunks = [str(chunk) for chunk in input_data.get("chunks", [])]
-        replacements = {
-            str(old): str(new)
-            for old, new in input_data.get("replacements", {}).items()
-        }
-        case_sensitive = bool(input_data.get("case_sensitive", False))
-        output = asyncio.run(
-            collect_text_transform_chunks(
-                transform_module,
-                chunks,
-                [transform_module.replace(replacements, case_sensitive=case_sensitive)],
-            )
-        )
-        joined = "".join(output)
-        return {
-            "contract": "tts-text-replacements",
-            "events": [
-                {
-                    "name": "text_replace",
-                    "joined": joined,
-                    "contains_original": any(old in joined for old in replacements),
-                }
-            ],
-        }
                     "type": err.type,
                     "label": err.label,
                     "recoverable": err.recoverable,
@@ -436,6 +449,114 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                     "timestamp_positive": err.timestamp > 0,
                     "has_error_field": False,
                     "has_err_field": False,
+                }
+            ],
+        }
+    if action == "tts_error_required_fields":
+        required_fields = ["timestamp", "label", "recoverable"]
+        base = {
+            "timestamp": 1.25,
+            "label": "provider.TTS",
+            "error": Exception("provider disconnected"),
+            "recoverable": True,
+        }
+        accepted_missing_fields = []
+        for field_name in required_fields:
+            kwargs = dict(base)
+            del kwargs[field_name]
+            try:
+                module.TTSError(**kwargs)
+                accepted_missing_fields.append(field_name)
+            except Exception:
+                pass
+        err = module.TTSError(**base)
+        return {
+            "contract": "tts-error-required-fields",
+            "events": [
+                {
+                    "name": "tts_error_required_fields",
+                    "accepted_missing_fields": accepted_missing_fields,
+                    "type": err.type,
+                    "timestamp": err.timestamp,
+                    "label": err.label,
+                    "recoverable": err.recoverable,
+                }
+            ],
+        }
+    if action == "text_transform":
+        transform_module = load_reference_text_transforms()
+        chunks = [str(chunk) for chunk in input_data.get("chunks", [])]
+        transforms = [str(transform) for transform in input_data.get("transforms", ["filter_markdown"])]
+        output = asyncio.run(collect_text_transform_chunks(transform_module, chunks, transforms))
+        return {
+            "contract": "tts-text-transforms",
+            "events": [
+                {
+                    "name": "text_transform",
+                    "chunks": output,
+                    "joined": "".join(output),
+                }
+            ],
+        }
+    if action == "text_replace":
+        transform_module = load_reference_text_transforms()
+        chunks = [str(chunk) for chunk in input_data.get("chunks", [])]
+        replacements = {
+            str(old): str(new)
+            for old, new in input_data.get("replacements", {}).items()
+        }
+        case_sensitive = bool(input_data.get("case_sensitive", False))
+        output = asyncio.run(
+            collect_text_transform_chunks(
+                transform_module,
+                chunks,
+                [transform_module.replace(replacements, case_sensitive=case_sensitive)],
+            )
+        )
+        joined = "".join(output)
+        return {
+            "contract": "tts-text-replacements",
+            "events": [
+                {
+                    "name": "text_replace",
+                    "joined": joined,
+                    "contains_original": any(old in joined for old in replacements),
+                }
+            ],
+        }
+    if action == "text_replace_words":
+        tokenize_utils = load_python_utils_runner().load_reference_tokenize_utils()
+        chunks = [str(chunk) for chunk in input_data.get("chunks", [])]
+        replacements = {
+            str(old): str(new)
+            for old, new in input_data.get("replacements", {}).items()
+        }
+
+        async def source() -> AsyncIterable[str]:
+            for chunk in chunks:
+                yield chunk
+
+        async def collect() -> list[str]:
+            return [
+                chunk
+                async for chunk in tokenize_utils.replace_words(
+                    text=source(),
+                    replacements=replacements,
+                )
+            ]
+
+        output = asyncio.run(collect())
+        joined = "".join(output)
+        return {
+            "contract": "tts-text-replacements",
+            "events": [
+                {
+                    "name": "text_replace_words",
+                    "joined": joined,
+                    "workflow_preserved": "workflow" in joined,
+                    "substring_replaced": "workstream" in joined,
+                    "punctuation_preserved": "stream," in joined,
+                    "final_word_replaced": joined.endswith("stream!"),
                 }
             ],
         }
@@ -488,6 +609,32 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                     "name": "error_panic_isolated",
                     "labels": labels,
                     "escaped_error": escaped_error,
+                }
+            ],
+        }
+    if action == "text_replace":
+        transform_module = load_reference_text_transforms()
+        chunks = [str(chunk) for chunk in input_data.get("chunks", [])]
+        replacements = {
+            str(old): str(new)
+            for old, new in input_data.get("replacements", {}).items()
+        }
+        case_sensitive = bool(input_data.get("case_sensitive", False))
+        output = asyncio.run(
+            collect_text_transform_chunks(
+                transform_module,
+                chunks,
+                [transform_module.replace(replacements, case_sensitive=case_sensitive)],
+            )
+        )
+        joined = "".join(output)
+        return {
+            "contract": "tts-text-replacements",
+            "events": [
+                {
+                    "name": "text_replace",
+                    "joined": joined,
+                    "contains_original": any(old in joined for old in replacements),
                 }
             ],
         }

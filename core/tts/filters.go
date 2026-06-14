@@ -1,6 +1,7 @@
 package tts
 
 import (
+	"fmt"
 	"regexp"
 	"sort"
 	"strings"
@@ -49,6 +50,7 @@ var (
 type TextTransformBuffer struct {
 	buffer          string
 	bufferIsNewline bool
+	transforms      []string
 }
 
 type TextReplaceBuffer struct {
@@ -75,7 +77,21 @@ type textReplacement struct {
 }
 
 func NewTextTransformBuffer() *TextTransformBuffer {
-	return &TextTransformBuffer{bufferIsNewline: true}
+	return &TextTransformBuffer{
+		bufferIsNewline: true,
+		transforms:      []string{"filter_markdown", "filter_emoji", "filter_tool_call_markers"},
+	}
+}
+
+func NewTextTransformBufferWithTransforms(transforms []string) (*TextTransformBuffer, error) {
+	compiled, err := validateTextTransforms(transforms)
+	if err != nil {
+		return nil, err
+	}
+	return &TextTransformBuffer{
+		bufferIsNewline: true,
+		transforms:      compiled,
+	}, nil
 }
 
 func NewTextReplaceBuffer(replacements map[string]string, caseSensitive bool) *TextReplaceBuffer {
@@ -144,6 +160,14 @@ func (b *TextTransformBuffer) Push(text string) []string {
 	if text == "" {
 		return nil
 	}
+	if !b.hasMarkdownTransform() {
+		text = b.applyTextTransforms(text, b.bufferIsNewline, false)
+		b.bufferIsNewline = strings.HasSuffix(text, "\n")
+		if text == "" {
+			return nil
+		}
+		return []string{text}
+	}
 	b.buffer += text
 
 	if strings.Contains(b.buffer, "\n") {
@@ -156,7 +180,7 @@ func (b *TextTransformBuffer) Push(text string) []string {
 			if i == 0 {
 				isNewline = b.bufferIsNewline
 			}
-			out = appendTransformedText(out, line+"\n", isNewline, false)
+			out = b.appendTransformedText(out, line+"\n", isNewline, false)
 		}
 		b.bufferIsNewline = true
 		return out
@@ -167,9 +191,9 @@ func (b *TextTransformBuffer) Push(text string) []string {
 		splitEnd := lastSplitPos
 		processable := b.buffer[:splitEnd]
 		rest := b.buffer[splitEnd:]
-		if !hasIncompleteMarkdownPattern(processable) {
+		if !b.hasMarkdownTransform() || !hasIncompleteMarkdownPattern(processable) {
 			b.buffer = rest
-			out := appendTransformedText(nil, processable, b.bufferIsNewline, false)
+			out := b.appendTransformedText(nil, processable, b.bufferIsNewline, false)
 			b.bufferIsNewline = false
 			return out
 		}
@@ -374,24 +398,26 @@ func FilterToolCallMarkers(text string) string {
 }
 
 func ApplyTextTransforms(text string) string {
-	text = FilterMarkdown(text)
-	text = FilterEmoji(text)
-	text = FilterToolCallMarkers(text)
-	return text
+	return applyTextTransforms(text, true, true)
+}
+
+func ApplyTextTransformsWithTransforms(text string, transforms []string) (string, error) {
+	compiled, err := validateTextTransforms(transforms)
+	if err != nil {
+		return "", err
+	}
+	return applyNamedTextTransforms(text, compiled, true, true), nil
 }
 
 func applyTextTransforms(text string, applyLinePatterns bool, trim bool) string {
-	text = filterMarkdown(text, applyLinePatterns, trim)
-	text = FilterEmoji(text)
-	text = FilterToolCallMarkers(text)
-	return text
+	return applyNamedTextTransforms(text, []string{"filter_markdown", "filter_emoji", "filter_tool_call_markers"}, applyLinePatterns, trim)
 }
 
 func (b *TextTransformBuffer) flush() []string {
 	if b.buffer == "" {
 		return nil
 	}
-	text := applyTextTransforms(b.buffer, b.bufferIsNewline, false)
+	text := b.applyTextTransforms(b.buffer, b.bufferIsNewline, false)
 	b.buffer = ""
 	b.bufferIsNewline = true
 	if text == "" {
@@ -400,12 +426,51 @@ func (b *TextTransformBuffer) flush() []string {
 	return []string{text}
 }
 
-func appendTransformedText(out []string, text string, applyLinePatterns bool, trim bool) []string {
-	text = applyTextTransforms(text, applyLinePatterns, trim)
+func (b *TextTransformBuffer) appendTransformedText(out []string, text string, applyLinePatterns bool, trim bool) []string {
+	text = b.applyTextTransforms(text, applyLinePatterns, trim)
 	if text == "" {
 		return out
 	}
 	return append(out, text)
+}
+
+func (b *TextTransformBuffer) applyTextTransforms(text string, applyLinePatterns bool, trim bool) string {
+	return applyNamedTextTransforms(text, b.transforms, applyLinePatterns, trim)
+}
+
+func (b *TextTransformBuffer) hasMarkdownTransform() bool {
+	for _, transform := range b.transforms {
+		if transform == "filter_markdown" {
+			return true
+		}
+	}
+	return false
+}
+
+func validateTextTransforms(transforms []string) ([]string, error) {
+	compiled := append([]string(nil), transforms...)
+	for _, transform := range compiled {
+		switch transform {
+		case "filter_markdown", "filter_emoji":
+		default:
+			return nil, fmt.Errorf("invalid TTS text transform %q", transform)
+		}
+	}
+	return compiled, nil
+}
+
+func applyNamedTextTransforms(text string, transforms []string, applyLinePatterns bool, trim bool) string {
+	for _, transform := range transforms {
+		switch transform {
+		case "filter_markdown":
+			text = filterMarkdown(text, applyLinePatterns, trim)
+		case "filter_emoji":
+			text = FilterEmoji(text)
+		case "filter_tool_call_markers":
+			text = FilterToolCallMarkers(text)
+		}
+	}
+	return text
 }
 
 func hasIncompleteMarkdownPattern(buffer string) bool {

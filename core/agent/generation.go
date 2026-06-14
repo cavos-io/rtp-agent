@@ -229,6 +229,8 @@ type TTSInferenceOptions struct {
 	StreamPacer             *tts.SentenceStreamPacerOptions
 	TextReplacements        map[string]string
 	OrderedTextReplacements []tts.TextReplacement
+	TextTransforms          []string
+	TextTransformsSet       bool
 	DisableTextTransforms   bool
 	PreserveTimedTranscript bool
 }
@@ -259,6 +261,13 @@ func WithTTSTextTransformsDisabled() TTSInferenceOption {
 	}
 }
 
+func WithTTSTextTransforms(transforms []string) TTSInferenceOption {
+	return func(options *TTSInferenceOptions) {
+		options.TextTransforms = append([]string(nil), transforms...)
+		options.TextTransformsSet = true
+	}
+}
+
 func WithTTSPreserveTimedTranscript() TTSInferenceOption {
 	return func(options *TTSInferenceOptions) {
 		options.PreserveTimedTranscript = true
@@ -275,6 +284,10 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 	for _, opt := range opts {
 		opt(&options)
 	}
+	transformBuffer, err := newTTSTextTransformBuffer(options)
+	if err != nil {
+		return nil, err
+	}
 	ctx, span := telemetry.NewTTSNodeSpan(ctx, tts.Model(t), tts.Provider(t))
 
 	if !t.Capabilities().Streaming {
@@ -289,10 +302,15 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			}
 			ttsText := text.String()
 			if !options.DisableTextTransforms {
-				ttsText = tts.ApplyTextTransforms(ttsText)
+				var transformErr error
+				ttsText, transformErr = applyTTSTextTransforms(ttsText, options)
+				if transformErr != nil {
+					data.StreamErr = transformErr
+					return
+				}
 			}
-			transformedText := strings.TrimSpace(applyTTSTextReplacements(ttsText, options))
-			if transformedText == "" {
+			transformedText := applyTTSTextReplacements(ttsText, options)
+			if strings.TrimSpace(transformedText) == "" {
 				return
 			}
 
@@ -360,7 +378,6 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 				}
 			}
 		} else {
-			transformBuffer := tts.NewTextTransformBuffer()
 			for text := range textCh {
 				for _, filteredText := range transformBuffer.Push(text) {
 					if !pushTTSReplacementChunks(stream, replaceBuffer.Push(filteredText), data) {
@@ -408,6 +425,23 @@ func applyTTSTextReplacements(text string, options TTSInferenceOptions) string {
 	buffer := newTTSReplacementBuffer(options)
 	chunks := append(buffer.Push(text), buffer.Flush()...)
 	return strings.Join(chunks, "")
+}
+
+func applyTTSTextTransforms(text string, options TTSInferenceOptions) (string, error) {
+	if options.TextTransformsSet {
+		return tts.ApplyTextTransformsWithTransforms(text, options.TextTransforms)
+	}
+	return tts.ApplyTextTransforms(text), nil
+}
+
+func newTTSTextTransformBuffer(options TTSInferenceOptions) (*tts.TextTransformBuffer, error) {
+	if options.DisableTextTransforms {
+		return nil, nil
+	}
+	if options.TextTransformsSet {
+		return tts.NewTextTransformBufferWithTransforms(options.TextTransforms)
+	}
+	return tts.NewTextTransformBuffer(), nil
 }
 
 func newTTSReplacementBuffer(options TTSInferenceOptions) *tts.TextRegexReplaceBuffer {

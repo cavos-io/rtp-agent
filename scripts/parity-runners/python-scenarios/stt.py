@@ -381,6 +381,37 @@ def stt_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "stt_error_required_fields":
+        required_fields = ["timestamp", "label", "recoverable"]
+        base = {
+            "timestamp": 1.25,
+            "label": "provider.STT",
+            "error": Exception("provider disconnected"),
+            "recoverable": True,
+        }
+        accepted_missing_fields = []
+        for field_name in required_fields:
+            kwargs = dict(base)
+            del kwargs[field_name]
+            try:
+                module.STTError(**kwargs)
+                accepted_missing_fields.append(field_name)
+            except Exception:
+                pass
+        err = module.STTError(**base)
+        return {
+            "contract": "stt-error-required-fields",
+            "events": [
+                {
+                    "name": "stt_error_required_fields",
+                    "accepted_missing_fields": accepted_missing_fields,
+                    "type": err.type,
+                    "timestamp": err.timestamp,
+                    "label": err.label,
+                    "recoverable": err.recoverable,
+                }
+            ],
+        }
     if action == "capabilities_json":
         caps = module.STTCapabilities(
             streaming=True,
