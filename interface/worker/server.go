@@ -154,6 +154,8 @@ type WorkerOptions struct {
 	AgentName      string
 	AgentNameIsEnv bool
 	WorkerType     WorkerType
+	Transport      WorkerTransport
+	Agora          AgoraOptions
 	MaxRetry       int
 	MaxRetrySet    bool
 	Version        string
@@ -785,6 +787,7 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 }
 
 func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
+	opts.Transport = NormalizeWorkerTransport(string(opts.Transport))
 	if !opts.DevMode {
 		opts.DevMode = utils.IsDevMode()
 	}
