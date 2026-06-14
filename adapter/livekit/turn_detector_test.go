@@ -212,8 +212,10 @@ func TestTurnDetectorPluginDownloadFilesDownloadsReferenceFiles(t *testing.T) {
 
 	wantURLs := []string{
 		"https://huggingface.co/livekit/turn-detector/resolve/v1.2.2-en/onnx/model_q8.onnx",
+		"https://huggingface.co/livekit/turn-detector/resolve/v1.2.2-en/tokenizer.json",
 		"https://huggingface.co/livekit/turn-detector/resolve/v1.2.2-en/languages.json",
 		"https://huggingface.co/livekit/turn-detector/resolve/v0.4.1-intl/onnx/model_q8.onnx",
+		"https://huggingface.co/livekit/turn-detector/resolve/v0.4.1-intl/tokenizer.json",
 		"https://huggingface.co/livekit/turn-detector/resolve/v0.4.1-intl/languages.json",
 	}
 	if strings.Join(gotURLs, "\n") != strings.Join(wantURLs, "\n") {
@@ -227,6 +229,13 @@ func TestTurnDetectorPluginDownloadFilesDownloadsReferenceFiles(t *testing.T) {
 		}
 		if _, err := os.Stat(onnxPath); err != nil {
 			t.Fatalf("downloaded ONNX stat error = %v", err)
+		}
+		tokenizerPath, err := ModelTokenizerPath(modelType)
+		if err != nil {
+			t.Fatalf("ModelTokenizerPath(%s) error = %v", modelType, err)
+		}
+		if _, err := os.Stat(tokenizerPath); err != nil {
+			t.Fatalf("downloaded tokenizer stat error = %v", err)
 		}
 		languagesPath, err := ModelLanguagesPath(modelType)
 		if err != nil {
@@ -242,7 +251,7 @@ func TestTurnDetectorPluginDownloadFilesSkipsExistingReferenceFiles(t *testing.T
 	dir := t.TempDir()
 	chdir(t, dir)
 	for _, modelType := range []ModelType{ModelEnglish, ModelMultilingual} {
-		for _, pathFunc := range []func(ModelType) (string, error){ModelONNXPath, ModelLanguagesPath} {
+		for _, pathFunc := range []func(ModelType) (string, error){ModelONNXPath, ModelTokenizerPath, ModelLanguagesPath} {
 			path, err := pathFunc(modelType)
 			if err != nil {
 				t.Fatalf("pathFunc(%s) error = %v", modelType, err)

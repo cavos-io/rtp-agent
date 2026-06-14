@@ -59,6 +59,18 @@ func ModelONNXPathIn(rootDir string, modelType ModelType) string {
 	return filepath.Join(modelResourceDir(rootDir, modelType), "onnx", ONNXFilename)
 }
 
+func ModelTokenizerPath(modelType ModelType) (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return ModelTokenizerPathIn(cwd, modelType), nil
+}
+
+func ModelTokenizerPathIn(rootDir string, modelType ModelType) string {
+	return filepath.Join(modelResourceDir(rootDir, modelType), "tokenizer.json")
+}
+
 func ModelLanguagesPath(modelType ModelType) (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -81,6 +93,10 @@ func turnDetectorDownloadFiles(modelType ModelType) ([]turnDetectorDownloadFile,
 	if err != nil {
 		return nil, err
 	}
+	tokenizerPath, err := ModelTokenizerPath(modelType)
+	if err != nil {
+		return nil, err
+	}
 	languagesPath, err := ModelLanguagesPath(modelType)
 	if err != nil {
 		return nil, err
@@ -89,6 +105,10 @@ func turnDetectorDownloadFiles(modelType ModelType) ([]turnDetectorDownloadFile,
 		{
 			url:  huggingFaceResolveURL(revision, "onnx/"+ONNXFilename),
 			path: onnxPath,
+		},
+		{
+			url:  huggingFaceResolveURL(revision, "tokenizer.json"),
+			path: tokenizerPath,
 		},
 		{
 			url:  huggingFaceResolveURL(revision, "languages.json"),

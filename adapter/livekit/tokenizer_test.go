@@ -2,6 +2,7 @@ package livekit
 
 import (
 	"context"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -69,5 +70,12 @@ func TestTurnDetectorTokenizerRejectsMalformedPayload(t *testing.T) {
 	_, err := tokenizer.TokenizeTurnDetectorPayload(context.Background(), []byte(`not json`))
 	if err == nil || !strings.Contains(err.Error(), "parse") {
 		t.Fatalf("TokenizeTurnDetectorPayload() error = %v, want parse error", err)
+	}
+}
+
+func TestNewHuggingFaceTurnDetectorTokenizerRejectsMissingFile(t *testing.T) {
+	_, err := NewHuggingFaceTurnDetectorTokenizer(ModelEnglish, filepath.Join(t.TempDir(), "tokenizer.json"))
+	if err == nil {
+		t.Fatal("NewHuggingFaceTurnDetectorTokenizer() error = nil, want missing file error")
 	}
 }
