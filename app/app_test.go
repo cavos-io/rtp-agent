@@ -3850,6 +3850,127 @@ func TestSpitchTTSFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestXaiTTSFallbackPassesReferenceOptions(t *testing.T) {
+	type wsRecord struct {
+		voice         string
+		language      string
+		codec         string
+		sampleRate    string
+		authorization string
+		messages      []map[string]any
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		record := wsRecord{
+			voice:         r.URL.Query().Get("voice"),
+			language:      r.URL.Query().Get("language"),
+			codec:         r.URL.Query().Get("codec"),
+			sampleRate:    r.URL.Query().Get("sample_rate"),
+			authorization: r.Header.Get("Authorization"),
+		}
+		for i := 0; i < 2; i++ {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				t.Errorf("read xai tts message: %v", err)
+				return
+			}
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Errorf("decode xai tts message: %v", err)
+				return
+			}
+			record.messages = append(record.messages, message)
+		}
+		records <- record
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		XAIAPIKey:       "test-xai-key",
+		TTSWebsocketURL: endpoint,
+		TTSVoice:        "eve",
+		TTSLanguage:     "ja",
+	}, providerXAI)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*xai.XaiTTS); !ok {
+		t.Fatalf("provider type = %T, want *xai.XaiTTS", provider)
+	}
+	if got, want := provider.Label(), "xai.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 24000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "unknown"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "xAI"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference streaming without aligned transcript", caps)
+	}
+	stream, err := provider.Synthesize(context.Background(), "hello xai")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.voice, "eve"; got != want {
+			t.Fatalf("query voice = %q, want %q", got, want)
+		}
+		if got, want := record.language, "ja"; got != want {
+			t.Fatalf("query language = %q, want %q", got, want)
+		}
+		if got, want := record.codec, "pcm"; got != want {
+			t.Fatalf("query codec = %q, want %q", got, want)
+		}
+		if got, want := record.sampleRate, "24000"; got != want {
+			t.Fatalf("query sample_rate = %q, want %q", got, want)
+		}
+		if got, want := record.authorization, "Bearer test-xai-key"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		if len(record.messages) != 2 {
+			t.Fatalf("messages = %#v, want text.delta and text.done", record.messages)
+		}
+		if got, want := record.messages[0]["type"], "text.delta"; got != want {
+			t.Fatalf("first message type = %#v, want %#v", got, want)
+		}
+		if got, want := record.messages[0]["delta"], "hello xai"; got != want {
+			t.Fatalf("first message delta = %#v, want %#v", got, want)
+		}
+		if got, want := record.messages[1]["type"], "text.done"; got != want {
+			t.Fatalf("second message type = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for xai websocket request")
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsTelnyxTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "telnyx")
