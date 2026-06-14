@@ -9119,6 +9119,107 @@ func TestDefaultConfigFromEnvAcceptsSpeechifyTTSFallbackProvider(t *testing.T) {
 	}
 }
 
+func TestSpeechifyTTSFallbackPassesReferenceOptions(t *testing.T) {
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/mpeg"}},
+			Body:       io.NopCloser(strings.NewReader("audio")),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	loudnessNormalization := true
+	textNormalization := false
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		SpeechifyAPIKey:          "test-speechify-key",
+		TTSBaseURL:               "https://speechify.example/v1/",
+		TTSModel:                 "simba-english",
+		TTSVoice:                 "cliff",
+		TTSLanguage:              "en-US",
+		TTSEncoding:              "mp3_24000",
+		TTSLoudnessNormalization: &loudnessNormalization,
+		TTSTextNormalization:     &textNormalization,
+	}, providerSpeechify)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*speechify.SpeechifyTTS); !ok {
+		t.Fatalf("provider type = %T, want *speechify.SpeechifyTTS", provider)
+	}
+	if got, want := provider.Label(), "speechify.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 24000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference encoding-derived sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "simba-english"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "Speechify"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://speechify.example/v1/audio/stream"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("Authorization"), "Bearer test-speechify-key"; got != want {
+		t.Fatalf("Authorization = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("Accept"), "audio/mpeg"; got != want {
+		t.Fatalf("Accept = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("x-caller"), "livekit"; got != want {
+		t.Fatalf("x-caller = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["input"], "hello"; got != want {
+		t.Fatalf("payload input = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["voice_id"], "cliff"; got != want {
+		t.Fatalf("payload voice_id = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["language"], "en-US"; got != want {
+		t.Fatalf("payload language = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["model"], "simba-english"; got != want {
+		t.Fatalf("payload model = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["audio_format"], "mp3"; got != want {
+		t.Fatalf("payload audio_format = %#v, want %#v", got, want)
+	}
+	options, ok := gotPayload["options"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload options = %#v, want object", gotPayload["options"])
+	}
+	if got, want := options["loudness_normalization"], true; got != want {
+		t.Fatalf("payload options.loudness_normalization = %#v, want %#v", got, want)
+	}
+	if got, want := options["text_normalization"], false; got != want {
+		t.Fatalf("payload options.text_normalization = %#v, want %#v", got, want)
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsSimplismartTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "simplismart")
