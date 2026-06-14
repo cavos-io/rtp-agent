@@ -8638,6 +8638,7 @@ func TestDefaultConfigFromEnvSelectsCavosSpeechProviders(t *testing.T) {
 	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://steno.example/v1")
 	t.Setenv("RTP_AGENT_STT_MODEL", "small")
 	t.Setenv("RTP_AGENT_STT_LANGUAGE", "id")
+	t.Setenv("RTP_AGENT_VAD_PROVIDER", "silero")
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "cavos")
 	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://cacatua.example/v1")
 	t.Setenv("RTP_AGENT_TTS_MODEL", "supertonic-3")
@@ -8679,6 +8680,53 @@ func TestDefaultConfigFromEnvSelectsCavosSpeechProviders(t *testing.T) {
 	}
 	if got := app.Session.TTS.SampleRate(); got != 44100 {
 		t.Fatalf("TTS sample rate = %d, want 44100", got)
+	}
+}
+
+func TestDefaultConfigFromEnvAcceptsCavosSTTFallbackProvider(t *testing.T) {
+	t.Setenv("DEEPGRAM_API_KEY", "test-deepgram-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
+	t.Setenv("RTP_AGENT_STT_FALLBACK_PROVIDERS", "cavos")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://steno.example/v1")
+	t.Setenv("RTP_AGENT_STT_MODEL", "small")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "id")
+	t.Setenv("RTP_AGENT_VAD_PROVIDER", "silero")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.STT == nil {
+		t.Fatal("Session STT is nil")
+	}
+	if got := app.Session.STT.Label(); got != "FallbackAdapter(deepgram.STT)" {
+		t.Fatalf("STT label = %q, want fallback adapter around primary deepgram STT", got)
+	}
+	if app.Session.VAD == nil {
+		t.Fatal("Session VAD is nil")
+	}
+}
+
+func TestDefaultConfigFromEnvAcceptsCavosTTSFallbackProvider(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "cavos")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://cacatua.example/v1")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "supertonic-3")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "gisa_300521")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "id")
+	t.Setenv("RTP_AGENT_TTS_RESPONSE_FORMAT", "pcm")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "44100")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
+		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
 	}
 }
 
