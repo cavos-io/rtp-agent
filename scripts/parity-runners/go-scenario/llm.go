@@ -440,6 +440,46 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "no_retry_after_chunk":
+		primaryErr := errors.New("primary stream failed")
+		primary := &fakeScenarioLLM{label: "primary", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "partial"}}},
+			{err: primaryErr},
+		}}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		defer stream.Close()
+		chunks := []string{}
+		errored := false
+		for {
+			chunk, err := stream.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				errored = true
+				break
+			}
+			if chunk != nil && chunk.Delta != nil {
+				chunks = append(chunks, chunk.Delta.Content)
+			}
+		}
+		return map[string]any{
+			"contract": "llm-fallback-no-retry-after-chunk",
+			"events": []map[string]any{
+				{
+					"name":    "no_retry_after_chunk",
+					"chunks":  chunks,
+					"errored": errored,
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported LLM fallback action %q", payload.Action)
 	}

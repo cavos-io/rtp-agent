@@ -193,6 +193,9 @@ def load_reference_llm_fallback():
         def error(self, *args: Any, **kwargs: Any) -> None:
             pass
 
+        def exception(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
     class LLM(EventEmitter):
         def __init__(self) -> None:
             super().__init__()
@@ -431,6 +434,34 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
                         "name": "stream_chat_context",
                         "before_is_original": before_is_original,
                         "after_is_provider": after_is_provider,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "no_retry_after_chunk":
+        primary = FakeLLM(
+            "primary",
+            [FakeChunk("partial"), RuntimeError("primary stream failed")],
+        )
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter([primary, fallback])
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            errored = False
+            try:
+                await stream._run()
+            except RuntimeError:
+                errored = True
+            chunks = [chunk.delta.content for chunk in stream._event_ch.items]
+            return {
+                "contract": "llm-fallback-no-retry-after-chunk",
+                "events": [
+                    {
+                        "name": "no_retry_after_chunk",
+                        "chunks": chunks,
+                        "errored": errored,
                     }
                 ],
             }
