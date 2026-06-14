@@ -719,6 +719,40 @@ func TestPerformTTSInferenceUsesSynthesizeForNonStreamingTTS(t *testing.T) {
 	}
 }
 
+func TestPerformTTSInferenceNonStreamingReplacesReferenceSubstrings(t *testing.T) {
+	provider := &fakeGenerationChunkedTTS{
+		stream: &fakeGenerationChunkedStream{
+			frames: []*model.AudioFrame{
+				{
+					Data:              []byte("chunked"),
+					SampleRate:        24000,
+					NumChannels:       1,
+					SamplesPerChannel: 3,
+				},
+			},
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "Please concatenate cat."
+	close(textCh)
+
+	data, err := PerformTTSInference(
+		context.Background(),
+		provider,
+		textCh,
+		WithTTSTextTransformsDisabled(),
+		WithTTSTextReplacements(map[string]string{"cat": "dog"}),
+	)
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+	<-data.AudioCh
+
+	if want := "Please condogenate dog."; provider.synthesizeText != want {
+		t.Fatalf("synthesize text = %q, want reference substring replacement %q", provider.synthesizeText, want)
+	}
+}
+
 func TestPerformTTSInferenceErrorsWhenNonStreamingTTSProducesNoAudio(t *testing.T) {
 	provider := &fakeGenerationChunkedTTS{
 		stream: &fakeGenerationChunkedStream{},

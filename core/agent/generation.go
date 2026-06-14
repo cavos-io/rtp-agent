@@ -16,7 +16,6 @@ import (
 	"github.com/cavos-io/rtp-agent/core/tts"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
-	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -406,10 +405,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 }
 
 func applyTTSTextReplacements(text string, options TTSInferenceOptions) string {
-	if len(options.OrderedTextReplacements) == 0 {
-		return tokenize.ReplaceWords(text, options.TextReplacements)
-	}
-	buffer := tts.NewOrderedTextRegexReplaceBuffer(options.OrderedTextReplacements, false)
+	buffer := newTTSReplacementBuffer(options)
 	chunks := append(buffer.Push(text), buffer.Flush()...)
 	return strings.Join(chunks, "")
 }
