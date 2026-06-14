@@ -3711,6 +3711,24 @@ func runLLMValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "metrics_unsubscribe":
+		var emitter lkllm.MetricsEmitter
+		requestIDs := []string{}
+		unsubscribe := emitter.OnMetricsCollected(func(metrics *telemetry.LLMMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		unsubscribe()
+		unsubscribe()
+		emitter.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "after-unsubscribe"})
+		return map[string]any{
+			"contract": "llm-metrics-reference-unsubscribe",
+			"events": []map[string]any{
+				{
+					"name":        "metrics_unsubscribe",
+					"request_ids": requestIDs,
+				},
+			},
+		}, nil
 	case "error_panic_isolated":
 		var emitter lkllm.ErrorEmitter
 		err := lkllm.NewLLMError("openai.LLM", context.Canceled, true)
@@ -3738,6 +3756,24 @@ func runLLMValueObjects(input json.RawMessage) (any, error) {
 					"escaped_error":      escapedError,
 					"handler_call_count": len(receivedLabels),
 					"labels":             receivedLabels,
+				},
+			},
+		}, nil
+	case "error_unsubscribe":
+		var emitter lkllm.ErrorEmitter
+		labels := []string{}
+		unsubscribe := emitter.OnError(func(err *lkllm.LLMError) {
+			labels = append(labels, err.Label)
+		})
+		unsubscribe()
+		unsubscribe()
+		emitter.EmitError(lkllm.NewLLMError("openai.LLM", context.Canceled, true))
+		return map[string]any{
+			"contract": "llm-error-reference-unsubscribe",
+			"events": []map[string]any{
+				{
+					"name":   "error_unsubscribe",
+					"labels": labels,
 				},
 			},
 		}, nil

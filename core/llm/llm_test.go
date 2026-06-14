@@ -410,6 +410,24 @@ func TestLLMMetricsEmitterPanicDoesNotBlockOtherHandlers(t *testing.T) {
 	}
 }
 
+func TestLLMMetricsEmitterCanUnsubscribe(t *testing.T) {
+	var emitter MetricsEmitter
+	received := make(chan *telemetry.LLMMetrics, 1)
+	unsubscribe := emitter.OnMetricsCollected(func(metrics *telemetry.LLMMetrics) {
+		received <- metrics
+	})
+	unsubscribe()
+	unsubscribe()
+
+	emitter.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "after-unsubscribe"})
+
+	select {
+	case metrics := <-received:
+		t.Fatalf("received metrics after unsubscribe: %#v", metrics)
+	default:
+	}
+}
+
 func TestLLMErrorEmitterPanicDoesNotBlockOtherHandlers(t *testing.T) {
 	var emitter ErrorEmitter
 	cause := context.Canceled
@@ -439,6 +457,24 @@ func TestLLMErrorEmitterPanicDoesNotBlockOtherHandlers(t *testing.T) {
 		}
 	default:
 		t.Fatal("second error handler was not called")
+	}
+}
+
+func TestLLMErrorEmitterCanUnsubscribe(t *testing.T) {
+	var emitter ErrorEmitter
+	received := make(chan *LLMError, 1)
+	unsubscribe := emitter.OnError(func(err *LLMError) {
+		received <- err
+	})
+	unsubscribe()
+	unsubscribe()
+
+	emitter.EmitError(NewLLMError("openai.LLM", context.Canceled, true))
+
+	select {
+	case err := <-received:
+		t.Fatalf("received error after unsubscribe: %#v", err)
+	default:
 	}
 }
 

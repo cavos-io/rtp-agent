@@ -1908,6 +1908,34 @@ def llm_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "metrics_unsubscribe":
+        module = load_reference_llm_fallback()
+
+        class MetricsLLM(module.LLM):
+            def chat(self, **kwargs: Any) -> Any:
+                raise NotImplementedError
+
+        llm = MetricsLLM()
+        request_ids: list[str] = []
+
+        def handler(metrics: Any) -> None:
+            request_ids.append(metrics.request_id)
+
+        llm.on("metrics_collected", handler)
+        llm.off("metrics_collected", handler)
+        llm.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "after-unsubscribe"})(),
+        )
+        return {
+            "contract": "llm-metrics-reference-unsubscribe",
+            "events": [
+                {
+                    "name": "metrics_unsubscribe",
+                    "request_ids": request_ids,
+                }
+            ],
+        }
     if action == "error_panic_isolated":
         module = load_reference_llm_fallback()
 
@@ -1940,6 +1968,31 @@ def llm_value_objects(input_data: Any) -> dict[str, Any]:
                     "escaped_error": escaped_error,
                     "handler_call_count": len(received_labels),
                     "labels": received_labels,
+                }
+            ],
+        }
+    if action == "error_unsubscribe":
+        module = load_reference_llm_fallback()
+
+        class ErrorLLM(module.LLM):
+            def chat(self, **kwargs: Any) -> Any:
+                raise NotImplementedError
+
+        llm = ErrorLLM()
+        labels: list[str] = []
+
+        def handler(error: Any) -> None:
+            labels.append(error.label)
+
+        llm.on("error", handler)
+        llm.off("error", handler)
+        llm.emit("error", type("Error", (), {"label": "after-unsubscribe"})())
+        return {
+            "contract": "llm-error-reference-unsubscribe",
+            "events": [
+                {
+                    "name": "error_unsubscribe",
+                    "labels": labels,
                 }
             ],
         }
