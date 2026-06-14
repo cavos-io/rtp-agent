@@ -1,4 +1,4 @@
-package turndetector
+package livekit
 
 import "time"
 
