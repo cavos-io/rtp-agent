@@ -1140,7 +1140,7 @@ func (a *App) runAgora(ctx context.Context) error {
 		<-eventsDone
 		stopObservingEvents()
 	}()
-	if err := a.runSession(nil); err != nil {
+	if err := a.runSessionWithContext(nil, ctx); err != nil {
 		return err
 	}
 	<-ctx.Done()
@@ -1661,8 +1661,15 @@ func copyAgentRuntime(dst *agent.Agent, src *agent.Agent) {
 }
 
 func (a *App) runSession(ctx *worker.JobContext) error {
+	return a.runSessionWithContext(ctx, context.Background())
+}
+
+func (a *App) runSessionWithContext(ctx *worker.JobContext, sessionCtx context.Context) error {
 	if a.Session == nil {
 		return fmt.Errorf("agent session is not configured")
+	}
+	if sessionCtx == nil {
+		sessionCtx = context.Background()
 	}
 	defer a.closeMCPServers()
 	if ctx != nil {
@@ -1715,7 +1722,6 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 			}
 		}
 	}
-	sessionCtx := context.Background()
 	if ctx != nil {
 		info := ctx.AvatarStartInfo()
 		if info.LiveKitURL != "" && info.LiveKitToken != "" {
