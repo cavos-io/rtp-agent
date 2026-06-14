@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"strings"
 	"time"
@@ -322,6 +323,40 @@ func runLLMAPIErrors(input json.RawMessage) (any, error) {
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported api errors action %q", payload.Action)
+	}
+}
+
+func runLLMFallback(input json.RawMessage) (any, error) {
+	var payload struct {
+		Action string `json:"action"`
+	}
+	if err := json.Unmarshal(input, &payload); err != nil {
+		return nil, err
+	}
+	if payload.Action == "" {
+		payload.Action = "provider_error_not_forwarded"
+	}
+	switch payload.Action {
+	case "provider_error_not_forwarded":
+		primary := &fakeScenarioLLM{label: "primary"}
+		fallback := &fakeScenarioLLM{label: "fallback"}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		labels := make([]string, 0, 3)
+		unsubscribe := adapter.OnError(func(err *lkllm.LLMError) {
+			labels = append(labels, err.Label)
+		})
+		defer unsubscribe()
+		primary.EmitError(lkllm.NewLLMError("primary", errors.New("primary failed"), true))
+		fallback.EmitError(lkllm.NewLLMError("fallback", errors.New("fallback failed"), true))
+		adapter.EmitError(lkllm.NewLLMError("adapter", errors.New("adapter failed"), true))
+		return map[string]any{
+			"contract": "llm-fallback-provider-error-not-forwarded",
+			"events": []map[string]any{
+				{"name": "provider_error_not_forwarded", "labels": labels},
+			},
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported LLM fallback action %q", payload.Action)
 	}
 }
 
@@ -2416,6 +2451,78 @@ func runLLMValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "text_stream_only_text_deltas":
+		stream := &scenarioLLMTextStream{
+			events: []scenarioLLMTextStreamEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "hello"}}},
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{ToolCalls: []lkllm.FunctionToolCall{{Name: "lookup"}}}}},
+				{chunk: &lkllm.ChatChunk{Usage: &lkllm.CompletionUsage{TotalTokens: 2}}},
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: " world"}}},
+			},
+		}
+		textStream, err := lkllm.NewTextStream(stream)
+		if err != nil {
+			return nil, err
+		}
+		texts := make([]string, 0, 2)
+		eof := false
+		for {
+			text, err := textStream.Next()
+			if err != nil {
+				eof = errors.Is(err, io.EOF)
+				if !eof {
+					return nil, err
+				}
+				break
+			}
+			texts = append(texts, text)
+		}
+		return map[string]any{
+			"contract": "llm-text-stream",
+			"events": []map[string]any{
+				{
+					"name":   "text_stream_only_text_deltas",
+					"texts":  texts,
+					"closed": stream.closed,
+					"eof":    eof,
+				},
+			},
+		}, nil
+	case "text_stream_closes_error":
+		streamErr := errors.New("stream failed")
+		stream := &scenarioLLMTextStream{
+			events: []scenarioLLMTextStreamEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "hello"}}},
+				{err: streamErr},
+			},
+		}
+		textStream, err := lkllm.NewTextStream(stream)
+		if err != nil {
+			return nil, err
+		}
+		texts := make([]string, 0, 1)
+		first, err := textStream.Next()
+		if err != nil {
+			return nil, err
+		}
+		texts = append(texts, first)
+		_, err = textStream.Next()
+		message := ""
+		if err != nil {
+			message = err.Error()
+		}
+		return map[string]any{
+			"contract": "llm-text-stream",
+			"events": []map[string]any{
+				{
+					"name":          "text_stream_closes_error",
+					"texts":         texts,
+					"error":         errors.Is(err, streamErr),
+					"error_message": message,
+					"closed":        stream.closed,
+				},
+			},
+		}, nil
 	case "realtime_event_payloads":
 		return runLLMRealtimeEventPayloads(payload.Mode)
 	default:
@@ -3017,6 +3124,33 @@ type scenarioLLMProviderTool struct {
 
 func (t *scenarioLLMProviderTool) IsProviderTool() bool { return true }
 
+type scenarioLLMTextStreamEvent struct {
+	chunk *lkllm.ChatChunk
+	err   error
+}
+
+type scenarioLLMTextStream struct {
+	events []scenarioLLMTextStreamEvent
+	closed bool
+}
+
+func (s *scenarioLLMTextStream) Next() (*lkllm.ChatChunk, error) {
+	if len(s.events) == 0 {
+		return nil, io.EOF
+	}
+	event := s.events[0]
+	s.events = s.events[1:]
+	if event.err != nil {
+		return nil, event.err
+	}
+	return event.chunk, nil
+}
+
+func (s *scenarioLLMTextStream) Close() error {
+	s.closed = true
+	return nil
+}
+
 func completionUsagePayload(usage lkllm.CompletionUsage) (map[string]any, error) {
 	data, err := json.Marshal(usage)
 	if err != nil {
@@ -3131,6 +3265,9 @@ func (s *scenarioLLMToolset) Close() error {
 }
 
 type fakeScenarioLLM struct {
+	lkllm.MetricsEmitter
+	lkllm.ErrorEmitter
+
 	label        string
 	model        string
 	provider     string

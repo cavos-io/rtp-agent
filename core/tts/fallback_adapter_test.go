@@ -437,11 +437,11 @@ func TestFallbackAdapterEmitsStreamedMetricsAfterFinalAudio(t *testing.T) {
 	}
 }
 
-func TestFallbackAdapterForwardsErrorEvents(t *testing.T) {
+func TestFallbackAdapterDoesNotForwardProviderErrorEvents(t *testing.T) {
 	primary := &metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1}
 	secondary := &metadataTTS{label: "secondary", sampleRate: 24000, numChannels: 1}
 	adapter := NewFallbackAdapter([]TTS{primary, secondary})
-	errCh := make(chan string, 2)
+	errCh := make(chan string, 3)
 
 	unsubscribe := adapter.OnError(func(err TTSError) {
 		errCh <- err.Label
@@ -450,11 +450,29 @@ func TestFallbackAdapterForwardsErrorEvents(t *testing.T) {
 
 	primary.EmitError(TTSError{Label: "primary", Err: errors.New("primary failed")})
 	secondary.EmitError(TTSError{Label: "secondary", Err: errors.New("secondary failed")})
+	adapter.EmitError(TTSError{Label: "adapter", Err: errors.New("adapter failed")})
 
-	first := receiveTTSErrorLabel(t, errCh)
-	second := receiveTTSErrorLabel(t, errCh)
-	if strings.Join([]string{first, second}, ",") != "primary,secondary" {
-		t.Fatalf("error labels = %q, %q; want primary then secondary", first, second)
+	select {
+	case label := <-errCh:
+		if label != "adapter" {
+			t.Fatalf("error label = %q, want adapter-local error only", label)
+		}
+	default:
+		t.Fatal("error handler was not called")
+	}
+	select {
+	case label := <-errCh:
+		t.Fatalf("unexpected forwarded provider error label %q", label)
+	default:
+	}
+
+	primary.EmitError(TTSError{Label: "primary-after", Err: errors.New("primary failed again")})
+	secondary.EmitError(TTSError{Label: "secondary-after", Err: errors.New("secondary failed again")})
+
+	select {
+	case label := <-errCh:
+		t.Fatalf("unexpected late forwarded provider error label %q", label)
+	default:
 	}
 }
 
@@ -745,7 +763,7 @@ func TestFallbackAdapterFallsBackFromTypedNilSynthesizeStream(t *testing.T) {
 	}
 }
 
-func TestFallbackAdapterErrorUnsubscribeRemovesLocalAndProviderHandlers(t *testing.T) {
+func TestFallbackAdapterErrorUnsubscribeRemovesLocalHandler(t *testing.T) {
 	primary := &metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1}
 	adapter := NewFallbackAdapter([]TTS{primary})
 	errCh := make(chan TTSError, 2)
@@ -3252,17 +3270,6 @@ func TestFallbackSynthesizeStreamReportsDoneAfterEOF(t *testing.T) {
 	}
 	if err := exceptionStream.Exception(); err != nil {
 		t.Fatalf("Exception() = %v, want nil", err)
-	}
-}
-
-func receiveTTSErrorLabel(t *testing.T, errs <-chan string) string {
-	t.Helper()
-	select {
-	case label := <-errs:
-		return label
-	case <-time.After(200 * time.Millisecond):
-		t.Fatal("timed out waiting for TTS error")
-		return ""
 	}
 }
 

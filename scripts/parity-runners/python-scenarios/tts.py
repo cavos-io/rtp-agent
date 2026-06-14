@@ -61,6 +61,90 @@ def tts_stream_adapter(input_data: Any) -> dict[str, Any]:
             "contract": "tts-stream-adapter",
             "events": [{"name": "close", "close_calls": provider.close_calls}],
         }
+    if action == "forward_metrics":
+        request_ids: list[str] = []
+        adapter.on(
+            "metrics_collected",
+            lambda metrics: request_ids.append(metrics.request_id),
+        )
+        provider.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "req-1"})(),
+        )
+        return {
+            "contract": "tts-stream-adapter",
+            "events": [
+                {"name": "forward_metrics", "request_ids": request_ids, "count": len(request_ids)}
+            ],
+        }
+    if action == "close_preserves_metrics_forwarding":
+        request_ids: list[str] = []
+        adapter.on(
+            "metrics_collected",
+            lambda metrics: request_ids.append(metrics.request_id),
+        )
+        provider.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "before"})(),
+        )
+        asyncio.run(adapter.aclose())
+        provider.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "after"})(),
+        )
+        adapter.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "local"})(),
+        )
+        return {
+            "contract": "tts-stream-adapter-close-preserves-metrics-forwarding",
+            "events": [
+                {"name": "close_preserves_metrics_forwarding", "request_ids": request_ids}
+            ],
+        }
+    if action == "unsubscribe_metrics":
+        request_ids: list[str] = []
+
+        def on_metrics(metrics: Any) -> None:
+            request_ids.append(metrics.request_id)
+
+        adapter.on("metrics_collected", on_metrics)
+        provider.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "before"})(),
+        )
+        adapter.off("metrics_collected", on_metrics)
+        provider.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "provider"})(),
+        )
+        adapter.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "adapter"})(),
+        )
+        return {
+            "contract": "tts-stream-adapter-metrics-unsubscribe",
+            "events": [
+                {"name": "unsubscribe_metrics", "request_ids": request_ids}
+            ],
+        }
+    if action == "provider_error_not_forwarded":
+        labels: list[str] = []
+        adapter.on("error", lambda error: labels.append(error.label))
+        provider.emit(
+            "error",
+            type("Error", (), {"label": "provider"})(),
+        )
+        adapter.emit(
+            "error",
+            type("Error", (), {"label": "adapter"})(),
+        )
+        return {
+            "contract": "tts-stream-adapter-provider-error-not-forwarded",
+            "events": [
+                {"name": "provider_error_not_forwarded", "labels": labels}
+            ],
+        }
     raise ValueError(f"unsupported TTS stream adapter action {action!r}")
 
 
@@ -395,6 +479,21 @@ def tts_fallback(input_data: Any) -> dict[str, Any]:
                     "primary_prewarm_calls": primary.prewarm_calls,
                     "fallback_prewarm_calls": fallback.prewarm_calls,
                 }
+            ],
+        }
+    if action == "provider_error_not_forwarded":
+        primary = ScenarioTTS()
+        fallback = ScenarioTTS()
+        adapter = module.FallbackAdapter([primary, fallback])
+        labels: list[str] = []
+        adapter.on("error", lambda error: labels.append(error.label))
+        primary.emit("error", type("Error", (), {"label": "primary"})())
+        fallback.emit("error", type("Error", (), {"label": "fallback"})())
+        adapter.emit("error", type("Error", (), {"label": "adapter"})())
+        return {
+            "contract": "tts-fallback-provider-error-not-forwarded",
+            "events": [
+                {"name": "provider_error_not_forwarded", "labels": labels}
             ],
         }
     if action == "validation":

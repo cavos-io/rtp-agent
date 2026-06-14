@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -123,6 +124,37 @@ func TestStreamAdapterForwardsMetricsCollected(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterClosePreservesProviderMetricsForwarding(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{}
+	adapter := NewStreamAdapter(provider)
+	metricsCh := make(chan string, 3)
+
+	unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+		metricsCh <- metrics.RequestID
+	})
+	defer unsubscribe()
+
+	provider.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "before"})
+	if err := adapter.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	provider.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "after"})
+	adapter.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "local"})
+
+	var got []string
+	for {
+		select {
+		case requestID := <-metricsCh:
+			got = append(got, requestID)
+		default:
+			if !reflect.DeepEqual(got, []string{"before", "after", "local"}) {
+				t.Fatalf("metrics request IDs = %#v, want provider forwarding before and after close plus local adapter event", got)
+			}
+			return
+		}
+	}
+}
+
 func TestStreamAdapterEmitsStreamedMetricsForFinalSegment(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{
 		events: []*SynthesizedAudio{{
@@ -206,29 +238,31 @@ func TestStreamAdapterMetricsUnsubscribeRemovesLocalAndProviderHandlers(t *testi
 	}
 }
 
-func TestStreamAdapterForwardsErrorEvents(t *testing.T) {
+func TestStreamAdapterDoesNotForwardProviderErrorEvents(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{}
 	adapter := NewStreamAdapter(provider)
-	errCh := make(chan TTSError, 1)
+	errCh := make(chan string, 2)
 
 	unsubscribe := adapter.OnError(func(err TTSError) {
-		errCh <- err
+		errCh <- err.Label
 	})
 	defer unsubscribe()
 
-	cause := errors.New("provider failed")
-	provider.EmitError(TTSError{Label: "provider", Err: cause, Recoverable: true})
+	provider.EmitError(TTSError{Label: "provider", Err: errors.New("provider failed"), Recoverable: true})
+	adapter.EmitError(TTSError{Label: "adapter", Err: errors.New("adapter failed"), Recoverable: true})
 
 	select {
-	case got := <-errCh:
-		if got.Err != cause {
-			t.Fatalf("Err = %v, want %v", got.Err, cause)
-		}
-		if !got.Recoverable {
-			t.Fatal("Recoverable = false, want true")
+	case label := <-errCh:
+		if label != "adapter" {
+			t.Fatalf("error label = %q, want adapter-local error only", label)
 		}
 	default:
 		t.Fatal("error handler was not called")
+	}
+	select {
+	case label := <-errCh:
+		t.Fatalf("unexpected forwarded provider error label %q", label)
+	default:
 	}
 }
 
@@ -277,7 +311,7 @@ func TestStreamAdapterEmitsErrorOnStreamFailure(t *testing.T) {
 	}
 }
 
-func TestStreamAdapterErrorUnsubscribeRemovesLocalAndProviderHandlers(t *testing.T) {
+func TestStreamAdapterErrorUnsubscribeRemovesLocalHandler(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{}
 	adapter := NewStreamAdapter(provider)
 	errCh := make(chan TTSError, 2)

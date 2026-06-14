@@ -490,6 +490,44 @@ def stt_fallback(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "provider_error_not_forwarded":
+        primary = FakeSTT("primary")
+        fallback = FakeSTT("fallback")
+        adapter = fallback_module.FallbackAdapter([primary, fallback])
+        labels: list[str] = []
+        adapter.on("error", lambda error: labels.append(error.label))
+        primary.emit("error", type("Error", (), {"label": "primary"})())
+        fallback.emit("error", type("Error", (), {"label": "fallback"})())
+        adapter.emit("error", type("Error", (), {"label": "adapter"})())
+        return {
+            "contract": "stt-fallback-provider-error-not-forwarded",
+            "events": [
+                {"name": "provider_error_not_forwarded", "labels": labels}
+            ],
+        }
+    if action == "forward_metrics":
+        primary = FakeSTT("primary")
+        fallback = FakeSTT("fallback")
+        adapter = fallback_module.FallbackAdapter([primary, fallback])
+        request_ids: list[str] = []
+        adapter.on(
+            "metrics_collected",
+            lambda metrics: request_ids.append(metrics.request_id),
+        )
+        primary.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "primary-req"})(),
+        )
+        fallback.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "fallback-req"})(),
+        )
+        return {
+            "contract": "stt-fallback-forward-provider-metrics",
+            "events": [
+                {"name": "forward_metrics", "request_ids": request_ids}
+            ],
+        }
     if action == "validation":
         mode = input_data.get("mode", "empty")
         try:
@@ -641,6 +679,70 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
                     "same_instance": adapter.wrapped_stt is wrapped,
                     "wrapped_label": adapter.wrapped_stt.label,
                 }
+            ],
+        }
+    if action == "public_wrapper":
+        wrapper_cls = stream_adapter_module.StreamAdapterWrapper
+        is_recognize_stream = issubclass(
+            wrapper_cls, stt_module.RecognizeStream
+        ) or all(
+            hasattr(wrapper_cls, name)
+            for name in ("push_frame", "flush", "aclose", "__aiter__")
+        )
+        return {
+            "contract": "stt-stream-adapter",
+            "events": [
+                {
+                    "name": "public_wrapper",
+                    "type_name": wrapper_cls.__name__,
+                    "is_recognize_stream": is_recognize_stream,
+                    "has_push_frame": hasattr(wrapper_cls, "push_frame"),
+                    "has_flush": hasattr(wrapper_cls, "flush"),
+                    "has_end_input": hasattr(wrapper_cls, "end_input"),
+                    "has_start_time_offset": hasattr(wrapper_cls, "start_time_offset"),
+                    "has_start_time": hasattr(wrapper_cls, "start_time"),
+                }
+            ],
+        }
+    if action == "forward_metrics":
+        wrapped = FakeSTT("wrapped")
+        adapter = stream_adapter_module.StreamAdapter(stt=wrapped, vad=FakeVAD())
+        request_ids: list[str] = []
+        adapter.on(
+            "metrics_collected",
+            lambda metrics: request_ids.append(metrics.request_id),
+        )
+        wrapped.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "req-1"})(),
+        )
+        return {
+            "contract": "stt-stream-adapter",
+            "events": [
+                {
+                    "name": "forward_metrics",
+                    "request_ids": request_ids,
+                    "count": len(request_ids),
+                }
+            ],
+        }
+    if action == "provider_error_not_forwarded":
+        wrapped = FakeSTT("wrapped")
+        adapter = stream_adapter_module.StreamAdapter(stt=wrapped, vad=FakeVAD())
+        labels: list[str] = []
+        adapter.on("error", lambda error: labels.append(error.label))
+        wrapped.emit(
+            "error",
+            type("Error", (), {"label": "wrapped"})(),
+        )
+        adapter.emit(
+            "error",
+            type("Error", (), {"label": "adapter"})(),
+        )
+        return {
+            "contract": "stt-stream-adapter-provider-error-not-forwarded",
+            "events": [
+                {"name": "provider_error_not_forwarded", "labels": labels}
             ],
         }
     if action == "metadata":

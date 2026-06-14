@@ -230,20 +230,7 @@ func (f *FallbackAdapter) OnMetricsCollected(handler STTMetricsHandler) func() {
 }
 
 func (f *FallbackAdapter) OnError(handler STTErrorHandler) func() {
-	unsubscribes := []func(){f.ErrorEmitter.OnError(handler)}
-	for _, stt := range f.stts {
-		if collector, ok := stt.(errorCollectorSTT); ok {
-			unsubscribes = append(unsubscribes, collector.OnError(handler))
-		}
-	}
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			for _, unsubscribe := range unsubscribes {
-				unsubscribe()
-			}
-		})
-	}
+	return f.ErrorEmitter.OnError(handler)
 }
 
 func (f *FallbackAdapter) OnAvailabilityChanged(handler AvailabilityChangedHandler) func() {

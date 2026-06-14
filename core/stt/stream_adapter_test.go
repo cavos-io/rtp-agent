@@ -102,26 +102,31 @@ func TestStreamAdapterForwardsWrappedSTTMetrics(t *testing.T) {
 	}
 }
 
-func TestStreamAdapterForwardsWrappedSTTErrors(t *testing.T) {
+func TestStreamAdapterDoesNotForwardWrappedSTTErrors(t *testing.T) {
 	wrapped := &fakeStreamAdapterSTT{}
 	adapter := NewStreamAdapter(wrapped, &fakeStreamAdapterVAD{})
-	errCh := make(chan error, 1)
+	labelsCh := make(chan string, 2)
 
 	unsubscribe := adapter.OnError(func(err *STTError) {
-		errCh <- err
+		labelsCh <- err.Label
 	})
 	defer unsubscribe()
 
-	cause := errors.New("wrapped stt failed")
-	wrapped.EmitError(NewSTTError("wrapped", cause, true))
+	wrapped.EmitError(NewSTTError("wrapped", errors.New("wrapped stt failed"), true))
+	adapter.EmitError(NewSTTError("adapter", errors.New("adapter failed"), true))
 
 	select {
-	case err := <-errCh:
-		if !errors.Is(err, cause) {
-			t.Fatalf("forwarded error = %v, want cause %v", err, cause)
+	case label := <-labelsCh:
+		if label != "adapter" {
+			t.Fatalf("error label = %q, want adapter-local error only", label)
 		}
 	default:
 		t.Fatal("error handler was not called")
+	}
+	select {
+	case label := <-labelsCh:
+		t.Fatalf("unexpected forwarded wrapped STT error label %q", label)
+	default:
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	lktts "github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
 func runTTSValueObjects(input json.RawMessage) (any, error) {
@@ -382,6 +383,24 @@ func runTTSFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "provider_error_not_forwarded":
+		primary := &fakeScenarioTTS{provider: "primary"}
+		fallback := &fakeScenarioTTS{provider: "fallback"}
+		adapter := lktts.NewFallbackAdapter([]lktts.TTS{primary, fallback})
+		labels := make([]string, 0, 3)
+		unsubscribe := adapter.OnError(func(err lktts.TTSError) {
+			labels = append(labels, err.Label)
+		})
+		defer unsubscribe()
+		primary.EmitError(lktts.TTSError{Label: "primary", Err: errors.New("primary failed")})
+		fallback.EmitError(lktts.TTSError{Label: "fallback", Err: errors.New("fallback failed")})
+		adapter.EmitError(lktts.TTSError{Label: "adapter", Err: errors.New("adapter failed")})
+		return map[string]any{
+			"contract": "tts-fallback-provider-error-not-forwarded",
+			"events": []map[string]any{
+				{"name": "provider_error_not_forwarded", "labels": labels},
+			},
+		}, nil
 	case "validation":
 		mode := payload.Mode
 		if mode == "" {
@@ -467,12 +486,75 @@ func runTTSStreamAdapter(input json.RawMessage) (any, error) {
 				{"name": "close", "close_calls": provider.closeCalls},
 			},
 		}, nil
+	case "forward_metrics":
+		requestIDs := make([]string, 0, 1)
+		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		defer unsubscribe()
+		provider.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "req-1"})
+		return map[string]any{
+			"contract": "tts-stream-adapter",
+			"events": []map[string]any{
+				{"name": "forward_metrics", "request_ids": requestIDs, "count": len(requestIDs)},
+			},
+		}, nil
+	case "close_preserves_metrics_forwarding":
+		requestIDs := make([]string, 0, 2)
+		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		defer unsubscribe()
+		provider.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "before"})
+		if err := adapter.Close(); err != nil {
+			return nil, err
+		}
+		provider.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "after"})
+		adapter.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "local"})
+		return map[string]any{
+			"contract": "tts-stream-adapter-close-preserves-metrics-forwarding",
+			"events": []map[string]any{
+				{"name": "close_preserves_metrics_forwarding", "request_ids": requestIDs},
+			},
+		}, nil
+	case "unsubscribe_metrics":
+		requestIDs := make([]string, 0, 1)
+		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		provider.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "before"})
+		unsubscribe()
+		provider.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "provider"})
+		adapter.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "adapter"})
+		return map[string]any{
+			"contract": "tts-stream-adapter-metrics-unsubscribe",
+			"events": []map[string]any{
+				{"name": "unsubscribe_metrics", "request_ids": requestIDs},
+			},
+		}, nil
+	case "provider_error_not_forwarded":
+		labels := make([]string, 0, 2)
+		unsubscribe := adapter.OnError(func(err lktts.TTSError) {
+			labels = append(labels, err.Label)
+		})
+		defer unsubscribe()
+		provider.EmitError(lktts.TTSError{Label: "provider", Err: errors.New("provider failed")})
+		adapter.EmitError(lktts.TTSError{Label: "adapter", Err: errors.New("adapter failed")})
+		return map[string]any{
+			"contract": "tts-stream-adapter-provider-error-not-forwarded",
+			"events": []map[string]any{
+				{"name": "provider_error_not_forwarded", "labels": labels},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported TTS stream adapter action %q", payload.Action)
 	}
 }
 
 type fakeScenarioTTS struct {
+	lktts.MetricsEmitter
+	lktts.ErrorEmitter
+
 	sampleRate   int
 	numChannels  int
 	model        string

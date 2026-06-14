@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
 	lkstt "github.com/cavos-io/rtp-agent/core/stt"
 	lkvad "github.com/cavos-io/rtp-agent/core/vad"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
 func runSTTValueObjects(input json.RawMessage) (any, error) {
@@ -529,6 +531,41 @@ func runSTTFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "provider_error_not_forwarded":
+		primary := &fakeScenarioSTT{label: "primary", capabilities: lkstt.STTCapabilities{Streaming: true}}
+		fallback := &fakeScenarioSTT{label: "fallback", capabilities: lkstt.STTCapabilities{Streaming: true}}
+		adapter := lkstt.NewFallbackAdapter([]lkstt.STT{primary, fallback})
+		labels := make([]string, 0, 3)
+		unsubscribe := adapter.OnError(func(err *lkstt.STTError) {
+			labels = append(labels, err.Label)
+		})
+		defer unsubscribe()
+		primary.EmitError(lkstt.NewSTTError("primary", errors.New("primary failed"), true))
+		fallback.EmitError(lkstt.NewSTTError("fallback", errors.New("fallback failed"), true))
+		adapter.EmitError(lkstt.NewSTTError("adapter", errors.New("adapter failed"), true))
+		return map[string]any{
+			"contract": "stt-fallback-provider-error-not-forwarded",
+			"events": []map[string]any{
+				{"name": "provider_error_not_forwarded", "labels": labels},
+			},
+		}, nil
+	case "forward_metrics":
+		primary := &fakeScenarioSTT{label: "primary", capabilities: lkstt.STTCapabilities{Streaming: true}}
+		fallback := &fakeScenarioSTT{label: "fallback", capabilities: lkstt.STTCapabilities{Streaming: true}}
+		adapter := lkstt.NewFallbackAdapter([]lkstt.STT{primary, fallback})
+		requestIDs := make([]string, 0, 2)
+		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		defer unsubscribe()
+		primary.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "primary-req"})
+		fallback.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "fallback-req"})
+		return map[string]any{
+			"contract": "stt-fallback-forward-provider-metrics",
+			"events": []map[string]any{
+				{"name": "forward_metrics", "request_ids": requestIDs},
+			},
+		}, nil
 	case "validation":
 		mode := payload.Mode
 		if mode == "" {
@@ -687,7 +724,7 @@ func runSTTStreamAdapter(input json.RawMessage) (any, error) {
 			},
 		}, nil
 	case "wrapped":
-		wrapped := fakeScenarioSTT{label: "wrapped", capabilities: lkstt.STTCapabilities{OfflineRecognize: true}}
+		wrapped := &fakeScenarioSTT{label: "wrapped", capabilities: lkstt.STTCapabilities{OfflineRecognize: true}}
 		adapter := lkstt.NewStreamAdapter(wrapped, nil)
 		return map[string]any{
 			"contract": "stt-stream-adapter",
@@ -697,6 +734,61 @@ func runSTTStreamAdapter(input json.RawMessage) (any, error) {
 					"same_instance": adapter.WrappedSTT() == wrapped,
 					"wrapped_label": adapter.WrappedSTT().Label(),
 				},
+			},
+		}, nil
+	case "public_wrapper":
+		var wrapper *lkstt.StreamAdapterWrapper
+		_, isRecognizeStream := any(wrapper).(lkstt.RecognizeStream)
+		_, hasTiming := any(wrapper).(lkstt.StreamTiming)
+		_, hasEndInput := any(wrapper).(lkstt.InputEnding)
+		return map[string]any{
+			"contract": "stt-stream-adapter",
+			"events": []map[string]any{
+				{
+					"name":                  "public_wrapper",
+					"type_name":             "StreamAdapterWrapper",
+					"is_recognize_stream":   isRecognizeStream,
+					"has_push_frame":        isRecognizeStream,
+					"has_flush":             isRecognizeStream,
+					"has_end_input":         hasEndInput,
+					"has_start_time_offset": hasTiming,
+					"has_start_time":        hasTiming,
+				},
+			},
+		}, nil
+	case "forward_metrics":
+		wrapped := &fakeScenarioSTT{label: "wrapped", capabilities: lkstt.STTCapabilities{OfflineRecognize: true}}
+		adapter := lkstt.NewStreamAdapter(wrapped, nil)
+		requestIDs := make([]string, 0, 1)
+		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		defer unsubscribe()
+		wrapped.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "req-1"})
+		return map[string]any{
+			"contract": "stt-stream-adapter",
+			"events": []map[string]any{
+				{
+					"name":        "forward_metrics",
+					"request_ids": requestIDs,
+					"count":       len(requestIDs),
+				},
+			},
+		}, nil
+	case "provider_error_not_forwarded":
+		wrapped := &fakeScenarioSTT{label: "wrapped", capabilities: lkstt.STTCapabilities{OfflineRecognize: true}}
+		adapter := lkstt.NewStreamAdapter(wrapped, nil)
+		labels := make([]string, 0, 2)
+		unsubscribe := adapter.OnError(func(err *lkstt.STTError) {
+			labels = append(labels, err.Label)
+		})
+		defer unsubscribe()
+		wrapped.EmitError(lkstt.NewSTTError("wrapped", errors.New("wrapped stt failed"), true))
+		adapter.EmitError(lkstt.NewSTTError("adapter", errors.New("adapter failed"), true))
+		return map[string]any{
+			"contract": "stt-stream-adapter-provider-error-not-forwarded",
+			"events": []map[string]any{
+				{"name": "provider_error_not_forwarded", "labels": labels},
 			},
 		}, nil
 	case "metadata":
@@ -722,6 +814,8 @@ func runSTTStreamAdapter(input json.RawMessage) (any, error) {
 }
 
 type fakeScenarioSTT struct {
+	lkstt.MetricsEmitter
+	lkstt.ErrorEmitter
 	label        string
 	model        string
 	provider     string
