@@ -13,6 +13,7 @@ import (
 
 	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
 	lkllm "github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
 func runLLMAPIConnectOptions(input json.RawMessage) (any, error) {
@@ -354,6 +355,23 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 			"contract": "llm-fallback-provider-error-not-forwarded",
 			"events": []map[string]any{
 				{"name": "provider_error_not_forwarded", "labels": labels},
+			},
+		}, nil
+	case "forward_metrics":
+		primary := &fakeScenarioLLM{label: "primary"}
+		fallback := &fakeScenarioLLM{label: "fallback"}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		requestIDs := make([]string, 0, 2)
+		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.LLMMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		defer unsubscribe()
+		primary.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "primary-req"})
+		fallback.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "fallback-req"})
+		return map[string]any{
+			"contract": "llm-fallback-forward-provider-metrics",
+			"events": []map[string]any{
+				{"name": "forward_metrics", "request_ids": requestIDs},
 			},
 		}, nil
 	default:

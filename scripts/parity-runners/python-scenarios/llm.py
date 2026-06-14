@@ -281,6 +281,29 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
                 {"name": "provider_error_not_forwarded", "labels": labels}
             ],
         }
+    if action == "forward_metrics":
+        primary = FakeLLM("primary")
+        fallback = FakeLLM("fallback")
+        adapter = module.FallbackAdapter([primary, fallback])
+        request_ids: list[str] = []
+        adapter.on(
+            "metrics_collected",
+            lambda metrics: request_ids.append(metrics.request_id),
+        )
+        primary.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "primary-req"})(),
+        )
+        fallback.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "fallback-req"})(),
+        )
+        return {
+            "contract": "llm-fallback-forward-provider-metrics",
+            "events": [
+                {"name": "forward_metrics", "request_ids": request_ids}
+            ],
+        }
     raise ValueError(f"unsupported LLM fallback action {action!r}")
 
 
