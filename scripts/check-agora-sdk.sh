@@ -15,9 +15,11 @@ if [ -z "$sdk_dir" ]; then
 fi
 
 header="$sdk_dir/agora_sdk/include/c/api2/agora_local_user.h"
-if [ ! -f "$header" ]; then
-  echo "Agora native SDK headers are missing." >&2
-  echo "Expected: $header" >&2
+library="$sdk_dir/agora_sdk/libagora-ffmpeg.so"
+if [ ! -f "$header" ] || [ ! -f "$library" ]; then
+  echo "Agora native SDK payload is missing or incomplete." >&2
+  echo "Expected header: $header" >&2
+  echo "Expected library: $library" >&2
   echo "" >&2
   echo "Install the native SDK payload in a local Agora-Golang-Server-SDK checkout:" >&2
   echo "  git clone https://github.com/AgoraIO-Extensions/Agora-Golang-Server-SDK.git" >&2
@@ -32,3 +34,6 @@ if [ ! -f "$header" ]; then
 fi
 
 echo "Agora native SDK headers found: $header"
+echo "Agora native SDK libraries found: $library"
+echo "Set LD_LIBRARY_PATH before running agora_sdk binaries:"
+echo "  export LD_LIBRARY_PATH=$sdk_dir/agora_sdk:\$LD_LIBRARY_PATH"

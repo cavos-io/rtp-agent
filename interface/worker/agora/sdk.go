@@ -187,9 +187,7 @@ func (c *sdkChannelClient) Leave(ctx context.Context) error {
 		connection.Release()
 		return fmt.Errorf("agora SDK disconnect failed: %d", ret)
 	}
-	if ret := connection.Release(); ret != 0 {
-		return fmt.Errorf("agora SDK connection release failed: %d", ret)
-	}
+	connection.Release()
 	return nil
 }
 

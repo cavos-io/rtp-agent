@@ -59,3 +59,13 @@ func TestSDKClientImplementationUsesCurrentConnectSignature(t *testing.T) {
 		t.Fatal("sdk.go must call RtcConnection.Connect with token, channel, uid, and info arguments")
 	}
 }
+
+func TestSDKClientImplementationUsesVoidReleaseSignature(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	if strings.Contains(string(source), "ret := connection.Release()") {
+		t.Fatal("sdk.go must not treat RtcConnection.Release as returning a status code")
+	}
+}
