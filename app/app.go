@@ -355,6 +355,7 @@ type AppConfig struct {
 	STTKeytermsPrompt                       []string
 	STTVADThreshold                         *float64
 	STTVADSilenceThresholdSeconds           *float64
+	STTVADSpeechPadMS                       *int
 	STTSpeakerLabels                        *bool
 	STTMaxSpeakers                          *int
 	STTDomain                               string
@@ -718,6 +719,7 @@ func DefaultConfigFromEnv() AppConfig {
 		STTKeytermsPrompt:                       splitEnvList("RTP_AGENT_STT_KEYTERMS_PROMPT"),
 		STTVADThreshold:                         getenvOptionalFloat("RTP_AGENT_STT_VAD_THRESHOLD"),
 		STTVADSilenceThresholdSeconds:           getenvOptionalFloat("RTP_AGENT_STT_VAD_SILENCE_THRESHOLD_SECONDS"),
+		STTVADSpeechPadMS:                       getenvOptionalInt("RTP_AGENT_STT_VAD_SPEECH_PAD_MS"),
 		STTSpeakerLabels:                        getenvOptionalBool("RTP_AGENT_STT_SPEAKER_LABELS"),
 		STTMaxSpeakers:                          getenvOptionalInt("RTP_AGENT_STT_MAX_SPEAKERS"),
 		STTDomain:                               os.Getenv("RTP_AGENT_STT_DOMAIN"),
@@ -2736,6 +2738,9 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		if cfg.STTVADSilenceThresholdSeconds != nil {
 			sttOpts = append(sttOpts, slng.WithSTTVADMinSilenceDurationMS(int(math.Round(*cfg.STTVADSilenceThresholdSeconds*1000))))
 		}
+		if cfg.STTVADSpeechPadMS != nil {
+			sttOpts = append(sttOpts, slng.WithSTTVADSpeechPadMS(*cfg.STTVADSpeechPadMS))
+		}
 		if cfg.STTDiarization != nil {
 			minSpeakers := 0
 			if cfg.STTMinSpeakers != nil {
@@ -4175,6 +4180,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.STTVADSilenceThresholdSeconds != nil {
 			sttOpts = append(sttOpts, slng.WithSTTVADMinSilenceDurationMS(int(math.Round(*cfg.STTVADSilenceThresholdSeconds*1000))))
+		}
+		if cfg.STTVADSpeechPadMS != nil {
+			sttOpts = append(sttOpts, slng.WithSTTVADSpeechPadMS(*cfg.STTVADSpeechPadMS))
 		}
 		if cfg.STTDiarization != nil {
 			minSpeakers := 0
