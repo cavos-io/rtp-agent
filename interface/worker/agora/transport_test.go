@@ -92,6 +92,27 @@ func TestTransportJoinPassesOptionsToClient(t *testing.T) {
 	}
 }
 
+func TestTransportJoinGeneratesTokenFromCertificate(t *testing.T) {
+	client := &fakeChannelClient{}
+	opts := worker.AgoraOptions{
+		AppID:          "970CA35de60c44645bbae8a215061b33",
+		AppCertificate: "5CFd2fd1755d40ecb72977518be15d3b",
+		Channel:        "support",
+		UID:            "agent",
+	}
+	tr := NewTransport(opts, client)
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	if client.joinOptions.Token == "" {
+		t.Fatal("client token is empty, want generated RTC token")
+	}
+	if client.joinOptions.Token == opts.Token {
+		t.Fatal("client token was not generated")
+	}
+}
+
 func TestTransportLeaveDelegatesToClient(t *testing.T) {
 	client := &fakeChannelClient{}
 	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)

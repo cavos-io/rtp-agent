@@ -101,7 +101,8 @@ func (t *Transport) Join(ctx context.Context) error {
 	if t == nil {
 		return fmt.Errorf("agora transport is nil")
 	}
-	if err := t.opts.Validate(); err != nil {
+	opts, err := ResolveJoinOptions(t.opts)
+	if err != nil {
 		return err
 	}
 	if t.client == nil {
@@ -110,7 +111,7 @@ func (t *Transport) Join(ctx context.Context) error {
 	t.mu.Lock()
 	audio := t.audio
 	t.mu.Unlock()
-	return t.client.Join(ctx, t.opts, t.emit, audio)
+	return t.client.Join(ctx, opts, t.emit, audio)
 }
 
 func (t *Transport) Leave(ctx context.Context) error {

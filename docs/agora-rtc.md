@@ -41,11 +41,14 @@ go build -tags agora_sdk ./cmd
 
 export RTP_AGENT_TRANSPORT=agora
 export AGORA_APP_ID=...
+export AGORA_APP_CERTIFICATE=...
 export AGORA_CHANNEL=...
 export AGORA_UID=agent-0
-export AGORA_TOKEN=...
 ```
 
-`AGORA_TOKEN` is optional only when authentication is disabled for the Agora
-project. If `AGORA_UID` is omitted, the SDK transport uses `"0"`, matching the
-Agora server SDK examples.
+If `AGORA_TOKEN` is set, the worker uses it as-is. If `AGORA_TOKEN` is empty
+and `AGORA_APP_CERTIFICATE` is set, the worker generates a one-hour publisher
+RTC token for the configured channel and UID. `AGORA_TOKEN` is optional only
+when authentication is disabled for the Agora project or `AGORA_APP_CERTIFICATE`
+is available for token generation. If `AGORA_UID` is omitted, the SDK transport
+uses `"0"`, matching the Agora server SDK examples.

@@ -6,6 +6,7 @@ require (
 	cloud.google.com/go/speech v1.35.0
 	cloud.google.com/go/texttospeech v1.21.0
 	github.com/AgoraIO-Extensions/Agora-Golang-Server-SDK/v2 v2.6.1
+	github.com/AgoraIO/Tools/DynamicKey/AgoraDynamicKey/go/src v0.0.0-20250825033728-374cd21f5220
 	github.com/aws/aws-sdk-go-v2 v1.42.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.25
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.53.5
