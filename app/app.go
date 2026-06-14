@@ -2015,6 +2015,30 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, openai.WithOpenAISTTBaseURL(cfg.STTBaseURL))
 		}
 		return openai.NewOVHCloudOpenAISTT(cfg.STTModel, cfg.OVHCloudAPIKey, sttOpts...)
+	case providerBaseten:
+		sttOpts := []baseten.BasetenSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, baseten.WithBasetenSTTModelEndpoint(cfg.STTBaseURL))
+		}
+		if cfg.STTChainID != "" {
+			sttOpts = append(sttOpts, baseten.WithBasetenSTTChainID(cfg.STTChainID))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, baseten.WithBasetenSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTEncoding != "" {
+			sttOpts = append(sttOpts, baseten.WithBasetenSTTEncoding(cfg.STTEncoding))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, baseten.WithBasetenSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTBufferSizeSeconds != nil {
+			sttOpts = append(sttOpts, baseten.WithBasetenSTTBufferSizeSeconds(*cfg.STTBufferSizeSeconds))
+		}
+		if cfg.STTVADThreshold != nil {
+			sttOpts = append(sttOpts, baseten.WithBasetenSTTVADThreshold(*cfg.STTVADThreshold))
+		}
+		return baseten.NewBasetenSTT("", cfg.STTModel, sttOpts...)
 	case providerElevenLabs:
 		sttOpts := []elevenlabs.ElevenLabsSTTOption{}
 		if cfg.STTBaseURL != "" {

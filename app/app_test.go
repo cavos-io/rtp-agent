@@ -3402,6 +3402,120 @@ func TestGradiumSTTFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestBasetenSTTFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("BASETEN_API_KEY", "test-baseten-key")
+	type wsRecord struct {
+		authorization string
+		metadata      map[string]any
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read baseten stt metadata: %v", err)
+			return
+		}
+		var metadata map[string]any
+		if err := json.Unmarshal(payload, &metadata); err != nil {
+			t.Errorf("decode baseten stt metadata: %v", err)
+			return
+		}
+		records <- wsRecord{
+			authorization: r.Header.Get("Authorization"),
+			metadata:      metadata,
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	sampleRate := 8000
+	bufferSizeSeconds := 0.064
+	vadThreshold := 0.7
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTBaseURL:           endpoint,
+		STTLanguage:          "auto",
+		STTEncoding:          "pcm_mulaw",
+		STTSampleRate:        &sampleRate,
+		STTBufferSizeSeconds: &bufferSizeSeconds,
+		STTVADThreshold:      &vadThreshold,
+	}, providerBaseten)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*baseten.BasetenSTT); !ok {
+		t.Fatalf("provider type = %T, want *baseten.BasetenSTT", provider)
+	}
+	if got, want := provider.Label(), "baseten.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "unknown"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Baseten"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.AlignedTranscript != "word" || caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming word-aligned interim-only", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.authorization, "Api-Key test-baseten-key"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		whisper, _ := record.metadata["whisper_params"].(map[string]any)
+		if got, want := whisper["audio_language"], "auto"; got != want {
+			t.Fatalf("whisper.audio_language = %#v, want %#v", got, want)
+		}
+		if got, want := whisper["show_word_timestamps"], true; got != want {
+			t.Fatalf("whisper.show_word_timestamps = %#v, want %#v", got, want)
+		}
+		streaming, _ := record.metadata["streaming_params"].(map[string]any)
+		if got, want := streaming["encoding"], "pcm_mulaw"; got != want {
+			t.Fatalf("streaming.encoding = %#v, want %#v", got, want)
+		}
+		if got, want := streaming["sample_rate"], float64(8000); got != want {
+			t.Fatalf("streaming.sample_rate = %#v, want %#v", got, want)
+		}
+		if got, want := streaming["enable_partial_transcripts"], true; got != want {
+			t.Fatalf("streaming.enable_partial_transcripts = %#v, want %#v", got, want)
+		}
+		if got, want := streaming["partial_transcript_interval_s"], float64(1); got != want {
+			t.Fatalf("streaming.partial_transcript_interval_s = %#v, want %#v", got, want)
+		}
+		vad, _ := record.metadata["streaming_vad_config"].(map[string]any)
+		if got, want := vad["threshold"], 0.7; got != want {
+			t.Fatalf("vad.threshold = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Baseten STT metadata")
+	}
+}
+
 func TestDefaultConfigFromEnvWrapsTTSFallbackProviders(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "cartesia")
