@@ -3196,6 +3196,7 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 		{name: "fal", provider: "fal", envKey: "FAL_KEY", envValue: "test-fal-key"},
 		{name: "gradium", provider: "gradium", envKey: "GRADIUM_API_KEY", envValue: "test-gradium-key"},
 		{name: "hedra", provider: "hedra", envKey: "HEDRA_API_KEY", envValue: "test-hedra-key"},
+		{name: "hume", provider: "hume", envKey: "HUME_API_KEY", envValue: "test-hume-key"},
 		{name: "mistralai", provider: "mistralai", envKey: "MISTRAL_API_KEY", envValue: "test-mistral-key"},
 		{name: "nvidia", provider: "nvidia", envKey: "NVIDIA_API_KEY", envValue: "test-nvidia-key"},
 		{name: "perplexity", provider: "perplexity", envKey: "PERPLEXITY_API_KEY", envValue: "test-perplexity-key"},

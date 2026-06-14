@@ -1938,6 +1938,8 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return gradium.NewGradiumLLM(cfg.GradiumAPIKey, cfg.LLMModel), nil
 	case providerHedra:
 		return hedra.NewHedraLLM(cfg.HedraAPIKey, cfg.LLMModel), nil
+	case providerHume:
+		return hume.NewHumeLLM(cfg.HumeAPIKey, cfg.LLMModel), nil
 	case providerMistralAI:
 		return mistralai.NewMistralLLM(cfg.MistralAPIKey, cfg.LLMModel), nil
 	case providerNvidia:
