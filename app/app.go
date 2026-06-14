@@ -2190,6 +2190,39 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, gladia.WithGladiaPreProcessing(boolValue(cfg.STTPreProcessingAudioEnhancer), speechThreshold))
 		}
 		return gladia.NewGladiaSTT(cfg.GladiaAPIKey, sttOpts...), nil
+	case providerInworld:
+		sttOpts := []inworld.InworldSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTNumberOfChannels != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTNumChannels(*cfg.STTNumberOfChannels))
+		}
+		if cfg.STTVoiceProfile != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTVoiceProfile(*cfg.STTVoiceProfile))
+		}
+		if cfg.STTVoiceProfileTopN != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTVoiceProfileTopN(*cfg.STTVoiceProfileTopN))
+		}
+		if cfg.STTVADThreshold != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTVADThreshold(*cfg.STTVADThreshold))
+		}
+		if cfg.STTMinEndOfTurnSilenceWhenConfident != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTMinEndOfTurnSilenceWhenConfident(*cfg.STTMinEndOfTurnSilenceWhenConfident))
+		}
+		if cfg.STTEndOfTurnConfidenceThreshold != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTEndOfTurnConfidenceThreshold(*cfg.STTEndOfTurnConfidenceThreshold))
+		}
+		return inworld.NewInworldSTT(cfg.InworldAPIKey, sttOpts...), nil
 	case providerGradium:
 		sttOpts := []gradium.GradiumSTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -2214,6 +2247,33 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, gradium.WithGradiumSTTBufferSizeSeconds(*cfg.STTBufferSizeSeconds))
 		}
 		return gradium.NewGradiumSTT(cfg.GradiumAPIKey, sttOpts...), nil
+	case providerSmallestAI:
+		sttOpts := []smallestai.SmallestAISTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTEncoding != "" {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTEncoding(cfg.STTEncoding))
+		}
+		if cfg.STTWordTimestamps != nil {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTWordTimestamps(*cfg.STTWordTimestamps))
+		}
+		if cfg.STTDiarization != nil {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTDiarize(*cfg.STTDiarization))
+		}
+		if cfg.STTEndpointingMS != nil {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTEOUTimeoutMS(*cfg.STTEndpointingMS))
+		}
+		return smallestai.NewSmallestAISTT(cfg.SmallestAIAPIKey, sttOpts...), nil
 	case providerSoniox:
 		sttOpts := []soniox.SonioxSTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -2320,6 +2380,112 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTPreferCurrentSpeaker(*cfg.STTPreferCurrentSpeaker))
 		}
 		return speechmatics.NewSpeechmaticsSTT(cfg.SpeechmaticsAPIKey, sttOpts...), nil
+	case providerTelnyx:
+		sttOpts := []telnyx.TelnyxSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, telnyx.WithTelnyxSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, telnyx.WithTelnyxSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, telnyx.WithTelnyxSTTTranscriptionEngine(cfg.STTModel))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, telnyx.WithTelnyxSTTSampleRate(*cfg.STTSampleRate))
+		}
+		return telnyx.NewTelnyxSTT(cfg.TelnyxAPIKey, sttOpts...), nil
+	case providerXAI:
+		sttOpts := []xai.XaiSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, xai.WithXaiSTTRestURL(cfg.STTBaseURL))
+		}
+		if cfg.STTStreamingURL != "" {
+			sttOpts = append(sttOpts, xai.WithXaiSTTWebsocketURL(cfg.STTStreamingURL))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, xai.WithXaiSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, xai.WithXaiSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTInterimResults != nil {
+			sttOpts = append(sttOpts, xai.WithXaiSTTInterimResults(*cfg.STTInterimResults))
+		}
+		if cfg.STTDiarization != nil {
+			sttOpts = append(sttOpts, xai.WithXaiSTTDiarization(*cfg.STTDiarization))
+		}
+		if cfg.STTEndpointingMS != nil {
+			sttOpts = append(sttOpts, xai.WithXaiSTTEndpointing(*cfg.STTEndpointingMS))
+		}
+		return xai.NewXaiSTT(cfg.XAIAPIKey, sttOpts...), nil
+	case providerSarvam:
+		sttOpts := []sarvam.SarvamSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTStreamingURL != "" {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTStreamingURL(cfg.STTStreamingURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTTask != "" {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTMode(cfg.STTTask))
+		}
+		if cfg.STTPrompt != "" {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTPrompt(cfg.STTPrompt))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTVADEvents != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTHighVADSensitivity(*cfg.STTVADEvents))
+		}
+		if cfg.STTVADFlush != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTFlushSignal(*cfg.STTVADFlush))
+		}
+		if cfg.STTEncoding != "" {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTInputAudioCodec(cfg.STTEncoding))
+		}
+		if cfg.STTPositiveSpeechThreshold != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTPositiveSpeechThreshold(*cfg.STTPositiveSpeechThreshold))
+		}
+		if cfg.STTNegativeSpeechThreshold != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTNegativeSpeechThreshold(*cfg.STTNegativeSpeechThreshold))
+		}
+		if cfg.STTMinSpeechFrames != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTMinSpeechFrames(*cfg.STTMinSpeechFrames))
+		}
+		if cfg.STTFirstTurnMinSpeechFrames != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTFirstTurnMinSpeechFrames(*cfg.STTFirstTurnMinSpeechFrames))
+		}
+		if cfg.STTNegativeFramesCount != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTNegativeFramesCount(*cfg.STTNegativeFramesCount))
+		}
+		if cfg.STTNegativeFramesWindow != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTNegativeFramesWindow(*cfg.STTNegativeFramesWindow))
+		}
+		if cfg.STTStartSpeechVolumeThreshold != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTStartSpeechVolumeThreshold(*cfg.STTStartSpeechVolumeThreshold))
+		}
+		if cfg.STTInterruptMinSpeechFrames != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTInterruptMinSpeechFrames(*cfg.STTInterruptMinSpeechFrames))
+		}
+		if cfg.STTPreSpeechPadFrames != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTPreSpeechPadFrames(*cfg.STTPreSpeechPadFrames))
+		}
+		if cfg.STTNumInitialIgnoredFrames != nil {
+			sttOpts = append(sttOpts, sarvam.WithSarvamSTTNumInitialIgnoredFrames(*cfg.STTNumInitialIgnoredFrames))
+		}
+		provider := sarvam.NewSarvamSTT(cfg.SarvamAPIKey, sttOpts...)
+		if provider == nil {
+			return nil, fmt.Errorf("invalid sarvam STT configuration")
+		}
+		return provider, nil
 	case providerSLNG:
 		sttOpts := []slng.STTOption{}
 		if cfg.STTModel != "" {

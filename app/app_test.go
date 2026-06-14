@@ -3,6 +3,7 @@ package app
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -4230,6 +4231,617 @@ func TestGladiaSTTFallbackPassesReferenceOptions(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for Gladia STT init request")
+	}
+}
+
+func TestXaiSTTFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("XAI_API_KEY", "test-xai-key")
+	type wsRecord struct {
+		authorization string
+		query         map[string]string
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		query := map[string]string{}
+		for key, values := range r.URL.Query() {
+			if len(values) > 0 {
+				query[key] = values[0]
+			}
+		}
+		records <- wsRecord{
+			authorization: r.Header.Get("Authorization"),
+			query:         query,
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	sampleRate := 8000
+	interimResults := false
+	diarization := true
+	endpointing := 250
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTStreamingURL:   "ws" + strings.TrimPrefix(server.URL, "http"),
+		STTSampleRate:     &sampleRate,
+		STTLanguage:       "es",
+		STTInterimResults: &interimResults,
+		STTDiarization:    &diarization,
+		STTEndpointingMS:  &endpointing,
+	}, providerXAI)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*xai.XaiSTT); !ok {
+		t.Fatalf("provider type = %T, want *xai.XaiSTT", provider)
+	}
+	if got, want := provider.Label(), "xai.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.InterimResults || !caps.Diarization || caps.AlignedTranscript != "word" || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming diarization word-aligned offline without interim", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.authorization, "Bearer test-xai-key"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		if got, want := record.query["encoding"], "pcm"; got != want {
+			t.Fatalf("query encoding = %q, want %q", got, want)
+		}
+		if got, want := record.query["sample_rate"], "8000"; got != want {
+			t.Fatalf("query sample_rate = %q, want %q", got, want)
+		}
+		if got, want := record.query["language"], "es"; got != want {
+			t.Fatalf("query language = %q, want %q", got, want)
+		}
+		if got, want := record.query["interim_results"], "false"; got != want {
+			t.Fatalf("query interim_results = %q, want %q", got, want)
+		}
+		if got, want := record.query["diarize"], "true"; got != want {
+			t.Fatalf("query diarize = %q, want %q", got, want)
+		}
+		if got, want := record.query["endpointing"], "250"; got != want {
+			t.Fatalf("query endpointing = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for xAI STT websocket request")
+	}
+}
+
+func TestSmallestAISTTFallbackPassesReferenceOptions(t *testing.T) {
+	type wsRecord struct {
+		authorization string
+		source        string
+		path          string
+		query         map[string]string
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		query := map[string]string{}
+		for key, values := range r.URL.Query() {
+			if len(values) > 0 {
+				query[key] = values[0]
+			}
+		}
+		records <- wsRecord{
+			authorization: r.Header.Get("Authorization"),
+			source:        r.Header.Get("X-Source"),
+			path:          r.URL.Path,
+			query:         query,
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	sampleRate := 8000
+	wordTimestamps := false
+	diarization := true
+	endpointingMS := 500
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		SmallestAIAPIKey:  "test-smallest-key",
+		STTBaseURL:        server.URL,
+		STTModel:          "pulse",
+		STTLanguage:       "multi",
+		STTSampleRate:     &sampleRate,
+		STTEncoding:       "mulaw",
+		STTWordTimestamps: &wordTimestamps,
+		STTDiarization:    &diarization,
+		STTEndpointingMS:  &endpointingMS,
+	}, providerSmallestAI)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*smallestai.SmallestAISTT); !ok {
+		t.Fatalf("provider type = %T, want *smallestai.SmallestAISTT", provider)
+	}
+	if got, want := provider.Label(), "smallestai.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "pulse"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "SmallestAI"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || !caps.Diarization || caps.AlignedTranscript != "" || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming interim diarization offline without alignment", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.authorization, "Bearer test-smallest-key"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		if got, want := record.source, "livekit"; got != want {
+			t.Fatalf("X-Source = %q, want %q", got, want)
+		}
+		if got, want := record.path, "/pulse/get_text"; got != want {
+			t.Fatalf("path = %q, want %q", got, want)
+		}
+		if got, want := record.query["language"], "multi"; got != want {
+			t.Fatalf("query language = %q, want %q", got, want)
+		}
+		if got, want := record.query["encoding"], "mulaw"; got != want {
+			t.Fatalf("query encoding = %q, want %q", got, want)
+		}
+		if got, want := record.query["sample_rate"], "8000"; got != want {
+			t.Fatalf("query sample_rate = %q, want %q", got, want)
+		}
+		if got, want := record.query["word_timestamps"], "false"; got != want {
+			t.Fatalf("query word_timestamps = %q, want %q", got, want)
+		}
+		if got, want := record.query["diarize"], "true"; got != want {
+			t.Fatalf("query diarize = %q, want %q", got, want)
+		}
+		if got, want := record.query["eou_timeout_ms"], "500"; got != want {
+			t.Fatalf("query eou_timeout_ms = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SmallestAI STT websocket request")
+	}
+}
+
+func TestTelnyxSTTFallbackPassesReferenceOptions(t *testing.T) {
+	type wsRecord struct {
+		authorization string
+		query         map[string]string
+		header        []byte
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		query := map[string]string{}
+		for key, values := range r.URL.Query() {
+			if len(values) > 0 {
+				query[key] = values[0]
+			}
+		}
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read telnyx wav header: %v", err)
+			return
+		}
+		records <- wsRecord{
+			authorization: r.Header.Get("Authorization"),
+			query:         query,
+			header:        payload,
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	sampleRate := 8000
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		TelnyxAPIKey:  "test-telnyx-key",
+		STTBaseURL:    "ws" + strings.TrimPrefix(server.URL, "http"),
+		STTLanguage:   "es",
+		STTModel:      "google",
+		STTSampleRate: &sampleRate,
+	}, providerTelnyx)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*telnyx.TelnyxSTT); !ok {
+		t.Fatalf("provider type = %T, want *telnyx.TelnyxSTT", provider)
+	}
+	if got, want := provider.Label(), "telnyx.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "google"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "telnyx"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.Diarization || caps.AlignedTranscript != "" || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming interim offline without diarization", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.authorization, "Bearer test-telnyx-key"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		if got, want := record.query["transcription_engine"], "google"; got != want {
+			t.Fatalf("query transcription_engine = %q, want %q", got, want)
+		}
+		if got, want := record.query["language"], "es"; got != want {
+			t.Fatalf("query language = %q, want %q", got, want)
+		}
+		if got, want := record.query["input_format"], "wav"; got != want {
+			t.Fatalf("query input_format = %q, want %q", got, want)
+		}
+		if len(record.header) != 44 {
+			t.Fatalf("wav header length = %d, want 44", len(record.header))
+		}
+		if got, want := string(record.header[0:4]), "RIFF"; got != want {
+			t.Fatalf("wav header RIFF = %q, want %q", got, want)
+		}
+		if got, want := string(record.header[8:12]), "WAVE"; got != want {
+			t.Fatalf("wav header WAVE = %q, want %q", got, want)
+		}
+		if got, want := binary.LittleEndian.Uint32(record.header[24:28]), uint32(8000); got != want {
+			t.Fatalf("wav sample rate = %d, want %d", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Telnyx STT websocket request")
+	}
+}
+
+func TestInworldSTTFallbackPassesReferenceOptions(t *testing.T) {
+	type wsRecord struct {
+		authorization string
+		path          string
+		message       map[string]any
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read inworld config message: %v", err)
+			return
+		}
+		var message map[string]any
+		if err := json.Unmarshal(payload, &message); err != nil {
+			t.Errorf("decode inworld config message: %v", err)
+			return
+		}
+		records <- wsRecord{
+			authorization: r.Header.Get("Authorization"),
+			path:          r.URL.Path,
+			message:       message,
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	sampleRate := 8000
+	numChannels := 2
+	voiceProfile := true
+	voiceProfileTopN := 3
+	vadThreshold := 0.4
+	minSilence := 180
+	confidenceThreshold := 0.45
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		InworldAPIKey:                       "test-inworld-key",
+		STTBaseURL:                          server.URL,
+		STTModel:                            "inworld-stt-test",
+		STTLanguage:                         "en-US",
+		STTSampleRate:                       &sampleRate,
+		STTNumberOfChannels:                 &numChannels,
+		STTVoiceProfile:                     &voiceProfile,
+		STTVoiceProfileTopN:                 &voiceProfileTopN,
+		STTVADThreshold:                     &vadThreshold,
+		STTMinEndOfTurnSilenceWhenConfident: &minSilence,
+		STTEndOfTurnConfidenceThreshold:     &confidenceThreshold,
+	}, providerInworld)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*inworld.InworldSTT); !ok {
+		t.Fatalf("provider type = %T, want *inworld.InworldSTT", provider)
+	}
+	if got, want := provider.Label(), "inworld.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "inworld-stt-test"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Inworld"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming interim without offline", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.authorization, "Basic test-inworld-key"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		if got, want := record.path, "/stt/v1/transcribe:streamBidirectional"; got != want {
+			t.Fatalf("path = %q, want %q", got, want)
+		}
+		config, _ := record.message["transcribeConfig"].(map[string]any)
+		if got, want := config["modelId"], "inworld-stt-test"; got != want {
+			t.Fatalf("modelId = %#v, want %#v", got, want)
+		}
+		if got, want := config["language"], "en-US"; got != want {
+			t.Fatalf("language = %#v, want %#v", got, want)
+		}
+		if got, want := config["sampleRateHertz"], float64(8000); got != want {
+			t.Fatalf("sampleRateHertz = %#v, want %#v", got, want)
+		}
+		if got, want := config["numberOfChannels"], float64(2); got != want {
+			t.Fatalf("numberOfChannels = %#v, want %#v", got, want)
+		}
+		if got, want := config["endOfTurnConfidenceThreshold"], 0.45; got != want {
+			t.Fatalf("endOfTurnConfidenceThreshold = %#v, want %#v", got, want)
+		}
+		voiceConfig, _ := config["voiceProfileConfig"].(map[string]any)
+		if got, want := voiceConfig["enableVoiceProfile"], true; got != want {
+			t.Fatalf("enableVoiceProfile = %#v, want %#v", got, want)
+		}
+		if got, want := voiceConfig["topN"], float64(3); got != want {
+			t.Fatalf("voice topN = %#v, want %#v", got, want)
+		}
+		inworldConfig, _ := config["inworldSttV1Config"].(map[string]any)
+		if got, want := inworldConfig["minEndOfTurnSilenceWhenConfident"], float64(180); got != want {
+			t.Fatalf("minEndOfTurnSilenceWhenConfident = %#v, want %#v", got, want)
+		}
+		if got, want := inworldConfig["vadThreshold"], 0.4; got != want {
+			t.Fatalf("vadThreshold = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Inworld STT websocket config")
+	}
+}
+
+func TestSarvamSTTFallbackPassesReferenceOptions(t *testing.T) {
+	type wsRecord struct {
+		apiKey    string
+		userAgent string
+		query     map[string]string
+		message   map[string]any
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		query := map[string]string{}
+		for key, values := range r.URL.Query() {
+			if len(values) > 0 {
+				query[key] = values[0]
+			}
+		}
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read sarvam stt config message: %v", err)
+			return
+		}
+		var message map[string]any
+		if err := json.Unmarshal(payload, &message); err != nil {
+			t.Errorf("decode sarvam stt config message: %v", err)
+			return
+		}
+		records <- wsRecord{
+			apiKey:    r.Header.Get("api-subscription-key"),
+			userAgent: r.Header.Get("User-Agent"),
+			query:     query,
+			message:   message,
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	sampleRate := 8000
+	highVAD := true
+	flushSignal := false
+	positiveSpeech := 0.6
+	negativeSpeech := 0.2
+	minSpeechFrames := 3
+	firstTurnMinSpeechFrames := 5
+	negativeFramesCount := 2
+	negativeFramesWindow := 4
+	startSpeechVolume := 0.1
+	interruptMinSpeechFrames := 6
+	preSpeechPadFrames := 7
+	numInitialIgnoredFrames := 8
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		SarvamAPIKey:                  "test-sarvam-key",
+		STTStreamingURL:               "ws" + strings.TrimPrefix(server.URL, "http"),
+		STTModel:                      "saaras:v3",
+		STTLanguage:                   "hi-IN",
+		STTTask:                       "translate",
+		STTPrompt:                     "domain prompt",
+		STTSampleRate:                 &sampleRate,
+		STTVADEvents:                  &highVAD,
+		STTVADFlush:                   &flushSignal,
+		STTEncoding:                   "audio/pcm",
+		STTPositiveSpeechThreshold:    &positiveSpeech,
+		STTNegativeSpeechThreshold:    &negativeSpeech,
+		STTMinSpeechFrames:            &minSpeechFrames,
+		STTFirstTurnMinSpeechFrames:   &firstTurnMinSpeechFrames,
+		STTNegativeFramesCount:        &negativeFramesCount,
+		STTNegativeFramesWindow:       &negativeFramesWindow,
+		STTStartSpeechVolumeThreshold: &startSpeechVolume,
+		STTInterruptMinSpeechFrames:   &interruptMinSpeechFrames,
+		STTPreSpeechPadFrames:         &preSpeechPadFrames,
+		STTNumInitialIgnoredFrames:    &numInitialIgnoredFrames,
+	}, providerSarvam)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*sarvam.SarvamSTT); !ok {
+		t.Fatalf("provider type = %T, want *sarvam.SarvamSTT", provider)
+	}
+	if got, want := provider.Label(), "sarvam.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "saaras:v3"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Sarvam"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.Diarization || caps.AlignedTranscript != "" || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming interim offline without diarization", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.apiKey, "test-sarvam-key"; got != want {
+			t.Fatalf("api-subscription-key = %q, want %q", got, want)
+		}
+		if got, want := record.userAgent, "LiveKit Agents Sarvam Plugin/Go"; got != want {
+			t.Fatalf("User-Agent = %q, want %q", got, want)
+		}
+		expectedQuery := map[string]string{
+			"language-code":                 "hi-IN",
+			"model":                         "saaras:v3",
+			"mode":                          "translate",
+			"vad_signals":                   "true",
+			"sample_rate":                   "8000",
+			"high_vad_sensitivity":          "true",
+			"flush_signal":                  "false",
+			"input_audio_codec":             "audio/pcm",
+			"positive_speech_threshold":     "0.6",
+			"negative_speech_threshold":     "0.2",
+			"min_speech_frames":             "3",
+			"first_turn_min_speech_frames":  "5",
+			"negative_frames_count":         "2",
+			"negative_frames_window":        "4",
+			"start_speech_volume_threshold": "0.1",
+			"interrupt_min_speech_frames":   "6",
+			"pre_speech_pad_frames":         "7",
+			"num_initial_ignored_frames":    "8",
+		}
+		for key, want := range expectedQuery {
+			if got := record.query[key]; got != want {
+				t.Fatalf("query %s = %q, want %q", key, got, want)
+			}
+		}
+		if got, want := record.message["type"], "config"; got != want {
+			t.Fatalf("config type = %#v, want %#v", got, want)
+		}
+		if got, want := record.message["prompt"], "domain prompt"; got != want {
+			t.Fatalf("config prompt = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Sarvam STT websocket config")
 	}
 }
 
