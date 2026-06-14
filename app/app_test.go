@@ -3187,6 +3187,7 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 		provider string
 		envKey   string
 		envValue string
+		model    string
 	}{
 		{name: "cerebras", provider: "cerebras", envKey: "CEREBRAS_API_KEY", envValue: "test-cerebras-key"},
 		{name: "fireworks", provider: "fireworks", envKey: "FIREWORKS_API_KEY", envValue: "test-fireworks-key"},
@@ -3204,6 +3205,7 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 		{name: "mistralai", provider: "mistralai", envKey: "MISTRAL_API_KEY", envValue: "test-mistral-key"},
 		{name: "nvidia", provider: "nvidia", envKey: "NVIDIA_API_KEY", envValue: "test-nvidia-key"},
 		{name: "perplexity", provider: "perplexity", envKey: "PERPLEXITY_API_KEY", envValue: "test-perplexity-key"},
+		{name: "sarvam", provider: "sarvam", envKey: "SARVAM_API_KEY", envValue: "test-sarvam-key", model: "sarvam-m"},
 		{name: "telnyx", provider: "telnyx", envKey: "TELNYX_API_KEY", envValue: "test-telnyx-key"},
 	}
 
@@ -3211,7 +3213,11 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
 			t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", tt.provider)
-			t.Setenv("RTP_AGENT_LLM_MODEL", "custom-fallback-model")
+			model := tt.model
+			if model == "" {
+				model = "custom-fallback-model"
+			}
+			t.Setenv("RTP_AGENT_LLM_MODEL", model)
 			t.Setenv(tt.envKey, tt.envValue)
 
 			app, err := NewApp(DefaultConfigFromEnv())

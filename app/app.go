@@ -1974,6 +1974,22 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return openai.NewSambaNovaOpenAILLM(cfg.LLMModel, cfg.SambaNovaAPIKey)
 	case providerPerplexity:
 		return perplexity.NewPerplexityLLM(cfg.PerplexityAPIKey, cfg.LLMModel), nil
+	case providerSarvam:
+		llmOpts := []sarvam.SarvamLLMOption{}
+		if cfg.LLMBaseURL != "" {
+			llmOpts = append(llmOpts, sarvam.WithSarvamLLMBaseURL(cfg.LLMBaseURL))
+		}
+		if len(cfg.LLMExtraHeaders) > 0 {
+			llmOpts = append(llmOpts, sarvam.WithSarvamLLMExtraHeaders(cfg.LLMExtraHeaders))
+		}
+		if len(cfg.LLMExtraBody) > 0 {
+			llmOpts = append(llmOpts, sarvam.WithSarvamLLMExtraBody(cfg.LLMExtraBody))
+		}
+		provider := sarvam.NewSarvamLLM(cfg.SarvamAPIKey, cfg.LLMModel, llmOpts...)
+		if provider == nil {
+			return nil, fmt.Errorf("invalid sarvam LLM configuration")
+		}
+		return provider, nil
 	case providerTelnyx:
 		return telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel), nil
 	case providerGroq:
