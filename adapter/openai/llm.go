@@ -243,6 +243,18 @@ func WithOpenAILLMReasoningEffort(reasoningEffort string) OpenAILLMOption {
 	}
 }
 
+func WithOpenAILLMExtraParams(params map[string]any) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		l.extraParams = cloneOpenAIAnyMap(params)
+	}
+}
+
+func WithOpenAILLMDefaultReasoning(defaultReasoning bool) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		l.defaultReasoning = defaultReasoning
+	}
+}
+
 func WithOpenAILLMParallelToolCalls(parallelToolCalls bool) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		l.parallelToolCalls = parallelToolCalls
