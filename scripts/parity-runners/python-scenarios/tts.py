@@ -699,6 +699,53 @@ def tts_fallback(input_data: Any) -> dict[str, Any]:
                 {"name": "provider_error_not_forwarded", "labels": labels}
             ],
         }
+    if action == "forward_metrics":
+        primary = ScenarioTTS()
+        fallback = ScenarioTTS()
+        adapter = module.FallbackAdapter([primary, fallback])
+        request_ids: list[str] = []
+        adapter.on(
+            "metrics_collected",
+            lambda metrics: request_ids.append(metrics.request_id),
+        )
+        primary.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "primary-req"})(),
+        )
+        fallback.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "fallback-req"})(),
+        )
+        return {
+            "contract": "tts-fallback-forward-metrics",
+            "events": [
+                {"name": "forward_metrics", "request_ids": request_ids}
+            ],
+        }
+    if action == "metrics_unsubscribe":
+        primary = ScenarioTTS()
+        adapter = module.FallbackAdapter([primary])
+        request_ids: list[str] = []
+
+        def handler(metrics: Any) -> None:
+            request_ids.append(metrics.request_id)
+
+        adapter.on("metrics_collected", handler)
+        adapter.off("metrics_collected", handler)
+        primary.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "primary-req"})(),
+        )
+        adapter.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "adapter-req"})(),
+        )
+        return {
+            "contract": "tts-fallback-metrics-unsubscribe",
+            "events": [
+                {"name": "metrics_unsubscribe", "request_ids": request_ids}
+            ],
+        }
     if action == "close_unsubscribes_provider_metrics":
         primary = ScenarioTTS()
         adapter = module.FallbackAdapter([primary])

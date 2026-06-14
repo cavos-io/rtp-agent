@@ -588,6 +588,39 @@ func runTTSFallback(input json.RawMessage) (any, error) {
 				{"name": "provider_error_not_forwarded", "labels": labels},
 			},
 		}, nil
+	case "forward_metrics":
+		primary := &fakeScenarioTTS{provider: "primary"}
+		fallback := &fakeScenarioTTS{provider: "fallback"}
+		adapter := lktts.NewFallbackAdapter([]lktts.TTS{primary, fallback})
+		requestIDs := make([]string, 0, 2)
+		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		defer unsubscribe()
+		primary.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "primary-req"})
+		fallback.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "fallback-req"})
+		return map[string]any{
+			"contract": "tts-fallback-forward-metrics",
+			"events": []map[string]any{
+				{"name": "forward_metrics", "request_ids": requestIDs},
+			},
+		}, nil
+	case "metrics_unsubscribe":
+		primary := &fakeScenarioTTS{provider: "primary"}
+		adapter := lktts.NewFallbackAdapter([]lktts.TTS{primary})
+		requestIDs := make([]string, 0, 1)
+		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		unsubscribe()
+		primary.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "primary-req"})
+		adapter.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "adapter-req"})
+		return map[string]any{
+			"contract": "tts-fallback-metrics-unsubscribe",
+			"events": []map[string]any{
+				{"name": "metrics_unsubscribe", "request_ids": requestIDs},
+			},
+		}, nil
 	case "close_unsubscribes_provider_metrics":
 		primary := &fakeScenarioTTS{provider: "primary"}
 		adapter := lktts.NewFallbackAdapter([]lktts.TTS{primary})
