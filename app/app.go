@@ -2113,6 +2113,53 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, openai.WithOpenAITTSBaseURL(cfg.TTSBaseURL))
 		}
 		return openai.NewOpenAITTS(cfg.OpenAIAPIKey, "", "", ttsOpts...)
+	case providerAsyncAI:
+		ttsOpts := []asyncai.AsyncAITTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, asyncai.WithAsyncAITTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, asyncai.WithAsyncAITTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, asyncai.WithAsyncAITTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, asyncai.WithAsyncAITTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, asyncai.WithAsyncAITTSEncoding(cfg.TTSEncoding))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, asyncai.WithAsyncAITTSSampleRate(*cfg.TTSSampleRate))
+		}
+		return asyncai.NewAsyncAITTS(os.Getenv("ASYNCAI_API_KEY"), cfg.TTSVoice, ttsOpts...), nil
+	case providerCambai:
+		ttsOpts := []cambai.CambaiTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, cambai.WithCambaiTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSVoice != "" {
+			if voiceID, err := strconv.Atoi(cfg.TTSVoice); err == nil {
+				ttsOpts = append(ttsOpts, cambai.WithCambaiTTSVoiceID(voiceID))
+			}
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, cambai.WithCambaiTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, cambai.WithCambaiTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, cambai.WithCambaiTTSOutputFormat(cfg.TTSEncoding))
+		}
+		if cfg.TTSInstructions != "" {
+			ttsOpts = append(ttsOpts, cambai.WithCambaiTTSUserInstructions(cfg.TTSInstructions))
+		}
+		if cfg.TTSEnhanceNamedEntities != nil {
+			ttsOpts = append(ttsOpts, cambai.WithCambaiTTSEnhanceNamedEntities(*cfg.TTSEnhanceNamedEntities))
+		}
+		return cambai.NewCambaiTTS("", "", ttsOpts...)
 	case providerCartesia:
 		ttsOpts := []cartesia.CartesiaTTSOption{}
 		if cfg.TTSBaseURL != "" {
@@ -2166,6 +2213,60 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEncoding(cfg.TTSEncoding))
 		}
 		return elevenlabs.NewElevenLabsTTS(cfg.ElevenLabsAPIKey, cfg.TTSVoice, cfg.TTSModel, ttsOpts...)
+	case providerFishAudio:
+		ttsOpts := []fishaudio.FishAudioTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSOutputFormat(cfg.TTSResponseFormat))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSLatencyMode != "" {
+			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSLatencyMode(cfg.TTSLatencyMode))
+		}
+		if cfg.TTSChunkLength != nil {
+			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSChunkLength(*cfg.TTSChunkLength))
+		}
+		return fishaudio.NewFishAudioTTS(cfg.FishAudioAPIKey, cfg.TTSVoice, ttsOpts...), nil
+	case providerGnani:
+		ttsOpts := []gnani.Option{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, gnani.WithBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, gnani.WithVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, gnani.WithModel(cfg.TTSModel))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, gnani.WithSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, gnani.WithEncoding(cfg.TTSEncoding))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, gnani.WithContainer(cfg.TTSResponseFormat))
+		}
+		if cfg.TTSNumberOfChannels != nil {
+			ttsOpts = append(ttsOpts, gnani.WithNumChannels(*cfg.TTSNumberOfChannels))
+		}
+		if cfg.TTSSampleWidth != nil {
+			ttsOpts = append(ttsOpts, gnani.WithSampleWidth(*cfg.TTSSampleWidth))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, gnani.WithLanguage(cfg.TTSLanguage))
+		}
+		return gnani.NewTTS(cfg.GnaniAPIKey, ttsOpts...), nil
 	case providerGroq:
 		ttsOpts := []groq.GroqTTSOption{}
 		if cfg.TTSBaseURL != "" {
@@ -2430,10 +2531,73 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, smallestai.WithSmallestAITTSOutputFormat(cfg.TTSResponseFormat))
 		}
 		return smallestai.NewSmallestAITTS(cfg.SmallestAIAPIKey, "", ttsOpts...), nil
+	case providerSoniox:
+		ttsOpts := []soniox.SonioxTTSOption{}
+		if cfg.TTSWebsocketURL != "" {
+			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSWebsocketURL(cfg.TTSWebsocketURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSAudioFormat(cfg.TTSEncoding))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSBitRate != nil {
+			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSBitrate(*cfg.TTSBitRate))
+		}
+		return soniox.NewSonioxTTS(cfg.SonioxAPIKey, ttsOpts...), nil
+	case providerSpeechmatics:
+		ttsOpts := []speechmatics.SpeechmaticsTTSOption{}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, speechmatics.WithSpeechmaticsTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, speechmatics.WithSpeechmaticsTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, speechmatics.WithSpeechmaticsTTSBaseURL(cfg.TTSBaseURL))
+		}
+		return speechmatics.NewSpeechmaticsTTS(cfg.SpeechmaticsAPIKey, ttsOpts...), nil
+	case providerSpitch:
+		ttsOpts := []spitch.SpitchTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSOutputFormat(cfg.TTSResponseFormat))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		return spitch.NewSpitchTTS(cfg.SpitchAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerUltravox:
 		return ultravox.NewUltravoxTTS(cfg.UltravoxAPIKey, cfg.TTSVoice), nil
 	case providerUpliftAI:
 		return upliftai.NewUpliftAITTS(cfg.UpliftAIAPIKey, cfg.TTSVoice), nil
+	case providerXAI:
+		ttsOpts := []xai.XaiTTSOption{}
+		if cfg.TTSWebsocketURL != "" {
+			ttsOpts = append(ttsOpts, xai.WithXaiTTSWebsocketURL(cfg.TTSWebsocketURL))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, xai.WithXaiTTSLanguage(cfg.TTSLanguage))
+		}
+		return xai.NewXaiTTS(cfg.XAIAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {

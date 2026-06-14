@@ -102,6 +102,7 @@ import (
 	"github.com/livekit/protocol/livekit"
 	livekitlogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
@@ -3665,6 +3666,715 @@ func TestSmallestAITTSFallbackPassesReferenceOptions(t *testing.T) {
 	}
 	if got, want := gotPayload["output_format"], "wav"; got != want {
 		t.Fatalf("output_format = %#v, want %#v", got, want)
+	}
+}
+
+func TestSonioxTTSFallbackPassesReferenceOptions(t *testing.T) {
+	sampleRate := 48000
+	bitRate := 192000
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		SonioxAPIKey:    "test-soniox-key",
+		TTSWebsocketURL: "ws://soniox.example/tts",
+		TTSModel:        "tts-custom",
+		TTSLanguage:     "es",
+		TTSVoice:        "Adrian",
+		TTSEncoding:     "mp3",
+		TTSSampleRate:   &sampleRate,
+		TTSBitRate:      &bitRate,
+	}, providerSoniox)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*soniox.SonioxTTS); !ok {
+		t.Fatalf("provider type = %T, want *soniox.SonioxTTS", provider)
+	}
+	if got, want := provider.Label(), "soniox.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 48000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference configured sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "tts-custom"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "Soniox"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference streaming without aligned transcript", caps)
+	}
+}
+
+func TestSpeechmaticsTTSFallbackPassesReferenceOptions(t *testing.T) {
+	sampleRate := 24000
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]string
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("audio")),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		SpeechmaticsAPIKey: "test-speechmatics-key",
+		TTSBaseURL:         "https://tts.example.com",
+		TTSVoice:           "theo",
+		TTSSampleRate:      &sampleRate,
+	}, providerSpeechmatics)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*speechmatics.SpeechmaticsTTS); !ok {
+		t.Fatalf("provider type = %T, want *speechmatics.SpeechmaticsTTS", provider)
+	}
+	if got, want := provider.Label(), "speechmatics.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 24000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference configured sample rate %d", got, want)
+	}
+	if got, want := tts.Provider(provider), "Speechmatics"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
+	}
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if !strings.HasPrefix(gotURL, "https://tts.example.com/generate/theo?") {
+		t.Fatalf("request URL = %q, want configured generate endpoint", gotURL)
+	}
+	if !strings.Contains(gotURL, "output_format=pcm_24000") {
+		t.Fatalf("request URL = %q, want output_format=pcm_24000", gotURL)
+	}
+	if got, want := gotHeaders.Get("Authorization"), "Bearer test-speechmatics-key"; got != want {
+		t.Fatalf("Authorization = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["text"], "hello"; got != want {
+		t.Fatalf("payload text = %q, want %q", got, want)
+	}
+}
+
+func TestSpitchTTSFallbackPassesReferenceOptions(t *testing.T) {
+	sampleRate := 24000
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("audio")),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		SpitchAPIKey:      "test-spitch-key",
+		TTSBaseURL:        "https://spitch.example/",
+		TTSVoice:          "amina",
+		TTSLanguage:       "fr",
+		TTSResponseFormat: "wav",
+		TTSSampleRate:     &sampleRate,
+	}, providerSpitch)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*spitch.SpitchTTS); !ok {
+		t.Fatalf("provider type = %T, want *spitch.SpitchTTS", provider)
+	}
+	if got, want := provider.Label(), "spitch.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 24000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "unknown"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "Spitch"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
+	}
+	stream, err := provider.Synthesize(context.Background(), "bonjour")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://spitch.example/tts/v1/synthesize"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("Authorization"), "Bearer test-spitch-key"; got != want {
+		t.Fatalf("Authorization = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["text"], "bonjour"; got != want {
+		t.Fatalf("payload text = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["voice"], "amina"; got != want {
+		t.Fatalf("payload voice = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["language"], "fr"; got != want {
+		t.Fatalf("payload language = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["format"], "wav"; got != want {
+		t.Fatalf("payload format = %#v, want %#v", got, want)
+	}
+}
+
+func TestXaiTTSFallbackPassesReferenceOptions(t *testing.T) {
+	type wsRecord struct {
+		voice         string
+		language      string
+		codec         string
+		sampleRate    string
+		authorization string
+		messages      []map[string]any
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		record := wsRecord{
+			voice:         r.URL.Query().Get("voice"),
+			language:      r.URL.Query().Get("language"),
+			codec:         r.URL.Query().Get("codec"),
+			sampleRate:    r.URL.Query().Get("sample_rate"),
+			authorization: r.Header.Get("Authorization"),
+		}
+		for i := 0; i < 2; i++ {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				t.Errorf("read xai tts message: %v", err)
+				return
+			}
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Errorf("decode xai tts message: %v", err)
+				return
+			}
+			record.messages = append(record.messages, message)
+		}
+		records <- record
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		XAIAPIKey:       "test-xai-key",
+		TTSWebsocketURL: endpoint,
+		TTSVoice:        "eve",
+		TTSLanguage:     "ja",
+	}, providerXAI)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*xai.XaiTTS); !ok {
+		t.Fatalf("provider type = %T, want *xai.XaiTTS", provider)
+	}
+	if got, want := provider.Label(), "xai.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 24000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "unknown"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "xAI"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference streaming without aligned transcript", caps)
+	}
+	stream, err := provider.Synthesize(context.Background(), "hello xai")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.voice, "eve"; got != want {
+			t.Fatalf("query voice = %q, want %q", got, want)
+		}
+		if got, want := record.language, "ja"; got != want {
+			t.Fatalf("query language = %q, want %q", got, want)
+		}
+		if got, want := record.codec, "pcm"; got != want {
+			t.Fatalf("query codec = %q, want %q", got, want)
+		}
+		if got, want := record.sampleRate, "24000"; got != want {
+			t.Fatalf("query sample_rate = %q, want %q", got, want)
+		}
+		if got, want := record.authorization, "Bearer test-xai-key"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		if len(record.messages) != 2 {
+			t.Fatalf("messages = %#v, want text.delta and text.done", record.messages)
+		}
+		if got, want := record.messages[0]["type"], "text.delta"; got != want {
+			t.Fatalf("first message type = %#v, want %#v", got, want)
+		}
+		if got, want := record.messages[0]["delta"], "hello xai"; got != want {
+			t.Fatalf("first message delta = %#v, want %#v", got, want)
+		}
+		if got, want := record.messages[1]["type"], "text.done"; got != want {
+			t.Fatalf("second message type = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for xai websocket request")
+	}
+}
+
+func TestFishAudioTTSFallbackPassesReferenceOptions(t *testing.T) {
+	sampleRate := 48000
+	chunkLength := 250
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			return nil, err
+		}
+		if err := msgpack.Unmarshal(body, &gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("audio")),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		FishAudioAPIKey:   "test-fish-key",
+		TTSBaseURL:        "https://fish.example/",
+		TTSModel:          "s1",
+		TTSVoice:          "voice-2",
+		TTSResponseFormat: "opus",
+		TTSSampleRate:     &sampleRate,
+		TTSLatencyMode:    "low",
+		TTSChunkLength:    &chunkLength,
+	}, providerFishAudio)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*fishaudio.FishAudioTTS); !ok {
+		t.Fatalf("provider type = %T, want *fishaudio.FishAudioTTS", provider)
+	}
+	if got, want := provider.Label(), "fishaudio.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 48000; got != want {
+		t.Fatalf("SampleRate() = %d, want configured reference sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "s1"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "FishAudio"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference streaming without aligned transcript", caps)
+	}
+	stream, err := provider.Synthesize(context.Background(), "hello fish")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://fish.example/v1/tts"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("Authorization"), "Bearer test-fish-key"; got != want {
+		t.Fatalf("Authorization = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("Content-Type"), "application/msgpack"; got != want {
+		t.Fatalf("Content-Type = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("model"), "s1"; got != want {
+		t.Fatalf("model header = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["text"], "hello fish"; got != want {
+		t.Fatalf("payload text = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["reference_id"], "voice-2"; got != want {
+		t.Fatalf("payload reference_id = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["format"], "opus"; got != want {
+		t.Fatalf("payload format = %#v, want %#v", got, want)
+	}
+	if got, want := fmt.Sprint(gotPayload["sample_rate"]), "48000"; got != want {
+		t.Fatalf("payload sample_rate = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["latency"], "low"; got != want {
+		t.Fatalf("payload latency = %#v, want %#v", got, want)
+	}
+	if got, want := fmt.Sprint(gotPayload["chunk_length"]), "250"; got != want {
+		t.Fatalf("payload chunk_length = %#v, want %#v", got, want)
+	}
+}
+
+func TestAsyncAITTSFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("ASYNCAI_API_KEY", "test-asyncai-key")
+	sampleRate := 24000
+	initPayloads := make(chan map[string]any, 1)
+	requests := make(chan *http.Request, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests <- r.Clone(r.Context())
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read asyncai init payload: %v", err)
+			return
+		}
+		var init map[string]any
+		if err := json.Unmarshal(payload, &init); err != nil {
+			t.Errorf("decode asyncai init payload: %v", err)
+			return
+		}
+		initPayloads <- init
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		TTSBaseURL:    server.URL,
+		TTSModel:      "async_custom",
+		TTSVoice:      "voice-2",
+		TTSLanguage:   "hi",
+		TTSEncoding:   "pcm_mulaw",
+		TTSSampleRate: &sampleRate,
+	}, providerAsyncAI)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*asyncai.AsyncAITTS); !ok {
+		t.Fatalf("provider type = %T, want *asyncai.AsyncAITTS", provider)
+	}
+	if got, want := provider.Label(), "asyncai.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 24000; got != want {
+		t.Fatalf("SampleRate() = %d, want configured reference sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "async_custom"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "AsyncAI"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference streaming without aligned transcript", caps)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case req := <-requests:
+		if got, want := req.URL.Path, "/text_to_speech/websocket/ws"; got != want {
+			t.Fatalf("websocket path = %q, want %q", got, want)
+		}
+		if got, want := req.URL.Query().Get("api_key"), "test-asyncai-key"; got != want {
+			t.Fatalf("api_key query = %q, want %q", got, want)
+		}
+		if got, want := req.URL.Query().Get("version"), "v1"; got != want {
+			t.Fatalf("version query = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for AsyncAI websocket request")
+	}
+
+	select {
+	case init := <-initPayloads:
+		if got, want := init["model_id"], "async_custom"; got != want {
+			t.Fatalf("model_id = %#v, want %#v", got, want)
+		}
+		if got, want := init["language"], "hi"; got != want {
+			t.Fatalf("language = %#v, want %#v", got, want)
+		}
+		voice, _ := init["voice"].(map[string]any)
+		if got, want := voice["mode"], "id"; got != want {
+			t.Fatalf("voice.mode = %#v, want %#v in %#v", got, want, init)
+		}
+		if got, want := voice["id"], "voice-2"; got != want {
+			t.Fatalf("voice.id = %#v, want %#v in %#v", got, want, init)
+		}
+		output, _ := init["output_format"].(map[string]any)
+		if got, want := output["container"], "raw"; got != want {
+			t.Fatalf("output_format.container = %#v, want %#v in %#v", got, want, init)
+		}
+		if got, want := output["encoding"], "pcm_mulaw"; got != want {
+			t.Fatalf("output_format.encoding = %#v, want %#v in %#v", got, want, init)
+		}
+		if got, want := output["sample_rate"], float64(24000); got != want {
+			t.Fatalf("output_format.sample_rate = %#v, want %#v in %#v", got, want, init)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for AsyncAI init payload")
+	}
+}
+
+func TestCambaiTTSFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("CAMB_API_KEY", "test-cambai-key")
+	enhanceNamedEntities := true
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("audio")),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		TTSBaseURL:              "https://cambai.example/apis/",
+		TTSVoice:                "42",
+		TTSLanguage:             "fr-fr",
+		TTSModel:                "mars-pro",
+		TTSEncoding:             "wav",
+		TTSInstructions:         "warm and concise",
+		TTSEnhanceNamedEntities: &enhanceNamedEntities,
+	}, providerCambai)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*cambai.CambaiTTS); !ok {
+		t.Fatalf("provider type = %T, want *cambai.CambaiTTS", provider)
+	}
+	if got, want := provider.Label(), "cambai.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 48000; got != want {
+		t.Fatalf("SampleRate() = %d, want mars-pro reference sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "mars-pro"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "Camb.ai"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
+	}
+	stream, err := provider.Synthesize(context.Background(), "bonjour")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://cambai.example/apis/tts-stream"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("x-api-key"), "test-cambai-key"; got != want {
+		t.Fatalf("x-api-key = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["text"], "bonjour"; got != want {
+		t.Fatalf("payload text = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["voice_id"], float64(42); got != want {
+		t.Fatalf("payload voice_id = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["language"], "fr-fr"; got != want {
+		t.Fatalf("payload language = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["speech_model"], "mars-pro"; got != want {
+		t.Fatalf("payload speech_model = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["user_instructions"], "warm and concise"; got != want {
+		t.Fatalf("payload user_instructions = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["enhance_named_entities_pronunciation"], true; got != want {
+		t.Fatalf("payload enhance_named_entities_pronunciation = %#v, want %#v", got, want)
+	}
+	outputConfig, _ := gotPayload["output_configuration"].(map[string]any)
+	if got, want := outputConfig["format"], "wav"; got != want {
+		t.Fatalf("payload output_configuration.format = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+}
+
+func TestGnaniTTSFallbackPassesReferenceOptions(t *testing.T) {
+	sampleRate := 22050
+	numChannels := 2
+	sampleWidth := 3
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("audio")),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		GnaniAPIKey:         "test-gnani-key",
+		TTSBaseURL:          "https://gnani.example/",
+		TTSVoice:            "Simran",
+		TTSModel:            "vachana-custom",
+		TTSSampleRate:       &sampleRate,
+		TTSEncoding:         "oggopus",
+		TTSResponseFormat:   "ogg",
+		TTSNumberOfChannels: &numChannels,
+		TTSSampleWidth:      &sampleWidth,
+		TTSLanguage:         "kn",
+	}, providerGnani)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*gnani.TTS); !ok {
+		t.Fatalf("provider type = %T, want *gnani.TTS", provider)
+	}
+	if got, want := provider.Label(), "gnani.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 22050; got != want {
+		t.Fatalf("SampleRate() = %d, want configured reference sample rate %d", got, want)
+	}
+	if got, want := provider.NumChannels(), 2; got != want {
+		t.Fatalf("NumChannels() = %d, want configured channels %d", got, want)
+	}
+	if got, want := tts.Model(provider), "vachana-custom"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "Gnani"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference streaming without aligned transcript", caps)
+	}
+	stream, err := provider.Synthesize(context.Background(), "namaste")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://gnani.example/api/v1/tts/inference"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("X-API-Key-ID"), "test-gnani-key"; got != want {
+		t.Fatalf("X-API-Key-ID = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["text"], "namaste"; got != want {
+		t.Fatalf("payload text = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["voice"], "Simran"; got != want {
+		t.Fatalf("payload voice = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["model"], "vachana-custom"; got != want {
+		t.Fatalf("payload model = %#v, want %#v", got, want)
+	}
+	audioConfig, _ := gotPayload["audio_config"].(map[string]any)
+	if got, want := audioConfig["sample_rate"], float64(22050); got != want {
+		t.Fatalf("audio_config.sample_rate = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+	if got, want := audioConfig["encoding"], "oggopus"; got != want {
+		t.Fatalf("audio_config.encoding = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+	if got, want := audioConfig["container"], "ogg"; got != want {
+		t.Fatalf("audio_config.container = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+	if got, want := audioConfig["num_channels"], float64(2); got != want {
+		t.Fatalf("audio_config.num_channels = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+	if got, want := audioConfig["sample_width"], float64(3); got != want {
+		t.Fatalf("audio_config.sample_width = %#v, want %#v in %#v", got, want, gotPayload)
 	}
 }
 
