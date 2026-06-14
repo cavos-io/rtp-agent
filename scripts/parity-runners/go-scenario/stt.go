@@ -1072,6 +1072,9 @@ type fakeScenarioVAD struct {
 	flushCh    chan struct{}
 	endCount   *atomic.Int32
 	endCh      chan struct{}
+	createCh   chan struct{}
+	closeCount *atomic.Int32
+	closeCh    chan struct{}
 }
 
 func (fakeScenarioVAD) Label() string                       { return "scenario.VAD" }
@@ -1083,6 +1086,12 @@ func (fakeScenarioVAD) OnMetricsCollected(lkvad.VADMetricsHandler) func() {
 }
 func (v fakeScenarioVAD) Stream(context.Context) (lkvad.VADStream, error) {
 	events := append([]*lkvad.VADEvent(nil), v.events...)
+	if v.createCh != nil {
+		select {
+		case v.createCh <- struct{}{}:
+		default:
+		}
+	}
 	return &fakeScenarioVADStream{
 		events:     events,
 		done:       make(chan struct{}),
@@ -1090,6 +1099,8 @@ func (v fakeScenarioVAD) Stream(context.Context) (lkvad.VADStream, error) {
 		flushCh:    v.flushCh,
 		endCount:   v.endCount,
 		endCh:      v.endCh,
+		closeCount: v.closeCount,
+		closeCh:    v.closeCh,
 	}, nil
 }
 
@@ -1100,6 +1111,8 @@ type fakeScenarioVADStream struct {
 	flushCh    chan struct{}
 	endCount   *atomic.Int32
 	endCh      chan struct{}
+	closeCount *atomic.Int32
+	closeCh    chan struct{}
 }
 
 func (fakeScenarioVADStream) PushFrame(*audiomodel.AudioFrame) error { return nil }
@@ -1128,6 +1141,15 @@ func (s *fakeScenarioVADStream) EndInput() error {
 	return nil
 }
 func (s *fakeScenarioVADStream) Close() error {
+	if s.closeCount != nil {
+		s.closeCount.Add(1)
+	}
+	if s.closeCh != nil {
+		select {
+		case s.closeCh <- struct{}{}:
+		default:
+		}
+	}
 	select {
 	case <-s.done:
 	default:
@@ -1469,6 +1491,44 @@ func runSTTStreamAdapter(input json.RawMessage) (any, error) {
 					"push_after_error":  pushAfterErr,
 					"flush_after_error": flushAfterErr,
 					"second_end_error":  secondEndErr,
+				},
+			},
+		}, nil
+	case "close_closes_vad":
+		createCh := make(chan struct{}, 1)
+		closeCount := &atomic.Int32{}
+		closeCh := make(chan struct{}, 1)
+		adapter := lkstt.NewStreamAdapter(fakeScenarioSTT{
+			label:        "wrapped",
+			capabilities: lkstt.STTCapabilities{OfflineRecognize: true},
+		}, fakeScenarioVAD{createCh: createCh, closeCount: closeCount, closeCh: closeCh})
+		stream, err := adapter.Stream(context.Background(), "en")
+		if err != nil {
+			return nil, err
+		}
+		created := false
+		select {
+		case <-createCh:
+			created = true
+		case <-time.After(200 * time.Millisecond):
+		}
+		if err := stream.Close(); err != nil {
+			return nil, err
+		}
+		closed := false
+		select {
+		case <-closeCh:
+			closed = true
+		case <-time.After(200 * time.Millisecond):
+		}
+		return map[string]any{
+			"contract": "stt-stream-adapter-close-closes-vad",
+			"events": []map[string]any{
+				{
+					"name":               "close_closes_vad",
+					"vad_stream_created": created,
+					"vad_closed":         closed,
+					"close_calls":        closeCount.Load(),
 				},
 			},
 		}, nil

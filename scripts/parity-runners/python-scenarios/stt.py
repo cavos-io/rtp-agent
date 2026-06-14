@@ -1140,6 +1140,7 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
         def __init__(self, events: list[Any]) -> None:
             self._events = list(events)
             self.closed = False
+            self.close_calls = 0
             self.flush_calls = 0
             self.end_input_calls = 0
 
@@ -1154,6 +1155,7 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
 
         async def aclose(self) -> None:
             self.closed = True
+            self.close_calls += 1
 
         def __aiter__(self) -> Any:
             return self
@@ -1579,6 +1581,31 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
             "events": [
                 {
                     "name": "end_input_lifecycle",
+                    **result,
+                }
+            ],
+        }
+    if action == "close_closes_vad":
+        install_stream_adapter_runtime_shims()
+        vad = FakeVAD()
+        adapter = stream_adapter_module.StreamAdapter(stt=FakeSTT("wrapped"), vad=vad)
+
+        async def run_close() -> dict[str, Any]:
+            stream = adapter.stream(language="en")
+            await wait_for(lambda: vad.last_stream is not None)
+            await stream.aclose()
+            return {
+                "vad_stream_created": vad.last_stream is not None,
+                "vad_closed": bool(vad.last_stream and vad.last_stream.closed),
+                "close_calls": vad.last_stream.close_calls if vad.last_stream else 0,
+            }
+
+        result = asyncio.run(run_close())
+        return {
+            "contract": "stt-stream-adapter-close-closes-vad",
+            "events": [
+                {
+                    "name": "close_closes_vad",
                     **result,
                 }
             ],
