@@ -47,6 +47,9 @@ case "${FAKE_AGORA_WORKER_MODE:-worker-error}" in
     echo '{"msg":"agora transport connected","channel":"support","reason":0}'
     sleep 2
     ;;
+  connected-exit)
+    echo '{"msg":"agora transport connected","channel":"support","reason":0}'
+    ;;
   connected-then-worker-error)
     echo '{"msg":"agora transport connected","channel":"support","reason":0}'
     sleep 1
@@ -90,6 +93,13 @@ if ! FAKE_AGORA_WORKER_MODE=connected run_smoke >"$WORKDIR/out-connected.txt" 2>
 fi
 
 grep -q '^Agora RTC connected$' "$WORKDIR/out-connected.txt"
+
+if FAKE_AGORA_WORKER_MODE=connected-exit run_smoke >"$WORKDIR/out-connected-exit.txt" 2>"$WORKDIR/err-connected-exit.txt"; then
+  echo "smoke script unexpectedly passed after connected log followed by early exit" >&2
+  exit 1
+fi
+
+grep -q '^Agora RTC worker exited before stable connected window:$' "$WORKDIR/err-connected-exit.txt"
 
 if FAKE_AGORA_WORKER_MODE=connected-then-worker-error run_smoke >"$WORKDIR/out-connected-then-worker-error.txt" 2>"$WORKDIR/err-connected-then-worker-error.txt"; then
   echo "smoke script unexpectedly passed after connected log followed by worker error" >&2

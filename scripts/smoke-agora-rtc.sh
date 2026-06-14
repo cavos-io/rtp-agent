@@ -115,6 +115,12 @@ if has_worker_error; then
   exit 1
 fi
 
+if has_connected_event; then
+  echo "Agora RTC worker exited before stable connected window:" >&2
+  tail -n 40 "$log_abs" >&2
+  exit 1
+fi
+
 echo "Agora RTC worker exited before connected event:" >&2
 tail -n 40 "$log_abs" >&2
 exit 1
