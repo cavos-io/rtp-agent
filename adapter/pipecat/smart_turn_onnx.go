@@ -55,6 +55,19 @@ type SmartTurnONNXOptions struct {
 	FeatureExtractor   FeatureExtractor
 }
 
+var newSmartTurnWithONNXOptions = NewSmartTurnWithONNX
+
+func NewLocalSmartTurn(opts ...SmartTurnOption) (*SmartTurn, error) {
+	modelPath, err := smartTurnCPUModelPath()
+	if err != nil {
+		return nil, err
+	}
+	return newSmartTurnWithONNXOptions(SmartTurnONNXOptions{
+		ModelPath:        modelPath,
+		FeatureExtractor: NewWhisperFeatureExtractor().Extract,
+	}, opts...)
+}
+
 func NewSmartTurnWithONNX(options SmartTurnONNXOptions, opts ...SmartTurnOption) (*SmartTurn, error) {
 	runner, err := newSmartTurnONNXRunner(options.ModelPath, options.ONNXRuntimeLibPath)
 	if err != nil {
