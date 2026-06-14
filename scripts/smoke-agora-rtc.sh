@@ -51,9 +51,13 @@ has_worker_error() {
   grep -q -e 'Worker error:' -e '"msg":"Worker error"' "$log_abs"
 }
 
+has_connected_event() {
+  grep -q '"msg":"agora transport connected"' "$log_abs"
+}
+
 deadline=$((SECONDS + timeout_seconds))
 while kill -0 "$pid" >/dev/null 2>&1; do
-  if grep -q '"msg":"agora transport connected"' "$log_abs"; then
+  if has_connected_event; then
     echo "Agora RTC connected"
     exit 0
   fi
@@ -74,6 +78,11 @@ while kill -0 "$pid" >/dev/null 2>&1; do
   fi
   sleep 1
 done
+
+if has_connected_event; then
+  echo "Agora RTC connected"
+  exit 0
+fi
 
 if has_worker_error; then
   echo "Agora RTC smoke failed with worker error:" >&2
