@@ -32,6 +32,29 @@ func TestFallbackAdapterForwardsProviderMetrics(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterCloseUnsubscribesProviderMetrics(t *testing.T) {
+	primary := &fakeFallbackLLM{label: "primary.LLM"}
+	adapter := NewFallbackAdapter([]LLM{primary})
+	metricsCh := make(chan string, 1)
+
+	unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.LLMMetrics) {
+		metricsCh <- metrics.RequestID
+	})
+	defer unsubscribe()
+
+	if err := adapter.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	primary.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "late"})
+
+	select {
+	case requestID := <-metricsCh:
+		t.Fatalf("received provider metric after Close(): %q", requestID)
+	default:
+	}
+}
+
 func TestFallbackAdapterRequiresAtLeastOneLLM(t *testing.T) {
 	defer func() {
 		r := recover()

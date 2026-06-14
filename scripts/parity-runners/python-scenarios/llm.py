@@ -178,7 +178,7 @@ def load_reference_llm_fallback():
 
         def off(self, event: str, handler: Any) -> None:
             handlers = self._handlers.get(event, [])
-            self._handlers[event] = [candidate for candidate in handlers if candidate is not handler]
+            self._handlers[event] = [candidate for candidate in handlers if candidate != handler]
 
         def emit(self, event: str, *args: Any, **kwargs: Any) -> None:
             for handler in list(self._handlers.get(event, [])):
@@ -440,6 +440,25 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
             "contract": "llm-fallback-forward-provider-metrics",
             "events": [
                 {"name": "forward_metrics", "request_ids": request_ids}
+            ],
+        }
+    if action == "close_unsubscribes_provider_metrics":
+        primary = FakeLLM("primary")
+        adapter = module.FallbackAdapter([primary])
+        request_ids: list[str] = []
+        adapter.on(
+            "metrics_collected",
+            lambda metrics: request_ids.append(metrics.request_id),
+        )
+        asyncio.run(adapter.aclose())
+        primary.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "late"})(),
+        )
+        return {
+            "contract": "llm-fallback-close-unsubscribes-provider-metrics",
+            "events": [
+                {"name": "close_unsubscribes_provider_metrics", "request_ids": request_ids}
             ],
         }
     if action == "next_provider_before_chunk":

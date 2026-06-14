@@ -1607,6 +1607,7 @@ type FallbackAdapter struct {
 	mu                   sync.Mutex
 	available            []bool
 	recovering           []bool
+	metricsUnsubscribes  []func()
 	availabilityChanged  chan FallbackAvailabilityChangedEvent
 	availabilityHandlers []fallbackAvailabilityHandlerSubscription
 	nextAvailabilityID   uint64
@@ -1705,7 +1706,7 @@ func NewFallbackAdapterWithOptions(llms []LLM, options FallbackAdapterOptions) *
 	}
 	for _, provider := range llms {
 		if collector, ok := provider.(metricsCollectorLLM); ok {
-			collector.OnMetricsCollected(adapter.EmitMetricsCollected)
+			adapter.metricsUnsubscribes = append(adapter.metricsUnsubscribes, collector.OnMetricsCollected(adapter.EmitMetricsCollected))
 		}
 	}
 	return adapter
@@ -1750,6 +1751,18 @@ func (f *FallbackAdapter) Provider() string {
 
 func (f *FallbackAdapter) Prewarm() {
 	Prewarm(f.llms[0])
+}
+
+func (f *FallbackAdapter) Close() error {
+	f.mu.Lock()
+	unsubscribes := append([]func(){}, f.metricsUnsubscribes...)
+	f.metricsUnsubscribes = nil
+	f.mu.Unlock()
+
+	for _, unsubscribe := range unsubscribes {
+		unsubscribe()
+	}
+	return nil
 }
 
 func (f *FallbackAdapter) OnMetricsCollected(handler LLMMetricsHandler) func() {
