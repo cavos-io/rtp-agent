@@ -417,8 +417,9 @@ func smallestAISpeechData(defaultLanguage, detectedLanguage, transcript string, 
 		language = defaultLanguage
 	}
 	data := stt.SpeechData{
-		Language: language,
-		Text:     transcript,
+		Language:   language,
+		Text:       transcript,
+		Confidence: stt.DefaultTranscriptConfidence(transcript),
 	}
 	if len(words) == 0 {
 		return data

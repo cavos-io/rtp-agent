@@ -380,7 +380,7 @@ func processFireworksStreamEvent(state *fireworksStreamState, event fireworksStr
 	events = append(events, &stt.SpeechEvent{
 		Type: eventType,
 		Alternatives: []stt.SpeechData{
-			{Language: state.language, Text: fullTranscript},
+			{Language: state.language, Text: fullTranscript, Confidence: stt.DefaultTranscriptConfidence(fullTranscript)},
 		},
 	})
 	if eventType == stt.SpeechEventFinalTranscript {

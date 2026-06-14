@@ -73,6 +73,20 @@ func TestRoomIOAudioTrackPublicationOptionsPreserveConfiguredName(t *testing.T) 
 	}
 }
 
+func TestRoomIOAudioOutputCodecUsesStandardOpusChannels(t *testing.T) {
+	codec := roomIOAudioOutputCodec()
+
+	if codec.MimeType != webrtc.MimeTypeOpus {
+		t.Fatalf("MimeType = %q, want %q", codec.MimeType, webrtc.MimeTypeOpus)
+	}
+	if codec.ClockRate != roomIOOpusClockRate {
+		t.Fatalf("ClockRate = %d, want %d", codec.ClockRate, roomIOOpusClockRate)
+	}
+	if codec.Channels != 2 {
+		t.Fatalf("Channels = %d, want 2 for standard Opus SDP negotiation", codec.Channels)
+	}
+}
+
 func TestNewRoomIOUsesReferencePreConnectAudioTimeout(t *testing.T) {
 	rio := NewRoomIO(lksdk.NewRoom(nil), &agent.AgentSession{}, RoomOptions{})
 

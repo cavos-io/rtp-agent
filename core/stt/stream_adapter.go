@@ -349,6 +349,7 @@ func (w *streamAdapterWrapper) EndInput() error {
 	w.inputEnded = true
 	w.mu.Unlock()
 
+	w.inputCh <- streamAdapterInput{flush: true}
 	w.inputCh <- streamAdapterInput{end: true}
 	return nil
 }

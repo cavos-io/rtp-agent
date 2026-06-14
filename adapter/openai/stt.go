@@ -519,9 +519,10 @@ func openAISpeechEvent(resp openai.AudioResponse) *stt.SpeechEvent {
 		Type: stt.SpeechEventFinalTranscript,
 		Alternatives: []stt.SpeechData{
 			{
-				Text:     resp.Text,
-				Language: resp.Language,
-				Words:    openAITimedStrings(resp.Words),
+				Text:       resp.Text,
+				Language:   resp.Language,
+				Confidence: stt.DefaultTranscriptConfidence(resp.Text),
+				Words:      openAITimedStrings(resp.Words),
 			},
 		},
 	}
@@ -739,8 +740,9 @@ func openAIRealtimeSTTEventsFromMessage(payload []byte, state *openAIRealtimeSTT
 			Type:      stt.SpeechEventInterimTranscript,
 			RequestID: state.currentItemID,
 			Alternatives: []stt.SpeechData{{
-				Text:     state.currentText,
-				Language: state.language,
+				Text:       state.currentText,
+				Language:   state.language,
+				Confidence: stt.DefaultTranscriptConfidence(state.currentText),
 			}},
 		}}, nil
 	case "conversation.item.input_audio_transcription.completed":
@@ -753,8 +755,9 @@ func openAIRealtimeSTTEventsFromMessage(payload []byte, state *openAIRealtimeSTT
 				Type:      stt.SpeechEventFinalTranscript,
 				RequestID: itemID,
 				Alternatives: []stt.SpeechData{{
-					Text:     transcript,
-					Language: state.language,
+					Text:       transcript,
+					Language:   state.language,
+					Confidence: stt.DefaultTranscriptConfidence(transcript),
 				}},
 			})
 		}

@@ -120,7 +120,7 @@ func (s *FalSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 	return &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,
 		Alternatives: []stt.SpeechData{
-			{Text: result.Text},
+			{Text: result.Text, Confidence: stt.DefaultTranscriptConfidence(result.Text)},
 		},
 	}, nil
 }

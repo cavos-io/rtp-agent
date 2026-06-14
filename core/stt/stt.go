@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -35,6 +36,13 @@ type SpeechData struct {
 	TargetLanguages  []string       `json:"target_languages"`
 	TargetTexts      []string       `json:"target_texts"`
 	Metadata         map[string]any `json:"metadata"`
+}
+
+func DefaultTranscriptConfidence(text string) float64 {
+	if strings.TrimSpace(text) == "" {
+		return 0
+	}
+	return 1
 }
 
 func (d *SpeechData) UnmarshalJSON(data []byte) error {

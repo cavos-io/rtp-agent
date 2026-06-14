@@ -372,6 +372,7 @@ func simplismartSTTSpeechEvent(defaultLanguage string, resp simplismartSTTRespon
 		Language: language,
 		Text:     strings.Join(resp.Transcription, ""),
 	}
+	data.Confidence = stt.DefaultTranscriptConfidence(data.Text)
 	if len(resp.Timestamps) > 0 {
 		data.StartTime = resp.Timestamps[0][0]
 		data.EndTime = resp.Timestamps[len(resp.Timestamps)-1][1]

@@ -82,7 +82,7 @@ func (s *SpitchSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	return &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,
 		Alternatives: []stt.SpeechData{
-			{Text: result.Text},
+			{Text: result.Text, Confidence: stt.DefaultTranscriptConfidence(result.Text)},
 		},
 	}, nil
 }

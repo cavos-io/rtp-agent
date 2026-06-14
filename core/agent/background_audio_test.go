@@ -9,11 +9,26 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/pion/webrtc/v4"
 )
 
 func TestBackgroundFrameGainNoopReturnsNil(t *testing.T) {
 	if gain := backgroundFrameGain(10, 4, nil, 0, 0, 48000, 1.0); gain != nil {
 		t.Fatalf("backgroundFrameGain() = %#v, want nil for no-op", gain)
+	}
+}
+
+func TestBackgroundAudioOutputCodecUsesStandardOpusChannels(t *testing.T) {
+	codec := backgroundAudioOutputCodec()
+
+	if codec.MimeType != webrtc.MimeTypeOpus {
+		t.Fatalf("MimeType = %q, want %q", codec.MimeType, webrtc.MimeTypeOpus)
+	}
+	if codec.ClockRate != 48000 {
+		t.Fatalf("ClockRate = %d, want 48000", codec.ClockRate)
+	}
+	if codec.Channels != 2 {
+		t.Fatalf("Channels = %d, want 2 for standard Opus SDP negotiation", codec.Channels)
 	}
 }
 

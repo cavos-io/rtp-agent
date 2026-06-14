@@ -31,6 +31,14 @@ const (
 	HoldMusic       BuiltinAudioClip = "hold_music.ogg"
 )
 
+func backgroundAudioOutputCodec() webrtc.RTPCodecCapability {
+	return webrtc.RTPCodecCapability{
+		MimeType:  webrtc.MimeTypeOpus,
+		ClockRate: 48000,
+		Channels:  2,
+	}
+}
+
 func (b BuiltinAudioClip) Path() string {
 	cwd, _ := os.Getwd()
 	return filepath.Join(cwd, "resources", "audio", string(b))
@@ -389,11 +397,7 @@ func (p *BackgroundAudioPlayer) Start(room *lksdk.Room, agentSession *AgentSessi
 	p.mixerTaskCtx = ctx
 	p.mixerTaskCancel = cancel
 
-	track, err := lksdk.NewLocalSampleTrack(webrtc.RTPCodecCapability{
-		MimeType:  webrtc.MimeTypeOpus,
-		ClockRate: 48000,
-		Channels:  1,
-	})
+	track, err := lksdk.NewLocalSampleTrack(backgroundAudioOutputCodec())
 	if err != nil {
 		return err
 	}

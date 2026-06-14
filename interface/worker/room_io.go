@@ -139,6 +139,14 @@ const roomIOOpusClockRate uint32 = 48000
 const roomIOOpusFrameSamples uint32 = 960
 const roomIOAudioSubscriptionTimeout = 3 * time.Second
 
+func roomIOAudioOutputCodec() webrtc.RTPCodecCapability {
+	return webrtc.RTPCodecCapability{
+		MimeType:  webrtc.MimeTypeOpus,
+		ClockRate: roomIOOpusClockRate,
+		Channels:  2,
+	}
+}
+
 type TextInputEvent struct {
 	Text                string
 	Info                lksdk.TextStreamInfo
@@ -950,11 +958,7 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 	if rio == nil || rio.Options.DisableAudioOutput {
 		return nil
 	}
-	track, err := lksdk.NewLocalSampleTrack(webrtc.RTPCodecCapability{
-		MimeType:  webrtc.MimeTypeOpus,
-		ClockRate: 48000,
-		Channels:  1, // Match encoder
-	})
+	track, err := lksdk.NewLocalSampleTrack(roomIOAudioOutputCodec())
 	if err != nil {
 		return err
 	}

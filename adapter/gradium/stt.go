@@ -331,9 +331,10 @@ func processGradiumSTTMessage(state *gradiumSTTMessageState, payload []byte, sta
 			Type: stt.SpeechEventInterimTranscript,
 			Alternatives: []stt.SpeechData{
 				{
-					Text:      text,
-					Language:  state.language,
-					StartTime: startS + startTimeOffset,
+					Text:       text,
+					Language:   state.language,
+					Confidence: stt.DefaultTranscriptConfidence(text),
+					StartTime:  startS + startTimeOffset,
 				},
 			},
 		})
@@ -391,7 +392,7 @@ func processGradiumSTTStep(state *gradiumSTTMessageState, raw map[string]any) []
 		{
 			Type: stt.SpeechEventFinalTranscript,
 			Alternatives: []stt.SpeechData{
-				{Text: text, Language: state.language},
+				{Text: text, Language: state.language, Confidence: stt.DefaultTranscriptConfidence(text)},
 			},
 		},
 		{Type: stt.SpeechEventEndOfSpeech},

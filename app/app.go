@@ -3004,6 +3004,8 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		if cfg.TTSResponseFormat != "" {
 			ttsOpts = append(ttsOpts, openai.WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormat(cfg.TTSResponseFormat)))
+		} else {
+			ttsOpts = append(ttsOpts, openai.WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm))
 		}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, openai.WithOpenAITTSBaseURL(cfg.TTSBaseURL))
@@ -3165,6 +3167,8 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		if cfg.TTSEncoding != "" {
 			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEncoding(cfg.TTSEncoding))
+		} else if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEncoding(fmt.Sprintf("pcm_%d", *cfg.TTSSampleRate)))
 		}
 		return elevenlabs.NewElevenLabsTTS(cfg.ElevenLabsAPIKey, cfg.TTSVoice, cfg.TTSModel, ttsOpts...)
 	case providerFishAudio:
@@ -3180,6 +3184,8 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		if cfg.TTSResponseFormat != "" {
 			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSOutputFormat(cfg.TTSResponseFormat))
+		} else {
+			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSOutputFormat("pcm"))
 		}
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSSampleRate(*cfg.TTSSampleRate))
@@ -3266,6 +3272,8 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		if cfg.TTSResponseFormat != "" {
 			ttsOpts = append(ttsOpts, hume.WithHumeTTSAudioFormat(cfg.TTSResponseFormat))
+		} else {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSAudioFormat("pcm"))
 		}
 		if cfg.TTSContextGenerationID != "" {
 			ttsOpts = append(ttsOpts, hume.WithHumeTTSContextGenerationID(cfg.TTSContextGenerationID))
@@ -3366,6 +3374,8 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		if cfg.TTSResponseFormat != "" {
 			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSResponseFormat(cfg.TTSResponseFormat))
+		} else {
+			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSResponseFormat("pcm"))
 		}
 		return mistralai.NewMistralAITTS(cfg.MistralAPIKey, "", ttsOpts...)
 	case providerLMNT:
@@ -3381,6 +3391,8 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		if cfg.TTSResponseFormat != "" {
 			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSFormat(cfg.TTSResponseFormat))
+		} else {
+			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSFormat("raw"))
 		}
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSSampleRate(*cfg.TTSSampleRate))
@@ -4886,6 +4898,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.TTSEncoding != "" {
 			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEncoding(cfg.TTSEncoding))
+		} else if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEncoding(fmt.Sprintf("pcm_%d", *cfg.TTSSampleRate)))
 		}
 		provider, err := elevenlabs.NewElevenLabsTTS(cfg.ElevenLabsAPIKey, cfg.TTSVoice, cfg.TTSModel, ttsOpts...)
 		if err != nil {
@@ -4974,6 +4988,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.TTSResponseFormat != "" {
 			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSOutputFormat(cfg.TTSResponseFormat))
+		} else {
+			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSOutputFormat("pcm"))
 		}
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSSampleRate(*cfg.TTSSampleRate))
@@ -5060,6 +5076,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.TTSResponseFormat != "" {
 			ttsOpts = append(ttsOpts, hume.WithHumeTTSAudioFormat(cfg.TTSResponseFormat))
+		} else {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSAudioFormat("pcm"))
 		}
 		if cfg.TTSContextGenerationID != "" {
 			ttsOpts = append(ttsOpts, hume.WithHumeTTSContextGenerationID(cfg.TTSContextGenerationID))
@@ -5169,6 +5187,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.TTSResponseFormat != "" {
 			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSResponseFormat(cfg.TTSResponseFormat))
+		} else {
+			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSResponseFormat("pcm"))
 		}
 		provider, err := mistralai.NewMistralAITTS(cfg.MistralAPIKey, "", ttsOpts...)
 		if err != nil {
@@ -5237,6 +5257,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.TTSResponseFormat != "" {
 			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSFormat(cfg.TTSResponseFormat))
+		} else {
+			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSFormat("raw"))
 		}
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSSampleRate(*cfg.TTSSampleRate))
@@ -5626,6 +5648,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.TTSResponseFormat != "" {
 			ttsOpts = append(ttsOpts, openai.WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormat(cfg.TTSResponseFormat)))
+		} else {
+			ttsOpts = append(ttsOpts, openai.WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm))
 		}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, openai.WithOpenAITTSBaseURL(cfg.TTSBaseURL))

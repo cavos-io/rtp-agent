@@ -416,7 +416,14 @@ func cartesiaLegacySpeechData(state *cartesiaSTTStreamState, data map[string]any
 	end := start + duration
 	state.lastSpeechEndTime = end
 	words := cartesiaWordsFromAny(data["words"], state.startTimeOffset)
-	return stt.SpeechData{Language: state.languageOrDefault(), Text: text, StartTime: start, EndTime: end, Words: words}
+	return stt.SpeechData{
+		Language:   state.languageOrDefault(),
+		Text:       text,
+		Confidence: stt.DefaultTranscriptConfidence(text),
+		StartTime:  start,
+		EndTime:    end,
+		Words:      words,
+	}
 }
 
 func cartesiaTranscriptEvent(eventType stt.SpeechEventType, state *cartesiaSTTStreamState, transcript string) *stt.SpeechEvent {
@@ -424,8 +431,9 @@ func cartesiaTranscriptEvent(eventType stt.SpeechEventType, state *cartesiaSTTSt
 		Type:      eventType,
 		RequestID: state.requestID,
 		Alternatives: []stt.SpeechData{{
-			Text:     transcript,
-			Language: state.languageOrDefault(),
+			Text:       transcript,
+			Language:   state.languageOrDefault(),
+			Confidence: stt.DefaultTranscriptConfidence(transcript),
 		}},
 	}
 }

@@ -211,11 +211,12 @@ func mistralAISTTSpeechEvent(defaultLanguage string, resp mistralAISTTResponse) 
 		Type: stt.SpeechEventFinalTranscript,
 		Alternatives: []stt.SpeechData{
 			{
-				Text:      resp.Text,
-				Language:  language,
-				StartTime: mistralAISTTStartTime(resp.Segments),
-				EndTime:   mistralAISTTEndTime(resp.Segments),
-				Words:     mistralAISTTTimedStrings(resp.Segments),
+				Text:       resp.Text,
+				Language:   language,
+				Confidence: stt.DefaultTranscriptConfidence(resp.Text),
+				StartTime:  mistralAISTTStartTime(resp.Segments),
+				EndTime:    mistralAISTTEndTime(resp.Segments),
+				Words:      mistralAISTTTimedStrings(resp.Segments),
 			},
 		},
 	}
