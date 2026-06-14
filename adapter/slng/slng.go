@@ -141,6 +141,12 @@ func WithSTTVADMinSilenceDurationMS(milliseconds int) STTOption {
 	}
 }
 
+func WithSTTVADSpeechPadMS(milliseconds int) STTOption {
+	return func(s *STT) {
+		s.vadSpeechPadMS = milliseconds
+	}
+}
+
 func WithSTTDiarization(enabled bool, minSpeakers, maxSpeakers int) STTOption {
 	return func(s *STT) {
 		s.enableDiarization = enabled

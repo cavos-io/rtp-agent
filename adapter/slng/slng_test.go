@@ -192,6 +192,14 @@ func TestSLNGSTTInitPayloadPreservesExplicitZeroVADSilence(t *testing.T) {
 	assertSLNGNestedField(t, payload, "config", "vad_min_silence_duration_ms", float64(0))
 }
 
+func TestSLNGSTTInitPayloadUsesVADSpeechPadOption(t *testing.T) {
+	provider := NewSTT("test-key", WithSTTVADSpeechPadMS(75))
+
+	payload := buildSTTInitPayload(provider)
+
+	assertSLNGNestedField(t, payload, "config", "vad_speech_pad_ms", float64(75))
+}
+
 func TestSLNGTTSReceivedEventParsesReferenceShapes(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString([]byte{1, 2, 3})
 	audio, done, err := ttsAudioFromMessage([]byte(`{"type":"audio_chunk","data":"`+encoded+`"}`), 24000)
