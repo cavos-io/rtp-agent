@@ -151,6 +151,37 @@ func TestFallbackAdapterCloseUnsubscribesProviderMetrics(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterMetricsUnsubscribeRemovesLocalAndProviderHandlers(t *testing.T) {
+	primary := &metadataSTT{label: "primary", capabilities: STTCapabilities{Streaming: true}}
+	adapter := NewFallbackAdapter([]STT{primary})
+	metricsCh := make(chan string, 1)
+
+	unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+		metricsCh <- metrics.RequestID
+	})
+
+	primary.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "before"})
+	select {
+	case requestID := <-metricsCh:
+		if requestID != "before" {
+			t.Fatalf("metrics RequestID before unsubscribe = %q, want before", requestID)
+		}
+	default:
+		t.Fatal("metrics handler was not called before unsubscribe")
+	}
+
+	unsubscribe()
+	unsubscribe()
+	primary.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "provider-after"})
+	adapter.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "local-after"})
+
+	select {
+	case requestID := <-metricsCh:
+		t.Fatalf("received metrics after unsubscribe: %q", requestID)
+	default:
+	}
+}
+
 func TestFallbackAdapterDoesNotForwardProviderErrors(t *testing.T) {
 	primary := &metadataSTT{label: "primary", capabilities: STTCapabilities{Streaming: true}}
 	fallback := &metadataSTT{label: "fallback", capabilities: STTCapabilities{Streaming: true}}

@@ -815,6 +815,24 @@ func runSTTFallback(input json.RawMessage) (any, error) {
 				{"name": "forward_metrics", "request_ids": requestIDs},
 			},
 		}, nil
+	case "metrics_unsubscribe":
+		primary := &fakeScenarioSTT{label: "primary", capabilities: lkstt.STTCapabilities{Streaming: true}}
+		adapter := lkstt.NewFallbackAdapter([]lkstt.STT{primary})
+		requestIDs := make([]string, 0, 1)
+		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		primary.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "before"})
+		unsubscribe()
+		unsubscribe()
+		primary.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "provider-after"})
+		adapter.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "local-after"})
+		return map[string]any{
+			"contract": "stt-fallback-metrics-unsubscribe",
+			"events": []map[string]any{
+				{"name": "metrics_unsubscribe", "request_ids": requestIDs},
+			},
+		}, nil
 	case "close_unsubscribes_provider_metrics":
 		primary := &fakeScenarioSTT{label: "primary", capabilities: lkstt.STTCapabilities{Streaming: true}}
 		adapter := lkstt.NewFallbackAdapter([]lkstt.STT{primary})

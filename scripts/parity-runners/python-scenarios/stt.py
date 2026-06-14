@@ -840,6 +840,34 @@ def stt_fallback(input_data: Any) -> dict[str, Any]:
                 {"name": "forward_metrics", "request_ids": request_ids}
             ],
         }
+    if action == "metrics_unsubscribe":
+        primary = FakeSTT("primary")
+        adapter = fallback_module.FallbackAdapter([primary])
+        request_ids: list[str] = []
+
+        def handler(metrics: Any) -> None:
+            request_ids.append(metrics.request_id)
+
+        adapter.on("metrics_collected", handler)
+        primary.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "before"})(),
+        )
+        adapter.off("metrics_collected", handler)
+        primary.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "provider-after"})(),
+        )
+        adapter.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "local-after"})(),
+        )
+        return {
+            "contract": "stt-fallback-metrics-unsubscribe",
+            "events": [
+                {"name": "metrics_unsubscribe", "request_ids": request_ids}
+            ],
+        }
     if action == "close_unsubscribes_provider_metrics":
         primary = FakeSTT("primary")
         adapter = fallback_module.FallbackAdapter([primary])
