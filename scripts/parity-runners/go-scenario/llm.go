@@ -3926,6 +3926,46 @@ func runLLMValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "realtime_error_required_fields":
+		base := map[string]any{
+			"timestamp":   1.25,
+			"label":       "openai.RealtimeModel",
+			"recoverable": false,
+		}
+		rejectedMissingFields := make([]string, 0, 3)
+		for _, fieldName := range []string{"timestamp", "label", "recoverable"} {
+			payload := make(map[string]any, len(base)-1)
+			for key, value := range base {
+				if key != fieldName {
+					payload[key] = value
+				}
+			}
+			data, err := json.Marshal(payload)
+			if err != nil {
+				return nil, err
+			}
+			var modelErr lkllm.RealtimeModelError
+			if err := json.Unmarshal(data, &modelErr); err != nil && strings.Contains(err.Error(), fieldName) {
+				rejectedMissingFields = append(rejectedMissingFields, fieldName)
+			}
+		}
+		var modelErr lkllm.RealtimeModelError
+		if err := json.Unmarshal([]byte(`{"timestamp":1.25,"label":"openai.RealtimeModel","recoverable":false}`), &modelErr); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "llm-realtime-error-required-fields",
+			"events": []map[string]any{
+				{
+					"name":                    "realtime_error_required_fields",
+					"rejected_missing_fields": rejectedMissingFields,
+					"type":                    modelErr.Type,
+					"timestamp":               float64(modelErr.Timestamp.UnixNano()) / float64(1e9),
+					"label":                   modelErr.Label,
+					"recoverable":             modelErr.Recoverable,
+				},
+			},
+		}, nil
 	case "realtime_error_message":
 		cause := errors.New("timeout")
 		messageOnly := lkllm.NewRealtimeError("generation timed out", nil)

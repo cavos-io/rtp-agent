@@ -75,6 +75,25 @@ def load_reference_llm_value_class(class_name: str):
 
 
 def load_reference_llm_realtime_class(class_name: str):
+    def Field(default=..., **kwargs: Any) -> Any:
+        if "default_factory" in kwargs:
+            return kwargs["default_factory"]()
+        return default
+
+    class BaseModel:
+        def __init__(self, **kwargs: Any) -> None:
+            annotations = getattr(self.__class__, "__annotations__", {})
+            for field in annotations:
+                if field in kwargs:
+                    value = kwargs.pop(field)
+                elif field in self.__class__.__dict__:
+                    value = self.__class__.__dict__[field]
+                else:
+                    raise ValueError(f"{field} is required")
+                setattr(self, field, value)
+            for field, value in kwargs.items():
+                setattr(self, field, value)
+
     path = repo_root() / "refs/agents/livekit-agents/livekit/agents/llm/realtime.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     class_node = next(
@@ -90,7 +109,12 @@ def load_reference_llm_realtime_class(class_name: str):
     module = ast.Module(body=[class_node], type_ignores=[])
     ast.fix_missing_locations(module)
     namespace = {
+        "Any": Any,
+        "BaseModel": BaseModel,
+        "ConfigDict": lambda **kwargs: kwargs,
         "dataclass": dataclass,
+        "Field": Field,
+        "Literal": Literal,
     }
     exec(compile(module, str(path), "exec"), namespace)
     return namespace[class_name]
@@ -2051,6 +2075,36 @@ def llm_value_objects(input_data: Any) -> dict[str, Any]:
                     "recoverable": False,
                     "timestamp_positive": True,
                     "error_message": str(err),
+                }
+            ],
+        }
+    if action == "realtime_error_required_fields":
+        realtime_error = load_reference_llm_realtime_class("RealtimeModelError")
+        base = {
+            "timestamp": 1.25,
+            "label": "openai.RealtimeModel",
+            "error": Exception("session disconnected"),
+            "recoverable": False,
+        }
+        rejected_missing_fields = []
+        for field_name in ["timestamp", "label", "recoverable"]:
+            kwargs = dict(base)
+            del kwargs[field_name]
+            try:
+                realtime_error(**kwargs)
+            except Exception:
+                rejected_missing_fields.append(field_name)
+        err = realtime_error(**base)
+        return {
+            "contract": "llm-realtime-error-required-fields",
+            "events": [
+                {
+                    "name": "realtime_error_required_fields",
+                    "rejected_missing_fields": rejected_missing_fields,
+                    "type": err.type,
+                    "timestamp": err.timestamp,
+                    "label": err.label,
+                    "recoverable": err.recoverable,
                 }
             ],
         }
