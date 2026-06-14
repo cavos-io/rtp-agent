@@ -3206,6 +3206,7 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 		{name: "nvidia", provider: "nvidia", envKey: "NVIDIA_API_KEY", envValue: "test-nvidia-key"},
 		{name: "perplexity", provider: "perplexity", envKey: "PERPLEXITY_API_KEY", envValue: "test-perplexity-key"},
 		{name: "sarvam", provider: "sarvam", envKey: "SARVAM_API_KEY", envValue: "test-sarvam-key", model: "sarvam-m"},
+		{name: "simli", provider: "simli", envKey: "SIMLI_API_KEY", envValue: "test-simli-key"},
 		{name: "telnyx", provider: "telnyx", envKey: "TELNYX_API_KEY", envValue: "test-telnyx-key"},
 	}
 
