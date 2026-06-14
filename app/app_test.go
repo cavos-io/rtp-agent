@@ -3192,6 +3192,7 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 		{name: "fireworks", provider: "fireworks", envKey: "FIREWORKS_API_KEY", envValue: "test-fireworks-key"},
 		{name: "anthropic", provider: "anthropic", envKey: "ANTHROPIC_API_KEY", envValue: "test-anthropic-key"},
 		{name: "google", provider: "google", envKey: "GOOGLE_API_KEY", envValue: "test-google-key"},
+		{name: "baseten", provider: "baseten", envKey: "BASETEN_API_KEY", envValue: "test-baseten-key"},
 		{name: "mistralai", provider: "mistralai", envKey: "MISTRAL_API_KEY", envValue: "test-mistral-key"},
 		{name: "nvidia", provider: "nvidia", envKey: "NVIDIA_API_KEY", envValue: "test-nvidia-key"},
 		{name: "perplexity", provider: "perplexity", envKey: "PERPLEXITY_API_KEY", envValue: "test-perplexity-key"},
