@@ -351,16 +351,23 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
             self,
             label: str,
             events: list[Any] | None = None,
+            streams: list[list[Any]] | None = None,
             stream_chat_ctx: Any | None = None,
         ) -> None:
             super().__init__()
             self._label = label
             self._events = events or []
+            self._streams = streams or []
             self._stream_chat_ctx = stream_chat_ctx
+            self.calls = 0
 
         def chat(self, **kwargs: Any) -> FakeStream:
+            self.calls += 1
+            events = self._events
+            if self._streams:
+                events = self._streams.pop(0)
             return FakeStream(
-                self._events,
+                events,
                 chat_ctx=self._stream_chat_ctx or kwargs["chat_ctx"],
                 tools=kwargs.get("tools") or [],
             )
@@ -531,6 +538,38 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
                         "name": "retry_after_usage_only",
                         "chunks": events,
                         "errored": errored,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "retries_same_provider":
+        primary = FakeLLM(
+            "primary",
+            streams=[
+                [RuntimeError("primary stream failed")],
+                [FakeChunk("primary recovered")],
+            ],
+        )
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter(
+            [primary, fallback],
+            max_retry_per_llm=1,
+            retry_interval=0,
+        )
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            await stream._run()
+            chunks = [chunk_kind(chunk) for chunk in stream._event_ch.items]
+            return {
+                "contract": "llm-fallback-retries-same-provider",
+                "events": [
+                    {
+                        "name": "retries_same_provider",
+                        "chunks": chunks,
+                        "primary_calls": primary.calls,
+                        "fallback_calls": fallback.calls,
                     }
                 ],
             }

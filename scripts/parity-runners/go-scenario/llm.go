@@ -558,6 +558,48 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "retries_same_provider":
+		primaryErr := errors.New("primary stream failed")
+		primary := &fakeScenarioLLM{label: "primary", streams: []lkllm.LLMStream{
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{{err: primaryErr}}},
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "primary recovered"}}},
+			}},
+		}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapterWithOptions([]lkllm.LLM{primary, fallback}, lkllm.FallbackAdapterOptions{
+			MaxRetryPerLLM: 1,
+			RetryInterval:  time.Nanosecond,
+		})
+		stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		defer stream.Close()
+		chunks := []string{}
+		for {
+			chunk, err := stream.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return nil, err
+			}
+			chunks = append(chunks, scenarioLLMChunkKind(chunk))
+		}
+		return map[string]any{
+			"contract": "llm-fallback-retries-same-provider",
+			"events": []map[string]any{
+				{
+					"name":           "retries_same_provider",
+					"chunks":         chunks,
+					"primary_calls":  primary.calls,
+					"fallback_calls": fallback.calls,
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported LLM fallback action %q", payload.Action)
 	}
@@ -4283,10 +4325,12 @@ type fakeScenarioLLM struct {
 	stream       lkllm.LLMStream
 	streams      []lkllm.LLMStream
 	err          error
+	calls        int
 	prewarmCalls int
 }
 
 func (f *fakeScenarioLLM) Chat(context.Context, *lkllm.ChatContext, ...lkllm.ChatOption) (lkllm.LLMStream, error) {
+	f.calls++
 	if f.err != nil {
 		return nil, f.err
 	}

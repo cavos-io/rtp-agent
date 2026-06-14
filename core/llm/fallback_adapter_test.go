@@ -250,7 +250,7 @@ func TestFallbackAdapterRetriesAfterUsageOnlyChunk(t *testing.T) {
 	}
 }
 
-func TestFallbackAdapterRetriesSameLLMBeforeFallback(t *testing.T) {
+func TestFallbackAdapterDoesNotRetrySameLLMBeforeFallback(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	primary := &fakeFallbackLLM{streams: []LLMStream{
 		&fakeFallbackStream{events: []fakeFallbackEvent{{err: firstErr}}},
@@ -275,14 +275,24 @@ func TestFallbackAdapterRetriesSameLLMBeforeFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next returned error: %v", err)
 	}
-	if got := chunk.Delta.Content; got != "primary recovered" {
-		t.Fatalf("chunk content = %q, want primary recovered", got)
+	if got := chunk.Delta.Content; got != "fallback" {
+		t.Fatalf("chunk content = %q, want fallback", got)
 	}
-	if primary.calls != 2 {
-		t.Fatalf("primary calls = %d, want 2", primary.calls)
+	if primary.calls != 1 {
+		t.Fatalf("primary calls = %d, want 1", primary.calls)
 	}
-	if fallback.calls != 0 {
-		t.Fatalf("fallback calls = %d, want 0", fallback.calls)
+	if fallback.calls != 1 {
+		t.Fatalf("fallback calls = %d, want 1", fallback.calls)
+	}
+	if len(primary.options) != 1 {
+		t.Fatalf("primary options = %d, want 1", len(primary.options))
+	}
+	connectOptions := primary.options[0].ConnectOptions
+	if connectOptions == nil {
+		t.Fatal("primary ConnectOptions = nil, want fallback attempt options")
+	}
+	if connectOptions.MaxRetry != 1 {
+		t.Fatalf("primary MaxRetry = %d, want provider-level retry count", connectOptions.MaxRetry)
 	}
 }
 
@@ -358,9 +368,8 @@ func TestFallbackAdapterDefaultsAttemptTimeout(t *testing.T) {
 	}
 }
 
-func TestFallbackAdapterWaitsRetryIntervalBeforeSameProviderRetry(t *testing.T) {
+func TestFallbackAdapterPassesRetryIntervalToProviderWithoutAdapterDelay(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
-	var callTimes []time.Time
 	primary := &fakeFallbackLLM{
 		streams: []LLMStream{
 			&fakeFallbackStream{events: []fakeFallbackEvent{{err: firstErr}}},
@@ -368,11 +377,11 @@ func TestFallbackAdapterWaitsRetryIntervalBeforeSameProviderRetry(t *testing.T) 
 				{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "primary recovered"}}},
 			}},
 		},
-		onChat: func(context.Context) {
-			callTimes = append(callTimes, time.Now())
-		},
 	}
-	adapter := NewFallbackAdapterWithOptions([]LLM{primary}, FallbackAdapterOptions{
+	fallback := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
+	}}}
+	adapter := NewFallbackAdapterWithOptions([]LLM{primary, fallback}, FallbackAdapterOptions{
 		MaxRetryPerLLM: 1,
 		RetryInterval:  25 * time.Millisecond,
 	})
@@ -387,31 +396,28 @@ func TestFallbackAdapterWaitsRetryIntervalBeforeSameProviderRetry(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Next returned error: %v", err)
 	}
-	if got := chunk.Delta.Content; got != "primary recovered" {
-		t.Fatalf("chunk content = %q, want primary recovered", got)
+	if got := chunk.Delta.Content; got != "fallback" {
+		t.Fatalf("chunk content = %q, want fallback", got)
 	}
-	if len(callTimes) != 2 {
-		t.Fatalf("callTimes length = %d, want 2", len(callTimes))
+	if primary.calls != 1 {
+		t.Fatalf("primary calls = %d, want 1", primary.calls)
 	}
-	if elapsed := callTimes[1].Sub(callTimes[0]); elapsed < 25*time.Millisecond {
-		t.Fatalf("retry interval = %v, want at least 25ms", elapsed)
+	if len(primary.options) != 1 {
+		t.Fatalf("primary options = %d, want 1", len(primary.options))
+	}
+	connectOptions := primary.options[0].ConnectOptions
+	if connectOptions == nil {
+		t.Fatal("provider ConnectOptions = nil, want fallback attempt options")
+	}
+	if connectOptions.RetryInterval != 25*time.Millisecond {
+		t.Fatalf("RetryInterval = %v, want fallback retry interval", connectOptions.RetryInterval)
 	}
 }
 
 func TestFallbackAdapterDefaultsRetryInterval(t *testing.T) {
-	firstErr := errors.New("primary stream failed")
-	var callTimes []time.Time
-	primary := &fakeFallbackLLM{
-		streams: []LLMStream{
-			&fakeFallbackStream{events: []fakeFallbackEvent{{err: firstErr}}},
-			&fakeFallbackStream{events: []fakeFallbackEvent{
-				{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "primary recovered"}}},
-			}},
-		},
-		onChat: func(context.Context) {
-			callTimes = append(callTimes, time.Now())
-		},
-	}
+	primary := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "ok"}}},
+	}}}
 	adapter := NewFallbackAdapterWithOptions([]LLM{primary}, FallbackAdapterOptions{
 		MaxRetryPerLLM: 1,
 	})
@@ -426,14 +432,18 @@ func TestFallbackAdapterDefaultsRetryInterval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next returned error: %v", err)
 	}
-	if got := chunk.Delta.Content; got != "primary recovered" {
-		t.Fatalf("chunk content = %q, want primary recovered", got)
+	if got := chunk.Delta.Content; got != "ok" {
+		t.Fatalf("chunk content = %q, want ok", got)
 	}
-	if len(callTimes) != 2 {
-		t.Fatalf("callTimes length = %d, want 2", len(callTimes))
+	if len(primary.options) != 1 {
+		t.Fatalf("primary options = %d, want 1", len(primary.options))
 	}
-	if elapsed := callTimes[1].Sub(callTimes[0]); elapsed < 500*time.Millisecond {
-		t.Fatalf("retry interval = %v, want at least default 500ms", elapsed)
+	connectOptions := primary.options[0].ConnectOptions
+	if connectOptions == nil {
+		t.Fatal("provider ConnectOptions = nil, want fallback attempt options")
+	}
+	if connectOptions.RetryInterval != 500*time.Millisecond {
+		t.Fatalf("RetryInterval = %v, want default 500ms", connectOptions.RetryInterval)
 	}
 }
 

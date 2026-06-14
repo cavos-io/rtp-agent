@@ -1838,7 +1838,6 @@ type fallbackLLMStream struct {
 	activeCancel context.CancelFunc
 	activeIndex  int
 	activeCtxSet bool
-	retries      map[int]int
 	outputSent   bool
 	closed       bool
 }
@@ -1929,9 +1928,6 @@ func (f *FallbackAdapter) finishRecovery(index int, available bool) {
 }
 
 func (s *fallbackLLMStream) tryStart(index int) error {
-	if s.retries == nil {
-		s.retries = make(map[int]int)
-	}
 	start := time.Now()
 	var lastErr error
 	allUnavailable := s.adapter.allUnavailable()
@@ -1956,14 +1952,8 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 			}
 			cancel()
 			lastErr = err
-			if !s.canRetryLLM(i) {
-				s.markUnavailable(i, true)
-				break
-			}
-			s.retries[i]++
-			if err := s.adapter.waitRetryInterval(s.ctx); err != nil {
-				return err
-			}
+			s.markUnavailable(i, true)
+			break
 		}
 	}
 	if lastErr != nil {
@@ -2011,16 +2001,6 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 		}
 
 		s.closeActive()
-		if s.canRetryLLM(s.activeIndex) {
-			s.retries[s.activeIndex]++
-			if retryErr := s.adapter.waitRetryInterval(s.ctx); retryErr != nil {
-				return nil, retryErr
-			}
-			if startErr := s.tryStart(s.activeIndex); startErr != nil {
-				return nil, startErr
-			}
-			continue
-		}
 		s.markUnavailable(s.activeIndex, true)
 		if s.activeIndex+1 >= len(s.adapter.llms) {
 			return nil, err
@@ -2029,16 +2009,6 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 			return nil, startErr
 		}
 	}
-}
-
-func (s *fallbackLLMStream) canRetryLLM(index int) bool {
-	if s.adapter.maxRetryPerLLM <= 0 {
-		return false
-	}
-	if s.retries == nil {
-		s.retries = make(map[int]int)
-	}
-	return s.retries[index] < s.adapter.maxRetryPerLLM
 }
 
 func isClientClosedLLMError(err error) bool {
@@ -2061,20 +2031,6 @@ func (f *FallbackAdapter) attemptContext(parent context.Context) (context.Contex
 		return context.WithCancel(parent)
 	}
 	return context.WithTimeout(parent, f.attemptTimeout)
-}
-
-func (f *FallbackAdapter) waitRetryInterval(ctx context.Context) error {
-	if f.retryInterval <= 0 {
-		return nil
-	}
-	timer := time.NewTimer(f.retryInterval)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }
 
 func (s *fallbackLLMStream) closeActive() {
