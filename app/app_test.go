@@ -5997,6 +5997,130 @@ func TestSLNGSTTFallbackPassesVADSilenceOption(t *testing.T) {
 	}
 }
 
+func TestSLNGSTTFallbackPassesVADSpeechPadOption(t *testing.T) {
+	initPayloads := make(chan map[string]any, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read init payload: %v", err)
+			return
+		}
+		var init map[string]any
+		if err := json.Unmarshal(payload, &init); err != nil {
+			t.Errorf("decode init payload: %v", err)
+			return
+		}
+		initPayloads <- init
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	speechPadMS := 75
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		SLNGAPIKey:        "test-slng-key",
+		STTBaseURL:        endpoint,
+		STTVADSpeechPadMS: &speechPadMS,
+	}, providerSLNG)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case init := <-initPayloads:
+		config, ok := init["config"].(map[string]any)
+		if !ok {
+			t.Fatalf("init.config = %#v, want object", init["config"])
+		}
+		if got, want := config["vad_speech_pad_ms"], float64(75); got != want {
+			t.Fatalf("config.vad_speech_pad_ms = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SLNG STT init payload")
+	}
+}
+
+func TestSLNGSTTFallbackPassesModelEndpoints(t *testing.T) {
+	initPayloads := make(chan map[string]any, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read init payload: %v", err)
+			return
+		}
+		var init map[string]any
+		if err := json.Unmarshal(payload, &init); err != nil {
+			t.Errorf("decode init payload: %v", err)
+			return
+		}
+		initPayloads <- init
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		SLNGAPIKey: "test-slng-key",
+		STTModelEndpoints: []string{
+			"ws://127.0.0.1:1/v1/stt/deepgram/failing",
+			"ws" + strings.TrimPrefix(server.URL, "http") + "/v1/stt/deepgram/nova:3",
+		},
+	}, providerSLNG)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case init := <-initPayloads:
+		if got, want := init["model"], "nova-3"; got != want {
+			t.Fatalf("init.model = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for fallback SLNG STT init payload")
+	}
+}
+
 func TestSLNGSTTFallbackBuffersAudioByReferenceWindow(t *testing.T) {
 	binaryLengths := make(chan int, 2)
 	upgrader := websocket.Upgrader{}
@@ -6530,12 +6654,13 @@ func TestSLNGTTSFallbackPassesModelOptions(t *testing.T) {
 	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
 	provider, err := fallbackTTSFromProvider(AppConfig{
 		TTSBaseURL: endpoint,
-		TTSModel:   "elevenlabs/eleven-flash:2.5",
+		TTSModel:   "sarvam/bulbul:v3",
 		TTSVoice:   "voice-1",
 		TTSModelOptions: map[string]any{
-			"auto_mode":             true,
-			"enable_ssml_parsing":   true,
-			"chunk_length_schedule": []int{80, 120, 180},
+			"target_language_code": "hi",
+			"pace":                 0.85,
+			"min_buffer_size":      2,
+			"auto_mode":            true,
 		},
 		SLNGAPIKey: "test-slng-key",
 	}, providerSLNG)
@@ -6551,16 +6676,27 @@ func TestSLNGTTSFallbackPassesModelOptions(t *testing.T) {
 
 	select {
 	case init := <-initPayloads:
+		if init["language"] != "hi-IN" {
+			t.Fatalf("language = %#v, want hi-IN in %#v", init["language"], init)
+		}
 		config, _ := init["config"].(map[string]any)
-		if config["auto_mode"] != true {
-			t.Fatalf("config.auto_mode = %#v, want true in %#v", config["auto_mode"], init)
+		if config["language"] != "hi-IN" {
+			t.Fatalf("config.language = %#v, want hi-IN in %#v", config["language"], init)
 		}
-		if config["enable_ssml_parsing"] != true {
-			t.Fatalf("config.enable_ssml_parsing = %#v, want true in %#v", config["enable_ssml_parsing"], init)
+		if config["speech_sample_rate"] != "24000" {
+			t.Fatalf("config.speech_sample_rate = %#v, want 24000 in %#v", config["speech_sample_rate"], init)
 		}
-		schedule, _ := config["chunk_length_schedule"].([]any)
-		if len(schedule) != 3 || schedule[0] != float64(80) || schedule[1] != float64(120) || schedule[2] != float64(180) {
-			t.Fatalf("config.chunk_length_schedule = %#v, want [80 120 180] in %#v", config["chunk_length_schedule"], init)
+		if config["pace"] != 0.85 {
+			t.Fatalf("config.pace = %#v, want 0.85 in %#v", config["pace"], init)
+		}
+		if config["min_buffer_size"] != float64(2) {
+			t.Fatalf("config.min_buffer_size = %#v, want 2 in %#v", config["min_buffer_size"], init)
+		}
+		if _, ok := config["target_language_code"]; ok {
+			t.Fatalf("config.target_language_code present in %#v", init)
+		}
+		if _, ok := config["auto_mode"]; ok {
+			t.Fatalf("config.auto_mode present in %#v", init)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for SLNG init payload")

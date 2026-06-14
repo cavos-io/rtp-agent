@@ -21,8 +21,11 @@
           pkg-config
         ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
           llvmPackages.libcxx
-          llvmPackages.libcxxabi
           libunwind
+        ] ++ pkgs.lib.optionals (pkgs.stdenv.isLinux && pkgs ? libcxxabi) [
+          libcxxabi
+        ] ++ pkgs.lib.optionals (pkgs.stdenv.isLinux && pkgs.llvmPackages ? libcxxabi) [
+          llvmPackages.libcxxabi
         ];
 
         soExt =

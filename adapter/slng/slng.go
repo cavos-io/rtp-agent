@@ -37,12 +37,14 @@ const (
 	slngAPIKeyEnv              = "SLNG_API_KEY"
 	slngNumChannels            = 1
 	slngFlushMessage           = `{"type":"flush"}`
+	slngCancelMessage          = `{"type":"cancel"}`
 )
 
 type STT struct {
 	apiKey                  string
 	model                   string
 	endpoint                string
+	modelEndpoints          []string
 	regionOverride          string
 	sampleRate              int
 	bufferSizeSeconds       float64
@@ -64,6 +66,7 @@ func WithSTTBaseURL(baseURL string) STTOption {
 	return func(s *STT) {
 		if baseURL != "" {
 			s.endpoint = defaultSTTEndpoint(strings.TrimRight(baseURL, "/"), s.model)
+			s.modelEndpoints = nil
 		}
 	}
 }
@@ -73,6 +76,7 @@ func WithSTTModel(modelName string) STTOption {
 		if modelName != "" {
 			s.model = modelName
 			s.endpoint = defaultSTTEndpoint(defaultSLNGBaseURL, modelName)
+			s.modelEndpoints = nil
 		}
 	}
 }
@@ -81,6 +85,29 @@ func WithSTTEndpoint(endpoint string) STTOption {
 	return func(s *STT) {
 		if endpoint != "" {
 			s.endpoint = endpoint
+			s.modelEndpoints = []string{endpoint}
+			if model := extractSTTModelFromEndpoint(endpoint); model != "" {
+				s.model = model
+			}
+		}
+	}
+}
+
+func WithSTTModelEndpoints(endpoints ...string) STTOption {
+	return func(s *STT) {
+		cleaned := make([]string, 0, len(endpoints))
+		for _, endpoint := range endpoints {
+			if endpoint != "" {
+				cleaned = append(cleaned, endpoint)
+			}
+		}
+		if len(cleaned) == 0 {
+			return
+		}
+		s.modelEndpoints = cleaned
+		s.endpoint = cleaned[0]
+		if model := extractSTTModelFromEndpoint(cleaned[0]); model != "" {
+			s.model = model
 		}
 	}
 }
@@ -137,9 +164,13 @@ func WithSTTVADThreshold(threshold float64) STTOption {
 
 func WithSTTVADMinSilenceDurationMS(milliseconds int) STTOption {
 	return func(s *STT) {
-		if milliseconds > 0 {
-			s.vadMinSilenceDurationMS = milliseconds
-		}
+		s.vadMinSilenceDurationMS = milliseconds
+	}
+}
+
+func WithSTTVADSpeechPadMS(milliseconds int) STTOption {
+	return func(s *STT) {
+		s.vadSpeechPadMS = milliseconds
 	}
 }
 
@@ -196,6 +227,9 @@ func (s *STT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+	if err := s.requireAPIKey(); err != nil {
+		return nil, err
+	}
 	var audio bytes.Buffer
 	for _, frame := range frames {
 		if frame != nil {
@@ -264,22 +298,75 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 }
 
 func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, s.endpoint, buildSTTWebsocketHeaders(s))
-	if err != nil {
-		return nil, fmt.Errorf("failed to dial slng stt websocket: %w", err)
-	}
-	if err := conn.WriteMessage(websocket.TextMessage, buildSTTInitPayload(s)); err != nil {
-		conn.Close()
+	if err := s.requireAPIKey(); err != nil {
 		return nil, err
 	}
-	return &sttStream{
-		conn:              conn,
-		language:          s.resolveLanguage(language),
-		partials:          s.enablePartialTranscript,
-		sampleRate:        s.sampleRate,
-		bufferSizeSeconds: s.bufferSizeSeconds,
-		encoding:          s.encoding,
-	}, nil
+	endpoints := s.sttEndpoints()
+	var lastErr error
+	for endpointIndex, endpoint := range endpoints {
+		attempt := *s
+		attempt.endpoint = endpoint
+		if model := extractSTTModelFromEndpoint(endpoint); model != "" {
+			attempt.model = model
+		}
+		conn, _, err := websocket.DefaultDialer.DialContext(ctx, endpoint, buildSTTWebsocketHeaders(&attempt))
+		if err != nil {
+			lastErr = fmt.Errorf("failed to dial slng stt websocket: %w", err)
+			continue
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, buildSTTInitPayload(&attempt)); err != nil {
+			conn.Close()
+			lastErr = err
+			continue
+		}
+		s.endpoint = endpoint
+		s.model = attempt.model
+		if len(s.modelEndpoints) > 0 && endpointIndex > 0 {
+			s.modelEndpoints = append([]string(nil), endpoints[endpointIndex:]...)
+		}
+		return &sttStream{
+			conn:              conn,
+			language:          s.resolveLanguage(language),
+			partials:          s.enablePartialTranscript,
+			sampleRate:        s.sampleRate,
+			bufferSizeSeconds: s.bufferSizeSeconds,
+			encoding:          s.encoding,
+		}, nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, errors.New("slng stt websocket endpoint is empty")
+}
+
+func (s *STT) requireAPIKey() error {
+	if s.apiKey == "" {
+		return fmt.Errorf("api key is required, or set %s environment variable", slngAPIKeyEnv)
+	}
+	return nil
+}
+
+func (s *STT) sttEndpoints() []string {
+	if len(s.modelEndpoints) > 0 {
+		return s.modelEndpoints
+	}
+	if s.endpoint == "" {
+		return nil
+	}
+	return []string{s.endpoint}
+}
+
+func extractSTTModelFromEndpoint(endpoint string) string {
+	marker := "/v1/stt/"
+	index := strings.Index(endpoint, marker)
+	if index < 0 {
+		return ""
+	}
+	model := endpoint[index+len(marker):]
+	if query := strings.IndexAny(model, "?#"); query >= 0 {
+		model = model[:query]
+	}
+	return strings.TrimRight(model, "/")
 }
 
 func (s *STT) resolveLanguage(language string) string {
@@ -359,9 +446,7 @@ func WithTTSSampleRate(sampleRate int) TTSOption {
 
 func WithTTSSpeed(speed float64) TTSOption {
 	return func(t *TTS) {
-		if speed > 0 {
-			t.speed = speed
-		}
+		t.speed = speed
 	}
 }
 
@@ -422,6 +507,9 @@ func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, e
 }
 
 func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if err := t.requireAPIKey(); err != nil {
+		return nil, err
+	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, t.endpoint, buildTTSWebsocketHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial slng tts websocket: %w", err)
@@ -431,6 +519,13 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		return nil, err
 	}
 	return &ttsStream{conn: conn, sampleRate: t.sampleRate, model: t.model}, nil
+}
+
+func (t *TTS) requireAPIKey() error {
+	if t.apiKey == "" {
+		return fmt.Errorf("api key is required, or set %s environment variable", slngAPIKeyEnv)
+	}
+	return nil
 }
 
 func defaultSTTEndpoint(baseURL, model string) string {
@@ -542,9 +637,6 @@ func buildTTSInitPayload(t *TTS) []byte {
 		"sample_rate": t.sampleRate,
 		"speed":       t.speed,
 	}
-	for key, value := range t.modelOptions {
-		config[key] = value
-	}
 	payload := map[string]any{
 		"type":     "init",
 		"model":    t.model,
@@ -641,6 +733,11 @@ func resolveDeepgramSTTModel(ref modelRef) string {
 		return "nova-2"
 	}
 	return ""
+}
+
+func isRimeArcanaModel(modelName string) bool {
+	ref, err := parseModelRef(modelName)
+	return err == nil && ref.routeProvider == "rime" && ref.routeModel == "arcana"
 }
 
 func normalizeLanguageForModel(modelName, language string, options map[string]any) string {
@@ -991,6 +1088,9 @@ func (s *ttsStream) PushText(text string) error {
 }
 
 func (s *ttsStream) Flush() error {
+	if isRimeArcanaModel(s.model) {
+		return s.conn.WriteMessage(websocket.TextMessage, []byte(slngCancelMessage))
+	}
 	return s.conn.WriteMessage(websocket.TextMessage, []byte(slngFlushMessage))
 }
 
@@ -1047,7 +1147,7 @@ func (s *ttsStream) readError(err error) error {
 	if !errors.As(err, &closeErr) {
 		return err
 	}
-	if closeErr.Code == websocket.CloseNormalClosure && s.audioFrames > 0 {
+	if closeErr.Code == websocket.CloseNormalClosure && (s.audioFrames > 0 || isRimeArcanaModel(s.model)) {
 		return io.EOF
 	}
 	return fmt.Errorf(
