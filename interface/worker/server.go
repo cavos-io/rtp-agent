@@ -1469,6 +1469,13 @@ func (s *AgentServer) validateRunPreconditions() error {
 	if s.entrypointFnc == nil {
 		return workerReferenceError(rtcSessionRequiredMessage)
 	}
+	transport := NormalizeWorkerTransport(string(s.Options.Transport))
+	if err := ValidateWorkerTransport(transport); err != nil {
+		return err
+	}
+	if transport == WorkerTransportAgora {
+		return s.Options.Agora.Validate()
+	}
 	if s.Options.WSRL == "" {
 		return fmt.Errorf("ws_url is required, or set LIVEKIT_URL environment variable")
 	}
