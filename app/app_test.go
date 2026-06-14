@@ -5113,6 +5113,130 @@ func TestSimplismartSTTFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestClovaSTTFallbackPassesReferenceOptions(t *testing.T) {
+	type restRecord struct {
+		secret      string
+		path        string
+		params      map[string]any
+		filename    string
+		contentType string
+		mediaPrefix string
+	}
+	records := make(chan restRecord, 1)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("parse clova stt multipart request: %v", err)
+			return
+		}
+		var params map[string]any
+		if err := json.Unmarshal([]byte(r.FormValue("params")), &params); err != nil {
+			t.Errorf("decode clova stt params: %v", err)
+			return
+		}
+		file, header, err := r.FormFile("media")
+		if err != nil {
+			t.Errorf("read clova stt media file: %v", err)
+			return
+		}
+		defer file.Close()
+		media, err := io.ReadAll(file)
+		if err != nil {
+			t.Errorf("read clova stt media bytes: %v", err)
+			return
+		}
+		prefix := string(media)
+		if len(prefix) > 12 {
+			prefix = prefix[:12]
+		}
+		records <- restRecord{
+			secret:      r.Header.Get("X-CLOVASPEECH-API-KEY"),
+			path:        r.URL.Path,
+			params:      params,
+			filename:    header.Filename,
+			contentType: header.Header.Get("Content-Type"),
+			mediaPrefix: prefix,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"text":"hello clova","confidence":0.92}`))
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test HTTP server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	threshold := 0.6
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		ClovaSTTSecret:    "test-clova-secret",
+		ClovaSTTInvokeURL: server.URL,
+		STTLanguage:       "en",
+		STTVADThreshold:   &threshold,
+	}, providerClova)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*clova.ClovaSTT); !ok {
+		t.Fatalf("provider type = %T, want *clova.ClovaSTT", provider)
+	}
+	if got, want := provider.Label(), "clova.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "unknown"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Clova"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || !caps.InterimResults || caps.Diarization || caps.AlignedTranscript != "" || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want offline interim without streaming/diarization", caps)
+	}
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
+	if err != nil {
+		t.Fatalf("Recognize() error = %v", err)
+	}
+	if event.Type != stt.SpeechEventInterimTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %+v, want one interim transcript", event)
+	}
+	alt := event.Alternatives[0]
+	if alt.Text != "hello clova" || alt.Language != "en-US" || alt.Confidence != 0.92 {
+		t.Fatalf("alternative = %+v, want mapped Clova transcript", alt)
+	}
+
+	select {
+	case record := <-records:
+		if got, want := record.secret, "test-clova-secret"; got != want {
+			t.Fatalf("X-CLOVASPEECH-API-KEY = %q, want %q", got, want)
+		}
+		if got, want := record.path, "/recognizer/upload"; got != want {
+			t.Fatalf("path = %q, want %q", got, want)
+		}
+		if got, want := record.params["language"], "en-US"; got != want {
+			t.Fatalf("params language = %#v, want %#v", got, want)
+		}
+		if got, want := record.params["completion"], "sync"; got != want {
+			t.Fatalf("params completion = %#v, want %#v", got, want)
+		}
+		if got, want := record.filename, "audio.wav"; got != want {
+			t.Fatalf("filename = %q, want %q", got, want)
+		}
+		if got, want := record.contentType, "audio/wav"; got != want {
+			t.Fatalf("media content type = %q, want %q", got, want)
+		}
+		if !strings.HasPrefix(record.mediaPrefix, "RIFF") || !strings.Contains(record.mediaPrefix, "WAVE") {
+			t.Fatalf("media prefix = %q, want RIFF/WAVE wav header", record.mediaPrefix)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Clova STT REST request")
+	}
+}
+
 func TestRtzrSTTFallbackPassesReferenceOptions(t *testing.T) {
 	type wsRecord struct {
 		authorization string

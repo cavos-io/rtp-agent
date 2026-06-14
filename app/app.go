@@ -2060,6 +2060,15 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTAudioChunkDurationMS(*cfg.STTAudioChunkDurationMS))
 		}
 		return cartesia.NewCartesiaSTT("", sttOpts...), nil
+	case providerClova:
+		sttOpts := []clova.ClovaSTTOption{}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, clova.WithClovaSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTVADThreshold != nil {
+			sttOpts = append(sttOpts, clova.WithClovaSTTThreshold(*cfg.STTVADThreshold))
+		}
+		return clova.NewClovaSTT(cfg.ClovaSTTSecret, cfg.ClovaSTTInvokeURL, sttOpts...), nil
 	case providerElevenLabs:
 		sttOpts := []elevenlabs.ElevenLabsSTTOption{}
 		if cfg.STTBaseURL != "" {
