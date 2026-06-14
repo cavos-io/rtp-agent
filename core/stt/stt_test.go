@@ -658,6 +658,24 @@ func TestSTTMetricsEmitterPanicDoesNotBlockOtherHandlers(t *testing.T) {
 	}
 }
 
+func TestSTTMetricsEmitterCanUnsubscribe(t *testing.T) {
+	var emitter MetricsEmitter
+	received := make(chan *telemetry.STTMetrics, 1)
+	unsubscribe := emitter.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+		received <- metrics
+	})
+	unsubscribe()
+	unsubscribe()
+
+	emitter.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "after-unsubscribe"})
+
+	select {
+	case metrics := <-received:
+		t.Fatalf("received metrics after unsubscribe: %#v", metrics)
+	default:
+	}
+}
+
 func TestSTTErrorEmitterPanicDoesNotBlockOtherHandlers(t *testing.T) {
 	var emitter ErrorEmitter
 	cause := context.Canceled
@@ -687,6 +705,24 @@ func TestSTTErrorEmitterPanicDoesNotBlockOtherHandlers(t *testing.T) {
 		}
 	default:
 		t.Fatal("second error handler was not called")
+	}
+}
+
+func TestSTTErrorEmitterCanUnsubscribe(t *testing.T) {
+	var emitter ErrorEmitter
+	received := make(chan *STTError, 1)
+	unsubscribe := emitter.OnError(func(err *STTError) {
+		received <- err
+	})
+	unsubscribe()
+	unsubscribe()
+
+	emitter.EmitError(NewSTTError("provider.STT", context.Canceled, true))
+
+	select {
+	case err := <-received:
+		t.Fatalf("received error after unsubscribe: %#v", err)
+	default:
 	}
 }
 

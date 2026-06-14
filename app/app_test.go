@@ -3187,20 +3187,43 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 		provider string
 		envKey   string
 		envValue string
+		model    string
 	}{
+		{name: "aws", provider: "aws", envKey: "AWS_REGION", envValue: "us-west-2"},
 		{name: "cerebras", provider: "cerebras", envKey: "CEREBRAS_API_KEY", envValue: "test-cerebras-key"},
 		{name: "fireworks", provider: "fireworks", envKey: "FIREWORKS_API_KEY", envValue: "test-fireworks-key"},
+		{name: "anthropic", provider: "anthropic", envKey: "ANTHROPIC_API_KEY", envValue: "test-anthropic-key"},
+		{name: "google", provider: "google", envKey: "GOOGLE_API_KEY", envValue: "test-google-key"},
+		{name: "baseten", provider: "baseten", envKey: "BASETEN_API_KEY", envValue: "test-baseten-key"},
+		{name: "fal", provider: "fal", envKey: "FAL_KEY", envValue: "test-fal-key"},
+		{name: "gradium", provider: "gradium", envKey: "GRADIUM_API_KEY", envValue: "test-gradium-key"},
+		{name: "hedra", provider: "hedra", envKey: "HEDRA_API_KEY", envValue: "test-hedra-key"},
+		{name: "hume", provider: "hume", envKey: "HUME_API_KEY", envValue: "test-hume-key"},
+		{name: "inworld", provider: "inworld", envKey: "INWORLD_API_KEY", envValue: "test-inworld-key"},
+		{name: "langchain", provider: "langchain", envKey: "LANGCHAIN_API_KEY", envValue: "test-langchain-key"},
+		{name: "lemonslice", provider: "lemonslice", envKey: "LEMONSLICE_API_KEY", envValue: "test-lemonslice-key"},
+		{name: "minimax", provider: "minimax", envKey: "MINIMAX_API_KEY", envValue: "test-minimax-key"},
 		{name: "mistralai", provider: "mistralai", envKey: "MISTRAL_API_KEY", envValue: "test-mistral-key"},
 		{name: "nvidia", provider: "nvidia", envKey: "NVIDIA_API_KEY", envValue: "test-nvidia-key"},
 		{name: "perplexity", provider: "perplexity", envKey: "PERPLEXITY_API_KEY", envValue: "test-perplexity-key"},
+		{name: "sarvam", provider: "sarvam", envKey: "SARVAM_API_KEY", envValue: "test-sarvam-key", model: "sarvam-m"},
+		{name: "simli", provider: "simli", envKey: "SIMLI_API_KEY", envValue: "test-simli-key"},
+		{name: "simplismart", provider: "simplismart", envKey: "SIMPLISMART_API_KEY", envValue: "test-simplismart-key"},
+		{name: "smallestai", provider: "smallestai", envKey: "SMALLESTAI_API_KEY", envValue: "test-smallestai-key"},
 		{name: "telnyx", provider: "telnyx", envKey: "TELNYX_API_KEY", envValue: "test-telnyx-key"},
+		{name: "trugen", provider: "trugen", envKey: "TRUGEN_API_KEY", envValue: "test-trugen-key"},
+		{name: "upliftai", provider: "upliftai", envKey: "UPLIFTAI_API_KEY", envValue: "test-upliftai-key"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
 			t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", tt.provider)
-			t.Setenv("RTP_AGENT_LLM_MODEL", "custom-fallback-model")
+			model := tt.model
+			if model == "" {
+				model = "custom-fallback-model"
+			}
+			t.Setenv("RTP_AGENT_LLM_MODEL", model)
 			t.Setenv(tt.envKey, tt.envValue)
 
 			app, err := NewApp(DefaultConfigFromEnv())
@@ -3255,6 +3278,36 @@ func TestDefaultConfigFromEnvWrapsSTTFallbackProviders(t *testing.T) {
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
 	t.Setenv("RTP_AGENT_STT_FALLBACK_PROVIDERS", "slng")
 	t.Setenv("SLNG_API_KEY", "test-slng-key")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.STT.Label(); got != "FallbackAdapter(deepgram.STT)" {
+		t.Fatalf("STT label = %q, want fallback adapter around primary deepgram STT", got)
+	}
+}
+
+func TestDefaultConfigFromEnvAcceptsLiveKitSTTFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
+	t.Setenv("RTP_AGENT_STT_FALLBACK_PROVIDERS", "livekit")
+	t.Setenv("RTP_AGENT_STT_MODEL", "deepgram/nova-3")
+	t.Setenv("LIVEKIT_INFERENCE_API_KEY", "test-livekit-key")
+	t.Setenv("LIVEKIT_INFERENCE_API_SECRET", "test-livekit-secret")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.STT.Label(); got != "FallbackAdapter(deepgram.STT)" {
+		t.Fatalf("STT label = %q, want fallback adapter around primary deepgram STT", got)
+	}
+}
+
+func TestDefaultConfigFromEnvAcceptsAWSSTTFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
+	t.Setenv("RTP_AGENT_STT_FALLBACK_PROVIDERS", "aws")
+	t.Setenv("AWS_REGION", "us-west-2")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -6231,6 +6284,23 @@ func TestDefaultConfigFromEnvWrapsTTSFallbackProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvAcceptsLiveKitTTSFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "livekit")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "cartesia/sonic-3")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("LIVEKIT_INFERENCE_API_KEY", "test-livekit-key")
+	t.Setenv("LIVEKIT_INFERENCE_API_SECRET", "test-livekit-secret")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
+		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	}
+}
+
 func TestAWSTTSFallbackPassesReferenceOptions(t *testing.T) {
 	sampleRate := 22050
 	provider, err := fallbackTTSFromProvider(AppConfig{
@@ -8638,6 +8708,7 @@ func TestDefaultConfigFromEnvSelectsCavosSpeechProviders(t *testing.T) {
 	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://steno.example/v1")
 	t.Setenv("RTP_AGENT_STT_MODEL", "small")
 	t.Setenv("RTP_AGENT_STT_LANGUAGE", "id")
+	t.Setenv("RTP_AGENT_VAD_PROVIDER", "silero")
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "cavos")
 	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://cacatua.example/v1")
 	t.Setenv("RTP_AGENT_TTS_MODEL", "supertonic-3")
@@ -8679,6 +8750,53 @@ func TestDefaultConfigFromEnvSelectsCavosSpeechProviders(t *testing.T) {
 	}
 	if got := app.Session.TTS.SampleRate(); got != 44100 {
 		t.Fatalf("TTS sample rate = %d, want 44100", got)
+	}
+}
+
+func TestDefaultConfigFromEnvAcceptsCavosSTTFallbackProvider(t *testing.T) {
+	t.Setenv("DEEPGRAM_API_KEY", "test-deepgram-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
+	t.Setenv("RTP_AGENT_STT_FALLBACK_PROVIDERS", "cavos")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://steno.example/v1")
+	t.Setenv("RTP_AGENT_STT_MODEL", "small")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "id")
+	t.Setenv("RTP_AGENT_VAD_PROVIDER", "silero")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.STT == nil {
+		t.Fatal("Session STT is nil")
+	}
+	if got := app.Session.STT.Label(); got != "FallbackAdapter(deepgram.STT)" {
+		t.Fatalf("STT label = %q, want fallback adapter around primary deepgram STT", got)
+	}
+	if app.Session.VAD == nil {
+		t.Fatal("Session VAD is nil")
+	}
+}
+
+func TestDefaultConfigFromEnvAcceptsCavosTTSFallbackProvider(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "cavos")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://cacatua.example/v1")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "supertonic-3")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "gisa_300521")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "id")
+	t.Setenv("RTP_AGENT_TTS_RESPONSE_FORMAT", "pcm")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "44100")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
+		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
 	}
 }
 

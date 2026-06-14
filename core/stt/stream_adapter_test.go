@@ -144,6 +144,37 @@ func TestStreamAdapterCloseUnsubscribesWrappedSTTMetrics(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterMetricsUnsubscribeRemovesLocalAndProviderHandlers(t *testing.T) {
+	wrapped := &fakeStreamAdapterSTT{}
+	adapter := NewStreamAdapter(wrapped, &fakeStreamAdapterVAD{})
+	metricsCh := make(chan string, 1)
+
+	unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+		metricsCh <- metrics.RequestID
+	})
+
+	wrapped.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "before"})
+	select {
+	case requestID := <-metricsCh:
+		if requestID != "before" {
+			t.Fatalf("metrics RequestID before unsubscribe = %q, want before", requestID)
+		}
+	default:
+		t.Fatal("wrapped metrics before unsubscribe were not forwarded")
+	}
+
+	unsubscribe()
+	unsubscribe()
+	wrapped.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "provider-after"})
+	adapter.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "local-after"})
+
+	select {
+	case requestID := <-metricsCh:
+		t.Fatalf("received metrics after unsubscribe: %q", requestID)
+	default:
+	}
+}
+
 func TestStreamAdapterDoesNotForwardWrappedSTTErrors(t *testing.T) {
 	wrapped := &fakeStreamAdapterSTT{}
 	adapter := NewStreamAdapter(wrapped, &fakeStreamAdapterVAD{})

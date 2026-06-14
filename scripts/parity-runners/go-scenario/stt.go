@@ -115,6 +115,24 @@ func runSTTValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "metrics_unsubscribe":
+		var emitter lkstt.MetricsEmitter
+		requestIDs := []string{}
+		unsubscribe := emitter.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		unsubscribe()
+		unsubscribe()
+		emitter.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "after-unsubscribe"})
+		return map[string]any{
+			"contract": "stt-metrics-reference-unsubscribe",
+			"events": []map[string]any{
+				{
+					"name":        "metrics_unsubscribe",
+					"request_ids": requestIDs,
+				},
+			},
+		}, nil
 	case "error_panic_isolated":
 		var emitter lkstt.ErrorEmitter
 		err := lkstt.NewSTTError("provider.STT", context.Canceled, true)
@@ -142,6 +160,24 @@ func runSTTValueObjects(input json.RawMessage) (any, error) {
 					"escaped_error":      escapedError,
 					"handler_call_count": len(receivedLabels),
 					"labels":             receivedLabels,
+				},
+			},
+		}, nil
+	case "error_unsubscribe":
+		var emitter lkstt.ErrorEmitter
+		labels := []string{}
+		unsubscribe := emitter.OnError(func(err *lkstt.STTError) {
+			labels = append(labels, err.Label)
+		})
+		unsubscribe()
+		unsubscribe()
+		emitter.EmitError(lkstt.NewSTTError("provider.STT", context.Canceled, true))
+		return map[string]any{
+			"contract": "stt-error-reference-unsubscribe",
+			"events": []map[string]any{
+				{
+					"name":   "error_unsubscribe",
+					"labels": labels,
 				},
 			},
 		}, nil
@@ -779,6 +815,24 @@ func runSTTFallback(input json.RawMessage) (any, error) {
 				{"name": "forward_metrics", "request_ids": requestIDs},
 			},
 		}, nil
+	case "metrics_unsubscribe":
+		primary := &fakeScenarioSTT{label: "primary", capabilities: lkstt.STTCapabilities{Streaming: true}}
+		adapter := lkstt.NewFallbackAdapter([]lkstt.STT{primary})
+		requestIDs := make([]string, 0, 1)
+		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		primary.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "before"})
+		unsubscribe()
+		unsubscribe()
+		primary.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "provider-after"})
+		adapter.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "local-after"})
+		return map[string]any{
+			"contract": "stt-fallback-metrics-unsubscribe",
+			"events": []map[string]any{
+				{"name": "metrics_unsubscribe", "request_ids": requestIDs},
+			},
+		}, nil
 	case "close_unsubscribes_provider_metrics":
 		primary := &fakeScenarioSTT{label: "primary", capabilities: lkstt.STTCapabilities{Streaming: true}}
 		adapter := lkstt.NewFallbackAdapter([]lkstt.STT{primary})
@@ -1130,6 +1184,24 @@ func runSTTStreamAdapter(input json.RawMessage) (any, error) {
 			"contract": "stt-stream-adapter-close-unsubscribes-provider-metrics",
 			"events": []map[string]any{
 				{"name": "close_unsubscribes_provider_metrics", "request_ids": requestIDs},
+			},
+		}, nil
+	case "metrics_unsubscribe":
+		wrapped := &fakeScenarioSTT{label: "wrapped", capabilities: lkstt.STTCapabilities{OfflineRecognize: true}}
+		adapter := lkstt.NewStreamAdapter(wrapped, nil)
+		requestIDs := make([]string, 0, 1)
+		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		wrapped.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "before"})
+		unsubscribe()
+		unsubscribe()
+		wrapped.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "provider-after"})
+		adapter.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "local-after"})
+		return map[string]any{
+			"contract": "stt-stream-adapter-metrics-unsubscribe",
+			"events": []map[string]any{
+				{"name": "metrics_unsubscribe", "request_ids": requestIDs},
 			},
 		}, nil
 	case "provider_error_not_forwarded":

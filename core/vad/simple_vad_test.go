@@ -339,6 +339,33 @@ func TestSimpleVADMetricsHandlerPanicDoesNotStopOtherHandlers(t *testing.T) {
 	}
 }
 
+func TestSimpleVADMetricsHandlerCanUnsubscribe(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{UpdateInterval: 1})
+	metricsCh := make(chan *telemetry.VADMetrics, 1)
+	unsubscribe := detector.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
+		metricsCh <- metrics
+	})
+	unsubscribe()
+	unsubscribe()
+
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+
+	select {
+	case metrics := <-metricsCh:
+		t.Fatalf("received metrics after unsubscribe: %#v", metrics)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestSimpleVADMetricsIdleTimeStartsAtStreamCreation(t *testing.T) {
 	detector := NewSimpleVADWithOptions(SimpleVADOptions{UpdateInterval: 1})
 	metricsCh := make(chan *telemetry.VADMetrics, 1)

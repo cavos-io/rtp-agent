@@ -255,6 +255,40 @@ func runVADValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "metrics_unsubscribe":
+		detector := lkvad.NewSimpleVADWithOptions(lkvad.SimpleVADOptions{UpdateInterval: 1})
+		received := make(chan struct{}, 1)
+		unsubscribe := detector.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
+			received <- struct{}{}
+		})
+		unsubscribe()
+		unsubscribe()
+		stream, err := detector.Stream(context.Background())
+		if err != nil {
+			return nil, err
+		}
+		defer stream.Close()
+		if err := stream.PushFrame(vadScenarioAudioFrame(16000, 160, 6000)); err != nil {
+			return nil, err
+		}
+		if _, err := stream.Next(); err != nil {
+			return nil, err
+		}
+		receivedCount := 0
+		select {
+		case <-received:
+			receivedCount++
+		case <-time.After(100 * time.Millisecond):
+		}
+		return map[string]any{
+			"contract": "vad-metrics-unsubscribe",
+			"events": []map[string]any{
+				{
+					"name":           "metrics_unsubscribe",
+					"received_count": receivedCount,
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported vad value-object action %q", payload.Action)
 	}

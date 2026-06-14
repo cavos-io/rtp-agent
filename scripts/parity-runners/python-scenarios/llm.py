@@ -1317,6 +1317,129 @@ def llm_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "metrics_panic_isolated":
+        module = load_reference_llm_fallback()
+
+        class MetricsLLM(module.LLM):
+            def chat(self, **kwargs: Any) -> Any:
+                raise NotImplementedError
+
+        llm = MetricsLLM()
+        received_request_ids: list[str] = []
+
+        def failing_handler(metrics: Any) -> None:
+            raise RuntimeError("metrics handler failed")
+
+        def recording_handler(metrics: Any) -> None:
+            received_request_ids.append(metrics.request_id)
+
+        llm.on("metrics_collected", failing_handler)
+        llm.on("metrics_collected", recording_handler)
+        escaped_error = False
+        metrics = type("Metrics", (), {"request_id": "req"})()
+        try:
+            llm.emit("metrics_collected", metrics)
+        except RuntimeError:
+            escaped_error = True
+        return {
+            "contract": "llm-metrics-reference-panic-isolated",
+            "events": [
+                {
+                    "name": "metrics_panic_isolated",
+                    "escaped_error": escaped_error,
+                    "handler_call_count": len(received_request_ids),
+                    "request_ids": received_request_ids,
+                }
+            ],
+        }
+    if action == "metrics_unsubscribe":
+        module = load_reference_llm_fallback()
+
+        class MetricsLLM(module.LLM):
+            def chat(self, **kwargs: Any) -> Any:
+                raise NotImplementedError
+
+        llm = MetricsLLM()
+        request_ids: list[str] = []
+
+        def handler(metrics: Any) -> None:
+            request_ids.append(metrics.request_id)
+
+        llm.on("metrics_collected", handler)
+        llm.off("metrics_collected", handler)
+        llm.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "after-unsubscribe"})(),
+        )
+        return {
+            "contract": "llm-metrics-reference-unsubscribe",
+            "events": [
+                {
+                    "name": "metrics_unsubscribe",
+                    "request_ids": request_ids,
+                }
+            ],
+        }
+    if action == "error_panic_isolated":
+        module = load_reference_llm_fallback()
+
+        class ErrorLLM(module.LLM):
+            def chat(self, **kwargs: Any) -> Any:
+                raise NotImplementedError
+
+        llm = ErrorLLM()
+        received_labels: list[str] = []
+
+        def failing_handler(error: Any) -> None:
+            raise RuntimeError("error handler failed")
+
+        def recording_handler(error: Any) -> None:
+            received_labels.append(error.label)
+
+        llm.on("error", failing_handler)
+        llm.on("error", recording_handler)
+        escaped_error = False
+        err = type("Error", (), {"label": "openai.LLM"})()
+        try:
+            llm.emit("error", err)
+        except RuntimeError:
+            escaped_error = True
+        return {
+            "contract": "llm-error-reference-panic-isolated",
+            "events": [
+                {
+                    "name": "error_panic_isolated",
+                    "escaped_error": escaped_error,
+                    "handler_call_count": len(received_labels),
+                    "labels": received_labels,
+                }
+            ],
+        }
+    if action == "error_unsubscribe":
+        module = load_reference_llm_fallback()
+
+        class ErrorLLM(module.LLM):
+            def chat(self, **kwargs: Any) -> Any:
+                raise NotImplementedError
+
+        llm = ErrorLLM()
+        labels: list[str] = []
+
+        def handler(error: Any) -> None:
+            labels.append(error.label)
+
+        llm.on("error", handler)
+        llm.off("error", handler)
+        llm.emit("error", type("Error", (), {"label": "after-unsubscribe"})())
+        return {
+            "contract": "llm-error-reference-unsubscribe",
+            "events": [
+                {
+                    "name": "error_unsubscribe",
+                    "labels": labels,
+                }
+            ],
+        }
     if action == "llm_error_payload":
         err = Exception("provider unavailable")
         return {
