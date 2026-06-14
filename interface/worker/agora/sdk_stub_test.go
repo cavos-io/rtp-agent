@@ -223,6 +223,27 @@ func TestSDKClientImplementationLeavesBeforeCheckingContext(t *testing.T) {
 	}
 }
 
+func TestSDKClientImplementationNormalizesNilContexts(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, method := range []string{"Join", "Leave", "PublishPCM"} {
+		funcIndex := strings.Index(text, "func (c *sdkChannelClient) "+method)
+		if funcIndex < 0 {
+			t.Fatalf("sdk.go missing sdkChannelClient.%s", method)
+		}
+		body := text[funcIndex:]
+		if nextFunc := strings.Index(body[len("func "):], "\nfunc "); nextFunc >= 0 {
+			body = body[:len("func ")+nextFunc]
+		}
+		if !strings.Contains(body, "ctx = normalizeContext(ctx)") {
+			t.Fatalf("sdk.go %s must normalize nil contexts before using ctx.Done", method)
+		}
+	}
+}
+
 func TestSDKClientImplementationRejectsDuplicateJoin(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {

@@ -127,6 +127,7 @@ func sdkAudioFrameToModel(frame *agoraservice.AudioFrame) *model.AudioFrame {
 }
 
 func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, handler EventHandler, audioHandler AudioHandler) error {
+	ctx = normalizeContext(ctx)
 	if err := opts.Validate(); err != nil {
 		return err
 	}
@@ -356,6 +357,7 @@ func (c *sdkChannelClient) waitConnected(ctx context.Context, connection *agoras
 }
 
 func (c *sdkChannelClient) Leave(ctx context.Context) error {
+	ctx = normalizeContext(ctx)
 	c.mu.Lock()
 	connection := c.connection
 	c.connection = nil
@@ -387,6 +389,7 @@ func (c *sdkChannelClient) Leave(ctx context.Context) error {
 }
 
 func (c *sdkChannelClient) PublishPCM(ctx context.Context, frame PCMFrame) error {
+	ctx = normalizeContext(ctx)
 	if err := frame.Validate(); err != nil {
 		return err
 	}
