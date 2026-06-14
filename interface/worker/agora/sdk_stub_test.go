@@ -185,6 +185,31 @@ func TestSDKClientImplementationHasJoinTimeout(t *testing.T) {
 	}
 }
 
+func TestSDKClientImplementationReleasesWaitConnectionOnlyWhenOwned(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	if !strings.Contains(text, "func (c *sdkChannelClient) releaseActiveConnection") {
+		t.Fatal("sdk.go missing releaseActiveConnection ownership helper")
+	}
+	waitIndex := strings.Index(text, "func (c *sdkChannelClient) waitConnected")
+	if waitIndex < 0 {
+		t.Fatal("sdk.go missing waitConnected")
+	}
+	waitBody := text[waitIndex:]
+	if nextFunc := strings.Index(waitBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		waitBody = waitBody[:len("func ")+nextFunc]
+	}
+	if strings.Contains(waitBody, "connection.Release()") {
+		t.Fatal("waitConnected must not release the SDK connection without ownership")
+	}
+	if !strings.Contains(waitBody, "c.releaseActiveConnection(connection)") {
+		t.Fatal("waitConnected must release through releaseActiveConnection")
+	}
+}
+
 func TestSDKClientImplementationReleasesServiceOnLeave(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {

@@ -98,6 +98,23 @@ func releaseSDKService() error {
 	return nil
 }
 
+func (c *sdkChannelClient) releaseActiveConnection(connection *agoraservice.RtcConnection) bool {
+	c.mu.Lock()
+	if c.connection != connection {
+		c.joining = false
+		c.mu.Unlock()
+		return false
+	}
+	c.connection = nil
+	c.joining = false
+	c.mu.Unlock()
+
+	_ = connection.Disconnect()
+	connection.Release()
+	_ = releaseSDKService()
+	return true
+}
+
 func emitSDKEvent(handler EventHandler, event Event) {
 	if handler != nil {
 		handler(event)
@@ -321,37 +338,13 @@ func (c *sdkChannelClient) waitConnected(ctx context.Context, connection *agoras
 	case <-connectedCh:
 		return nil
 	case err := <-joinErrCh:
-		_ = connection.Disconnect()
-		connection.Release()
-		c.mu.Lock()
-		if c.connection == connection {
-			c.connection = nil
-		}
-		c.joining = false
-		c.mu.Unlock()
-		_ = releaseSDKService()
+		c.releaseActiveConnection(connection)
 		return err
 	case <-timer.C:
-		_ = connection.Disconnect()
-		connection.Release()
-		c.mu.Lock()
-		if c.connection == connection {
-			c.connection = nil
-		}
-		c.joining = false
-		c.mu.Unlock()
-		_ = releaseSDKService()
+		c.releaseActiveConnection(connection)
 		return fmt.Errorf("agora SDK connect timed out after %s", sdkJoinTimeout())
 	case <-ctx.Done():
-		_ = connection.Disconnect()
-		connection.Release()
-		c.mu.Lock()
-		if c.connection == connection {
-			c.connection = nil
-		}
-		c.joining = false
-		c.mu.Unlock()
-		_ = releaseSDKService()
+		c.releaseActiveConnection(connection)
 		return ctx.Err()
 	}
 }
