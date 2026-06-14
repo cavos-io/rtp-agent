@@ -298,8 +298,18 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
             self.tool_calls: list[Any] = []
 
     class FakeChunk:
-        def __init__(self, content: str) -> None:
+        def __init__(self, content: str = "", *, usage: bool = False) -> None:
             self.delta = FakeDelta(content)
+            self.usage = usage
+
+    def chunk_kind(chunk: Any) -> str:
+        if getattr(chunk, "usage", False):
+            return "usage"
+        delta = getattr(chunk, "delta", None)
+        content = getattr(delta, "content", "")
+        if content:
+            return f"content:{content}"
+        return "empty"
 
     class FakeStream:
         def __init__(
@@ -492,6 +502,34 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
                     {
                         "name": "retry_after_chunk_enabled",
                         "chunks": chunks,
+                        "errored": errored,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "retry_after_usage_only":
+        primary = FakeLLM(
+            "primary",
+            [FakeChunk(usage=True), RuntimeError("primary stream failed")],
+        )
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter([primary, fallback])
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            errored = False
+            try:
+                await stream._run()
+            except RuntimeError:
+                errored = True
+            events = [chunk_kind(chunk) for chunk in stream._event_ch.items]
+            return {
+                "contract": "llm-fallback-retry-after-usage-only",
+                "events": [
+                    {
+                        "name": "retry_after_usage_only",
+                        "chunks": events,
                         "errored": errored,
                     }
                 ],
