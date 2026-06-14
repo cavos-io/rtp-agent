@@ -116,6 +116,18 @@ func TestNewSLNGTTSUsesEnvironmentAPIKey(t *testing.T) {
 	}
 }
 
+func TestSLNGTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("SLNG_API_KEY", "")
+	provider := NewTTS("", WithTTSEndpoint("ws://127.0.0.1:1/v1/tts/deepgram/aura:2"))
+
+	if _, err := provider.Stream(context.Background()); err == nil || !strings.Contains(err.Error(), "SLNG_API_KEY") {
+		t.Fatalf("Stream() error = %v, want SLNG_API_KEY guidance before dialing", err)
+	}
+	if _, err := provider.Synthesize(context.Background(), "hello"); err == nil || !strings.Contains(err.Error(), "SLNG_API_KEY") {
+		t.Fatalf("Synthesize() error = %v, want SLNG_API_KEY guidance before request", err)
+	}
+}
+
 func TestSLNGLocalEndpointsUsePlainWebsocket(t *testing.T) {
 	provider := NewSTT("test-key", WithSTTBaseURL("localhost:9000"))
 	if provider.endpoint != "ws://localhost:9000/v1/stt/deepgram/nova:3" {

@@ -503,6 +503,9 @@ func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, e
 }
 
 func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if err := t.requireAPIKey(); err != nil {
+		return nil, err
+	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, t.endpoint, buildTTSWebsocketHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial slng tts websocket: %w", err)
@@ -512,6 +515,13 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		return nil, err
 	}
 	return &ttsStream{conn: conn, sampleRate: t.sampleRate, model: t.model}, nil
+}
+
+func (t *TTS) requireAPIKey() error {
+	if t.apiKey == "" {
+		return fmt.Errorf("api key is required, or set %s environment variable", slngAPIKeyEnv)
+	}
+	return nil
 }
 
 func defaultSTTEndpoint(baseURL, model string) string {
