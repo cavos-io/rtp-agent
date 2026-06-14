@@ -238,29 +238,31 @@ func TestStreamAdapterMetricsUnsubscribeRemovesLocalAndProviderHandlers(t *testi
 	}
 }
 
-func TestStreamAdapterForwardsErrorEvents(t *testing.T) {
+func TestStreamAdapterDoesNotForwardProviderErrorEvents(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{}
 	adapter := NewStreamAdapter(provider)
-	errCh := make(chan TTSError, 1)
+	errCh := make(chan string, 2)
 
 	unsubscribe := adapter.OnError(func(err TTSError) {
-		errCh <- err
+		errCh <- err.Label
 	})
 	defer unsubscribe()
 
-	cause := errors.New("provider failed")
-	provider.EmitError(TTSError{Label: "provider", Err: cause, Recoverable: true})
+	provider.EmitError(TTSError{Label: "provider", Err: errors.New("provider failed"), Recoverable: true})
+	adapter.EmitError(TTSError{Label: "adapter", Err: errors.New("adapter failed"), Recoverable: true})
 
 	select {
-	case got := <-errCh:
-		if got.Err != cause {
-			t.Fatalf("Err = %v, want %v", got.Err, cause)
-		}
-		if !got.Recoverable {
-			t.Fatal("Recoverable = false, want true")
+	case label := <-errCh:
+		if label != "adapter" {
+			t.Fatalf("error label = %q, want adapter-local error only", label)
 		}
 	default:
 		t.Fatal("error handler was not called")
+	}
+	select {
+	case label := <-errCh:
+		t.Fatalf("unexpected forwarded provider error label %q", label)
+	default:
 	}
 }
 
@@ -309,7 +311,7 @@ func TestStreamAdapterEmitsErrorOnStreamFailure(t *testing.T) {
 	}
 }
 
-func TestStreamAdapterErrorUnsubscribeRemovesLocalAndProviderHandlers(t *testing.T) {
+func TestStreamAdapterErrorUnsubscribeRemovesLocalHandler(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{}
 	adapter := NewStreamAdapter(provider)
 	errCh := make(chan TTSError, 2)

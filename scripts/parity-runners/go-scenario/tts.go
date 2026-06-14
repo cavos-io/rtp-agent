@@ -600,6 +600,20 @@ func runTTSStreamAdapter(input json.RawMessage) (any, error) {
 				{"name": "unsubscribe_metrics", "request_ids": requestIDs},
 			},
 		}, nil
+	case "provider_error_not_forwarded":
+		labels := make([]string, 0, 2)
+		unsubscribe := adapter.OnError(func(err lktts.TTSError) {
+			labels = append(labels, err.Label)
+		})
+		defer unsubscribe()
+		provider.EmitError(lktts.TTSError{Label: "provider", Err: errors.New("provider failed")})
+		adapter.EmitError(lktts.TTSError{Label: "adapter", Err: errors.New("adapter failed")})
+		return map[string]any{
+			"contract": "tts-stream-adapter-provider-error-not-forwarded",
+			"events": []map[string]any{
+				{"name": "provider_error_not_forwarded", "labels": labels},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported TTS stream adapter action %q", payload.Action)
 	}
@@ -607,6 +621,7 @@ func runTTSStreamAdapter(input json.RawMessage) (any, error) {
 
 type fakeScenarioTTS struct {
 	lktts.MetricsEmitter
+	lktts.ErrorEmitter
 
 	sampleRate   int
 	numChannels  int

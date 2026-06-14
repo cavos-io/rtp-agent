@@ -167,6 +167,23 @@ def tts_stream_adapter(input_data: Any) -> dict[str, Any]:
                 {"name": "unsubscribe_metrics", "request_ids": request_ids}
             ],
         }
+    if action == "provider_error_not_forwarded":
+        labels: list[str] = []
+        adapter.on("error", lambda error: labels.append(error.label))
+        provider.emit(
+            "error",
+            type("Error", (), {"label": "provider"})(),
+        )
+        adapter.emit(
+            "error",
+            type("Error", (), {"label": "adapter"})(),
+        )
+        return {
+            "contract": "tts-stream-adapter-provider-error-not-forwarded",
+            "events": [
+                {"name": "provider_error_not_forwarded", "labels": labels}
+            ],
+        }
     raise ValueError(f"unsupported TTS stream adapter action {action!r}")
 
 
