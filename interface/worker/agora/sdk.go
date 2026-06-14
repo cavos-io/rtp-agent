@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 
 	agoraservice "github.com/AgoraIO-Extensions/Agora-Golang-Server-SDK/v2/go_sdk/rtc"
@@ -29,7 +30,30 @@ func emitSDKEvent(handler EventHandler, event Event) {
 	}
 }
 
-func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, handler EventHandler) error {
+func sdkAudioFrameToModel(frame *agoraservice.AudioFrame) *model.AudioFrame {
+	if frame == nil || len(frame.Buffer) == 0 || frame.SamplesPerSec <= 0 || frame.Channels <= 0 {
+		return nil
+	}
+	samplesPerChannel := frame.SamplesPerChannel
+	if samplesPerChannel <= 0 {
+		bytesPerSample := frame.BytesPerSample
+		if bytesPerSample <= 0 {
+			bytesPerSample = 2
+		}
+		samplesPerChannel = len(frame.Buffer) / frame.Channels / bytesPerSample
+	}
+	if samplesPerChannel <= 0 {
+		return nil
+	}
+	return &model.AudioFrame{
+		Data:              append([]byte(nil), frame.Buffer...),
+		SampleRate:        uint32(frame.SamplesPerSec),
+		NumChannels:       uint32(frame.Channels),
+		SamplesPerChannel: uint32(samplesPerChannel),
+	}
+}
+
+func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, handler EventHandler, audioHandler AudioHandler) error {
 	if err := opts.Validate(); err != nil {
 		return err
 	}
@@ -107,6 +131,28 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 			return fallback
 		},
 	})
+	if audioHandler != nil {
+		localUser := connection.GetLocalUser()
+		if localUser == nil {
+			connection.Release()
+			return fmt.Errorf("agora SDK local user creation failed")
+		}
+		if ret := localUser.SetPlaybackAudioFrameBeforeMixingParameters(1, 16000); ret != 0 {
+			connection.Release()
+			return fmt.Errorf("agora SDK set playback audio frame parameters failed: %d", ret)
+		}
+		if ret := connection.RegisterAudioFrameObserver(&agoraservice.AudioFrameObserver{
+			OnPlaybackAudioFrameBeforeMixing: func(_ *agoraservice.LocalUser, channelID string, userID string, frame *agoraservice.AudioFrame, _ agoraservice.VadState, _ *agoraservice.AudioFrame) bool {
+				if audioFrame := sdkAudioFrameToModel(frame); audioFrame != nil {
+					audioHandler(audioFrame)
+				}
+				return true
+			},
+		}, 0, nil); ret != 0 {
+			connection.Release()
+			return fmt.Errorf("agora SDK register audio frame observer failed: %d", ret)
+		}
+	}
 
 	if ret := connection.Connect(opts.Token, opts.Channel, uid); ret != 0 {
 		connection.Release()

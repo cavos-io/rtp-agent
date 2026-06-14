@@ -87,6 +87,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/upliftai"
 	"github.com/cavos-io/rtp-agent/adapter/xai"
 	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	beta "github.com/cavos-io/rtp-agent/core/beta"
 	betatools "github.com/cavos-io/rtp-agent/core/beta/tools"
 	"github.com/cavos-io/rtp-agent/core/beta/workflows"
@@ -1112,9 +1113,15 @@ func (a *App) runAgora(ctx context.Context) error {
 		return err
 	}
 	transport := workeragora.NewTransport(opts, client)
+	audioInput := workeragora.NewAudioInput(ctx, a.Session)
+	transport.SetAudioHandler(audioInput.HandleAudioFrame)
 	if err := transport.Join(ctx); err != nil {
 		return err
 	}
+	audioOutput := workeragora.NewAudioOutput(transport)
+	a.Session.EnsureAssistant().SetPublishAudio(func(frame *model.AudioFrame) error {
+		return audioOutput.PublishAudio(ctx, frame)
+	})
 	defer func() {
 		if err := transport.Close(context.Background()); err != nil {
 			logutil.Logger.Errorw("failed to close Agora transport", err)

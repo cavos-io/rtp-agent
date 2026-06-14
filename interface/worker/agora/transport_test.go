@@ -7,12 +7,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 )
 
 type fakeChannelClient struct {
 	joinOptions  worker.AgoraOptions
 	handler      EventHandler
+	audioHandler AudioHandler
 	pcmFrame     PCMFrame
 	joinErr      error
 	leaveErr     error
@@ -23,9 +25,10 @@ type fakeChannelClient struct {
 	left         bool
 }
 
-func (f *fakeChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, handler EventHandler) error {
+func (f *fakeChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, handler EventHandler, audioHandler AudioHandler) error {
 	f.joinOptions = opts
 	f.handler = handler
+	f.audioHandler = audioHandler
 	if f.joinErr != nil {
 		return f.joinErr
 	}
@@ -53,6 +56,10 @@ func (f *fakeChannelClient) PublishPCM(ctx context.Context, frame PCMFrame) erro
 
 func (f *fakeChannelClient) emit(event Event) {
 	f.handler(event)
+}
+
+func (f *fakeChannelClient) emitAudio(frame *model.AudioFrame) {
+	f.audioHandler(frame)
 }
 
 func TestTransportJoinValidatesOptions(t *testing.T) {
@@ -125,6 +132,37 @@ func TestTransportForwardsClientEvents(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for event")
+	}
+}
+
+func TestTransportForwardsClientAudioFrames(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	received := make(chan *model.AudioFrame, 1)
+	tr.SetAudioHandler(func(frame *model.AudioFrame) {
+		received <- frame
+	})
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	client.emitAudio(&model.AudioFrame{
+		Data:              []byte{1, 2, 3, 4},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	})
+
+	select {
+	case frame := <-received:
+		if frame.SampleRate != 16000 {
+			t.Fatalf("frame sample rate = %d, want 16000", frame.SampleRate)
+		}
+		if frame.SamplesPerChannel != 2 {
+			t.Fatalf("frame samples per channel = %d, want 2", frame.SamplesPerChannel)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for audio frame")
 	}
 }
 
