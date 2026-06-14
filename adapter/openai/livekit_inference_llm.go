@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/cavos-io/rtp-agent/core/inference"
+	"github.com/cavos-io/rtp-agent/adapter/livekit"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	goopenai "github.com/sashabaranov/go-openai"
 )
@@ -44,12 +44,12 @@ func (c *liveKitInferenceHeadersHTTPClient) Do(req *http.Request) (*http.Respons
 		}
 	}
 	cloned.Header.Set("User-Agent", liveKitInferenceUserAgent())
-	inference.AddContextHeaders(cloned.Header)
+	livekit.AddContextHeaders(cloned.Header)
 	if c.provider != "" {
-		cloned.Header.Set(inference.HeaderInferenceProvider, c.provider)
+		cloned.Header.Set(livekit.HeaderInferenceProvider, c.provider)
 	}
 	if c.inferencePriority != "" {
-		cloned.Header.Set(inference.HeaderInferencePriority, c.inferencePriority)
+		cloned.Header.Set(livekit.HeaderInferencePriority, c.inferencePriority)
 	}
 	return base.Do(cloned)
 }
@@ -158,7 +158,7 @@ func (l *LiveKitInferenceLLM) UpdateOptions(opts ...LiveKitInferenceLLMOption) {
 }
 
 func (l *LiveKitInferenceLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
-	token, err := inference.CreateAccessToken(l.apiKey, l.apiSecret, inference.InferenceAccessTokenTTL)
+	token, err := livekit.CreateAccessToken(l.apiKey, l.apiSecret, livekit.InferenceAccessTokenTTL)
 	if err != nil {
 		return nil, err
 	}

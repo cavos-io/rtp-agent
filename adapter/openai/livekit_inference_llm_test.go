@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cavos-io/rtp-agent/core/inference"
+	"github.com/cavos-io/rtp-agent/adapter/livekit"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
@@ -44,7 +44,7 @@ func TestNewLiveKitInferenceLLMFallsBackToLiveKitCredentialsAndURL(t *testing.T)
 	t.Setenv(liveKitInferenceAPISecretEnv, "")
 	t.Setenv(liveKitAPIKeyEnv, "livekit-key")
 	t.Setenv(liveKitAPISecretEnv, "livekit-secret")
-	t.Setenv(liveKitInferenceURLEnv, "https://inference.local/v1")
+	t.Setenv(liveKitInferenceURLEnv, "https://livekit.local/v1")
 
 	provider, err := NewLiveKitInferenceLLM("google/gemini-2.5-flash", "", "")
 	if err != nil {
@@ -57,7 +57,7 @@ func TestNewLiveKitInferenceLLMFallsBackToLiveKitCredentialsAndURL(t *testing.T)
 	if provider.apiSecret != "livekit-secret" {
 		t.Fatalf("apiSecret = %q, want LiveKit API secret fallback", provider.apiSecret)
 	}
-	if provider.baseURL != "https://inference.local/v1" {
+	if provider.baseURL != "https://livekit.local/v1" {
 		t.Fatalf("baseURL = %q, want inference URL env", provider.baseURL)
 	}
 }
@@ -115,7 +115,7 @@ func TestLiveKitInferenceLLMChatSendsReferenceInferenceHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
 	}
-	provider.baseURL = "https://inference.test/v1"
+	provider.baseURL = "https://livekit.test/v1"
 	provider.httpClient = capture
 
 	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
@@ -126,13 +126,16 @@ func TestLiveKitInferenceLLMChatSendsReferenceInferenceHeaders(t *testing.T) {
 	if !strings.Contains(capture.userAgent, " (go ") {
 		t.Fatalf("User-Agent = %q, want Go runtime marker", capture.userAgent)
 	}
+	if got := capture.header.Get("Authorization"); !strings.HasPrefix(got, "Bearer ") {
+		t.Fatalf("Authorization = %q, want bearer token", got)
+	}
 }
 
 func TestLiveKitInferenceLLMChatSendsReferenceContextHeaders(t *testing.T) {
-	restore := inference.SetContextHeadersProvider(func() map[string]string {
+	restore := livekit.SetContextHeadersProvider(func() map[string]string {
 		return map[string]string{
-			inference.HeaderRoomID: "RM_llm",
-			inference.HeaderJobID:  "job_llm",
+			livekit.HeaderRoomID: "RM_llm",
+			livekit.HeaderJobID:  "job_llm",
 		}
 	})
 	defer restore()
@@ -146,16 +149,16 @@ func TestLiveKitInferenceLLMChatSendsReferenceContextHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
 	}
-	provider.baseURL = "https://inference.test/v1"
+	provider.baseURL = "https://livekit.test/v1"
 	provider.httpClient = capture
 
 	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if capture.roomID != "RM_llm" {
-		t.Fatalf("%s = %q, want RM_llm", inference.HeaderRoomID, capture.roomID)
+		t.Fatalf("%s = %q, want RM_llm", livekit.HeaderRoomID, capture.roomID)
 	}
 	if capture.jobID != "job_llm" {
-		t.Fatalf("%s = %q, want job_llm", inference.HeaderJobID, capture.jobID)
+		t.Fatalf("%s = %q, want job_llm", livekit.HeaderJobID, capture.jobID)
 	}
 }
 
@@ -175,7 +178,7 @@ func TestLiveKitInferenceLLMChatSendsReferenceRoutingHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
 	}
-	provider.baseURL = "https://inference.test/v1"
+	provider.baseURL = "https://livekit.test/v1"
 	provider.httpClient = capture
 
 	_, _ = provider.Chat(
@@ -186,10 +189,10 @@ func TestLiveKitInferenceLLMChatSendsReferenceRoutingHeaders(t *testing.T) {
 	)
 
 	if capture.inferenceProvider != "google" {
-		t.Fatalf("%s = %q, want google", inference.HeaderInferenceProvider, capture.inferenceProvider)
+		t.Fatalf("%s = %q, want google", livekit.HeaderInferenceProvider, capture.inferenceProvider)
 	}
 	if capture.inferencePriority != "priority" {
-		t.Fatalf("%s = %q, want priority", inference.HeaderInferencePriority, capture.inferencePriority)
+		t.Fatalf("%s = %q, want priority", livekit.HeaderInferencePriority, capture.inferencePriority)
 	}
 	if strings.Contains(capture.requestBody, "inference_class") {
 		t.Fatalf("request body = %s, want inference_class consumed as header", capture.requestBody)
@@ -206,7 +209,7 @@ func TestLiveKitInferenceLLMUpdateOptionsChangesReferenceModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
 	}
-	provider.baseURL = "https://inference.test/v1"
+	provider.baseURL = "https://livekit.test/v1"
 	provider.httpClient = capture
 
 	provider.UpdateOptions(WithLiveKitInferenceLLMModel("openai/gpt-5-mini"))
@@ -237,7 +240,7 @@ func TestLiveKitInferenceLLMUpdateOptionsReplacesReferenceExtraParams(t *testing
 	if err != nil {
 		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
 	}
-	provider.baseURL = "https://inference.test/v1"
+	provider.baseURL = "https://livekit.test/v1"
 	provider.httpClient = capture
 
 	provider.UpdateOptions(WithLiveKitInferenceLLMExtraParams(map[string]any{
@@ -268,7 +271,7 @@ func TestLiveKitInferenceLLMChatOmitsDefaultReasoningEffort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
 	}
-	provider.baseURL = "https://inference.test/v1"
+	provider.baseURL = "https://livekit.test/v1"
 	provider.httpClient = capture
 
 	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
@@ -292,7 +295,7 @@ func TestLiveKitInferenceLLMChatRequestsReferenceUsageStreamOptions(t *testing.T
 	if err != nil {
 		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
 	}
-	provider.baseURL = "https://inference.test/v1"
+	provider.baseURL = "https://livekit.test/v1"
 	provider.httpClient = capture
 
 	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
@@ -319,7 +322,7 @@ func TestLiveKitInferenceLLMChatSendsReferenceExtraHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
 	}
-	provider.baseURL = "https://inference.test/v1"
+	provider.baseURL = "https://livekit.test/v1"
 	provider.httpClient = capture
 
 	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
@@ -345,7 +348,7 @@ func TestLiveKitInferenceLLMChatSendsReferenceCallExtraHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
 	}
-	provider.baseURL = "https://inference.test/v1"
+	provider.baseURL = "https://livekit.test/v1"
 	provider.httpClient = capture
 
 	_, _ = provider.Chat(
