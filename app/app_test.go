@@ -5005,6 +5005,114 @@ func TestGnaniSTTFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestSimplismartSTTFallbackPassesReferenceOptions(t *testing.T) {
+	type restRecord struct {
+		authorization string
+		contentType   string
+		path          string
+		payload       map[string]any
+	}
+	records := make(chan restRecord, 1)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode simplismart stt request: %v", err)
+			return
+		}
+		records <- restRecord{
+			authorization: r.Header.Get("Authorization"),
+			contentType:   r.Header.Get("Content-Type"),
+			path:          r.URL.Path,
+			payload:       payload,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"request_id":"req-1","transcription":["hello ","world"],"timestamps":[[0.1,0.5],[0.6,1.0]],"info":{"language":"de"}}`))
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test HTTP server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	includeTimestamps := true
+	maxSpeakers := 2
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		SimplismartAPIKey:    "test-simplismart-key",
+		STTBaseURL:           server.URL,
+		STTModel:             "custom/model",
+		STTLanguage:          "fr",
+		STTTask:              "translate",
+		STTIncludeTimestamps: &includeTimestamps,
+		STTKeytermsPrompt:    []string{"Chicago", "Joplin"},
+		STTMaxSpeakers:       &maxSpeakers,
+	}, providerSimplismart)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*simplismart.SimplismartSTT); !ok {
+		t.Fatalf("provider type = %T, want *simplismart.SimplismartSTT", provider)
+	}
+	if got, want := provider.Label(), "simplismart.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "custom/model"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Simplismart"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || caps.InterimResults || !caps.Diarization || caps.AlignedTranscript != "word" || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want offline word-aligned diarization without streaming/interim", caps)
+	}
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
+	if err != nil {
+		t.Fatalf("Recognize() error = %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || event.RequestID != "req-1" || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %+v, want one final transcript with request id", event)
+	}
+	alt := event.Alternatives[0]
+	if alt.Text != "hello world" || alt.Language != "de" || alt.StartTime != 0.1 || alt.EndTime != 1.0 {
+		t.Fatalf("alternative = %+v, want mapped Simplismart transcript", alt)
+	}
+
+	select {
+	case record := <-records:
+		if got, want := record.authorization, "Bearer test-simplismart-key"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		if got, want := record.contentType, "application/json"; got != want {
+			t.Fatalf("Content-Type = %q, want %q", got, want)
+		}
+		if got, want := record.path, "/"; got != want {
+			t.Fatalf("path = %q, want %q", got, want)
+		}
+		expectedPayload := map[string]any{
+			"audio_data":         "AQI=",
+			"language":           "fr",
+			"model":              "custom/model",
+			"task":               "translate",
+			"without_timestamps": false,
+			"hotwords":           "Chicago,Joplin",
+			"num_speakers":       float64(2),
+		}
+		for key, want := range expectedPayload {
+			if got := record.payload[key]; got != want {
+				t.Fatalf("payload %s = %#v, want %#v", key, got, want)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Simplismart STT REST request")
+	}
+}
+
 func TestRtzrSTTFallbackPassesReferenceOptions(t *testing.T) {
 	type wsRecord struct {
 		authorization string
