@@ -2131,6 +2131,8 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, adapteraws.WithAWSTTSSampleRate(*cfg.TTSSampleRate))
 		}
 		return adapteraws.NewAWSTTS(context.Background(), cfg.AWSRegion, cfg.TTSVoice, ttsOpts...)
+	case providerAzure:
+		return azure.NewAzureTTS("", "", cfg.TTSVoice, cfg.TTSLanguage)
 	case providerAsyncAI:
 		ttsOpts := []asyncai.AsyncAITTSOption{}
 		if cfg.TTSBaseURL != "" {
