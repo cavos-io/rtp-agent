@@ -1372,6 +1372,51 @@ func TestAgentActivityUsesSessionMaxEndpointingDelay(t *testing.T) {
 	}
 }
 
+func TestAgentActivityUsesAudioTurnDetectorMaxEndpointingDelay(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.STT = &fakePipelineSTT{}
+	audioDetector := &recordingAudioTurnDetector{probability: 0.1}
+	agent.AudioTurnDetector = audioDetector
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		MinEndpointingDelay: 0.01,
+		MaxEndpointingDelay: 0.03,
+	})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	defer activity.Stop()
+
+	frameData := []byte{0x01, 0x00, 0x02, 0x00}
+	audioDetector.originalData = frameData
+	session.OnAudioFrame(context.Background(), &model.AudioFrame{
+		Data:              frameData,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "still talking", Confidence: 0.9}},
+	})
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "still talking" {
+			t.Fatalf("turn message text = %q, want still talking", msg.TextContent())
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called after audio turn detector max endpointing delay")
+	}
+	if audioDetector.calls != 1 {
+		t.Fatalf("audio detector calls = %d, want 1", audioDetector.calls)
+	}
+	if len(audioDetector.frames) != 1 {
+		t.Fatalf("audio detector frames = %d, want 1", len(audioDetector.frames))
+	}
+	if &audioDetector.frames[0].Data[0] == &audioDetector.originalData[0] {
+		t.Fatal("audio detector received original frame backing data, want copied snapshot")
+	}
+}
+
 func TestAgentSessionUpdateOptionsAffectsActiveEndpointingDelay(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeSTT
@@ -2579,6 +2624,19 @@ type turnDetectorFunc func(context.Context, *llm.ChatContext) (float64, error)
 
 func (f turnDetectorFunc) PredictEndOfTurn(ctx context.Context, chatCtx *llm.ChatContext) (float64, error) {
 	return f(ctx, chatCtx)
+}
+
+type recordingAudioTurnDetector struct {
+	probability  float64
+	calls        int
+	frames       []*model.AudioFrame
+	originalData []byte
+}
+
+func (d *recordingAudioTurnDetector) PredictEndOfTurnAudio(ctx context.Context, frames []*model.AudioFrame) (float64, error) {
+	d.calls++
+	d.frames = frames
+	return d.probability, nil
 }
 
 func waitForNoCurrentSpeech(t *testing.T, activity *AgentActivity) {

@@ -63,6 +63,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/adapter/perplexity"
 	"github.com/cavos-io/rtp-agent/adapter/phonic"
+	"github.com/cavos-io/rtp-agent/adapter/pipecat"
 	"github.com/cavos-io/rtp-agent/adapter/resemble"
 	"github.com/cavos-io/rtp-agent/adapter/respeecher"
 	"github.com/cavos-io/rtp-agent/adapter/rime"
@@ -294,6 +295,22 @@ func TestAppRegistersSileroPluginDownloader(t *testing.T) {
 		return
 	}
 	t.Fatal("Silero plugin downloader was not registered")
+}
+
+func TestAppRegistersPipecatPluginDownloader(t *testing.T) {
+	for _, registered := range plugin.RegisteredPlugins() {
+		if registered.Package() != pipecat.PluginPackage {
+			continue
+		}
+		if registered.Title() != pipecat.PluginTitle {
+			t.Fatalf("plugin title = %q, want %q", registered.Title(), pipecat.PluginTitle)
+		}
+		if registered.Version() != pipecat.PluginVersion {
+			t.Fatalf("plugin version = %q, want %q", registered.Version(), pipecat.PluginVersion)
+		}
+		return
+	}
+	t.Fatal("Pipecat plugin downloader was not registered")
 }
 
 func TestNewAppInstallsConfiguredLogger(t *testing.T) {
@@ -4204,6 +4221,27 @@ func TestDefaultConfigFromEnvConfiguresLLMTurnDetector(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvConfiguresPipecatAudioTurnDetector(t *testing.T) {
+	t.Setenv("RTP_AGENT_TURN_DETECTOR_PROVIDER", "pipecat")
+	fake := &fakeAppAudioTurnDetector{}
+	oldFactory := appNewPipecatSmartTurn
+	appNewPipecatSmartTurn = func() (agent.AudioTurnDetector, error) {
+		return fake, nil
+	}
+	t.Cleanup(func() { appNewPipecatSmartTurn = oldFactory })
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Agent == nil {
+		t.Fatal("Agent is nil")
+	}
+	if app.Agent.AudioTurnDetector != fake {
+		t.Fatalf("AudioTurnDetector = %T, want configured Pipecat detector", app.Agent.AudioTurnDetector)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsPhonicRealtimeModel(t *testing.T) {
 	t.Setenv("PHONIC_API_KEY", "test-phonic-key")
 	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "phonic")
@@ -4369,6 +4407,12 @@ type fakeAppDtmfPublisher struct{}
 
 func (f *fakeAppDtmfPublisher) PublishDTMF(code int32, digit string) error {
 	return nil
+}
+
+type fakeAppAudioTurnDetector struct{}
+
+func (f *fakeAppAudioTurnDetector) PredictEndOfTurnAudio(context.Context, []*model.AudioFrame) (float64, error) {
+	return 0.9, nil
 }
 
 type appRecordingLogger struct{}

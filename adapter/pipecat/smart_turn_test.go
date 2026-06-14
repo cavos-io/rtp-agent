@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 )
 
@@ -130,6 +131,41 @@ func TestSmartTurnPredictFrameConvertsPCM16MonoToFloat32(t *testing.T) {
 	}
 	if got[len(got)-1] != -0.5 {
 		t.Fatalf("converted negative sample = %v, want -0.5", got[len(got)-1])
+	}
+}
+
+func TestSmartTurnPredictEndOfTurnAudioConcatenatesFrames(t *testing.T) {
+	var _ agent.AudioTurnDetector = (*SmartTurn)(nil)
+
+	var got []float32
+	detector := NewSmartTurn(WithProbabilityEstimator(func(_ context.Context, audio []float32) (float64, error) {
+		got = append([]float32(nil), audio...)
+		return 0.9, nil
+	}))
+	frames := []*model.AudioFrame{
+		{
+			Data:              []byte{0x00, 0x40},
+			SampleRate:        16000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		},
+		{
+			Data:              []byte{0x00, 0xc0},
+			SampleRate:        16000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		},
+	}
+
+	probability, err := detector.PredictEndOfTurnAudio(context.Background(), frames)
+	if err != nil {
+		t.Fatalf("PredictEndOfTurnAudio error = %v", err)
+	}
+	if probability != 0.9 {
+		t.Fatalf("PredictEndOfTurnAudio probability = %v, want 0.9", probability)
+	}
+	if got[len(got)-2] != 0.5 || got[len(got)-1] != -0.5 {
+		t.Fatalf("audio tail = [%v %v], want [0.5 -0.5]", got[len(got)-2], got[len(got)-1])
 	}
 }
 

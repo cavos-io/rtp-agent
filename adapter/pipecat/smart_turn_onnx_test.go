@@ -3,6 +3,8 @@ package pipecat
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -112,5 +114,45 @@ func TestNewSmartTurnWithONNXRequiresModelPath(t *testing.T) {
 	}
 	if got, want := err.Error(), "pipecat smart turn ONNX model path is required"; got != want {
 		t.Fatalf("NewSmartTurnWithONNX error = %q, want %q", got, want)
+	}
+}
+
+func TestNewLocalSmartTurnUsesDownloadedCPUModelPath(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	var gotOptions SmartTurnONNXOptions
+	newSmartTurnWithONNXOptions = func(options SmartTurnONNXOptions, opts ...SmartTurnOption) (*SmartTurn, error) {
+		gotOptions = options
+		return NewSmartTurn(opts...), nil
+	}
+	t.Cleanup(func() { newSmartTurnWithONNXOptions = NewSmartTurnWithONNX })
+
+	_, err := NewLocalSmartTurn(WithProbabilityEstimator(func(context.Context, []float32) (float64, error) {
+		return 0.9, nil
+	}))
+
+	if err != nil {
+		t.Fatalf("NewLocalSmartTurn error = %v", err)
+	}
+	wantPath := filepath.Join(dir, "resources", "models", smartTurnCPUModelFileName)
+	if gotOptions.ModelPath != wantPath {
+		t.Fatalf("ModelPath = %q, want %q", gotOptions.ModelPath, wantPath)
+	}
+	if gotOptions.FeatureExtractor == nil {
+		t.Fatal("FeatureExtractor = nil, want default extractor configured")
+	}
+}
+
+func TestNewLocalSmartTurnReturnsWorkingDirectoryError(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("RemoveAll error = %v", err)
+	}
+
+	_, err := NewLocalSmartTurn()
+
+	if err == nil {
+		t.Fatal("NewLocalSmartTurn error = nil, want working directory error")
 	}
 }

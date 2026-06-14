@@ -92,6 +92,22 @@ func (s *SmartTurn) PredictFrame(ctx context.Context, frame *model.AudioFrame) (
 	return s.PredictEndpoint(ctx, audio)
 }
 
+func (s *SmartTurn) PredictEndOfTurnAudio(ctx context.Context, frames []*model.AudioFrame) (float64, error) {
+	audio := make([]float32, 0)
+	for _, frame := range frames {
+		frameAudio, err := PCM16MonoFloat32(frame)
+		if err != nil {
+			return 0, err
+		}
+		audio = append(audio, frameAudio...)
+	}
+	result, err := s.PredictEndpoint(ctx, audio)
+	if err != nil {
+		return 0, err
+	}
+	return result.Probability, nil
+}
+
 func SmartTurnAudioWindow(audio []float32, nSeconds int, sampleRate int) []float32 {
 	maxSamples := nSeconds * sampleRate
 	if maxSamples <= 0 {
