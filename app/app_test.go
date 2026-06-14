@@ -4689,6 +4689,114 @@ func TestInworldSTTFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestRtzrSTTFallbackPassesReferenceOptions(t *testing.T) {
+	type wsRecord struct {
+		authorization string
+		query         map[string]string
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		query := map[string]string{}
+		for key, values := range r.URL.Query() {
+			if len(values) > 0 {
+				query[key] = values[0]
+			}
+		}
+		records <- wsRecord{
+			authorization: r.Header.Get("Authorization"),
+			query:         query,
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	sampleRate := 16000
+	epdTime := 1.2
+	noiseThreshold := 0.42
+	activeThreshold := 0.77
+	punctuate := true
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		RtzrClientID:                    "test-client-id",
+		RtzrClientSecret:                "test-client-secret",
+		RtzrAccessToken:                 "test-access-token",
+		STTStreamingURL:                 "ws" + strings.TrimPrefix(server.URL, "http"),
+		STTModel:                        "sommers_ko-test",
+		STTSampleRate:                   &sampleRate,
+		STTDomain:                       "GENERAL",
+		STTEndpointingSeconds:           &epdTime,
+		STTVADThreshold:                 &noiseThreshold,
+		STTEndOfTurnConfidenceThreshold: &activeThreshold,
+		STTPunctuate:                    &punctuate,
+		STTKeytermsPrompt:               []string{"서울", "LiveKit"},
+	}, providerRtzr)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*rtzr.RtzrSTT); !ok {
+		t.Fatalf("provider type = %T, want *rtzr.RtzrSTT", provider)
+	}
+	if got, want := provider.Label(), "rtzr.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "sommers_ko-test"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "RTZR"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.Diarization || caps.AlignedTranscript != "chunk" || caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming interim chunk-aligned without offline", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.authorization, "bearer test-access-token"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		expectedQuery := map[string]string{
+			"model_name":       "sommers_ko-test",
+			"domain":           "GENERAL",
+			"sample_rate":      "16000",
+			"encoding":         "LINEAR16",
+			"epd_time":         "1.2",
+			"noise_threshold":  "0.42",
+			"active_threshold": "0.77",
+			"use_punctuation":  "true",
+			"keywords":         "서울,LiveKit",
+		}
+		for key, want := range expectedQuery {
+			if got := record.query[key]; got != want {
+				t.Fatalf("query %s = %q, want %q", key, got, want)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for RTZR STT websocket request")
+	}
+}
+
 func TestMistralAISTTFallbackPassesReferenceOptions(t *testing.T) {
 	type requestRecord struct {
 		apiKey      string

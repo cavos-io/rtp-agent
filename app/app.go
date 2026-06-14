@@ -2501,6 +2501,48 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			return nil, fmt.Errorf("invalid sarvam STT configuration")
 		}
 		return provider, nil
+	case providerRtzr:
+		sttOpts := []rtzr.RtzrSTTOption{}
+		if cfg.RtzrClientSecret != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrClientSecret(cfg.RtzrClientSecret))
+		}
+		if cfg.RtzrAccessToken != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrAccessToken(cfg.RtzrAccessToken))
+		}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrAPIBase(cfg.STTBaseURL))
+		}
+		if cfg.STTStreamingURL != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrWSBase(cfg.STTStreamingURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, rtzr.WithRtzrSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTDomain != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrDomain(cfg.STTDomain))
+		}
+		if cfg.STTEndpointingSeconds != nil {
+			sttOpts = append(sttOpts, rtzr.WithRtzrEPDTime(*cfg.STTEndpointingSeconds))
+		}
+		if cfg.STTVADThreshold != nil {
+			sttOpts = append(sttOpts, rtzr.WithRtzrNoiseThreshold(*cfg.STTVADThreshold))
+		}
+		if cfg.STTEndOfTurnConfidenceThreshold != nil {
+			sttOpts = append(sttOpts, rtzr.WithRtzrActiveThreshold(*cfg.STTEndOfTurnConfidenceThreshold))
+		}
+		if cfg.STTPunctuate != nil {
+			sttOpts = append(sttOpts, rtzr.WithRtzrUsePunctuation(*cfg.STTPunctuate))
+		}
+		if len(cfg.STTKeytermsPrompt) > 0 {
+			sttOpts = append(sttOpts, rtzr.WithRtzrKeywords(cfg.STTKeytermsPrompt))
+		}
+		return rtzr.NewRtzrSTT(cfg.RtzrClientID, sttOpts...), nil
 	case providerSLNG:
 		sttOpts := []slng.STTOption{}
 		if cfg.STTModel != "" {
