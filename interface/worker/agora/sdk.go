@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,14 +42,14 @@ func NewSDKChannelClient() (ChannelClient, error) {
 }
 
 func sdkRuntimeDir() string {
-	if dir := os.Getenv("AGORA_SDK_DATA_DIR"); dir != "" {
+	if dir := strings.TrimSpace(os.Getenv("AGORA_SDK_DATA_DIR")); dir != "" {
 		return dir
 	}
 	return filepath.Join(os.TempDir(), "rtp-agent-agora")
 }
 
 func sdkJoinTimeout() time.Duration {
-	value := os.Getenv("AGORA_JOIN_TIMEOUT")
+	value := strings.TrimSpace(os.Getenv("AGORA_JOIN_TIMEOUT"))
 	if value == "" {
 		return defaultSDKJoinTimeout
 	}
@@ -136,9 +137,18 @@ func sdkAudioFrameToModel(frame *agoraservice.AudioFrame) *model.AudioFrame {
 	if frame.Type != agoraservice.AudioFrameTypePCM16 || frame.BytesPerSample != 2 {
 		return nil
 	}
+	bytesPerInterleavedSample := frame.Channels * frame.BytesPerSample
+	if len(frame.Buffer)%bytesPerInterleavedSample != 0 {
+		return nil
+	}
 	samplesPerChannel := frame.SamplesPerChannel
-	if samplesPerChannel <= 0 {
-		samplesPerChannel = len(frame.Buffer) / frame.Channels / 2
+	if samplesPerChannel < 0 {
+		return nil
+	}
+	if samplesPerChannel == 0 {
+		samplesPerChannel = len(frame.Buffer) / bytesPerInterleavedSample
+	} else if len(frame.Buffer) != samplesPerChannel*bytesPerInterleavedSample {
+		return nil
 	}
 	if samplesPerChannel <= 0 {
 		return nil
@@ -153,9 +163,11 @@ func sdkAudioFrameToModel(frame *agoraservice.AudioFrame) *model.AudioFrame {
 
 func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, handler EventHandler, audioHandler AudioHandler) error {
 	ctx = normalizeContext(ctx)
-	if err := opts.Validate(); err != nil {
+	resolved, err := ResolveJoinOptions(opts)
+	if err != nil {
 		return err
 	}
+	opts = resolved
 	uid := opts.UID
 	if uid == "" {
 		uid = "0"
@@ -310,6 +322,13 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 		}
 	}
 
+	select {
+	case <-ctx.Done():
+		connection.Release()
+		_ = releaseSDKService()
+		return ctx.Err()
+	default:
+	}
 	if ret := connection.Connect(opts.Token, opts.Channel, uid, ""); ret != 0 {
 		connection.Release()
 		_ = releaseSDKService()

@@ -649,11 +649,11 @@ func DefaultConfigFromEnv() AppConfig {
 		WorkerOptions: worker.WorkerOptions{
 			Transport: worker.NormalizeWorkerTransport(os.Getenv("RTP_AGENT_TRANSPORT")),
 			Agora: worker.AgoraOptions{
-				AppID:          os.Getenv("AGORA_APP_ID"),
-				AppCertificate: os.Getenv("AGORA_APP_CERTIFICATE"),
-				Channel:        os.Getenv("AGORA_CHANNEL"),
-				UID:            os.Getenv("AGORA_UID"),
-				Token:          os.Getenv("AGORA_TOKEN"),
+				AppID:          strings.TrimSpace(os.Getenv("AGORA_APP_ID")),
+				AppCertificate: strings.TrimSpace(os.Getenv("AGORA_APP_CERTIFICATE")),
+				Channel:        strings.TrimSpace(os.Getenv("AGORA_CHANNEL")),
+				UID:            strings.TrimSpace(os.Getenv("AGORA_UID")),
+				Token:          strings.TrimSpace(os.Getenv("AGORA_TOKEN")),
 			},
 		},
 		Instructions:                            getenvDefault("RTP_AGENT_INSTRUCTIONS", "You are a helpful realtime voice agent."),

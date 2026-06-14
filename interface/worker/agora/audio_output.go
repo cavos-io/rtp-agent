@@ -34,6 +34,11 @@ func (o *AudioOutput) PublishAudio(ctx context.Context, frame *model.AudioFrame)
 	if o.publisher == nil {
 		return fmt.Errorf("agora audio output publisher is required")
 	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
@@ -47,6 +52,13 @@ func (o *AudioOutput) PublishAudio(ctx context.Context, frame *model.AudioFrame)
 	}
 	if sampleRate%100 != 0 {
 		return fmt.Errorf("agora audio frame sample rate must produce whole 10 ms frames")
+	}
+	bytesPerInterleavedSample := channels * 2
+	if len(frame.Data)%bytesPerInterleavedSample != 0 {
+		return fmt.Errorf("agora audio frame data must contain whole 16-bit interleaved samples")
+	}
+	if frame.SamplesPerChannel > 0 && len(frame.Data) != int(frame.SamplesPerChannel)*bytesPerInterleavedSample {
+		return fmt.Errorf("agora audio frame samples per channel does not match PCM data length")
 	}
 	bytesPer10MS := (sampleRate / 100) * channels * 2
 	if bytesPer10MS <= 0 {

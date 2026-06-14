@@ -75,6 +75,31 @@ func TestSDKClientImplementationRequiresPCM16InboundAudio(t *testing.T) {
 	}
 }
 
+func TestSDKClientImplementationValidatesInboundPCMBufferShape(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	helperIndex := strings.Index(text, "func sdkAudioFrameToModel")
+	if helperIndex < 0 {
+		t.Fatal("sdk.go missing sdkAudioFrameToModel")
+	}
+	helperBody := text[helperIndex:]
+	if nextFunc := strings.Index(helperBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		helperBody = helperBody[:len("func ")+nextFunc]
+	}
+	for _, want := range []string{
+		"len(frame.Buffer)%bytesPerInterleavedSample != 0",
+		"samplesPerChannel < 0",
+		"len(frame.Buffer) != samplesPerChannel*bytesPerInterleavedSample",
+	} {
+		if !strings.Contains(helperBody, want) {
+			t.Fatalf("sdkAudioFrameToModel missing %q", want)
+		}
+	}
+}
+
 func TestSDKClientImplementationRegistersLocalUserObserver(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {
@@ -103,6 +128,33 @@ func TestSDKClientImplementationUsesCurrentConnectSignature(t *testing.T) {
 	}
 }
 
+func TestSDKClientImplementationResolvesJoinOptions(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	joinIndex := strings.Index(text, "func (c *sdkChannelClient) Join")
+	if joinIndex < 0 {
+		t.Fatal("sdk.go missing sdkChannelClient.Join")
+	}
+	joinBody := text[joinIndex:]
+	if nextFunc := strings.Index(joinBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		joinBody = joinBody[:len("func ")+nextFunc]
+	}
+	resolveIndex := strings.Index(joinBody, "ResolveJoinOptions(opts)")
+	connectIndex := strings.Index(joinBody, "Connect(opts.Token, opts.Channel, uid, \"\")")
+	if resolveIndex < 0 {
+		t.Fatal("SDK Join must resolve Agora join options before native Connect")
+	}
+	if connectIndex < 0 {
+		t.Fatal("SDK Join missing native Connect call")
+	}
+	if resolveIndex > connectIndex {
+		t.Fatal("SDK Join must resolve Agora join options before native Connect")
+	}
+}
+
 func TestSDKClientImplementationUsesVoidReleaseSignature(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {
@@ -125,6 +177,22 @@ func TestSDKClientImplementationConfiguresRuntimeDirectories(t *testing.T) {
 		"cfg.LogPath",
 		"cfg.ConfigDir",
 		"cfg.DataDir",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}
+
+func TestSDKClientImplementationTrimsRuntimeEnv(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		`strings.TrimSpace(os.Getenv("AGORA_SDK_DATA_DIR"))`,
+		`strings.TrimSpace(os.Getenv("AGORA_JOIN_TIMEOUT"))`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("sdk.go missing %q", want)
@@ -194,6 +262,38 @@ func TestSDKClientImplementationChecksConnectionObserverRegistration(t *testing.
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}
+
+func TestSDKClientImplementationChecksContextBeforeConnect(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	joinIndex := strings.Index(text, "func (c *sdkChannelClient) Join")
+	if joinIndex < 0 {
+		t.Fatal("sdk.go missing sdkChannelClient.Join")
+	}
+	joinBody := text[joinIndex:]
+	if nextFunc := strings.Index(joinBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		joinBody = joinBody[:len("func ")+nextFunc]
+	}
+	setupIndex := strings.Index(joinBody, "if ret := connection.RegisterObserver")
+	connectIndex := strings.Index(joinBody, "connection.Connect(")
+	if setupIndex < 0 || connectIndex < 0 {
+		t.Fatal("Join missing observer setup or Connect call")
+	}
+	setupToConnect := joinBody[setupIndex:connectIndex]
+	contextIndex := strings.LastIndex(setupToConnect, "case <-ctx.Done():")
+	if contextIndex < 0 {
+		t.Fatal("Join must recheck context cancellation after SDK observer setup and before Connect")
+	}
+	contextBranch := setupToConnect[contextIndex:]
+	for _, want := range []string{"connection.Release()", "releaseSDKService()", "return ctx.Err()"} {
+		if !strings.Contains(contextBranch, want) {
+			t.Fatalf("pre-Connect cancellation branch missing %q", want)
 		}
 	}
 }

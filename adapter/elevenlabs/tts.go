@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -219,6 +221,10 @@ func (s *elevenLabsChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error
 		}
 		return nil, err
 	}
+	frame, err = normalizeElevenLabsMP3Frame(frame, s.sampleRate)
+	if err != nil {
+		return nil, err
+	}
 	return &tts.SynthesizedAudio{Frame: frame}, nil
 }
 
@@ -266,6 +272,7 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 		errCh:      make(chan error, 1),
 		ctx:        ctx,
 		cancel:     cancel,
+		encoding:   t.encoding,
 		sampleRate: t.sampleRate,
 	}
 
@@ -321,6 +328,7 @@ type elevenLabsStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
+	encoding   string
 	sampleRate int
 }
 
@@ -378,7 +386,7 @@ func (s *elevenLabsStream) readLoop() {
 		}
 
 		if resp.Audio != "" {
-			audio, err := elevenLabsSynthesizedAudio(resp, s.sampleRate)
+			audio, err := elevenLabsSynthesizedAudio(resp, s.sampleRate, s.encoding)
 			if err != nil {
 				logger.Logger.Errorw("Failed to decode base64 audio", err)
 				continue
@@ -406,7 +414,7 @@ func (s *elevenLabsStream) readLoop() {
 	}
 }
 
-func elevenLabsSynthesizedAudio(resp elWSResponse, sampleRate int) (*tts.SynthesizedAudio, error) {
+func elevenLabsSynthesizedAudio(resp elWSResponse, sampleRate int, encoding string) (*tts.SynthesizedAudio, error) {
 	data, err := base64.StdEncoding.DecodeString(resp.Audio)
 	if err != nil {
 		return nil, err
@@ -421,6 +429,19 @@ func elevenLabsSynthesizedAudio(resp elWSResponse, sampleRate int) (*tts.Synthes
 			deltaText.WriteString(char)
 		}
 	}
+
+	if strings.HasPrefix(encoding, "mp3") {
+		frame, err := decodeElevenLabsMP3Audio(data, sampleRate)
+		if err != nil {
+			return nil, err
+		}
+		return &tts.SynthesizedAudio{
+			Frame:     frame,
+			IsFinal:   resp.IsFinal,
+			DeltaText: deltaText.String(),
+		}, nil
+	}
+
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
 			Data:              data,
@@ -431,6 +452,56 @@ func elevenLabsSynthesizedAudio(resp elWSResponse, sampleRate int) (*tts.Synthes
 		IsFinal:   resp.IsFinal,
 		DeltaText: deltaText.String(),
 	}, nil
+}
+
+func decodeElevenLabsMP3Audio(data []byte, sampleRate int) (*model.AudioFrame, error) {
+	decoder := codecs.NewMP3AudioStreamDecoder()
+	defer decoder.Close()
+	go func() {
+		decoder.Push(data)
+		decoder.EndInput()
+	}()
+	frame, err := decoder.Next()
+	if err != nil {
+		return nil, err
+	}
+	return normalizeElevenLabsMP3Frame(frame, sampleRate)
+}
+
+func normalizeElevenLabsMP3Frame(frame *model.AudioFrame, sampleRate int) (*model.AudioFrame, error) {
+	frame = elevenLabsDownmixToMono(frame)
+	if sampleRate <= 0 {
+		return frame, nil
+	}
+	return coreaudio.ResampleAudioFrame(frame, uint32(sampleRate))
+}
+
+func elevenLabsDownmixToMono(frame *model.AudioFrame) *model.AudioFrame {
+	if frame == nil || frame.NumChannels <= 1 {
+		return frame
+	}
+	channels := int(frame.NumChannels)
+	samples := int(frame.SamplesPerChannel)
+	if samples == 0 {
+		samples = len(frame.Data) / (channels * 2)
+	}
+	out := make([]byte, samples*2)
+	for sample := 0; sample < samples; sample++ {
+		sum := int32(0)
+		for channel := 0; channel < channels; channel++ {
+			offset := (sample*channels + channel) * 2
+			if offset+2 > len(frame.Data) {
+				break
+			}
+			sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset : offset+2])))
+		}
+		binary.LittleEndian.PutUint16(out[sample*2:sample*2+2], uint16(int16(sum/int32(channels))))
+	}
+	mono := *frame
+	mono.Data = out
+	mono.NumChannels = 1
+	mono.SamplesPerChannel = uint32(samples)
+	return &mono
 }
 
 func (s *elevenLabsStream) pingLoop() {

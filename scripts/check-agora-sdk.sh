@@ -11,11 +11,13 @@ trim_space() {
 }
 
 sdk_dir="${AGORA_GO_SDK_DIR:-}"
-if [ -z "$(trim_space "$sdk_dir")" ]; then
+sdk_dir="$(trim_space "$sdk_dir")"
+if [ -z "$sdk_dir" ]; then
   sdk_dir="$(go list -m -f '{{.Dir}}' "$module" 2>/dev/null || true)"
 fi
 
-if [ -z "$(trim_space "$sdk_dir")" ]; then
+sdk_dir="$(trim_space "$sdk_dir")"
+if [ -z "$sdk_dir" ]; then
   echo "Agora Go SDK module is not available." >&2
   echo "Run: go mod download $module" >&2
   exit 1

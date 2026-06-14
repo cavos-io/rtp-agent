@@ -118,7 +118,13 @@ func (t *Transport) Join(ctx context.Context) error {
 	if t.client == nil {
 		return fmt.Errorf("agora channel client is required")
 	}
-	joinCtx, cancel := context.WithCancel(normalizeContext(ctx))
+	ctx = normalizeContext(ctx)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	joinCtx, cancel := context.WithCancel(ctx)
 	t.mu.Lock()
 	if t.closing || t.closed {
 		t.mu.Unlock()
@@ -155,6 +161,12 @@ func (t *Transport) PublishPCM(ctx context.Context, frame PCMFrame) error {
 	if err := frame.Validate(); err != nil {
 		return err
 	}
+	ctx = normalizeContext(ctx)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 	t.mu.Lock()
 	closed := t.closing || t.closed
 	t.mu.Unlock()
@@ -164,7 +176,7 @@ func (t *Transport) PublishPCM(ctx context.Context, frame PCMFrame) error {
 	if t.client == nil {
 		return fmt.Errorf("agora channel client is required")
 	}
-	return t.client.PublishPCM(normalizeContext(ctx), frame)
+	return t.client.PublishPCM(ctx, frame)
 }
 
 func (t *Transport) Close(ctx context.Context) error {
@@ -200,5 +212,16 @@ func (t *Transport) emit(event Event) {
 	select {
 	case t.events <- event:
 	default:
+		if event.Kind != EventError {
+			return
+		}
+		select {
+		case <-t.events:
+		default:
+		}
+		select {
+		case t.events <- event:
+		default:
+		}
 	}
 }
