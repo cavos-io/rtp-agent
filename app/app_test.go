@@ -3304,6 +3304,55 @@ func TestDefaultConfigFromEnvWrapsTTSFallbackProviders(t *testing.T) {
 	}
 }
 
+func TestAWSTTSFallbackPassesReferenceOptions(t *testing.T) {
+	sampleRate := 22050
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		AWSRegion:     "us-west-2",
+		TTSVoice:      "Joanna",
+		TTSModel:      "standard",
+		TTSTextType:   "ssml",
+		TTSLanguage:   "en-US",
+		TTSSampleRate: &sampleRate,
+	}, providerAWS)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	awsProvider, ok := provider.(*adapteraws.AWSTTS)
+	if !ok {
+		t.Fatalf("provider type = %T, want *aws.AWSTTS", provider)
+	}
+	if got, want := provider.Label(), "aws.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 22050; got != want {
+		t.Fatalf("SampleRate() = %d, want reference configured sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "standard"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "Amazon Polly"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
+	}
+
+	state := reflect.ValueOf(awsProvider).Elem()
+	if got, want := state.FieldByName("voice").String(), "Joanna"; got != want {
+		t.Fatalf("voice = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("engine").String(), "standard"; got != want {
+		t.Fatalf("engine = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("textType").String(), "ssml"; got != want {
+		t.Fatalf("textType = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("language").String(), "en-US"; got != want {
+		t.Fatalf("language = %q, want %q", got, want)
+	}
+}
+
 func TestGradiumTTSFallbackPassesReferenceOptions(t *testing.T) {
 	type wsRecord struct {
 		apiKey    string

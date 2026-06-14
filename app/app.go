@@ -2113,6 +2113,24 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, openai.WithOpenAITTSBaseURL(cfg.TTSBaseURL))
 		}
 		return openai.NewOpenAITTS(cfg.OpenAIAPIKey, "", "", ttsOpts...)
+	case providerAWS:
+		ttsOpts := []adapteraws.AWSTTSOption{}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, adapteraws.WithAWSTTSVoice(awspollytypes.VoiceId(cfg.TTSVoice)))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, adapteraws.WithAWSTTSEngine(awspollytypes.Engine(cfg.TTSModel)))
+		}
+		if cfg.TTSTextType != "" {
+			ttsOpts = append(ttsOpts, adapteraws.WithAWSTTSTextType(awspollytypes.TextType(cfg.TTSTextType)))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, adapteraws.WithAWSTTSLanguage(awspollytypes.LanguageCode(cfg.TTSLanguage)))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, adapteraws.WithAWSTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		return adapteraws.NewAWSTTS(context.Background(), cfg.AWSRegion, cfg.TTSVoice, ttsOpts...)
 	case providerAsyncAI:
 		ttsOpts := []asyncai.AsyncAITTSOption{}
 		if cfg.TTSBaseURL != "" {
