@@ -141,6 +141,32 @@ def tts_stream_adapter(input_data: Any) -> dict[str, Any]:
                 {"name": "close_preserves_metrics_forwarding", "request_ids": request_ids}
             ],
         }
+    if action == "unsubscribe_metrics":
+        request_ids: list[str] = []
+
+        def on_metrics(metrics: Any) -> None:
+            request_ids.append(metrics.request_id)
+
+        adapter.on("metrics_collected", on_metrics)
+        provider.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "before"})(),
+        )
+        adapter.off("metrics_collected", on_metrics)
+        provider.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "provider"})(),
+        )
+        adapter.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "adapter"})(),
+        )
+        return {
+            "contract": "tts-stream-adapter-metrics-unsubscribe",
+            "events": [
+                {"name": "unsubscribe_metrics", "request_ids": request_ids}
+            ],
+        }
     raise ValueError(f"unsupported TTS stream adapter action {action!r}")
 
 
