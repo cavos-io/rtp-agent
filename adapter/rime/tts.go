@@ -188,6 +188,9 @@ func (t *RimeTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 }
 
 func buildRimeTTSRequest(ctx context.Context, t *RimeTTS, text string) (*http.Request, error) {
+	if err := validateRimeTimeScaleFactor(t); err != nil {
+		return nil, err
+	}
 	reqBody := map[string]interface{}{
 		"speaker":      t.voice,
 		"text":         text,
@@ -221,6 +224,9 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if err := validateRimeAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
+	if err := validateRimeTimeScaleFactor(t); err != nil {
+		return nil, err
+	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildRimeTTSWebsocketURL(t).String(), buildRimeTTSWebsocketHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial rime tts websocket: %w", err)
@@ -242,6 +248,13 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 func validateRimeAPIKey(apiKey string) error {
 	if apiKey == "" {
 		return fmt.Errorf("rime API key is required, either as argument or set RIME_API_KEY environmental variable")
+	}
+	return nil
+}
+
+func validateRimeTimeScaleFactor(t *RimeTTS) error {
+	if t.model == "mistv2" && t.timeScaleFactor != nil {
+		return fmt.Errorf("time_scale_factor is not supported by the mistv2 model; use arcana, mistv3, or coda")
 	}
 	return nil
 }

@@ -156,6 +156,28 @@ func TestRimeTTSOptionsMatchReferenceModels(t *testing.T) {
 	}
 }
 
+func TestRimeTTSRejectsMistV2TimeScaleFactor(t *testing.T) {
+	provider := NewRimeTTS("test-key", "",
+		WithRimeTTSModel("mistv2"),
+		WithRimeTTSTimeScaleFactor(1.1),
+	)
+
+	_, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err == nil || !strings.Contains(err.Error(), "time_scale_factor is not supported by the mistv2 model") {
+		t.Fatalf("build request error = %v, want reference mistv2 time_scale_factor error", err)
+	}
+
+	streaming := NewRimeTTS("test-key", "",
+		WithRimeTTSModel("mistv2"),
+		WithRimeTTSTimeScaleFactor(1.1),
+		WithRimeTTSWebsocket(true),
+	)
+	_, err = streaming.Stream(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "time_scale_factor is not supported by the mistv2 model") {
+		t.Fatalf("Stream error = %v, want reference mistv2 time_scale_factor error", err)
+	}
+}
+
 func TestRimeTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	stream := &rimeTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
