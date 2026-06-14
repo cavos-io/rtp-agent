@@ -1070,6 +1070,8 @@ type fakeScenarioVAD struct {
 	events     []*lkvad.VADEvent
 	flushCount *atomic.Int32
 	flushCh    chan struct{}
+	endCount   *atomic.Int32
+	endCh      chan struct{}
 }
 
 func (fakeScenarioVAD) Label() string                       { return "scenario.VAD" }
@@ -1086,15 +1088,18 @@ func (v fakeScenarioVAD) Stream(context.Context) (lkvad.VADStream, error) {
 		done:       make(chan struct{}),
 		flushCount: v.flushCount,
 		flushCh:    v.flushCh,
+		endCount:   v.endCount,
+		endCh:      v.endCh,
 	}, nil
 }
 
 type fakeScenarioVADStream struct {
-	events        []*lkvad.VADEvent
-	done          chan struct{}
-	flushCount    *atomic.Int32
-	flushCh       chan struct{}
-	endInputCount *atomic.Int32
+	events     []*lkvad.VADEvent
+	done       chan struct{}
+	flushCount *atomic.Int32
+	flushCh    chan struct{}
+	endCount   *atomic.Int32
+	endCh      chan struct{}
 }
 
 func (fakeScenarioVADStream) PushFrame(*audiomodel.AudioFrame) error { return nil }
@@ -1111,8 +1116,14 @@ func (s *fakeScenarioVADStream) Flush() error {
 	return nil
 }
 func (s *fakeScenarioVADStream) EndInput() error {
-	if s.endInputCount != nil {
-		s.endInputCount.Add(1)
+	if s.endCount != nil {
+		s.endCount.Add(1)
+	}
+	if s.endCh != nil {
+		select {
+		case s.endCh <- struct{}{}:
+		default:
+		}
 	}
 	return nil
 }
@@ -1414,6 +1425,50 @@ func runSTTStreamAdapter(input json.RawMessage) (any, error) {
 					"flush_calls":     flushCount.Load(),
 					"end_input_calls": int32(0),
 					"recognize_calls": recognizeCalls.Load(),
+				},
+			},
+		}, nil
+	case "end_input_lifecycle":
+		flushCount := &atomic.Int32{}
+		endCount := &atomic.Int32{}
+		endCh := make(chan struct{}, 1)
+		adapter := lkstt.NewStreamAdapter(fakeScenarioSTT{
+			label:        "wrapped",
+			capabilities: lkstt.STTCapabilities{OfflineRecognize: true},
+		}, fakeScenarioVAD{flushCount: flushCount, endCount: endCount, endCh: endCh})
+		stream, err := adapter.Stream(context.Background(), "en")
+		if err != nil {
+			return nil, err
+		}
+		ending, ok := stream.(lkstt.InputEnding)
+		if !ok {
+			stream.Close()
+			return nil, fmt.Errorf("stream does not implement InputEnding")
+		}
+		if err := ending.EndInput(); err != nil {
+			stream.Close()
+			return nil, err
+		}
+		select {
+		case <-endCh:
+		case <-time.After(200 * time.Millisecond):
+		}
+		pushAfterErr := stream.PushFrame(&audiomodel.AudioFrame{Data: []byte("late"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}) != nil
+		flushAfterErr := stream.Flush() != nil
+		secondEndErr := ending.EndInput() != nil
+		if err := stream.Close(); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "stt-stream-adapter-end-input-lifecycle",
+			"events": []map[string]any{
+				{
+					"name":              "end_input_lifecycle",
+					"flush_calls":       flushCount.Load(),
+					"end_input_calls":   endCount.Load(),
+					"push_after_error":  pushAfterErr,
+					"flush_after_error": flushAfterErr,
+					"second_end_error":  secondEndErr,
 				},
 			},
 		}, nil

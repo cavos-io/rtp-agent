@@ -1534,4 +1534,53 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "end_input_lifecycle":
+        install_stream_adapter_runtime_shims()
+        vad = FakeVAD()
+        adapter = stream_adapter_module.StreamAdapter(stt=FakeSTT("wrapped"), vad=vad)
+
+        async def run_end_input() -> dict[str, Any]:
+            stream = adapter.stream(language="en")
+            stream.end_input()
+            await wait_for(
+                lambda: vad.last_stream is not None and vad.last_stream.end_input_calls > 0
+            )
+            flush_calls = vad.last_stream.flush_calls if vad.last_stream is not None else 0
+            end_input_calls = (
+                vad.last_stream.end_input_calls if vad.last_stream is not None else 0
+            )
+            push_after_error = False
+            flush_after_error = False
+            second_end_error = False
+            try:
+                stream.push_frame(object())
+            except Exception:
+                push_after_error = True
+            try:
+                stream.flush()
+            except Exception:
+                flush_after_error = True
+            try:
+                stream.end_input()
+            except Exception:
+                second_end_error = True
+            await stream.aclose()
+            return {
+                "flush_calls": flush_calls,
+                "end_input_calls": end_input_calls,
+                "push_after_error": push_after_error,
+                "flush_after_error": flush_after_error,
+                "second_end_error": second_end_error,
+            }
+
+        result = asyncio.run(run_end_input())
+        return {
+            "contract": "stt-stream-adapter-end-input-lifecycle",
+            "events": [
+                {
+                    "name": "end_input_lifecycle",
+                    **result,
+                }
+            ],
+        }
     raise ValueError(f"unsupported STT stream adapter action {action!r}")
