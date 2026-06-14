@@ -3,7 +3,6 @@ package ten
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -145,6 +144,9 @@ func WithNativeLibrary(path string) VADOption {
 	}
 }
 
+// WithModelPath configures the TEN ONNX model file used by the native
+// tenvad_native build. Clients that do not want cwd-dependent resource lookup
+// can pass ModelPathIn(appRoot) or any absolute model path.
 func WithModelPath(path string) VADOption {
 	return func(o *VADOptions) {
 		o.ModelPath = path
@@ -453,10 +455,6 @@ func finiteBetweenZeroAndOne(value float64) bool {
 
 func invalidDuration(value float64) bool {
 	return math.IsNaN(value) || math.IsInf(value, 0) || value < 0
-}
-
-func newNativeProbabilityEstimatorFactory(VADOptions) (vad.ProbabilityEstimatorFactory, error) {
-	return nil, errors.New("TEN VAD native library integration is not implemented")
 }
 
 func estimateRMSProbability(frame *model.AudioFrame) (float64, error) {

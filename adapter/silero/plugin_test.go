@@ -64,3 +64,12 @@ func TestSileroPluginDownloadFilesSkipsExistingModel(t *testing.T) {
 		t.Fatalf("DownloadFiles() error = %v", err)
 	}
 }
+
+func TestSileroModelPathInBuildsExplicitResourcePath(t *testing.T) {
+	root := filepath.Join("srv", "rtp-agent")
+	got := ModelPathIn(root)
+	want := filepath.Join(root, "resources", "models", "silero_vad.onnx")
+	if got != want {
+		t.Fatalf("ModelPathIn() = %q, want %q", got, want)
+	}
+}

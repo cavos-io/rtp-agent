@@ -19,6 +19,10 @@
           opusfile
           portaudio
           pkg-config
+        ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+          llvmPackages.libcxx
+          llvmPackages.libcxxabi
+          libunwind
         ];
 
         soExt =

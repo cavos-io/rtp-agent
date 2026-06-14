@@ -42,11 +42,24 @@ func (Plugin) DownloadFiles() error {
 }
 
 func sileroModelPath() (string, error) {
+	return ModelPath()
+}
+
+// ModelPath returns the default Silero ONNX model path under the current
+// working directory: resources/models/silero_vad.onnx.
+func ModelPath() (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(cwd, "resources", "models", sileroModelFileName), nil
+	return ModelPathIn(cwd), nil
+}
+
+// ModelPathIn returns the Silero ONNX model path under rootDir without
+// consulting the process working directory. Use this with WithONNXFilePath when
+// embedding this library in a service with an explicit application root.
+func ModelPathIn(rootDir string) string {
+	return filepath.Join(rootDir, "resources", "models", sileroModelFileName)
 }
 
 func downloadFile(url, path string) error {

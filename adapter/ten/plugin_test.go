@@ -64,3 +64,12 @@ func TestPluginDownloadFilesSkipsExistingModel(t *testing.T) {
 		t.Fatalf("DownloadFiles() error = %v", err)
 	}
 }
+
+func TestModelPathInBuildsExplicitResourcePath(t *testing.T) {
+	root := filepath.Join("srv", "rtp-agent")
+	got := ModelPathIn(root)
+	want := filepath.Join(root, "resources", "models", "ten-vad.onnx")
+	if got != want {
+		t.Fatalf("ModelPathIn() = %q, want %q", got, want)
+	}
+}
