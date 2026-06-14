@@ -2036,6 +2036,30 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTSampleRate(*cfg.STTSampleRate))
 		}
 		return elevenlabs.NewElevenLabsSTT(cfg.ElevenLabsAPIKey, sttOpts...), nil
+	case providerGradium:
+		sttOpts := []gradium.GradiumSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTModelEndpoint(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTModelName(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTTemperature != nil {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTTemperature(*cfg.STTTemperature))
+		}
+		if cfg.STTVADBucket != nil {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTVADBucket(cfg.STTVADBucket))
+		}
+		if cfg.STTVADFlush != nil {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTVADFlush(*cfg.STTVADFlush))
+		}
+		if cfg.STTBufferSizeSeconds != nil {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTBufferSizeSeconds(*cfg.STTBufferSizeSeconds))
+		}
+		return gradium.NewGradiumSTT(cfg.GradiumAPIKey, sttOpts...), nil
 	case providerSLNG:
 		sttOpts := []slng.STTOption{}
 		if cfg.STTModel != "" {

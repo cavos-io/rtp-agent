@@ -3290,6 +3290,118 @@ func TestDefaultConfigFromEnvWrapsNonStreamingSTTFallbackWithVAD(t *testing.T) {
 	}
 }
 
+func TestGradiumSTTFallbackPassesReferenceOptions(t *testing.T) {
+	type wsRecord struct {
+		apiKey    string
+		apiSource string
+		setup     map[string]any
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read gradium stt setup payload: %v", err)
+			return
+		}
+		var setup map[string]any
+		if err := json.Unmarshal(payload, &setup); err != nil {
+			t.Errorf("decode gradium stt setup payload: %v", err)
+			return
+		}
+		records <- wsRecord{
+			apiKey:    r.Header.Get("x-api-key"),
+			apiSource: r.Header.Get("x-api-source"),
+			setup:     setup,
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	temperature := 0.35
+	vadBucket := 4
+	vadFlush := false
+	bufferSizeSeconds := 0.12
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		GradiumAPIKey:        "test-gradium-key",
+		STTBaseURL:           endpoint,
+		STTModel:             "asr-test",
+		STTLanguage:          "en",
+		STTTemperature:       &temperature,
+		STTVADBucket:         &vadBucket,
+		STTVADFlush:          &vadFlush,
+		STTBufferSizeSeconds: &bufferSizeSeconds,
+	}, providerGradium)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*gradium.GradiumSTT); !ok {
+		t.Fatalf("provider type = %T, want *gradium.GradiumSTT", provider)
+	}
+	if got, want := provider.Label(), "gradium.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "unknown"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Gradium"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming interim-only", caps)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.apiKey, "test-gradium-key"; got != want {
+			t.Fatalf("x-api-key = %q, want %q", got, want)
+		}
+		if got, want := record.apiSource, "livekit"; got != want {
+			t.Fatalf("x-api-source = %q, want %q", got, want)
+		}
+		if got, want := record.setup["type"], "setup"; got != want {
+			t.Fatalf("setup.type = %#v, want %#v", got, want)
+		}
+		if got, want := record.setup["model_name"], "asr-test"; got != want {
+			t.Fatalf("setup.model_name = %#v, want %#v", got, want)
+		}
+		if got, want := record.setup["input_format"], "pcm"; got != want {
+			t.Fatalf("setup.input_format = %#v, want %#v", got, want)
+		}
+		config, _ := record.setup["json_config"].(map[string]any)
+		if got, want := config["language"], "en"; got != want {
+			t.Fatalf("json_config.language = %#v, want %#v", got, want)
+		}
+		if got, want := config["temp"], 0.35; got != want {
+			t.Fatalf("json_config.temp = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Gradium STT setup payload")
+	}
+}
+
 func TestDefaultConfigFromEnvWrapsTTSFallbackProviders(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "cartesia")
