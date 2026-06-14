@@ -4689,6 +4689,789 @@ func TestInworldSTTFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestAssemblyAISTTFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("ASSEMBLYAI_API_KEY", "test-assemblyai-key")
+	type wsRecord struct {
+		authorization string
+		contentType   string
+		userAgent     string
+		path          string
+		query         map[string]string
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		query := map[string]string{}
+		for key, values := range r.URL.Query() {
+			if len(values) > 0 {
+				query[key] = values[0]
+			}
+		}
+		records <- wsRecord{
+			authorization: r.Header.Get("Authorization"),
+			contentType:   r.Header.Get("Content-Type"),
+			userAgent:     r.Header.Get("User-Agent"),
+			path:          r.URL.Path,
+			query:         query,
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	sampleRate := 8000
+	minTurnSilence := 120
+	maxTurnSilence := 900
+	endTurnConfidence := 0.7
+	formatTurns := true
+	languageDetection := false
+	continuousPartials := false
+	interruptionDelay := 250
+	vadThreshold := 0.45
+	speakerLabels := true
+	maxSpeakers := 3
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTBaseURL:                      "ws" + strings.TrimPrefix(server.URL, "http"),
+		STTSampleRate:                   &sampleRate,
+		STTModel:                        "u3-rt-pro",
+		STTMinTurnSilence:               &minTurnSilence,
+		STTMaxTurnSilence:               &maxTurnSilence,
+		STTEndOfTurnConfidenceThreshold: &endTurnConfidence,
+		STTFormatTurns:                  &formatTurns,
+		STTLanguageDetection:            &languageDetection,
+		STTContinuousPartials:           &continuousPartials,
+		STTInterruptionDelay:            &interruptionDelay,
+		STTKeytermsPrompt:               []string{"LiveKit", "AssemblyAI"},
+		STTPrompt:                       "agent vocabulary",
+		STTVADThreshold:                 &vadThreshold,
+		STTSpeakerLabels:                &speakerLabels,
+		STTMaxSpeakers:                  &maxSpeakers,
+		STTDomain:                       "call_center",
+	}, providerAssemblyAI)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*assemblyai.AssemblyAISTT); !ok {
+		t.Fatalf("provider type = %T, want *assemblyai.AssemblyAISTT", provider)
+	}
+	if got, want := provider.Label(), "assemblyai.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "u3-rt-pro"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "AssemblyAI"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || !caps.Diarization || caps.AlignedTranscript != "word" || caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming interim diarization word-aligned without offline", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.authorization, "test-assemblyai-key"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		if got, want := record.contentType, "application/json"; got != want {
+			t.Fatalf("Content-Type = %q, want %q", got, want)
+		}
+		if got, want := record.userAgent, "AssemblyAI/1.0 (integration=Livekit)"; got != want {
+			t.Fatalf("User-Agent = %q, want %q", got, want)
+		}
+		if got, want := record.path, "/v3/ws"; got != want {
+			t.Fatalf("path = %q, want %q", got, want)
+		}
+		expectedQuery := map[string]string{
+			"sample_rate":                      "8000",
+			"encoding":                         "pcm_s16le",
+			"speech_model":                     "u3-rt-pro",
+			"min_turn_silence":                 "120",
+			"max_turn_silence":                 "900",
+			"end_of_turn_confidence_threshold": "0.7",
+			"format_turns":                     "true",
+			"language_detection":               "false",
+			"continuous_partials":              "false",
+			"interruption_delay":               "250",
+			"keyterms_prompt":                  `["LiveKit","AssemblyAI"]`,
+			"prompt":                           "agent vocabulary",
+			"vad_threshold":                    "0.45",
+			"speaker_labels":                   "true",
+			"max_speakers":                     "3",
+			"domain":                           "call_center",
+		}
+		for key, want := range expectedQuery {
+			if got := record.query[key]; got != want {
+				t.Fatalf("query %s = %q, want %q", key, got, want)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for AssemblyAI STT websocket request")
+	}
+}
+
+func TestGnaniSTTFallbackPassesReferenceOptions(t *testing.T) {
+	type wsRecord struct {
+		apiKey   string
+		language string
+		path     string
+	}
+	type restRecord struct {
+		apiKey         string
+		organizationID string
+		userID         string
+		path           string
+		fields         map[string]string
+		filename       string
+		contentType    string
+		audio          []byte
+	}
+	wsRecords := make(chan wsRecord, 1)
+	restRecords := make(chan restRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/stt/v3/stream":
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("upgrade websocket: %v", err)
+				return
+			}
+			defer conn.Close()
+			wsRecords <- wsRecord{
+				apiKey:   r.Header.Get("x-api-key-id"),
+				language: r.Header.Get("lang_code"),
+				path:     r.URL.Path,
+			}
+		case "/stt/v3":
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Errorf("parse gnani stt multipart request: %v", err)
+				return
+			}
+			file, header, err := r.FormFile("audio_file")
+			if err != nil {
+				t.Errorf("read gnani stt audio file: %v", err)
+				return
+			}
+			defer file.Close()
+			audio, err := io.ReadAll(file)
+			if err != nil {
+				t.Errorf("read gnani stt audio bytes: %v", err)
+				return
+			}
+			fields := map[string]string{}
+			for key, values := range r.MultipartForm.Value {
+				if len(values) > 0 {
+					fields[key] = values[0]
+				}
+			}
+			restRecords <- restRecord{
+				apiKey:         r.Header.Get("X-API-Key-ID"),
+				organizationID: r.Header.Get("X-Organization-ID"),
+				userID:         r.Header.Get("X-API-User-ID"),
+				path:           r.URL.Path,
+				fields:         fields,
+				filename:       header.Filename,
+				contentType:    header.Header.Get("Content-Type"),
+				audio:          audio,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"transcript":"namaste","request_id":"req-1","language":"hi-IN","confidence":0.91}`))
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	sampleRate := 8000
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		GnaniAPIKey:       "test-gnani-key",
+		STTBaseURL:        server.URL,
+		STTLanguage:       "hi-IN",
+		STTSampleRate:     &sampleRate,
+		STTOrganizationID: "org-123",
+		STTUserID:         "user-456",
+	}, providerGnani)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*gnani.STT); !ok {
+		t.Fatalf("provider type = %T, want *gnani.STT", provider)
+	}
+	if got, want := provider.Label(), "gnani.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "vachana-stt-v3"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Gnani"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.InterimResults || caps.Diarization || caps.AlignedTranscript != "" || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming offline without interim/diarization", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-wsRecords:
+		if got, want := record.apiKey, "test-gnani-key"; got != want {
+			t.Fatalf("websocket x-api-key-id = %q, want %q", got, want)
+		}
+		if got, want := record.language, "hi-IN"; got != want {
+			t.Fatalf("websocket lang_code = %q, want %q", got, want)
+		}
+		if got, want := record.path, "/stt/v3/stream"; got != want {
+			t.Fatalf("websocket path = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Gnani STT websocket request")
+	}
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "ta-IN")
+	if err != nil {
+		t.Fatalf("Recognize() error = %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %+v, want one final transcript", event)
+	}
+	alt := event.Alternatives[0]
+	if alt.Text != "namaste" || alt.Language != "ta-IN" || alt.Confidence != 1 {
+		t.Fatalf("alternative = %+v, want mapped Gnani transcript", alt)
+	}
+
+	select {
+	case record := <-restRecords:
+		if got, want := record.apiKey, "test-gnani-key"; got != want {
+			t.Fatalf("REST X-API-Key-ID = %q, want %q", got, want)
+		}
+		if got, want := record.organizationID, "org-123"; got != want {
+			t.Fatalf("REST X-Organization-ID = %q, want %q", got, want)
+		}
+		if got, want := record.userID, "user-456"; got != want {
+			t.Fatalf("REST X-API-User-ID = %q, want %q", got, want)
+		}
+		if got, want := record.path, "/stt/v3"; got != want {
+			t.Fatalf("REST path = %q, want %q", got, want)
+		}
+		if got, want := record.fields["language_code"], "ta-IN"; got != want {
+			t.Fatalf("language_code = %q, want %q", got, want)
+		}
+		if got, want := record.filename, "audio.wav"; got != want {
+			t.Fatalf("filename = %q, want %q", got, want)
+		}
+		if got, want := record.contentType, "audio/wav"; got != want {
+			t.Fatalf("file content type = %q, want %q", got, want)
+		}
+		if got, want := fmt.Sprintf("%x", record.audio), "0102"; got != want {
+			t.Fatalf("audio bytes = %s, want %s", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Gnani STT REST request")
+	}
+}
+
+func TestSimplismartSTTFallbackPassesReferenceOptions(t *testing.T) {
+	type restRecord struct {
+		authorization string
+		contentType   string
+		path          string
+		payload       map[string]any
+	}
+	records := make(chan restRecord, 1)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode simplismart stt request: %v", err)
+			return
+		}
+		records <- restRecord{
+			authorization: r.Header.Get("Authorization"),
+			contentType:   r.Header.Get("Content-Type"),
+			path:          r.URL.Path,
+			payload:       payload,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"request_id":"req-1","transcription":["hello ","world"],"timestamps":[[0.1,0.5],[0.6,1.0]],"info":{"language":"de"}}`))
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test HTTP server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	includeTimestamps := true
+	maxSpeakers := 2
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		SimplismartAPIKey:    "test-simplismart-key",
+		STTBaseURL:           server.URL,
+		STTModel:             "custom/model",
+		STTLanguage:          "fr",
+		STTTask:              "translate",
+		STTIncludeTimestamps: &includeTimestamps,
+		STTKeytermsPrompt:    []string{"Chicago", "Joplin"},
+		STTMaxSpeakers:       &maxSpeakers,
+	}, providerSimplismart)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*simplismart.SimplismartSTT); !ok {
+		t.Fatalf("provider type = %T, want *simplismart.SimplismartSTT", provider)
+	}
+	if got, want := provider.Label(), "simplismart.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "custom/model"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Simplismart"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || caps.InterimResults || !caps.Diarization || caps.AlignedTranscript != "word" || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want offline word-aligned diarization without streaming/interim", caps)
+	}
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
+	if err != nil {
+		t.Fatalf("Recognize() error = %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || event.RequestID != "req-1" || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %+v, want one final transcript with request id", event)
+	}
+	alt := event.Alternatives[0]
+	if alt.Text != "hello world" || alt.Language != "de" || alt.StartTime != 0.1 || alt.EndTime != 1.0 {
+		t.Fatalf("alternative = %+v, want mapped Simplismart transcript", alt)
+	}
+
+	select {
+	case record := <-records:
+		if got, want := record.authorization, "Bearer test-simplismart-key"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		if got, want := record.contentType, "application/json"; got != want {
+			t.Fatalf("Content-Type = %q, want %q", got, want)
+		}
+		if got, want := record.path, "/"; got != want {
+			t.Fatalf("path = %q, want %q", got, want)
+		}
+		expectedPayload := map[string]any{
+			"audio_data":         "AQI=",
+			"language":           "fr",
+			"model":              "custom/model",
+			"task":               "translate",
+			"without_timestamps": false,
+			"hotwords":           "Chicago,Joplin",
+			"num_speakers":       float64(2),
+		}
+		for key, want := range expectedPayload {
+			if got := record.payload[key]; got != want {
+				t.Fatalf("payload %s = %#v, want %#v", key, got, want)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Simplismart STT REST request")
+	}
+}
+
+func TestClovaSTTFallbackPassesReferenceOptions(t *testing.T) {
+	type restRecord struct {
+		secret      string
+		path        string
+		params      map[string]any
+		filename    string
+		contentType string
+		mediaPrefix string
+	}
+	records := make(chan restRecord, 1)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("parse clova stt multipart request: %v", err)
+			return
+		}
+		var params map[string]any
+		if err := json.Unmarshal([]byte(r.FormValue("params")), &params); err != nil {
+			t.Errorf("decode clova stt params: %v", err)
+			return
+		}
+		file, header, err := r.FormFile("media")
+		if err != nil {
+			t.Errorf("read clova stt media file: %v", err)
+			return
+		}
+		defer file.Close()
+		media, err := io.ReadAll(file)
+		if err != nil {
+			t.Errorf("read clova stt media bytes: %v", err)
+			return
+		}
+		prefix := string(media)
+		if len(prefix) > 12 {
+			prefix = prefix[:12]
+		}
+		records <- restRecord{
+			secret:      r.Header.Get("X-CLOVASPEECH-API-KEY"),
+			path:        r.URL.Path,
+			params:      params,
+			filename:    header.Filename,
+			contentType: header.Header.Get("Content-Type"),
+			mediaPrefix: prefix,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"text":"hello clova","confidence":0.92}`))
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test HTTP server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	threshold := 0.6
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		ClovaSTTSecret:    "test-clova-secret",
+		ClovaSTTInvokeURL: server.URL,
+		STTLanguage:       "en",
+		STTVADThreshold:   &threshold,
+	}, providerClova)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*clova.ClovaSTT); !ok {
+		t.Fatalf("provider type = %T, want *clova.ClovaSTT", provider)
+	}
+	if got, want := provider.Label(), "clova.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "unknown"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Clova"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || !caps.InterimResults || caps.Diarization || caps.AlignedTranscript != "" || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want offline interim without streaming/diarization", caps)
+	}
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
+	if err != nil {
+		t.Fatalf("Recognize() error = %v", err)
+	}
+	if event.Type != stt.SpeechEventInterimTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %+v, want one interim transcript", event)
+	}
+	alt := event.Alternatives[0]
+	if alt.Text != "hello clova" || alt.Language != "en-US" || alt.Confidence != 0.92 {
+		t.Fatalf("alternative = %+v, want mapped Clova transcript", alt)
+	}
+
+	select {
+	case record := <-records:
+		if got, want := record.secret, "test-clova-secret"; got != want {
+			t.Fatalf("X-CLOVASPEECH-API-KEY = %q, want %q", got, want)
+		}
+		if got, want := record.path, "/recognizer/upload"; got != want {
+			t.Fatalf("path = %q, want %q", got, want)
+		}
+		if got, want := record.params["language"], "en-US"; got != want {
+			t.Fatalf("params language = %#v, want %#v", got, want)
+		}
+		if got, want := record.params["completion"], "sync"; got != want {
+			t.Fatalf("params completion = %#v, want %#v", got, want)
+		}
+		if got, want := record.filename, "audio.wav"; got != want {
+			t.Fatalf("filename = %q, want %q", got, want)
+		}
+		if got, want := record.contentType, "audio/wav"; got != want {
+			t.Fatalf("media content type = %q, want %q", got, want)
+		}
+		if !strings.HasPrefix(record.mediaPrefix, "RIFF") || !strings.Contains(record.mediaPrefix, "WAVE") {
+			t.Fatalf("media prefix = %q, want RIFF/WAVE wav header", record.mediaPrefix)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Clova STT REST request")
+	}
+}
+
+func TestRtzrSTTFallbackPassesReferenceOptions(t *testing.T) {
+	type wsRecord struct {
+		authorization string
+		query         map[string]string
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		query := map[string]string{}
+		for key, values := range r.URL.Query() {
+			if len(values) > 0 {
+				query[key] = values[0]
+			}
+		}
+		records <- wsRecord{
+			authorization: r.Header.Get("Authorization"),
+			query:         query,
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	sampleRate := 16000
+	epdTime := 1.2
+	noiseThreshold := 0.42
+	activeThreshold := 0.77
+	punctuate := true
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		RtzrClientID:                    "test-client-id",
+		RtzrClientSecret:                "test-client-secret",
+		RtzrAccessToken:                 "test-access-token",
+		STTStreamingURL:                 "ws" + strings.TrimPrefix(server.URL, "http"),
+		STTModel:                        "sommers_ko-test",
+		STTSampleRate:                   &sampleRate,
+		STTDomain:                       "GENERAL",
+		STTEndpointingSeconds:           &epdTime,
+		STTVADThreshold:                 &noiseThreshold,
+		STTEndOfTurnConfidenceThreshold: &activeThreshold,
+		STTPunctuate:                    &punctuate,
+		STTKeytermsPrompt:               []string{"서울", "LiveKit"},
+	}, providerRtzr)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*rtzr.RtzrSTT); !ok {
+		t.Fatalf("provider type = %T, want *rtzr.RtzrSTT", provider)
+	}
+	if got, want := provider.Label(), "rtzr.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "sommers_ko-test"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "RTZR"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.Diarization || caps.AlignedTranscript != "chunk" || caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming interim chunk-aligned without offline", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.authorization, "bearer test-access-token"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		expectedQuery := map[string]string{
+			"model_name":       "sommers_ko-test",
+			"domain":           "GENERAL",
+			"sample_rate":      "16000",
+			"encoding":         "LINEAR16",
+			"epd_time":         "1.2",
+			"noise_threshold":  "0.42",
+			"active_threshold": "0.77",
+			"use_punctuation":  "true",
+			"keywords":         "서울,LiveKit",
+		}
+		for key, want := range expectedQuery {
+			if got := record.query[key]; got != want {
+				t.Fatalf("query %s = %q, want %q", key, got, want)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for RTZR STT websocket request")
+	}
+}
+
+func TestMistralAISTTFallbackPassesReferenceOptions(t *testing.T) {
+	type requestRecord struct {
+		apiKey      string
+		path        string
+		fields      map[string]string
+		filename    string
+		contentType string
+		audio       []byte
+	}
+	records := make(chan requestRecord, 1)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("parse mistralai stt multipart request: %v", err)
+			return
+		}
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			t.Errorf("read mistralai stt audio file: %v", err)
+			return
+		}
+		defer file.Close()
+		audio, err := io.ReadAll(file)
+		if err != nil {
+			t.Errorf("read mistralai stt audio bytes: %v", err)
+			return
+		}
+		fields := map[string]string{}
+		for key, values := range r.MultipartForm.Value {
+			if len(values) > 0 {
+				fields[key] = values[0]
+			}
+		}
+		records <- requestRecord{
+			apiKey:      r.Header.Get("x-api-key"),
+			path:        r.URL.Path,
+			fields:      fields,
+			filename:    header.Filename,
+			contentType: header.Header.Get("Content-Type"),
+			audio:       audio,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"text":"bonjour monde","language":"fr","segments":[{"text":"bonjour","start":0.2,"end":0.7},{"text":"monde","start":0.8,"end":1.1}]}`))
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test HTTP server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		MistralAPIKey:     "test-mistral-key",
+		STTBaseURL:        server.URL,
+		STTModel:          "voxtral-mini-2507",
+		STTLanguage:       "fr",
+		STTKeytermsPrompt: []string{"Chicago", "Joplin"},
+	}, providerMistralAI)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*mistralai.MistralAISTT); !ok {
+		t.Fatalf("provider type = %T, want *mistralai.MistralAISTT", provider)
+	}
+	if got, want := provider.Label(), "mistralai.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "voxtral-mini-2507"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "MistralAI"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || caps.InterimResults || caps.Diarization || caps.AlignedTranscript != "" || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want offline-only without streaming/interim/diarization", caps)
+	}
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
+	if err != nil {
+		t.Fatalf("Recognize() error = %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %+v, want one final transcript", event)
+	}
+	alt := event.Alternatives[0]
+	if alt.Text != "bonjour monde" || alt.Language != "fr" || alt.StartTime != 0.2 || alt.EndTime != 1.1 {
+		t.Fatalf("alternative = %+v, want mapped MistralAI transcript", alt)
+	}
+
+	select {
+	case record := <-records:
+		if got, want := record.apiKey, "test-mistral-key"; got != want {
+			t.Fatalf("x-api-key = %q, want %q", got, want)
+		}
+		if got, want := record.path, "/audio/transcriptions"; got != want {
+			t.Fatalf("path = %q, want %q", got, want)
+		}
+		if got, want := record.fields["model"], "voxtral-mini-2507"; got != want {
+			t.Fatalf("model = %q, want %q", got, want)
+		}
+		if got, want := record.fields["language"], "fr"; got != want {
+			t.Fatalf("language = %q, want %q", got, want)
+		}
+		if got, want := record.fields["context_bias"], "Chicago,Joplin"; got != want {
+			t.Fatalf("context_bias = %q, want %q", got, want)
+		}
+		if _, ok := record.fields["timestamp_granularities"]; ok {
+			t.Fatalf("timestamp_granularities present with language: %#v", record.fields)
+		}
+		if got, want := record.filename, "audio.wav"; got != want {
+			t.Fatalf("filename = %q, want %q", got, want)
+		}
+		if got, want := record.contentType, "audio/wav"; got != want {
+			t.Fatalf("file content type = %q, want %q", got, want)
+		}
+		if got, want := fmt.Sprintf("%x", record.audio), "0102"; got != want {
+			t.Fatalf("audio bytes = %s, want %s", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for MistralAI STT recognize request")
+	}
+}
+
 func TestSarvamSTTFallbackPassesReferenceOptions(t *testing.T) {
 	type wsRecord struct {
 		apiKey    string

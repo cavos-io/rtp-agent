@@ -2060,6 +2060,15 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTAudioChunkDurationMS(*cfg.STTAudioChunkDurationMS))
 		}
 		return cartesia.NewCartesiaSTT("", sttOpts...), nil
+	case providerClova:
+		sttOpts := []clova.ClovaSTTOption{}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, clova.WithClovaSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTVADThreshold != nil {
+			sttOpts = append(sttOpts, clova.WithClovaSTTThreshold(*cfg.STTVADThreshold))
+		}
+		return clova.NewClovaSTT(cfg.ClovaSTTSecret, cfg.ClovaSTTInvokeURL, sttOpts...), nil
 	case providerElevenLabs:
 		sttOpts := []elevenlabs.ElevenLabsSTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -2223,6 +2232,21 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, inworld.WithInworldSTTEndOfTurnConfidenceThreshold(*cfg.STTEndOfTurnConfidenceThreshold))
 		}
 		return inworld.NewInworldSTT(cfg.InworldAPIKey, sttOpts...), nil
+	case providerMistralAI:
+		sttOpts := []mistralai.MistralAISTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, mistralai.WithMistralAISTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, mistralai.WithMistralAISTTModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, mistralai.WithMistralAISTTLanguage(cfg.STTLanguage))
+		}
+		if len(cfg.STTKeytermsPrompt) > 0 {
+			sttOpts = append(sttOpts, mistralai.WithMistralAISTTContextBias(cfg.STTKeytermsPrompt))
+		}
+		return mistralai.NewMistralAISTT(cfg.MistralAPIKey, sttOpts...), nil
 	case providerGradium:
 		sttOpts := []gradium.GradiumSTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -2247,6 +2271,24 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, gradium.WithGradiumSTTBufferSizeSeconds(*cfg.STTBufferSizeSeconds))
 		}
 		return gradium.NewGradiumSTT(cfg.GradiumAPIKey, sttOpts...), nil
+	case providerGnani:
+		sttOpts := []gnani.STTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, gnani.WithSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, gnani.WithSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, gnani.WithSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTOrganizationID != "" {
+			sttOpts = append(sttOpts, gnani.WithSTTOrganizationID(cfg.STTOrganizationID))
+		}
+		if cfg.STTUserID != "" {
+			sttOpts = append(sttOpts, gnani.WithSTTUserID(cfg.STTUserID))
+		}
+		return gnani.NewSTT(cfg.GnaniAPIKey, sttOpts...), nil
 	case providerSmallestAI:
 		sttOpts := []smallestai.SmallestAISTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -2486,6 +2528,126 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			return nil, fmt.Errorf("invalid sarvam STT configuration")
 		}
 		return provider, nil
+	case providerRtzr:
+		sttOpts := []rtzr.RtzrSTTOption{}
+		if cfg.RtzrClientSecret != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrClientSecret(cfg.RtzrClientSecret))
+		}
+		if cfg.RtzrAccessToken != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrAccessToken(cfg.RtzrAccessToken))
+		}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrAPIBase(cfg.STTBaseURL))
+		}
+		if cfg.STTStreamingURL != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrWSBase(cfg.STTStreamingURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, rtzr.WithRtzrSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTDomain != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrDomain(cfg.STTDomain))
+		}
+		if cfg.STTEndpointingSeconds != nil {
+			sttOpts = append(sttOpts, rtzr.WithRtzrEPDTime(*cfg.STTEndpointingSeconds))
+		}
+		if cfg.STTVADThreshold != nil {
+			sttOpts = append(sttOpts, rtzr.WithRtzrNoiseThreshold(*cfg.STTVADThreshold))
+		}
+		if cfg.STTEndOfTurnConfidenceThreshold != nil {
+			sttOpts = append(sttOpts, rtzr.WithRtzrActiveThreshold(*cfg.STTEndOfTurnConfidenceThreshold))
+		}
+		if cfg.STTPunctuate != nil {
+			sttOpts = append(sttOpts, rtzr.WithRtzrUsePunctuation(*cfg.STTPunctuate))
+		}
+		if len(cfg.STTKeytermsPrompt) > 0 {
+			sttOpts = append(sttOpts, rtzr.WithRtzrKeywords(cfg.STTKeytermsPrompt))
+		}
+		return rtzr.NewRtzrSTT(cfg.RtzrClientID, sttOpts...), nil
+	case providerAssemblyAI:
+		sttOpts := []assemblyai.AssemblyAISTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, assemblyai.WithAssemblyAISTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, assemblyai.WithAssemblyAISTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, assemblyai.WithAssemblyAISTTModel(cfg.STTModel))
+		}
+		if cfg.STTMinTurnSilence != nil {
+			sttOpts = append(sttOpts, assemblyai.WithAssemblyAISTTMinTurnSilence(*cfg.STTMinTurnSilence))
+		}
+		if cfg.STTMaxTurnSilence != nil {
+			sttOpts = append(sttOpts, assemblyai.WithAssemblyAISTTMaxTurnSilence(*cfg.STTMaxTurnSilence))
+		}
+		if cfg.STTEndOfTurnConfidenceThreshold != nil {
+			sttOpts = append(sttOpts, assemblyai.WithAssemblyAISTTEndOfTurnConfidenceThreshold(*cfg.STTEndOfTurnConfidenceThreshold))
+		}
+		if cfg.STTFormatTurns != nil {
+			sttOpts = append(sttOpts, assemblyai.WithAssemblyAISTTFormatTurns(*cfg.STTFormatTurns))
+		}
+		if cfg.STTLanguageDetection != nil {
+			sttOpts = append(sttOpts, assemblyai.WithAssemblyAISTTLanguageDetection(*cfg.STTLanguageDetection))
+		}
+		if cfg.STTContinuousPartials != nil {
+			sttOpts = append(sttOpts, assemblyai.WithAssemblyAISTTContinuousPartials(*cfg.STTContinuousPartials))
+		}
+		if cfg.STTInterruptionDelay != nil {
+			sttOpts = append(sttOpts, assemblyai.WithAssemblyAISTTInterruptionDelay(*cfg.STTInterruptionDelay))
+		}
+		if len(cfg.STTKeytermsPrompt) > 0 {
+			sttOpts = append(sttOpts, assemblyai.WithAssemblyAISTTKeytermsPrompt(cfg.STTKeytermsPrompt))
+		}
+		if cfg.STTPrompt != "" {
+			sttOpts = append(sttOpts, assemblyai.WithAssemblyAISTTPrompt(cfg.STTPrompt))
+		}
+		if cfg.STTVADThreshold != nil {
+			sttOpts = append(sttOpts, assemblyai.WithAssemblyAISTTVADThreshold(*cfg.STTVADThreshold))
+		}
+		if cfg.STTSpeakerLabels != nil {
+			sttOpts = append(sttOpts, assemblyai.WithAssemblyAISTTSpeakerLabels(*cfg.STTSpeakerLabels))
+		}
+		if cfg.STTMaxSpeakers != nil {
+			sttOpts = append(sttOpts, assemblyai.WithAssemblyAISTTMaxSpeakers(*cfg.STTMaxSpeakers))
+		}
+		if cfg.STTDomain != "" {
+			sttOpts = append(sttOpts, assemblyai.WithAssemblyAISTTDomain(cfg.STTDomain))
+		}
+		return assemblyai.NewAssemblyAISTT(os.Getenv("ASSEMBLYAI_API_KEY"), sttOpts...), nil
+	case providerSimplismart:
+		sttOpts := []simplismart.SimplismartSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTInterimResults != nil {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTStreaming(*cfg.STTInterimResults))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTTask != "" {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTTask(cfg.STTTask))
+		}
+		if cfg.STTIncludeTimestamps != nil {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTWithoutTimestamps(!*cfg.STTIncludeTimestamps))
+		}
+		if len(cfg.STTKeytermsPrompt) > 0 {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTHotwords(strings.Join(cfg.STTKeytermsPrompt, ",")))
+		}
+		if cfg.STTMaxSpeakers != nil {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTNumSpeakers(*cfg.STTMaxSpeakers))
+		}
+		return simplismart.NewSimplismartSTT(cfg.SimplismartAPIKey, sttOpts...), nil
 	case providerSLNG:
 		sttOpts := []slng.STTOption{}
 		if cfg.STTModel != "" {
