@@ -4689,6 +4689,147 @@ func TestInworldSTTFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestAssemblyAISTTFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("ASSEMBLYAI_API_KEY", "test-assemblyai-key")
+	type wsRecord struct {
+		authorization string
+		contentType   string
+		userAgent     string
+		path          string
+		query         map[string]string
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		query := map[string]string{}
+		for key, values := range r.URL.Query() {
+			if len(values) > 0 {
+				query[key] = values[0]
+			}
+		}
+		records <- wsRecord{
+			authorization: r.Header.Get("Authorization"),
+			contentType:   r.Header.Get("Content-Type"),
+			userAgent:     r.Header.Get("User-Agent"),
+			path:          r.URL.Path,
+			query:         query,
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	sampleRate := 8000
+	minTurnSilence := 120
+	maxTurnSilence := 900
+	endTurnConfidence := 0.7
+	formatTurns := true
+	languageDetection := false
+	continuousPartials := false
+	interruptionDelay := 250
+	vadThreshold := 0.45
+	speakerLabels := true
+	maxSpeakers := 3
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTBaseURL:                      "ws" + strings.TrimPrefix(server.URL, "http"),
+		STTSampleRate:                   &sampleRate,
+		STTModel:                        "u3-rt-pro",
+		STTMinTurnSilence:               &minTurnSilence,
+		STTMaxTurnSilence:               &maxTurnSilence,
+		STTEndOfTurnConfidenceThreshold: &endTurnConfidence,
+		STTFormatTurns:                  &formatTurns,
+		STTLanguageDetection:            &languageDetection,
+		STTContinuousPartials:           &continuousPartials,
+		STTInterruptionDelay:            &interruptionDelay,
+		STTKeytermsPrompt:               []string{"LiveKit", "AssemblyAI"},
+		STTPrompt:                       "agent vocabulary",
+		STTVADThreshold:                 &vadThreshold,
+		STTSpeakerLabels:                &speakerLabels,
+		STTMaxSpeakers:                  &maxSpeakers,
+		STTDomain:                       "call_center",
+	}, providerAssemblyAI)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*assemblyai.AssemblyAISTT); !ok {
+		t.Fatalf("provider type = %T, want *assemblyai.AssemblyAISTT", provider)
+	}
+	if got, want := provider.Label(), "assemblyai.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "u3-rt-pro"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "AssemblyAI"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || !caps.Diarization || caps.AlignedTranscript != "word" || caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming interim diarization word-aligned without offline", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.authorization, "test-assemblyai-key"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		if got, want := record.contentType, "application/json"; got != want {
+			t.Fatalf("Content-Type = %q, want %q", got, want)
+		}
+		if got, want := record.userAgent, "AssemblyAI/1.0 (integration=Livekit)"; got != want {
+			t.Fatalf("User-Agent = %q, want %q", got, want)
+		}
+		if got, want := record.path, "/v3/ws"; got != want {
+			t.Fatalf("path = %q, want %q", got, want)
+		}
+		expectedQuery := map[string]string{
+			"sample_rate":                      "8000",
+			"encoding":                         "pcm_s16le",
+			"speech_model":                     "u3-rt-pro",
+			"min_turn_silence":                 "120",
+			"max_turn_silence":                 "900",
+			"end_of_turn_confidence_threshold": "0.7",
+			"format_turns":                     "true",
+			"language_detection":               "false",
+			"continuous_partials":              "false",
+			"interruption_delay":               "250",
+			"keyterms_prompt":                  `["LiveKit","AssemblyAI"]`,
+			"prompt":                           "agent vocabulary",
+			"vad_threshold":                    "0.45",
+			"speaker_labels":                   "true",
+			"max_speakers":                     "3",
+			"domain":                           "call_center",
+		}
+		for key, want := range expectedQuery {
+			if got := record.query[key]; got != want {
+				t.Fatalf("query %s = %q, want %q", key, got, want)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for AssemblyAI STT websocket request")
+	}
+}
+
 func TestRtzrSTTFallbackPassesReferenceOptions(t *testing.T) {
 	type wsRecord struct {
 		authorization string
