@@ -654,6 +654,25 @@ def stt_fallback(input_data: Any) -> dict[str, Any]:
                 {"name": "forward_metrics", "request_ids": request_ids}
             ],
         }
+    if action == "close_unsubscribes_provider_metrics":
+        primary = FakeSTT("primary")
+        adapter = fallback_module.FallbackAdapter([primary])
+        request_ids: list[str] = []
+        adapter.on(
+            "metrics_collected",
+            lambda metrics: request_ids.append(metrics.request_id),
+        )
+        asyncio.run(adapter.aclose())
+        primary.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "late"})(),
+        )
+        return {
+            "contract": "stt-fallback-close-unsubscribes-provider-metrics",
+            "events": [
+                {"name": "close_unsubscribes_provider_metrics", "request_ids": request_ids}
+            ],
+        }
     if action == "availability_panic_isolated":
         primary = FakeSTT("primary", recognize_error=True)
         fallback = FakeSTT("fallback")

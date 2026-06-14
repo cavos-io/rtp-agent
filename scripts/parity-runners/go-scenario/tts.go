@@ -639,7 +639,7 @@ func runTTSStreamAdapter(input json.RawMessage) (any, error) {
 				{"name": "forward_metrics", "request_ids": requestIDs, "count": len(requestIDs)},
 			},
 		}, nil
-	case "close_preserves_metrics_forwarding":
+	case "close_unsubscribes_provider_metrics":
 		requestIDs := make([]string, 0, 2)
 		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
 			requestIDs = append(requestIDs, metrics.RequestID)
@@ -652,9 +652,9 @@ func runTTSStreamAdapter(input json.RawMessage) (any, error) {
 		provider.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "after"})
 		adapter.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "local"})
 		return map[string]any{
-			"contract": "tts-stream-adapter-close-preserves-metrics-forwarding",
+			"contract": "tts-stream-adapter-close-unsubscribes-provider-metrics",
 			"events": []map[string]any{
-				{"name": "close_preserves_metrics_forwarding", "request_ids": requestIDs},
+				{"name": "close_unsubscribes_provider_metrics", "request_ids": requestIDs},
 			},
 		}, nil
 	case "unsubscribe_metrics":

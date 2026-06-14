@@ -116,7 +116,7 @@ def tts_stream_adapter(input_data: Any) -> dict[str, Any]:
                 {"name": "forward_metrics", "request_ids": request_ids, "count": len(request_ids)}
             ],
         }
-    if action == "close_preserves_metrics_forwarding":
+    if action == "close_unsubscribes_provider_metrics":
         request_ids: list[str] = []
         adapter.on(
             "metrics_collected",
@@ -136,9 +136,9 @@ def tts_stream_adapter(input_data: Any) -> dict[str, Any]:
             type("Metrics", (), {"request_id": "local"})(),
         )
         return {
-            "contract": "tts-stream-adapter-close-preserves-metrics-forwarding",
+            "contract": "tts-stream-adapter-close-unsubscribes-provider-metrics",
             "events": [
-                {"name": "close_preserves_metrics_forwarding", "request_ids": request_ids}
+                {"name": "close_unsubscribes_provider_metrics", "request_ids": request_ids}
             ],
         }
     if action == "unsubscribe_metrics":
