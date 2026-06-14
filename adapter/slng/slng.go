@@ -489,7 +489,7 @@ func (t *TTS) SampleRate() int  { return t.sampleRate }
 func (t *TTS) NumChannels() int { return slngNumChannels }
 
 func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	stream, err := t.Stream(ctx)
+	stream, err := t.stream(ctx, false)
 	if err != nil {
 		return nil, err
 	}
@@ -507,6 +507,10 @@ func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, e
 }
 
 func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	return t.stream(ctx, true)
+}
+
+func (t *TTS) stream(ctx context.Context, appendTextSpace bool) (tts.SynthesizeStream, error) {
 	if err := t.requireAPIKey(); err != nil {
 		return nil, err
 	}
@@ -518,7 +522,7 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		conn.Close()
 		return nil, err
 	}
-	return &ttsStream{conn: conn, sampleRate: t.sampleRate, model: t.model}, nil
+	return &ttsStream{conn: conn, sampleRate: t.sampleRate, model: t.model, appendTextSpace: appendTextSpace}, nil
 }
 
 func (t *TTS) requireAPIKey() error {
@@ -1074,11 +1078,15 @@ type ttsStream struct {
 	audioBytes      int
 	textMessages    int
 	lastMessageType string
+	appendTextSpace bool
 }
 
 func (s *ttsStream) PushText(text string) error {
 	if text == "" {
 		return nil
+	}
+	if s.appendTextSpace && !strings.HasSuffix(text, " ") {
+		text += " "
 	}
 	data, err := json.Marshal(map[string]any{"type": "text", "text": text})
 	if err != nil {
