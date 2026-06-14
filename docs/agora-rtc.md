@@ -57,6 +57,7 @@ export AGORA_APP_ID=...
 export AGORA_APP_CERTIFICATE=...
 export AGORA_CHANNEL=...
 export AGORA_UID=agent-0
+export AGORA_JOIN_TIMEOUT=10s
 export LD_LIBRARY_PATH=/path/to/Agora-Golang-Server-SDK/agora_sdk:$LD_LIBRARY_PATH
 
 .tmp/rtp-agent-agora start
@@ -68,6 +69,10 @@ RTC token for the configured channel and UID. `AGORA_TOKEN` is optional only
 when authentication is disabled for the Agora project or `AGORA_APP_CERTIFICATE`
 is available for token generation. If `AGORA_UID` is omitted, the SDK transport
 uses `"0"`, matching the Agora server SDK examples.
+
+`AGORA_JOIN_TIMEOUT` bounds how long the worker waits for Agora's connected
+event before startup fails. It accepts Go duration strings such as `10s` or a
+number of seconds.
 
 ## Smoke Test
 

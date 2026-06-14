@@ -96,3 +96,38 @@ func TestSDKClientImplementationConfiguresRuntimeDirectories(t *testing.T) {
 		}
 	}
 }
+
+func TestSDKClientImplementationWaitsForConnectedEvent(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"connectedCh := make(chan struct{}, 1)",
+		"joinErrCh := make(chan error, 1)",
+		"case connectedCh <- struct{}{}",
+		"return c.waitConnected",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}
+
+func TestSDKClientImplementationHasJoinTimeout(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"AGORA_JOIN_TIMEOUT",
+		"defaultSDKJoinTimeout",
+		"time.NewTimer",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}

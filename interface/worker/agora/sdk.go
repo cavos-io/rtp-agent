@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/interface/worker"
@@ -22,6 +24,8 @@ type sdkChannelClient struct {
 
 var sdkServiceMu sync.Mutex
 
+const defaultSDKJoinTimeout = 10 * time.Second
+
 func NewSDKChannelClient() (ChannelClient, error) {
 	return &sdkChannelClient{}, nil
 }
@@ -31,6 +35,20 @@ func sdkRuntimeDir() string {
 		return dir
 	}
 	return filepath.Join(os.TempDir(), "rtp-agent-agora")
+}
+
+func sdkJoinTimeout() time.Duration {
+	value := os.Getenv("AGORA_JOIN_TIMEOUT")
+	if value == "" {
+		return defaultSDKJoinTimeout
+	}
+	if duration, err := time.ParseDuration(value); err == nil && duration > 0 {
+		return duration
+	}
+	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	return defaultSDKJoinTimeout
 }
 
 func emitSDKEvent(handler EventHandler, event Event) {
@@ -113,6 +131,8 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 	if connection == nil {
 		return fmt.Errorf("agora SDK connection creation failed")
 	}
+	connectedCh := make(chan struct{}, 1)
+	joinErrCh := make(chan error, 1)
 	connection.RegisterObserver(&agoraservice.RtcConnectionObserver{
 		OnConnected: func(_ *agoraservice.RtcConnection, info *agoraservice.RtcConnectionInfo, reason int) {
 			event := Event{Kind: EventConnected, Channel: opts.Channel, Reason: reason}
@@ -120,6 +140,10 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 				event.Channel = info.ChannelId
 			}
 			emitSDKEvent(handler, event)
+			select {
+			case connectedCh <- struct{}{}:
+			default:
+			}
 		},
 		OnDisconnected: func(_ *agoraservice.RtcConnection, info *agoraservice.RtcConnectionInfo, reason int) {
 			event := Event{Kind: EventDisconnected, Channel: opts.Channel, Reason: reason}
@@ -135,10 +159,20 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 			emitSDKEvent(handler, Event{Kind: EventUserLeft, Channel: opts.Channel, UserID: uid, Reason: reason})
 		},
 		OnError: func(_ *agoraservice.RtcConnection, errCode int, msg string) {
-			emitSDKEvent(handler, Event{Kind: EventError, Channel: opts.Channel, Reason: errCode, Err: fmt.Errorf("agora SDK error %d: %s", errCode, msg)})
+			err := fmt.Errorf("agora SDK error %d: %s", errCode, msg)
+			emitSDKEvent(handler, Event{Kind: EventError, Channel: opts.Channel, Reason: errCode, Err: err})
+			select {
+			case joinErrCh <- err:
+			default:
+			}
 		},
 		OnConnectionFailure: func(_ *agoraservice.RtcConnection, _ *agoraservice.RtcConnectionInfo, errCode int) {
-			emitSDKEvent(handler, Event{Kind: EventError, Channel: opts.Channel, Reason: errCode, Err: fmt.Errorf("agora SDK connection failure: %d", errCode)})
+			err := fmt.Errorf("agora SDK connection failure: %d", errCode)
+			emitSDKEvent(handler, Event{Kind: EventError, Channel: opts.Channel, Reason: errCode, Err: err})
+			select {
+			case joinErrCh <- err:
+			default:
+			}
 		},
 		OnAIQoSCapabilityMissing: func(_ *agoraservice.RtcConnection, fallback int) int {
 			return fallback
@@ -180,7 +214,43 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 	c.mu.Lock()
 	c.connection = connection
 	c.mu.Unlock()
-	return nil
+	return c.waitConnected(ctx, connection, connectedCh, joinErrCh)
+}
+
+func (c *sdkChannelClient) waitConnected(ctx context.Context, connection *agoraservice.RtcConnection, connectedCh <-chan struct{}, joinErrCh <-chan error) error {
+	timer := time.NewTimer(sdkJoinTimeout())
+	defer timer.Stop()
+	select {
+	case <-connectedCh:
+		return nil
+	case err := <-joinErrCh:
+		_ = connection.Disconnect()
+		connection.Release()
+		c.mu.Lock()
+		if c.connection == connection {
+			c.connection = nil
+		}
+		c.mu.Unlock()
+		return err
+	case <-timer.C:
+		_ = connection.Disconnect()
+		connection.Release()
+		c.mu.Lock()
+		if c.connection == connection {
+			c.connection = nil
+		}
+		c.mu.Unlock()
+		return fmt.Errorf("agora SDK connect timed out after %s", sdkJoinTimeout())
+	case <-ctx.Done():
+		_ = connection.Disconnect()
+		connection.Release()
+		c.mu.Lock()
+		if c.connection == connection {
+			c.connection = nil
+		}
+		c.mu.Unlock()
+		return ctx.Err()
+	}
 }
 
 func (c *sdkChannelClient) Leave(ctx context.Context) error {
