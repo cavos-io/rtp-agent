@@ -1519,6 +1519,7 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		if transportRun != nil {
 			return transportRun(ctx)
 		}
+		return fmt.Errorf("agora transport run function is required")
 	}
 
 	if err := s.validateRunPreconditions(); err != nil {
