@@ -209,24 +209,7 @@ func (f *FallbackAdapter) OnError(handler TTSErrorHandler) func() {
 	if handler == nil {
 		return func() {}
 	}
-	unsubscribes := make([]func(), 0, len(f.ttss)+1)
-	unsubscribes = append(unsubscribes, f.ErrorEmitter.OnError(handler))
-	for _, tts := range f.ttss {
-		collector, ok := tts.(errorCollectorTTS)
-		if !ok {
-			continue
-		}
-		unsubscribes = append(unsubscribes, collector.OnError(handler))
-	}
-
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			for _, unsubscribe := range unsubscribes {
-				unsubscribe()
-			}
-		})
-	}
+	return f.ErrorEmitter.OnError(handler)
 }
 
 func (f *FallbackAdapter) Capabilities() TTSCapabilities {

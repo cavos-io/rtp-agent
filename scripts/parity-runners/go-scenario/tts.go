@@ -469,6 +469,24 @@ func runTTSFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "provider_error_not_forwarded":
+		primary := &fakeScenarioTTS{provider: "primary"}
+		fallback := &fakeScenarioTTS{provider: "fallback"}
+		adapter := lktts.NewFallbackAdapter([]lktts.TTS{primary, fallback})
+		labels := make([]string, 0, 3)
+		unsubscribe := adapter.OnError(func(err lktts.TTSError) {
+			labels = append(labels, err.Label)
+		})
+		defer unsubscribe()
+		primary.EmitError(lktts.TTSError{Label: "primary", Err: errors.New("primary failed")})
+		fallback.EmitError(lktts.TTSError{Label: "fallback", Err: errors.New("fallback failed")})
+		adapter.EmitError(lktts.TTSError{Label: "adapter", Err: errors.New("adapter failed")})
+		return map[string]any{
+			"contract": "tts-fallback-provider-error-not-forwarded",
+			"events": []map[string]any{
+				{"name": "provider_error_not_forwarded", "labels": labels},
+			},
+		}, nil
 	case "validation":
 		mode := payload.Mode
 		if mode == "" {
