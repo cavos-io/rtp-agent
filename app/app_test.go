@@ -3462,6 +3462,114 @@ func TestBasetenTTSFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("CARTESIA_API_KEY", "test-cartesia-key")
+	sampleRate := 16000
+	wordTimestamps := false
+	volume := 1.1
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeaders = r.Header.Clone()
+		if got, want := r.URL.Path, "/tts/bytes"; got != want {
+			t.Errorf("request path = %q, want %q", got, want)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotPayload); err != nil {
+			t.Errorf("decode cartesia payload: %v", err)
+			return
+		}
+		_, _ = w.Write([]byte("audio"))
+	}))
+	defer server.Close()
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		TTSBaseURL:             server.URL,
+		TTSModel:               "sonic-3",
+		TTSVoice:               "voice-id-ignored-for-embedding",
+		TTSVoiceEmbedding:      []float64{0.1, 0.2, 0.3},
+		TTSLanguage:            "es",
+		TTSEncoding:            "pcm_mulaw",
+		TTSSampleRate:          &sampleRate,
+		TTSAPIVersion:          "2025-01-01",
+		TTSWordTimestamps:      &wordTimestamps,
+		TTSSpeed:               1.2,
+		TTSEmotion:             "happy",
+		TTSVolume:              &volume,
+		TTSPronunciationDictID: "dict-1",
+	}, providerCartesia)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*cartesia.CartesiaTTS); !ok {
+		t.Fatalf("provider type = %T, want *cartesia.CartesiaTTS", provider)
+	}
+	if got, want := provider.Label(), "cartesia.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 16000; got != want {
+		t.Fatalf("SampleRate() = %d, want configured sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "sonic-3"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "Cartesia"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want streaming without aligned transcript", caps)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hola")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotHeaders.Get("X-API-Key"), "test-cartesia-key"; got != want {
+		t.Fatalf("X-API-Key = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("Cartesia-Version"), "2025-01-01"; got != want {
+		t.Fatalf("Cartesia-Version = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["transcript"], "hola"; got != want {
+		t.Fatalf("transcript = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["language"], "es"; got != want {
+		t.Fatalf("language = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["pronunciation_dict_id"], "dict-1"; got != want {
+		t.Fatalf("pronunciation_dict_id = %#v, want %#v", got, want)
+	}
+	voice, _ := gotPayload["voice"].(map[string]any)
+	if got, want := voice["mode"], "embedding"; got != want {
+		t.Fatalf("voice.mode = %#v, want %#v in %#v", got, want, voice)
+	}
+	embedding, _ := voice["embedding"].([]any)
+	if len(embedding) != 3 || embedding[0] != 0.1 || embedding[1] != 0.2 || embedding[2] != 0.3 {
+		t.Fatalf("voice.embedding = %#v, want [0.1 0.2 0.3]", voice["embedding"])
+	}
+	outputFormat, _ := gotPayload["output_format"].(map[string]any)
+	if got, want := outputFormat["encoding"], "pcm_mulaw"; got != want {
+		t.Fatalf("output_format.encoding = %#v, want %#v", got, want)
+	}
+	if got, want := outputFormat["sample_rate"], float64(16000); got != want {
+		t.Fatalf("output_format.sample_rate = %#v, want %#v", got, want)
+	}
+	generationConfig, _ := gotPayload["generation_config"].(map[string]any)
+	if got, want := generationConfig["speed"], 1.2; got != want {
+		t.Fatalf("generation_config.speed = %#v, want %#v", got, want)
+	}
+	if got, want := generationConfig["emotion"], "happy"; got != want {
+		t.Fatalf("generation_config.emotion = %#v, want %#v", got, want)
+	}
+	if got, want := generationConfig["volume"], 1.1; got != want {
+		t.Fatalf("generation_config.volume = %#v, want %#v", got, want)
+	}
+}
+
 func TestGradiumTTSFallbackPassesReferenceOptions(t *testing.T) {
 	type wsRecord struct {
 		apiKey    string
