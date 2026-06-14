@@ -384,3 +384,32 @@ func TestSDKClientImplementationReleasesPublishFailureOnlyWhenOwned(t *testing.T
 		t.Fatal("publish-audio failure must release through releaseActiveConnection")
 	}
 }
+
+func TestSDKClientImplementationSerializesPublishPCMWithLeave(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	publishIndex := strings.Index(text, "func (c *sdkChannelClient) PublishPCM")
+	if publishIndex < 0 {
+		t.Fatal("sdk.go missing sdkChannelClient.PublishPCM")
+	}
+	publishBody := text[publishIndex:]
+	if nextFunc := strings.Index(publishBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		publishBody = publishBody[:len("func ")+nextFunc]
+	}
+	lockIndex := strings.Index(publishBody, "c.mu.Lock()")
+	pushIndex := strings.Index(publishBody, "PushAudioPcmData")
+	unlockIndex := strings.Index(publishBody, "c.mu.Unlock()")
+	deferUnlockIndex := strings.Index(publishBody, "defer c.mu.Unlock()")
+	if lockIndex < 0 || pushIndex < 0 {
+		t.Fatal("PublishPCM must lock before pushing PCM to the SDK connection")
+	}
+	if unlockIndex >= 0 && unlockIndex < pushIndex && !strings.Contains(publishBody[unlockIndex-6:unlockIndex], "defer ") {
+		t.Fatal("PublishPCM must not unlock before PushAudioPcmData returns")
+	}
+	if deferUnlockIndex < 0 {
+		t.Fatal("PublishPCM must defer unlock while using the SDK connection")
+	}
+}

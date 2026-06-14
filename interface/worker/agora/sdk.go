@@ -384,12 +384,11 @@ func (c *sdkChannelClient) PublishPCM(ctx context.Context, frame PCMFrame) error
 	default:
 	}
 	c.mu.Lock()
-	connection := c.connection
-	c.mu.Unlock()
-	if connection == nil {
+	defer c.mu.Unlock()
+	if c.connection == nil {
 		return fmt.Errorf("agora SDK channel is not joined")
 	}
-	if ret := connection.PushAudioPcmData(frame.Data, frame.SampleRate, frame.Channels, frame.StartPTSMS); ret != 0 {
+	if ret := c.connection.PushAudioPcmData(frame.Data, frame.SampleRate, frame.Channels, frame.StartPTSMS); ret != 0 {
 		return fmt.Errorf("agora SDK push PCM failed: %d", ret)
 	}
 	return nil
