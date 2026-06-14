@@ -681,8 +681,10 @@ def stt_fallback(input_data: Any) -> dict[str, Any]:
             )
             self._label = label
             self._recognize_error = recognize_error
+            self.recognize_calls = 0
 
         async def _recognize_impl(self, *args: Any, **kwargs: Any) -> Any:
+            self.recognize_calls += 1
             if self._recognize_error:
                 raise RuntimeError(f"{self._label} failed")
             return stt_module.SpeechEvent(type=stt_module.SpeechEventType.FINAL_TRANSCRIPT)
@@ -844,6 +846,41 @@ def stt_fallback(input_data: Any) -> dict[str, Any]:
                 {
                     "name": "availability_unsubscribe",
                     "received_count": received_count,
+                }
+            ],
+        }
+    if action == "all_failed_recognize":
+        if not hasattr(fallback_module.logger, "debug"):
+            fallback_module.logger.debug = lambda *args, **kwargs: None
+        if not hasattr(fallback_module.logger, "exception"):
+            fallback_module.logger.exception = lambda *args, **kwargs: None
+        primary = FakeSTT("primary", recognize_error=True)
+        fallback = FakeSTT("fallback", recognize_error=True)
+        adapter = fallback_module.FallbackAdapter(
+            [primary, fallback],
+            max_retry_per_stt=0,
+        )
+        error_class = ""
+        retryable = False
+
+        async def run_recognize() -> None:
+            await adapter.recognize([])
+
+        try:
+            asyncio.run(run_recognize())
+        except Exception as exc:
+            error_class = type(exc).__name__
+            retryable = getattr(exc, "retryable", False)
+
+        return {
+            "contract": "stt-fallback-all-failed-recognize",
+            "events": [
+                {
+                    "name": "all_failed_recognize",
+                    "error_class": error_class,
+                    "retryable": retryable,
+                    "primary_calls": primary.recognize_calls,
+                    "fallback_calls": fallback.recognize_calls,
                 }
             ],
         }

@@ -830,17 +830,19 @@ func TestFallbackAdapterTimesOutBlockedRecognizeAttempt(t *testing.T) {
 func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T) {
 	primaryErr := errors.New("primary recognize failed")
 	fallbackErr := errors.New("fallback recognize failed")
+	primary := &metadataSTT{
+		label:         "primary",
+		capabilities:  STTCapabilities{Streaming: true},
+		recognizeErrs: []error{primaryErr},
+	}
+	fallback := &metadataSTT{
+		label:         "fallback",
+		capabilities:  STTCapabilities{Streaming: true},
+		recognizeErrs: []error{fallbackErr},
+	}
 	adapter := NewFallbackAdapterWithOptions([]STT{
-		&metadataSTT{
-			label:         "primary",
-			capabilities:  STTCapabilities{Streaming: true},
-			recognizeErrs: []error{primaryErr},
-		},
-		&metadataSTT{
-			label:         "fallback",
-			capabilities:  STTCapabilities{Streaming: true},
-			recognizeErrs: []error{fallbackErr},
-		},
+		primary,
+		fallback,
 	}, FallbackAdapterOptions{MaxRetryPerSTT: 0})
 
 	_, err := adapter.Recognize(context.Background(), nil, "en")
@@ -866,6 +868,8 @@ func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T
 	if !strings.Contains(err.Error(), "all STTs failed") {
 		t.Fatalf("Recognize error = %q, want all STTs failed message", err)
 	}
+	waitForRecognizeCalls(t, primary, 2)
+	waitForRecognizeCalls(t, fallback, 2)
 }
 
 func TestFallbackAdapterSkipsUnavailableSTTOnNextRecognize(t *testing.T) {

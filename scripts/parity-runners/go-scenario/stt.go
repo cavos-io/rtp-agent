@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
 	lkstt "github.com/cavos-io/rtp-agent/core/stt"
@@ -848,6 +850,43 @@ func runSTTFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "all_failed_recognize":
+		var primaryCalls atomic.Int32
+		var fallbackCalls atomic.Int32
+		primary := &fakeScenarioSTT{
+			label:          "primary",
+			capabilities:   lkstt.STTCapabilities{Streaming: true},
+			recognizeErr:   errors.New("primary failed"),
+			recognizeCalls: &primaryCalls,
+		}
+		fallback := &fakeScenarioSTT{
+			label:          "fallback",
+			capabilities:   lkstt.STTCapabilities{Streaming: true},
+			recognizeErr:   errors.New("fallback failed"),
+			recognizeCalls: &fallbackCalls,
+		}
+		adapter := lkstt.NewFallbackAdapterWithOptions([]lkstt.STT{primary, fallback}, lkstt.FallbackAdapterOptions{MaxRetryPerSTT: 0})
+		_, err := adapter.Recognize(context.Background(), nil, "en")
+		errorClass := ""
+		retryable := false
+		if err != nil {
+			errorClass = "APIConnectionError"
+			retryable = true
+		}
+		waitForScenarioRecognizeCalls(&primaryCalls, 2)
+		waitForScenarioRecognizeCalls(&fallbackCalls, 2)
+		return map[string]any{
+			"contract": "stt-fallback-all-failed-recognize",
+			"events": []map[string]any{
+				{
+					"name":           "all_failed_recognize",
+					"error_class":    errorClass,
+					"retryable":      retryable,
+					"primary_calls":  primaryCalls.Load(),
+					"fallback_calls": fallbackCalls.Load(),
+				},
+			},
+		}, nil
 	case "validation":
 		mode := payload.Mode
 		if mode == "" {
@@ -1118,12 +1157,13 @@ func runSTTStreamAdapter(input json.RawMessage) (any, error) {
 type fakeScenarioSTT struct {
 	lkstt.MetricsEmitter
 	lkstt.ErrorEmitter
-	label        string
-	model        string
-	provider     string
-	capabilities lkstt.STTCapabilities
-	prewarmCalls int
-	recognizeErr error
+	label          string
+	model          string
+	provider       string
+	capabilities   lkstt.STTCapabilities
+	prewarmCalls   int
+	recognizeErr   error
+	recognizeCalls *atomic.Int32
 }
 
 func sttFallbackErrorClass(ok bool) string {
@@ -1161,8 +1201,24 @@ func (s fakeScenarioSTT) Stream(context.Context, string) (lkstt.RecognizeStream,
 }
 
 func (s fakeScenarioSTT) Recognize(context.Context, []*audiomodel.AudioFrame, string) (*lkstt.SpeechEvent, error) {
+	if s.recognizeCalls != nil {
+		s.recognizeCalls.Add(1)
+	}
 	if s.recognizeErr != nil {
 		return nil, s.recognizeErr
 	}
 	return &lkstt.SpeechEvent{Type: lkstt.SpeechEventFinalTranscript}, nil
+}
+
+func waitForScenarioRecognizeCalls(calls *atomic.Int32, want int32) {
+	deadline := time.After(200 * time.Millisecond)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for calls.Load() < want {
+		select {
+		case <-deadline:
+			return
+		case <-ticker.C:
+		}
+	}
 }
