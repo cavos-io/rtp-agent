@@ -70,18 +70,7 @@ func (a *StreamAdapter) OnMetricsCollected(handler STTMetricsHandler) func() {
 }
 
 func (a *StreamAdapter) OnError(handler STTErrorHandler) func() {
-	unsubscribes := []func(){a.ErrorEmitter.OnError(handler)}
-	if collector, ok := a.stt.(errorCollectorSTT); ok {
-		unsubscribes = append(unsubscribes, collector.OnError(handler))
-	}
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			for _, unsubscribe := range unsubscribes {
-				unsubscribe()
-			}
-		})
-	}
+	return a.ErrorEmitter.OnError(handler)
 }
 
 func (a *StreamAdapter) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*SpeechEvent, error) {

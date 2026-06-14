@@ -734,6 +734,25 @@ def stt_stream_adapter(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "provider_error_not_forwarded":
+        wrapped = FakeSTT("wrapped")
+        adapter = stream_adapter_module.StreamAdapter(stt=wrapped, vad=FakeVAD())
+        labels: list[str] = []
+        adapter.on("error", lambda error: labels.append(error.label))
+        wrapped.emit(
+            "error",
+            type("Error", (), {"label": "wrapped"})(),
+        )
+        adapter.emit(
+            "error",
+            type("Error", (), {"label": "adapter"})(),
+        )
+        return {
+            "contract": "stt-stream-adapter-provider-error-not-forwarded",
+            "events": [
+                {"name": "provider_error_not_forwarded", "labels": labels}
+            ],
+        }
     if action == "metadata":
         adapter = stream_adapter_module.StreamAdapter(
             stt=FakeSTT("wrapped", model="wrapped-model", provider="wrapped-provider"),

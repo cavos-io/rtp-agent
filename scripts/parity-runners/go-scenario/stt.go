@@ -789,6 +789,22 @@ func runSTTStreamAdapter(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "provider_error_not_forwarded":
+		wrapped := &fakeScenarioSTT{label: "wrapped", capabilities: lkstt.STTCapabilities{OfflineRecognize: true}}
+		adapter := lkstt.NewStreamAdapter(wrapped, nil)
+		labels := make([]string, 0, 2)
+		unsubscribe := adapter.OnError(func(err *lkstt.STTError) {
+			labels = append(labels, err.Label)
+		})
+		defer unsubscribe()
+		wrapped.EmitError(lkstt.NewSTTError("wrapped", errors.New("wrapped stt failed"), true))
+		adapter.EmitError(lkstt.NewSTTError("adapter", errors.New("adapter failed"), true))
+		return map[string]any{
+			"contract": "stt-stream-adapter-provider-error-not-forwarded",
+			"events": []map[string]any{
+				{"name": "provider_error_not_forwarded", "labels": labels},
+			},
+		}, nil
 	case "metadata":
 		adapter := lkstt.NewStreamAdapter(fakeScenarioSTT{
 			label:        "wrapped",
@@ -813,6 +829,7 @@ func runSTTStreamAdapter(input json.RawMessage) (any, error) {
 
 type fakeScenarioSTT struct {
 	lkstt.MetricsEmitter
+	lkstt.ErrorEmitter
 	label        string
 	model        string
 	provider     string
