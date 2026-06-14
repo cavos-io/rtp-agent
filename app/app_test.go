@@ -4233,6 +4233,104 @@ func TestGladiaSTTFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestXaiSTTFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("XAI_API_KEY", "test-xai-key")
+	type wsRecord struct {
+		authorization string
+		query         map[string]string
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		query := map[string]string{}
+		for key, values := range r.URL.Query() {
+			if len(values) > 0 {
+				query[key] = values[0]
+			}
+		}
+		records <- wsRecord{
+			authorization: r.Header.Get("Authorization"),
+			query:         query,
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	sampleRate := 8000
+	interimResults := false
+	diarization := true
+	endpointing := 250
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTStreamingURL:   "ws" + strings.TrimPrefix(server.URL, "http"),
+		STTSampleRate:     &sampleRate,
+		STTLanguage:       "es",
+		STTInterimResults: &interimResults,
+		STTDiarization:    &diarization,
+		STTEndpointingMS:  &endpointing,
+	}, providerXAI)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*xai.XaiSTT); !ok {
+		t.Fatalf("provider type = %T, want *xai.XaiSTT", provider)
+	}
+	if got, want := provider.Label(), "xai.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.InterimResults || !caps.Diarization || caps.AlignedTranscript != "word" || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming diarization word-aligned offline without interim", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.authorization, "Bearer test-xai-key"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		if got, want := record.query["encoding"], "pcm"; got != want {
+			t.Fatalf("query encoding = %q, want %q", got, want)
+		}
+		if got, want := record.query["sample_rate"], "8000"; got != want {
+			t.Fatalf("query sample_rate = %q, want %q", got, want)
+		}
+		if got, want := record.query["language"], "es"; got != want {
+			t.Fatalf("query language = %q, want %q", got, want)
+		}
+		if got, want := record.query["interim_results"], "false"; got != want {
+			t.Fatalf("query interim_results = %q, want %q", got, want)
+		}
+		if got, want := record.query["diarize"], "true"; got != want {
+			t.Fatalf("query diarize = %q, want %q", got, want)
+		}
+		if got, want := record.query["endpointing"], "250"; got != want {
+			t.Fatalf("query endpointing = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for xAI STT websocket request")
+	}
+}
+
 func firstQueryValue(values map[string][]string, key string) string {
 	if len(values[key]) == 0 {
 		return ""

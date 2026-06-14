@@ -2320,6 +2320,30 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTPreferCurrentSpeaker(*cfg.STTPreferCurrentSpeaker))
 		}
 		return speechmatics.NewSpeechmaticsSTT(cfg.SpeechmaticsAPIKey, sttOpts...), nil
+	case providerXAI:
+		sttOpts := []xai.XaiSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, xai.WithXaiSTTRestURL(cfg.STTBaseURL))
+		}
+		if cfg.STTStreamingURL != "" {
+			sttOpts = append(sttOpts, xai.WithXaiSTTWebsocketURL(cfg.STTStreamingURL))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, xai.WithXaiSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, xai.WithXaiSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTInterimResults != nil {
+			sttOpts = append(sttOpts, xai.WithXaiSTTInterimResults(*cfg.STTInterimResults))
+		}
+		if cfg.STTDiarization != nil {
+			sttOpts = append(sttOpts, xai.WithXaiSTTDiarization(*cfg.STTDiarization))
+		}
+		if cfg.STTEndpointingMS != nil {
+			sttOpts = append(sttOpts, xai.WithXaiSTTEndpointing(*cfg.STTEndpointingMS))
+		}
+		return xai.NewXaiSTT(cfg.XAIAPIKey, sttOpts...), nil
 	case providerSLNG:
 		sttOpts := []slng.STTOption{}
 		if cfg.STTModel != "" {
