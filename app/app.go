@@ -1992,6 +1992,8 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return provider, nil
 	case providerSimli:
 		return simli.NewSimliLLM(cfg.SimliAPIKey, cfg.LLMModel), nil
+	case providerSimplismart:
+		return simplismart.NewSimplismartLLM(cfg.SimplismartAPIKey, cfg.LLMModel), nil
 	case providerTelnyx:
 		return telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel), nil
 	case providerGroq:
