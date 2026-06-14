@@ -317,14 +317,7 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 		return err
 	}
 	if ret := connection.PublishAudio(); ret != 0 {
-		c.mu.Lock()
-		if c.connection == connection {
-			c.connection = nil
-		}
-		c.mu.Unlock()
-		_ = connection.Disconnect()
-		connection.Release()
-		_ = releaseSDKService()
+		c.releaseActiveConnection(connection)
 		return fmt.Errorf("agora SDK publish audio failed: %d", ret)
 	}
 	return nil

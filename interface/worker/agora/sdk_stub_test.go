@@ -352,3 +352,35 @@ func TestSDKClientImplementationPublishesAfterConnected(t *testing.T) {
 		t.Fatal("sdk.go must wait for Agora connected event before publishing audio")
 	}
 }
+
+func TestSDKClientImplementationReleasesPublishFailureOnlyWhenOwned(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	joinIndex := strings.Index(text, "func (c *sdkChannelClient) Join")
+	if joinIndex < 0 {
+		t.Fatal("sdk.go missing sdkChannelClient.Join")
+	}
+	joinBody := text[joinIndex:]
+	if nextFunc := strings.Index(joinBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		joinBody = joinBody[:len("func ")+nextFunc]
+	}
+	publishIndex := strings.Index(joinBody, "if ret := connection.PublishAudio()")
+	if publishIndex < 0 {
+		t.Fatal("Join missing PublishAudio call")
+	}
+	publishFailureBody := joinBody[publishIndex:]
+	publishFailureIndex := strings.Index(publishFailureBody, "agora SDK publish audio failed")
+	if publishFailureIndex < 0 {
+		t.Fatal("Join missing publish-audio failure branch")
+	}
+	publishFailureBody = publishFailureBody[:publishFailureIndex]
+	if strings.Contains(publishFailureBody, "connection.Release()") {
+		t.Fatal("publish-audio failure must not release the SDK connection without ownership")
+	}
+	if !strings.Contains(publishFailureBody, "c.releaseActiveConnection(connection)") {
+		t.Fatal("publish-audio failure must release through releaseActiveConnection")
+	}
+}
