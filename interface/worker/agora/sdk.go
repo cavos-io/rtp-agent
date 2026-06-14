@@ -165,6 +165,9 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, h
 	cfg.AudioScenario = agoraservice.AudioScenarioChorus
 	cfg.UseStringUid = true
 	runtimeDir := sdkRuntimeDir()
+	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
+		return fmt.Errorf("agora SDK runtime directory setup failed: %w", err)
+	}
 	cfg.LogPath = filepath.Join(runtimeDir, "agorasdk.log")
 	cfg.ConfigDir = runtimeDir
 	cfg.DataDir = runtimeDir

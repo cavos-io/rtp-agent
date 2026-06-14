@@ -121,6 +121,7 @@ func TestSDKClientImplementationConfiguresRuntimeDirectories(t *testing.T) {
 	text := string(source)
 	for _, want := range []string{
 		"AGORA_SDK_DATA_DIR",
+		"os.MkdirAll(runtimeDir",
 		"cfg.LogPath",
 		"cfg.ConfigDir",
 		"cfg.DataDir",
