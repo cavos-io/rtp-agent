@@ -580,16 +580,18 @@ func sarvamSTTConfidence(probability float64) float64 {
 }
 
 type sarvamSTTRecognizeStream struct {
-	conn       *websocket.Conn
-	ctx        context.Context
-	cancel     context.CancelFunc
-	language   string
-	encoding   string
-	sampleRate int
-	events     chan *stt.SpeechEvent
-	errCh      chan error
-	mu         sync.Mutex
-	closed     bool
+	conn          *websocket.Conn
+	ctx           context.Context
+	cancel        context.CancelFunc
+	language      string
+	encoding      string
+	sampleRate    int
+	events        chan *stt.SpeechEvent
+	errCh         chan error
+	sequencer     *sarvamSTTStreamEventSequencer
+	mu            sync.Mutex
+	closed        bool
+	audioPosition float64
 }
 
 func newSarvamSTTRecognizeStream(ctx context.Context, conn *websocket.Conn, provider *SarvamSTT, language string) *sarvamSTTRecognizeStream {
@@ -607,6 +609,7 @@ func newSarvamSTTRecognizeStream(ctx context.Context, conn *websocket.Conn, prov
 		sampleRate: provider.sampleRate,
 		events:     make(chan *stt.SpeechEvent, 100),
 		errCh:      make(chan error, 1),
+		sequencer:  newSarvamSTTStreamEventSequencer(language),
 	}
 }
 
@@ -635,8 +638,24 @@ func (s *sarvamSTTRecognizeStream) PushFrame(frame *model.AudioFrame) error {
 		if err := s.conn.WriteMessage(websocket.TextMessage, message); err != nil {
 			return err
 		}
+		s.addAudioPosition(chunk.SamplesPerChannel, sampleRate)
 	}
 	return nil
+}
+
+func (s *sarvamSTTRecognizeStream) addAudioPosition(samplesPerChannel uint32, sampleRate int) {
+	if samplesPerChannel == 0 || sampleRate <= 0 {
+		return
+	}
+	s.mu.Lock()
+	s.audioPosition += float64(samplesPerChannel) / float64(sampleRate)
+	s.mu.Unlock()
+}
+
+func (s *sarvamSTTRecognizeStream) currentAudioPosition() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.audioPosition
 }
 
 func (s *sarvamSTTRecognizeStream) Flush() error {
@@ -691,7 +710,7 @@ func (s *sarvamSTTRecognizeStream) readLoop() {
 		if msgType != websocket.TextMessage {
 			continue
 		}
-		events, err := sarvamSTTEventsFromStreamMessage(payload, s.language)
+		events, err := s.sequencer.EventsFromStreamMessage(payload, s.currentAudioPosition())
 		if err != nil {
 			s.errCh <- err
 			return
@@ -703,6 +722,76 @@ func (s *sarvamSTTRecognizeStream) readLoop() {
 			}
 		}
 	}
+}
+
+type sarvamSTTStreamEventSequencer struct {
+	defaultLanguage string
+	serverRequestID string
+	eosEmitted      bool
+}
+
+func newSarvamSTTStreamEventSequencer(defaultLanguage string) *sarvamSTTStreamEventSequencer {
+	return &sarvamSTTStreamEventSequencer{defaultLanguage: defaultLanguage}
+}
+
+func (s *sarvamSTTStreamEventSequencer) EventsFromStreamMessage(payload []byte, audioPosition float64) ([]*stt.SpeechEvent, error) {
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		return nil, err
+	}
+	data := sarvamMap(message["data"])
+	if requestID := sarvamString(data["request_id"]); requestID != "" {
+		s.serverRequestID = requestID
+	}
+
+	messageType := sarvamString(message["type"])
+	if (messageType == "events" || messageType == "event") && sarvamString(data["signal_type"]) == "START_SPEECH" {
+		s.eosEmitted = false
+	}
+	if (messageType == "events" || messageType == "event") && sarvamString(data["signal_type"]) == "END_SPEECH" {
+		if sarvamStreamMessageHasError(message) {
+			return nil, sarvamSTTStreamError(message)
+		}
+		if s.eosEmitted {
+			return nil, nil
+		}
+		s.eosEmitted = true
+		return []*stt.SpeechEvent{{
+			Type:      stt.SpeechEventEndOfSpeech,
+			RequestID: s.serverRequestID,
+			Alternatives: []stt.SpeechData{{
+				Language: s.defaultLanguage,
+				Text:     "",
+				EndTime:  audioPosition,
+			}},
+		}}, nil
+	}
+
+	events, err := sarvamSTTEventsFromStreamMessage(payload, s.defaultLanguage)
+	if err != nil {
+		return nil, err
+	}
+	if messageType == "data" && sarvamString(data["transcript"]) != "" {
+		if !sarvamSTTEventsContainUsage(events) {
+			events = append([]*stt.SpeechEvent{{
+				Type:      stt.SpeechEventRecognitionUsage,
+				RequestID: s.serverRequestID,
+				RecognitionUsage: &stt.RecognitionUsage{
+					AudioDuration: sarvamFloat64(sarvamMap(data["metrics"])["audio_duration"]),
+				},
+			}}, events...)
+		}
+	}
+	return events, nil
+}
+
+func sarvamSTTEventsContainUsage(events []*stt.SpeechEvent) bool {
+	for _, event := range events {
+		if event.Type == stt.SpeechEventRecognitionUsage {
+			return true
+		}
+	}
+	return false
 }
 
 func sarvamSTTChunkBytes(sampleRate int) int {
