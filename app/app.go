@@ -3337,7 +3337,17 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		return groq.NewGroqTTS(cfg.GroqAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerNvidia:
-		return nvidia.NewNvidiaTTS(cfg.NvidiaAPIKey, cfg.TTSVoice)
+		ttsOpts := []nvidia.NvidiaTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, nvidia.WithNvidiaTTSServer(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, nvidia.WithNvidiaTTSFunctionID(cfg.TTSModel))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, nvidia.WithNvidiaTTSLanguageCode(cfg.TTSLanguage))
+		}
+		return nvidia.NewNvidiaTTS(cfg.NvidiaAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerMistralAI:
 		ttsOpts := []mistralai.MistralAITTSOption{}
 		if cfg.TTSBaseURL != "" {
@@ -5162,7 +5172,17 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = murf.NewMurfTTS(cfg.MurfAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerNvidia:
-		provider, err := nvidia.NewNvidiaTTS(cfg.NvidiaAPIKey, cfg.TTSVoice)
+		ttsOpts := []nvidia.NvidiaTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, nvidia.WithNvidiaTTSServer(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, nvidia.WithNvidiaTTSFunctionID(cfg.TTSModel))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, nvidia.WithNvidiaTTSLanguageCode(cfg.TTSLanguage))
+		}
+		provider, err := nvidia.NewNvidiaTTS(cfg.NvidiaAPIKey, cfg.TTSVoice, ttsOpts...)
 		if err != nil {
 			return nil, err
 		}

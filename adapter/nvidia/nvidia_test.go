@@ -102,6 +102,34 @@ func TestNvidiaTTSAllowsLocalRivaWithoutAPIKey(t *testing.T) {
 	}
 }
 
+func TestNvidiaTTSOptionsMatchReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "Magpie-Multilingual.ID-ID.Ayu",
+		WithNvidiaTTSServer("localhost:50051"),
+		WithNvidiaTTSFunctionID("local-function"),
+		WithNvidiaTTSLanguageCode("id-ID"),
+		WithNvidiaTTSUseSSL(false),
+	)
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+
+	if got, want := provider.voice, "Magpie-Multilingual.ID-ID.Ayu"; got != want {
+		t.Fatalf("voice = %q, want %q", got, want)
+	}
+	if got, want := provider.server, "localhost:50051"; got != want {
+		t.Fatalf("server = %q, want %q", got, want)
+	}
+	if got, want := provider.functionID, "local-function"; got != want {
+		t.Fatalf("functionID = %q, want %q", got, want)
+	}
+	if got, want := provider.languageCode, "id-ID"; got != want {
+		t.Fatalf("languageCode = %q, want %q", got, want)
+	}
+	if provider.useSSL {
+		t.Fatal("useSSL = true, want false")
+	}
+}
+
 func TestNvidiaTTSReportsUnsupportedRivaCalls(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {

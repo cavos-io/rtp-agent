@@ -8354,6 +8354,35 @@ func TestDefaultConfigFromEnvAcceptsNvidiaTTSFallbackProvider(t *testing.T) {
 	}
 }
 
+func TestNvidiaTTSFallbackPassesReferenceLanguage(t *testing.T) {
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		NvidiaAPIKey: "test-nvidia-key",
+		TTSVoice:     "Magpie-Multilingual.ID-ID.Ayu",
+		TTSLanguage:  "id-ID",
+	}, providerNvidia)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	nvidiaProvider, ok := provider.(*nvidia.NvidiaTTS)
+	if !ok {
+		t.Fatalf("provider type = %T, want *nvidia.NvidiaTTS", provider)
+	}
+	if got, want := nvidiaProvider.Label(), "nvidia.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := nvidiaProvider.SampleRate(), 16000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference sample rate %d", got, want)
+	}
+	state := reflect.ValueOf(nvidiaProvider).Elem()
+	if got, want := state.FieldByName("voice").String(), "Magpie-Multilingual.ID-ID.Ayu"; got != want {
+		t.Fatalf("voice = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("languageCode").String(), "id-ID"; got != want {
+		t.Fatalf("languageCode = %q, want %q", got, want)
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsMistralAITTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "mistralai")

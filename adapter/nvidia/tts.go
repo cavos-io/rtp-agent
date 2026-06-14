@@ -29,6 +29,30 @@ type NvidiaTTS struct {
 
 type NvidiaTTSOption func(*NvidiaTTS)
 
+func WithNvidiaTTSServer(server string) NvidiaTTSOption {
+	return func(t *NvidiaTTS) {
+		if server != "" {
+			t.server = server
+		}
+	}
+}
+
+func WithNvidiaTTSFunctionID(functionID string) NvidiaTTSOption {
+	return func(t *NvidiaTTS) {
+		if functionID != "" {
+			t.functionID = functionID
+		}
+	}
+}
+
+func WithNvidiaTTSLanguageCode(languageCode string) NvidiaTTSOption {
+	return func(t *NvidiaTTS) {
+		if languageCode != "" {
+			t.languageCode = languageCode
+		}
+	}
+}
+
 func WithNvidiaTTSUseSSL(useSSL bool) NvidiaTTSOption {
 	return func(t *NvidiaTTS) {
 		t.useSSL = useSSL
