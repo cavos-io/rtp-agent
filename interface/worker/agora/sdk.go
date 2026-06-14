@@ -108,13 +108,12 @@ func sdkAudioFrameToModel(frame *agoraservice.AudioFrame) *model.AudioFrame {
 	if frame == nil || len(frame.Buffer) == 0 || frame.SamplesPerSec <= 0 || frame.Channels <= 0 {
 		return nil
 	}
+	if frame.Type != agoraservice.AudioFrameTypePCM16 || frame.BytesPerSample != 2 {
+		return nil
+	}
 	samplesPerChannel := frame.SamplesPerChannel
 	if samplesPerChannel <= 0 {
-		bytesPerSample := frame.BytesPerSample
-		if bytesPerSample <= 0 {
-			bytesPerSample = 2
-		}
-		samplesPerChannel = len(frame.Buffer) / frame.Channels / bytesPerSample
+		samplesPerChannel = len(frame.Buffer) / frame.Channels / 2
 	}
 	if samplesPerChannel <= 0 {
 		return nil

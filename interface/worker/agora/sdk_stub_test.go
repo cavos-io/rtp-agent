@@ -59,6 +59,22 @@ func TestSDKClientImplementationRegistersInboundAudioObserver(t *testing.T) {
 	}
 }
 
+func TestSDKClientImplementationRequiresPCM16InboundAudio(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"frame.Type != agoraservice.AudioFrameTypePCM16",
+		"frame.BytesPerSample != 2",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}
+
 func TestSDKClientImplementationRegistersLocalUserObserver(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {
