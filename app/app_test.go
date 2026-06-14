@@ -3,6 +3,7 @@ package app
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -4444,6 +4445,115 @@ func TestSmallestAISTTFallbackPassesReferenceOptions(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for SmallestAI STT websocket request")
+	}
+}
+
+func TestTelnyxSTTFallbackPassesReferenceOptions(t *testing.T) {
+	type wsRecord struct {
+		authorization string
+		query         map[string]string
+		header        []byte
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		query := map[string]string{}
+		for key, values := range r.URL.Query() {
+			if len(values) > 0 {
+				query[key] = values[0]
+			}
+		}
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read telnyx wav header: %v", err)
+			return
+		}
+		records <- wsRecord{
+			authorization: r.Header.Get("Authorization"),
+			query:         query,
+			header:        payload,
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	sampleRate := 8000
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		TelnyxAPIKey:  "test-telnyx-key",
+		STTBaseURL:    "ws" + strings.TrimPrefix(server.URL, "http"),
+		STTLanguage:   "es",
+		STTModel:      "google",
+		STTSampleRate: &sampleRate,
+	}, providerTelnyx)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*telnyx.TelnyxSTT); !ok {
+		t.Fatalf("provider type = %T, want *telnyx.TelnyxSTT", provider)
+	}
+	if got, want := provider.Label(), "telnyx.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "google"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "telnyx"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.Diarization || caps.AlignedTranscript != "" || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming interim offline without diarization", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.authorization, "Bearer test-telnyx-key"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		if got, want := record.query["transcription_engine"], "google"; got != want {
+			t.Fatalf("query transcription_engine = %q, want %q", got, want)
+		}
+		if got, want := record.query["language"], "es"; got != want {
+			t.Fatalf("query language = %q, want %q", got, want)
+		}
+		if got, want := record.query["input_format"], "wav"; got != want {
+			t.Fatalf("query input_format = %q, want %q", got, want)
+		}
+		if len(record.header) != 44 {
+			t.Fatalf("wav header length = %d, want 44", len(record.header))
+		}
+		if got, want := string(record.header[0:4]), "RIFF"; got != want {
+			t.Fatalf("wav header RIFF = %q, want %q", got, want)
+		}
+		if got, want := string(record.header[8:12]), "WAVE"; got != want {
+			t.Fatalf("wav header WAVE = %q, want %q", got, want)
+		}
+		if got, want := binary.LittleEndian.Uint32(record.header[24:28]), uint32(8000); got != want {
+			t.Fatalf("wav sample rate = %d, want %d", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Telnyx STT websocket request")
 	}
 }
 

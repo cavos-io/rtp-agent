@@ -2347,6 +2347,21 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTPreferCurrentSpeaker(*cfg.STTPreferCurrentSpeaker))
 		}
 		return speechmatics.NewSpeechmaticsSTT(cfg.SpeechmaticsAPIKey, sttOpts...), nil
+	case providerTelnyx:
+		sttOpts := []telnyx.TelnyxSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, telnyx.WithTelnyxSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, telnyx.WithTelnyxSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, telnyx.WithTelnyxSTTTranscriptionEngine(cfg.STTModel))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, telnyx.WithTelnyxSTTSampleRate(*cfg.STTSampleRate))
+		}
+		return telnyx.NewTelnyxSTT(cfg.TelnyxAPIKey, sttOpts...), nil
 	case providerXAI:
 		sttOpts := []xai.XaiSTTOption{}
 		if cfg.STTBaseURL != "" {
