@@ -600,9 +600,46 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "all_failed_error":
+		primary := &fakeScenarioLLM{label: "primary", err: errors.New("primary unavailable")}
+		fallback := &fakeScenarioLLM{label: "fallback", err: errors.New("fallback unavailable")}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		_, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		message := ""
+		if err != nil {
+			message = err.Error()
+		}
+		var connectionErr *lkllm.APIConnectionError
+		return map[string]any{
+			"contract": "llm-fallback-all-failed-error",
+			"events": []map[string]any{
+				{
+					"name":                   "all_failed_error",
+					"errored":                err != nil,
+					"error_class":            scenarioLLMConnectionErrorClass(err),
+					"retryable":              errors.As(err, &connectionErr) && connectionErr.Retryable,
+					"message_has_all_failed": strings.Contains(message, "all LLMs failed"),
+					"message_has_primary":    strings.Contains(message, "primary"),
+					"message_has_fallback":   strings.Contains(message, "fallback"),
+					"primary_calls":          primary.calls,
+					"fallback_calls":         fallback.calls,
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported LLM fallback action %q", payload.Action)
 	}
+}
+
+func scenarioLLMConnectionErrorClass(err error) string {
+	var connectionErr *lkllm.APIConnectionError
+	if errors.As(err, &connectionErr) {
+		return "api_connection"
+	}
+	if err == nil {
+		return ""
+	}
+	return fmt.Sprintf("%T", err)
 }
 
 func scenarioLLMChunkKind(chunk *lkllm.ChatChunk) string {

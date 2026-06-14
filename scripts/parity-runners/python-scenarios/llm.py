@@ -353,16 +353,20 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
             events: list[Any] | None = None,
             streams: list[list[Any]] | None = None,
             stream_chat_ctx: Any | None = None,
+            chat_error: BaseException | None = None,
         ) -> None:
             super().__init__()
             self._label = label
             self._events = events or []
             self._streams = streams or []
             self._stream_chat_ctx = stream_chat_ctx
+            self._chat_error = chat_error
             self.calls = 0
 
         def chat(self, **kwargs: Any) -> FakeStream:
             self.calls += 1
+            if self._chat_error is not None:
+                raise self._chat_error
             events = self._events
             if self._streams:
                 events = self._streams.pop(0)
@@ -568,6 +572,40 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
                     {
                         "name": "retries_same_provider",
                         "chunks": chunks,
+                        "primary_calls": primary.calls,
+                        "fallback_calls": fallback.calls,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "all_failed_error":
+        primary = FakeLLM("primary", chat_error=RuntimeError("primary unavailable"))
+        fallback = FakeLLM("fallback", chat_error=RuntimeError("fallback unavailable"))
+        adapter = module.FallbackAdapter([primary, fallback])
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            error = None
+            try:
+                await stream._run()
+            except BaseException as exc:  # noqa: BLE001 - scenario records stable error contract
+                error = exc
+            message = str(error) if error is not None else ""
+            retryable = bool(getattr(error, "retryable", False))
+            return {
+                "contract": "llm-fallback-all-failed-error",
+                "events": [
+                    {
+                        "name": "all_failed_error",
+                        "errored": error is not None,
+                        "error_class": "api_connection"
+                        if isinstance(error, module.APIConnectionError)
+                        else type(error).__name__ if error is not None else "",
+                        "retryable": retryable,
+                        "message_has_all_failed": "all LLMs failed" in message,
+                        "message_has_primary": "primary" in message,
+                        "message_has_fallback": "fallback" in message,
                         "primary_calls": primary.calls,
                         "fallback_calls": fallback.calls,
                     }
