@@ -675,6 +675,47 @@ func runSTTFallback(input json.RawMessage) (any, error) {
 				{"name": "forward_metrics", "request_ids": requestIDs},
 			},
 		}, nil
+	case "availability_panic_isolated":
+		primary := &fakeScenarioSTT{label: "primary", capabilities: lkstt.STTCapabilities{Streaming: true}, recognizeErr: errors.New("primary failed")}
+		fallback := &fakeScenarioSTT{label: "fallback", capabilities: lkstt.STTCapabilities{Streaming: true}}
+		adapter := lkstt.NewFallbackAdapterWithOptions([]lkstt.STT{primary, fallback}, lkstt.FallbackAdapterOptions{MaxRetryPerSTT: 0})
+		received := make(chan struct{}, 1)
+		escapedError := false
+		adapter.OnAvailabilityChanged(func(lkstt.AvailabilityChangedEvent) {
+			panic("availability handler failed")
+		})
+		adapter.OnAvailabilityChanged(func(event lkstt.AvailabilityChangedEvent) {
+			if event.STT == primary && !event.Available {
+				received <- struct{}{}
+			}
+		})
+		func() {
+			defer func() {
+				if recover() != nil {
+					escapedError = true
+				}
+			}()
+			_, err := adapter.Recognize(context.Background(), nil, "en")
+			if err != nil {
+				escapedError = true
+			}
+		}()
+		receivedCount := 0
+		select {
+		case <-received:
+			receivedCount++
+		default:
+		}
+		return map[string]any{
+			"contract": "stt-fallback-availability-panic-isolated",
+			"events": []map[string]any{
+				{
+					"name":           "availability_panic_isolated",
+					"received_count": receivedCount,
+					"escaped_error":  escapedError,
+				},
+			},
+		}, nil
 	case "validation":
 		mode := payload.Mode
 		if mode == "" {
@@ -930,6 +971,7 @@ type fakeScenarioSTT struct {
 	provider     string
 	capabilities lkstt.STTCapabilities
 	prewarmCalls int
+	recognizeErr error
 }
 
 func sttFallbackErrorClass(ok bool) string {
@@ -967,5 +1009,8 @@ func (s fakeScenarioSTT) Stream(context.Context, string) (lkstt.RecognizeStream,
 }
 
 func (s fakeScenarioSTT) Recognize(context.Context, []*audiomodel.AudioFrame, string) (*lkstt.SpeechEvent, error) {
+	if s.recognizeErr != nil {
+		return nil, s.recognizeErr
+	}
 	return &lkstt.SpeechEvent{Type: lkstt.SpeechEventFinalTranscript}, nil
 }

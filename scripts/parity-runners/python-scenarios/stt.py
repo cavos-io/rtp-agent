@@ -561,6 +561,7 @@ def stt_fallback(input_data: Any) -> dict[str, Any]:
             diarization: bool = False,
             aligned_transcript: Any = False,
             offline_recognize: bool = True,
+            recognize_error: bool = False,
         ) -> None:
             super().__init__(
                 capabilities=stt_module.STTCapabilities(
@@ -572,8 +573,11 @@ def stt_fallback(input_data: Any) -> dict[str, Any]:
                 )
             )
             self._label = label
+            self._recognize_error = recognize_error
 
         async def _recognize_impl(self, *args: Any, **kwargs: Any) -> Any:
+            if self._recognize_error:
+                raise RuntimeError(f"{self._label} failed")
             return stt_module.SpeechEvent(type=stt_module.SpeechEventType.FINAL_TRANSCRIPT)
 
     def caps_event(name: str, adapter: Any) -> dict[str, Any]:
@@ -648,6 +652,44 @@ def stt_fallback(input_data: Any) -> dict[str, Any]:
             "contract": "stt-fallback-forward-provider-metrics",
             "events": [
                 {"name": "forward_metrics", "request_ids": request_ids}
+            ],
+        }
+    if action == "availability_panic_isolated":
+        primary = FakeSTT("primary", recognize_error=True)
+        fallback = FakeSTT("fallback")
+        adapter = fallback_module.FallbackAdapter(
+            [primary, fallback],
+            max_retry_per_stt=0,
+        )
+        received_count = 0
+        escaped_error = False
+
+        def bad_handler(event: Any) -> None:
+            raise RuntimeError("availability handler failed")
+
+        def good_handler(event: Any) -> None:
+            nonlocal received_count
+            if event.stt is primary and event.available is False:
+                received_count += 1
+
+        adapter.on("stt_availability_changed", bad_handler)
+        adapter.on("stt_availability_changed", good_handler)
+
+        async def run_recognize() -> None:
+            await adapter.recognize([])
+
+        try:
+            asyncio.run(run_recognize())
+        except RuntimeError:
+            escaped_error = True
+        return {
+            "contract": "stt-fallback-availability-panic-isolated",
+            "events": [
+                {
+                    "name": "availability_panic_isolated",
+                    "received_count": received_count,
+                    "escaped_error": escaped_error,
+                }
             ],
         }
     if action == "validation":
