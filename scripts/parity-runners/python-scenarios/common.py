@@ -354,6 +354,43 @@ def load_reference_stt_stream_adapter():
     return module
 
 
+def load_reference_stt_multi_speaker():
+    stt_module = load_reference_stt()
+    path = repo_root() / "refs/agents/livekit-agents/livekit/agents/stt/multi_speaker_adapter.py"
+
+    stt_pkg = sys.modules["livekit.agents.stt"]
+    stt_pkg.STT = stt_module.STT
+    stt_pkg.RecognizeStream = stt_module.RecognizeStream
+    stt_pkg.SpeechData = stt_module.SpeechData
+    stt_pkg.SpeechEvent = stt_module.SpeechEvent
+    stt_pkg.SpeechEventType = stt_module.SpeechEventType
+    stt_pkg.STTCapabilities = stt_module.STTCapabilities
+
+    audio_mod = sys.modules["livekit.agents.utils.audio"]
+
+    class AudioByteStream:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def write(self, data: Any) -> list[Any]:
+            return []
+
+    audio_mod.AudioByteStream = AudioByteStream
+
+    if "numpy" not in sys.modules:
+        sys.modules["numpy"] = types.ModuleType("numpy")
+
+    spec = importlib.util.spec_from_file_location(
+        "livekit.agents.stt.multi_speaker_adapter", path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load reference stt multi_speaker_adapter.py from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["livekit.agents.stt.multi_speaker_adapter"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def load_reference_tts():
     path = repo_root() / "refs/agents/livekit-agents/livekit/agents/tts/tts.py"
 

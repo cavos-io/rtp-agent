@@ -24,6 +24,8 @@ type FallbackAdapter struct {
 	sampleRate           int
 	numChannels          int
 	maxRetryPerTTS       int
+	attemptTimeout       time.Duration
+	retryInterval        time.Duration
 	availabilityHandlers []availabilityHandlerSubscription
 	nextAvailabilityID   uint64
 
@@ -60,7 +62,15 @@ type FallbackAdapterOptions struct {
 	MaxRetryPerTTS int
 	DisableRetries bool
 	SampleRate     int
+	AttemptTimeout time.Duration
+	RetryInterval  time.Duration
 }
+
+const (
+	defaultFallbackAttemptTimeout = 10 * time.Second
+	defaultFallbackRetryInterval  = 2 * time.Second
+	firstFallbackRetryInterval    = 100 * time.Millisecond
+)
 
 func NewFallbackAdapter(ttss []TTS) *FallbackAdapter {
 	return NewFallbackAdapterWithOptions(ttss, FallbackAdapterOptions{})
@@ -75,6 +85,14 @@ func NewFallbackAdapterWithOptions(ttss []TTS, options FallbackAdapterOptions) *
 	capabilities := TTSCapabilities{AlignedTranscript: true}
 	sampleRate := options.SampleRate
 	maxRetryPerTTS := options.MaxRetryPerTTS
+	attemptTimeout := options.AttemptTimeout
+	if attemptTimeout <= 0 {
+		attemptTimeout = defaultFallbackAttemptTimeout
+	}
+	retryInterval := options.RetryInterval
+	if retryInterval <= 0 {
+		retryInterval = defaultFallbackRetryInterval
+	}
 	if options.DisableRetries {
 		maxRetryPerTTS = 0
 	} else if maxRetryPerTTS == 0 {
@@ -103,6 +121,8 @@ func NewFallbackAdapterWithOptions(ttss []TTS, options FallbackAdapterOptions) *
 		sampleRate:     sampleRate,
 		numChannels:    numChannels,
 		maxRetryPerTTS: maxRetryPerTTS,
+		attemptTimeout: attemptTimeout,
+		retryInterval:  retryInterval,
 		status:         status,
 	}
 }
@@ -250,6 +270,31 @@ func (f *FallbackAdapter) shouldTry(index int) bool {
 	return f.status[index].available || f.allUnavailableLocked()
 }
 
+func (f *FallbackAdapter) attemptContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if f.attemptTimeout <= 0 {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, f.attemptTimeout)
+}
+
+func (f *FallbackAdapter) waitRetryInterval(ctx context.Context, retryCount int) error {
+	interval := f.retryInterval
+	if retryCount == 1 {
+		interval = firstFallbackRetryInterval
+	}
+	if interval <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (f *FallbackAdapter) markUnavailable(index int) {
 	f.mu.Lock()
 	if index < 0 || index >= len(f.status) {
@@ -298,7 +343,7 @@ func (f *FallbackAdapter) tryRecoverChunked(index int, text string) {
 		f.mu.Unlock()
 		return
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := f.attemptContext(context.Background())
 	f.nextRecoveryID++
 	recoveryID := f.nextRecoveryID
 	f.status[index].recovering = true
@@ -369,7 +414,7 @@ func (f *FallbackAdapter) tryRecoverStream(index int, inputs []fallbackSynthesiz
 		f.mu.Unlock()
 		return
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := f.attemptContext(context.Background())
 	f.nextRecoveryID++
 	recoveryID := f.nextRecoveryID
 	f.status[index].recovering = true
@@ -594,8 +639,14 @@ func (s *fallbackChunkedStream) tryStartStream(index int) error {
 			continue
 		}
 		for {
+			if s.retries[i] > 0 {
+				if err := s.adapter.waitRetryInterval(s.ctx, s.retries[i]); err != nil {
+					return err
+				}
+			}
 			tts := s.adapter.ttss[i]
-			stream, err := tts.Synthesize(s.ctx, s.text)
+			attemptCtx, cancel := s.adapter.attemptContext(s.ctx)
+			stream, err := tts.Synthesize(attemptCtx, s.text)
 			if err == nil && isNilChunkedStream(stream) {
 				err = fmt.Errorf("TTS returned nil chunked stream")
 			}
@@ -604,6 +655,7 @@ func (s *fallbackChunkedStream) tryStartStream(index int) error {
 				s.activeIndex = i
 				return nil
 			}
+			cancel()
 			logger.Logger.Errorw("Failed to start TTS synthesize stream", err, "tts", tts.Label())
 			lastErr = err
 			if s.canRetryTTS(i) {
@@ -965,6 +1017,11 @@ func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
 		}
 		for {
 			tts := s.adapter.ttss[i]
+			if s.retries[i] > 0 {
+				if err := s.adapter.waitRetryInterval(s.ctx, s.retries[i]); err != nil {
+					return err
+				}
+			}
 			stream, err := s.startProviderStream(tts)
 			if err != nil {
 				logger.Logger.Errorw("Failed to start TTS stream", err, "tts", tts.Label())
@@ -1005,11 +1062,16 @@ func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
 }
 
 func (s *fallbackSynthesizeStream) startProviderStream(tts TTS) (SynthesizeStream, error) {
-	stream, err := streamForTTS(s.ctx, tts)
+	attemptCtx, cancel := s.adapter.attemptContext(s.ctx)
+	stream, err := streamForTTS(attemptCtx, tts)
 	if err == nil && isNilSynthesizeStream(stream) {
-		return nil, fmt.Errorf("TTS returned nil synthesize stream")
+		err = fmt.Errorf("TTS returned nil synthesize stream")
 	}
-	return stream, err
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	return stream, nil
 }
 
 func (s *fallbackSynthesizeStream) replayBufferedText(stream SynthesizeStream) error {

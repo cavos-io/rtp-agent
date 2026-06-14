@@ -645,9 +645,11 @@ func (s *MCPServerStdio) closeTransportLocked() error {
 		s.stdout = nil
 	}
 	if s.cmd != nil && s.cmd.Process != nil {
+		cmd := s.cmd
 		if err := s.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) && firstErr == nil {
 			firstErr = err
 		}
+		_ = cmd.Wait()
 	}
 	s.cmd = nil
 	return firstErr

@@ -612,6 +612,98 @@ func TestFallbackAdapterEmitsRecoverableErrorOnChunkedRetry(t *testing.T) {
 	}
 }
 
+func TestFallbackChunkedStreamWaitsRetryIntervalBeforeSameTTSRetry(t *testing.T) {
+	providerErr := errors.New("retryable provider failure")
+	adapter := NewFallbackAdapterWithOptions([]TTS{
+		&metadataTTS{
+			label:       "primary",
+			sampleRate:  24000,
+			numChannels: 1,
+			chunkedStreams: []ChunkedStream{
+				&metadataChunkedStream{err: providerErr},
+				&metadataChunkedStream{err: providerErr},
+				&metadataChunkedStream{events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte("retry success")}}}},
+			},
+		},
+	}, FallbackAdapterOptions{
+		MaxRetryPerTTS: 2,
+		RetryInterval:  30 * time.Millisecond,
+	})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	startedAt := time.Now()
+	audio, err := stream.Next()
+	elapsed := time.Since(startedAt)
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := string(audio.Frame.Data); got != "retry success" {
+		t.Fatalf("audio data = %q, want retry success", got)
+	}
+	if elapsed < 120*time.Millisecond {
+		t.Fatalf("Next elapsed = %s, want retry interval delay", elapsed)
+	}
+}
+
+func TestFallbackChunkedStreamTimesOutBlockedSynthesizeAttempt(t *testing.T) {
+	primary := &blockingSynthesizeTTS{
+		metadataTTS: metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1},
+		started:     make(chan struct{}, 1),
+	}
+	fallback := &metadataTTS{
+		label:       "fallback",
+		sampleRate:  24000,
+		numChannels: 1,
+		chunked: &metadataChunkedStream{
+			events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte("fallback")}}},
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]TTS{primary, fallback}, FallbackAdapterOptions{
+		DisableRetries: true,
+		AttemptTimeout: 20 * time.Millisecond,
+	})
+
+	type synthesizeResult struct {
+		stream ChunkedStream
+		err    error
+	}
+	done := make(chan synthesizeResult, 1)
+	go func() {
+		stream, err := adapter.Synthesize(context.Background(), "hello")
+		done <- synthesizeResult{stream: stream, err: err}
+	}()
+
+	select {
+	case <-primary.started:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("primary synthesize was not attempted")
+	}
+
+	var result synthesizeResult
+	select {
+	case result = <-done:
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("Synthesize did not return after attempt timeout")
+	}
+	if result.err != nil {
+		t.Fatalf("Synthesize returned error: %v", result.err)
+	}
+	defer result.stream.Close()
+
+	audio, err := result.stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := string(audio.Frame.Data); got != "fallback" {
+		t.Fatalf("audio data = %q, want fallback", got)
+	}
+}
+
 func TestFallbackAdapterFallsBackFromTypedNilChunkedStream(t *testing.T) {
 	var typedNil *metadataChunkedStream
 	adapter := NewFallbackAdapterWithOptions([]TTS{
@@ -2262,6 +2354,39 @@ func TestFallbackChunkedRecoveryKeepsProviderUnavailableWhenReplayAudioInvalid(t
 	}
 }
 
+func TestFallbackChunkedRecoveryTimesOutBlockedProvider(t *testing.T) {
+	primary := &contextAwareRecoveryTTS{
+		metadataTTS: metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1},
+		started:     make(chan struct{}, 1),
+		cancelled:   make(chan struct{}, 1),
+	}
+	adapter := NewFallbackAdapterWithOptions([]TTS{primary}, FallbackAdapterOptions{
+		AttemptTimeout: 20 * time.Millisecond,
+	})
+	adapter.status[0].available = false
+
+	adapter.tryRecoverChunked(0, "hello")
+
+	select {
+	case <-primary.started:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("recovery synthesize was not attempted")
+	}
+	select {
+	case <-primary.cancelled:
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("recovery synthesize context was not cancelled after attempt timeout")
+	}
+	waitForFallbackCondition(t, func() bool {
+		adapter.mu.Lock()
+		defer adapter.mu.Unlock()
+		return !adapter.status[0].recovering
+	})
+	if adapter.status[0].available {
+		t.Fatal("provider available = true after blocked recovery probe, want false")
+	}
+}
+
 func TestFallbackSynthesizeStreamReturnsEOFWhenProviderCompletes(t *testing.T) {
 	firstStream := &metadataSynthesizeStream{
 		events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte{1}}}},
@@ -3094,6 +3219,47 @@ func TestFallbackSynthesizeRecoveryKeepsProviderUnavailableWhenReplayAudioInvali
 	}
 }
 
+func TestFallbackSynthesizeRecoveryTimesOutBlockedProvider(t *testing.T) {
+	stream := &contextAwareRecoverySynthesizeStream{
+		started:   make(chan struct{}, 1),
+		cancelled: make(chan struct{}, 1),
+	}
+	primary := &contextAwareRecoveryStreamTTS{
+		metadataTTS: metadataTTS{
+			label:        "primary",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+		},
+		stream: stream,
+	}
+	adapter := NewFallbackAdapterWithOptions([]TTS{primary}, FallbackAdapterOptions{
+		AttemptTimeout: 20 * time.Millisecond,
+	})
+	adapter.status[0].available = false
+
+	adapter.tryRecoverStream(0, []fallbackSynthesizeInput{{text: "hello"}})
+
+	select {
+	case <-stream.started:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("recovery stream was not attempted")
+	}
+	select {
+	case <-stream.cancelled:
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("recovery stream context was not cancelled after attempt timeout")
+	}
+	waitForFallbackCondition(t, func() bool {
+		adapter.mu.Lock()
+		defer adapter.mu.Unlock()
+		return !adapter.status[0].recovering
+	})
+	if adapter.status[0].available {
+		t.Fatal("provider available = true after blocked recovery probe, want false")
+	}
+}
+
 func waitForFallbackCondition(t *testing.T, condition func() bool) {
 	t.Helper()
 
@@ -3398,6 +3564,20 @@ type contextCapturingTTS struct {
 	release   chan struct{}
 }
 
+type blockingSynthesizeTTS struct {
+	metadataTTS
+	started chan struct{}
+}
+
+func (b *blockingSynthesizeTTS) Synthesize(ctx context.Context, text string) (ChunkedStream, error) {
+	select {
+	case b.started <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
 func (c *contextCapturingTTS) Synthesize(ctx context.Context, text string) (ChunkedStream, error) {
 	c.ctx = ctx
 	return &contextCapturingChunkedStream{
@@ -3471,6 +3651,48 @@ func (s *contextAwareRecoveryChunkedStream) Next() (*SynthesizedAudio, error) {
 
 func (s *contextAwareRecoveryChunkedStream) Close() error {
 	return nil
+}
+
+type contextAwareRecoverySynthesizeStream struct {
+	ctx       context.Context
+	started   chan struct{}
+	cancelled chan struct{}
+}
+
+type contextAwareRecoveryStreamTTS struct {
+	metadataTTS
+	stream *contextAwareRecoverySynthesizeStream
+}
+
+func (t *contextAwareRecoveryStreamTTS) Stream(ctx context.Context) (SynthesizeStream, error) {
+	t.streamCalls++
+	t.stream.ctx = ctx
+	return t.stream, nil
+}
+
+func (s *contextAwareRecoverySynthesizeStream) PushText(string) error {
+	return nil
+}
+
+func (s *contextAwareRecoverySynthesizeStream) Flush() error {
+	return nil
+}
+
+func (s *contextAwareRecoverySynthesizeStream) Close() error {
+	return nil
+}
+
+func (s *contextAwareRecoverySynthesizeStream) Next() (*SynthesizedAudio, error) {
+	select {
+	case s.started <- struct{}{}:
+	default:
+	}
+	<-s.ctx.Done()
+	select {
+	case s.cancelled <- struct{}{}:
+	default:
+	}
+	return nil, s.ctx.Err()
 }
 
 func (n *notifyStreamTTS) Stream(ctx context.Context) (SynthesizeStream, error) {

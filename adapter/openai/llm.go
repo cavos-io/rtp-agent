@@ -395,7 +395,7 @@ func NewOVHCloudOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenA
 	if apiKey == "" {
 		return nil, fmt.Errorf("OVHcloud AI Endpoints API key is required, either as argument or set OVHCLOUD_API_KEY environmental variable")
 	}
-	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultOVHCloudOpenAIBaseURL, nil, opts...), nil
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultOVHCloudOpenAIBaseURL, nil, openAILLMOptionsWithDefaultToolChoiceAuto(opts...)...), nil
 }
 
 func NewDeepSeekOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
@@ -408,7 +408,7 @@ func NewDeepSeekOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenA
 	if apiKey == "" {
 		return nil, fmt.Errorf("DeepSeek API key is required, either as argument or set DEEPSEEK_API_KEY environmental variable")
 	}
-	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultDeepSeekOpenAIBaseURL, nil, opts...), nil
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultDeepSeekOpenAIBaseURL, nil, openAILLMOptionsWithDefaultToolChoiceAuto(opts...)...), nil
 }
 
 func NewFireworksOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
@@ -421,7 +421,7 @@ func NewFireworksOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*Open
 	if apiKey == "" {
 		return nil, fmt.Errorf("fireworks API key is required, either as argument or set FIREWORKS_API_KEY environmental variable")
 	}
-	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultFireworksOpenAIBaseURL, nil, opts...), nil
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultFireworksOpenAIBaseURL, nil, openAILLMOptionsWithDefaultToolChoiceAuto(opts...)...), nil
 }
 
 func NewPerplexityOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
@@ -434,7 +434,7 @@ func NewPerplexityOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*Ope
 	if apiKey == "" {
 		return nil, fmt.Errorf("perplexity AI API key is required, either as argument or set PERPLEXITY_API_KEY environmental variable")
 	}
-	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultPerplexityOpenAIBaseURL, nil, opts...), nil
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultPerplexityOpenAIBaseURL, nil, openAILLMOptionsWithDefaultToolChoiceAuto(opts...)...), nil
 }
 
 func NewTogetherOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
@@ -447,7 +447,7 @@ func NewTogetherOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenA
 	if apiKey == "" {
 		return nil, fmt.Errorf("together AI API key is required, either as argument or set TOGETHER_API_KEY environmental variable")
 	}
-	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultTogetherOpenAIBaseURL, nil, opts...), nil
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultTogetherOpenAIBaseURL, nil, openAILLMOptionsWithDefaultToolChoiceAuto(opts...)...), nil
 }
 
 func NewTelnyxOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
@@ -460,7 +460,7 @@ func NewTelnyxOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAIL
 	if apiKey == "" {
 		return nil, fmt.Errorf("telnyx AI API key is required, either as argument or set TELNYX_API_KEY environmental variable")
 	}
-	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultTelnyxOpenAIBaseURL, nil, opts...), nil
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultTelnyxOpenAIBaseURL, nil, openAILLMOptionsWithDefaultToolChoiceAuto(opts...)...), nil
 }
 
 func NewNebiusOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
@@ -473,7 +473,7 @@ func NewNebiusOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAIL
 	if apiKey == "" {
 		return nil, fmt.Errorf("nebius API key is required, either as argument or set NEBIUS_API_KEY environmental variable")
 	}
-	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultNebiusOpenAIBaseURL, nil, opts...), nil
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultNebiusOpenAIBaseURL, nil, openAILLMOptionsWithDefaultToolChoiceAuto(opts...)...), nil
 }
 
 func NewLettaOpenAILLM(agentID, baseURL, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
@@ -504,7 +504,7 @@ func NewOllamaOpenAILLM(model string, opts ...OpenAILLMOption) *OpenAILLM {
 	if model == "" {
 		model = defaultOllamaOpenAILLMModel
 	}
-	return NewOpenAILLMWithBaseURLAndHTTPClient("ollama", model, defaultOllamaOpenAIBaseURL, nil, opts...)
+	return NewOpenAILLMWithBaseURLAndHTTPClient("ollama", model, defaultOllamaOpenAIBaseURL, nil, openAILLMOptionsWithDefaultToolChoiceAuto(opts...)...)
 }
 
 func NewCometAPIOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
@@ -517,7 +517,7 @@ func NewCometAPIOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenA
 	if apiKey == "" {
 		return nil, fmt.Errorf("CometAPI API key is required, either as argument or set COMETAPI_API_KEY environmental variable")
 	}
-	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultCometAPIOpenAIBaseURL, nil, opts...), nil
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultCometAPIOpenAIBaseURL, nil, openAILLMOptionsWithDefaultToolChoiceAuto(opts...)...), nil
 }
 
 func NewOctoAIOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
@@ -530,7 +530,7 @@ func NewOctoAIOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAIL
 	if apiKey == "" {
 		return nil, fmt.Errorf("OctoAI API key is required, either as argument or set OCTOAI_TOKEN environmental variable")
 	}
-	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultOctoAIOpenAIBaseURL, nil, opts...), nil
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultOctoAIOpenAIBaseURL, nil, openAILLMOptionsWithDefaultToolChoiceAuto(opts...)...), nil
 }
 
 func NewSambaNovaOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
@@ -543,7 +543,10 @@ func NewSambaNovaOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*Open
 	if apiKey == "" {
 		return nil, fmt.Errorf("SambaNova API key is required, either as argument or set SAMBANOVA_API_KEY environment variable")
 	}
-	options := []OpenAILLMOption{WithOpenAILLMStrictToolSchema(false)}
+	options := []OpenAILLMOption{
+		WithOpenAILLMToolChoice("auto"),
+		WithOpenAILLMStrictToolSchema(false),
+	}
 	options = append(options, opts...)
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultSambaNovaOpenAIBaseURL, nil, options...), nil
 }
@@ -573,7 +576,12 @@ func NewXAIOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM,
 	if apiKey == "" {
 		return nil, fmt.Errorf("XAI API key is required, either as argument or set XAI_API_KEY environmental variable")
 	}
-	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultXAIOpenAIBaseURL, nil, opts...), nil
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultXAIOpenAIBaseURL, nil, openAILLMOptionsWithDefaultToolChoiceAuto(opts...)...), nil
+}
+
+func openAILLMOptionsWithDefaultToolChoiceAuto(opts ...OpenAILLMOption) []OpenAILLMOption {
+	options := []OpenAILLMOption{WithOpenAILLMToolChoice("auto")}
+	return append(options, opts...)
 }
 
 func NewOpenRouterLLM(apiKey, model string, opts ...OpenRouterLLMOption) (*OpenAILLM, error) {

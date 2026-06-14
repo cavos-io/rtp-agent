@@ -798,7 +798,7 @@ func TestFallbackAdapterExposesReferenceMetadata(t *testing.T) {
 	}
 }
 
-func TestMultiSpeakerAdapterForwardsWrappedMetadata(t *testing.T) {
+func TestMultiSpeakerAdapterMetadataMatchesReferenceDefaults(t *testing.T) {
 	wrapped := &fakeMetadataSTT{
 		model:        "diarized-model",
 		provider:     "diarized-provider",
@@ -809,11 +809,17 @@ func TestMultiSpeakerAdapterForwardsWrappedMetadata(t *testing.T) {
 		t.Fatalf("NewMultiSpeakerAdapter returned error: %v", err)
 	}
 
-	if got := Model(adapter); got != "diarized-model" {
-		t.Fatalf("MultiSpeakerAdapter Model = %q, want wrapped model", got)
+	if got := Model(wrapped); got != "diarized-model" {
+		t.Fatalf("wrapped Model = %q, want diarized-model", got)
 	}
-	if got := Provider(adapter); got != "diarized-provider" {
-		t.Fatalf("MultiSpeakerAdapter Provider = %q, want wrapped provider", got)
+	if got := Provider(wrapped); got != "diarized-provider" {
+		t.Fatalf("wrapped Provider = %q, want diarized-provider", got)
+	}
+	if got := Model(adapter); got != "unknown" {
+		t.Fatalf("MultiSpeakerAdapter Model = %q, want reference default unknown", got)
+	}
+	if got := Provider(adapter); got != "unknown" {
+		t.Fatalf("MultiSpeakerAdapter Provider = %q, want reference default unknown", got)
 	}
 }
 
@@ -843,7 +849,7 @@ func TestFallbackAdapterPrewarmsPrimaryProvider(t *testing.T) {
 	}
 }
 
-func TestMultiSpeakerAdapterForwardsPrewarm(t *testing.T) {
+func TestMultiSpeakerAdapterPrewarmMatchesReferenceNoop(t *testing.T) {
 	wrapped := &fakeMetadataSTT{
 		capabilities: STTCapabilities{Streaming: true, Diarization: true},
 	}
@@ -851,11 +857,14 @@ func TestMultiSpeakerAdapterForwardsPrewarm(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMultiSpeakerAdapter returned error: %v", err)
 	}
+	if !adapter.Capabilities().Diarization {
+		t.Fatal("MultiSpeakerAdapter Capabilities().Diarization = false, want wrapped diarization capability")
+	}
 
 	Prewarm(adapter)
 
-	if !wrapped.prewarmed {
-		t.Fatal("MultiSpeakerAdapter Prewarm did not call wrapped STT Prewarm")
+	if wrapped.prewarmed {
+		t.Fatal("MultiSpeakerAdapter Prewarm called wrapped STT, want reference no-op")
 	}
 }
 

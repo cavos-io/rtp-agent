@@ -30,6 +30,158 @@ def stt_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "multi_speaker_metadata":
+        multi_speaker_module = load_reference_stt_multi_speaker()
+
+        class ScenarioSTT(module.STT):
+            def __init__(self) -> None:
+                super().__init__(
+                    capabilities=module.STTCapabilities(
+                        streaming=True,
+                        interim_results=True,
+                        diarization=True,
+                    )
+                )
+
+            @property
+            def model(self) -> str:
+                return "wrapped-model"
+
+            @property
+            def provider(self) -> str:
+                return "wrapped-provider"
+
+            async def _recognize_impl(
+                self, buffer: Any, *, language: Any = None, conn_options: Any = None
+            ) -> Any:
+                return None
+
+        wrapped = ScenarioSTT()
+        adapter = multi_speaker_module.MultiSpeakerAdapter(stt=wrapped)
+        return {
+            "contract": "stt-multi-speaker-metadata",
+            "events": [
+                {
+                    "name": "multi_speaker_metadata",
+                    "model": adapter.model,
+                    "provider": adapter.provider,
+                    "wrapped_model": wrapped.model,
+                    "wrapped_provider": wrapped.provider,
+                    "diarization": adapter.capabilities.diarization,
+                }
+            ],
+        }
+    if action == "multi_speaker_prewarm":
+        multi_speaker_module = load_reference_stt_multi_speaker()
+
+        class ScenarioSTT(module.STT):
+            def __init__(self) -> None:
+                super().__init__(
+                    capabilities=module.STTCapabilities(
+                        streaming=True,
+                        interim_results=True,
+                        diarization=True,
+                    )
+                )
+                self.prewarm_calls = 0
+
+            def prewarm(self) -> None:
+                self.prewarm_calls += 1
+
+            async def _recognize_impl(
+                self, buffer: Any, *, language: Any = None, conn_options: Any = None
+            ) -> Any:
+                return None
+
+        wrapped = ScenarioSTT()
+        adapter = multi_speaker_module.MultiSpeakerAdapter(stt=wrapped)
+        adapter.prewarm()
+        return {
+            "contract": "stt-multi-speaker-prewarm",
+            "events": [
+                {
+                    "name": "multi_speaker_prewarm",
+                    "wrapped_prewarm_calls": wrapped.prewarm_calls,
+                    "adapter_capability_diarization": adapter.capabilities.diarization,
+                }
+            ],
+        }
+    if action == "metrics_panic_isolated":
+        class ScenarioSTT(module.STT):
+            def __init__(self) -> None:
+                super().__init__(
+                    capabilities=module.STTCapabilities(streaming=False, interim_results=False)
+                )
+
+            async def _recognize_impl(self, buffer: Any, *, language: Any = None, conn_options: Any = None) -> Any:
+                return None
+
+        provider = ScenarioSTT()
+        received_request_ids: list[str] = []
+
+        def failing_handler(metrics: Any) -> None:
+            raise RuntimeError("metrics handler failed")
+
+        def recording_handler(metrics: Any) -> None:
+            received_request_ids.append(metrics.request_id)
+
+        provider.on("metrics_collected", failing_handler)
+        provider.on("metrics_collected", recording_handler)
+        escaped_error = False
+        metrics = type("Metrics", (), {"request_id": "req"})()
+        try:
+            provider.emit("metrics_collected", metrics)
+        except RuntimeError:
+            escaped_error = True
+        return {
+            "contract": "stt-metrics-reference-panic-isolated",
+            "events": [
+                {
+                    "name": "metrics_panic_isolated",
+                    "escaped_error": escaped_error,
+                    "handler_call_count": len(received_request_ids),
+                    "request_ids": received_request_ids,
+                }
+            ],
+        }
+    if action == "error_panic_isolated":
+        class ScenarioSTT(module.STT):
+            def __init__(self) -> None:
+                super().__init__(
+                    capabilities=module.STTCapabilities(streaming=False, interim_results=False)
+                )
+
+            async def _recognize_impl(self, buffer: Any, *, language: Any = None, conn_options: Any = None) -> Any:
+                return None
+
+        provider = ScenarioSTT()
+        received_labels: list[str] = []
+
+        def failing_handler(error: Any) -> None:
+            raise RuntimeError("error handler failed")
+
+        def recording_handler(error: Any) -> None:
+            received_labels.append(error.label)
+
+        provider.on("error", failing_handler)
+        provider.on("error", recording_handler)
+        escaped_error = False
+        err = type("Error", (), {"label": "provider.STT"})()
+        try:
+            provider.emit("error", err)
+        except RuntimeError:
+            escaped_error = True
+        return {
+            "contract": "stt-error-reference-panic-isolated",
+            "events": [
+                {
+                    "name": "error_panic_isolated",
+                    "escaped_error": escaped_error,
+                    "handler_call_count": len(received_labels),
+                    "labels": received_labels,
+                }
+            ],
+        }
     if action == "speech_data_metadata":
         word = load_reference_types().TimedString(
             "hello",

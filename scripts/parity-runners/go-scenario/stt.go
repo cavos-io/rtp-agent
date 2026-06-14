@@ -39,6 +39,110 @@ func runSTTValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "multi_speaker_metadata":
+		wrapped := fakeScenarioSTT{
+			label:        "wrapped",
+			model:        "wrapped-model",
+			provider:     "wrapped-provider",
+			capabilities: lkstt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: true},
+		}
+		adapter, err := lkstt.NewMultiSpeakerAdapter(wrapped, true, false, "{text}", "{text}", nil)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "stt-multi-speaker-metadata",
+			"events": []map[string]any{
+				{
+					"name":             "multi_speaker_metadata",
+					"model":            lkstt.Model(adapter),
+					"provider":         lkstt.Provider(adapter),
+					"wrapped_model":    lkstt.Model(wrapped),
+					"wrapped_provider": lkstt.Provider(wrapped),
+					"diarization":      adapter.Capabilities().Diarization,
+				},
+			},
+		}, nil
+	case "multi_speaker_prewarm":
+		wrapped := &fakeScenarioSTT{
+			label:        "wrapped",
+			capabilities: lkstt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: true},
+		}
+		adapter, err := lkstt.NewMultiSpeakerAdapter(wrapped, true, false, "{text}", "{text}", nil)
+		if err != nil {
+			return nil, err
+		}
+		lkstt.Prewarm(adapter)
+		return map[string]any{
+			"contract": "stt-multi-speaker-prewarm",
+			"events": []map[string]any{
+				{
+					"name":                           "multi_speaker_prewarm",
+					"wrapped_prewarm_calls":          wrapped.prewarmCalls,
+					"adapter_capability_diarization": adapter.Capabilities().Diarization,
+				},
+			},
+		}, nil
+	case "metrics_panic_isolated":
+		var emitter lkstt.MetricsEmitter
+		metrics := &telemetry.STTMetrics{RequestID: "req"}
+		receivedRequestIDs := []string{}
+		emitter.OnMetricsCollected(func(*telemetry.STTMetrics) {
+			panic("metrics handler failed")
+		})
+		emitter.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+			receivedRequestIDs = append(receivedRequestIDs, metrics.RequestID)
+		})
+		escapedError := false
+		func() {
+			defer func() {
+				if recover() != nil {
+					escapedError = true
+				}
+			}()
+			emitter.EmitMetricsCollected(metrics)
+		}()
+		return map[string]any{
+			"contract": "stt-metrics-reference-panic-isolated",
+			"events": []map[string]any{
+				{
+					"name":               "metrics_panic_isolated",
+					"escaped_error":      escapedError,
+					"handler_call_count": len(receivedRequestIDs),
+					"request_ids":        receivedRequestIDs,
+				},
+			},
+		}, nil
+	case "error_panic_isolated":
+		var emitter lkstt.ErrorEmitter
+		err := lkstt.NewSTTError("provider.STT", context.Canceled, true)
+		receivedLabels := []string{}
+		emitter.OnError(func(*lkstt.STTError) {
+			panic("error handler failed")
+		})
+		emitter.OnError(func(err *lkstt.STTError) {
+			receivedLabels = append(receivedLabels, err.Label)
+		})
+		escapedError := false
+		func() {
+			defer func() {
+				if recover() != nil {
+					escapedError = true
+				}
+			}()
+			emitter.EmitError(err)
+		}()
+		return map[string]any{
+			"contract": "stt-error-reference-panic-isolated",
+			"events": []map[string]any{
+				{
+					"name":               "error_panic_isolated",
+					"escaped_error":      escapedError,
+					"handler_call_count": len(receivedLabels),
+					"labels":             receivedLabels,
+				},
+			},
+		}, nil
 	case "speech_data_metadata":
 		data := lkstt.SpeechData{
 			Language: "en",

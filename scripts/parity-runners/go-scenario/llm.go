@@ -338,6 +338,66 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 		payload.Action = "provider_error_not_forwarded"
 	}
 	switch payload.Action {
+	case "option_defaults":
+		primary := &fakeScenarioLLM{label: "primary", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "ok"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary})
+		stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		defer stream.Close()
+		if _, err := stream.Next(); err != nil {
+			return nil, err
+		}
+		if len(primary.options) == 0 || primary.options[0].ConnectOptions == nil {
+			return nil, errors.New("fallback provider connect options missing")
+		}
+		connectOptions := primary.options[0].ConnectOptions
+		return map[string]any{
+			"contract": "llm-fallback-options",
+			"events": []map[string]any{
+				{
+					"name":              "option_defaults",
+					"max_retry":         connectOptions.MaxRetry,
+					"retry_interval_ms": int(connectOptions.RetryInterval / time.Millisecond),
+					"timeout_ms":        int(connectOptions.Timeout / time.Millisecond),
+				},
+			},
+		}, nil
+	case "option_overrides":
+		primary := &fakeScenarioLLM{label: "primary", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "ok"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapterWithOptions([]lkllm.LLM{primary}, lkllm.FallbackAdapterOptions{
+			AttemptTimeout: 50 * time.Millisecond,
+			MaxRetryPerLLM: 2,
+			RetryInterval:  25 * time.Millisecond,
+		})
+		stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		defer stream.Close()
+		if _, err := stream.Next(); err != nil {
+			return nil, err
+		}
+		if len(primary.options) == 0 || primary.options[0].ConnectOptions == nil {
+			return nil, errors.New("fallback provider connect options missing")
+		}
+		connectOptions := primary.options[0].ConnectOptions
+		return map[string]any{
+			"contract": "llm-fallback-options",
+			"events": []map[string]any{
+				{
+					"name":              "option_overrides",
+					"max_retry":         connectOptions.MaxRetry,
+					"retry_interval_ms": int(connectOptions.RetryInterval / time.Millisecond),
+					"timeout_ms":        int(connectOptions.Timeout / time.Millisecond),
+				},
+			},
+		}, nil
 	case "provider_error_not_forwarded":
 		primary := &fakeScenarioLLM{label: "primary"}
 		fallback := &fakeScenarioLLM{label: "fallback"}
@@ -3989,12 +4049,18 @@ type fakeScenarioLLM struct {
 	stream       lkllm.LLMStream
 	streams      []lkllm.LLMStream
 	err          error
+	options      []lkllm.ChatOptions
 	calls        int
 	prewarmCalls int
 }
 
-func (f *fakeScenarioLLM) Chat(context.Context, *lkllm.ChatContext, ...lkllm.ChatOption) (lkllm.LLMStream, error) {
+func (f *fakeScenarioLLM) Chat(_ context.Context, _ *lkllm.ChatContext, opts ...lkllm.ChatOption) (lkllm.LLMStream, error) {
 	f.calls++
+	var options lkllm.ChatOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
+	f.options = append(f.options, options)
 	if f.err != nil {
 		return nil, f.err
 	}
