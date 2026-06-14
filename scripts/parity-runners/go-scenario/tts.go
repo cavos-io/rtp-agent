@@ -541,6 +541,26 @@ func runTTSFallback(input json.RawMessage) (any, error) {
 				{"name": "provider_error_not_forwarded", "labels": labels},
 			},
 		}, nil
+	case "close_unsubscribes_provider_metrics":
+		primary := &fakeScenarioTTS{provider: "primary"}
+		adapter := lktts.NewFallbackAdapter([]lktts.TTS{primary})
+		requestIDs := make([]string, 0, 2)
+		unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+			requestIDs = append(requestIDs, metrics.RequestID)
+		})
+		defer unsubscribe()
+		primary.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "before"})
+		if err := adapter.Close(); err != nil {
+			return nil, err
+		}
+		primary.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "after"})
+		adapter.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "local"})
+		return map[string]any{
+			"contract": "tts-fallback-close-unsubscribes-provider-metrics",
+			"events": []map[string]any{
+				{"name": "close_unsubscribes_provider_metrics", "request_ids": requestIDs},
+			},
+		}, nil
 	case "validation":
 		mode := payload.Mode
 		if mode == "" {

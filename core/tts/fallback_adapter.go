@@ -33,6 +33,8 @@ type FallbackAdapter struct {
 
 	nextRecoveryID uint64
 	recoveryWG     sync.WaitGroup
+
+	metricsUnsubscribes []func()
 }
 
 type fallbackTTSStatus struct {
@@ -133,10 +135,15 @@ func (f *FallbackAdapter) Close() error {
 		f.status[i].recovering = false
 		f.status[i].recoveryID = 0
 	}
+	metricsUnsubscribes := append([]func(){}, f.metricsUnsubscribes...)
+	f.metricsUnsubscribes = nil
 	f.mu.Unlock()
 
 	for _, cancel := range cancels {
 		cancel()
+	}
+	for _, unsubscribe := range metricsUnsubscribes {
+		unsubscribe()
 	}
 	f.recoveryWG.Wait()
 
@@ -185,20 +192,24 @@ func (f *FallbackAdapter) OnMetricsCollected(handler TTSMetricsHandler) func() {
 	if handler == nil {
 		return func() {}
 	}
-	unsubscribes := make([]func(), 0, len(f.ttss)+1)
-	unsubscribes = append(unsubscribes, f.MetricsEmitter.OnMetricsCollected(handler))
+	localUnsubscribe := f.MetricsEmitter.OnMetricsCollected(handler)
+	providerUnsubscribes := make([]func(), 0, len(f.ttss))
 	for _, tts := range f.ttss {
 		collector, ok := tts.(metricsCollectorTTS)
 		if !ok {
 			continue
 		}
-		unsubscribes = append(unsubscribes, collector.OnMetricsCollected(handler))
+		providerUnsubscribes = append(providerUnsubscribes, collector.OnMetricsCollected(handler))
 	}
+	f.mu.Lock()
+	f.metricsUnsubscribes = append(f.metricsUnsubscribes, providerUnsubscribes...)
+	f.mu.Unlock()
 
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			for _, unsubscribe := range unsubscribes {
+			localUnsubscribe()
+			for _, unsubscribe := range providerUnsubscribes {
 				unsubscribe()
 			}
 		})

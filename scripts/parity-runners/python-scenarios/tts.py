@@ -664,6 +664,33 @@ def tts_fallback(input_data: Any) -> dict[str, Any]:
                 {"name": "provider_error_not_forwarded", "labels": labels}
             ],
         }
+    if action == "close_unsubscribes_provider_metrics":
+        primary = ScenarioTTS()
+        adapter = module.FallbackAdapter([primary])
+        request_ids: list[str] = []
+        adapter.on(
+            "metrics_collected",
+            lambda metrics: request_ids.append(metrics.request_id),
+        )
+        primary.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "before"})(),
+        )
+        asyncio.run(adapter.aclose())
+        primary.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "after"})(),
+        )
+        adapter.emit(
+            "metrics_collected",
+            type("Metrics", (), {"request_id": "local"})(),
+        )
+        return {
+            "contract": "tts-fallback-close-unsubscribes-provider-metrics",
+            "events": [
+                {"name": "close_unsubscribes_provider_metrics", "request_ids": request_ids}
+            ],
+        }
     if action == "validation":
         mode = input_data.get("mode", "empty")
         error = False
