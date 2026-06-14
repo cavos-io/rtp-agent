@@ -461,6 +461,7 @@ type AppConfig struct {
 	TTSTokenizerMinSentenceLen              *int
 	TTSTokenizerStreamContextLen            *int
 	TTSTextReplacements                     map[string]string
+	TTSTextTransforms                       []string
 	DisableTTSTextTransforms                bool
 	WordTokenizerProvider                   string
 	WordTokenizerLanguage                   string
@@ -826,6 +827,7 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSTokenizerMinSentenceLen:              getenvOptionalInt("RTP_AGENT_TTS_TOKENIZER_MIN_SENTENCE_LEN"),
 		TTSTokenizerStreamContextLen:            getenvOptionalInt("RTP_AGENT_TTS_TOKENIZER_STREAM_CONTEXT_LEN"),
 		TTSTextReplacements:                     splitEnvStringMap("RTP_AGENT_TTS_TEXT_REPLACEMENTS"),
+		TTSTextTransforms:                       splitEnvList("RTP_AGENT_TTS_TEXT_TRANSFORMS"),
 		DisableTTSTextTransforms:                getenvBool("RTP_AGENT_DISABLE_TTS_TEXT_TRANSFORMS"),
 		WordTokenizerProvider:                   normalizedEnv("RTP_AGENT_WORD_TOKENIZER_PROVIDER"),
 		WordTokenizerLanguage:                   os.Getenv("RTP_AGENT_WORD_TOKENIZER_LANGUAGE"),
@@ -5508,6 +5510,10 @@ func agentSessionOptionsFromConfig(cfg AppConfig) (agent.AgentSessionOptions, er
 		opts.TTSStreamPacer = &pacer
 	}
 	opts.TTSTextReplacements = cfg.TTSTextReplacements
+	if len(cfg.TTSTextTransforms) > 0 {
+		opts.TTSTextTransforms = append([]string(nil), cfg.TTSTextTransforms...)
+		opts.TTSTextTransformsSet = true
+	}
 	opts.DisableTTSTextTransforms = cfg.DisableTTSTextTransforms
 	opts.LLMParallelToolCalls = cfg.LLMParallelToolCalls
 	opts.LLMExtraParams = cfg.LLMExtraBody
