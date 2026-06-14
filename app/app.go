@@ -2430,6 +2430,30 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, smallestai.WithSmallestAITTSOutputFormat(cfg.TTSResponseFormat))
 		}
 		return smallestai.NewSmallestAITTS(cfg.SmallestAIAPIKey, "", ttsOpts...), nil
+	case providerSoniox:
+		ttsOpts := []soniox.SonioxTTSOption{}
+		if cfg.TTSWebsocketURL != "" {
+			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSWebsocketURL(cfg.TTSWebsocketURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSAudioFormat(cfg.TTSEncoding))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSBitRate != nil {
+			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSBitrate(*cfg.TTSBitRate))
+		}
+		return soniox.NewSonioxTTS(cfg.SonioxAPIKey, ttsOpts...), nil
 	case providerUltravox:
 		return ultravox.NewUltravoxTTS(cfg.UltravoxAPIKey, cfg.TTSVoice), nil
 	case providerUpliftAI:

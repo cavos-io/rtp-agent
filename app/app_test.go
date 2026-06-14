@@ -3668,6 +3668,43 @@ func TestSmallestAITTSFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestSonioxTTSFallbackPassesReferenceOptions(t *testing.T) {
+	sampleRate := 48000
+	bitRate := 192000
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		SonioxAPIKey:    "test-soniox-key",
+		TTSWebsocketURL: "ws://soniox.example/tts",
+		TTSModel:        "tts-custom",
+		TTSLanguage:     "es",
+		TTSVoice:        "Adrian",
+		TTSEncoding:     "mp3",
+		TTSSampleRate:   &sampleRate,
+		TTSBitRate:      &bitRate,
+	}, providerSoniox)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*soniox.SonioxTTS); !ok {
+		t.Fatalf("provider type = %T, want *soniox.SonioxTTS", provider)
+	}
+	if got, want := provider.Label(), "soniox.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 48000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference configured sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "tts-custom"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "Soniox"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference streaming without aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsTelnyxTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "telnyx")
