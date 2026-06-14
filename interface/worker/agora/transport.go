@@ -155,6 +155,12 @@ func (t *Transport) PublishPCM(ctx context.Context, frame PCMFrame) error {
 	if err := frame.Validate(); err != nil {
 		return err
 	}
+	t.mu.Lock()
+	closed := t.closing || t.closed
+	t.mu.Unlock()
+	if closed {
+		return fmt.Errorf("agora transport is closed")
+	}
 	if t.client == nil {
 		return fmt.Errorf("agora channel client is required")
 	}

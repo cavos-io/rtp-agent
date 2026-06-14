@@ -307,6 +307,30 @@ func TestTransportPublishPCMNormalizesNilContext(t *testing.T) {
 	}
 }
 
+func TestTransportPublishPCMAfterCloseReturnsError(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	frame := PCMFrame{
+		Data:       []byte{1, 2, 3, 4},
+		SampleRate: 100,
+		Channels:   2,
+	}
+
+	if err := tr.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	err := tr.PublishPCM(context.Background(), frame)
+	if err == nil {
+		t.Fatal("PublishPCM() error = nil, want closed transport error")
+	}
+	if !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PublishPCM() error = %v, want closed transport error", err)
+	}
+	if client.publishCount != 0 {
+		t.Fatalf("publish count = %d, want 0", client.publishCount)
+	}
+}
+
 func TestTransportPublishPCMRejectsNonTenMillisecondFrames(t *testing.T) {
 	client := &fakeChannelClient{}
 	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
