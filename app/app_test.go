@@ -4068,6 +4068,30 @@ func TestSonioxSTTFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestSonioxSTTFallbackUsesReferenceLanguageHintFallback(t *testing.T) {
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		SonioxAPIKey: "test-soniox-key",
+		STTLanguage:  "id",
+	}, providerSoniox)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	sonioxProvider, ok := provider.(*soniox.SonioxSTT)
+	if !ok {
+		t.Fatalf("provider type = %T, want *soniox.SonioxSTT", provider)
+	}
+	state := reflect.ValueOf(sonioxProvider).Elem()
+	languageHints := state.FieldByName("languageHints")
+	got := make([]string, 0, languageHints.Len())
+	for i := 0; i < languageHints.Len(); i++ {
+		got = append(got, languageHints.Index(i).String())
+	}
+	if want := []string{"id"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("languageHints = %#v, want %#v", got, want)
+	}
+}
+
 func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
 	t.Setenv("SPEECHMATICS_API_KEY", "test-speechmatics-key")
 	type wsRecord struct {

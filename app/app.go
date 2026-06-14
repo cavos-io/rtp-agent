@@ -2462,6 +2462,8 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		}
 		if cfg.STTLanguageOptions != "" {
 			sttOpts = append(sttOpts, soniox.WithSonioxLanguageHints(splitStringList(cfg.STTLanguageOptions)))
+		} else if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, soniox.WithSonioxLanguageHints([]string{cfg.STTLanguage}))
 		}
 		if strict := modelOptionBool(cfg.STTModelOptions, "language_hints_strict"); strict != nil {
 			sttOpts = append(sttOpts, soniox.WithSonioxLanguageHintsStrict(*strict))
