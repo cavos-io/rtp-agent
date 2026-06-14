@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -417,6 +418,42 @@ func TestSarvamSTTStreamSequencerWaitsForFinalAfterEndOfSpeech(t *testing.T) {
 	}
 	if events[2].Alternatives[0].EndTime != 0.5 {
 		t.Fatalf("EOS end time = %.2f, want pending audio position", events[2].Alternatives[0].EndTime)
+	}
+}
+
+func TestSarvamSTTStreamSequencerEmitsFallbackEOSWhenFinalMissing(t *testing.T) {
+	sequencer := newSarvamSTTStreamEventSequencer("en-IN")
+
+	_, err := sequencer.EventsFromStreamMessage([]byte(`{"type":"events","data":{"signal_type":"START_SPEECH","request_id":"req-3"}}`), 0)
+	if err != nil {
+		t.Fatalf("start event: %v", err)
+	}
+	events, err := sequencer.EventsFromStreamMessage([]byte(`{"type":"event","data":{"signal_type":"END_SPEECH","request_id":"req-3"}}`), 0.75)
+	if err != nil {
+		t.Fatalf("end event: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("end events = %+v, want delayed EOS", events)
+	}
+
+	event := sequencer.PendingEndOfSpeechEvent()
+	if event == nil {
+		t.Fatal("fallback event = nil, want pending EOS")
+	}
+	if event.Type != stt.SpeechEventEndOfSpeech || event.RequestID != "req-3" {
+		t.Fatalf("fallback event = %+v, want END_OF_SPEECH with request id", event)
+	}
+	if len(event.Alternatives) != 1 || event.Alternatives[0].EndTime != 0.75 {
+		t.Fatalf("fallback alternatives = %+v, want pending end time", event.Alternatives)
+	}
+	if again := sequencer.PendingEndOfSpeechEvent(); again != nil {
+		t.Fatalf("second fallback event = %+v, want nil after emit", again)
+	}
+}
+
+func TestSarvamSTTStreamEOSFallbackTimeoutMatchesReference(t *testing.T) {
+	if sarvamSTTEOSFallbackTimeout != time.Second {
+		t.Fatalf("EOS fallback timeout = %v, want reference 1s", sarvamSTTEOSFallbackTimeout)
 	}
 }
 

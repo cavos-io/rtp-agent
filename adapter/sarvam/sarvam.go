@@ -31,6 +31,7 @@ const (
 	defaultSarvamSTTLanguage           = "en-IN"
 	defaultSarvamSTTMode               = "transcribe"
 	defaultSarvamSTTSampleRate         = 16000
+	sarvamSTTEOSFallbackTimeout        = time.Second
 	defaultSarvamTTSBaseURL            = "https://api.sarvam.ai/text-to-speech"
 	defaultSarvamTTSWSURL              = "wss://api.sarvam.ai/text-to-speech/ws"
 	defaultSarvamTTSModel              = "bulbul:v3"
@@ -721,11 +722,15 @@ func (s *sarvamSTTRecognizeStream) readLoop() {
 		}
 		if isEndSpeech {
 			_ = s.Flush()
+			if len(events) == 0 {
+				s.emitPendingEndOfSpeechAfterTimeout()
+			}
 		}
 	}
 }
 
 type sarvamSTTStreamEventSequencer struct {
+	mu                  sync.Mutex
 	defaultLanguage     string
 	serverRequestID     string
 	finalEmitted        bool
@@ -739,6 +744,9 @@ func newSarvamSTTStreamEventSequencer(defaultLanguage string) *sarvamSTTStreamEv
 }
 
 func (s *sarvamSTTStreamEventSequencer) EventsFromStreamMessage(payload []byte, audioPosition float64) ([]*stt.SpeechEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	var message map[string]any
 	if err := json.Unmarshal(payload, &message); err != nil {
 		return nil, err
@@ -793,6 +801,16 @@ func (s *sarvamSTTStreamEventSequencer) EventsFromStreamMessage(payload []byte, 
 	return events, nil
 }
 
+func (s *sarvamSTTStreamEventSequencer) PendingEndOfSpeechEvent() *stt.SpeechEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.pendingEOS || s.eosEmitted {
+		return nil
+	}
+	return s.endOfSpeechEvent(s.pendingAudioEndTime)
+}
+
 func (s *sarvamSTTStreamEventSequencer) endOfSpeechEvent(audioPosition float64) *stt.SpeechEvent {
 	s.eosEmitted = true
 	s.pendingEOS = false
@@ -825,6 +843,25 @@ func sarvamSTTEventsContainUsage(events []*stt.SpeechEvent) bool {
 		}
 	}
 	return false
+}
+
+func (s *sarvamSTTRecognizeStream) emitPendingEndOfSpeechAfterTimeout() {
+	go func() {
+		timer := time.NewTimer(sarvamSTTEOSFallbackTimeout)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			event := s.sequencer.PendingEndOfSpeechEvent()
+			if event == nil {
+				return
+			}
+			select {
+			case s.events <- event:
+			case <-s.ctx.Done():
+			}
+		case <-s.ctx.Done():
+		}
+	}()
 }
 
 func sarvamSTTStreamMessageIsEndSpeech(payload []byte) bool {
