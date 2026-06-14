@@ -467,6 +467,37 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
             }
 
         return asyncio.run(run())
+    if action == "retry_after_chunk_enabled":
+        primary = FakeLLM(
+            "primary",
+            [FakeChunk("partial"), RuntimeError("primary stream failed")],
+        )
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter(
+            [primary, fallback],
+            retry_on_chunk_sent=True,
+        )
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            errored = False
+            try:
+                await stream._run()
+            except RuntimeError:
+                errored = True
+            chunks = [chunk.delta.content for chunk in stream._event_ch.items]
+            return {
+                "contract": "llm-fallback-retry-after-chunk-enabled",
+                "events": [
+                    {
+                        "name": "retry_after_chunk_enabled",
+                        "chunks": chunks,
+                        "errored": errored,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
     raise ValueError(f"unsupported LLM fallback action {action!r}")
 
 
