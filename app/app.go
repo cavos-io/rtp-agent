@@ -1115,8 +1115,7 @@ func (a *App) runAgora(ctx context.Context) error {
 	transport := workeragora.NewTransport(opts, client)
 	audioInput := workeragora.NewAudioInput(ctx, a.Session)
 	transport.SetAudioHandler(audioInput.HandleAudioFrame)
-	eventsCtx, stopObservingEvents := context.WithCancel(ctx)
-	defer stopObservingEvents()
+	eventsCtx, stopObservingEvents := context.WithCancel(context.Background())
 	eventsDone := make(chan struct{})
 	go func() {
 		defer close(eventsDone)
@@ -1127,6 +1126,7 @@ func (a *App) runAgora(ctx context.Context) error {
 			logutil.Logger.Errorw("failed to close Agora transport after join error", closeErr)
 		}
 		<-eventsDone
+		stopObservingEvents()
 		return err
 	}
 	audioOutput := workeragora.NewAudioOutput(transport)
@@ -1137,6 +1137,8 @@ func (a *App) runAgora(ctx context.Context) error {
 		if err := transport.Close(context.Background()); err != nil {
 			logutil.Logger.Errorw("failed to close Agora transport", err)
 		}
+		<-eventsDone
+		stopObservingEvents()
 	}()
 	if err := a.runSession(nil); err != nil {
 		return err
