@@ -1922,6 +1922,12 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return cerebras.NewCerebrasLLM(cfg.CerebrasAPIKey, cfg.LLMModel), nil
 	case providerFireworks:
 		return fireworksai.NewFireworksLLM(cfg.FireworksAPIKey, cfg.LLMModel), nil
+	case providerAnthropic:
+		llmOpts := []anthropic.AnthropicOption{}
+		if cfg.LLMBaseURL != "" {
+			llmOpts = append(llmOpts, anthropic.WithAnthropicBaseURL(cfg.LLMBaseURL))
+		}
+		return anthropic.NewAnthropicLLM(cfg.AnthropicAPIKey, cfg.LLMModel, llmOpts...)
 	case providerMistralAI:
 		return mistralai.NewMistralLLM(cfg.MistralAPIKey, cfg.LLMModel), nil
 	case providerNvidia:
