@@ -18,10 +18,6 @@ type llmErrorHandlerSubscription struct {
 	handler LLMErrorHandler
 }
 
-type errorCollectorLLM interface {
-	OnError(LLMErrorHandler) func()
-}
-
 func (e *ErrorEmitter) OnError(handler LLMErrorHandler) func() {
 	if handler == nil {
 		return func() {}

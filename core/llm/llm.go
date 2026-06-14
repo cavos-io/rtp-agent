@@ -1707,9 +1707,6 @@ func NewFallbackAdapterWithOptions(llms []LLM, options FallbackAdapterOptions) *
 		if collector, ok := provider.(metricsCollectorLLM); ok {
 			collector.OnMetricsCollected(adapter.EmitMetricsCollected)
 		}
-		if collector, ok := provider.(errorCollectorLLM); ok {
-			collector.OnError(adapter.EmitError)
-		}
 	}
 	return adapter
 }

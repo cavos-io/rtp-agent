@@ -327,6 +327,40 @@ func runLLMAPIErrors(input json.RawMessage) (any, error) {
 	}
 }
 
+func runLLMFallback(input json.RawMessage) (any, error) {
+	var payload struct {
+		Action string `json:"action"`
+	}
+	if err := json.Unmarshal(input, &payload); err != nil {
+		return nil, err
+	}
+	if payload.Action == "" {
+		payload.Action = "provider_error_not_forwarded"
+	}
+	switch payload.Action {
+	case "provider_error_not_forwarded":
+		primary := &fakeScenarioLLM{label: "primary"}
+		fallback := &fakeScenarioLLM{label: "fallback"}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		labels := make([]string, 0, 3)
+		unsubscribe := adapter.OnError(func(err *lkllm.LLMError) {
+			labels = append(labels, err.Label)
+		})
+		defer unsubscribe()
+		primary.EmitError(lkllm.NewLLMError("primary", errors.New("primary failed"), true))
+		fallback.EmitError(lkllm.NewLLMError("fallback", errors.New("fallback failed"), true))
+		adapter.EmitError(lkllm.NewLLMError("adapter", errors.New("adapter failed"), true))
+		return map[string]any{
+			"contract": "llm-fallback-provider-error-not-forwarded",
+			"events": []map[string]any{
+				{"name": "provider_error_not_forwarded", "labels": labels},
+			},
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported LLM fallback action %q", payload.Action)
+	}
+}
+
 func runLLMRemoteChatContext(input json.RawMessage) (any, error) {
 	var payload struct {
 		Action     string `json:"action"`
@@ -4025,6 +4059,9 @@ func (s *scenarioLLMToolset) Close() error {
 }
 
 type fakeScenarioLLM struct {
+	lkllm.MetricsEmitter
+	lkllm.ErrorEmitter
+
 	label        string
 	model        string
 	provider     string

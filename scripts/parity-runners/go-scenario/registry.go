@@ -31,6 +31,7 @@ func registeredHandlers() handlerRegistry {
 		"language_normalize":           runLanguageNormalize,
 		"llm_api_errors":               runLLMAPIErrors,
 		"llm_chat_context":             runLLMChatContext,
+		"llm_fallback":                 runLLMFallback,
 		"llm_function_arguments":       runLLMFunctionArguments,
 		"llm_function_output":          runLLMFunctionOutput,
 		"llm_image_serialization":      runLLMImageSerialization,

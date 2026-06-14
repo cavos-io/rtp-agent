@@ -153,6 +153,137 @@ def load_reference_completion_usage():
     return load_reference_llm_value_class("CompletionUsage")
 
 
+def load_reference_llm_fallback():
+    livekit_mod = sys.modules.get("livekit") or types.ModuleType("livekit")
+    rtc_mod = sys.modules.get("livekit.rtc") or types.ModuleType("livekit.rtc")
+    agents_mod = sys.modules.get("livekit.agents") or types.ModuleType("livekit.agents")
+    llm_pkg = sys.modules.get("livekit.agents.llm") or types.ModuleType("livekit.agents.llm")
+    llm_mod = types.ModuleType("livekit.agents.llm.llm")
+    chat_context_mod = types.ModuleType("livekit.agents.llm.chat_context")
+    tool_context_mod = types.ModuleType("livekit.agents.llm.tool_context")
+    log_mod = sys.modules.get("livekit.agents.log") or types.ModuleType("livekit.agents.log")
+
+    class EventEmitter:
+        def __init__(self) -> None:
+            self._handlers: dict[str, list[Any]] = {}
+
+        def __class_getitem__(cls, item: Any) -> type:
+            return cls
+
+        def on(self, event: str, handler: Any) -> Any:
+            self._handlers.setdefault(event, []).append(handler)
+            return handler
+
+        def off(self, event: str, handler: Any) -> None:
+            handlers = self._handlers.get(event, [])
+            self._handlers[event] = [candidate for candidate in handlers if candidate is not handler]
+
+        def emit(self, event: str, *args: Any, **kwargs: Any) -> None:
+            for handler in list(self._handlers.get(event, [])):
+                handler(*args, **kwargs)
+
+    class Logger:
+        def info(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def warning(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def error(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+    class LLM(EventEmitter):
+        def __init__(self) -> None:
+            super().__init__()
+            self._label = f"{type(self).__module__}.{type(self).__name__}"
+
+        def __class_getitem__(cls, item: Any) -> type:
+            return cls
+
+        @property
+        def label(self) -> str:
+            return self._label
+
+        @property
+        def model(self) -> str:
+            return "unknown"
+
+        @property
+        def provider(self) -> str:
+            return "unknown"
+
+    class LLMStream:
+        pass
+
+    class ChatChunk:
+        pass
+
+    class ChatContext:
+        pass
+
+    class Tool:
+        pass
+
+    ToolChoice = Any
+
+    rtc_mod.EventEmitter = EventEmitter
+    llm_mod.LLM = LLM
+    llm_mod.LLMStream = LLMStream
+    llm_mod.ChatChunk = ChatChunk
+    chat_context_mod.ChatContext = ChatContext
+    tool_context_mod.Tool = Tool
+    tool_context_mod.ToolChoice = ToolChoice
+    log_mod.logger = Logger()
+
+    sys.modules["livekit"] = livekit_mod
+    sys.modules["livekit.rtc"] = rtc_mod
+    sys.modules["livekit.agents"] = agents_mod
+    sys.modules["livekit.agents.llm"] = llm_pkg
+    sys.modules["livekit.agents.llm.llm"] = llm_mod
+    sys.modules["livekit.agents.llm.chat_context"] = chat_context_mod
+    sys.modules["livekit.agents.llm.tool_context"] = tool_context_mod
+    sys.modules["livekit.agents.log"] = log_mod
+
+    load_reference_types()
+    load_reference_exceptions()
+
+    path = repo_root() / "refs/agents/livekit-agents/livekit/agents/llm/fallback_adapter.py"
+    spec = importlib.util.spec_from_file_location("livekit.agents.llm.fallback_adapter", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load reference llm fallback_adapter.py from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["livekit.agents.llm.fallback_adapter"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def llm_fallback(input_data: Any) -> dict[str, Any]:
+    action = input_data.get("action", "provider_error_not_forwarded")
+    module = load_reference_llm_fallback()
+
+    class FakeLLM(module.LLM):
+        def __init__(self, label: str) -> None:
+            super().__init__()
+            self._label = label
+
+    if action == "provider_error_not_forwarded":
+        primary = FakeLLM("primary")
+        fallback = FakeLLM("fallback")
+        adapter = module.FallbackAdapter([primary, fallback])
+        labels: list[str] = []
+        adapter.on("error", lambda error: labels.append(error.label))
+        primary.emit("error", type("Error", (), {"label": "primary"})())
+        fallback.emit("error", type("Error", (), {"label": "fallback"})())
+        adapter.emit("error", type("Error", (), {"label": "adapter"})())
+        return {
+            "contract": "llm-fallback-provider-error-not-forwarded",
+            "events": [
+                {"name": "provider_error_not_forwarded", "labels": labels}
+            ],
+        }
+    raise ValueError(f"unsupported LLM fallback action {action!r}")
+
+
 def llm_api_connect_options(input_data: Any) -> dict[str, Any]:
     action = input_data.get("action", "defaults")
     module = load_reference_types()

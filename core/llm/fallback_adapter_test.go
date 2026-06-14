@@ -46,25 +46,33 @@ func TestFallbackAdapterRequiresAtLeastOneLLM(t *testing.T) {
 	_ = NewFallbackAdapter(nil)
 }
 
-func TestFallbackAdapterForwardsProviderErrors(t *testing.T) {
+func TestFallbackAdapterDoesNotForwardProviderErrors(t *testing.T) {
 	primary := &fakeFallbackLLM{label: "primary.LLM"}
 	fallback := &fakeFallbackLLM{label: "fallback.LLM"}
 	adapter := NewFallbackAdapter([]LLM{primary, fallback})
-	errCh := make(chan error, 2)
+	labelsCh := make(chan string, 3)
 
 	unsubscribe := adapter.OnError(func(err *LLMError) {
-		errCh <- err
+		labelsCh <- err.Label
 	})
 	defer unsubscribe()
 
-	primaryCause := errors.New("primary failed")
-	fallbackCause := errors.New("fallback failed")
-	primary.EmitError(NewLLMError("primary", primaryCause, true))
-	fallback.EmitError(NewLLMError("fallback", fallbackCause, true))
+	primary.EmitError(NewLLMError("primary", errors.New("primary failed"), true))
+	fallback.EmitError(NewLLMError("fallback", errors.New("fallback failed"), true))
+	adapter.EmitError(NewLLMError("adapter", errors.New("adapter failed"), true))
 
-	got := []error{<-errCh, <-errCh}
-	if !errors.Is(got[0], primaryCause) || !errors.Is(got[1], fallbackCause) {
-		t.Fatalf("forwarded errors = %#v, want primary then fallback causes", got)
+	select {
+	case label := <-labelsCh:
+		if label != "adapter" {
+			t.Fatalf("error label = %q, want adapter-local error only", label)
+		}
+	default:
+		t.Fatal("error handler was not called")
+	}
+	select {
+	case label := <-labelsCh:
+		t.Fatalf("unexpected forwarded provider error label %q", label)
+	default:
 	}
 }
 
