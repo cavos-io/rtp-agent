@@ -8884,6 +8884,98 @@ func TestDefaultConfigFromEnvAcceptsRimeTTSFallbackProvider(t *testing.T) {
 	}
 }
 
+func TestRimeTTSFallbackPassesReferenceOptions(t *testing.T) {
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(strings.NewReader("audio")),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	sampleRate := 24000
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		RimeAPIKey:    "test-rime-key",
+		TTSBaseURL:    "https://rime.example/v1/rime-tts",
+		TTSModel:      "coda",
+		TTSVoice:      "lyra",
+		TTSLanguage:   "spa",
+		TTSSampleRate: &sampleRate,
+		TTSSpeed:      1.1,
+	}, providerRime)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*rime.RimeTTS); !ok {
+		t.Fatalf("provider type = %T, want *rime.RimeTTS", provider)
+	}
+	if got, want := provider.Label(), "rime.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 24000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference configured sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "coda"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "Rime"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference HTTP mode without streaming", caps)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hola")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://rime.example/v1/rime-tts"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("Authorization"), "Bearer test-rime-key"; got != want {
+		t.Fatalf("Authorization = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("Accept"), "audio/pcm"; got != want {
+		t.Fatalf("Accept = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["speaker"], "lyra"; got != want {
+		t.Fatalf("payload speaker = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["text"], "hola"; got != want {
+		t.Fatalf("payload text = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["modelId"], "coda"; got != want {
+		t.Fatalf("payload modelId = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["lang"], "spa"; got != want {
+		t.Fatalf("payload lang = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["samplingRate"], float64(24000); got != want {
+		t.Fatalf("payload samplingRate = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["timeScaleFactor"], 1.1; got != want {
+		t.Fatalf("payload timeScaleFactor = %#v, want %#v", got, want)
+	}
+	if _, ok := gotPayload["audioFormat"]; ok {
+		t.Fatalf("payload audioFormat = %#v, want omitted for HTTP reference payload", gotPayload["audioFormat"])
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsMurfTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "murf")
