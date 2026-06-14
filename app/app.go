@@ -2296,6 +2296,60 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, rime.WithRimeTTSSegment(cfg.TTSDeliveryMode))
 		}
 		return rime.NewRimeTTS(cfg.RimeAPIKey, cfg.TTSVoice, ttsOpts...), nil
+	case providerSarvam:
+		ttsOpts := []sarvam.SarvamTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, sarvam.WithSarvamTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSWebsocketURL != "" {
+			ttsOpts = append(ttsOpts, sarvam.WithSarvamTTSWSURL(cfg.TTSWebsocketURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, sarvam.WithSarvamTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, sarvam.WithSarvamTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, sarvam.WithSarvamTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, sarvam.WithSarvamTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSTemperature != nil {
+			ttsOpts = append(ttsOpts, sarvam.WithSarvamTTSTemperature(*cfg.TTSTemperature))
+		}
+		if cfg.TTSPitch != nil {
+			ttsOpts = append(ttsOpts, sarvam.WithSarvamTTSPitch(float64(*cfg.TTSPitch)))
+		}
+		if cfg.TTSSpeed != 0 {
+			ttsOpts = append(ttsOpts, sarvam.WithSarvamTTSPace(cfg.TTSSpeed))
+		}
+		if cfg.TTSVolume != nil {
+			ttsOpts = append(ttsOpts, sarvam.WithSarvamTTSLoudness(*cfg.TTSVolume))
+		}
+		if cfg.TTSBitRate != nil {
+			ttsOpts = append(ttsOpts, sarvam.WithSarvamTTSOutputAudioBitrate(strconv.Itoa(*cfg.TTSBitRate)))
+		}
+		if cfg.TTSBufferSize != nil {
+			ttsOpts = append(ttsOpts, sarvam.WithSarvamTTSMinBufferSize(*cfg.TTSBufferSize))
+		}
+		if cfg.TTSChunkLength != nil {
+			ttsOpts = append(ttsOpts, sarvam.WithSarvamTTSMaxChunkLength(*cfg.TTSChunkLength))
+		}
+		if cfg.TTSEnhanceNamedEntities != nil {
+			ttsOpts = append(ttsOpts, sarvam.WithSarvamTTSEnablePreprocessing(*cfg.TTSEnhanceNamedEntities))
+		}
+		if cfg.TTSInstantMode != nil {
+			ttsOpts = append(ttsOpts, sarvam.WithSarvamTTSEnableCachedResponses(*cfg.TTSInstantMode))
+		}
+		if cfg.TTSPronunciationDictID != "" {
+			ttsOpts = append(ttsOpts, sarvam.WithSarvamTTSDictID(cfg.TTSPronunciationDictID))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, sarvam.WithSarvamTTSOutputAudioCodec(cfg.TTSEncoding))
+		}
+		return sarvam.NewSarvamTTS(cfg.SarvamAPIKey, "", ttsOpts...), nil
 	case providerMurf:
 		ttsOpts := []murf.MurfTTSOption{}
 		if cfg.TTSBaseURL != "" {

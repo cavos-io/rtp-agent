@@ -3487,6 +3487,106 @@ func TestRespeecherTTSFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestSarvamTTSFallbackPassesReferenceOptions(t *testing.T) {
+	sampleRate := 24000
+	temperature := 0.7
+	bitRate := 96
+	bufferSize := 80
+	chunkLength := 240
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("audio")),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		SarvamAPIKey:           "test-sarvam-key",
+		TTSBaseURL:             "https://sarvam.example/tts",
+		TTSModel:               "bulbul:v3",
+		TTSVoice:               "ritu",
+		TTSLanguage:            "hi-IN",
+		TTSSampleRate:          &sampleRate,
+		TTSTemperature:         &temperature,
+		TTSBitRate:             &bitRate,
+		TTSBufferSize:          &bufferSize,
+		TTSChunkLength:         &chunkLength,
+		TTSPronunciationDictID: "dict-123",
+		TTSEncoding:            "wav",
+	}, providerSarvam)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if got, want := provider.Label(), "sarvam.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 24000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference configured sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "bulbul:v3"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "Sarvam"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://sarvam.example/tts"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("api-subscription-key"), "test-sarvam-key"; got != want {
+		t.Fatalf("api-subscription-key = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["target_language_code"], "hi-IN"; got != want {
+		t.Fatalf("target_language_code = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["speaker"], "ritu"; got != want {
+		t.Fatalf("speaker = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["model"], "bulbul:v3"; got != want {
+		t.Fatalf("model = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["speech_sample_rate"], float64(24000); got != want {
+		t.Fatalf("speech_sample_rate = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["temperature"], float64(0.7); got != want {
+		t.Fatalf("temperature = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["output_audio_bitrate"], "96"; got != want {
+		t.Fatalf("output_audio_bitrate = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["min_buffer_size"], float64(80); got != want {
+		t.Fatalf("min_buffer_size = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["max_chunk_length"], float64(240); got != want {
+		t.Fatalf("max_chunk_length = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["dict_id"], "dict-123"; got != want {
+		t.Fatalf("dict_id = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["output_audio_codec"], "wav"; got != want {
+		t.Fatalf("output_audio_codec = %#v, want %#v", got, want)
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsTelnyxTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "telnyx")
