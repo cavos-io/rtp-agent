@@ -184,6 +184,21 @@ def tts_stream_adapter(input_data: Any) -> dict[str, Any]:
                 {"name": "provider_error_not_forwarded", "labels": labels}
             ],
         }
+    if action == "error_unsubscribe_local":
+        labels: list[str] = []
+
+        def handler(error: Any) -> None:
+            labels.append(error.label)
+
+        adapter.on("error", handler)
+        adapter.off("error", handler)
+        adapter.emit("error", type("Error", (), {"label": "adapter"})())
+        return {
+            "contract": "tts-stream-adapter-error-unsubscribe",
+            "events": [
+                {"name": "error_unsubscribe_local", "labels": labels}
+            ],
+        }
     raise ValueError(f"unsupported TTS stream adapter action {action!r}")
 
 

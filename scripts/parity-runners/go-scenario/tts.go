@@ -878,6 +878,19 @@ func runTTSStreamAdapter(input json.RawMessage) (any, error) {
 				{"name": "provider_error_not_forwarded", "labels": labels},
 			},
 		}, nil
+	case "error_unsubscribe_local":
+		labels := make([]string, 0, 1)
+		unsubscribe := adapter.OnError(func(err lktts.TTSError) {
+			labels = append(labels, err.Label)
+		})
+		unsubscribe()
+		adapter.EmitError(lktts.TTSError{Label: "adapter", Err: errors.New("adapter failed")})
+		return map[string]any{
+			"contract": "tts-stream-adapter-error-unsubscribe",
+			"events": []map[string]any{
+				{"name": "error_unsubscribe_local", "labels": labels},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported TTS stream adapter action %q", payload.Action)
 	}
