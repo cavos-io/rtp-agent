@@ -1,7 +1,10 @@
 package livekit
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -183,5 +186,78 @@ func TestTurnDetectorMultilingualPayloadNormalizesLikeReference(t *testing.T) {
 	}
 	if got.ChatCtx[1].Content != "next line" {
 		t.Fatalf("normalized second content = %q, want collapsed whitespace and punctuation removal", got.ChatCtx[1].Content)
+	}
+}
+
+func TestTurnDetectorPredictEndOfTurnUsesRemoteInferenceURL(t *testing.T) {
+	var gotPath string
+	var gotRequest struct {
+		ChatCtx []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"chat_ctx"`
+	}
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		gotPath = r.URL.Path
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotRequest); err != nil {
+			t.Fatalf("request decode error = %v", err)
+		}
+		return jsonResponse(200, `{"probability":0.73}`), nil
+	})}
+
+	chatCtx := llm.NewChatContext()
+	chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "Need more time"})
+
+	probability, err := NewMultilingualModel(
+		WithRemoteInferenceBaseURL("https://turn.example"),
+		WithHTTPClient(client),
+	).
+		PredictEndOfTurn(context.Background(), chatCtx)
+	if err != nil {
+		t.Fatalf("PredictEndOfTurn() error = %v", err)
+	}
+	if gotPath != "/eot/multi" {
+		t.Fatalf("path = %q, want /eot/multi", gotPath)
+	}
+	if len(gotRequest.ChatCtx) != 1 || gotRequest.ChatCtx[0].Content != "need more time" {
+		t.Fatalf("request chat_ctx = %#v, want normalized user message", gotRequest.ChatCtx)
+	}
+	if probability != 0.73 {
+		t.Fatalf("probability = %v, want 0.73", probability)
+	}
+}
+
+func TestTurnDetectorPredictEndOfTurnDefaultsToOneForInvalidRemoteProbability(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(200, `{"probability":-1}`), nil
+	})}
+
+	probability, err := NewMultilingualModel(
+		WithRemoteInferenceBaseURL("https://turn.example"),
+		WithHTTPClient(client),
+	).
+		PredictEndOfTurn(context.Background(), llm.NewChatContext())
+	if err != nil {
+		t.Fatalf("PredictEndOfTurn() error = %v", err)
+	}
+	if probability != 1 {
+		t.Fatalf("probability = %v, want 1 for invalid remote probability", probability)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func jsonResponse(status int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
 	}
 }

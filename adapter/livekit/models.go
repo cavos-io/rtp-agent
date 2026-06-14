@@ -2,6 +2,7 @@ package livekit
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"time"
 	"unicode"
@@ -41,6 +42,7 @@ type Model struct {
 	inferenceMethod     string
 	unlikelyThreshold   *float64
 	remoteInferenceBase string
+	httpClient          *http.Client
 }
 
 type inferenceMessage struct {
@@ -71,6 +73,12 @@ func WithUnlikelyThreshold(threshold float64) ModelOption {
 func WithRemoteInferenceBaseURL(urlBase string) ModelOption {
 	return func(model *Model) {
 		model.remoteInferenceBase = urlBase
+	}
+}
+
+func WithHTTPClient(client *http.Client) ModelOption {
+	return func(model *Model) {
+		model.httpClient = client
 	}
 }
 
