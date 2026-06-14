@@ -406,6 +406,40 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 				{"name": "next_provider_before_chunk", "chunks": chunks},
 			},
 		}, nil
+	case "stream_chat_context":
+		originalCtx := lkllm.NewChatContext()
+		providerCtx := lkllm.NewChatContext()
+		provider := &fakeScenarioLLM{label: "provider", stream: &fakeScenarioLLMStream{
+			chatCtx: providerCtx,
+			events: []fakeScenarioLLMEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "ok"}}},
+			},
+		}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{provider})
+		stream, err := adapter.Chat(context.Background(), originalCtx)
+		if err != nil {
+			return nil, err
+		}
+		defer stream.Close()
+		streamWithChatCtx, ok := stream.(interface{ ChatCtx() *lkllm.ChatContext })
+		if !ok {
+			return nil, errors.New("fallback stream does not expose ChatCtx")
+		}
+		beforeIsOriginal := streamWithChatCtx.ChatCtx() == originalCtx
+		if _, err := stream.Next(); err != nil {
+			return nil, err
+		}
+		afterIsProvider := streamWithChatCtx.ChatCtx() == providerCtx
+		return map[string]any{
+			"contract": "llm-fallback-stream-exposes-chat-context",
+			"events": []map[string]any{
+				{
+					"name":               "stream_chat_context",
+					"before_is_original": beforeIsOriginal,
+					"after_is_provider":  afterIsProvider,
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported LLM fallback action %q", payload.Action)
 	}
@@ -4158,9 +4192,10 @@ type fakeScenarioLLMEvent struct {
 }
 
 type fakeScenarioLLMStream struct {
-	events []fakeScenarioLLMEvent
-	index  int
-	closed bool
+	events  []fakeScenarioLLMEvent
+	chatCtx *lkllm.ChatContext
+	index   int
+	closed  bool
 }
 
 func (f *fakeScenarioLLMStream) Next() (*lkllm.ChatChunk, error) {
@@ -4178,6 +4213,10 @@ func (f *fakeScenarioLLMStream) Next() (*lkllm.ChatChunk, error) {
 func (f *fakeScenarioLLMStream) Close() error {
 	f.closed = true
 	return nil
+}
+
+func (f *fakeScenarioLLMStream) ChatCtx() *lkllm.ChatContext {
+	return f.chatCtx
 }
 
 type fakeScenarioRealtimeModel struct {

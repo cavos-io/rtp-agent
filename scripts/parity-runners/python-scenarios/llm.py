@@ -334,15 +334,21 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
                 yield event
 
     class FakeLLM(module.LLM):
-        def __init__(self, label: str, events: list[Any] | None = None) -> None:
+        def __init__(
+            self,
+            label: str,
+            events: list[Any] | None = None,
+            stream_chat_ctx: Any | None = None,
+        ) -> None:
             super().__init__()
             self._label = label
             self._events = events or []
+            self._stream_chat_ctx = stream_chat_ctx
 
         def chat(self, **kwargs: Any) -> FakeStream:
             return FakeStream(
                 self._events,
-                chat_ctx=kwargs["chat_ctx"],
+                chat_ctx=self._stream_chat_ctx or kwargs["chat_ctx"],
                 tools=kwargs.get("tools") or [],
             )
 
@@ -398,6 +404,34 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
                 "contract": "llm-fallback-next-provider-before-chunk",
                 "events": [
                     {"name": "next_provider_before_chunk", "chunks": chunks}
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "stream_chat_context":
+        original_ctx = module.ChatContext()
+        provider_ctx = module.ChatContext()
+        provider = FakeLLM(
+            "provider",
+            [FakeChunk("ok")],
+            stream_chat_ctx=provider_ctx,
+        )
+        adapter = module.FallbackAdapter([provider])
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=original_ctx)
+            before_is_original = stream.chat_ctx is original_ctx
+            async for _ in stream:
+                break
+            after_is_provider = stream.chat_ctx is provider_ctx
+            return {
+                "contract": "llm-fallback-stream-exposes-chat-context",
+                "events": [
+                    {
+                        "name": "stream_chat_context",
+                        "before_is_original": before_is_original,
+                        "after_is_provider": after_is_provider,
+                    }
                 ],
             }
 
