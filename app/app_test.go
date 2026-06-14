@@ -8549,6 +8549,96 @@ func TestDefaultConfigFromEnvAcceptsMistralAITTSFallbackProvider(t *testing.T) {
 	}
 }
 
+func TestMistralAITTSFallbackPassesReferenceOptions(t *testing.T) {
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+				`data: {"event":"speech.audio.delta","data":{"audio_data":"YXVkaW8="}}`,
+				`data: {"event":"speech.audio.done","data":{"usage":{"prompt_tokens":2,"completion_tokens":4,"total_tokens":6}}}`,
+				"",
+			}, "\n"))),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		MistralAPIKey:     "test-mistral-key",
+		TTSBaseURL:        "https://mistral.example/v1/",
+		TTSModel:          "voxtral-mini-tts-2603",
+		TTSVoice:          "voice-1",
+		TTSResponseFormat: "opus",
+	}, providerMistralAI)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*mistralai.MistralAITTS); !ok {
+		t.Fatalf("provider type = %T, want *mistralai.MistralAITTS", provider)
+	}
+	if got, want := provider.Label(), "mistralai.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 24000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "voxtral-mini-tts-2603"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "MistralAI"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://mistral.example/v1/audio/speech"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("Authorization"), "Bearer test-mistral-key"; got != want {
+		t.Fatalf("Authorization = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("Accept"), "text/event-stream"; got != want {
+		t.Fatalf("Accept = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["model"], "voxtral-mini-tts-2603"; got != want {
+		t.Fatalf("payload model = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["voice_id"], "voice-1"; got != want {
+		t.Fatalf("payload voice_id = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["input"], "hello"; got != want {
+		t.Fatalf("payload input = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["response_format"], "opus"; got != want {
+		t.Fatalf("payload response_format = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["stream"], true; got != want {
+		t.Fatalf("payload stream = %#v, want %#v", got, want)
+	}
+	if _, ok := gotPayload["ref_audio"]; ok {
+		t.Fatalf("payload ref_audio present with voice request: %#v", gotPayload)
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsLMNTTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "lmnt")
