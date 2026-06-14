@@ -888,7 +888,7 @@ func (s *sttStream) PushFrame(frame *model.AudioFrame) error {
 	chunkSize := s.audioChunkBytes()
 	for len(s.audioBuffer) >= chunkSize {
 		chunk := append([]byte(nil), s.audioBuffer[:chunkSize]...)
-		if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
+		if err := s.writeAlignedAudio(chunk); err != nil {
 			return err
 		}
 		s.audioBuffer = s.audioBuffer[chunkSize:]
@@ -902,6 +902,13 @@ func (s *sttStream) Flush() error {
 	}
 	chunk := append([]byte(nil), s.audioBuffer...)
 	s.audioBuffer = nil
+	return s.writeAlignedAudio(chunk)
+}
+
+func (s *sttStream) writeAlignedAudio(chunk []byte) error {
+	if len(chunk)%slngSTTBytesPerSample(s.encoding) != 0 {
+		return nil
+	}
 	return s.conn.WriteMessage(websocket.BinaryMessage, chunk)
 }
 
