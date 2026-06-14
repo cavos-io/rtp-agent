@@ -4378,6 +4378,115 @@ func TestGnaniTTSFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestHumeTTSFallbackPassesReferenceOptions(t *testing.T) {
+	speed := 1.2
+	trailingSilence := 0.4
+	instantMode := false
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"audio":"AAE="}` + "\n")),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		HumeAPIKey:         "test-hume-key",
+		TTSBaseURL:         "https://hume.example/",
+		TTSModel:           "2",
+		TTSVoice:           "Narrator",
+		TTSVoiceProvider:   "CUSTOM_VOICE",
+		TTSInstructions:    "calm",
+		TTSSpeed:           speed,
+		TTSTrailingSilence: &trailingSilence,
+		TTSInstantMode:     &instantMode,
+		TTSResponseFormat:  "wav",
+	}, providerHume)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*hume.HumeTTS); !ok {
+		t.Fatalf("provider type = %T, want *hume.HumeTTS", provider)
+	}
+	if got, want := provider.Label(), "hume.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 48000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference sample rate %d", got, want)
+	}
+	if got, want := tts.Model(provider), "Octave"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "Hume"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
+	}
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://hume.example/v0/tts/stream/json"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("X-Hume-Api-Key"), "test-hume-key"; got != want {
+		t.Fatalf("X-Hume-Api-Key = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["version"], "2"; got != want {
+		t.Fatalf("payload version = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["strip_headers"], true; got != want {
+		t.Fatalf("payload strip_headers = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["instant_mode"], false; got != want {
+		t.Fatalf("payload instant_mode = %#v, want %#v", got, want)
+	}
+	format, _ := gotPayload["format"].(map[string]any)
+	if got, want := format["type"], "wav"; got != want {
+		t.Fatalf("payload format.type = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+	utterances, _ := gotPayload["utterances"].([]any)
+	if len(utterances) != 1 {
+		t.Fatalf("payload utterances = %#v, want one utterance", gotPayload["utterances"])
+	}
+	utterance, _ := utterances[0].(map[string]any)
+	if got, want := utterance["text"], "hello"; got != want {
+		t.Fatalf("utterance text = %#v, want %#v", got, want)
+	}
+	if got, want := utterance["description"], "calm"; got != want {
+		t.Fatalf("utterance description = %#v, want %#v", got, want)
+	}
+	if got, want := utterance["speed"], float64(1.2); got != want {
+		t.Fatalf("utterance speed = %#v, want %#v", got, want)
+	}
+	if got, want := utterance["trailing_silence"], float64(0.4); got != want {
+		t.Fatalf("utterance trailing_silence = %#v, want %#v", got, want)
+	}
+	voice, _ := utterance["voice"].(map[string]any)
+	if got, want := voice["name"], "Narrator"; got != want {
+		t.Fatalf("voice name = %#v, want %#v", got, want)
+	}
+	if got, want := voice["provider"], "CUSTOM_VOICE"; got != want {
+		t.Fatalf("voice provider = %#v, want %#v", got, want)
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsTelnyxTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "telnyx")

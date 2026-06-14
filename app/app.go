@@ -2267,6 +2267,40 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, gnani.WithLanguage(cfg.TTSLanguage))
 		}
 		return gnani.NewTTS(cfg.GnaniAPIKey, ttsOpts...), nil
+	case providerHume:
+		ttsOpts := []hume.HumeTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSModelVersion(cfg.TTSModel))
+		}
+		if cfg.TTSVoiceID != "" {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSVoiceID(cfg.TTSVoiceID, cfg.TTSVoiceProvider))
+		} else if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSVoiceName(cfg.TTSVoice, cfg.TTSVoiceProvider))
+		}
+		if cfg.TTSInstructions != "" {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSDescription(cfg.TTSInstructions))
+		}
+		if cfg.TTSSpeed != 0 {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSSpeed(cfg.TTSSpeed))
+		}
+		if cfg.TTSTrailingSilence != nil {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSTrailingSilence(*cfg.TTSTrailingSilence))
+		}
+		if cfg.TTSInstantMode != nil {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSInstantMode(*cfg.TTSInstantMode))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSAudioFormat(cfg.TTSResponseFormat))
+		}
+		if cfg.TTSContextGenerationID != "" {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSContextGenerationID(cfg.TTSContextGenerationID))
+		} else if len(cfg.TTSContextUtterances) > 0 {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSContextUtterances(cfg.TTSContextUtterances))
+		}
+		return hume.NewHumeTTS(cfg.HumeAPIKey, "", ttsOpts...), nil
 	case providerGroq:
 		ttsOpts := []groq.GroqTTSOption{}
 		if cfg.TTSBaseURL != "" {
