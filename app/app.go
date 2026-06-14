@@ -2237,6 +2237,36 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSChunkLength(*cfg.TTSChunkLength))
 		}
 		return fishaudio.NewFishAudioTTS(cfg.FishAudioAPIKey, cfg.TTSVoice, ttsOpts...), nil
+	case providerGnani:
+		ttsOpts := []gnani.Option{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, gnani.WithBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, gnani.WithVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, gnani.WithModel(cfg.TTSModel))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, gnani.WithSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, gnani.WithEncoding(cfg.TTSEncoding))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, gnani.WithContainer(cfg.TTSResponseFormat))
+		}
+		if cfg.TTSNumberOfChannels != nil {
+			ttsOpts = append(ttsOpts, gnani.WithNumChannels(*cfg.TTSNumberOfChannels))
+		}
+		if cfg.TTSSampleWidth != nil {
+			ttsOpts = append(ttsOpts, gnani.WithSampleWidth(*cfg.TTSSampleWidth))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, gnani.WithLanguage(cfg.TTSLanguage))
+		}
+		return gnani.NewTTS(cfg.GnaniAPIKey, ttsOpts...), nil
 	case providerGroq:
 		ttsOpts := []groq.GroqTTSOption{}
 		if cfg.TTSBaseURL != "" {

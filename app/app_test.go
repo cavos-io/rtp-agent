@@ -4278,6 +4278,106 @@ func TestCambaiTTSFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestGnaniTTSFallbackPassesReferenceOptions(t *testing.T) {
+	sampleRate := 22050
+	numChannels := 2
+	sampleWidth := 3
+	var gotURL string
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotHeaders = req.Header.Clone()
+		if err := json.NewDecoder(req.Body).Decode(&gotPayload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("audio")),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		GnaniAPIKey:         "test-gnani-key",
+		TTSBaseURL:          "https://gnani.example/",
+		TTSVoice:            "Simran",
+		TTSModel:            "vachana-custom",
+		TTSSampleRate:       &sampleRate,
+		TTSEncoding:         "oggopus",
+		TTSResponseFormat:   "ogg",
+		TTSNumberOfChannels: &numChannels,
+		TTSSampleWidth:      &sampleWidth,
+		TTSLanguage:         "kn",
+	}, providerGnani)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*gnani.TTS); !ok {
+		t.Fatalf("provider type = %T, want *gnani.TTS", provider)
+	}
+	if got, want := provider.Label(), "gnani.TTS"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := provider.SampleRate(), 22050; got != want {
+		t.Fatalf("SampleRate() = %d, want configured reference sample rate %d", got, want)
+	}
+	if got, want := provider.NumChannels(), 2; got != want {
+		t.Fatalf("NumChannels() = %d, want configured channels %d", got, want)
+	}
+	if got, want := tts.Model(provider), "vachana-custom"; got != want {
+		t.Fatalf("tts.Model() = %q, want %q", got, want)
+	}
+	if got, want := tts.Provider(provider), "Gnani"; got != want {
+		t.Fatalf("tts.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities() = %+v, want reference streaming without aligned transcript", caps)
+	}
+	stream, err := provider.Synthesize(context.Background(), "namaste")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+
+	if got, want := gotURL, "https://gnani.example/api/v1/tts/inference"; got != want {
+		t.Fatalf("request URL = %q, want %q", got, want)
+	}
+	if got, want := gotHeaders.Get("X-API-Key-ID"), "test-gnani-key"; got != want {
+		t.Fatalf("X-API-Key-ID = %q, want %q", got, want)
+	}
+	if got, want := gotPayload["text"], "namaste"; got != want {
+		t.Fatalf("payload text = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["voice"], "Simran"; got != want {
+		t.Fatalf("payload voice = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["model"], "vachana-custom"; got != want {
+		t.Fatalf("payload model = %#v, want %#v", got, want)
+	}
+	audioConfig, _ := gotPayload["audio_config"].(map[string]any)
+	if got, want := audioConfig["sample_rate"], float64(22050); got != want {
+		t.Fatalf("audio_config.sample_rate = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+	if got, want := audioConfig["encoding"], "oggopus"; got != want {
+		t.Fatalf("audio_config.encoding = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+	if got, want := audioConfig["container"], "ogg"; got != want {
+		t.Fatalf("audio_config.container = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+	if got, want := audioConfig["num_channels"], float64(2); got != want {
+		t.Fatalf("audio_config.num_channels = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+	if got, want := audioConfig["sample_width"], float64(3); got != want {
+		t.Fatalf("audio_config.sample_width = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsTelnyxTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "telnyx")
