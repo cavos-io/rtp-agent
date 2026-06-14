@@ -1998,6 +1998,8 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return smallestai.NewSmallestAILLM(cfg.SmallestAIAPIKey, cfg.LLMModel), nil
 	case providerTelnyx:
 		return telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel), nil
+	case providerTrugen:
+		return trugen.NewTrugenLLM(cfg.TrugenAPIKey, cfg.LLMModel), nil
 	case providerGroq:
 		return groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel), nil
 	case providerXAI:
