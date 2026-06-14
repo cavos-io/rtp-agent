@@ -14,6 +14,11 @@ func ResolveJoinOptions(opts worker.AgoraOptions) (worker.AgoraOptions, error) {
 	if err := opts.Validate(); err != nil {
 		return worker.AgoraOptions{}, err
 	}
+	opts.AppID = strings.TrimSpace(opts.AppID)
+	opts.AppCertificate = strings.TrimSpace(opts.AppCertificate)
+	opts.Channel = strings.TrimSpace(opts.Channel)
+	opts.UID = strings.TrimSpace(opts.UID)
+	opts.Token = strings.TrimSpace(opts.Token)
 	if strings.TrimSpace(opts.UID) == "" {
 		opts.UID = "0"
 	}
