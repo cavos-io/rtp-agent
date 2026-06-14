@@ -3619,6 +3619,627 @@ func TestCartesiaSTTFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestFireworksSTTFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("FIREWORKS_API_KEY", "test-fireworks-key")
+	type wsRecord struct {
+		path          string
+		query         map[string][]string
+		authorization string
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		query := map[string][]string{}
+		for key, values := range r.URL.Query() {
+			query[key] = append([]string(nil), values...)
+		}
+		records <- wsRecord{
+			path:          r.URL.Path,
+			query:         query,
+			authorization: r.Header.Get("Authorization"),
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	temperature := 0.2
+	skipVAD := true
+	textTimeoutSeconds := 2.5
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTBaseURL:                "ws" + strings.TrimPrefix(server.URL, "http"),
+		STTModel:                  "whisper-v3",
+		STTLanguage:               "en",
+		STTPrompt:                 "domain prompt",
+		STTTemperature:            &temperature,
+		STTSkipVAD:                &skipVAD,
+		STTVADKwargs:              map[string]any{"threshold": "0.15"},
+		STTTextTimeoutSeconds:     &textTimeoutSeconds,
+		STTTimestampGranularities: []string{"word", "segment"},
+	}, providerFireworks)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*fireworksai.FireworksSTT); !ok {
+		t.Fatalf("provider type = %T, want *fireworksai.FireworksSTT", provider)
+	}
+	if got, want := provider.Label(), "fireworks.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "whisper-v3"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "FireworksAI"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.AlignedTranscript != "" || caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming interim-only", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		query := record.query
+		if got, want := record.path, "/audio_streaming"; got != want {
+			t.Fatalf("path = %q, want %q", got, want)
+		}
+		if got, want := record.authorization, "test-fireworks-key"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		if got, want := firstQueryValue(query, "model"), "whisper-v3"; got != want {
+			t.Fatalf("query model = %q, want %q", got, want)
+		}
+		if got, want := firstQueryValue(query, "language"), "en"; got != want {
+			t.Fatalf("query language = %q, want %q", got, want)
+		}
+		if got, want := firstQueryValue(query, "prompt"), "domain prompt"; got != want {
+			t.Fatalf("query prompt = %q, want %q", got, want)
+		}
+		if got, want := firstQueryValue(query, "temperature"), "0.2"; got != want {
+			t.Fatalf("query temperature = %q, want %q", got, want)
+		}
+		if got, want := firstQueryValue(query, "skip_vad"), "true"; got != want {
+			t.Fatalf("query skip_vad = %q, want %q", got, want)
+		}
+		if got, want := firstQueryValue(query, "vad_kwargs"), `{"threshold":"0.15"}`; got != want {
+			t.Fatalf("query vad_kwargs = %q, want %q", got, want)
+		}
+		if got, want := firstQueryValue(query, "text_timeout_seconds"), "2.5"; got != want {
+			t.Fatalf("query text_timeout_seconds = %q, want %q", got, want)
+		}
+		if got, want := firstQueryValue(query, "response_format"), "verbose_json"; got != want {
+			t.Fatalf("query response_format = %q, want %q", got, want)
+		}
+		if got, want := strings.Join(query["timestamp_granularities"], ","), "word,segment"; got != want {
+			t.Fatalf("query timestamp_granularities = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Fireworks STT websocket request")
+	}
+}
+
+func TestSonioxSTTFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("SONIOX_API_KEY", "test-soniox-key")
+	records := make(chan map[string]any, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read soniox config: %v", err)
+			return
+		}
+		var config map[string]any
+		if err := json.Unmarshal(payload, &config); err != nil {
+			t.Errorf("decode soniox config: %v", err)
+			return
+		}
+		records <- config
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	numChannels := 2
+	sampleRate := 8000
+	diarization := true
+	languageDetection := false
+	endpointingMS := 750
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTBaseURL:                    "ws" + strings.TrimPrefix(server.URL, "http"),
+		STTModel:                      "stt-rt-v4",
+		STTLanguageOptions:            "en,es",
+		STTNumberOfChannels:           &numChannels,
+		STTSampleRate:                 &sampleRate,
+		STTDiarization:                &diarization,
+		STTLanguageDetection:          &languageDetection,
+		STTEndpointingMS:              &endpointingMS,
+		STTSessionID:                  "client-1",
+		STTPrompt:                     "domain terms",
+		STTTranslationSourceLanguages: []string{"en"},
+		STTTranslationTargetLanguages: []string{"es"},
+	}, providerSoniox)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*soniox.SonioxSTT); !ok {
+		t.Fatalf("provider type = %T, want *soniox.SonioxSTT", provider)
+	}
+	if got, want := provider.Label(), "soniox.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "stt-rt-v4"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Soniox"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || !caps.Diarization || caps.AlignedTranscript != "chunk" || caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming interim diarization chunk-aligned", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case config := <-records:
+		if got, want := config["api_key"], "test-soniox-key"; got != want {
+			t.Fatalf("config api_key = %#v, want %#v", got, want)
+		}
+		if got, want := config["model"], "stt-rt-v4"; got != want {
+			t.Fatalf("config model = %#v, want %#v", got, want)
+		}
+		if got, want := fmt.Sprint(config["language_hints"]), "[en es]"; got != want {
+			t.Fatalf("config language_hints = %#v, want %q", config["language_hints"], want)
+		}
+		if got, want := config["num_channels"], float64(2); got != want {
+			t.Fatalf("config num_channels = %#v, want %#v", got, want)
+		}
+		if got, want := config["sample_rate"], float64(8000); got != want {
+			t.Fatalf("config sample_rate = %#v, want %#v", got, want)
+		}
+		if got, want := config["enable_speaker_diarization"], true; got != want {
+			t.Fatalf("config enable_speaker_diarization = %#v, want %#v", got, want)
+		}
+		if got, want := config["enable_language_identification"], false; got != want {
+			t.Fatalf("config enable_language_identification = %#v, want %#v", got, want)
+		}
+		if got, want := config["client_reference_id"], "client-1"; got != want {
+			t.Fatalf("config client_reference_id = %#v, want %#v", got, want)
+		}
+		if got, want := config["max_endpoint_delay_ms"], float64(750); got != want {
+			t.Fatalf("config max_endpoint_delay_ms = %#v, want %#v", got, want)
+		}
+		if got, want := config["context"], "domain terms"; got != want {
+			t.Fatalf("config context = %#v, want %#v", got, want)
+		}
+		translation, _ := config["translation"].(map[string]any)
+		if got, want := translation["type"], "two_way"; got != want {
+			t.Fatalf("translation type = %#v, want %#v", got, want)
+		}
+		if got, want := translation["language_a"], "en"; got != want {
+			t.Fatalf("translation language_a = %#v, want %#v", got, want)
+		}
+		if got, want := translation["language_b"], "es"; got != want {
+			t.Fatalf("translation language_b = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Soniox STT config")
+	}
+}
+
+func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("SPEECHMATICS_API_KEY", "test-speechmatics-key")
+	type wsRecord struct {
+		authorization string
+		message       map[string]any
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read speechmatics start message: %v", err)
+			return
+		}
+		var message map[string]any
+		if err := json.Unmarshal(payload, &message); err != nil {
+			t.Errorf("decode speechmatics start message: %v", err)
+			return
+		}
+		records <- wsRecord{
+			authorization: r.Header.Get("Authorization"),
+			message:       message,
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	sampleRate := 8000
+	includePartials := false
+	diarization := true
+	maxDelay := 1.25
+	silenceTrigger := 0.55
+	maxUtteranceDelay := 2.5
+	maxSpeakers := 3
+	preferCurrentSpeaker := true
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTBaseURL:                              "ws" + strings.TrimPrefix(server.URL, "http"),
+		STTLanguage:                             "en",
+		STTSampleRate:                           &sampleRate,
+		STTEncoding:                             "pcm_mulaw",
+		STTDomain:                               "finance",
+		STTOutputLocale:                         "en-GB",
+		STTInterimResults:                       &includePartials,
+		STTDiarization:                          &diarization,
+		STTKeytermsPrompt:                       []string{"LiveKit:live kit|livekit"},
+		STTModelOptions:                         map[string]any{"focus_speakers": "agent|user", "ignore_speakers": "noise", "focus_mode": "retain", "known_speakers": "agent:spk-1", "speaker_sensitivity": "0.7"},
+		STTOperatingPoint:                       "enhanced",
+		STTTextTimeoutSeconds:                   &maxDelay,
+		STTVADSilenceThresholdSeconds:           &silenceTrigger,
+		STTMaxDurationWithoutEndpointingSeconds: &maxUtteranceDelay,
+		STTMaxSpeakers:                          &maxSpeakers,
+		STTPreferCurrentSpeaker:                 &preferCurrentSpeaker,
+	}, providerSpeechmatics)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*speechmatics.SpeechmaticsSTT); !ok {
+		t.Fatalf("provider type = %T, want *speechmatics.SpeechmaticsSTT", provider)
+	}
+	if got, want := provider.Label(), "speechmatics.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "enhanced"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Speechmatics"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || !caps.Diarization || caps.AlignedTranscript != "chunk" || caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming interim diarization chunk-aligned", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.authorization, "Bearer test-speechmatics-key"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		message := record.message
+		if got, want := message["message"], "StartRecognition"; got != want {
+			t.Fatalf("message = %#v, want %#v", got, want)
+		}
+		audioFormat, _ := message["audio_format"].(map[string]any)
+		if got, want := audioFormat["encoding"], "pcm_mulaw"; got != want {
+			t.Fatalf("audio encoding = %#v, want %#v", got, want)
+		}
+		if got, want := audioFormat["sample_rate"], float64(8000); got != want {
+			t.Fatalf("audio sample_rate = %#v, want %#v", got, want)
+		}
+		config, _ := message["transcription_config"].(map[string]any)
+		if got, want := config["language"], "en"; got != want {
+			t.Fatalf("language = %#v, want %#v", got, want)
+		}
+		if got, want := config["domain"], "finance"; got != want {
+			t.Fatalf("domain = %#v, want %#v", got, want)
+		}
+		if got, want := config["output_locale"], "en-GB"; got != want {
+			t.Fatalf("output_locale = %#v, want %#v", got, want)
+		}
+		if got, want := config["enable_partials"], false; got != want {
+			t.Fatalf("enable_partials = %#v, want %#v", got, want)
+		}
+		if got, want := config["diarization"], "speaker"; got != want {
+			t.Fatalf("diarization = %#v, want %#v", got, want)
+		}
+		if got, want := config["operating_point"], "enhanced"; got != want {
+			t.Fatalf("operating_point = %#v, want %#v", got, want)
+		}
+		if got, want := config["max_delay"], 1.25; got != want {
+			t.Fatalf("max_delay = %#v, want %#v", got, want)
+		}
+		if got, want := config["end_of_utterance_silence_trigger"], 0.55; got != want {
+			t.Fatalf("end_of_utterance_silence_trigger = %#v, want %#v", got, want)
+		}
+		if got, want := config["end_of_utterance_max_delay"], 2.5; got != want {
+			t.Fatalf("end_of_utterance_max_delay = %#v, want %#v", got, want)
+		}
+		if got, want := config["speaker_sensitivity"], 0.7; got != want {
+			t.Fatalf("speaker_sensitivity = %#v, want %#v", got, want)
+		}
+		if got, want := config["max_speakers"], float64(3); got != want {
+			t.Fatalf("max_speakers = %#v, want %#v", got, want)
+		}
+		if got, want := config["prefer_current_speaker"], true; got != want {
+			t.Fatalf("prefer_current_speaker = %#v, want %#v", got, want)
+		}
+		vocab, _ := config["additional_vocab"].([]any)
+		if len(vocab) != 1 {
+			t.Fatalf("additional_vocab length = %d, want 1", len(vocab))
+		}
+		firstVocab, _ := vocab[0].(map[string]any)
+		if got, want := firstVocab["content"], "LiveKit"; got != want {
+			t.Fatalf("vocab content = %#v, want %#v", got, want)
+		}
+		if got, want := fmt.Sprint(firstVocab["sounds_like"]), "[live kit livekit]"; got != want {
+			t.Fatalf("vocab sounds_like = %#v, want %q", firstVocab["sounds_like"], want)
+		}
+		speakerConfig, _ := config["speaker_config"].(map[string]any)
+		if got, want := fmt.Sprint(speakerConfig["focus_speakers"]), "[agent user]"; got != want {
+			t.Fatalf("focus_speakers = %#v, want %q", speakerConfig["focus_speakers"], want)
+		}
+		if got, want := fmt.Sprint(speakerConfig["ignore_speakers"]), "[noise]"; got != want {
+			t.Fatalf("ignore_speakers = %#v, want %q", speakerConfig["ignore_speakers"], want)
+		}
+		if got, want := speakerConfig["focus_mode"], "retain"; got != want {
+			t.Fatalf("focus_mode = %#v, want %#v", got, want)
+		}
+		knownSpeakers, _ := config["known_speakers"].([]any)
+		if len(knownSpeakers) != 1 {
+			t.Fatalf("known_speakers length = %d, want 1", len(knownSpeakers))
+		}
+		knownSpeaker, _ := knownSpeakers[0].(map[string]any)
+		if got, want := knownSpeaker["label"], "agent"; got != want {
+			t.Fatalf("known speaker label = %#v, want %#v", got, want)
+		}
+		if got, want := knownSpeaker["speaker_id"], "spk-1"; got != want {
+			t.Fatalf("known speaker id = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Speechmatics STT start message")
+	}
+}
+
+func TestGladiaSTTFallbackPassesReferenceOptions(t *testing.T) {
+	t.Setenv("GLADIA_API_KEY", "test-gladia-key")
+	type initRecord struct {
+		apiKey string
+		region string
+		body   map[string]any
+	}
+	records := make(chan initRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/ws" {
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("upgrade websocket: %v", err)
+				return
+			}
+			defer conn.Close()
+			_, _, _ = conn.ReadMessage()
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode gladia init body: %v", err)
+			return
+		}
+		records <- initRecord{
+			apiKey: r.Header.Get("X-Gladia-Key"),
+			region: r.URL.Query().Get("region"),
+			body:   body,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"id":"session-1","url":"ws://%s/ws"}`, r.Host)
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	interimResults := false
+	codeSwitching := true
+	sampleRate := 8000
+	bitDepth := 16
+	channels := 2
+	endpointing := 0.1
+	maxDuration := 4.0
+	matchOriginal := true
+	lipsync := true
+	contextAdaptation := true
+	informal := true
+	audioEnhancer := true
+	speechThreshold := 0.7
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTBaseURL:                              server.URL,
+		STTModel:                                "solaria-1",
+		STTInterimResults:                       &interimResults,
+		STTLanguageOptions:                      "en,fr",
+		STTCodeSwitching:                        &codeSwitching,
+		STTSampleRate:                           &sampleRate,
+		STTBitDepth:                             &bitDepth,
+		STTNumberOfChannels:                     &channels,
+		STTEncoding:                             "wav/ulaw",
+		STTEndpointingSeconds:                   &endpointing,
+		STTMaxDurationWithoutEndpointingSeconds: &maxDuration,
+		STTRegion:                               "us-west",
+		STTCustomVocabulary:                     []any{"LiveKit", map[string]any{"value": "Agents"}},
+		STTCustomSpelling:                       map[string][]string{"livekit": []string{"live kit", "live-kit"}},
+		STTTranslationTargetLanguages:           []string{"es", "de"},
+		STTTranslationModel:                     "base",
+		STTTranslationMatchOriginalUtterances:   &matchOriginal,
+		STTTranslationLipsync:                   &lipsync,
+		STTTranslationContextAdaptation:         &contextAdaptation,
+		STTTranslationContext:                   "support call",
+		STTTranslationInformal:                  &informal,
+		STTPreProcessingAudioEnhancer:           &audioEnhancer,
+		STTPreProcessingSpeechThreshold:         &speechThreshold,
+	}, providerGladia)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*gladia.GladiaSTT); !ok {
+		t.Fatalf("provider type = %T, want *gladia.GladiaSTT", provider)
+	}
+	if got, want := provider.Label(), "gladia.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "solaria-1"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "Gladia"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Streaming || caps.InterimResults || caps.AlignedTranscript != "word" || caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming word-aligned without interim", caps)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.apiKey, "test-gladia-key"; got != want {
+			t.Fatalf("X-Gladia-Key = %q, want %q", got, want)
+		}
+		if got, want := record.region, "us-west"; got != want {
+			t.Fatalf("region = %q, want %q", got, want)
+		}
+		body := record.body
+		if got, want := body["model"], "solaria-1"; got != want {
+			t.Fatalf("model = %#v, want %#v", got, want)
+		}
+		if got, want := body["encoding"], "wav/ulaw"; got != want {
+			t.Fatalf("encoding = %#v, want %#v", got, want)
+		}
+		if got, want := body["sample_rate"], float64(8000); got != want {
+			t.Fatalf("sample_rate = %#v, want %#v", got, want)
+		}
+		if got, want := body["bit_depth"], float64(16); got != want {
+			t.Fatalf("bit_depth = %#v, want %#v", got, want)
+		}
+		if got, want := body["channels"], float64(2); got != want {
+			t.Fatalf("channels = %#v, want %#v", got, want)
+		}
+		if got, want := body["endpointing"], 0.1; got != want {
+			t.Fatalf("endpointing = %#v, want %#v", got, want)
+		}
+		if got, want := body["maximum_duration_without_endpointing"], 4.0; got != want {
+			t.Fatalf("maximum_duration_without_endpointing = %#v, want %#v", got, want)
+		}
+		languageConfig, _ := body["language_config"].(map[string]any)
+		if got, want := fmt.Sprint(languageConfig["languages"]), "[en fr]"; got != want {
+			t.Fatalf("languages = %#v, want %q", languageConfig["languages"], want)
+		}
+		if got, want := languageConfig["code_switching"], true; got != want {
+			t.Fatalf("code_switching = %#v, want %#v", got, want)
+		}
+		messagesConfig, _ := body["messages_config"].(map[string]any)
+		if got, want := messagesConfig["receive_partial_transcripts"], false; got != want {
+			t.Fatalf("receive_partial_transcripts = %#v, want %#v", got, want)
+		}
+		realtime, _ := body["realtime_processing"].(map[string]any)
+		if got, want := realtime["custom_vocabulary"], true; got != want {
+			t.Fatalf("custom_vocabulary = %#v, want %#v", got, want)
+		}
+		if got, want := realtime["custom_spelling"], true; got != want {
+			t.Fatalf("custom_spelling = %#v, want %#v", got, want)
+		}
+		if got, want := realtime["translation"], true; got != want {
+			t.Fatalf("translation = %#v, want %#v", got, want)
+		}
+		translationConfig, _ := realtime["translation_config"].(map[string]any)
+		if got, want := fmt.Sprint(translationConfig["target_languages"]), "[es de]"; got != want {
+			t.Fatalf("target_languages = %#v, want %q", translationConfig["target_languages"], want)
+		}
+		if got, want := translationConfig["context"], "support call"; got != want {
+			t.Fatalf("translation context = %#v, want %#v", got, want)
+		}
+		if got, want := translationConfig["context_adaptation"], true; got != want {
+			t.Fatalf("context_adaptation = %#v, want %#v", got, want)
+		}
+		if got, want := translationConfig["informal"], true; got != want {
+			t.Fatalf("informal = %#v, want %#v", got, want)
+		}
+		preProcessing, _ := body["pre_processing"].(map[string]any)
+		if got, want := preProcessing["audio_enhancer"], true; got != want {
+			t.Fatalf("audio_enhancer = %#v, want %#v", got, want)
+		}
+		if got, want := preProcessing["speech_threshold"], 0.7; got != want {
+			t.Fatalf("speech_threshold = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Gladia STT init request")
+	}
+}
+
+func firstQueryValue(values map[string][]string, key string) string {
+	if len(values[key]) == 0 {
+		return ""
+	}
+	return values[key][0]
+}
+
 func TestDefaultConfigFromEnvWrapsTTSFallbackProviders(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "cartesia")

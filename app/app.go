@@ -2081,6 +2081,115 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTSampleRate(*cfg.STTSampleRate))
 		}
 		return elevenlabs.NewElevenLabsSTT(cfg.ElevenLabsAPIKey, sttOpts...), nil
+	case providerFireworks:
+		sttOpts := []fireworksai.FireworksSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, fireworksai.WithFireworksBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, fireworksai.WithFireworksModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, fireworksai.WithFireworksLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTPrompt != "" {
+			sttOpts = append(sttOpts, fireworksai.WithFireworksPrompt(cfg.STTPrompt))
+		}
+		if cfg.STTTemperature != nil {
+			sttOpts = append(sttOpts, fireworksai.WithFireworksTemperature(*cfg.STTTemperature))
+		}
+		if cfg.STTSkipVAD != nil {
+			sttOpts = append(sttOpts, fireworksai.WithFireworksSkipVAD(*cfg.STTSkipVAD))
+		}
+		if len(cfg.STTVADKwargs) > 0 {
+			sttOpts = append(sttOpts, fireworksai.WithFireworksVADKwargs(cfg.STTVADKwargs))
+		}
+		if cfg.STTTextTimeoutSeconds != nil {
+			sttOpts = append(sttOpts, fireworksai.WithFireworksTextTimeoutSeconds(*cfg.STTTextTimeoutSeconds))
+		}
+		if len(cfg.STTTimestampGranularities) > 0 {
+			sttOpts = append(sttOpts, fireworksai.WithFireworksTimestampGranularities(cfg.STTTimestampGranularities))
+		}
+		return fireworksai.NewFireworksSTT(cfg.FireworksAPIKey, sttOpts...), nil
+	case providerGladia:
+		sttOpts := []gladia.GladiaSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, gladia.WithGladiaBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, gladia.WithGladiaModel(cfg.STTModel))
+		}
+		if cfg.STTInterimResults != nil {
+			sttOpts = append(sttOpts, gladia.WithGladiaInterimResults(*cfg.STTInterimResults))
+		}
+		if cfg.STTLanguageOptions != "" {
+			sttOpts = append(sttOpts, gladia.WithGladiaLanguages(splitStringList(cfg.STTLanguageOptions)))
+		}
+		if cfg.STTCodeSwitching != nil {
+			sttOpts = append(sttOpts, gladia.WithGladiaCodeSwitching(*cfg.STTCodeSwitching))
+		}
+		sampleRate := 0
+		if cfg.STTSampleRate != nil {
+			sampleRate = *cfg.STTSampleRate
+		}
+		bitDepth := 0
+		if cfg.STTBitDepth != nil {
+			bitDepth = *cfg.STTBitDepth
+		}
+		channels := 0
+		if cfg.STTNumberOfChannels != nil {
+			channels = *cfg.STTNumberOfChannels
+		}
+		if sampleRate != 0 || bitDepth != 0 || channels != 0 || cfg.STTEncoding != "" {
+			sttOpts = append(sttOpts, gladia.WithGladiaAudioFormat(sampleRate, bitDepth, channels, cfg.STTEncoding))
+		}
+		if cfg.STTEndpointingSeconds != nil || cfg.STTMaxDurationWithoutEndpointingSeconds != nil {
+			endpointing := -1.0
+			if cfg.STTEndpointingSeconds != nil {
+				endpointing = *cfg.STTEndpointingSeconds
+			}
+			maxDuration := 0.0
+			if cfg.STTMaxDurationWithoutEndpointingSeconds != nil {
+				maxDuration = *cfg.STTMaxDurationWithoutEndpointingSeconds
+			}
+			sttOpts = append(sttOpts, gladia.WithGladiaEndpointing(endpointing, maxDuration))
+		}
+		if cfg.STTRegion != "" {
+			sttOpts = append(sttOpts, gladia.WithGladiaRegion(cfg.STTRegion))
+		}
+		if len(cfg.STTCustomVocabulary) > 0 {
+			sttOpts = append(sttOpts, gladia.WithGladiaCustomVocabulary(cfg.STTCustomVocabulary))
+		}
+		if len(cfg.STTCustomSpelling) > 0 {
+			sttOpts = append(sttOpts, gladia.WithGladiaCustomSpelling(cfg.STTCustomSpelling))
+		}
+		if len(cfg.STTTranslationTargetLanguages) > 0 {
+			matchOriginal := boolValue(cfg.STTTranslationMatchOriginalUtterances)
+			lipsync := boolValue(cfg.STTTranslationLipsync)
+			contextAdaptation := boolValue(cfg.STTTranslationContextAdaptation)
+			informal := boolValue(cfg.STTTranslationInformal)
+			if cfg.STTTranslationModel != "" || cfg.STTTranslationContext != "" || matchOriginal || lipsync || contextAdaptation || informal {
+				sttOpts = append(sttOpts, gladia.WithGladiaTranslationConfig(
+					cfg.STTTranslationTargetLanguages,
+					cfg.STTTranslationModel,
+					matchOriginal,
+					lipsync,
+					contextAdaptation,
+					cfg.STTTranslationContext,
+					informal,
+				))
+			} else {
+				sttOpts = append(sttOpts, gladia.WithGladiaTranslation(cfg.STTTranslationTargetLanguages))
+			}
+		}
+		if cfg.STTPreProcessingAudioEnhancer != nil || cfg.STTPreProcessingSpeechThreshold != nil {
+			speechThreshold := 0.0
+			if cfg.STTPreProcessingSpeechThreshold != nil {
+				speechThreshold = *cfg.STTPreProcessingSpeechThreshold
+			}
+			sttOpts = append(sttOpts, gladia.WithGladiaPreProcessing(boolValue(cfg.STTPreProcessingAudioEnhancer), speechThreshold))
+		}
+		return gladia.NewGladiaSTT(cfg.GladiaAPIKey, sttOpts...), nil
 	case providerGradium:
 		sttOpts := []gradium.GradiumSTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -2105,6 +2214,112 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, gradium.WithGradiumSTTBufferSizeSeconds(*cfg.STTBufferSizeSeconds))
 		}
 		return gradium.NewGradiumSTT(cfg.GradiumAPIKey, sttOpts...), nil
+	case providerSoniox:
+		sttOpts := []soniox.SonioxSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, soniox.WithSonioxBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, soniox.WithSonioxModel(cfg.STTModel))
+		}
+		if cfg.STTLanguageOptions != "" {
+			sttOpts = append(sttOpts, soniox.WithSonioxLanguageHints(splitStringList(cfg.STTLanguageOptions)))
+		}
+		if strict := modelOptionBool(cfg.STTModelOptions, "language_hints_strict"); strict != nil {
+			sttOpts = append(sttOpts, soniox.WithSonioxLanguageHintsStrict(*strict))
+		}
+		if cfg.STTNumberOfChannels != nil {
+			sttOpts = append(sttOpts, soniox.WithSonioxNumChannels(*cfg.STTNumberOfChannels))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, soniox.WithSonioxSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTDiarization != nil {
+			sttOpts = append(sttOpts, soniox.WithSonioxSpeakerDiarization(*cfg.STTDiarization))
+		}
+		if cfg.STTLanguageDetection != nil {
+			sttOpts = append(sttOpts, soniox.WithSonioxLanguageIdentification(*cfg.STTLanguageDetection))
+		}
+		if cfg.STTEndpointingMS != nil {
+			sttOpts = append(sttOpts, soniox.WithSonioxMaxEndpointDelayMS(*cfg.STTEndpointingMS))
+		}
+		if cfg.STTSessionID != "" {
+			sttOpts = append(sttOpts, soniox.WithSonioxClientReferenceID(cfg.STTSessionID))
+		}
+		if context, ok := sonioxContextObjectFromModelOptions(cfg.STTModelOptions); ok {
+			sttOpts = append(sttOpts, soniox.WithSonioxContextObject(context))
+		} else if cfg.STTPrompt != "" {
+			sttOpts = append(sttOpts, soniox.WithSonioxContextText(cfg.STTPrompt))
+		}
+		if len(cfg.STTTranslationSourceLanguages) > 0 && len(cfg.STTTranslationTargetLanguages) > 0 {
+			sttOpts = append(sttOpts, soniox.WithSonioxTwoWayTranslation(cfg.STTTranslationSourceLanguages[0], cfg.STTTranslationTargetLanguages[0]))
+		} else if len(cfg.STTTranslationTargetLanguages) > 0 {
+			sttOpts = append(sttOpts, soniox.WithSonioxOneWayTranslation(cfg.STTTranslationTargetLanguages[0]))
+		}
+		return soniox.NewSonioxSTT(cfg.SonioxAPIKey, sttOpts...), nil
+	case providerSpeechmatics:
+		sttOpts := []speechmatics.SpeechmaticsSTTOption{}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTEncoding != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTAudioEncoding(cfg.STTEncoding))
+		}
+		if cfg.STTDomain != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTDomain(cfg.STTDomain))
+		}
+		if cfg.STTOutputLocale != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTOutputLocale(cfg.STTOutputLocale))
+		}
+		if cfg.STTInterimResults != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTIncludePartials(*cfg.STTInterimResults))
+		}
+		if cfg.STTDiarization != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTEnableDiarization(*cfg.STTDiarization))
+		}
+		if len(cfg.STTKeytermsPrompt) > 0 {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTAdditionalVocab(speechmaticsAdditionalVocab(cfg.STTKeytermsPrompt)))
+		}
+		focusSpeakers := modelOptionStringList(cfg.STTModelOptions, "focus_speakers")
+		ignoreSpeakers := modelOptionStringList(cfg.STTModelOptions, "ignore_speakers")
+		focusMode := modelOptionString(cfg.STTModelOptions, "focus_mode")
+		if len(focusSpeakers) > 0 || len(ignoreSpeakers) > 0 || focusMode != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTSpeakerFocus(focusSpeakers, ignoreSpeakers, focusMode))
+		}
+		if speakers := speechmaticsKnownSpeakers(modelOptionString(cfg.STTModelOptions, "known_speakers")); len(speakers) > 0 {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTKnownSpeakers(speakers))
+		}
+		if cfg.STTOperatingPoint != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTOperatingPoint(cfg.STTOperatingPoint))
+		}
+		if cfg.STTTextTimeoutSeconds != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTMaxDelay(*cfg.STTTextTimeoutSeconds))
+		}
+		if cfg.STTVADSilenceThresholdSeconds != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(*cfg.STTVADSilenceThresholdSeconds))
+		}
+		if cfg.STTMaxDurationWithoutEndpointingSeconds != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTEndOfUtteranceMaxDelay(*cfg.STTMaxDurationWithoutEndpointingSeconds))
+		}
+		if overrides := speechmaticsPunctuationOverrides(cfg.STTModelOptions); len(overrides) > 0 {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTPunctuationOverrides(overrides))
+		}
+		if sensitivity := modelOptionFloat(cfg.STTModelOptions, "speaker_sensitivity"); sensitivity != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTSpeakerSensitivity(*sensitivity))
+		}
+		if cfg.STTMaxSpeakers != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTMaxSpeakers(*cfg.STTMaxSpeakers))
+		}
+		if cfg.STTPreferCurrentSpeaker != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTPreferCurrentSpeaker(*cfg.STTPreferCurrentSpeaker))
+		}
+		return speechmatics.NewSpeechmaticsSTT(cfg.SpeechmaticsAPIKey, sttOpts...), nil
 	case providerSLNG:
 		sttOpts := []slng.STTOption{}
 		if cfg.STTModel != "" {
