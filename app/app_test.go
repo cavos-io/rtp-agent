@@ -518,17 +518,28 @@ func TestDefaultConfigFromEnvDefaultsWorkerTransportToLiveKit(t *testing.T) {
 }
 
 func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
-	t.Setenv("RTP_AGENT_TRANSPORT", "agora")
-	t.Setenv("AGORA_APP_ID", "agora-app")
-	t.Setenv("AGORA_APP_CERTIFICATE", "agora-cert")
-	t.Setenv("AGORA_CHANNEL", "support-room")
-	t.Setenv("AGORA_UID", "agent-42")
-	t.Setenv("AGORA_TOKEN", "agora-token")
+	t.Setenv("RTP_AGENT_TRANSPORT", " agora ")
+	t.Setenv("AGORA_APP_ID", " agora-app ")
+	t.Setenv("AGORA_APP_CERTIFICATE", " agora-cert ")
+	t.Setenv("AGORA_CHANNEL", " support-room ")
+	t.Setenv("AGORA_UID", " agent-42 ")
+	t.Setenv("AGORA_TOKEN", " agora-token ")
 
 	cfg := DefaultConfigFromEnv()
 
 	if cfg.WorkerOptions.Transport != worker.WorkerTransportAgora {
 		t.Fatalf("Transport = %q, want %q", cfg.WorkerOptions.Transport, worker.WorkerTransportAgora)
+	}
+	for name, value := range map[string]string{
+		"AppID":          cfg.WorkerOptions.Agora.AppID,
+		"AppCertificate": cfg.WorkerOptions.Agora.AppCertificate,
+		"Channel":        cfg.WorkerOptions.Agora.Channel,
+		"UID":            cfg.WorkerOptions.Agora.UID,
+		"Token":          cfg.WorkerOptions.Agora.Token,
+	} {
+		if strings.TrimSpace(value) != value {
+			t.Fatalf("Agora.%s = %q, want trimmed value", name, value)
+		}
 	}
 	if cfg.WorkerOptions.Agora.AppID != "agora-app" {
 		t.Fatalf("Agora.AppID = %q, want agora-app", cfg.WorkerOptions.Agora.AppID)
