@@ -3609,6 +3609,8 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		if cfg.TTSEncoding != "" {
 			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSEncoding(cfg.TTSEncoding))
+		} else {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSEncoding("wav_48000"))
 		}
 		if cfg.TTSLanguage != "" {
 			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSLanguage(cfg.TTSLanguage))
@@ -5487,6 +5489,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.TTSEncoding != "" {
 			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSEncoding(cfg.TTSEncoding))
+		} else {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSEncoding("wav_48000"))
 		}
 		if cfg.TTSLanguage != "" {
 			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSLanguage(cfg.TTSLanguage))

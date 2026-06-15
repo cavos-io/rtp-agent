@@ -1310,6 +1310,13 @@ func TestTTSRuntimeDefaultsUsePCMCompatibleProviderFormats(t *testing.T) {
 			fieldName: "format",
 			want:      "raw",
 		},
+		{
+			name:      "speechify",
+			provider:  providerSpeechify,
+			cfg:       AppConfig{SpeechifyAPIKey: "test-speechify-key"},
+			fieldName: "encoding",
+			want:      "wav_48000",
+		},
 	}
 
 	for _, tt := range tests {
