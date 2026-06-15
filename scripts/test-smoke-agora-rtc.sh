@@ -51,6 +51,10 @@ case "${FAKE_AGORA_WORKER_MODE:-worker-error}" in
     echo '{"msg":"agora transport connected","channel":"support","reason":0}'
     sleep 2
     ;;
+  connected-spaced-json)
+    echo '{"msg": "agora transport connected", "channel": "support", "reason": 0}'
+    sleep 2
+    ;;
   connected-exit)
     echo '{"msg":"agora transport connected","channel":"support","reason":0}'
     ;;
@@ -62,8 +66,14 @@ case "${FAKE_AGORA_WORKER_MODE:-worker-error}" in
   worker-error)
     echo '{"msg":"Worker error","error":"agora SDK connect timed out after 3s"}'
     ;;
+  worker-error-spaced-json)
+    echo '{"msg": "Worker error", "error": "agora SDK connect timed out after 3s"}'
+    ;;
   sdk-event-error)
     echo '{"msg":"agora transport event error","channel":"support","reason":110}'
+    ;;
+  sdk-event-error-spaced-json)
+    echo '{"msg": "agora transport event error", "channel": "support", "reason": 110}'
     ;;
 esac
 BIN
@@ -156,6 +166,14 @@ fi
 grep -q '^Agora RTC smoke failed with worker error:$' "$WORKDIR/err-worker-error.txt"
 grep -q '"msg":"Worker error"' "$WORKDIR/err-worker-error.txt"
 
+if FAKE_AGORA_WORKER_MODE=worker-error-spaced-json run_smoke >"$WORKDIR/out-worker-error-spaced-json.txt" 2>"$WORKDIR/err-worker-error-spaced-json.txt"; then
+  echo "smoke script unexpectedly passed after spaced JSON worker error" >&2
+  exit 1
+fi
+
+grep -q '^Agora RTC smoke failed with worker error:$' "$WORKDIR/err-worker-error-spaced-json.txt"
+grep -q '"msg": "Worker error"' "$WORKDIR/err-worker-error-spaced-json.txt"
+
 if ! FAKE_AGORA_WORKER_MODE=connected run_smoke >"$WORKDIR/out-connected.txt" 2>"$WORKDIR/err-connected.txt"; then
   echo "smoke script did not pass after connected log" >&2
   cat "$WORKDIR/err-connected.txt" >&2
@@ -163,6 +181,14 @@ if ! FAKE_AGORA_WORKER_MODE=connected run_smoke >"$WORKDIR/out-connected.txt" 2>
 fi
 
 grep -q '^Agora RTC connected$' "$WORKDIR/out-connected.txt"
+
+if ! FAKE_AGORA_WORKER_MODE=connected-spaced-json run_smoke >"$WORKDIR/out-connected-spaced-json.txt" 2>"$WORKDIR/err-connected-spaced-json.txt"; then
+  echo "smoke script did not pass after spaced JSON connected log" >&2
+  cat "$WORKDIR/err-connected-spaced-json.txt" >&2
+  exit 1
+fi
+
+grep -q '^Agora RTC connected$' "$WORKDIR/out-connected-spaced-json.txt"
 
 if ! FAKE_AGORA_WORKER_MODE=connected run_smoke_with_padded_sdk_dir >"$WORKDIR/out-padded-sdk.txt" 2>"$WORKDIR/err-padded-sdk.txt"; then
   echo "smoke script did not pass with padded SDK dir" >&2
@@ -230,3 +256,11 @@ fi
 
 grep -q '^Agora RTC smoke failed with SDK event error:$' "$WORKDIR/err-sdk-event-error.txt"
 grep -q '"msg":"agora transport event error"' "$WORKDIR/err-sdk-event-error.txt"
+
+if FAKE_AGORA_WORKER_MODE=sdk-event-error-spaced-json run_smoke >"$WORKDIR/out-sdk-event-error-spaced-json.txt" 2>"$WORKDIR/err-sdk-event-error-spaced-json.txt"; then
+  echo "smoke script unexpectedly passed after spaced JSON SDK event error" >&2
+  exit 1
+fi
+
+grep -q '^Agora RTC smoke failed with SDK event error:$' "$WORKDIR/err-sdk-event-error-spaced-json.txt"
+grep -q '"msg": "agora transport event error"' "$WORKDIR/err-sdk-event-error-spaced-json.txt"

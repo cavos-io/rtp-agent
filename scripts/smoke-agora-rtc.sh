@@ -77,15 +77,15 @@ cleanup() {
 trap cleanup EXIT
 
 has_worker_error() {
-  grep -q -e 'Worker error:' -e '"msg":"Worker error"' "$log_abs"
+  grep -Eq 'Worker error:|"msg"[[:space:]]*:[[:space:]]*"Worker error"' "$log_abs"
 }
 
 has_connected_event() {
-  grep -q '"msg":"agora transport connected"' "$log_abs"
+  grep -Eq '"msg"[[:space:]]*:[[:space:]]*"agora transport connected"' "$log_abs"
 }
 
 has_sdk_event_error() {
-  grep -q '"msg":"agora transport event error"' "$log_abs"
+  grep -Eq '"msg"[[:space:]]*:[[:space:]]*"agora transport event error"' "$log_abs"
 }
 
 deadline=$((SECONDS + timeout_seconds))
