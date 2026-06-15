@@ -3423,6 +3423,8 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		if cfg.TTSResponseFormat != "" {
 			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSAudioFormat(cfg.TTSResponseFormat))
+		} else {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSAudioFormat("pcm"))
 		}
 		if cfg.TTSEmotion != "" {
 			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSEmotion(cfg.TTSEmotion))
@@ -5159,6 +5161,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.TTSResponseFormat != "" {
 			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSAudioFormat(cfg.TTSResponseFormat))
+		} else {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSAudioFormat("pcm"))
 		}
 		if cfg.TTSEmotion != "" {
 			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSEmotion(cfg.TTSEmotion))

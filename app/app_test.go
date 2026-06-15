@@ -1324,6 +1324,13 @@ func TestTTSRuntimeDefaultsUsePCMCompatibleProviderFormats(t *testing.T) {
 			fieldName: "outputFormat",
 			want:      "wav",
 		},
+		{
+			name:      "minimax",
+			provider:  providerMinimax,
+			cfg:       AppConfig{MinimaxAPIKey: "test-minimax-key"},
+			fieldName: "audioFormat",
+			want:      "pcm",
+		},
 	}
 
 	for _, tt := range tests {
