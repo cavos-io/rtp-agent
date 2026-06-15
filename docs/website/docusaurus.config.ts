@@ -7,7 +7,8 @@ import type * as Preset from '@docusaurus/preset-classic';
 const config: Config = {
   title: 'RTP Agent',
   tagline: 'Real-time multi-agent orchestration',
-  favicon: 'img/logo.svg',
+  favicon: 'img/Favicon-White.svg',
+  //  faviconDark: 'img/Favicon-White.svg',
 
   future: {
     v4: true,
@@ -52,9 +53,10 @@ const config: Config = {
     },
     navbar: {
       title: 'RTP Agent',
-      logo: {
+      logo: { 
         alt: 'RTP Agent Logo',
-        src: 'img/logo.svg',
+        src: 'img/logo-cavos-black.webp',
+        srcDark: 'img/logo-cavos-white.webp',
       },
       items: [
         {
