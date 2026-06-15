@@ -2800,7 +2800,7 @@ func (r realtimeUserTranscriptionAssistant) Start(context.Context, *AgentSession
 func (r realtimeUserTranscriptionAssistant) OnAudioFrame(context.Context, *model.AudioFrame) {
 }
 
-func (r realtimeUserTranscriptionAssistant) SetPublishAudio(func(frame *model.AudioFrame) error) {
+func (r realtimeUserTranscriptionAssistant) SetPublishAudio(func(context.Context, *model.AudioFrame) error) {
 }
 
 func (r realtimeUserTranscriptionAssistant) RealtimeCapabilities() llm.RealtimeCapabilities {
@@ -2814,7 +2814,7 @@ func (r *recordingScheduledSpeechAssistant) Start(context.Context, *AgentSession
 func (r *recordingScheduledSpeechAssistant) OnAudioFrame(context.Context, *model.AudioFrame) {
 }
 
-func (r *recordingScheduledSpeechAssistant) SetPublishAudio(func(frame *model.AudioFrame) error) {
+func (r *recordingScheduledSpeechAssistant) SetPublishAudio(func(context.Context, *model.AudioFrame) error) {
 }
 
 func (r *recordingScheduledSpeechAssistant) OnSpeechScheduled(ctx context.Context, speech *SpeechHandle) {
@@ -2848,7 +2848,7 @@ func (r *recordingOptionsAssistant) Start(context.Context, *AgentSession) error 
 func (r *recordingOptionsAssistant) OnAudioFrame(context.Context, *model.AudioFrame) {
 }
 
-func (r *recordingOptionsAssistant) SetPublishAudio(func(frame *model.AudioFrame) error) {
+func (r *recordingOptionsAssistant) SetPublishAudio(func(context.Context, *model.AudioFrame) error) {
 }
 
 func (r *recordingOptionsAssistant) UpdateOptions(_ context.Context, options llm.RealtimeSessionOptions) error {
@@ -2869,7 +2869,7 @@ func (r *recordingRealtimeCommitAssistant) Start(context.Context, *AgentSession)
 func (r *recordingRealtimeCommitAssistant) OnAudioFrame(context.Context, *model.AudioFrame) {
 }
 
-func (r *recordingRealtimeCommitAssistant) SetPublishAudio(func(frame *model.AudioFrame) error) {
+func (r *recordingRealtimeCommitAssistant) SetPublishAudio(func(context.Context, *model.AudioFrame) error) {
 }
 
 func (r *recordingRealtimeCommitAssistant) CommitAudio() error {

@@ -128,7 +128,7 @@ type fakeAppAgoraChannelClient struct {
 type fakeAppSessionAssistant struct {
 	audioCh  chan *model.AudioFrame
 	startCtx context.Context
-	publish  func(frame *model.AudioFrame) error
+	publish  func(ctx context.Context, frame *model.AudioFrame) error
 }
 
 func (f *fakeAppSessionAssistant) Start(ctx context.Context, s *agent.AgentSession) error {
@@ -147,7 +147,7 @@ func (f *fakeAppSessionAssistant) OnAudioFrame(ctx context.Context, frame *model
 	}
 }
 
-func (f *fakeAppSessionAssistant) SetPublishAudio(publish func(frame *model.AudioFrame) error) {
+func (f *fakeAppSessionAssistant) SetPublishAudio(publish func(ctx context.Context, frame *model.AudioFrame) error) {
 	f.publish = publish
 }
 
