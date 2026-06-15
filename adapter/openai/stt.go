@@ -515,13 +515,18 @@ func openAISTTRequestLanguage(language string) string {
 }
 
 func openAISpeechEvent(resp openai.AudioResponse) *stt.SpeechEvent {
+	confidence := 0.0
+	if strings.TrimSpace(resp.Text) != "" {
+		confidence = 1.0
+	}
 	return &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,
 		Alternatives: []stt.SpeechData{
 			{
-				Text:     resp.Text,
-				Language: resp.Language,
-				Words:    openAITimedStrings(resp.Words),
+				Text:       resp.Text,
+				Language:   resp.Language,
+				Confidence: confidence,
+				Words:      openAITimedStrings(resp.Words),
 			},
 		},
 	}

@@ -109,6 +109,21 @@ func TestOpenAISpeechEventPreservesWordTimestamps(t *testing.T) {
 	}
 }
 
+func TestOpenAISpeechEventDefaultsMissingConfidenceToOne(t *testing.T) {
+	var resp goopenai.AudioResponse
+	if err := json.Unmarshal([]byte(`{"text": "Hello.", "language": "id"}`), &resp); err != nil {
+		t.Fatal(err)
+	}
+
+	event := openAISpeechEvent(resp)
+	if len(event.Alternatives) != 1 {
+		t.Fatalf("alternatives = %d, want 1", len(event.Alternatives))
+	}
+	if got := event.Alternatives[0].Confidence; got != 1.0 {
+		t.Fatalf("confidence = %v, want 1.0 for OpenAI-compatible STT without confidence field", got)
+	}
+}
+
 func TestOpenAISTTRecognizeUploadsWAVContainer(t *testing.T) {
 	var uploaded []byte
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
