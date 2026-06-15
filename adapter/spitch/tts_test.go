@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 
 	corestt "github.com/cavos-io/rtp-agent/core/stt"
@@ -163,6 +165,52 @@ func TestSpitchTTSChunkedStreamDecodesWAVResponse(t *testing.T) {
 	if err != io.EOF {
 		t.Fatalf("second Next error = %v, want EOF", err)
 	}
+}
+
+func TestSpitchTTSChunkedStreamDecodesReferenceMP3Response(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: spitchRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(mp3Data)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewSpitchTTS("test-key", "", WithSpitchTTSBaseURL("https://spitch.example"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if audio.Frame.SampleRate != 48000 {
+		t.Fatalf("sample rate = %d, want decoded mp3 rate 48000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 2 {
+		t.Fatalf("channels = %d, want decoded mp3 stereo", audio.Frame.NumChannels)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded frame is empty")
+	}
+	if bytes.Equal(audio.Frame.Data, mp3Data[:len(audio.Frame.Data)]) {
+		t.Fatal("frame data still contains compressed mp3 bytes")
+	}
+}
+
+type spitchRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f spitchRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func assertSpitchPayload(t *testing.T, payload map[string]any, key string, want string) {
