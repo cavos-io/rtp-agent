@@ -1,11 +1,14 @@
 package openai
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -496,6 +499,10 @@ func TestOpenAITTSSSEStreamHandlesLargeAudioDelta(t *testing.T) {
 }
 
 func TestOpenAITTSAudioModelsUseAudioStreamFormat(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -508,7 +515,7 @@ func TestOpenAITTSAudioModelsUseAudioStreamFormat(t *testing.T) {
 			StatusCode: http.StatusOK,
 			Status:     "200 OK",
 			Header:     http.Header{"Content-Type": []string{"audio/mp3"}},
-			Body:       io.NopCloser(strings.NewReader(string([]byte{1, 2, 3, 4}))),
+			Body:       io.NopCloser(bytes.NewReader(mp3Data)),
 			Request:    r,
 		}, nil
 	})
@@ -527,8 +534,17 @@ func TestOpenAITTSAudioModelsUseAudioStreamFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next error = %v", err)
 	}
-	if string(audio.Frame.Data) != string([]byte{1, 2, 3, 4}) {
-		t.Fatalf("audio bytes = %v, want raw audio bytes", audio.Frame.Data)
+	if audio.Frame.SampleRate != 48000 {
+		t.Fatalf("sample rate = %d, want decoded mp3 rate 48000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 2 {
+		t.Fatalf("channels = %d, want decoded mp3 stereo", audio.Frame.NumChannels)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded frame is empty")
+	}
+	if bytes.Equal(audio.Frame.Data, mp3Data[:len(audio.Frame.Data)]) {
+		t.Fatal("frame data still contains compressed mp3 bytes")
 	}
 }
 
