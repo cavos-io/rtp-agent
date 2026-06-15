@@ -162,8 +162,9 @@ func (s *TelnyxSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	return &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,
 		Alternatives: []stt.SpeechData{{
-			Language: resolvedLanguage,
-			Text:     finalText.String(),
+			Language:   resolvedLanguage,
+			Text:       finalText.String(),
+			Confidence: stt.DefaultTranscriptConfidence(finalText.String()),
 		}},
 	}, nil
 }

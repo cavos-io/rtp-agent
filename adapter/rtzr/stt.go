@@ -460,11 +460,12 @@ func processRtzrTranscriptEvent(state *rtzrTranscriptState, payload rtzrTranscri
 		Type: eventType,
 		Alternatives: []stt.SpeechData{
 			{
-				Text:      text,
-				Language:  state.language,
-				StartTime: payload.StartAt/1000 + startTimeOffset,
-				EndTime:   (payload.StartAt+payload.Duration)/1000 + startTimeOffset,
-				Words:     rtzrTimedStrings(payload.Words, startTimeOffset),
+				Text:       text,
+				Language:   state.language,
+				Confidence: stt.DefaultTranscriptConfidence(text),
+				StartTime:  payload.StartAt/1000 + startTimeOffset,
+				EndTime:    (payload.StartAt+payload.Duration)/1000 + startTimeOffset,
+				Words:      rtzrTimedStrings(payload.Words, startTimeOffset),
 			},
 		},
 	})

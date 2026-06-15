@@ -424,8 +424,9 @@ func xaiSTTBatchSpeechEvent(enableDiarization bool, resp xaiSTTResponse) *stt.Sp
 
 func xaiSTTSpeechData(words []xaiSTTWord, text, language string, enableDiarization bool) stt.SpeechData {
 	data := stt.SpeechData{
-		Language: language,
-		Text:     text,
+		Language:   language,
+		Text:       text,
+		Confidence: stt.DefaultTranscriptConfidence(text),
 	}
 	if len(words) == 0 {
 		return data

@@ -125,7 +125,7 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
-	data := stt.SpeechData{Text: result.Text, Language: result.Language}
+	data := stt.SpeechData{Text: result.Text, Language: result.Language, Confidence: stt.DefaultTranscriptConfidence(result.Text)}
 	if len(result.Segments) > 0 {
 		data.StartTime = result.Segments[0].Start
 		data.EndTime = result.Segments[len(result.Segments)-1].End

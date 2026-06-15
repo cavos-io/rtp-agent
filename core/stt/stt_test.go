@@ -52,6 +52,24 @@ func TestSpeechDataCarriesReferenceMetadataFields(t *testing.T) {
 	}
 }
 
+func TestDefaultTranscriptConfidenceMatchesReferenceInferenceDefault(t *testing.T) {
+	tests := []struct {
+		text string
+		want float64
+	}{
+		{text: "hello", want: 1.0},
+		{text: "  hello  ", want: 1.0},
+		{text: "", want: 0.0},
+		{text: "   ", want: 0.0},
+	}
+
+	for _, tt := range tests {
+		if got := DefaultTranscriptConfidence(tt.text); got != tt.want {
+			t.Fatalf("DefaultTranscriptConfidence(%q) = %v, want %v", tt.text, got, tt.want)
+		}
+	}
+}
+
 func TestSpeechDataUnmarshalJSONRejectsMissingRequiredFields(t *testing.T) {
 	tests := []struct {
 		name    string
