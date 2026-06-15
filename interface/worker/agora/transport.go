@@ -212,5 +212,16 @@ func (t *Transport) emit(event Event) {
 	select {
 	case t.events <- event:
 	default:
+		if event.Kind != EventError {
+			return
+		}
+		select {
+		case <-t.events:
+		default:
+		}
+		select {
+		case t.events <- event:
+		default:
+		}
 	}
 }

@@ -3,6 +3,7 @@ package agora
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -181,6 +182,34 @@ func TestTransportForwardsClientEvents(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for event")
 	}
+}
+
+func TestTransportPrioritizesErrorEventsWhenBufferIsFull(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	for i := 0; i < cap(tr.events); i++ {
+		client.emit(Event{Kind: EventUserJoined, Channel: "support", UserID: fmt.Sprintf("user-%d", i)})
+	}
+	client.emit(Event{Kind: EventError, Channel: "support", Reason: 110, Err: errors.New("sdk error")})
+
+	for i := 0; i < cap(tr.events); i++ {
+		select {
+		case event := <-tr.Events():
+			if event.Kind == EventError {
+				if event.Reason != 110 {
+					t.Fatalf("error reason = %d, want 110", event.Reason)
+				}
+				return
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out draining transport events")
+		}
+	}
+	t.Fatal("transport dropped error event when buffer was full")
 }
 
 func TestTransportForwardsClientAudioFrames(t *testing.T) {
