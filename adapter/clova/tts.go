@@ -7,8 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
-	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -77,29 +78,44 @@ func (t *ClovaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type clovaTTSChunkedStream struct {
-	resp *http.Response
+	resp    *http.Response
+	decoder codecs.AudioStreamDecoder
+	started bool
 }
 
 func (s *clovaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	buf := make([]byte, 4096)
-	n, err := s.resp.Body.Read(buf)
+	if !s.started {
+		s.started = true
+		s.decoder = codecs.NewMP3AudioStreamDecoder()
+		data, err := io.ReadAll(s.resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		if len(data) == 0 {
+			return nil, io.EOF
+		}
+		go func() {
+			s.decoder.Push(data)
+			s.decoder.EndInput()
+		}()
+	}
+
+	frame, err := s.decoder.Next()
 	if err != nil {
-		if err == io.EOF {
+		if strings.Contains(err.Error(), "decoder closed") {
 			return nil, io.EOF
 		}
 		return nil, err
 	}
 
 	return &tts.SynthesizedAudio{
-		Frame: &model.AudioFrame{
-			Data:              buf[:n],
-			SampleRate:        24000,
-			NumChannels:       1,
-			SamplesPerChannel: uint32(n / 2),
-		},
+		Frame: frame,
 	}, nil
 }
 
 func (s *clovaTTSChunkedStream) Close() error {
+	if s.decoder != nil {
+		_ = s.decoder.Close()
+	}
 	return s.resp.Body.Close()
 }
