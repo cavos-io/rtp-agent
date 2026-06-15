@@ -3,9 +3,12 @@ package hume
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -294,4 +297,52 @@ func TestHumeTTSChunkedStreamDecodesReferenceJSONLines(t *testing.T) {
 	if audio.Frame.SampleRate != 48000 {
 		t.Fatalf("sample rate = %d, want 48000", audio.Frame.SampleRate)
 	}
+}
+
+func TestHumeTTSChunkedStreamDecodesReferenceMP3JSONLines(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+
+	line := `{"audio":"` + base64.StdEncoding.EncodeToString(mp3Data) + `"}` + "\n"
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: humeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(line)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewHumeTTS("test-key", "", WithHumeTTSBaseURL("https://hume.example"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if audio.Frame.SampleRate != 48000 {
+		t.Fatalf("sample rate = %d, want decoded mp3 rate 48000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 2 {
+		t.Fatalf("channels = %d, want decoded mp3 stereo", audio.Frame.NumChannels)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded frame is empty")
+	}
+	if bytes.Equal(audio.Frame.Data, mp3Data[:len(audio.Frame.Data)]) {
+		t.Fatal("frame data still contains compressed mp3 bytes")
+	}
+}
+
+type humeRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f humeRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
