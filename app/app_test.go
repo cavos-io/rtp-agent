@@ -1292,6 +1292,72 @@ func TestElevenLabsTTSConfigSampleRateUsesPCMOutputFormat(t *testing.T) {
 	}
 }
 
+func TestTTSRuntimeDefaultsUsePCMCompatibleProviderFormats(t *testing.T) {
+	sampleRate := 8000
+	tests := []struct {
+		name      string
+		provider  string
+		cfg       AppConfig
+		fieldName string
+		want      string
+	}{
+		{
+			name:      "openai",
+			provider:  providerOpenAI,
+			cfg:       AppConfig{OpenAIAPIKey: "test-openai-key"},
+			fieldName: "responseFormat",
+			want:      "pcm",
+		},
+		{
+			name:      "elevenlabs",
+			provider:  providerElevenLabs,
+			cfg:       AppConfig{ElevenLabsAPIKey: "test-elevenlabs-key", TTSSampleRate: &sampleRate},
+			fieldName: "encoding",
+			want:      "pcm_8000",
+		},
+		{
+			name:      "mistralai",
+			provider:  providerMistralAI,
+			cfg:       AppConfig{MistralAPIKey: "test-mistral-key"},
+			fieldName: "responseFormat",
+			want:      "pcm",
+		},
+		{
+			name:      "fishaudio",
+			provider:  providerFishAudio,
+			cfg:       AppConfig{FishAudioAPIKey: "test-fish-key"},
+			fieldName: "outputFormat",
+			want:      "pcm",
+		},
+		{
+			name:      "hume",
+			provider:  providerHume,
+			cfg:       AppConfig{HumeAPIKey: "test-hume-key"},
+			fieldName: "audioFormat",
+			want:      "pcm",
+		},
+		{
+			name:      "lmnt",
+			provider:  providerLMNT,
+			cfg:       AppConfig{LMNTAPIKey: "test-lmnt-key"},
+			fieldName: "format",
+			want:      "raw",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider, err := fallbackTTSFromProvider(tt.cfg, tt.provider)
+			if err != nil {
+				t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+			}
+			if got := reflect.ValueOf(provider).Elem().FieldByName(tt.fieldName).String(); got != tt.want {
+				t.Fatalf("%s = %q, want %q", tt.fieldName, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsCartesiaSpeechProviders(t *testing.T) {
 	t.Setenv("CARTESIA_API_KEY", "test-cartesia-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "cartesia")
