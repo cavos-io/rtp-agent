@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 
+	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
@@ -149,6 +151,7 @@ func (t *LMNTTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 
 	return &lmntTTSChunkedStream{
 		resp:       resp,
+		format:     t.format,
 		sampleRate: t.sampleRate,
 	}, nil
 }
@@ -191,10 +194,17 @@ func (t *LMNTTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 
 type lmntTTSChunkedStream struct {
 	resp       *http.Response
+	format     string
 	sampleRate int
+	decoder    codecs.AudioStreamDecoder
+	started    bool
 }
 
 func (s *lmntTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.format == "mp3" {
+		return s.nextDecodedMP3()
+	}
+
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
 	if err != nil {
@@ -214,6 +224,36 @@ func (s *lmntTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
+func (s *lmntTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
+	if !s.started {
+		s.started = true
+		s.decoder = codecs.NewMP3AudioStreamDecoder()
+		data, err := io.ReadAll(s.resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		if len(data) == 0 {
+			return nil, io.EOF
+		}
+		go func() {
+			s.decoder.Push(data)
+			s.decoder.EndInput()
+		}()
+	}
+
+	frame, err := s.decoder.Next()
+	if err != nil {
+		if strings.Contains(err.Error(), "decoder closed") {
+			return nil, io.EOF
+		}
+		return nil, err
+	}
+	return &tts.SynthesizedAudio{Frame: frame}, nil
+}
+
 func (s *lmntTTSChunkedStream) Close() error {
+	if s.decoder != nil {
+		_ = s.decoder.Close()
+	}
 	return s.resp.Body.Close()
 }
