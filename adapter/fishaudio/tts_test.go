@@ -3,6 +3,7 @@ package fishaudio
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"io"
 	"net/http"
 	"strings"
@@ -201,10 +202,12 @@ func TestFishAudioTTSOptionsMatchReference(t *testing.T) {
 	}
 }
 
-func TestFishAudioTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
+func TestFishAudioTTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {
+	pcm := []byte{0x01, 0x02, 0x03, 0x04}
 	stream := &fishaudioTTSChunkedStream{
-		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(fishAudioTestWAV(pcm, 48000, 1)))},
 		sampleRate: 48000,
+		format:     "wav",
 	}
 
 	audio, err := stream.Next()
@@ -213,6 +216,12 @@ func TestFishAudioTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	}
 	if audio.Frame.SampleRate != 48000 {
 		t.Fatalf("sample rate = %d, want 48000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("channels = %d, want mono wav metadata", audio.Frame.NumChannels)
+	}
+	if !bytes.Equal(audio.Frame.Data, pcm) {
+		t.Fatalf("audio data = %#v, want decoded wav pcm", audio.Frame.Data)
 	}
 }
 
@@ -271,17 +280,18 @@ func TestFishAudioTTSStreamMessagesMatchReference(t *testing.T) {
 }
 
 func TestFishAudioTTSAudioFromStreamMessage(t *testing.T) {
+	pcm := []byte{1, 2, 3, 4}
 	audio, done, err := fishAudioTTSAudioFromStreamMessage(mustFishMessage(t, map[string]any{
 		"event": "audio",
-		"audio": []byte{1, 2, 3, 4},
-	}), 24000)
+		"audio": fishAudioTestWAV(pcm, 24000, 1),
+	}), 24000, "wav")
 	if err != nil {
 		t.Fatalf("audio from message: %v", err)
 	}
 	if done {
 		t.Fatal("done = true for audio event")
 	}
-	if audio == nil || string(audio.Frame.Data) != string([]byte{1, 2, 3, 4}) {
+	if audio == nil || !bytes.Equal(audio.Frame.Data, pcm) {
 		t.Fatalf("audio = %+v, want decoded frame", audio)
 	}
 	if audio.Frame.SampleRate != 24000 || audio.Frame.NumChannels != 1 {
@@ -290,7 +300,7 @@ func TestFishAudioTTSAudioFromStreamMessage(t *testing.T) {
 
 	finished, done, err := fishAudioTTSAudioFromStreamMessage(mustFishMessage(t, map[string]any{
 		"event": "finish",
-	}), 24000)
+	}), 24000, "wav")
 	if err != nil {
 		t.Fatalf("finish event: %v", err)
 	}
@@ -355,4 +365,25 @@ func mustFishMessage(t *testing.T, message map[string]any) []byte {
 		t.Fatalf("marshal message: %v", err)
 	}
 	return encoded
+}
+
+func fishAudioTestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
+	var wav bytes.Buffer
+	blockAlign := channels * 2
+	byteRate := sampleRate * uint32(blockAlign)
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36+len(pcm)))
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, channels)
+	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
+	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
+	_ = binary.Write(&wav, binary.LittleEndian, blockAlign)
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	wav.WriteString("data")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(len(pcm)))
+	wav.Write(pcm)
+	return wav.Bytes()
 }
