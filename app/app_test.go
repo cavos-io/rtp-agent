@@ -1251,55 +1251,16 @@ func TestDefaultConfigFromEnvSelectsElevenLabsSpeechProviders(t *testing.T) {
 	}
 }
 
-func TestElevenLabsTTSConfigSampleRateUsesPCMOutputFormat(t *testing.T) {
-	var gotOutputFormat string
-	originalClient := http.DefaultClient
-	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(r *http.Request) (*http.Response, error) {
-		gotOutputFormat = r.URL.Query().Get("output_format")
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
-			Body:       io.NopCloser(strings.NewReader("\x00\x00\x01\x00")),
-			Request:    r,
-		}, nil
-	})}
-	t.Cleanup(func() { http.DefaultClient = originalClient })
-
-	sampleRate := 8000
-	provider, err := fallbackTTSFromProvider(AppConfig{
-		ElevenLabsAPIKey: "test-elevenlabs-key",
-		TTSProvider:      providerElevenLabs,
-		TTSBaseURL:       "https://eleven.example/v1",
-		TTSSampleRate:    &sampleRate,
-	}, providerElevenLabs)
-	if err != nil {
-		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
-	}
-	if got := provider.SampleRate(); got != sampleRate {
-		t.Fatalf("sample rate = %d, want %d", got, sampleRate)
-	}
-
-	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err != nil {
-		t.Fatalf("Synthesize() error = %v", err)
-	}
-	defer stream.Close()
-	if _, err := stream.Next(); err != nil {
-		t.Fatalf("stream.Next() error = %v", err)
-	}
-	if gotOutputFormat != "pcm_8000" {
-		t.Fatalf("output_format = %q, want pcm_8000", gotOutputFormat)
-	}
-}
-
 func TestTTSRuntimeDefaultsUsePCMCompatibleProviderFormats(t *testing.T) {
 	sampleRate := 8000
 	tests := []struct {
-		name      string
-		provider  string
-		cfg       AppConfig
-		fieldName string
-		want      string
+		name                  string
+		provider              string
+		cfg                   AppConfig
+		fieldName             string
+		want                  string
+		wantSampleRate        int
+		wantOutputFormatQuery string
 	}{
 		{
 			name:      "openai",
@@ -1309,11 +1270,17 @@ func TestTTSRuntimeDefaultsUsePCMCompatibleProviderFormats(t *testing.T) {
 			want:      "pcm",
 		},
 		{
-			name:      "elevenlabs",
-			provider:  providerElevenLabs,
-			cfg:       AppConfig{ElevenLabsAPIKey: "test-elevenlabs-key", TTSSampleRate: &sampleRate},
-			fieldName: "encoding",
-			want:      "pcm_8000",
+			name:     "elevenlabs",
+			provider: providerElevenLabs,
+			cfg: AppConfig{
+				ElevenLabsAPIKey: "test-elevenlabs-key",
+				TTSBaseURL:       "https://eleven.example/v1",
+				TTSSampleRate:    &sampleRate,
+			},
+			fieldName:             "encoding",
+			want:                  "pcm_8000",
+			wantSampleRate:        sampleRate,
+			wantOutputFormatQuery: "pcm_8000",
 		},
 		{
 			name:      "mistralai",
@@ -1353,6 +1320,54 @@ func TestTTSRuntimeDefaultsUsePCMCompatibleProviderFormats(t *testing.T) {
 			}
 			if got := reflect.ValueOf(provider).Elem().FieldByName(tt.fieldName).String(); got != tt.want {
 				t.Fatalf("%s = %q, want %q", tt.fieldName, got, tt.want)
+			}
+
+			configureCfg := tt.cfg
+			configureCfg.TTSProvider = tt.provider
+			configuredAgent := &agent.Agent{}
+			if _, err := configureProviders(configureCfg, configuredAgent); err != nil {
+				t.Fatalf("configureProviders() error = %v", err)
+			}
+			if configuredAgent.TTS == nil {
+				t.Fatal("configureProviders() left TTS nil")
+			}
+			if got := reflect.ValueOf(configuredAgent.TTS).Elem().FieldByName(tt.fieldName).String(); got != tt.want {
+				t.Fatalf("configured %s = %q, want %q", tt.fieldName, got, tt.want)
+			}
+
+			if tt.wantSampleRate != 0 {
+				if got := provider.SampleRate(); got != tt.wantSampleRate {
+					t.Fatalf("sample rate = %d, want %d", got, tt.wantSampleRate)
+				}
+				if got := configuredAgent.TTS.SampleRate(); got != tt.wantSampleRate {
+					t.Fatalf("configured sample rate = %d, want %d", got, tt.wantSampleRate)
+				}
+			}
+			if tt.wantOutputFormatQuery != "" {
+				var gotOutputFormat string
+				originalClient := http.DefaultClient
+				http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(r *http.Request) (*http.Response, error) {
+					gotOutputFormat = r.URL.Query().Get("output_format")
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+						Body:       io.NopCloser(strings.NewReader("\x00\x00\x01\x00")),
+						Request:    r,
+					}, nil
+				})}
+				t.Cleanup(func() { http.DefaultClient = originalClient })
+
+				stream, err := provider.Synthesize(context.Background(), "hello")
+				if err != nil {
+					t.Fatalf("Synthesize() error = %v", err)
+				}
+				defer stream.Close()
+				if _, err := stream.Next(); err != nil {
+					t.Fatalf("stream.Next() error = %v", err)
+				}
+				if gotOutputFormat != tt.wantOutputFormatQuery {
+					t.Fatalf("output_format = %q, want %q", gotOutputFormat, tt.wantOutputFormatQuery)
+				}
 			}
 		})
 	}
