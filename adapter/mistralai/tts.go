@@ -14,6 +14,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
@@ -180,6 +181,7 @@ func (s *mistralAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	if s.scanner == nil {
 		s.scanner = bufio.NewScanner(s.reader)
+		s.scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	}
 	for s.scanner.Scan() {
 		line := strings.TrimSpace(s.scanner.Text())
@@ -243,11 +245,11 @@ func mistralAITTSAudioFromStreamEvent(data string, responseFormat string) (*tts.
 	}
 	switch event.Event {
 	case "speech.audio.delta":
-		audio, err := decodeMistralAITTSAudio(event.Data.AudioData, responseFormat)
+		audio, err := decodeMistralAITTSAudioFrame(event.Data.AudioData, responseFormat)
 		if err != nil {
 			return nil, false, err
 		}
-		return mistralAITTSAudioFrame(audio), false, nil
+		return audio, false, nil
 	case "speech.audio.done":
 		return nil, true, nil
 	default:
@@ -265,22 +267,35 @@ func mistralAITTSAudioFromJSONResponse(data string, responseFormat string) (*tts
 	if response.AudioData == "" {
 		return nil, nil
 	}
-	audio, err := decodeMistralAITTSAudio(response.AudioData, responseFormat)
-	if err != nil {
-		return nil, err
-	}
-	return mistralAITTSAudioFrame(audio), nil
+	return decodeMistralAITTSAudioFrame(response.AudioData, responseFormat)
 }
 
-func decodeMistralAITTSAudio(audioData string, responseFormat string) ([]byte, error) {
+func decodeMistralAITTSAudioFrame(audioData string, responseFormat string) (*tts.SynthesizedAudio, error) {
 	audio, err := base64.StdEncoding.DecodeString(audioData)
 	if err != nil {
 		return nil, err
 	}
 	if responseFormat == "pcm" {
-		return mistralAIF32LEToS16LE(audio), nil
+		return mistralAITTSAudioFrame(mistralAIF32LEToS16LE(audio)), nil
 	}
-	return audio, nil
+	if responseFormat == "mp3" {
+		return decodeMistralAIMP3Audio(audio)
+	}
+	return mistralAITTSAudioFrame(audio), nil
+}
+
+func decodeMistralAIMP3Audio(audio []byte) (*tts.SynthesizedAudio, error) {
+	decoder := codecs.NewMP3AudioStreamDecoder()
+	defer decoder.Close()
+	go func() {
+		decoder.Push(audio)
+		decoder.EndInput()
+	}()
+	frame, err := decoder.Next()
+	if err != nil {
+		return nil, err
+	}
+	return &tts.SynthesizedAudio{Frame: frame}, nil
 }
 
 func mistralAITTSAudioFrame(audio []byte) *tts.SynthesizedAudio {
