@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -114,18 +116,32 @@ func TestAWSTTSUpdateOptionsMatchesReference(t *testing.T) {
 	}
 }
 
-func TestAWSTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
-	stream := &awsTTSChunkedStream{
-		stream:     io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
-		sampleRate: 24000,
+func TestAWSTTSChunkedStreamDecodesReferenceMP3Audio(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
 	}
+
+	stream := &awsTTSChunkedStream{
+		stream: io.NopCloser(bytes.NewReader(mp3Data)),
+	}
+	defer stream.Close()
 
 	audio, err := stream.Next()
 	if err != nil {
 		t.Fatalf("Next returned error: %v", err)
 	}
-	if audio.Frame.SampleRate != 24000 {
-		t.Fatalf("sample rate = %d, want 24000", audio.Frame.SampleRate)
+	if audio.Frame.SampleRate != 48000 {
+		t.Fatalf("sample rate = %d, want decoded mp3 rate 48000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 2 {
+		t.Fatalf("channels = %d, want decoded mp3 stereo", audio.Frame.NumChannels)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded frame is empty")
+	}
+	if bytes.Equal(audio.Frame.Data, mp3Data[:len(audio.Frame.Data)]) {
+		t.Fatal("frame data still contains compressed mp3 bytes")
 	}
 }
 
@@ -151,8 +167,7 @@ func TestAWSTTSStreamReportsUnsupported(t *testing.T) {
 
 func TestAWSTTSChunkedStreamEOFAndClose(t *testing.T) {
 	stream := &awsTTSChunkedStream{
-		stream:     io.NopCloser(bytes.NewReader(nil)),
-		sampleRate: 16000,
+		stream: io.NopCloser(bytes.NewReader(nil)),
 	}
 
 	if _, err := stream.Next(); err != io.EOF {

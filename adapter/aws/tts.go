@@ -4,12 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/polly"
 	"github.com/aws/aws-sdk-go-v2/service/polly/types"
-	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -120,8 +121,7 @@ func (t *AWSTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream
 	}
 
 	return &awsTTSChunkedStream{
-		stream:     out.AudioStream,
-		sampleRate: t.sampleRate,
+		stream: out.AudioStream,
 	}, nil
 }
 
@@ -151,31 +151,45 @@ func (t *AWSTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type awsTTSChunkedStream struct {
-	stream     io.ReadCloser
-	sampleRate int
+	stream  io.ReadCloser
+	decoder codecs.AudioStreamDecoder
+	started bool
 }
 
 func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	buf := make([]byte, 4096)
-	n, err := s.stream.Read(buf)
+	if !s.started {
+		s.started = true
+		s.decoder = codecs.NewMP3AudioStreamDecoder()
+		data, err := io.ReadAll(s.stream)
+		if err != nil {
+			return nil, err
+		}
+		if len(data) == 0 {
+			return nil, io.EOF
+		}
+		go func() {
+			s.decoder.Push(data)
+			s.decoder.EndInput()
+		}()
+	}
+
+	frame, err := s.decoder.Next()
 	if err != nil {
-		if err == io.EOF {
+		if strings.Contains(err.Error(), "decoder closed") {
 			return nil, io.EOF
 		}
 		return nil, err
 	}
 
 	return &tts.SynthesizedAudio{
-		Frame: &model.AudioFrame{
-			Data:              buf[:n],
-			SampleRate:        uint32(s.sampleRate),
-			NumChannels:       1,
-			SamplesPerChannel: uint32(n / 2),
-		},
+		Frame: frame,
 	}, nil
 }
 
 func (s *awsTTSChunkedStream) Close() error {
+	if s.decoder != nil {
+		_ = s.decoder.Close()
+	}
 	if s.stream == nil {
 		return nil
 	}
