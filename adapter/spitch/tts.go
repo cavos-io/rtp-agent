@@ -3,6 +3,7 @@ package spitch
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -150,28 +151,86 @@ func (t *SpitchTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 type spitchTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
+	emitted    bool
 }
 
 func (s *spitchTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	buf := make([]byte, 4096)
-	n, err := s.resp.Body.Read(buf)
+	if s.emitted {
+		return nil, io.EOF
+	}
+	s.emitted = true
+
+	data, err := io.ReadAll(s.resp.Body)
 	if err != nil {
-		if err == io.EOF {
-			return nil, io.EOF
-		}
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, io.EOF
+	}
+	frame, err := decodeSpitchWAVPCM16(data)
+	if err != nil {
 		return nil, err
 	}
 
 	return &tts.SynthesizedAudio{
-		Frame: &model.AudioFrame{
-			Data:              buf[:n],
-			SampleRate:        uint32(s.sampleRate),
-			NumChannels:       1,
-			SamplesPerChannel: uint32(n / 2),
-		},
+		Frame: frame,
 	}, nil
 }
 
 func (s *spitchTTSChunkedStream) Close() error {
 	return s.resp.Body.Close()
+}
+
+func decodeSpitchWAVPCM16(data []byte) (*model.AudioFrame, error) {
+	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
+		return nil, fmt.Errorf("invalid spitch wav data")
+	}
+
+	var (
+		audioFormat   uint16
+		numChannels   uint16
+		sampleRate    uint32
+		bitsPerSample uint16
+		pcmData       []byte
+	)
+	for offset := 12; offset+8 <= len(data); {
+		chunkID := string(data[offset : offset+4])
+		chunkSize := int(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
+		offset += 8
+		if chunkSize < 0 || offset+chunkSize > len(data) {
+			return nil, fmt.Errorf("invalid spitch wav chunk size")
+		}
+		chunk := data[offset : offset+chunkSize]
+		switch chunkID {
+		case "fmt ":
+			if len(chunk) < 16 {
+				return nil, fmt.Errorf("invalid spitch wav fmt chunk")
+			}
+			audioFormat = binary.LittleEndian.Uint16(chunk[0:2])
+			numChannels = binary.LittleEndian.Uint16(chunk[2:4])
+			sampleRate = binary.LittleEndian.Uint32(chunk[4:8])
+			bitsPerSample = binary.LittleEndian.Uint16(chunk[14:16])
+		case "data":
+			pcmData = append([]byte(nil), chunk...)
+		}
+		offset += chunkSize
+		if chunkSize%2 == 1 {
+			offset++
+		}
+	}
+	if audioFormat != 1 || bitsPerSample != 16 {
+		return nil, fmt.Errorf("unsupported spitch wav format: audio_format=%d bits_per_sample=%d", audioFormat, bitsPerSample)
+	}
+	if sampleRate == 0 || numChannels == 0 {
+		return nil, fmt.Errorf("missing spitch wav format metadata")
+	}
+	if pcmData == nil {
+		return nil, fmt.Errorf("missing spitch wav data chunk")
+	}
+	return &model.AudioFrame{
+		Data:              pcmData,
+		SampleRate:        sampleRate,
+		NumChannels:       uint32(numChannels),
+		SamplesPerChannel: uint32(len(pcmData) / (int(numChannels) * 2)),
+	}, nil
 }

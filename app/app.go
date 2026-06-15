@@ -3728,6 +3728,8 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		if cfg.TTSResponseFormat != "" {
 			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSOutputFormat(cfg.TTSResponseFormat))
+		} else {
+			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSOutputFormat("wav"))
 		}
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSSampleRate(*cfg.TTSSampleRate))
@@ -5530,6 +5532,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.TTSResponseFormat != "" {
 			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSOutputFormat(cfg.TTSResponseFormat))
+		} else {
+			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSOutputFormat("wav"))
 		}
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSSampleRate(*cfg.TTSSampleRate))

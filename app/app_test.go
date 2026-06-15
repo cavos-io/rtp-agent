@@ -1317,6 +1317,13 @@ func TestTTSRuntimeDefaultsUsePCMCompatibleProviderFormats(t *testing.T) {
 			fieldName: "encoding",
 			want:      "wav_48000",
 		},
+		{
+			name:      "spitch",
+			provider:  providerSpitch,
+			cfg:       AppConfig{SpitchAPIKey: "test-spitch-key"},
+			fieldName: "outputFormat",
+			want:      "wav",
+		},
 	}
 
 	for _, tt := range tests {
