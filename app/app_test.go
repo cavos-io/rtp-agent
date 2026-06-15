@@ -128,7 +128,7 @@ type fakeAppAgoraChannelClient struct {
 type fakeAppSessionAssistant struct {
 	audioCh  chan *model.AudioFrame
 	startCtx context.Context
-	publish  func(frame *model.AudioFrame) error
+	publish  func(ctx context.Context, frame *model.AudioFrame) error
 }
 
 func (f *fakeAppSessionAssistant) Start(ctx context.Context, s *agent.AgentSession) error {
@@ -147,7 +147,7 @@ func (f *fakeAppSessionAssistant) OnAudioFrame(ctx context.Context, frame *model
 	}
 }
 
-func (f *fakeAppSessionAssistant) SetPublishAudio(publish func(frame *model.AudioFrame) error) {
+func (f *fakeAppSessionAssistant) SetPublishAudio(publish func(ctx context.Context, frame *model.AudioFrame) error) {
 	f.publish = publish
 }
 
@@ -892,7 +892,7 @@ func TestRunAgoraPublishesAssistantAudioToChannel(t *testing.T) {
 	if !ok {
 		t.Fatalf("session assistant = %T, want *agent.PipelineAgent", session.Assistant)
 	}
-	var publishAudio func(*model.AudioFrame) error
+	var publishAudio func(context.Context, *model.AudioFrame) error
 	timeout := time.After(time.Second)
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
@@ -907,7 +907,7 @@ func TestRunAgoraPublishesAssistantAudioToChannel(t *testing.T) {
 		case <-ticker.C:
 		}
 	}
-	if err := publishAudio(&model.AudioFrame{
+	if err := publishAudio(context.Background(), &model.AudioFrame{
 		Data:              make([]byte, 320),
 		SampleRate:        16000,
 		NumChannels:       1,
@@ -918,6 +918,9 @@ func TestRunAgoraPublishesAssistantAudioToChannel(t *testing.T) {
 
 	select {
 	case frame := <-client.publishedCh:
+		if len(frame.Data) != 320 {
+			t.Fatalf("published data length = %d, want 320", len(frame.Data))
+		}
 		if frame.SampleRate != 16000 {
 			t.Fatalf("published sample rate = %d, want 16000", frame.SampleRate)
 		}

@@ -266,7 +266,7 @@ func TestRoomIOPlaybackEventsFollowCaptureAndFlush(t *testing.T) {
 		SamplesPerChannel: 960,
 	}
 
-	if err := rio.PublishAudio(frame); err != nil {
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
 		t.Fatalf("PublishAudio error = %v", err)
 	}
 	if len(started) != 1 {
@@ -324,10 +324,10 @@ func TestRoomIOPlaybackFinishedIncludesAudioDiagnostics(t *testing.T) {
 		NumChannels:       1,
 		SamplesPerChannel: 480,
 	}
-	if err := rio.PublishAudio(frame); err != nil {
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
 		t.Fatalf("PublishAudio(first) error = %v", err)
 	}
-	if err := rio.PublishAudio(frame); err != nil {
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
 		t.Fatalf("PublishAudio(second) error = %v", err)
 	}
 
@@ -359,7 +359,7 @@ func TestRoomIOPublishAudioRecordsMissingTrackDiagnostic(t *testing.T) {
 		SamplesPerChannel: 160,
 	}
 
-	if err := rio.PublishAudio(frame); err != nil {
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
 		t.Fatalf("PublishAudio without track error = %v, want nil diagnostic", err)
 	}
 	stats := rio.AudioOutputDiagnostics()
@@ -390,7 +390,7 @@ func TestRoomIOPublishAudioResamplesPCMToOpusClockRate(t *testing.T) {
 		SamplesPerChannel: 160,
 	}
 
-	if err := rio.PublishAudio(frame); err != nil {
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
 		t.Fatalf("PublishAudio error = %v", err)
 	}
 
@@ -422,7 +422,7 @@ func TestRoomIOPublishAudioChunksLongPCMForOpus(t *testing.T) {
 		SamplesPerChannel: 99108,
 	}
 
-	if err := rio.PublishAudio(frame); err != nil {
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
 		t.Fatalf("PublishAudio error = %v", err)
 	}
 
@@ -439,6 +439,31 @@ func TestRoomIOPublishAudioChunksLongPCMForOpus(t *testing.T) {
 	}
 }
 
+func TestRoomIOPublishAudioHonorsCanceledContextBeforeEncoding(t *testing.T) {
+	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
+	rio := &RoomIO{
+		audioTrack: newRoomIOTestAudioTrack(t),
+		encoder:    encoder,
+	}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := rio.PublishAudio(ctx, frame)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("PublishAudio error = %v, want context.Canceled", err)
+	}
+	if len(encoder.calls) != 0 {
+		t.Fatalf("encoder calls = %d, want 0 after canceled context", len(encoder.calls))
+	}
+}
+
 func TestRoomIOClearBufferFinishesPlaybackAsInterrupted(t *testing.T) {
 	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
 	frame := &model.AudioFrame{
@@ -447,7 +472,7 @@ func TestRoomIOClearBufferFinishesPlaybackAsInterrupted(t *testing.T) {
 		NumChannels:       1,
 		SamplesPerChannel: 480,
 	}
-	if err := rio.PublishAudio(frame); err != nil {
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
 		t.Fatalf("PublishAudio error = %v", err)
 	}
 
@@ -467,7 +492,7 @@ func TestRoomIOClearBufferFinishesPlaybackAsInterrupted(t *testing.T) {
 
 func TestRoomIOWaitForPlayoutCancellationRemovesWaiter(t *testing.T) {
 	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
-	if err := rio.PublishAudio(&model.AudioFrame{
+	if err := rio.PublishAudio(context.Background(), &model.AudioFrame{
 		Data:              make([]byte, 960*2),
 		SampleRate:        48000,
 		NumChannels:       1,
@@ -509,7 +534,7 @@ func TestRoomIOOffPlaybackStartedRemovesMatchingHandler(t *testing.T) {
 	})
 	rio.OffPlaybackStarted(callback)
 
-	if err := rio.PublishAudio(&model.AudioFrame{
+	if err := rio.PublishAudio(context.Background(), &model.AudioFrame{
 		Data:              make([]byte, 960*2),
 		SampleRate:        48000,
 		NumChannels:       1,
@@ -549,7 +574,7 @@ func TestRoomIOOffPlaybackStartedUsesCallbackIdentity(t *testing.T) {
 	rio.OnPlaybackStarted(secondCallback)
 	rio.OffPlaybackStarted(secondCallback)
 
-	if err := rio.PublishAudio(&model.AudioFrame{
+	if err := rio.PublishAudio(context.Background(), &model.AudioFrame{
 		Data:              make([]byte, 960*2),
 		SampleRate:        48000,
 		NumChannels:       1,
@@ -589,7 +614,7 @@ func TestRoomIOPlaybackStartedHandlerPanicDoesNotBlockOtherHandlers(t *testing.T
 		}
 	}()
 
-	if err := rio.PublishAudio(&model.AudioFrame{
+	if err := rio.PublishAudio(context.Background(), &model.AudioFrame{
 		Data:              make([]byte, 960*2),
 		SampleRate:        48000,
 		NumChannels:       1,
@@ -621,7 +646,7 @@ func TestRoomIOOffPlaybackFinishedRemovesMatchingHandler(t *testing.T) {
 	})
 	rio.OffPlaybackFinished(callback)
 
-	if err := rio.PublishAudio(&model.AudioFrame{
+	if err := rio.PublishAudio(context.Background(), &model.AudioFrame{
 		Data:              make([]byte, 960*2),
 		SampleRate:        48000,
 		NumChannels:       1,
@@ -656,7 +681,7 @@ func TestRoomIOPlaybackFinishedHandlerPanicDoesNotBlockOtherHandlers(t *testing.
 		kept <- ev
 	})
 
-	if err := rio.PublishAudio(&model.AudioFrame{
+	if err := rio.PublishAudio(context.Background(), &model.AudioFrame{
 		Data:              make([]byte, 960*2),
 		SampleRate:        48000,
 		NumChannels:       1,
@@ -1928,7 +1953,7 @@ func TestRoomIOHandleParticipantConnectedDisablesAudioForSimulator(t *testing.T)
 		NumChannels:       1,
 		SamplesPerChannel: 1,
 	}
-	if err := rio.PublishAudio(frame); err != nil {
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
 		t.Fatalf("PublishAudio(simulator) error = %v", err)
 	}
 	if recorder.OutputStartTime != nil {

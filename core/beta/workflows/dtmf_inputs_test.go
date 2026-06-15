@@ -274,5 +274,5 @@ type fakeDtmfSessionAssistant struct{}
 
 func (f *fakeDtmfSessionAssistant) Start(context.Context, *agent.AgentSession) error { return nil }
 func (f *fakeDtmfSessionAssistant) OnAudioFrame(context.Context, *model.AudioFrame)  {}
-func (f *fakeDtmfSessionAssistant) SetPublishAudio(func(frame *model.AudioFrame) error) {
+func (f *fakeDtmfSessionAssistant) SetPublishAudio(func(context.Context, *model.AudioFrame) error) {
 }

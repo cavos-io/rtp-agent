@@ -956,7 +956,7 @@ type fakeSessionAssistant struct{}
 func (f *fakeSessionAssistant) Start(context.Context, *AgentSession) error { return nil }
 func (f *fakeSessionAssistant) OnAudioFrame(context.Context, *model.AudioFrame) {
 }
-func (f *fakeSessionAssistant) SetPublishAudio(func(frame *model.AudioFrame) error) {
+func (f *fakeSessionAssistant) SetPublishAudio(func(context.Context, *model.AudioFrame) error) {
 }
 
 type doneScheduledSpeechAssistant struct {

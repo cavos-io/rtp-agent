@@ -169,7 +169,7 @@ type CommitUserTurnOptions struct {
 type SessionAssistant interface {
 	Start(ctx context.Context, s *AgentSession) error
 	OnAudioFrame(ctx context.Context, frame *model.AudioFrame)
-	SetPublishAudio(func(frame *model.AudioFrame) error)
+	SetPublishAudio(func(ctx context.Context, frame *model.AudioFrame) error)
 }
 
 type closeableSessionAssistant interface {

@@ -1130,7 +1130,7 @@ func (a *App) runAgora(ctx context.Context) error {
 		return err
 	}
 	audioOutput := workeragora.NewAudioOutput(transport)
-	a.Session.EnsureAssistant().SetPublishAudio(func(frame *model.AudioFrame) error {
+	a.Session.EnsureAssistant().SetPublishAudio(func(ctx context.Context, frame *model.AudioFrame) error {
 		return audioOutput.PublishAudio(ctx, frame)
 	})
 	defer func() {

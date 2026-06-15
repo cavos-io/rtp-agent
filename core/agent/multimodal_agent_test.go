@@ -186,7 +186,7 @@ func TestMultimodalAgentEmitsRealtimeErrorWhenEventAudioPublishFails(t *testing.
 	ma := &MultimodalAgent{
 		session: session,
 	}
-	ma.PublishAudio = func(*model.AudioFrame) error {
+	ma.PublishAudio = func(context.Context, *model.AudioFrame) error {
 		return cause
 	}
 
@@ -1124,7 +1124,7 @@ func TestMultimodalAgentEmitsRealtimeErrorWhenMessageAudioPublishFails(t *testin
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	cause := errors.New("publish generated audio failed")
 	ma := &MultimodalAgent{session: session}
-	ma.PublishAudio = func(*model.AudioFrame) error {
+	ma.PublishAudio = func(context.Context, *model.AudioFrame) error {
 		return cause
 	}
 	audioCh := make(chan *model.AudioFrame, 1)

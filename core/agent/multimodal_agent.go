@@ -29,7 +29,7 @@ type MultimodalAgent struct {
 	pendingAutoToolReply      *SpeechHandle
 	pendingAutoToolReplyTimer *time.Timer
 
-	PublishAudio func(frame *model.AudioFrame) error
+	PublishAudio func(ctx context.Context, frame *model.AudioFrame) error
 }
 
 func NewMultimodalAgent(
@@ -90,7 +90,7 @@ func (ma *MultimodalAgent) Close() error {
 	return nil
 }
 
-func (ma *MultimodalAgent) SetPublishAudio(publish func(frame *model.AudioFrame) error) {
+func (ma *MultimodalAgent) SetPublishAudio(publish func(ctx context.Context, frame *model.AudioFrame) error) {
 	ma.mu.Lock()
 	defer ma.mu.Unlock()
 	ma.PublishAudio = publish
@@ -472,7 +472,7 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 				NumChannels:       1,
 				SamplesPerChannel: uint32(len(ev.Data) / 2),
 			}
-			if err := ma.PublishAudio(frame); err != nil && ma.session != nil {
+			if err := ma.PublishAudio(context.Background(), frame); err != nil && ma.session != nil {
 				ma.session.EmitError(ErrorEvent{
 					Error:  llm.NewRealtimeError("failed to publish realtime audio", err),
 					Source: ma,
@@ -646,7 +646,7 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 			session := ma.session
 			ma.mu.Unlock()
 			if publish != nil {
-				if err := publish(frame); err != nil {
+				if err := publish(ctx, frame); err != nil {
 					if session != nil {
 						session.EmitError(ErrorEvent{
 							Error:  llm.NewRealtimeError("failed to publish realtime audio", err),

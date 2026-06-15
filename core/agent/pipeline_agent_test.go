@@ -1762,7 +1762,7 @@ func TestPipelineAgentEmitsTTSErrorEventForPublishAudioFailure(t *testing.T) {
 	}}
 	agent := NewPipelineAgent(nil, nil, nil, ttsSource, llm.NewChatContext())
 	agent.session = session
-	agent.PublishAudio = func(*model.AudioFrame) error {
+	agent.PublishAudio = func(context.Context, *model.AudioFrame) error {
 		return cause
 	}
 	speech := NewSpeechHandle(false, DefaultInputDetails())

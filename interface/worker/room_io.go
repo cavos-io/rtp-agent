@@ -1422,7 +1422,7 @@ func (rio *RoomIO) finishPlayback(interrupted bool, synchronizedTranscript strin
 	}
 }
 
-func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
+func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) error {
 	if rio == nil || rio.Options.DisableAudioOutput || rio.isAudioDisabled() {
 		return nil
 	}
@@ -1454,7 +1454,12 @@ func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
 		if err != nil {
 			return err
 		}
-		for _, encodeFrame := range encodeFrames {
+		for i, encodeFrame := range encodeFrames {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
 			encoded, err := encoder.Encode(encodeFrame.Data)
 			if err != nil {
 				rio.recordAudioOutputError(err)
@@ -1470,6 +1475,13 @@ func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
 			}
 			rio.recordAudioOutputFramePublished(frame, encodeFrame, len(encoded), 1)
 			rio.addPlaybackPosition(duration)
+			if i < len(encodeFrames)-1 {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(duration):
+				}
+			}
 		}
 		return nil
 	}

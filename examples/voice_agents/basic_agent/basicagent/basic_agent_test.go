@@ -179,5 +179,5 @@ type fakeExampleSessionAssistant struct{}
 
 func (f *fakeExampleSessionAssistant) Start(context.Context, *agent.AgentSession) error { return nil }
 func (f *fakeExampleSessionAssistant) OnAudioFrame(context.Context, *model.AudioFrame)  {}
-func (f *fakeExampleSessionAssistant) SetPublishAudio(func(frame *model.AudioFrame) error) {
+func (f *fakeExampleSessionAssistant) SetPublishAudio(func(context.Context, *model.AudioFrame) error) {
 }

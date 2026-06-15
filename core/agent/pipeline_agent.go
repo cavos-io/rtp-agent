@@ -42,7 +42,7 @@ type PipelineAgent struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	PublishAudio func(frame *model.AudioFrame) error
+	PublishAudio func(ctx context.Context, frame *model.AudioFrame) error
 }
 
 type pipelineReplyOptions struct {
@@ -87,7 +87,7 @@ func (va *PipelineAgent) Start(ctx context.Context, s *AgentSession) error {
 	return nil
 }
 
-func (va *PipelineAgent) SetPublishAudio(publish func(frame *model.AudioFrame) error) {
+func (va *PipelineAgent) SetPublishAudio(publish func(ctx context.Context, frame *model.AudioFrame) error) {
 	va.mu.Lock()
 	defer va.mu.Unlock()
 	va.PublishAudio = publish
@@ -691,7 +691,7 @@ func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSes
 		default:
 			transcriptSync.PushAudio(frame)
 			if va.PublishAudio != nil {
-				if err := va.PublishAudio(frame); err != nil {
+				if err := va.PublishAudio(ctx, frame); err != nil {
 					transcriptSync.Close()
 					<-transcriptionDone
 					return ttsGen, err
