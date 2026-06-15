@@ -37,6 +37,7 @@ Core goals:
 - Hexagonal architecture (`adapter`, `core`, `interface`, `library`) for clear separation of concerns.
 - Broad provider coverage with 60+ adapter packages (LLM, STT, TTS, avatar, utilities).
 - LiveKit-compatible worker transport and job lifecycle handling.
+- Optional Agora RTC worker transport for joining Agora channels directly as an agent.
 - Docusaurus documentation site for adapter references.
 
 ## Built With
@@ -52,6 +53,7 @@ Core goals:
 
 - Go 1.25+ (as defined in `go.mod`)
 - Access to a LiveKit deployment (URL, API key, API secret)
+- For Agora RTC transport: an `Agora-Golang-Server-SDK` checkout with native SDK assets and Agora project credentials.
 
 ### Installation
 
@@ -93,6 +95,49 @@ Connect mode for local room testing:
 
 ```bash
 go run ./cmd/main.go connect <room_name> [participant_identity]
+```
+
+### Agora RTC Worker Transport
+
+The Agora transport is optional and built behind the `agora_sdk` tag because it depends on Agora native runtime libraries.
+
+Build an Agora-enabled binary:
+
+```bash
+AGORA_GO_SDK_DIR=/path/to/Agora-Golang-Server-SDK \
+  OUT=.tmp/rtp-agent-agora \
+  scripts/build-agora-sdk.sh
+```
+
+Run the worker in an Agora RTC channel:
+
+```bash
+export RTP_AGENT_TRANSPORT=agora
+export AGORA_GO_SDK_DIR=/path/to/Agora-Golang-Server-SDK
+export LD_LIBRARY_PATH="$AGORA_GO_SDK_DIR/agora_sdk:$LD_LIBRARY_PATH"
+export AGORA_APP_ID=<agora-app-id>
+export AGORA_APP_CERTIFICATE=<agora-app-certificate> # or set AGORA_TOKEN
+export AGORA_CHANNEL=<channel-name>
+export AGORA_UID=agent-0
+
+.tmp/rtp-agent-agora start
+```
+
+Validate the join path with the smoke script:
+
+```bash
+AGORA_GO_SDK_DIR=/path/to/Agora-Golang-Server-SDK \
+  AGORA_APP_ID=<agora-app-id> \
+  AGORA_APP_CERTIFICATE=<agora-app-certificate> \
+  AGORA_CHANNEL=<channel-name> \
+  AGORA_UID=agent-0 \
+  scripts/smoke-agora-rtc.sh
+```
+
+The smoke script succeeds only after the worker logs `agora transport connected` for a stable window and prints:
+
+```text
+Agora RTC connected
 ```
 
 ## Roadmap
