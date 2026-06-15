@@ -231,14 +231,17 @@ func TestElevenLabsTTSDecodesReferenceMP3Response(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next returned error: %v", err)
 	}
-	if audio.Frame.SampleRate != 48000 {
-		t.Fatalf("sample rate = %d, want decoded mp3 rate 48000", audio.Frame.SampleRate)
+	if audio.Frame.SampleRate != 22050 {
+		t.Fatalf("sample rate = %d, want configured mp3 rate 22050", audio.Frame.SampleRate)
 	}
-	if audio.Frame.NumChannels != 2 {
-		t.Fatalf("channels = %d, want decoded mp3 stereo", audio.Frame.NumChannels)
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("channels = %d, want reference mono output", audio.Frame.NumChannels)
 	}
 	if len(audio.Frame.Data) == 0 {
 		t.Fatal("decoded frame is empty")
+	}
+	if got, want := len(audio.Frame.Data), int(audio.Frame.SamplesPerChannel*audio.Frame.NumChannels*2); got != want {
+		t.Fatalf("frame byte length = %d, want %d from samples/channels", got, want)
 	}
 	if bytes.Equal(audio.Frame.Data, mp3Data[:len(audio.Frame.Data)]) {
 		t.Fatal("frame data still contains compressed mp3 bytes")
@@ -348,14 +351,17 @@ func TestElevenLabsSynthesizedAudioDecodesReferenceMP3WebsocketAudio(t *testing.
 	if err != nil {
 		t.Fatalf("elevenLabsSynthesizedAudio() error = %v", err)
 	}
-	if audio.Frame.SampleRate != 48000 {
-		t.Fatalf("sample rate = %d, want decoded mp3 rate 48000", audio.Frame.SampleRate)
+	if audio.Frame.SampleRate != 22050 {
+		t.Fatalf("sample rate = %d, want configured mp3 rate 22050", audio.Frame.SampleRate)
 	}
-	if audio.Frame.NumChannels != 2 {
-		t.Fatalf("channels = %d, want decoded mp3 stereo", audio.Frame.NumChannels)
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("channels = %d, want reference mono output", audio.Frame.NumChannels)
 	}
 	if len(audio.Frame.Data) == 0 {
 		t.Fatal("decoded frame is empty")
+	}
+	if got, want := len(audio.Frame.Data), int(audio.Frame.SamplesPerChannel*audio.Frame.NumChannels*2); got != want {
+		t.Fatalf("frame byte length = %d, want %d from samples/channels", got, want)
 	}
 	if bytes.Equal(audio.Frame.Data, mp3Data[:len(audio.Frame.Data)]) {
 		t.Fatal("frame data still contains compressed mp3 bytes")

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -217,6 +219,10 @@ func (s *elevenLabsChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error
 		if strings.Contains(err.Error(), "decoder closed") {
 			return nil, io.EOF
 		}
+		return nil, err
+	}
+	frame, err = normalizeElevenLabsMP3Frame(frame, s.sampleRate)
+	if err != nil {
 		return nil, err
 	}
 	return &tts.SynthesizedAudio{Frame: frame}, nil
@@ -425,7 +431,7 @@ func elevenLabsSynthesizedAudio(resp elWSResponse, sampleRate int, encoding stri
 	}
 
 	if strings.HasPrefix(encoding, "mp3") {
-		frame, err := decodeElevenLabsMP3Audio(data)
+		frame, err := decodeElevenLabsMP3Audio(data, sampleRate)
 		if err != nil {
 			return nil, err
 		}
@@ -448,14 +454,54 @@ func elevenLabsSynthesizedAudio(resp elWSResponse, sampleRate int, encoding stri
 	}, nil
 }
 
-func decodeElevenLabsMP3Audio(data []byte) (*model.AudioFrame, error) {
+func decodeElevenLabsMP3Audio(data []byte, sampleRate int) (*model.AudioFrame, error) {
 	decoder := codecs.NewMP3AudioStreamDecoder()
 	defer decoder.Close()
 	go func() {
 		decoder.Push(data)
 		decoder.EndInput()
 	}()
-	return decoder.Next()
+	frame, err := decoder.Next()
+	if err != nil {
+		return nil, err
+	}
+	return normalizeElevenLabsMP3Frame(frame, sampleRate)
+}
+
+func normalizeElevenLabsMP3Frame(frame *model.AudioFrame, sampleRate int) (*model.AudioFrame, error) {
+	frame = elevenLabsDownmixToMono(frame)
+	if sampleRate <= 0 {
+		return frame, nil
+	}
+	return coreaudio.ResampleAudioFrame(frame, uint32(sampleRate))
+}
+
+func elevenLabsDownmixToMono(frame *model.AudioFrame) *model.AudioFrame {
+	if frame == nil || frame.NumChannels <= 1 {
+		return frame
+	}
+	channels := int(frame.NumChannels)
+	samples := int(frame.SamplesPerChannel)
+	if samples == 0 {
+		samples = len(frame.Data) / (channels * 2)
+	}
+	out := make([]byte, samples*2)
+	for sample := 0; sample < samples; sample++ {
+		sum := int32(0)
+		for channel := 0; channel < channels; channel++ {
+			offset := (sample*channels + channel) * 2
+			if offset+2 > len(frame.Data) {
+				break
+			}
+			sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset : offset+2])))
+		}
+		binary.LittleEndian.PutUint16(out[sample*2:sample*2+2], uint16(int16(sum/int32(channels))))
+	}
+	mono := *frame
+	mono.Data = out
+	mono.NumChannels = 1
+	mono.SamplesPerChannel = uint32(samples)
+	return &mono
 }
 
 func (s *elevenLabsStream) pingLoop() {
