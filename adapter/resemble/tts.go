@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
@@ -321,7 +322,7 @@ func (s *resembleTTSSynthesizeStream) readLoop() {
 		if msgType != websocket.TextMessage {
 			continue
 		}
-		audio, done, requestID, err := resembleTTSAudioFromWebsocketMessage(payload, s.provider.sampleRate)
+		audio, done, requestID, err := resembleTTSAudioFromWebsocketMessage(payload)
 		if err != nil {
 			s.errCh <- err
 			return
@@ -341,7 +342,7 @@ func (s *resembleTTSSynthesizeStream) shouldStopAfterAudioEnd(requestID int) boo
 	return s.flushed && requestID >= s.lastID
 }
 
-func resembleTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio, bool, int, error) {
+func resembleTTSAudioFromWebsocketMessage(payload []byte) (*tts.SynthesizedAudio, bool, int, error) {
 	var message struct {
 		Type         string `json:"type"`
 		AudioContent string `json:"audio_content"`
@@ -363,7 +364,11 @@ func resembleTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.
 		if len(audio) == 0 {
 			return nil, false, message.RequestID, nil
 		}
-		return resembleTTSAudioFrame(audio, sampleRate), false, message.RequestID, nil
+		decoded, err := resembleTTSMP3AudioFrame(audio)
+		if err != nil {
+			return nil, false, message.RequestID, err
+		}
+		return decoded, false, message.RequestID, nil
 	case "audio_end":
 		return nil, true, message.RequestID, nil
 	case "error":
@@ -376,13 +381,16 @@ func resembleTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.
 	}
 }
 
-func resembleTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {
-	return &tts.SynthesizedAudio{
-		Frame: &model.AudioFrame{
-			Data:              bytes.Clone(audio),
-			SampleRate:        uint32(sampleRate),
-			NumChannels:       1,
-			SamplesPerChannel: uint32(len(audio) / 2),
-		},
+func resembleTTSMP3AudioFrame(audio []byte) (*tts.SynthesizedAudio, error) {
+	decoder := codecs.NewMP3AudioStreamDecoder()
+	defer decoder.Close()
+	go func() {
+		decoder.Push(audio)
+		decoder.EndInput()
+	}()
+	frame, err := decoder.Next()
+	if err != nil {
+		return nil, err
 	}
+	return &tts.SynthesizedAudio{Frame: frame}, nil
 }
