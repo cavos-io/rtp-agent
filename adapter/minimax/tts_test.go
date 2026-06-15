@@ -3,9 +3,12 @@ package minimax
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -342,6 +345,52 @@ func TestMinimaxTTSChunkedStreamDecodesReferenceSSEAudio(t *testing.T) {
 	}
 }
 
+func TestMinimaxTTSChunkedStreamDecodesReferenceMP3SSEAudio(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+
+	line := `data: {"data":{"audio":"` + hex.EncodeToString(mp3Data) + `"},"base_resp":{"status_code":0}}` + "\n\n"
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: minimaxRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(line)),
+			Header:     http.Header{"Trace-Id": []string{"trace-mp3"}},
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewMinimaxTTS("test-key", "voice-1", WithMinimaxTTSBaseURL("https://minimax.example"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if audio.RequestID != "trace-mp3" {
+		t.Fatalf("request id = %q, want trace-mp3", audio.RequestID)
+	}
+	if audio.Frame.SampleRate != 48000 {
+		t.Fatalf("sample rate = %d, want decoded mp3 rate 48000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 2 {
+		t.Fatalf("channels = %d, want decoded mp3 stereo", audio.Frame.NumChannels)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded frame is empty")
+	}
+	if bytes.Equal(audio.Frame.Data, mp3Data[:len(audio.Frame.Data)]) {
+		t.Fatal("frame data still contains compressed mp3 bytes")
+	}
+}
+
 func TestMinimaxTTSWebsocketURLAndHeadersMatchReference(t *testing.T) {
 	provider := NewMinimaxTTS("test-key", "", WithMinimaxTTSBaseURL("https://minimax.example"))
 
@@ -465,4 +514,10 @@ func assertMinimaxPayload(t *testing.T, payload map[string]any, key string, want
 	if got := payload[key]; got != want {
 		t.Fatalf("%s = %#v, want %q", key, got, want)
 	}
+}
+
+type minimaxRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f minimaxRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }

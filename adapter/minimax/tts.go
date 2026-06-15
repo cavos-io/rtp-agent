@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
@@ -214,8 +215,9 @@ func (t *MinimaxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 	}
 
 	return &minimaxTTSChunkedStream{
-		resp:       resp,
-		sampleRate: t.sampleRate,
+		resp:        resp,
+		audioFormat: t.audioFormat,
+		sampleRate:  t.sampleRate,
 	}, nil
 }
 
@@ -344,10 +346,13 @@ func validateMinimaxTTSOptions(t *MinimaxTTS) error {
 }
 
 type minimaxTTSChunkedStream struct {
-	resp       *http.Response
-	sampleRate int
-	scanner    *bufio.Scanner
-	requestID  string
+	resp          *http.Response
+	audioFormat   string
+	sampleRate    int
+	scanner       *bufio.Scanner
+	requestID     string
+	decoder       codecs.AudioStreamDecoder
+	decodeStarted bool
 }
 
 func (s *minimaxTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -359,6 +364,10 @@ func (s *minimaxTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	if s.scanner == nil {
 		s.scanner = bufio.NewScanner(s.resp.Body)
+		s.scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	}
+	if s.audioFormat == "mp3" {
+		return s.nextDecodedMP3()
 	}
 	for s.scanner.Scan() {
 		line := strings.TrimSpace(s.scanner.Text())
@@ -388,7 +397,59 @@ func (s *minimaxTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	return nil, io.EOF
 }
 
+func (s *minimaxTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
+	if !s.decodeStarted {
+		s.decodeStarted = true
+		audio, err := s.collectSSEAudio()
+		if err != nil {
+			return nil, err
+		}
+		if len(audio) == 0 {
+			return nil, io.EOF
+		}
+		s.decoder = codecs.NewMP3AudioStreamDecoder()
+		go func() {
+			s.decoder.Push(audio)
+			s.decoder.EndInput()
+		}()
+	}
+
+	frame, err := s.decoder.Next()
+	if err != nil {
+		if strings.Contains(err.Error(), "decoder closed") {
+			return nil, io.EOF
+		}
+		return nil, err
+	}
+	return &tts.SynthesizedAudio{RequestID: s.requestID, Frame: frame}, nil
+}
+
+func (s *minimaxTTSChunkedStream) collectSSEAudio() ([]byte, error) {
+	var audio bytes.Buffer
+	for s.scanner.Scan() {
+		line := strings.TrimSpace(s.scanner.Text())
+		if line == "" || !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		chunk, err := minimaxAudioFromSSELine(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		if err != nil {
+			return nil, err
+		}
+		if len(chunk) == 0 {
+			continue
+		}
+		audio.Write(chunk)
+	}
+	if err := s.scanner.Err(); err != nil {
+		return nil, err
+	}
+	return audio.Bytes(), nil
+}
+
 func (s *minimaxTTSChunkedStream) Close() error {
+	if s.decoder != nil {
+		_ = s.decoder.Close()
+	}
 	return s.resp.Body.Close()
 }
 
