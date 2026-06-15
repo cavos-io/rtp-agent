@@ -3165,6 +3165,8 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		if cfg.TTSEncoding != "" {
 			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEncoding(cfg.TTSEncoding))
+		} else if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEncoding(fmt.Sprintf("pcm_%d", *cfg.TTSSampleRate)))
 		}
 		return elevenlabs.NewElevenLabsTTS(cfg.ElevenLabsAPIKey, cfg.TTSVoice, cfg.TTSModel, ttsOpts...)
 	case providerFishAudio:
@@ -4886,6 +4888,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.TTSEncoding != "" {
 			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEncoding(cfg.TTSEncoding))
+		} else if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEncoding(fmt.Sprintf("pcm_%d", *cfg.TTSSampleRate)))
 		}
 		provider, err := elevenlabs.NewElevenLabsTTS(cfg.ElevenLabsAPIKey, cfg.TTSVoice, cfg.TTSModel, ttsOpts...)
 		if err != nil {

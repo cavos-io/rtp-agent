@@ -1251,6 +1251,47 @@ func TestDefaultConfigFromEnvSelectsElevenLabsSpeechProviders(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSConfigSampleRateUsesPCMOutputFormat(t *testing.T) {
+	var gotOutputFormat string
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appMCPHTTPRoundTripper(func(r *http.Request) (*http.Response, error) {
+		gotOutputFormat = r.URL.Query().Get("output_format")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(strings.NewReader("\x00\x00\x01\x00")),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	sampleRate := 8000
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		ElevenLabsAPIKey: "test-elevenlabs-key",
+		TTSProvider:      providerElevenLabs,
+		TTSBaseURL:       "https://eleven.example/v1",
+		TTSSampleRate:    &sampleRate,
+	}, providerElevenLabs)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+	if got := provider.SampleRate(); got != sampleRate {
+		t.Fatalf("sample rate = %d, want %d", got, sampleRate)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("stream.Next() error = %v", err)
+	}
+	if gotOutputFormat != "pcm_8000" {
+		t.Fatalf("output_format = %q, want pcm_8000", gotOutputFormat)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsCartesiaSpeechProviders(t *testing.T) {
 	t.Setenv("CARTESIA_API_KEY", "test-cartesia-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "cartesia")
