@@ -128,6 +128,33 @@ func TestSDKClientImplementationUsesCurrentConnectSignature(t *testing.T) {
 	}
 }
 
+func TestSDKClientImplementationResolvesJoinOptions(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	joinIndex := strings.Index(text, "func (c *sdkChannelClient) Join")
+	if joinIndex < 0 {
+		t.Fatal("sdk.go missing sdkChannelClient.Join")
+	}
+	joinBody := text[joinIndex:]
+	if nextFunc := strings.Index(joinBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		joinBody = joinBody[:len("func ")+nextFunc]
+	}
+	resolveIndex := strings.Index(joinBody, "ResolveJoinOptions(opts)")
+	connectIndex := strings.Index(joinBody, "Connect(opts.Token, opts.Channel, uid, \"\")")
+	if resolveIndex < 0 {
+		t.Fatal("SDK Join must resolve Agora join options before native Connect")
+	}
+	if connectIndex < 0 {
+		t.Fatal("SDK Join missing native Connect call")
+	}
+	if resolveIndex > connectIndex {
+		t.Fatal("SDK Join must resolve Agora join options before native Connect")
+	}
+}
+
 func TestSDKClientImplementationUsesVoidReleaseSignature(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {

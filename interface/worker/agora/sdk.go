@@ -163,9 +163,11 @@ func sdkAudioFrameToModel(frame *agoraservice.AudioFrame) *model.AudioFrame {
 
 func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, handler EventHandler, audioHandler AudioHandler) error {
 	ctx = normalizeContext(ctx)
-	if err := opts.Validate(); err != nil {
+	resolved, err := ResolveJoinOptions(opts)
+	if err != nil {
 		return err
 	}
+	opts = resolved
 	uid := opts.UID
 	if uid == "" {
 		uid = "0"
