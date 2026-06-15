@@ -326,12 +326,39 @@ func TestElevenLabsSynthesizedAudioUsesConfiguredSampleRate(t *testing.T) {
 		Audio: base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
 	}
 
-	audio, err := elevenLabsSynthesizedAudio(resp, 22050)
+	audio, err := elevenLabsSynthesizedAudio(resp, 22050, "pcm_22050")
 	if err != nil {
 		t.Fatalf("elevenLabsSynthesizedAudio() error = %v", err)
 	}
 	if audio.Frame.SampleRate != 22050 {
 		t.Fatalf("sample rate = %d, want 22050", audio.Frame.SampleRate)
+	}
+}
+
+func TestElevenLabsSynthesizedAudioDecodesReferenceMP3WebsocketAudio(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+	resp := elWSResponse{
+		Audio: base64.StdEncoding.EncodeToString(mp3Data),
+	}
+
+	audio, err := elevenLabsSynthesizedAudio(resp, 22050, "mp3_22050_32")
+	if err != nil {
+		t.Fatalf("elevenLabsSynthesizedAudio() error = %v", err)
+	}
+	if audio.Frame.SampleRate != 48000 {
+		t.Fatalf("sample rate = %d, want decoded mp3 rate 48000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 2 {
+		t.Fatalf("channels = %d, want decoded mp3 stereo", audio.Frame.NumChannels)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded frame is empty")
+	}
+	if bytes.Equal(audio.Frame.Data, mp3Data[:len(audio.Frame.Data)]) {
+		t.Fatal("frame data still contains compressed mp3 bytes")
 	}
 }
 

@@ -266,6 +266,7 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 		errCh:      make(chan error, 1),
 		ctx:        ctx,
 		cancel:     cancel,
+		encoding:   t.encoding,
 		sampleRate: t.sampleRate,
 	}
 
@@ -321,6 +322,7 @@ type elevenLabsStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
+	encoding   string
 	sampleRate int
 }
 
@@ -378,7 +380,7 @@ func (s *elevenLabsStream) readLoop() {
 		}
 
 		if resp.Audio != "" {
-			audio, err := elevenLabsSynthesizedAudio(resp, s.sampleRate)
+			audio, err := elevenLabsSynthesizedAudio(resp, s.sampleRate, s.encoding)
 			if err != nil {
 				logger.Logger.Errorw("Failed to decode base64 audio", err)
 				continue
@@ -406,7 +408,7 @@ func (s *elevenLabsStream) readLoop() {
 	}
 }
 
-func elevenLabsSynthesizedAudio(resp elWSResponse, sampleRate int) (*tts.SynthesizedAudio, error) {
+func elevenLabsSynthesizedAudio(resp elWSResponse, sampleRate int, encoding string) (*tts.SynthesizedAudio, error) {
 	data, err := base64.StdEncoding.DecodeString(resp.Audio)
 	if err != nil {
 		return nil, err
@@ -421,6 +423,19 @@ func elevenLabsSynthesizedAudio(resp elWSResponse, sampleRate int) (*tts.Synthes
 			deltaText.WriteString(char)
 		}
 	}
+
+	if strings.HasPrefix(encoding, "mp3") {
+		frame, err := decodeElevenLabsMP3Audio(data)
+		if err != nil {
+			return nil, err
+		}
+		return &tts.SynthesizedAudio{
+			Frame:     frame,
+			IsFinal:   resp.IsFinal,
+			DeltaText: deltaText.String(),
+		}, nil
+	}
+
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
 			Data:              data,
@@ -431,6 +446,16 @@ func elevenLabsSynthesizedAudio(resp elWSResponse, sampleRate int) (*tts.Synthes
 		IsFinal:   resp.IsFinal,
 		DeltaText: deltaText.String(),
 	}, nil
+}
+
+func decodeElevenLabsMP3Audio(data []byte) (*model.AudioFrame, error) {
+	decoder := codecs.NewMP3AudioStreamDecoder()
+	defer decoder.Close()
+	go func() {
+		decoder.Push(data)
+		decoder.EndInput()
+	}()
+	return decoder.Next()
 }
 
 func (s *elevenLabsStream) pingLoop() {
