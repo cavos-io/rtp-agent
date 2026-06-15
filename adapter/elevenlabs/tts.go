@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/logger"
@@ -128,6 +129,7 @@ func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.Chunke
 
 	return &elevenLabsChunkedStream{
 		resp:       resp,
+		encoding:   t.encoding,
 		sampleRate: t.sampleRate,
 	}, nil
 }
@@ -150,10 +152,17 @@ func buildElevenLabsSynthesizeRequest(t *ElevenLabsTTS, text string) (string, []
 
 type elevenLabsChunkedStream struct {
 	resp       *http.Response
+	encoding   string
 	sampleRate int
+	decoder    codecs.AudioStreamDecoder
+	started    bool
 }
 
 func (s *elevenLabsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if strings.HasPrefix(s.encoding, "mp3") {
+		return s.nextDecodedMP3()
+	}
+
 	// Read PCM audio in chunks from the HTTP response
 	buf := make([]byte, 8192)
 	n, err := s.resp.Body.Read(buf)
@@ -186,7 +195,37 @@ func (s *elevenLabsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
+func (s *elevenLabsChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
+	if !s.started {
+		s.started = true
+		s.decoder = codecs.NewMP3AudioStreamDecoder()
+		data, err := io.ReadAll(s.resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		if len(data) == 0 {
+			return nil, io.EOF
+		}
+		go func() {
+			s.decoder.Push(data)
+			s.decoder.EndInput()
+		}()
+	}
+
+	frame, err := s.decoder.Next()
+	if err != nil {
+		if strings.Contains(err.Error(), "decoder closed") {
+			return nil, io.EOF
+		}
+		return nil, err
+	}
+	return &tts.SynthesizedAudio{Frame: frame}, nil
+}
+
 func (s *elevenLabsChunkedStream) Close() error {
+	if s.decoder != nil {
+		_ = s.decoder.Close()
+	}
 	return s.resp.Body.Close()
 }
 
