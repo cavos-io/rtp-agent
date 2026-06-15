@@ -3,6 +3,7 @@ package fishaudio
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net/http"
@@ -173,6 +174,7 @@ func (t *FishAudioTTS) Synthesize(ctx context.Context, text string) (tts.Chunked
 	return &fishaudioTTSChunkedStream{
 		resp:       resp,
 		sampleRate: t.sampleRate,
+		format:     t.outputFormat,
 	}, nil
 }
 
@@ -274,6 +276,7 @@ func (t *FishAudioTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error)
 		ctx:        streamCtx,
 		cancel:     cancel,
 		sampleRate: t.sampleRate,
+		format:     t.outputFormat,
 		events:     make(chan *tts.SynthesizedAudio, 100),
 		errCh:      make(chan error, 1),
 	}
@@ -284,9 +287,21 @@ func (t *FishAudioTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error)
 type fishaudioTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
+	format     string
 }
 
 func (s *fishaudioTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.format == "wav" {
+		data, err := io.ReadAll(s.resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		if len(data) == 0 {
+			return nil, io.EOF
+		}
+		return fishAudioDecodeTTSFrame(data, s.sampleRate, s.format)
+	}
+
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
 	if err != nil {
@@ -296,14 +311,7 @@ func (s *fishaudioTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		return nil, err
 	}
 
-	return &tts.SynthesizedAudio{
-		Frame: &model.AudioFrame{
-			Data:              buf[:n],
-			SampleRate:        uint32(s.sampleRate),
-			NumChannels:       1,
-			SamplesPerChannel: uint32(n / 2),
-		},
-	}, nil
+	return fishAudioDecodeTTSFrame(buf[:n], s.sampleRate, s.format)
 }
 
 func (s *fishaudioTTSChunkedStream) Close() error {
@@ -315,6 +323,7 @@ type fishAudioTTSSynthesizeStream struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	sampleRate int
+	format     string
 	events     chan *tts.SynthesizedAudio
 	errCh      chan error
 	mu         sync.Mutex
@@ -387,7 +396,7 @@ func (s *fishAudioTTSSynthesizeStream) readLoop() {
 		if msgType != websocket.BinaryMessage {
 			continue
 		}
-		audio, done, err := fishAudioTTSAudioFromStreamMessage(payload, s.sampleRate)
+		audio, done, err := fishAudioTTSAudioFromStreamMessage(payload, s.sampleRate, s.format)
 		if err != nil {
 			s.errCh <- err
 			return
@@ -401,7 +410,7 @@ func (s *fishAudioTTSSynthesizeStream) readLoop() {
 	}
 }
 
-func fishAudioTTSAudioFromStreamMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio, bool, error) {
+func fishAudioTTSAudioFromStreamMessage(payload []byte, sampleRate int, format string) (*tts.SynthesizedAudio, bool, error) {
 	var message map[string]interface{}
 	if err := msgpack.Unmarshal(payload, &message); err != nil {
 		return nil, false, err
@@ -413,7 +422,11 @@ func fishAudioTTSAudioFromStreamMessage(payload []byte, sampleRate int) (*tts.Sy
 		if !ok || len(audio) == 0 {
 			return nil, false, nil
 		}
-		return fishAudioTTSAudioFrame(audio, sampleRate), false, nil
+		decoded, err := fishAudioDecodeTTSFrame(audio, sampleRate, format)
+		if err != nil {
+			return nil, false, err
+		}
+		return decoded, false, nil
 	case "finish":
 		if reason, _ := message["reason"].(string); reason == "error" {
 			return nil, false, fmt.Errorf("fishaudio tts stream finished with error")
@@ -444,4 +457,65 @@ func fishAudioTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio 
 			SamplesPerChannel: uint32(len(audio) / 2),
 		},
 	}
+}
+
+func fishAudioDecodeTTSFrame(audio []byte, sampleRate int, format string) (*tts.SynthesizedAudio, error) {
+	if format == "wav" {
+		frame, err := decodeFishAudioWAVPCM16(audio)
+		if err != nil {
+			return nil, err
+		}
+		return &tts.SynthesizedAudio{Frame: frame}, nil
+	}
+	return fishAudioTTSAudioFrame(audio, sampleRate), nil
+}
+
+func decodeFishAudioWAVPCM16(data []byte) (*model.AudioFrame, error) {
+	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
+		return nil, fmt.Errorf("invalid fishaudio wav data")
+	}
+	offset := 12
+	var sampleRate uint32
+	var channels uint16
+	var bitsPerSample uint16
+	var pcm []byte
+	for offset+8 <= len(data) {
+		chunkID := string(data[offset : offset+4])
+		chunkSize := int(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
+		offset += 8
+		if chunkSize < 0 || offset+chunkSize > len(data) {
+			return nil, fmt.Errorf("invalid fishaudio wav chunk size")
+		}
+		switch chunkID {
+		case "fmt ":
+			if chunkSize < 16 {
+				return nil, fmt.Errorf("invalid fishaudio wav fmt chunk")
+			}
+			audioFormat := binary.LittleEndian.Uint16(data[offset : offset+2])
+			channels = binary.LittleEndian.Uint16(data[offset+2 : offset+4])
+			sampleRate = binary.LittleEndian.Uint32(data[offset+4 : offset+8])
+			bitsPerSample = binary.LittleEndian.Uint16(data[offset+14 : offset+16])
+			if audioFormat != 1 || bitsPerSample != 16 {
+				return nil, fmt.Errorf("unsupported fishaudio wav format: audio_format=%d bits_per_sample=%d", audioFormat, bitsPerSample)
+			}
+		case "data":
+			pcm = bytes.Clone(data[offset : offset+chunkSize])
+		}
+		offset += chunkSize
+		if chunkSize%2 == 1 {
+			offset++
+		}
+	}
+	if sampleRate == 0 || channels == 0 || bitsPerSample == 0 {
+		return nil, fmt.Errorf("missing fishaudio wav format metadata")
+	}
+	if pcm == nil {
+		return nil, fmt.Errorf("missing fishaudio wav data chunk")
+	}
+	return &model.AudioFrame{
+		Data:              pcm,
+		SampleRate:        sampleRate,
+		NumChannels:       uint32(channels),
+		SamplesPerChannel: uint32(len(pcm) / int(channels) / 2),
+	}, nil
 }

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
@@ -118,8 +119,9 @@ func (t *SpitchTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	}
 
 	return &spitchTTSChunkedStream{
-		resp:       resp,
-		sampleRate: t.sampleRate,
+		resp:         resp,
+		outputFormat: t.outputFormat,
+		sampleRate:   t.sampleRate,
 	}, nil
 }
 
@@ -149,9 +151,11 @@ func (t *SpitchTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type spitchTTSChunkedStream struct {
-	resp       *http.Response
-	sampleRate int
-	emitted    bool
+	resp         *http.Response
+	outputFormat string
+	sampleRate   int
+	emitted      bool
+	decoder      codecs.AudioStreamDecoder
 }
 
 func (s *spitchTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -167,6 +171,9 @@ func (s *spitchTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if len(data) == 0 {
 		return nil, io.EOF
 	}
+	if s.outputFormat == "mp3" {
+		return s.decodeMP3(data)
+	}
 	frame, err := decodeSpitchWAVPCM16(data)
 	if err != nil {
 		return nil, err
@@ -177,7 +184,23 @@ func (s *spitchTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
+func (s *spitchTTSChunkedStream) decodeMP3(data []byte) (*tts.SynthesizedAudio, error) {
+	s.decoder = codecs.NewMP3AudioStreamDecoder()
+	go func() {
+		s.decoder.Push(data)
+		s.decoder.EndInput()
+	}()
+	frame, err := s.decoder.Next()
+	if err != nil {
+		return nil, err
+	}
+	return &tts.SynthesizedAudio{Frame: frame}, nil
+}
+
 func (s *spitchTTSChunkedStream) Close() error {
+	if s.decoder != nil {
+		_ = s.decoder.Close()
+	}
 	return s.resp.Body.Close()
 }
 

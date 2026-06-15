@@ -3,9 +3,12 @@ package resemble
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -212,7 +215,12 @@ func TestResembleTTSWebsocketMessageMatchesReference(t *testing.T) {
 }
 
 func TestResembleTTSAudioFromWebsocketMessage(t *testing.T) {
-	audio, done, requestID, err := resembleTTSAudioFromWebsocketMessage([]byte(`{"type":"audio","request_id":7,"audio_content":"AQIDBA=="}`), 24000)
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+	audioPayload := `{"type":"audio","request_id":7,"audio_content":"` + base64.StdEncoding.EncodeToString(mp3Data) + `"}`
+	audio, done, requestID, err := resembleTTSAudioFromWebsocketMessage([]byte(audioPayload))
 	if err != nil {
 		t.Fatalf("audio from websocket message: %v", err)
 	}
@@ -222,14 +230,21 @@ func TestResembleTTSAudioFromWebsocketMessage(t *testing.T) {
 	if requestID != 7 {
 		t.Fatalf("request id = %d, want 7", requestID)
 	}
-	if audio == nil || string(audio.Frame.Data) != string([]byte{1, 2, 3, 4}) {
+	if audio == nil || len(audio.Frame.Data) == 0 {
 		t.Fatalf("audio = %+v, want decoded audio frame", audio)
 	}
-	if audio.Frame.SampleRate != 24000 || audio.Frame.NumChannels != 1 {
-		t.Fatalf("frame = %+v, want 24000 Hz mono", audio.Frame)
+	if audio.Frame.SampleRate != 48000 || audio.Frame.NumChannels != 2 {
+		t.Fatalf("frame = %+v, want decoded 48000 Hz stereo mp3", audio.Frame)
+	}
+	prefixLen := len(audio.Frame.Data)
+	if len(mp3Data) < prefixLen {
+		prefixLen = len(mp3Data)
+	}
+	if bytes.Equal(audio.Frame.Data[:prefixLen], mp3Data[:prefixLen]) {
+		t.Fatal("frame data still contains compressed mp3 bytes")
 	}
 
-	finished, done, requestID, err := resembleTTSAudioFromWebsocketMessage([]byte(`{"type":"audio_end","request_id":7}`), 24000)
+	finished, done, requestID, err := resembleTTSAudioFromWebsocketMessage([]byte(`{"type":"audio_end","request_id":7}`))
 	if err != nil {
 		t.Fatalf("audio_end message: %v", err)
 	}
@@ -237,7 +252,7 @@ func TestResembleTTSAudioFromWebsocketMessage(t *testing.T) {
 		t.Fatalf("finished=%+v done=%v requestID=%d, want done for request 7", finished, done, requestID)
 	}
 
-	if _, _, _, err := resembleTTSAudioFromWebsocketMessage([]byte(`{"type":"error","message":"bad text"}`), 24000); err == nil {
+	if _, _, _, err := resembleTTSAudioFromWebsocketMessage([]byte(`{"type":"error","message":"bad text"}`)); err == nil {
 		t.Fatal("error message returned nil error, want stream error")
 	}
 }

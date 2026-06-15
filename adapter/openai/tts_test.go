@@ -1,11 +1,14 @@
 package openai
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -436,7 +439,10 @@ func TestOpenAITTSSynthesizeReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
 }
 
 func TestOpenAITTSDefaultModelUsesSSEStreamFormat(t *testing.T) {
-	wantAudio := []byte{7, 8, 9}
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -445,7 +451,7 @@ func TestOpenAITTSDefaultModelUsesSSEStreamFormat(t *testing.T) {
 		if !strings.Contains(string(body), `"stream_format":"sse"`) {
 			t.Fatalf("request body %s missing reference SSE stream_format", body)
 		}
-		sse := `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(wantAudio) + `"}` + "\n\n" +
+		sse := `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(mp3Data) + `"}` + "\n\n" +
 			`data: {"type":"speech.audio.done"}` + "\n\n"
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -470,8 +476,21 @@ func TestOpenAITTSDefaultModelUsesSSEStreamFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next error = %v", err)
 	}
-	if string(audio.Frame.Data) != string(wantAudio) {
-		t.Fatalf("audio bytes = %v, want decoded SSE bytes", audio.Frame.Data)
+	if audio.Frame.SampleRate != 48000 {
+		t.Fatalf("sample rate = %d, want decoded mp3 rate 48000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 2 {
+		t.Fatalf("channels = %d, want decoded mp3 stereo", audio.Frame.NumChannels)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded frame is empty")
+	}
+	prefixLen := len(audio.Frame.Data)
+	if len(mp3Data) < prefixLen {
+		prefixLen = len(mp3Data)
+	}
+	if bytes.Equal(audio.Frame.Data[:prefixLen], mp3Data[:prefixLen]) {
+		t.Fatal("frame data still contains compressed mp3 bytes")
 	}
 }
 
@@ -496,6 +515,10 @@ func TestOpenAITTSSSEStreamHandlesLargeAudioDelta(t *testing.T) {
 }
 
 func TestOpenAITTSAudioModelsUseAudioStreamFormat(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -508,7 +531,7 @@ func TestOpenAITTSAudioModelsUseAudioStreamFormat(t *testing.T) {
 			StatusCode: http.StatusOK,
 			Status:     "200 OK",
 			Header:     http.Header{"Content-Type": []string{"audio/mp3"}},
-			Body:       io.NopCloser(strings.NewReader(string([]byte{1, 2, 3, 4}))),
+			Body:       io.NopCloser(bytes.NewReader(mp3Data)),
 			Request:    r,
 		}, nil
 	})
@@ -527,8 +550,17 @@ func TestOpenAITTSAudioModelsUseAudioStreamFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next error = %v", err)
 	}
-	if string(audio.Frame.Data) != string([]byte{1, 2, 3, 4}) {
-		t.Fatalf("audio bytes = %v, want raw audio bytes", audio.Frame.Data)
+	if audio.Frame.SampleRate != 48000 {
+		t.Fatalf("sample rate = %d, want decoded mp3 rate 48000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 2 {
+		t.Fatalf("channels = %d, want decoded mp3 stereo", audio.Frame.NumChannels)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded frame is empty")
+	}
+	if bytes.Equal(audio.Frame.Data, mp3Data[:len(audio.Frame.Data)]) {
+		t.Fatal("frame data still contains compressed mp3 bytes")
 	}
 }
 

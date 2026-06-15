@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -171,7 +172,7 @@ func TestMistralAITTSStreamDecodesAudioDeltaDoneAndPCM(t *testing.T) {
 func TestMistralAITTSStreamDecodesJSONAudioResponse(t *testing.T) {
 	stream := &mistralAITTSChunkedStream{
 		reader:         strings.NewReader(`{"audio_data":"` + base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}) + `"}`),
-		responseFormat: "mp3",
+		responseFormat: "flac",
 	}
 
 	audio, err := stream.Next()
@@ -181,6 +182,34 @@ func TestMistralAITTSStreamDecodesJSONAudioResponse(t *testing.T) {
 	assertMistralTTSAudio(t, audio, []byte{0x01, 0x02})
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("next after json chunk error = %v, want EOF", err)
+	}
+}
+
+func TestMistralAITTSStreamDecodesReferenceMP3Response(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+	stream := &mistralAITTSChunkedStream{
+		reader:         strings.NewReader(`{"audio_data":"` + base64.StdEncoding.EncodeToString(mp3Data) + `"}`),
+		responseFormat: "mp3",
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("next audio: %v", err)
+	}
+	if audio.Frame.SampleRate != 48000 {
+		t.Fatalf("sample rate = %d, want decoded mp3 rate 48000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 2 {
+		t.Fatalf("channels = %d, want decoded mp3 stereo", audio.Frame.NumChannels)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded frame is empty")
+	}
+	if string(audio.Frame.Data) == string(mp3Data[:len(audio.Frame.Data)]) {
+		t.Fatal("frame data still contains compressed mp3 bytes")
 	}
 }
 

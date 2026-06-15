@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
@@ -188,8 +189,9 @@ func (t *HumeTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 	}
 
 	return &humeTTSChunkedStream{
-		resp:       resp,
-		sampleRate: t.sampleRate,
+		resp:        resp,
+		audioFormat: t.audioFormat,
+		sampleRate:  t.sampleRate,
 	}, nil
 }
 
@@ -299,14 +301,21 @@ func (t *HumeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type humeTTSChunkedStream struct {
-	resp       *http.Response
-	sampleRate int
-	scanner    *bufio.Scanner
+	resp          *http.Response
+	audioFormat   string
+	sampleRate    int
+	scanner       *bufio.Scanner
+	decoder       codecs.AudioStreamDecoder
+	decodeStarted bool
 }
 
 func (s *humeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.scanner == nil {
 		s.scanner = bufio.NewScanner(s.resp.Body)
+		s.scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	}
+	if s.audioFormat == "mp3" {
+		return s.nextDecodedMP3()
 	}
 	for s.scanner.Scan() {
 		line := strings.TrimSpace(s.scanner.Text())
@@ -335,7 +344,59 @@ func (s *humeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	return nil, io.EOF
 }
 
+func (s *humeTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
+	if !s.decodeStarted {
+		s.decodeStarted = true
+		audio, err := s.collectJSONLineAudio()
+		if err != nil {
+			return nil, err
+		}
+		if len(audio) == 0 {
+			return nil, io.EOF
+		}
+		s.decoder = codecs.NewMP3AudioStreamDecoder()
+		go func() {
+			s.decoder.Push(audio)
+			s.decoder.EndInput()
+		}()
+	}
+
+	frame, err := s.decoder.Next()
+	if err != nil {
+		if strings.Contains(err.Error(), "decoder closed") {
+			return nil, io.EOF
+		}
+		return nil, err
+	}
+	return &tts.SynthesizedAudio{Frame: frame}, nil
+}
+
+func (s *humeTTSChunkedStream) collectJSONLineAudio() ([]byte, error) {
+	var audio bytes.Buffer
+	for s.scanner.Scan() {
+		line := strings.TrimSpace(s.scanner.Text())
+		if line == "" {
+			continue
+		}
+		chunk, err := humeAudioFromJSONLine(line)
+		if err != nil {
+			return nil, err
+		}
+		if len(chunk) == 0 {
+			continue
+		}
+		audio.Write(chunk)
+	}
+	if err := s.scanner.Err(); err != nil {
+		return nil, err
+	}
+	return audio.Bytes(), nil
+}
+
 func (s *humeTTSChunkedStream) Close() error {
+	if s.decoder != nil {
+		_ = s.decoder.Close()
+	}
 	return s.resp.Body.Close()
 }
 
