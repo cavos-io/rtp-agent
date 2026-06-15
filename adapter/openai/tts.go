@@ -321,6 +321,9 @@ func (s *openaiTTSChunkedStream) nextMP3Audio() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
+	if s.responseFormat == openai.SpeechResponseFormatMp3 {
+		return s.nextSSEMP3Audio()
+	}
 	if s.scanner == nil {
 		s.scanner = bufio.NewScanner(s.resp)
 		s.scanner.Buffer(make([]byte, 0, 64*1024), openAITTSMaxSSELineBytes)
@@ -368,6 +371,76 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	return nil, io.EOF
+}
+
+func (s *openaiTTSChunkedStream) nextSSEMP3Audio() (*tts.SynthesizedAudio, error) {
+	if !s.decodeStarted {
+		s.decodeStarted = true
+		audio, err := s.collectSSEAudio()
+		if err != nil {
+			return nil, err
+		}
+		if len(audio) == 0 {
+			return nil, io.EOF
+		}
+		s.decoder = codecs.NewMP3AudioStreamDecoder()
+		go func() {
+			s.decoder.Push(audio)
+			s.decoder.EndInput()
+		}()
+	}
+	frame, err := s.decoder.Next()
+	if err != nil {
+		if strings.Contains(err.Error(), "decoder closed") {
+			return nil, io.EOF
+		}
+		return nil, llm.NewAPIConnectionError(err.Error())
+	}
+	return &tts.SynthesizedAudio{Frame: frame}, nil
+}
+
+func (s *openaiTTSChunkedStream) collectSSEAudio() ([]byte, error) {
+	if s.scanner == nil {
+		s.scanner = bufio.NewScanner(s.resp)
+		s.scanner.Buffer(make([]byte, 0, 64*1024), openAITTSMaxSSELineBytes)
+	}
+	var audio bytes.Buffer
+	for s.scanner.Scan() {
+		line := strings.TrimSpace(s.scanner.Text())
+		if line == "" || !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
+		if data == "[DONE]" {
+			break
+		}
+		var event map[string]any
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			continue
+		}
+		eventType, _ := event["type"].(string)
+		switch eventType {
+		case "speech.audio.delta":
+			audioB64, _ := event["delta"].(string)
+			if audioB64 == "" {
+				audioB64, _ = event["audio"].(string)
+			}
+			if audioB64 == "" {
+				continue
+			}
+			audioData, err := base64.StdEncoding.DecodeString(audioB64)
+			if err != nil {
+				return nil, llm.NewAPIConnectionError(err.Error())
+			}
+			audio.Write(audioData)
+		case "speech.audio.done":
+			return audio.Bytes(), nil
+		}
+	}
+	if err := s.scanner.Err(); err != nil {
+		return nil, llm.NewAPIConnectionError(err.Error())
+	}
+	return audio.Bytes(), nil
 }
 
 func (s *openaiTTSChunkedStream) Close() error {
