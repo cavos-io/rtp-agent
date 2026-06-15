@@ -1,12 +1,15 @@
 package elevenlabs
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -191,6 +194,54 @@ func TestElevenLabsTTSRejectsNonAudioResponse(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "non-audio") {
 		t.Fatalf("Synthesize error = %q, want non-audio guidance", err)
+	}
+}
+
+func TestElevenLabsTTSDecodesReferenceMP3Response(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: elevenLabsRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/mpeg"}},
+			Body:       io.NopCloser(bytes.NewReader(mp3Data)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "",
+		WithElevenLabsBaseURL("https://eleven.example/v1"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if audio.Frame.SampleRate != 48000 {
+		t.Fatalf("sample rate = %d, want decoded mp3 rate 48000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 2 {
+		t.Fatalf("channels = %d, want decoded mp3 stereo", audio.Frame.NumChannels)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded frame is empty")
+	}
+	if bytes.Equal(audio.Frame.Data, mp3Data[:len(audio.Frame.Data)]) {
+		t.Fatal("frame data still contains compressed mp3 bytes")
 	}
 }
 

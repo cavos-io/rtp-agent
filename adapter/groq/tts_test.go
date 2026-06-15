@@ -3,6 +3,7 @@ package groq
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -169,7 +170,7 @@ func TestGroqTTSRejectsNonAudioResponse(t *testing.T) {
 
 func TestGroqTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	stream := &groqTTSChunkedStream{
-		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(groqTestWAV([]byte{0x01, 0x02}, 48000, 1)))},
 		sampleRate: 48000,
 	}
 
@@ -182,11 +183,57 @@ func TestGroqTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestGroqTTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {
+	pcm := []byte{0x01, 0x00, 0x02, 0x00}
+	stream := &groqTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(groqTestWAV(pcm, 48000, 1)))},
+		sampleRate: 48000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if !bytes.Equal(audio.Frame.Data, pcm) {
+		t.Fatalf("frame data = %#v, want decoded PCM %#v", audio.Frame.Data, pcm)
+	}
+	if audio.Frame.SampleRate != 48000 || audio.Frame.NumChannels != 1 || audio.Frame.SamplesPerChannel != 2 {
+		t.Fatalf("frame shape = rate %d channels %d samples %d, want 48000/1/2", audio.Frame.SampleRate, audio.Frame.NumChannels, audio.Frame.SamplesPerChannel)
+	}
+
+	_, err = stream.Next()
+	if err != io.EOF {
+		t.Fatalf("second Next error = %v, want EOF", err)
+	}
+}
+
 func assertGroqTTSPayload(t *testing.T, payload map[string]any, key string, want string) {
 	t.Helper()
 	if got := payload[key]; got != want {
 		t.Fatalf("%s = %#v, want %q", key, got, want)
 	}
+}
+
+func groqTestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
+	var wav bytes.Buffer
+	byteRate := sampleRate * uint32(channels) * 2
+	blockAlign := channels * 2
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36+len(pcm)))
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, channels)
+	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
+	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
+	_ = binary.Write(&wav, binary.LittleEndian, blockAlign)
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	wav.WriteString("data")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(len(pcm)))
+	wav.Write(pcm)
+	return wav.Bytes()
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

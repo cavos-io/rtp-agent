@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -160,9 +162,40 @@ func TestLMNTTTSDefaultsLanguageToEnglishForNonBlizzard(t *testing.T) {
 	}
 }
 
+func TestLMNTTTSChunkedStreamDecodesReferenceMP3Audio(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+
+	stream := &lmntTTSChunkedStream{
+		resp:   &http.Response{Body: io.NopCloser(bytes.NewReader(mp3Data))},
+		format: "mp3",
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if audio.Frame.SampleRate != 48000 {
+		t.Fatalf("sample rate = %d, want decoded mp3 rate 48000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 2 {
+		t.Fatalf("channels = %d, want decoded mp3 stereo", audio.Frame.NumChannels)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded frame is empty")
+	}
+	if bytes.Equal(audio.Frame.Data, mp3Data[:len(audio.Frame.Data)]) {
+		t.Fatal("frame data still contains compressed mp3 bytes")
+	}
+}
+
 func TestLMNTTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	stream := &lmntTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
+		format:     "raw",
 		sampleRate: 16000,
 	}
 

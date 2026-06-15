@@ -3423,6 +3423,8 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		if cfg.TTSResponseFormat != "" {
 			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSAudioFormat(cfg.TTSResponseFormat))
+		} else {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSAudioFormat("pcm"))
 		}
 		if cfg.TTSEmotion != "" {
 			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSEmotion(cfg.TTSEmotion))
@@ -3609,6 +3611,8 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		if cfg.TTSEncoding != "" {
 			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSEncoding(cfg.TTSEncoding))
+		} else {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSEncoding("wav_48000"))
 		}
 		if cfg.TTSLanguage != "" {
 			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSLanguage(cfg.TTSLanguage))
@@ -3726,6 +3730,8 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		if cfg.TTSResponseFormat != "" {
 			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSOutputFormat(cfg.TTSResponseFormat))
+		} else {
+			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSOutputFormat("wav"))
 		}
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSSampleRate(*cfg.TTSSampleRate))
@@ -5155,6 +5161,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.TTSResponseFormat != "" {
 			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSAudioFormat(cfg.TTSResponseFormat))
+		} else {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSAudioFormat("pcm"))
 		}
 		if cfg.TTSEmotion != "" {
 			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSEmotion(cfg.TTSEmotion))
@@ -5487,6 +5495,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.TTSEncoding != "" {
 			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSEncoding(cfg.TTSEncoding))
+		} else {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSEncoding("wav_48000"))
 		}
 		if cfg.TTSLanguage != "" {
 			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSLanguage(cfg.TTSLanguage))
@@ -5526,6 +5536,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.TTSResponseFormat != "" {
 			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSOutputFormat(cfg.TTSResponseFormat))
+		} else {
+			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSOutputFormat("wav"))
 		}
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSSampleRate(*cfg.TTSSampleRate))
