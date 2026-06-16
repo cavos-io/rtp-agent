@@ -1789,6 +1789,22 @@ func TestAgentActivityOnFinalTranscriptInterruptsCurrentSpeechForVADTurnDetectio
 	current.MarkDone()
 }
 
+func TestAgentActivityOnFinalTranscriptInterruptsCurrentSpeechForDefaultVADTurnDetection(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 5})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "default vad interrupt", Confidence: 0.9}},
+	})
+
+	waitForInterrupted(t, current)
+	current.MarkDone()
+}
+
 func TestAgentActivityOnFinalTranscriptDoesNotInterruptManualTurnDetection(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeManual})
