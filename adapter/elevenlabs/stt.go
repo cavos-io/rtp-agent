@@ -137,6 +137,12 @@ func (s *ElevenLabsSTT) Capabilities() stt.STTCapabilities {
 	}
 }
 
+func (s *ElevenLabsSTT) UpdateOptions(opts ...ElevenLabsSTTOption) {
+	for _, opt := range opts {
+		opt(s)
+	}
+}
+
 func (s *ElevenLabsSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if err := validateElevenLabsAPIKey(s.apiKey); err != nil {
 		return nil, err
