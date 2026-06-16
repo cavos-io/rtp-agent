@@ -188,6 +188,10 @@ type scheduledSpeechAssistant interface {
 	OnSpeechScheduled(ctx context.Context, speech *SpeechHandle)
 }
 
+type preemptiveSpeechAssistant interface {
+	OnSpeechPreemptive(ctx context.Context, speech *SpeechHandle)
+}
+
 type nativeSayAssistant interface {
 	SupportsNativeSay() bool
 }

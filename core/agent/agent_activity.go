@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -132,6 +133,11 @@ type AgentActivity struct {
 
 	userAudioMu     sync.Mutex
 	userAudioFrames []*model.AudioFrame
+
+	preemptiveMu              sync.Mutex
+	preemptiveGeneration      *preemptiveGeneration
+	preemptiveGenerationCount int
+	userSpeechStartedAt       time.Time
 }
 
 func NewAgentActivity(agentIntf AgentInterface, session *AgentSession) *AgentActivity {
@@ -154,6 +160,16 @@ type scheduledSpeech struct {
 	speech   *SpeechHandle
 	priority int
 	seq      uint64
+}
+
+type preemptiveGeneration struct {
+	speech     *SpeechHandle
+	userMsg    *llm.ChatMessage
+	transcript string
+	chatCtx    *llm.ChatContext
+	toolsKey   string
+	toolChoice llm.ToolChoice
+	createdAt  time.Time
 }
 
 func (a *AgentActivity) Start() {
@@ -1335,6 +1351,7 @@ func (a *AgentActivity) nextSpeechIndexLocked() int {
 func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 	a.speaking = true
 	a.sttEOSReceived = false
+	a.userSpeechStartedAt = time.Now()
 	a.clearUserAudioFrames()
 	if a.Session != nil {
 		a.Session.UpdateUserState(UserStateSpeaking)
@@ -1382,6 +1399,9 @@ func (a *AgentActivity) OnVADInferenceDone(ev *vad.VADEvent) {
 	if turnDetection == TurnDetectionModeSTT && a.sttEOSReceived && ev.RawAccumulatedSilence > 0 {
 		return
 	}
+	if a.shortInterruptionTranscript(a.currentInterruptionTranscript()) {
+		return
+	}
 	a.interruptByAudioActivity("VAD inference", "speech_duration", ev.SpeechDuration)
 }
 
@@ -1414,7 +1434,9 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 	})
 	turnDetection := a.turnDetectionMode()
 	if transcript != "" && turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
-		a.interruptByAudioActivity("interim transcript", "transcript", transcript)
+		if !a.shortInterruptionTranscript(transcript) {
+			a.interruptByAudioActivity("interim transcript", "transcript", transcript)
+		}
 	}
 }
 
@@ -1459,10 +1481,13 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.pendingInterimSpeakerID = ""
 	a.userTurnMu.Unlock()
 	a.notifyUserTurnUpdated()
+	a.maybeStartPreemptiveGeneration(transcript, confidence)
 
 	turnDetection := a.turnDetectionMode()
 	if turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
-		a.interruptByAudioActivity("final transcript", "transcript", transcript)
+		if !a.shortInterruptionTranscript(transcript) {
+			a.interruptByAudioActivity("final transcript", "transcript", transcript)
+		}
 	}
 	if turnDetection == TurnDetectionModeSTT {
 		a.runEOUDetection(EndOfTurnInfo{
@@ -1588,6 +1613,8 @@ func (a *AgentActivity) ClearUserTurn() {
 
 	a.sttEOSReceived = false
 	a.speaking = false
+	a.userSpeechStartedAt = time.Time{}
+	a.cancelPreemptiveGeneration()
 }
 
 func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnOptions) (string, error) {
@@ -1696,8 +1723,10 @@ collect:
 func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo) (*SpeechHandle, error) {
 	a.userTurnCompletionMu.Lock()
 	defer a.userTurnCompletionMu.Unlock()
+	a.resetPreemptiveGenerationCount()
 
 	if rejectsZeroConfidenceTranscript(info.NewTranscript, info.TranscriptConfidence) {
+		a.cancelPreemptiveGeneration()
 		logger.Logger.Warnw("skipping zero-confidence user turn", nil, "transcript", info.NewTranscript)
 		return nil, nil
 	}
@@ -1709,6 +1738,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		CreatedAt:            time.Now(),
 	}
 	if info.SkipReply {
+		a.cancelPreemptiveGeneration()
 		a.commitUserMessage(newMsg)
 		return nil, nil
 	}
@@ -1717,10 +1747,12 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	schedulingPaused := a.schedulingPaused || a.schedulingDraining
 	a.queueMu.Unlock()
 	if currentSpeech != nil && !currentSpeech.AllowInterruptions && !currentSpeech.IsInterrupted() && !currentSpeech.IsDone() {
+		a.cancelPreemptiveGeneration()
 		logger.Logger.Warnw("skipping reply to user input, current speech generation cannot be interrupted", nil, "userInput", info.NewTranscript)
 		return nil, nil
 	}
 	if a.shouldSkipShortInterruption(currentSpeech, info.NewTranscript) {
+		a.cancelPreemptiveGeneration()
 		return nil, nil
 	}
 	if currentSpeech != nil && !currentSpeech.IsInterrupted() && !currentSpeech.IsDone() {
@@ -1732,6 +1764,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		}
 	}
 	if schedulingPaused {
+		a.cancelPreemptiveGeneration()
 		logger.Logger.Warnw("skipping on_user_turn_completed, speech scheduling is paused", nil, "userInput", info.NewTranscript)
 		return nil, nil
 	}
@@ -1741,30 +1774,40 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	if err := a.AgentIntf.OnUserTurnCompleted(ctx, chatCtx, newMsg); err != nil {
 		var stopResponse llm.StopResponse
 		if errors.As(err, &stopResponse) {
+			a.cancelPreemptiveGeneration()
 			return nil, nil
 		}
+		a.cancelPreemptiveGeneration()
 		logger.Logger.Errorw("error occurred during on_user_turn_completed", err)
 		return nil, nil
 	}
 	hookDelay := time.Since(hookStart).Seconds()
 	newMsg.Metrics = metricsReportFromEndOfTurn(info, hookDelay)
 	if a.Agent.LLM == nil || a.Session == nil {
+		a.cancelPreemptiveGeneration()
 		return nil, nil
 	}
 	a.queueMu.Lock()
 	schedulingPaused = a.schedulingPaused || a.schedulingDraining
 	a.queueMu.Unlock()
 	if schedulingPaused {
+		a.cancelPreemptiveGeneration()
 		logger.Logger.Warnw("skipping reply to user input, speech scheduling is paused", nil, "userInput", info.NewTranscript)
 		return nil, nil
 	}
-	handle, err := a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
-		UserMessage:   newMsg,
-		ChatCtx:       chatCtx,
-		InputModality: "audio",
-	})
+	handle, err := a.usePreemptiveGenerationIfMatching(chatCtx, newMsg)
 	if err != nil {
 		return nil, err
+	}
+	if handle == nil {
+		handle, err = a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+			UserMessage:   newMsg,
+			ChatCtx:       chatCtx,
+			InputModality: "audio",
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
 	mode := a.turnDetectionMode()
 	metadata := (*telemetry.Metadata)(nil)
@@ -1792,6 +1835,10 @@ func (a *AgentActivity) shouldSkipShortInterruption(currentSpeech *SpeechHandle,
 	if !a.InterruptionEnabled() {
 		return false
 	}
+	return a.shortInterruptionTranscript(transcript)
+}
+
+func (a *AgentActivity) shortInterruptionTranscript(transcript string) bool {
 	if a.Session == nil || a.Session.Options.MinInterruptionWords <= 0 {
 		return false
 	}
@@ -1805,6 +1852,157 @@ func (a *AgentActivity) shouldSkipShortInterruption(currentSpeech *SpeechHandle,
 		wordCount = len(tokenize.SplitWords(transcript, true, true, false))
 	}
 	return wordCount < a.Session.Options.MinInterruptionWords
+}
+
+func (a *AgentActivity) currentInterruptionTranscript() string {
+	if a == nil {
+		return ""
+	}
+	a.userTurnMu.Lock()
+	defer a.userTurnMu.Unlock()
+	if a.pendingInterimTranscript != "" {
+		return a.pendingInterimTranscript
+	}
+	return a.pendingUserTranscript
+}
+
+func (a *AgentActivity) maybeStartPreemptiveGeneration(transcript string, confidence float64) {
+	if a == nil || a.Agent == nil || a.Session == nil || transcript == "" {
+		return
+	}
+	opts := a.Session.Options
+	mode := a.turnDetectionMode()
+	if !opts.PreemptiveGeneration || a.Agent.LLM == nil || mode == TurnDetectionModeManual || mode == TurnDetectionModeRealtimeLLM {
+		return
+	}
+	a.queueMu.Lock()
+	schedulingPaused := a.schedulingPaused || a.schedulingDraining
+	currentSpeech := a.currentSpeech
+	a.queueMu.Unlock()
+	if schedulingPaused || (currentSpeech != nil && !currentSpeech.IsInterrupted()) {
+		return
+	}
+	if opts.PreemptiveGenerationMaxSpeechDuration > 0 && !a.userSpeechStartedAt.IsZero() &&
+		time.Since(a.userSpeechStartedAt).Seconds() > opts.PreemptiveGenerationMaxSpeechDuration {
+		return
+	}
+
+	a.preemptiveMu.Lock()
+	if a.preemptiveGenerationCount >= opts.PreemptiveGenerationMaxRetries {
+		a.preemptiveMu.Unlock()
+		return
+	}
+	a.preemptiveGenerationCount++
+	a.preemptiveMu.Unlock()
+
+	a.cancelPreemptiveGeneration()
+
+	msg := &llm.ChatMessage{
+		Role:                 llm.ChatRoleUser,
+		Content:              []llm.ChatContent{{Text: transcript}},
+		TranscriptConfidence: &confidence,
+		CreatedAt:            time.Now(),
+	}
+	chatCtx := a.RetrieveChatCtx().Copy()
+	scheduleSpeech := false
+	handle, err := a.Session.GenerateReplyWithOptions(a.ctx, GenerateReplyOptions{
+		UserMessage:    msg,
+		ChatCtx:        chatCtx,
+		InputModality:  "audio",
+		ScheduleSpeech: &scheduleSpeech,
+	})
+	if err != nil {
+		logger.Logger.Warnw("failed to start preemptive generation", err, "transcript", transcript)
+		return
+	}
+
+	a.preemptiveMu.Lock()
+	a.preemptiveGeneration = &preemptiveGeneration{
+		speech:     handle,
+		userMsg:    msg,
+		transcript: transcript,
+		chatCtx:    chatCtx.Copy(),
+		toolsKey:   a.currentToolsKey(),
+		toolChoice: a.currentToolChoice(),
+		createdAt:  time.Now(),
+	}
+	a.preemptiveMu.Unlock()
+	if assistant, ok := a.Session.Assistant.(preemptiveSpeechAssistant); ok {
+		go assistant.OnSpeechPreemptive(a.ctx, handle)
+	}
+}
+
+func (a *AgentActivity) usePreemptiveGenerationIfMatching(chatCtx *llm.ChatContext, newMsg *llm.ChatMessage) (*SpeechHandle, error) {
+	if a == nil || a.Session == nil || newMsg == nil {
+		return nil, nil
+	}
+	a.preemptiveMu.Lock()
+	preemptive := a.preemptiveGeneration
+	a.preemptiveGeneration = nil
+	a.preemptiveMu.Unlock()
+	if preemptive == nil {
+		return nil, nil
+	}
+	matches := preemptive.transcript == newMsg.TextContent() &&
+		preemptive.chatCtx.IsEquivalent(chatCtx) &&
+		preemptive.toolsKey == a.currentToolsKey() &&
+		reflect.DeepEqual(preemptive.toolChoice, a.currentToolChoice())
+	if !matches {
+		_ = preemptive.speech.Interrupt(true)
+		return nil, nil
+	}
+	preemptive.userMsg.Metrics = newMsg.Metrics
+	if err := a.ScheduleSpeech(preemptive.speech, SpeechPriorityNormal, false); err != nil {
+		return nil, err
+	}
+	a.Session.EmitConversationItemAdded(preemptive.userMsg)
+	a.Session.watchActiveRunSpeechHandle(preemptive.speech)
+	logger.Logger.Debugw("using preemptive generation", "preemptiveLeadTime", time.Since(preemptive.createdAt).Seconds())
+	return preemptive.speech, nil
+}
+
+func (a *AgentActivity) cancelPreemptiveGeneration() {
+	if a == nil {
+		return
+	}
+	a.preemptiveMu.Lock()
+	preemptive := a.preemptiveGeneration
+	a.preemptiveGeneration = nil
+	a.preemptiveMu.Unlock()
+	if preemptive != nil {
+		_ = preemptive.speech.Interrupt(true)
+	}
+}
+
+func (a *AgentActivity) resetPreemptiveGenerationCount() {
+	if a == nil {
+		return
+	}
+	a.preemptiveMu.Lock()
+	a.preemptiveGenerationCount = 0
+	a.preemptiveMu.Unlock()
+}
+
+func (a *AgentActivity) currentToolsKey() string {
+	if a == nil {
+		return ""
+	}
+	tools := a.Tools()
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		if named, ok := tool.(interface{ Name() string }); ok && named.Name() != "" {
+			names = append(names, named.Name())
+		}
+	}
+	sort.Strings(names)
+	return strings.Join(names, "\x00")
+}
+
+func (a *AgentActivity) currentToolChoice() llm.ToolChoice {
+	if a == nil || a.Session == nil {
+		return nil
+	}
+	return a.Session.Options.ToolChoice
 }
 
 func metricsReportFromEndOfTurn(info EndOfTurnInfo, onUserTurnCompletedDelay float64) map[string]any {

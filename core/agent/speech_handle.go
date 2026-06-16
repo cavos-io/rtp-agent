@@ -79,6 +79,9 @@ type SpeechHandle struct {
 	chatItems         []llm.ChatItem
 	runFinalOutput    any
 	runFinalOutputSet bool
+	precomputedLLM    *LLMGenerationData
+	precomputedTTS    *TTSGenerationData
+	precomputeCancel  context.CancelFunc
 
 	interruptCh        chan struct{}
 	doneCh             chan struct{}
@@ -145,6 +148,7 @@ func (s *SpeechHandle) Interrupt(force bool) error {
 	if !force && !s.AllowInterruptions {
 		return ErrSpeechInterruptionsDisabled
 	}
+	s.cancelPrecomputedGenerationLocked()
 
 	if !s.IsInterrupted() && !s.IsDone() {
 		close(s.interruptCh)
@@ -188,9 +192,59 @@ func (s *SpeechHandle) RunFinalOutput() (any, bool) {
 	return s.runFinalOutput, s.runFinalOutputSet
 }
 
+func (s *SpeechHandle) setPrecomputedLLMGeneration(data *LLMGenerationData) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.precomputedLLM = data
+}
+
+func (s *SpeechHandle) takePrecomputedLLMGeneration() *LLMGenerationData {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	data := s.precomputedLLM
+	s.precomputedLLM = nil
+	return data
+}
+
+func (s *SpeechHandle) setPrecomputedTTSGeneration(data *TTSGenerationData) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.precomputedTTS = data
+}
+
+func (s *SpeechHandle) takePrecomputedTTSGeneration() *TTSGenerationData {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	data := s.precomputedTTS
+	s.precomputedTTS = nil
+	return data
+}
+
+func (s *SpeechHandle) setPrecomputedGenerationCancel(cancel context.CancelFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.precomputeCancel != nil {
+		s.precomputeCancel()
+	}
+	s.precomputeCancel = cancel
+}
+
+func (s *SpeechHandle) cancelPrecomputedGenerationLocked() {
+	if s.precomputeCancel != nil {
+		s.precomputeCancel()
+		s.precomputeCancel = nil
+	}
+}
+
 func (s *SpeechHandle) MarkDone() {
 	s.mu.Lock()
 	alreadyDone := s.IsDone()
+	s.cancelPrecomputedGenerationLocked()
 	if !alreadyDone {
 		close(s.doneCh)
 	}
