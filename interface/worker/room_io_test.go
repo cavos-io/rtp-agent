@@ -1295,6 +1295,85 @@ func TestRoomIOPublishesUserInputTranscriptionStream(t *testing.T) {
 	}
 }
 
+func TestRoomIOReusesUserTranscriptionSegmentUntilFinal(t *testing.T) {
+	published := make(chan roomIOPublishedText, 3)
+	rio := &RoomIO{
+		userTranscriptionTrackID:       "TR_user_audio",
+		userTranscriptionParticipantID: "caller-a",
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "halo",
+		IsFinal:    false,
+		Language:   "id",
+	})
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "halo semua",
+		IsFinal:    false,
+		Language:   "id",
+	})
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "halo semua apa kabar",
+		IsFinal:    true,
+		Language:   "id",
+	})
+
+	first := receivePublishedText(t, published, "first user transcript")
+	second := receivePublishedText(t, published, "second user transcript")
+	final := receivePublishedText(t, published, "final user transcript")
+
+	segmentID := first.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if segmentID == "" {
+		t.Fatal("first segment id is empty")
+	}
+	if second.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute] != segmentID {
+		t.Fatalf("second segment id = %q, want %q (same as first)", second.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute], segmentID)
+	}
+	if final.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute] != segmentID {
+		t.Fatalf("final segment id = %q, want %q (same as first)", final.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute], segmentID)
+	}
+	if final.opts.Attributes[RoomIOTranscriptionFinalAttribute] != "true" {
+		t.Fatalf("final attribute = %q, want true", final.opts.Attributes[RoomIOTranscriptionFinalAttribute])
+	}
+}
+
+func TestRoomIOResetsUserTranscriptionSegmentAfterFinal(t *testing.T) {
+	published := make(chan roomIOPublishedText, 2)
+	rio := &RoomIO{
+		userTranscriptionTrackID:       "TR_user_audio",
+		userTranscriptionParticipantID: "caller-a",
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "utterance one",
+		IsFinal:    true,
+		Language:   "id",
+	})
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "utterance two",
+		IsFinal:    true,
+		Language:   "id",
+	})
+
+	first := receivePublishedText(t, published, "first utterance")
+	second := receivePublishedText(t, published, "second utterance")
+
+	firstID := first.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	secondID := second.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if firstID == "" || secondID == "" {
+		t.Fatalf("segment ids must not be empty: first=%q second=%q", firstID, secondID)
+	}
+	if firstID == secondID {
+		t.Fatalf("segment id after final must reset: both = %q", firstID)
+	}
+}
+
 func TestRoomIOCanDisableAgentTranscriptionOutput(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 	published := make(chan roomIOPublishedText, 1)
