@@ -84,6 +84,53 @@ func TestAgentActivityScheduleSpeechPreservesFIFOWithinPriority(t *testing.T) {
 	}
 }
 
+func TestAgentActivitySpeechDoneClearsPausedFalseInterruption(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:               TurnDetectionModeVAD,
+		MinInterruptionDuration:     0.05,
+		FalseInterruptionTimeout:    10,
+		FalseInterruptionTimeoutSet: true,
+		ResumeFalseInterruption:     true,
+		ResumeFalseInterruptionSet:  true,
+	})
+	audioOutput := &recordingAudioOutputController{canPause: true}
+	session.SetAudioOutputController(audioOutput)
+	activity := NewAgentActivity(agent, session)
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	if err := activity.ScheduleSpeech(speech, SpeechPriorityNormal, false); err != nil {
+		t.Fatalf("ScheduleSpeech error = %v, want nil", err)
+	}
+	activity.processQueue()
+	if activity.currentSpeech != speech {
+		t.Fatalf("currentSpeech = %p, want scheduled speech %p", activity.currentSpeech, speech)
+	}
+	session.agentState = AgentStateSpeaking
+	activity.OnVADInferenceDone(&vad.VADEvent{
+		Type:                  vad.VADEventInferenceDone,
+		SpeechDuration:        0.06,
+		Speaking:              true,
+		RawAccumulatedSilence: 0,
+	})
+	if audioOutput.pauseCount != 1 {
+		t.Fatalf("PauseAudioOutput calls = %d, want 1", audioOutput.pauseCount)
+	}
+
+	speech.MarkDone()
+	waitForNoCurrentSpeech(t, activity)
+
+	if audioOutput.resumeCount != 1 {
+		t.Fatalf("ResumeAudioOutput calls = %d, want 1 after paused speech finished", audioOutput.resumeCount)
+	}
+	select {
+	case ev := <-session.AgentFalseInterruptionEvents():
+		t.Fatalf("unexpected false interruption event after paused speech finished: %#v", ev)
+	default:
+	}
+}
+
 func TestAgentActivityProcessQueueDoesNotDeadlockWhenSpeechCompletesDuringDoneCallbackRegistration(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

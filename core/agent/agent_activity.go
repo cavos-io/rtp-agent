@@ -1182,6 +1182,7 @@ func (a *AgentActivity) OnPipelineReplyDone(speech *SpeechHandle) {
 	inactive := len(a.speechQueue) == 0 && (a.currentSpeech == nil || a.currentSpeech.IsDone())
 	started := a.schedulingStarted
 	a.queueMu.Unlock()
+	a.resumeFinishedPausedSpeech(speech)
 	if inactive {
 		a.Session.UpdateAgentState(AgentStateListening)
 	}
@@ -1759,6 +1760,25 @@ func (a *AgentActivity) resumeCanceledFalseInterruption(paused *pausedSpeechInfo
 	if controller != nil && a.Session.Options.ResumeFalseInterruption {
 		controller.ResumeAudioOutput()
 	}
+}
+
+func (a *AgentActivity) resumeFinishedPausedSpeech(speech *SpeechHandle) {
+	if a == nil || a.Session == nil || speech == nil {
+		return
+	}
+	a.falseInterruptionMu.Lock()
+	paused := a.pausedSpeech
+	if paused == nil || paused.handle != speech {
+		a.falseInterruptionMu.Unlock()
+		return
+	}
+	a.pausedSpeech = nil
+	if a.falseInterruptionTimer != nil {
+		a.falseInterruptionTimer.Stop()
+		a.falseInterruptionTimer = nil
+	}
+	a.falseInterruptionMu.Unlock()
+	a.resumeCanceledFalseInterruption(paused)
 }
 
 func (a *AgentActivity) ClearUserTurn() {
