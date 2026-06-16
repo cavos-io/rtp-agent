@@ -105,7 +105,7 @@ func newGoogleSTTWithClient(client googleSpeechClient, opts ...GoogleSTTOption) 
 	return provider
 }
 
-func (s *GoogleSTT) Label() string { return "google.STT" }
+func (s *GoogleSTT) Label() string           { return "google.STT" }
 func (s *GoogleSTT) InputSampleRate() uint32 { return uint32(s.sampleRate) }
 func (s *GoogleSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "word", OfflineRecognize: true}
@@ -168,16 +168,9 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		return nil, err
 	}
 
-	data := stt.SpeechData{}
-	if len(resp.Results) > 0 && len(resp.Results[0].Alternatives) > 0 {
-		data = googleSpeechDataFromAlternative(resp.Results[0].Alternatives[0])
-	}
-
 	return &stt.SpeechEvent{
-		Type: stt.SpeechEventFinalTranscript,
-		Alternatives: []stt.SpeechData{
-			data,
-		},
+		Type:         stt.SpeechEventFinalTranscript,
+		Alternatives: googleSpeechDataFromRecognizeResults(resp.Results),
 	}, nil
 }
 
@@ -205,6 +198,36 @@ func googleSpeechDataFromAlternative(alt *speechpb.SpeechRecognitionAlternative)
 		Confidence: float64(alt.GetConfidence()),
 		Words:      googleTimedStrings(alt.GetWords()),
 	}
+}
+
+func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionResult) []stt.SpeechData {
+	if len(results) == 0 {
+		return []stt.SpeechData{}
+	}
+	var text string
+	var confidence float64
+	var count int
+	var firstAlt *speechpb.SpeechRecognitionAlternative
+	for _, result := range results {
+		if len(result.GetAlternatives()) == 0 {
+			continue
+		}
+		alt := result.GetAlternatives()[0]
+		if firstAlt == nil {
+			firstAlt = alt
+		}
+		text += alt.GetTranscript()
+		confidence += float64(alt.GetConfidence())
+		count++
+	}
+	if count == 0 {
+		return []stt.SpeechData{}
+	}
+	return []stt.SpeechData{{
+		Text:       text,
+		Confidence: confidence / float64(count),
+		Words:      googleTimedStrings(firstAlt.GetWords()),
+	}}
 }
 
 func googleTimedStrings(words []*speechpb.WordInfo) []stt.TimedString {

@@ -202,6 +202,53 @@ func TestGoogleSTTRecognizeSendsAudioAndMapsFinalEvent(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTRecognizeCombinesReferenceResultSegments(t *testing.T) {
+	client := &fakeGoogleSpeechClient{
+		recognizeResponse: &speechpb.RecognizeResponse{
+			Results: []*speechpb.SpeechRecognitionResult{
+				{
+					Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+						Transcript: "hello ",
+						Confidence: 0.8,
+						Words: []*speechpb.WordInfo{{
+							Word:       "hello",
+							StartTime:  durationpb.New(100 * 1000 * 1000),
+							EndTime:    durationpb.New(300 * 1000 * 1000),
+							Confidence: 0.81,
+						}},
+					}},
+				},
+				{
+					Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+						Transcript: "world",
+						Confidence: 0.6,
+					}},
+				},
+			},
+		},
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte("pcm")}}, "")
+	if err != nil {
+		t.Fatalf("Recognize returned error: %v", err)
+	}
+
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %#v, want one final transcript", event)
+	}
+	got := event.Alternatives[0]
+	if got.Text != "hello world" {
+		t.Fatalf("text = %q, want hello world", got.Text)
+	}
+	if math.Abs(got.Confidence-0.7) > 0.000001 {
+		t.Fatalf("confidence = %v, want averaged confidence 0.7", got.Confidence)
+	}
+	if len(got.Words) != 1 || got.Words[0].Text != "hello" {
+		t.Fatalf("words = %#v, want first-result word details", got.Words)
+	}
+}
+
 func TestGoogleSTTStreamSendsConfigAndEmitsEvents(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{{
