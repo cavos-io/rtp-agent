@@ -123,6 +123,9 @@ type AgentActivity struct {
 	pendingUserLanguage          string
 	pendingTranscriptConfidence  float64
 	pendingUserTranscriptPresent bool
+	userTurnLimitStartedAt       time.Time
+	userTurnLimitTranscript      string
+	userTurnLimitWordCount       int
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -178,6 +181,10 @@ type pausedSpeechInfo struct {
 	handle     *SpeechHandle
 	agentState AgentState
 	timeout    time.Duration
+}
+
+type inputTranscriptionFlusher interface {
+	FlushInputTranscription(context.Context, time.Duration) error
 }
 
 type preemptiveGeneration struct {
@@ -1546,6 +1553,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.pendingInterimSpeakerID = ""
 	a.userTurnMu.Unlock()
 	a.notifyUserTurnUpdated()
+	a.checkUserTurnLimit(transcript)
 	a.maybeStartPreemptiveGeneration(transcript, confidence)
 	startedSpeakingAt, stoppedSpeakingAt, transcriptionDelay := a.finalTranscriptTiming(ev)
 
@@ -1606,6 +1614,7 @@ func (a *AgentActivity) armBackchannelBoundary(startedAt time.Time) {
 	if a == nil || a.Session == nil {
 		return
 	}
+	a.resetUserTurnLimitTracker()
 	duration := time.Duration(a.Session.Options.BackchannelBoundaryStart * float64(time.Second))
 	a.backchannelBoundaryMu.Lock()
 	a.audioActivityDisabled = false
@@ -2085,23 +2094,40 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 		}
 	}
 	if opts.TranscriptTimeout > 0 {
-		deadline := time.NewTimer(opts.TranscriptTimeout)
-		defer deadline.Stop()
-		for {
-			a.userTurnMu.Lock()
-			present := a.pendingUserTranscriptPresent
-			hasInterim := a.pendingInterimTranscript != ""
-			ch := a.userTurnUpdatedCh
-			a.userTurnMu.Unlock()
-			if present || !hasInterim {
-				break
+		a.userTurnMu.Lock()
+		present := a.pendingUserTranscriptPresent
+		hasInterim := a.pendingInterimTranscript != ""
+		a.userTurnMu.Unlock()
+		if !present {
+			flusher, ok := a.inputTranscriptionFlusher()
+			if ok {
+				flushDuration := opts.STTFlushDuration
+				if flushDuration == 0 {
+					flushDuration = 2 * time.Second
+				}
+				if err := flusher.FlushInputTranscription(ctx, flushDuration); err != nil {
+					return "", err
+				}
 			}
-			select {
-			case <-ch:
-			case <-deadline.C:
-				goto collect
-			case <-ctx.Done():
-				return "", ctx.Err()
+			if ok || hasInterim {
+				deadline := time.NewTimer(opts.TranscriptTimeout)
+				defer deadline.Stop()
+				for {
+					a.userTurnMu.Lock()
+					present := a.pendingUserTranscriptPresent
+					ch := a.userTurnUpdatedCh
+					a.userTurnMu.Unlock()
+					if present {
+						break
+					}
+					select {
+					case <-ch:
+					case <-deadline.C:
+						goto collect
+					case <-ctx.Done():
+						return "", ctx.Err()
+					}
+				}
 			}
 		}
 	}
@@ -2157,6 +2183,17 @@ collect:
 		return transcript, err
 	}
 	return transcript, nil
+}
+
+func (a *AgentActivity) inputTranscriptionFlusher() (inputTranscriptionFlusher, bool) {
+	if a == nil || a.Session == nil {
+		return nil, false
+	}
+	a.Session.mu.Lock()
+	assistant := a.Session.Assistant
+	a.Session.mu.Unlock()
+	flusher, ok := assistant.(inputTranscriptionFlusher)
+	return flusher, ok
 }
 
 func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo) (*SpeechHandle, error) {
@@ -2309,6 +2346,63 @@ func (a *AgentActivity) currentInterruptionTranscript() string {
 		return a.pendingInterimTranscript
 	}
 	return a.pendingUserTranscript
+}
+
+func (a *AgentActivity) checkUserTurnLimit(transcript string) {
+	if a == nil || a.Session == nil || transcript == "" {
+		return
+	}
+	maxWords := a.Session.Options.UserTurnLimitMaxWords
+	maxDuration := a.Session.Options.UserTurnLimitMaxDuration
+	if maxWords <= 0 && maxDuration <= 0 {
+		return
+	}
+
+	now := time.Now()
+	a.userTurnMu.Lock()
+	if a.userTurnLimitStartedAt.IsZero() {
+		if !a.userSpeechStartedAt.IsZero() {
+			a.userTurnLimitStartedAt = a.userSpeechStartedAt
+		} else {
+			a.userTurnLimitStartedAt = now
+		}
+	}
+	wordCount := a.userTurnLimitWordCount + a.countUserTurnWordsLocked(transcript)
+	accumulated := strings.TrimSpace(strings.TrimSpace(a.userTurnLimitTranscript) + " " + strings.TrimSpace(transcript))
+	a.userTurnLimitWordCount = wordCount
+	a.userTurnLimitTranscript = accumulated
+	duration := now.Sub(a.userTurnLimitStartedAt)
+	wordsExceeded := maxWords > 0 && wordCount >= maxWords
+	durationExceeded := maxDuration > 0 && duration.Seconds() >= maxDuration
+	a.userTurnMu.Unlock()
+
+	if !wordsExceeded && !durationExceeded {
+		return
+	}
+	a.Session.EmitUserTurnExceeded(UserTurnExceededEvent{
+		Transcript:            transcript,
+		AccumulatedTranscript: accumulated,
+		AccumulatedWordCount:  wordCount,
+		Duration:              duration,
+	})
+}
+
+func (a *AgentActivity) countUserTurnWordsLocked(transcript string) int {
+	if a.Session != nil && a.Session.Options.WordTokenizer != nil {
+		return len(a.Session.Options.WordTokenizer.Tokenize(transcript, ""))
+	}
+	return len(tokenize.SplitWords(transcript, true, true, false))
+}
+
+func (a *AgentActivity) resetUserTurnLimitTracker() {
+	if a == nil {
+		return
+	}
+	a.userTurnMu.Lock()
+	a.userTurnLimitStartedAt = time.Time{}
+	a.userTurnLimitTranscript = ""
+	a.userTurnLimitWordCount = 0
+	a.userTurnMu.Unlock()
 }
 
 func (a *AgentActivity) maybeStartPreemptiveGeneration(transcript string, confidence float64) {

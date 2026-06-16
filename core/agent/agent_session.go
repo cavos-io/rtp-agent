@@ -58,6 +58,8 @@ type AgentSessionOptions struct {
 	UserAwayTimeout                          float64
 	UserAwayTimeoutSet                       bool
 	DisableUserAwayTimeout                   bool
+	UserTurnLimitMaxWords                    int
+	UserTurnLimitMaxDuration                 float64
 	FalseInterruptionTimeout                 float64
 	FalseInterruptionTimeoutSet              bool
 	ResumeFalseInterruption                  bool
@@ -269,6 +271,7 @@ type AgentSession struct {
 	idleHolds      int
 	idleDone       chan struct{}
 	userAwayTimer  *time.Timer
+	userAwayGate   func() bool
 	aecWarmupTimer *time.Timer
 	aecWarmupDone  bool
 	userdata       any
@@ -552,6 +555,25 @@ func (s *AgentSession) AudioPlaybackController() AudioPlaybackController {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.audioPlaybackController
+}
+
+// SetUserAwayTimerGate installs a runtime gate for user-away timer arming.
+// The callback returns true while the timer should be blocked.
+func (s *AgentSession) SetUserAwayTimerGate(gate func() bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.userAwayGate = gate
+	s.mu.Unlock()
+	s.updateUserAwayTimer()
+}
+
+func (s *AgentSession) RefreshUserAwayTimer() {
+	if s == nil {
+		return
+	}
+	s.updateUserAwayTimer()
 }
 
 func (s *AgentSession) UserState() UserState {
@@ -2158,9 +2180,13 @@ func (s *AgentSession) updateUserAwayTimer() {
 		s.agentState == AgentStateListening &&
 		s.userState == UserStateListening
 	timeout := s.Options.UserAwayTimeout
+	gate := s.userAwayGate
 	s.mu.Unlock()
 
 	if !shouldStart {
+		return
+	}
+	if gate != nil && gate() {
 		return
 	}
 

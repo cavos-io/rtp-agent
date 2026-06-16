@@ -232,6 +232,7 @@ type RoomIO struct {
 	playbackSegmentsCount     int
 	playbackFinishedCount     int
 	playbackPosition          time.Duration
+	playbackStartedAt         time.Time
 	playbackAudioFrames       int
 	playbackAudioBytes        int
 	playbackAudioEncoded      int
@@ -311,6 +312,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	if !opts.DisableAudioOutput {
 		session.SetAudioOutputController(rio)
 		session.SetAudioPlaybackController(roomIOPlaybackController{rio: rio})
+		session.SetUserAwayTimerGate(rio.userAwayTimerBlocked)
 		session.EnsureAssistant().SetPublishAudio(rio.PublishAudio)
 	}
 
@@ -1489,7 +1491,9 @@ func (rio *RoomIO) startPlayback() (PlaybackStartedEvent, []func(PlaybackStarted
 	rio.playbackAudioChannels = 0
 	rio.playbackAudioLastError = ""
 	rio.playbackTranscript = rio.pendingPlaybackTranscript
-	ev := PlaybackStartedEvent{CreatedAt: time.Now()}
+	startedAt := time.Now()
+	rio.playbackStartedAt = startedAt
+	ev := PlaybackStartedEvent{CreatedAt: startedAt}
 	handlers := append([]func(PlaybackStartedEvent){}, rio.playbackStartedHandlers...)
 	return ev, handlers, true
 }
@@ -1598,8 +1602,15 @@ func (rio *RoomIO) finishPlayback(interrupted bool, synchronizedTranscript strin
 	if synchronizedTranscript == "" {
 		synchronizedTranscript = rio.playbackTranscript
 	}
+	playbackPosition := rio.playbackPosition
+	if interrupted && !rio.playbackStartedAt.IsZero() {
+		elapsed := time.Since(rio.playbackStartedAt)
+		if elapsed < playbackPosition {
+			playbackPosition = elapsed
+		}
+	}
 	ev := PlaybackFinishedEvent{
-		PlaybackPosition:       rio.playbackPosition,
+		PlaybackPosition:       playbackPosition,
 		Interrupted:            interrupted,
 		SynchronizedTranscript: synchronizedTranscript,
 		AudioFrames:            rio.playbackAudioFrames,
@@ -1610,6 +1621,7 @@ func (rio *RoomIO) finishPlayback(interrupted bool, synchronizedTranscript strin
 		AudioLastError:         rio.playbackAudioLastError,
 	}
 	rio.playbackPosition = 0
+	rio.playbackStartedAt = time.Time{}
 	rio.playbackAudioFrames = 0
 	rio.playbackAudioBytes = 0
 	rio.playbackAudioEncoded = 0
@@ -1723,6 +1735,9 @@ func (rio *RoomIO) markAudioSubscribed() {
 	ch := rio.audioSubscribed
 	rio.mu.Unlock()
 	if ch == nil {
+		if rio.AgentSession != nil {
+			rio.AgentSession.RefreshUserAwayTimer()
+		}
 		return
 	}
 	rio.audioSubOnce.Do(func() {
@@ -1731,6 +1746,27 @@ func (rio *RoomIO) markAudioSubscribed() {
 		rio.mu.Unlock()
 		close(ch)
 	})
+	if rio.AgentSession != nil {
+		rio.AgentSession.RefreshUserAwayTimer()
+	}
+}
+
+func (rio *RoomIO) userAwayTimerBlocked() bool {
+	if rio == nil || rio.Options.DisableAudioOutput {
+		return false
+	}
+	rio.mu.Lock()
+	ch := rio.audioSubscribed
+	rio.mu.Unlock()
+	if ch == nil {
+		return true
+	}
+	select {
+	case <-ch:
+		return false
+	default:
+		return true
+	}
 }
 
 func (rio *RoomIO) waitForAudioSubscription(ctx context.Context) error {
@@ -1851,6 +1887,9 @@ func callPlaybackFinishedHandler(handler func(PlaybackFinishedEvent), ev Playbac
 }
 
 func (rio *RoomIO) Close() error {
+	if rio.AgentSession != nil {
+		rio.AgentSession.SetUserAwayTimerGate(nil)
+	}
 	rio.dropPausedAudioOutput()
 	rio.mu.Lock()
 	rio.closed = true

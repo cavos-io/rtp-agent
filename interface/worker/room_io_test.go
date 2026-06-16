@@ -324,6 +324,32 @@ func TestRoomIOLocalTrackSubscriptionReleasesAudioOutput(t *testing.T) {
 	}
 }
 
+func TestRoomIOBlocksUserAwayUntilAudioSubscribed(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{UserAwayTimeout: 0.01})
+	rio := NewRoomIO(nil, session, RoomOptions{})
+	rio.audioSubscribed = make(chan struct{})
+	rio.audioSubOnce = sync.Once{}
+
+	session.UpdateAgentState(agent.AgentStateListening)
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		t.Fatalf("unexpected user state event before audio subscription = %q -> %q", ev.OldState, ev.NewState)
+	case <-time.After(40 * time.Millisecond):
+	}
+
+	rio.markAudioSubscribed()
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		if ev.OldState != agent.UserStateListening || ev.NewState != agent.UserStateAway {
+			t.Fatalf("event states = %q -> %q, want listening -> away after audio subscription", ev.OldState, ev.NewState)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserStateChangedCh did not receive away event after audio subscription")
+	}
+}
+
 func TestRoomIOAudioSubscriptionWaitFallsBackAfterTimeout(t *testing.T) {
 	rio := &RoomIO{
 		Options: RoomOptions{
@@ -660,8 +686,34 @@ func TestRoomIOClearBufferFinishesPlaybackAsInterrupted(t *testing.T) {
 	if !ev.Interrupted {
 		t.Fatal("PlaybackFinishedEvent.Interrupted = false, want true after ClearBuffer")
 	}
-	if ev.PlaybackPosition != 10*time.Millisecond {
-		t.Fatalf("PlaybackPosition = %v, want 10ms", ev.PlaybackPosition)
+	if ev.PlaybackPosition >= 10*time.Millisecond {
+		t.Fatalf("PlaybackPosition = %v, want less than full pushed duration after ClearBuffer", ev.PlaybackPosition)
+	}
+}
+
+func TestRoomIOClearBufferReportsOnlyPlayedAudioPosition(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 48000*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 48000,
+	}
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+
+	rio.ClearBuffer()
+
+	ev, err := rio.WaitForPlayout(context.Background())
+	if err != nil {
+		t.Fatalf("WaitForPlayout error = %v", err)
+	}
+	if !ev.Interrupted {
+		t.Fatal("PlaybackFinishedEvent.Interrupted = false, want true after ClearBuffer")
+	}
+	if ev.PlaybackPosition >= 100*time.Millisecond {
+		t.Fatalf("PlaybackPosition = %v, want only elapsed played audio after immediate ClearBuffer", ev.PlaybackPosition)
 	}
 }
 

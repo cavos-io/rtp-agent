@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -773,7 +774,7 @@ func TestPerformTTSInferenceUsesSynthesizeForNonStreamingTTS(t *testing.T) {
 	if string(frame.Data) != "chunked" {
 		t.Fatalf("audio data = %q, want chunked", frame.Data)
 	}
-	if want := "Say hello "; provider.synthesizeText != want {
+	if want := "Say hello"; provider.synthesizeText != want {
 		t.Fatalf("synthesize text = %q, want reference transformed text %q", provider.synthesizeText, want)
 	}
 	if !provider.stream.closed {
@@ -781,6 +782,51 @@ func TestPerformTTSInferenceUsesSynthesizeForNonStreamingTTS(t *testing.T) {
 	}
 	if _, ok := <-data.AudioCh; ok {
 		t.Fatal("AudioCh produced extra frame")
+	}
+}
+
+func TestPerformTTSInferenceStreamsNonStreamingTTSBeforeInputEnds(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	provider := &fakeGenerationChunkedTTS{
+		stream: &fakeGenerationChunkedStream{
+			frames: []*model.AudioFrame{
+				{
+					Data:              bytes.Repeat([]byte{1}, 960),
+					SampleRate:        24000,
+					NumChannels:       1,
+					SamplesPerChannel: 480,
+				},
+			},
+		},
+	}
+	textCh := make(chan string, 2)
+	textCh <- "This is the first complete sentence. "
+	textCh <- "Second sentence is still arriving"
+
+	data, err := PerformTTSInference(ctx, provider, textCh, WithTTSTextTransformsDisabled())
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+
+	select {
+	case frame, ok := <-data.AudioCh:
+		if !ok {
+			t.Fatal("AudioCh closed before audio, want first sentence audio before input end")
+		}
+		if frame == nil || len(frame.Data) == 0 {
+			t.Fatalf("audio frame = %#v, want first sentence audio before input end", frame)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for non-streaming TTS audio before input end")
+	}
+
+	cancel()
+	close(textCh)
+	for range data.AudioCh {
+	}
+	if len(provider.synthesizeTexts) == 0 || provider.synthesizeTexts[0] != "This is the first complete sentence." {
+		t.Fatalf("synthesize texts = %#v, want first sentence before input end", provider.synthesizeTexts)
 	}
 }
 
@@ -818,7 +864,7 @@ func TestPerformTTSInferenceNonStreamingReplacesReferenceSubstrings(t *testing.T
 	}
 }
 
-func TestPerformTTSInferenceNonStreamingPreservesReferenceWhitespace(t *testing.T) {
+func TestPerformTTSInferenceNonStreamingTrimsProviderInputLikeReferenceAdapter(t *testing.T) {
 	provider := &fakeGenerationChunkedTTS{
 		stream: &fakeGenerationChunkedStream{
 			frames: []*model.AudioFrame{
@@ -841,8 +887,8 @@ func TestPerformTTSInferenceNonStreamingPreservesReferenceWhitespace(t *testing.
 	}
 	<-data.AudioCh
 
-	if want := " hello "; provider.synthesizeText != want {
-		t.Fatalf("synthesize text = %q, want reference whitespace-preserving input %q", provider.synthesizeText, want)
+	if want := "hello"; provider.synthesizeText != want {
+		t.Fatalf("synthesize text = %q, want reference stream-adapter trimmed input %q", provider.synthesizeText, want)
 	}
 }
 
@@ -1440,6 +1486,75 @@ func TestPerformToolExecutionsCancelTaskToolCancelsCancellableTool(t *testing.T)
 	}
 }
 
+func TestPerformToolExecutionsCancelTaskHonorsCurrentSpeechInterruptions(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	tool := &blockingGenerationTool{
+		flags:   llm.ToolFlagCancellable,
+		started: make(chan struct{}, 1),
+		args:    make(chan string, 1),
+		release: make(chan struct{}),
+	}
+	toolCtx := llm.NewToolContext([]interface{}{tool, getRunningTasksTool{}, cancelTaskTool{}})
+	functionCh := make(chan *llm.FunctionToolCall)
+	outputs := PerformToolExecutions(
+		context.Background(),
+		functionCh,
+		toolCtx,
+		WithToolExecutionSession(session),
+		WithToolExecutionSpeechHandle(speech),
+	)
+
+	functionCh <- &llm.FunctionToolCall{
+		ID:        "item_lookup",
+		Type:      "function",
+		Name:      "lookup",
+		CallID:    "call_lookup_a",
+		Arguments: `{"city":"Paris"}`,
+	}
+	select {
+	case <-tool.started:
+	case <-testTimeout():
+		t.Fatal("cancellable lookup did not start")
+	}
+	if err := speech.SetAllowInterruptions(false); err != nil {
+		t.Fatalf("SetAllowInterruptions(false) error = %v, want nil before interruption", err)
+	}
+
+	functionCh <- &llm.FunctionToolCall{
+		ID:        "item_cancel",
+		Type:      "function",
+		Name:      cancelTaskToolName,
+		CallID:    "call_cancel",
+		Arguments: `{"call_id":"call_lookup_a"}`,
+	}
+	cancelOutput := mustReceiveToolOutput(t, outputs)
+	if cancelOutput.FncCall.Name != cancelTaskToolName {
+		t.Fatalf("first output = %s, want cancel task output", cancelOutput.FncCall.Name)
+	}
+	if cancelOutput.RawError == nil {
+		t.Fatal("cancel task RawError = nil, want interruptions-disallowed ToolError")
+	}
+	if got, want := cancelOutput.RawError.Error(), "Tool call call_lookup_a is not cancellable because interruptions are disallowed"; got != want {
+		t.Fatalf("cancel task RawError = %q, want reference message %q", got, want)
+	}
+	if cancelOutput.FncCallOut == nil || !cancelOutput.FncCallOut.IsError || cancelOutput.FncCallOut.Output != cancelOutput.RawError.Error() {
+		t.Fatalf("cancel task FncCallOut = %#v, want visible ToolError output", cancelOutput.FncCallOut)
+	}
+
+	close(tool.release)
+	close(functionCh)
+	var lookupCompleted bool
+	for output := range outputs {
+		if output.FncCall.Name == "lookup" {
+			lookupCompleted = output.RawOutput == "ok" && output.RawError == nil
+		}
+	}
+	if !lookupCompleted {
+		t.Fatal("lookup did not complete normally after cancellation was rejected")
+	}
+}
+
 func TestPerformToolExecutionsDetachesRunContextAfterReturn(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	tool := &runContextRecordingTool{}
@@ -1842,8 +1957,9 @@ func (f *fakeGenerationTTSStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 type fakeGenerationChunkedTTS struct {
-	stream         *fakeGenerationChunkedStream
-	synthesizeText string
+	stream          *fakeGenerationChunkedStream
+	synthesizeText  string
+	synthesizeTexts []string
 }
 
 func (f *fakeGenerationChunkedTTS) Label() string { return "fake-generation-chunked-tts" }
@@ -1858,6 +1974,7 @@ func (f *fakeGenerationChunkedTTS) NumChannels() int { return 1 }
 
 func (f *fakeGenerationChunkedTTS) Synthesize(_ context.Context, text string) (tts.ChunkedStream, error) {
 	f.synthesizeText = text
+	f.synthesizeTexts = append(f.synthesizeTexts, text)
 	return f.stream, nil
 }
 

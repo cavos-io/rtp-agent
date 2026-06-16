@@ -1098,6 +1098,49 @@ func TestAgentActivityUserTurnExceededWaitDoesNotConsumeLegacyAgentStateChannel(
 	}
 }
 
+func TestAgentActivityFinalTranscriptEmitsUserTurnExceededAtMaxWords(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{UserTurnLimitMaxWords: 3})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	defer activity.Stop()
+	events := session.UserTurnExceededEvents()
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "one two", Confidence: 0.9}},
+	})
+	select {
+	case ev := <-events:
+		t.Fatalf("UserTurnExceeded emitted early: %#v", ev)
+	default:
+	}
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "three", Confidence: 0.9}},
+	})
+	select {
+	case ev := <-events:
+		if ev.Transcript != "three" || ev.AccumulatedTranscript != "one two three" || ev.AccumulatedWordCount != 3 {
+			t.Fatalf("UserTurnExceededEvent = %#v, want latest three with accumulated one two three/3", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserTurnExceededEvents did not receive word-limit event")
+	}
+
+	session.UpdateAgentState(AgentStateSpeaking)
+	session.UpdateAgentState(AgentStateListening)
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "one two", Confidence: 0.9}},
+	})
+	select {
+	case ev := <-events:
+		t.Fatalf("UserTurnExceeded emitted after agent speech reset: %#v", ev)
+	default:
+	}
+}
+
 func TestAgentActivityRealtimeInputSpeechStoppedEmitsInterimTranscriptWhenEnabled(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -2757,6 +2800,61 @@ func TestAgentActivityCommitUserTurnFallsBackToInterimTranscriptAfterTimeout(t *
 	}
 }
 
+func TestAgentActivityCommitUserTurnFlushesSTTBeforeWaitingForFinal(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	flusher := &recordingTranscriptFlusher{flushed: make(chan struct{}, 1)}
+	session.Assistant = flusher
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	done := make(chan string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{
+			TranscriptTimeout: 100 * time.Millisecond,
+			STTFlushDuration:  20 * time.Millisecond,
+		})
+		if err != nil {
+			errCh <- err
+			return
+		}
+		done <- transcript
+	}()
+
+	select {
+	case <-flusher.flushed:
+	case <-time.After(time.Second):
+		t.Fatal("CommitUserTurn did not flush input transcription before waiting for final transcript")
+	}
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "flushed final",
+			Language:   "en",
+			Confidence: 0.92,
+		}},
+	})
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	case transcript := <-done:
+		if transcript != "flushed final" {
+			t.Fatalf("CommitUserTurn transcript = %q, want flushed final", transcript)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CommitUserTurn did not return after flushed final transcript")
+	}
+	if flusher.calls != 1 {
+		t.Fatalf("FlushInputTranscription calls = %d, want 1", flusher.calls)
+	}
+	if flusher.flushDuration != 20*time.Millisecond {
+		t.Fatalf("FlushInputTranscription duration = %v, want 20ms", flusher.flushDuration)
+	}
+}
+
 func TestAgentActivityCommitUserTurnGeneratesReplyWhenLLMConfigured(t *testing.T) {
 	agent := NewAgent("test")
 	agent.TurnDetection = TurnDetectionModeManual
@@ -3897,6 +3995,29 @@ type turnCompletedAgent struct {
 
 func (a *turnCompletedAgent) OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContext, newMsg *llm.ChatMessage) error {
 	a.turns <- newMsg
+	return nil
+}
+
+type recordingTranscriptFlusher struct {
+	calls         int
+	flushDuration time.Duration
+	flushed       chan struct{}
+}
+
+func (r *recordingTranscriptFlusher) Start(context.Context, *AgentSession) error { return nil }
+
+func (r *recordingTranscriptFlusher) OnAudioFrame(context.Context, *model.AudioFrame) {}
+
+func (r *recordingTranscriptFlusher) SetPublishAudio(func(context.Context, *model.AudioFrame) error) {
+}
+
+func (r *recordingTranscriptFlusher) FlushInputTranscription(_ context.Context, duration time.Duration) error {
+	r.calls++
+	r.flushDuration = duration
+	select {
+	case r.flushed <- struct{}{}:
+	default:
+	}
 	return nil
 }
 
