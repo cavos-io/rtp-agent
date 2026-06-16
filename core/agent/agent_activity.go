@@ -1371,6 +1371,7 @@ func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 	a.userSpeechStartedAt = time.Now()
 	a.userSpeechStoppedAt = time.Time{}
 	a.clearUserAudioFrames()
+	a.clearHeldUserTranscriptWindow()
 	if a.Session != nil {
 		a.Session.UpdateUserState(UserStateSpeaking)
 	}
@@ -1580,6 +1581,15 @@ func (a *AgentActivity) holdUserTranscriptsUntil(ignoreUntil time.Time) {
 	if a.ignoreUserTranscriptUntil.IsZero() || ignoreUntil.Before(a.ignoreUserTranscriptUntil) {
 		a.ignoreUserTranscriptUntil = ignoreUntil
 	}
+	a.userTurnMu.Unlock()
+}
+
+func (a *AgentActivity) clearHeldUserTranscriptWindow() {
+	if a == nil {
+		return
+	}
+	a.userTurnMu.Lock()
+	a.ignoreUserTranscriptUntil = time.Time{}
 	a.userTurnMu.Unlock()
 }
 

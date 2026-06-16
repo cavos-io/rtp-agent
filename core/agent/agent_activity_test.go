@@ -2111,6 +2111,43 @@ func TestAgentActivityDropsInterimTranscriptBeforeAgentSpeechEnd(t *testing.T) {
 	}
 }
 
+func TestAgentActivityStartOfSpeechClearsHeldTranscriptIgnoreWindow(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeVAD})
+	activity := NewAgentActivity(agent, session)
+	userTranscriptEvents := session.UserInputTranscribedEvents()
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	defer current.MarkDone()
+	startedAt := time.Unix(100, 0)
+	activity.userSpeechStartedAt = startedAt
+	activity.holdUserTranscriptsUntil(startedAt.Add(time.Second))
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	if !activity.ignoreUserTranscriptUntil.IsZero() {
+		t.Fatalf("ignoreUserTranscriptUntil = %v, want cleared after start of speech", activity.ignoreUserTranscriptUntil)
+	}
+
+	activity.userSpeechStartedAt = startedAt
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:      "new speech",
+			StartTime: 0.25,
+			EndTime:   0.5,
+		}},
+	})
+
+	select {
+	case ev := <-userTranscriptEvents:
+		if ev.Transcript != "new speech" || ev.IsFinal {
+			t.Fatalf("event = %#v, want non-final new speech", ev)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("UserInputTranscribedEvents did not receive new speech after start reset")
+	}
+}
+
 func TestAgentActivityOnFinalTranscriptSkipsEmptyTranscript(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}
