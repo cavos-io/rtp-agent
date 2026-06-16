@@ -5069,7 +5069,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = cartesia.NewCartesiaTTS("", cfg.TTSVoice, cfg.TTSModel, ttsOpts...)
 	case providerCavos:
-		a.TTS = cavosTTSFromConfig(cfg)
+		a.TTS = ensureTTSStreaming(cavosTTSFromConfig(cfg))
 	case providerClova:
 		a.TTS = clova.NewClovaTTS(cfg.ClovaClientID, cfg.ClovaClientSecret, cfg.TTSVoice)
 	case providerDeepgram:

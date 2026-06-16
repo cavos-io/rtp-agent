@@ -10648,17 +10648,20 @@ func TestDefaultConfigFromEnvSelectsCavosSpeechProviders(t *testing.T) {
 	if app.Session.TTS == nil {
 		t.Fatal("Session TTS is nil")
 	}
-	if got := app.Session.TTS.Label(); got != "cavos.TTS" {
-		t.Fatalf("TTS label = %q, want cavos.TTS", got)
+	if got := app.Session.TTS.Label(); got != "StreamAdapter(cavos.TTS)" {
+		t.Fatalf("TTS label = %q, want StreamAdapter(cavos.TTS)", got)
 	}
 	if got := tts.Provider(app.Session.TTS); got != "cavos" {
-		t.Fatalf("TTS provider = %q, want cavos", got)
+		t.Fatalf("TTS provider = %q, want StreamAdapter to forward cavos provider metadata", got)
 	}
 	if got := tts.Model(app.Session.TTS); got != "supertonic-3" {
-		t.Fatalf("TTS model = %q, want supertonic-3", got)
+		t.Fatalf("TTS model = %q, want StreamAdapter to forward supertonic-3 model metadata", got)
 	}
 	if got := app.Session.TTS.SampleRate(); got != 44100 {
 		t.Fatalf("TTS sample rate = %d, want 44100", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || !caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want stream adapter capabilities", caps)
 	}
 }
 
