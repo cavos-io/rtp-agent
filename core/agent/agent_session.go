@@ -58,6 +58,8 @@ type AgentSessionOptions struct {
 	UserAwayTimeout                          float64
 	UserAwayTimeoutSet                       bool
 	DisableUserAwayTimeout                   bool
+	UserTurnLimitMaxWords                    int
+	UserTurnLimitMaxDuration                 float64
 	FalseInterruptionTimeout                 float64
 	FalseInterruptionTimeoutSet              bool
 	ResumeFalseInterruption                  bool

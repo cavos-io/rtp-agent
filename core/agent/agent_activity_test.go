@@ -1098,6 +1098,49 @@ func TestAgentActivityUserTurnExceededWaitDoesNotConsumeLegacyAgentStateChannel(
 	}
 }
 
+func TestAgentActivityFinalTranscriptEmitsUserTurnExceededAtMaxWords(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{UserTurnLimitMaxWords: 3})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	defer activity.Stop()
+	events := session.UserTurnExceededEvents()
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "one two", Confidence: 0.9}},
+	})
+	select {
+	case ev := <-events:
+		t.Fatalf("UserTurnExceeded emitted early: %#v", ev)
+	default:
+	}
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "three", Confidence: 0.9}},
+	})
+	select {
+	case ev := <-events:
+		if ev.Transcript != "three" || ev.AccumulatedTranscript != "one two three" || ev.AccumulatedWordCount != 3 {
+			t.Fatalf("UserTurnExceededEvent = %#v, want latest three with accumulated one two three/3", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserTurnExceededEvents did not receive word-limit event")
+	}
+
+	session.UpdateAgentState(AgentStateSpeaking)
+	session.UpdateAgentState(AgentStateListening)
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "one two", Confidence: 0.9}},
+	})
+	select {
+	case ev := <-events:
+		t.Fatalf("UserTurnExceeded emitted after agent speech reset: %#v", ev)
+	default:
+	}
+}
+
 func TestAgentActivityRealtimeInputSpeechStoppedEmitsInterimTranscriptWhenEnabled(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
