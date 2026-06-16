@@ -906,14 +906,14 @@ func isSLNGTTSEndEvent(message map[string]any) bool {
 }
 
 func sttEventsFromMessage(payload []byte, defaultLanguage string, partials bool) ([]*stt.SpeechEvent, error) {
-	events, _, err := sttEventsFromMessageWithSpeechState(payload, defaultLanguage, partials, false)
+	events, _, _, err := sttEventsFromMessageWithSpeechState(payload, defaultLanguage, partials, false, 0)
 	return events, err
 }
 
-func sttEventsFromMessageWithSpeechState(payload []byte, defaultLanguage string, partials bool, speechStarted bool) ([]*stt.SpeechEvent, bool, error) {
+func sttEventsFromMessageWithSpeechState(payload []byte, defaultLanguage string, partials bool, speechStarted bool, speechDuration float64) ([]*stt.SpeechEvent, bool, float64, error) {
 	var message map[string]any
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return nil, speechStarted, err
+		return nil, speechStarted, speechDuration, err
 	}
 	messageType := slngString(message["type"])
 	if messageType == "Results" {
@@ -921,19 +921,22 @@ func sttEventsFromMessageWithSpeechState(payload []byte, defaultLanguage string,
 		messageType = slngString(message["type"])
 	}
 	if messageType == "Error" {
-		return nil, speechStarted, fmt.Errorf("slng stt error: %s", extractSLNGError(message))
+		return nil, speechStarted, speechDuration, fmt.Errorf("slng stt error: %s", extractSLNGError(message))
 	}
 	if messageType == "partial_transcript" && !partials {
-		return nil, speechStarted, nil
+		return nil, speechStarted, speechDuration, nil
 	}
 	if messageType != "partial_transcript" && messageType != "final_transcript" {
-		return nil, speechStarted, nil
-	}
-	text := slngString(message["transcript"])
-	if text == "" {
-		return nil, speechStarted, nil
+		return nil, speechStarted, speechDuration, nil
 	}
 	isFinal := messageType == "final_transcript"
+	text := slngString(message["transcript"])
+	if text == "" {
+		if isFinal && speechDuration > 0 {
+			return []*stt.SpeechEvent{slngSTTRecognitionUsageEvent(speechDuration)}, speechStarted, 0, nil
+		}
+		return nil, speechStarted, speechDuration, nil
+	}
 	eventType := stt.SpeechEventInterimTranscript
 	if isFinal {
 		eventType = stt.SpeechEventFinalTranscript
@@ -962,8 +965,19 @@ func sttEventsFromMessageWithSpeechState(payload []byte, defaultLanguage string,
 	if isFinal {
 		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
 		speechStarted = false
+		if speechDuration > 0 {
+			events = append(events, slngSTTRecognitionUsageEvent(speechDuration))
+			speechDuration = 0
+		}
 	}
-	return events, speechStarted, nil
+	return events, speechStarted, speechDuration, nil
+}
+
+func slngSTTRecognitionUsageEvent(audioDuration float64) *stt.SpeechEvent {
+	return &stt.SpeechEvent{
+		Type:             stt.SpeechEventRecognitionUsage,
+		RecognitionUsage: &stt.RecognitionUsage{AudioDuration: audioDuration},
+	}
 }
 
 func normalizeSLNGResults(message map[string]any) map[string]any {
@@ -996,6 +1010,7 @@ type sttStream struct {
 	audioBuffer       []byte
 	pendingEvents     []*stt.SpeechEvent
 	speechStarted     bool
+	speechDuration    float64
 }
 
 func (s *sttStream) PushFrame(frame *model.AudioFrame) error {
@@ -1027,7 +1042,23 @@ func (s *sttStream) writeAlignedAudio(chunk []byte) error {
 	if len(chunk)%slngSTTBytesPerSample(s.encoding) != 0 {
 		return nil
 	}
-	return s.conn.WriteMessage(websocket.BinaryMessage, chunk)
+	if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
+		return err
+	}
+	s.speechDuration += s.audioDuration(chunk)
+	return nil
+}
+
+func (s *sttStream) audioDuration(chunk []byte) float64 {
+	sampleRate := s.sampleRate
+	if sampleRate <= 0 {
+		sampleRate = defaultSLNGSTTSampleRate
+	}
+	bytesPerSample := slngSTTBytesPerSample(s.encoding)
+	if bytesPerSample <= 0 || len(chunk) == 0 {
+		return 0
+	}
+	return float64(len(chunk)/bytesPerSample) / float64(sampleRate)
 }
 
 func (s *sttStream) audioChunkBytes() int {
@@ -1074,11 +1105,12 @@ func (s *sttStream) Next() (*stt.SpeechEvent, error) {
 		if msgType != websocket.TextMessage {
 			continue
 		}
-		events, speechStarted, err := sttEventsFromMessageWithSpeechState(payload, s.language, s.partials, s.speechStarted)
+		events, speechStarted, speechDuration, err := sttEventsFromMessageWithSpeechState(payload, s.language, s.partials, s.speechStarted, s.speechDuration)
 		if err != nil {
 			return nil, err
 		}
 		s.speechStarted = speechStarted
+		s.speechDuration = speechDuration
 		if len(events) > 0 {
 			event := events[0]
 			s.pendingEvents = append(s.pendingEvents, events[1:]...)
