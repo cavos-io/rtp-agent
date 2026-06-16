@@ -445,6 +445,9 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 	}
 	defer speech.MarkDone()
 	speech.AuthorizeGeneration()
+	if speech.IsInterrupted() {
+		return
+	}
 
 	if speech.Generation.Text != "" {
 		va.mu.Lock()

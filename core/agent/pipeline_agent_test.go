@@ -2766,6 +2766,36 @@ func TestPipelineAgentScheduledSaySpeaksProvidedTextWithoutLLM(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentScheduledSaySkipsInterruptedSpeechBeforeSynthesis(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	ttsStream := &fakePipelineTTSStream{}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, &fakeGenerationLLM{}, &fakePipelineTTS{stream: ttsStream}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	speech.Generation.Text = "unheard"
+	speech.Generation.AssistantMessage = &llm.ChatMessage{
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{{Text: "unheard"}},
+	}
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	if got := ttsStream.text.String(); got != "" {
+		t.Fatalf("TTS text = %q, want no synthesis for interrupted speech", got)
+	}
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chatCtx.Items = %#v, want no assistant commit for interrupted speech", chatCtx.Items)
+	}
+	if len(speech.ChatItems()) != 0 {
+		t.Fatalf("speech.ChatItems = %#v, want no committed chat items", speech.ChatItems())
+	}
+}
+
 func TestPipelineAgentScheduledSayPersistsAssistantTextInAgentChatContext(t *testing.T) {
 	pipelineCtx := llm.NewChatContext()
 	ttsStream := &fakePipelineTTSStream{}
