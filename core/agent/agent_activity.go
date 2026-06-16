@@ -1577,11 +1577,21 @@ func (a *AgentActivity) holdUserTranscriptsUntil(ignoreUntil time.Time) {
 	if a == nil || ignoreUntil.IsZero() {
 		return
 	}
+	if cooldown := a.heldTranscriptEndCooldown(); cooldown > 0 {
+		ignoreUntil = ignoreUntil.Add(-cooldown)
+	}
 	a.userTurnMu.Lock()
 	if a.ignoreUserTranscriptUntil.IsZero() || ignoreUntil.Before(a.ignoreUserTranscriptUntil) {
 		a.ignoreUserTranscriptUntil = ignoreUntil
 	}
 	a.userTurnMu.Unlock()
+}
+
+func (a *AgentActivity) heldTranscriptEndCooldown() time.Duration {
+	if a == nil || a.Session == nil {
+		return 0
+	}
+	return time.Duration(a.Session.Options.BackchannelBoundaryEnd * float64(time.Second))
 }
 
 func overlappingSpeechIgnoreUntil(ev OverlappingSpeechEvent) time.Time {

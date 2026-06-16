@@ -723,8 +723,9 @@ func TestAgentActivityOnInterruptionPauseUsesOverlapTimestampForHeldTranscripts(
 		OverlapStartedAt: &overlapStartedAt,
 	})
 
-	if !activity.ignoreUserTranscriptUntil.Equal(overlapStartedAt) {
-		t.Fatalf("ignoreUserTranscriptUntil = %v, want overlap start %v", activity.ignoreUserTranscriptUntil, overlapStartedAt)
+	wantIgnoreUntil := overlapStartedAt.Add(-time.Second)
+	if !activity.ignoreUserTranscriptUntil.Equal(wantIgnoreUntil) {
+		t.Fatalf("ignoreUserTranscriptUntil = %v, want overlap start minus cooldown %v", activity.ignoreUserTranscriptUntil, wantIgnoreUntil)
 	}
 }
 
@@ -2054,7 +2055,7 @@ func TestAgentActivityDropsFinalTranscriptBeforeAgentSpeechEnd(t *testing.T) {
 	userTranscriptEvents := session.UserInputTranscribedEvents()
 	startedAt := time.Unix(100, 0)
 	activity.userSpeechStartedAt = startedAt
-	activity.holdUserTranscriptsUntil(startedAt.Add(time.Second))
+	activity.holdUserTranscriptsUntil(startedAt.Add(2 * time.Second))
 
 	activity.OnFinalTranscript(&stt.SpeechEvent{
 		Alternatives: []stt.SpeechData{{
@@ -2076,7 +2077,7 @@ func TestAgentActivityDropsFinalTranscriptBeforeAgentSpeechEnd(t *testing.T) {
 	activity.OnFinalTranscript(&stt.SpeechEvent{
 		Alternatives: []stt.SpeechData{{
 			Text:       "new turn",
-			EndTime:    1.5,
+			EndTime:    2.5,
 			Confidence: 0.9,
 		}},
 	})
@@ -2094,6 +2095,34 @@ func TestAgentActivityDropsFinalTranscriptBeforeAgentSpeechEnd(t *testing.T) {
 	}
 }
 
+func TestAgentActivityHeldFinalTranscriptUsesReferenceEndCooldown(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	userTranscriptEvents := session.UserInputTranscribedEvents()
+	startedAt := time.Unix(100, 0)
+	activity.userSpeechStartedAt = startedAt
+	activity.holdUserTranscriptsUntil(startedAt.Add(time.Second))
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "near boundary",
+			EndTime:    0.5,
+			Confidence: 0.9,
+		}},
+	})
+
+	select {
+	case ev := <-userTranscriptEvents:
+		if ev.Transcript != "near boundary" || !ev.IsFinal {
+			t.Fatalf("event = %#v, want final near boundary transcript", ev)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("UserInputTranscribedEvents did not receive near-boundary transcript")
+	}
+}
+
 func TestAgentActivityDropsInterimTranscriptBeforeAgentSpeechEnd(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}
@@ -2105,7 +2134,7 @@ func TestAgentActivityDropsInterimTranscriptBeforeAgentSpeechEnd(t *testing.T) {
 	defer current.MarkDone()
 	startedAt := time.Unix(100, 0)
 	activity.userSpeechStartedAt = startedAt
-	activity.holdUserTranscriptsUntil(startedAt.Add(time.Second))
+	activity.holdUserTranscriptsUntil(startedAt.Add(2 * time.Second))
 
 	activity.OnInterimTranscript(&stt.SpeechEvent{
 		Alternatives: []stt.SpeechData{{
@@ -2127,8 +2156,8 @@ func TestAgentActivityDropsInterimTranscriptBeforeAgentSpeechEnd(t *testing.T) {
 	activity.OnInterimTranscript(&stt.SpeechEvent{
 		Alternatives: []stt.SpeechData{{
 			Text:      "new interim",
-			StartTime: 1.25,
-			EndTime:   1.5,
+			StartTime: 2.25,
+			EndTime:   2.5,
 		}},
 	})
 

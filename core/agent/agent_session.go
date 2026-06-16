@@ -62,6 +62,8 @@ type AgentSessionOptions struct {
 	FalseInterruptionTimeoutSet              bool
 	ResumeFalseInterruption                  bool
 	ResumeFalseInterruptionSet               bool
+	BackchannelBoundaryEnd                   float64
+	BackchannelBoundaryEndSet                bool
 	MinConsecutiveSpeechDelay                float64
 	UseTTSAlignedTranscript                  bool
 	TTSStreamPacer                           *tts.SentenceStreamPacerOptions
@@ -962,6 +964,9 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	}
 	if !opts.ResumeFalseInterruptionSet {
 		opts.ResumeFalseInterruption = true
+	}
+	if !opts.BackchannelBoundaryEndSet && opts.BackchannelBoundaryEnd == 0 {
+		opts.BackchannelBoundaryEnd = 1.0
 	}
 	if !opts.PreemptiveGenerationSet {
 		opts.PreemptiveGeneration = true
