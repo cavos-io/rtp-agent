@@ -445,6 +445,9 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 	}
 	defer speech.MarkDone()
 	speech.AuthorizeGeneration()
+	if speech.IsInterrupted() {
+		return
+	}
 
 	if speech.Generation.Text != "" {
 		va.mu.Lock()
@@ -453,7 +456,7 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 		if session == nil {
 			return
 		}
-		if _, err := va.synthesizeSpeech(ctx, session, singleTextChannel(speech.Generation.Text)); err != nil {
+		if _, err := va.synthesizeSpeech(ctx, session, singleTextChannel(speech.Generation.Text), speech); err != nil {
 			logger.Logger.Errorw("TTS inference failed", err)
 			va.emitTTSError(session, err)
 		}
@@ -579,9 +582,9 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			ttsGen = opts.SpeechHandle.takePrecomputedTTSGeneration()
 		}
 		if ttsGen != nil {
-			ttsGen, err = va.playTTSGeneration(ctx, session, ttsGen)
+			ttsGen, err = va.playTTSGeneration(ctx, session, ttsGen, opts.SpeechHandle)
 		} else {
-			ttsGen, err = va.synthesizeSpeech(ctx, session, genData.TextCh)
+			ttsGen, err = va.synthesizeSpeech(ctx, session, genData.TextCh, opts.SpeechHandle)
 		}
 		if err != nil {
 			logger.Logger.Errorw("TTS inference failed", err)
@@ -595,11 +598,14 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		}
 		va.emitLLMMetrics(session, genData)
 
-		if genData.GeneratedText != "" {
+		va.waitForAssistantPlayout(ctx, session, opts.SpeechHandle)
+		forwardedText := va.forwardedAssistantTextAfterInterruption(ctx, session, opts.SpeechHandle, genData.GeneratedText)
+		if forwardedText != "" {
 			args := llm.ChatMessageArgs{
-				ID:   genData.ID,
-				Role: llm.ChatRoleAssistant,
-				Text: genData.GeneratedText,
+				ID:          genData.ID,
+				Role:        llm.ChatRoleAssistant,
+				Text:        forwardedText,
+				Interrupted: opts.SpeechHandle != nil && opts.SpeechHandle.IsInterrupted(),
 			}
 			if len(genData.GeneratedExtra) > 0 {
 				args.Extra = genData.GeneratedExtra
@@ -698,6 +704,42 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		toolSteps++
 		// Loop back to LLM with tool outputs
 	}
+}
+
+func (va *PipelineAgent) waitForAssistantPlayout(ctx context.Context, session *AgentSession, speech *SpeechHandle) {
+	if session == nil || (speech != nil && speech.IsInterrupted()) {
+		return
+	}
+	playback := session.AudioPlaybackController()
+	if playback == nil {
+		return
+	}
+	if _, err := playback.WaitForPlayout(ctx); err != nil {
+		logger.Logger.Warnw("failed to wait for assistant playback", err)
+	}
+}
+
+func (va *PipelineAgent) forwardedAssistantTextAfterInterruption(ctx context.Context, session *AgentSession, speech *SpeechHandle, generatedText string) string {
+	if generatedText == "" || speech == nil || !speech.IsInterrupted() || session == nil {
+		return generatedText
+	}
+	playback := session.AudioPlaybackController()
+	if playback == nil {
+		return generatedText
+	}
+	playback.ClearBuffer()
+	ev, err := playback.WaitForPlayout(ctx)
+	if err != nil {
+		logger.Logger.Warnw("failed to wait for interrupted playback", err)
+		return generatedText
+	}
+	if ev.SynchronizedTranscript != "" {
+		return ev.SynchronizedTranscript
+	}
+	if ev.PlaybackPosition <= 0 {
+		return ""
+	}
+	return generatedText
 }
 
 func (va *PipelineAgent) precomputeLLMGeneration(ctx context.Context, session *AgentSession, opts pipelineReplyOptions) (*LLMGenerationData, error) {
@@ -823,7 +865,7 @@ func llmCachedPromptTokens(usage *llm.CompletionUsage) int {
 	return usage.PromptCachedTokens + usage.CacheCreationTokens + usage.CacheReadTokens
 }
 
-func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSession, textCh <-chan string) (*TTSGenerationData, error) {
+func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSession, textCh <-chan string, speech *SpeechHandle) (*TTSGenerationData, error) {
 	transcriptSync := NewTranscriptSynchronizer(0)
 	useAlignedTranscript := va.useTTSAlignedTranscript(session)
 	var transcriptionDone <-chan struct{}
@@ -843,14 +885,14 @@ func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSes
 	if useAlignedTranscript {
 		transcriptionDone = va.forwardAlignedAgentOutputTranscription(session, ttsGen.TimedTextCh)
 	}
-	return va.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, transcriptionDone)
+	return va.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, transcriptionDone, speech)
 }
 
 func (va *PipelineAgent) startTTSGeneration(ctx context.Context, session *AgentSession, textCh <-chan string) (*TTSGenerationData, error) {
 	return PerformTTSInference(ctx, va.tts, textCh, va.ttsInferenceOptions(session)...)
 }
 
-func (va *PipelineAgent) playTTSGeneration(ctx context.Context, session *AgentSession, ttsGen *TTSGenerationData) (*TTSGenerationData, error) {
+func (va *PipelineAgent) playTTSGeneration(ctx context.Context, session *AgentSession, ttsGen *TTSGenerationData, speech *SpeechHandle) (*TTSGenerationData, error) {
 	if ttsGen == nil {
 		return nil, nil
 	}
@@ -861,10 +903,10 @@ func (va *PipelineAgent) playTTSGeneration(ctx context.Context, session *AgentSe
 		<-transcriptionDone
 		transcriptionDone = va.forwardAlignedAgentOutputTranscription(session, ttsGen.TimedTextCh)
 	}
-	return va.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, transcriptionDone)
+	return va.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, transcriptionDone, speech)
 }
 
-func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, session *AgentSession, ttsGen *TTSGenerationData, transcriptSync *TranscriptSynchronizer, transcriptionDone <-chan struct{}) (*TTSGenerationData, error) {
+func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, session *AgentSession, ttsGen *TTSGenerationData, transcriptSync *TranscriptSynchronizer, transcriptionDone <-chan struct{}, speech *SpeechHandle) (*TTSGenerationData, error) {
 	session.UpdateAgentState(AgentStateSpeaking)
 	for frame := range ttsGen.AudioCh {
 		select {
@@ -873,6 +915,11 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 			<-transcriptionDone
 			return ttsGen, ctx.Err()
 		default:
+			if speech != nil && speech.IsInterrupted() {
+				transcriptSync.Close()
+				<-transcriptionDone
+				return ttsGen, nil
+			}
 			transcriptSync.PushAudio(frame)
 			if va.PublishAudio != nil {
 				if err := va.PublishAudio(ctx, frame); err != nil {
@@ -880,6 +927,11 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 					<-transcriptionDone
 					return ttsGen, err
 				}
+			}
+			if speech != nil && speech.IsInterrupted() {
+				transcriptSync.Close()
+				<-transcriptionDone
+				return ttsGen, nil
 			}
 		}
 	}

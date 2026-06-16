@@ -305,11 +305,34 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 
 	if !opts.DisableAudioOutput {
 		session.SetAudioOutputController(rio)
+		session.SetAudioPlaybackController(roomIOPlaybackController{rio: rio})
 		session.EnsureAssistant().SetPublishAudio(rio.PublishAudio)
 	}
 
 	rio.AttachRoom(room)
 	return rio
+}
+
+type roomIOPlaybackController struct {
+	rio *RoomIO
+}
+
+func (c roomIOPlaybackController) ClearBuffer() {
+	if c.rio != nil {
+		c.rio.ClearBuffer()
+	}
+}
+
+func (c roomIOPlaybackController) WaitForPlayout(ctx context.Context) (agent.AudioPlaybackResult, error) {
+	if c.rio == nil {
+		return agent.AudioPlaybackResult{}, nil
+	}
+	ev, err := c.rio.WaitForPlayout(ctx)
+	return agent.AudioPlaybackResult{
+		PlaybackPosition:       ev.PlaybackPosition,
+		Interrupted:            ev.Interrupted,
+		SynchronizedTranscript: ev.SynchronizedTranscript,
+	}, err
 }
 
 func (rio *RoomIO) AttachRoom(room *lksdk.Room) {

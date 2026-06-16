@@ -1163,7 +1163,7 @@ func TestPipelineAgentSessionOptionDisablesTTSTextTransforms(t *testing.T) {
 	})
 	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{stream: providerStream}, llm.NewChatContext())
 
-	if _, err := agent.synthesizeSpeech(context.Background(), session, singleTextChannel("Say **bold** now")); err != nil {
+	if _, err := agent.synthesizeSpeech(context.Background(), session, singleTextChannel("Say **bold** now"), nil); err != nil {
 		t.Fatalf("synthesizeSpeech error = %v", err)
 	}
 
@@ -1188,7 +1188,7 @@ func TestPipelineAgentSessionOptionSelectsTTSTextTransforms(t *testing.T) {
 	})
 	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{stream: providerStream}, llm.NewChatContext())
 
-	if _, err := agent.synthesizeSpeech(context.Background(), session, singleTextChannel("Say **hi** 😊")); err != nil {
+	if _, err := agent.synthesizeSpeech(context.Background(), session, singleTextChannel("Say **hi** 😊"), nil); err != nil {
 		t.Fatalf("synthesizeSpeech error = %v", err)
 	}
 
@@ -2055,6 +2055,53 @@ func TestPipelineAgentEmitsTTSErrorEventForPublishAudioFailure(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentStopsPublishingTTSAfterSpeechInterrupted(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	ttsSource := &fakePipelineTTS{stream: &fakePipelineTTSStream{
+		frames: []*model.AudioFrame{
+			{
+				Data:              []byte{1},
+				SampleRate:        24000,
+				NumChannels:       1,
+				SamplesPerChannel: 1,
+			},
+			{
+				Data:              []byte{2},
+				SampleRate:        24000,
+				NumChannels:       1,
+				SamplesPerChannel: 1,
+			},
+		},
+	}}
+	agent := NewPipelineAgent(nil, nil, nil, ttsSource, llm.NewChatContext())
+	agent.session = session
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	speech.Generation.Text = "hello"
+	speech.Generation.AssistantMessage = &llm.ChatMessage{
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{{Text: "hello"}},
+	}
+	var published [][]byte
+	agent.PublishAudio = func(_ context.Context, frame *model.AudioFrame) error {
+		published = append(published, append([]byte(nil), frame.Data...))
+		if len(published) == 1 {
+			if err := speech.Interrupt(false); err != nil {
+				t.Fatalf("Interrupt error = %v, want nil", err)
+			}
+		}
+		return nil
+	}
+
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	if len(published) != 1 {
+		t.Fatalf("published frames = %#v, want only first frame before interruption", published)
+	}
+	if got := published[0]; len(got) != 1 || got[0] != 1 {
+		t.Fatalf("first published frame = %#v, want frame 1", got)
+	}
+}
+
 func TestPipelineAgentEmitsTTSErrorEventForChunkedSpeechSynthesisFailure(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	cause := errors.New("tts synthesize failed")
@@ -2719,6 +2766,36 @@ func TestPipelineAgentScheduledSaySpeaksProvidedTextWithoutLLM(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentScheduledSaySkipsInterruptedSpeechBeforeSynthesis(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	ttsStream := &fakePipelineTTSStream{}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, &fakeGenerationLLM{}, &fakePipelineTTS{stream: ttsStream}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	speech.Generation.Text = "unheard"
+	speech.Generation.AssistantMessage = &llm.ChatMessage{
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{{Text: "unheard"}},
+	}
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	if got := ttsStream.text.String(); got != "" {
+		t.Fatalf("TTS text = %q, want no synthesis for interrupted speech", got)
+	}
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chatCtx.Items = %#v, want no assistant commit for interrupted speech", chatCtx.Items)
+	}
+	if len(speech.ChatItems()) != 0 {
+		t.Fatalf("speech.ChatItems = %#v, want no committed chat items", speech.ChatItems())
+	}
+}
+
 func TestPipelineAgentScheduledSayPersistsAssistantTextInAgentChatContext(t *testing.T) {
 	pipelineCtx := llm.NewChatContext()
 	ttsStream := &fakePipelineTTSStream{}
@@ -2754,6 +2831,139 @@ func TestPipelineAgentScheduledSayPersistsAssistantTextInAgentChatContext(t *tes
 	}
 	if assistantMessages != 1 {
 		t.Fatalf("pipeline chat context items = %#v, want one scheduled say assistant message", pipelineCtx.Items)
+	}
+}
+
+func TestPipelineAgentInterruptedReplySkipsUnplayedAssistantText(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "unheard answer"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(&fakePipelinePlaybackController{
+		result: AudioPlaybackResult{Interrupted: true},
+	})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chatCtx.Items = %#v, want no assistant message for interrupted unplayed speech", chatCtx.Items)
+	}
+	if len(speech.ChatItems()) != 0 {
+		t.Fatalf("speech.ChatItems = %#v, want no committed assistant message", speech.ChatItems())
+	}
+}
+
+func TestPipelineAgentInterruptedReplyCommitsSynchronizedTranscript(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "full answer the user did not hear"}},
+			},
+		},
+	}
+	playback := &fakePipelinePlaybackController{
+		result: AudioPlaybackResult{
+			PlaybackPosition:       200 * time.Millisecond,
+			Interrupted:            true,
+			SynchronizedTranscript: "full answer",
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(playback)
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+
+	if playback.clearCalls != 1 {
+		t.Fatalf("ClearBuffer calls = %d, want 1", playback.clearCalls)
+	}
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx.Items length = %d, want committed partial assistant message", len(chatCtx.Items))
+	}
+	msg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("chatCtx item = %T, want *llm.ChatMessage", chatCtx.Items[0])
+	}
+	if msg.TextContent() != "full answer" || !msg.Interrupted {
+		t.Fatalf("assistant message text/interrupted = %q/%v, want partial interrupted message", msg.TextContent(), msg.Interrupted)
+	}
+}
+
+func TestPipelineAgentReplyWaitsForPlayoutBeforeCommit(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "played answer"}},
+			},
+		},
+	}
+	waitStarted := make(chan struct{})
+	releaseWait := make(chan struct{})
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(&fakePipelinePlaybackController{
+		waitStarted: waitStarted,
+		releaseWait: releaseWait,
+		result: AudioPlaybackResult{
+			PlaybackPosition: 300 * time.Millisecond,
+		},
+	})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+	}()
+
+	select {
+	case <-waitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("pipeline did not wait for audio playout before committing")
+	}
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chatCtx.Items = %#v, want no assistant message before playout finishes", chatCtx.Items)
+	}
+	select {
+	case <-done:
+		t.Fatal("generateReplyWithOptions returned before playback was released")
+	default:
+	}
+
+	close(releaseWait)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("generateReplyWithOptions did not finish after playback was released")
+	}
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx.Items length = %d, want committed assistant message after playout", len(chatCtx.Items))
+	}
+	msg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || msg.TextContent() != "played answer" || msg.Interrupted {
+		t.Fatalf("assistant message = %#v, want uninterrupted played answer", chatCtx.Items[0])
 	}
 }
 
@@ -2857,6 +3067,30 @@ type fakePipelineTTSStream struct {
 	timedTranscripts [][]tts.TimedString
 	next             int
 	err              error
+}
+
+type fakePipelinePlaybackController struct {
+	clearCalls int
+	result     AudioPlaybackResult
+	err        error
+
+	waitStarted chan struct{}
+	releaseWait chan struct{}
+}
+
+func (f *fakePipelinePlaybackController) ClearBuffer() {
+	f.clearCalls++
+}
+
+func (f *fakePipelinePlaybackController) WaitForPlayout(context.Context) (AudioPlaybackResult, error) {
+	if f.waitStarted != nil {
+		close(f.waitStarted)
+		f.waitStarted = nil
+	}
+	if f.releaseWait != nil {
+		<-f.releaseWait
+	}
+	return f.result, f.err
 }
 
 func (f *fakePipelineTTSStream) PushText(text string) error {
