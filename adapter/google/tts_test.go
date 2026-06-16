@@ -107,6 +107,43 @@ func TestGoogleTTSOptionsOverrideReferenceVoiceFields(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSUpdateOptionsMatchesReference(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client)
+
+	provider.UpdateOptions(
+		WithGoogleTTSLanguage("id-ID"),
+		WithGoogleTTSVoice("id-ID-Standard-A"),
+		WithGoogleTTSModel("gemini-custom"),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "halo")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	voice := client.request.GetVoice()
+	if voice.GetLanguageCode() != "id-ID" || voice.GetName() != "id-ID-Standard-A" || voice.GetModelName() != "gemini-custom" {
+		t.Fatalf("voice = %+v, want updated language, voice, and model", voice)
+	}
+}
+
+func TestGoogleTTSUpdateOptionsPreservesExistingVoiceFields(t *testing.T) {
+	provider := newGoogleTTSWithClient(nil,
+		WithGoogleTTSLanguage("id-ID"),
+		WithGoogleTTSModel("gemini-custom"),
+	)
+
+	provider.UpdateOptions(WithGoogleTTSVoice("id-ID-Standard-B"))
+
+	if provider.voice.GetLanguageCode() != "id-ID" || provider.voice.GetName() != "id-ID-Standard-B" || provider.voice.GetModelName() != "gemini-custom" {
+		t.Fatalf("voice = %+v, want updated voice with existing language and model", provider.voice)
+	}
+}
+
 func TestGoogleTTSChirp3OmitsModelName(t *testing.T) {
 	provider := newGoogleTTSWithClient(nil, WithGoogleTTSModel("chirp_3"))
 

@@ -81,17 +81,9 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 		opt(&cfg)
 	}
 
-	voice := &texttospeechpb.VoiceSelectionParams{
-		LanguageCode: cfg.language,
-		Name:         cfg.voice,
-	}
-	if cfg.model != "chirp_3" {
-		voice.ModelName = cfg.model
-	}
-
 	return &GoogleTTS{
 		client: client,
-		voice:  voice,
+		voice:  googleTTSVoiceParams(cfg),
 		audio: &texttospeechpb.AudioConfig{
 			AudioEncoding:   texttospeechpb.AudioEncoding_LINEAR16,
 			SampleRateHertz: 24000,
@@ -112,6 +104,18 @@ func (t *GoogleTTS) Model() string {
 	return "Chirp3"
 }
 func (t *GoogleTTS) Provider() string { return "Google Cloud Platform" }
+
+func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
+	cfg := googleTTSConfig{
+		language: t.voice.GetLanguageCode(),
+		voice:    t.voice.GetName(),
+		model:    t.Model(),
+	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	t.voice = googleTTSVoiceParams(cfg)
+}
 
 func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	req := &texttospeechpb.SynthesizeSpeechRequest{
@@ -180,4 +184,15 @@ func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 func (s *googleTTSChunkedStream) Close() error {
 	return nil
+}
+
+func googleTTSVoiceParams(cfg googleTTSConfig) *texttospeechpb.VoiceSelectionParams {
+	voice := &texttospeechpb.VoiceSelectionParams{
+		LanguageCode: cfg.language,
+		Name:         cfg.voice,
+	}
+	if cfg.model != "chirp_3" {
+		voice.ModelName = cfg.model
+	}
+	return voice
 }
