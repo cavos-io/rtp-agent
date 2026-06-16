@@ -1610,6 +1610,35 @@ func TestAgentActivityOnFinalTranscriptEmitsUserInputTranscribed(t *testing.T) {
 	}
 }
 
+func TestAgentActivityOnFinalTranscriptSkipsEmptyTranscript(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeVAD})
+	activity := NewAgentActivity(agent, session)
+	userTranscriptEvents := session.UserInputTranscribedEvents()
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	defer current.MarkDone()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Language:   "en",
+			Text:       "",
+			Confidence: 0,
+			SpeakerID:  "speaker-1",
+		}},
+	})
+
+	select {
+	case ev := <-userTranscriptEvents:
+		t.Fatalf("UserInputTranscribedEvents received empty final transcript: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if current.IsInterrupted() {
+		t.Fatal("current speech was interrupted for empty final transcript")
+	}
+}
+
 func TestAgentActivityOnInterimTranscriptEmitsUserInputTranscribed(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

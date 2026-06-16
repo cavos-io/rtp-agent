@@ -1430,6 +1430,9 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 		language = ev.Alternatives[0].Language
 		speakerID = ev.Alternatives[0].SpeakerID
 	}
+	if transcript == "" {
+		return
+	}
 	if rejectsZeroConfidenceTranscript(transcript, confidence) {
 		logger.Logger.Warnw("skipping zero-confidence final transcript", nil, "transcript", transcript)
 		return
