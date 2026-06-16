@@ -1388,6 +1388,44 @@ func TestMultimodalAgentTruncatesInterruptedRealtimeMessageToPlayedTranscript(t 
 	}
 }
 
+func TestMultimodalAgentSkipsRealtimeMessagesAfterSpeechInterrupted(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	rtSession := &fakeRealtimeSession{}
+	ma := &MultimodalAgent{
+		model: &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{
+			MutableChatContext: true,
+		}},
+		session:   NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{}),
+		chatCtx:   chatCtx,
+		rtSession: rtSession,
+		ctx:       context.Background(),
+	}
+	textCh := make(chan string, 1)
+	textCh <- "never heard"
+	close(textCh)
+	messageCh := make(chan llm.MessageGeneration, 1)
+	messageCh <- llm.MessageGeneration{MessageID: "msg_skipped", TextCh: textCh}
+	close(messageCh)
+	functionCh := make(chan *llm.FunctionCall)
+	close(functionCh)
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	if err := speech.Interrupt(true); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+
+	ma.consumeRealtimeGeneration(context.Background(), speech, &llm.GenerationCreatedEvent{
+		MessageCh:  messageCh,
+		FunctionCh: functionCh,
+	})
+
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chat context items = %#v, want no never-heard assistant message", chatCtx.Items)
+	}
+	if rtSession.updated != chatCtx {
+		t.Fatalf("updated chat context = %#v, want local context sync after skipped realtime messages", rtSession.updated)
+	}
+}
+
 func TestMultimodalAgentGeneratesToolReplyWhenRealtimeDoesNotAutoReply(t *testing.T) {
 	agent := NewAgent("test")
 	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}

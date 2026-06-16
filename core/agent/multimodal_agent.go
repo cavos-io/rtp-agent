@@ -605,6 +605,10 @@ func (ma *MultimodalAgent) consumeRealtimeGeneration(ctx context.Context, speech
 	messageCh := generation.MessageCh
 	functionCh := generation.FunctionCh
 	for messageCh != nil || functionCh != nil {
+		if speech != nil && speech.IsInterrupted() {
+			ma.syncRealtimeChatContextAfterSkippedMessages()
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -613,11 +617,23 @@ func (ma *MultimodalAgent) consumeRealtimeGeneration(ctx context.Context, speech
 				messageCh = nil
 				continue
 			}
+			if speech != nil && speech.IsInterrupted() {
+				ma.syncRealtimeChatContextAfterSkippedMessages()
+				return
+			}
 			ma.consumeRealtimeMessage(ctx, speech, message)
+			if speech != nil && speech.IsInterrupted() {
+				ma.syncRealtimeChatContextAfterSkippedMessages()
+				return
+			}
 		case call, ok := <-functionCh:
 			if !ok {
 				functionCh = nil
 				continue
+			}
+			if speech != nil && speech.IsInterrupted() {
+				ma.syncRealtimeChatContextAfterSkippedMessages()
+				return
 			}
 			ma.executeRealtimeFunctionCall(call)
 		}
@@ -737,6 +753,22 @@ func (ma *MultimodalAgent) truncateInterruptedRealtimeMessage(messageID string, 
 		AudioTranscript: &audioTranscript,
 	}); err != nil {
 		logger.Logger.Warnw("failed to truncate interrupted realtime message", err, "message_id", messageID)
+	}
+}
+
+func (ma *MultimodalAgent) syncRealtimeChatContextAfterSkippedMessages() {
+	if !ma.realtimeCapabilities().MutableChatContext {
+		return
+	}
+	ma.mu.Lock()
+	rtSession := ma.rtSession
+	chatCtx := ma.chatCtx
+	ma.mu.Unlock()
+	if rtSession == nil || chatCtx == nil {
+		return
+	}
+	if err := rtSession.UpdateChatContext(chatCtx); err != nil {
+		logger.Logger.Warnw("failed to sync realtime chat context after skipped messages", err)
 	}
 }
 
