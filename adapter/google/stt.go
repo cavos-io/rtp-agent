@@ -278,25 +278,46 @@ func (s *googleSTTStream) readLoop() {
 			s.events <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
 		}
 
-		for _, result := range resp.Results {
-			if len(result.Alternatives) == 0 {
-				continue
-			}
-
-			alt := result.Alternatives[0]
-			eventType := stt.SpeechEventInterimTranscript
-			if result.IsFinal {
-				eventType = stt.SpeechEventFinalTranscript
-			}
-
+		if data, eventType, ok := googleSpeechDataFromStreamingResults(resp.Results); ok {
 			s.events <- &stt.SpeechEvent{
-				Type: eventType,
-				Alternatives: []stt.SpeechData{
-					googleSpeechDataFromAlternative(alt),
-				},
+				Type:         eventType,
+				Alternatives: []stt.SpeechData{data},
 			}
 		}
 	}
+}
+
+func googleSpeechDataFromStreamingResults(results []*speechpb.StreamingRecognitionResult) (stt.SpeechData, stt.SpeechEventType, bool) {
+	if len(results) == 0 {
+		return stt.SpeechData{}, "", false
+	}
+	var text string
+	var confidence float64
+	var count int
+	var firstAlt *speechpb.SpeechRecognitionAlternative
+	for _, result := range results {
+		if len(result.GetAlternatives()) == 0 {
+			continue
+		}
+		alt := result.GetAlternatives()[0]
+		if result.GetIsFinal() {
+			return googleSpeechDataFromAlternative(alt), stt.SpeechEventFinalTranscript, true
+		}
+		if firstAlt == nil {
+			firstAlt = alt
+		}
+		text += alt.GetTranscript()
+		confidence += float64(alt.GetConfidence())
+		count++
+	}
+	if count == 0 || text == "" {
+		return stt.SpeechData{}, "", false
+	}
+	return stt.SpeechData{
+		Text:       text,
+		Confidence: confidence / float64(count),
+		Words:      googleTimedStrings(firstAlt.GetWords()),
+	}, stt.SpeechEventInterimTranscript, true
 }
 
 func (s *googleSTTStream) PushFrame(frame *model.AudioFrame) error {

@@ -299,6 +299,52 @@ func TestGoogleSTTStreamSendsConfigAndEmitsEvents(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamCombinesReferenceInterimResultSegments(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{{
+			Results: []*speechpb.StreamingRecognitionResult{
+				{
+					Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+						Transcript: "hello ",
+						Confidence: 0.8,
+					}},
+				},
+				{
+					Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+						Transcript: "world",
+						Confidence: 0.6,
+					}},
+				},
+			},
+		}},
+	}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if event.Type != stt.SpeechEventInterimTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %#v, want one interim transcript", event)
+	}
+	got := event.Alternatives[0]
+	if got.Text != "hello world" {
+		t.Fatalf("text = %q, want hello world", got.Text)
+	}
+	if math.Abs(got.Confidence-0.7) > 0.000001 {
+		t.Fatalf("confidence = %v, want averaged confidence 0.7", got.Confidence)
+	}
+
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next error = %v, want EOF after one combined event", err)
+	}
+}
+
 func TestGoogleSTTStreamMapsReferenceVoiceActivityEvents(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{
