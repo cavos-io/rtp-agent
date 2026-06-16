@@ -143,6 +143,9 @@ type AgentActivity struct {
 	userSpeechStoppedAt       time.Time
 	ignoreUserTranscriptUntil time.Time
 
+	backchannelBoundaryMu    sync.Mutex
+	backchannelBoundaryUntil time.Time
+
 	falseInterruptionMu    sync.Mutex
 	pausedSpeech           *pausedSpeechInfo
 	falseInterruptionTimer *time.Timer
@@ -1420,6 +1423,9 @@ func (a *AgentActivity) OnOverlapSpeechEnded(ev OverlappingSpeechEvent) {
 	if a == nil || a.Session == nil {
 		return
 	}
+	if !ev.IsInterruption && a.backchannelBoundaryActive(time.Now()) {
+		return
+	}
 	a.overlapSpeechEnded = true
 	a.interruptionDetected = ev.IsInterruption
 	a.Session.EmitOverlappingSpeech(ev)
@@ -1592,6 +1598,44 @@ func (a *AgentActivity) heldTranscriptEndCooldown() time.Duration {
 		return 0
 	}
 	return time.Duration(a.Session.Options.BackchannelBoundaryEnd * float64(time.Second))
+}
+
+func (a *AgentActivity) armBackchannelBoundary(startedAt time.Time) {
+	if a == nil || a.Session == nil {
+		return
+	}
+	duration := time.Duration(a.Session.Options.BackchannelBoundaryStart * float64(time.Second))
+	a.backchannelBoundaryMu.Lock()
+	if duration > 0 {
+		a.backchannelBoundaryUntil = startedAt.Add(duration)
+	} else {
+		a.backchannelBoundaryUntil = time.Time{}
+	}
+	a.backchannelBoundaryMu.Unlock()
+}
+
+func (a *AgentActivity) cancelBackchannelBoundary() {
+	if a == nil {
+		return
+	}
+	a.backchannelBoundaryMu.Lock()
+	a.backchannelBoundaryUntil = time.Time{}
+	a.backchannelBoundaryMu.Unlock()
+}
+
+func (a *AgentActivity) backchannelBoundaryActive(now time.Time) bool {
+	if a == nil {
+		return false
+	}
+	a.backchannelBoundaryMu.Lock()
+	until := a.backchannelBoundaryUntil
+	if until.IsZero() || !now.Before(until) {
+		a.backchannelBoundaryUntil = time.Time{}
+		a.backchannelBoundaryMu.Unlock()
+		return false
+	}
+	a.backchannelBoundaryMu.Unlock()
+	return true
 }
 
 func overlappingSpeechIgnoreUntil(ev OverlappingSpeechEvent) time.Time {

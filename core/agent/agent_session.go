@@ -62,6 +62,8 @@ type AgentSessionOptions struct {
 	FalseInterruptionTimeoutSet              bool
 	ResumeFalseInterruption                  bool
 	ResumeFalseInterruptionSet               bool
+	BackchannelBoundaryStart                 float64
+	BackchannelBoundaryStartSet              bool
 	BackchannelBoundaryEnd                   float64
 	BackchannelBoundaryEndSet                bool
 	MinConsecutiveSpeechDelay                float64
@@ -964,6 +966,9 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	}
 	if !opts.ResumeFalseInterruptionSet {
 		opts.ResumeFalseInterruption = true
+	}
+	if !opts.BackchannelBoundaryStartSet && opts.BackchannelBoundaryStart == 0 {
+		opts.BackchannelBoundaryStart = 1.0
 	}
 	if !opts.BackchannelBoundaryEndSet && opts.BackchannelBoundaryEnd == 0 {
 		opts.BackchannelBoundaryEnd = 1.0
@@ -2049,17 +2054,29 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 	s.agentState = state
 	backgroundAudio := s.Options.BackgroundAudio
 	endpointing := s.Options.Endpointing
+	activity := s.activity
 	if state == AgentStateSpeaking {
 		s.llmErrorCount = 0
 		s.ttsErrorCount = 0
 		s.startAECWarmupLocked()
 	}
-	if oldState != state && endpointing != nil {
-		now := float64(time.Now().UnixNano()) / float64(time.Second)
+	if oldState != state {
+		nowTime := time.Now()
+		now := float64(nowTime.UnixNano()) / float64(time.Second)
 		if state == AgentStateSpeaking {
-			endpointing.OnStartOfAgentSpeech(now)
+			if endpointing != nil {
+				endpointing.OnStartOfAgentSpeech(now)
+			}
+			if activity != nil {
+				activity.armBackchannelBoundary(nowTime)
+			}
 		} else if oldState == AgentStateSpeaking {
-			endpointing.OnEndOfAgentSpeech(now)
+			if endpointing != nil {
+				endpointing.OnEndOfAgentSpeech(now)
+			}
+			if activity != nil {
+				activity.cancelBackchannelBoundary()
+			}
 		}
 	}
 	s.mu.Unlock()

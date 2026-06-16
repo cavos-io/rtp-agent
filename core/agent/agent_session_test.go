@@ -1182,6 +1182,9 @@ func TestNewAgentSessionAppliesReferenceOptionDefaults(t *testing.T) {
 	if !opts.ResumeFalseInterruption {
 		t.Fatal("ResumeFalseInterruption = false, want default true")
 	}
+	if opts.BackchannelBoundaryStart != 1.0 {
+		t.Fatalf("BackchannelBoundaryStart = %v, want 1.0", opts.BackchannelBoundaryStart)
+	}
 	if opts.BackchannelBoundaryEnd != 1.0 {
 		t.Fatalf("BackchannelBoundaryEnd = %v, want 1.0", opts.BackchannelBoundaryEnd)
 	}
@@ -1327,10 +1330,15 @@ func TestNewAgentSessionPreservesExplicitZeroFalseInterruptionTimeout(t *testing
 
 func TestNewAgentSessionPreservesExplicitZeroBackchannelBoundaryEnd(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
-		BackchannelBoundaryEnd:    0,
-		BackchannelBoundaryEndSet: true,
+		BackchannelBoundaryStart:    0,
+		BackchannelBoundaryStartSet: true,
+		BackchannelBoundaryEnd:      0,
+		BackchannelBoundaryEndSet:   true,
 	})
 
+	if session.Options.BackchannelBoundaryStart != 0 {
+		t.Fatalf("BackchannelBoundaryStart = %v, want explicit zero preserved", session.Options.BackchannelBoundaryStart)
+	}
 	if session.Options.BackchannelBoundaryEnd != 0 {
 		t.Fatalf("BackchannelBoundaryEnd = %v, want explicit zero preserved", session.Options.BackchannelBoundaryEnd)
 	}

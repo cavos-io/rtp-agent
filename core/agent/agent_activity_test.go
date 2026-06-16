@@ -677,6 +677,46 @@ func TestAgentActivityOverlapSpeechEndedIgnoresFalseInterruptionForEndpointing(t
 	}
 }
 
+func TestAgentActivitySuppressesBackchannelOverlapDuringStartBoundary(t *testing.T) {
+	endpointing := &recordingActivityEndpointing{}
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{Endpointing: endpointing})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	events := session.OverlappingSpeechEvents()
+
+	session.UpdateAgentState(AgentStateSpeaking)
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech, Timestamp: 1.0})
+	activity.OnOverlapSpeechEnded(OverlappingSpeechEvent{IsInterruption: false})
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech, Timestamp: 1.5})
+
+	select {
+	case ev := <-events:
+		t.Fatalf("unexpected backchannel overlap event during start boundary: %#v", ev)
+	default:
+	}
+	if endpointing.endCount != 1 {
+		t.Fatalf("OnEndOfSpeech calls = %d, want 1", endpointing.endCount)
+	}
+	if endpointing.lastShouldIgnore {
+		t.Fatal("OnEndOfSpeech shouldIgnore = true, want false for suppressed backchannel overlap")
+	}
+
+	detectedAt := time.Unix(50, 0)
+	activity.OnOverlapSpeechEnded(OverlappingSpeechEvent{
+		IsInterruption: true,
+		DetectedAt:     detectedAt,
+	})
+	select {
+	case ev := <-events:
+		if !ev.IsInterruption || !ev.DetectedAt.Equal(detectedAt) {
+			t.Fatalf("interruption overlap event = %#v, want true interruption during boundary", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("OverlappingSpeechEvents did not receive true interruption during start boundary")
+	}
+}
+
 func TestAgentActivityOnInterruptionCutsCurrentSpeech(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}
