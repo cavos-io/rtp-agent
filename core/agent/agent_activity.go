@@ -419,7 +419,7 @@ func (a *AgentActivity) recordInitialConfiguration() error {
 		a.registeredTools = append([]llm.Tool(nil), registeredTools...)
 		tools = agentToolsAsInterfaces(registeredTools)
 	}
-	toolNames := sortedAgentToolNames(tools)
+	toolNames := sortedAgentFunctionToolNames(tools)
 	if instructions == nil && len(toolNames) == 0 {
 		return nil
 	}
@@ -826,6 +826,45 @@ func sortedAgentToolNames(tools []interface{}) []string {
 		seen[name] = struct{}{}
 		names = append(names, name)
 	}
+	if len(names) == 0 {
+		return nil
+	}
+	sort.Strings(names)
+	return names
+}
+
+func sortedAgentFunctionToolNames(tools []interface{}) []string {
+	if len(tools) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(tools))
+	seen := make(map[string]struct{}, len(tools))
+	var addToolNames func([]interface{})
+	addToolNames = func(items []interface{}) {
+		for _, item := range items {
+			if toolset, ok := item.(llm.Toolset); ok {
+				addToolNames(agentToolsAsInterfaces(toolset.Tools()))
+				continue
+			}
+			tool, ok := item.(llm.Tool)
+			if !ok {
+				continue
+			}
+			if _, providerOnly := tool.(llm.ProviderTool); providerOnly {
+				continue
+			}
+			name := tool.Name()
+			if name == "" {
+				continue
+			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			names = append(names, name)
+		}
+	}
+	addToolNames(tools)
 	if len(names) == 0 {
 		return nil
 	}

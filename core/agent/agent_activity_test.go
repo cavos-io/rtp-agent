@@ -1216,6 +1216,31 @@ func TestAgentActivityStartRecordsInitialMCPTools(t *testing.T) {
 	}
 }
 
+func TestAgentActivityStartRecordsFlattenedToolsetFunctionNames(t *testing.T) {
+	lookup := &agentTestTool{id: "lookup", name: "lookup"}
+	agent := NewAgent("")
+	agent.Tools = []llm.Tool{&nestedAgentToolset{
+		agentTestTool: agentTestTool{id: "wrapper", name: "wrapper"},
+		tools:         []llm.Tool{lookup},
+	}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.Start()
+	defer activity.Stop()
+
+	if len(agent.ChatCtx.Items) == 0 {
+		t.Fatal("agent chat context has no initial items, want tool config")
+	}
+	config, ok := agent.ChatCtx.Items[len(agent.ChatCtx.Items)-1].(*llm.AgentConfigUpdate)
+	if !ok {
+		t.Fatalf("last agent chat item = %T, want config update", agent.ChatCtx.Items[len(agent.ChatCtx.Items)-1])
+	}
+	if !stringSlicesEqual(config.ToolsAdded, []string{"lookup"}) {
+		t.Fatalf("config tools added = %q, want flattened function tool names [lookup]", config.ToolsAdded)
+	}
+}
+
 func TestAgentActivityStartLogsMCPToolsetSetupError(t *testing.T) {
 	recorder := &recordingLogger{}
 	oldLogger := logutil.Logger
