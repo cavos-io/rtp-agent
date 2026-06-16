@@ -19,6 +19,7 @@ type GoogleSTT struct {
 	punctuate            bool
 	spokenPunctuation    bool
 	profanityFilter      bool
+	voiceActivityEvents  bool
 	sampleRate           int32
 	enableWordTimeOffset bool
 	enableWordConfidence bool
@@ -54,6 +55,12 @@ func WithGoogleSTTSpokenPunctuation(spokenPunctuation bool) GoogleSTTOption {
 func WithGoogleSTTProfanityFilter(profanityFilter bool) GoogleSTTOption {
 	return func(s *GoogleSTT) {
 		s.profanityFilter = profanityFilter
+	}
+}
+
+func WithGoogleSTTVoiceActivityEvents(enabled bool) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		s.voiceActivityEvents = enabled
 	}
 }
 
@@ -115,8 +122,9 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	err = stream.Send(&speechpb.StreamingRecognizeRequest{
 		StreamingRequest: &speechpb.StreamingRecognizeRequest_StreamingConfig{
 			StreamingConfig: &speechpb.StreamingRecognitionConfig{
-				Config:         googleRecognitionConfig(s, language),
-				InterimResults: true,
+				Config:                    googleRecognitionConfig(s, language),
+				InterimResults:            true,
+				EnableVoiceActivityEvents: s.voiceActivityEvents,
 			},
 		},
 	})
@@ -235,6 +243,13 @@ func (s *googleSTTStream) readLoop() {
 				s.errCh <- err
 			}
 			return
+		}
+
+		switch resp.GetSpeechEventType() {
+		case speechpb.StreamingRecognizeResponse_SPEECH_ACTIVITY_BEGIN:
+			s.events <- &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech}
+		case speechpb.StreamingRecognizeResponse_SPEECH_ACTIVITY_END:
+			s.events <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
 		}
 
 		for _, result := range resp.Results {

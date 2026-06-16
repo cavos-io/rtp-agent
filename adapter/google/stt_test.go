@@ -245,6 +245,45 @@ func TestGoogleSTTStreamSendsConfigAndEmitsEvents(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamMapsReferenceVoiceActivityEvents(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{
+			{SpeechEventType: speechpb.StreamingRecognizeResponse_SPEECH_ACTIVITY_BEGIN},
+			{SpeechEventType: speechpb.StreamingRecognizeResponse_SPEECH_ACTIVITY_END},
+		},
+	}
+	provider := newGoogleSTTWithClient(
+		&fakeGoogleSpeechClient{stream: streamClient},
+		WithGoogleSTTVoiceActivityEvents(true),
+	)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	config := streamClient.sent[0].GetStreamingConfig()
+	if config == nil || !config.GetEnableVoiceActivityEvents() {
+		t.Fatalf("enable voice activity events = %v, want true", config.GetEnableVoiceActivityEvents())
+	}
+
+	start, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if start.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event type = %v, want start of speech", start.Type)
+	}
+
+	end, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if end.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("second event type = %v, want end of speech", end.Type)
+	}
+}
+
 func TestGoogleSTTStreamPropagatesClientErrors(t *testing.T) {
 	wantErr := errors.New("stream error")
 	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{streamErr: wantErr})
