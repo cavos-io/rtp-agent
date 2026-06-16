@@ -289,6 +289,8 @@ func (s *googleTTSSynthesizeStream) Flush() error {
 			},
 		},
 	}); err != nil {
+		s.closed = true
+		_ = stream.CloseSend()
 		return err
 	}
 	if err := stream.Send(&texttospeechpb.StreamingSynthesizeRequest{
@@ -299,9 +301,12 @@ func (s *googleTTSSynthesizeStream) Flush() error {
 			},
 		},
 	}); err != nil {
+		s.closed = true
+		_ = stream.CloseSend()
 		return err
 	}
 	if err := stream.CloseSend(); err != nil {
+		s.closed = true
 		return err
 	}
 	s.streams = append(s.streams, stream)

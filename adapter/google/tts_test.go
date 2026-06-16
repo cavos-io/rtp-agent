@@ -230,6 +230,35 @@ func TestGoogleTTSPromptMatchesReferenceRequests(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamClosesAfterInputSendFailure(t *testing.T) {
+	wantErr := errors.New("send failed")
+	streamClient := &fakeGoogleTTSStream{sendErrAfterConfig: wantErr}
+	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+
+	err = stream.Flush()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Flush error = %v, want %v", err, wantErr)
+	}
+	if !streamClient.closed {
+		t.Fatal("stream client closed = false after send failure")
+	}
+	err = stream.PushText("again")
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after failed Flush error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after send failure error = %v", err)
+	}
+}
+
 func TestGoogleTTSSpeakingRateMatchesReferenceRequests(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
@@ -366,13 +395,17 @@ func (c *fakeGoogleTTSClient) StreamingSynthesize(ctx context.Context, opts ...g
 
 type fakeGoogleTTSStream struct {
 	grpc.ClientStream
-	sent      []*texttospeech.StreamingSynthesizeRequest
-	responses []*texttospeech.StreamingSynthesizeResponse
-	closed    bool
+	sent               []*texttospeech.StreamingSynthesizeRequest
+	responses          []*texttospeech.StreamingSynthesizeResponse
+	closed             bool
+	sendErrAfterConfig error
 }
 
 func (s *fakeGoogleTTSStream) Send(req *texttospeech.StreamingSynthesizeRequest) error {
 	s.sent = append(s.sent, req)
+	if req.GetInput() != nil && s.sendErrAfterConfig != nil {
+		return s.sendErrAfterConfig
+	}
 	return nil
 }
 
