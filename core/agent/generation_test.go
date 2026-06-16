@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -773,7 +774,7 @@ func TestPerformTTSInferenceUsesSynthesizeForNonStreamingTTS(t *testing.T) {
 	if string(frame.Data) != "chunked" {
 		t.Fatalf("audio data = %q, want chunked", frame.Data)
 	}
-	if want := "Say hello "; provider.synthesizeText != want {
+	if want := "Say hello"; provider.synthesizeText != want {
 		t.Fatalf("synthesize text = %q, want reference transformed text %q", provider.synthesizeText, want)
 	}
 	if !provider.stream.closed {
@@ -781,6 +782,51 @@ func TestPerformTTSInferenceUsesSynthesizeForNonStreamingTTS(t *testing.T) {
 	}
 	if _, ok := <-data.AudioCh; ok {
 		t.Fatal("AudioCh produced extra frame")
+	}
+}
+
+func TestPerformTTSInferenceStreamsNonStreamingTTSBeforeInputEnds(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	provider := &fakeGenerationChunkedTTS{
+		stream: &fakeGenerationChunkedStream{
+			frames: []*model.AudioFrame{
+				{
+					Data:              bytes.Repeat([]byte{1}, 960),
+					SampleRate:        24000,
+					NumChannels:       1,
+					SamplesPerChannel: 480,
+				},
+			},
+		},
+	}
+	textCh := make(chan string, 2)
+	textCh <- "This is the first complete sentence. "
+	textCh <- "Second sentence is still arriving"
+
+	data, err := PerformTTSInference(ctx, provider, textCh, WithTTSTextTransformsDisabled())
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+
+	select {
+	case frame, ok := <-data.AudioCh:
+		if !ok {
+			t.Fatal("AudioCh closed before audio, want first sentence audio before input end")
+		}
+		if frame == nil || len(frame.Data) == 0 {
+			t.Fatalf("audio frame = %#v, want first sentence audio before input end", frame)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for non-streaming TTS audio before input end")
+	}
+
+	cancel()
+	close(textCh)
+	for range data.AudioCh {
+	}
+	if len(provider.synthesizeTexts) == 0 || provider.synthesizeTexts[0] != "This is the first complete sentence." {
+		t.Fatalf("synthesize texts = %#v, want first sentence before input end", provider.synthesizeTexts)
 	}
 }
 
@@ -818,7 +864,7 @@ func TestPerformTTSInferenceNonStreamingReplacesReferenceSubstrings(t *testing.T
 	}
 }
 
-func TestPerformTTSInferenceNonStreamingPreservesReferenceWhitespace(t *testing.T) {
+func TestPerformTTSInferenceNonStreamingTrimsProviderInputLikeReferenceAdapter(t *testing.T) {
 	provider := &fakeGenerationChunkedTTS{
 		stream: &fakeGenerationChunkedStream{
 			frames: []*model.AudioFrame{
@@ -841,8 +887,8 @@ func TestPerformTTSInferenceNonStreamingPreservesReferenceWhitespace(t *testing.
 	}
 	<-data.AudioCh
 
-	if want := " hello "; provider.synthesizeText != want {
-		t.Fatalf("synthesize text = %q, want reference whitespace-preserving input %q", provider.synthesizeText, want)
+	if want := "hello"; provider.synthesizeText != want {
+		t.Fatalf("synthesize text = %q, want reference stream-adapter trimmed input %q", provider.synthesizeText, want)
 	}
 }
 
@@ -1842,8 +1888,9 @@ func (f *fakeGenerationTTSStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 type fakeGenerationChunkedTTS struct {
-	stream         *fakeGenerationChunkedStream
-	synthesizeText string
+	stream          *fakeGenerationChunkedStream
+	synthesizeText  string
+	synthesizeTexts []string
 }
 
 func (f *fakeGenerationChunkedTTS) Label() string { return "fake-generation-chunked-tts" }
@@ -1858,6 +1905,7 @@ func (f *fakeGenerationChunkedTTS) NumChannels() int { return 1 }
 
 func (f *fakeGenerationChunkedTTS) Synthesize(_ context.Context, text string) (tts.ChunkedStream, error) {
 	f.synthesizeText = text
+	f.synthesizeTexts = append(f.synthesizeTexts, text)
 	return f.stream, nil
 }
 

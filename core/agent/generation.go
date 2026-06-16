@@ -290,6 +290,10 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 	}
 	ctx, span := telemetry.NewTTSNodeSpan(ctx, tts.Model(t), tts.Provider(t))
 
+	if !t.Capabilities().Streaming && !options.PreserveTimedTranscript {
+		t = tts.NewStreamAdapter(t)
+	}
+
 	if !t.Capabilities().Streaming {
 		go func() {
 			defer close(data.AudioCh)
