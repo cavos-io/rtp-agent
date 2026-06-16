@@ -10573,6 +10573,58 @@ func TestDefaultConfigFromEnvSelectsGoogleLLM(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsGoogleTTS(t *testing.T) {
+	original := appNewGoogleTTS
+	defer func() { appNewGoogleTTS = original }()
+
+	var credentialsFile string
+	var googleCfg appGoogleTTSConfig
+	appNewGoogleTTS = func(credentials string, cfg appGoogleTTSConfig) (tts.TTS, error) {
+		credentialsFile = credentials
+		googleCfg = cfg
+		return &fakeAppTTS{}, nil
+	}
+
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "/tmp/google-credentials.json")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "id-ID")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "id-ID-Standard-A")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "gemini-custom")
+	t.Setenv("RTP_AGENT_TTS_INSTRUCTIONS", "speak warmly")
+	t.Setenv("RTP_AGENT_TTS_SPEAKING_RATE", "1.25")
+	t.Setenv("RTP_AGENT_TTS_PITCH", "3")
+	t.Setenv("RTP_AGENT_TTS_MODEL_OPTIONS", "effects_profile_id=telephony-class-application,volume_gain_db=-2.5")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if credentialsFile != "/tmp/google-credentials.json" {
+		t.Fatalf("credentials file = %q, want /tmp/google-credentials.json", credentialsFile)
+	}
+	if googleCfg.language != "id-ID" || googleCfg.voice != "id-ID-Standard-A" || googleCfg.model != "gemini-custom" {
+		t.Fatalf("google cfg voice = %+v, want configured language, voice, and model", googleCfg)
+	}
+	if googleCfg.prompt != "speak warmly" {
+		t.Fatalf("prompt = %q, want speak warmly", googleCfg.prompt)
+	}
+	if googleCfg.speakingRate != 1.25 {
+		t.Fatalf("speaking rate = %v, want 1.25", googleCfg.speakingRate)
+	}
+	if googleCfg.pitch != 3 {
+		t.Fatalf("pitch = %v, want 3", googleCfg.pitch)
+	}
+	if googleCfg.effectsProfileID != "telephony-class-application" {
+		t.Fatalf("effects profile = %q, want telephony-class-application", googleCfg.effectsProfileID)
+	}
+	if googleCfg.volumeGainDB != -2.5 {
+		t.Fatalf("volume gain = %v, want -2.5", googleCfg.volumeGainDB)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsGroqProviders(t *testing.T) {
 	t.Setenv("GROQ_API_KEY", "test-groq-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "groq")
