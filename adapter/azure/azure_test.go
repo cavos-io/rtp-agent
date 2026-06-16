@@ -155,6 +155,35 @@ func TestAzureSTTRecognizeReportsRecognitionFailure(t *testing.T) {
 	}
 }
 
+func TestAzureSTTRecognizePreservesExplicitZeroConfidence(t *testing.T) {
+	provider, err := NewAzureSTT("key", "eastus")
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body: io.NopCloser(strings.NewReader(`{
+					"RecognitionStatus":"Success",
+					"DisplayText":"fallback text",
+					"NBest":[{"Display":"zero confidence","Confidence":0}]
+				}`)),
+				Request: req,
+			}, nil
+		}),
+	}
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "en-US")
+	if err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+	if got := event.Alternatives[0].Confidence; got != 0 {
+		t.Fatalf("confidence = %v, want explicit Azure NBest zero confidence", got)
+	}
+}
+
 func TestAzureSTTRecognizeHTTPErrorIncludesBody(t *testing.T) {
 	provider, err := NewAzureSTT("key", "eastus")
 	if err != nil {
@@ -307,6 +336,22 @@ func TestAzureSTTStreamUsesWebsocketProtocol(t *testing.T) {
 	end := nextAzureTestEvent(t, stream)
 	if end.Type != stt.SpeechEventEndOfSpeech {
 		t.Fatalf("end Type = %s, want end_of_speech", end.Type)
+	}
+}
+
+func TestAzureSTTStreamPreservesExplicitZeroConfidence(t *testing.T) {
+	event := parseAzureSTTMessage(
+		resolveAzureSTTLanguage("id-ID"),
+		[]byte("Path: speech.phrase\r\nContent-Type: application/json\r\n\r\n{\"RecognitionStatus\":\"Success\",\"DisplayText\":\"fallback text\",\"NBest\":[{\"Display\":\"zero confidence\",\"Confidence\":0}]}"),
+	)
+	if event == nil {
+		t.Fatal("event = nil, want final transcript")
+	}
+	if got := event.Alternatives[0].Text; got != "zero confidence" {
+		t.Fatalf("text = %q, want NBest display", got)
+	}
+	if got := event.Alternatives[0].Confidence; got != 0 {
+		t.Fatalf("confidence = %v, want explicit Azure NBest zero confidence", got)
 	}
 }
 

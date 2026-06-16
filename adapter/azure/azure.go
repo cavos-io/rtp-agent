@@ -138,8 +138,8 @@ type azureSTTRecognizeResponse struct {
 	RecognitionStatus string `json:"RecognitionStatus"`
 	DisplayText       string `json:"DisplayText"`
 	NBest             []struct {
-		Display    string  `json:"Display"`
-		Confidence float64 `json:"Confidence"`
+		Display    string   `json:"Display"`
+		Confidence *float64 `json:"Confidence"`
 	} `json:"NBest"`
 }
 
@@ -174,8 +174,8 @@ func azureSTTRecognizeSpeechEvent(language string, result azureSTTRecognizeRespo
 		if result.NBest[0].Display != "" {
 			text = result.NBest[0].Display
 		}
-		if result.NBest[0].Confidence != 0 {
-			confidence = result.NBest[0].Confidence
+		if result.NBest[0].Confidence != nil {
+			confidence = *result.NBest[0].Confidence
 		}
 	}
 	if strings.TrimSpace(text) == "" {
@@ -389,8 +389,8 @@ func parseAzureSTTMessage(language string, payload []byte) *stt.SpeechEvent {
 			RecognitionStatus string `json:"RecognitionStatus"`
 			DisplayText       string `json:"DisplayText"`
 			NBest             []struct {
-				Display    string  `json:"Display"`
-				Confidence float64 `json:"Confidence"`
+				Display    string   `json:"Display"`
+				Confidence *float64 `json:"Confidence"`
 			} `json:"NBest"`
 		}
 		if err := json.Unmarshal(body, &message); err != nil {
@@ -402,8 +402,8 @@ func parseAzureSTTMessage(language string, payload []byte) *stt.SpeechEvent {
 			if message.NBest[0].Display != "" {
 				text = message.NBest[0].Display
 			}
-			if message.NBest[0].Confidence != 0 {
-				confidence = message.NBest[0].Confidence
+			if message.NBest[0].Confidence != nil {
+				confidence = *message.NBest[0].Confidence
 			}
 		}
 		if strings.TrimSpace(text) == "" {
