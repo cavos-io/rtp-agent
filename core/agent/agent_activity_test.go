@@ -653,8 +653,27 @@ func TestAgentActivityOverlapSpeechEndedEmitsAndMarksInterruption(t *testing.T) 
 	if endpointing.endCount != 1 {
 		t.Fatalf("OnEndOfSpeech calls = %d, want 1", endpointing.endCount)
 	}
+	if endpointing.lastShouldIgnore {
+		t.Fatal("OnEndOfSpeech shouldIgnore = true, want false for overlap classified as interruption")
+	}
+}
+
+func TestAgentActivityOverlapSpeechEndedIgnoresFalseInterruptionForEndpointing(t *testing.T) {
+	endpointing := &recordingActivityEndpointing{}
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{Endpointing: endpointing})
+	session.UpdateAgentState(AgentStateSpeaking)
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech, Timestamp: 1.0})
+	activity.OnOverlapSpeechEnded(OverlappingSpeechEvent{IsInterruption: false})
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech, Timestamp: 1.5})
+
+	if endpointing.endCount != 1 {
+		t.Fatalf("OnEndOfSpeech calls = %d, want 1", endpointing.endCount)
+	}
 	if !endpointing.lastShouldIgnore {
-		t.Fatal("OnEndOfSpeech shouldIgnore = false, want true for overlap classified as interruption")
+		t.Fatal("OnEndOfSpeech shouldIgnore = false, want true for overlap classified as non-interruption while agent was speaking")
 	}
 }
 
