@@ -105,6 +105,13 @@ func (t *GoogleTTS) Capabilities() tts.TTSCapabilities {
 }
 func (t *GoogleTTS) SampleRate() int  { return 24000 }
 func (t *GoogleTTS) NumChannels() int { return 1 }
+func (t *GoogleTTS) Model() string {
+	if model := t.voice.GetModelName(); model != "" {
+		return model
+	}
+	return "Chirp3"
+}
+func (t *GoogleTTS) Provider() string { return "Google Cloud Platform" }
 
 func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	req := &texttospeechpb.SynthesizeSpeechRequest{

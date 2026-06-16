@@ -31,6 +31,12 @@ func TestGoogleTTSMetadata(t *testing.T) {
 	if got := provider.NumChannels(); got != 1 {
 		t.Fatalf("NumChannels = %d, want 1", got)
 	}
+	if got := provider.Model(); got != "gemini-2.5-flash-tts" {
+		t.Fatalf("Model = %q, want gemini-2.5-flash-tts", got)
+	}
+	if got := provider.Provider(); got != "Google Cloud Platform" {
+		t.Fatalf("Provider = %q, want Google Cloud Platform", got)
+	}
 	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
 		t.Fatalf("Capabilities = %#v, want non-streaming without aligned transcript", caps)
 	}
