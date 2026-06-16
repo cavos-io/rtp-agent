@@ -1163,7 +1163,7 @@ func TestPipelineAgentSessionOptionDisablesTTSTextTransforms(t *testing.T) {
 	})
 	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{stream: providerStream}, llm.NewChatContext())
 
-	if _, err := agent.synthesizeSpeech(context.Background(), session, singleTextChannel("Say **bold** now")); err != nil {
+	if _, err := agent.synthesizeSpeech(context.Background(), session, singleTextChannel("Say **bold** now"), nil); err != nil {
 		t.Fatalf("synthesizeSpeech error = %v", err)
 	}
 
@@ -1188,7 +1188,7 @@ func TestPipelineAgentSessionOptionSelectsTTSTextTransforms(t *testing.T) {
 	})
 	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{stream: providerStream}, llm.NewChatContext())
 
-	if _, err := agent.synthesizeSpeech(context.Background(), session, singleTextChannel("Say **hi** 😊")); err != nil {
+	if _, err := agent.synthesizeSpeech(context.Background(), session, singleTextChannel("Say **hi** 😊"), nil); err != nil {
 		t.Fatalf("synthesizeSpeech error = %v", err)
 	}
 
@@ -2052,6 +2052,53 @@ func TestPipelineAgentEmitsTTSErrorEventForPublishAudioFailure(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive publish audio error")
+	}
+}
+
+func TestPipelineAgentStopsPublishingTTSAfterSpeechInterrupted(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	ttsSource := &fakePipelineTTS{stream: &fakePipelineTTSStream{
+		frames: []*model.AudioFrame{
+			{
+				Data:              []byte{1},
+				SampleRate:        24000,
+				NumChannels:       1,
+				SamplesPerChannel: 1,
+			},
+			{
+				Data:              []byte{2},
+				SampleRate:        24000,
+				NumChannels:       1,
+				SamplesPerChannel: 1,
+			},
+		},
+	}}
+	agent := NewPipelineAgent(nil, nil, nil, ttsSource, llm.NewChatContext())
+	agent.session = session
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	speech.Generation.Text = "hello"
+	speech.Generation.AssistantMessage = &llm.ChatMessage{
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{{Text: "hello"}},
+	}
+	var published [][]byte
+	agent.PublishAudio = func(_ context.Context, frame *model.AudioFrame) error {
+		published = append(published, append([]byte(nil), frame.Data...))
+		if len(published) == 1 {
+			if err := speech.Interrupt(false); err != nil {
+				t.Fatalf("Interrupt error = %v, want nil", err)
+			}
+		}
+		return nil
+	}
+
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	if len(published) != 1 {
+		t.Fatalf("published frames = %#v, want only first frame before interruption", published)
+	}
+	if got := published[0]; len(got) != 1 || got[0] != 1 {
+		t.Fatalf("first published frame = %#v, want frame 1", got)
 	}
 }
 
