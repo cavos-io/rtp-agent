@@ -1465,6 +1465,10 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 		language = ev.Alternatives[0].Language
 		speakerID = ev.Alternatives[0].SpeakerID
 	}
+	if a.shouldDropInterimTranscriptBeforeAgentSpeechEnd(ev) {
+		logger.Logger.Debugw("dropping stale interim transcript before agent speech end", "transcript", transcript)
+		return
+	}
 	a.userTurnMu.Lock()
 	a.pendingInterimTranscript = transcript
 	a.pendingInterimLanguage = language
@@ -1595,6 +1599,30 @@ func (a *AgentActivity) shouldDropFinalTranscriptBeforeAgentSpeechEnd(ev *stt.Sp
 	}
 	transcriptEnd := a.userSpeechStartedAt.Add(time.Duration(alternative.EndTime * float64(time.Second)))
 	if transcriptEnd.Before(ignoreUntil) {
+		a.userTurnMu.Unlock()
+		return true
+	}
+	a.ignoreUserTranscriptUntil = time.Time{}
+	a.userTurnMu.Unlock()
+	return false
+}
+
+func (a *AgentActivity) shouldDropInterimTranscriptBeforeAgentSpeechEnd(ev *stt.SpeechEvent) bool {
+	if a == nil || ev == nil || len(ev.Alternatives) == 0 || a.userSpeechStartedAt.IsZero() {
+		return false
+	}
+	alternative := ev.Alternatives[0]
+	if alternative.StartTime <= 0 || alternative.StartTime == alternative.EndTime {
+		return false
+	}
+	a.userTurnMu.Lock()
+	ignoreUntil := a.ignoreUserTranscriptUntil
+	if ignoreUntil.IsZero() {
+		a.userTurnMu.Unlock()
+		return false
+	}
+	transcriptStart := a.userSpeechStartedAt.Add(time.Duration(alternative.StartTime * float64(time.Second)))
+	if transcriptStart.Before(ignoreUntil) {
 		a.userTurnMu.Unlock()
 		return true
 	}

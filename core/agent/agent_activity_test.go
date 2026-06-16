@@ -2063,6 +2063,54 @@ func TestAgentActivityDropsFinalTranscriptBeforeAgentSpeechEnd(t *testing.T) {
 	}
 }
 
+func TestAgentActivityDropsInterimTranscriptBeforeAgentSpeechEnd(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeVAD})
+	activity := NewAgentActivity(agent, session)
+	userTranscriptEvents := session.UserInputTranscribedEvents()
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	defer current.MarkDone()
+	startedAt := time.Unix(100, 0)
+	activity.userSpeechStartedAt = startedAt
+	activity.holdUserTranscriptsUntil(startedAt.Add(time.Second))
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:      "stale interim",
+			StartTime: 0.25,
+			EndTime:   0.5,
+		}},
+	})
+
+	select {
+	case ev := <-userTranscriptEvents:
+		t.Fatalf("unexpected stale interim transcript event: %#v", ev)
+	default:
+	}
+	if current.IsInterrupted() {
+		t.Fatal("current speech was interrupted by stale interim transcript")
+	}
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:      "new interim",
+			StartTime: 1.25,
+			EndTime:   1.5,
+		}},
+	})
+
+	select {
+	case ev := <-userTranscriptEvents:
+		if ev.Transcript != "new interim" || ev.IsFinal {
+			t.Fatalf("event = %#v, want non-final new interim", ev)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("UserInputTranscribedEvents did not receive later interim transcript")
+	}
+}
+
 func TestAgentActivityOnFinalTranscriptSkipsEmptyTranscript(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}
