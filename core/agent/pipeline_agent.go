@@ -124,6 +124,12 @@ func (va *PipelineAgent) run(ctx context.Context) {
 		}
 		return
 	}
+	defer func() {
+		if err := vadStream.Close(); err != nil && !isSpeechStreamShutdownError(err) {
+			logger.Logger.Errorw("failed to close VAD stream", err)
+			va.emitError(err, va.vad)
+		}
+	}()
 
 	sttStream, err := va.stt.Stream(ctx, "")
 	if err != nil {
@@ -137,6 +143,16 @@ func (va *PipelineAgent) run(ctx context.Context) {
 		}
 		return
 	}
+	defer func() {
+		if err := sttStream.Close(); err != nil && !isSpeechStreamShutdownError(err) {
+			logger.Logger.Errorw("failed to close STT stream", err)
+			label := "stt"
+			if va.stt != nil {
+				label = va.stt.Label()
+			}
+			va.emitError(stt.NewSTTError(label, err, false), va.stt)
+		}
+	}()
 
 	go va.vadLoop(vadStream)
 	go va.sttLoop(sttStream)

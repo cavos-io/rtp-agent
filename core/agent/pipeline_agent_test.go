@@ -1531,6 +1531,32 @@ func TestPipelineAgentIgnoresClosedPipeSTTPushFrameOnShutdown(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentClosesRecognitionStreamsOnContextCancel(t *testing.T) {
+	vadClosed := make(chan struct{})
+	sttClosed := make(chan struct{})
+	vadPushed := make(chan *model.AudioFrame, 1)
+	sttPushed := make(chan *model.AudioFrame, 1)
+	vadStream := &fakePipelineVADStream{pushedCh: vadPushed, closedCh: vadClosed}
+	sttStream := &fakePipelineRecognizeStream{pushedCh: sttPushed, closedCh: sttClosed}
+	agent := NewPipelineAgent(
+		&fakePipelineVAD{stream: vadStream},
+		&fakePipelineSTT{stream: sttStream},
+		nil,
+		nil,
+		llm.NewChatContext(),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	go agent.run(ctx)
+
+	agent.OnAudioFrame(ctx, &model.AudioFrame{Data: []byte{1, 2}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1})
+	receivePipelineFrame(t, vadPushed)
+	receivePipelineFrame(t, sttPushed)
+	cancel()
+
+	receivePipelineClosed(t, vadClosed, "VAD")
+	receivePipelineClosed(t, sttClosed, "STT")
+}
+
 func TestPipelineAgentEmitsErrorEventForSTTStreamStartError(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	cause := errors.New("stt start failed")
@@ -2835,12 +2861,14 @@ func (f *fakePipelineVAD) Stream(context.Context) (vad.VADStream, error) {
 }
 
 type fakePipelineVADStream struct {
-	events   []*vad.VADEvent
-	index    int
-	err      error
-	pushErr  error
-	frames   []*model.AudioFrame
-	pushedCh chan *model.AudioFrame
+	events    []*vad.VADEvent
+	index     int
+	err       error
+	pushErr   error
+	frames    []*model.AudioFrame
+	pushedCh  chan *model.AudioFrame
+	closedCh  chan struct{}
+	closeOnce sync.Once
 }
 
 func (f *fakePipelineVADStream) PushFrame(frame *model.AudioFrame) error {
@@ -2855,7 +2883,12 @@ func (f *fakePipelineVADStream) Flush() error { return nil }
 
 func (f *fakePipelineVADStream) EndInput() error { return nil }
 
-func (f *fakePipelineVADStream) Close() error { return nil }
+func (f *fakePipelineVADStream) Close() error {
+	if f.closedCh != nil {
+		f.closeOnce.Do(func() { close(f.closedCh) })
+	}
+	return nil
+}
 
 func (f *fakePipelineVADStream) Next() (*vad.VADEvent, error) {
 	if f.index < len(f.events) {
@@ -3026,13 +3059,25 @@ func receivePipelineFrame(t *testing.T, ch <-chan *model.AudioFrame) *model.Audi
 	return nil
 }
 
+func receivePipelineClosed(t *testing.T, ch <-chan struct{}, name string) {
+	t.Helper()
+
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		t.Fatalf("%s stream was not closed", name)
+	}
+}
+
 type fakePipelineRecognizeStream struct {
-	events   []*stt.SpeechEvent
-	index    int
-	err      error
-	pushErr  error
-	frames   []*model.AudioFrame
-	pushedCh chan *model.AudioFrame
+	events    []*stt.SpeechEvent
+	index     int
+	err       error
+	pushErr   error
+	frames    []*model.AudioFrame
+	pushedCh  chan *model.AudioFrame
+	closedCh  chan struct{}
+	closeOnce sync.Once
 }
 
 func (f *fakePipelineRecognizeStream) PushFrame(frame *model.AudioFrame) error {
@@ -3045,7 +3090,12 @@ func (f *fakePipelineRecognizeStream) PushFrame(frame *model.AudioFrame) error {
 
 func (f *fakePipelineRecognizeStream) Flush() error { return nil }
 
-func (f *fakePipelineRecognizeStream) Close() error { return nil }
+func (f *fakePipelineRecognizeStream) Close() error {
+	if f.closedCh != nil {
+		f.closeOnce.Do(func() { close(f.closedCh) })
+	}
+	return nil
+}
 
 func (f *fakePipelineRecognizeStream) Next() (*stt.SpeechEvent, error) {
 	if f.index >= len(f.events) {
