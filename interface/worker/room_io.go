@@ -137,6 +137,7 @@ const RoomIOTranscriptionSegmentIDAttribute = "lk.segment_id"
 const roomIODeleteRoomCloseTimeout = 10 * time.Second
 const roomIOOpusClockRate uint32 = 48000
 const roomIOOpusFrameSamples uint32 = 960
+const roomIOInputSampleRate uint32 = 24000
 const roomIOAudioSubscriptionTimeout = 3 * time.Second
 
 func roomIOAudioOutputCodec() webrtc.RTPCodecCapability {
@@ -1229,12 +1230,7 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 				}
 			}
 
-			frame := &model.AudioFrame{
-				Data:              pcm,
-				SampleRate:        track.Codec().ClockRate,
-				NumChannels:       1, // We decode to mono for simplicity
-				SamplesPerChannel: uint32(len(pcm) / 2),
-			}
+			frame := roomIOInputFrameFromPCM(pcm, track.Codec().ClockRate, 1)
 
 			if rio.Recorder != nil {
 				rio.Recorder.RecordInput(frame)
@@ -1242,6 +1238,27 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 			rio.AgentSession.OnAudioFrame(context.Background(), frame)
 		}
 	}
+}
+
+func roomIOInputFrameFromPCM(pcm []byte, sampleRate uint32, channels uint32) *model.AudioFrame {
+	if channels == 0 {
+		channels = 1
+	}
+	frame := &model.AudioFrame{
+		Data:              pcm,
+		SampleRate:        sampleRate,
+		NumChannels:       channels,
+		SamplesPerChannel: uint32(len(pcm)) / channels / 2,
+	}
+	if sampleRate == 0 || sampleRate == roomIOInputSampleRate {
+		return frame
+	}
+	resampled, err := audio.ResampleAudioFrame(frame, roomIOInputSampleRate)
+	if err != nil {
+		logger.Logger.Warnw("room audio input resample failed", err, "from", sampleRate, "to", roomIOInputSampleRate)
+		return frame
+	}
+	return resampled
 }
 
 func (rio *RoomIO) OnPlaybackStarted(callback func(PlaybackStartedEvent)) {

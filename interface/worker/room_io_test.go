@@ -131,6 +131,24 @@ func TestNewRoomIOCanDisableAudioInput(t *testing.T) {
 	}
 }
 
+func TestRoomIOInputFrameUsesReferenceSampleRate(t *testing.T) {
+	pcm := make([]byte, 960)
+	frame := roomIOInputFrameFromPCM(pcm, roomIOOpusClockRate, 1)
+
+	if frame.SampleRate != 24000 {
+		t.Fatalf("SampleRate = %d, want reference RoomIO input rate 24000", frame.SampleRate)
+	}
+	if frame.NumChannels != 1 {
+		t.Fatalf("NumChannels = %d, want mono reference input", frame.NumChannels)
+	}
+	if frame.SamplesPerChannel != 240 {
+		t.Fatalf("SamplesPerChannel = %d, want 240 after 48k->24k resample", frame.SamplesPerChannel)
+	}
+	if got, want := len(frame.Data), int(frame.SamplesPerChannel*frame.NumChannels*2); got != want {
+		t.Fatalf("frame data bytes = %d, want %d", got, want)
+	}
+}
+
 func TestNewRoomIORegistersReferenceChatTextHandler(t *testing.T) {
 	room := lksdk.NewRoom(nil)
 	_ = NewRoomIO(room, &agent.AgentSession{}, RoomOptions{})
