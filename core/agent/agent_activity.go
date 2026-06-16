@@ -141,6 +141,7 @@ type AgentActivity struct {
 	preemptiveGenerationCount int
 	userSpeechStartedAt       time.Time
 	userSpeechStoppedAt       time.Time
+	ignoreUserTranscriptUntil time.Time
 
 	falseInterruptionMu    sync.Mutex
 	pausedSpeech           *pausedSpeechInfo
@@ -1509,6 +1510,10 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 		logger.Logger.Warnw("skipping zero-confidence final transcript", nil, "transcript", transcript)
 		return
 	}
+	if a.shouldDropFinalTranscriptBeforeAgentSpeechEnd(ev) {
+		logger.Logger.Debugw("dropping stale final transcript before agent speech end", "transcript", transcript)
+		return
+	}
 	if a.Session != nil {
 		a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
 			Language:   language,
@@ -1561,6 +1566,41 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 			AudioFrames:          a.userAudioSnapshot(),
 		})
 	}
+}
+
+func (a *AgentActivity) holdUserTranscriptsUntil(ignoreUntil time.Time) {
+	if a == nil || ignoreUntil.IsZero() {
+		return
+	}
+	a.userTurnMu.Lock()
+	if a.ignoreUserTranscriptUntil.IsZero() || ignoreUntil.Before(a.ignoreUserTranscriptUntil) {
+		a.ignoreUserTranscriptUntil = ignoreUntil
+	}
+	a.userTurnMu.Unlock()
+}
+
+func (a *AgentActivity) shouldDropFinalTranscriptBeforeAgentSpeechEnd(ev *stt.SpeechEvent) bool {
+	if a == nil || ev == nil || len(ev.Alternatives) == 0 || a.userSpeechStartedAt.IsZero() {
+		return false
+	}
+	alternative := ev.Alternatives[0]
+	if alternative.EndTime <= 0 || alternative.StartTime == alternative.EndTime {
+		return false
+	}
+	a.userTurnMu.Lock()
+	ignoreUntil := a.ignoreUserTranscriptUntil
+	if ignoreUntil.IsZero() {
+		a.userTurnMu.Unlock()
+		return false
+	}
+	transcriptEnd := a.userSpeechStartedAt.Add(time.Duration(alternative.EndTime * float64(time.Second)))
+	if transcriptEnd.Before(ignoreUntil) {
+		a.userTurnMu.Unlock()
+		return true
+	}
+	a.ignoreUserTranscriptUntil = time.Time{}
+	a.userTurnMu.Unlock()
+	return false
 }
 
 func (a *AgentActivity) finalTranscriptTiming(ev *stt.SpeechEvent) (*float64, *float64, float64) {

@@ -2015,6 +2015,54 @@ func TestAgentActivityOnFinalTranscriptEmitsUserInputTranscribed(t *testing.T) {
 	}
 }
 
+func TestAgentActivityDropsFinalTranscriptBeforeAgentSpeechEnd(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	userTranscriptEvents := session.UserInputTranscribedEvents()
+	startedAt := time.Unix(100, 0)
+	activity.userSpeechStartedAt = startedAt
+	activity.holdUserTranscriptsUntil(startedAt.Add(time.Second))
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "stale overlap",
+			EndTime:    0.5,
+			Confidence: 0.9,
+		}},
+	})
+
+	select {
+	case ev := <-userTranscriptEvents:
+		t.Fatalf("unexpected stale transcript event: %#v", ev)
+	default:
+	}
+	if activity.pendingUserTranscriptPresent {
+		t.Fatalf("pending user transcript = %q, want stale transcript dropped", activity.pendingUserTranscript)
+	}
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "new turn",
+			EndTime:    1.5,
+			Confidence: 0.9,
+		}},
+	})
+
+	select {
+	case ev := <-userTranscriptEvents:
+		if ev.Transcript != "new turn" || !ev.IsFinal {
+			t.Fatalf("event = %#v, want final new turn", ev)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("UserInputTranscribedEvents did not receive later transcript")
+	}
+	if !activity.pendingUserTranscriptPresent || activity.pendingUserTranscript != "new turn" {
+		t.Fatalf("pending user transcript = %q/%v, want new turn present", activity.pendingUserTranscript, activity.pendingUserTranscriptPresent)
+	}
+}
+
 func TestAgentActivityOnFinalTranscriptSkipsEmptyTranscript(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}

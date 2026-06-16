@@ -799,10 +799,19 @@ func (ma *MultimodalAgent) forwardedRealtimeTextAfterInterruption(ctx context.Co
 		return generatedText, AudioPlaybackResult{}
 	}
 	if ev.SynchronizedTranscript != "" {
+		if session.activity != nil {
+			session.activity.holdUserTranscriptsUntil(time.Now())
+		}
 		return ev.SynchronizedTranscript, ev
 	}
 	if ev.PlaybackPosition <= 0 {
+		if session.activity != nil {
+			session.activity.holdUserTranscriptsUntil(time.Now())
+		}
 		return "", ev
+	}
+	if session.activity != nil {
+		session.activity.holdUserTranscriptsUntil(time.Now())
 	}
 	return generatedText, ev
 }
