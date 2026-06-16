@@ -26,10 +26,6 @@ import (
 // to VAD and STT processing. Returning nil drops the frame from both pipelines.
 type AudioInputHook func(ctx context.Context, frame *model.AudioFrame) *model.AudioFrame
 
-type sttSampleRater interface {
-	InputSampleRate() uint32
-}
-
 type PipelineAgent struct {
 	vad     vad.VAD
 	stt     stt.STT
@@ -166,13 +162,11 @@ func (va *PipelineAgent) run(ctx context.Context) {
 			if va.session != nil && va.session.shouldSilenceInputAudio() {
 				sttFrame = audio.SilenceFrameLike(frame)
 			}
-			if rater, ok := va.stt.(sttSampleRater); ok {
-				if targetRate := rater.InputSampleRate(); targetRate > 0 && sttFrame.SampleRate != targetRate {
-					if resampled, err := audio.ResampleAudioFrame(sttFrame, targetRate); err == nil {
-						sttFrame = resampled
-					} else {
-						logger.Logger.Warnw("STT resample failed", err, "from", sttFrame.SampleRate, "to", targetRate)
-					}
+			if targetRate := stt.InputSampleRate(va.stt); targetRate > 0 && sttFrame.SampleRate != targetRate {
+				if resampled, err := audio.ResampleAudioFrame(sttFrame, targetRate); err == nil {
+					sttFrame = resampled
+				} else {
+					logger.Logger.Warnw("STT resample failed", err, "from", sttFrame.SampleRate, "to", targetRate)
 				}
 			}
 			if err := sttStream.PushFrame(sttFrame); err != nil {
