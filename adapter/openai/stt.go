@@ -564,6 +564,11 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
 	chunkBytes := openAIRealtimeSTTChunkBytes()
 	for start := 0; start < len(frame.Data); start += chunkBytes {
 		end := start + chunkBytes
@@ -578,6 +583,7 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 			return err
 		}
 		if err := s.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+			s.closeAfterWriteFailureLocked()
 			return err
 		}
 	}
@@ -589,7 +595,16 @@ func (s *openAIRealtimeSTTStream) Flush() error {
 	if err != nil {
 		return err
 	}
-	return s.conn.WriteMessage(websocket.TextMessage, message)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if err := s.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *openAIRealtimeSTTStream) UpdateOptions(language string) {
@@ -615,6 +630,18 @@ func (s *openAIRealtimeSTTStream) Close() error {
 	s.cancel()
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
+}
+
+func (s *openAIRealtimeSTTStream) closeAfterWriteFailureLocked() {
+	if s.closed {
+		return
+	}
+	s.closed = true
+	if s.owner != nil {
+		s.owner.unregisterRealtimeSTTStream(s)
+	}
+	s.cancel()
+	_ = s.conn.Close()
 }
 
 func (s *openAIRealtimeSTTStream) Next() (*stt.SpeechEvent, error) {

@@ -1,18 +1,26 @@
 package elevenlabs
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"encoding/base64"
+	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/gorilla/websocket"
 )
 
 func TestElevenLabsSTTDefaultsMatchReference(t *testing.T) {
@@ -357,6 +365,110 @@ func TestElevenLabsSTTStreamEventReportsErrors(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "quota_exceeded") || !strings.Contains(err.Error(), "upgrade") {
 		t.Fatalf("error = %v, want provider error", err)
 	}
+}
+
+func TestElevenLabsSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
+	closed := make(chan struct{})
+	closeAfterHandshake := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runElevenLabsClosingWebsocketServer(serverConn, closeAfterHandshake, closed, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTModel("scribe_v2_realtime"),
+		WithElevenLabsSTTBaseURL("ws://eleven.test/v1"),
+	)
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	close(closeAfterHandshake)
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test websocket close")
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	default:
+	}
+
+	var writeErr error
+	for range 3 {
+		writeErr = stream.PushFrame(&model.AudioFrame{
+			Data:              []byte{0x01, 0x02},
+			SampleRate:        16000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		})
+		if writeErr != nil {
+			break
+		}
+	}
+	if writeErr == nil {
+		t.Fatal("PushFrame error = nil after closed websocket, want write failure")
+	}
+	providerStream, ok := stream.(*elevenLabsSTTStream)
+	if !ok {
+		t.Fatalf("stream = %T, want *elevenLabsSTTStream", stream)
+	}
+	if !providerStream.closed {
+		t.Fatal("stream closed = false after write failure, want true")
+	}
+
+	err = stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x03, 0x04},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	})
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("second PushFrame error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after write failure error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close after write failure error = %v", err)
+	}
+}
+
+func runElevenLabsClosingWebsocketServer(conn net.Conn, closeAfterHandshake <-chan struct{}, closed chan<- struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", elevenLabsTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	<-closeAfterHandshake
+	close(closed)
+	errCh <- nil
+}
+
+func elevenLabsTestAcceptKey(key string) string {
+	sum := sha1.Sum([]byte(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+	return base64.StdEncoding.EncodeToString(sum[:])
 }
 
 type elevenLabsMultipartFile struct {

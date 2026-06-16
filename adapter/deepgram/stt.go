@@ -614,7 +614,13 @@ func (s *deepgramStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	return s.conn.WriteMessage(websocket.BinaryMessage, frame.Data)
+	if err := s.conn.WriteMessage(websocket.BinaryMessage, frame.Data); err != nil {
+		s.closed = true
+		s.cancel()
+		_ = s.conn.Close()
+		return err
+	}
+	return nil
 }
 
 func (s *deepgramStream) Flush() error {
