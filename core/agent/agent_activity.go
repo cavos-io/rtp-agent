@@ -108,6 +108,7 @@ type AgentActivity struct {
 	speaking       bool
 
 	providerUnsubscribes []func()
+	registeredTools      []llm.Tool
 
 	userTurnMu                   sync.Mutex
 	userTurnUpdatedCh            chan struct{}
@@ -313,6 +314,13 @@ func (a *AgentActivity) Tools() []interface{} {
 	if a == nil || a.Agent == nil {
 		return nil
 	}
+	if len(a.registeredTools) > 0 {
+		tools := make([]interface{}, 0, len(a.registeredTools))
+		for _, tool := range a.registeredTools {
+			tools = append(tools, tool)
+		}
+		return tools
+	}
 	capacity := len(a.Agent.Tools)
 	if a.Session != nil {
 		capacity += len(a.Session.Tools)
@@ -408,6 +416,7 @@ func (a *AgentActivity) recordInitialConfiguration() error {
 		if err != nil {
 			return err
 		}
+		a.registeredTools = append([]llm.Tool(nil), registeredTools...)
 		tools = agentToolsAsInterfaces(registeredTools)
 	}
 	toolNames := sortedAgentToolNames(tools)
@@ -698,6 +707,7 @@ func (a *AgentActivity) UpdateChatCtx(ctx context.Context, chatCtx *llm.ChatCont
 		if err != nil {
 			return err
 		}
+		a.registeredTools = append([]llm.Tool(nil), registeredTools...)
 		tools = agentToolsAsInterfaces(registeredTools)
 	} else if a.Agent != nil {
 		for idx, tool := range a.Agent.Tools {

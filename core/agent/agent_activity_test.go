@@ -299,6 +299,23 @@ func TestAgentActivityToolsOmitCancellationHelpersWithoutCancellableTools(t *tes
 	}
 }
 
+func TestAgentActivityToolsIncludesStartedMCPTools(t *testing.T) {
+	mcpTool := &agentTestTool{id: "lookup", name: "lookup"}
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.SetMCPServers([]llm.MCPServer{&fakeActivityMCPServer{tools: []llm.Tool{mcpTool}}})
+	activity := NewAgentActivity(agent, session)
+
+	activity.Start()
+	defer activity.Stop()
+
+	got := sortedAgentToolNames(activity.Tools())
+	want := []string{"lookup"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("Tools() names after Start = %#v, want MCP tools %#v", got, want)
+	}
+}
+
 func TestAgentActivityUpdateChatCtxPreservesMCPToolItems(t *testing.T) {
 	mcpTool := &agentTestTool{id: "lookup", name: "lookup"}
 	agent := NewAgent("test")
