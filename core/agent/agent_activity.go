@@ -1613,6 +1613,7 @@ func (a *AgentActivity) armBackchannelBoundary(startedAt time.Time) {
 		a.backchannelBoundaryUntil = startedAt.Add(duration)
 	} else {
 		a.backchannelBoundaryUntil = time.Time{}
+		a.audioActivityDisabled = true
 	}
 	a.backchannelBoundaryMu.Unlock()
 }
@@ -1634,7 +1635,7 @@ func (a *AgentActivity) audioActivityInterruptionDisabled(now time.Time) bool {
 	a.backchannelBoundaryMu.Lock()
 	if a.audioActivityDisabled {
 		a.backchannelBoundaryMu.Unlock()
-		return true
+		return a.Session.AgentState() == AgentStateSpeaking
 	}
 	until := a.backchannelBoundaryUntil
 	if until.IsZero() {

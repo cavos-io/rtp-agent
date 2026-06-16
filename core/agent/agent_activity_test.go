@@ -892,6 +892,47 @@ func TestAgentActivityVADInferenceDoneIgnoresAfterBackchannelBoundaryExpires(t *
 	waitForInterrupted(t, current)
 }
 
+func TestAgentActivityVADInferenceDoneIgnoresWithoutBackchannelBoundaryStart(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:               TurnDetectionModeVAD,
+		MinInterruptionDuration:     0.05,
+		BackchannelBoundaryStart:    0,
+		BackchannelBoundaryStartSet: true,
+	})
+	activity := NewAgentActivity(agent, session)
+
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	activity.OnVADInferenceDone(&vad.VADEvent{
+		Type:                  vad.VADEventInferenceDone,
+		SpeechDuration:        0.06,
+		Speaking:              true,
+		RawAccumulatedSilence: 0,
+	})
+	waitForInterrupted(t, current)
+	current.MarkDone()
+
+	current = NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	defer current.MarkDone()
+	session.agentState = AgentStateSpeaking
+	activity.armBackchannelBoundary(time.Now())
+	activity.OnVADInferenceDone(&vad.VADEvent{
+		Type:                  vad.VADEventInferenceDone,
+		SpeechDuration:        0.06,
+		Speaking:              true,
+		RawAccumulatedSilence: 0,
+	})
+
+	select {
+	case <-current.interruptCh:
+		t.Fatal("current speech was interrupted by VAD without an active backchannel boundary")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestAgentActivityOnVADInferenceDoneRespectsMinInterruptionWordsWithoutTranscript(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}
