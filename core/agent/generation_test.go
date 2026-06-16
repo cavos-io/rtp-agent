@@ -409,6 +409,37 @@ func TestPerformTTSInferenceEndsStreamInput(t *testing.T) {
 	}
 }
 
+func TestPerformTTSInferenceStreamsAudioBeforeInputEnds(t *testing.T) {
+	providerStream := newEndInputGenerationTTSStream()
+	providerStream.emitAfterPush = true
+	provider := &fakeGenerationTTS{stream: providerStream}
+	textCh := make(chan string, 1)
+
+	data, err := PerformTTSInference(context.Background(), provider, textCh, WithTTSTextTransformsDisabled())
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+	defer close(textCh)
+
+	textCh <- "hello"
+
+	select {
+	case frame, ok := <-data.AudioCh:
+		if !ok {
+			t.Fatal("AudioCh closed before input ended, want streamed audio")
+		}
+		if frame == nil || string(frame.Data) != "audio" {
+			t.Fatalf("audio frame = %#v, want streamed audio before EndInput", frame)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for TTS audio before input ended")
+	}
+
+	if providerStream.endedClosed() {
+		t.Fatal("EndInput ran before streaming first audio")
+	}
+}
+
 func TestPerformTTSInferenceRecordsPushTextError(t *testing.T) {
 	cause := errors.New("push text failed")
 	providerStream := newEndInputGenerationTTSStream()
@@ -1860,17 +1891,20 @@ func (s *fakeGenerationChunkedStream) Close() error {
 }
 
 type endInputGenerationTTSStream struct {
-	calls   []string
-	ended   chan struct{}
-	closed  bool
-	emitted bool
-	pushErr error
-	endErr  error
+	calls         []string
+	ended         chan struct{}
+	pushed        chan struct{}
+	closed        bool
+	emitted       bool
+	pushErr       error
+	endErr        error
+	emitAfterPush bool
 }
 
 func newEndInputGenerationTTSStream() *endInputGenerationTTSStream {
 	return &endInputGenerationTTSStream{
-		ended: make(chan struct{}),
+		ended:  make(chan struct{}),
+		pushed: make(chan struct{}),
 	}
 }
 
@@ -1878,6 +1912,11 @@ func (s *endInputGenerationTTSStream) PushText(text string) error {
 	s.calls = append(s.calls, "push:"+text)
 	if s.pushErr != nil {
 		return s.pushErr
+	}
+	select {
+	case <-s.pushed:
+	default:
+		close(s.pushed)
 	}
 	return nil
 }
@@ -1911,7 +1950,11 @@ func (s *endInputGenerationTTSStream) Close() error {
 }
 
 func (s *endInputGenerationTTSStream) Next() (*tts.SynthesizedAudio, error) {
-	<-s.ended
+	if s.emitAfterPush {
+		<-s.pushed
+	} else {
+		<-s.ended
+	}
 	if s.emitted || s.closed {
 		return nil, io.EOF
 	}
@@ -1924,6 +1967,15 @@ func (s *endInputGenerationTTSStream) Next() (*tts.SynthesizedAudio, error) {
 			SamplesPerChannel: 2,
 		},
 	}, nil
+}
+
+func (s *endInputGenerationTTSStream) endedClosed() bool {
+	select {
+	case <-s.ended:
+		return true
+	default:
+		return false
+	}
 }
 
 type pacedGenerationTTSStream struct {
