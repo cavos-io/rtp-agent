@@ -2457,6 +2457,67 @@ func TestAgentActivityCommitUserTurnInterruptsCurrentSpeechBeforeReply(t *testin
 	}
 }
 
+func TestAgentActivityCommitUserTurnCancelsPausedFalseInterruption(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.VAD = &fakePipelineVAD{}
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:               TurnDetectionModeVAD,
+		MinInterruptionDuration:     0.05,
+		FalseInterruptionTimeout:    10,
+		FalseInterruptionTimeoutSet: true,
+		ResumeFalseInterruption:     true,
+		ResumeFalseInterruptionSet:  true,
+	})
+	audioOutput := &recordingAudioOutputController{canPause: true}
+	session.SetAudioOutputController(audioOutput)
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	session.agentState = AgentStateSpeaking
+
+	activity.OnVADInferenceDone(&vad.VADEvent{
+		Type:                  vad.VADEventInferenceDone,
+		SpeechDuration:        0.06,
+		Speaking:              true,
+		RawAccumulatedSilence: 0,
+	})
+	if audioOutput.pauseCount != 1 {
+		t.Fatalf("PauseAudioOutput calls = %d, want 1", audioOutput.pauseCount)
+	}
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "real turn", Confidence: 1}},
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+		done <- err
+	}()
+
+	waitForInterrupted(t, current)
+	current.MarkDone()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("CommitUserTurn error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("CommitUserTurn did not return after paused speech completed")
+	}
+	if audioOutput.resumeCount != 1 {
+		t.Fatalf("ResumeAudioOutput calls = %d, want 1 after committing real turn", audioOutput.resumeCount)
+	}
+	select {
+	case ev := <-session.AgentFalseInterruptionEvents():
+		t.Fatalf("unexpected false interruption event after real turn commit: %#v", ev)
+	default:
+	}
+}
+
 func TestAgentActivityCompleteUserTurnWaitsForPreviousHook(t *testing.T) {
 	agent := &blockingTurnAgent{
 		Agent:   NewAgent("test"),

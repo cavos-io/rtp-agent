@@ -1693,6 +1693,37 @@ func (a *AgentActivity) resumeFalseInterruption() {
 	a.Session.EmitAgentFalseInterruption(AgentFalseInterruptionEvent{Resumed: resumed})
 }
 
+func (a *AgentActivity) cancelPausedFalseInterruption(interrupt bool) *pausedSpeechInfo {
+	if a == nil {
+		return nil
+	}
+	a.falseInterruptionMu.Lock()
+	paused := a.pausedSpeech
+	a.pausedSpeech = nil
+	if a.falseInterruptionTimer != nil {
+		a.falseInterruptionTimer.Stop()
+		a.falseInterruptionTimer = nil
+	}
+	a.falseInterruptionMu.Unlock()
+	if paused == nil {
+		return nil
+	}
+	if interrupt && !paused.handle.IsInterrupted() && paused.handle.AllowInterruptions {
+		_ = paused.handle.Interrupt(false)
+	}
+	return paused
+}
+
+func (a *AgentActivity) resumeCanceledFalseInterruption(paused *pausedSpeechInfo) {
+	if a == nil || a.Session == nil || paused == nil {
+		return
+	}
+	controller := a.Session.AudioOutputController()
+	if controller != nil && a.Session.Options.ResumeFalseInterruption {
+		controller.ResumeAudioOutput()
+	}
+}
+
 func (a *AgentActivity) ClearUserTurn() {
 	a.eouMu.Lock()
 	if a.eouCancel != nil {
@@ -1859,12 +1890,14 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		return nil, nil
 	}
 	if currentSpeech != nil && !currentSpeech.IsInterrupted() && !currentSpeech.IsDone() {
+		paused := a.cancelPausedFalseInterruption(false)
 		if err := currentSpeech.Interrupt(false); err != nil {
 			return nil, err
 		}
 		if err := currentSpeech.Wait(ctx); err != nil {
 			return nil, err
 		}
+		a.resumeCanceledFalseInterruption(paused)
 	}
 	if schedulingPaused {
 		a.cancelPreemptiveGeneration()
