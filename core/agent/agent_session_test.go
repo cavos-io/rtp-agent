@@ -2226,6 +2226,31 @@ func TestAgentSessionGenerateReplyOptionsCanCreateUnscheduledSpeech(t *testing.T
 	}
 }
 
+func TestAgentSessionGenerateReplyRejectsMissingLLM(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.Assistant = NewPipelineAgent(nil, nil, nil, nil, session.ChatCtx)
+	speechEvents := session.SpeechCreatedEvents()
+
+	handle, err := session.GenerateReply(context.Background(), "hello")
+
+	if handle != nil {
+		t.Fatalf("GenerateReply handle = %#v, want nil without LLM", handle)
+	}
+	if err == nil {
+		t.Fatal("GenerateReply error = nil, want missing LLM error")
+	}
+	if got, want := err.Error(), "trying to generate reply without an LLM model"; got != want {
+		t.Fatalf("GenerateReply error = %q, want %q", got, want)
+	}
+	select {
+	case ev := <-speechEvents:
+		t.Fatalf("SpeechCreated event = %#v, want no speech without LLM", ev)
+	default:
+	}
+}
+
 func TestAgentSessionGenerateReplyOptionsPreferUserMessageOverString(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

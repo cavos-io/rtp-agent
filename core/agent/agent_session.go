@@ -112,6 +112,7 @@ var (
 	ErrAgentSessionNestedRun        = errors.New("nested runs are not supported")
 	ErrAgentSessionUserdataNotSet   = errors.New("AgentSession userdata is not set")
 	ErrAgentSessionJobContextNotSet = errors.New("agent session job context is not set")
+	errGenerateReplyMissingLLM      = errors.New("trying to generate reply without an LLM model")
 	errAgentSessionClosingSay       = agentSessionClosingError("AgentSession is closing, cannot use say()")
 	errAgentSessionClosingReply     = agentSessionClosingError("AgentSession is closing, cannot use generate_reply()")
 )
@@ -2151,6 +2152,9 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 			return nil, errAgentSessionClosingReply
 		}
 		return nil, ErrAgentSessionNotRunning
+	}
+	if pipeline, ok := assistant.(*PipelineAgent); ok && pipeline.LLM == nil {
+		return nil, errGenerateReplyMissingLLM
 	}
 	if len(opts.Tools) > 0 {
 		registeredTools, err := sessionRegisteredTools(ctx, s)
