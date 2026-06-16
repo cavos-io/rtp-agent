@@ -108,6 +108,7 @@ type AgentActivity struct {
 	speaking       bool
 
 	providerUnsubscribes []func()
+	registeredTools      []llm.Tool
 
 	userTurnMu                   sync.Mutex
 	userTurnUpdatedCh            chan struct{}
@@ -313,6 +314,13 @@ func (a *AgentActivity) Tools() []interface{} {
 	if a == nil || a.Agent == nil {
 		return nil
 	}
+	if len(a.registeredTools) > 0 {
+		tools := make([]interface{}, 0, len(a.registeredTools))
+		for _, tool := range a.registeredTools {
+			tools = append(tools, tool)
+		}
+		return tools
+	}
 	capacity := len(a.Agent.Tools)
 	if a.Session != nil {
 		capacity += len(a.Session.Tools)
@@ -408,9 +416,10 @@ func (a *AgentActivity) recordInitialConfiguration() error {
 		if err != nil {
 			return err
 		}
+		a.registeredTools = append([]llm.Tool(nil), registeredTools...)
 		tools = agentToolsAsInterfaces(registeredTools)
 	}
-	toolNames := sortedAgentToolNames(tools)
+	toolNames := sortedAgentFunctionToolNames(tools)
 	if instructions == nil && len(toolNames) == 0 {
 		return nil
 	}
@@ -698,6 +707,7 @@ func (a *AgentActivity) UpdateChatCtx(ctx context.Context, chatCtx *llm.ChatCont
 		if err != nil {
 			return err
 		}
+		a.registeredTools = append([]llm.Tool(nil), registeredTools...)
 		tools = agentToolsAsInterfaces(registeredTools)
 	} else if a.Agent != nil {
 		for idx, tool := range a.Agent.Tools {
@@ -763,9 +773,22 @@ func (a *AgentActivity) RetrieveChatCtx() *llm.ChatContext {
 
 func agentToolNameSet(tools []llm.Tool) map[string]struct{} {
 	names := make(map[string]struct{}, len(tools))
-	for _, tool := range tools {
-		names[tool.Name()] = struct{}{}
+	var addToolNames func([]llm.Tool)
+	addToolNames = func(items []llm.Tool) {
+		for _, tool := range items {
+			if toolset, ok := tool.(llm.Toolset); ok {
+				addToolNames(toolset.Tools())
+				continue
+			}
+			if _, providerOnly := tool.(llm.ProviderTool); providerOnly {
+				continue
+			}
+			if name := tool.Name(); name != "" {
+				names[name] = struct{}{}
+			}
+		}
 	}
+	addToolNames(tools)
 	return names
 }
 
@@ -816,6 +839,45 @@ func sortedAgentToolNames(tools []interface{}) []string {
 		seen[name] = struct{}{}
 		names = append(names, name)
 	}
+	if len(names) == 0 {
+		return nil
+	}
+	sort.Strings(names)
+	return names
+}
+
+func sortedAgentFunctionToolNames(tools []interface{}) []string {
+	if len(tools) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(tools))
+	seen := make(map[string]struct{}, len(tools))
+	var addToolNames func([]interface{})
+	addToolNames = func(items []interface{}) {
+		for _, item := range items {
+			if toolset, ok := item.(llm.Toolset); ok {
+				addToolNames(agentToolsAsInterfaces(toolset.Tools()))
+				continue
+			}
+			tool, ok := item.(llm.Tool)
+			if !ok {
+				continue
+			}
+			if _, providerOnly := tool.(llm.ProviderTool); providerOnly {
+				continue
+			}
+			name := tool.Name()
+			if name == "" {
+				continue
+			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			names = append(names, name)
+		}
+	}
+	addToolNames(tools)
 	if len(names) == 0 {
 		return nil
 	}

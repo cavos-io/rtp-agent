@@ -126,7 +126,7 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 		voice:  googleTTSVoiceParams(cfg),
 		prompt: cfg.prompt,
 		audio: &texttospeechpb.AudioConfig{
-			AudioEncoding:    texttospeechpb.AudioEncoding_LINEAR16,
+			AudioEncoding:    texttospeechpb.AudioEncoding_PCM,
 			SampleRateHertz:  24000,
 			SpeakingRate:     cfg.speakingRate,
 			Pitch:            cfg.pitch,
@@ -282,7 +282,7 @@ func (s *googleTTSSynthesizeStream) Flush() error {
 			StreamingConfig: &texttospeechpb.StreamingSynthesizeConfig{
 				Voice: s.voice,
 				StreamingAudioConfig: &texttospeechpb.StreamingAudioConfig{
-					AudioEncoding:   s.audio.GetAudioEncoding(),
+					AudioEncoding:   texttospeechpb.AudioEncoding_PCM,
 					SampleRateHertz: s.audio.GetSampleRateHertz(),
 					SpeakingRate:    s.audio.GetSpeakingRate(),
 				},

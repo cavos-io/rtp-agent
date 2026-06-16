@@ -82,8 +82,8 @@ func TestGoogleTTSStreamSendsReferenceConfigAndInput(t *testing.T) {
 	if config.GetVoice().GetLanguageCode() != "id-ID" || config.GetVoice().GetName() != "id-ID-Standard-A" || config.GetVoice().GetModelName() != "gemini-custom" {
 		t.Fatalf("streaming voice = %+v, want configured voice", config.GetVoice())
 	}
-	if config.GetStreamingAudioConfig().GetSampleRateHertz() != 24000 || config.GetStreamingAudioConfig().GetAudioEncoding() != texttospeech.AudioEncoding_LINEAR16 {
-		t.Fatalf("audio config = %+v, want LINEAR16 24 kHz", config.GetStreamingAudioConfig())
+	if config.GetStreamingAudioConfig().GetSampleRateHertz() != 24000 || config.GetStreamingAudioConfig().GetAudioEncoding() != texttospeech.AudioEncoding_PCM {
+		t.Fatalf("audio config = %+v, want PCM 24 kHz", config.GetStreamingAudioConfig())
 	}
 	if got := client.stream.sent[1].GetInput().GetText(); got != "halo" {
 		t.Fatalf("input text = %q, want halo", got)
@@ -126,8 +126,8 @@ func TestGoogleTTSSynthesizeRequestUsesReferenceDefaults(t *testing.T) {
 	if got := req.GetVoice().GetModelName(); got != "gemini-2.5-flash-tts" {
 		t.Fatalf("voice model = %q, want gemini-2.5-flash-tts", got)
 	}
-	if got := req.GetAudioConfig().GetAudioEncoding(); got != texttospeech.AudioEncoding_LINEAR16 {
-		t.Fatalf("audio encoding = %v, want LINEAR16", got)
+	if got := req.GetAudioConfig().GetAudioEncoding(); got != texttospeech.AudioEncoding_PCM {
+		t.Fatalf("audio encoding = %v, want PCM", got)
 	}
 	if got := req.GetAudioConfig().GetSampleRateHertz(); got != 24000 {
 		t.Fatalf("sample rate = %d, want 24000", got)

@@ -764,7 +764,7 @@ func (e *APIStatusError) Error() string {
 		parts = append(parts, fmt.Sprintf("request_id=%s", e.RequestID))
 	}
 	if pyTruthy(e.Body) {
-		parts = append(parts, fmt.Sprintf("body=%s", pyRepr(e.Body)))
+		parts = append(parts, fmt.Sprintf("body=%s", pyStr(e.Body)))
 	}
 	return strings.Join(parts, ", ")
 }
@@ -805,6 +805,15 @@ func pyTruthy(value any) bool {
 		return v.Float() != 0
 	default:
 		return true
+	}
+}
+
+func pyStr(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	default:
+		return pyRepr(value)
 	}
 }
 
@@ -1835,6 +1844,11 @@ func (f *FallbackAdapter) Chat(ctx context.Context, chatCtx *ChatContext, opts .
 		chatCtx: chatCtx,
 		opts:    opts,
 	}
+	var options ChatOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
+	stream.tools = append([]Tool(nil), options.Tools...)
 	if err := stream.tryStart(0); err != nil {
 		return nil, err
 	}
@@ -1845,6 +1859,7 @@ type fallbackLLMStream struct {
 	adapter *FallbackAdapter
 	ctx     context.Context
 	chatCtx *ChatContext
+	tools   []Tool
 	opts    []ChatOption
 
 	activeStream LLMStream
@@ -1867,6 +1882,20 @@ func (s *fallbackLLMStream) ChatCtx() *ChatContext {
 		}
 	}
 	return s.chatCtx
+}
+
+func (s *fallbackLLMStream) Tools() []Tool {
+	if s == nil {
+		return nil
+	}
+	if s.activeCtxSet {
+		if streamWithTools, ok := s.activeStream.(interface{ Tools() []Tool }); ok {
+			if tools := streamWithTools.Tools(); tools != nil {
+				return append([]Tool(nil), tools...)
+			}
+		}
+	}
+	return append([]Tool(nil), s.tools...)
 }
 
 func (s *fallbackLLMStream) markUnavailable(index int, recover bool) {

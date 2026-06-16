@@ -62,10 +62,23 @@ func NewProcPool(maxProcesses int, executorType ExecutorType, entrypoint func() 
 }
 
 func (p *ProcPool) newExecutor(id string) JobExecutor {
-	if p.executorType == ExecutorTypeProcess {
+	switch p.executorType {
+	case ExecutorTypeProcess:
 		return NewProcessJobExecutor(id)
+	case ExecutorTypeThread:
+		return NewThreadJobExecutor(id, p.entrypoint)
+	default:
+		return nil
 	}
-	return NewThreadJobExecutor(id, p.entrypoint)
+}
+
+func (p *ProcPool) validateExecutorType() error {
+	switch p.executorType {
+	case ExecutorTypeThread, ExecutorTypeProcess:
+		return nil
+	default:
+		return fmt.Errorf("unsupported job executor: %s", p.executorType)
+	}
 }
 
 func (p *ProcPool) LaunchJob(ctx context.Context, job *livekit.Job) error {
@@ -81,10 +94,13 @@ func (p *ProcPool) Start(ctx context.Context) error {
 	p.started = true
 
 	closedExecutors := p.pruneFinishedExecutorsLocked()
-	warmedExecutors := p.warmIdleExecutorsLocked()
+	warmedExecutors, err := p.warmIdleExecutorsLocked()
 	p.mu.Unlock()
 
 	p.emitMany(ProcPoolEventProcessClosed, closedExecutors)
+	if err != nil {
+		return err
+	}
 	return p.emitWarmedExecutors(ctx, warmedExecutors)
 }
 
@@ -98,6 +114,11 @@ func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) er
 		}
 
 		closedExecutors := p.pruneFinishedExecutorsLocked()
+		if err := p.validateExecutorType(); err != nil {
+			p.mu.Unlock()
+			p.emitMany(ProcPoolEventProcessClosed, closedExecutors)
+			return err
+		}
 		executor := p.idleExecutorLocked()
 		executorWarmed := executor != nil
 		if executor == nil && len(p.executors) >= p.maxProcesses {
@@ -138,16 +159,21 @@ func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) er
 		logger.Logger.Infow("Launched job", "executor_type", p.executorType, "executor_id", id, "job_id", info.Job.GetId())
 		p.emit(ProcPoolEventJobLaunched, executor)
 		p.mu.Lock()
-		warmedExecutors := p.warmIdleExecutorsLocked()
+		warmedExecutors, err := p.warmIdleExecutorsLocked()
 		p.mu.Unlock()
-		_ = p.emitWarmedExecutors(ctx, warmedExecutors)
+		if err == nil {
+			_ = p.emitWarmedExecutors(ctx, warmedExecutors)
+		}
 		return nil
 	}
 
 	return lastErr
 }
 
-func (p *ProcPool) warmIdleExecutorsLocked() []JobExecutor {
+func (p *ProcPool) warmIdleExecutorsLocked() ([]JobExecutor, error) {
+	if err := p.validateExecutorType(); err != nil {
+		return nil, err
+	}
 	idleNeeded := p.targetIdle - p.idleExecutorCountLocked()
 	capacity := p.maxProcesses - len(p.executors)
 	if idleNeeded > capacity {
@@ -162,7 +188,7 @@ func (p *ProcPool) warmIdleExecutorsLocked() []JobExecutor {
 		executor := p.createExecutorLocked()
 		warmedExecutors = append(warmedExecutors, executor)
 	}
-	return warmedExecutors
+	return warmedExecutors, nil
 }
 
 func (p *ProcPool) emitWarmedExecutors(ctx context.Context, executors []JobExecutor) error {

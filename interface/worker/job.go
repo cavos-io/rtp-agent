@@ -904,7 +904,10 @@ func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntry
 			delete(c.participantTasks, key)
 			c.participantTasksMu.Unlock()
 		}()
-		registration.entrypoint(c, participant)
+		_ = runWithJobContext(c, func() error {
+			registration.entrypoint(c, participant)
+			return nil
+		})
 	}()
 }
 

@@ -161,6 +161,13 @@ func TestGoogleSTTLabel(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTExposesInputSampleRate(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTSampleRate(16000))
+	if got := provider.InputSampleRate(); got != 16000 {
+		t.Fatalf("InputSampleRate = %d, want 16000", got)
+	}
+}
+
 func TestGoogleSTTRecognizeSendsAudioAndMapsFinalEvent(t *testing.T) {
 	client := &fakeGoogleSpeechClient{
 		recognizeResponse: &speechpb.RecognizeResponse{

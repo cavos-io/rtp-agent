@@ -299,6 +299,23 @@ func TestAgentActivityToolsOmitCancellationHelpersWithoutCancellableTools(t *tes
 	}
 }
 
+func TestAgentActivityToolsIncludesStartedMCPTools(t *testing.T) {
+	mcpTool := &agentTestTool{id: "lookup", name: "lookup"}
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.SetMCPServers([]llm.MCPServer{&fakeActivityMCPServer{tools: []llm.Tool{mcpTool}}})
+	activity := NewAgentActivity(agent, session)
+
+	activity.Start()
+	defer activity.Stop()
+
+	got := sortedAgentToolNames(activity.Tools())
+	want := []string{"lookup"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("Tools() names after Start = %#v, want MCP tools %#v", got, want)
+	}
+}
+
 func TestAgentActivityUpdateChatCtxPreservesMCPToolItems(t *testing.T) {
 	mcpTool := &agentTestTool{id: "lookup", name: "lookup"}
 	agent := NewAgent("test")
@@ -1196,6 +1213,31 @@ func TestAgentActivityStartRecordsInitialMCPTools(t *testing.T) {
 	}
 	if !stringSlicesEqual(config.ToolsAdded, []string{"lookup"}) {
 		t.Fatalf("config tools added = %q, want [lookup]", config.ToolsAdded)
+	}
+}
+
+func TestAgentActivityStartRecordsFlattenedToolsetFunctionNames(t *testing.T) {
+	lookup := &agentTestTool{id: "lookup", name: "lookup"}
+	agent := NewAgent("")
+	agent.Tools = []llm.Tool{&nestedAgentToolset{
+		agentTestTool: agentTestTool{id: "wrapper", name: "wrapper"},
+		tools:         []llm.Tool{lookup},
+	}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.Start()
+	defer activity.Stop()
+
+	if len(agent.ChatCtx.Items) == 0 {
+		t.Fatal("agent chat context has no initial items, want tool config")
+	}
+	config, ok := agent.ChatCtx.Items[len(agent.ChatCtx.Items)-1].(*llm.AgentConfigUpdate)
+	if !ok {
+		t.Fatalf("last agent chat item = %T, want config update", agent.ChatCtx.Items[len(agent.ChatCtx.Items)-1])
+	}
+	if !stringSlicesEqual(config.ToolsAdded, []string{"lookup"}) {
+		t.Fatalf("config tools added = %q, want flattened function tool names [lookup]", config.ToolsAdded)
 	}
 }
 
