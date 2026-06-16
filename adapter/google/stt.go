@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"sync"
 
 	speech "cloud.google.com/go/speech/apiv1"
 	"cloud.google.com/go/speech/apiv1/speechpb"
@@ -228,6 +229,7 @@ func googleSpeakerID(word *speechpb.WordInfo) string {
 }
 
 type googleSTTStream struct {
+	mu     sync.Mutex
 	stream speechpb.Speech_StreamingRecognizeClient
 	events chan *stt.SpeechEvent
 	errCh  chan error
@@ -274,14 +276,21 @@ func (s *googleSTTStream) readLoop() {
 }
 
 func (s *googleSTTStream) PushFrame(frame *model.AudioFrame) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	return s.stream.Send(&speechpb.StreamingRecognizeRequest{
+	if err := s.stream.Send(&speechpb.StreamingRecognizeRequest{
 		StreamingRequest: &speechpb.StreamingRecognizeRequest_AudioContent{
 			AudioContent: frame.Data,
 		},
-	})
+	}); err != nil {
+		s.closed = true
+		_ = s.stream.CloseSend()
+		return err
+	}
+	return nil
 }
 
 func (s *googleSTTStream) Flush() error {
@@ -289,6 +298,8 @@ func (s *googleSTTStream) Flush() error {
 }
 
 func (s *googleSTTStream) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
 		return nil
 	}
