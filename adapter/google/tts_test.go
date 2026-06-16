@@ -132,6 +132,9 @@ func TestGoogleTTSSynthesizeRequestUsesReferenceDefaults(t *testing.T) {
 	if got := req.GetAudioConfig().GetSampleRateHertz(); got != 24000 {
 		t.Fatalf("sample rate = %d, want 24000", got)
 	}
+	if got := req.GetAudioConfig().GetSpeakingRate(); got != 1.0 {
+		t.Fatalf("speaking rate = %v, want 1.0", got)
+	}
 }
 
 func TestGoogleTTSOptionsOverrideReferenceVoiceFields(t *testing.T) {
@@ -224,6 +227,41 @@ func TestGoogleTTSPromptMatchesReferenceRequests(t *testing.T) {
 	}
 	if got := client.stream.sent[1].GetInput().GetPrompt(); got != "speak warmly" {
 		t.Fatalf("stream prompt = %q, want speak warmly on first input", got)
+	}
+}
+
+func TestGoogleTTSSpeakingRateMatchesReferenceRequests(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{{AudioContent: []byte{5, 6}}},
+		},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSSpeakingRate(1.25))
+
+	chunked, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer chunked.Close()
+	if got := client.request.GetAudioConfig().GetSpeakingRate(); got != 1.25 {
+		t.Fatalf("synthesize speaking rate = %v, want 1.25", got)
+	}
+
+	provider.UpdateOptions(WithGoogleTTSSpeakingRate(0.8))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	if got := client.stream.sent[0].GetStreamingConfig().GetStreamingAudioConfig().GetSpeakingRate(); got != 0.8 {
+		t.Fatalf("stream speaking rate = %v, want 0.8", got)
 	}
 }
 

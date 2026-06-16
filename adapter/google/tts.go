@@ -27,10 +27,11 @@ type googleTTSClient interface {
 type GoogleTTSOption func(*googleTTSConfig)
 
 type googleTTSConfig struct {
-	language string
-	voice    string
-	model    string
-	prompt   *string
+	language     string
+	voice        string
+	model        string
+	prompt       *string
+	speakingRate float64
 }
 
 func WithGoogleTTSLanguage(language string) GoogleTTSOption {
@@ -63,6 +64,12 @@ func WithGoogleTTSPrompt(prompt string) GoogleTTSOption {
 	}
 }
 
+func WithGoogleTTSSpeakingRate(rate float64) GoogleTTSOption {
+	return func(cfg *googleTTSConfig) {
+		cfg.speakingRate = rate
+	}
+}
+
 // NewGoogleTTS creates a new TTS client using Application Default Credentials,
 // or by providing a path to a credentials JSON file.
 func NewGoogleTTS(credentialsFile string, ttsOpts ...GoogleTTSOption) (*GoogleTTS, error) {
@@ -82,9 +89,10 @@ func NewGoogleTTS(credentialsFile string, ttsOpts ...GoogleTTSOption) (*GoogleTT
 
 func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *GoogleTTS {
 	cfg := googleTTSConfig{
-		language: "en-US",
-		voice:    "Charon",
-		model:    "gemini-2.5-flash-tts",
+		language:     "en-US",
+		voice:        "Charon",
+		model:        "gemini-2.5-flash-tts",
+		speakingRate: 1.0,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -97,6 +105,7 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 		audio: &texttospeechpb.AudioConfig{
 			AudioEncoding:   texttospeechpb.AudioEncoding_LINEAR16,
 			SampleRateHertz: 24000,
+			SpeakingRate:    cfg.speakingRate,
 		},
 	}
 }
@@ -117,16 +126,18 @@ func (t *GoogleTTS) Provider() string { return "Google Cloud Platform" }
 
 func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 	cfg := googleTTSConfig{
-		language: t.voice.GetLanguageCode(),
-		voice:    t.voice.GetName(),
-		model:    t.Model(),
-		prompt:   t.prompt,
+		language:     t.voice.GetLanguageCode(),
+		voice:        t.voice.GetName(),
+		model:        t.Model(),
+		prompt:       t.prompt,
+		speakingRate: t.audio.GetSpeakingRate(),
 	}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
 	t.voice = googleTTSVoiceParams(cfg)
 	t.prompt = cfg.prompt
+	t.audio.SpeakingRate = cfg.speakingRate
 }
 
 func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
@@ -241,6 +252,7 @@ func (s *googleTTSSynthesizeStream) Flush() error {
 				StreamingAudioConfig: &texttospeechpb.StreamingAudioConfig{
 					AudioEncoding:   s.audio.GetAudioEncoding(),
 					SampleRateHertz: s.audio.GetSampleRateHertz(),
+					SpeakingRate:    s.audio.GetSpeakingRate(),
 				},
 			},
 		},
