@@ -1690,6 +1690,33 @@ func TestAgentActivityEOUDelayAnchorsToLastSpeechTime(t *testing.T) {
 	}
 }
 
+func TestAgentActivityFinalTranscriptEOUDelayUsesSTTEndTime(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.STT = &fakePipelineSTT{}
+	agent.TurnDetection = TurnDetectionModeSTT
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.08})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	activity.userSpeechStartedAt = time.Now().Add(-180 * time.Millisecond)
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "timestamped final",
+			Confidence: 0.9,
+			EndTime:    0.05,
+		}},
+	})
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "timestamped final" {
+			t.Fatalf("turn message text = %q, want timestamped final", msg.TextContent())
+		}
+	case <-time.After(30 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted waited a full endpointing delay instead of using STT end time")
+	}
+}
+
 func TestAgentActivityRunEOUDetectionSkipsEmptyTranscript(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeVAD

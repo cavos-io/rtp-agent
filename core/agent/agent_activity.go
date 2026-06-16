@@ -1523,6 +1523,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.userTurnMu.Unlock()
 	a.notifyUserTurnUpdated()
 	a.maybeStartPreemptiveGeneration(transcript, confidence)
+	startedSpeakingAt, stoppedSpeakingAt, transcriptionDelay := a.finalTranscriptTiming(ev)
 
 	turnDetection := a.turnDetectionMode()
 	if turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
@@ -1538,6 +1539,9 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 			NewTranscript:        transcript,
 			Language:             language,
 			TranscriptConfidence: confidence,
+			TranscriptionDelay:   transcriptionDelay,
+			StartedSpeakingAt:    startedSpeakingAt,
+			StoppedSpeakingAt:    stoppedSpeakingAt,
 			AudioFrames:          a.userAudioSnapshot(),
 		})
 	} else if a.vadBasedTurnDetection() && !a.speaking {
@@ -1545,9 +1549,28 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 			NewTranscript:        transcript,
 			Language:             language,
 			TranscriptConfidence: confidence,
+			TranscriptionDelay:   transcriptionDelay,
+			StartedSpeakingAt:    startedSpeakingAt,
+			StoppedSpeakingAt:    stoppedSpeakingAt,
 			AudioFrames:          a.userAudioSnapshot(),
 		})
 	}
+}
+
+func (a *AgentActivity) finalTranscriptTiming(ev *stt.SpeechEvent) (*float64, *float64, float64) {
+	if a == nil || ev == nil || a.userSpeechStartedAt.IsZero() || len(ev.Alternatives) == 0 {
+		return nil, nil, 0
+	}
+	started := timeToUnixSeconds(a.userSpeechStartedAt)
+	if ev.Alternatives[0].EndTime <= 0 {
+		return &started, nil, 0
+	}
+	stopped := started + ev.Alternatives[0].EndTime
+	transcriptionDelay := timeToUnixSeconds(time.Now()) - stopped
+	if transcriptionDelay < 0 {
+		transcriptionDelay = 0
+	}
+	return &started, &stopped, transcriptionDelay
 }
 
 func (a *AgentActivity) RecordUserAudioFrame(frame *model.AudioFrame) {
