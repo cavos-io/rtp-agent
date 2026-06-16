@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -564,6 +565,81 @@ func TestOpenAITTSAudioModelsUseAudioStreamFormat(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSAudioMP3StreamsBeforeResponseEOF(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+	body := newBlockingEOFReadCloser(mp3Data)
+	defer body.Close()
+	stream := &openaiTTSChunkedStream{
+		resp:           body,
+		responseFormat: goopenai.SpeechResponseFormatMp3,
+		streamFormat:   openAITTSStreamFormatAudio,
+	}
+	defer stream.Close()
+
+	audioCh := make(chan *tts.SynthesizedAudio, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		audio, err := stream.Next()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		audioCh <- audio
+	}()
+
+	select {
+	case audio := <-audioCh:
+		if audio.Frame == nil || len(audio.Frame.Data) == 0 {
+			t.Fatalf("audio = %#v, want decoded frame before EOF", audio)
+		}
+	case err := <-errCh:
+		t.Fatalf("Next error before EOF = %v", err)
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for decoded MP3 audio before response EOF")
+	}
+}
+
+func TestOpenAITTSSSEMP3StreamsBeforeDoneEvent(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+	sse := `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(mp3Data) + `"}` + "\n\n"
+	body := newBlockingEOFReadCloser([]byte(sse))
+	defer body.Close()
+	stream := &openaiTTSChunkedStream{
+		resp:           body,
+		responseFormat: goopenai.SpeechResponseFormatMp3,
+		streamFormat:   openAITTSStreamFormatSSE,
+	}
+	defer stream.Close()
+
+	audioCh := make(chan *tts.SynthesizedAudio, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		audio, err := stream.Next()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		audioCh <- audio
+	}()
+
+	select {
+	case audio := <-audioCh:
+		if audio.Frame == nil || len(audio.Frame.Data) == 0 {
+			t.Fatalf("audio = %#v, want decoded frame before done event", audio)
+		}
+	case err := <-errCh:
+		t.Fatalf("Next error before done event = %v", err)
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for decoded SSE MP3 audio before done event")
+	}
+}
+
 func TestOpenAITTSChunkedStreamReturnsDataBeforeEOF(t *testing.T) {
 	stream := &openaiTTSChunkedStream{resp: &eofWithDataReader{data: []byte{1, 2, 3, 4}}}
 
@@ -616,6 +692,41 @@ func (r *eofWithDataReader) Read(p []byte) (int, error) {
 	copy(p, r.data)
 	r.done = true
 	return len(r.data), io.EOF
+}
+
+type blockingEOFReadCloser struct {
+	reader *bytes.Reader
+	eofCh  chan struct{}
+	closed chan struct{}
+}
+
+func newBlockingEOFReadCloser(data []byte) *blockingEOFReadCloser {
+	return &blockingEOFReadCloser{
+		reader: bytes.NewReader(data),
+		eofCh:  make(chan struct{}),
+		closed: make(chan struct{}),
+	}
+}
+
+func (r *blockingEOFReadCloser) Read(p []byte) (int, error) {
+	if r.reader.Len() > 0 {
+		return r.reader.Read(p)
+	}
+	select {
+	case <-r.eofCh:
+		return 0, io.EOF
+	case <-r.closed:
+		return 0, io.EOF
+	}
+}
+
+func (r *blockingEOFReadCloser) Close() error {
+	select {
+	case <-r.closed:
+	default:
+		close(r.closed)
+	}
+	return nil
 }
 
 func mustNewOpenAITTS(t *testing.T, apiKey string, model goopenai.SpeechModel, voice goopenai.SpeechVoice, opts ...OpenAITTSOption) *OpenAITTS {

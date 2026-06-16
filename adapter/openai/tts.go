@@ -260,6 +260,7 @@ type openaiTTSChunkedStream struct {
 	scanner        *bufio.Scanner
 	decoder        codecs.AudioStreamDecoder
 	decodeStarted  bool
+	decodeErrCh    chan error
 }
 
 func (s *openaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -296,28 +297,44 @@ func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
 func (s *openaiTTSChunkedStream) nextMP3Audio() (*tts.SynthesizedAudio, error) {
 	if !s.decodeStarted {
 		s.decodeStarted = true
-		audio, err := io.ReadAll(s.resp)
-		if err != nil {
-			return nil, llm.NewAPIConnectionError(err.Error())
-		}
-		if len(audio) == 0 {
-			return nil, io.EOF
-		}
 		s.decoder = codecs.NewMP3AudioStreamDecoder()
-		go func() {
-			s.decoder.Push(audio)
-			s.decoder.EndInput()
-		}()
+		s.decodeErrCh = make(chan error, 1)
+		go s.feedMP3Audio()
 	}
 
 	frame, err := s.decoder.Next()
 	if err != nil {
-		if strings.Contains(err.Error(), "decoder closed") {
+		if readErr := s.decodeReadError(); readErr != nil {
+			return nil, readErr
+		}
+		if openAITTSMP3DecodeEOF(err) {
 			return nil, io.EOF
 		}
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	return &tts.SynthesizedAudio{Frame: frame}, nil
+}
+
+func (s *openaiTTSChunkedStream) feedMP3Audio() {
+	defer s.decoder.EndInput()
+	buf := make([]byte, 4096)
+	for {
+		n, err := s.resp.Read(buf)
+		if n > 0 {
+			chunk := make([]byte, n)
+			copy(chunk, buf[:n])
+			s.decoder.Push(chunk)
+		}
+		if err != nil {
+			if err != io.EOF {
+				select {
+				case s.decodeErrCh <- llm.NewAPIConnectionError(err.Error()):
+				default:
+				}
+			}
+			return
+		}
+	}
 }
 
 func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
@@ -376,22 +393,16 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 func (s *openaiTTSChunkedStream) nextSSEMP3Audio() (*tts.SynthesizedAudio, error) {
 	if !s.decodeStarted {
 		s.decodeStarted = true
-		audio, err := s.collectSSEAudio()
-		if err != nil {
-			return nil, err
-		}
-		if len(audio) == 0 {
-			return nil, io.EOF
-		}
 		s.decoder = codecs.NewMP3AudioStreamDecoder()
-		go func() {
-			s.decoder.Push(audio)
-			s.decoder.EndInput()
-		}()
+		s.decodeErrCh = make(chan error, 1)
+		go s.feedSSEMP3Audio()
 	}
 	frame, err := s.decoder.Next()
 	if err != nil {
-		if strings.Contains(err.Error(), "decoder closed") {
+		if readErr := s.decodeReadError(); readErr != nil {
+			return nil, readErr
+		}
+		if openAITTSMP3DecodeEOF(err) {
 			return nil, io.EOF
 		}
 		return nil, llm.NewAPIConnectionError(err.Error())
@@ -399,12 +410,20 @@ func (s *openaiTTSChunkedStream) nextSSEMP3Audio() (*tts.SynthesizedAudio, error
 	return &tts.SynthesizedAudio{Frame: frame}, nil
 }
 
-func (s *openaiTTSChunkedStream) collectSSEAudio() ([]byte, error) {
+func openAITTSMP3DecodeEOF(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "decoder closed") || strings.Contains(msg, "failed to initialize mp3 decoder: EOF")
+}
+
+func (s *openaiTTSChunkedStream) feedSSEMP3Audio() {
+	defer s.decoder.EndInput()
 	if s.scanner == nil {
 		s.scanner = bufio.NewScanner(s.resp)
 		s.scanner.Buffer(make([]byte, 0, 64*1024), openAITTSMaxSSELineBytes)
 	}
-	var audio bytes.Buffer
 	for s.scanner.Scan() {
 		line := strings.TrimSpace(s.scanner.Text())
 		if line == "" || !strings.HasPrefix(line, "data: ") {
@@ -430,17 +449,39 @@ func (s *openaiTTSChunkedStream) collectSSEAudio() ([]byte, error) {
 			}
 			audioData, err := base64.StdEncoding.DecodeString(audioB64)
 			if err != nil {
-				return nil, llm.NewAPIConnectionError(err.Error())
+				s.sendDecodeReadError(llm.NewAPIConnectionError(err.Error()))
+				return
 			}
-			audio.Write(audioData)
+			s.decoder.Push(audioData)
 		case "speech.audio.done":
-			return audio.Bytes(), nil
+			return
 		}
 	}
 	if err := s.scanner.Err(); err != nil {
-		return nil, llm.NewAPIConnectionError(err.Error())
+		s.sendDecodeReadError(llm.NewAPIConnectionError(err.Error()))
 	}
-	return audio.Bytes(), nil
+}
+
+func (s *openaiTTSChunkedStream) sendDecodeReadError(err error) {
+	if err == nil || s.decodeErrCh == nil {
+		return
+	}
+	select {
+	case s.decodeErrCh <- err:
+	default:
+	}
+}
+
+func (s *openaiTTSChunkedStream) decodeReadError() error {
+	if s.decodeErrCh == nil {
+		return nil
+	}
+	select {
+	case err := <-s.decodeErrCh:
+		return err
+	default:
+		return nil
+	}
 }
 
 func (s *openaiTTSChunkedStream) Close() error {
