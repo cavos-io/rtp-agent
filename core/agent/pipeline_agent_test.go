@@ -1073,6 +1073,37 @@ func TestAgentSessionAudioInputHookConfiguresPipelineAssistant(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentResamplesToSTTInputSampleRate(t *testing.T) {
+	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1)}
+	stt := &fakePipelineSTTWithSampleRate{
+		fakePipelineSTT: fakePipelineSTT{stream: sttStream},
+		inputSampleRate: 8000,
+	}
+	agent := NewPipelineAgent(
+		&fakePipelineVAD{stream: &fakePipelineVADStream{pushedCh: make(chan *model.AudioFrame, 1)}},
+		stt,
+		nil,
+		nil,
+		llm.NewChatContext(),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.run(ctx)
+
+	agent.OnAudioFrame(ctx, &model.AudioFrame{
+		Data:              make([]byte, 640),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 320,
+	})
+
+	pushed := receivePipelineFrame(t, sttStream.pushedCh)
+	if pushed.SampleRate != 8000 {
+		t.Fatalf("STT frame sample rate = %d, want 8000 (resampled to STT input rate)", pushed.SampleRate)
+	}
+}
+
 func TestAgentSessionAudioInputHookConfiguresReplacementPipelineAssistant(t *testing.T) {
 	vadStream := &fakePipelineVADStream{pushedCh: make(chan *model.AudioFrame, 1)}
 	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1)}
@@ -2787,6 +2818,13 @@ func (f *fakePipelineSTT) Stream(context.Context, string) (stt.RecognizeStream, 
 func (f *fakePipelineSTT) Recognize(context.Context, []*model.AudioFrame, string) (*stt.SpeechEvent, error) {
 	return nil, nil
 }
+
+type fakePipelineSTTWithSampleRate struct {
+	fakePipelineSTT
+	inputSampleRate uint32
+}
+
+func (f *fakePipelineSTTWithSampleRate) InputSampleRate() uint32 { return f.inputSampleRate }
 
 type fakePipelineVAD struct {
 	metricsHandlers []vad.VADMetricsHandler
