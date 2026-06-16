@@ -274,6 +274,11 @@ func TestAzureSTTStreamUsesWebsocketProtocol(t *testing.T) {
 		t.Fatalf("audio payload = %v, want pushed PCM", audioPayload)
 	}
 
+	start := nextAzureTestEvent(t, stream)
+	if start.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("start Type = %s, want start_of_speech", start.Type)
+	}
+
 	interim := nextAzureTestEvent(t, stream)
 	if interim.Type != stt.SpeechEventInterimTranscript {
 		t.Fatalf("interim Type = %s, want interim_transcript", interim.Type)
@@ -668,6 +673,7 @@ func runAzureTestWebsocketServer(
 	audioMessages <- payload
 
 	for _, message := range []string{
+		"Path: turn.start\r\nContent-Type: application/json\r\n\r\n{}",
 		"Path: speech.hypothesis\r\nContent-Type: application/json\r\n\r\n{\"Text\":\"halo sementara\"}",
 		"Path: speech.phrase\r\nContent-Type: application/json\r\n\r\n{\"RecognitionStatus\":\"Success\",\"DisplayText\":\"halo final\",\"NBest\":[{\"Display\":\"halo final\",\"Confidence\":0.87}]}",
 		"Path: turn.end\r\nContent-Type: application/json\r\n\r\n{}",

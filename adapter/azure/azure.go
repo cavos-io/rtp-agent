@@ -410,6 +410,8 @@ func parseAzureSTTMessage(language string, payload []byte) *stt.SpeechEvent {
 			return nil
 		}
 		return azureSTTSpeechEvent(stt.SpeechEventFinalTranscript, language, text, confidence)
+	case "turn.start":
+		return &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech}
 	case "turn.end":
 		return &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
 	default:
