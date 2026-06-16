@@ -1,41 +1,42 @@
-# Website
+# rtp-agent docs website
 
-This website is built using [Docusaurus](https://docusaurus.io/), a modern static website generator.
+This website is built with [Docusaurus](https://docusaurus.io/) under `docs/website`.
+
+The lockfile is `package-lock.json`, so use `npm` for local development and CI.
 
 ## Installation
 
 ```bash
-yarn
+npm ci
 ```
 
 ## Local Development
 
 ```bash
-yarn start
+npm run start
 ```
 
-This command starts a local development server and opens up a browser window. Most changes are reflected live without having to restart the server.
+This starts a local development server. Most documentation changes are reflected without a restart.
+
+Before committing documentation changes, run:
+
+```bash
+npm run typecheck
+npm run build
+```
 
 ## Build
 
 ```bash
-yarn build
+npm run build
 ```
 
-This command generates static content into the `build` directory and can be served using any static contents hosting service.
+This generates static content in `build`.
 
 ## Deployment
 
-Using SSH:
+Use the Docusaurus deploy script only from an environment configured for the target host:
 
 ```bash
-USE_SSH=true yarn deploy
+npm run deploy
 ```
-
-Not using SSH:
-
-```bash
-GIT_USER=<Your GitHub username> yarn deploy
-```
-
-If you are using GitHub pages for hosting, this command is a convenient way to build the website and push to the `gh-pages` branch.

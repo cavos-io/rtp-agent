@@ -6,7 +6,7 @@ import type * as Preset from '@docusaurus/preset-classic';
 
 const config: Config = {
   title: 'RTP Agent',
-  tagline: 'Real-time multi-agent orchestration',
+  tagline: 'Go runtime for realtime AI agents',
   favicon: 'img/Favicon-White.svg',
   //  faviconDark: 'img/Favicon-White.svg',
 
@@ -80,7 +80,11 @@ const config: Config = {
           items: [
             {
               label: 'Introduction',
-              to: '/adapters/llm/openai',
+              to: '/',
+            },
+            {
+              label: 'Provider capabilities',
+              to: '/reference/providers',
             },
           ],
         },
