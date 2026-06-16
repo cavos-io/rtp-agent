@@ -1984,6 +1984,45 @@ func TestAgentActivityOnFinalTranscriptStartsFalseInterruptionTimerWhenSpeechEnd
 	current.MarkDone()
 }
 
+func TestAgentActivityOnInterimTranscriptStartsFalseInterruptionTimerWhenSpeechEnded(t *testing.T) {
+	agent := NewAgent("test")
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:               TurnDetectionModeSTT,
+		FalseInterruptionTimeout:    0.01,
+		FalseInterruptionTimeoutSet: true,
+		ResumeFalseInterruption:     true,
+		ResumeFalseInterruptionSet:  true,
+	})
+	audioOutput := &recordingAudioOutputController{canPause: true}
+	session.SetAudioOutputController(audioOutput)
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	session.agentState = AgentStateSpeaking
+	falseInterruptions := session.AgentFalseInterruptionEvents()
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "maybe hold on"}},
+	})
+
+	if audioOutput.pauseCount != 1 {
+		t.Fatalf("PauseAudioOutput calls = %d, want 1", audioOutput.pauseCount)
+	}
+	select {
+	case ev := <-falseInterruptions:
+		if !ev.Resumed {
+			t.Fatalf("AgentFalseInterruptionEvent.Resumed = false, want true")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AgentFalseInterruptionEvents did not receive resumed event")
+	}
+	if audioOutput.resumeCount != 1 {
+		t.Fatalf("ResumeAudioOutput calls = %d, want 1", audioOutput.resumeCount)
+	}
+	current.MarkDone()
+}
+
 func TestAgentActivityOnInterimTranscriptEmitsUserInputTranscribed(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
