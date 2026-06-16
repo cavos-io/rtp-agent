@@ -1077,7 +1077,7 @@ func TestStreamAdapterEndsInputWhenSupported(t *testing.T) {
 	}
 }
 
-func TestStreamAdapterRejectsInputAfterClose(t *testing.T) {
+func TestStreamAdapterIgnoresInputAfterCloseLikeReference(t *testing.T) {
 	stream, err := NewStreamAdapter(&fakeStreamAdapterTTS{}).Stream(context.Background())
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
@@ -1086,11 +1086,14 @@ func TestStreamAdapterRejectsInputAfterClose(t *testing.T) {
 		t.Fatalf("Close returned error: %v", err)
 	}
 
-	if err := stream.PushText("late"); err == nil {
-		t.Fatal("PushText returned nil error after close")
+	if err := stream.PushText("late"); err != nil {
+		t.Fatalf("PushText after close returned error: %v", err)
 	}
-	if err := stream.Flush(); err == nil {
-		t.Fatal("Flush returned nil error after close")
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after close returned error: %v", err)
+	}
+	if err := stream.PushText("later"); err != nil {
+		t.Fatalf("second PushText after close returned error: %v", err)
 	}
 }
 

@@ -438,7 +438,7 @@ func (w *streamAdapterWrapper) PushText(text string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed {
-		return fmt.Errorf("stream closed")
+		return nil
 	}
 	if w.inputDone {
 		return nil
@@ -455,7 +455,7 @@ func (w *streamAdapterWrapper) Flush() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed {
-		return fmt.Errorf("stream closed")
+		return nil
 	}
 	if w.inputDone {
 		return nil
