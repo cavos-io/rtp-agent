@@ -10595,11 +10595,20 @@ func TestDefaultConfigFromEnvSelectsGroqProviders(t *testing.T) {
 	if got := llm.Model(app.Session.LLM); got != "llama3-70b-8192" {
 		t.Fatalf("LLM model = %q, want llama3-70b-8192", got)
 	}
-	if got := app.Session.TTS.Label(); got != "groq.TTS" {
-		t.Fatalf("TTS label = %q, want groq.TTS", got)
+	if got := app.Session.TTS.Label(); got != "StreamAdapter(groq.TTS)" {
+		t.Fatalf("TTS label = %q, want StreamAdapter(groq.TTS)", got)
 	}
 	if got := app.Session.TTS.SampleRate(); got != 48000 {
 		t.Fatalf("TTS sample rate = %d, want 48000", got)
+	}
+	if got := tts.Provider(app.Session.TTS); got != "Groq" {
+		t.Fatalf("TTS provider = %q, want StreamAdapter to forward Groq provider metadata", got)
+	}
+	if got := tts.Model(app.Session.TTS); got != "canopylabs/orpheus-v1-english" {
+		t.Fatalf("TTS model = %q, want StreamAdapter to forward Groq model metadata", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || !caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want stream adapter capabilities", caps)
 	}
 }
 

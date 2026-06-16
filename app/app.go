@@ -5029,7 +5029,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSVoice != "" {
 			ttsOpts = append(ttsOpts, groq.WithGroqTTSVoice(cfg.TTSVoice))
 		}
-		a.TTS = groq.NewGroqTTS(cfg.GroqAPIKey, cfg.TTSVoice, ttsOpts...)
+		provider := groq.NewGroqTTS(cfg.GroqAPIKey, cfg.TTSVoice, ttsOpts...)
+		a.TTS = ensureTTSStreaming(provider)
 	case providerCartesia:
 		ttsOpts := []cartesia.CartesiaTTSOption{}
 		if cfg.TTSBaseURL != "" {
