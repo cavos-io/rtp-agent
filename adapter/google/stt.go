@@ -106,6 +106,7 @@ func newGoogleSTTWithClient(client googleSpeechClient, opts ...GoogleSTTOption) 
 }
 
 func (s *GoogleSTT) Label() string { return "google.STT" }
+func (s *GoogleSTT) InputSampleRate() uint32 { return uint32(s.sampleRate) }
 func (s *GoogleSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "word", OfflineRecognize: true}
 }
