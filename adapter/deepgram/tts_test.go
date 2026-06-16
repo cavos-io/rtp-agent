@@ -151,6 +151,29 @@ func TestDeepgramTTSStreamURLUsesConfiguredBaseURL(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSUpdateOptionsMatchesReference(t *testing.T) {
+	provider := NewDeepgramTTS("test-key", "")
+
+	provider.UpdateOptions("aura-2-asteria-en")
+
+	requestURL, _ := buildDeepgramTTSSynthesizeRequest(provider, "hello")
+	parsedRequest, err := url.Parse(requestURL)
+	if err != nil {
+		t.Fatalf("parse synthesize url: %v", err)
+	}
+	assertDeepgramTTSQuery(t, parsedRequest.Query(), "model", "aura-2-asteria-en")
+
+	streamURL := buildDeepgramTTSStreamURL(provider)
+	parsedStream, err := url.Parse(streamURL)
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	assertDeepgramTTSQuery(t, parsedStream.Query(), "model", "aura-2-asteria-en")
+	if got := provider.Model(); got != "aura-2-asteria-en" {
+		t.Fatalf("Model() = %q, want aura-2-asteria-en", got)
+	}
+}
+
 func assertDeepgramTTSQuery(t *testing.T, query url.Values, key string, want string) {
 	t.Helper()
 	if got := query.Get(key); got != want {
