@@ -223,6 +223,40 @@ func TestFallbackAdapterStreamExposesChatContext(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterStreamExposesActiveTools(t *testing.T) {
+	callTools := []Tool{&testTool{id: "call", name: "call"}}
+	providerTools := []Tool{&testTool{id: "provider", name: "provider"}}
+	adapter := NewFallbackAdapter([]LLM{
+		&fakeFallbackLLM{stream: &fakeFallbackStream{
+			tools: providerTools,
+			events: []fakeFallbackEvent{
+				{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "ok"}}},
+			},
+		}},
+	})
+
+	stream, err := adapter.Chat(context.Background(), NewChatContext(), WithTools(callTools))
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	defer stream.Close()
+
+	toolsStream, ok := stream.(interface{ Tools() []Tool })
+	if !ok {
+		t.Fatal("fallback stream does not expose Tools()")
+	}
+	if got := toolsStream.Tools(); len(got) != 1 || got[0] != callTools[0] {
+		t.Fatalf("Tools() before first chunk = %#v, want original call tools %#v", got, callTools)
+	}
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := toolsStream.Tools(); len(got) != 1 || got[0] != providerTools[0] {
+		t.Fatalf("Tools() after first chunk = %#v, want provider stream tools %#v", got, providerTools)
+	}
+}
+
 func TestFallbackAdapterDoesNotRetryAfterChunkSent(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	adapter := NewFallbackAdapter([]LLM{
@@ -1157,6 +1191,7 @@ type fakeFallbackEvent struct {
 type fakeFallbackStream struct {
 	events  []fakeFallbackEvent
 	chatCtx *ChatContext
+	tools   []Tool
 	index   int
 	closed  bool
 }
@@ -1180,6 +1215,10 @@ func (f *fakeFallbackStream) Close() error {
 
 func (f *fakeFallbackStream) ChatCtx() *ChatContext {
 	return f.chatCtx
+}
+
+func (f *fakeFallbackStream) Tools() []Tool {
+	return f.tools
 }
 
 func waitForFallbackCalls(t *testing.T, llm *fakeFallbackLLM, calls int) {
