@@ -139,6 +139,7 @@ const roomIOOpusClockRate uint32 = 48000
 const roomIOOpusFrameSamples uint32 = 960
 const roomIOInputSampleRate uint32 = 24000
 const roomIOAudioSubscriptionTimeout = 3 * time.Second
+const roomIOInputSilenceFlushDuration = 500 * time.Millisecond
 
 func roomIOAudioOutputCodec() webrtc.RTPCodecCapability {
 	return webrtc.RTPCodecCapability{
@@ -1210,7 +1211,9 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 
 		pkt, _, err := track.ReadRTP()
 		if err != nil {
-			if !errors.Is(err, io.EOF) {
+			if errors.Is(err, io.EOF) {
+				rio.forwardRoomInputFrame(context.Background(), roomIOInputSilenceFlushFrame())
+			} else {
 				// log error
 			}
 			return
@@ -1232,10 +1235,7 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 
 			frame := roomIOInputFrameFromPCM(pcm, track.Codec().ClockRate, 1)
 
-			if rio.Recorder != nil {
-				rio.Recorder.RecordInput(frame)
-			}
-			rio.AgentSession.OnAudioFrame(context.Background(), frame)
+			rio.forwardRoomInputFrame(context.Background(), frame)
 		}
 	}
 }
@@ -1259,6 +1259,28 @@ func roomIOInputFrameFromPCM(pcm []byte, sampleRate uint32, channels uint32) *mo
 		return frame
 	}
 	return resampled
+}
+
+func roomIOInputSilenceFlushFrame() *model.AudioFrame {
+	samples := uint32(roomIOInputSilenceFlushDuration.Seconds() * float64(roomIOInputSampleRate))
+	return &model.AudioFrame{
+		Data:              make([]byte, samples*2),
+		SampleRate:        roomIOInputSampleRate,
+		NumChannels:       1,
+		SamplesPerChannel: samples,
+	}
+}
+
+func (rio *RoomIO) forwardRoomInputFrame(ctx context.Context, frame *model.AudioFrame) {
+	if rio == nil || frame == nil {
+		return
+	}
+	if rio.Recorder != nil {
+		rio.Recorder.RecordInput(frame)
+	}
+	if rio.AgentSession != nil {
+		rio.AgentSession.OnAudioFrame(ctx, frame)
+	}
 }
 
 func (rio *RoomIO) OnPlaybackStarted(callback func(PlaybackStartedEvent)) {

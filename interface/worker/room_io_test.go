@@ -149,6 +149,28 @@ func TestRoomIOInputFrameUsesReferenceSampleRate(t *testing.T) {
 	}
 }
 
+func TestRoomIOInputSilenceFlushUsesReferenceDuration(t *testing.T) {
+	frame := roomIOInputSilenceFlushFrame()
+
+	if frame.SampleRate != 24000 {
+		t.Fatalf("SampleRate = %d, want reference RoomIO input rate 24000", frame.SampleRate)
+	}
+	if frame.NumChannels != 1 {
+		t.Fatalf("NumChannels = %d, want mono reference input", frame.NumChannels)
+	}
+	if frame.SamplesPerChannel != 12000 {
+		t.Fatalf("SamplesPerChannel = %d, want 0.5s of 24 kHz silence", frame.SamplesPerChannel)
+	}
+	if got, want := len(frame.Data), int(frame.SamplesPerChannel*frame.NumChannels*2); got != want {
+		t.Fatalf("frame data bytes = %d, want %d", got, want)
+	}
+	for i, b := range frame.Data {
+		if b != 0 {
+			t.Fatalf("frame data[%d] = %d, want silence", i, b)
+		}
+	}
+}
+
 func TestNewRoomIORegistersReferenceChatTextHandler(t *testing.T) {
 	room := lksdk.NewRoom(nil)
 	_ = NewRoomIO(room, &agent.AgentSession{}, RoomOptions{})
