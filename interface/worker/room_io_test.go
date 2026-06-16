@@ -634,6 +634,39 @@ func TestRoomIOPlaybackStartedKeepsEarlySynchronizedTranscript(t *testing.T) {
 	}
 }
 
+func TestRoomIOPlaybackFinishedDoesNotCarryLateTranscriptToNextSegment(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 480*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio(first) error = %v", err)
+	}
+	rio.Flush()
+	if _, err := rio.WaitForPlayout(context.Background()); err != nil {
+		t.Fatalf("WaitForPlayout(first) error = %v", err)
+	}
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "late transcript",
+		IsFinal:    true,
+	})
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio(second) error = %v", err)
+	}
+
+	rio.Flush()
+	ev, err := rio.WaitForPlayout(context.Background())
+	if err != nil {
+		t.Fatalf("WaitForPlayout(second) error = %v", err)
+	}
+	if ev.SynchronizedTranscript != "" {
+		t.Fatalf("SynchronizedTranscript = %q, want no late transcript carried to next segment", ev.SynchronizedTranscript)
+	}
+}
+
 func TestRoomIOWaitForPlayoutCancellationRemovesWaiter(t *testing.T) {
 	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
 	if err := rio.PublishAudio(context.Background(), &model.AudioFrame{

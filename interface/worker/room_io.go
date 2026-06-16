@@ -525,7 +525,7 @@ func (rio *RoomIO) handleAgentOutputTranscribed(ev agent.AgentOutputTranscribedE
 		return
 	}
 	segmentID, transcript := rio.agentOutputTranscriptionState(ev.Transcript, ev.IsFinal)
-	rio.setPlaybackTranscript(transcript)
+	rio.setPlaybackTranscript(transcript, ev.IsFinal)
 	attributes := map[string]string{
 		RoomIOTranscriptionFinalAttribute:     strconv.FormatBool(ev.IsFinal),
 		RoomIOTranscriptionSegmentIDAttribute: segmentID,
@@ -1434,14 +1434,14 @@ func (rio *RoomIO) startPlayback() (PlaybackStartedEvent, []func(PlaybackStarted
 	return ev, handlers, true
 }
 
-func (rio *RoomIO) setPlaybackTranscript(transcript string) {
+func (rio *RoomIO) setPlaybackTranscript(transcript string, final bool) {
 	if rio == nil || transcript == "" {
 		return
 	}
 	rio.mu.Lock()
 	if rio.playbackCapturing {
 		rio.playbackTranscript = transcript
-	} else {
+	} else if !final {
 		rio.pendingPlaybackTranscript = transcript
 	}
 	rio.mu.Unlock()
