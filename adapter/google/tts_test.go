@@ -82,8 +82,8 @@ func TestGoogleTTSStreamSendsReferenceConfigAndInput(t *testing.T) {
 	if config.GetVoice().GetLanguageCode() != "id-ID" || config.GetVoice().GetName() != "id-ID-Standard-A" || config.GetVoice().GetModelName() != "gemini-custom" {
 		t.Fatalf("streaming voice = %+v, want configured voice", config.GetVoice())
 	}
-	if config.GetStreamingAudioConfig().GetSampleRateHertz() != 24000 || config.GetStreamingAudioConfig().GetAudioEncoding() != texttospeech.AudioEncoding_LINEAR16 {
-		t.Fatalf("audio config = %+v, want LINEAR16 24 kHz", config.GetStreamingAudioConfig())
+	if config.GetStreamingAudioConfig().GetSampleRateHertz() != 24000 || config.GetStreamingAudioConfig().GetAudioEncoding() != texttospeech.AudioEncoding_PCM {
+		t.Fatalf("audio config = %+v, want PCM 24 kHz", config.GetStreamingAudioConfig())
 	}
 	if got := client.stream.sent[1].GetInput().GetText(); got != "halo" {
 		t.Fatalf("input text = %q, want halo", got)
