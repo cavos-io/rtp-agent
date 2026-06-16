@@ -585,6 +585,32 @@ func TestAgentUpdateToolsWhileRunningRecordsSameNameReplacement(t *testing.T) {
 	assertLastToolUpdate(t, session.ChatCtx)
 }
 
+func TestAgentUpdateToolsWhileRunningRecordsFlattenedToolsetDiff(t *testing.T) {
+	agent := NewAgent("help")
+	agent.Tools = []llm.Tool{&nestedAgentToolset{
+		agentTestTool: agentTestTool{id: "old-wrapper", name: "old-wrapper"},
+		tools:         []llm.Tool{&agentTestTool{id: "lookup", name: "lookup"}},
+	}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	agent.activity = NewAgentActivity(agent, session)
+
+	if err := agent.UpdateTools(context.Background(), []llm.Tool{&nestedAgentToolset{
+		agentTestTool: agentTestTool{id: "new-wrapper", name: "new-wrapper"},
+		tools:         []llm.Tool{&agentTestTool{id: "calc", name: "calc"}},
+	}}); err != nil {
+		t.Fatalf("UpdateTools error = %v, want nil", err)
+	}
+
+	config := assertLastToolUpdate(t, agent.ChatCtx)
+	if !stringSlicesEqual(config.ToolsAdded, []string{"calc"}) {
+		t.Fatalf("ToolsAdded = %q, want flattened child function [calc]", config.ToolsAdded)
+	}
+	if !stringSlicesEqual(config.ToolsRemoved, []string{"lookup"}) {
+		t.Fatalf("ToolsRemoved = %q, want flattened child function [lookup]", config.ToolsRemoved)
+	}
+	assertLastToolUpdate(t, session.ChatCtx)
+}
+
 func TestAgentUpdateChatContextWhileRunningAddsInstructionMessage(t *testing.T) {
 	agent := NewAgent("be helpful")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

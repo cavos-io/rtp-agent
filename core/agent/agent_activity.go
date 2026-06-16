@@ -773,9 +773,22 @@ func (a *AgentActivity) RetrieveChatCtx() *llm.ChatContext {
 
 func agentToolNameSet(tools []llm.Tool) map[string]struct{} {
 	names := make(map[string]struct{}, len(tools))
-	for _, tool := range tools {
-		names[tool.Name()] = struct{}{}
+	var addToolNames func([]llm.Tool)
+	addToolNames = func(items []llm.Tool) {
+		for _, tool := range items {
+			if toolset, ok := tool.(llm.Toolset); ok {
+				addToolNames(toolset.Tools())
+				continue
+			}
+			if _, providerOnly := tool.(llm.ProviderTool); providerOnly {
+				continue
+			}
+			if name := tool.Name(); name != "" {
+				names[name] = struct{}{}
+			}
+		}
 	}
+	addToolNames(tools)
 	return names
 }
 
