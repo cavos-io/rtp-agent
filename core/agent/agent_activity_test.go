@@ -2682,6 +2682,100 @@ func TestAgentActivityCommitUserTurnSkipReplyAddsUserMessageWithoutCallback(t *t
 	}
 }
 
+func TestAgentActivityPreemptiveGenerationSchedulesMatchingFinalTurn(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	agent.LLM = &fakeGenerationLLM{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	defer activity.Stop()
+
+	speechEvents := session.SpeechCreatedEvents()
+	conversationEvents := session.ConversationItemAddedEvents()
+	activity.OnStartOfSpeech(&vad.VADEvent{})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "answer quickly", Confidence: 0.91}},
+	})
+
+	var preemptive *SpeechHandle
+	select {
+	case ev := <-speechEvents:
+		preemptive = ev.SpeechHandle
+		if preemptive == nil || preemptive.IsScheduled() {
+			t.Fatalf("preemptive speech = %#v, want unscheduled handle", preemptive)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive preemptive generation")
+	}
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "answer quickly" {
+		t.Fatalf("CommitUserTurn transcript = %q, want final transcript", transcript)
+	}
+	if !preemptive.IsScheduled() {
+		t.Fatal("preemptive speech was not scheduled after matching turn completion")
+	}
+	select {
+	case ev := <-conversationEvents:
+		if ev.Item == nil || ev.Item.(*llm.ChatMessage).TextContent() != "answer quickly" {
+			t.Fatalf("ConversationItemAdded event = %#v, want preemptive user message", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConversationItemAddedEvents did not receive scheduled preemptive message")
+	}
+	select {
+	case ev := <-speechEvents:
+		t.Fatalf("SpeechCreatedEvents received second generation %#v, want reused preemptive handle", ev)
+	default:
+	}
+}
+
+func TestAgentActivityPreemptiveGenerationCancelsWhenTurnHookMutatesChatContext(t *testing.T) {
+	agent := &mutatingTurnAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	agent.LLM = &fakeGenerationLLM{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	defer activity.Stop()
+
+	speechEvents := session.SpeechCreatedEvents()
+	activity.OnStartOfSpeech(&vad.VADEvent{})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "revise context", Confidence: 0.88}},
+	})
+
+	var preemptive *SpeechHandle
+	select {
+	case ev := <-speechEvents:
+		preemptive = ev.SpeechHandle
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive preemptive generation")
+	}
+
+	if _, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{}); err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if !preemptive.IsInterrupted() {
+		t.Fatal("preemptive speech was not interrupted after chat context mutation")
+	}
+	select {
+	case ev := <-speechEvents:
+		if ev.SpeechHandle == preemptive {
+			t.Fatal("second SpeechCreated event reused invalidated preemptive handle")
+		}
+		if ev.SpeechHandle == nil || !ev.SpeechHandle.IsScheduled() {
+			t.Fatalf("replacement speech = %#v, want scheduled handle", ev.SpeechHandle)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive replacement generation")
+	}
+}
+
 func TestAgentActivityUserTurnExceededSkipsWhenAgentStartsSpeaking(t *testing.T) {
 	agent := &countingExceededAgent{Agent: NewAgent("test"), calls: make(chan UserTurnExceededEvent, 1)}
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -2707,6 +2801,20 @@ type turnCompletedAgent struct {
 
 func (a *turnCompletedAgent) OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContext, newMsg *llm.ChatMessage) error {
 	a.turns <- newMsg
+	return nil
+}
+
+type mutatingTurnAgent struct {
+	*Agent
+	turns chan *llm.ChatMessage
+}
+
+func (a *mutatingTurnAgent) OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContext, newMsg *llm.ChatMessage) error {
+	a.turns <- newMsg
+	chatCtx.AddMessage(llm.ChatMessageArgs{
+		Role: llm.ChatRoleSystem,
+		Text: "context changed",
+	})
 	return nil
 }
 
