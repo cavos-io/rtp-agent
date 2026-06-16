@@ -296,7 +296,7 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 }
 
 func isSpeechStreamShutdownError(err error) bool {
-	return err == io.EOF || errors.Is(err, context.Canceled)
+	return err == io.EOF || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, context.Canceled)
 }
 
 func (va *PipelineAgent) emitSTTMetrics(ev *stt.SpeechEvent) {

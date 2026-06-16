@@ -1505,6 +1505,32 @@ func TestPipelineAgentIgnoresCanceledSTTPushFrameOnShutdown(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentIgnoresClosedPipeSTTPushFrameOnShutdown(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	errorEvents := session.ErrorEvents()
+	pushed := make(chan *model.AudioFrame, 1)
+	source := &fakePipelineSTT{
+		stream: &fakePipelineRecognizeStream{
+			pushErr:  io.ErrClosedPipe,
+			pushedCh: pushed,
+		},
+	}
+	agent := NewPipelineAgent(&fakePipelineVAD{}, source, nil, nil, llm.NewChatContext())
+	agent.session = session
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.run(ctx)
+
+	agent.OnAudioFrame(ctx, &model.AudioFrame{Data: []byte{1, 2}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1})
+	receivePipelineFrame(t, pushed)
+
+	select {
+	case ev := <-errorEvents:
+		t.Fatalf("ErrorEvents received %#v, want no error for closed STT stream push", ev)
+	default:
+	}
+}
+
 func TestPipelineAgentEmitsErrorEventForSTTStreamStartError(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	cause := errors.New("stt start failed")

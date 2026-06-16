@@ -311,9 +311,15 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("azure stt stream is closed")
+		return io.ErrClosedPipe
 	}
-	return s.conn.WriteMessage(websocket.BinaryMessage, buildAzureSTTMessage("audio", s.connectionID, "audio/x-wav", frame.Data))
+	if err := s.conn.WriteMessage(websocket.BinaryMessage, buildAzureSTTMessage("audio", s.connectionID, "audio/x-wav", frame.Data)); err != nil {
+		s.closed = true
+		s.cancel()
+		_ = s.conn.Close()
+		return err
+	}
+	return nil
 }
 
 func (s *azureSTTStream) Flush() error {
@@ -356,6 +362,9 @@ func (s *azureSTTStream) readLoop() {
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
+			if s.ctx.Err() != nil {
+				return
+			}
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
 				select {
 				case s.errCh <- err:
