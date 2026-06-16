@@ -677,6 +677,46 @@ func TestAgentActivityOverlapSpeechEndedIgnoresFalseInterruptionForEndpointing(t
 	}
 }
 
+func TestAgentActivitySuppressesBackchannelOverlapDuringStartBoundary(t *testing.T) {
+	endpointing := &recordingActivityEndpointing{}
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{Endpointing: endpointing})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	events := session.OverlappingSpeechEvents()
+
+	session.UpdateAgentState(AgentStateSpeaking)
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech, Timestamp: 1.0})
+	activity.OnOverlapSpeechEnded(OverlappingSpeechEvent{IsInterruption: false})
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech, Timestamp: 1.5})
+
+	select {
+	case ev := <-events:
+		t.Fatalf("unexpected backchannel overlap event during start boundary: %#v", ev)
+	default:
+	}
+	if endpointing.endCount != 1 {
+		t.Fatalf("OnEndOfSpeech calls = %d, want 1", endpointing.endCount)
+	}
+	if endpointing.lastShouldIgnore {
+		t.Fatal("OnEndOfSpeech shouldIgnore = true, want false for suppressed backchannel overlap")
+	}
+
+	detectedAt := time.Unix(50, 0)
+	activity.OnOverlapSpeechEnded(OverlappingSpeechEvent{
+		IsInterruption: true,
+		DetectedAt:     detectedAt,
+	})
+	select {
+	case ev := <-events:
+		if !ev.IsInterruption || !ev.DetectedAt.Equal(detectedAt) {
+			t.Fatalf("interruption overlap event = %#v, want true interruption during boundary", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("OverlappingSpeechEvents did not receive true interruption during start boundary")
+	}
+}
+
 func TestAgentActivityOnInterruptionCutsCurrentSpeech(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}
@@ -723,8 +763,9 @@ func TestAgentActivityOnInterruptionPauseUsesOverlapTimestampForHeldTranscripts(
 		OverlapStartedAt: &overlapStartedAt,
 	})
 
-	if !activity.ignoreUserTranscriptUntil.Equal(overlapStartedAt) {
-		t.Fatalf("ignoreUserTranscriptUntil = %v, want overlap start %v", activity.ignoreUserTranscriptUntil, overlapStartedAt)
+	wantIgnoreUntil := overlapStartedAt.Add(-time.Second)
+	if !activity.ignoreUserTranscriptUntil.Equal(wantIgnoreUntil) {
+		t.Fatalf("ignoreUserTranscriptUntil = %v, want overlap start minus cooldown %v", activity.ignoreUserTranscriptUntil, wantIgnoreUntil)
 	}
 }
 
@@ -803,6 +844,93 @@ func TestAgentActivityOnVADInferenceDonePausesFalseInterruption(t *testing.T) {
 		t.Fatalf("AgentState() after false interruption resume = %q, want %q", got, AgentStateSpeaking)
 	}
 	current.MarkDone()
+}
+
+func TestAgentActivityVADInferenceDoneIgnoresAfterBackchannelBoundaryExpires(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:           TurnDetectionModeVAD,
+		MinInterruptionDuration: 0.05,
+	})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	defer current.MarkDone()
+
+	activity.OnVADInferenceDone(&vad.VADEvent{
+		Type:                  vad.VADEventInferenceDone,
+		SpeechDuration:        0.06,
+		Speaking:              true,
+		RawAccumulatedSilence: 0,
+	})
+	waitForInterrupted(t, current)
+	current.MarkDone()
+
+	current = NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	defer current.MarkDone()
+	session.agentState = AgentStateSpeaking
+	activity.armBackchannelBoundary(time.Now().Add(-2 * time.Second))
+	activity.OnVADInferenceDone(&vad.VADEvent{
+		Type:                  vad.VADEventInferenceDone,
+		SpeechDuration:        0.06,
+		Speaking:              true,
+		RawAccumulatedSilence: 0,
+	})
+
+	select {
+	case <-current.interruptCh:
+		t.Fatal("current speech was interrupted by VAD after backchannel boundary expired")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	activity.OnInterruption(OverlappingSpeechEvent{
+		IsInterruption: true,
+		DetectedAt:     time.Now(),
+	})
+	waitForInterrupted(t, current)
+}
+
+func TestAgentActivityVADInferenceDoneIgnoresWithoutBackchannelBoundaryStart(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:               TurnDetectionModeVAD,
+		MinInterruptionDuration:     0.05,
+		BackchannelBoundaryStart:    0,
+		BackchannelBoundaryStartSet: true,
+	})
+	activity := NewAgentActivity(agent, session)
+
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	activity.OnVADInferenceDone(&vad.VADEvent{
+		Type:                  vad.VADEventInferenceDone,
+		SpeechDuration:        0.06,
+		Speaking:              true,
+		RawAccumulatedSilence: 0,
+	})
+	waitForInterrupted(t, current)
+	current.MarkDone()
+
+	current = NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	defer current.MarkDone()
+	session.agentState = AgentStateSpeaking
+	activity.armBackchannelBoundary(time.Now())
+	activity.OnVADInferenceDone(&vad.VADEvent{
+		Type:                  vad.VADEventInferenceDone,
+		SpeechDuration:        0.06,
+		Speaking:              true,
+		RawAccumulatedSilence: 0,
+	})
+
+	select {
+	case <-current.interruptCh:
+		t.Fatal("current speech was interrupted by VAD without an active backchannel boundary")
+	case <-time.After(100 * time.Millisecond):
+	}
 }
 
 func TestAgentActivityOnVADInferenceDoneRespectsMinInterruptionWordsWithoutTranscript(t *testing.T) {
@@ -2054,7 +2182,7 @@ func TestAgentActivityDropsFinalTranscriptBeforeAgentSpeechEnd(t *testing.T) {
 	userTranscriptEvents := session.UserInputTranscribedEvents()
 	startedAt := time.Unix(100, 0)
 	activity.userSpeechStartedAt = startedAt
-	activity.holdUserTranscriptsUntil(startedAt.Add(time.Second))
+	activity.holdUserTranscriptsUntil(startedAt.Add(2 * time.Second))
 
 	activity.OnFinalTranscript(&stt.SpeechEvent{
 		Alternatives: []stt.SpeechData{{
@@ -2076,7 +2204,7 @@ func TestAgentActivityDropsFinalTranscriptBeforeAgentSpeechEnd(t *testing.T) {
 	activity.OnFinalTranscript(&stt.SpeechEvent{
 		Alternatives: []stt.SpeechData{{
 			Text:       "new turn",
-			EndTime:    1.5,
+			EndTime:    2.5,
 			Confidence: 0.9,
 		}},
 	})
@@ -2094,6 +2222,34 @@ func TestAgentActivityDropsFinalTranscriptBeforeAgentSpeechEnd(t *testing.T) {
 	}
 }
 
+func TestAgentActivityHeldFinalTranscriptUsesReferenceEndCooldown(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	userTranscriptEvents := session.UserInputTranscribedEvents()
+	startedAt := time.Unix(100, 0)
+	activity.userSpeechStartedAt = startedAt
+	activity.holdUserTranscriptsUntil(startedAt.Add(time.Second))
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "near boundary",
+			EndTime:    0.5,
+			Confidence: 0.9,
+		}},
+	})
+
+	select {
+	case ev := <-userTranscriptEvents:
+		if ev.Transcript != "near boundary" || !ev.IsFinal {
+			t.Fatalf("event = %#v, want final near boundary transcript", ev)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("UserInputTranscribedEvents did not receive near-boundary transcript")
+	}
+}
+
 func TestAgentActivityDropsInterimTranscriptBeforeAgentSpeechEnd(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}
@@ -2105,7 +2261,7 @@ func TestAgentActivityDropsInterimTranscriptBeforeAgentSpeechEnd(t *testing.T) {
 	defer current.MarkDone()
 	startedAt := time.Unix(100, 0)
 	activity.userSpeechStartedAt = startedAt
-	activity.holdUserTranscriptsUntil(startedAt.Add(time.Second))
+	activity.holdUserTranscriptsUntil(startedAt.Add(2 * time.Second))
 
 	activity.OnInterimTranscript(&stt.SpeechEvent{
 		Alternatives: []stt.SpeechData{{
@@ -2127,8 +2283,8 @@ func TestAgentActivityDropsInterimTranscriptBeforeAgentSpeechEnd(t *testing.T) {
 	activity.OnInterimTranscript(&stt.SpeechEvent{
 		Alternatives: []stt.SpeechData{{
 			Text:      "new interim",
-			StartTime: 1.25,
-			EndTime:   1.5,
+			StartTime: 2.25,
+			EndTime:   2.5,
 		}},
 	})
 
@@ -3163,6 +3319,52 @@ func TestAgentActivityCommitUserTurnSkipsWhenSchedulingPaused(t *testing.T) {
 	}
 	if transcript != "paused turn" {
 		t.Fatalf("CommitUserTurn transcript = %q, want paused turn", transcript)
+	}
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called while scheduling paused with %q", msg.TextContent())
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("reply generated while scheduling paused: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestAgentActivityCommitUserTurnRecordsClosingPausedTurn(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	session.closing = true
+	activity.schedulingPaused = true
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "closing paused turn", Confidence: 0.9}},
+	})
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "closing paused turn" {
+		t.Fatalf("CommitUserTurn transcript = %q, want closing paused turn", transcript)
+	}
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		msg, ok := ev.Item.(*llm.ChatMessage)
+		if !ok || msg.TextContent() != "closing paused turn" {
+			t.Fatalf("ConversationItemAdded item = %#v, want closing paused turn", ev.Item)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConversationItemAddedEvents did not receive closing paused turn")
+	}
+	if agent.ChatCtx == nil || len(agent.ChatCtx.Items) != 1 {
+		t.Fatalf("chat context items = %#v, want one closing user message", agent.ChatCtx)
+	}
+	if msg, ok := agent.ChatCtx.Items[0].(*llm.ChatMessage); !ok || msg.TextContent() != "closing paused turn" {
+		t.Fatalf("chat context item = %#v, want closing paused turn message", agent.ChatCtx.Items[0])
 	}
 	select {
 	case msg := <-agent.turns:

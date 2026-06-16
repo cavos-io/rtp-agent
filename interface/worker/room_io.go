@@ -137,7 +137,10 @@ const RoomIOTranscriptionSegmentIDAttribute = "lk.segment_id"
 const roomIODeleteRoomCloseTimeout = 10 * time.Second
 const roomIOOpusClockRate uint32 = 48000
 const roomIOOpusFrameSamples uint32 = 960
+const roomIOInputSampleRate uint32 = 24000
+const roomIOInputFrameSizeMS uint32 = 50
 const roomIOAudioSubscriptionTimeout = 3 * time.Second
+const roomIOInputSilenceFlushDuration = 500 * time.Millisecond
 
 func roomIOAudioOutputCodec() webrtc.RTPCodecCapability {
 	return webrtc.RTPCodecCapability{
@@ -1181,14 +1184,15 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 	// First, check for and flush any pre-connect audio buffered
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	inputStream := newRoomIOInputAudioStream()
 
 	if rio.preConnectAudio != nil {
 		if frames := rio.preConnectAudio.WaitForData(ctx, track.ID()); len(frames) > 0 {
 			for _, frame := range frames {
-				if rio.Recorder != nil {
-					rio.Recorder.RecordInput(frame)
+				inputFrame := roomIOInputFrameFromFrame(frame)
+				if inputFrame != nil {
+					rio.forwardRoomInputFrames(context.Background(), inputStream.Push(inputFrame.Data))
 				}
-				rio.AgentSession.OnAudioFrame(context.Background(), frame)
 			}
 		}
 	}
@@ -1209,7 +1213,10 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 
 		pkt, _, err := track.ReadRTP()
 		if err != nil {
-			if !errors.Is(err, io.EOF) {
+			if errors.Is(err, io.EOF) {
+				rio.forwardRoomInputFrames(context.Background(), inputStream.Flush())
+				rio.forwardRoomInputFrame(context.Background(), roomIOInputSilenceFlushFrame())
+			} else {
 				// log error
 			}
 			return
@@ -1229,18 +1236,71 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 				}
 			}
 
-			frame := &model.AudioFrame{
-				Data:              pcm,
-				SampleRate:        track.Codec().ClockRate,
-				NumChannels:       1, // We decode to mono for simplicity
-				SamplesPerChannel: uint32(len(pcm) / 2),
-			}
+			frame := roomIOInputFrameFromPCM(pcm, track.Codec().ClockRate, 1)
 
-			if rio.Recorder != nil {
-				rio.Recorder.RecordInput(frame)
-			}
-			rio.AgentSession.OnAudioFrame(context.Background(), frame)
+			rio.forwardRoomInputFrames(context.Background(), inputStream.Push(frame.Data))
 		}
+	}
+}
+
+func newRoomIOInputAudioStream() *audio.AudioByteStream {
+	samplesPerChannel := roomIOInputSampleRate * roomIOInputFrameSizeMS / 1000
+	return audio.NewAudioByteStream(roomIOInputSampleRate, 1, samplesPerChannel)
+}
+
+func roomIOInputFrameFromPCM(pcm []byte, sampleRate uint32, channels uint32) *model.AudioFrame {
+	if channels == 0 {
+		channels = 1
+	}
+	frame := &model.AudioFrame{
+		Data:              pcm,
+		SampleRate:        sampleRate,
+		NumChannels:       channels,
+		SamplesPerChannel: uint32(len(pcm)) / channels / 2,
+	}
+	if sampleRate == 0 || sampleRate == roomIOInputSampleRate {
+		return frame
+	}
+	resampled, err := audio.ResampleAudioFrame(frame, roomIOInputSampleRate)
+	if err != nil {
+		logger.Logger.Warnw("room audio input resample failed", err, "from", sampleRate, "to", roomIOInputSampleRate)
+		return frame
+	}
+	return resampled
+}
+
+func roomIOInputFrameFromFrame(frame *model.AudioFrame) *model.AudioFrame {
+	if frame == nil {
+		return nil
+	}
+	return roomIOInputFrameFromPCM(frame.Data, frame.SampleRate, frame.NumChannels)
+}
+
+func roomIOInputSilenceFlushFrame() *model.AudioFrame {
+	samples := uint32(roomIOInputSilenceFlushDuration.Seconds() * float64(roomIOInputSampleRate))
+	return &model.AudioFrame{
+		Data:              make([]byte, samples*2),
+		SampleRate:        roomIOInputSampleRate,
+		NumChannels:       1,
+		SamplesPerChannel: samples,
+	}
+}
+
+func (rio *RoomIO) forwardRoomInputFrames(ctx context.Context, frames []*model.AudioFrame) {
+	for _, frame := range frames {
+		rio.forwardRoomInputFrame(ctx, frame)
+	}
+}
+
+func (rio *RoomIO) forwardRoomInputFrame(ctx context.Context, frame *model.AudioFrame) {
+	if rio == nil || frame == nil {
+		return
+	}
+	if rio.Recorder != nil {
+		rio.Recorder.RecordInput(frame)
+	}
+	if rio.AgentSession != nil {
+		rio.AgentSession.OnAudioFrame(ctx, frame)
 	}
 }
 

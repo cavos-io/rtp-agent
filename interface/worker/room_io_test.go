@@ -131,6 +131,98 @@ func TestNewRoomIOCanDisableAudioInput(t *testing.T) {
 	}
 }
 
+func TestRoomIOInputFrameUsesReferenceSampleRate(t *testing.T) {
+	pcm := make([]byte, 960)
+	frame := roomIOInputFrameFromPCM(pcm, roomIOOpusClockRate, 1)
+
+	if frame.SampleRate != 24000 {
+		t.Fatalf("SampleRate = %d, want reference RoomIO input rate 24000", frame.SampleRate)
+	}
+	if frame.NumChannels != 1 {
+		t.Fatalf("NumChannels = %d, want mono reference input", frame.NumChannels)
+	}
+	if frame.SamplesPerChannel != 240 {
+		t.Fatalf("SamplesPerChannel = %d, want 240 after 48k->24k resample", frame.SamplesPerChannel)
+	}
+	if got, want := len(frame.Data), int(frame.SamplesPerChannel*frame.NumChannels*2); got != want {
+		t.Fatalf("frame data bytes = %d, want %d", got, want)
+	}
+}
+
+func TestRoomIOInputStreamUsesReferenceFrameSize(t *testing.T) {
+	stream := newRoomIOInputAudioStream()
+	var frames []*model.AudioFrame
+	for i := 0; i < 5; i++ {
+		frame := roomIOInputFrameFromPCM(make([]byte, 960), roomIOOpusClockRate, 1)
+		frames = append(frames, stream.Push(frame.Data)...)
+	}
+
+	if len(frames) != 1 {
+		t.Fatalf("frames = %d, want one 50ms RoomIO input frame", len(frames))
+	}
+	if frames[0].SampleRate != 24000 {
+		t.Fatalf("SampleRate = %d, want 24000", frames[0].SampleRate)
+	}
+	if frames[0].NumChannels != 1 {
+		t.Fatalf("NumChannels = %d, want mono", frames[0].NumChannels)
+	}
+	if frames[0].SamplesPerChannel != 1200 {
+		t.Fatalf("SamplesPerChannel = %d, want 1200 for 50ms at 24kHz", frames[0].SamplesPerChannel)
+	}
+	if got, want := len(frames[0].Data), int(frames[0].SamplesPerChannel*frames[0].NumChannels*2); got != want {
+		t.Fatalf("frame data bytes = %d, want %d", got, want)
+	}
+}
+
+func TestRoomIOInputFrameNormalizesPreConnectAudio(t *testing.T) {
+	preConnect := &model.AudioFrame{
+		Data:              make([]byte, 960),
+		SampleRate:        roomIOOpusClockRate,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}
+
+	frame := roomIOInputFrameFromFrame(preConnect)
+
+	if frame == preConnect {
+		t.Fatal("normalized frame reused pre-connect frame pointer")
+	}
+	if frame.SampleRate != 24000 {
+		t.Fatalf("SampleRate = %d, want reference RoomIO input rate 24000", frame.SampleRate)
+	}
+	if frame.NumChannels != 1 {
+		t.Fatalf("NumChannels = %d, want mono reference input", frame.NumChannels)
+	}
+	if frame.SamplesPerChannel != 240 {
+		t.Fatalf("SamplesPerChannel = %d, want 240 after 48k->24k resample", frame.SamplesPerChannel)
+	}
+	if got, want := len(frame.Data), int(frame.SamplesPerChannel*frame.NumChannels*2); got != want {
+		t.Fatalf("frame data bytes = %d, want %d", got, want)
+	}
+}
+
+func TestRoomIOInputSilenceFlushUsesReferenceDuration(t *testing.T) {
+	frame := roomIOInputSilenceFlushFrame()
+
+	if frame.SampleRate != 24000 {
+		t.Fatalf("SampleRate = %d, want reference RoomIO input rate 24000", frame.SampleRate)
+	}
+	if frame.NumChannels != 1 {
+		t.Fatalf("NumChannels = %d, want mono reference input", frame.NumChannels)
+	}
+	if frame.SamplesPerChannel != 12000 {
+		t.Fatalf("SamplesPerChannel = %d, want 0.5s of 24 kHz silence", frame.SamplesPerChannel)
+	}
+	if got, want := len(frame.Data), int(frame.SamplesPerChannel*frame.NumChannels*2); got != want {
+		t.Fatalf("frame data bytes = %d, want %d", got, want)
+	}
+	for i, b := range frame.Data {
+		if b != 0 {
+			t.Fatalf("frame data[%d] = %d, want silence", i, b)
+		}
+	}
+}
+
 func TestNewRoomIORegistersReferenceChatTextHandler(t *testing.T) {
 	room := lksdk.NewRoom(nil)
 	_ = NewRoomIO(room, &agent.AgentSession{}, RoomOptions{})
