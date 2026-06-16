@@ -288,6 +288,31 @@ func TestAzureSTTBuildsReferenceHostStreamURL(t *testing.T) {
 	}
 }
 
+func TestAzureSTTStreamUsesConfiguredDefaultLanguage(t *testing.T) {
+	provider, err := NewAzureSTT("", "", WithAzureSTTSpeechHost("https://speech.container.test"), WithAzureSTTLanguage("id-ID"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+
+	streamURL := buildAzureSTTStreamURL(provider, provider.streamLanguage(""))
+	parsed, err := url.Parse(streamURL)
+	if err != nil {
+		t.Fatalf("parse stream URL: %v", err)
+	}
+	if got := parsed.Query().Get("language"); got != "id-ID" {
+		t.Fatalf("stream language = %q, want configured provider language id-ID", got)
+	}
+
+	overrideURL := buildAzureSTTStreamURL(provider, provider.streamLanguage("en-US"))
+	overrideParsed, err := url.Parse(overrideURL)
+	if err != nil {
+		t.Fatalf("parse override stream URL: %v", err)
+	}
+	if got := overrideParsed.Query().Get("language"); got != "en-US" {
+		t.Fatalf("override stream language = %q, want explicit stream language en-US", got)
+	}
+}
+
 func TestAzureSTTStreamUsesWebsocketProtocol(t *testing.T) {
 	requests := make(chan *http.Request, 1)
 	configMessages := make(chan string, 1)

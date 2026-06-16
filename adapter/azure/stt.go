@@ -34,6 +34,7 @@ type AzureSTT struct {
 	apiKey        string
 	region        string
 	speechHost    string
+	language      string
 	httpClient    *http.Client
 	websocketURL  string
 	dialWebsocket azureSTTWebsocketDialer
@@ -53,6 +54,14 @@ func WithAzureSTTSpeechHost(speechHost string) AzureSTTOption {
 	return func(s *AzureSTT) {
 		if speechHost != "" {
 			s.speechHost = speechHost
+		}
+	}
+}
+
+func WithAzureSTTLanguage(language string) AzureSTTOption {
+	return func(s *AzureSTT) {
+		if language != "" {
+			s.language = language
 		}
 	}
 }
@@ -90,7 +99,7 @@ func (s *AzureSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *AzureSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
-	resolvedLanguage := resolveAzureSTTLanguage(language)
+	resolvedLanguage := s.streamLanguage(language)
 	streamURL := buildAzureSTTStreamURL(s, resolvedLanguage)
 	conn, connectionID, err := openAzureSTTStreamConnection(ctx, s, streamURL)
 	if err != nil {
@@ -151,7 +160,7 @@ func (s *AzureSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, err
 	}
-	return azureSTTRecognizeSpeechEvent(resolveAzureSTTLanguage(languageStr), result)
+	return azureSTTRecognizeSpeechEvent(s.streamLanguage(languageStr), result)
 }
 
 type azureSTTRecognizeResponse struct {
@@ -170,7 +179,7 @@ func buildAzureSTTRecognizeRequest(ctx context.Context, s *AzureSTT, frames []*m
 		Path:   "/speech/recognition/conversation/cognitiveservices/v1",
 	}
 	query := u.Query()
-	query.Set("language", resolveAzureSTTLanguage(language))
+	query.Set("language", s.streamLanguage(language))
 	query.Set("format", "detailed")
 	u.RawQuery = query.Encode()
 
@@ -280,6 +289,16 @@ func buildAzureSTTStreamURL(s *AzureSTT, language string) string {
 func resolveAzureSTTLanguage(language string) string {
 	if language != "" {
 		return language
+	}
+	return defaultAzureSTTLanguage
+}
+
+func (s *AzureSTT) streamLanguage(language string) string {
+	if language != "" {
+		return language
+	}
+	if s != nil && s.language != "" {
+		return s.language
 	}
 	return defaultAzureSTTLanguage
 }

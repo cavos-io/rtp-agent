@@ -10513,6 +10513,97 @@ func TestDefaultConfigFromEnvSelectsAzureSpeechProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvMapsAzureSTTLanguageAndEndpoint(t *testing.T) {
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "id-ID")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://southindia.api.cognitive.microsoft.com/")
+	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	azureProvider, ok := app.Session.STT.(*azure.AzureSTT)
+	if !ok {
+		t.Fatalf("STT provider = %T, want *azure.AzureSTT", app.Session.STT)
+	}
+	state := reflect.ValueOf(azureProvider).Elem()
+	if got, want := state.FieldByName("language").String(), "id-ID"; got != want {
+		t.Fatalf("Azure STT language = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("speechHost").String(), "https://southindia.api.cognitive.microsoft.com/"; got != want {
+		t.Fatalf("Azure STT speechHost = %q, want %q", got, want)
+	}
+}
+
+func TestNewAppMapsAzureSTTBundleSettingEndpoint(t *testing.T) {
+	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
+	cfg := AppConfig{
+		STTProvider: "azure",
+		STTLanguage: "id-ID",
+		STTModelOptions: map[string]any{
+			"setting": map[string]any{
+				"azure_endpoint": "https://southindia.api.cognitive.microsoft.com/",
+			},
+		},
+	}
+
+	app, err := NewApp(cfg)
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	azureProvider, ok := app.Session.STT.(*azure.AzureSTT)
+	if !ok {
+		t.Fatalf("STT provider = %T, want *azure.AzureSTT", app.Session.STT)
+	}
+	state := reflect.ValueOf(azureProvider).Elem()
+	if got, want := state.FieldByName("language").String(), "id-ID"; got != want {
+		t.Fatalf("Azure STT language = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("speechHost").String(), "https://southindia.api.cognitive.microsoft.com/"; got != want {
+		t.Fatalf("Azure STT speechHost = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultConfigFromEnvRejectsAzureSTTUnsupportedOpenAIDeploymentConfig(t *testing.T) {
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "id-ID")
+	t.Setenv("RTP_AGENT_STT_MODEL", "telephony")
+	t.Setenv("RTP_AGENT_STT_MODEL_OPTIONS", "azure_deployment=whisper,api_version=2024-06-01")
+	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
+	t.Setenv("AZURE_SPEECH_REGION", "southeastasia")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil {
+		t.Fatal("NewApp() error = nil, want unsupported Azure STT deployment config error")
+	}
+	if !strings.Contains(err.Error(), "azure_deployment") || !strings.Contains(err.Error(), "RTP_AGENT_STT_PROVIDER=azure") {
+		t.Fatalf("NewApp() error = %v, want Azure STT unsupported deployment config context", err)
+	}
+}
+
+func TestNewAppRejectsAzureSTTUnsupportedBundleDeploymentConfig(t *testing.T) {
+	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
+	cfg := AppConfig{
+		STTProvider: "azure",
+		STTLanguage: "id-ID",
+		STTModelOptions: map[string]any{
+			"setting": map[string]any{
+				"azure_deployment": "whisper",
+				"api_version":      "2024-06-01",
+			},
+		},
+	}
+
+	_, err := NewApp(cfg)
+	if err == nil {
+		t.Fatal("NewApp() error = nil, want unsupported Azure STT deployment config error")
+	}
+	if !strings.Contains(err.Error(), "azure_deployment") || !strings.Contains(err.Error(), "RTP_AGENT_STT_PROVIDER=azure") {
+		t.Fatalf("NewApp() error = %v, want Azure STT unsupported deployment config context", err)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsBasetenProviders(t *testing.T) {
 	t.Setenv("BASETEN_API_KEY", "test-baseten-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "baseten")

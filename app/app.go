@@ -2186,7 +2186,7 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 	case providerAWS:
 		return awsSTTFromConfig(cfg)
 	case providerAzure:
-		return azure.NewAzureSTT("", "")
+		return azureSTTFromConfig(cfg)
 	case providerFal:
 		return falSTTFromConfig(cfg), nil
 	case providerSpitch:
@@ -2987,6 +2987,59 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_STT_FALLBACK_PROVIDERS entry %q", provider)
 	}
+}
+
+func azureSTTFromConfig(cfg AppConfig) (*azure.AzureSTT, error) {
+	if err := validateAzureSTTConfig(cfg); err != nil {
+		return nil, err
+	}
+	sttOpts := []azure.AzureSTTOption{}
+	if speechHost := azureSTTSpeechHostFromConfig(cfg); speechHost != "" {
+		sttOpts = append(sttOpts, azure.WithAzureSTTSpeechHost(speechHost))
+	}
+	if language := azureSTTLanguageFromConfig(cfg); language != "" {
+		sttOpts = append(sttOpts, azure.WithAzureSTTLanguage(language))
+	}
+	return azure.NewAzureSTT("", cfg.STTRegion, sttOpts...)
+}
+
+func validateAzureSTTConfig(cfg AppConfig) error {
+	for _, key := range []string{"azure_deployment", "api_version"} {
+		if azureSTTModelOption(cfg.STTModelOptions, key) != "" {
+			return fmt.Errorf("RTP_AGENT_STT_PROVIDER=azure uses Azure Speech websocket STT and does not support %s; remove Azure OpenAI Whisper deployment options or use an OpenAI-compatible STT provider", key)
+		}
+	}
+	return nil
+}
+
+func azureSTTSpeechHostFromConfig(cfg AppConfig) string {
+	if strings.TrimSpace(cfg.STTBaseURL) != "" {
+		return strings.TrimSpace(cfg.STTBaseURL)
+	}
+	for _, key := range []string{"azure_endpoint", "speech_endpoint", "speech_host"} {
+		if value := azureSTTModelOption(cfg.STTModelOptions, key); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func azureSTTLanguageFromConfig(cfg AppConfig) string {
+	if strings.TrimSpace(cfg.STTLanguage) != "" {
+		return strings.TrimSpace(cfg.STTLanguage)
+	}
+	return azureSTTModelOption(cfg.STTModelOptions, "language")
+}
+
+func azureSTTModelOption(options map[string]any, key string) string {
+	if value := modelOptionString(options, key); value != "" {
+		return value
+	}
+	setting, ok := options["setting"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	return modelOptionString(setting, key)
 }
 
 func awsSTTFromConfig(cfg AppConfig) (*adapteraws.AWSSTT, error) {
@@ -4153,7 +4206,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.STT = provider
 	case providerAzure:
-		provider, err := azure.NewAzureSTT("", "")
+		provider, err := azureSTTFromConfig(cfg)
 		if err != nil {
 			return nil, err
 		}
