@@ -60,7 +60,29 @@ func TestAzureSTTFallsBackToSpeechEnvironment(t *testing.T) {
 	}
 }
 
+func TestAzureSTTFallsBackToSpeechHostEnvironment(t *testing.T) {
+	t.Setenv(azureSpeechHostEnv, "https://speech.container.test")
+	t.Setenv(azureSpeechKeyEnv, "")
+	t.Setenv(azureSpeechRegionEnv, "")
+
+	provider, err := NewAzureSTT("", "")
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v, want nil from speech host config", err)
+	}
+
+	if provider.speechHost != "https://speech.container.test" {
+		t.Fatalf("speechHost = %q, want speech host from env", provider.speechHost)
+	}
+	if provider.apiKey != "" {
+		t.Fatalf("apiKey = %q, want empty for host-only config", provider.apiKey)
+	}
+	if provider.region != "" {
+		t.Fatalf("region = %q, want empty for host-only config", provider.region)
+	}
+}
+
 func TestAzureSTTRequiresSpeechConfig(t *testing.T) {
+	t.Setenv(azureSpeechHostEnv, "")
 	t.Setenv(azureSpeechKeyEnv, "")
 	t.Setenv(azureSpeechRegionEnv, "")
 
@@ -234,6 +256,35 @@ func TestAzureSTTBuildsReferenceStreamURL(t *testing.T) {
 	}
 	if query.Get("format") != "detailed" {
 		t.Fatalf("format query = %q, want detailed", query.Get("format"))
+	}
+}
+
+func TestAzureSTTBuildsReferenceHostStreamURL(t *testing.T) {
+	provider, err := NewAzureSTT("", "", WithAzureSTTSpeechHost("https://speech.container.test"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+
+	streamURL := buildAzureSTTStreamURL(provider, "id-ID")
+	parsed, err := url.Parse(streamURL)
+	if err != nil {
+		t.Fatalf("parse stream URL: %v", err)
+	}
+
+	if parsed.Scheme != "wss" {
+		t.Fatalf("stream URL scheme = %q, want wss for host websocket", parsed.Scheme)
+	}
+	if parsed.Host != "speech.container.test" {
+		t.Fatalf("stream URL host = %q, want speech host", parsed.Host)
+	}
+	if parsed.Path != "/speech/recognition/conversation/cognitiveservices/v1" {
+		t.Fatalf("stream URL path = %q, want Azure conversation endpoint", parsed.Path)
+	}
+	if parsed.Query().Get("language") != "id-ID" {
+		t.Fatalf("language query = %q, want id-ID", parsed.Query().Get("language"))
+	}
+	if parsed.Query().Get("format") != "detailed" {
+		t.Fatalf("format query = %q, want detailed", parsed.Query().Get("format"))
 	}
 }
 

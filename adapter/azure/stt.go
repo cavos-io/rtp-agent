@@ -21,6 +21,7 @@ import (
 )
 
 const (
+	azureSpeechHostEnv      = "AZURE_SPEECH_HOST"
 	azureSpeechKeyEnv       = "AZURE_SPEECH_KEY"
 	azureSpeechRegionEnv    = "AZURE_SPEECH_REGION"
 	defaultAzureSTTLanguage = "en-US"
@@ -31,6 +32,7 @@ type azureSTTWebsocketDialer func(context.Context, string, http.Header) (*websoc
 type AzureSTT struct {
 	apiKey        string
 	region        string
+	speechHost    string
 	httpClient    *http.Client
 	websocketURL  string
 	dialWebsocket azureSTTWebsocketDialer
@@ -46,6 +48,14 @@ func WithAzureSTTWebsocketURL(websocketURL string) AzureSTTOption {
 	}
 }
 
+func WithAzureSTTSpeechHost(speechHost string) AzureSTTOption {
+	return func(s *AzureSTT) {
+		if speechHost != "" {
+			s.speechHost = speechHost
+		}
+	}
+}
+
 func NewAzureSTT(apiKey string, region string, opts ...AzureSTTOption) (*AzureSTT, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(azureSpeechKeyEnv)
@@ -53,17 +63,18 @@ func NewAzureSTT(apiKey string, region string, opts ...AzureSTTOption) (*AzureST
 	if region == "" {
 		region = os.Getenv(azureSpeechRegionEnv)
 	}
-	if apiKey == "" || region == "" {
-		return nil, fmt.Errorf("azure speech config requires AZURE_SPEECH_KEY and AZURE_SPEECH_REGION")
-	}
 	provider := &AzureSTT{
 		apiKey:        apiKey,
 		region:        region,
+		speechHost:    os.Getenv(azureSpeechHostEnv),
 		httpClient:    http.DefaultClient,
 		dialWebsocket: defaultAzureSTTWebsocketDialer,
 	}
 	for _, opt := range opts {
 		opt(provider)
+	}
+	if provider.speechHost == "" && (provider.apiKey == "" || provider.region == "") {
+		return nil, fmt.Errorf("azure speech config requires AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION")
 	}
 	return provider, nil
 }
@@ -224,11 +235,23 @@ func defaultAzureSTTWebsocketDialer(ctx context.Context, endpoint string, header
 func buildAzureSTTStreamURL(s *AzureSTT, language string) string {
 	base := s.websocketURL
 	if base == "" {
-		base = fmt.Sprintf("wss://%s.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1", s.region)
+		if s.speechHost != "" {
+			base = s.speechHost
+		} else {
+			base = fmt.Sprintf("wss://%s.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1", s.region)
+		}
 	}
 	u, err := url.Parse(base)
 	if err != nil {
 		return base
+	}
+	switch u.Scheme {
+	case "http":
+		u.Scheme = "ws"
+	case "https":
+		u.Scheme = "wss"
+	case "":
+		u.Scheme = "wss"
 	}
 	if u.Path == "" || u.Path == "/" {
 		u.Path = "/speech/recognition/conversation/cognitiveservices/v1"
@@ -249,7 +272,9 @@ func resolveAzureSTTLanguage(language string) string {
 
 func buildAzureSTTHeaders(s *AzureSTT, connectionID string) http.Header {
 	headers := make(http.Header)
-	headers.Set("Ocp-Apim-Subscription-Key", s.apiKey)
+	if s.apiKey != "" {
+		headers.Set("Ocp-Apim-Subscription-Key", s.apiKey)
+	}
 	headers.Set("X-ConnectionId", connectionID)
 	return headers
 }
