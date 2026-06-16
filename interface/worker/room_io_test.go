@@ -149,6 +149,33 @@ func TestRoomIOInputFrameUsesReferenceSampleRate(t *testing.T) {
 	}
 }
 
+func TestRoomIOInputFrameNormalizesPreConnectAudio(t *testing.T) {
+	preConnect := &model.AudioFrame{
+		Data:              make([]byte, 960),
+		SampleRate:        roomIOOpusClockRate,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}
+
+	frame := roomIOInputFrameFromFrame(preConnect)
+
+	if frame == preConnect {
+		t.Fatal("normalized frame reused pre-connect frame pointer")
+	}
+	if frame.SampleRate != 24000 {
+		t.Fatalf("SampleRate = %d, want reference RoomIO input rate 24000", frame.SampleRate)
+	}
+	if frame.NumChannels != 1 {
+		t.Fatalf("NumChannels = %d, want mono reference input", frame.NumChannels)
+	}
+	if frame.SamplesPerChannel != 240 {
+		t.Fatalf("SamplesPerChannel = %d, want 240 after 48k->24k resample", frame.SamplesPerChannel)
+	}
+	if got, want := len(frame.Data), int(frame.SamplesPerChannel*frame.NumChannels*2); got != want {
+		t.Fatalf("frame data bytes = %d, want %d", got, want)
+	}
+}
+
 func TestRoomIOInputSilenceFlushUsesReferenceDuration(t *testing.T) {
 	frame := roomIOInputSilenceFlushFrame()
 

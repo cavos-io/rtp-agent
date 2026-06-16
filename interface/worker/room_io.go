@@ -1187,10 +1187,7 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 	if rio.preConnectAudio != nil {
 		if frames := rio.preConnectAudio.WaitForData(ctx, track.ID()); len(frames) > 0 {
 			for _, frame := range frames {
-				if rio.Recorder != nil {
-					rio.Recorder.RecordInput(frame)
-				}
-				rio.AgentSession.OnAudioFrame(context.Background(), frame)
+				rio.forwardRoomInputFrame(context.Background(), roomIOInputFrameFromFrame(frame))
 			}
 		}
 	}
@@ -1259,6 +1256,13 @@ func roomIOInputFrameFromPCM(pcm []byte, sampleRate uint32, channels uint32) *mo
 		return frame
 	}
 	return resampled
+}
+
+func roomIOInputFrameFromFrame(frame *model.AudioFrame) *model.AudioFrame {
+	if frame == nil {
+		return nil
+	}
+	return roomIOInputFrameFromPCM(frame.Data, frame.SampleRate, frame.NumChannels)
 }
 
 func roomIOInputSilenceFlushFrame() *model.AudioFrame {
