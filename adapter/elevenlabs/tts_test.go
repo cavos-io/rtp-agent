@@ -383,8 +383,11 @@ func TestElevenLabsTTSUpdateOptionsMatchesReference(t *testing.T) {
 	if err := json.Unmarshal(body, &payload); err != nil {
 		t.Fatalf("unmarshal body: %v", err)
 	}
-	if payload["model_id"] != "eleven_multilingual_v2" || payload["language_code"] != "id" {
-		t.Fatalf("payload = %#v, want updated model and language", payload)
+	if payload["model_id"] != "eleven_multilingual_v2" {
+		t.Fatalf("payload = %#v, want updated model", payload)
+	}
+	if _, hasLang := payload["language_code"]; hasLang {
+		t.Fatalf("payload = %#v, eleven_multilingual_v2 must not include language_code", payload)
 	}
 
 	streamURL := buildElevenLabsStreamURL(provider)
@@ -395,8 +398,11 @@ func TestElevenLabsTTSUpdateOptionsMatchesReference(t *testing.T) {
 	if parsedStream.Path != "/v1/text-to-speech/voice-updated/stream-input" {
 		t.Fatalf("stream path = %q, want updated voice", parsedStream.Path)
 	}
-	if parsedStream.Query().Get("model_id") != "eleven_multilingual_v2" || parsedStream.Query().Get("language_code") != "id" {
-		t.Fatalf("stream query = %s, want updated model and language", parsedStream.RawQuery)
+	if parsedStream.Query().Get("model_id") != "eleven_multilingual_v2" {
+		t.Fatalf("stream model_id = %q, want eleven_multilingual_v2", parsedStream.Query().Get("model_id"))
+	}
+	if parsedStream.Query().Get("language_code") != "" {
+		t.Fatalf("stream language_code = %q, eleven_multilingual_v2 must not include language_code", parsedStream.Query().Get("language_code"))
 	}
 	if got := provider.Model(); got != "eleven_multilingual_v2" {
 		t.Fatalf("Model() = %q, want eleven_multilingual_v2", got)
