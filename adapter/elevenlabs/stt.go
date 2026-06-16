@@ -329,14 +329,24 @@ type elevenLabsSTTStream struct {
 }
 
 func (s *elevenLabsSTTStream) PushFrame(frame *model.AudioFrame) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	return writeElevenLabsSTTMessage(s.conn, buildElevenLabsSTTAudioChunkMessage(frame.Data, s.sampleRate, false))
+	return s.writeMessageLocked(buildElevenLabsSTTAudioChunkMessage(frame.Data, s.sampleRate, false))
 }
 
 func (s *elevenLabsSTTStream) Flush() error {
-	return writeElevenLabsSTTMessage(s.conn, buildElevenLabsSTTAudioChunkMessage(nil, s.sampleRate, true))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	return s.writeMessageLocked(buildElevenLabsSTTAudioChunkMessage(nil, s.sampleRate, true))
 }
 
 func (s *elevenLabsSTTStream) Close() error {
@@ -349,6 +359,16 @@ func (s *elevenLabsSTTStream) Close() error {
 	s.cancel()
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
+}
+
+func (s *elevenLabsSTTStream) writeMessageLocked(message map[string]any) error {
+	if err := writeElevenLabsSTTMessage(s.conn, message); err != nil {
+		s.closed = true
+		s.cancel()
+		_ = s.conn.Close()
+		return err
+	}
+	return nil
 }
 
 func (s *elevenLabsSTTStream) Next() (*stt.SpeechEvent, error) {
@@ -404,7 +424,16 @@ func (s *elevenLabsSTTStream) keepAliveLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			_ = writeElevenLabsSTTMessage(s.conn, buildElevenLabsSTTAudioChunkMessage(nil, s.sampleRate, false))
+			s.mu.Lock()
+			if s.closed {
+				s.mu.Unlock()
+				return
+			}
+			err := s.writeMessageLocked(buildElevenLabsSTTAudioChunkMessage(nil, s.sampleRate, false))
+			s.mu.Unlock()
+			if err != nil {
+				return
+			}
 		case <-s.ctx.Done():
 			return
 		}
