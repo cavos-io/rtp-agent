@@ -141,6 +141,7 @@ type AgentActivity struct {
 	preemptiveGenerationCount int
 	userSpeechStartedAt       time.Time
 	userSpeechStoppedAt       time.Time
+	ignoreUserTranscriptUntil time.Time
 
 	falseInterruptionMu    sync.Mutex
 	pausedSpeech           *pausedSpeechInfo
@@ -1370,6 +1371,7 @@ func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 	a.userSpeechStartedAt = time.Now()
 	a.userSpeechStoppedAt = time.Time{}
 	a.clearUserAudioFrames()
+	a.clearHeldUserTranscriptWindow()
 	if a.Session != nil {
 		a.Session.UpdateUserState(UserStateSpeaking)
 	}
@@ -1429,7 +1431,7 @@ func (a *AgentActivity) OnInterruption(ev OverlappingSpeechEvent) {
 	}
 	a.overlapSpeechEnded = true
 	a.interruptionDetected = true
-	a.interruptByAudioActivity("overlapping speech", "detected_at", ev.DetectedAt)
+	a.interruptByAudioActivity("overlapping speech", "detected_at", ev.DetectedAt, overlappingSpeechIgnoreUntil(ev))
 }
 
 func (a *AgentActivity) OnVADInferenceDone(ev *vad.VADEvent) {
@@ -1446,7 +1448,7 @@ func (a *AgentActivity) OnVADInferenceDone(ev *vad.VADEvent) {
 	if a.shortInterruptionTranscript(a.currentInterruptionTranscript()) {
 		return
 	}
-	a.interruptByAudioActivity("VAD inference", "speech_duration", ev.SpeechDuration)
+	a.interruptByAudioActivity("VAD inference", "speech_duration", ev.SpeechDuration, time.Time{})
 }
 
 func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
@@ -1464,6 +1466,10 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 		language = ev.Alternatives[0].Language
 		speakerID = ev.Alternatives[0].SpeakerID
 	}
+	if a.shouldDropInterimTranscriptBeforeAgentSpeechEnd(ev) {
+		logger.Logger.Debugw("dropping stale interim transcript before agent speech end", "transcript", transcript)
+		return
+	}
 	a.userTurnMu.Lock()
 	a.pendingInterimTranscript = transcript
 	a.pendingInterimLanguage = language
@@ -1479,7 +1485,7 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 	turnDetection := a.turnDetectionMode()
 	if transcript != "" && turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
 		if !a.shortInterruptionTranscript(transcript) {
-			a.interruptByAudioActivity("interim transcript", "transcript", transcript)
+			a.interruptByAudioActivity("interim transcript", "transcript", transcript, time.Time{})
 			if !a.speaking {
 				a.startFalseInterruptionTimer()
 			}
@@ -1509,6 +1515,10 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 		logger.Logger.Warnw("skipping zero-confidence final transcript", nil, "transcript", transcript)
 		return
 	}
+	if a.shouldDropFinalTranscriptBeforeAgentSpeechEnd(ev) {
+		logger.Logger.Debugw("dropping stale final transcript before agent speech end", "transcript", transcript)
+		return
+	}
 	if a.Session != nil {
 		a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
 			Language:   language,
@@ -1534,7 +1544,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	turnDetection := a.turnDetectionMode()
 	if turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
 		if !a.shortInterruptionTranscript(transcript) {
-			a.interruptByAudioActivity("final transcript", "transcript", transcript)
+			a.interruptByAudioActivity("final transcript", "transcript", transcript, time.Time{})
 			if !a.speaking {
 				a.startFalseInterruptionTimer()
 			}
@@ -1561,6 +1571,81 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 			AudioFrames:          a.userAudioSnapshot(),
 		})
 	}
+}
+
+func (a *AgentActivity) holdUserTranscriptsUntil(ignoreUntil time.Time) {
+	if a == nil || ignoreUntil.IsZero() {
+		return
+	}
+	a.userTurnMu.Lock()
+	if a.ignoreUserTranscriptUntil.IsZero() || ignoreUntil.Before(a.ignoreUserTranscriptUntil) {
+		a.ignoreUserTranscriptUntil = ignoreUntil
+	}
+	a.userTurnMu.Unlock()
+}
+
+func overlappingSpeechIgnoreUntil(ev OverlappingSpeechEvent) time.Time {
+	if ev.OverlapStartedAt != nil && !ev.OverlapStartedAt.IsZero() {
+		return *ev.OverlapStartedAt
+	}
+	return ev.DetectedAt
+}
+
+func (a *AgentActivity) clearHeldUserTranscriptWindow() {
+	if a == nil {
+		return
+	}
+	a.userTurnMu.Lock()
+	a.ignoreUserTranscriptUntil = time.Time{}
+	a.userTurnMu.Unlock()
+}
+
+func (a *AgentActivity) shouldDropFinalTranscriptBeforeAgentSpeechEnd(ev *stt.SpeechEvent) bool {
+	if a == nil || ev == nil || len(ev.Alternatives) == 0 || a.userSpeechStartedAt.IsZero() {
+		return false
+	}
+	alternative := ev.Alternatives[0]
+	if alternative.EndTime <= 0 || alternative.StartTime == alternative.EndTime {
+		return false
+	}
+	a.userTurnMu.Lock()
+	ignoreUntil := a.ignoreUserTranscriptUntil
+	if ignoreUntil.IsZero() {
+		a.userTurnMu.Unlock()
+		return false
+	}
+	transcriptEnd := a.userSpeechStartedAt.Add(time.Duration(alternative.EndTime * float64(time.Second)))
+	if transcriptEnd.Before(ignoreUntil) {
+		a.userTurnMu.Unlock()
+		return true
+	}
+	a.ignoreUserTranscriptUntil = time.Time{}
+	a.userTurnMu.Unlock()
+	return false
+}
+
+func (a *AgentActivity) shouldDropInterimTranscriptBeforeAgentSpeechEnd(ev *stt.SpeechEvent) bool {
+	if a == nil || ev == nil || len(ev.Alternatives) == 0 || a.userSpeechStartedAt.IsZero() {
+		return false
+	}
+	alternative := ev.Alternatives[0]
+	if alternative.StartTime <= 0 || alternative.StartTime == alternative.EndTime {
+		return false
+	}
+	a.userTurnMu.Lock()
+	ignoreUntil := a.ignoreUserTranscriptUntil
+	if ignoreUntil.IsZero() {
+		a.userTurnMu.Unlock()
+		return false
+	}
+	transcriptStart := a.userSpeechStartedAt.Add(time.Duration(alternative.StartTime * float64(time.Second)))
+	if transcriptStart.Before(ignoreUntil) {
+		a.userTurnMu.Unlock()
+		return true
+	}
+	a.ignoreUserTranscriptUntil = time.Time{}
+	a.userTurnMu.Unlock()
+	return false
 }
 
 func (a *AgentActivity) finalTranscriptTiming(ev *stt.SpeechEvent) (*float64, *float64, float64) {
@@ -1649,14 +1734,14 @@ func (a *AgentActivity) realtimeUserTranscriptionEnabled() bool {
 	return ok && capabilities.RealtimeCapabilities().UserTranscription
 }
 
-func (a *AgentActivity) interruptByAudioActivity(reason string, key string, value any) {
+func (a *AgentActivity) interruptByAudioActivity(reason string, key string, value any, ignoreUserTranscriptUntil time.Time) {
 	if a == nil {
 		return
 	}
 	if a.Session != nil && a.Session.aecWarmupActive() {
 		return
 	}
-	if a.pauseSpeechForFalseInterruption() {
+	if a.pauseSpeechForFalseInterruption(ignoreUserTranscriptUntil) {
 		return
 	}
 	go func() {
@@ -1666,12 +1751,19 @@ func (a *AgentActivity) interruptByAudioActivity(reason string, key string, valu
 	}()
 }
 
-func (a *AgentActivity) pauseSpeechForFalseInterruption() bool {
+func (a *AgentActivity) pauseSpeechForFalseInterruption(ignoreUserTranscriptUntil time.Time) bool {
 	if a == nil || a.Session == nil {
 		return false
 	}
 	opts := a.Session.Options
-	return a.pauseCurrentSpeechForFalseInterruption(time.Duration(opts.FalseInterruptionTimeout*float64(time.Second)), true, false)
+	if !a.pauseCurrentSpeechForFalseInterruption(time.Duration(opts.FalseInterruptionTimeout*float64(time.Second)), true, false) {
+		return false
+	}
+	if ignoreUserTranscriptUntil.IsZero() {
+		ignoreUserTranscriptUntil = time.Now()
+	}
+	a.holdUserTranscriptsUntil(ignoreUserTranscriptUntil)
+	return true
 }
 
 func (a *AgentActivity) pauseThinkingSpeechForFalseInterruption() bool {

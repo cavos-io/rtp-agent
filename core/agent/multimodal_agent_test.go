@@ -1321,6 +1321,159 @@ func TestMultimodalAgentKeepsRunOpenForRealtimeAutoToolReply(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentTruncatesInterruptedRealtimeMessageToPlayedTranscript(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	playback := &fakePipelinePlaybackController{
+		result: AudioPlaybackResult{
+			PlaybackPosition:       420 * time.Millisecond,
+			Interrupted:            true,
+			SynchronizedTranscript: "heard words",
+		},
+	}
+	session.SetAudioPlaybackController(playback)
+	chatCtx := llm.NewChatContext()
+	rtSession := &fakeRealtimeSession{}
+	ma := &MultimodalAgent{
+		model: &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{
+			MessageTruncation: true,
+			AudioOutput:       true,
+		}},
+		session:   session,
+		chatCtx:   chatCtx,
+		rtSession: rtSession,
+		ctx:       context.Background(),
+	}
+	textCh := make(chan string, 1)
+	textCh <- "heard words unheard words"
+	close(textCh)
+	modalitiesCh := make(chan []string, 1)
+	modalitiesCh <- []string{"audio"}
+	close(modalitiesCh)
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	if err := speech.Interrupt(true); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+
+	ma.consumeRealtimeMessage(context.Background(), speech, llm.MessageGeneration{
+		MessageID:    "msg_realtime_1",
+		TextCh:       textCh,
+		ModalitiesCh: modalitiesCh,
+	})
+
+	if playback.clearCalls != 1 {
+		t.Fatalf("ClearBuffer calls = %d, want 1 for interrupted realtime speech", playback.clearCalls)
+	}
+	if len(rtSession.truncates) != 1 {
+		t.Fatalf("Truncate calls = %#v, want one realtime truncation", rtSession.truncates)
+	}
+	truncate := rtSession.truncates[0]
+	if truncate.MessageID != "msg_realtime_1" || truncate.AudioEndMillis != 420 {
+		t.Fatalf("truncate options = %#v, want msg_realtime_1 at 420ms", truncate)
+	}
+	if len(truncate.Modalities) != 1 || truncate.Modalities[0] != "audio" {
+		t.Fatalf("truncate modalities = %#v, want audio", truncate.Modalities)
+	}
+	if truncate.AudioTranscript == nil || *truncate.AudioTranscript != "heard words" {
+		t.Fatalf("truncate transcript = %#v, want heard words", truncate.AudioTranscript)
+	}
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("chat context items = %#v, want one heard assistant message", chatCtx.Items)
+	}
+	msg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("chat context item = %T, want ChatMessage", chatCtx.Items[0])
+	}
+	if msg.TextContent() != "heard words" || !msg.Interrupted {
+		t.Fatalf("assistant message text/interrupted = %q/%v, want heard words/true", msg.TextContent(), msg.Interrupted)
+	}
+}
+
+func TestMultimodalAgentSkipsRealtimeMessagesAfterSpeechInterrupted(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	rtSession := &fakeRealtimeSession{}
+	ma := &MultimodalAgent{
+		model: &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{
+			MutableChatContext: true,
+		}},
+		session:   NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{}),
+		chatCtx:   chatCtx,
+		rtSession: rtSession,
+		ctx:       context.Background(),
+	}
+	textCh := make(chan string, 1)
+	textCh <- "never heard"
+	close(textCh)
+	messageCh := make(chan llm.MessageGeneration, 1)
+	messageCh <- llm.MessageGeneration{MessageID: "msg_skipped", TextCh: textCh}
+	close(messageCh)
+	functionCh := make(chan *llm.FunctionCall)
+	close(functionCh)
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	if err := speech.Interrupt(true); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+
+	ma.consumeRealtimeGeneration(context.Background(), speech, &llm.GenerationCreatedEvent{
+		MessageCh:  messageCh,
+		FunctionCh: functionCh,
+	})
+
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chat context items = %#v, want no never-heard assistant message", chatCtx.Items)
+	}
+	if rtSession.updated != chatCtx {
+		t.Fatalf("updated chat context = %#v, want local context sync after skipped realtime messages", rtSession.updated)
+	}
+}
+
+func TestMultimodalAgentUsesTTSFallbackForTextOnlyRealtimeMessage(t *testing.T) {
+	ttsStream := newEndInputGenerationTTSStream()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.TTS = &fakeGenerationTTS{stream: ttsStream}
+	chatCtx := llm.NewChatContext()
+	var published []*model.AudioFrame
+	ma := &MultimodalAgent{
+		model: &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{
+			AudioOutput: true,
+		}},
+		session: session,
+		chatCtx: chatCtx,
+		PublishAudio: func(ctx context.Context, frame *model.AudioFrame) error {
+			published = append(published, frame)
+			return nil
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "spoken fallback"
+	close(textCh)
+	modalitiesCh := make(chan []string, 1)
+	modalitiesCh <- []string{"text"}
+	close(modalitiesCh)
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	ma.consumeRealtimeMessage(context.Background(), speech, llm.MessageGeneration{
+		MessageID:    "msg_text_only",
+		TextCh:       textCh,
+		ModalitiesCh: modalitiesCh,
+	})
+
+	if len(published) != 1 || string(published[0].Data) != "audio" {
+		t.Fatalf("published frames = %#v, want one synthesized TTS audio frame", published)
+	}
+	if !strings.Contains(strings.Join(ttsStream.calls, ","), "push:spoken") ||
+		!strings.Contains(strings.Join(ttsStream.calls, ","), "push: fallback") ||
+		ttsStream.calls[len(ttsStream.calls)-1] != "end_input" {
+		t.Fatalf("TTS stream calls = %#v, want text pushed before end_input", ttsStream.calls)
+	}
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("chat context items = %#v, want assistant text message", chatCtx.Items)
+	}
+	msg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || msg.TextContent() != "spoken fallback" {
+		t.Fatalf("assistant message = %#v, want spoken fallback", chatCtx.Items[0])
+	}
+}
+
 func TestMultimodalAgentGeneratesToolReplyWhenRealtimeDoesNotAutoReply(t *testing.T) {
 	agent := NewAgent("test")
 	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}
@@ -1811,6 +1964,7 @@ type fakeRealtimeSession struct {
 	closed                int
 	interrupted           int
 	cleared               int
+	truncates             []llm.RealtimeTruncateOptions
 }
 
 func (f *fakeRealtimeSession) UpdateInstructions(instructions string) error {
@@ -1859,7 +2013,10 @@ func (f *fakeRealtimeSession) Say(text string) error {
 	return nil
 }
 
-func (f *fakeRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error { return nil }
+func (f *fakeRealtimeSession) Truncate(options llm.RealtimeTruncateOptions) error {
+	f.truncates = append(f.truncates, options)
+	return nil
+}
 
 func (f *fakeRealtimeSession) Interrupt() error {
 	f.interrupted++

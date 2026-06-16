@@ -605,6 +605,10 @@ func (ma *MultimodalAgent) consumeRealtimeGeneration(ctx context.Context, speech
 	messageCh := generation.MessageCh
 	functionCh := generation.FunctionCh
 	for messageCh != nil || functionCh != nil {
+		if speech != nil && speech.IsInterrupted() {
+			ma.syncRealtimeChatContextAfterSkippedMessages()
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -613,11 +617,23 @@ func (ma *MultimodalAgent) consumeRealtimeGeneration(ctx context.Context, speech
 				messageCh = nil
 				continue
 			}
+			if speech != nil && speech.IsInterrupted() {
+				ma.syncRealtimeChatContextAfterSkippedMessages()
+				return
+			}
 			ma.consumeRealtimeMessage(ctx, speech, message)
+			if speech != nil && speech.IsInterrupted() {
+				ma.syncRealtimeChatContextAfterSkippedMessages()
+				return
+			}
 		case call, ok := <-functionCh:
 			if !ok {
 				functionCh = nil
 				continue
+			}
+			if speech != nil && speech.IsInterrupted() {
+				ma.syncRealtimeChatContextAfterSkippedMessages()
+				return
 			}
 			ma.executeRealtimeFunctionCall(call)
 		}
@@ -626,10 +642,18 @@ func (ma *MultimodalAgent) consumeRealtimeGeneration(ctx context.Context, speech
 
 func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *SpeechHandle, message llm.MessageGeneration) {
 	var text string
-	for message.TextCh != nil || message.AudioCh != nil {
+	var modalities []string
+	modalitiesCh := message.ModalitiesCh
+	for message.TextCh != nil || message.AudioCh != nil || modalitiesCh != nil {
 		select {
 		case <-ctx.Done():
 			return
+		case values, ok := <-modalitiesCh:
+			if !ok {
+				modalitiesCh = nil
+				continue
+			}
+			modalities = append([]string(nil), values...)
 		case delta, ok := <-message.TextCh:
 			if !ok {
 				message.TextCh = nil
@@ -658,14 +682,33 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 			}
 		}
 	}
+	interrupted := speech != nil && speech.IsInterrupted()
+	if interrupted {
+		var playback AudioPlaybackResult
+		text, playback = ma.forwardedRealtimeTextAfterInterruption(ctx, text)
+		ma.truncateInterruptedRealtimeMessage(message.MessageID, modalities, text, playback)
+	}
+	if text != "" && len(modalities) > 0 && !realtimeModalitiesContain(modalities, "audio") {
+		if err := ma.publishTTSFallbackForRealtimeText(ctx, speech, text); err != nil {
+			logger.Logger.Errorw("failed to synthesize text-only realtime response", err)
+			if ma.session != nil {
+				ma.session.EmitError(ErrorEvent{
+					Error:  err,
+					Source: ma,
+				})
+			}
+			return
+		}
+	}
 	if text == "" {
 		return
 	}
 	msg := &llm.ChatMessage{
-		ID:        message.MessageID,
-		Role:      llm.ChatRoleAssistant,
-		Content:   []llm.ChatContent{{Text: text}},
-		CreatedAt: time.Now(),
+		ID:          message.MessageID,
+		Role:        llm.ChatRoleAssistant,
+		Content:     []llm.ChatContent{{Text: text}},
+		Interrupted: interrupted,
+		CreatedAt:   time.Now(),
 	}
 	if ma.chatCtx != nil {
 		if err := ma.chatCtx.UpsertItem(msg, llm.ChatContextUpsertOptions{AllowTypeMismatch: true}); err != nil {
@@ -676,6 +719,138 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 		ma.session.EmitConversationItemAdded(msg)
 	}
 	speech.AddChatItems(msg)
+}
+
+func (ma *MultimodalAgent) publishTTSFallbackForRealtimeText(ctx context.Context, speech *SpeechHandle, text string) error {
+	ma.mu.Lock()
+	session := ma.session
+	publish := ma.PublishAudio
+	ma.mu.Unlock()
+	if session == nil || session.TTS == nil || publish == nil {
+		return nil
+	}
+	textCh := make(chan string, 1)
+	textCh <- text
+	close(textCh)
+	ttsGen, err := PerformTTSInference(ctx, session.TTS, textCh, multimodalTTSInferenceOptions(session)...)
+	if err != nil {
+		return err
+	}
+	session.UpdateAgentState(AgentStateSpeaking)
+	for frame := range ttsGen.AudioCh {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			if speech != nil && speech.IsInterrupted() {
+				return nil
+			}
+			if err := publish(ctx, frame); err != nil {
+				return err
+			}
+		}
+	}
+	return ttsGen.StreamErr
+}
+
+func multimodalTTSInferenceOptions(session *AgentSession) []TTSInferenceOption {
+	if session == nil {
+		return nil
+	}
+	var opts []TTSInferenceOption
+	if session.Options.TTSStreamPacer != nil {
+		opts = append(opts, WithTTSStreamPacer(*session.Options.TTSStreamPacer))
+	}
+	if len(session.Options.TTSTextReplacements) > 0 {
+		opts = append(opts, WithTTSTextReplacements(session.Options.TTSTextReplacements))
+	}
+	if session.Options.DisableTTSTextTransforms {
+		opts = append(opts, WithTTSTextTransformsDisabled())
+	} else if session.Options.TTSTextTransformsSet {
+		opts = append(opts, WithTTSTextTransforms(session.Options.TTSTextTransforms))
+	}
+	return opts
+}
+
+func realtimeModalitiesContain(modalities []string, target string) bool {
+	for _, modality := range modalities {
+		if modality == target {
+			return true
+		}
+	}
+	return false
+}
+
+func (ma *MultimodalAgent) forwardedRealtimeTextAfterInterruption(ctx context.Context, generatedText string) (string, AudioPlaybackResult) {
+	ma.mu.Lock()
+	session := ma.session
+	ma.mu.Unlock()
+	if session == nil {
+		return generatedText, AudioPlaybackResult{}
+	}
+	playback := session.AudioPlaybackController()
+	if playback == nil {
+		return generatedText, AudioPlaybackResult{}
+	}
+	playback.ClearBuffer()
+	ev, err := playback.WaitForPlayout(ctx)
+	if err != nil {
+		logger.Logger.Warnw("failed to wait for interrupted realtime playback", err)
+		return generatedText, AudioPlaybackResult{}
+	}
+	if ev.SynchronizedTranscript != "" {
+		if session.activity != nil {
+			session.activity.holdUserTranscriptsUntil(time.Now())
+		}
+		return ev.SynchronizedTranscript, ev
+	}
+	if ev.PlaybackPosition <= 0 {
+		if session.activity != nil {
+			session.activity.holdUserTranscriptsUntil(time.Now())
+		}
+		return "", ev
+	}
+	if session.activity != nil {
+		session.activity.holdUserTranscriptsUntil(time.Now())
+	}
+	return generatedText, ev
+}
+
+func (ma *MultimodalAgent) truncateInterruptedRealtimeMessage(messageID string, modalities []string, transcript string, playback AudioPlaybackResult) {
+	if messageID == "" || !ma.realtimeCapabilities().MessageTruncation {
+		return
+	}
+	ma.mu.Lock()
+	rtSession := ma.rtSession
+	ma.mu.Unlock()
+	if rtSession == nil {
+		return
+	}
+	audioTranscript := transcript
+	if err := rtSession.Truncate(llm.RealtimeTruncateOptions{
+		MessageID:       messageID,
+		Modalities:      append([]string(nil), modalities...),
+		AudioEndMillis:  int(playback.PlaybackPosition / time.Millisecond),
+		AudioTranscript: &audioTranscript,
+	}); err != nil {
+		logger.Logger.Warnw("failed to truncate interrupted realtime message", err, "message_id", messageID)
+	}
+}
+
+func (ma *MultimodalAgent) syncRealtimeChatContextAfterSkippedMessages() {
+	if !ma.realtimeCapabilities().MutableChatContext {
+		return
+	}
+	ma.mu.Lock()
+	rtSession := ma.rtSession
+	chatCtx := ma.chatCtx
+	ma.mu.Unlock()
+	if rtSession == nil || chatCtx == nil {
+		return
+	}
+	if err := rtSession.UpdateChatContext(chatCtx); err != nil {
+		logger.Logger.Warnw("failed to sync realtime chat context after skipped messages", err)
+	}
 }
 
 func (ma *MultimodalAgent) realtimeTools() ([]llm.Tool, error) {

@@ -697,6 +697,37 @@ func TestAgentActivityOnInterruptionCutsCurrentSpeech(t *testing.T) {
 	current.MarkDone()
 }
 
+func TestAgentActivityOnInterruptionPauseUsesOverlapTimestampForHeldTranscripts(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:               TurnDetectionModeVAD,
+		MinInterruptionDuration:     0.05,
+		FalseInterruptionTimeout:    0.01,
+		FalseInterruptionTimeoutSet: true,
+		ResumeFalseInterruption:     true,
+		ResumeFalseInterruptionSet:  true,
+	})
+	session.SetAudioOutputController(&recordingAudioOutputController{canPause: true})
+	session.agentState = AgentStateSpeaking
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	defer current.MarkDone()
+	overlapStartedAt := time.Unix(200, 250_000_000)
+	detectedAt := overlapStartedAt.Add(750 * time.Millisecond)
+
+	activity.OnInterruption(OverlappingSpeechEvent{
+		IsInterruption:   true,
+		DetectedAt:       detectedAt,
+		OverlapStartedAt: &overlapStartedAt,
+	})
+
+	if !activity.ignoreUserTranscriptUntil.Equal(overlapStartedAt) {
+		t.Fatalf("ignoreUserTranscriptUntil = %v, want overlap start %v", activity.ignoreUserTranscriptUntil, overlapStartedAt)
+	}
+}
+
 func TestAgentActivityOnVADInferenceDoneInterruptsCurrentSpeech(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}
@@ -2012,6 +2043,139 @@ func TestAgentActivityOnFinalTranscriptEmitsUserInputTranscribed(t *testing.T) {
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("UserInputTranscribedEvents did not receive final transcript")
+	}
+}
+
+func TestAgentActivityDropsFinalTranscriptBeforeAgentSpeechEnd(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	userTranscriptEvents := session.UserInputTranscribedEvents()
+	startedAt := time.Unix(100, 0)
+	activity.userSpeechStartedAt = startedAt
+	activity.holdUserTranscriptsUntil(startedAt.Add(time.Second))
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "stale overlap",
+			EndTime:    0.5,
+			Confidence: 0.9,
+		}},
+	})
+
+	select {
+	case ev := <-userTranscriptEvents:
+		t.Fatalf("unexpected stale transcript event: %#v", ev)
+	default:
+	}
+	if activity.pendingUserTranscriptPresent {
+		t.Fatalf("pending user transcript = %q, want stale transcript dropped", activity.pendingUserTranscript)
+	}
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "new turn",
+			EndTime:    1.5,
+			Confidence: 0.9,
+		}},
+	})
+
+	select {
+	case ev := <-userTranscriptEvents:
+		if ev.Transcript != "new turn" || !ev.IsFinal {
+			t.Fatalf("event = %#v, want final new turn", ev)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("UserInputTranscribedEvents did not receive later transcript")
+	}
+	if !activity.pendingUserTranscriptPresent || activity.pendingUserTranscript != "new turn" {
+		t.Fatalf("pending user transcript = %q/%v, want new turn present", activity.pendingUserTranscript, activity.pendingUserTranscriptPresent)
+	}
+}
+
+func TestAgentActivityDropsInterimTranscriptBeforeAgentSpeechEnd(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeVAD})
+	activity := NewAgentActivity(agent, session)
+	userTranscriptEvents := session.UserInputTranscribedEvents()
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	defer current.MarkDone()
+	startedAt := time.Unix(100, 0)
+	activity.userSpeechStartedAt = startedAt
+	activity.holdUserTranscriptsUntil(startedAt.Add(time.Second))
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:      "stale interim",
+			StartTime: 0.25,
+			EndTime:   0.5,
+		}},
+	})
+
+	select {
+	case ev := <-userTranscriptEvents:
+		t.Fatalf("unexpected stale interim transcript event: %#v", ev)
+	default:
+	}
+	if current.IsInterrupted() {
+		t.Fatal("current speech was interrupted by stale interim transcript")
+	}
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:      "new interim",
+			StartTime: 1.25,
+			EndTime:   1.5,
+		}},
+	})
+
+	select {
+	case ev := <-userTranscriptEvents:
+		if ev.Transcript != "new interim" || ev.IsFinal {
+			t.Fatalf("event = %#v, want non-final new interim", ev)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("UserInputTranscribedEvents did not receive later interim transcript")
+	}
+}
+
+func TestAgentActivityStartOfSpeechClearsHeldTranscriptIgnoreWindow(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeVAD})
+	activity := NewAgentActivity(agent, session)
+	userTranscriptEvents := session.UserInputTranscribedEvents()
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	defer current.MarkDone()
+	startedAt := time.Unix(100, 0)
+	activity.userSpeechStartedAt = startedAt
+	activity.holdUserTranscriptsUntil(startedAt.Add(time.Second))
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	if !activity.ignoreUserTranscriptUntil.IsZero() {
+		t.Fatalf("ignoreUserTranscriptUntil = %v, want cleared after start of speech", activity.ignoreUserTranscriptUntil)
+	}
+
+	activity.userSpeechStartedAt = startedAt
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:      "new speech",
+			StartTime: 0.25,
+			EndTime:   0.5,
+		}},
+	})
+
+	select {
+	case ev := <-userTranscriptEvents:
+		if ev.Transcript != "new speech" || ev.IsFinal {
+			t.Fatalf("event = %#v, want non-final new speech", ev)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("UserInputTranscribedEvents did not receive new speech after start reset")
 	}
 }
 

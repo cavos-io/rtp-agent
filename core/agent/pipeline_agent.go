@@ -716,6 +716,10 @@ func (va *PipelineAgent) waitForAssistantPlayout(ctx context.Context, session *A
 	}
 	if _, err := playback.WaitForPlayout(ctx); err != nil {
 		logger.Logger.Warnw("failed to wait for assistant playback", err)
+		return
+	}
+	if session.activity != nil {
+		session.activity.holdUserTranscriptsUntil(time.Now())
 	}
 }
 
@@ -732,6 +736,9 @@ func (va *PipelineAgent) forwardedAssistantTextAfterInterruption(ctx context.Con
 	if err != nil {
 		logger.Logger.Warnw("failed to wait for interrupted playback", err)
 		return generatedText
+	}
+	if session.activity != nil {
+		session.activity.holdUserTranscriptsUntil(time.Now())
 	}
 	if ev.SynchronizedTranscript != "" {
 		return ev.SynchronizedTranscript

@@ -573,6 +573,100 @@ func TestRoomIOClearBufferFinishesPlaybackAsInterrupted(t *testing.T) {
 	}
 }
 
+func TestRoomIOPlaybackFinishedIncludesSynchronizedTranscript(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 480*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "hello",
+		IsFinal:    false,
+	})
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: " there",
+		IsFinal:    false,
+	})
+
+	rio.ClearBuffer()
+
+	ev, err := rio.WaitForPlayout(context.Background())
+	if err != nil {
+		t.Fatalf("WaitForPlayout error = %v", err)
+	}
+	if !ev.Interrupted {
+		t.Fatal("PlaybackFinishedEvent.Interrupted = false, want true after ClearBuffer")
+	}
+	if ev.SynchronizedTranscript != "hello there" {
+		t.Fatalf("SynchronizedTranscript = %q, want accumulated transcript", ev.SynchronizedTranscript)
+	}
+}
+
+func TestRoomIOPlaybackStartedKeepsEarlySynchronizedTranscript(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "early transcript",
+		IsFinal:    false,
+	})
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 480*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+
+	rio.Flush()
+
+	ev, err := rio.WaitForPlayout(context.Background())
+	if err != nil {
+		t.Fatalf("WaitForPlayout error = %v", err)
+	}
+	if ev.SynchronizedTranscript != "early transcript" {
+		t.Fatalf("SynchronizedTranscript = %q, want transcript emitted before playback start", ev.SynchronizedTranscript)
+	}
+}
+
+func TestRoomIOPlaybackFinishedDoesNotCarryLateTranscriptToNextSegment(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 480*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio(first) error = %v", err)
+	}
+	rio.Flush()
+	if _, err := rio.WaitForPlayout(context.Background()); err != nil {
+		t.Fatalf("WaitForPlayout(first) error = %v", err)
+	}
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "late transcript",
+		IsFinal:    true,
+	})
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio(second) error = %v", err)
+	}
+
+	rio.Flush()
+	ev, err := rio.WaitForPlayout(context.Background())
+	if err != nil {
+		t.Fatalf("WaitForPlayout(second) error = %v", err)
+	}
+	if ev.SynchronizedTranscript != "" {
+		t.Fatalf("SynchronizedTranscript = %q, want no late transcript carried to next segment", ev.SynchronizedTranscript)
+	}
+}
+
 func TestRoomIOWaitForPlayoutCancellationRemovesWaiter(t *testing.T) {
 	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
 	if err := rio.PublishAudio(context.Background(), &model.AudioFrame{
