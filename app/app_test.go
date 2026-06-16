@@ -11188,8 +11188,11 @@ func TestDefaultConfigFromEnvSelectsAnthropicLLM(t *testing.T) {
 	if app.Session == nil || app.Session.LLM == nil {
 		t.Fatal("Session LLM is nil")
 	}
-	if got := llm.Provider(app.Session.LLM); got != "anthropic" {
-		t.Fatalf("LLM provider = %q, want anthropic", got)
+	if _, ok := app.Session.LLM.(*anthropic.AnthropicLLM); !ok {
+		t.Fatalf("Session LLM = %T, want *anthropic.AnthropicLLM", app.Session.LLM)
+	}
+	if got := llm.Provider(app.Session.LLM); got != "anthropic.example" {
+		t.Fatalf("LLM provider = %q, want configured Anthropic base URL host", got)
 	}
 	if got := llm.Model(app.Session.LLM); got != "claude-test" {
 		t.Fatalf("LLM model = %q, want claude-test", got)

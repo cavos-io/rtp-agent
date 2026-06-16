@@ -91,8 +91,16 @@ func TestAnthropicLLMMetadataMatchesReference(t *testing.T) {
 	if got := model.Model(); got != defaultAnthropicMode {
 		t.Fatalf("Model() = %q, want %q", got, defaultAnthropicMode)
 	}
-	if got := model.Provider(); got != "anthropic" {
-		t.Fatalf("Provider() = %q, want anthropic", got)
+	if got := model.Provider(); got != "api.anthropic.com" {
+		t.Fatalf("Provider() = %q, want reference base URL host", got)
+	}
+
+	custom, err := NewAnthropicLLM("test-key", "", WithAnthropicBaseURL("https://anthropic.example/v1/"))
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM(custom base URL) error = %v", err)
+	}
+	if got := custom.Provider(); got != "anthropic.example" {
+		t.Fatalf("custom Provider() = %q, want configured base URL host", got)
 	}
 }
 
