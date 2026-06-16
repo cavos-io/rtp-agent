@@ -251,6 +251,21 @@ func runLLMAPIErrors(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "status_string_body":
+		err := lkllm.NewAPIStatusError("worker connection closed unexpectedly", 499, "req_ws", "msg.data='closed' msg.extra='timeout'")
+		return map[string]any{
+			"contract": "llm-api-errors",
+			"events": []map[string]any{
+				{
+					"name":       "status_string_body",
+					"error":      err.Error(),
+					"message":    err.Message,
+					"status":     err.StatusCode,
+					"request_id": err.RequestID,
+					"retryable":  err.Retryable,
+				},
+			},
+		}, nil
 	case "base_error":
 		err := lkllm.NewAPIError("provider failed", map[string]any{"code": "overloaded"}, true)
 		body, _ := err.Body.(map[string]any)

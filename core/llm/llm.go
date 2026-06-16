@@ -764,7 +764,7 @@ func (e *APIStatusError) Error() string {
 		parts = append(parts, fmt.Sprintf("request_id=%s", e.RequestID))
 	}
 	if pyTruthy(e.Body) {
-		parts = append(parts, fmt.Sprintf("body=%s", pyRepr(e.Body)))
+		parts = append(parts, fmt.Sprintf("body=%s", pyStr(e.Body)))
 	}
 	return strings.Join(parts, ", ")
 }
@@ -805,6 +805,15 @@ func pyTruthy(value any) bool {
 		return v.Float() != 0
 	default:
 		return true
+	}
+}
+
+func pyStr(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	default:
+		return pyRepr(value)
 	}
 }
 

@@ -584,6 +584,15 @@ func TestAPIStatusErrorStringFormatsFloatBodyLikeReference(t *testing.T) {
 	}
 }
 
+func TestAPIStatusErrorStringFormatsStringBodyLikeReference(t *testing.T) {
+	err := NewAPIStatusError("worker connection closed unexpectedly", 499, "req_ws", "msg.data='closed' msg.extra='timeout'")
+
+	want := "message='worker connection closed unexpectedly', status_code=499, retryable=True, request_id=req_ws, body=msg.data='closed' msg.extra='timeout'"
+	if got := err.Error(); got != want {
+		t.Fatalf("Error() = %q, want %q", got, want)
+	}
+}
+
 func TestCreateAPIErrorFromHTTPFormatsReferenceMessage(t *testing.T) {
 	err := CreateAPIErrorFromHTTP("quota exceeded", 429, "req_123", map[string]any{"type": "rate_limit"})
 
