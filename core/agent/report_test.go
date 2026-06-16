@@ -524,6 +524,9 @@ func stringSliceContains(values []string, want string) bool {
 func TestSessionReportToDictUsesReferencePreemptiveGenerationShape(t *testing.T) {
 	report := NewSessionReport()
 	report.Options.PreemptiveGeneration = true
+	report.Options.PreemptiveGenerationPreemptiveTTS = true
+	report.Options.PreemptiveGenerationMaxSpeechDuration = 4.5
+	report.Options.PreemptiveGenerationMaxRetries = 7
 
 	data := report.ToDict()
 	options, ok := data["options"].(map[string]any)
@@ -537,14 +540,14 @@ func TestSessionReportToDictUsesReferencePreemptiveGenerationShape(t *testing.T)
 	if preemptive["enabled"] != true {
 		t.Fatalf("preemptive_generation enabled = %#v, want true", preemptive["enabled"])
 	}
-	if preemptive["preemptive_tts"] != false {
-		t.Fatalf("preemptive_generation preemptive_tts = %#v, want false", preemptive["preemptive_tts"])
+	if preemptive["preemptive_tts"] != true {
+		t.Fatalf("preemptive_generation preemptive_tts = %#v, want true", preemptive["preemptive_tts"])
 	}
-	if preemptive["max_speech_duration"] != 10.0 {
-		t.Fatalf("preemptive_generation max_speech_duration = %#v, want 10.0", preemptive["max_speech_duration"])
+	if preemptive["max_speech_duration"] != 4.5 {
+		t.Fatalf("preemptive_generation max_speech_duration = %#v, want 4.5", preemptive["max_speech_duration"])
 	}
-	if preemptive["max_retries"] != 3 {
-		t.Fatalf("preemptive_generation max_retries = %#v, want 3", preemptive["max_retries"])
+	if preemptive["max_retries"] != 7 {
+		t.Fatalf("preemptive_generation max_retries = %#v, want 7", preemptive["max_retries"])
 	}
 }
 

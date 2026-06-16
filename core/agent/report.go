@@ -208,9 +208,9 @@ func sessionReportOptionsToDict(opts AgentSessionOptions) map[string]any {
 		"turn_detection":                   opts.TurnDetection,
 		"preemptive_generation": map[string]any{
 			"enabled":             opts.PreemptiveGeneration,
-			"preemptive_tts":      false,
-			"max_speech_duration": 10.0,
-			"max_retries":         3,
+			"preemptive_tts":      opts.PreemptiveGenerationPreemptiveTTS,
+			"max_speech_duration": opts.PreemptiveGenerationMaxSpeechDuration,
+			"max_retries":         opts.PreemptiveGenerationMaxRetries,
 		},
 		"session_close_transcript_timeout": opts.SessionCloseTranscriptTimeout,
 	}

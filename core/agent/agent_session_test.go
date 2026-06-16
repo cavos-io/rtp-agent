@@ -1188,6 +1188,15 @@ func TestNewAgentSessionAppliesReferenceOptionDefaults(t *testing.T) {
 	if !opts.PreemptiveGeneration {
 		t.Fatal("PreemptiveGeneration = false, want default true")
 	}
+	if opts.PreemptiveGenerationPreemptiveTTS {
+		t.Fatal("PreemptiveGenerationPreemptiveTTS = true, want default false")
+	}
+	if opts.PreemptiveGenerationMaxSpeechDuration != 10.0 {
+		t.Fatalf("PreemptiveGenerationMaxSpeechDuration = %v, want 10.0", opts.PreemptiveGenerationMaxSpeechDuration)
+	}
+	if opts.PreemptiveGenerationMaxRetries != 3 {
+		t.Fatalf("PreemptiveGenerationMaxRetries = %d, want 3", opts.PreemptiveGenerationMaxRetries)
+	}
 	if opts.AECWarmupDuration != 3.0 {
 		t.Fatalf("AECWarmupDuration = %v, want 3.0", opts.AECWarmupDuration)
 	}
@@ -1215,6 +1224,27 @@ func TestNewAgentSessionPreservesExplicitFalseTurnOptions(t *testing.T) {
 	}
 	if session.Options.PreemptiveGeneration {
 		t.Fatal("PreemptiveGeneration = true, want explicit false")
+	}
+}
+
+func TestNewAgentSessionPreservesExplicitPreemptiveGenerationOptions(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		PreemptiveGenerationPreemptiveTTS:        true,
+		PreemptiveGenerationPreemptiveTTSSet:     true,
+		PreemptiveGenerationMaxSpeechDuration:    4.5,
+		PreemptiveGenerationMaxSpeechDurationSet: true,
+		PreemptiveGenerationMaxRetries:           7,
+		PreemptiveGenerationMaxRetriesSet:        true,
+	})
+
+	if !session.Options.PreemptiveGenerationPreemptiveTTS {
+		t.Fatal("PreemptiveGenerationPreemptiveTTS = false, want explicit true")
+	}
+	if session.Options.PreemptiveGenerationMaxSpeechDuration != 4.5 {
+		t.Fatalf("PreemptiveGenerationMaxSpeechDuration = %v, want 4.5", session.Options.PreemptiveGenerationMaxSpeechDuration)
+	}
+	if session.Options.PreemptiveGenerationMaxRetries != 7 {
+		t.Fatalf("PreemptiveGenerationMaxRetries = %d, want 7", session.Options.PreemptiveGenerationMaxRetries)
 	}
 }
 

@@ -39,56 +39,62 @@ const (
 type idleHoldContextKey struct{}
 
 type AgentSessionOptions struct {
-	AllowInterruptions               bool
-	AllowInterruptionsSet            bool
-	DiscardAudioIfUninterruptible    bool
-	DiscardAudioIfUninterruptibleSet bool
-	MinInterruptionDuration          float64
-	MinInterruptionDurationSet       bool
-	MinInterruptionWords             int
-	MinEndpointingDelay              float64
-	MinEndpointingDelaySet           bool
-	MaxEndpointingDelay              float64
-	MaxEndpointingDelaySet           bool
-	EndpointingMode                  string
-	EndpointingAlpha                 float64
-	Endpointing                      Endpointing
-	MaxToolSteps                     int
-	MaxToolStepsSet                  bool
-	UserAwayTimeout                  float64
-	UserAwayTimeoutSet               bool
-	DisableUserAwayTimeout           bool
-	FalseInterruptionTimeout         float64
-	FalseInterruptionTimeoutSet      bool
-	ResumeFalseInterruption          bool
-	ResumeFalseInterruptionSet       bool
-	MinConsecutiveSpeechDelay        float64
-	UseTTSAlignedTranscript          bool
-	TTSStreamPacer                   *tts.SentenceStreamPacerOptions
-	TTSTextReplacements              map[string]string
-	TTSTextTransforms                []string
-	TTSTextTransformsSet             bool
-	DisableTTSTextTransforms         bool
-	LLMParallelToolCalls             *bool
-	LLMExtraParams                   map[string]any
-	LLMResponseFormat                map[string]any
-	BackgroundAudio                  *BackgroundAudioPlayer
-	WordTokenizer                    tokenize.WordTokenizer
-	PreemptiveGeneration             bool
-	PreemptiveGenerationSet          bool
-	AudioInputHook                   AudioInputHook
-	AECWarmupDuration                float64
-	AECWarmupDurationSet             bool
-	SessionCloseTranscriptTimeout    float64
-	SessionCloseTranscriptTimeoutSet bool
-	TurnDetection                    TurnDetectionMode
-	IVRDetection                     bool
-	IVRSilenceDuration               time.Duration
-	VideoSampler                     *VoiceActivityVideoSampler
-	ToolChoice                       llm.ToolChoice
-	MaxUnrecoverableErrors           int
-	MaxUnrecoverableErrorsSet        bool
-	MockTools                        map[string]MockToolFunc
+	AllowInterruptions                       bool
+	AllowInterruptionsSet                    bool
+	DiscardAudioIfUninterruptible            bool
+	DiscardAudioIfUninterruptibleSet         bool
+	MinInterruptionDuration                  float64
+	MinInterruptionDurationSet               bool
+	MinInterruptionWords                     int
+	MinEndpointingDelay                      float64
+	MinEndpointingDelaySet                   bool
+	MaxEndpointingDelay                      float64
+	MaxEndpointingDelaySet                   bool
+	EndpointingMode                          string
+	EndpointingAlpha                         float64
+	Endpointing                              Endpointing
+	MaxToolSteps                             int
+	MaxToolStepsSet                          bool
+	UserAwayTimeout                          float64
+	UserAwayTimeoutSet                       bool
+	DisableUserAwayTimeout                   bool
+	FalseInterruptionTimeout                 float64
+	FalseInterruptionTimeoutSet              bool
+	ResumeFalseInterruption                  bool
+	ResumeFalseInterruptionSet               bool
+	MinConsecutiveSpeechDelay                float64
+	UseTTSAlignedTranscript                  bool
+	TTSStreamPacer                           *tts.SentenceStreamPacerOptions
+	TTSTextReplacements                      map[string]string
+	TTSTextTransforms                        []string
+	TTSTextTransformsSet                     bool
+	DisableTTSTextTransforms                 bool
+	LLMParallelToolCalls                     *bool
+	LLMExtraParams                           map[string]any
+	LLMResponseFormat                        map[string]any
+	BackgroundAudio                          *BackgroundAudioPlayer
+	WordTokenizer                            tokenize.WordTokenizer
+	PreemptiveGeneration                     bool
+	PreemptiveGenerationSet                  bool
+	PreemptiveGenerationPreemptiveTTS        bool
+	PreemptiveGenerationPreemptiveTTSSet     bool
+	PreemptiveGenerationMaxSpeechDuration    float64
+	PreemptiveGenerationMaxSpeechDurationSet bool
+	PreemptiveGenerationMaxRetries           int
+	PreemptiveGenerationMaxRetriesSet        bool
+	AudioInputHook                           AudioInputHook
+	AECWarmupDuration                        float64
+	AECWarmupDurationSet                     bool
+	SessionCloseTranscriptTimeout            float64
+	SessionCloseTranscriptTimeoutSet         bool
+	TurnDetection                            TurnDetectionMode
+	IVRDetection                             bool
+	IVRSilenceDuration                       time.Duration
+	VideoSampler                             *VoiceActivityVideoSampler
+	ToolChoice                               llm.ToolChoice
+	MaxUnrecoverableErrors                   int
+	MaxUnrecoverableErrorsSet                bool
+	MockTools                                map[string]MockToolFunc
 }
 
 type AgentSessionUpdateOptions struct {
@@ -899,6 +905,12 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	}
 	if !opts.PreemptiveGenerationSet {
 		opts.PreemptiveGeneration = true
+	}
+	if !opts.PreemptiveGenerationMaxSpeechDurationSet && opts.PreemptiveGenerationMaxSpeechDuration == 0 {
+		opts.PreemptiveGenerationMaxSpeechDuration = 10.0
+	}
+	if !opts.PreemptiveGenerationMaxRetriesSet && opts.PreemptiveGenerationMaxRetries == 0 {
+		opts.PreemptiveGenerationMaxRetries = 3
 	}
 	if !opts.DisableTTSTextTransforms && !opts.TTSTextTransformsSet {
 		opts.TTSTextTransforms = []string{"filter_markdown", "filter_emoji"}
