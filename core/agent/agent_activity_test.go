@@ -697,6 +697,37 @@ func TestAgentActivityOnInterruptionCutsCurrentSpeech(t *testing.T) {
 	current.MarkDone()
 }
 
+func TestAgentActivityOnInterruptionPauseUsesOverlapTimestampForHeldTranscripts(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:               TurnDetectionModeVAD,
+		MinInterruptionDuration:     0.05,
+		FalseInterruptionTimeout:    0.01,
+		FalseInterruptionTimeoutSet: true,
+		ResumeFalseInterruption:     true,
+		ResumeFalseInterruptionSet:  true,
+	})
+	session.SetAudioOutputController(&recordingAudioOutputController{canPause: true})
+	session.agentState = AgentStateSpeaking
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	defer current.MarkDone()
+	overlapStartedAt := time.Unix(200, 250_000_000)
+	detectedAt := overlapStartedAt.Add(750 * time.Millisecond)
+
+	activity.OnInterruption(OverlappingSpeechEvent{
+		IsInterruption:   true,
+		DetectedAt:       detectedAt,
+		OverlapStartedAt: &overlapStartedAt,
+	})
+
+	if !activity.ignoreUserTranscriptUntil.Equal(overlapStartedAt) {
+		t.Fatalf("ignoreUserTranscriptUntil = %v, want overlap start %v", activity.ignoreUserTranscriptUntil, overlapStartedAt)
+	}
+}
+
 func TestAgentActivityOnVADInferenceDoneInterruptsCurrentSpeech(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}
