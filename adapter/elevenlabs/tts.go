@@ -38,6 +38,22 @@ type ElevenLabsTTS struct {
 
 type ElevenLabsTTSOption func(*ElevenLabsTTS)
 
+func WithElevenLabsVoiceID(voiceID string) ElevenLabsTTSOption {
+	return func(t *ElevenLabsTTS) {
+		if voiceID != "" {
+			t.voiceID = voiceID
+		}
+	}
+}
+
+func WithElevenLabsModel(modelID string) ElevenLabsTTSOption {
+	return func(t *ElevenLabsTTS) {
+		if modelID != "" {
+			t.modelID = modelID
+		}
+	}
+}
+
 func WithElevenLabsBaseURL(baseURL string) ElevenLabsTTSOption {
 	return func(t *ElevenLabsTTS) {
 		if baseURL != "" {
@@ -96,6 +112,12 @@ func (t *ElevenLabsTTS) SampleRate() int  { return t.sampleRate }
 func (t *ElevenLabsTTS) NumChannels() int { return 1 }
 func (t *ElevenLabsTTS) Model() string    { return t.modelID }
 func (t *ElevenLabsTTS) Provider() string { return "ElevenLabs" }
+
+func (t *ElevenLabsTTS) UpdateOptions(opts ...ElevenLabsTTSOption) {
+	for _, opt := range opts {
+		opt(t)
+	}
+}
 
 // Synthesize performs a full HTTP POST for non-streaming scenarios.
 func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
