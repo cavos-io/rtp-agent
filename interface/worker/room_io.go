@@ -241,7 +241,7 @@ type RoomIO struct {
 	playbackFinishedHandlers []func(PlaybackFinishedEvent)
 
 	audioOutputPaused  bool
-	audioOutputWaiters []chan struct{}
+	audioOutputWaiters []chan audioOutputWaitResult
 
 	audioOutputDiagnostics RoomIOAudioOutputDiagnostics
 
@@ -275,6 +275,10 @@ type RoomIO struct {
 	roomName           func() string
 }
 
+type audioOutputWaitResult struct {
+	drop bool
+}
+
 func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) *RoomIO {
 	dec, _ := newOpusDecoder(48000, 1)
 	enc, _ := newOpusEncoder(48000, 1)
@@ -300,6 +304,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	rio.startSessionCloseListener()
 
 	if !opts.DisableAudioOutput {
+		session.SetAudioOutputController(rio)
 		session.EnsureAssistant().SetPublishAudio(rio.PublishAudio)
 	}
 
@@ -1303,6 +1308,7 @@ func (rio *RoomIO) Flush() {
 }
 
 func (rio *RoomIO) ClearBuffer() {
+	rio.dropPausedAudioOutput()
 	rio.finishPlayback(true, "")
 }
 
@@ -1315,23 +1321,40 @@ func (rio *RoomIO) PauseAudioOutput() {
 	rio.mu.Unlock()
 }
 
+func (rio *RoomIO) CanPauseAudioOutput() bool {
+	return rio != nil && !rio.Options.DisableAudioOutput
+}
+
 func (rio *RoomIO) ResumeAudioOutput() {
 	if rio == nil {
 		return
 	}
 	rio.mu.Lock()
 	rio.audioOutputPaused = false
-	waiters := append([]chan struct{}{}, rio.audioOutputWaiters...)
+	waiters := append([]chan audioOutputWaitResult{}, rio.audioOutputWaiters...)
 	rio.audioOutputWaiters = nil
 	rio.mu.Unlock()
 	for _, waiter := range waiters {
-		close(waiter)
+		waiter <- audioOutputWaitResult{}
 	}
 }
 
-func (rio *RoomIO) waitForAudioOutputResume(ctx context.Context) error {
+func (rio *RoomIO) dropPausedAudioOutput() {
 	if rio == nil {
-		return nil
+		return
+	}
+	rio.mu.Lock()
+	waiters := append([]chan audioOutputWaitResult{}, rio.audioOutputWaiters...)
+	rio.audioOutputWaiters = nil
+	rio.mu.Unlock()
+	for _, waiter := range waiters {
+		waiter <- audioOutputWaitResult{drop: true}
+	}
+}
+
+func (rio *RoomIO) waitForAudioOutputResume(ctx context.Context) (bool, error) {
+	if rio == nil {
+		return false, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -1339,21 +1362,21 @@ func (rio *RoomIO) waitForAudioOutputResume(ctx context.Context) error {
 	rio.mu.Lock()
 	if !rio.audioOutputPaused {
 		rio.mu.Unlock()
-		return nil
+		return false, nil
 	}
-	waiter := make(chan struct{})
+	waiter := make(chan audioOutputWaitResult, 1)
 	rio.audioOutputWaiters = append(rio.audioOutputWaiters, waiter)
 	rio.mu.Unlock()
 	select {
-	case <-waiter:
-		return nil
+	case result := <-waiter:
+		return result.drop, nil
 	case <-ctx.Done():
 		rio.removeAudioOutputWaiter(waiter)
-		return ctx.Err()
+		return false, ctx.Err()
 	}
 }
 
-func (rio *RoomIO) removeAudioOutputWaiter(waiter chan struct{}) {
+func (rio *RoomIO) removeAudioOutputWaiter(waiter chan audioOutputWaitResult) {
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
 	for i, candidate := range rio.audioOutputWaiters {
@@ -1523,8 +1546,12 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 		return nil
 	}
 
-	if err := rio.waitForAudioOutputResume(ctx); err != nil {
+	drop, err := rio.waitForAudioOutputResume(ctx)
+	if err != nil {
 		return err
+	}
+	if drop {
+		return nil
 	}
 
 	started, handlers, ok := rio.startPlayback()
@@ -1719,6 +1746,7 @@ func callPlaybackFinishedHandler(handler func(PlaybackFinishedEvent), ev Playbac
 }
 
 func (rio *RoomIO) Close() error {
+	rio.dropPausedAudioOutput()
 	rio.mu.Lock()
 	rio.closed = true
 	if rio.agentStateCancel != nil {
