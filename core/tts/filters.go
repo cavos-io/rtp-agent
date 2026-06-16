@@ -1,7 +1,6 @@
 package tts
 
 import (
-	"fmt"
 	"regexp"
 	"sort"
 	"strings"
@@ -74,6 +73,14 @@ type TextReplacement struct {
 type textReplacement struct {
 	old string
 	new string
+}
+
+type invalidTextTransformError struct {
+	transform string
+}
+
+func (e invalidTextTransformError) Error() string {
+	return "Invalid transform: " + e.transform + ", available transforms: [filter_markdown filter_emoji]"
 }
 
 func NewTextTransformBuffer() *TextTransformBuffer {
@@ -453,7 +460,7 @@ func validateTextTransforms(transforms []string) ([]string, error) {
 		switch transform {
 		case "filter_markdown", "filter_emoji":
 		default:
-			return nil, fmt.Errorf("invalid TTS text transform %q", transform)
+			return nil, invalidTextTransformError{transform: transform}
 		}
 	}
 	return compiled, nil

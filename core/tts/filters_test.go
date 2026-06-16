@@ -150,6 +150,18 @@ func TestTextTransformBufferCanApplyEmptyTransformList(t *testing.T) {
 	}
 }
 
+func TestTextTransformBufferRejectsUnknownTransformWithReferenceError(t *testing.T) {
+	_, err := NewTextTransformBufferWithTransforms([]string{"filter_markdown", "unknown"})
+	if err == nil {
+		t.Fatal("NewTextTransformBufferWithTransforms error = nil, want invalid transform error")
+	}
+	for _, want := range []string{"Invalid transform: unknown", "filter_markdown", "filter_emoji"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %q, want it to contain %q", err.Error(), want)
+		}
+	}
+}
+
 func TestTextTransformBufferFiltersEndCallToolMarkersAcrossChunks(t *testing.T) {
 	buffer := NewTextTransformBuffer()
 
