@@ -1498,6 +1498,9 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	if turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
 		if !a.shortInterruptionTranscript(transcript) {
 			a.interruptByAudioActivity("final transcript", "transcript", transcript)
+			if !a.speaking {
+				a.startFalseInterruptionTimer()
+			}
 		}
 	}
 	if turnDetection == TurnDetectionModeSTT {
