@@ -240,6 +240,9 @@ type RoomIO struct {
 	playbackStartedHandlers  []func(PlaybackStartedEvent)
 	playbackFinishedHandlers []func(PlaybackFinishedEvent)
 
+	audioOutputPaused  bool
+	audioOutputWaiters []chan struct{}
+
 	audioOutputDiagnostics RoomIOAudioOutputDiagnostics
 
 	preConnectAudio *PreConnectAudioHandler
@@ -1303,6 +1306,65 @@ func (rio *RoomIO) ClearBuffer() {
 	rio.finishPlayback(true, "")
 }
 
+func (rio *RoomIO) PauseAudioOutput() {
+	if rio == nil {
+		return
+	}
+	rio.mu.Lock()
+	rio.audioOutputPaused = true
+	rio.mu.Unlock()
+}
+
+func (rio *RoomIO) ResumeAudioOutput() {
+	if rio == nil {
+		return
+	}
+	rio.mu.Lock()
+	rio.audioOutputPaused = false
+	waiters := append([]chan struct{}{}, rio.audioOutputWaiters...)
+	rio.audioOutputWaiters = nil
+	rio.mu.Unlock()
+	for _, waiter := range waiters {
+		close(waiter)
+	}
+}
+
+func (rio *RoomIO) waitForAudioOutputResume(ctx context.Context) error {
+	if rio == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	rio.mu.Lock()
+	if !rio.audioOutputPaused {
+		rio.mu.Unlock()
+		return nil
+	}
+	waiter := make(chan struct{})
+	rio.audioOutputWaiters = append(rio.audioOutputWaiters, waiter)
+	rio.mu.Unlock()
+	select {
+	case <-waiter:
+		return nil
+	case <-ctx.Done():
+		rio.removeAudioOutputWaiter(waiter)
+		return ctx.Err()
+	}
+}
+
+func (rio *RoomIO) removeAudioOutputWaiter(waiter chan struct{}) {
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	for i, candidate := range rio.audioOutputWaiters {
+		if candidate != waiter {
+			continue
+		}
+		rio.audioOutputWaiters = append(rio.audioOutputWaiters[:i], rio.audioOutputWaiters[i+1:]...)
+		return
+	}
+}
+
 func (rio *RoomIO) startPlayback() (PlaybackStartedEvent, []func(PlaybackStartedEvent), bool) {
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
@@ -1459,6 +1521,10 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 	if track == nil {
 		rio.recordAudioOutputError(errors.New("room audio output track not started"))
 		return nil
+	}
+
+	if err := rio.waitForAudioOutputResume(ctx); err != nil {
+		return err
 	}
 
 	started, handlers, ok := rio.startPlayback()
