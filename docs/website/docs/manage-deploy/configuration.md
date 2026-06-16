@@ -8,16 +8,23 @@ title: Configuration and deployment
 Runtime configuration is centralized in `app.AppConfig`. Use `app.DefaultConfigFromEnv()` to load environment variables, then override fields in Go when needed.
 
 ```go
-cfg := app.DefaultConfigFromEnv()
-cfg.Instructions = "You are a concise support agent."
-cfg.LLMProvider = "openai"
-cfg.LLMModel = "gpt-4.1-mini"
+package main
 
-rtpApp, err := app.Init(cfg)
-if err != nil {
-	return err
+import "github.com/cavos-io/rtp-agent/app"
+
+func buildApp() (*app.App, error) {
+	cfg := app.DefaultConfigFromEnv()
+	cfg.Instructions = "You are a concise support agent."
+	cfg.LLMProvider = "openai"
+	cfg.LLMModel = "gpt-4.1-mini"
+
+	rtpApp, err := app.Init(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	return rtpApp, nil
 }
-defer rtpApp.Close(context.Background())
 ```
 
 ## Core environment variables
@@ -48,4 +55,3 @@ Provider API keys are provider-specific, for example `OPENAI_API_KEY`, `DEEPGRAM
 Build and run a Go binary that initializes `app.App` and passes its server to `cli.RunApp`. Worker transport, credentials, and provider selection should come from environment or deployment configuration.
 
 Do not document a deployment target as supported unless the repository contains the corresponding server, transport, or integration code.
-

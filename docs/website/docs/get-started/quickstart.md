@@ -42,19 +42,31 @@ go run ./examples/voice_agents/basic_agent
 The example constructs the app with:
 
 ```go
-rtpApp, err := basicagent.NewApp(basicagent.ConfigFromEnv())
-if err != nil {
-	panic(err)
-}
-defer rtpApp.Close(context.Background())
+package main
 
-cli.RunApp(rtpApp.Server, func(ctx context.Context) (string, error) {
-	summary, err := rtpApp.EvaluateSession(ctx, nil)
+import (
+	"context"
+	"fmt"
+
+	basicagent "github.com/cavos-io/rtp-agent/examples/voice_agents/basic_agent/basicagent"
+	"github.com/cavos-io/rtp-agent/interface/cli"
+)
+
+func main() {
+	rtpApp, err := basicagent.NewApp(basicagent.ConfigFromEnv())
 	if err != nil {
-		return "", err
+		panic(err)
 	}
-	return fmt.Sprintf("score=%.2f\n", summary.Score), nil
-})
+	defer rtpApp.Close(context.Background())
+
+	cli.RunApp(rtpApp.Server, func(ctx context.Context) (string, error) {
+		summary, err := rtpApp.EvaluateSession(ctx, nil)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("score=%.2f\n", summary.Score), nil
+	})
+}
 ```
 
 That code is adapted from `examples/voice_agents/basic_agent/main.go`. The important API facts are `app.Init`/`app.NewApp`, `basicagent.NewApp`, and `cli.RunApp`.
@@ -78,4 +90,3 @@ RTP_AGENT_TTS_VOICE=alloy
 ```
 
 Only use provider names that are wired in `app/app.go` or construct adapters directly in Go.
-

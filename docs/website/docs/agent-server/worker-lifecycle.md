@@ -10,9 +10,15 @@ The worker surface is in `interface/worker`.
 The app layer creates a server with:
 
 ```go
-server := worker.NewAgentServer(worker.WorkerOptions{
-	AgentName: "example-agent",
-})
+package main
+
+import "github.com/cavos-io/rtp-agent/interface/worker"
+
+func buildServer() *worker.AgentServer {
+	return worker.NewAgentServer(worker.WorkerOptions{
+		AgentName: "example-agent",
+	})
+}
 ```
 
 Most applications should let `app.NewApp` create this server from `AppConfig.WorkerOptions`.
@@ -37,4 +43,3 @@ The app reads many of these from environment through `app.DefaultConfigFromEnv`.
 Jobs are represented by `worker.JobContext`. Room connection behavior is configured through `worker.ConnectOptions`, and room I/O is handled by `worker.RoomIO`.
 
 For local or CLI-driven execution, use `interface/cli.RunApp` with an `AgentServer`.
-

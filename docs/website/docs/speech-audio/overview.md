@@ -25,21 +25,28 @@ OPENAI_API_KEY=your_key
 At package level, adapters expose concrete constructors. Examples:
 
 ```go
+package main
+
 import (
 	openaiadapter "github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/adapter/deepgram"
 	goopenai "github.com/sashabaranov/go-openai"
 )
 
-sttModel := deepgram.NewDeepgramSTT(apiKey, "nova-3")
+func configureSpeech(apiKey string) error {
+	sttModel := deepgram.NewDeepgramSTT(apiKey, "nova-3")
 
-ttsModel, err := openaiadapter.NewOpenAITTS(
-	apiKey,
-	goopenai.SpeechModel("gpt-4o-mini-tts"),
-	goopenai.SpeechVoice("alloy"),
-)
-if err != nil {
-	return err
+	ttsModel, err := openaiadapter.NewOpenAITTS(
+		apiKey,
+		goopenai.SpeechModel("gpt-4o-mini-tts"),
+		goopenai.SpeechVoice("alloy"),
+	)
+	if err != nil {
+		return err
+	}
+
+	_, _ = sttModel, ttsModel
+	return nil
 }
 ```
 

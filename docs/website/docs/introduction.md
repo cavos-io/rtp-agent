@@ -8,7 +8,7 @@ slug: /
 
 `rtp-agent` is a Go runtime for building realtime AI agents. It follows the useful runtime behavior of LiveKit Agents where that behavior is implemented and tested in this repository: agent/session orchestration, streaming LLM/STT/TTS boundaries, tools, interruptions, worker lifecycle, room I/O, telemetry, and provider adapters.
 
-This documentation describes the repository state at tag `v0.0.67`. The tag exists in this checkout, and `git describe --tags --always --dirty` reports `v0.0.67`.
+This documentation describes the Go source API at tag `v0.0.67`. The tag exists in this checkout. The documentation branch may contain docs-only commits after that tag; the diff from `v0.0.67` to this documentation update contains no Go source, `go.mod`, or `go.sum` changes.
 
 ## What is implemented
 
@@ -32,4 +32,3 @@ Behavioral parity with LiveKit Agents is a project goal, not a blanket compatibi
 - **How-to guides**: configure models, tools, workers, and runtime behavior.
 - **Explanation**: understand architecture, lifecycle, provider boundaries, and parity.
 - **Reference**: inspect packages, constructors, environment variables, and provider capabilities.
-

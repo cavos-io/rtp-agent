@@ -10,6 +10,8 @@ TTS interfaces live in `core/tts`. App-level setup assigns an implementation to 
 Example direct constructors:
 
 ```go
+package main
+
 import (
 	"github.com/cavos-io/rtp-agent/adapter/deepgram"
 	"github.com/cavos-io/rtp-agent/adapter/google"
@@ -17,20 +19,25 @@ import (
 	goopenai "github.com/sashabaranov/go-openai"
 )
 
-deepgramTTS := deepgram.NewDeepgramTTS(apiKey, "aura-2-thalia-en")
+func configureTTS(apiKey string, credentialsFile string) error {
+	deepgramTTS := deepgram.NewDeepgramTTS(apiKey, "aura-2-thalia-en")
 
-openaiTTS, err := openaiadapter.NewOpenAITTS(
-	apiKey,
-	goopenai.SpeechModel("gpt-4o-mini-tts"),
-	goopenai.SpeechVoice("alloy"),
-)
-if err != nil {
-	return err
-}
+	openaiTTS, err := openaiadapter.NewOpenAITTS(
+		apiKey,
+		goopenai.SpeechModel("gpt-4o-mini-tts"),
+		goopenai.SpeechVoice("alloy"),
+	)
+	if err != nil {
+		return err
+	}
 
-googleTTS, err := google.NewGoogleTTS(credentialsFile, google.WithGoogleTTSVoice("en-US-Chirp3-HD-Aoede"))
-if err != nil {
-	return err
+	googleTTS, err := google.NewGoogleTTS(credentialsFile, google.WithGoogleTTSVoice("en-US-Chirp3-HD-Aoede"))
+	if err != nil {
+		return err
+	}
+
+	_, _, _ = deepgramTTS, openaiTTS, googleTTS
+	return nil
 }
 ```
 

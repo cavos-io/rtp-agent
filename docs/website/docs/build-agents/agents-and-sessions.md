@@ -10,6 +10,14 @@ Use `app.NewApp` for most applications. It creates a base `agent.Agent`, configu
 For custom agent behavior, embed or wrap `*agent.Agent` and implement lifecycle hooks.
 
 ```go
+package main
+
+import (
+	"context"
+
+	"github.com/cavos-io/rtp-agent/core/agent"
+)
+
 type assistant struct {
 	*agent.Agent
 }
@@ -38,12 +46,20 @@ This mirrors the pattern used by `examples/voice_agents/basic_agent/basicagent/b
 The low-level constructor is:
 
 ```go
-session := agent.NewAgentSession(myAgent, nil, agent.AgentSessionOptions{
-	AllowInterruptions:    true,
-	AllowInterruptionsSet: true,
-	MaxToolSteps:          3,
-	MaxToolStepsSet:       true,
-})
+package main
+
+import "github.com/cavos-io/rtp-agent/core/agent"
+
+func newSession() *agent.AgentSession {
+	myAgent := agent.NewAgent("You are a concise realtime assistant.")
+
+	return agent.NewAgentSession(myAgent, nil, agent.AgentSessionOptions{
+		AllowInterruptions:    true,
+		AllowInterruptionsSet: true,
+		MaxToolSteps:          3,
+		MaxToolStepsSet:       true,
+	})
+}
 ```
 
 The second argument is a `*livekit.Room`. App-level setup usually passes `nil` and lets worker room I/O attach runtime room state later.
@@ -61,4 +77,3 @@ The second argument is a `*livekit.Room`. App-level setup usually passes `nil` a
 - mock tools for tests
 
 Defaults are applied by `agent.NewAgentSession`.
-

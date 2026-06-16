@@ -10,21 +10,33 @@ LLM interfaces and chat types live in `core/llm`. App-level setup assigns an imp
 Example direct constructors:
 
 ```go
-openaiLLM, err := openai.NewOpenAILLM(apiKey, "gpt-4.1-mini")
-if err != nil {
-	return err
-}
+package main
 
-anthropicLLM, err := anthropic.NewAnthropicLLM(apiKey, "claude-sonnet-4-5")
-if err != nil {
-	return err
-}
+import (
+	"github.com/cavos-io/rtp-agent/adapter/anthropic"
+	"github.com/cavos-io/rtp-agent/adapter/google"
+	"github.com/cavos-io/rtp-agent/adapter/openai"
+)
 
-googleLLM, err := google.NewGoogleLLM(apiKey, "gemini-2.5-flash")
-if err != nil {
-	return err
+func configureLLMs(apiKey string) error {
+	openaiLLM, err := openai.NewOpenAILLM(apiKey, "gpt-4.1-mini")
+	if err != nil {
+		return err
+	}
+
+	anthropicLLM, err := anthropic.NewAnthropicLLM(apiKey, "claude-sonnet-4-5")
+	if err != nil {
+		return err
+	}
+
+	googleLLM, err := google.NewGoogleLLM(apiKey, "gemini-2.5-flash")
+	if err != nil {
+		return err
+	}
+
+	_, _, _ = openaiLLM, anthropicLLM, googleLLM
+	return nil
 }
 ```
 
 For normal applications, prefer `AppConfig` so the app layer can also wire STT, TTS, VAD, realtime, avatar, tools, and worker settings.
-

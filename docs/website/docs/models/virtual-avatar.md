@@ -12,9 +12,18 @@ Source-backed avatar adapters at `v0.0.67` include packages such as `anam`, `bey
 Example direct constructors:
 
 ```go
-avatar := simli.NewSimliAvatar(apiKey)
-hedraAvatar := hedra.NewHedraAvatar(apiKey)
+package main
+
+import (
+	"github.com/cavos-io/rtp-agent/adapter/hedra"
+	"github.com/cavos-io/rtp-agent/adapter/simli"
+)
+
+func configureAvatars(apiKey string) {
+	avatar := simli.NewSimliAvatar(apiKey)
+	hedraAvatar := hedra.NewHedraAvatar(apiKey)
+	_, _ = avatar, hedraAvatar
+}
 ```
 
 Use app-level `RTP_AGENT_AVATAR_PROVIDER` only for providers wired in `app/app.go`.
-
