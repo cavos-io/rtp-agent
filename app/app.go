@@ -95,6 +95,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	corestt "github.com/cavos-io/rtp-agent/core/stt"
 	coretts "github.com/cavos-io/rtp-agent/core/tts"
+	corevad "github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	workeragora "github.com/cavos-io/rtp-agent/interface/worker/agora"
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
@@ -108,6 +109,46 @@ import (
 )
 
 var appNewAgoraChannelClient = workeragora.NewSDKChannelClient
+
+type appGoogleTTSConfig struct {
+	language         string
+	voice            string
+	model            string
+	prompt           string
+	speakingRate     float64
+	pitch            float64
+	effectsProfileID string
+	volumeGainDB     float64
+}
+
+var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (coretts.TTS, error) {
+	ttsOpts := []adaptergoogle.GoogleTTSOption{}
+	if cfg.language != "" {
+		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSLanguage(cfg.language))
+	}
+	if cfg.voice != "" {
+		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSVoice(cfg.voice))
+	}
+	if cfg.model != "" {
+		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSModel(cfg.model))
+	}
+	if cfg.prompt != "" {
+		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSPrompt(cfg.prompt))
+	}
+	if cfg.speakingRate != 0 {
+		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSSpeakingRate(cfg.speakingRate))
+	}
+	if cfg.pitch != 0 {
+		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSPitch(cfg.pitch))
+	}
+	if cfg.effectsProfileID != "" {
+		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSEffectsProfileID(cfg.effectsProfileID))
+	}
+	if cfg.volumeGainDB != 0 {
+		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSVolumeGainDB(cfg.volumeGainDB))
+	}
+	return adaptergoogle.NewGoogleTTS(credentialsFile, ttsOpts...)
+}
 
 func init() {
 	plugin.RegisterPluginMetadata(anam.PluginTitle, anam.PluginVersion, anam.PluginPackage)
@@ -3041,6 +3082,13 @@ func configureTTSFallbacks(cfg AppConfig, a *agent.Agent) error {
 	return nil
 }
 
+func ensureSTTStreaming(provider corestt.STT, detector corevad.VAD) corestt.STT {
+	if provider == nil || provider.Capabilities().Streaming || detector == nil {
+		return provider
+	}
+	return corestt.NewStreamAdapter(provider, detector)
+}
+
 func ensureTTSStreaming(provider coretts.TTS) coretts.TTS {
 	if provider.Capabilities().Streaming {
 		return provider
@@ -3090,6 +3138,28 @@ func cavosTTSFromConfig(cfg AppConfig) coretts.TTS {
 		ttsOpts = append(ttsOpts, cavos.WithTTSSampleRate(*cfg.TTSSampleRate))
 	}
 	return cavos.NewTTS(ttsOpts...)
+}
+
+func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
+	googleCfg := appGoogleTTSConfig{
+		language: cfg.TTSLanguage,
+		voice:    cfg.TTSVoice,
+		model:    cfg.TTSModel,
+		prompt:   cfg.TTSInstructions,
+	}
+	if cfg.TTSSpeakingRate != nil {
+		googleCfg.speakingRate = *cfg.TTSSpeakingRate
+	} else if appTTSSpeedConfigured(cfg) {
+		googleCfg.speakingRate = cfg.TTSSpeed
+	}
+	if cfg.TTSPitch != nil {
+		googleCfg.pitch = float64(*cfg.TTSPitch)
+	}
+	googleCfg.effectsProfileID = modelOptionString(cfg.TTSModelOptions, "effects_profile_id")
+	if volumeGainDB := modelOptionFloat(cfg.TTSModelOptions, "volume_gain_db"); volumeGainDB != nil {
+		googleCfg.volumeGainDB = *volumeGainDB
+	}
+	return googleCfg
 }
 
 func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error) {
@@ -4878,7 +4948,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.STT = assemblyai.NewAssemblyAISTT(os.Getenv("ASSEMBLYAI_API_KEY"), sttOpts...)
 	case providerCavos:
-		a.STT = cavosSTTFromConfig(cfg)
+		a.STT = ensureSTTStreaming(cavosSTTFromConfig(cfg), a.VAD)
 	case providerOpenAI:
 		sttOpts := []openai.OpenAISTTOption{openai.WithOpenAISTTRealtime(true)}
 		if cfg.STTLanguage != "" {
@@ -4982,17 +5052,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = provider
 	case providerGoogle:
-		ttsOpts := []adaptergoogle.GoogleTTSOption{}
-		if cfg.TTSLanguage != "" {
-			ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSLanguage(cfg.TTSLanguage))
-		}
-		if cfg.TTSVoice != "" {
-			ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSVoice(cfg.TTSVoice))
-		}
-		if cfg.TTSModel != "" {
-			ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSModel(cfg.TTSModel))
-		}
-		provider, err := adaptergoogle.NewGoogleTTS(cfg.GoogleCredentialsFile, ttsOpts...)
+		provider, err := appNewGoogleTTS(cfg.GoogleCredentialsFile, googleTTSConfigFromAppConfig(cfg))
 		if err != nil {
 			return nil, err
 		}

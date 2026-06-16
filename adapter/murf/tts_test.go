@@ -204,6 +204,24 @@ func TestMurfTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestMurfTTSChunkedStreamKeepsFinalReadBytes(t *testing.T) {
+	stream := &murfTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(&finalReadMurfReader{data: []byte{0x01, 0x02, 0x03, 0x04}})},
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if string(audio.Frame.Data) != string([]byte{0x01, 0x02, 0x03, 0x04}) {
+		t.Fatalf("audio bytes = %#v, want final read bytes", audio.Frame.Data)
+	}
+	if audio.Frame.SamplesPerChannel != 2 {
+		t.Fatalf("samples per channel = %d, want 2", audio.Frame.SamplesPerChannel)
+	}
+}
+
 func TestMurfTTSWebsocketURLAndHeadersMatchReference(t *testing.T) {
 	provider := NewMurfTTS("test-key", "",
 		WithMurfTTSBaseURL("https://murf.example"),
@@ -312,4 +330,18 @@ func assertMurfPayload(t *testing.T, payload map[string]any, key string, want st
 	if got := payload[key]; got != want {
 		t.Fatalf("%s = %#v, want %q", key, got, want)
 	}
+}
+
+type finalReadMurfReader struct {
+	data []byte
+	done bool
+}
+
+func (r *finalReadMurfReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	copy(p, r.data)
+	r.done = true
+	return len(r.data), io.EOF
 }

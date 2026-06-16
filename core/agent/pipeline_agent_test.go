@@ -1435,6 +1435,21 @@ func TestPipelineAgentEmitsErrorEventForSTTStreamError(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentIgnoresCanceledSTTStreamOnShutdown(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	errorEvents := session.ErrorEvents()
+	agent := NewPipelineAgent(nil, &fakePipelineSTT{}, nil, nil, llm.NewChatContext())
+	agent.session = session
+
+	agent.sttLoop(&fakePipelineRecognizeStream{err: context.Canceled})
+
+	select {
+	case ev := <-errorEvents:
+		t.Fatalf("ErrorEvents received %#v, want no error for stream cancellation", ev)
+	default:
+	}
+}
+
 func TestPipelineAgentEmitsErrorEventForSTTPushFrameError(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	cause := errors.New("stt push failed")
@@ -1464,6 +1479,58 @@ func TestPipelineAgentEmitsErrorEventForSTTPushFrameError(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentIgnoresCanceledSTTPushFrameOnShutdown(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	errorEvents := session.ErrorEvents()
+	pushed := make(chan *model.AudioFrame, 1)
+	source := &fakePipelineSTT{
+		stream: &fakePipelineRecognizeStream{
+			pushErr:  context.Canceled,
+			pushedCh: pushed,
+		},
+	}
+	agent := NewPipelineAgent(&fakePipelineVAD{}, source, nil, nil, llm.NewChatContext())
+	agent.session = session
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.run(ctx)
+
+	agent.OnAudioFrame(ctx, &model.AudioFrame{Data: []byte{1, 2}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1})
+	receivePipelineFrame(t, pushed)
+
+	select {
+	case ev := <-errorEvents:
+		t.Fatalf("ErrorEvents received %#v, want no error for canceled STT push", ev)
+	default:
+	}
+}
+
+func TestPipelineAgentIgnoresClosedPipeSTTPushFrameOnShutdown(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	errorEvents := session.ErrorEvents()
+	pushed := make(chan *model.AudioFrame, 1)
+	source := &fakePipelineSTT{
+		stream: &fakePipelineRecognizeStream{
+			pushErr:  io.ErrClosedPipe,
+			pushedCh: pushed,
+		},
+	}
+	agent := NewPipelineAgent(&fakePipelineVAD{}, source, nil, nil, llm.NewChatContext())
+	agent.session = session
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.run(ctx)
+
+	agent.OnAudioFrame(ctx, &model.AudioFrame{Data: []byte{1, 2}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1})
+	receivePipelineFrame(t, pushed)
+
+	select {
+	case ev := <-errorEvents:
+		t.Fatalf("ErrorEvents received %#v, want no error for closed STT stream push", ev)
+	default:
+	}
+}
+
 func TestPipelineAgentEmitsErrorEventForSTTStreamStartError(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	cause := errors.New("stt start failed")
@@ -1487,6 +1554,21 @@ func TestPipelineAgentEmitsErrorEventForSTTStreamStartError(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive STT start error")
+	}
+}
+
+func TestPipelineAgentIgnoresCanceledSTTStreamStartOnShutdown(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	errorEvents := session.ErrorEvents()
+	agent := NewPipelineAgent(&fakePipelineVAD{}, &fakePipelineSTT{streamErr: context.Canceled}, nil, nil, llm.NewChatContext())
+	agent.session = session
+
+	agent.run(context.Background())
+
+	select {
+	case ev := <-errorEvents:
+		t.Fatalf("ErrorEvents received %#v, want no error for canceled STT stream start", ev)
+	default:
 	}
 }
 
@@ -1559,6 +1641,62 @@ func TestPipelineAgentEmitsErrorEventForVADStreamError(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive VAD stream error")
+	}
+}
+
+func TestPipelineAgentIgnoresCanceledVADStreamStartOnShutdown(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	errorEvents := session.ErrorEvents()
+	agent := NewPipelineAgent(&fakePipelineVAD{streamErr: context.Canceled}, &fakePipelineSTT{}, nil, nil, nil)
+	agent.session = session
+
+	agent.run(context.Background())
+
+	select {
+	case ev := <-errorEvents:
+		t.Fatalf("ErrorEvents received %#v, want no error for canceled VAD stream start", ev)
+	default:
+	}
+}
+
+func TestPipelineAgentIgnoresCanceledVADStreamOnShutdown(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	errorEvents := session.ErrorEvents()
+	agent := NewPipelineAgent(&fakePipelineVAD{}, nil, nil, nil, nil)
+	agent.session = session
+
+	agent.vadLoop(&fakePipelineVADStream{err: context.Canceled})
+
+	select {
+	case ev := <-errorEvents:
+		t.Fatalf("ErrorEvents received %#v, want no error for stream cancellation", ev)
+	default:
+	}
+}
+
+func TestPipelineAgentIgnoresCanceledVADPushFrameOnShutdown(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	errorEvents := session.ErrorEvents()
+	pushed := make(chan *model.AudioFrame, 1)
+	source := &fakePipelineVAD{
+		stream: &fakePipelineVADStream{
+			pushErr:  context.Canceled,
+			pushedCh: pushed,
+		},
+	}
+	agent := NewPipelineAgent(source, &fakePipelineSTT{}, nil, nil, nil)
+	agent.session = session
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.run(ctx)
+
+	agent.OnAudioFrame(ctx, &model.AudioFrame{Data: []byte{1, 2}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1})
+	receivePipelineFrame(t, pushed)
+
+	select {
+	case ev := <-errorEvents:
+		t.Fatalf("ErrorEvents received %#v, want no error for canceled VAD push", ev)
+	default:
 	}
 }
 
@@ -2653,6 +2791,7 @@ func (f *fakePipelineSTT) Recognize(context.Context, []*model.AudioFrame, string
 type fakePipelineVAD struct {
 	metricsHandlers []vad.VADMetricsHandler
 	stream          *fakePipelineVADStream
+	streamErr       error
 }
 
 func (f *fakePipelineVAD) Label() string { return "fake-vad" }
@@ -2686,6 +2825,9 @@ func (f *fakePipelineVAD) EmitMetricsCollected(metrics *telemetry.VADMetrics) {
 }
 
 func (f *fakePipelineVAD) Stream(context.Context) (vad.VADStream, error) {
+	if f.streamErr != nil {
+		return nil, f.streamErr
+	}
 	if f.stream != nil {
 		return f.stream, nil
 	}

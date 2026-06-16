@@ -138,8 +138,8 @@ type azureSTTRecognizeResponse struct {
 	RecognitionStatus string `json:"RecognitionStatus"`
 	DisplayText       string `json:"DisplayText"`
 	NBest             []struct {
-		Display    string  `json:"Display"`
-		Confidence float64 `json:"Confidence"`
+		Display    string   `json:"Display"`
+		Confidence *float64 `json:"Confidence"`
 	} `json:"NBest"`
 }
 
@@ -174,8 +174,8 @@ func azureSTTRecognizeSpeechEvent(language string, result azureSTTRecognizeRespo
 		if result.NBest[0].Display != "" {
 			text = result.NBest[0].Display
 		}
-		if result.NBest[0].Confidence != 0 {
-			confidence = result.NBest[0].Confidence
+		if result.NBest[0].Confidence != nil {
+			confidence = *result.NBest[0].Confidence
 		}
 	}
 	if strings.TrimSpace(text) == "" {
@@ -311,9 +311,15 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("azure stt stream is closed")
+		return io.ErrClosedPipe
 	}
-	return s.conn.WriteMessage(websocket.BinaryMessage, buildAzureSTTMessage("audio", s.connectionID, "audio/x-wav", frame.Data))
+	if err := s.conn.WriteMessage(websocket.BinaryMessage, buildAzureSTTMessage("audio", s.connectionID, "audio/x-wav", frame.Data)); err != nil {
+		s.closed = true
+		s.cancel()
+		_ = s.conn.Close()
+		return err
+	}
+	return nil
 }
 
 func (s *azureSTTStream) Flush() error {
@@ -356,6 +362,9 @@ func (s *azureSTTStream) readLoop() {
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
+			if s.ctx.Err() != nil {
+				return
+			}
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
 				select {
 				case s.errCh <- err:
@@ -389,8 +398,8 @@ func parseAzureSTTMessage(language string, payload []byte) *stt.SpeechEvent {
 			RecognitionStatus string `json:"RecognitionStatus"`
 			DisplayText       string `json:"DisplayText"`
 			NBest             []struct {
-				Display    string  `json:"Display"`
-				Confidence float64 `json:"Confidence"`
+				Display    string   `json:"Display"`
+				Confidence *float64 `json:"Confidence"`
 			} `json:"NBest"`
 		}
 		if err := json.Unmarshal(body, &message); err != nil {
@@ -402,14 +411,16 @@ func parseAzureSTTMessage(language string, payload []byte) *stt.SpeechEvent {
 			if message.NBest[0].Display != "" {
 				text = message.NBest[0].Display
 			}
-			if message.NBest[0].Confidence != 0 {
-				confidence = message.NBest[0].Confidence
+			if message.NBest[0].Confidence != nil {
+				confidence = *message.NBest[0].Confidence
 			}
 		}
 		if strings.TrimSpace(text) == "" {
 			return nil
 		}
 		return azureSTTSpeechEvent(stt.SpeechEventFinalTranscript, language, text, confidence)
+	case "turn.start":
+		return &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech}
 	case "turn.end":
 		return &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
 	default:

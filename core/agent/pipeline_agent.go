@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -117,19 +118,23 @@ func (va *PipelineAgent) run(ctx context.Context) {
 
 	vadStream, err := va.vad.Stream(ctx)
 	if err != nil {
-		logger.Logger.Errorw("failed to start VAD stream", err)
-		va.emitError(err, va.vad)
+		if !isSpeechStreamShutdownError(err) {
+			logger.Logger.Errorw("failed to start VAD stream", err)
+			va.emitError(err, va.vad)
+		}
 		return
 	}
 
 	sttStream, err := va.stt.Stream(ctx, "")
 	if err != nil {
-		logger.Logger.Errorw("failed to start STT stream", err)
-		label := "stt"
-		if va.stt != nil {
-			label = va.stt.Label()
+		if !isSpeechStreamShutdownError(err) {
+			logger.Logger.Errorw("failed to start STT stream", err)
+			label := "stt"
+			if va.stt != nil {
+				label = va.stt.Label()
+			}
+			va.emitError(stt.NewSTTError(label, err, false), va.stt)
 		}
-		va.emitError(stt.NewSTTError(label, err, false), va.stt)
 		return
 	}
 
@@ -148,20 +153,24 @@ func (va *PipelineAgent) run(ctx context.Context) {
 				continue
 			}
 			if err := vadStream.PushFrame(frame); err != nil {
-				logger.Logger.Errorw("VAD push frame failed", err)
-				va.emitError(err, va.vad)
+				if !isSpeechStreamShutdownError(err) {
+					logger.Logger.Errorw("VAD push frame failed", err)
+					va.emitError(err, va.vad)
+				}
 			}
 			sttFrame := frame
 			if va.session != nil && va.session.shouldSilenceInputAudio() {
 				sttFrame = audio.SilenceFrameLike(frame)
 			}
 			if err := sttStream.PushFrame(sttFrame); err != nil {
-				logger.Logger.Errorw("STT push frame failed", err)
-				label := "stt"
-				if va.stt != nil {
-					label = va.stt.Label()
+				if !isSpeechStreamShutdownError(err) {
+					logger.Logger.Errorw("STT push frame failed", err)
+					label := "stt"
+					if va.stt != nil {
+						label = va.stt.Label()
+					}
+					va.emitError(stt.NewSTTError(label, err, false), va.stt)
 				}
-				va.emitError(stt.NewSTTError(label, err, false), va.stt)
 			}
 		}
 	}
@@ -171,7 +180,7 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 	for {
 		ev, err := stream.Next()
 		if err != nil {
-			if err != io.EOF {
+			if !isSpeechStreamShutdownError(err) {
 				logger.Logger.Errorw("VAD stream error", err)
 				va.emitError(err, va.vad)
 			}
@@ -214,7 +223,7 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 	for {
 		ev, err := stream.Next()
 		if err != nil {
-			if err != io.EOF {
+			if !isSpeechStreamShutdownError(err) {
 				logger.Logger.Errorw("STT stream error", err)
 				label := "stt"
 				if va.stt != nil {
@@ -284,6 +293,10 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 			go va.generateReply()
 		}
 	}
+}
+
+func isSpeechStreamShutdownError(err error) bool {
+	return err == io.EOF || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, context.Canceled)
 }
 
 func (va *PipelineAgent) emitSTTMetrics(ev *stt.SpeechEvent) {

@@ -301,7 +301,7 @@ type murfTTSChunkedStream struct {
 func (s *murfTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
-	if err != nil {
+	if err != nil && n == 0 {
 		if err == io.EOF {
 			return nil, io.EOF
 		}
