@@ -607,6 +607,33 @@ func TestRoomIOPlaybackFinishedIncludesSynchronizedTranscript(t *testing.T) {
 	}
 }
 
+func TestRoomIOPlaybackStartedKeepsEarlySynchronizedTranscript(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "early transcript",
+		IsFinal:    false,
+	})
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 480*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+
+	rio.Flush()
+
+	ev, err := rio.WaitForPlayout(context.Background())
+	if err != nil {
+		t.Fatalf("WaitForPlayout error = %v", err)
+	}
+	if ev.SynchronizedTranscript != "early transcript" {
+		t.Fatalf("SynchronizedTranscript = %q, want transcript emitted before playback start", ev.SynchronizedTranscript)
+	}
+}
+
 func TestRoomIOWaitForPlayoutCancellationRemovesWaiter(t *testing.T) {
 	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
 	if err := rio.PublishAudio(context.Background(), &model.AudioFrame{
