@@ -7,6 +7,8 @@ title: Parity system
 
 The project tracks LiveKit Agents behavior through a manifest-driven parity gate.
 
+Use this page when a docs or source claim depends on LiveKit-reference behavior. A passing Go test can be good regression evidence, but parity-sensitive claims should point to the manifest, a cross-runtime case, or a Go test that intentionally encodes reference behavior.
+
 The central manifest is:
 
 ```text
@@ -33,3 +35,12 @@ scripts/parity-gate.sh --case <case-name>
 
 Do not add one-off JSON fixture files or one runner per behavior. New parity-sensitive cases should use the TSV manifest and existing runner types whenever possible.
 
+## Evidence levels
+
+| Case type | What it proves |
+|---|---|
+| `go-test` | Go behavior passes a named test linked to reference behavior. |
+| `cross-runtime` | Python reference and Go target produced matching normalized JSON for the same TSV input. |
+| `symbol-report` | Symbol inventory matches a fixture; it is not behavioral proof. |
+
+Use `scripts/parity-gate.sh --local` only for fast local feedback. It is not final validation.

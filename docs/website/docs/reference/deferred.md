@@ -5,7 +5,9 @@ title: Deferred documentation
 
 # Deferred documentation
 
-The following areas are intentionally not expanded into detailed how-to pages in this version of the docs:
+Use this page to see which LiveKit-shaped docs are intentionally not expanded yet.
+
+These areas are deferred because the repository does not contain enough source, tests, examples, or deployment evidence to document them as supported behavior:
 
 - Provider-specific pages for every adapter. The old pages used unsupported conceptual APIs. They have been replaced by a capability matrix until each provider has source-backed examples and tests worth documenting.
 - Hosted product pages for Agent Builder, Agent Console, and Agent Embed Widget. The Go repository does not implement those LiveKit hosted products.
@@ -15,4 +17,4 @@ The following areas are intentionally not expanded into detailed how-to pages in
 - Full LiveKit Agents compatibility statements. The repository uses parity tests, but not every LiveKit Agents feature is proven equivalent.
 - Provider model catalogs. Model names change outside this repository; docs should only include model names that appear in source examples or tests.
 
-These pages can be added when the source, tests, or parity manifest provide stable evidence.
+Add these pages only when the source, tests, examples, or parity manifest provide stable evidence.

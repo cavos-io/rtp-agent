@@ -7,6 +7,8 @@ title: Provider capabilities
 
 This table is generated from source layout at `v0.0.67`. A check mark means the adapter package contains the corresponding capability file.
 
+Use this table to decide whether a provider can be documented for a capability. It does not prove cloud account setup, model availability, pricing, or full behavioral parity with LiveKit Agents.
+
 | Provider | LLM | STT | TTS | Realtime | Avatar | VAD |
 |---|---:|---:|---:|---:|---:|---:|
 | anthropic | yes |  |  |  |  |  |
@@ -85,3 +87,15 @@ Source-backed constructors include:
 
 There is no generic `NewProvider` constructor pattern in source.
 
+## Capability rule
+
+When adding or editing provider docs:
+
+- `llm.go` allows an LLM claim.
+- `stt.go` allows an STT claim.
+- `tts.go` allows a TTS claim.
+- `realtime.go` allows a realtime claim.
+- `avatar.go` allows a virtual-avatar claim.
+- `vad.go` allows a VAD claim.
+
+If the file is absent, leave the capability undocumented or mark it unavailable.

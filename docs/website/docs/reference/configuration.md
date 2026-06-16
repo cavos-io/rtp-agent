@@ -7,6 +7,8 @@ title: Configuration reference
 
 `app.DefaultConfigFromEnv()` reads environment variables into `app.AppConfig`.
 
+Use this page as a compact map for common environment-backed settings. It is not the complete list of fields in `AppConfig`; inspect `app.DefaultConfigFromEnv()` when adding or verifying an option.
+
 ## Model selection
 
 | Field | Environment variable |
@@ -56,5 +58,11 @@ Provider credentials are read into `AppConfig` fields. Common examples:
 - `LIVEKIT_API_KEY`
 - `LIVEKIT_API_SECRET`
 
-Check `app.DefaultConfigFromEnv` for the complete list at this version.
+## How to use this reference
 
+- Use environment variables for deploy-time choices.
+- Use direct `AppConfig` fields for values owned by code.
+- Use adapter constructor options when a provider-specific setting is not exposed by `AppConfig`.
+- Do not document an environment variable unless it is read in source.
+
+Check `app.DefaultConfigFromEnv` for the complete list at this version.

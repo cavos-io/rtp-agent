@@ -5,7 +5,9 @@ title: LiveKit IA migration matrix
 
 # LiveKit IA migration matrix
 
-This matrix records how the LiveKit Agents documentation structure maps to `rtp-agent` at `v0.0.67`.
+Use this matrix to audit the documentation structure against the LiveKit Agents IA reference.
+
+The matrix records how the LiveKit Agents documentation structure maps to `rtp-agent` at `v0.0.67`. Status reflects this Go repository, not LiveKit's Python/Node product surface.
 
 | LiveKit section | rtp-agent target | Status | Evidence | Action |
 |---|---|---|---|---|
@@ -32,4 +34,3 @@ This matrix records how the LiveKit Agents documentation structure maps to `rtp-
 | WebRTC Transport | `webrtc-transport/overview` | partial | `interface/worker/room_io.go` | create |
 | Manage and Deploy | `manage-deploy/*` | partial | `cmd/main.go`, `interface/worker/server.go` | rewrite/create |
 | Reference | `reference/*` | implemented/partial | source packages and tests | create/rewrite |
-

@@ -5,6 +5,8 @@ title: Package reference
 
 # Package reference
 
+Use this page to find the package that owns a behavior before reading or changing source.
+
 ## Application
 
 - `app`: configuration, provider wiring, app lifecycle, evaluation.
@@ -28,3 +30,6 @@ title: Package reference
 
 Adapters live under `adapter/<provider>` and implement provider-specific details. Capability is indicated by source files such as `llm.go`, `stt.go`, `tts.go`, `realtime.go`, `avatar.go`, or `vad.go`.
 
+## Boundary rule
+
+Keep provider-specific API details in `adapter/<provider>`. Keep provider-agnostic behavior in `core`. Keep room, worker, CLI, transport, and process lifecycle behavior in `interface`.
