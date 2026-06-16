@@ -660,8 +660,34 @@ func TestRoomIOClearBufferFinishesPlaybackAsInterrupted(t *testing.T) {
 	if !ev.Interrupted {
 		t.Fatal("PlaybackFinishedEvent.Interrupted = false, want true after ClearBuffer")
 	}
-	if ev.PlaybackPosition != 10*time.Millisecond {
-		t.Fatalf("PlaybackPosition = %v, want 10ms", ev.PlaybackPosition)
+	if ev.PlaybackPosition >= 10*time.Millisecond {
+		t.Fatalf("PlaybackPosition = %v, want less than full pushed duration after ClearBuffer", ev.PlaybackPosition)
+	}
+}
+
+func TestRoomIOClearBufferReportsOnlyPlayedAudioPosition(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 48000*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 48000,
+	}
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+
+	rio.ClearBuffer()
+
+	ev, err := rio.WaitForPlayout(context.Background())
+	if err != nil {
+		t.Fatalf("WaitForPlayout error = %v", err)
+	}
+	if !ev.Interrupted {
+		t.Fatal("PlaybackFinishedEvent.Interrupted = false, want true after ClearBuffer")
+	}
+	if ev.PlaybackPosition >= 100*time.Millisecond {
+		t.Fatalf("PlaybackPosition = %v, want only elapsed played audio after immediate ClearBuffer", ev.PlaybackPosition)
 	}
 }
 

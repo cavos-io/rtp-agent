@@ -232,6 +232,7 @@ type RoomIO struct {
 	playbackSegmentsCount     int
 	playbackFinishedCount     int
 	playbackPosition          time.Duration
+	playbackStartedAt         time.Time
 	playbackAudioFrames       int
 	playbackAudioBytes        int
 	playbackAudioEncoded      int
@@ -1489,7 +1490,9 @@ func (rio *RoomIO) startPlayback() (PlaybackStartedEvent, []func(PlaybackStarted
 	rio.playbackAudioChannels = 0
 	rio.playbackAudioLastError = ""
 	rio.playbackTranscript = rio.pendingPlaybackTranscript
-	ev := PlaybackStartedEvent{CreatedAt: time.Now()}
+	startedAt := time.Now()
+	rio.playbackStartedAt = startedAt
+	ev := PlaybackStartedEvent{CreatedAt: startedAt}
 	handlers := append([]func(PlaybackStartedEvent){}, rio.playbackStartedHandlers...)
 	return ev, handlers, true
 }
@@ -1598,8 +1601,15 @@ func (rio *RoomIO) finishPlayback(interrupted bool, synchronizedTranscript strin
 	if synchronizedTranscript == "" {
 		synchronizedTranscript = rio.playbackTranscript
 	}
+	playbackPosition := rio.playbackPosition
+	if interrupted && !rio.playbackStartedAt.IsZero() {
+		elapsed := time.Since(rio.playbackStartedAt)
+		if elapsed < playbackPosition {
+			playbackPosition = elapsed
+		}
+	}
 	ev := PlaybackFinishedEvent{
-		PlaybackPosition:       rio.playbackPosition,
+		PlaybackPosition:       playbackPosition,
 		Interrupted:            interrupted,
 		SynchronizedTranscript: synchronizedTranscript,
 		AudioFrames:            rio.playbackAudioFrames,
@@ -1610,6 +1620,7 @@ func (rio *RoomIO) finishPlayback(interrupted bool, synchronizedTranscript strin
 		AudioLastError:         rio.playbackAudioLastError,
 	}
 	rio.playbackPosition = 0
+	rio.playbackStartedAt = time.Time{}
 	rio.playbackAudioFrames = 0
 	rio.playbackAudioBytes = 0
 	rio.playbackAudioEncoded = 0
