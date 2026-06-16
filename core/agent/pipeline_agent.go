@@ -595,11 +595,13 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		}
 		va.emitLLMMetrics(session, genData)
 
-		if genData.GeneratedText != "" {
+		forwardedText := va.forwardedAssistantTextAfterInterruption(ctx, session, opts.SpeechHandle, genData.GeneratedText)
+		if forwardedText != "" {
 			args := llm.ChatMessageArgs{
-				ID:   genData.ID,
-				Role: llm.ChatRoleAssistant,
-				Text: genData.GeneratedText,
+				ID:          genData.ID,
+				Role:        llm.ChatRoleAssistant,
+				Text:        forwardedText,
+				Interrupted: opts.SpeechHandle != nil && opts.SpeechHandle.IsInterrupted(),
 			}
 			if len(genData.GeneratedExtra) > 0 {
 				args.Extra = genData.GeneratedExtra
@@ -698,6 +700,29 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		toolSteps++
 		// Loop back to LLM with tool outputs
 	}
+}
+
+func (va *PipelineAgent) forwardedAssistantTextAfterInterruption(ctx context.Context, session *AgentSession, speech *SpeechHandle, generatedText string) string {
+	if generatedText == "" || speech == nil || !speech.IsInterrupted() || session == nil {
+		return generatedText
+	}
+	playback := session.AudioPlaybackController()
+	if playback == nil {
+		return generatedText
+	}
+	playback.ClearBuffer()
+	ev, err := playback.WaitForPlayout(ctx)
+	if err != nil {
+		logger.Logger.Warnw("failed to wait for interrupted playback", err)
+		return generatedText
+	}
+	if ev.SynchronizedTranscript != "" {
+		return ev.SynchronizedTranscript
+	}
+	if ev.PlaybackPosition <= 0 {
+		return ""
+	}
+	return generatedText
 }
 
 func (va *PipelineAgent) precomputeLLMGeneration(ctx context.Context, session *AgentSession, opts pipelineReplyOptions) (*LLMGenerationData, error) {
