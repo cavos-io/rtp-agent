@@ -525,6 +525,59 @@ func TestAgentActivityOnStartOfSpeechPausesThinkingSpeech(t *testing.T) {
 	current.MarkDone()
 }
 
+func TestAgentActivityOnStartOfSpeechCancelsPendingFalseInterruptionResume(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:               TurnDetectionModeVAD,
+		MinInterruptionDuration:     0.05,
+		FalseInterruptionTimeout:    0.02,
+		FalseInterruptionTimeoutSet: true,
+		ResumeFalseInterruption:     true,
+		ResumeFalseInterruptionSet:  true,
+	})
+	audioOutput := &recordingAudioOutputController{canPause: true}
+	session.SetAudioOutputController(audioOutput)
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	session.agentState = AgentStateSpeaking
+	falseInterruptions := session.AgentFalseInterruptionEvents()
+
+	activity.OnVADInferenceDone(&vad.VADEvent{
+		Type:                  vad.VADEventInferenceDone,
+		SpeechDuration:        0.06,
+		Speaking:              true,
+		RawAccumulatedSilence: 0,
+	})
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+
+	select {
+	case ev := <-falseInterruptions:
+		t.Fatalf("false interruption resumed while user started speaking again: %#v", ev)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if audioOutput.resumeCount != 0 {
+		t.Fatalf("ResumeAudioOutput calls = %d, want 0 while user is speaking again", audioOutput.resumeCount)
+	}
+
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+
+	select {
+	case ev := <-falseInterruptions:
+		if !ev.Resumed {
+			t.Fatalf("AgentFalseInterruptionEvent.Resumed = false, want true")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AgentFalseInterruptionEvents did not receive resumed event after second speech end")
+	}
+	if audioOutput.resumeCount != 1 {
+		t.Fatalf("ResumeAudioOutput calls = %d, want 1 after second speech end", audioOutput.resumeCount)
+	}
+	current.MarkDone()
+}
+
 func TestAgentActivityOnVADInferenceDoneInterruptsCurrentSpeech(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}

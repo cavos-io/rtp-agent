@@ -1381,6 +1381,7 @@ func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 	}
 	a.eouMu.Unlock()
 
+	a.cancelFalseInterruptionTimer()
 	if a.pauseThinkingSpeechForFalseInterruption() {
 		return
 	}
@@ -1688,6 +1689,18 @@ func (a *AgentActivity) startFalseInterruptionTimer() {
 	}
 	timeout := paused.timeout
 	a.falseInterruptionTimer = time.AfterFunc(timeout, a.resumeFalseInterruption)
+	a.falseInterruptionMu.Unlock()
+}
+
+func (a *AgentActivity) cancelFalseInterruptionTimer() {
+	if a == nil {
+		return
+	}
+	a.falseInterruptionMu.Lock()
+	if a.falseInterruptionTimer != nil {
+		a.falseInterruptionTimer.Stop()
+		a.falseInterruptionTimer = nil
+	}
 	a.falseInterruptionMu.Unlock()
 }
 
