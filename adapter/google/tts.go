@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"strings"
+	"sync"
 
 	texttospeech "cloud.google.com/go/texttospeech/apiv1"
 	"cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
@@ -193,13 +194,15 @@ func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 }
 
 func (t *GoogleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
-	return &googleTTSSynthesizeStream{
+	stream := &googleTTSSynthesizeStream{
 		ctx:    ctx,
 		client: t.client,
 		voice:  t.voice,
 		prompt: t.prompt,
 		audio:  t.audio,
-	}, nil
+	}
+	stream.cond = sync.NewCond(&stream.mu)
+	return stream, nil
 }
 
 type googleTTSChunkedStream struct {
@@ -246,18 +249,26 @@ func (s *googleTTSChunkedStream) Close() error {
 }
 
 type googleTTSSynthesizeStream struct {
-	ctx     context.Context
-	client  googleTTSClient
-	streams []texttospeechpb.TextToSpeech_StreamingSynthesizeClient
-	voice   *texttospeechpb.VoiceSelectionParams
-	prompt  *string
-	audio   *texttospeechpb.AudioConfig
-	buffer  strings.Builder
-	closed  bool
+	mu         sync.Mutex
+	cond       *sync.Cond
+	ctx        context.Context
+	client     googleTTSClient
+	streams    []texttospeechpb.TextToSpeech_StreamingSynthesizeClient
+	voice      *texttospeechpb.VoiceSelectionParams
+	prompt     *string
+	audio      *texttospeechpb.AudioConfig
+	buffer     strings.Builder
+	closed     bool
+	inputEnded bool
 }
 
 func (s *googleTTSSynthesizeStream) PushText(text string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
 		return io.ErrClosedPipe
 	}
 	_, err := s.buffer.WriteString(text)
@@ -265,11 +276,18 @@ func (s *googleTTSSynthesizeStream) PushText(text string) error {
 }
 
 func (s *googleTTSSynthesizeStream) Flush() error {
+	s.mu.Lock()
 	if s.closed {
+		s.mu.Unlock()
+		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
+		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
 	text := s.buffer.String()
 	s.buffer.Reset()
+	s.mu.Unlock()
 	if text == "" {
 		return nil
 	}
@@ -289,7 +307,7 @@ func (s *googleTTSSynthesizeStream) Flush() error {
 			},
 		},
 	}); err != nil {
-		s.closed = true
+		s.markClosed()
 		_ = stream.CloseSend()
 		return err
 	}
@@ -301,35 +319,73 @@ func (s *googleTTSSynthesizeStream) Flush() error {
 			},
 		},
 	}); err != nil {
-		s.closed = true
+		s.markClosed()
 		_ = stream.CloseSend()
 		return err
 	}
 	if err := stream.CloseSend(); err != nil {
-		s.closed = true
+		s.markClosed()
 		return err
 	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = stream.CloseSend()
+		return io.ErrClosedPipe
+	}
 	s.streams = append(s.streams, stream)
+	s.cond.Broadcast()
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *googleTTSSynthesizeStream) EndInput() error {
+	if err := s.Flush(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.inputEnded = true
+	s.cond.Broadcast()
+	s.mu.Unlock()
 	return nil
 }
 
 func (s *googleTTSSynthesizeStream) Close() error {
+	s.mu.Lock()
 	s.closed = true
+	streams := append([]texttospeechpb.TextToSpeech_StreamingSynthesizeClient(nil), s.streams...)
+	s.streams = nil
+	s.cond.Broadcast()
+	s.mu.Unlock()
 	var closeErr error
-	for _, stream := range s.streams {
+	for _, stream := range streams {
 		if err := stream.CloseSend(); err != nil && closeErr == nil {
 			closeErr = err
 		}
 	}
-	s.streams = nil
 	return closeErr
 }
 
 func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
-	for len(s.streams) > 0 {
-		resp, err := s.streams[0].Recv()
+	for {
+		s.mu.Lock()
+		for len(s.streams) == 0 && !s.closed && !s.inputEnded {
+			s.cond.Wait()
+		}
+		if len(s.streams) == 0 {
+			s.mu.Unlock()
+			return nil, io.EOF
+		}
+		stream := s.streams[0]
+		s.mu.Unlock()
+
+		resp, err := stream.Recv()
 		if err == io.EOF {
-			s.streams = s.streams[1:]
+			s.mu.Lock()
+			if len(s.streams) > 0 && s.streams[0] == stream {
+				s.streams = s.streams[1:]
+			}
+			s.mu.Unlock()
 			continue
 		}
 		if err != nil {
@@ -345,7 +401,13 @@ func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 			},
 		}, nil
 	}
-	return nil, io.EOF
+}
+
+func (s *googleTTSSynthesizeStream) markClosed() {
+	s.mu.Lock()
+	s.closed = true
+	s.cond.Broadcast()
+	s.mu.Unlock()
 }
 
 func googleTTSVoiceParams(cfg googleTTSConfig) *texttospeechpb.VoiceSelectionParams {
