@@ -1435,6 +1435,21 @@ func TestPipelineAgentEmitsErrorEventForSTTStreamError(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentIgnoresCanceledSTTStreamOnShutdown(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	errorEvents := session.ErrorEvents()
+	agent := NewPipelineAgent(nil, &fakePipelineSTT{}, nil, nil, llm.NewChatContext())
+	agent.session = session
+
+	agent.sttLoop(&fakePipelineRecognizeStream{err: context.Canceled})
+
+	select {
+	case ev := <-errorEvents:
+		t.Fatalf("ErrorEvents received %#v, want no error for stream cancellation", ev)
+	default:
+	}
+}
+
 func TestPipelineAgentEmitsErrorEventForSTTPushFrameError(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	cause := errors.New("stt push failed")
@@ -1559,6 +1574,21 @@ func TestPipelineAgentEmitsErrorEventForVADStreamError(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive VAD stream error")
+	}
+}
+
+func TestPipelineAgentIgnoresCanceledVADStreamOnShutdown(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	errorEvents := session.ErrorEvents()
+	agent := NewPipelineAgent(&fakePipelineVAD{}, nil, nil, nil, nil)
+	agent.session = session
+
+	agent.vadLoop(&fakePipelineVADStream{err: context.Canceled})
+
+	select {
+	case ev := <-errorEvents:
+		t.Fatalf("ErrorEvents received %#v, want no error for stream cancellation", ev)
+	default:
 	}
 }
 

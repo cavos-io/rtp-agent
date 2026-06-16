@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -171,7 +172,7 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 	for {
 		ev, err := stream.Next()
 		if err != nil {
-			if err != io.EOF {
+			if err != io.EOF && !errors.Is(err, context.Canceled) {
 				logger.Logger.Errorw("VAD stream error", err)
 				va.emitError(err, va.vad)
 			}
@@ -214,7 +215,7 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 	for {
 		ev, err := stream.Next()
 		if err != nil {
-			if err != io.EOF {
+			if err != io.EOF && !errors.Is(err, context.Canceled) {
 				logger.Logger.Errorw("STT stream error", err)
 				label := "stt"
 				if va.stt != nil {
