@@ -95,6 +95,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	corestt "github.com/cavos-io/rtp-agent/core/stt"
 	coretts "github.com/cavos-io/rtp-agent/core/tts"
+	corevad "github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	workeragora "github.com/cavos-io/rtp-agent/interface/worker/agora"
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
@@ -3041,6 +3042,13 @@ func configureTTSFallbacks(cfg AppConfig, a *agent.Agent) error {
 	return nil
 }
 
+func ensureSTTStreaming(provider corestt.STT, detector corevad.VAD) corestt.STT {
+	if provider == nil || provider.Capabilities().Streaming || detector == nil {
+		return provider
+	}
+	return corestt.NewStreamAdapter(provider, detector)
+}
+
 func ensureTTSStreaming(provider coretts.TTS) coretts.TTS {
 	if provider.Capabilities().Streaming {
 		return provider
@@ -4878,7 +4886,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.STT = assemblyai.NewAssemblyAISTT(os.Getenv("ASSEMBLYAI_API_KEY"), sttOpts...)
 	case providerCavos:
-		a.STT = cavosSTTFromConfig(cfg)
+		a.STT = ensureSTTStreaming(cavosSTTFromConfig(cfg), a.VAD)
 	case providerOpenAI:
 		sttOpts := []openai.OpenAISTTOption{openai.WithOpenAISTTRealtime(true)}
 		if cfg.STTLanguage != "" {

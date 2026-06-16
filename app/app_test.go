@@ -10636,14 +10636,17 @@ func TestDefaultConfigFromEnvSelectsCavosSpeechProviders(t *testing.T) {
 	if app.Session.STT == nil {
 		t.Fatal("Session STT is nil")
 	}
-	if got := app.Session.STT.Label(); got != "cavos.STT" {
-		t.Fatalf("STT label = %q, want cavos.STT", got)
+	if got := app.Session.STT.Label(); got != "StreamAdapter(cavos.STT)" {
+		t.Fatalf("STT label = %q, want StreamAdapter(cavos.STT)", got)
 	}
 	if got := stt.Provider(app.Session.STT); got != "cavos" {
-		t.Fatalf("STT provider = %q, want cavos", got)
+		t.Fatalf("STT provider = %q, want StreamAdapter to forward cavos provider metadata", got)
 	}
 	if got := stt.Model(app.Session.STT); got != "small" {
-		t.Fatalf("STT model = %q, want small", got)
+		t.Fatalf("STT model = %q, want StreamAdapter to forward small model metadata", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want stream adapter capabilities", caps)
 	}
 	if app.Session.TTS == nil {
 		t.Fatal("Session TTS is nil")
