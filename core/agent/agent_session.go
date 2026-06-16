@@ -566,6 +566,12 @@ func (s *AgentSession) AgentState() AgentState {
 	return s.agentState
 }
 
+func (s *AgentSession) isClosing() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closing
+}
+
 func (s *AgentSession) SetMCPServers(servers []llm.MCPServer) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

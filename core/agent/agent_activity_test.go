@@ -3329,6 +3329,52 @@ func TestAgentActivityCommitUserTurnSkipsWhenSchedulingPaused(t *testing.T) {
 	}
 }
 
+func TestAgentActivityCommitUserTurnRecordsClosingPausedTurn(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	session.closing = true
+	activity.schedulingPaused = true
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "closing paused turn", Confidence: 0.9}},
+	})
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "closing paused turn" {
+		t.Fatalf("CommitUserTurn transcript = %q, want closing paused turn", transcript)
+	}
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		msg, ok := ev.Item.(*llm.ChatMessage)
+		if !ok || msg.TextContent() != "closing paused turn" {
+			t.Fatalf("ConversationItemAdded item = %#v, want closing paused turn", ev.Item)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConversationItemAddedEvents did not receive closing paused turn")
+	}
+	if agent.ChatCtx == nil || len(agent.ChatCtx.Items) != 1 {
+		t.Fatalf("chat context items = %#v, want one closing user message", agent.ChatCtx)
+	}
+	if msg, ok := agent.ChatCtx.Items[0].(*llm.ChatMessage); !ok || msg.TextContent() != "closing paused turn" {
+		t.Fatalf("chat context item = %#v, want closing paused turn message", agent.ChatCtx.Items[0])
+	}
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called while scheduling paused with %q", msg.TextContent())
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("reply generated while scheduling paused: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func TestAgentActivityCommitUserTurnSkipsReplyWhenHookPausesScheduling(t *testing.T) {
 	agent := &pausingTurnAgent{
 		Agent: NewAgent("test"),
