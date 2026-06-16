@@ -1531,6 +1531,21 @@ func TestPipelineAgentEmitsErrorEventForSTTStreamStartError(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentIgnoresCanceledSTTStreamStartOnShutdown(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	errorEvents := session.ErrorEvents()
+	agent := NewPipelineAgent(&fakePipelineVAD{}, &fakePipelineSTT{streamErr: context.Canceled}, nil, nil, llm.NewChatContext())
+	agent.session = session
+
+	agent.run(context.Background())
+
+	select {
+	case ev := <-errorEvents:
+		t.Fatalf("ErrorEvents received %#v, want no error for canceled STT stream start", ev)
+	default:
+	}
+}
+
 func TestPipelineAgentEmitsSTTMetricsForRecognitionUsage(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	source := &fakePipelineSTT{}
@@ -1600,6 +1615,21 @@ func TestPipelineAgentEmitsErrorEventForVADStreamError(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive VAD stream error")
+	}
+}
+
+func TestPipelineAgentIgnoresCanceledVADStreamStartOnShutdown(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	errorEvents := session.ErrorEvents()
+	agent := NewPipelineAgent(&fakePipelineVAD{streamErr: context.Canceled}, &fakePipelineSTT{}, nil, nil, nil)
+	agent.session = session
+
+	agent.run(context.Background())
+
+	select {
+	case ev := <-errorEvents:
+		t.Fatalf("ErrorEvents received %#v, want no error for canceled VAD stream start", ev)
+	default:
 	}
 }
 
@@ -2735,6 +2765,7 @@ func (f *fakePipelineSTT) Recognize(context.Context, []*model.AudioFrame, string
 type fakePipelineVAD struct {
 	metricsHandlers []vad.VADMetricsHandler
 	stream          *fakePipelineVADStream
+	streamErr       error
 }
 
 func (f *fakePipelineVAD) Label() string { return "fake-vad" }
@@ -2768,6 +2799,9 @@ func (f *fakePipelineVAD) EmitMetricsCollected(metrics *telemetry.VADMetrics) {
 }
 
 func (f *fakePipelineVAD) Stream(context.Context) (vad.VADStream, error) {
+	if f.streamErr != nil {
+		return nil, f.streamErr
+	}
 	if f.stream != nil {
 		return f.stream, nil
 	}
