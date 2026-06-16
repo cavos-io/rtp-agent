@@ -251,6 +251,7 @@ type RoomIO struct {
 	userTranscriptionCancel        context.CancelFunc
 	userTranscriptionTrackID       string
 	userTranscriptionParticipantID string
+	userTranscriptionSegmentID     string
 
 	agentStateCancel         context.CancelFunc
 	agentStatePublisher      func(map[string]string)
@@ -532,6 +533,22 @@ func (rio *RoomIO) agentOutputTranscriptionState(transcript string, final bool) 
 	return segmentID, publishText
 }
 
+func (rio *RoomIO) userInputTranscriptionState(final bool) string {
+	if rio == nil {
+		return roomIOTranscriptionSegmentID()
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	if rio.userTranscriptionSegmentID == "" {
+		rio.userTranscriptionSegmentID = roomIOTranscriptionSegmentID()
+	}
+	segmentID := rio.userTranscriptionSegmentID
+	if final {
+		rio.userTranscriptionSegmentID = ""
+	}
+	return segmentID
+}
+
 func (rio *RoomIO) handleUserInputTranscribed(ev agent.UserInputTranscribedEvent) {
 	if rio == nil || ev.Transcript == "" {
 		return
@@ -540,7 +557,7 @@ func (rio *RoomIO) handleUserInputTranscribed(ev agent.UserInputTranscribedEvent
 	if trackID == "" || participantID == "" {
 		return
 	}
-	segmentID := roomIOTranscriptionSegmentID()
+	segmentID := rio.userInputTranscriptionState(ev.IsFinal)
 	rio.publishTranscriptionPacketWithSegment(participantID, trackID, &livekit.TranscriptionSegment{
 		Id:       segmentID,
 		Text:     ev.Transcript,
