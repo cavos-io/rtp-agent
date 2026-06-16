@@ -91,6 +91,22 @@ func TestDefaultFallbackAdapterOptionsMatchReferenceDefaults(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterEmptyOptionsUseReferenceDefaults(t *testing.T) {
+	adapter := NewFallbackAdapterWithOptions([]STT{
+		&metadataSTT{label: "primary", capabilities: STTCapabilities{Streaming: true}},
+	}, FallbackAdapterOptions{})
+
+	if adapter.maxRetryPerSTT != 1 {
+		t.Fatalf("MaxRetryPerSTT = %d, want 1", adapter.maxRetryPerSTT)
+	}
+	if adapter.attemptTimeout != 10*time.Second {
+		t.Fatalf("AttemptTimeout = %s, want 10s", adapter.attemptTimeout)
+	}
+	if adapter.retryInterval != 5*time.Second {
+		t.Fatalf("RetryInterval = %s, want 5s", adapter.retryInterval)
+	}
+}
+
 func TestFallbackAdapterAlwaysAdvertisesOfflineRecognize(t *testing.T) {
 	adapter := NewFallbackAdapter([]STT{
 		&metadataSTT{label: "primary", capabilities: STTCapabilities{
@@ -539,7 +555,7 @@ func TestFallbackStreamReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T)
 				}}},
 			},
 		},
-	}, FallbackAdapterOptions{MaxRetryPerSTT: 0})
+	}, FallbackAdapterOptions{DisableRetries: true})
 
 	stream, err := adapter.Stream(context.Background(), "en")
 	if err != nil {
@@ -603,7 +619,7 @@ func TestFallbackStreamClosesRecoveriesWhenRuntimeProvidersExhausted(t *testing.
 				fallbackRecovery,
 			},
 		},
-	}, FallbackAdapterOptions{MaxRetryPerSTT: 0})
+	}, FallbackAdapterOptions{DisableRetries: true})
 
 	stream, err := adapter.Stream(context.Background(), "en")
 	if err != nil {
@@ -639,7 +655,7 @@ func TestFallbackStreamStartReturnsAllFailedErrorWhenProvidersExhausted(t *testi
 			capabilities: STTCapabilities{Streaming: true},
 			streamErrs:   []error{fallbackErr},
 		},
-	}, FallbackAdapterOptions{MaxRetryPerSTT: 0})
+	}, FallbackAdapterOptions{DisableRetries: true})
 
 	_, err := adapter.Stream(context.Background(), "en")
 	if err == nil {
@@ -678,7 +694,7 @@ func TestFallbackStreamTreatsNilProviderStreamAsFailure(t *testing.T) {
 			capabilities: STTCapabilities{Streaming: true},
 		},
 		fallback,
-	}, FallbackAdapterOptions{MaxRetryPerSTT: 0})
+	}, FallbackAdapterOptions{DisableRetries: true})
 
 	stream, err := adapter.Stream(context.Background(), "en")
 	if err != nil {
@@ -715,7 +731,7 @@ func TestFallbackStreamTreatsTypedNilProviderStreamAsFailure(t *testing.T) {
 			streams:      []RecognizeStream{typedNil},
 		},
 		fallback,
-	}, FallbackAdapterOptions{MaxRetryPerSTT: 0})
+	}, FallbackAdapterOptions{DisableRetries: true})
 
 	stream, err := adapter.Stream(context.Background(), "en")
 	if err != nil {
@@ -757,7 +773,7 @@ func TestFallbackStreamStartClosesRecoveryStreamsWhenProvidersExhausted(t *testi
 			capabilities: STTCapabilities{Streaming: true},
 			streamErrs:   []error{fallbackErr},
 		},
-	}, FallbackAdapterOptions{MaxRetryPerSTT: 0})
+	}, FallbackAdapterOptions{DisableRetries: true})
 
 	_, err := adapter.Stream(context.Background(), "en")
 	if err == nil {
@@ -854,7 +870,7 @@ func TestFallbackAdapterTimesOutBlockedRecognizeAttempt(t *testing.T) {
 		},
 	}
 	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerSTT: 0,
+		DisableRetries: true,
 		AttemptTimeout: 20 * time.Millisecond,
 	})
 
@@ -894,7 +910,7 @@ func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T
 	adapter := NewFallbackAdapterWithOptions([]STT{
 		primary,
 		fallback,
-	}, FallbackAdapterOptions{MaxRetryPerSTT: 0})
+	}, FallbackAdapterOptions{DisableRetries: true})
 
 	_, err := adapter.Recognize(context.Background(), nil, "en")
 	if err == nil {
@@ -940,7 +956,7 @@ func TestFallbackAdapterSkipsUnavailableSTTOnNextRecognize(t *testing.T) {
 		},
 	}
 	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerSTT: 0,
+		DisableRetries: true,
 	})
 
 	event, err := adapter.Recognize(context.Background(), nil, "en")
@@ -983,7 +999,7 @@ func TestFallbackAdapterRecoversUnavailableSTTInBackground(t *testing.T) {
 		},
 	}
 	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerSTT: 0,
+		DisableRetries: true,
 	})
 
 	event, err := adapter.Recognize(context.Background(), nil, "en")
@@ -1028,7 +1044,7 @@ func TestFallbackAdapterEmitsAvailabilityChanges(t *testing.T) {
 		},
 	}
 	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerSTT: 0,
+		DisableRetries: true,
 	})
 	changes := make(chan AvailabilityChangedEvent, 2)
 	adapter.OnAvailabilityChanged(func(event AvailabilityChangedEvent) {
@@ -1072,7 +1088,7 @@ func TestFallbackAdapterAvailabilityHandlerPanicDoesNotBlockOtherHandlers(t *tes
 		},
 	}
 	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerSTT: 0,
+		DisableRetries: true,
 	})
 	changes := make(chan AvailabilityChangedEvent, 1)
 	adapter.OnAvailabilityChanged(func(AvailabilityChangedEvent) {
@@ -1123,7 +1139,7 @@ func TestFallbackAdapterCanUnsubscribeAvailabilityChanges(t *testing.T) {
 		},
 	}
 	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerSTT: 0,
+		DisableRetries: true,
 	})
 	changes := make(chan AvailabilityChangedEvent, 2)
 	unsubscribe := adapter.OnAvailabilityChanged(func(event AvailabilityChangedEvent) {
@@ -1158,7 +1174,7 @@ func TestFallbackAdapterRecoverySurvivesCallerContextCancellation(t *testing.T) 
 		},
 	}
 	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerSTT: 0,
+		DisableRetries: true,
 	})
 
 	event, err := adapter.Recognize(ctx, nil, "en")
@@ -1202,7 +1218,7 @@ func TestFallbackAdapterCloseCancelsRecognizeRecovery(t *testing.T) {
 		},
 	}
 	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerSTT: 0,
+		DisableRetries: true,
 	})
 
 	event, err := adapter.Recognize(context.Background(), nil, "en")
@@ -1252,7 +1268,7 @@ func TestFallbackStreamSkipsUnavailableSTTFromRecognizeFailure(t *testing.T) {
 		}}},
 	}
 	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerSTT: 0,
+		DisableRetries: true,
 	})
 
 	if _, err := adapter.Recognize(context.Background(), nil, "en"); err != nil {
@@ -1311,7 +1327,7 @@ func TestFallbackStreamRecoversSkippedUnavailableProvider(t *testing.T) {
 		}}},
 	}
 	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerSTT: 0,
+		DisableRetries: true,
 	})
 
 	if _, err := adapter.Recognize(context.Background(), nil, "en"); err != nil {
@@ -1383,7 +1399,7 @@ func TestFallbackStreamRecoversFailedProviderInBackground(t *testing.T) {
 		}}},
 	}
 	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerSTT: 0,
+		DisableRetries: true,
 	})
 
 	stream, err := adapter.Stream(context.Background(), "en")
@@ -1452,7 +1468,7 @@ func TestFallbackStreamPropagatesTimingAnchorsToRecoveryStream(t *testing.T) {
 		}}},
 	}
 	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerSTT: 0,
+		DisableRetries: true,
 	})
 
 	stream, err := adapter.Stream(context.Background(), "en")
@@ -1512,7 +1528,7 @@ func TestFallbackStreamRecoversProviderAfterStreamStartFailure(t *testing.T) {
 		}}},
 	}
 	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerSTT: 0,
+		DisableRetries: true,
 	})
 
 	stream, err := adapter.Stream(context.Background(), "en")
@@ -1575,7 +1591,7 @@ func TestFallbackStreamForwardsOnlyNewInputToRecoveringProvider(t *testing.T) {
 		stream:       newBlockingRecognizeStream(),
 	}
 	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerSTT: 0,
+		DisableRetries: true,
 	})
 
 	stream, err := adapter.Stream(context.Background(), "en")
@@ -1637,7 +1653,7 @@ func TestFallbackStreamCloseClosesRecoveringProvider(t *testing.T) {
 		stream:       newBlockingRecognizeStream(),
 	}
 	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerSTT: 0,
+		DisableRetries: true,
 	})
 
 	stream, err := adapter.Stream(context.Background(), "en")
@@ -1684,7 +1700,7 @@ func TestFallbackAdapterCloseClosesStreamRecovery(t *testing.T) {
 		stream:       newBlockingRecognizeStream(),
 	}
 	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerSTT: 0,
+		DisableRetries: true,
 	})
 
 	stream, err := adapter.Stream(context.Background(), "en")
@@ -1806,7 +1822,7 @@ func TestFallbackStreamTimesOutBlockedProvider(t *testing.T) {
 		stream:       fallbackStream,
 	}
 	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerSTT: 0,
+		DisableRetries: true,
 		AttemptTimeout: 20 * time.Millisecond,
 	})
 
@@ -1858,7 +1874,7 @@ func TestFallbackStreamTimesOutBlockedStreamStart(t *testing.T) {
 		}}},
 	}
 	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerSTT: 0,
+		DisableRetries: true,
 		AttemptTimeout: 20 * time.Millisecond,
 	})
 
@@ -1929,7 +1945,7 @@ func TestFallbackStreamTimesOutBlockedRecoveryProvider(t *testing.T) {
 		stream:       newHeartbeatRecognizeStream(5 * time.Millisecond),
 	}
 	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerSTT: 0,
+		DisableRetries: true,
 		AttemptTimeout: 20 * time.Millisecond,
 	})
 

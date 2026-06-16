@@ -41,6 +41,7 @@ const (
 
 type FallbackAdapterOptions struct {
 	MaxRetryPerSTT int
+	DisableRetries bool
 	AttemptTimeout time.Duration
 	RetryInterval  time.Duration
 }
@@ -103,8 +104,16 @@ func newFallbackAdapter(stts []STT, vad vad.VAD, options FallbackAdapterOptions)
 	if len(stts) == 0 {
 		panic("At least one STT instance must be provided.")
 	}
+	if options.DisableRetries {
+		options.MaxRetryPerSTT = 0
+	} else if options.MaxRetryPerSTT == 0 {
+		options.MaxRetryPerSTT = 1
+	}
 	if options.AttemptTimeout <= 0 {
 		options.AttemptTimeout = defaultFallbackAttemptTimeout
+	}
+	if options.RetryInterval <= 0 {
+		options.RetryInterval = defaultFallbackRetryInterval
 	}
 
 	if vad == nil {
