@@ -1672,6 +1672,30 @@ func TestAgentActivityOnFinalTranscriptSkipsEmptyTranscript(t *testing.T) {
 	}
 }
 
+func TestAgentActivityOnFinalTranscriptRespectsMinInterruptionWords(t *testing.T) {
+	agent := NewAgent("test")
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:        TurnDetectionModeSTT,
+		MinInterruptionWords: 2,
+		MinEndpointingDelay:  0.5,
+	})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "wait", Confidence: 0.9}},
+	})
+
+	select {
+	case <-current.interruptCh:
+		t.Fatal("current speech was interrupted for final transcript below MinInterruptionWords")
+	case <-time.After(20 * time.Millisecond):
+	}
+	current.MarkDone()
+}
+
 func TestAgentActivityOnInterimTranscriptEmitsUserInputTranscribed(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -1733,6 +1757,29 @@ func TestAgentActivityOnInterimTranscriptInterruptsCurrentSpeech(t *testing.T) {
 	})
 
 	waitForInterrupted(t, current)
+}
+
+func TestAgentActivityOnInterimTranscriptRespectsMinInterruptionWords(t *testing.T) {
+	agent := NewAgent("test")
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:        TurnDetectionModeSTT,
+		MinInterruptionWords: 2,
+	})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "wait"}},
+	})
+
+	select {
+	case <-current.interruptCh:
+		t.Fatal("current speech was interrupted for interim transcript below MinInterruptionWords")
+	case <-time.After(20 * time.Millisecond):
+	}
+	current.MarkDone()
 }
 
 func TestAgentActivityOnInterimTranscriptIgnoresAECWarmup(t *testing.T) {

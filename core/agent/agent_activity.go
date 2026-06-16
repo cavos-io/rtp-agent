@@ -1431,7 +1431,9 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 	})
 	turnDetection := a.turnDetectionMode()
 	if transcript != "" && turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
-		a.interruptByAudioActivity("interim transcript", "transcript", transcript)
+		if !a.shortInterruptionTranscript(transcript) {
+			a.interruptByAudioActivity("interim transcript", "transcript", transcript)
+		}
 	}
 }
 
@@ -1480,7 +1482,9 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 
 	turnDetection := a.turnDetectionMode()
 	if turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
-		a.interruptByAudioActivity("final transcript", "transcript", transcript)
+		if !a.shortInterruptionTranscript(transcript) {
+			a.interruptByAudioActivity("final transcript", "transcript", transcript)
+		}
 	}
 	if turnDetection == TurnDetectionModeSTT {
 		a.runEOUDetection(EndOfTurnInfo{
@@ -1828,6 +1832,10 @@ func (a *AgentActivity) shouldSkipShortInterruption(currentSpeech *SpeechHandle,
 	if !a.InterruptionEnabled() {
 		return false
 	}
+	return a.shortInterruptionTranscript(transcript)
+}
+
+func (a *AgentActivity) shortInterruptionTranscript(transcript string) bool {
 	if a.Session == nil || a.Session.Options.MinInterruptionWords <= 0 {
 		return false
 	}
