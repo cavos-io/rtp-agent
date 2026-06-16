@@ -1,10 +1,15 @@
 package deepgram
 
 import (
+	"bufio"
 	"context"
+	"crypto/sha1"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -393,47 +398,29 @@ func TestDeepgramSTTAdvancedOptionsUseReferenceQueryParams(t *testing.T) {
 }
 
 func TestDeepgramSTTStreamPreservesReferenceSpeechState(t *testing.T) {
-	upgrader := websocket.Upgrader{}
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Errorf("upgrade websocket: %v", err)
-			return
-		}
-		defer conn.Close()
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	closeServer := make(chan struct{})
+	go runDeepgramSpeechStateWebsocketServer(serverConn, closeServer, serverErr)
 
-		for _, message := range []string{
-			`{"type":"UtteranceEnd"}`,
-			`{"type":"SpeechStarted"}`,
-			`{"type":"SpeechStarted"}`,
-			`{"type":"Results","is_final":false,"speech_final":false,"metadata":{"request_id":"req-1"},"channel":{"alternatives":[{"transcript":"hel","confidence":0.5,"words":[]}]}}`,
-			`{"type":"Results","is_final":true,"speech_final":true,"metadata":{"request_id":"req-1"},"channel":{"alternatives":[{"transcript":"hello","confidence":0.9,"words":[]}]}}`,
-			`{"type":"Results","is_final":true,"speech_final":true,"metadata":{"request_id":"req-2"},"channel":{"alternatives":[{"transcript":"again","confidence":0.8,"words":[]}]}}`,
-		} {
-			if err := conn.WriteMessage(websocket.TextMessage, []byte(message)); err != nil {
-				t.Errorf("write Deepgram message: %v", err)
-				return
-			}
-		}
-		<-r.Context().Done()
-	})
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen test websocket server: %v", err)
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
 	}
-	server := &httptest.Server{
-		Listener: listener,
-		Config:   &http.Server{Handler: handler},
-	}
-	server.Start()
-	defer server.Close()
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
 
-	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"))
 	stream, err := provider.Stream(context.Background(), "en-US")
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
 	}
 	defer stream.Close()
+	defer close(closeServer)
 
 	wantTypes := []stt.SpeechEventType{
 		stt.SpeechEventStartOfSpeech,
@@ -450,6 +437,160 @@ func TestDeepgramSTTStreamPreservesReferenceSpeechState(t *testing.T) {
 			t.Fatalf("event type = %s, want %s", event.Type, wantType)
 		}
 	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	default:
+	}
+}
+
+func TestDeepgramSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
+	closed := make(chan struct{})
+	closeAfterHandshake := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramClosingWebsocketServer(serverConn, closeAfterHandshake, closed, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"))
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	close(closeAfterHandshake)
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test websocket close")
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	default:
+	}
+
+	var writeErr error
+	for range 3 {
+		writeErr = stream.PushFrame(&model.AudioFrame{
+			Data:              []byte{0x01, 0x02},
+			SampleRate:        16000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		})
+		if writeErr != nil {
+			break
+		}
+	}
+	if writeErr == nil {
+		t.Fatal("PushFrame error = nil after closed websocket, want write failure")
+	}
+	providerStream, ok := stream.(*deepgramStream)
+	if !ok {
+		t.Fatalf("stream = %T, want *deepgramStream", stream)
+	}
+	if !providerStream.closed {
+		t.Fatal("stream closed = false after write failure, want true")
+	}
+
+	err = stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x03, 0x04},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	})
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("second PushFrame error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after write failure error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close after write failure error = %v", err)
+	}
+}
+
+func runDeepgramClosingWebsocketServer(conn net.Conn, closeAfterHandshake <-chan struct{}, closed chan<- struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	<-closeAfterHandshake
+	close(closed)
+	errCh <- nil
+}
+
+func deepgramTestAcceptKey(key string) string {
+	sum := sha1.Sum([]byte(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+	return base64.StdEncoding.EncodeToString(sum[:])
+}
+
+func runDeepgramSpeechStateWebsocketServer(conn net.Conn, closeServer <-chan struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	for _, message := range []string{
+		`{"type":"UtteranceEnd"}`,
+		`{"type":"SpeechStarted"}`,
+		`{"type":"SpeechStarted"}`,
+		`{"type":"Results","is_final":false,"speech_final":false,"metadata":{"request_id":"req-1"},"channel":{"alternatives":[{"transcript":"hel","confidence":0.5,"words":[]}]}}`,
+		`{"type":"Results","is_final":true,"speech_final":true,"metadata":{"request_id":"req-1"},"channel":{"alternatives":[{"transcript":"hello","confidence":0.9,"words":[]}]}}`,
+		`{"type":"Results","is_final":true,"speech_final":true,"metadata":{"request_id":"req-2"},"channel":{"alternatives":[{"transcript":"again","confidence":0.8,"words":[]}]}}`,
+	} {
+		if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(message)); err != nil {
+			errCh <- err
+			return
+		}
+	}
+	<-closeServer
+	errCh <- nil
+}
+
+func writeDeepgramTestWebsocketFrame(w io.Writer, opcode int, payload []byte) error {
+	header := []byte{0x80 | byte(opcode)}
+	switch {
+	case len(payload) < 126:
+		header = append(header, byte(len(payload)))
+	case len(payload) <= 65535:
+		header = append(header, 126, byte(len(payload)>>8), byte(len(payload)))
+	default:
+		return fmt.Errorf("payload too large: %d", len(payload))
+	}
+	if _, err := w.Write(header); err != nil {
+		return err
+	}
+	_, err := w.Write(payload)
+	return err
 }
 
 func nextDeepgramTestSpeechEvent(t *testing.T, stream stt.RecognizeStream) *stt.SpeechEvent {
