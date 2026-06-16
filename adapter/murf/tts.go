@@ -141,6 +141,12 @@ func (t *MurfTTS) NumChannels() int { return 1 }
 func (t *MurfTTS) Model() string    { return t.model }
 func (t *MurfTTS) Provider() string { return "Murf" }
 
+func (t *MurfTTS) UpdateOptions(opts ...MurfTTSOption) {
+	for _, opt := range opts {
+		opt(t)
+	}
+}
+
 func (t *MurfTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if err := validateMurfAPIKey(t.apiKey); err != nil {
 		return nil, err

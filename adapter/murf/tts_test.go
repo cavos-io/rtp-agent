@@ -159,6 +159,36 @@ func TestMurfTTSOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestMurfTTSUpdateOptionsMatchesReference(t *testing.T) {
+	provider := NewMurfTTS("test-key", "")
+
+	provider.UpdateOptions(
+		WithMurfTTSLocale("en-US"),
+		WithMurfTTSVoice("en-US-natalie"),
+		WithMurfTTSStyle("Promo"),
+		WithMurfTTSSpeed(12),
+		WithMurfTTSPitch(-4),
+	)
+
+	req, err := buildMurfTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	assertMurfPayload(t, payload, "voice_id", "en-US-natalie")
+	assertMurfPayload(t, payload, "multiNativeLocale", "en-US")
+	assertMurfPayload(t, payload, "style", "Promo")
+	if payload["rate"] != float64(12) {
+		t.Fatalf("rate = %#v, want 12", payload["rate"])
+	}
+	if payload["pitch"] != float64(-4) {
+		t.Fatalf("pitch = %#v, want -4", payload["pitch"])
+	}
+}
+
 func TestMurfTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	stream := &murfTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
