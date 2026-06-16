@@ -137,6 +137,14 @@ func TestDeepgramSTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTExposesInputSampleRate(t *testing.T) {
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTSampleRate(8000))
+
+	if got := provider.InputSampleRate(); got != 8000 {
+		t.Fatalf("InputSampleRate = %d, want 8000", got)
+	}
+}
+
 func TestDeepgramSTTDefaultsMatchReference(t *testing.T) {
 	provider := NewDeepgramSTT("test-key", "")
 
