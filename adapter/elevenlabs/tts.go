@@ -180,6 +180,7 @@ type elevenLabsChunkedStream struct {
 	sampleRate int
 	decoder    codecs.AudioStreamDecoder
 	started    bool
+	emitted    bool
 }
 
 func (s *elevenLabsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -192,6 +193,7 @@ func (s *elevenLabsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	n, err := s.resp.Body.Read(buf)
 	if err != nil {
 		if err == io.EOF && n > 0 {
+			s.emitted = true
 			// Return final chunk
 			return &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{
@@ -206,9 +208,10 @@ func (s *elevenLabsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if err == io.EOF {
 			return nil, io.EOF
 		}
-		return nil, err
+		return nil, fmt.Errorf("elevenlabs TTS chunked pcm response read %s: %w", s.audioByteState(), err)
 	}
 
+	s.emitted = true
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
 			Data:              buf[:n],
@@ -225,7 +228,7 @@ func (s *elevenLabsChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error
 		s.decoder = codecs.NewMP3AudioStreamDecoder()
 		data, err := io.ReadAll(s.resp.Body)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("elevenlabs TTS chunked mp3 response read %s: %w", s.audioByteState(), err)
 		}
 		if len(data) == 0 {
 			return nil, io.EOF
@@ -241,13 +244,21 @@ func (s *elevenLabsChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error
 		if strings.Contains(err.Error(), "decoder closed") {
 			return nil, io.EOF
 		}
-		return nil, err
+		return nil, fmt.Errorf("elevenlabs TTS chunked mp3 decode %s: %w", s.audioByteState(), err)
 	}
 	frame, err = normalizeElevenLabsMP3Frame(frame, s.sampleRate)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("elevenlabs TTS chunked mp3 resample %s: %w", s.audioByteState(), err)
 	}
+	s.emitted = true
 	return &tts.SynthesizedAudio{Frame: frame}, nil
+}
+
+func (s *elevenLabsChunkedStream) audioByteState() string {
+	if s.emitted {
+		return "after audio bytes"
+	}
+	return "before audio bytes"
 }
 
 func (s *elevenLabsChunkedStream) Close() error {
@@ -379,7 +390,7 @@ func (s *elevenLabsStream) readLoop() {
 		if err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
 				logger.Logger.Errorw("ElevenLabs WebSocket read error", err)
-				s.sendError(err)
+				s.sendError(fmt.Errorf("elevenlabs TTS websocket read: %w", err))
 			}
 			return
 		}
@@ -410,8 +421,9 @@ func (s *elevenLabsStream) readLoop() {
 		if resp.Audio != "" {
 			audio, err := elevenLabsSynthesizedAudio(resp, s.sampleRate, s.encoding)
 			if err != nil {
-				logger.Logger.Errorw("Failed to decode base64 audio", err)
-				continue
+				logger.Logger.Errorw("Failed to decode ElevenLabs audio", err)
+				s.sendError(fmt.Errorf("elevenlabs TTS websocket audio decode: %w", err))
+				return
 			}
 			select {
 			case <-s.ctx.Done():
