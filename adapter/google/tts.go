@@ -282,7 +282,7 @@ func (s *googleTTSSynthesizeStream) Flush() error {
 			StreamingConfig: &texttospeechpb.StreamingSynthesizeConfig{
 				Voice: s.voice,
 				StreamingAudioConfig: &texttospeechpb.StreamingAudioConfig{
-					AudioEncoding:   s.audio.GetAudioEncoding(),
+					AudioEncoding:   texttospeechpb.AudioEncoding_PCM,
 					SampleRateHertz: s.audio.GetSampleRateHertz(),
 					SpeakingRate:    s.audio.GetSpeakingRate(),
 				},
