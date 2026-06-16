@@ -435,6 +435,17 @@ func Prewarm(stt STT) {
 	}
 }
 
+type inputSampleRaterSTT interface {
+	InputSampleRate() uint32
+}
+
+func InputSampleRate(stt STT) uint32 {
+	if rater, ok := stt.(inputSampleRaterSTT); ok {
+		return rater.InputSampleRate()
+	}
+	return 0
+}
+
 type SearchStream interface {
 	PushFrame(frame *model.AudioFrame) error
 	Close() error

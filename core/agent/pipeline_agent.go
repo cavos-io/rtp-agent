@@ -190,6 +190,13 @@ func (va *PipelineAgent) run(ctx context.Context) {
 			if va.session != nil && va.session.shouldSilenceInputAudio() {
 				sttFrame = audio.SilenceFrameLike(frame)
 			}
+			if targetRate := stt.InputSampleRate(va.stt); targetRate > 0 && sttFrame.SampleRate != targetRate {
+				if resampled, err := audio.ResampleAudioFrame(sttFrame, targetRate); err == nil {
+					sttFrame = resampled
+				} else {
+					logger.Logger.Warnw("STT resample failed", err, "from", sttFrame.SampleRate, "to", targetRate)
+				}
+			}
 			if err := sttStream.PushFrame(sttFrame); err != nil {
 				if !isSpeechStreamShutdownError(err) {
 					logger.Logger.Errorw("STT push frame failed", err)

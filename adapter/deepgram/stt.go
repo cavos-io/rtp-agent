@@ -197,6 +197,7 @@ func (s *DeepgramSTT) Model() string { return s.model }
 func (s *DeepgramSTT) Provider() string {
 	return "Deepgram"
 }
+func (s *DeepgramSTT) InputSampleRate() uint32 { return uint32(s.sampleRate) }
 func (s *DeepgramSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: s.interimResults, Diarization: s.enableDiarization, AlignedTranscript: "word", OfflineRecognize: true}
 }
