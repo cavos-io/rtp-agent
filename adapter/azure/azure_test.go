@@ -288,6 +288,31 @@ func TestAzureSTTBuildsReferenceHostStreamURL(t *testing.T) {
 	}
 }
 
+func TestAzureSTTStreamUsesConfiguredDefaultLanguage(t *testing.T) {
+	provider, err := NewAzureSTT("", "", WithAzureSTTSpeechHost("https://speech.container.test"), WithAzureSTTLanguage("id-ID"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+
+	streamURL := buildAzureSTTStreamURL(provider, provider.streamLanguage(""))
+	parsed, err := url.Parse(streamURL)
+	if err != nil {
+		t.Fatalf("parse stream URL: %v", err)
+	}
+	if got := parsed.Query().Get("language"); got != "id-ID" {
+		t.Fatalf("stream language = %q, want configured provider language id-ID", got)
+	}
+
+	overrideURL := buildAzureSTTStreamURL(provider, provider.streamLanguage("en-US"))
+	overrideParsed, err := url.Parse(overrideURL)
+	if err != nil {
+		t.Fatalf("parse override stream URL: %v", err)
+	}
+	if got := overrideParsed.Query().Get("language"); got != "en-US" {
+		t.Fatalf("override stream language = %q, want explicit stream language en-US", got)
+	}
+}
+
 func TestAzureSTTStreamUsesWebsocketProtocol(t *testing.T) {
 	requests := make(chan *http.Request, 1)
 	configMessages := make(chan string, 1)
@@ -344,7 +369,7 @@ func TestAzureSTTStreamUsesWebsocketProtocol(t *testing.T) {
 		t.Fatalf("PushFrame error = %v", err)
 	}
 	audioMessage := receiveAzureTestValue(t, audioMessages, "audio")
-	audioHeaders, audioPayload := splitAzureTestMessage(t, audioMessage)
+	audioHeaders, audioPayload := splitAzureTestBinaryMessage(t, audioMessage)
 	if audioHeaders["Path"] != "audio" {
 		t.Fatalf("audio Path = %q, want audio", audioHeaders["Path"])
 	}
@@ -408,15 +433,20 @@ func TestAzureSTTStreamPreservesExplicitZeroConfidence(t *testing.T) {
 }
 
 func TestAzureSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
-	requests := make(chan *http.Request, 1)
-	configMessages := make(chan string, 1)
-	serverClosed := make(chan struct{})
+	requests := make(chan *http.Request, defaultAzureSTTRetries+1)
+	configMessages := make(chan string, defaultAzureSTTRetries+1)
+	serverClosed := make(chan struct{}, defaultAzureSTTRetries+1)
 
 	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
 	if err != nil {
 		t.Fatalf("NewAzureSTT error = %v", err)
 	}
-	provider.dialWebsocket = azureTestClosingDialer(t, requests, configMessages, serverClosed)
+	closingDialer := azureTestClosingDialer(t, requests, configMessages, serverClosed)
+	var attempts int
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		attempts++
+		return closingDialer(ctx, endpoint, headers)
+	}
 
 	stream, err := provider.Stream(context.Background(), "id-ID")
 	if err != nil {
@@ -444,6 +474,19 @@ func TestAzureSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	if !providerStream.closed {
 		t.Fatal("stream closed = false after write failure, want true")
 	}
+	terminalAttempts := attempts
+	if terminalAttempts != defaultAzureSTTRetries+1 {
+		t.Fatalf("dial attempts after terminal write failure = %d, want initial plus retries", terminalAttempts)
+	}
+
+	_, nextErr := stream.Next()
+	if !errors.Is(nextErr, err) {
+		t.Fatalf("Next error = %v, want terminal write error %v", nextErr, err)
+	}
+	_, nextErr = stream.Next()
+	if nextErr == nil || errors.Is(nextErr, err) {
+		t.Fatalf("second Next error = %v, want shutdown/EOF after one terminal error", nextErr)
+	}
 
 	err = stream.PushFrame(&model.AudioFrame{
 		Data:              []byte{0x03, 0x04},
@@ -454,11 +497,66 @@ func TestAzureSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	if !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("second PushFrame error = %v, want io.ErrClosedPipe", err)
 	}
+	if attempts != terminalAttempts {
+		t.Fatalf("dial attempts after closed PushFrame = %d, want unchanged %d", attempts, terminalAttempts)
+	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close after write failure error = %v", err)
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("second Close after write failure error = %v", err)
+	}
+}
+
+func TestAzureSTTStreamReconnectsAfterAudioWriteFailure(t *testing.T) {
+	requests := make(chan *http.Request, 2)
+	configMessages := make(chan string, 2)
+	audioMessages := make(chan []byte, 1)
+	serverClosed := make(chan struct{}, defaultAzureSTTRetries+1)
+
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	closingDialer := azureTestClosingDialer(t, requests, configMessages, serverClosed)
+	okDialer := azureTestDialer(t, requests, configMessages, audioMessages)
+	var attempts int
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			return closingDialer(ctx, endpoint, headers)
+		}
+		return okDialer(ctx, endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "id-ID")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	receiveAzureTestValue(t, requests, "first request")
+	receiveAzureTestValue(t, configMessages, "first speech config")
+	receiveAzureTestSignal(t, serverClosed, "server close")
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame after reconnect error = %v", err)
+	}
+
+	receiveAzureTestValue(t, requests, "second request")
+	receiveAzureTestValue(t, configMessages, "second speech config")
+	audioMessage := receiveAzureTestValue(t, audioMessages, "audio after reconnect")
+	_, audioPayload := splitAzureTestBinaryMessage(t, audioMessage)
+	if !bytes.Equal(audioPayload, []byte{0x01, 0x02}) {
+		t.Fatalf("audio payload after reconnect = %v, want original pushed PCM", audioPayload)
+	}
+	if attempts != 2 {
+		t.Fatalf("dial attempts = %d, want 2", attempts)
 	}
 }
 
@@ -724,6 +822,20 @@ func splitAzureTestMessage(t *testing.T, payload []byte) (map[string]string, []b
 	return headers, parts[1]
 }
 
+func splitAzureTestBinaryMessage(t *testing.T, payload []byte) (map[string]string, []byte) {
+	t.Helper()
+	if len(payload) < 2 {
+		t.Fatalf("azure binary message length = %d, want header length prefix", len(payload))
+	}
+	headerLen := int(binary.BigEndian.Uint16(payload[:2]))
+	if len(payload) < 2+headerLen {
+		t.Fatalf("azure binary message header length = %d exceeds payload length %d", headerLen, len(payload))
+	}
+	headers, body := splitAzureTestMessage(t, payload[2:2+headerLen])
+	body = append(body, payload[2+headerLen:]...)
+	return headers, body
+}
+
 func nextAzureTestEvent(t *testing.T, stream stt.RecognizeStream) *stt.SpeechEvent {
 	t.Helper()
 	type result struct {
@@ -819,7 +931,7 @@ func runAzureTestClosingWebsocketServer(
 		return
 	}
 	configMessages <- string(payload)
-	close(serverClosed)
+	serverClosed <- struct{}{}
 	errCh <- nil
 }
 

@@ -25,6 +25,7 @@ const (
 	azureSpeechKeyEnv       = "AZURE_SPEECH_KEY"
 	azureSpeechRegionEnv    = "AZURE_SPEECH_REGION"
 	defaultAzureSTTLanguage = "en-US"
+	defaultAzureSTTRetries  = 3
 )
 
 type azureSTTWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
@@ -33,6 +34,7 @@ type AzureSTT struct {
 	apiKey        string
 	region        string
 	speechHost    string
+	language      string
 	httpClient    *http.Client
 	websocketURL  string
 	dialWebsocket azureSTTWebsocketDialer
@@ -52,6 +54,14 @@ func WithAzureSTTSpeechHost(speechHost string) AzureSTTOption {
 	return func(s *AzureSTT) {
 		if speechHost != "" {
 			s.speechHost = speechHost
+		}
+	}
+}
+
+func WithAzureSTTLanguage(language string) AzureSTTOption {
+	return func(s *AzureSTT) {
+		if language != "" {
+			s.language = language
 		}
 	}
 }
@@ -89,27 +99,40 @@ func (s *AzureSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *AzureSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
-	connectionID := strings.ReplaceAll(uuid.NewString(), "-", "")
-	conn, _, err := s.dialWebsocket(ctx, buildAzureSTTStreamURL(s, language), buildAzureSTTHeaders(s, connectionID))
+	resolvedLanguage := s.streamLanguage(language)
+	streamURL := buildAzureSTTStreamURL(s, resolvedLanguage)
+	conn, connectionID, err := openAzureSTTStreamConnection(ctx, s, streamURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial azure stt websocket: %w", err)
-	}
-	if err := conn.WriteMessage(websocket.TextMessage, buildAzureSTTMessage("speech.config", connectionID, "application/json", buildAzureSTTSpeechConfig())); err != nil {
-		_ = conn.Close()
 		return nil, err
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &azureSTTStream{
-		conn:         conn,
-		connectionID: connectionID,
-		language:     resolveAzureSTTLanguage(language),
-		events:       make(chan *stt.SpeechEvent, 100),
-		errCh:        make(chan error, 1),
-		ctx:          streamCtx,
-		cancel:       cancel,
+		provider:      s,
+		conn:          conn,
+		connectionID:  connectionID,
+		streamURL:     streamURL,
+		language:      resolvedLanguage,
+		events:        make(chan *stt.SpeechEvent, 100),
+		errCh:         make(chan error, 1),
+		ctx:           streamCtx,
+		cancel:        cancel,
+		maxReconnects: defaultAzureSTTRetries,
 	}
-	go stream.readLoop()
+	go stream.readLoop(conn)
 	return stream, nil
+}
+
+func openAzureSTTStreamConnection(ctx context.Context, provider *AzureSTT, streamURL string) (*websocket.Conn, string, error) {
+	connectionID := strings.ReplaceAll(uuid.NewString(), "-", "")
+	conn, _, err := provider.dialWebsocket(ctx, streamURL, buildAzureSTTHeaders(provider, connectionID))
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to dial azure stt websocket: %w", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, buildAzureSTTMessage("speech.config", connectionID, "application/json", buildAzureSTTSpeechConfig())); err != nil {
+		_ = conn.Close()
+		return nil, "", fmt.Errorf("failed to initialize azure stt websocket: %w", err)
+	}
+	return conn, connectionID, nil
 }
 
 func (s *AzureSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, languageStr string) (*stt.SpeechEvent, error) {
@@ -137,7 +160,7 @@ func (s *AzureSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, err
 	}
-	return azureSTTRecognizeSpeechEvent(resolveAzureSTTLanguage(languageStr), result)
+	return azureSTTRecognizeSpeechEvent(s.streamLanguage(languageStr), result)
 }
 
 type azureSTTRecognizeResponse struct {
@@ -156,7 +179,7 @@ func buildAzureSTTRecognizeRequest(ctx context.Context, s *AzureSTT, frames []*m
 		Path:   "/speech/recognition/conversation/cognitiveservices/v1",
 	}
 	query := u.Query()
-	query.Set("language", resolveAzureSTTLanguage(language))
+	query.Set("language", s.streamLanguage(language))
 	query.Set("format", "detailed")
 	u.RawQuery = query.Encode()
 
@@ -270,6 +293,16 @@ func resolveAzureSTTLanguage(language string) string {
 	return defaultAzureSTTLanguage
 }
 
+func (s *AzureSTT) streamLanguage(language string) string {
+	if language != "" {
+		return language
+	}
+	if s != nil && s.language != "" {
+		return s.language
+	}
+	return defaultAzureSTTLanguage
+}
+
 func buildAzureSTTHeaders(s *AzureSTT, connectionID string) http.Header {
 	headers := make(http.Header)
 	if s.apiKey != "" {
@@ -292,6 +325,23 @@ func buildAzureSTTSpeechConfig() []byte {
 }
 
 func buildAzureSTTMessage(path string, requestID string, contentType string, body []byte) []byte {
+	headers := buildAzureSTTMessageHeaders(path, requestID, contentType)
+	var b bytes.Buffer
+	b.Write(headers)
+	b.Write(body)
+	return b.Bytes()
+}
+
+func buildAzureSTTBinaryMessage(path string, requestID string, contentType string, body []byte) []byte {
+	headers := buildAzureSTTMessageHeaders(path, requestID, contentType)
+	var b bytes.Buffer
+	_ = binary.Write(&b, binary.BigEndian, uint16(len(headers)))
+	b.Write(headers)
+	b.Write(body)
+	return b.Bytes()
+}
+
+func buildAzureSTTMessageHeaders(path string, requestID string, contentType string) []byte {
 	var b bytes.Buffer
 	b.WriteString("Path: ")
 	b.WriteString(path)
@@ -308,20 +358,24 @@ func buildAzureSTTMessage(path string, requestID string, contentType string, bod
 		b.WriteString("\r\n")
 	}
 	b.WriteString("\r\n")
-	b.Write(body)
 	return b.Bytes()
 }
 
 type azureSTTStream struct {
-	conn         *websocket.Conn
-	connectionID string
-	language     string
-	events       chan *stt.SpeechEvent
-	errCh        chan error
-	mu           sync.Mutex
-	closed       bool
-	ctx          context.Context
-	cancel       context.CancelFunc
+	provider      *AzureSTT
+	conn          *websocket.Conn
+	connectionID  string
+	streamURL     string
+	language      string
+	events        chan *stt.SpeechEvent
+	errCh         chan error
+	mu            sync.Mutex
+	closed        bool
+	audioWritten  bool
+	reconnects    int
+	maxReconnects int
+	ctx           context.Context
+	cancel        context.CancelFunc
 }
 
 func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -333,12 +387,17 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	if err := s.conn.WriteMessage(websocket.BinaryMessage, buildAzureSTTMessage("audio", s.connectionID, "audio/x-wav", frame.Data)); err != nil {
-		s.closed = true
-		s.cancel()
-		_ = s.conn.Close()
-		return err
+	for {
+		if err := s.conn.WriteMessage(websocket.BinaryMessage, buildAzureSTTBinaryMessage("audio", s.connectionID, "audio/x-wav", frame.Data)); err != nil {
+			if reconnectErr := s.reconnectLocked(); reconnectErr == nil {
+				continue
+			}
+			s.finishWithErrorLocked(err)
+			return err
+		}
+		break
 	}
+	s.audioWritten = true
 	return nil
 }
 
@@ -360,6 +419,11 @@ func (s *azureSTTStream) Close() error {
 
 func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 	select {
+	case err := <-s.errCh:
+		return nil, err
+	default:
+	}
+	select {
 	case event, ok := <-s.events:
 		if !ok {
 			select {
@@ -377,20 +441,69 @@ func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 	}
 }
 
-func (s *azureSTTStream) readLoop() {
-	defer close(s.events)
+func (s *azureSTTStream) reconnectLocked() error {
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.reconnects >= s.maxReconnects {
+		return fmt.Errorf("azure stt websocket reconnect attempts exhausted")
+	}
+	s.reconnects++
+	oldConn := s.conn
+	conn, connectionID, err := openAzureSTTStreamConnection(s.ctx, s.provider, s.streamURL)
+	if err != nil {
+		return err
+	}
+	s.conn = conn
+	s.connectionID = connectionID
+	_ = oldConn.Close()
+	go s.readLoop(conn)
 	for {
-		msgType, payload, err := s.conn.ReadMessage()
+		select {
+		case <-s.errCh:
+		default:
+			return nil
+		}
+	}
+}
+
+func (s *azureSTTStream) finishWithErrorLocked(err error) {
+	if s.closed {
+		return
+	}
+	s.closed = true
+	select {
+	case s.errCh <- err:
+	default:
+	}
+	s.cancel()
+	_ = s.conn.Close()
+}
+
+func (s *azureSTTStream) readLoop(conn *websocket.Conn) {
+	for {
+		msgType, payload, err := conn.ReadMessage()
 		if err != nil {
 			if s.ctx.Err() != nil {
 				return
 			}
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				select {
-				case s.errCh <- err:
-				default:
-				}
+			s.mu.Lock()
+			if s.closed || conn != s.conn {
+				s.mu.Unlock()
+				return
 			}
+			if !s.audioWritten {
+				s.mu.Unlock()
+				return
+			}
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				s.closed = true
+				s.cancel()
+				s.mu.Unlock()
+				return
+			}
+			s.finishWithErrorLocked(err)
+			s.mu.Unlock()
 			return
 		}
 		if msgType != websocket.TextMessage {

@@ -1861,14 +1861,13 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			// EOU detected
-			logger.Logger.Infow("EOU detected, completing user turn")
 			a.clearPendingUserTurn()
 			if strings.TrimSpace(info.NewTranscript) == "" {
 				return
 			}
 			if _, err := a.completeUserTurn(a.ctx, info); err != nil {
 				logger.Logger.Errorw("user turn completion failed", err)
+				return
 			}
 		}
 	}()

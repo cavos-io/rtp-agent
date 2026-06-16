@@ -169,3 +169,5 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260615183401-62b3387ff324 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+retract v0.0.66 // checksum mismatch caused by republished tag; use v0.0.67

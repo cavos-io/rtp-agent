@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -248,6 +249,47 @@ func TestElevenLabsTTSDecodesReferenceMP3Response(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSReadErrorIncludesProviderOperationContext(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: elevenLabsRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       elevenLabsErrReader{err: io.ErrClosedPipe},
+			Request:    r,
+		}, nil
+	})}
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_multilingual_v2",
+		WithElevenLabsBaseURL("https://eleven.example/v1"),
+		WithElevenLabsLanguage("id"),
+		WithElevenLabsEncoding("pcm_8000"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "Halo, ada yang bisa saya bantu?")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next returned nil error, want wrapped closed-pipe read error")
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Next error = %v, want errors.Is io.ErrClosedPipe", err)
+	}
+	for _, want := range []string{"elevenlabs TTS", "chunked pcm response", "before audio bytes"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Next error = %q, want context %q", err, want)
+		}
+	}
+}
+
 func TestElevenLabsStreamURLUsesReferenceOptions(t *testing.T) {
 	provider, err := NewElevenLabsTTS("test-key", "", "",
 		WithElevenLabsLanguage("en"),
@@ -341,8 +383,11 @@ func TestElevenLabsTTSUpdateOptionsMatchesReference(t *testing.T) {
 	if err := json.Unmarshal(body, &payload); err != nil {
 		t.Fatalf("unmarshal body: %v", err)
 	}
-	if payload["model_id"] != "eleven_multilingual_v2" || payload["language_code"] != "id" {
-		t.Fatalf("payload = %#v, want updated model and language", payload)
+	if payload["model_id"] != "eleven_multilingual_v2" {
+		t.Fatalf("payload = %#v, want updated model", payload)
+	}
+	if _, hasLang := payload["language_code"]; hasLang {
+		t.Fatalf("payload = %#v, eleven_multilingual_v2 must not include language_code", payload)
 	}
 
 	streamURL := buildElevenLabsStreamURL(provider)
@@ -353,8 +398,11 @@ func TestElevenLabsTTSUpdateOptionsMatchesReference(t *testing.T) {
 	if parsedStream.Path != "/v1/text-to-speech/voice-updated/stream-input" {
 		t.Fatalf("stream path = %q, want updated voice", parsedStream.Path)
 	}
-	if parsedStream.Query().Get("model_id") != "eleven_multilingual_v2" || parsedStream.Query().Get("language_code") != "id" {
-		t.Fatalf("stream query = %s, want updated model and language", parsedStream.RawQuery)
+	if parsedStream.Query().Get("model_id") != "eleven_multilingual_v2" {
+		t.Fatalf("stream model_id = %q, want eleven_multilingual_v2", parsedStream.Query().Get("model_id"))
+	}
+	if parsedStream.Query().Get("language_code") != "" {
+		t.Fatalf("stream language_code = %q, eleven_multilingual_v2 must not include language_code", parsedStream.Query().Get("language_code"))
 	}
 	if got := provider.Model(); got != "eleven_multilingual_v2" {
 		t.Fatalf("Model() = %q, want eleven_multilingual_v2", got)
@@ -419,4 +467,16 @@ type elevenLabsRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f elevenLabsRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+type elevenLabsErrReader struct {
+	err error
+}
+
+func (r elevenLabsErrReader) Read([]byte) (int, error) {
+	return 0, r.err
+}
+
+func (r elevenLabsErrReader) Close() error {
+	return nil
 }
