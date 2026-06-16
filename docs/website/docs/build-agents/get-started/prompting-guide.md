@@ -7,16 +7,24 @@ title: Prompting guide
 
 Status: **partial**.
 
-Agent instructions are source-backed through `agent.Agent.Instructions`, `llm.Instructions`, and `app.AppConfig.Instructions`.
+Use instructions to set the agent's baseline behavior, and use reply options when one turn needs different guidance.
 
-Evidence:
+`rtp-agent` does not have a separate prompt-builder product surface. Prompting is part of the Go API:
 
-- `core/agent/agent.go`
-- `core/llm/llm.go`
-- `app/app.go`
-- `examples/voice_agents/basic_agent/basicagent/basic_agent.go`
+- `app.AppConfig.Instructions` sets the default instructions when the app is initialized.
+- `agent.NewAgent(instructions)` creates an agent with instructions and an empty chat context.
+- `Agent.UpdateInstructions(ctx, instructions)` updates instructions before or during activity.
+- `GenerateReplyOptions.Instructions` supplies turn-specific instructions for a generated reply.
 
-Use `RTP_AGENT_INSTRUCTIONS` or set `AppConfig.Instructions` in code:
+## Set default instructions from config
+
+Use environment configuration when instructions should be deploy-time data:
+
+```bash
+export RTP_AGENT_INSTRUCTIONS="You are concise, accurate, and helpful."
+```
+
+Use Go code when instructions are part of the app:
 
 ```go
 package main
@@ -30,3 +38,18 @@ func config() app.AppConfig {
 }
 ```
 
+## Keep spoken responses usable
+
+For voice agents, include constraints that match audio output. The basic agent asks for concise English responses and avoids markdown or special characters because the response is spoken.
+
+## Trigger a first reply
+
+An agent can start a conversation in `OnEnter()` by calling `GenerateReplyWithOptions` on the active session and passing `GenerateReplyOptions{Instructions: ...}`. The basic agent uses this pattern for its greeting.
+
+Evidence:
+
+- `core/agent/agent.go`
+- `core/agent/agent_session.go`
+- `core/llm/llm.go`
+- `app/app.go`
+- `examples/voice_agents/basic_agent/basicagent/basic_agent.go`
