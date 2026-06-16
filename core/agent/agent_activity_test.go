@@ -846,6 +846,52 @@ func TestAgentActivityOnVADInferenceDonePausesFalseInterruption(t *testing.T) {
 	current.MarkDone()
 }
 
+func TestAgentActivityVADInferenceDoneIgnoresAfterBackchannelBoundaryExpires(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:           TurnDetectionModeVAD,
+		MinInterruptionDuration: 0.05,
+	})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	defer current.MarkDone()
+
+	activity.OnVADInferenceDone(&vad.VADEvent{
+		Type:                  vad.VADEventInferenceDone,
+		SpeechDuration:        0.06,
+		Speaking:              true,
+		RawAccumulatedSilence: 0,
+	})
+	waitForInterrupted(t, current)
+	current.MarkDone()
+
+	current = NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	defer current.MarkDone()
+	session.agentState = AgentStateSpeaking
+	activity.armBackchannelBoundary(time.Now().Add(-2 * time.Second))
+	activity.OnVADInferenceDone(&vad.VADEvent{
+		Type:                  vad.VADEventInferenceDone,
+		SpeechDuration:        0.06,
+		Speaking:              true,
+		RawAccumulatedSilence: 0,
+	})
+
+	select {
+	case <-current.interruptCh:
+		t.Fatal("current speech was interrupted by VAD after backchannel boundary expired")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	activity.OnInterruption(OverlappingSpeechEvent{
+		IsInterruption: true,
+		DetectedAt:     time.Now(),
+	})
+	waitForInterrupted(t, current)
+}
+
 func TestAgentActivityOnVADInferenceDoneRespectsMinInterruptionWordsWithoutTranscript(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}

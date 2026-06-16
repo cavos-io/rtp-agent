@@ -145,6 +145,7 @@ type AgentActivity struct {
 
 	backchannelBoundaryMu    sync.Mutex
 	backchannelBoundaryUntil time.Time
+	audioActivityDisabled    bool
 
 	falseInterruptionMu    sync.Mutex
 	pausedSpeech           *pausedSpeechInfo
@@ -1437,6 +1438,7 @@ func (a *AgentActivity) OnInterruption(ev OverlappingSpeechEvent) {
 	}
 	a.overlapSpeechEnded = true
 	a.interruptionDetected = true
+	a.restoreAudioActivityInterruption()
 	a.interruptByAudioActivity("overlapping speech", "detected_at", ev.DetectedAt, overlappingSpeechIgnoreUntil(ev))
 }
 
@@ -1606,6 +1608,7 @@ func (a *AgentActivity) armBackchannelBoundary(startedAt time.Time) {
 	}
 	duration := time.Duration(a.Session.Options.BackchannelBoundaryStart * float64(time.Second))
 	a.backchannelBoundaryMu.Lock()
+	a.audioActivityDisabled = false
 	if duration > 0 {
 		a.backchannelBoundaryUntil = startedAt.Add(duration)
 	} else {
@@ -1620,6 +1623,47 @@ func (a *AgentActivity) cancelBackchannelBoundary() {
 	}
 	a.backchannelBoundaryMu.Lock()
 	a.backchannelBoundaryUntil = time.Time{}
+	a.audioActivityDisabled = false
+	a.backchannelBoundaryMu.Unlock()
+}
+
+func (a *AgentActivity) audioActivityInterruptionDisabled(now time.Time) bool {
+	if a == nil || a.Session == nil {
+		return false
+	}
+	a.backchannelBoundaryMu.Lock()
+	if a.audioActivityDisabled {
+		a.backchannelBoundaryMu.Unlock()
+		return true
+	}
+	until := a.backchannelBoundaryUntil
+	if until.IsZero() {
+		a.backchannelBoundaryMu.Unlock()
+		return false
+	}
+	if now.Before(until) {
+		a.backchannelBoundaryMu.Unlock()
+		return false
+	}
+	a.backchannelBoundaryUntil = time.Time{}
+	a.backchannelBoundaryMu.Unlock()
+
+	if a.Session.AgentState() != AgentStateSpeaking {
+		return false
+	}
+	a.backchannelBoundaryMu.Lock()
+	a.audioActivityDisabled = true
+	a.backchannelBoundaryMu.Unlock()
+	return true
+}
+
+func (a *AgentActivity) restoreAudioActivityInterruption() {
+	if a == nil {
+		return
+	}
+	a.backchannelBoundaryMu.Lock()
+	a.backchannelBoundaryUntil = time.Time{}
+	a.audioActivityDisabled = false
 	a.backchannelBoundaryMu.Unlock()
 }
 
@@ -1793,6 +1837,9 @@ func (a *AgentActivity) interruptByAudioActivity(reason string, key string, valu
 		return
 	}
 	if a.Session != nil && a.Session.aecWarmupActive() {
+		return
+	}
+	if a.audioActivityInterruptionDisabled(time.Now()) {
 		return
 	}
 	if a.pauseSpeechForFalseInterruption(ignoreUserTranscriptUntil) {
