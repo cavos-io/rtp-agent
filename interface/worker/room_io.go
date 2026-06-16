@@ -235,6 +235,7 @@ type RoomIO struct {
 	playbackAudioSampleRate  uint32
 	playbackAudioChannels    uint32
 	playbackAudioLastError   string
+	playbackTranscript       string
 	lastPlaybackEvent        PlaybackFinishedEvent
 	playbackWaiters          []chan struct{}
 	playbackStartedHandlers  []func(PlaybackStartedEvent)
@@ -523,6 +524,7 @@ func (rio *RoomIO) handleAgentOutputTranscribed(ev agent.AgentOutputTranscribedE
 		return
 	}
 	segmentID, transcript := rio.agentOutputTranscriptionState(ev.Transcript, ev.IsFinal)
+	rio.setPlaybackTranscript(transcript)
 	attributes := map[string]string{
 		RoomIOTranscriptionFinalAttribute:     strconv.FormatBool(ev.IsFinal),
 		RoomIOTranscriptionSegmentIDAttribute: segmentID,
@@ -1425,9 +1427,21 @@ func (rio *RoomIO) startPlayback() (PlaybackStartedEvent, []func(PlaybackStarted
 	rio.playbackAudioSampleRate = 0
 	rio.playbackAudioChannels = 0
 	rio.playbackAudioLastError = ""
+	rio.playbackTranscript = ""
 	ev := PlaybackStartedEvent{CreatedAt: time.Now()}
 	handlers := append([]func(PlaybackStartedEvent){}, rio.playbackStartedHandlers...)
 	return ev, handlers, true
+}
+
+func (rio *RoomIO) setPlaybackTranscript(transcript string) {
+	if rio == nil || transcript == "" {
+		return
+	}
+	rio.mu.Lock()
+	if rio.playbackCapturing {
+		rio.playbackTranscript = transcript
+	}
+	rio.mu.Unlock()
 }
 
 func (rio *RoomIO) addPlaybackPosition(duration time.Duration) {
@@ -1518,6 +1532,9 @@ func (rio *RoomIO) finishPlayback(interrupted bool, synchronizedTranscript strin
 	}
 	rio.playbackCapturing = false
 	rio.playbackFinishedCount++
+	if synchronizedTranscript == "" {
+		synchronizedTranscript = rio.playbackTranscript
+	}
 	ev := PlaybackFinishedEvent{
 		PlaybackPosition:       rio.playbackPosition,
 		Interrupted:            interrupted,
@@ -1536,6 +1553,7 @@ func (rio *RoomIO) finishPlayback(interrupted bool, synchronizedTranscript strin
 	rio.playbackAudioSampleRate = 0
 	rio.playbackAudioChannels = 0
 	rio.playbackAudioLastError = ""
+	rio.playbackTranscript = ""
 	rio.lastPlaybackEvent = ev
 	handlers := append([]func(PlaybackFinishedEvent){}, rio.playbackFinishedHandlers...)
 	waiters := append([]chan struct{}{}, rio.playbackWaiters...)
