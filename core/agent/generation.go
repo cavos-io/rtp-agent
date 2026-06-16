@@ -353,69 +353,113 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		return data, nil
 	}
 
-	stream, err := t.Stream(ctx)
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	stream, err := t.Stream(streamCtx)
 	if err != nil {
 		span.End()
+		cancelStream()
 		return nil, err
 	}
 	if options.StreamPacer != nil {
-		stream = tts.NewSentenceStreamPacerWithOptions(ctx, stream, *options.StreamPacer)
+		stream = tts.NewSentenceStreamPacerWithOptions(streamCtx, stream, *options.StreamPacer)
 	}
 
 	go func() {
 		defer close(data.AudioCh)
 		defer close(data.TimedTextCh)
 		defer stream.Close()
+		defer cancelStream()
 		defer span.End()
 
 		startTime := time.Now()
 		replaceBuffer := newTTSReplacementBuffer(options)
-
-		if options.DisableTextTransforms {
-			for text := range textCh {
-				if !pushTTSReplacementChunks(stream, replaceBuffer.Push(text), data) {
-					return
+		var streamErrMu sync.Mutex
+		setStreamErr := func(err error) {
+			if err == nil {
+				return
+			}
+			streamErrMu.Lock()
+			if data.StreamErr == nil {
+				data.StreamErr = err
+			}
+			streamErrMu.Unlock()
+			cancelStream()
+			_ = stream.Close()
+		}
+		pushChunks := func(chunks []string) bool {
+			for _, chunk := range chunks {
+				if chunk == "" {
+					continue
+				}
+				if err := stream.PushText(chunk); err != nil {
+					setStreamErr(err)
+					return false
 				}
 			}
-		} else {
-			for text := range textCh {
-				for _, filteredText := range transformBuffer.Push(text) {
-					if !pushTTSReplacementChunks(stream, replaceBuffer.Push(filteredText), data) {
+			return true
+		}
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if options.DisableTextTransforms {
+				for text := range textCh {
+					if !pushChunks(replaceBuffer.Push(text)) {
+						return
+					}
+				}
+			} else {
+				for text := range textCh {
+					for _, filteredText := range transformBuffer.Push(text) {
+						if !pushChunks(replaceBuffer.Push(filteredText)) {
+							return
+						}
+					}
+				}
+				for _, filteredText := range transformBuffer.Flush() {
+					if !pushChunks(replaceBuffer.Push(filteredText)) {
 						return
 					}
 				}
 			}
-			for _, filteredText := range transformBuffer.Flush() {
-				if !pushTTSReplacementChunks(stream, replaceBuffer.Push(filteredText), data) {
+			if !pushChunks(replaceBuffer.Flush()) {
+				return
+			}
+			if err := tts.EndSynthesizeStreamInput(stream); err != nil {
+				setStreamErr(err)
+				return
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for {
+				audio, err := stream.Next()
+				if err != nil {
+					if err != io.EOF {
+						setStreamErr(err)
+					}
+					return
+				}
+				if data.TTFB == 0 {
+					data.TTFB = time.Since(startTime)
+					span.SetAttributes(attribute.Float64(telemetry.AttrResponseTTFB, data.TTFB.Seconds()))
+				}
+				for _, timedText := range audio.TimedTranscript {
+					select {
+					case data.TimedTextCh <- timedText:
+					case <-streamCtx.Done():
+						return
+					}
+				}
+				select {
+				case data.AudioCh <- audio.Frame:
+				case <-streamCtx.Done():
 					return
 				}
 			}
-		}
-		if !pushTTSReplacementChunks(stream, replaceBuffer.Flush(), data) {
-			return
-		}
-		if err := tts.EndSynthesizeStreamInput(stream); err != nil {
-			data.StreamErr = err
-			return
-		}
-
-		for {
-			audio, err := stream.Next()
-			if err != nil {
-				if err != io.EOF {
-					data.StreamErr = err
-				}
-				break
-			}
-			if data.TTFB == 0 {
-				data.TTFB = time.Since(startTime)
-				span.SetAttributes(attribute.Float64(telemetry.AttrResponseTTFB, data.TTFB.Seconds()))
-			}
-			for _, timedText := range audio.TimedTranscript {
-				data.TimedTextCh <- timedText
-			}
-			data.AudioCh <- audio.Frame
-		}
+		}()
+		wg.Wait()
 	}()
 
 	return data, nil
@@ -449,19 +493,6 @@ func newTTSReplacementBuffer(options TTSInferenceOptions) *tts.TextRegexReplaceB
 		return tts.NewOrderedTextRegexReplaceBuffer(options.OrderedTextReplacements, false)
 	}
 	return tts.NewTextRegexReplaceBuffer(options.TextReplacements, false)
-}
-
-func pushTTSReplacementChunks(stream tts.SynthesizeStream, chunks []string, data *TTSGenerationData) bool {
-	for _, chunk := range chunks {
-		if chunk == "" {
-			continue
-		}
-		if err := stream.PushText(chunk); err != nil {
-			data.StreamErr = err
-			return false
-		}
-	}
-	return true
 }
 
 type ToolExecutionOutput struct {

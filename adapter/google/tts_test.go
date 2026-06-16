@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	texttospeech "cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	"github.com/googleapis/gax-go/v2"
@@ -98,6 +99,59 @@ func TestGoogleTTSStreamSendsReferenceConfigAndInput(t *testing.T) {
 	}
 	if audio.Frame.SampleRate != 24000 || audio.Frame.NumChannels != 1 || audio.Frame.SamplesPerChannel != 2 {
 		t.Fatalf("frame = %+v, want 24 kHz mono samples", audio.Frame)
+	}
+}
+
+func TestGoogleTTSStreamNextWaitsForFlushedAudio(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{{
+				AudioContent: []byte{9, 8, 7, 6},
+			}},
+		},
+	}
+	provider := newGoogleTTSWithClient(client)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	audioCh := make(chan *texttospeech.StreamingSynthesizeResponse, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		audio, err := stream.Next()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		audioCh <- &texttospeech.StreamingSynthesizeResponse{AudioContent: audio.Frame.Data}
+	}()
+
+	select {
+	case audio := <-audioCh:
+		t.Fatalf("Next returned audio before Flush: %v", audio.GetAudioContent())
+	case err := <-errCh:
+		t.Fatalf("Next returned error before Flush: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	select {
+	case audio := <-audioCh:
+		if !bytes.Equal(audio.GetAudioContent(), []byte{9, 8, 7, 6}) {
+			t.Fatalf("audio = %v, want flushed response bytes", audio.GetAudioContent())
+		}
+	case err := <-errCh:
+		t.Fatalf("Next returned error after Flush: %v", err)
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Next did not receive flushed audio")
 	}
 }
 
