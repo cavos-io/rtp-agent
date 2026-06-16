@@ -4765,6 +4765,36 @@ func TestAgentSessionCancelsUserAwayTimerWhenUserSpeaks(t *testing.T) {
 	}
 }
 
+func TestAgentSessionUserAwayTimerWaitsForGate(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{UserAwayTimeout: 0.01})
+	gated := true
+	session.SetUserAwayTimerGate(func() bool { return gated })
+
+	session.UpdateAgentState(AgentStateListening)
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		t.Fatalf("unexpected user state event while user-away gate closed = %q -> %q", ev.OldState, ev.NewState)
+	case <-time.After(40 * time.Millisecond):
+	}
+	if got := session.UserState(); got != UserStateListening {
+		t.Fatalf("UserState() = %q, want listening while user-away gate is closed", got)
+	}
+
+	gated = false
+	session.RefreshUserAwayTimer()
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		if ev.OldState != UserStateListening || ev.NewState != UserStateAway {
+			t.Fatalf("event states = %q -> %q, want listening -> away after gate opens", ev.OldState, ev.NewState)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserStateChangedCh did not receive away event after gate opened")
+	}
+}
+
 func TestAgentSessionClaimUserTurnPinsUserStateUntilRelease(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

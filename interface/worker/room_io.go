@@ -312,6 +312,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	if !opts.DisableAudioOutput {
 		session.SetAudioOutputController(rio)
 		session.SetAudioPlaybackController(roomIOPlaybackController{rio: rio})
+		session.SetUserAwayTimerGate(rio.userAwayTimerBlocked)
 		session.EnsureAssistant().SetPublishAudio(rio.PublishAudio)
 	}
 
@@ -1734,6 +1735,9 @@ func (rio *RoomIO) markAudioSubscribed() {
 	ch := rio.audioSubscribed
 	rio.mu.Unlock()
 	if ch == nil {
+		if rio.AgentSession != nil {
+			rio.AgentSession.RefreshUserAwayTimer()
+		}
 		return
 	}
 	rio.audioSubOnce.Do(func() {
@@ -1742,6 +1746,27 @@ func (rio *RoomIO) markAudioSubscribed() {
 		rio.mu.Unlock()
 		close(ch)
 	})
+	if rio.AgentSession != nil {
+		rio.AgentSession.RefreshUserAwayTimer()
+	}
+}
+
+func (rio *RoomIO) userAwayTimerBlocked() bool {
+	if rio == nil || rio.Options.DisableAudioOutput {
+		return false
+	}
+	rio.mu.Lock()
+	ch := rio.audioSubscribed
+	rio.mu.Unlock()
+	if ch == nil {
+		return true
+	}
+	select {
+	case <-ch:
+		return false
+	default:
+		return true
+	}
 }
 
 func (rio *RoomIO) waitForAudioSubscription(ctx context.Context) error {
@@ -1862,6 +1887,9 @@ func callPlaybackFinishedHandler(handler func(PlaybackFinishedEvent), ev Playbac
 }
 
 func (rio *RoomIO) Close() error {
+	if rio.AgentSession != nil {
+		rio.AgentSession.SetUserAwayTimerGate(nil)
+	}
 	rio.dropPausedAudioOutput()
 	rio.mu.Lock()
 	rio.closed = true
