@@ -2831,6 +2831,65 @@ func TestPipelineAgentInterruptedReplyCommitsSynchronizedTranscript(t *testing.T
 	}
 }
 
+func TestPipelineAgentReplyWaitsForPlayoutBeforeCommit(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "played answer"}},
+			},
+		},
+	}
+	waitStarted := make(chan struct{})
+	releaseWait := make(chan struct{})
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(&fakePipelinePlaybackController{
+		waitStarted: waitStarted,
+		releaseWait: releaseWait,
+		result: AudioPlaybackResult{
+			PlaybackPosition: 300 * time.Millisecond,
+		},
+	})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+	}()
+
+	select {
+	case <-waitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("pipeline did not wait for audio playout before committing")
+	}
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chatCtx.Items = %#v, want no assistant message before playout finishes", chatCtx.Items)
+	}
+	select {
+	case <-done:
+		t.Fatal("generateReplyWithOptions returned before playback was released")
+	default:
+	}
+
+	close(releaseWait)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("generateReplyWithOptions did not finish after playback was released")
+	}
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx.Items length = %d, want committed assistant message after playout", len(chatCtx.Items))
+	}
+	msg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || msg.TextContent() != "played answer" || msg.Interrupted {
+		t.Fatalf("assistant message = %#v, want uninterrupted played answer", chatCtx.Items[0])
+	}
+}
+
 func toolCallStream(callID string) *fakeGenerationLLMStream {
 	return &fakeGenerationLLMStream{
 		chunks: []*llm.ChatChunk{
@@ -2937,6 +2996,9 @@ type fakePipelinePlaybackController struct {
 	clearCalls int
 	result     AudioPlaybackResult
 	err        error
+
+	waitStarted chan struct{}
+	releaseWait chan struct{}
 }
 
 func (f *fakePipelinePlaybackController) ClearBuffer() {
@@ -2944,6 +3006,13 @@ func (f *fakePipelinePlaybackController) ClearBuffer() {
 }
 
 func (f *fakePipelinePlaybackController) WaitForPlayout(context.Context) (AudioPlaybackResult, error) {
+	if f.waitStarted != nil {
+		close(f.waitStarted)
+		f.waitStarted = nil
+	}
+	if f.releaseWait != nil {
+		<-f.releaseWait
+	}
 	return f.result, f.err
 }
 

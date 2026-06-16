@@ -595,6 +595,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		}
 		va.emitLLMMetrics(session, genData)
 
+		va.waitForAssistantPlayout(ctx, session, opts.SpeechHandle)
 		forwardedText := va.forwardedAssistantTextAfterInterruption(ctx, session, opts.SpeechHandle, genData.GeneratedText)
 		if forwardedText != "" {
 			args := llm.ChatMessageArgs{
@@ -699,6 +700,19 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		}
 		toolSteps++
 		// Loop back to LLM with tool outputs
+	}
+}
+
+func (va *PipelineAgent) waitForAssistantPlayout(ctx context.Context, session *AgentSession, speech *SpeechHandle) {
+	if session == nil || (speech != nil && speech.IsInterrupted()) {
+		return
+	}
+	playback := session.AudioPlaybackController()
+	if playback == nil {
+		return
+	}
+	if _, err := playback.WaitForPlayout(ctx); err != nil {
+		logger.Logger.Warnw("failed to wait for assistant playback", err)
 	}
 }
 
