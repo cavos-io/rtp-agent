@@ -54,8 +54,8 @@ func TestAzureSTTFallsBackToSpeechEnvironment(t *testing.T) {
 		t.Fatalf("Model = %q, want unknown", provider.Model())
 	}
 	caps := provider.Capabilities()
-	if !caps.Streaming || !caps.InterimResults || caps.AlignedTranscript != "chunk" || caps.OfflineRecognize {
-		t.Fatalf("Capabilities = %+v, want reference streaming/interim/chunk without offline", caps)
+	if !caps.Streaming || !caps.InterimResults || caps.AlignedTranscript != "chunk" || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities = %+v, want streaming/interim/chunk with offline recognize", caps)
 	}
 }
 
@@ -70,16 +70,110 @@ func TestAzureSTTRequiresSpeechConfig(t *testing.T) {
 	}
 }
 
-func TestAzureSTTRecognizeReportsUnsupportedOffline(t *testing.T) {
+func TestAzureSTTRecognizeUsesRESTRequestAndMapsDetailedResult(t *testing.T) {
 	provider, err := NewAzureSTT("key", "eastus")
 	if err != nil {
 		t.Fatalf("NewAzureSTT error = %v", err)
 	}
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method != http.MethodPost {
+				t.Fatalf("method = %q, want POST", req.Method)
+			}
+			if req.URL.Scheme != "https" || req.URL.Host != "eastus.stt.speech.microsoft.com" || req.URL.Path != "/speech/recognition/conversation/cognitiveservices/v1" {
+				t.Fatalf("URL = %q, want Azure STT REST endpoint", req.URL.String())
+			}
+			if req.URL.Query().Get("language") != "id-ID" {
+				t.Fatalf("language query = %q, want id-ID", req.URL.Query().Get("language"))
+			}
+			if req.URL.Query().Get("format") != "detailed" {
+				t.Fatalf("format query = %q, want detailed", req.URL.Query().Get("format"))
+			}
+			if got := req.Header.Get("Ocp-Apim-Subscription-Key"); got != "key" {
+				t.Fatalf("subscription header = %q, want key", got)
+			}
+			if got := req.Header.Get("Content-Type"); got != "audio/wav; codecs=audio/pcm; samplerate=16000" {
+				t.Fatalf("content-type = %q, want Azure WAV PCM content type", got)
+			}
+			body, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read request body: %v", err)
+			}
+			if !bytes.Contains(body, []byte("RIFF")) || !bytes.Contains(body, []byte("WAVE")) || !bytes.Contains(body, []byte{0x01, 0x02, 0x03, 0x04}) {
+				t.Fatalf("request body does not contain WAV payload: %v", body)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body: io.NopCloser(strings.NewReader(`{
+					"RecognitionStatus":"Success",
+					"DisplayText":"fallback text",
+					"NBest":[{"Display":"halo final","Confidence":0.87}]
+				}`)),
+				Request: req,
+			}, nil
+		}),
+	}
 
-	_, err = provider.Recognize(context.Background(), nil, "en-US")
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x02, 0x03, 0x04},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}}, "id-ID")
+	if err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event type = %s, want final transcript", event.Type)
+	}
+	alt := event.Alternatives[0]
+	if alt.Text != "halo final" || alt.Confidence != 0.87 || alt.Language != "id-ID" {
+		t.Fatalf("alternative = %+v, want NBest text/confidence with requested language", alt)
+	}
+}
 
-	if err == nil || !strings.Contains(err.Error(), "does not support single frame recognition") {
-		t.Fatalf("Recognize error = %v, want unsupported offline error", err)
+func TestAzureSTTRecognizeReportsRecognitionFailure(t *testing.T) {
+	provider, err := NewAzureSTT("key", "eastus")
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"RecognitionStatus":"NoMatch","DisplayText":""}`)),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	_, err = provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "en-US")
+	if err == nil || !strings.Contains(err.Error(), "NoMatch") {
+		t.Fatalf("Recognize error = %v, want recognition status context", err)
+	}
+}
+
+func TestAzureSTTRecognizeHTTPErrorIncludesBody(t *testing.T) {
+	provider, err := NewAzureSTT("key", "eastus")
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusUnauthorized,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"error":"bad key"}`)),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	_, err = provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "en-US")
+	if err == nil || !strings.Contains(err.Error(), "bad key") {
+		t.Fatalf("Recognize error = %v, want response body context", err)
 	}
 }
 
