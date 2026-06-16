@@ -10489,18 +10489,27 @@ func TestDefaultConfigFromEnvSelectsAzureSpeechProviders(t *testing.T) {
 	if got := app.Session.STT.Label(); got != "azure.STT" {
 		t.Fatalf("STT label = %q, want azure.STT", got)
 	}
-	if got := app.Session.TTS.Label(); got != "azure.TTS" {
-		t.Fatalf("TTS label = %q, want azure.TTS", got)
+	if got := app.Session.TTS.Label(); got != "StreamAdapter(azure.TTS)" {
+		t.Fatalf("TTS label = %q, want Azure TTS wrapped by core stream adapter", got)
 	}
 	if got := app.Session.TTS.SampleRate(); got != 24000 {
 		t.Fatalf("TTS sample rate = %d, want 24000", got)
 	}
-	languageProvider, ok := app.Session.TTS.(interface{ Language() string })
-	if !ok {
-		t.Fatalf("TTS = %T, want Language method", app.Session.TTS)
+	if got := tts.Model(app.Session.TTS); got != "unknown" {
+		t.Fatalf("TTS model = %q, want StreamAdapter to forward Azure model metadata", got)
 	}
-	if got := languageProvider.Language(); got != "id-ID" {
-		t.Fatalf("TTS language = %q, want id-ID", got)
+	if got := tts.Provider(app.Session.TTS); got != "Azure TTS" {
+		t.Fatalf("TTS provider = %q, want StreamAdapter to forward Azure provider metadata", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || !caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want core stream adapter capabilities", caps)
+	}
+	stream, err := app.Session.TTS.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("TTS Stream() error = %v, want core stream adapter", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("TTS stream Close() error = %v", err)
 	}
 }
 

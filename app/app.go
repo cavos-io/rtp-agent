@@ -3041,6 +3041,13 @@ func configureTTSFallbacks(cfg AppConfig, a *agent.Agent) error {
 	return nil
 }
 
+func ensureTTSStreaming(provider coretts.TTS) coretts.TTS {
+	if provider.Capabilities().Streaming {
+		return provider
+	}
+	return coretts.NewStreamAdapter(provider)
+}
+
 func appTTSSpeedConfigured(cfg AppConfig) bool {
 	return cfg.TTSSpeedSet || cfg.TTSSpeed != 0
 }
@@ -4948,7 +4955,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if err != nil {
 			return nil, err
 		}
-		a.TTS = provider
+		a.TTS = ensureTTSStreaming(provider)
 	case providerBaseten:
 		ttsOpts := []baseten.BasetenTTSOption{}
 		if cfg.TTSBaseURL != "" {
