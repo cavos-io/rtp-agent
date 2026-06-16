@@ -32,6 +32,9 @@ type googleTTSConfig struct {
 	model        string
 	prompt       *string
 	speakingRate float64
+	pitch        float64
+	effects      []string
+	volumeGainDB float64
 }
 
 func WithGoogleTTSLanguage(language string) GoogleTTSOption {
@@ -70,6 +73,26 @@ func WithGoogleTTSSpeakingRate(rate float64) GoogleTTSOption {
 	}
 }
 
+func WithGoogleTTSPitch(pitch float64) GoogleTTSOption {
+	return func(cfg *googleTTSConfig) {
+		cfg.pitch = pitch
+	}
+}
+
+func WithGoogleTTSEffectsProfileID(profileID string) GoogleTTSOption {
+	return func(cfg *googleTTSConfig) {
+		if profileID != "" {
+			cfg.effects = []string{profileID}
+		}
+	}
+}
+
+func WithGoogleTTSVolumeGainDB(volumeGainDB float64) GoogleTTSOption {
+	return func(cfg *googleTTSConfig) {
+		cfg.volumeGainDB = volumeGainDB
+	}
+}
+
 // NewGoogleTTS creates a new TTS client using Application Default Credentials,
 // or by providing a path to a credentials JSON file.
 func NewGoogleTTS(credentialsFile string, ttsOpts ...GoogleTTSOption) (*GoogleTTS, error) {
@@ -103,9 +126,12 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 		voice:  googleTTSVoiceParams(cfg),
 		prompt: cfg.prompt,
 		audio: &texttospeechpb.AudioConfig{
-			AudioEncoding:   texttospeechpb.AudioEncoding_LINEAR16,
-			SampleRateHertz: 24000,
-			SpeakingRate:    cfg.speakingRate,
+			AudioEncoding:    texttospeechpb.AudioEncoding_LINEAR16,
+			SampleRateHertz:  24000,
+			SpeakingRate:     cfg.speakingRate,
+			Pitch:            cfg.pitch,
+			EffectsProfileId: append([]string(nil), cfg.effects...),
+			VolumeGainDb:     cfg.volumeGainDB,
 		},
 	}
 }
@@ -131,6 +157,9 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 		model:        t.Model(),
 		prompt:       t.prompt,
 		speakingRate: t.audio.GetSpeakingRate(),
+		pitch:        t.audio.GetPitch(),
+		effects:      append([]string(nil), t.audio.GetEffectsProfileId()...),
+		volumeGainDB: t.audio.GetVolumeGainDb(),
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -138,6 +167,9 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 	t.voice = googleTTSVoiceParams(cfg)
 	t.prompt = cfg.prompt
 	t.audio.SpeakingRate = cfg.speakingRate
+	t.audio.Pitch = cfg.pitch
+	t.audio.EffectsProfileId = append([]string(nil), cfg.effects...)
+	t.audio.VolumeGainDb = cfg.volumeGainDB
 }
 
 func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {

@@ -3,6 +3,7 @@ package azure
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -35,6 +36,7 @@ type azureSTTWebsocketDialer func(context.Context, string, http.Header) (*websoc
 type AzureSTT struct {
 	apiKey        string
 	region        string
+	httpClient    *http.Client
 	websocketURL  string
 	dialWebsocket azureSTTWebsocketDialer
 }
@@ -62,6 +64,7 @@ func NewAzureSTT(apiKey string, region string, opts ...AzureSTTOption) (*AzureST
 	provider := &AzureSTT{
 		apiKey:        apiKey,
 		region:        region,
+		httpClient:    http.DefaultClient,
 		dialWebsocket: defaultAzureSTTWebsocketDialer,
 	}
 	for _, opt := range opts {
@@ -76,7 +79,7 @@ func (s *AzureSTT) Provider() string {
 	return "Azure STT"
 }
 func (s *AzureSTT) Capabilities() stt.STTCapabilities {
-	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "chunk", OfflineRecognize: false}
+	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "chunk", OfflineRecognize: true}
 }
 
 func (s *AzureSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
@@ -104,7 +107,119 @@ func (s *AzureSTT) Stream(ctx context.Context, language string) (stt.RecognizeSt
 }
 
 func (s *AzureSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, languageStr string) (*stt.SpeechEvent, error) {
-	return nil, fmt.Errorf("azure STT does not support single frame recognition")
+	req, err := buildAzureSTTRecognizeRequest(ctx, s, frames, languageStr)
+	if err != nil {
+		return nil, err
+	}
+	client := s.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("azure stt error: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var result azureSTTRecognizeResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, err
+	}
+	return azureSTTRecognizeSpeechEvent(resolveAzureSTTLanguage(languageStr), result)
+}
+
+type azureSTTRecognizeResponse struct {
+	RecognitionStatus string `json:"RecognitionStatus"`
+	DisplayText       string `json:"DisplayText"`
+	NBest             []struct {
+		Display    string  `json:"Display"`
+		Confidence float64 `json:"Confidence"`
+	} `json:"NBest"`
+}
+
+func buildAzureSTTRecognizeRequest(ctx context.Context, s *AzureSTT, frames []*model.AudioFrame, language string) (*http.Request, error) {
+	u := url.URL{
+		Scheme: "https",
+		Host:   fmt.Sprintf("%s.stt.speech.microsoft.com", s.region),
+		Path:   "/speech/recognition/conversation/cognitiveservices/v1",
+	}
+	query := u.Query()
+	query.Set("language", resolveAzureSTTLanguage(language))
+	query.Set("format", "detailed")
+	u.RawQuery = query.Encode()
+
+	wav, sampleRate := azureSTTWAVBytes(frames)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(wav))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", fmt.Sprintf("audio/wav; codecs=audio/pcm; samplerate=%d", sampleRate))
+	req.Header.Set("Ocp-Apim-Subscription-Key", s.apiKey)
+	return req, nil
+}
+
+func azureSTTRecognizeSpeechEvent(language string, result azureSTTRecognizeResponse) (*stt.SpeechEvent, error) {
+	if result.RecognitionStatus != "" && !strings.EqualFold(result.RecognitionStatus, "Success") {
+		return nil, fmt.Errorf("azure stt recognition failed: %s", result.RecognitionStatus)
+	}
+	text := result.DisplayText
+	confidence := stt.DefaultTranscriptConfidence(text)
+	if len(result.NBest) > 0 {
+		if result.NBest[0].Display != "" {
+			text = result.NBest[0].Display
+		}
+		if result.NBest[0].Confidence != 0 {
+			confidence = result.NBest[0].Confidence
+		}
+	}
+	if strings.TrimSpace(text) == "" {
+		return nil, fmt.Errorf("azure stt recognition returned empty transcript")
+	}
+	return azureSTTSpeechEvent(stt.SpeechEventFinalTranscript, language, text, confidence), nil
+}
+
+func azureSTTWAVBytes(frames []*model.AudioFrame) ([]byte, uint32) {
+	var pcm bytes.Buffer
+	sampleRate := uint32(16000)
+	numChannels := uint32(1)
+	for _, frame := range frames {
+		if frame == nil {
+			continue
+		}
+		if frame.SampleRate > 0 && pcm.Len() == 0 {
+			sampleRate = frame.SampleRate
+		}
+		if frame.NumChannels > 0 && pcm.Len() == 0 {
+			numChannels = frame.NumChannels
+		}
+		pcm.Write(frame.Data)
+	}
+	data := pcm.Bytes()
+	dataSize := uint32(len(data))
+	blockAlign := uint16(numChannels * 2)
+	byteRate := sampleRate * numChannels * 2
+	var wav bytes.Buffer
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36)+dataSize)
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(numChannels))
+	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
+	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
+	_ = binary.Write(&wav, binary.LittleEndian, blockAlign)
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	wav.WriteString("data")
+	_ = binary.Write(&wav, binary.LittleEndian, dataSize)
+	wav.Write(data)
+	return wav.Bytes(), sampleRate
 }
 
 func defaultAzureSTTWebsocketDialer(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
@@ -378,6 +493,15 @@ func (t *AzureTTS) Capabilities() tts.TTSCapabilities {
 func (t *AzureTTS) SampleRate() int  { return t.sampleRate }
 func (t *AzureTTS) NumChannels() int { return 1 }
 func (t *AzureTTS) Language() string { return t.language }
+
+func (t *AzureTTS) UpdateOptions(voice string, language string) {
+	if voice != "" {
+		t.voice = voice
+	}
+	if language != "" {
+		t.language = language
+	}
+}
 
 func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	req, err := buildAzureTTSRequest(ctx, t, text)

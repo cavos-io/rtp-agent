@@ -10489,18 +10489,27 @@ func TestDefaultConfigFromEnvSelectsAzureSpeechProviders(t *testing.T) {
 	if got := app.Session.STT.Label(); got != "azure.STT" {
 		t.Fatalf("STT label = %q, want azure.STT", got)
 	}
-	if got := app.Session.TTS.Label(); got != "azure.TTS" {
-		t.Fatalf("TTS label = %q, want azure.TTS", got)
+	if got := app.Session.TTS.Label(); got != "StreamAdapter(azure.TTS)" {
+		t.Fatalf("TTS label = %q, want Azure TTS wrapped by core stream adapter", got)
 	}
 	if got := app.Session.TTS.SampleRate(); got != 24000 {
 		t.Fatalf("TTS sample rate = %d, want 24000", got)
 	}
-	languageProvider, ok := app.Session.TTS.(interface{ Language() string })
-	if !ok {
-		t.Fatalf("TTS = %T, want Language method", app.Session.TTS)
+	if got := tts.Model(app.Session.TTS); got != "unknown" {
+		t.Fatalf("TTS model = %q, want StreamAdapter to forward Azure model metadata", got)
 	}
-	if got := languageProvider.Language(); got != "id-ID" {
-		t.Fatalf("TTS language = %q, want id-ID", got)
+	if got := tts.Provider(app.Session.TTS); got != "Azure TTS" {
+		t.Fatalf("TTS provider = %q, want StreamAdapter to forward Azure provider metadata", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || !caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want core stream adapter capabilities", caps)
+	}
+	stream, err := app.Session.TTS.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("TTS Stream() error = %v, want core stream adapter", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("TTS stream Close() error = %v", err)
 	}
 }
 
@@ -10586,11 +10595,20 @@ func TestDefaultConfigFromEnvSelectsGroqProviders(t *testing.T) {
 	if got := llm.Model(app.Session.LLM); got != "llama3-70b-8192" {
 		t.Fatalf("LLM model = %q, want llama3-70b-8192", got)
 	}
-	if got := app.Session.TTS.Label(); got != "groq.TTS" {
-		t.Fatalf("TTS label = %q, want groq.TTS", got)
+	if got := app.Session.TTS.Label(); got != "StreamAdapter(groq.TTS)" {
+		t.Fatalf("TTS label = %q, want StreamAdapter(groq.TTS)", got)
 	}
 	if got := app.Session.TTS.SampleRate(); got != 48000 {
 		t.Fatalf("TTS sample rate = %d, want 48000", got)
+	}
+	if got := tts.Provider(app.Session.TTS); got != "Groq" {
+		t.Fatalf("TTS provider = %q, want StreamAdapter to forward Groq provider metadata", got)
+	}
+	if got := tts.Model(app.Session.TTS); got != "canopylabs/orpheus-v1-english" {
+		t.Fatalf("TTS model = %q, want StreamAdapter to forward Groq model metadata", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || !caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want stream adapter capabilities", caps)
 	}
 }
 
@@ -10630,17 +10648,20 @@ func TestDefaultConfigFromEnvSelectsCavosSpeechProviders(t *testing.T) {
 	if app.Session.TTS == nil {
 		t.Fatal("Session TTS is nil")
 	}
-	if got := app.Session.TTS.Label(); got != "cavos.TTS" {
-		t.Fatalf("TTS label = %q, want cavos.TTS", got)
+	if got := app.Session.TTS.Label(); got != "StreamAdapter(cavos.TTS)" {
+		t.Fatalf("TTS label = %q, want StreamAdapter(cavos.TTS)", got)
 	}
 	if got := tts.Provider(app.Session.TTS); got != "cavos" {
-		t.Fatalf("TTS provider = %q, want cavos", got)
+		t.Fatalf("TTS provider = %q, want StreamAdapter to forward cavos provider metadata", got)
 	}
 	if got := tts.Model(app.Session.TTS); got != "supertonic-3" {
-		t.Fatalf("TTS model = %q, want supertonic-3", got)
+		t.Fatalf("TTS model = %q, want StreamAdapter to forward supertonic-3 model metadata", got)
 	}
 	if got := app.Session.TTS.SampleRate(); got != 44100 {
 		t.Fatalf("TTS sample rate = %d, want 44100", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || !caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want stream adapter capabilities", caps)
 	}
 }
 
@@ -11179,8 +11200,11 @@ func TestDefaultConfigFromEnvSelectsAnthropicLLM(t *testing.T) {
 	if app.Session == nil || app.Session.LLM == nil {
 		t.Fatal("Session LLM is nil")
 	}
-	if got := llm.Provider(app.Session.LLM); got != "anthropic" {
-		t.Fatalf("LLM provider = %q, want anthropic", got)
+	if _, ok := app.Session.LLM.(*anthropic.AnthropicLLM); !ok {
+		t.Fatalf("Session LLM = %T, want *anthropic.AnthropicLLM", app.Session.LLM)
+	}
+	if got := llm.Provider(app.Session.LLM); got != "anthropic.example" {
+		t.Fatalf("LLM provider = %q, want configured Anthropic base URL host", got)
 	}
 	if got := llm.Model(app.Session.LLM); got != "claude-test" {
 		t.Fatalf("LLM model = %q, want claude-test", got)

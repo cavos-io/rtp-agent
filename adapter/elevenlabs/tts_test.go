@@ -314,6 +314,53 @@ func TestElevenLabsStreamURLUsesConfiguredBaseURL(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSUpdateOptionsMatchesReference(t *testing.T) {
+	provider, err := NewElevenLabsTTS("test-key", "", "")
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	provider.UpdateOptions(
+		WithElevenLabsVoiceID("voice-updated"),
+		WithElevenLabsModel("eleven_multilingual_v2"),
+		WithElevenLabsLanguage("id"),
+	)
+
+	requestURL, body := buildElevenLabsSynthesizeRequest(provider, "halo")
+	parsedRequest, err := url.Parse(requestURL)
+	if err != nil {
+		t.Fatalf("parse synthesize url: %v", err)
+	}
+	if parsedRequest.Path != "/v1/text-to-speech/voice-updated/stream" {
+		t.Fatalf("synthesize path = %q, want updated voice", parsedRequest.Path)
+	}
+	if parsedRequest.Query().Get("model_id") != "eleven_multilingual_v2" {
+		t.Fatalf("synthesize model_id = %q, want eleven_multilingual_v2", parsedRequest.Query().Get("model_id"))
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	if payload["model_id"] != "eleven_multilingual_v2" || payload["language_code"] != "id" {
+		t.Fatalf("payload = %#v, want updated model and language", payload)
+	}
+
+	streamURL := buildElevenLabsStreamURL(provider)
+	parsedStream, err := url.Parse(streamURL)
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	if parsedStream.Path != "/v1/text-to-speech/voice-updated/stream-input" {
+		t.Fatalf("stream path = %q, want updated voice", parsedStream.Path)
+	}
+	if parsedStream.Query().Get("model_id") != "eleven_multilingual_v2" || parsedStream.Query().Get("language_code") != "id" {
+		t.Fatalf("stream query = %s, want updated model and language", parsedStream.RawQuery)
+	}
+	if got := provider.Model(); got != "eleven_multilingual_v2" {
+		t.Fatalf("Model() = %q, want eleven_multilingual_v2", got)
+	}
+}
+
 func TestElevenLabsStreamFlushUsesEndOfInputSignal(t *testing.T) {
 	flush := elevenLabsFlushPayload()
 	if flush["text"] != "" {

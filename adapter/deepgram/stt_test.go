@@ -2,12 +2,17 @@ package deepgram
 
 import (
 	"context"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/gorilla/websocket"
 )
 
 func TestDeepgramSpeechEventPreservesAlternativeWords(t *testing.T) {
@@ -385,6 +390,92 @@ func TestDeepgramSTTAdvancedOptionsUseReferenceQueryParams(t *testing.T) {
 	assertDeepgramQueryValues(t, query, "keyterm", []string{"LiveKit", "rtp-agent"})
 	assertDeepgramQueryValues(t, query, "redact", []string{"pci", "ssn"})
 	assertDeepgramQueryValues(t, query, "tag", []string{"agent", "test"})
+}
+
+func TestDeepgramSTTStreamPreservesReferenceSpeechState(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		for _, message := range []string{
+			`{"type":"UtteranceEnd"}`,
+			`{"type":"SpeechStarted"}`,
+			`{"type":"SpeechStarted"}`,
+			`{"type":"Results","is_final":false,"speech_final":false,"metadata":{"request_id":"req-1"},"channel":{"alternatives":[{"transcript":"hel","confidence":0.5,"words":[]}]}}`,
+			`{"type":"Results","is_final":true,"speech_final":true,"metadata":{"request_id":"req-1"},"channel":{"alternatives":[{"transcript":"hello","confidence":0.9,"words":[]}]}}`,
+			`{"type":"Results","is_final":true,"speech_final":true,"metadata":{"request_id":"req-2"},"channel":{"alternatives":[{"transcript":"again","confidence":0.8,"words":[]}]}}`,
+		} {
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(message)); err != nil {
+				t.Errorf("write Deepgram message: %v", err)
+				return
+			}
+		}
+		<-r.Context().Done()
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	wantTypes := []stt.SpeechEventType{
+		stt.SpeechEventStartOfSpeech,
+		stt.SpeechEventInterimTranscript,
+		stt.SpeechEventFinalTranscript,
+		stt.SpeechEventEndOfSpeech,
+		stt.SpeechEventStartOfSpeech,
+		stt.SpeechEventFinalTranscript,
+		stt.SpeechEventEndOfSpeech,
+	}
+	for _, wantType := range wantTypes {
+		event := nextDeepgramTestSpeechEvent(t, stream)
+		if event.Type != wantType {
+			t.Fatalf("event type = %s, want %s", event.Type, wantType)
+		}
+	}
+}
+
+func nextDeepgramTestSpeechEvent(t *testing.T, stream stt.RecognizeStream) *stt.SpeechEvent {
+	t.Helper()
+	type result struct {
+		event *stt.SpeechEvent
+		err   error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		event, err := stream.Next()
+		ch <- result{event: event, err: err}
+	}()
+	select {
+	case got := <-ch:
+		if got.err != nil {
+			t.Fatalf("Next() error = %v", got.err)
+		}
+		if got.event == nil {
+			t.Fatal("Next() event = nil")
+		}
+		return got.event
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Deepgram STT event")
+		return nil
+	}
 }
 
 func assertDeepgramQuery(t *testing.T, query url.Values, key string, want string) {

@@ -188,6 +188,45 @@ func TestElevenLabsSTTStreamURLAndMessagesMatchReference(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTUpdateOptionsMatchesReference(t *testing.T) {
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTModel("scribe_v2_realtime"),
+		WithElevenLabsSTTLanguage("en"),
+	)
+
+	provider.UpdateOptions(
+		WithElevenLabsSTTTagAudioEvents(false),
+		WithElevenLabsSTTServerVAD(ElevenLabsVADOptions{
+			VADSilenceThresholdSecs: floatPtr(0.6),
+			VADThreshold:            floatPtr(0.35),
+			MinSpeechDurationMS:     intPtr(150),
+			MinSilenceDurationMS:    intPtr(700),
+		}),
+		WithElevenLabsSTTKeyterms([]string{"LiveKit", "Cavos"}),
+	)
+
+	req, err := buildElevenLabsSTTRecognizeRequest(context.Background(), provider, []byte{0x01, 0x02}, "")
+	if err != nil {
+		t.Fatalf("build recognize request: %v", err)
+	}
+	fields, _ := readElevenLabsMultipartRequest(t, req)
+	assertElevenLabsFormField(t, fields, "tag_audio_events", "false")
+	if got := fields["keyterms"]; got != "LiveKit,Cavos" {
+		t.Fatalf("keyterms = %q, want joined keyterms", got)
+	}
+
+	streamURL, err := url.Parse(buildElevenLabsSTTStreamURL(provider, ""))
+	if err != nil {
+		t.Fatalf("parse stream URL: %v", err)
+	}
+	query := streamURL.Query()
+	assertElevenLabsQuery(t, query, "commit_strategy", "vad")
+	assertElevenLabsQuery(t, query, "vad_silence_threshold_secs", "0.6")
+	assertElevenLabsQuery(t, query, "vad_threshold", "0.35")
+	assertElevenLabsQuery(t, query, "min_speech_duration_ms", "150")
+	assertElevenLabsQuery(t, query, "min_silence_duration_ms", "700")
+}
+
 func TestElevenLabsSTTStreamURLConvertsHTTPBaseURLToWebsocket(t *testing.T) {
 	provider := NewElevenLabsSTT("test-key",
 		WithElevenLabsSTTBaseURL("http://eleven.example/v1"),

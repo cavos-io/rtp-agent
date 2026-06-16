@@ -3041,6 +3041,13 @@ func configureTTSFallbacks(cfg AppConfig, a *agent.Agent) error {
 	return nil
 }
 
+func ensureTTSStreaming(provider coretts.TTS) coretts.TTS {
+	if provider.Capabilities().Streaming {
+		return provider
+	}
+	return coretts.NewStreamAdapter(provider)
+}
+
 func appTTSSpeedConfigured(cfg AppConfig) bool {
 	return cfg.TTSSpeedSet || cfg.TTSSpeed != 0
 }
@@ -4948,7 +4955,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if err != nil {
 			return nil, err
 		}
-		a.TTS = provider
+		a.TTS = ensureTTSStreaming(provider)
 	case providerBaseten:
 		ttsOpts := []baseten.BasetenTTSOption{}
 		if cfg.TTSBaseURL != "" {
@@ -5022,7 +5029,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSVoice != "" {
 			ttsOpts = append(ttsOpts, groq.WithGroqTTSVoice(cfg.TTSVoice))
 		}
-		a.TTS = groq.NewGroqTTS(cfg.GroqAPIKey, cfg.TTSVoice, ttsOpts...)
+		provider := groq.NewGroqTTS(cfg.GroqAPIKey, cfg.TTSVoice, ttsOpts...)
+		a.TTS = ensureTTSStreaming(provider)
 	case providerCartesia:
 		ttsOpts := []cartesia.CartesiaTTSOption{}
 		if cfg.TTSBaseURL != "" {
@@ -5061,7 +5069,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = cartesia.NewCartesiaTTS("", cfg.TTSVoice, cfg.TTSModel, ttsOpts...)
 	case providerCavos:
-		a.TTS = cavosTTSFromConfig(cfg)
+		a.TTS = ensureTTSStreaming(cavosTTSFromConfig(cfg))
 	case providerClova:
 		a.TTS = clova.NewClovaTTS(cfg.ClovaClientID, cfg.ClovaClientSecret, cfg.TTSVoice)
 	case providerDeepgram:

@@ -69,7 +69,11 @@ func (l *AnthropicLLM) Model() string {
 }
 
 func (l *AnthropicLLM) Provider() string {
-	return "anthropic"
+	u, err := url.Parse(l.baseURL)
+	if err != nil || u.Host == "" {
+		return "anthropic"
+	}
+	return u.Host
 }
 
 type anthropicMessage struct {

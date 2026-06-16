@@ -906,9 +906,14 @@ func isSLNGTTSEndEvent(message map[string]any) bool {
 }
 
 func sttEventsFromMessage(payload []byte, defaultLanguage string, partials bool) ([]*stt.SpeechEvent, error) {
+	events, _, _, err := sttEventsFromMessageWithSpeechState(payload, defaultLanguage, partials, false, 0)
+	return events, err
+}
+
+func sttEventsFromMessageWithSpeechState(payload []byte, defaultLanguage string, partials bool, speechStarted bool, speechDuration float64) ([]*stt.SpeechEvent, bool, float64, error) {
 	var message map[string]any
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return nil, err
+		return nil, speechStarted, speechDuration, err
 	}
 	messageType := slngString(message["type"])
 	if messageType == "Results" {
@@ -916,19 +921,22 @@ func sttEventsFromMessage(payload []byte, defaultLanguage string, partials bool)
 		messageType = slngString(message["type"])
 	}
 	if messageType == "Error" {
-		return nil, fmt.Errorf("slng stt error: %s", extractSLNGError(message))
+		return nil, speechStarted, speechDuration, fmt.Errorf("slng stt error: %s", extractSLNGError(message))
 	}
 	if messageType == "partial_transcript" && !partials {
-		return nil, nil
+		return nil, speechStarted, speechDuration, nil
 	}
 	if messageType != "partial_transcript" && messageType != "final_transcript" {
-		return nil, nil
-	}
-	text := slngString(message["transcript"])
-	if text == "" {
-		return nil, nil
+		return nil, speechStarted, speechDuration, nil
 	}
 	isFinal := messageType == "final_transcript"
+	text := slngString(message["transcript"])
+	if text == "" {
+		if isFinal && speechDuration > 0 {
+			return []*stt.SpeechEvent{slngSTTRecognitionUsageEvent(speechDuration)}, speechStarted, 0, nil
+		}
+		return nil, speechStarted, speechDuration, nil
+	}
 	eventType := stt.SpeechEventInterimTranscript
 	if isFinal {
 		eventType = stt.SpeechEventFinalTranscript
@@ -946,8 +954,9 @@ func sttEventsFromMessage(payload []byte, defaultLanguage string, partials bool)
 		}
 	}
 	events := []*stt.SpeechEvent{}
-	if !isFinal {
+	if !speechStarted {
 		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
+		speechStarted = true
 	}
 	events = append(events, &stt.SpeechEvent{
 		Type:         eventType,
@@ -955,8 +964,20 @@ func sttEventsFromMessage(payload []byte, defaultLanguage string, partials bool)
 	})
 	if isFinal {
 		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
+		speechStarted = false
+		if speechDuration > 0 {
+			events = append(events, slngSTTRecognitionUsageEvent(speechDuration))
+			speechDuration = 0
+		}
 	}
-	return events, nil
+	return events, speechStarted, speechDuration, nil
+}
+
+func slngSTTRecognitionUsageEvent(audioDuration float64) *stt.SpeechEvent {
+	return &stt.SpeechEvent{
+		Type:             stt.SpeechEventRecognitionUsage,
+		RecognitionUsage: &stt.RecognitionUsage{AudioDuration: audioDuration},
+	}
 }
 
 func normalizeSLNGResults(message map[string]any) map[string]any {
@@ -987,6 +1008,9 @@ type sttStream struct {
 	bufferSizeSeconds float64
 	encoding          string
 	audioBuffer       []byte
+	pendingEvents     []*stt.SpeechEvent
+	speechStarted     bool
+	speechDuration    float64
 }
 
 func (s *sttStream) PushFrame(frame *model.AudioFrame) error {
@@ -1018,7 +1042,23 @@ func (s *sttStream) writeAlignedAudio(chunk []byte) error {
 	if len(chunk)%slngSTTBytesPerSample(s.encoding) != 0 {
 		return nil
 	}
-	return s.conn.WriteMessage(websocket.BinaryMessage, chunk)
+	if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
+		return err
+	}
+	s.speechDuration += s.audioDuration(chunk)
+	return nil
+}
+
+func (s *sttStream) audioDuration(chunk []byte) float64 {
+	sampleRate := s.sampleRate
+	if sampleRate <= 0 {
+		sampleRate = defaultSLNGSTTSampleRate
+	}
+	bytesPerSample := slngSTTBytesPerSample(s.encoding)
+	if bytesPerSample <= 0 || len(chunk) == 0 {
+		return 0
+	}
+	return float64(len(chunk)/bytesPerSample) / float64(sampleRate)
 }
 
 func (s *sttStream) audioChunkBytes() int {
@@ -1053,6 +1093,11 @@ func (s *sttStream) Close() error {
 
 func (s *sttStream) Next() (*stt.SpeechEvent, error) {
 	for {
+		if len(s.pendingEvents) > 0 {
+			event := s.pendingEvents[0]
+			s.pendingEvents = s.pendingEvents[1:]
+			return event, nil
+		}
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			return nil, err
@@ -1060,12 +1105,16 @@ func (s *sttStream) Next() (*stt.SpeechEvent, error) {
 		if msgType != websocket.TextMessage {
 			continue
 		}
-		events, err := sttEventsFromMessage(payload, s.language, s.partials)
+		events, speechStarted, speechDuration, err := sttEventsFromMessageWithSpeechState(payload, s.language, s.partials, s.speechStarted, s.speechDuration)
 		if err != nil {
 			return nil, err
 		}
+		s.speechStarted = speechStarted
+		s.speechDuration = speechDuration
 		if len(events) > 0 {
-			return events[0], nil
+			event := events[0]
+			s.pendingEvents = append(s.pendingEvents, events[1:]...)
+			return event, nil
 		}
 	}
 }

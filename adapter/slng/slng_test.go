@@ -507,11 +507,176 @@ func TestSLNGSTTStreamEventsMapReferenceMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("final transcript: %v", err)
 	}
-	if len(events) != 2 || events[0].Type != stt.SpeechEventFinalTranscript || events[1].Type != stt.SpeechEventEndOfSpeech {
-		t.Fatalf("events = %+v, want final and end", events)
+	if len(events) != 3 || events[0].Type != stt.SpeechEventStartOfSpeech || events[1].Type != stt.SpeechEventFinalTranscript || events[2].Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("events = %+v, want start, final, and end", events)
 	}
-	if events[0].Alternatives[0].StartTime != 0.1 || events[0].Alternatives[0].EndTime != 0.4 {
-		t.Fatalf("alternative = %+v, want word timings", events[0].Alternatives[0])
+	if events[1].Alternatives[0].StartTime != 0.1 || events[1].Alternatives[0].EndTime != 0.4 {
+		t.Fatalf("alternative = %+v, want word timings", events[1].Alternatives[0])
+	}
+}
+
+func TestSLNGSTTStreamNextPreservesReferenceEventSequence(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read init payload: %v", err)
+			return
+		}
+		for _, message := range []string{
+			`{"type":"Results","is_final":false,"language":"en","channel":{"alternatives":[{"transcript":"hel","confidence":0.5}]}}`,
+			`{"type":"Results","is_final":false,"language":"en","channel":{"alternatives":[{"transcript":"hell","confidence":0.6}]}}`,
+			`{"type":"final_transcript","transcript":"hello","confidence":0.9,"language":"en","words":[{"start":0.1,"end":0.4}]}`,
+		} {
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(message)); err != nil {
+				t.Errorf("write transcript message: %v", err)
+				return
+			}
+		}
+		<-r.Context().Done()
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	provider := NewSTT("test-key", WithSTTEndpoint("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	wantTypes := []stt.SpeechEventType{
+		stt.SpeechEventStartOfSpeech,
+		stt.SpeechEventInterimTranscript,
+		stt.SpeechEventInterimTranscript,
+		stt.SpeechEventFinalTranscript,
+		stt.SpeechEventEndOfSpeech,
+	}
+	for _, wantType := range wantTypes {
+		event := nextSLNGTestSpeechEvent(t, stream)
+		if event.Type != wantType {
+			t.Fatalf("event type = %s, want %s", event.Type, wantType)
+		}
+	}
+}
+
+func TestSLNGSTTStreamEmptyFinalEmitsReferenceUsage(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	binaryReceived := make(chan struct{}, 1)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read init payload: %v", err)
+			return
+		}
+		for {
+			msgType, _, err := conn.ReadMessage()
+			if err != nil {
+				t.Errorf("read audio payload: %v", err)
+				return
+			}
+			if msgType != websocket.BinaryMessage {
+				continue
+			}
+			binaryReceived <- struct{}{}
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"final_transcript","transcript":"","confidence":0,"language":"en"}`)); err != nil {
+				t.Errorf("write empty final: %v", err)
+			}
+			<-r.Context().Done()
+			return
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	provider := NewSTT(
+		"test-key",
+		WithSTTEndpoint("ws"+strings.TrimPrefix(server.URL, "http")),
+		WithSTTBufferSizeSeconds(0.001),
+	)
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 32),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 16,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	select {
+	case <-binaryReceived:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SLNG STT binary audio")
+	}
+
+	event := nextSLNGTestSpeechEvent(t, stream)
+	if event.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("event type = %s, want recognition_usage", event.Type)
+	}
+	if event.RecognitionUsage == nil {
+		t.Fatal("RecognitionUsage = nil")
+	}
+	if event.RecognitionUsage.AudioDuration != 0.001 {
+		t.Fatalf("AudioDuration = %v, want 0.001", event.RecognitionUsage.AudioDuration)
+	}
+}
+
+func nextSLNGTestSpeechEvent(t *testing.T, stream stt.RecognizeStream) *stt.SpeechEvent {
+	t.Helper()
+	type result struct {
+		event *stt.SpeechEvent
+		err   error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		event, err := stream.Next()
+		ch <- result{event: event, err: err}
+	}()
+	select {
+	case got := <-ch:
+		if got.err != nil {
+			t.Fatalf("Next() error = %v", got.err)
+		}
+		if got.event == nil {
+			t.Fatal("Next() event = nil")
+		}
+		return got.event
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SLNG STT event")
+		return nil
 	}
 }
 

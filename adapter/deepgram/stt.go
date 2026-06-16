@@ -404,11 +404,12 @@ func deepgramBaseURL(s *DeepgramSTT, websocketURL bool) (*url.URL, url.Values) {
 }
 
 type deepgramStream struct {
-	conn   *websocket.Conn
-	events chan *stt.SpeechEvent
-	errCh  chan error
-	mu     sync.Mutex
-	closed bool
+	conn     *websocket.Conn
+	events   chan *stt.SpeechEvent
+	errCh    chan error
+	mu       sync.Mutex
+	closed   bool
+	speaking bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -551,18 +552,24 @@ func (s *deepgramStream) readLoop() {
 
 		switch resp.Type {
 		case "SpeechStarted":
+			if s.speaking {
+				continue
+			}
+			s.speaking = true
 			s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
-
-		case "UtteranceEnd":
-			s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
 
 		case "Results":
 			if event := deepgramSpeechEvent(resp); event != nil {
-				s.sendEvent(event)
-
-				if resp.SpeechFinal {
-					s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
+				if !s.speaking {
+					s.speaking = true
+					s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
 				}
+				s.sendEvent(event)
+			}
+
+			if resp.SpeechFinal && s.speaking {
+				s.speaking = false
+				s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
 			}
 		}
 	}
