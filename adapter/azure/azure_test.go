@@ -408,15 +408,20 @@ func TestAzureSTTStreamPreservesExplicitZeroConfidence(t *testing.T) {
 }
 
 func TestAzureSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
-	requests := make(chan *http.Request, 1)
-	configMessages := make(chan string, 1)
-	serverClosed := make(chan struct{})
+	requests := make(chan *http.Request, defaultAzureSTTRetries+1)
+	configMessages := make(chan string, defaultAzureSTTRetries+1)
+	serverClosed := make(chan struct{}, defaultAzureSTTRetries+1)
 
 	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
 	if err != nil {
 		t.Fatalf("NewAzureSTT error = %v", err)
 	}
-	provider.dialWebsocket = azureTestClosingDialer(t, requests, configMessages, serverClosed)
+	closingDialer := azureTestClosingDialer(t, requests, configMessages, serverClosed)
+	var attempts int
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		attempts++
+		return closingDialer(ctx, endpoint, headers)
+	}
 
 	stream, err := provider.Stream(context.Background(), "id-ID")
 	if err != nil {
@@ -444,6 +449,19 @@ func TestAzureSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	if !providerStream.closed {
 		t.Fatal("stream closed = false after write failure, want true")
 	}
+	terminalAttempts := attempts
+	if terminalAttempts != defaultAzureSTTRetries+1 {
+		t.Fatalf("dial attempts after terminal write failure = %d, want initial plus retries", terminalAttempts)
+	}
+
+	_, nextErr := stream.Next()
+	if !errors.Is(nextErr, err) {
+		t.Fatalf("Next error = %v, want terminal write error %v", nextErr, err)
+	}
+	_, nextErr = stream.Next()
+	if nextErr == nil || errors.Is(nextErr, err) {
+		t.Fatalf("second Next error = %v, want shutdown/EOF after one terminal error", nextErr)
+	}
 
 	err = stream.PushFrame(&model.AudioFrame{
 		Data:              []byte{0x03, 0x04},
@@ -454,11 +472,66 @@ func TestAzureSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	if !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("second PushFrame error = %v, want io.ErrClosedPipe", err)
 	}
+	if attempts != terminalAttempts {
+		t.Fatalf("dial attempts after closed PushFrame = %d, want unchanged %d", attempts, terminalAttempts)
+	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close after write failure error = %v", err)
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("second Close after write failure error = %v", err)
+	}
+}
+
+func TestAzureSTTStreamReconnectsAfterAudioWriteFailure(t *testing.T) {
+	requests := make(chan *http.Request, 2)
+	configMessages := make(chan string, 2)
+	audioMessages := make(chan []byte, 1)
+	serverClosed := make(chan struct{}, defaultAzureSTTRetries+1)
+
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	closingDialer := azureTestClosingDialer(t, requests, configMessages, serverClosed)
+	okDialer := azureTestDialer(t, requests, configMessages, audioMessages)
+	var attempts int
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			return closingDialer(ctx, endpoint, headers)
+		}
+		return okDialer(ctx, endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "id-ID")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	receiveAzureTestValue(t, requests, "first request")
+	receiveAzureTestValue(t, configMessages, "first speech config")
+	receiveAzureTestSignal(t, serverClosed, "server close")
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame after reconnect error = %v", err)
+	}
+
+	receiveAzureTestValue(t, requests, "second request")
+	receiveAzureTestValue(t, configMessages, "second speech config")
+	audioMessage := receiveAzureTestValue(t, audioMessages, "audio after reconnect")
+	_, audioPayload := splitAzureTestMessage(t, audioMessage)
+	if !bytes.Equal(audioPayload, []byte{0x01, 0x02}) {
+		t.Fatalf("audio payload after reconnect = %v, want original pushed PCM", audioPayload)
+	}
+	if attempts != 2 {
+		t.Fatalf("dial attempts = %d, want 2", attempts)
 	}
 }
 
@@ -819,7 +892,7 @@ func runAzureTestClosingWebsocketServer(
 		return
 	}
 	configMessages <- string(payload)
-	close(serverClosed)
+	serverClosed <- struct{}{}
 	errCh <- nil
 }
 

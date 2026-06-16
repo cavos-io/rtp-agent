@@ -25,6 +25,7 @@ const (
 	azureSpeechKeyEnv       = "AZURE_SPEECH_KEY"
 	azureSpeechRegionEnv    = "AZURE_SPEECH_REGION"
 	defaultAzureSTTLanguage = "en-US"
+	defaultAzureSTTRetries  = 3
 )
 
 type azureSTTWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
@@ -89,27 +90,40 @@ func (s *AzureSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *AzureSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
-	connectionID := strings.ReplaceAll(uuid.NewString(), "-", "")
-	conn, _, err := s.dialWebsocket(ctx, buildAzureSTTStreamURL(s, language), buildAzureSTTHeaders(s, connectionID))
+	resolvedLanguage := resolveAzureSTTLanguage(language)
+	streamURL := buildAzureSTTStreamURL(s, resolvedLanguage)
+	conn, connectionID, err := openAzureSTTStreamConnection(ctx, s, streamURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial azure stt websocket: %w", err)
-	}
-	if err := conn.WriteMessage(websocket.TextMessage, buildAzureSTTMessage("speech.config", connectionID, "application/json", buildAzureSTTSpeechConfig())); err != nil {
-		_ = conn.Close()
 		return nil, err
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &azureSTTStream{
-		conn:         conn,
-		connectionID: connectionID,
-		language:     resolveAzureSTTLanguage(language),
-		events:       make(chan *stt.SpeechEvent, 100),
-		errCh:        make(chan error, 1),
-		ctx:          streamCtx,
-		cancel:       cancel,
+		provider:      s,
+		conn:          conn,
+		connectionID:  connectionID,
+		streamURL:     streamURL,
+		language:      resolvedLanguage,
+		events:        make(chan *stt.SpeechEvent, 100),
+		errCh:         make(chan error, 1),
+		ctx:           streamCtx,
+		cancel:        cancel,
+		maxReconnects: defaultAzureSTTRetries,
 	}
-	go stream.readLoop()
+	go stream.readLoop(conn)
 	return stream, nil
+}
+
+func openAzureSTTStreamConnection(ctx context.Context, provider *AzureSTT, streamURL string) (*websocket.Conn, string, error) {
+	connectionID := strings.ReplaceAll(uuid.NewString(), "-", "")
+	conn, _, err := provider.dialWebsocket(ctx, streamURL, buildAzureSTTHeaders(provider, connectionID))
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to dial azure stt websocket: %w", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, buildAzureSTTMessage("speech.config", connectionID, "application/json", buildAzureSTTSpeechConfig())); err != nil {
+		_ = conn.Close()
+		return nil, "", fmt.Errorf("failed to initialize azure stt websocket: %w", err)
+	}
+	return conn, connectionID, nil
 }
 
 func (s *AzureSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, languageStr string) (*stt.SpeechEvent, error) {
@@ -313,15 +327,20 @@ func buildAzureSTTMessage(path string, requestID string, contentType string, bod
 }
 
 type azureSTTStream struct {
-	conn         *websocket.Conn
-	connectionID string
-	language     string
-	events       chan *stt.SpeechEvent
-	errCh        chan error
-	mu           sync.Mutex
-	closed       bool
-	ctx          context.Context
-	cancel       context.CancelFunc
+	provider      *AzureSTT
+	conn          *websocket.Conn
+	connectionID  string
+	streamURL     string
+	language      string
+	events        chan *stt.SpeechEvent
+	errCh         chan error
+	mu            sync.Mutex
+	closed        bool
+	audioWritten  bool
+	reconnects    int
+	maxReconnects int
+	ctx           context.Context
+	cancel        context.CancelFunc
 }
 
 func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -333,12 +352,17 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	if err := s.conn.WriteMessage(websocket.BinaryMessage, buildAzureSTTMessage("audio", s.connectionID, "audio/x-wav", frame.Data)); err != nil {
-		s.closed = true
-		s.cancel()
-		_ = s.conn.Close()
-		return err
+	for {
+		if err := s.conn.WriteMessage(websocket.BinaryMessage, buildAzureSTTMessage("audio", s.connectionID, "audio/x-wav", frame.Data)); err != nil {
+			if reconnectErr := s.reconnectLocked(); reconnectErr == nil {
+				continue
+			}
+			s.finishWithErrorLocked(err)
+			return err
+		}
+		break
 	}
+	s.audioWritten = true
 	return nil
 }
 
@@ -360,6 +384,11 @@ func (s *azureSTTStream) Close() error {
 
 func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 	select {
+	case err := <-s.errCh:
+		return nil, err
+	default:
+	}
+	select {
 	case event, ok := <-s.events:
 		if !ok {
 			select {
@@ -377,20 +406,69 @@ func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 	}
 }
 
-func (s *azureSTTStream) readLoop() {
-	defer close(s.events)
+func (s *azureSTTStream) reconnectLocked() error {
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.reconnects >= s.maxReconnects {
+		return fmt.Errorf("azure stt websocket reconnect attempts exhausted")
+	}
+	s.reconnects++
+	oldConn := s.conn
+	conn, connectionID, err := openAzureSTTStreamConnection(s.ctx, s.provider, s.streamURL)
+	if err != nil {
+		return err
+	}
+	s.conn = conn
+	s.connectionID = connectionID
+	_ = oldConn.Close()
+	go s.readLoop(conn)
 	for {
-		msgType, payload, err := s.conn.ReadMessage()
+		select {
+		case <-s.errCh:
+		default:
+			return nil
+		}
+	}
+}
+
+func (s *azureSTTStream) finishWithErrorLocked(err error) {
+	if s.closed {
+		return
+	}
+	s.closed = true
+	select {
+	case s.errCh <- err:
+	default:
+	}
+	s.cancel()
+	_ = s.conn.Close()
+}
+
+func (s *azureSTTStream) readLoop(conn *websocket.Conn) {
+	for {
+		msgType, payload, err := conn.ReadMessage()
 		if err != nil {
 			if s.ctx.Err() != nil {
 				return
 			}
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				select {
-				case s.errCh <- err:
-				default:
-				}
+			s.mu.Lock()
+			if s.closed || conn != s.conn {
+				s.mu.Unlock()
+				return
 			}
+			if !s.audioWritten {
+				s.mu.Unlock()
+				return
+			}
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				s.closed = true
+				s.cancel()
+				s.mu.Unlock()
+				return
+			}
+			s.finishWithErrorLocked(err)
+			s.mu.Unlock()
 			return
 		}
 		if msgType != websocket.TextMessage {
