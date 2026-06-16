@@ -1557,6 +1557,34 @@ func TestPipelineAgentClosesRecognitionStreamsOnContextCancel(t *testing.T) {
 	receivePipelineClosed(t, sttClosed, "STT")
 }
 
+func TestPipelineAgentStartsWithoutVAD(t *testing.T) {
+	sttClosed := make(chan struct{})
+	sttPushed := make(chan *model.AudioFrame, 1)
+	sttStream := &fakePipelineRecognizeStream{pushedCh: sttPushed, closedCh: sttClosed}
+	agent := NewPipelineAgent(nil, &fakePipelineSTT{stream: sttStream}, nil, nil, llm.NewChatContext())
+	ctx, cancel := context.WithCancel(context.Background())
+	go agent.run(ctx)
+
+	agent.OnAudioFrame(ctx, &model.AudioFrame{Data: []byte{1, 2}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1})
+	receivePipelineFrame(t, sttPushed)
+	cancel()
+	receivePipelineClosed(t, sttClosed, "STT")
+}
+
+func TestPipelineAgentStartsWithoutSTT(t *testing.T) {
+	vadClosed := make(chan struct{})
+	vadPushed := make(chan *model.AudioFrame, 1)
+	vadStream := &fakePipelineVADStream{pushedCh: vadPushed, closedCh: vadClosed}
+	agent := NewPipelineAgent(&fakePipelineVAD{stream: vadStream}, nil, nil, nil, llm.NewChatContext())
+	ctx, cancel := context.WithCancel(context.Background())
+	go agent.run(ctx)
+
+	agent.OnAudioFrame(ctx, &model.AudioFrame{Data: []byte{1, 2}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1})
+	receivePipelineFrame(t, vadPushed)
+	cancel()
+	receivePipelineClosed(t, vadClosed, "VAD")
+}
+
 func TestPipelineAgentEmitsErrorEventForSTTStreamStartError(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	cause := errors.New("stt start failed")
