@@ -39,6 +39,8 @@ type PipelineAgent struct {
 	audioInputHook atomic.Pointer[AudioInputHook]
 	mu             sync.Mutex
 	session        *AgentSession
+	sttStream      stt.RecognizeStream
+	lastSTTFrame   *model.AudioFrame
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -104,6 +106,41 @@ func (va *PipelineAgent) SetAudioInputHook(hook AudioInputHook) {
 	va.audioInputHook.Store(&hook)
 }
 
+func (va *PipelineAgent) FlushInputTranscription(ctx context.Context, duration time.Duration) error {
+	if va == nil {
+		return nil
+	}
+	va.mu.Lock()
+	stream := va.sttStream
+	shape := va.lastSTTFrame
+	va.mu.Unlock()
+	if stream == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if duration > 0 && shape != nil && shape.SampleRate > 0 && shape.NumChannels > 0 {
+		const silenceChunk = 200 * time.Millisecond
+		for remaining := duration; remaining > 0; remaining -= silenceChunk {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+			chunk := silenceChunk
+			if remaining < chunk {
+				chunk = remaining
+			}
+			frame := audio.SilenceFrame(chunk.Seconds(), shape.SampleRate, shape.NumChannels)
+			if err := stream.PushFrame(frame); err != nil {
+				return err
+			}
+		}
+	}
+	return stream.Flush()
+}
+
 func (va *PipelineAgent) UpdateComponents(vadObj vad.VAD, sttObj stt.STT, llmObj llm.LLM, ttsObj tts.TTS) {
 	va.mu.Lock()
 	defer va.mu.Unlock()
@@ -151,7 +188,16 @@ func (va *PipelineAgent) run(ctx context.Context) {
 			return
 		}
 		sttStream = stream
+		va.mu.Lock()
+		va.sttStream = stream
+		va.mu.Unlock()
 		defer func() {
+			va.mu.Lock()
+			if va.sttStream == stream {
+				va.sttStream = nil
+				va.lastSTTFrame = nil
+			}
+			va.mu.Unlock()
 			if err := sttStream.Close(); err != nil && !isSpeechStreamShutdownError(err) {
 				logger.Logger.Errorw("failed to close STT stream", err)
 				label := "stt"
@@ -197,6 +243,13 @@ func (va *PipelineAgent) run(ctx context.Context) {
 					logger.Logger.Warnw("STT resample failed", err, "from", sttFrame.SampleRate, "to", targetRate)
 				}
 			}
+			va.mu.Lock()
+			va.lastSTTFrame = &model.AudioFrame{
+				SampleRate:        sttFrame.SampleRate,
+				NumChannels:       sttFrame.NumChannels,
+				SamplesPerChannel: sttFrame.SamplesPerChannel,
+			}
+			va.mu.Unlock()
 			if err := sttStream.PushFrame(sttFrame); err != nil {
 				if !isSpeechStreamShutdownError(err) {
 					logger.Logger.Errorw("STT push frame failed", err)

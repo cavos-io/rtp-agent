@@ -180,6 +180,10 @@ type pausedSpeechInfo struct {
 	timeout    time.Duration
 }
 
+type inputTranscriptionFlusher interface {
+	FlushInputTranscription(context.Context, time.Duration) error
+}
+
 type preemptiveGeneration struct {
 	speech     *SpeechHandle
 	userMsg    *llm.ChatMessage
@@ -2085,23 +2089,40 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 		}
 	}
 	if opts.TranscriptTimeout > 0 {
-		deadline := time.NewTimer(opts.TranscriptTimeout)
-		defer deadline.Stop()
-		for {
-			a.userTurnMu.Lock()
-			present := a.pendingUserTranscriptPresent
-			hasInterim := a.pendingInterimTranscript != ""
-			ch := a.userTurnUpdatedCh
-			a.userTurnMu.Unlock()
-			if present || !hasInterim {
-				break
+		a.userTurnMu.Lock()
+		present := a.pendingUserTranscriptPresent
+		hasInterim := a.pendingInterimTranscript != ""
+		a.userTurnMu.Unlock()
+		if !present {
+			flusher, ok := a.inputTranscriptionFlusher()
+			if ok {
+				flushDuration := opts.STTFlushDuration
+				if flushDuration == 0 {
+					flushDuration = 2 * time.Second
+				}
+				if err := flusher.FlushInputTranscription(ctx, flushDuration); err != nil {
+					return "", err
+				}
 			}
-			select {
-			case <-ch:
-			case <-deadline.C:
-				goto collect
-			case <-ctx.Done():
-				return "", ctx.Err()
+			if ok || hasInterim {
+				deadline := time.NewTimer(opts.TranscriptTimeout)
+				defer deadline.Stop()
+				for {
+					a.userTurnMu.Lock()
+					present := a.pendingUserTranscriptPresent
+					ch := a.userTurnUpdatedCh
+					a.userTurnMu.Unlock()
+					if present {
+						break
+					}
+					select {
+					case <-ch:
+					case <-deadline.C:
+						goto collect
+					case <-ctx.Done():
+						return "", ctx.Err()
+					}
+				}
 			}
 		}
 	}
@@ -2157,6 +2178,17 @@ collect:
 		return transcript, err
 	}
 	return transcript, nil
+}
+
+func (a *AgentActivity) inputTranscriptionFlusher() (inputTranscriptionFlusher, bool) {
+	if a == nil || a.Session == nil {
+		return nil, false
+	}
+	a.Session.mu.Lock()
+	assistant := a.Session.Assistant
+	a.Session.mu.Unlock()
+	flusher, ok := assistant.(inputTranscriptionFlusher)
+	return flusher, ok
 }
 
 func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo) (*SpeechHandle, error) {

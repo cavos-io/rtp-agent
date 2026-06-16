@@ -1418,6 +1418,39 @@ func TestPipelineAgentVADTurnDetectionWaitsForEndOfSpeechBeforeCommit(t *testing
 	}
 }
 
+func TestPipelineAgentFlushInputTranscriptionPushesSilenceAndFlushesSTT(t *testing.T) {
+	stream := &fakePipelineRecognizeStream{}
+	pipeline := NewPipelineAgent(nil, nil, nil, nil, nil)
+	pipeline.sttStream = stream
+	pipeline.lastSTTFrame = &model.AudioFrame{
+		SampleRate:        1000,
+		NumChannels:       1,
+		SamplesPerChannel: 20,
+	}
+
+	if err := pipeline.FlushInputTranscription(context.Background(), 450*time.Millisecond); err != nil {
+		t.Fatalf("FlushInputTranscription error = %v, want nil", err)
+	}
+	if stream.flushCount != 1 {
+		t.Fatalf("Flush calls = %d, want 1", stream.flushCount)
+	}
+	if len(stream.frames) != 3 {
+		t.Fatalf("silence frames = %d, want 3", len(stream.frames))
+	}
+	wantSamples := []uint32{200, 200, 50}
+	for i, frame := range stream.frames {
+		if frame.SampleRate != 1000 || frame.NumChannels != 1 || frame.SamplesPerChannel != wantSamples[i] {
+			t.Fatalf("silence frame %d shape = rate %d channels %d samples %d, want 1000/1/%d",
+				i, frame.SampleRate, frame.NumChannels, frame.SamplesPerChannel, wantSamples[i])
+		}
+		for _, sample := range frame.Data {
+			if sample != 0 {
+				t.Fatalf("silence frame %d contains non-zero data byte %d", i, sample)
+			}
+		}
+	}
+}
+
 func TestPipelineAgentEmitsUserInputTranscribedEvents(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
@@ -3411,14 +3444,15 @@ func receivePipelineClosed(t *testing.T, ch <-chan struct{}, name string) {
 }
 
 type fakePipelineRecognizeStream struct {
-	events    []*stt.SpeechEvent
-	index     int
-	err       error
-	pushErr   error
-	frames    []*model.AudioFrame
-	pushedCh  chan *model.AudioFrame
-	closedCh  chan struct{}
-	closeOnce sync.Once
+	events     []*stt.SpeechEvent
+	index      int
+	err        error
+	pushErr    error
+	frames     []*model.AudioFrame
+	pushedCh   chan *model.AudioFrame
+	closedCh   chan struct{}
+	flushCount int
+	closeOnce  sync.Once
 }
 
 func (f *fakePipelineRecognizeStream) PushFrame(frame *model.AudioFrame) error {
@@ -3429,7 +3463,10 @@ func (f *fakePipelineRecognizeStream) PushFrame(frame *model.AudioFrame) error {
 	return f.pushErr
 }
 
-func (f *fakePipelineRecognizeStream) Flush() error { return nil }
+func (f *fakePipelineRecognizeStream) Flush() error {
+	f.flushCount++
+	return nil
+}
 
 func (f *fakePipelineRecognizeStream) Close() error {
 	if f.closedCh != nil {
