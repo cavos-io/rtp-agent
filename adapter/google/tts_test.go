@@ -265,6 +265,43 @@ func TestGoogleTTSSpeakingRateMatchesReferenceRequests(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSAudioConfigOptionsMatchReferenceRequests(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client,
+		WithGoogleTTSPitch(2.5),
+		WithGoogleTTSEffectsProfileID("telephony-class-application"),
+		WithGoogleTTSVolumeGainDB(-2.0),
+	)
+
+	chunked, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer chunked.Close()
+	audio := client.request.GetAudioConfig()
+	if got := audio.GetPitch(); got != 2.5 {
+		t.Fatalf("pitch = %v, want 2.5", got)
+	}
+	if got := audio.GetEffectsProfileId(); len(got) != 1 || got[0] != "telephony-class-application" {
+		t.Fatalf("effects profile = %v, want telephony-class-application", got)
+	}
+	if got := audio.GetVolumeGainDb(); got != -2.0 {
+		t.Fatalf("volume gain = %v, want -2.0", got)
+	}
+
+	provider.UpdateOptions(WithGoogleTTSVolumeGainDB(3.5))
+	chunked, err = provider.Synthesize(context.Background(), "hello again")
+	if err != nil {
+		t.Fatalf("Synthesize after update returned error: %v", err)
+	}
+	defer chunked.Close()
+	if got := client.request.GetAudioConfig().GetVolumeGainDb(); got != 3.5 {
+		t.Fatalf("updated volume gain = %v, want 3.5", got)
+	}
+}
+
 func TestGoogleTTSChirp3OmitsModelName(t *testing.T) {
 	provider := newGoogleTTSWithClient(nil, WithGoogleTTSModel("chirp_3"))
 
