@@ -294,6 +294,33 @@ func TestGoogleSTTStreamPropagatesClientErrors(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamClosesAfterAudioSendFailure(t *testing.T) {
+	wantErr := errors.New("send failed")
+	streamClient := &fakeGoogleStreamingRecognizeClient{sendErrAfterConfig: wantErr}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	err = stream.PushFrame(&model.AudioFrame{Data: []byte("pcm")})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("PushFrame error = %v, want %v", err, wantErr)
+	}
+	if !streamClient.closed {
+		t.Fatal("stream client closed = false after send failure")
+	}
+
+	err = stream.PushFrame(&model.AudioFrame{Data: []byte("again")})
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("second PushFrame error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after send failure error = %v", err)
+	}
+}
+
 type fakeGoogleSpeechClient struct {
 	stream            speechpb.Speech_StreamingRecognizeClient
 	streamErr         error
@@ -312,14 +339,18 @@ func (c *fakeGoogleSpeechClient) Recognize(ctx context.Context, req *speechpb.Re
 }
 
 type fakeGoogleStreamingRecognizeClient struct {
-	sent      []*speechpb.StreamingRecognizeRequest
-	responses []*speechpb.StreamingRecognizeResponse
-	recvIndex int
-	closed    bool
+	sent               []*speechpb.StreamingRecognizeRequest
+	responses          []*speechpb.StreamingRecognizeResponse
+	recvIndex          int
+	closed             bool
+	sendErrAfterConfig error
 }
 
 func (c *fakeGoogleStreamingRecognizeClient) Send(req *speechpb.StreamingRecognizeRequest) error {
 	c.sent = append(c.sent, req)
+	if req.GetAudioContent() != nil && c.sendErrAfterConfig != nil {
+		return c.sendErrAfterConfig
+	}
 	return nil
 }
 

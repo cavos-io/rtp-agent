@@ -5,12 +5,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -391,20 +392,11 @@ func TestSLNGTTSRimeArcanaFlushSendsCancel(t *testing.T) {
 			messages <- message
 		}
 	})
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen test websocket server: %v", err)
-	}
-	server := &httptest.Server{
-		Listener: listener,
-		Config:   &http.Server{Handler: handler},
-	}
-	server.Start()
-	defer server.Close()
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
 
 	provider := NewTTS("test-key",
 		WithTTSModel("rime/arcana:en"),
-		WithTTSEndpoint("ws"+strings.TrimPrefix(server.URL, "http")),
+		WithTTSEndpoint(endpoint),
 	)
 	stream, err := provider.Stream(context.Background())
 	if err != nil {
@@ -455,18 +447,9 @@ func TestSLNGTTSStreamTextMessageUsesReferenceSpacing(t *testing.T) {
 			messages <- message
 		}
 	})
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen test websocket server: %v", err)
-	}
-	server := &httptest.Server{
-		Listener: listener,
-		Config:   &http.Server{Handler: handler},
-	}
-	server.Start()
-	defer server.Close()
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
 
-	provider := NewTTS("test-key", WithTTSEndpoint("ws"+strings.TrimPrefix(server.URL, "http")))
+	provider := NewTTS("test-key", WithTTSEndpoint(endpoint))
 	stream, err := provider.Stream(context.Background())
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
@@ -541,18 +524,9 @@ func TestSLNGSTTStreamNextPreservesReferenceEventSequence(t *testing.T) {
 		}
 		<-r.Context().Done()
 	})
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen test websocket server: %v", err)
-	}
-	server := &httptest.Server{
-		Listener: listener,
-		Config:   &http.Server{Handler: handler},
-	}
-	server.Start()
-	defer server.Close()
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
 
-	provider := NewSTT("test-key", WithSTTEndpoint("ws"+strings.TrimPrefix(server.URL, "http")))
+	provider := NewSTT("test-key", WithSTTEndpoint(endpoint))
 	stream, err := provider.Stream(context.Background(), "en")
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
@@ -606,20 +580,11 @@ func TestSLNGSTTStreamEmptyFinalEmitsReferenceUsage(t *testing.T) {
 			return
 		}
 	})
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen test websocket server: %v", err)
-	}
-	server := &httptest.Server{
-		Listener: listener,
-		Config:   &http.Server{Handler: handler},
-	}
-	server.Start()
-	defer server.Close()
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
 
 	provider := NewSTT(
 		"test-key",
-		WithSTTEndpoint("ws"+strings.TrimPrefix(server.URL, "http")),
+		WithSTTEndpoint(endpoint),
 		WithSTTBufferSizeSeconds(0.001),
 	)
 	stream, err := provider.Stream(context.Background(), "en")
@@ -680,6 +645,110 @@ func nextSLNGTestSpeechEvent(t *testing.T, stream stt.RecognizeStream) *stt.Spee
 	}
 }
 
+type slngSingleConnListener struct {
+	conn   net.Conn
+	once   sync.Once
+	closed chan struct{}
+}
+
+func newSLNGSingleConnListener(conn net.Conn) *slngSingleConnListener {
+	return &slngSingleConnListener{conn: conn, closed: make(chan struct{})}
+}
+
+func (l *slngSingleConnListener) Accept() (net.Conn, error) {
+	var conn net.Conn
+	l.once.Do(func() {
+		conn = l.conn
+	})
+	if conn != nil {
+		return conn, nil
+	}
+	<-l.closed
+	return nil, net.ErrClosed
+}
+
+func (l *slngSingleConnListener) Close() error {
+	select {
+	case <-l.closed:
+	default:
+		close(l.closed)
+	}
+	return nil
+}
+
+func (l *slngSingleConnListener) Addr() net.Addr {
+	return slngTestAddr("slng.test:443")
+}
+
+type slngTestAddr string
+
+func (a slngTestAddr) Network() string { return "tcp" }
+
+func (a slngTestAddr) String() string { return string(a) }
+
+func newSLNGInMemoryWebsocketEndpoints(t *testing.T, handlers ...http.Handler) []string {
+	t.Helper()
+	oldDialer := websocket.DefaultDialer
+	handlerByHost := make(map[string]http.Handler, len(handlers))
+	endpoints := make([]string, 0, len(handlers))
+	for i, handler := range handlers {
+		host := fmt.Sprintf("slng-test-%d.local", i)
+		handlerByHost[host] = handler
+		endpoints = append(endpoints, "ws://"+host)
+	}
+
+	var mu sync.Mutex
+	var cleanup []func()
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			_ = ctx
+			_ = network
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				host = address
+			}
+			handler, ok := handlerByHost[host]
+			if !ok {
+				return nil, fmt.Errorf("no in-memory SLNG websocket endpoint for %s", address)
+			}
+			clientConn, serverConn := net.Pipe()
+			listener := newSLNGSingleConnListener(serverConn)
+			server := &http.Server{Handler: handler}
+			serverErr := make(chan error, 1)
+			go func() {
+				if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+					serverErr <- err
+				}
+			}()
+			mu.Lock()
+			cleanup = append(cleanup, func() {
+				_ = server.Close()
+				_ = listener.Close()
+				_ = clientConn.Close()
+				_ = serverConn.Close()
+				select {
+				case err := <-serverErr:
+					t.Errorf("in-memory SLNG websocket server error: %v", err)
+				default:
+				}
+			})
+			mu.Unlock()
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+
+	t.Cleanup(func() {
+		websocket.DefaultDialer = oldDialer
+		mu.Lock()
+		defer mu.Unlock()
+		for _, cleanupFn := range cleanup {
+			cleanupFn()
+		}
+	})
+	return endpoints
+}
+
 func TestSLNGSTTStreamFlushSkipsMisalignedAudio(t *testing.T) {
 	binaryLengths := make(chan int, 1)
 	upgrader := websocket.Upgrader{}
@@ -705,18 +774,9 @@ func TestSLNGSTTStreamFlushSkipsMisalignedAudio(t *testing.T) {
 			}
 		}
 	})
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen test websocket server: %v", err)
-	}
-	server := &httptest.Server{
-		Listener: listener,
-		Config:   &http.Server{Handler: handler},
-	}
-	server.Start()
-	defer server.Close()
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
 
-	provider := NewSTT("test-key", WithSTTEndpoint("ws"+strings.TrimPrefix(server.URL, "http")))
+	provider := NewSTT("test-key", WithSTTEndpoint(endpoint))
 	stream, err := provider.Stream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
@@ -738,6 +798,75 @@ func TestSLNGSTTStreamFlushSkipsMisalignedAudio(t *testing.T) {
 	case got := <-binaryLengths:
 		t.Fatalf("sent misaligned %d-byte audio chunk", got)
 	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestSLNGSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
+	closed := make(chan struct{})
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read init payload: %v", err)
+			return
+		}
+		close(closed)
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
+
+	provider := NewSTT(
+		"test-key",
+		WithSTTEndpoint(endpoint+"/v1/stt/deepgram/nova:3"),
+		WithSTTBufferSizeSeconds(0.001),
+	)
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test websocket close")
+	}
+
+	var writeErr error
+	for range 3 {
+		writeErr = stream.PushFrame(&model.AudioFrame{
+			Data:              make([]byte, 32),
+			SampleRate:        16000,
+			NumChannels:       1,
+			SamplesPerChannel: 16,
+		})
+		if writeErr != nil {
+			break
+		}
+	}
+	if writeErr == nil {
+		t.Fatal("PushFrame error = nil after closed websocket, want write failure")
+	}
+
+	err = stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 32),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 16,
+	})
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("second PushFrame error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after write failure error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close after write failure error = %v", err)
 	}
 }
 
@@ -764,20 +893,11 @@ func TestSLNGSTTStreamFallsBackToNextModelEndpoint(t *testing.T) {
 		}
 		initPayloads <- init
 	})
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen test websocket server: %v", err)
-	}
-	server := &httptest.Server{
-		Listener: listener,
-		Config:   &http.Server{Handler: handler},
-	}
-	server.Start()
-	defer server.Close()
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
 
 	provider := NewSTT("test-key", WithSTTModelEndpoints(
 		"ws://127.0.0.1:1/v1/stt/deepgram/failing",
-		"ws"+strings.TrimPrefix(server.URL, "http")+"/v1/stt/deepgram/nova:3",
+		endpoint+"/v1/stt/deepgram/nova:3",
 	))
 	stream, err := provider.Stream(context.Background(), "")
 	if err != nil {
@@ -801,17 +921,6 @@ func TestSLNGSTTStreamStartsAtRememberedFallbackEndpoint(t *testing.T) {
 		failedEndpointHits <- struct{}{}
 		http.Error(w, "first endpoint unavailable", http.StatusServiceUnavailable)
 	})
-	failedListener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen failed test websocket server: %v", err)
-	}
-	failedServer := &httptest.Server{
-		Listener: failedListener,
-		Config:   &http.Server{Handler: failedHandler},
-	}
-	failedServer.Start()
-	defer failedServer.Close()
-
 	var successHits atomic.Int32
 	initPayloads := make(chan map[string]any, 2)
 	upgrader := websocket.Upgrader{}
@@ -836,20 +945,11 @@ func TestSLNGSTTStreamStartsAtRememberedFallbackEndpoint(t *testing.T) {
 		}
 		initPayloads <- init
 	})
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen test websocket server: %v", err)
-	}
-	successServer := &httptest.Server{
-		Listener: listener,
-		Config:   &http.Server{Handler: handler},
-	}
-	successServer.Start()
-	defer successServer.Close()
+	endpoints := newSLNGInMemoryWebsocketEndpoints(t, failedHandler, handler)
 
 	provider := NewSTT("test-key", WithSTTModelEndpoints(
-		"ws"+strings.TrimPrefix(failedServer.URL, "http")+"/v1/stt/deepgram/failing",
-		"ws"+strings.TrimPrefix(successServer.URL, "http")+"/v1/stt/deepgram/nova:3",
+		endpoints[0]+"/v1/stt/deepgram/failing",
+		endpoints[1]+"/v1/stt/deepgram/nova:3",
 	))
 	first, err := provider.Stream(context.Background(), "")
 	if err != nil {

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -1001,6 +1002,7 @@ func normalizeSLNGResults(message map[string]any) map[string]any {
 }
 
 type sttStream struct {
+	mu                sync.Mutex
 	conn              *websocket.Conn
 	language          string
 	partials          bool
@@ -1011,9 +1013,15 @@ type sttStream struct {
 	pendingEvents     []*stt.SpeechEvent
 	speechStarted     bool
 	speechDuration    float64
+	closed            bool
 }
 
 func (s *sttStream) PushFrame(frame *model.AudioFrame) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
@@ -1030,6 +1038,11 @@ func (s *sttStream) PushFrame(frame *model.AudioFrame) error {
 }
 
 func (s *sttStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
 	if len(s.audioBuffer) == 0 {
 		return nil
 	}
@@ -1043,6 +1056,8 @@ func (s *sttStream) writeAlignedAudio(chunk []byte) error {
 		return nil
 	}
 	if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
+		s.closed = true
+		_ = s.conn.Close()
 		return err
 	}
 	s.speechDuration += s.audioDuration(chunk)
@@ -1085,6 +1100,12 @@ func slngSTTBytesPerSample(encoding string) int {
 }
 
 func (s *sttStream) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
 	if s.conn == nil {
 		return nil
 	}

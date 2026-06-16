@@ -335,6 +335,11 @@ type murfTTSSynthesizeStream struct {
 }
 
 func (s *murfTTSSynthesizeStream) PushText(text string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
 	if text == "" {
 		return nil
 	}
@@ -342,15 +347,20 @@ func (s *murfTTSSynthesizeStream) PushText(text string) error {
 	if err != nil {
 		return err
 	}
-	return s.conn.WriteMessage(websocket.TextMessage, message)
+	return s.writeMessageLocked(message)
 }
 
 func (s *murfTTSSynthesizeStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
 	message, err := buildMurfTTSEndMessage(s.provider, s.contextID)
 	if err != nil {
 		return err
 	}
-	return s.conn.WriteMessage(websocket.TextMessage, message)
+	return s.writeMessageLocked(message)
 }
 
 func (s *murfTTSSynthesizeStream) Close() error {
@@ -363,6 +373,16 @@ func (s *murfTTSSynthesizeStream) Close() error {
 	s.cancel()
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
+}
+
+func (s *murfTTSSynthesizeStream) writeMessageLocked(message []byte) error {
+	if err := s.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+		s.closed = true
+		s.cancel()
+		_ = s.conn.Close()
+		return err
+	}
+	return nil
 }
 
 func (s *murfTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
