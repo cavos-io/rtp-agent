@@ -5,11 +5,12 @@ import (
 	"context"
 	"errors"
 	"io"
-	"strings"
 	"testing"
 
 	texttospeech "cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	"github.com/googleapis/gax-go/v2"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 )
 
 func TestNewGoogleTTSRejectsMissingCredentialsFile(t *testing.T) {
@@ -37,18 +38,66 @@ func TestGoogleTTSMetadata(t *testing.T) {
 	if got := provider.Provider(); got != "Google Cloud Platform" {
 		t.Fatalf("Provider = %q, want Google Cloud Platform", got)
 	}
-	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
-		t.Fatalf("Capabilities = %#v, want non-streaming without aligned transcript", caps)
+	if caps := provider.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("Capabilities = %#v, want reference streaming without aligned transcript", caps)
 	}
 }
 
-func TestGoogleTTSStreamReturnsUnsupportedError(t *testing.T) {
-	_, err := newGoogleTTSWithClient(nil).Stream(context.Background())
-	if err == nil {
-		t.Fatal("Stream returned nil error, want unsupported streaming error")
+func TestGoogleTTSStreamSendsReferenceConfigAndInput(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{{
+				AudioContent: []byte{1, 2, 3, 4},
+			}},
+		},
 	}
-	if !strings.Contains(err.Error(), "streaming tts input not yet implemented") {
-		t.Fatalf("Stream error = %q, want unsupported streaming error", err.Error())
+	provider := newGoogleTTSWithClient(client,
+		WithGoogleTTSLanguage("id-ID"),
+		WithGoogleTTSVoice("id-ID-Standard-A"),
+		WithGoogleTTSModel("gemini-custom"),
+	)
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if !provider.Capabilities().Streaming {
+		t.Fatal("Capabilities().Streaming = false, want true like reference")
+	}
+	if err := stream.PushText("halo"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	if len(client.stream.sent) != 2 {
+		t.Fatalf("sent requests = %d, want config and input", len(client.stream.sent))
+	}
+	config := client.stream.sent[0].GetStreamingConfig()
+	if config == nil {
+		t.Fatal("first request has nil streaming_config")
+	}
+	if config.GetVoice().GetLanguageCode() != "id-ID" || config.GetVoice().GetName() != "id-ID-Standard-A" || config.GetVoice().GetModelName() != "gemini-custom" {
+		t.Fatalf("streaming voice = %+v, want configured voice", config.GetVoice())
+	}
+	if config.GetStreamingAudioConfig().GetSampleRateHertz() != 24000 || config.GetStreamingAudioConfig().GetAudioEncoding() != texttospeech.AudioEncoding_LINEAR16 {
+		t.Fatalf("audio config = %+v, want LINEAR16 24 kHz", config.GetStreamingAudioConfig())
+	}
+	if got := client.stream.sent[1].GetInput().GetText(); got != "halo" {
+		t.Fatalf("input text = %q, want halo", got)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if !bytes.Equal(audio.Frame.Data, []byte{1, 2, 3, 4}) {
+		t.Fatalf("audio = %v, want response bytes", audio.Frame.Data)
+	}
+	if audio.Frame.SampleRate != 24000 || audio.Frame.NumChannels != 1 || audio.Frame.SamplesPerChannel != 2 {
+		t.Fatalf("frame = %+v, want 24 kHz mono samples", audio.Frame)
 	}
 }
 
@@ -190,6 +239,7 @@ func TestGoogleTTSSynthesizeStripsWAVHeaderAndChunksAudio(t *testing.T) {
 type fakeGoogleTTSClient struct {
 	request  *texttospeech.SynthesizeSpeechRequest
 	response *texttospeech.SynthesizeSpeechResponse
+	stream   *fakeGoogleTTSStream
 	err      error
 }
 
@@ -197,3 +247,41 @@ func (c *fakeGoogleTTSClient) SynthesizeSpeech(ctx context.Context, req *texttos
 	c.request = req
 	return c.response, c.err
 }
+
+func (c *fakeGoogleTTSClient) StreamingSynthesize(ctx context.Context, opts ...gax.CallOption) (texttospeech.TextToSpeech_StreamingSynthesizeClient, error) {
+	if c.err != nil {
+		return nil, c.err
+	}
+	return c.stream, nil
+}
+
+type fakeGoogleTTSStream struct {
+	grpc.ClientStream
+	sent      []*texttospeech.StreamingSynthesizeRequest
+	responses []*texttospeech.StreamingSynthesizeResponse
+	closed    bool
+}
+
+func (s *fakeGoogleTTSStream) Send(req *texttospeech.StreamingSynthesizeRequest) error {
+	s.sent = append(s.sent, req)
+	return nil
+}
+
+func (s *fakeGoogleTTSStream) Recv() (*texttospeech.StreamingSynthesizeResponse, error) {
+	if len(s.responses) == 0 {
+		return nil, io.EOF
+	}
+	resp := s.responses[0]
+	s.responses = s.responses[1:]
+	return resp, nil
+}
+
+func (s *fakeGoogleTTSStream) Header() (metadata.MD, error) { return nil, nil }
+func (s *fakeGoogleTTSStream) Trailer() metadata.MD         { return nil }
+func (s *fakeGoogleTTSStream) CloseSend() error {
+	s.closed = true
+	return nil
+}
+func (s *fakeGoogleTTSStream) Context() context.Context { return context.Background() }
+func (s *fakeGoogleTTSStream) SendMsg(m any) error      { return nil }
+func (s *fakeGoogleTTSStream) RecvMsg(m any) error      { return nil }
