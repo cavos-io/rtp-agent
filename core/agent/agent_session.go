@@ -140,6 +140,7 @@ type GenerateReplyOptions struct {
 	ChatCtx             *llm.ChatContext
 	AllowInterruptions  *bool
 	InputModality       string
+	ScheduleSpeech      *bool
 }
 
 type SayOptions struct {
@@ -2208,6 +2209,14 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	}
 	if userMessage != nil && handle.Generation.UserMessage == nil {
 		handle.Generation.UserMessage = userMessage
+	}
+
+	scheduleSpeech := true
+	if opts.ScheduleSpeech != nil {
+		scheduleSpeech = *opts.ScheduleSpeech
+	}
+	if !scheduleSpeech {
+		return handle, nil
 	}
 
 	// Schedule the speech

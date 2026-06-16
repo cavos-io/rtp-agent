@@ -2146,6 +2146,56 @@ func TestAgentSessionGenerateReplyOptionsAcceptUserMessage(t *testing.T) {
 	}
 }
 
+func TestAgentSessionGenerateReplyOptionsCanCreateUnscheduledSpeech(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	speechEvents := session.SpeechCreatedEvents()
+	conversationEvents := session.ConversationItemAddedEvents()
+	scheduleSpeech := false
+	userMessage := &llm.ChatMessage{
+		ID:        "preemptive_user",
+		Role:      llm.ChatRoleUser,
+		Content:   []llm.ChatContent{{Text: "preemptive input"}},
+		CreatedAt: time.Now(),
+	}
+
+	handle, err := session.GenerateReplyWithOptions(context.Background(), GenerateReplyOptions{
+		UserMessage:    userMessage,
+		InputModality:  "audio",
+		ScheduleSpeech: &scheduleSpeech,
+	})
+
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions error = %v, want nil", err)
+	}
+	if handle == nil {
+		t.Fatal("GenerateReplyWithOptions handle = nil, want unscheduled speech handle")
+	}
+	if handle.IsScheduled() {
+		t.Fatal("speech handle was scheduled, want preemptive unscheduled handle")
+	}
+	if handle.Generation.UserMessage != userMessage {
+		t.Fatalf("handle.Generation.UserMessage = %#v, want supplied user message", handle.Generation.UserMessage)
+	}
+	if len(session.ChatCtx.Items) != 0 {
+		t.Fatalf("session ChatCtx items = %#v, want no committed user message before scheduling", session.ChatCtx.Items)
+	}
+	select {
+	case ev := <-speechEvents:
+		if ev.SpeechHandle != handle || !ev.UserInitiated || ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated event = %#v, want unscheduled generate_reply handle", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive unscheduled generate reply")
+	}
+	select {
+	case ev := <-conversationEvents:
+		t.Fatalf("ConversationItemAdded event = %#v, want no chat commit before scheduling", ev)
+	default:
+	}
+}
+
 func TestAgentSessionGenerateReplyOptionsPreferUserMessageOverString(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
