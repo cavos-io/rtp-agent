@@ -1188,6 +1188,15 @@ func TestNewAgentSessionAppliesReferenceOptionDefaults(t *testing.T) {
 	if !opts.PreemptiveGeneration {
 		t.Fatal("PreemptiveGeneration = false, want default true")
 	}
+	if opts.PreemptiveGenerationPreemptiveTTS {
+		t.Fatal("PreemptiveGenerationPreemptiveTTS = true, want default false")
+	}
+	if opts.PreemptiveGenerationMaxSpeechDuration != 10.0 {
+		t.Fatalf("PreemptiveGenerationMaxSpeechDuration = %v, want 10.0", opts.PreemptiveGenerationMaxSpeechDuration)
+	}
+	if opts.PreemptiveGenerationMaxRetries != 3 {
+		t.Fatalf("PreemptiveGenerationMaxRetries = %d, want 3", opts.PreemptiveGenerationMaxRetries)
+	}
 	if opts.AECWarmupDuration != 3.0 {
 		t.Fatalf("AECWarmupDuration = %v, want 3.0", opts.AECWarmupDuration)
 	}
@@ -1215,6 +1224,27 @@ func TestNewAgentSessionPreservesExplicitFalseTurnOptions(t *testing.T) {
 	}
 	if session.Options.PreemptiveGeneration {
 		t.Fatal("PreemptiveGeneration = true, want explicit false")
+	}
+}
+
+func TestNewAgentSessionPreservesExplicitPreemptiveGenerationOptions(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		PreemptiveGenerationPreemptiveTTS:        true,
+		PreemptiveGenerationPreemptiveTTSSet:     true,
+		PreemptiveGenerationMaxSpeechDuration:    4.5,
+		PreemptiveGenerationMaxSpeechDurationSet: true,
+		PreemptiveGenerationMaxRetries:           7,
+		PreemptiveGenerationMaxRetriesSet:        true,
+	})
+
+	if !session.Options.PreemptiveGenerationPreemptiveTTS {
+		t.Fatal("PreemptiveGenerationPreemptiveTTS = false, want explicit true")
+	}
+	if session.Options.PreemptiveGenerationMaxSpeechDuration != 4.5 {
+		t.Fatalf("PreemptiveGenerationMaxSpeechDuration = %v, want 4.5", session.Options.PreemptiveGenerationMaxSpeechDuration)
+	}
+	if session.Options.PreemptiveGenerationMaxRetries != 7 {
+		t.Fatalf("PreemptiveGenerationMaxRetries = %d, want 7", session.Options.PreemptiveGenerationMaxRetries)
 	}
 }
 
@@ -2143,6 +2173,81 @@ func TestAgentSessionGenerateReplyOptionsAcceptUserMessage(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ConversationItemAddedEvents did not receive supplied user message")
+	}
+}
+
+func TestAgentSessionGenerateReplyOptionsCanCreateUnscheduledSpeech(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	speechEvents := session.SpeechCreatedEvents()
+	conversationEvents := session.ConversationItemAddedEvents()
+	scheduleSpeech := false
+	userMessage := &llm.ChatMessage{
+		ID:        "preemptive_user",
+		Role:      llm.ChatRoleUser,
+		Content:   []llm.ChatContent{{Text: "preemptive input"}},
+		CreatedAt: time.Now(),
+	}
+
+	handle, err := session.GenerateReplyWithOptions(context.Background(), GenerateReplyOptions{
+		UserMessage:    userMessage,
+		InputModality:  "audio",
+		ScheduleSpeech: &scheduleSpeech,
+	})
+
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions error = %v, want nil", err)
+	}
+	if handle == nil {
+		t.Fatal("GenerateReplyWithOptions handle = nil, want unscheduled speech handle")
+	}
+	if handle.IsScheduled() {
+		t.Fatal("speech handle was scheduled, want preemptive unscheduled handle")
+	}
+	if handle.Generation.UserMessage != userMessage {
+		t.Fatalf("handle.Generation.UserMessage = %#v, want supplied user message", handle.Generation.UserMessage)
+	}
+	if len(session.ChatCtx.Items) != 0 {
+		t.Fatalf("session ChatCtx items = %#v, want no committed user message before scheduling", session.ChatCtx.Items)
+	}
+	select {
+	case ev := <-speechEvents:
+		if ev.SpeechHandle != handle || !ev.UserInitiated || ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated event = %#v, want unscheduled generate_reply handle", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive unscheduled generate reply")
+	}
+	select {
+	case ev := <-conversationEvents:
+		t.Fatalf("ConversationItemAdded event = %#v, want no chat commit before scheduling", ev)
+	default:
+	}
+}
+
+func TestAgentSessionGenerateReplyRejectsMissingLLM(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.Assistant = NewPipelineAgent(nil, nil, nil, nil, session.ChatCtx)
+	speechEvents := session.SpeechCreatedEvents()
+
+	handle, err := session.GenerateReply(context.Background(), "hello")
+
+	if handle != nil {
+		t.Fatalf("GenerateReply handle = %#v, want nil without LLM", handle)
+	}
+	if err == nil {
+		t.Fatal("GenerateReply error = nil, want missing LLM error")
+	}
+	if got, want := err.Error(), "trying to generate reply without an LLM model"; got != want {
+		t.Fatalf("GenerateReply error = %q, want %q", got, want)
+	}
+	select {
+	case ev := <-speechEvents:
+		t.Fatalf("SpeechCreated event = %#v, want no speech without LLM", ev)
+	default:
 	}
 }
 

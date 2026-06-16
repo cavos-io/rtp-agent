@@ -39,56 +39,62 @@ const (
 type idleHoldContextKey struct{}
 
 type AgentSessionOptions struct {
-	AllowInterruptions               bool
-	AllowInterruptionsSet            bool
-	DiscardAudioIfUninterruptible    bool
-	DiscardAudioIfUninterruptibleSet bool
-	MinInterruptionDuration          float64
-	MinInterruptionDurationSet       bool
-	MinInterruptionWords             int
-	MinEndpointingDelay              float64
-	MinEndpointingDelaySet           bool
-	MaxEndpointingDelay              float64
-	MaxEndpointingDelaySet           bool
-	EndpointingMode                  string
-	EndpointingAlpha                 float64
-	Endpointing                      Endpointing
-	MaxToolSteps                     int
-	MaxToolStepsSet                  bool
-	UserAwayTimeout                  float64
-	UserAwayTimeoutSet               bool
-	DisableUserAwayTimeout           bool
-	FalseInterruptionTimeout         float64
-	FalseInterruptionTimeoutSet      bool
-	ResumeFalseInterruption          bool
-	ResumeFalseInterruptionSet       bool
-	MinConsecutiveSpeechDelay        float64
-	UseTTSAlignedTranscript          bool
-	TTSStreamPacer                   *tts.SentenceStreamPacerOptions
-	TTSTextReplacements              map[string]string
-	TTSTextTransforms                []string
-	TTSTextTransformsSet             bool
-	DisableTTSTextTransforms         bool
-	LLMParallelToolCalls             *bool
-	LLMExtraParams                   map[string]any
-	LLMResponseFormat                map[string]any
-	BackgroundAudio                  *BackgroundAudioPlayer
-	WordTokenizer                    tokenize.WordTokenizer
-	PreemptiveGeneration             bool
-	PreemptiveGenerationSet          bool
-	AudioInputHook                   AudioInputHook
-	AECWarmupDuration                float64
-	AECWarmupDurationSet             bool
-	SessionCloseTranscriptTimeout    float64
-	SessionCloseTranscriptTimeoutSet bool
-	TurnDetection                    TurnDetectionMode
-	IVRDetection                     bool
-	IVRSilenceDuration               time.Duration
-	VideoSampler                     *VoiceActivityVideoSampler
-	ToolChoice                       llm.ToolChoice
-	MaxUnrecoverableErrors           int
-	MaxUnrecoverableErrorsSet        bool
-	MockTools                        map[string]MockToolFunc
+	AllowInterruptions                       bool
+	AllowInterruptionsSet                    bool
+	DiscardAudioIfUninterruptible            bool
+	DiscardAudioIfUninterruptibleSet         bool
+	MinInterruptionDuration                  float64
+	MinInterruptionDurationSet               bool
+	MinInterruptionWords                     int
+	MinEndpointingDelay                      float64
+	MinEndpointingDelaySet                   bool
+	MaxEndpointingDelay                      float64
+	MaxEndpointingDelaySet                   bool
+	EndpointingMode                          string
+	EndpointingAlpha                         float64
+	Endpointing                              Endpointing
+	MaxToolSteps                             int
+	MaxToolStepsSet                          bool
+	UserAwayTimeout                          float64
+	UserAwayTimeoutSet                       bool
+	DisableUserAwayTimeout                   bool
+	FalseInterruptionTimeout                 float64
+	FalseInterruptionTimeoutSet              bool
+	ResumeFalseInterruption                  bool
+	ResumeFalseInterruptionSet               bool
+	MinConsecutiveSpeechDelay                float64
+	UseTTSAlignedTranscript                  bool
+	TTSStreamPacer                           *tts.SentenceStreamPacerOptions
+	TTSTextReplacements                      map[string]string
+	TTSTextTransforms                        []string
+	TTSTextTransformsSet                     bool
+	DisableTTSTextTransforms                 bool
+	LLMParallelToolCalls                     *bool
+	LLMExtraParams                           map[string]any
+	LLMResponseFormat                        map[string]any
+	BackgroundAudio                          *BackgroundAudioPlayer
+	WordTokenizer                            tokenize.WordTokenizer
+	PreemptiveGeneration                     bool
+	PreemptiveGenerationSet                  bool
+	PreemptiveGenerationPreemptiveTTS        bool
+	PreemptiveGenerationPreemptiveTTSSet     bool
+	PreemptiveGenerationMaxSpeechDuration    float64
+	PreemptiveGenerationMaxSpeechDurationSet bool
+	PreemptiveGenerationMaxRetries           int
+	PreemptiveGenerationMaxRetriesSet        bool
+	AudioInputHook                           AudioInputHook
+	AECWarmupDuration                        float64
+	AECWarmupDurationSet                     bool
+	SessionCloseTranscriptTimeout            float64
+	SessionCloseTranscriptTimeoutSet         bool
+	TurnDetection                            TurnDetectionMode
+	IVRDetection                             bool
+	IVRSilenceDuration                       time.Duration
+	VideoSampler                             *VoiceActivityVideoSampler
+	ToolChoice                               llm.ToolChoice
+	MaxUnrecoverableErrors                   int
+	MaxUnrecoverableErrorsSet                bool
+	MockTools                                map[string]MockToolFunc
 }
 
 type AgentSessionUpdateOptions struct {
@@ -106,6 +112,7 @@ var (
 	ErrAgentSessionNestedRun        = errors.New("nested runs are not supported")
 	ErrAgentSessionUserdataNotSet   = errors.New("AgentSession userdata is not set")
 	ErrAgentSessionJobContextNotSet = errors.New("agent session job context is not set")
+	errGenerateReplyMissingLLM      = errors.New("trying to generate reply without an LLM model")
 	errAgentSessionClosingSay       = agentSessionClosingError("AgentSession is closing, cannot use say()")
 	errAgentSessionClosingReply     = agentSessionClosingError("AgentSession is closing, cannot use generate_reply()")
 )
@@ -140,6 +147,7 @@ type GenerateReplyOptions struct {
 	ChatCtx             *llm.ChatContext
 	AllowInterruptions  *bool
 	InputModality       string
+	ScheduleSpeech      *bool
 }
 
 type SayOptions struct {
@@ -898,6 +906,12 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	}
 	if !opts.PreemptiveGenerationSet {
 		opts.PreemptiveGeneration = true
+	}
+	if !opts.PreemptiveGenerationMaxSpeechDurationSet && opts.PreemptiveGenerationMaxSpeechDuration == 0 {
+		opts.PreemptiveGenerationMaxSpeechDuration = 10.0
+	}
+	if !opts.PreemptiveGenerationMaxRetriesSet && opts.PreemptiveGenerationMaxRetries == 0 {
+		opts.PreemptiveGenerationMaxRetries = 3
 	}
 	if !opts.DisableTTSTextTransforms && !opts.TTSTextTransformsSet {
 		opts.TTSTextTransforms = []string{"filter_markdown", "filter_emoji"}
@@ -2139,6 +2153,9 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 		}
 		return nil, ErrAgentSessionNotRunning
 	}
+	if pipeline, ok := assistant.(*PipelineAgent); ok && pipeline.LLM == nil {
+		return nil, errGenerateReplyMissingLLM
+	}
 	if len(opts.Tools) > 0 {
 		registeredTools, err := sessionRegisteredTools(ctx, s)
 		if err != nil {
@@ -2208,6 +2225,14 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	}
 	if userMessage != nil && handle.Generation.UserMessage == nil {
 		handle.Generation.UserMessage = userMessage
+	}
+
+	scheduleSpeech := true
+	if opts.ScheduleSpeech != nil {
+		scheduleSpeech = *opts.ScheduleSpeech
+	}
+	if !scheduleSpeech {
+		return handle, nil
 	}
 
 	// Schedule the speech

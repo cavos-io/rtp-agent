@@ -1389,6 +1389,37 @@ func TestAgentActivityRunEOUDetectionSkipsEmptyTranscript(t *testing.T) {
 	}
 }
 
+func TestAgentActivityVADTurnCompletesPendingFinalTranscriptAfterEndOfSpeech(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Timestamp: 1.0})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "wait for vad eos", Confidence: 0.9}},
+	})
+
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called before VAD end-of-speech with %q", msg.TextContent())
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	activity.OnEndOfSpeech(&vad.VADEvent{Timestamp: 1.5})
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "wait for vad eos" {
+			t.Fatalf("turn message text = %q, want wait for vad eos", msg.TextContent())
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called after VAD end-of-speech")
+	}
+}
+
 func TestAgentActivityUsesSessionMaxEndpointingDelay(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeSTT
@@ -1610,6 +1641,35 @@ func TestAgentActivityOnFinalTranscriptEmitsUserInputTranscribed(t *testing.T) {
 	}
 }
 
+func TestAgentActivityOnFinalTranscriptSkipsEmptyTranscript(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeVAD})
+	activity := NewAgentActivity(agent, session)
+	userTranscriptEvents := session.UserInputTranscribedEvents()
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	defer current.MarkDone()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Language:   "en",
+			Text:       "",
+			Confidence: 0,
+			SpeakerID:  "speaker-1",
+		}},
+	})
+
+	select {
+	case ev := <-userTranscriptEvents:
+		t.Fatalf("UserInputTranscribedEvents received empty final transcript: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if current.IsInterrupted() {
+		t.Fatal("current speech was interrupted for empty final transcript")
+	}
+}
+
 func TestAgentActivityOnInterimTranscriptEmitsUserInputTranscribed(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -1723,6 +1783,22 @@ func TestAgentActivityOnFinalTranscriptInterruptsCurrentSpeechForVADTurnDetectio
 
 	activity.OnFinalTranscript(&stt.SpeechEvent{
 		Alternatives: []stt.SpeechData{{Text: "final fallback", Confidence: 0.9}},
+	})
+
+	waitForInterrupted(t, current)
+	current.MarkDone()
+}
+
+func TestAgentActivityOnFinalTranscriptInterruptsCurrentSpeechForDefaultVADTurnDetection(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 5})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "default vad interrupt", Confidence: 0.9}},
 	})
 
 	waitForInterrupted(t, current)
