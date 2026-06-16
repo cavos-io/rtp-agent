@@ -808,6 +808,36 @@ func TestJobContextParticipantAvailableRunsMatchingEntrypoints(t *testing.T) {
 	}
 }
 
+func TestJobContextParticipantEntrypointHasCurrentJobContext(t *testing.T) {
+	jobCtx := NewJobContext(&livekit.Job{Id: "job_participant_context"}, "", "", "")
+	observed := make(chan *JobContext, 1)
+	if err := jobCtx.AddParticipantEntrypoint(func(_ *JobContext, _ *livekit.ParticipantInfo) {
+		got, _ := GetJobContext()
+		observed <- got
+	}); err != nil {
+		t.Fatalf("AddParticipantEntrypoint() error = %v", err)
+	}
+
+	if err := runWithJobContext(jobCtx, func() error {
+		jobCtx.participantAvailable(fakeParticipantView{
+			identity: "caller",
+			kind:     lksdk.ParticipantStandard,
+		})
+		return nil
+	}); err != nil {
+		t.Fatalf("runWithJobContext() error = %v", err)
+	}
+
+	select {
+	case got := <-observed:
+		if got != jobCtx {
+			t.Fatalf("GetJobContext() inside participant entrypoint = %#v, want scheduled job context %#v", got, jobCtx)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("participant entrypoint was not called")
+	}
+}
+
 func TestJobContextAddParticipantEntrypointRunsForExistingParticipants(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_participant_entrypoint_existing"}, "", "", "")
 	ctx.participantAvailable(fakeParticipantView{
