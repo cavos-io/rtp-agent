@@ -164,7 +164,7 @@ func buildElevenLabsSynthesizeRequest(t *ElevenLabsTTS, text string) (string, []
 		"text":     text,
 		"model_id": t.modelID,
 	}
-	if t.language != "" {
+	if t.language != "" && elevenLabsSupportsLanguageCode(t.modelID) {
 		body["language_code"] = t.language
 	}
 	if t.enableSSMLParsing {
@@ -317,7 +317,7 @@ func buildElevenLabsStreamURL(t *ElevenLabsTTS) string {
 	q := parsed.Query()
 	q.Set("model_id", t.modelID)
 	q.Set("output_format", t.encoding)
-	if t.language != "" {
+	if t.language != "" && elevenLabsSupportsLanguageCode(t.modelID) {
 		q.Set("language_code", t.language)
 	}
 	q.Set("enable_ssml_parsing", strconv.FormatBool(t.enableSSMLParsing))
@@ -327,6 +327,15 @@ func buildElevenLabsStreamURL(t *ElevenLabsTTS) string {
 	q.Set("sync_alignment", "true")
 	parsed.RawQuery = q.Encode()
 	return parsed.String()
+}
+
+func elevenLabsSupportsLanguageCode(modelID string) bool {
+	switch modelID {
+	case "eleven_turbo_v2_5", "eleven_turbo_v2", "eleven_flash_v2_5", "eleven_flash_v2":
+		return true
+	default:
+		return false
+	}
 }
 
 func elevenLabsSampleRate(encoding string) int {
