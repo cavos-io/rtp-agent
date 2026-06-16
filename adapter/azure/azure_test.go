@@ -344,7 +344,7 @@ func TestAzureSTTStreamUsesWebsocketProtocol(t *testing.T) {
 		t.Fatalf("PushFrame error = %v", err)
 	}
 	audioMessage := receiveAzureTestValue(t, audioMessages, "audio")
-	audioHeaders, audioPayload := splitAzureTestMessage(t, audioMessage)
+	audioHeaders, audioPayload := splitAzureTestBinaryMessage(t, audioMessage)
 	if audioHeaders["Path"] != "audio" {
 		t.Fatalf("audio Path = %q, want audio", audioHeaders["Path"])
 	}
@@ -722,6 +722,27 @@ func splitAzureTestMessage(t *testing.T, payload []byte) (map[string]string, []b
 		}
 	}
 	return headers, parts[1]
+}
+
+func splitAzureTestBinaryMessage(t *testing.T, payload []byte) (map[string]string, []byte) {
+	t.Helper()
+	if len(payload) < 2 {
+		t.Fatalf("binary message too short: %d bytes", len(payload))
+	}
+	headerLen := int(binary.BigEndian.Uint16(payload[:2]))
+	if len(payload) < 2+headerLen {
+		t.Fatalf("binary message header truncated: need %d got %d", 2+headerLen, len(payload))
+	}
+	headerBlock := payload[2 : 2+headerLen]
+	audio := payload[2+headerLen:]
+	headers := map[string]string{}
+	for _, line := range strings.Split(string(headerBlock), "\r\n") {
+		key, value, ok := strings.Cut(line, ":")
+		if ok {
+			headers[strings.TrimSpace(key)] = strings.TrimSpace(value)
+		}
+	}
+	return headers, audio
 }
 
 func nextAzureTestEvent(t *testing.T, stream stt.RecognizeStream) *stt.SpeechEvent {

@@ -312,6 +312,32 @@ func buildAzureSTTMessage(path string, requestID string, contentType string, bod
 	return b.Bytes()
 }
 
+// buildAzureSTTAudioMessage builds a binary WebSocket message for Azure STT audio frames.
+// Azure binary protocol: [2-byte big-endian header length][header bytes][audio bytes].
+func buildAzureSTTAudioMessage(path string, requestID string, contentType string, audio []byte) []byte {
+	var header bytes.Buffer
+	header.WriteString("Path: ")
+	header.WriteString(path)
+	header.WriteString("\r\n")
+	header.WriteString("X-RequestId: ")
+	header.WriteString(requestID)
+	header.WriteString("\r\n")
+	header.WriteString("X-Timestamp: ")
+	header.WriteString(time.Now().UTC().Format(time.RFC3339Nano))
+	header.WriteString("\r\n")
+	if contentType != "" {
+		header.WriteString("Content-Type: ")
+		header.WriteString(contentType)
+		header.WriteString("\r\n")
+	}
+	headerBytes := header.Bytes()
+	var b bytes.Buffer
+	_ = binary.Write(&b, binary.BigEndian, uint16(len(headerBytes)))
+	b.Write(headerBytes)
+	b.Write(audio)
+	return b.Bytes()
+}
+
 type azureSTTStream struct {
 	conn         *websocket.Conn
 	connectionID string
@@ -333,7 +359,7 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	if err := s.conn.WriteMessage(websocket.BinaryMessage, buildAzureSTTMessage("audio", s.connectionID, "audio/x-wav", frame.Data)); err != nil {
+	if err := s.conn.WriteMessage(websocket.BinaryMessage, buildAzureSTTAudioMessage("audio", s.connectionID, "audio/x-wav", frame.Data)); err != nil {
 		s.closed = true
 		s.cancel()
 		_ = s.conn.Close()
