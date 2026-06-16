@@ -16,7 +16,12 @@ export GIT_CONFIG_VALUE_0="https://github.com/"
 if [[ "$#" -gt 0 ]]; then
 	go get "$@"
 else
-	go get -u ./...
+	mapfile -t packages < <(go list -e ./... | grep -v '/refs/')
+	if [[ "${#packages[@]}" -eq 0 ]]; then
+		echo "Error: no Go packages found outside refs."
+		exit 1
+	fi
+	go get -u "${packages[@]}"
 fi
 
 go mod tidy
