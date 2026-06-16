@@ -1075,6 +1075,86 @@ func TestOpenAISTTUpdateOptionsPropagatesEmptyLanguageToActiveStream(t *testing.
 	}
 }
 
+func TestOpenAIRealtimeSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	started := make(chan struct{})
+	closeServer := make(chan struct{})
+	serverDone := make(chan struct{})
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			defer close(serverDone)
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			close(started)
+			<-closeServer
+			_ = conn.Close()
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not send initial session update")
+	}
+	close(closeServer)
+	select {
+	case <-serverDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test websocket close")
+	}
+
+	var writeErr error
+	for range 3 {
+		writeErr = stream.PushFrame(&model.AudioFrame{
+			Data:              []byte{0x01, 0x02},
+			SampleRate:        24000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		})
+		if writeErr != nil {
+			break
+		}
+	}
+	if writeErr == nil {
+		t.Fatal("PushFrame error = nil after closed websocket, want write failure")
+	}
+	providerStream, ok := stream.(*openAIRealtimeSTTStream)
+	if !ok {
+		t.Fatalf("stream = %T, want *openAIRealtimeSTTStream", stream)
+	}
+	if !providerStream.closed {
+		t.Fatal("stream closed = false after write failure, want true")
+	}
+
+	err = stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x03, 0x04},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	})
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("second PushFrame error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after write failure error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close after write failure error = %v", err)
+	}
+}
+
 func TestOpenAISTTUpdateOptionsPropagatesLanguageToActiveStream(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
