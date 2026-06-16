@@ -1374,6 +1374,135 @@ func TestRoomIOResetsUserTranscriptionSegmentAfterFinal(t *testing.T) {
 	}
 }
 
+func TestRoomIOSetParticipantResetsUserTranscriptionSegmentOnTargetChange(t *testing.T) {
+	published := make(chan roomIOPublishedText, 2)
+	rio := &RoomIO{
+		userTranscriptionTrackID:       "TR_user_audio",
+		userTranscriptionParticipantID: "caller-a",
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "interim utterance",
+		IsFinal:    false,
+		Language:   "id",
+	})
+	interim := receivePublishedText(t, published, "interim utterance")
+	interimID := interim.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if interimID == "" {
+		t.Fatal("interim segment id must not be empty")
+	}
+
+	rio.SetParticipant("caller-b")
+
+	rio.mu.Lock()
+	rio.userTranscriptionTrackID = "TR_user_audio_b"
+	rio.userTranscriptionParticipantID = "caller-b"
+	rio.mu.Unlock()
+
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "next utterance",
+		IsFinal:    true,
+		Language:   "id",
+	})
+	next := receivePublishedText(t, published, "next utterance after participant change")
+	nextID := next.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if nextID == "" {
+		t.Fatal("next segment id must not be empty")
+	}
+	if nextID == interimID {
+		t.Fatalf("segment id must reset after participant change: both = %q", nextID)
+	}
+}
+
+func TestRoomIODisableAudioResetsUserTranscriptionSegment(t *testing.T) {
+	published := make(chan roomIOPublishedText, 2)
+	rio := &RoomIO{
+		userTranscriptionTrackID:       "TR_user_audio",
+		userTranscriptionParticipantID: "caller-a",
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "interim utterance",
+		IsFinal:    false,
+		Language:   "id",
+	})
+	interim := receivePublishedText(t, published, "interim utterance")
+	interimID := interim.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if interimID == "" {
+		t.Fatal("interim segment id must not be empty")
+	}
+
+	rio.disableAudioIOForSimulator()
+
+	rio.mu.Lock()
+	rio.userTranscriptionTrackID = "TR_user_audio_new"
+	rio.userTranscriptionParticipantID = "caller-a"
+	rio.mu.Unlock()
+
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "next utterance",
+		IsFinal:    true,
+		Language:   "id",
+	})
+	next := receivePublishedText(t, published, "next utterance after audio disabled")
+	nextID := next.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if nextID == "" {
+		t.Fatal("next segment id must not be empty")
+	}
+	if nextID == interimID {
+		t.Fatalf("segment id must reset after audio disabled: both = %q", nextID)
+	}
+}
+
+func TestRoomIOClearTranscriptionTargetResetsUserTranscriptionSegment(t *testing.T) {
+	published := make(chan roomIOPublishedText, 2)
+	rio := &RoomIO{
+		userTranscriptionTrackID:       "TR_user_audio",
+		userTranscriptionParticipantID: "caller-a",
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "interim utterance",
+		IsFinal:    false,
+		Language:   "id",
+	})
+	interim := receivePublishedText(t, published, "interim utterance")
+	interimID := interim.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if interimID == "" {
+		t.Fatal("interim segment id must not be empty")
+	}
+
+	rio.clearUserTranscriptionTargetForParticipant("caller-a")
+
+	rio.mu.Lock()
+	rio.userTranscriptionTrackID = "TR_user_audio_new"
+	rio.userTranscriptionParticipantID = "caller-a"
+	rio.mu.Unlock()
+
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "next utterance",
+		IsFinal:    true,
+		Language:   "id",
+	})
+	next := receivePublishedText(t, published, "next utterance after target cleared")
+	nextID := next.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if nextID == "" {
+		t.Fatal("next segment id must not be empty")
+	}
+	if nextID == interimID {
+		t.Fatalf("segment id must reset after target cleared: both = %q", nextID)
+	}
+}
+
 func TestRoomIOCanDisableAgentTranscriptionOutput(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 	published := make(chan roomIOPublishedText, 1)

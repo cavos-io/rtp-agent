@@ -773,6 +773,7 @@ func (rio *RoomIO) disableAudioIOForSimulator() {
 	rio.audioTrackID = ""
 	rio.userTranscriptionTrackID = ""
 	rio.userTranscriptionParticipantID = ""
+	rio.userTranscriptionSegmentID = ""
 	rio.mu.Unlock()
 
 	if preConnectAudio != nil {
@@ -794,6 +795,7 @@ func (rio *RoomIO) setParticipant(participantIdentity string, available bool) {
 	if participantIdentity == "" || rio.userTranscriptionParticipantID != participantIdentity {
 		rio.userTranscriptionTrackID = ""
 		rio.userTranscriptionParticipantID = ""
+		rio.userTranscriptionSegmentID = ""
 	}
 	rio.Options.ParticipantIdentity = participantIdentity
 	rio.participantAvailable = available
@@ -1105,6 +1107,7 @@ func (rio *RoomIO) clearUserTranscriptionTargetForParticipant(participantIdentit
 	}
 	rio.userTranscriptionTrackID = ""
 	rio.userTranscriptionParticipantID = ""
+	rio.userTranscriptionSegmentID = ""
 }
 
 func (rio *RoomIO) forgetConnectedParticipant(identity string) {
