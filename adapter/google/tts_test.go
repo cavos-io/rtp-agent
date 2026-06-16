@@ -193,6 +193,40 @@ func TestGoogleTTSUpdateOptionsPreservesExistingVoiceFields(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSPromptMatchesReferenceRequests(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{{AudioContent: []byte{5, 6}}},
+		},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSPrompt("speak warmly"))
+
+	chunked, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer chunked.Close()
+	if got := client.request.GetInput().GetPrompt(); got != "speak warmly" {
+		t.Fatalf("synthesize prompt = %q, want speak warmly", got)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	if got := client.stream.sent[1].GetInput().GetPrompt(); got != "speak warmly" {
+		t.Fatalf("stream prompt = %q, want speak warmly on first input", got)
+	}
+}
+
 func TestGoogleTTSChirp3OmitsModelName(t *testing.T) {
 	provider := newGoogleTTSWithClient(nil, WithGoogleTTSModel("chirp_3"))
 

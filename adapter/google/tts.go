@@ -15,6 +15,7 @@ import (
 type GoogleTTS struct {
 	client googleTTSClient
 	voice  *texttospeechpb.VoiceSelectionParams
+	prompt *string
 	audio  *texttospeechpb.AudioConfig
 }
 
@@ -29,6 +30,7 @@ type googleTTSConfig struct {
 	language string
 	voice    string
 	model    string
+	prompt   *string
 }
 
 func WithGoogleTTSLanguage(language string) GoogleTTSOption {
@@ -52,6 +54,12 @@ func WithGoogleTTSModel(model string) GoogleTTSOption {
 		if model != "" {
 			cfg.model = model
 		}
+	}
+}
+
+func WithGoogleTTSPrompt(prompt string) GoogleTTSOption {
+	return func(cfg *googleTTSConfig) {
+		cfg.prompt = &prompt
 	}
 }
 
@@ -85,6 +93,7 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 	return &GoogleTTS{
 		client: client,
 		voice:  googleTTSVoiceParams(cfg),
+		prompt: cfg.prompt,
 		audio: &texttospeechpb.AudioConfig{
 			AudioEncoding:   texttospeechpb.AudioEncoding_LINEAR16,
 			SampleRateHertz: 24000,
@@ -111,17 +120,20 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 		language: t.voice.GetLanguageCode(),
 		voice:    t.voice.GetName(),
 		model:    t.Model(),
+		prompt:   t.prompt,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
 	t.voice = googleTTSVoiceParams(cfg)
+	t.prompt = cfg.prompt
 }
 
 func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	req := &texttospeechpb.SynthesizeSpeechRequest{
 		Input: &texttospeechpb.SynthesisInput{
 			InputSource: &texttospeechpb.SynthesisInput_Text{Text: text},
+			Prompt:      t.prompt,
 		},
 		Voice:       t.voice,
 		AudioConfig: t.audio,
@@ -142,6 +154,7 @@ func (t *GoogleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		ctx:    ctx,
 		client: t.client,
 		voice:  t.voice,
+		prompt: t.prompt,
 		audio:  t.audio,
 	}, nil
 }
@@ -194,6 +207,7 @@ type googleTTSSynthesizeStream struct {
 	client  googleTTSClient
 	streams []texttospeechpb.TextToSpeech_StreamingSynthesizeClient
 	voice   *texttospeechpb.VoiceSelectionParams
+	prompt  *string
 	audio   *texttospeechpb.AudioConfig
 	buffer  strings.Builder
 	closed  bool
@@ -237,6 +251,7 @@ func (s *googleTTSSynthesizeStream) Flush() error {
 		StreamingRequest: &texttospeechpb.StreamingSynthesizeRequest_Input{
 			Input: &texttospeechpb.StreamingSynthesisInput{
 				InputSource: &texttospeechpb.StreamingSynthesisInput_Text{Text: text},
+				Prompt:      s.prompt,
 			},
 		},
 	}); err != nil {
