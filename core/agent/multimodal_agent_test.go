@@ -1426,6 +1426,54 @@ func TestMultimodalAgentSkipsRealtimeMessagesAfterSpeechInterrupted(t *testing.T
 	}
 }
 
+func TestMultimodalAgentUsesTTSFallbackForTextOnlyRealtimeMessage(t *testing.T) {
+	ttsStream := newEndInputGenerationTTSStream()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.TTS = &fakeGenerationTTS{stream: ttsStream}
+	chatCtx := llm.NewChatContext()
+	var published []*model.AudioFrame
+	ma := &MultimodalAgent{
+		model: &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{
+			AudioOutput: true,
+		}},
+		session: session,
+		chatCtx: chatCtx,
+		PublishAudio: func(ctx context.Context, frame *model.AudioFrame) error {
+			published = append(published, frame)
+			return nil
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "spoken fallback"
+	close(textCh)
+	modalitiesCh := make(chan []string, 1)
+	modalitiesCh <- []string{"text"}
+	close(modalitiesCh)
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	ma.consumeRealtimeMessage(context.Background(), speech, llm.MessageGeneration{
+		MessageID:    "msg_text_only",
+		TextCh:       textCh,
+		ModalitiesCh: modalitiesCh,
+	})
+
+	if len(published) != 1 || string(published[0].Data) != "audio" {
+		t.Fatalf("published frames = %#v, want one synthesized TTS audio frame", published)
+	}
+	if !strings.Contains(strings.Join(ttsStream.calls, ","), "push:spoken") ||
+		!strings.Contains(strings.Join(ttsStream.calls, ","), "push: fallback") ||
+		ttsStream.calls[len(ttsStream.calls)-1] != "end_input" {
+		t.Fatalf("TTS stream calls = %#v, want text pushed before end_input", ttsStream.calls)
+	}
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("chat context items = %#v, want assistant text message", chatCtx.Items)
+	}
+	msg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || msg.TextContent() != "spoken fallback" {
+		t.Fatalf("assistant message = %#v, want spoken fallback", chatCtx.Items[0])
+	}
+}
+
 func TestMultimodalAgentGeneratesToolReplyWhenRealtimeDoesNotAutoReply(t *testing.T) {
 	agent := NewAgent("test")
 	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}

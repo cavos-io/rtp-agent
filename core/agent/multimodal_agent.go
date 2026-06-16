@@ -688,6 +688,18 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 		text, playback = ma.forwardedRealtimeTextAfterInterruption(ctx, text)
 		ma.truncateInterruptedRealtimeMessage(message.MessageID, modalities, text, playback)
 	}
+	if text != "" && len(modalities) > 0 && !realtimeModalitiesContain(modalities, "audio") {
+		if err := ma.publishTTSFallbackForRealtimeText(ctx, speech, text); err != nil {
+			logger.Logger.Errorw("failed to synthesize text-only realtime response", err)
+			if ma.session != nil {
+				ma.session.EmitError(ErrorEvent{
+					Error:  err,
+					Source: ma,
+				})
+			}
+			return
+		}
+	}
 	if text == "" {
 		return
 	}
@@ -707,6 +719,66 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 		ma.session.EmitConversationItemAdded(msg)
 	}
 	speech.AddChatItems(msg)
+}
+
+func (ma *MultimodalAgent) publishTTSFallbackForRealtimeText(ctx context.Context, speech *SpeechHandle, text string) error {
+	ma.mu.Lock()
+	session := ma.session
+	publish := ma.PublishAudio
+	ma.mu.Unlock()
+	if session == nil || session.TTS == nil || publish == nil {
+		return nil
+	}
+	textCh := make(chan string, 1)
+	textCh <- text
+	close(textCh)
+	ttsGen, err := PerformTTSInference(ctx, session.TTS, textCh, multimodalTTSInferenceOptions(session)...)
+	if err != nil {
+		return err
+	}
+	session.UpdateAgentState(AgentStateSpeaking)
+	for frame := range ttsGen.AudioCh {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			if speech != nil && speech.IsInterrupted() {
+				return nil
+			}
+			if err := publish(ctx, frame); err != nil {
+				return err
+			}
+		}
+	}
+	return ttsGen.StreamErr
+}
+
+func multimodalTTSInferenceOptions(session *AgentSession) []TTSInferenceOption {
+	if session == nil {
+		return nil
+	}
+	var opts []TTSInferenceOption
+	if session.Options.TTSStreamPacer != nil {
+		opts = append(opts, WithTTSStreamPacer(*session.Options.TTSStreamPacer))
+	}
+	if len(session.Options.TTSTextReplacements) > 0 {
+		opts = append(opts, WithTTSTextReplacements(session.Options.TTSTextReplacements))
+	}
+	if session.Options.DisableTTSTextTransforms {
+		opts = append(opts, WithTTSTextTransformsDisabled())
+	} else if session.Options.TTSTextTransformsSet {
+		opts = append(opts, WithTTSTextTransforms(session.Options.TTSTextTransforms))
+	}
+	return opts
+}
+
+func realtimeModalitiesContain(modalities []string, target string) bool {
+	for _, modality := range modalities {
+		if modality == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (ma *MultimodalAgent) forwardedRealtimeTextAfterInterruption(ctx context.Context, generatedText string) (string, AudioPlaybackResult) {
