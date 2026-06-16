@@ -1380,6 +1380,10 @@ func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 		a.eouCancel = nil
 	}
 	a.eouMu.Unlock()
+
+	if a.pauseThinkingSpeechForFalseInterruption() {
+		return
+	}
 }
 
 func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
@@ -1611,6 +1615,21 @@ func (a *AgentActivity) pauseSpeechForFalseInterruption() bool {
 	if a == nil || a.Session == nil {
 		return false
 	}
+	opts := a.Session.Options
+	return a.pauseCurrentSpeechForFalseInterruption(time.Duration(opts.FalseInterruptionTimeout*float64(time.Second)), true, false)
+}
+
+func (a *AgentActivity) pauseThinkingSpeechForFalseInterruption() bool {
+	if a == nil || a.Session == nil || a.Session.AgentState() == AgentStateSpeaking {
+		return false
+	}
+	return a.pauseCurrentSpeechForFalseInterruption(0, false, true)
+}
+
+func (a *AgentActivity) pauseCurrentSpeechForFalseInterruption(timeout time.Duration, updateAgentState bool, skipIfPaused bool) bool {
+	if a == nil || a.Session == nil {
+		return false
+	}
 	controller := a.Session.AudioOutputController()
 	if controller == nil || !controller.CanPauseAudioOutput() {
 		return false
@@ -1627,8 +1646,11 @@ func (a *AgentActivity) pauseSpeechForFalseInterruption() bool {
 	}
 	a.queueMu.Unlock()
 
-	timeout := time.Duration(opts.FalseInterruptionTimeout * float64(time.Second))
 	a.falseInterruptionMu.Lock()
+	if skipIfPaused && a.pausedSpeech != nil && a.pausedSpeech.handle == current {
+		a.falseInterruptionMu.Unlock()
+		return false
+	}
 	if a.falseInterruptionTimer != nil {
 		a.falseInterruptionTimer.Stop()
 		a.falseInterruptionTimer = nil
@@ -1645,7 +1667,9 @@ func (a *AgentActivity) pauseSpeechForFalseInterruption() bool {
 	a.falseInterruptionMu.Unlock()
 
 	controller.PauseAudioOutput()
-	a.Session.UpdateAgentState(AgentStateListening)
+	if updateAgentState {
+		a.Session.UpdateAgentState(AgentStateListening)
+	}
 	return true
 }
 

@@ -486,6 +486,45 @@ func TestAgentActivityVADSpeechCallbacksUpdateUserState(t *testing.T) {
 	}
 }
 
+func TestAgentActivityOnStartOfSpeechPausesThinkingSpeech(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		ResumeFalseInterruption:    true,
+		ResumeFalseInterruptionSet: true,
+	})
+	audioOutput := &recordingAudioOutputController{canPause: true}
+	session.SetAudioOutputController(audioOutput)
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	session.agentState = AgentStateListening
+	falseInterruptions := session.AgentFalseInterruptionEvents()
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+
+	if audioOutput.pauseCount != 1 {
+		t.Fatalf("PauseAudioOutput calls = %d, want 1", audioOutput.pauseCount)
+	}
+	if current.IsInterrupted() {
+		t.Fatal("current speech was interrupted instead of paused while agent was thinking")
+	}
+
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+
+	select {
+	case ev := <-falseInterruptions:
+		if !ev.Resumed {
+			t.Fatalf("AgentFalseInterruptionEvent.Resumed = false, want true")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AgentFalseInterruptionEvents did not receive resumed event")
+	}
+	if audioOutput.resumeCount != 1 {
+		t.Fatalf("ResumeAudioOutput calls = %d, want 1", audioOutput.resumeCount)
+	}
+	current.MarkDone()
+}
+
 func TestAgentActivityOnVADInferenceDoneInterruptsCurrentSpeech(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}
