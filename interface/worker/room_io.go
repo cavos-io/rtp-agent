@@ -138,6 +138,7 @@ const roomIODeleteRoomCloseTimeout = 10 * time.Second
 const roomIOOpusClockRate uint32 = 48000
 const roomIOOpusFrameSamples uint32 = 960
 const roomIOInputSampleRate uint32 = 24000
+const roomIOInputFrameSizeMS uint32 = 50
 const roomIOAudioSubscriptionTimeout = 3 * time.Second
 const roomIOInputSilenceFlushDuration = 500 * time.Millisecond
 
@@ -1183,11 +1184,15 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 	// First, check for and flush any pre-connect audio buffered
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	inputStream := newRoomIOInputAudioStream()
 
 	if rio.preConnectAudio != nil {
 		if frames := rio.preConnectAudio.WaitForData(ctx, track.ID()); len(frames) > 0 {
 			for _, frame := range frames {
-				rio.forwardRoomInputFrame(context.Background(), roomIOInputFrameFromFrame(frame))
+				inputFrame := roomIOInputFrameFromFrame(frame)
+				if inputFrame != nil {
+					rio.forwardRoomInputFrames(context.Background(), inputStream.Push(inputFrame.Data))
+				}
 			}
 		}
 	}
@@ -1209,6 +1214,7 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 		pkt, _, err := track.ReadRTP()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				rio.forwardRoomInputFrames(context.Background(), inputStream.Flush())
 				rio.forwardRoomInputFrame(context.Background(), roomIOInputSilenceFlushFrame())
 			} else {
 				// log error
@@ -1232,9 +1238,14 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 
 			frame := roomIOInputFrameFromPCM(pcm, track.Codec().ClockRate, 1)
 
-			rio.forwardRoomInputFrame(context.Background(), frame)
+			rio.forwardRoomInputFrames(context.Background(), inputStream.Push(frame.Data))
 		}
 	}
+}
+
+func newRoomIOInputAudioStream() *audio.AudioByteStream {
+	samplesPerChannel := roomIOInputSampleRate * roomIOInputFrameSizeMS / 1000
+	return audio.NewAudioByteStream(roomIOInputSampleRate, 1, samplesPerChannel)
 }
 
 func roomIOInputFrameFromPCM(pcm []byte, sampleRate uint32, channels uint32) *model.AudioFrame {
@@ -1272,6 +1283,12 @@ func roomIOInputSilenceFlushFrame() *model.AudioFrame {
 		SampleRate:        roomIOInputSampleRate,
 		NumChannels:       1,
 		SamplesPerChannel: samples,
+	}
+}
+
+func (rio *RoomIO) forwardRoomInputFrames(ctx context.Context, frames []*model.AudioFrame) {
+	for _, frame := range frames {
+		rio.forwardRoomInputFrame(ctx, frame)
 	}
 }
 

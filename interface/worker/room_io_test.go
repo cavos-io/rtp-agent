@@ -149,6 +149,31 @@ func TestRoomIOInputFrameUsesReferenceSampleRate(t *testing.T) {
 	}
 }
 
+func TestRoomIOInputStreamUsesReferenceFrameSize(t *testing.T) {
+	stream := newRoomIOInputAudioStream()
+	var frames []*model.AudioFrame
+	for i := 0; i < 5; i++ {
+		frame := roomIOInputFrameFromPCM(make([]byte, 960), roomIOOpusClockRate, 1)
+		frames = append(frames, stream.Push(frame.Data)...)
+	}
+
+	if len(frames) != 1 {
+		t.Fatalf("frames = %d, want one 50ms RoomIO input frame", len(frames))
+	}
+	if frames[0].SampleRate != 24000 {
+		t.Fatalf("SampleRate = %d, want 24000", frames[0].SampleRate)
+	}
+	if frames[0].NumChannels != 1 {
+		t.Fatalf("NumChannels = %d, want mono", frames[0].NumChannels)
+	}
+	if frames[0].SamplesPerChannel != 1200 {
+		t.Fatalf("SamplesPerChannel = %d, want 1200 for 50ms at 24kHz", frames[0].SamplesPerChannel)
+	}
+	if got, want := len(frames[0].Data), int(frames[0].SamplesPerChannel*frames[0].NumChannels*2); got != want {
+		t.Fatalf("frame data bytes = %d, want %d", got, want)
+	}
+}
+
 func TestRoomIOInputFrameNormalizesPreConnectAudio(t *testing.T) {
 	preConnect := &model.AudioFrame{
 		Data:              make([]byte, 960),
