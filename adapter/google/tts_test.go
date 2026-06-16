@@ -126,8 +126,8 @@ func TestGoogleTTSSynthesizeRequestUsesReferenceDefaults(t *testing.T) {
 	if got := req.GetVoice().GetModelName(); got != "gemini-2.5-flash-tts" {
 		t.Fatalf("voice model = %q, want gemini-2.5-flash-tts", got)
 	}
-	if got := req.GetAudioConfig().GetAudioEncoding(); got != texttospeech.AudioEncoding_LINEAR16 {
-		t.Fatalf("audio encoding = %v, want LINEAR16", got)
+	if got := req.GetAudioConfig().GetAudioEncoding(); got != texttospeech.AudioEncoding_PCM {
+		t.Fatalf("audio encoding = %v, want PCM", got)
 	}
 	if got := req.GetAudioConfig().GetSampleRateHertz(); got != 24000 {
 		t.Fatalf("sample rate = %d, want 24000", got)

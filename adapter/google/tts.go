@@ -126,7 +126,7 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 		voice:  googleTTSVoiceParams(cfg),
 		prompt: cfg.prompt,
 		audio: &texttospeechpb.AudioConfig{
-			AudioEncoding:    texttospeechpb.AudioEncoding_LINEAR16,
+			AudioEncoding:    texttospeechpb.AudioEncoding_PCM,
 			SampleRateHertz:  24000,
 			SpeakingRate:     cfg.speakingRate,
 			Pitch:            cfg.pitch,
