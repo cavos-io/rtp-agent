@@ -1746,6 +1746,7 @@ func callPlaybackFinishedHandler(handler func(PlaybackFinishedEvent), ev Playbac
 }
 
 func (rio *RoomIO) Close() error {
+	rio.dropPausedAudioOutput()
 	rio.mu.Lock()
 	rio.closed = true
 	if rio.agentStateCancel != nil {

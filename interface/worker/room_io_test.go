@@ -851,6 +851,48 @@ func TestRoomIOCloseUnregistersChatTextHandler(t *testing.T) {
 	}
 }
 
+func TestRoomIOCloseDropsPausedPublish(t *testing.T) {
+	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
+	rio := &RoomIO{
+		audioTrack: newRoomIOTestAudioTrack(t),
+		encoder:    encoder,
+	}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+
+	rio.PauseAudioOutput()
+	published := make(chan error, 1)
+	go func() {
+		published <- rio.PublishAudio(context.Background(), frame)
+	}()
+
+	select {
+	case err := <-published:
+		t.Fatalf("PublishAudio returned while paused with error %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	if err := rio.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	select {
+	case err := <-published:
+		if err != nil {
+			t.Fatalf("PublishAudio after Close error = %v, want nil dropped publish", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("PublishAudio did not unblock after Close")
+	}
+	if len(encoder.calls) != 0 {
+		t.Fatalf("encoder calls = %d, want 0 after Close drops paused publish", len(encoder.calls))
+	}
+}
+
 func TestRoomIOCloseClearsSessionListeners(t *testing.T) {
 	agentStateCancelled := make(chan struct{})
 	userStateCancelled := make(chan struct{})
