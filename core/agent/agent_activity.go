@@ -138,6 +138,10 @@ type AgentActivity struct {
 	preemptiveGeneration      *preemptiveGeneration
 	preemptiveGenerationCount int
 	userSpeechStartedAt       time.Time
+
+	falseInterruptionMu    sync.Mutex
+	pausedSpeech           *pausedSpeechInfo
+	falseInterruptionTimer *time.Timer
 }
 
 func NewAgentActivity(agentIntf AgentInterface, session *AgentSession) *AgentActivity {
@@ -160,6 +164,12 @@ type scheduledSpeech struct {
 	speech   *SpeechHandle
 	priority int
 	seq      uint64
+}
+
+type pausedSpeechInfo struct {
+	handle     *SpeechHandle
+	agentState AgentState
+	timeout    time.Duration
 }
 
 type preemptiveGeneration struct {
@@ -1386,6 +1396,7 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 		// Trigger EOU detection
 		a.runEOUDetection(a.pendingFinalEndOfTurnInfo())
 	}
+	a.startFalseInterruptionTimer()
 }
 
 func (a *AgentActivity) OnVADInferenceDone(ev *vad.VADEvent) {
@@ -1583,11 +1594,100 @@ func (a *AgentActivity) interruptByAudioActivity(reason string, key string, valu
 	if a.Session != nil && a.Session.aecWarmupActive() {
 		return
 	}
+	if a.pauseSpeechForFalseInterruption() {
+		return
+	}
 	go func() {
 		if err := a.Interrupt(false); err != nil {
 			logger.Logger.Warnw("failed to interrupt speech for "+reason, err, key, value)
 		}
 	}()
+}
+
+func (a *AgentActivity) pauseSpeechForFalseInterruption() bool {
+	if a == nil || a.Session == nil {
+		return false
+	}
+	controller := a.Session.AudioOutputController()
+	if controller == nil || !controller.CanPauseAudioOutput() {
+		return false
+	}
+	opts := a.Session.Options
+	if !opts.ResumeFalseInterruption || opts.FalseInterruptionTimeout < 0 {
+		return false
+	}
+	a.queueMu.Lock()
+	current := a.currentSpeech
+	if current == nil || current.IsInterrupted() || current.IsDone() || !current.AllowInterruptions {
+		a.queueMu.Unlock()
+		return false
+	}
+	a.queueMu.Unlock()
+
+	timeout := time.Duration(opts.FalseInterruptionTimeout * float64(time.Second))
+	a.falseInterruptionMu.Lock()
+	if a.falseInterruptionTimer != nil {
+		a.falseInterruptionTimer.Stop()
+		a.falseInterruptionTimer = nil
+	}
+	if a.pausedSpeech != nil && a.pausedSpeech.handle == current {
+		a.pausedSpeech.timeout = timeout
+	} else {
+		a.pausedSpeech = &pausedSpeechInfo{
+			handle:     current,
+			agentState: a.Session.AgentState(),
+			timeout:    timeout,
+		}
+	}
+	a.falseInterruptionMu.Unlock()
+
+	controller.PauseAudioOutput()
+	a.Session.UpdateAgentState(AgentStateListening)
+	return true
+}
+
+func (a *AgentActivity) startFalseInterruptionTimer() {
+	if a == nil {
+		return
+	}
+	a.falseInterruptionMu.Lock()
+	paused := a.pausedSpeech
+	if paused == nil {
+		a.falseInterruptionMu.Unlock()
+		return
+	}
+	if a.falseInterruptionTimer != nil {
+		a.falseInterruptionTimer.Stop()
+	}
+	timeout := paused.timeout
+	a.falseInterruptionTimer = time.AfterFunc(timeout, a.resumeFalseInterruption)
+	a.falseInterruptionMu.Unlock()
+}
+
+func (a *AgentActivity) resumeFalseInterruption() {
+	if a == nil || a.Session == nil {
+		return
+	}
+	a.falseInterruptionMu.Lock()
+	paused := a.pausedSpeech
+	a.pausedSpeech = nil
+	a.falseInterruptionTimer = nil
+	a.falseInterruptionMu.Unlock()
+	if paused == nil {
+		return
+	}
+
+	resumed := false
+	controller := a.Session.AudioOutputController()
+	a.queueMu.Lock()
+	current := a.currentSpeech
+	a.queueMu.Unlock()
+	if current == paused.handle && !paused.handle.IsDone() && controller != nil && controller.CanPauseAudioOutput() && a.Session.Options.ResumeFalseInterruption {
+		a.Session.UpdateAgentState(paused.agentState)
+		controller.ResumeAudioOutput()
+		resumed = true
+	}
+	a.Session.EmitAgentFalseInterruption(AgentFalseInterruptionEvent{Resumed: resumed})
 }
 
 func (a *AgentActivity) ClearUserTurn() {

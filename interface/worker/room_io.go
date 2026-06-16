@@ -300,6 +300,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	rio.startSessionCloseListener()
 
 	if !opts.DisableAudioOutput {
+		session.SetAudioOutputController(rio)
 		session.EnsureAssistant().SetPublishAudio(rio.PublishAudio)
 	}
 
@@ -1313,6 +1314,10 @@ func (rio *RoomIO) PauseAudioOutput() {
 	rio.mu.Lock()
 	rio.audioOutputPaused = true
 	rio.mu.Unlock()
+}
+
+func (rio *RoomIO) CanPauseAudioOutput() bool {
+	return rio != nil && !rio.Options.DisableAudioOutput
 }
 
 func (rio *RoomIO) ResumeAudioOutput() {

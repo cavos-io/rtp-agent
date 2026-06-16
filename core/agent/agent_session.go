@@ -180,6 +180,12 @@ type SessionAssistant interface {
 	SetPublishAudio(func(ctx context.Context, frame *model.AudioFrame) error)
 }
 
+type AudioOutputController interface {
+	CanPauseAudioOutput() bool
+	PauseAudioOutput()
+	ResumeAudioOutput()
+}
+
 type closeableSessionAssistant interface {
 	Close() error
 }
@@ -256,13 +262,14 @@ type AgentSession struct {
 	jobContextSet  bool
 	// UserTranscriptFilter, when non-nil, is applied before user transcript
 	// events are recorded or broadcast to RoomIO subscribers.
-	UserTranscriptFilter func(string) string
-	mcpServers           []llm.MCPServer
-	recordedEvents       []Event
-	eventListeners       map[string][]agentEventListener
-	nextListenerID       uint64
-	ivrActivity          *IVRActivity
-	videoSampler         *VoiceActivityVideoSampler
+	UserTranscriptFilter  func(string) string
+	mcpServers            []llm.MCPServer
+	recordedEvents        []Event
+	eventListeners        map[string][]agentEventListener
+	nextListenerID        uint64
+	ivrActivity           *IVRActivity
+	videoSampler          *VoiceActivityVideoSampler
+	audioOutputController AudioOutputController
 
 	// Event channels
 	AgentStateChangedCh  chan AgentStateChangedEvent
@@ -493,6 +500,24 @@ func (s *AgentSession) UserStateValue() UserState {
 
 func (s *AgentSession) AgentStateValue() AgentState {
 	return s.AgentState()
+}
+
+func (s *AgentSession) SetAudioOutputController(controller AudioOutputController) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.audioOutputController = controller
+	s.mu.Unlock()
+}
+
+func (s *AgentSession) AudioOutputController() AudioOutputController {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.audioOutputController
 }
 
 func (s *AgentSession) UserState() UserState {
