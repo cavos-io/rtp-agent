@@ -379,6 +379,15 @@ func (t *AzureTTS) SampleRate() int  { return t.sampleRate }
 func (t *AzureTTS) NumChannels() int { return 1 }
 func (t *AzureTTS) Language() string { return t.language }
 
+func (t *AzureTTS) UpdateOptions(voice string, language string) {
+	if voice != "" {
+		t.voice = voice
+	}
+	if language != "" {
+		t.language = language
+	}
+}
+
 func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	req, err := buildAzureTTSRequest(ctx, t, text)
 	if err != nil {

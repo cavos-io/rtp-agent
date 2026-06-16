@@ -321,6 +321,34 @@ func TestAzureTTSBuildsRequestWithConfiguredLanguage(t *testing.T) {
 	}
 }
 
+func TestAzureTTSUpdateOptionsMatchesReference(t *testing.T) {
+	provider, err := NewAzureTTS("key", "eastus", "")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+
+	provider.UpdateOptions("id-ID-GadisNeural", "id-ID")
+
+	req, err := buildAzureTTSRequest(context.Background(), provider, "halo")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	ssml := string(body)
+	if !strings.Contains(ssml, `xml:lang="id-ID"`) {
+		t.Fatalf("SSML = %q, want updated language", ssml)
+	}
+	if !strings.Contains(ssml, `voice name="id-ID-GadisNeural"`) {
+		t.Fatalf("SSML = %q, want updated voice", ssml)
+	}
+	if provider.Language() != "id-ID" {
+		t.Fatalf("Language() = %q, want id-ID", provider.Language())
+	}
+}
+
 func TestAzureTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	stream := &azureTTSChunkedStream{
 		body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
