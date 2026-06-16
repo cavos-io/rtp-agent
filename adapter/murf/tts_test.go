@@ -4,12 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/gorilla/websocket"
 )
 
 func TestMurfTTSDefaultsMatchReference(t *testing.T) {
@@ -296,6 +301,140 @@ func TestMurfTTSStreamTextAndEndPacketsMatchReference(t *testing.T) {
 		t.Fatalf("end message = %+v, want context end packet", end)
 	}
 }
+
+func TestMurfTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
+	conn, closed := newMurfClosingWebsocketConn(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &murfTTSSynthesizeStream{
+		conn:       conn,
+		ctx:        ctx,
+		cancel:     cancel,
+		provider:   NewMurfTTS("test-key", ""),
+		contextID:  "context-1",
+		sampleRate: 24000,
+		events:     make(chan *tts.SynthesizedAudio, 1),
+		errCh:      make(chan error, 1),
+	}
+	defer stream.Close()
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test websocket close")
+	}
+
+	var writeErr error
+	for range 3 {
+		writeErr = stream.PushText("hello")
+		if writeErr != nil {
+			break
+		}
+	}
+	if writeErr == nil {
+		t.Fatal("PushText error = nil after closed websocket, want write failure")
+	}
+	if !stream.closed {
+		t.Fatal("stream closed = false after write failure, want true")
+	}
+	err := stream.PushText("again")
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("second PushText error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after write failure error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close after write failure error = %v", err)
+	}
+}
+
+func newMurfClosingWebsocketConn(t *testing.T) (*websocket.Conn, <-chan struct{}) {
+	t.Helper()
+	clientConn, serverConn := net.Pipe()
+	closed := make(chan struct{})
+	listener := newMurfSingleConnListener(serverConn)
+	upgrader := websocket.Upgrader{}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		close(closed)
+	})}
+	serverErr := make(chan error, 1)
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			serverErr <- err
+		}
+	}()
+	dialer := websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	conn, _, err := dialer.Dial("ws://murf.test/v1/speech/stream-input", nil)
+	if err != nil {
+		clientConn.Close()
+		t.Fatalf("dial test websocket: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = server.Close()
+		_ = listener.Close()
+		_ = conn.Close()
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+		select {
+		case err := <-serverErr:
+			t.Errorf("test websocket server error: %v", err)
+		default:
+		}
+	})
+	return conn, closed
+}
+
+type murfSingleConnListener struct {
+	conn   net.Conn
+	once   sync.Once
+	closed chan struct{}
+}
+
+func newMurfSingleConnListener(conn net.Conn) *murfSingleConnListener {
+	return &murfSingleConnListener{conn: conn, closed: make(chan struct{})}
+}
+
+func (l *murfSingleConnListener) Accept() (net.Conn, error) {
+	var conn net.Conn
+	l.once.Do(func() {
+		conn = l.conn
+	})
+	if conn != nil {
+		return conn, nil
+	}
+	<-l.closed
+	return nil, net.ErrClosed
+}
+
+func (l *murfSingleConnListener) Close() error {
+	select {
+	case <-l.closed:
+	default:
+		close(l.closed)
+	}
+	return nil
+}
+
+func (l *murfSingleConnListener) Addr() net.Addr {
+	return murfTestAddr("murf.test:443")
+}
+
+type murfTestAddr string
+
+func (a murfTestAddr) Network() string { return "tcp" }
+
+func (a murfTestAddr) String() string { return string(a) }
 
 func TestMurfTTSAudioFromStreamMessage(t *testing.T) {
 	audio, done, err := murfAudioFromStreamMessage([]byte(`{"context_id":"context-1","audio":"AQIDBA=="}`), 24000)
