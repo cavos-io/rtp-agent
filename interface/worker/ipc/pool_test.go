@@ -239,6 +239,34 @@ func TestProcPoolTargetIdleProcesses(t *testing.T) {
 	}
 }
 
+func TestProcPoolRejectsUnsupportedExecutorType(t *testing.T) {
+	launchPool := NewProcPool(1, ExecutorType("unsupported"), nil)
+
+	err := launchPool.LaunchJob(context.Background(), &livekit.Job{Id: "job-a"})
+	if err == nil {
+		t.Fatal("LaunchJob error = nil, want unsupported job executor error")
+	}
+	if got, want := err.Error(), "unsupported job executor: unsupported"; got != want {
+		t.Fatalf("LaunchJob error = %q, want %q", got, want)
+	}
+	if executors := launchPool.GetExecutors(); len(executors) != 0 {
+		t.Fatalf("executors len = %d, want none after unsupported executor type", len(executors))
+	}
+
+	startPool := NewProcPool(1, ExecutorType("unsupported"), nil)
+	startPool.SetTargetIdleProcesses(1)
+	err = startPool.Start(context.Background())
+	if err == nil {
+		t.Fatal("Start error = nil, want unsupported job executor error")
+	}
+	if got, want := err.Error(), "unsupported job executor: unsupported"; got != want {
+		t.Fatalf("Start error = %q, want %q", got, want)
+	}
+	if executors := startPool.GetExecutors(); len(executors) != 0 {
+		t.Fatalf("start executors len = %d, want none after unsupported executor type", len(executors))
+	}
+}
+
 func TestProcPoolHighTargetIdleProcessesStillWarmsOnlyCapacity(t *testing.T) {
 	pool := NewProcPool(2, ExecutorTypeThread, nil)
 	pool.SetTargetIdleProcesses(10)
