@@ -80,6 +80,7 @@ type SpeechHandle struct {
 	runFinalOutput    any
 	runFinalOutputSet bool
 	precomputedLLM    *LLMGenerationData
+	precomputedTTS    *TTSGenerationData
 
 	interruptCh        chan struct{}
 	doneCh             chan struct{}
@@ -202,6 +203,22 @@ func (s *SpeechHandle) takePrecomputedLLMGeneration() *LLMGenerationData {
 
 	data := s.precomputedLLM
 	s.precomputedLLM = nil
+	return data
+}
+
+func (s *SpeechHandle) setPrecomputedTTSGeneration(data *TTSGenerationData) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.precomputedTTS = data
+}
+
+func (s *SpeechHandle) takePrecomputedTTSGeneration() *TTSGenerationData {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	data := s.precomputedTTS
+	s.precomputedTTS = nil
 	return data
 }
 

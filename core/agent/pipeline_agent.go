@@ -424,6 +424,15 @@ func (va *PipelineAgent) OnSpeechPreemptive(ctx context.Context, speech *SpeechH
 		return
 	}
 	speech.setPrecomputedLLMGeneration(genData)
+	if va.tts != nil && session.Options.PreemptiveGenerationPreemptiveTTS {
+		ttsGen, err := va.startTTSGeneration(ctx, session, genData.TextCh)
+		if err != nil {
+			logger.Logger.Errorw("preemptive TTS inference failed", err)
+			va.emitTTSError(session, err)
+			return
+		}
+		speech.setPrecomputedTTSGeneration(ttsGen)
+	}
 }
 
 func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHandle) {
@@ -561,7 +570,15 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			}
 		}
 
-		ttsGen, err := va.synthesizeSpeech(ctx, session, genData.TextCh)
+		var ttsGen *TTSGenerationData
+		if opts.SpeechHandle != nil && toolSteps == 0 {
+			ttsGen = opts.SpeechHandle.takePrecomputedTTSGeneration()
+		}
+		if ttsGen != nil {
+			ttsGen, err = va.playTTSGeneration(ctx, session, ttsGen)
+		} else {
+			ttsGen, err = va.synthesizeSpeech(ctx, session, genData.TextCh)
+		}
 		if err != nil {
 			logger.Logger.Errorw("TTS inference failed", err)
 			va.emitTTSError(session, err)
@@ -822,7 +839,28 @@ func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSes
 	if useAlignedTranscript {
 		transcriptionDone = va.forwardAlignedAgentOutputTranscription(session, ttsGen.TimedTextCh)
 	}
+	return va.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, transcriptionDone)
+}
 
+func (va *PipelineAgent) startTTSGeneration(ctx context.Context, session *AgentSession, textCh <-chan string) (*TTSGenerationData, error) {
+	return PerformTTSInference(ctx, va.tts, textCh, va.ttsInferenceOptions(session)...)
+}
+
+func (va *PipelineAgent) playTTSGeneration(ctx context.Context, session *AgentSession, ttsGen *TTSGenerationData) (*TTSGenerationData, error) {
+	if ttsGen == nil {
+		return nil, nil
+	}
+	transcriptSync := NewTranscriptSynchronizer(0)
+	transcriptionDone := va.forwardAgentOutputTranscription(session, transcriptSync)
+	if va.useTTSAlignedTranscript(session) {
+		transcriptSync.Close()
+		<-transcriptionDone
+		transcriptionDone = va.forwardAlignedAgentOutputTranscription(session, ttsGen.TimedTextCh)
+	}
+	return va.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, transcriptionDone)
+}
+
+func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, session *AgentSession, ttsGen *TTSGenerationData, transcriptSync *TranscriptSynchronizer, transcriptionDone <-chan struct{}) (*TTSGenerationData, error) {
 	session.UpdateAgentState(AgentStateSpeaking)
 	for frame := range ttsGen.AudioCh {
 		select {

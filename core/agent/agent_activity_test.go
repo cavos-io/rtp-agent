@@ -10,6 +10,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/core/vad"
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -2788,6 +2789,71 @@ func TestAgentActivityPreemptiveGenerationStartsLLMBeforeScheduling(t *testing.T
 	}
 }
 
+func TestAgentActivityPreemptiveGenerationStartsTTSBeforeSchedulingWhenEnabled(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	agent.LLM = &preemptiveCountingLLM{
+		calls: make(chan struct{}, 2),
+		stream: &fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{
+			Delta: &llm.ChoiceDelta{Content: "spoken early"},
+		}}},
+	}
+	countingTTS := &preemptiveCountingTTS{
+		calls: make(chan struct{}, 2),
+		stream: &fakePipelineTTSStream{frames: []*model.AudioFrame{{
+			SampleRate:        24000,
+			NumChannels:       1,
+			SamplesPerChannel: 240,
+			Data:              []byte{1, 2, 3, 4},
+		}}},
+	}
+	agent.TTS = countingTTS
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		PreemptiveGenerationPreemptiveTTS:    true,
+		PreemptiveGenerationPreemptiveTTSSet: true,
+	})
+	pipeline := NewPipelineAgent(nil, nil, agent.LLM, agent.TTS, agent.ChatCtx)
+	pipeline.session = session
+	session.Assistant = pipeline
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	defer activity.Stop()
+
+	speechEvents := session.SpeechCreatedEvents()
+	activity.OnStartOfSpeech(&vad.VADEvent{})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "start speech early", Confidence: 0.93}},
+	})
+
+	var preemptive *SpeechHandle
+	select {
+	case ev := <-speechEvents:
+		preemptive = ev.SpeechHandle
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive preemptive generation")
+	}
+	if preemptive == nil || preemptive.IsScheduled() {
+		t.Fatalf("preemptive speech = %#v, want unscheduled handle", preemptive)
+	}
+	select {
+	case <-countingTTS.calls:
+	case <-time.After(time.Second):
+		t.Fatal("TTS was not started for preemptive generation before scheduling")
+	}
+
+	if _, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{}); err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if !preemptive.IsScheduled() {
+		t.Fatal("preemptive speech was not scheduled after matching turn completion")
+	}
+	select {
+	case <-countingTTS.calls:
+		t.Fatal("TTS started again after scheduling reused preemptive speech")
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func TestAgentActivityPreemptiveGenerationCancelsWhenTurnHookMutatesChatContext(t *testing.T) {
 	agent := &mutatingTurnAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeVAD
@@ -2878,6 +2944,30 @@ type preemptiveCountingLLM struct {
 }
 
 func (p *preemptiveCountingLLM) Chat(context.Context, *llm.ChatContext, ...llm.ChatOption) (llm.LLMStream, error) {
+	p.calls <- struct{}{}
+	return p.stream, nil
+}
+
+type preemptiveCountingTTS struct {
+	calls  chan struct{}
+	stream tts.SynthesizeStream
+}
+
+func (p *preemptiveCountingTTS) Label() string { return "preemptive-counting-tts" }
+
+func (p *preemptiveCountingTTS) Capabilities() tts.TTSCapabilities {
+	return tts.TTSCapabilities{Streaming: true}
+}
+
+func (p *preemptiveCountingTTS) SampleRate() int { return 24000 }
+
+func (p *preemptiveCountingTTS) NumChannels() int { return 1 }
+
+func (p *preemptiveCountingTTS) Synthesize(context.Context, string) (tts.ChunkedStream, error) {
+	return nil, errors.New("Synthesize should not be called for streaming TTS")
+}
+
+func (p *preemptiveCountingTTS) Stream(context.Context) (tts.SynthesizeStream, error) {
 	p.calls <- struct{}{}
 	return p.stream, nil
 }
