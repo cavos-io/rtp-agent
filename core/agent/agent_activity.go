@@ -1399,6 +1399,9 @@ func (a *AgentActivity) OnVADInferenceDone(ev *vad.VADEvent) {
 	if turnDetection == TurnDetectionModeSTT && a.sttEOSReceived && ev.RawAccumulatedSilence > 0 {
 		return
 	}
+	if a.shortInterruptionTranscript(a.currentInterruptionTranscript()) {
+		return
+	}
 	a.interruptByAudioActivity("VAD inference", "speech_duration", ev.SpeechDuration)
 }
 
@@ -1849,6 +1852,18 @@ func (a *AgentActivity) shortInterruptionTranscript(transcript string) bool {
 		wordCount = len(tokenize.SplitWords(transcript, true, true, false))
 	}
 	return wordCount < a.Session.Options.MinInterruptionWords
+}
+
+func (a *AgentActivity) currentInterruptionTranscript() string {
+	if a == nil {
+		return ""
+	}
+	a.userTurnMu.Lock()
+	defer a.userTurnMu.Unlock()
+	if a.pendingInterimTranscript != "" {
+		return a.pendingInterimTranscript
+	}
+	return a.pendingUserTranscript
 }
 
 func (a *AgentActivity) maybeStartPreemptiveGeneration(transcript string, confidence float64) {

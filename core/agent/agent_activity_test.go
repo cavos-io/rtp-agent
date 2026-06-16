@@ -508,6 +508,61 @@ func TestAgentActivityOnVADInferenceDoneInterruptsCurrentSpeech(t *testing.T) {
 	current.MarkDone()
 }
 
+func TestAgentActivityOnVADInferenceDoneRespectsMinInterruptionWordsWithoutTranscript(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:           TurnDetectionModeVAD,
+		MinInterruptionDuration: 0.05,
+		MinInterruptionWords:    2,
+	})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnVADInferenceDone(&vad.VADEvent{
+		Type:                  vad.VADEventInferenceDone,
+		SpeechDuration:        0.06,
+		Speaking:              true,
+		RawAccumulatedSilence: 0,
+	})
+
+	select {
+	case <-current.interruptCh:
+		t.Fatal("current speech was interrupted by VAD before transcript reached MinInterruptionWords")
+	case <-time.After(20 * time.Millisecond):
+	}
+	current.MarkDone()
+}
+
+func TestAgentActivityOnVADInferenceDoneInterruptsAfterMinInterruptionWordsTranscript(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:           TurnDetectionModeVAD,
+		MinInterruptionDuration: 0.05,
+		MinInterruptionWords:    2,
+	})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "wait now"}},
+	})
+
+	activity.OnVADInferenceDone(&vad.VADEvent{
+		Type:                  vad.VADEventInferenceDone,
+		SpeechDuration:        0.06,
+		Speaking:              true,
+		RawAccumulatedSilence: 0,
+	})
+
+	waitForInterrupted(t, current)
+	current.MarkDone()
+}
+
 func TestAgentActivityOnVADInferenceDoneIgnoresAECWarmup(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}
