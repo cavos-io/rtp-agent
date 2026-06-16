@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -2896,6 +2897,57 @@ func TestAgentActivityPreemptiveGenerationCancelsWhenTurnHookMutatesChatContext(
 	}
 }
 
+func TestAgentActivityPreemptiveGenerationInvalidationCancelsProviderWork(t *testing.T) {
+	agent := &mutatingTurnAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	agent.LLM = &preemptiveCountingLLM{
+		calls: make(chan struct{}, 2),
+		stream: &fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{
+			Delta: &llm.ChoiceDelta{Content: "cancel me"},
+		}}},
+	}
+	cancelAwareTTS := &cancelAwarePreemptiveTTS{
+		calls:    make(chan struct{}, 1),
+		canceled: make(chan struct{}, 1),
+	}
+	agent.TTS = cancelAwareTTS
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		PreemptiveGenerationPreemptiveTTS:    true,
+		PreemptiveGenerationPreemptiveTTSSet: true,
+	})
+	pipeline := NewPipelineAgent(nil, nil, agent.LLM, agent.TTS, agent.ChatCtx)
+	pipeline.session = session
+	session.Assistant = pipeline
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	defer activity.Stop()
+
+	speechEvents := session.SpeechCreatedEvents()
+	activity.OnStartOfSpeech(&vad.VADEvent{})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "cancel preemptive", Confidence: 0.93}},
+	})
+	select {
+	case <-speechEvents:
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive preemptive generation")
+	}
+	select {
+	case <-cancelAwareTTS.calls:
+	case <-time.After(time.Second):
+		t.Fatal("TTS was not started for preemptive generation")
+	}
+
+	if _, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{}); err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	select {
+	case <-cancelAwareTTS.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("invalidated preemptive generation did not cancel provider work")
+	}
+}
+
 func TestAgentActivityUserTurnExceededSkipsWhenAgentStartsSpeaking(t *testing.T) {
 	agent := &countingExceededAgent{Agent: NewAgent("test"), calls: make(chan UserTurnExceededEvent, 1)}
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -2970,6 +3022,50 @@ func (p *preemptiveCountingTTS) Synthesize(context.Context, string) (tts.Chunked
 func (p *preemptiveCountingTTS) Stream(context.Context) (tts.SynthesizeStream, error) {
 	p.calls <- struct{}{}
 	return p.stream, nil
+}
+
+type cancelAwarePreemptiveTTS struct {
+	calls    chan struct{}
+	canceled chan struct{}
+}
+
+func (c *cancelAwarePreemptiveTTS) Label() string { return "cancel-aware-preemptive-tts" }
+
+func (c *cancelAwarePreemptiveTTS) Capabilities() tts.TTSCapabilities {
+	return tts.TTSCapabilities{Streaming: true}
+}
+
+func (c *cancelAwarePreemptiveTTS) SampleRate() int { return 24000 }
+
+func (c *cancelAwarePreemptiveTTS) NumChannels() int { return 1 }
+
+func (c *cancelAwarePreemptiveTTS) Synthesize(context.Context, string) (tts.ChunkedStream, error) {
+	return nil, errors.New("Synthesize should not be called for streaming TTS")
+}
+
+func (c *cancelAwarePreemptiveTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	c.calls <- struct{}{}
+	return &cancelAwarePreemptiveTTSStream{ctx: ctx, canceled: c.canceled}, nil
+}
+
+type cancelAwarePreemptiveTTSStream struct {
+	ctx      context.Context
+	canceled chan struct{}
+}
+
+func (s *cancelAwarePreemptiveTTSStream) PushText(string) error { return nil }
+
+func (s *cancelAwarePreemptiveTTSStream) Flush() error { return nil }
+
+func (s *cancelAwarePreemptiveTTSStream) Close() error { return nil }
+
+func (s *cancelAwarePreemptiveTTSStream) Next() (*tts.SynthesizedAudio, error) {
+	<-s.ctx.Done()
+	select {
+	case s.canceled <- struct{}{}:
+	default:
+	}
+	return nil, io.EOF
 }
 
 type pausingTurnAgent struct {

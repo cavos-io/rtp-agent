@@ -81,6 +81,7 @@ type SpeechHandle struct {
 	runFinalOutputSet bool
 	precomputedLLM    *LLMGenerationData
 	precomputedTTS    *TTSGenerationData
+	precomputeCancel  context.CancelFunc
 
 	interruptCh        chan struct{}
 	doneCh             chan struct{}
@@ -147,6 +148,7 @@ func (s *SpeechHandle) Interrupt(force bool) error {
 	if !force && !s.AllowInterruptions {
 		return ErrSpeechInterruptionsDisabled
 	}
+	s.cancelPrecomputedGenerationLocked()
 
 	if !s.IsInterrupted() && !s.IsDone() {
 		close(s.interruptCh)
@@ -222,9 +224,27 @@ func (s *SpeechHandle) takePrecomputedTTSGeneration() *TTSGenerationData {
 	return data
 }
 
+func (s *SpeechHandle) setPrecomputedGenerationCancel(cancel context.CancelFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.precomputeCancel != nil {
+		s.precomputeCancel()
+	}
+	s.precomputeCancel = cancel
+}
+
+func (s *SpeechHandle) cancelPrecomputedGenerationLocked() {
+	if s.precomputeCancel != nil {
+		s.precomputeCancel()
+		s.precomputeCancel = nil
+	}
+}
+
 func (s *SpeechHandle) MarkDone() {
 	s.mu.Lock()
 	alreadyDone := s.IsDone()
+	s.cancelPrecomputedGenerationLocked()
 	if !alreadyDone {
 		close(s.doneCh)
 	}

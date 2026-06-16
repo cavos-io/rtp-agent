@@ -417,16 +417,20 @@ func (va *PipelineAgent) OnSpeechPreemptive(ctx context.Context, speech *SpeechH
 	if session == nil || va.LLM == nil {
 		return
 	}
-	genData, err := va.precomputeLLMGeneration(ctx, session, va.speechOptions(speech))
+	precomputeCtx, cancel := context.WithCancel(ctx)
+	speech.setPrecomputedGenerationCancel(cancel)
+	genData, err := va.precomputeLLMGeneration(precomputeCtx, session, va.speechOptions(speech))
 	if err != nil {
+		cancel()
 		logger.Logger.Errorw("preemptive LLM inference failed", err)
 		va.emitLLMError(session, err)
 		return
 	}
 	speech.setPrecomputedLLMGeneration(genData)
 	if va.tts != nil && session.Options.PreemptiveGenerationPreemptiveTTS {
-		ttsGen, err := va.startTTSGeneration(ctx, session, genData.TextCh)
+		ttsGen, err := va.startTTSGeneration(precomputeCtx, session, genData.TextCh)
 		if err != nil {
+			cancel()
 			logger.Logger.Errorw("preemptive TTS inference failed", err)
 			va.emitTTSError(session, err)
 			return
