@@ -387,6 +387,45 @@ func (va *PipelineAgent) generateReply() {
 	va.generateReplyWithOptions(pipelineReplyOptions{})
 }
 
+func (va *PipelineAgent) speechOptions(speech *SpeechHandle) pipelineReplyOptions {
+	if speech == nil {
+		return pipelineReplyOptions{}
+	}
+	options := pipelineReplyOptions{
+		Tools:              append([]string(nil), speech.Generation.Tools...),
+		IgnoreOnEnterTools: speech.Generation.IgnoreOnEnterTools,
+		ChatCtx:            speech.Generation.ChatCtx,
+		UserMessage:        speech.Generation.UserMessage,
+		SpeechHandle:       speech,
+	}
+	if speech.Generation.Instructions != nil {
+		options.Instructions = speech.Generation.Instructions.AsModality(speech.InputDetails.Modality).String()
+	}
+	if speech.Generation.ToolChoice != nil {
+		options.ToolChoice = speech.Generation.ToolChoice
+	}
+	return options
+}
+
+func (va *PipelineAgent) OnSpeechPreemptive(ctx context.Context, speech *SpeechHandle) {
+	if speech == nil || speech.IsInterrupted() || speech.IsDone() {
+		return
+	}
+	va.mu.Lock()
+	session := va.session
+	va.mu.Unlock()
+	if session == nil || va.LLM == nil {
+		return
+	}
+	genData, err := va.precomputeLLMGeneration(ctx, session, va.speechOptions(speech))
+	if err != nil {
+		logger.Logger.Errorw("preemptive LLM inference failed", err)
+		va.emitLLMError(session, err)
+		return
+	}
+	speech.setPrecomputedLLMGeneration(genData)
+}
+
 func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHandle) {
 	if speech == nil {
 		return
@@ -411,20 +450,7 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 		return
 	}
 
-	options := pipelineReplyOptions{
-		Tools:              append([]string(nil), speech.Generation.Tools...),
-		IgnoreOnEnterTools: speech.Generation.IgnoreOnEnterTools,
-		ChatCtx:            speech.Generation.ChatCtx,
-		UserMessage:        speech.Generation.UserMessage,
-		SpeechHandle:       speech,
-	}
-	if speech.Generation.Instructions != nil {
-		options.Instructions = speech.Generation.Instructions.AsModality(speech.InputDetails.Modality).String()
-	}
-	if speech.Generation.ToolChoice != nil {
-		options.ToolChoice = speech.Generation.ToolChoice
-	}
-	va.generateReplyWithOptions(options)
+	va.generateReplyWithOptions(va.speechOptions(speech))
 }
 
 func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
@@ -520,12 +546,19 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		if len(session.Options.LLMResponseFormat) > 0 {
 			chatOptions = append(chatOptions, llm.WithResponseFormat(session.Options.LLMResponseFormat))
 		}
-		genData, err := PerformLLMInference(ctx, va.LLM, inferenceCtx, selectedTools, chatOptions...)
-		if err != nil {
-			logger.Logger.Errorw("LLM inference failed", err)
-			va.emitLLMError(session, err)
-			session.UpdateAgentState(AgentStateIdle)
-			return
+		var genData *LLMGenerationData
+		if opts.SpeechHandle != nil && toolSteps == 0 {
+			genData = opts.SpeechHandle.takePrecomputedLLMGeneration()
+		}
+		if genData == nil {
+			var err error
+			genData, err = PerformLLMInference(ctx, va.LLM, inferenceCtx, selectedTools, chatOptions...)
+			if err != nil {
+				logger.Logger.Errorw("LLM inference failed", err)
+				va.emitLLMError(session, err)
+				session.UpdateAgentState(AgentStateIdle)
+				return
+			}
 		}
 
 		ttsGen, err := va.synthesizeSpeech(ctx, session, genData.TextCh)
@@ -644,6 +677,67 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		toolSteps++
 		// Loop back to LLM with tool outputs
 	}
+}
+
+func (va *PipelineAgent) precomputeLLMGeneration(ctx context.Context, session *AgentSession, opts pipelineReplyOptions) (*LLMGenerationData, error) {
+	registeredTools, err := sessionRegisteredTools(ctx, session)
+	if err != nil {
+		return nil, err
+	}
+	selectedTools, err := resolveToolsByID(registeredTools, opts.Tools)
+	if err != nil {
+		return nil, err
+	}
+	if opts.IgnoreOnEnterTools {
+		selectedTools = filterOnEnterIgnoredTools(selectedTools)
+	}
+
+	replyCtx := va.chatCtx
+	if opts.ChatCtx != nil {
+		replyCtx = opts.ChatCtx.Copy()
+	}
+	if opts.UserMessage != nil {
+		if replyCtx == va.chatCtx {
+			replyCtx = va.chatCtx.Copy()
+		}
+		insertChatItemIfMissing(replyCtx, opts.UserMessage)
+	}
+
+	inferenceCtx := replyCtx
+	inputModality := ""
+	if opts.SpeechHandle != nil {
+		inputModality = opts.SpeechHandle.InputDetails.Modality
+	}
+	if opts.Instructions != "" {
+		if inferenceCtx == replyCtx {
+			inferenceCtx = replyCtx.Copy()
+		}
+		inferenceCtx.Items = append([]llm.ChatItem{&llm.ChatMessage{
+			Role:    llm.ChatRoleSystem,
+			Content: []llm.ChatContent{{Text: opts.Instructions}},
+		}}, inferenceCtx.Items...)
+	}
+	if inputModality != "" {
+		if inferenceCtx == replyCtx {
+			inferenceCtx = replyCtx.Copy()
+		}
+		applyAgentInstructionsModality(inferenceCtx, inputModality)
+	}
+
+	var chatOptions []llm.ChatOption
+	if opts.ToolChoice != nil {
+		chatOptions = append(chatOptions, llm.WithToolChoice(opts.ToolChoice))
+	}
+	if session.Options.LLMParallelToolCalls != nil {
+		chatOptions = append(chatOptions, llm.WithParallelToolCalls(*session.Options.LLMParallelToolCalls))
+	}
+	if len(session.Options.LLMExtraParams) > 0 {
+		chatOptions = append(chatOptions, llm.WithExtraParams(session.Options.LLMExtraParams))
+	}
+	if len(session.Options.LLMResponseFormat) > 0 {
+		chatOptions = append(chatOptions, llm.WithResponseFormat(session.Options.LLMResponseFormat))
+	}
+	return PerformLLMInference(ctx, va.LLM, inferenceCtx, selectedTools, chatOptions...)
 }
 
 func (va *PipelineAgent) emitLLMMetrics(session *AgentSession, genData *LLMGenerationData) {

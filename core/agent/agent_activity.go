@@ -1904,6 +1904,9 @@ func (a *AgentActivity) maybeStartPreemptiveGeneration(transcript string, confid
 		createdAt:  time.Now(),
 	}
 	a.preemptiveMu.Unlock()
+	if assistant, ok := a.Session.Assistant.(preemptiveSpeechAssistant); ok {
+		go assistant.OnSpeechPreemptive(a.ctx, handle)
+	}
 }
 
 func (a *AgentActivity) usePreemptiveGenerationIfMatching(chatCtx *llm.ChatContext, newMsg *llm.ChatMessage) (*SpeechHandle, error) {

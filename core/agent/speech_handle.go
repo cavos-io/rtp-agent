@@ -79,6 +79,7 @@ type SpeechHandle struct {
 	chatItems         []llm.ChatItem
 	runFinalOutput    any
 	runFinalOutputSet bool
+	precomputedLLM    *LLMGenerationData
 
 	interruptCh        chan struct{}
 	doneCh             chan struct{}
@@ -186,6 +187,22 @@ func (s *SpeechHandle) RunFinalOutput() (any, bool) {
 	defer s.mu.Unlock()
 
 	return s.runFinalOutput, s.runFinalOutputSet
+}
+
+func (s *SpeechHandle) setPrecomputedLLMGeneration(data *LLMGenerationData) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.precomputedLLM = data
+}
+
+func (s *SpeechHandle) takePrecomputedLLMGeneration() *LLMGenerationData {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	data := s.precomputedLLM
+	s.precomputedLLM = nil
+	return data
 }
 
 func (s *SpeechHandle) MarkDone() {
