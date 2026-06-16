@@ -306,6 +306,23 @@ func buildAzureSTTSpeechConfig() []byte {
 }
 
 func buildAzureSTTMessage(path string, requestID string, contentType string, body []byte) []byte {
+	headers := buildAzureSTTMessageHeaders(path, requestID, contentType)
+	var b bytes.Buffer
+	b.Write(headers)
+	b.Write(body)
+	return b.Bytes()
+}
+
+func buildAzureSTTBinaryMessage(path string, requestID string, contentType string, body []byte) []byte {
+	headers := buildAzureSTTMessageHeaders(path, requestID, contentType)
+	var b bytes.Buffer
+	_ = binary.Write(&b, binary.BigEndian, uint16(len(headers)))
+	b.Write(headers)
+	b.Write(body)
+	return b.Bytes()
+}
+
+func buildAzureSTTMessageHeaders(path string, requestID string, contentType string) []byte {
 	var b bytes.Buffer
 	b.WriteString("Path: ")
 	b.WriteString(path)
@@ -322,7 +339,6 @@ func buildAzureSTTMessage(path string, requestID string, contentType string, bod
 		b.WriteString("\r\n")
 	}
 	b.WriteString("\r\n")
-	b.Write(body)
 	return b.Bytes()
 }
 
@@ -353,7 +369,7 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 		return io.ErrClosedPipe
 	}
 	for {
-		if err := s.conn.WriteMessage(websocket.BinaryMessage, buildAzureSTTMessage("audio", s.connectionID, "audio/x-wav", frame.Data)); err != nil {
+		if err := s.conn.WriteMessage(websocket.BinaryMessage, buildAzureSTTBinaryMessage("audio", s.connectionID, "audio/x-wav", frame.Data)); err != nil {
 			if reconnectErr := s.reconnectLocked(); reconnectErr == nil {
 				continue
 			}

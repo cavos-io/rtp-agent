@@ -344,7 +344,7 @@ func TestAzureSTTStreamUsesWebsocketProtocol(t *testing.T) {
 		t.Fatalf("PushFrame error = %v", err)
 	}
 	audioMessage := receiveAzureTestValue(t, audioMessages, "audio")
-	audioHeaders, audioPayload := splitAzureTestMessage(t, audioMessage)
+	audioHeaders, audioPayload := splitAzureTestBinaryMessage(t, audioMessage)
 	if audioHeaders["Path"] != "audio" {
 		t.Fatalf("audio Path = %q, want audio", audioHeaders["Path"])
 	}
@@ -526,7 +526,7 @@ func TestAzureSTTStreamReconnectsAfterAudioWriteFailure(t *testing.T) {
 	receiveAzureTestValue(t, requests, "second request")
 	receiveAzureTestValue(t, configMessages, "second speech config")
 	audioMessage := receiveAzureTestValue(t, audioMessages, "audio after reconnect")
-	_, audioPayload := splitAzureTestMessage(t, audioMessage)
+	_, audioPayload := splitAzureTestBinaryMessage(t, audioMessage)
 	if !bytes.Equal(audioPayload, []byte{0x01, 0x02}) {
 		t.Fatalf("audio payload after reconnect = %v, want original pushed PCM", audioPayload)
 	}
@@ -795,6 +795,20 @@ func splitAzureTestMessage(t *testing.T, payload []byte) (map[string]string, []b
 		}
 	}
 	return headers, parts[1]
+}
+
+func splitAzureTestBinaryMessage(t *testing.T, payload []byte) (map[string]string, []byte) {
+	t.Helper()
+	if len(payload) < 2 {
+		t.Fatalf("azure binary message length = %d, want header length prefix", len(payload))
+	}
+	headerLen := int(binary.BigEndian.Uint16(payload[:2]))
+	if len(payload) < 2+headerLen {
+		t.Fatalf("azure binary message header length = %d exceeds payload length %d", headerLen, len(payload))
+	}
+	headers, body := splitAzureTestMessage(t, payload[2:2+headerLen])
+	body = append(body, payload[2+headerLen:]...)
+	return headers, body
 }
 
 func nextAzureTestEvent(t *testing.T, stream stt.RecognizeStream) *stt.SpeechEvent {
