@@ -625,6 +625,59 @@ func TestAgentActivityOnStartOfSpeechCancelsPendingFalseInterruptionResume(t *te
 	current.MarkDone()
 }
 
+func TestAgentActivityOverlapSpeechEndedEmitsAndMarksInterruption(t *testing.T) {
+	endpointing := &recordingActivityEndpointing{}
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{Endpointing: endpointing})
+	activity := NewAgentActivity(agent, session)
+	events := session.OverlappingSpeechEvents()
+	detectedAt := time.Unix(40, 250_000_000)
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech, Timestamp: 1.0})
+	activity.OnOverlapSpeechEnded(OverlappingSpeechEvent{
+		IsInterruption: true,
+		DetectedAt:     detectedAt,
+	})
+
+	select {
+	case ev := <-events:
+		if !ev.IsInterruption || !ev.DetectedAt.Equal(detectedAt) {
+			t.Fatalf("OverlappingSpeechEvent = %#v, want interruption event with detector timestamp", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("OverlappingSpeechEvents did not receive overlap event")
+	}
+
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech, Timestamp: 1.5})
+
+	if endpointing.endCount != 1 {
+		t.Fatalf("OnEndOfSpeech calls = %d, want 1", endpointing.endCount)
+	}
+	if !endpointing.lastShouldIgnore {
+		t.Fatal("OnEndOfSpeech shouldIgnore = false, want true for overlap classified as interruption")
+	}
+}
+
+func TestAgentActivityOnInterruptionCutsCurrentSpeech(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:           TurnDetectionModeVAD,
+		MinInterruptionDuration: 0.05,
+	})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnInterruption(OverlappingSpeechEvent{
+		IsInterruption: true,
+		DetectedAt:     time.Now(),
+	})
+
+	waitForInterrupted(t, current)
+	current.MarkDone()
+}
+
 func TestAgentActivityOnVADInferenceDoneInterruptsCurrentSpeech(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}
@@ -3519,6 +3572,28 @@ func (r *recordingAudioOutputController) PauseAudioOutput() {
 
 func (r *recordingAudioOutputController) ResumeAudioOutput() {
 	r.resumeCount++
+}
+
+type recordingActivityEndpointing struct {
+	startCount       int
+	endCount         int
+	lastShouldIgnore bool
+}
+
+func (r *recordingActivityEndpointing) UpdateOptions(*float64, *float64) {}
+func (r *recordingActivityEndpointing) MinDelay() float64                { return 0 }
+func (r *recordingActivityEndpointing) MaxDelay() float64                { return 0 }
+func (r *recordingActivityEndpointing) Overlapping() bool                { return false }
+func (r *recordingActivityEndpointing) OnStartOfAgentSpeech(float64)     {}
+func (r *recordingActivityEndpointing) OnEndOfAgentSpeech(float64)       {}
+
+func (r *recordingActivityEndpointing) OnStartOfSpeech(float64, bool) {
+	r.startCount++
+}
+
+func (r *recordingActivityEndpointing) OnEndOfSpeech(_ float64, shouldIgnore bool) {
+	r.endCount++
+	r.lastShouldIgnore = shouldIgnore
 }
 
 type pausingTurnAgent struct {

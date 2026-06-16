@@ -105,8 +105,9 @@ type AgentActivity struct {
 	schedulingDraining bool
 	schedulingStarted  bool
 
-	sttEOSReceived bool
-	speaking       bool
+	sttEOSReceived       bool
+	speaking             bool
+	interruptionDetected bool
 
 	providerUnsubscribes []func()
 	registeredTools      []llm.Tool
@@ -1362,6 +1363,7 @@ func (a *AgentActivity) nextSpeechIndexLocked() int {
 func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 	a.speaking = true
 	a.sttEOSReceived = false
+	a.interruptionDetected = false
 	a.userSpeechStartedAt = time.Now()
 	a.clearUserAudioFrames()
 	if a.Session != nil {
@@ -1394,7 +1396,7 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 		a.Session.UpdateUserState(UserStateListening)
 	}
 	if endpointing := a.endpointing(); endpointing != nil {
-		endpointing.OnEndOfSpeech(vadEventTimestamp(ev), false)
+		endpointing.OnEndOfSpeech(vadEventTimestamp(ev), a.interruptionDetected)
 	}
 	logger.Logger.Infow("End of speech detected")
 
@@ -1403,6 +1405,22 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 		a.runEOUDetection(a.pendingFinalEndOfTurnInfo())
 	}
 	a.startFalseInterruptionTimer()
+}
+
+func (a *AgentActivity) OnOverlapSpeechEnded(ev OverlappingSpeechEvent) {
+	if a == nil || a.Session == nil {
+		return
+	}
+	a.interruptionDetected = ev.IsInterruption
+	a.Session.EmitOverlappingSpeech(ev)
+}
+
+func (a *AgentActivity) OnInterruption(ev OverlappingSpeechEvent) {
+	if a == nil {
+		return
+	}
+	a.interruptionDetected = true
+	a.interruptByAudioActivity("overlapping speech", "detected_at", ev.DetectedAt)
 }
 
 func (a *AgentActivity) OnVADInferenceDone(ev *vad.VADEvent) {
