@@ -139,6 +139,7 @@ type AgentActivity struct {
 	preemptiveGeneration      *preemptiveGeneration
 	preemptiveGenerationCount int
 	userSpeechStartedAt       time.Time
+	userSpeechStoppedAt       time.Time
 
 	falseInterruptionMu    sync.Mutex
 	pausedSpeech           *pausedSpeechInfo
@@ -1365,6 +1366,7 @@ func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 	a.sttEOSReceived = false
 	a.interruptionDetected = false
 	a.userSpeechStartedAt = time.Now()
+	a.userSpeechStoppedAt = time.Time{}
 	a.clearUserAudioFrames()
 	if a.Session != nil {
 		a.Session.UpdateUserState(UserStateSpeaking)
@@ -1392,6 +1394,7 @@ func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 
 func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 	a.speaking = false
+	a.userSpeechStoppedAt = time.Now()
 	if a.Session != nil {
 		a.Session.UpdateUserState(UserStateListening)
 	}
@@ -1826,6 +1829,7 @@ func (a *AgentActivity) ClearUserTurn() {
 	a.sttEOSReceived = false
 	a.speaking = false
 	a.userSpeechStartedAt = time.Time{}
+	a.userSpeechStoppedAt = time.Time{}
 	a.cancelPreemptiveGeneration()
 }
 
@@ -2282,12 +2286,21 @@ func (a *AgentActivity) pendingFinalEndOfTurnInfo() EndOfTurnInfo {
 	if !a.pendingUserTranscriptPresent {
 		return EndOfTurnInfo{}
 	}
-	return EndOfTurnInfo{
+	info := EndOfTurnInfo{
 		NewTranscript:        a.pendingUserTranscript,
 		Language:             a.pendingUserLanguage,
 		TranscriptConfidence: a.pendingTranscriptConfidence,
 		AudioFrames:          a.userAudioSnapshot(),
 	}
+	if !a.userSpeechStartedAt.IsZero() {
+		started := timeToUnixSeconds(a.userSpeechStartedAt)
+		info.StartedSpeakingAt = &started
+	}
+	if !a.userSpeechStoppedAt.IsZero() {
+		stopped := timeToUnixSeconds(a.userSpeechStoppedAt)
+		info.StoppedSpeakingAt = &stopped
+	}
+	return info
 }
 
 func (a *AgentActivity) vadBasedTurnDetection() bool {
@@ -2377,6 +2390,9 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 			}
 		}
 
+		if info.StoppedSpeakingAt != nil {
+			endpointingDelay += *info.StoppedSpeakingAt - timeToUnixSeconds(time.Now())
+		}
 		timer := time.NewTimer(time.Duration(endpointingDelay * float64(time.Second)))
 		defer timer.Stop()
 

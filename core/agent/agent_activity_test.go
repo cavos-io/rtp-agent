@@ -1666,6 +1666,30 @@ func TestAgentActivityUsesSessionMinEndpointingDelay(t *testing.T) {
 	}
 }
 
+func TestAgentActivityEOUDelayAnchorsToLastSpeechTime(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.08})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	stopped := float64(time.Now().Add(-120*time.Millisecond).UnixNano()) / float64(time.Second)
+
+	activity.runEOUDetection(EndOfTurnInfo{
+		NewTranscript:        "already ended",
+		TranscriptConfidence: 0.9,
+		StoppedSpeakingAt:    &stopped,
+	})
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "already ended" {
+			t.Fatalf("turn message text = %q, want already ended", msg.TextContent())
+		}
+	case <-time.After(30 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called immediately after endpointing delay had already elapsed")
+	}
+}
+
 func TestAgentActivityRunEOUDetectionSkipsEmptyTranscript(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeVAD
