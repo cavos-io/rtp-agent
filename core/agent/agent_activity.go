@@ -117,6 +117,7 @@ type AgentActivity struct {
 	pendingInterimSpeakerID      string
 	userTurnCompletionMu         sync.Mutex
 	pendingUserTranscript        string
+	pendingUserLanguage          string
 	pendingTranscriptConfidence  float64
 	pendingUserTranscriptPresent bool
 
@@ -358,8 +359,10 @@ func (a *AgentActivity) InterruptionEnabled() bool {
 		return false
 	}
 	switch a.turnDetectionMode() {
-	case "", TurnDetectionModeManual, TurnDetectionModeRealtimeLLM:
+	case TurnDetectionModeManual, TurnDetectionModeRealtimeLLM:
 		return false
+	case "":
+		return a.hasVADModel()
 	default:
 		return true
 	}
@@ -1362,9 +1365,9 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 	}
 	logger.Logger.Infow("End of speech detected")
 
-	if a.turnDetectionMode() == TurnDetectionModeVAD {
+	if a.vadBasedTurnDetection() {
 		// Trigger EOU detection
-		a.runEOUDetection(EndOfTurnInfo{})
+		a.runEOUDetection(a.pendingFinalEndOfTurnInfo())
 	}
 }
 
@@ -1448,6 +1451,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 
 	a.userTurnMu.Lock()
 	a.pendingUserTranscript = transcript
+	a.pendingUserLanguage = language
 	a.pendingTranscriptConfidence = confidence
 	a.pendingUserTranscriptPresent = true
 	a.pendingInterimTranscript = ""
@@ -1461,6 +1465,13 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 		a.interruptByAudioActivity("final transcript", "transcript", transcript)
 	}
 	if turnDetection == TurnDetectionModeSTT {
+		a.runEOUDetection(EndOfTurnInfo{
+			NewTranscript:        transcript,
+			Language:             language,
+			TranscriptConfidence: confidence,
+			AudioFrames:          a.userAudioSnapshot(),
+		})
+	} else if a.vadBasedTurnDetection() && !a.speaking {
 		a.runEOUDetection(EndOfTurnInfo{
 			NewTranscript:        transcript,
 			Language:             language,
@@ -1632,6 +1643,7 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 collect:
 	a.userTurnMu.Lock()
 	transcript := a.pendingUserTranscript
+	language := a.pendingUserLanguage
 	confidence := a.pendingTranscriptConfidence
 	present := a.pendingUserTranscriptPresent
 	fallbackLanguage := ""
@@ -1646,6 +1658,7 @@ collect:
 		fallbackFinal = true
 	}
 	a.pendingUserTranscript = ""
+	a.pendingUserLanguage = ""
 	a.pendingTranscriptConfidence = 0
 	a.pendingUserTranscriptPresent = false
 	a.pendingInterimTranscript = ""
@@ -1671,8 +1684,9 @@ collect:
 	if _, err := a.completeUserTurn(ctx, EndOfTurnInfo{
 		SkipReply:            opts.SkipReply,
 		NewTranscript:        transcript,
-		Language:             fallbackLanguage,
+		Language:             firstNonEmpty(language, fallbackLanguage),
 		TranscriptConfidence: confidence,
+		AudioFrames:          a.userAudioSnapshot(),
 	}); err != nil {
 		return transcript, err
 	}
@@ -1829,6 +1843,7 @@ func (a *AgentActivity) clearPendingUserTurn() {
 	defer a.userTurnMu.Unlock()
 
 	a.pendingUserTranscript = ""
+	a.pendingUserLanguage = ""
 	a.pendingTranscriptConfidence = 0
 	a.pendingUserTranscriptPresent = false
 	a.pendingInterimTranscript = ""
@@ -1847,6 +1862,28 @@ func (a *AgentActivity) notifyUserTurnUpdated() {
 	case ch <- struct{}{}:
 	default:
 	}
+}
+
+func (a *AgentActivity) pendingFinalEndOfTurnInfo() EndOfTurnInfo {
+	a.userTurnMu.Lock()
+	defer a.userTurnMu.Unlock()
+	if !a.pendingUserTranscriptPresent {
+		return EndOfTurnInfo{}
+	}
+	return EndOfTurnInfo{
+		NewTranscript:        a.pendingUserTranscript,
+		Language:             a.pendingUserLanguage,
+		TranscriptConfidence: a.pendingTranscriptConfidence,
+		AudioFrames:          a.userAudioSnapshot(),
+	}
+}
+
+func (a *AgentActivity) vadBasedTurnDetection() bool {
+	if a == nil {
+		return false
+	}
+	mode := a.turnDetectionMode()
+	return mode == TurnDetectionModeVAD || (mode == "" && a.hasVADModel())
 }
 
 func (a *AgentActivity) turnDetectionMode() TurnDetectionMode {
@@ -1873,6 +1910,15 @@ func (a *AgentActivity) turnDetectionMode() TurnDetectionMode {
 
 func (a *AgentActivity) hasVADModel() bool {
 	return a != nil && ((a.Agent != nil && a.Agent.VAD != nil) || (a.Session != nil && a.Session.VAD != nil))
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {

@@ -291,7 +291,7 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 				continue
 			}
 			session.activity.OnFinalTranscript(ev)
-			if session.activity.turnDetectionMode() != TurnDetectionModeSTT {
+			if session.activity.turnDetectionMode() != TurnDetectionModeSTT && !session.activity.vadBasedTurnDetection() {
 				if ctx == nil {
 					ctx = context.Background()
 				}
