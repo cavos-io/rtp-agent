@@ -345,6 +345,29 @@ func TestGoogleSTTStreamCombinesReferenceInterimResultSegments(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamSuppressesLowConfidenceInterimTranscript(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{{
+			Results: []*speechpb.StreamingRecognitionResult{{
+				Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+					Transcript: "maybe",
+					Confidence: 0.3,
+				}},
+			}},
+		}},
+	}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	if event, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next event = %#v, error = %v; want EOF without low-confidence interim event", event, err)
+	}
+}
+
 func TestGoogleSTTStreamMapsReferenceVoiceActivityEvents(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{

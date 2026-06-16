@@ -22,6 +22,7 @@ type GoogleSTT struct {
 	profanityFilter      bool
 	voiceActivityEvents  bool
 	sampleRate           int32
+	minConfidence        float64
 	enableWordTimeOffset bool
 	enableWordConfidence bool
 }
@@ -73,6 +74,14 @@ func WithGoogleSTTSampleRate(sampleRate int32) GoogleSTTOption {
 	}
 }
 
+func WithGoogleSTTMinConfidenceThreshold(threshold float64) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		if threshold >= 0 {
+			s.minConfidence = threshold
+		}
+	}
+}
+
 // NewGoogleSTT creates a new STT client using Application Default Credentials,
 // or by providing a path to a credentials JSON file.
 func NewGoogleSTT(credentialsFile string, providerOpts ...GoogleSTTOption) (*GoogleSTT, error) {
@@ -96,6 +105,7 @@ func newGoogleSTTWithClient(client googleSpeechClient, opts ...GoogleSTTOption) 
 		model:                "latest_long",
 		punctuate:            true,
 		sampleRate:           16000,
+		minConfidence:        0.65,
 		enableWordTimeOffset: true,
 		enableWordConfidence: true,
 	}
@@ -136,9 +146,10 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	}
 
 	gs := &googleSTTStream{
-		stream: stream,
-		events: make(chan *stt.SpeechEvent, 10),
-		errCh:  make(chan error, 1),
+		stream:        stream,
+		minConfidence: s.minConfidence,
+		events:        make(chan *stt.SpeechEvent, 10),
+		errCh:         make(chan error, 1),
 	}
 	go gs.readLoop()
 
@@ -253,11 +264,12 @@ func googleSpeakerID(word *speechpb.WordInfo) string {
 }
 
 type googleSTTStream struct {
-	mu     sync.Mutex
-	stream speechpb.Speech_StreamingRecognizeClient
-	events chan *stt.SpeechEvent
-	errCh  chan error
-	closed bool
+	mu            sync.Mutex
+	stream        speechpb.Speech_StreamingRecognizeClient
+	minConfidence float64
+	events        chan *stt.SpeechEvent
+	errCh         chan error
+	closed        bool
 }
 
 func (s *googleSTTStream) readLoop() {
@@ -278,7 +290,7 @@ func (s *googleSTTStream) readLoop() {
 			s.events <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
 		}
 
-		if data, eventType, ok := googleSpeechDataFromStreamingResults(resp.Results); ok {
+		if data, eventType, ok := googleSpeechDataFromStreamingResults(resp.Results, s.minConfidence); ok {
 			s.events <- &stt.SpeechEvent{
 				Type:         eventType,
 				Alternatives: []stt.SpeechData{data},
@@ -287,7 +299,7 @@ func (s *googleSTTStream) readLoop() {
 	}
 }
 
-func googleSpeechDataFromStreamingResults(results []*speechpb.StreamingRecognitionResult) (stt.SpeechData, stt.SpeechEventType, bool) {
+func googleSpeechDataFromStreamingResults(results []*speechpb.StreamingRecognitionResult, minConfidence float64) (stt.SpeechData, stt.SpeechEventType, bool) {
 	if len(results) == 0 {
 		return stt.SpeechData{}, "", false
 	}
@@ -313,9 +325,13 @@ func googleSpeechDataFromStreamingResults(results []*speechpb.StreamingRecogniti
 	if count == 0 || text == "" {
 		return stt.SpeechData{}, "", false
 	}
+	confidence = confidence / float64(count)
+	if confidence < minConfidence {
+		return stt.SpeechData{}, "", false
+	}
 	return stt.SpeechData{
 		Text:       text,
-		Confidence: confidence / float64(count),
+		Confidence: confidence,
 		Words:      googleTimedStrings(firstAlt.GetWords()),
 	}, stt.SpeechEventInterimTranscript, true
 }
