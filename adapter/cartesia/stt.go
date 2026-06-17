@@ -157,6 +157,8 @@ func (s *CartesiaSTT) Stream(ctx context.Context, language string) (stt.Recogniz
 		},
 	}
 	stream.writeBinary = stream.writeBinaryMessage
+	stream.writeText = stream.writeTextMessage
+	stream.closeConn = stream.closeWebsocketConn
 	go stream.readLoop()
 	return stream, nil
 }
@@ -184,6 +186,8 @@ type cartesiaSTTStream struct {
 
 	audioBStream *audio.AudioByteStream
 	writeBinary  func([]byte) error
+	writeText    func([]byte) error
+	closeConn    func() error
 }
 
 func (s *cartesiaSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -215,14 +219,22 @@ func (s *cartesiaSTTStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	s.cancel()
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.audioBStream != nil {
+		for _, chunk := range s.audioBStream.Flush() {
+			if err := s.writeBinaryData(chunk.Data); err != nil {
+				return err
+			}
+		}
+	}
 	closeMessage := `{"type":"close"}`
 	if s.state.mode == "legacy" {
 		closeMessage = "close"
 	}
-	_ = s.conn.WriteMessage(websocket.TextMessage, []byte(closeMessage))
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.conn.Close()
+	_ = s.writeTextData([]byte(closeMessage))
+	return s.closeConnection()
 }
 
 func (s *cartesiaSTTStream) writeBinaryData(data []byte) error {
@@ -234,6 +246,29 @@ func (s *cartesiaSTTStream) writeBinaryData(data []byte) error {
 
 func (s *cartesiaSTTStream) writeBinaryMessage(data []byte) error {
 	return s.conn.WriteMessage(websocket.BinaryMessage, data)
+}
+
+func (s *cartesiaSTTStream) writeTextData(data []byte) error {
+	if s.writeText != nil {
+		return s.writeText(data)
+	}
+	return s.writeTextMessage(data)
+}
+
+func (s *cartesiaSTTStream) writeTextMessage(data []byte) error {
+	return s.conn.WriteMessage(websocket.TextMessage, data)
+}
+
+func (s *cartesiaSTTStream) closeConnection() error {
+	if s.closeConn != nil {
+		return s.closeConn()
+	}
+	return s.closeWebsocketConn()
+}
+
+func (s *cartesiaSTTStream) closeWebsocketConn() error {
+	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	return s.conn.Close()
 }
 
 func (s *cartesiaSTTStream) Next() (*stt.SpeechEvent, error) {

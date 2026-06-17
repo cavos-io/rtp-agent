@@ -256,6 +256,45 @@ func TestCartesiaSTTPushFrameBuffersReferenceAudioChunks(t *testing.T) {
 	}
 }
 
+func TestCartesiaSTTCloseFlushesBufferedAudioBeforeClose(t *testing.T) {
+	var writes [][]byte
+	var textMessages []string
+	stream := &cartesiaSTTStream{
+		state:        &cartesiaSTTStreamState{mode: "auto"},
+		audioBStream: newCartesiaSTTAudioByteStream(16000, 160),
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+		writeText: func(data []byte) error {
+			textMessages = append(textMessages, string(data))
+			return nil
+		},
+		closeConn: func() error { return nil },
+	}
+
+	if err := stream.PushFrame(&audiomodel.AudioFrame{
+		Data:              make([]byte, 1280*2),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1280,
+	}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes before close = %s, want none", cartesiaWriteSizes(writes))
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if len(writes) != 1 || len(writes[0]) != 2560 {
+		t.Fatalf("writes after close = %s, want buffered 80ms chunk", cartesiaWriteSizes(writes))
+	}
+	if len(textMessages) != 1 || textMessages[0] != `{"type":"close"}` {
+		t.Fatalf("text messages = %#v, want close message after buffered audio", textMessages)
+	}
+}
+
 func TestCartesiaSTTErrorEventReportsServerErrors(t *testing.T) {
 	_, err := processCartesiaSTTEvent(&cartesiaSTTStreamState{}, map[string]any{
 		"type":        "error",
