@@ -129,6 +129,40 @@ func TestResolveJoinOptionsPreservesPublishAudioDisabled(t *testing.T) {
 	}
 }
 
+func TestResolveJoinOptionsDefaultsSubscribeAudioToTENEnabled(t *testing.T) {
+	opts := Options{
+		AppID:   "app",
+		Channel: "support",
+	}
+
+	resolved, err := ResolveJoinOptions(opts)
+	if err != nil {
+		t.Fatalf("ResolveJoinOptions() error = %v", err)
+	}
+
+	if resolved.SubscribeAudio == nil || !*resolved.SubscribeAudio {
+		t.Fatalf("resolved SubscribeAudio = %#v, want enabled by default", resolved.SubscribeAudio)
+	}
+}
+
+func TestResolveJoinOptionsPreservesSubscribeAudioDisabled(t *testing.T) {
+	disabled := false
+	opts := Options{
+		AppID:          "app",
+		Channel:        "support",
+		SubscribeAudio: &disabled,
+	}
+
+	resolved, err := ResolveJoinOptions(opts)
+	if err != nil {
+		t.Fatalf("ResolveJoinOptions() error = %v", err)
+	}
+
+	if resolved.SubscribeAudio == nil || *resolved.SubscribeAudio {
+		t.Fatalf("resolved SubscribeAudio = %#v, want disabled", resolved.SubscribeAudio)
+	}
+}
+
 func TestOptionsValidateRequiresAppIDAndChannel(t *testing.T) {
 	if err := (Options{}).Validate(); err == nil {
 		t.Fatal("Options.Validate() error = nil, want missing app ID")

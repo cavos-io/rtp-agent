@@ -213,7 +213,7 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts Options, handler Event
 	}
 
 	conCfg := &agoraservice.RtcConnectionConfig{
-		AutoSubscribeAudio:            true,
+		AutoSubscribeAudio:            SubscribeAudioEnabled(opts.SubscribeAudio),
 		AutoSubscribeVideo:            false,
 		EnableAudioRecordingOrPlayout: false,
 		ClientRole:                    agoraservice.ClientRoleBroadcaster,
@@ -281,7 +281,7 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts Options, handler Event
 		_ = releaseSDKService()
 		return fmt.Errorf("agora SDK register connection observer failed: %d", ret)
 	}
-	if audioHandler != nil {
+	if audioHandler != nil && SubscribeAudioEnabled(opts.SubscribeAudio) {
 		localUser := connection.GetLocalUser()
 		if localUser == nil {
 			connection.Release()

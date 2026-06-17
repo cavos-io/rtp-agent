@@ -556,6 +556,21 @@ func TestTransportForwardsClientAudioFrames(t *testing.T) {
 	}
 }
 
+func TestTransportJoinDisablesAudioHandlerWhenSubscribeAudioDisabled(t *testing.T) {
+	disabled := false
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support", SubscribeAudio: &disabled}, client)
+	tr.SetAudioHandler(func(*model.AudioFrame) {})
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+
+	if client.audioHandler != nil {
+		t.Fatal("client audio handler was set with subscribe_audio disabled")
+	}
+}
+
 func TestTransportCloseLeavesClientAndClosesEvents(t *testing.T) {
 	client := &fakeChannelClient{}
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)

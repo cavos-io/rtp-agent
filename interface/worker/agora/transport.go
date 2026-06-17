@@ -140,6 +140,9 @@ func (t *Transport) Join(ctx context.Context) error {
 		return fmt.Errorf("agora transport is already joined")
 	}
 	audio := t.audio
+	if !SubscribeAudioEnabled(opts.SubscribeAudio) {
+		audio = nil
+	}
 	t.joinSeq++
 	joinSeq := t.joinSeq
 	t.joinCancel = cancel

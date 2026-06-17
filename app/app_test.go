@@ -555,6 +555,7 @@ func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 	t.Setenv("AGORA_UID", " agent-42 ")
 	t.Setenv("AGORA_TOKEN", " agora-token ")
 	t.Setenv("AGORA_PUBLISH_AUDIO", "false")
+	t.Setenv("AGORA_SUBSCRIBE_AUDIO", "false")
 
 	cfg := DefaultConfigFromEnv()
 
@@ -589,6 +590,9 @@ func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 	}
 	if cfg.Agora.PublishAudio == nil || *cfg.Agora.PublishAudio {
 		t.Fatalf("Agora.PublishAudio = %#v, want false", cfg.Agora.PublishAudio)
+	}
+	if cfg.Agora.SubscribeAudio == nil || *cfg.Agora.SubscribeAudio {
+		t.Fatalf("Agora.SubscribeAudio = %#v, want false", cfg.Agora.SubscribeAudio)
 	}
 }
 
@@ -1259,6 +1263,61 @@ func TestRunAgoraForwardsChannelAudioToSession(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("session did not receive Agora audio frame")
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("runAgora() error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not return after cancellation")
+	}
+}
+
+func TestRunAgoraDoesNotForwardChannelAudioWhenSubscribeDisabled(t *testing.T) {
+	disabled := false
+	client := &fakeAppAgoraChannelClient{joinedCh: make(chan struct{}, 1)}
+	oldNewAgoraChannelClient := appNewAgoraChannelClient
+	appNewAgoraChannelClient = func() (workeragora.ChannelClient, error) {
+		return client, nil
+	}
+	t.Cleanup(func() {
+		appNewAgoraChannelClient = oldNewAgoraChannelClient
+	})
+
+	assistant := &fakeAppSessionAssistant{audioCh: make(chan *model.AudioFrame, 1)}
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	session.Assistant = assistant
+	rtpApp := &App{
+		Session: session,
+		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
+		Config: AppConfig{
+			Agora: workeragora.Options{
+				AppID:          "app",
+				Channel:        "support",
+				UID:            "agent",
+				Token:          "token",
+				SubscribeAudio: &disabled,
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- rtpApp.runAgora(ctx)
+	}()
+
+	select {
+	case <-client.joinedCh:
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not join Agora channel")
+	}
+	if client.audio != nil {
+		t.Fatal("Agora client audio handler was set with subscribe_audio disabled")
 	}
 
 	cancel()

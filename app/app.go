@@ -703,6 +703,7 @@ func DefaultConfigFromEnv() AppConfig {
 			UID:            strings.TrimSpace(os.Getenv("AGORA_UID")),
 			Token:          strings.TrimSpace(os.Getenv("AGORA_TOKEN")),
 			PublishAudio:   getenvOptionalBool("AGORA_PUBLISH_AUDIO"),
+			SubscribeAudio: getenvOptionalBool("AGORA_SUBSCRIBE_AUDIO"),
 		},
 		AgoraGreeting:                           getenvTrimmedDefaultUnsetOnly("AGORA_GREETING", defaultAgoraGreeting),
 		Instructions:                            getenvDefault("RTP_AGENT_INSTRUCTIONS", "You are a helpful realtime voice agent."),

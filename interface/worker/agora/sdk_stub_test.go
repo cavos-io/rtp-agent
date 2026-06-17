@@ -500,6 +500,22 @@ func TestSDKClientImplementationHonorsPublishAudioDisabled(t *testing.T) {
 	}
 }
 
+func TestSDKClientImplementationHonorsSubscribeAudioDisabled(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"AutoSubscribeAudio:            SubscribeAudioEnabled(opts.SubscribeAudio)",
+		"if audioHandler != nil && SubscribeAudioEnabled(opts.SubscribeAudio)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}
+
 func TestSDKClientImplementationEmitsConnectedAfterPublishAudio(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {

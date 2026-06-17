@@ -22,6 +22,10 @@ func ResolveJoinOptions(opts Options) (Options, error) {
 		enabled := true
 		opts.PublishAudio = &enabled
 	}
+	if opts.SubscribeAudio == nil {
+		enabled := true
+		opts.SubscribeAudio = &enabled
+	}
 	if strings.TrimSpace(opts.UID) == "" {
 		opts.UID = "0"
 	}
@@ -47,5 +51,9 @@ func ResolveJoinOptions(opts Options) (Options, error) {
 }
 
 func PublishAudioEnabled(value *bool) bool {
+	return value == nil || *value
+}
+
+func SubscribeAudioEnabled(value *bool) bool {
 	return value == nil || *value
 }

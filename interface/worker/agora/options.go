@@ -12,6 +12,7 @@ type Options struct {
 	UID            string
 	Token          string
 	PublishAudio   *bool
+	SubscribeAudio *bool
 }
 
 func (opts Options) Validate() error {
