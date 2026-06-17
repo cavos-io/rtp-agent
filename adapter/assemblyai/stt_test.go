@@ -329,6 +329,36 @@ func TestAssemblyAIRealtimeFormatTurnsWaitsForFormattedFinal(t *testing.T) {
 	}
 }
 
+func TestAssemblyAIRealtimeFinalEmitsReferenceRecognitionUsage(t *testing.T) {
+	resp := aaiResponse{
+		Type:       "Turn",
+		Transcript: "hello",
+		EndOfTurn:  true,
+		Words: []assemblyAIWord{
+			{Text: "hello", Start: 100, End: 300, Confidence: 0.95},
+		},
+	}
+	state := &assemblyAIStreamState{speechDuration: 1.25}
+
+	events := assemblyAIRealtimeTranscriptEvents(resp, state)
+	if len(events) != 4 {
+		t.Fatalf("events = %d, want interim, final, end_of_speech, usage", len(events))
+	}
+	usage := events[3]
+	if usage.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("usage event type = %s, want recognition_usage", usage.Type)
+	}
+	if usage.RecognitionUsage == nil {
+		t.Fatal("RecognitionUsage = nil, want audio duration")
+	}
+	if usage.RecognitionUsage.AudioDuration != 1.25 {
+		t.Fatalf("audio duration = %v, want 1.25", usage.RecognitionUsage.AudioDuration)
+	}
+	if state.speechDuration != 0 {
+		t.Fatalf("speech duration after usage = %v, want reset to 0", state.speechDuration)
+	}
+}
+
 func TestAssemblyAIRealtimeSpeechStartedEmitsReferenceStart(t *testing.T) {
 	events := assemblyAIRealtimeEvents(aaiResponse{Type: "SpeechStarted"}, &assemblyAIStreamState{})
 	if len(events) != 1 {
@@ -413,6 +443,9 @@ func TestAssemblyAISTTStreamAnchorsReferenceStartTimeOnFirstChunk(t *testing.T) 
 	if *stream.state.streamStartTime != streamStart {
 		t.Fatalf("stream start time = %v, want %v", *stream.state.streamStartTime, streamStart)
 	}
+	if stream.state.speechDuration < 0.049 || stream.state.speechDuration > 0.051 {
+		t.Fatalf("speech duration after first chunk = %v, want 0.05", stream.state.speechDuration)
+	}
 
 	stream.clock = func() time.Time {
 		return time.Unix(int64(streamStart+10), 0)
@@ -427,6 +460,9 @@ func TestAssemblyAISTTStreamAnchorsReferenceStartTimeOnFirstChunk(t *testing.T) 
 	}
 	if *stream.state.streamStartTime != streamStart {
 		t.Fatalf("stream start time after second chunk = %v, want original %v", *stream.state.streamStartTime, streamStart)
+	}
+	if stream.state.speechDuration < 0.099 || stream.state.speechDuration > 0.101 {
+		t.Fatalf("speech duration after second chunk = %v, want 0.1", stream.state.speechDuration)
 	}
 }
 

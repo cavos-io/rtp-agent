@@ -349,6 +349,7 @@ type assemblyAIStreamState struct {
 	lastPreflightStartTime float64
 	requireFormattedFinal  bool
 	streamStartTime        *float64
+	speechDuration         float64
 }
 
 type aaiResponse struct {
@@ -440,6 +441,32 @@ func (state *assemblyAIStreamState) speechStartTime(timestampMS *float64) *float
 	return &startTime
 }
 
+func (state *assemblyAIStreamState) addSpeechDuration(duration float64) {
+	if state == nil || duration <= 0 {
+		return
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.speechDuration += duration
+}
+
+func (state *assemblyAIStreamState) recognitionUsageEvent() *stt.SpeechEvent {
+	if state == nil {
+		return nil
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.speechDuration <= 0 {
+		return nil
+	}
+	duration := state.speechDuration
+	state.speechDuration = 0
+	return &stt.SpeechEvent{
+		Type:             stt.SpeechEventRecognitionUsage,
+		RecognitionUsage: &stt.RecognitionUsage{AudioDuration: duration},
+	}
+}
+
 func assemblyAIRealtimeTranscriptEvent(resp aaiResponse) *stt.SpeechEvent {
 	events := assemblyAIRealtimeTranscriptEvents(resp, &assemblyAIStreamState{})
 	for _, event := range events {
@@ -493,6 +520,9 @@ func assemblyAIRealtimeTranscriptEvents(resp aaiResponse, state *assemblyAIStrea
 			events = append(events, assemblyAITranscriptEvent(stt.SpeechEventFinalTranscript, resp, text, words, startTime, endTime))
 		}
 		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
+		if usage := state.recognitionUsageEvent(); usage != nil {
+			events = append(events, usage)
+		}
 		state.lastPreflightStartTime = 0
 	}
 	return events
@@ -606,6 +636,7 @@ func (s *assemblyAISTTStream) PushFrame(frame *model.AudioFrame) error {
 			_ = s.closeConnection()
 			return err
 		}
+		s.state.addSpeechDuration(audio.CalculateFrameDuration(chunk))
 	}
 	return nil
 }
@@ -626,6 +657,7 @@ func (s *assemblyAISTTStream) Flush() error {
 			_ = s.closeConnection()
 			return err
 		}
+		s.state.addSpeechDuration(audio.CalculateFrameDuration(chunk))
 	}
 	return nil
 }
