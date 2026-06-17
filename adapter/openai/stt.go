@@ -664,7 +664,12 @@ func (s *openAIRealtimeSTTStream) Next() (*stt.SpeechEvent, error) {
 }
 
 func (s *openAIRealtimeSTTStream) readLoop() {
-	defer close(s.events)
+	defer func() {
+		if s.owner != nil {
+			s.owner.unregisterRealtimeSTTStream(s)
+		}
+		close(s.events)
+	}()
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {

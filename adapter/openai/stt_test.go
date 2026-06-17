@@ -707,6 +707,11 @@ func TestOpenAISTTStreamReturnsAPIStatusErrorOnUnexpectedClose(t *testing.T) {
 	if statusErr.Message != "OpenAI Realtime STT connection closed unexpectedly" {
 		t.Fatalf("APIStatusError message = %q, want unexpected close", statusErr.Message)
 	}
+
+	provider.UpdateOptions(WithOpenAISTTLanguage("id"))
+	if got := stream.(*openAIRealtimeSTTStream).state.language; got != "en" {
+		t.Fatalf("closed stream language = %q, want unchanged after provider update", got)
+	}
 }
 
 func TestOpenAISTTRecognizeLanguageOverridePersists(t *testing.T) {
