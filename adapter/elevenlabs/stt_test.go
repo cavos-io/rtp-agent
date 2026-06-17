@@ -341,6 +341,28 @@ func TestElevenLabsSTTStreamEventsMapLifecycle(t *testing.T) {
 	assertElevenLabsSTTEvent(t, events, 0, stt.SpeechEventEndOfSpeech, "")
 }
 
+func TestElevenLabsSTTStreamServerVADEndsSpeechAfterFinalTranscript(t *testing.T) {
+	state := &elevenLabsSTTStreamState{language: "en", includeTimestamps: true, serverVAD: true}
+
+	events, err := processElevenLabsSTTStreamEvent(state, map[string]any{
+		"message_type": "committed_transcript_with_timestamps",
+		"text":         "hello",
+		"words": []any{
+			map[string]any{"text": "hello", "start": 0.1, "end": 0.4},
+		},
+	})
+	if err != nil {
+		t.Fatalf("process final: %v", err)
+	}
+
+	assertElevenLabsSTTEvent(t, events, 0, stt.SpeechEventStartOfSpeech, "")
+	assertElevenLabsSTTEvent(t, events, 1, stt.SpeechEventFinalTranscript, "hello")
+	assertElevenLabsSTTEvent(t, events, 2, stt.SpeechEventEndOfSpeech, "")
+	if state.speaking {
+		t.Fatal("speaking = true, want false after server VAD final transcript")
+	}
+}
+
 func TestElevenLabsSTTStreamEventDefaultsLanguageToEnglish(t *testing.T) {
 	events, err := processElevenLabsSTTStreamEvent(&elevenLabsSTTStreamState{}, map[string]any{
 		"message_type": "committed_transcript",
