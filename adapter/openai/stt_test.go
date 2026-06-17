@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
@@ -783,6 +784,107 @@ func TestOpenAISTTStreamReconnectsAfterUnexpectedClose(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTStreamBuffersAndFlushesReferenceAudioChunks(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	started := make(chan struct{})
+	releaseServer := make(chan struct{})
+	messages := make(chan string, 10)
+	defer close(releaseServer)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			close(started)
+			for {
+				select {
+				case <-releaseServer:
+					return
+				default:
+				}
+				if _, payload, err := conn.ReadMessage(); err != nil {
+					return
+				} else {
+					messages <- string(payload)
+				}
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not send initial session update")
+	}
+
+	if err := stream.PushFrame(openAIRealtimeSTTTestFrame(bytes.Repeat([]byte{0x01}, 1200))); err != nil {
+		t.Fatalf("PushFrame first half error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "first 25ms partial frame should be buffered")
+
+	if err := stream.PushFrame(openAIRealtimeSTTTestFrame(bytes.Repeat([]byte{0x02}, 1200))); err != nil {
+		t.Fatalf("PushFrame second half error = %v", err)
+	}
+	fullChunk := assertOpenAIRealtimeSTTAudioAppend(t, <-messages)
+	if len(fullChunk) != openAIRealtimeSTTChunkBytes() {
+		t.Fatalf("full chunk bytes = %d, want %d", len(fullChunk), openAIRealtimeSTTChunkBytes())
+	}
+
+	if err := stream.PushFrame(openAIRealtimeSTTTestFrame(bytes.Repeat([]byte{0x03}, 480))); err != nil {
+		t.Fatalf("PushFrame remainder error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "10ms remainder should wait for Flush")
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	remainder := assertOpenAIRealtimeSTTAudioAppend(t, <-messages)
+	if len(remainder) != 480 {
+		t.Fatalf("remainder bytes = %d, want 480", len(remainder))
+	}
+	assertRealtimeMessage(t, <-messages, "input_audio_buffer.commit", "")
+}
+
+func openAIRealtimeSTTTestFrame(data []byte) *model.AudioFrame {
+	return &model.AudioFrame{
+		Data:              data,
+		SampleRate:        openAIRealtimeSTTSampleRate,
+		NumChannels:       openAIRealtimeSTTNumChannels,
+		SamplesPerChannel: uint32(len(data) / 2),
+	}
+}
+
+func assertOpenAIRealtimeSTTAudioAppend(t *testing.T, raw string) []byte {
+	t.Helper()
+	var message map[string]any
+	if err := json.Unmarshal([]byte(raw), &message); err != nil {
+		t.Fatalf("decode message %q: %v", raw, err)
+	}
+	if message["type"] != "input_audio_buffer.append" {
+		t.Fatalf("message type = %#v, want input_audio_buffer.append; raw=%s", message["type"], raw)
+	}
+	audioB64, _ := message["audio"].(string)
+	if audioB64 == "" {
+		t.Fatalf("audio = %#v, want base64 payload", message["audio"])
+	}
+	audio, err := base64.StdEncoding.DecodeString(audioB64)
+	if err != nil {
+		t.Fatalf("decode audio %q: %v", audioB64, err)
+	}
+	return audio
+}
+
 func TestOpenAISTTRecognizeLanguageOverridePersists(t *testing.T) {
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		if err := r.ParseMultipartForm(1 << 20); err != nil {
@@ -1189,18 +1291,7 @@ func TestOpenAIRealtimeSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 		t.Fatal("timed out waiting for test websocket close")
 	}
 
-	var writeErr error
-	for range 3 {
-		writeErr = stream.PushFrame(&model.AudioFrame{
-			Data:              []byte{0x01, 0x02},
-			SampleRate:        24000,
-			NumChannels:       1,
-			SamplesPerChannel: 1,
-		})
-		if writeErr != nil {
-			break
-		}
-	}
+	writeErr := stream.PushFrame(openAIRealtimeSTTTestFrame(bytes.Repeat([]byte{0x01}, openAIRealtimeSTTChunkBytes())))
 	if writeErr == nil {
 		t.Fatal("PushFrame error = nil after closed websocket, want write failure")
 	}

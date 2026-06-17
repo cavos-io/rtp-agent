@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -555,6 +556,7 @@ type openAIRealtimeSTTStream struct {
 	errCh  chan error
 	mu     sync.Mutex
 	closed bool
+	audio  *audio.AudioByteStream
 	state  *openAIRealtimeSTTMessageState
 	owner  *OpenAISTT
 }
@@ -568,16 +570,11 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	chunkBytes := openAIRealtimeSTTChunkBytes()
-	for start := 0; start < len(frame.Data); start += chunkBytes {
-		end := start + chunkBytes
-		if end > len(frame.Data) {
-			end = len(frame.Data)
-		}
-		chunk := *frame
-		chunk.Data = frame.Data[start:end]
-		chunk.SamplesPerChannel = uint32(len(chunk.Data) / 2)
-		message, err := buildOpenAIRealtimeSTTAudioAppendMessage(&chunk)
+	if s.audio == nil {
+		s.audio = newOpenAIRealtimeSTTAudioByteStream()
+	}
+	for _, chunk := range s.audio.Push(frame.Data) {
+		message, err := buildOpenAIRealtimeSTTAudioAppendMessage(chunk)
 		if err != nil {
 			return err
 		}
@@ -590,14 +587,26 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 }
 
 func (s *openAIRealtimeSTTStream) Flush() error {
-	message, err := buildOpenAIRealtimeSTTCommitMessage()
-	if err != nil {
-		return err
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
+	}
+	if s.audio != nil {
+		for _, chunk := range s.audio.Flush() {
+			message, err := buildOpenAIRealtimeSTTAudioAppendMessage(chunk)
+			if err != nil {
+				return err
+			}
+			if err := s.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+				s.closeAfterWriteFailureLocked()
+				return err
+			}
+		}
+	}
+	message, err := buildOpenAIRealtimeSTTCommitMessage()
+	if err != nil {
+		return err
 	}
 	if err := s.conn.WriteMessage(websocket.TextMessage, message); err != nil {
 		s.closeAfterWriteFailureLocked()
@@ -759,6 +768,10 @@ func (s *openAIRealtimeSTTStream) reconnectAfterUnexpectedClose() error {
 
 func openAIRealtimeSTTChunkBytes() int {
 	return openAIRealtimeSTTSampleRate / 20 * openAIRealtimeSTTNumChannels * 2
+}
+
+func newOpenAIRealtimeSTTAudioByteStream() *audio.AudioByteStream {
+	return audio.NewAudioByteStream(openAIRealtimeSTTSampleRate, openAIRealtimeSTTNumChannels, openAIRealtimeSTTSampleRate/20)
 }
 
 type openAIRealtimeSTTTiming struct {
