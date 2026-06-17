@@ -2,10 +2,12 @@ package cartesia
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"strings"
 	"testing"
 
+	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
@@ -215,6 +217,45 @@ func TestCartesiaSTTLegacyEventsMapTranscriptLifecycle(t *testing.T) {
 	}
 }
 
+func TestCartesiaSTTPushFrameBuffersReferenceAudioChunks(t *testing.T) {
+	var writes [][]byte
+	stream := &cartesiaSTTStream{
+		state:        &cartesiaSTTStreamState{mode: "auto"},
+		audioBStream: newCartesiaSTTAudioByteStream(16000, 160),
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+	}
+	frame := func(samples int) *audiomodel.AudioFrame {
+		return &audiomodel.AudioFrame{
+			Data:              make([]byte, samples*2),
+			SampleRate:        16000,
+			NumChannels:       1,
+			SamplesPerChannel: uint32(samples),
+		}
+	}
+
+	if err := stream.PushFrame(frame(1280)); err != nil {
+		t.Fatalf("PushFrame first half error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes after first half = %d, want 0", len(writes))
+	}
+	if err := stream.PushFrame(frame(1280)); err != nil {
+		t.Fatalf("PushFrame second half error = %v", err)
+	}
+	if len(writes) != 1 || len(writes[0]) != 5120 {
+		t.Fatalf("writes = %s, want one 160ms PCM chunk", cartesiaWriteSizes(writes))
+	}
+	if err := stream.PushFrame(frame(2560)); err != nil {
+		t.Fatalf("PushFrame full chunk error = %v", err)
+	}
+	if len(writes) != 2 || len(writes[1]) != 5120 {
+		t.Fatalf("writes = %s, want two 160ms PCM chunks", cartesiaWriteSizes(writes))
+	}
+}
+
 func TestCartesiaSTTErrorEventReportsServerErrors(t *testing.T) {
 	_, err := processCartesiaSTTEvent(&cartesiaSTTStreamState{}, map[string]any{
 		"type":        "error",
@@ -224,6 +265,14 @@ func TestCartesiaSTTErrorEventReportsServerErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("error = nil, want server error")
 	}
+}
+
+func cartesiaWriteSizes(writes [][]byte) string {
+	sizes := make([]string, 0, len(writes))
+	for _, write := range writes {
+		sizes = append(sizes, fmt.Sprintf("%d", len(write)))
+	}
+	return strings.Join(sizes, ",")
 }
 
 func assertCartesiaQuery(t *testing.T, query url.Values, key string, want string) {

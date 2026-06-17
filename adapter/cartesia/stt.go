@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
@@ -144,16 +145,18 @@ func (s *CartesiaSTT) Stream(ctx context.Context, language string) (stt.Recogniz
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &cartesiaSTTStream{
-		conn:   conn,
-		events: make(chan *stt.SpeechEvent, 100),
-		errCh:  make(chan error, 1),
-		ctx:    streamCtx,
-		cancel: cancel,
+		conn:         conn,
+		events:       make(chan *stt.SpeechEvent, 100),
+		errCh:        make(chan error, 1),
+		ctx:          streamCtx,
+		cancel:       cancel,
+		audioBStream: newCartesiaSTTAudioByteStream(s.sampleRate, s.audioChunkDurationMS),
 		state: &cartesiaSTTStreamState{
 			language: s.languageOrDefault(),
 			mode:     s.finalTranscriptMode,
 		},
 	}
+	stream.writeBinary = stream.writeBinaryMessage
 	go stream.readLoop()
 	return stream, nil
 }
@@ -178,13 +181,24 @@ type cartesiaSTTStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	state  *cartesiaSTTStreamState
+
+	audioBStream *audio.AudioByteStream
+	writeBinary  func([]byte) error
 }
 
 func (s *cartesiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	return s.conn.WriteMessage(websocket.BinaryMessage, frame.Data)
+	if s.audioBStream == nil {
+		s.audioBStream = newCartesiaSTTAudioByteStream(int(frame.SampleRate), defaultCartesiaSTTAudioChunkDurationMS)
+	}
+	for _, chunk := range s.audioBStream.Write(frame.Data) {
+		if err := s.writeBinaryData(chunk.Data); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *cartesiaSTTStream) Flush() error {
@@ -209,6 +223,17 @@ func (s *cartesiaSTTStream) Close() error {
 	_ = s.conn.WriteMessage(websocket.TextMessage, []byte(closeMessage))
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
+}
+
+func (s *cartesiaSTTStream) writeBinaryData(data []byte) error {
+	if s.writeBinary != nil {
+		return s.writeBinary(data)
+	}
+	return s.writeBinaryMessage(data)
+}
+
+func (s *cartesiaSTTStream) writeBinaryMessage(data []byte) error {
+	return s.conn.WriteMessage(websocket.BinaryMessage, data)
 }
 
 func (s *cartesiaSTTStream) Next() (*stt.SpeechEvent, error) {
@@ -510,6 +535,17 @@ func (s *CartesiaSTT) languageOrDefault() string {
 		return cartesiaLanguageBase(s.language)
 	}
 	return "en"
+}
+
+func newCartesiaSTTAudioByteStream(sampleRate int, durationMS int) *audio.AudioByteStream {
+	if sampleRate <= 0 {
+		sampleRate = defaultCartesiaSTTSampleRate
+	}
+	if durationMS <= 0 {
+		durationMS = defaultCartesiaSTTAudioChunkDurationMS
+	}
+	samplesPerChannel := uint32(sampleRate * durationMS / 1000)
+	return audio.NewAudioByteStream(uint32(sampleRate), 1, samplesPerChannel)
 }
 
 func (s *cartesiaSTTStreamState) languageOrDefault() string {
