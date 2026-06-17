@@ -248,16 +248,19 @@ func (t *Transport) emit(event Event) {
 	}
 	select {
 	case t.events <- event:
+		t.applyEventLocked(event)
 	default:
 		if event.Kind != EventError {
 			return
 		}
 		select {
-		case <-t.events:
+		case dropped := <-t.events:
+			t.revertEventLocked(dropped)
 		default:
 		}
 		select {
 		case t.events <- event:
+			t.applyEventLocked(event)
 		default:
 		}
 	}
@@ -269,13 +272,9 @@ func (t *Transport) acceptEventLocked(event Event) bool {
 		if event.UserID == "" {
 			return true
 		}
-		if t.users == nil {
-			t.users = make(map[string]struct{})
-		}
 		if _, ok := t.users[event.UserID]; ok {
 			return false
 		}
-		t.users[event.UserID] = struct{}{}
 		return true
 	case EventUserLeft:
 		if event.UserID == "" {
@@ -284,12 +283,46 @@ func (t *Transport) acceptEventLocked(event Event) bool {
 		if _, ok := t.users[event.UserID]; !ok {
 			return false
 		}
-		delete(t.users, event.UserID)
 		return true
 	case EventDisconnected:
-		t.users = nil
 		return true
 	default:
 		return true
+	}
+}
+
+func (t *Transport) applyEventLocked(event Event) {
+	switch event.Kind {
+	case EventUserJoined:
+		if event.UserID == "" {
+			return
+		}
+		if t.users == nil {
+			t.users = make(map[string]struct{})
+		}
+		t.users[event.UserID] = struct{}{}
+	case EventUserLeft:
+		if event.UserID != "" {
+			delete(t.users, event.UserID)
+		}
+	case EventDisconnected:
+		t.users = nil
+	}
+}
+
+func (t *Transport) revertEventLocked(event Event) {
+	switch event.Kind {
+	case EventUserJoined:
+		if event.UserID != "" {
+			delete(t.users, event.UserID)
+		}
+	case EventUserLeft:
+		if event.UserID == "" {
+			return
+		}
+		if t.users == nil {
+			t.users = make(map[string]struct{})
+		}
+		t.users[event.UserID] = struct{}{}
 	}
 }

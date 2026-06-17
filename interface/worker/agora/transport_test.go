@@ -312,6 +312,74 @@ func TestTransportDropsUnknownParticipantLeaveEvents(t *testing.T) {
 	}
 }
 
+func TestTransportDoesNotTrackDroppedParticipantJoinEvents(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	for i := 0; i < cap(tr.events); i++ {
+		client.emit(Event{Kind: EventConnected, Channel: "support", Reason: i})
+	}
+	client.emit(Event{Kind: EventUserJoined, Channel: "support", UserID: "user-1"})
+	for i := 0; i < cap(tr.events); i++ {
+		select {
+		case <-tr.Events():
+		case <-time.After(time.Second):
+			t.Fatal("timed out draining full event buffer")
+		}
+	}
+
+	client.emit(Event{Kind: EventUserJoined, Channel: "support", UserID: "user-1"})
+
+	select {
+	case event := <-tr.Events():
+		if event.Kind != EventUserJoined || event.UserID != "user-1" {
+			t.Fatalf("event = %#v, want user-1 join after dropped join", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for user join after dropped join")
+	}
+}
+
+func TestTransportDoesNotTrackDroppedParticipantLeaveEvents(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	client.emit(Event{Kind: EventUserJoined, Channel: "support", UserID: "user-1"})
+	select {
+	case <-tr.Events():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first user join")
+	}
+	for i := 0; i < cap(tr.events); i++ {
+		client.emit(Event{Kind: EventConnected, Channel: "support", Reason: i})
+	}
+	client.emit(Event{Kind: EventUserLeft, Channel: "support", UserID: "user-1"})
+	for i := 0; i < cap(tr.events); i++ {
+		select {
+		case <-tr.Events():
+		case <-time.After(time.Second):
+			t.Fatal("timed out draining full event buffer")
+		}
+	}
+
+	client.emit(Event{Kind: EventUserLeft, Channel: "support", UserID: "user-1"})
+
+	select {
+	case event := <-tr.Events():
+		if event.Kind != EventUserLeft || event.UserID != "user-1" {
+			t.Fatalf("event = %#v, want user-1 leave after dropped leave", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for user leave after dropped leave")
+	}
+}
+
 func TestTransportPrioritizesErrorEventsWhenBufferIsFull(t *testing.T) {
 	client := &fakeChannelClient{}
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
