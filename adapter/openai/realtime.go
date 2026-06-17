@@ -1281,6 +1281,7 @@ func (s *realtimeSession) sendMsg(msg any) error {
 
 func (s *realtimeSession) eventLoop() {
 	defer close(s.eventCh)
+	defer s.closeRealtimeGeneration()
 	for {
 		select {
 		case <-s.ctx.Done():
