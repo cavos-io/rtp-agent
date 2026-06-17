@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
@@ -421,6 +422,9 @@ type gladiaSTTStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	state  *gladiaSTTStreamState
+	audio  *audio.AudioByteStream
+
+	writeText func(map[string]any) error
 }
 
 func (s *gladiaSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -432,7 +436,19 @@ func (s *gladiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	return writeGladiaMessage(s.conn, buildGladiaAudioChunkMessage(frame.Data))
+	if s.audio == nil {
+		s.audio = newGladiaAudioByteStream(frame)
+	}
+	if s.state == nil {
+		s.state = &gladiaSTTStreamState{}
+	}
+	for _, chunk := range s.audio.Push(frame.Data) {
+		if err := s.writeTextMessage(buildGladiaAudioChunkMessage(chunk.Data)); err != nil {
+			return err
+		}
+		s.state.audioDuration += audio.CalculateFrameDuration(chunk)
+	}
+	return nil
 }
 
 func (s *gladiaSTTStream) Flush() error {
@@ -441,7 +457,59 @@ func (s *gladiaSTTStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	return writeGladiaMessage(s.conn, buildGladiaStopRecordingMessage())
+	if s.state == nil {
+		s.state = &gladiaSTTStreamState{}
+	}
+	if s.audio != nil {
+		for _, chunk := range s.audio.Flush() {
+			if err := s.writeTextMessage(buildGladiaAudioChunkMessage(chunk.Data)); err != nil {
+				return err
+			}
+			s.state.audioDuration += audio.CalculateFrameDuration(chunk)
+		}
+	}
+	if err := s.writeTextMessage(buildGladiaStopRecordingMessage()); err != nil {
+		return err
+	}
+	s.emitRecognitionUsage()
+	return nil
+}
+
+func (s *gladiaSTTStream) writeTextMessage(message map[string]any) error {
+	if s.writeText != nil {
+		return s.writeText(message)
+	}
+	if s.conn == nil {
+		return io.ErrClosedPipe
+	}
+	return writeGladiaMessage(s.conn, message)
+}
+
+func (s *gladiaSTTStream) emitRecognitionUsage() {
+	if s.events == nil || s.state == nil || s.state.audioDuration <= 0 {
+		return
+	}
+	duration := s.state.audioDuration
+	s.state.audioDuration = 0
+	s.events <- &stt.SpeechEvent{
+		Type:      stt.SpeechEventRecognitionUsage,
+		RequestID: s.state.requestID,
+		RecognitionUsage: &stt.RecognitionUsage{
+			AudioDuration: duration,
+		},
+	}
+}
+
+func newGladiaAudioByteStream(frame *model.AudioFrame) *audio.AudioByteStream {
+	sampleRate := frame.SampleRate
+	if sampleRate == 0 {
+		sampleRate = defaultGladiaSampleRate
+	}
+	numChannels := frame.NumChannels
+	if numChannels == 0 {
+		numChannels = defaultGladiaChannels
+	}
+	return audio.NewAudioByteStream(sampleRate, numChannels, 0)
 }
 
 func (s *gladiaSTTStream) Close() error {
@@ -505,9 +573,10 @@ func (s *gladiaSTTStream) readLoop() {
 }
 
 type gladiaSTTStreamState struct {
-	requestID string
-	languages []string
-	speaking  bool
+	requestID     string
+	languages     []string
+	speaking      bool
+	audioDuration float64
 }
 
 func processGladiaMessage(state *gladiaSTTStreamState, data map[string]any) ([]*stt.SpeechEvent, error) {
