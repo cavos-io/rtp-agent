@@ -47,8 +47,30 @@ func TestRTMMessageRouterDispatchesTENInputTextType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleDataMessage() error = %v, want nil", err)
 	}
-	if got.Text != "hello from ten" || got.Publisher != "caller-7" || got.Channel != "support" {
+	if got.Text != "hello from ten" || got.StreamID != "caller-7" || got.Publisher != "caller-7" || got.Channel != "support" {
 		t.Fatalf("TextInputEvent = %#v, want TEN input_text event", got)
+	}
+}
+
+func TestRTMMessageRouterPreservesNumericStreamID(t *testing.T) {
+	var got TextInputEvent
+	router := RTMMessageRouter{
+		TextInput: func(_ context.Context, ev TextInputEvent) error {
+			got = ev
+			return nil
+		},
+	}
+
+	err := router.HandleDataMessage(context.Background(), DataMessage{
+		Channel:   "support",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"type":"input_text","text":"hello from ten","stream_id":100}`),
+	})
+	if err != nil {
+		t.Fatalf("HandleDataMessage() error = %v, want nil", err)
+	}
+	if got.StreamID != "100" {
+		t.Fatalf("StreamID = %q, want numeric TEN stream id preserved", got.StreamID)
 	}
 }
 
