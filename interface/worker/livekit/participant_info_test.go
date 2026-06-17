@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
+	lkprotocol "github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -74,5 +75,110 @@ func TestParticipantInfoFromRemoteParticipantCopiesAttributes(t *testing.T) {
 func TestParticipantInfoFromRemoteParticipantNil(t *testing.T) {
 	if info := workerlivekit.ParticipantInfoFromRemoteParticipant(nil); info != nil {
 		t.Fatalf("ParticipantInfoFromRemoteParticipant(nil) = %#v, want nil", info)
+	}
+}
+
+func TestRemoteParticipantViewsFiltersNilParticipants(t *testing.T) {
+	views := workerlivekit.RemoteParticipantViews([]*lksdk.RemoteParticipant{nil})
+
+	if len(views) != 0 {
+		t.Fatalf("RemoteParticipantViews(nil participant) len = %d, want 0", len(views))
+	}
+}
+
+func TestRoomRemoteParticipantViewsHandlesNilRoom(t *testing.T) {
+	views := workerlivekit.RoomRemoteParticipantViews(nil)
+
+	if len(views) != 0 {
+		t.Fatalf("RoomRemoteParticipantViews(nil) len = %d, want 0", len(views))
+	}
+}
+
+func TestRoomRemoteParticipantViewsHandlesRoomWithoutParticipants(t *testing.T) {
+	views := workerlivekit.RoomRemoteParticipantViews(lksdk.NewRoom(nil))
+
+	if len(views) != 0 {
+		t.Fatalf("RoomRemoteParticipantViews(empty room) len = %d, want 0", len(views))
+	}
+}
+
+func TestRoomLocalParticipantReturnsLocalParticipant(t *testing.T) {
+	room := lksdk.NewRoom(nil)
+
+	if got := workerlivekit.RoomLocalParticipant(room); got != room.LocalParticipant {
+		t.Fatal("RoomLocalParticipant() did not return room local participant")
+	}
+}
+
+func TestRoomLocalParticipantHandlesNilRoom(t *testing.T) {
+	if got := workerlivekit.RoomLocalParticipant(nil); got != nil {
+		t.Fatalf("RoomLocalParticipant(nil) = %#v, want nil", got)
+	}
+}
+
+func TestParticipantInfoDetailsExposeIdentityAndKind(t *testing.T) {
+	details := workerlivekit.ParticipantInfoDetails(&lkprotocol.ParticipantInfo{
+		Identity: "caller-a",
+		Kind:     lkprotocol.ParticipantInfo_SIP,
+	})
+
+	if details.Identity != "caller-a" {
+		t.Fatalf("ParticipantInfoDetails().Identity = %q, want caller-a", details.Identity)
+	}
+	if details.Kind != lkprotocol.ParticipantInfo_SIP {
+		t.Fatalf("ParticipantInfoDetails().Kind = %v, want SIP", details.Kind)
+	}
+}
+
+func TestRoomCallbackWithHandlersPreservesParticipantCallback(t *testing.T) {
+	participant := &lksdk.RemoteParticipant{}
+	existingCalled := false
+	handlerCalled := false
+	cb := workerlivekit.RoomCallbackWithHandlers(&lksdk.RoomCallback{
+		OnParticipantConnected: func(got *lksdk.RemoteParticipant) {
+			if got != participant {
+				t.Fatalf("OnParticipantConnected participant = %#v, want original", got)
+			}
+			existingCalled = true
+		},
+	}, workerlivekit.RoomCallbackHandlers{
+		OnParticipantConnected: func(got workerlivekit.RemoteParticipantView) {
+			if got != participant {
+				t.Fatalf("handler participant = %#v, want original", got)
+			}
+			handlerCalled = true
+		},
+	})
+
+	cb.OnParticipantConnected(participant)
+
+	if !existingCalled {
+		t.Fatal("existing OnParticipantConnected callback was not called")
+	}
+	if !handlerCalled {
+		t.Fatal("participant handler was not called")
+	}
+}
+
+func TestRoomCallbackWithHandlersPreservesTrackCallback(t *testing.T) {
+	publication := &lksdk.RemoteTrackPublication{}
+	participant := &lksdk.RemoteParticipant{}
+	existingCalled := false
+	existing := &lksdk.RoomCallback{}
+	existing.OnTrackPublished = func(gotPublication *lksdk.RemoteTrackPublication, gotParticipant *lksdk.RemoteParticipant) {
+		if gotPublication != publication {
+			t.Fatalf("OnTrackPublished publication = %#v, want original", gotPublication)
+		}
+		if gotParticipant != participant {
+			t.Fatalf("OnTrackPublished participant = %#v, want original", gotParticipant)
+		}
+		existingCalled = true
+	}
+	cb := workerlivekit.RoomCallbackWithHandlers(existing, workerlivekit.RoomCallbackHandlers{})
+
+	cb.OnTrackPublished(publication, participant)
+
+	if !existingCalled {
+		t.Fatal("existing OnTrackPublished callback was not called")
 	}
 }

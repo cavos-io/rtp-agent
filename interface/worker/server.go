@@ -121,6 +121,12 @@ type WorkerPermissions = workerlivekit.WorkerPermissions
 
 type WorkerStartedHandler func()
 
+type WorkerRegisteredInfo struct {
+	WorkerID string
+}
+
+type WorkerRegisteredInfoHandler func(WorkerRegisteredInfo)
+
 type WorkerRegisteredHandler func(workerID string, serverInfo *livekit.ServerInfo)
 
 type WorkerInfo struct {
@@ -192,22 +198,23 @@ type AgentServer struct {
 	requestFnc    func(*JobRequest) error
 	sessionEndFnc func(*JobContext) error
 
-	activeJobs         map[string]*JobContext
-	pendingAccepts     map[string]JobAcceptArguments
-	pendingTimers      map[string]*time.Timer
-	reservedSlots      int
-	draining           bool
-	running            bool
-	mu                 sync.Mutex
-	conn               *websocket.Conn
-	httpServer         *http.Server
-	httpPort           int
-	prometheusServer   *telemetry.HttpServer
-	workerMessageSink  func(*livekit.WorkerMessage) error
-	workerID           string
-	connectionFailed   bool
-	startedHandlers    []WorkerStartedHandler
-	registeredHandlers []WorkerRegisteredHandler
+	activeJobs             map[string]*JobContext
+	pendingAccepts         map[string]JobAcceptArguments
+	pendingTimers          map[string]*time.Timer
+	reservedSlots          int
+	draining               bool
+	running                bool
+	mu                     sync.Mutex
+	conn                   *websocket.Conn
+	httpServer             *http.Server
+	httpPort               int
+	prometheusServer       *telemetry.HttpServer
+	workerMessageSink      func(*livekit.WorkerMessage) error
+	workerID               string
+	connectionFailed       bool
+	startedHandlers        []WorkerStartedHandler
+	registeredInfoHandlers []WorkerRegisteredInfoHandler
+	registeredHandlers     []WorkerRegisteredHandler
 
 	consoleSession any // Store local session for CLI console
 	transportRun   func(context.Context) error
@@ -236,6 +243,13 @@ func (s *AgentServer) OnWorkerRegistered(handler WorkerRegisteredHandler) {
 	defer s.mu.Unlock()
 
 	s.registeredHandlers = append(s.registeredHandlers, handler)
+}
+
+func (s *AgentServer) OnWorkerRegisteredInfo(handler WorkerRegisteredInfoHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.registeredInfoHandlers = append(s.registeredInfoHandlers, handler)
 }
 
 func (s *AgentServer) SetTransportRunFunc(fn func(context.Context) error) {
@@ -1658,12 +1672,26 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 
 func (s *AgentServer) emitWorkerRegistered(workerID string, serverInfo *livekit.ServerInfo) {
 	s.mu.Lock()
+	infoHandlers := append([]WorkerRegisteredInfoHandler(nil), s.registeredInfoHandlers...)
 	handlers := append([]WorkerRegisteredHandler(nil), s.registeredHandlers...)
 	s.mu.Unlock()
 
+	info := WorkerRegisteredInfo{WorkerID: workerID}
+	for _, handler := range infoHandlers {
+		callWorkerRegisteredInfoHandler(handler, info)
+	}
 	for _, handler := range handlers {
 		callWorkerRegisteredHandler(handler, workerID, serverInfo)
 	}
+}
+
+func callWorkerRegisteredInfoHandler(handler WorkerRegisteredInfoHandler, info WorkerRegisteredInfo) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Logger.Errorw("Worker registered handler failed", fmt.Errorf("panic: %v", r), "workerId", info.WorkerID)
+		}
+	}()
+	handler(info)
 }
 
 func callWorkerRegisteredHandler(handler WorkerRegisteredHandler, workerID string, serverInfo *livekit.ServerInfo) {

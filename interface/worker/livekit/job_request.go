@@ -75,6 +75,17 @@ func JobSessionReportInfo(job *lkprotocol.Job) SessionReportInfo {
 	return info
 }
 
+type MetricInfo struct {
+	RoomName string
+}
+
+func JobMetricInfo(job *lkprotocol.Job) MetricInfo {
+	if job == nil {
+		return MetricInfo{}
+	}
+	return MetricInfo{RoomName: JobRoomName(job)}
+}
+
 func JobInferenceHeaders(job *lkprotocol.Job) map[string]string {
 	if job == nil {
 		return nil

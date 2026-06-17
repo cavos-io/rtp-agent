@@ -81,6 +81,16 @@ func TestJobSessionReportInfoExposesJobAndRoomMetadata(t *testing.T) {
 	}
 }
 
+func TestJobMetricInfoExposesRoomName(t *testing.T) {
+	info := workerlivekit.JobMetricInfo(&lkprotocol.Job{
+		Room: &lkprotocol.Room{Name: "metrics-room"},
+	})
+
+	if info.RoomName != "metrics-room" {
+		t.Fatalf("JobMetricInfo().RoomName = %q, want metrics-room", info.RoomName)
+	}
+}
+
 func TestJobInferenceHeadersExposeLiveKitJobMetadata(t *testing.T) {
 	headers := workerlivekit.JobInferenceHeaders(&lkprotocol.Job{
 		Id: "job-inference",

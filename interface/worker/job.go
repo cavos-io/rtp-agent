@@ -401,10 +401,7 @@ func (c *JobContext) TokenClaims() (*auth.ClaimGrants, error) {
 }
 
 func (c *JobContext) JobID() string {
-	if c.Job == nil {
-		return ""
-	}
-	return c.Job.Id
+	return workerlivekit.JobID(c.Job)
 }
 
 func (c *JobContext) IsFakeJob() bool {
@@ -493,10 +490,10 @@ func (c *JobContext) PublisherInfo() *livekit.ParticipantInfo {
 }
 
 func (c *JobContext) Agent() *lksdk.LocalParticipant {
-	if c == nil || c.Room == nil {
+	if c == nil {
 		return nil
 	}
-	return c.Room.LocalParticipant
+	return workerlivekit.RoomLocalParticipant(c.Room)
 }
 
 var jobContextNewRoom = lksdk.NewRoom
@@ -534,15 +531,13 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *lksdk.Room, 
 		ctx = context.Background()
 	}
 	opts := normalizeConnectOptions(options...)
-	connectOptions := []lksdk.ConnectOption{
-		lksdk.WithAutoSubscribe(workerlivekit.AutoSubscribeSDKEnabled(string(opts.AutoSubscribe))),
-	}
+	connectOptions := workerlivekit.ConnectOptionsForAutoSubscribe(string(opts.AutoSubscribe))
 	if c.token != "" {
 		if err := jobContextJoinRoomWithToken(ctx, room, c.url, c.token, connectOptions...); err != nil {
 			return err
 		}
 		c.Room = room
-		c.participantsAvailable(remoteParticipantsAsViews(room.GetRemoteParticipants()))
+		c.participantsAvailable(workerlivekit.RoomRemoteParticipantViews(room))
 		c.applyAutoSubscribeOptions(opts.AutoSubscribe)
 		logger.Logger.Infow("Connected to room", "room", workerlivekit.JobRoomName(c.Job))
 		return nil
@@ -560,7 +555,7 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *lksdk.Room, 
 		return err
 	}
 	c.Room = room
-	c.participantsAvailable(remoteParticipantsAsViews(room.GetRemoteParticipants()))
+	c.participantsAvailable(workerlivekit.RoomRemoteParticipantViews(room))
 	c.applyAutoSubscribeOptions(opts.AutoSubscribe)
 	logger.Logger.Infow("Connected to room", "room", workerlivekit.JobRoomName(c.Job))
 	return nil
@@ -576,45 +571,21 @@ func normalizeConnectOptions(options ...ConnectOptions) ConnectOptions {
 }
 
 func (c *JobContext) applyAutoSubscribeOptions(mode AutoSubscribe) {
-	if c.Room == nil {
-		return
-	}
-	for _, participant := range c.Room.GetRemoteParticipants() {
-		for _, publication := range participant.TrackPublications() {
-			remotePublication, ok := publication.(*lksdk.RemoteTrackPublication)
-			if ok && workerlivekit.ShouldAutoSubscribeTrack(string(mode), remotePublication.Kind()) {
-				if err := remotePublication.SetSubscribed(true); err != nil {
-					logger.Logger.Warnw("failed to subscribe remote track", err, "trackSid", remotePublication.SID())
-				}
-			}
+	for _, result := range workerlivekit.ApplyAutoSubscribeToRoom(c.Room, string(mode)) {
+		if result.Err != nil {
+			logger.Logger.Warnw("failed to subscribe remote track", result.Err, "trackSid", result.TrackSID)
 		}
 	}
 }
 
 func (c *JobContext) roomCallbackWithEntrypoints(cb *lksdk.RoomCallback, autoSubscribe AutoSubscribe) *lksdk.RoomCallback {
-	wrapped := lksdk.NewRoomCallback()
-	wrapped.Merge(cb)
-	onParticipantConnected := wrapped.OnParticipantConnected
-	wrapped.OnParticipantConnected = func(participant *lksdk.RemoteParticipant) {
-		if onParticipantConnected != nil {
-			onParticipantConnected(participant)
-		}
-		if participant != nil {
-			c.participantAvailable(participant)
-		}
-	}
-	onTrackPublished := wrapped.OnTrackPublished
-	wrapped.OnTrackPublished = func(publication *lksdk.RemoteTrackPublication, participant *lksdk.RemoteParticipant) {
-		if onTrackPublished != nil {
-			onTrackPublished(publication, participant)
-		}
-		if publication != nil && workerlivekit.ShouldAutoSubscribeTrack(string(autoSubscribe), publication.Kind()) {
-			if err := publication.SetSubscribed(true); err != nil {
-				logger.Logger.Warnw("failed to subscribe published remote track", err, "trackSid", publication.SID())
-			}
-		}
-	}
-	return wrapped
+	return workerlivekit.RoomCallbackWithHandlers(cb, workerlivekit.RoomCallbackHandlers{
+		AutoSubscribe:          string(autoSubscribe),
+		OnParticipantConnected: c.participantAvailable,
+		OnTrackSubscribeError: func(result workerlivekit.RemoteTrackSubscriptionResult) {
+			logger.Logger.Warnw("failed to subscribe published remote track", result.Err, "trackSid", result.TrackSID)
+		},
+	})
 }
 
 func (c *JobContext) participantAvailable(participant workerlivekit.RemoteParticipantView) {
@@ -627,8 +598,10 @@ func (c *JobContext) participantAvailable(participant workerlivekit.RemotePartic
 }
 
 func (c *JobContext) rememberAvailableParticipant(info *livekit.ParticipantInfo) {
+	infoDetails := workerlivekit.ParticipantInfoDetails(info)
 	for i, participant := range c.availableParticipants {
-		if participant.Identity == info.Identity {
+		participantDetails := workerlivekit.ParticipantInfoDetails(participant)
+		if participantDetails.Identity == infoDetails.Identity {
 			c.availableParticipants[i] = info
 			return
 		}
@@ -640,16 +613,6 @@ func (c *JobContext) participantsAvailable(participants []workerlivekit.RemotePa
 	for _, participant := range participants {
 		c.participantAvailable(participant)
 	}
-}
-
-func remoteParticipantsAsViews(participants []*lksdk.RemoteParticipant) []workerlivekit.RemoteParticipantView {
-	views := make([]workerlivekit.RemoteParticipantView, 0, len(participants))
-	for _, participant := range participants {
-		if participant != nil {
-			views = append(views, participant)
-		}
-	}
-	return views
 }
 
 func (c *JobContext) AddShutdownCallback(callback any) error {
@@ -689,7 +652,8 @@ func (c *JobContext) AddParticipantEntrypoint(entrypoint ParticipantEntrypoint, 
 
 func (c *JobContext) scheduleParticipantEntrypointForExistingParticipants(registration participantEntrypointRegistration) {
 	for _, participant := range c.availableParticipants {
-		if !workerlivekit.ParticipantKindAllowed(registration.kinds, participant.Kind) {
+		participantDetails := workerlivekit.ParticipantInfoDetails(participant)
+		if !workerlivekit.ParticipantKindAllowed(registration.kinds, participantDetails.Kind) {
 			continue
 		}
 		c.scheduleParticipantEntrypoint(registration, participant)
@@ -704,7 +668,7 @@ func (c *JobContext) WaitForParticipant(
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
 	}
-	return utils.WaitForParticipant(ctx, c.Room, identity, workerlivekit.DefaultParticipantKindsWhenUnset(kinds)...)
+	return workerlivekit.WaitForParticipant(ctx, c.Room, identity, kinds...)
 }
 
 func (c *JobContext) WaitForAgent(
@@ -714,7 +678,7 @@ func (c *JobContext) WaitForAgent(
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
 	}
-	return utils.WaitForAgent(ctx, c.Room, agentName...)
+	return workerlivekit.WaitForAgent(ctx, c.Room, agentName...)
 }
 
 func (c *JobContext) WaitForTrackPublication(
@@ -725,7 +689,7 @@ func (c *JobContext) WaitForTrackPublication(
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
 	}
-	return utils.WaitForTrackPublication(ctx, c.Room, identity, kinds...)
+	return workerlivekit.WaitForTrackPublication(ctx, c.Room, identity, kinds...)
 }
 
 func (c *JobContext) WaitForTrackPublicationWithOptions(
@@ -735,7 +699,7 @@ func (c *JobContext) WaitForTrackPublicationWithOptions(
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
 	}
-	return utils.WaitForTrackPublicationWithOptions(ctx, c.Room, options)
+	return workerlivekit.WaitForTrackPublicationWithOptions(ctx, c.Room, options)
 }
 
 func (c *JobContext) WaitForParticipantAttribute(
@@ -747,7 +711,7 @@ func (c *JobContext) WaitForParticipantAttribute(
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return err
 	}
-	return utils.WaitForParticipantAttribute(ctx, c.Room, identity, attribute, value)
+	return workerlivekit.WaitForParticipantAttribute(ctx, c.Room, identity, attribute, value)
 }
 
 func (c *JobContext) ensureRoomConnected(ctx context.Context) error {
@@ -761,8 +725,9 @@ func (c *JobContext) scheduleParticipantEntrypoints(participant *livekit.Partici
 	if participant == nil {
 		return
 	}
+	participantDetails := workerlivekit.ParticipantInfoDetails(participant)
 	for _, registered := range c.participantEntrypoints {
-		if !workerlivekit.ParticipantKindAllowed(registered.kinds, participant.Kind) {
+		if !workerlivekit.ParticipantKindAllowed(registered.kinds, participantDetails.Kind) {
 			continue
 		}
 		c.scheduleParticipantEntrypoint(registered, participant)
@@ -773,8 +738,9 @@ func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntry
 	if participant == nil {
 		return
 	}
+	participantDetails := workerlivekit.ParticipantInfoDetails(participant)
 	key := participantEntrypointTaskKey{
-		identity:   participant.Identity,
+		identity:   participantDetails.Identity,
 		entrypoint: reflect.ValueOf(registration.entrypoint).Pointer(),
 	}
 	c.participantTasksMu.Lock()
@@ -782,7 +748,7 @@ func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntry
 		c.participantTasks = make(map[participantEntrypointTaskKey]struct{})
 	}
 	if _, ok := c.participantTasks[key]; ok {
-		logger.Logger.Warnw("participant entrypoint already running for participant", nil, "participant", participant.Identity)
+		logger.Logger.Warnw("participant entrypoint already running for participant", nil, "participant", participantDetails.Identity)
 	}
 	c.participantTasks[key] = struct{}{}
 	c.participantTasksMu.Unlock()
@@ -790,7 +756,7 @@ func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntry
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				logger.Logger.Errorw("Participant entrypoint panicked", fmt.Errorf("%v", recovered), "participant", participant.Identity)
+				logger.Logger.Errorw("Participant entrypoint panicked", fmt.Errorf("%v", recovered), "participant", participantDetails.Identity)
 			}
 			c.participantTasksMu.Lock()
 			delete(c.participantTasks, key)

@@ -1139,6 +1139,25 @@ func TestHandleRegisterNotifiesWorkerRegisteredHandlers(t *testing.T) {
 	}
 }
 
+func TestHandleRegisterNotifiesSharedWorkerRegisteredHandlers(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	var gotInfo WorkerRegisteredInfo
+	server.OnWorkerRegisteredInfo(func(info WorkerRegisteredInfo) {
+		gotInfo = info
+	})
+
+	server.handleMessage(context.Background(), &livekit.ServerMessage{
+		Message: &livekit.ServerMessage_Register{
+			Register: &livekit.RegisterWorkerResponse{WorkerId: "worker-shared"},
+		},
+	})
+
+	if gotInfo.WorkerID != "worker-shared" {
+		t.Fatalf("registered info WorkerID = %q, want worker-shared", gotInfo.WorkerID)
+	}
+}
+
 func TestWorkerRegisteredHandlerPanicDoesNotBlockOtherHandlers(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 
