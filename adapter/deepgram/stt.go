@@ -52,6 +52,8 @@ type DeepgramKeyword struct {
 
 type DeepgramSTTOption func(*DeepgramSTT)
 
+const deepgramSTTKeepAliveInterval = 5 * time.Second
+
 func WithDeepgramSTTBaseURL(baseURL string) DeepgramSTTOption {
 	return func(s *DeepgramSTT) {
 		if baseURL != "" {
@@ -585,9 +587,9 @@ func (s *deepgramStream) readLoop() {
 	}
 }
 
-// keepAliveLoop sends a native KeepAlive payload every 10 seconds to prevent Deepgram from dropping idle streams.
+// keepAliveLoop sends a native KeepAlive payload to prevent Deepgram from dropping idle streams.
 func (s *deepgramStream) keepAliveLoop() {
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(deepgramSTTKeepAliveInterval)
 	defer ticker.Stop()
 
 	for {

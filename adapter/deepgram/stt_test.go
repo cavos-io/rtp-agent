@@ -177,6 +177,12 @@ func TestDeepgramSTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTKeepAliveIntervalMatchesReference(t *testing.T) {
+	if deepgramSTTKeepAliveInterval != 5*time.Second {
+		t.Fatalf("keepalive interval = %v, want 5s", deepgramSTTKeepAliveInterval)
+	}
+}
+
 func TestDeepgramSTTUsesEnvAPIKeyWhenOmitted(t *testing.T) {
 	t.Setenv("DEEPGRAM_API_KEY", "env-key")
 
