@@ -112,7 +112,7 @@ import (
 )
 
 type fakeAppAgoraChannelClient struct {
-	joinOptions worker.AgoraOptions
+	joinOptions workeragora.Options
 	handler     workeragora.EventHandler
 	audio       workeragora.AudioHandler
 	joinedCh    chan struct{}
@@ -152,7 +152,7 @@ func (f *fakeAppSessionAssistant) SetPublishAudio(publish func(ctx context.Conte
 	f.publish = publish
 }
 
-func (f *fakeAppAgoraChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, handler workeragora.EventHandler, audio workeragora.AudioHandler) error {
+func (f *fakeAppAgoraChannelClient) Join(ctx context.Context, opts workeragora.Options, handler workeragora.EventHandler, audio workeragora.AudioHandler) error {
 	f.joinOptions = opts
 	f.handler = handler
 	f.audio = audio
@@ -597,6 +597,15 @@ func TestAppRunUsesAgoraTransportWhenConfigured(t *testing.T) {
 	}
 	if client.joinOptions.Channel != "support" {
 		t.Fatalf("joined channel = %q, want support", client.joinOptions.Channel)
+	}
+	if client.joinOptions.AppID != "app" {
+		t.Fatalf("joined app ID = %q, want app", client.joinOptions.AppID)
+	}
+	if client.joinOptions.UID != "agent" {
+		t.Fatalf("joined UID = %q, want agent", client.joinOptions.UID)
+	}
+	if client.joinOptions.Token != "token" {
+		t.Fatalf("joined token = %q, want token", client.joinOptions.Token)
 	}
 
 	cancel()

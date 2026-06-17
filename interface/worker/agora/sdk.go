@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/interface/worker"
 
 	agoraservice "github.com/AgoraIO-Extensions/Agora-Golang-Server-SDK/v2/go_sdk/rtc"
 )
@@ -161,7 +160,7 @@ func sdkAudioFrameToModel(frame *agoraservice.AudioFrame) *model.AudioFrame {
 	}
 }
 
-func (c *sdkChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, handler EventHandler, audioHandler AudioHandler) error {
+func (c *sdkChannelClient) Join(ctx context.Context, opts Options, handler EventHandler, audioHandler AudioHandler) error {
 	ctx = normalizeContext(ctx)
 	resolved, err := ResolveJoinOptions(opts)
 	if err != nil {

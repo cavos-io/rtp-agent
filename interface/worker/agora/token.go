@@ -5,14 +5,13 @@ import (
 	"time"
 
 	rtctokenbuilder "github.com/AgoraIO/Tools/DynamicKey/AgoraDynamicKey/go/src/rtctokenbuilder2"
-	"github.com/cavos-io/rtp-agent/interface/worker"
 )
 
 const defaultTokenTTL = time.Hour
 
-func ResolveJoinOptions(opts worker.AgoraOptions) (worker.AgoraOptions, error) {
+func ResolveJoinOptions(opts Options) (Options, error) {
 	if err := opts.Validate(); err != nil {
-		return worker.AgoraOptions{}, err
+		return Options{}, err
 	}
 	opts.AppID = strings.TrimSpace(opts.AppID)
 	opts.AppCertificate = strings.TrimSpace(opts.AppCertificate)
@@ -37,7 +36,7 @@ func ResolveJoinOptions(opts worker.AgoraOptions) (worker.AgoraOptions, error) {
 		tokenTTL,
 	)
 	if err != nil {
-		return worker.AgoraOptions{}, err
+		return Options{}, err
 	}
 	opts.Token = token
 	return opts, nil
