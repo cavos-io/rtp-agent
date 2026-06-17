@@ -20,7 +20,6 @@ import (
 	"github.com/cavos-io/rtp-agent/library/inference"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/utils"
-	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
@@ -444,23 +443,11 @@ func (c *JobContext) ParticipantIdentity() string {
 }
 
 func (c *JobContext) LocalParticipantIdentity() string {
-	claims, err := c.TokenClaims()
-	if err == nil && claims.Identity != "" {
-		return claims.Identity
-	}
-	return c.ParticipantIdentity()
+	return workerlivekit.LocalParticipantIdentity(c.token, c.ParticipantIdentity())
 }
 
 func (c *JobContext) TokenClaims() (*auth.ClaimGrants, error) {
-	tok, err := jwt.ParseSigned(c.token)
-	if err != nil {
-		return nil, err
-	}
-	claims := &auth.ClaimGrants{}
-	if err := tok.UnsafeClaimsWithoutVerification(claims); err != nil {
-		return nil, err
-	}
-	return claims, nil
+	return workerlivekit.TokenClaims(c.token)
 }
 
 func (c *JobContext) JobID() string {
