@@ -133,6 +133,43 @@ func TestLocalJobTokenIdentityRejectsInvalidToken(t *testing.T) {
 	}
 }
 
+func TestLocalJobTokenPreservesProvidedToken(t *testing.T) {
+	token, err := workerlivekit.LocalJobToken("provided-token", "api-key", "api-secret", "agent-a", "room-a", time.Hour)
+	if err != nil {
+		t.Fatalf("LocalJobToken() error = %v", err)
+	}
+	if token != "provided-token" {
+		t.Fatalf("LocalJobToken() = %q, want provided-token", token)
+	}
+}
+
+func TestLocalJobTokenReturnsEmptyWithoutCredentials(t *testing.T) {
+	token, err := workerlivekit.LocalJobToken("", "", "api-secret", "agent-a", "room-a", time.Hour)
+	if err != nil {
+		t.Fatalf("LocalJobToken() error = %v", err)
+	}
+	if token != "" {
+		t.Fatalf("LocalJobToken() = %q, want empty", token)
+	}
+}
+
+func TestLocalJobTokenGeneratesAgentJoinToken(t *testing.T) {
+	token, err := workerlivekit.LocalJobToken("", "api-key", "api-secret", "agent-a", "room-a", time.Hour)
+	if err != nil {
+		t.Fatalf("LocalJobToken() error = %v", err)
+	}
+	if token == "" {
+		t.Fatal("LocalJobToken() = empty, want generated token")
+	}
+	identity, err := workerlivekit.TokenIdentity(token)
+	if err != nil {
+		t.Fatalf("TokenIdentity(generated token) error = %v", err)
+	}
+	if identity != "agent-a" {
+		t.Fatalf("generated token identity = %q, want agent-a", identity)
+	}
+}
+
 func TestTokenIdentityReturnsParsedAPIIdentity(t *testing.T) {
 	token, err := auth.NewAccessToken("key", "secret").
 		SetIdentity("token-agent").

@@ -2228,13 +2228,9 @@ func newLocalJobContextWithOptions(roomName string, participantIdentity string, 
 	}
 	jobCtx.SetSessionDirectory(options.SessionDirectory)
 	jobCtx.process = NewJobProcess(JobExecutorTypeThread, opts.UserArguments, opts.HTTPProxy)
-	if token != "" {
-		jobCtx.token = token
-	} else if opts.APIKey != "" && opts.APISecret != "" {
-		generatedToken, err := workerlivekit.LocalAgentToken(opts.APIKey, opts.APISecret, participantIdentity, roomName, time.Hour)
-		if err == nil {
-			jobCtx.token = generatedToken
-		}
+	generatedToken, err := workerlivekit.LocalJobToken(token, opts.APIKey, opts.APISecret, participantIdentity, roomName, time.Hour)
+	if err == nil {
+		jobCtx.token = generatedToken
 	}
 	return jobCtx
 }
