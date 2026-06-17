@@ -587,7 +587,7 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *lksdk.Room, 
 	}
 	opts := normalizeConnectOptions(options...)
 	connectOptions := []lksdk.ConnectOption{
-		lksdk.WithAutoSubscribe(autoSubscribeSDKEnabled(opts.AutoSubscribe)),
+		lksdk.WithAutoSubscribe(workerlivekit.AutoSubscribeSDKEnabled(string(opts.AutoSubscribe))),
 	}
 	if c.token != "" {
 		if err := jobContextJoinRoomWithToken(ctx, room, c.url, c.token, connectOptions...); err != nil {
@@ -621,14 +621,6 @@ func normalizeConnectOptions(options ...ConnectOptions) ConnectOptions {
 	return opts
 }
 
-func autoSubscribeSDKEnabled(mode AutoSubscribe) bool {
-	return workerlivekit.AutoSubscribeSDKEnabled(string(mode))
-}
-
-func shouldAutoSubscribeTrack(mode AutoSubscribe, kind lksdk.TrackKind) bool {
-	return workerlivekit.ShouldAutoSubscribeTrack(string(mode), kind)
-}
-
 func (c *JobContext) applyAutoSubscribeOptions(mode AutoSubscribe) {
 	if c.Room == nil {
 		return
@@ -636,7 +628,7 @@ func (c *JobContext) applyAutoSubscribeOptions(mode AutoSubscribe) {
 	for _, participant := range c.Room.GetRemoteParticipants() {
 		for _, publication := range participant.TrackPublications() {
 			remotePublication, ok := publication.(*lksdk.RemoteTrackPublication)
-			if ok && shouldAutoSubscribeTrack(mode, remotePublication.Kind()) {
+			if ok && workerlivekit.ShouldAutoSubscribeTrack(string(mode), remotePublication.Kind()) {
 				if err := remotePublication.SetSubscribed(true); err != nil {
 					logger.Logger.Warnw("failed to subscribe remote track", err, "trackSid", remotePublication.SID())
 				}
@@ -662,7 +654,7 @@ func (c *JobContext) roomCallbackWithEntrypoints(cb *lksdk.RoomCallback, autoSub
 		if onTrackPublished != nil {
 			onTrackPublished(publication, participant)
 		}
-		if publication != nil && shouldAutoSubscribeTrack(autoSubscribe, publication.Kind()) {
+		if publication != nil && workerlivekit.ShouldAutoSubscribeTrack(string(autoSubscribe), publication.Kind()) {
 			if err := publication.SetSubscribed(true); err != nil {
 				logger.Logger.Warnw("failed to subscribe published remote track", err, "trackSid", publication.SID())
 			}

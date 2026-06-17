@@ -14,6 +14,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
+	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
@@ -537,8 +538,8 @@ func TestAutoSubscribeSDKEnabledMatchesReferenceModes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(string(tt.mode), func(t *testing.T) {
-			if got := autoSubscribeSDKEnabled(tt.mode); got != tt.want {
-				t.Fatalf("autoSubscribeSDKEnabled(%q) = %v, want %v", tt.mode, got, tt.want)
+			if got := workerlivekit.AutoSubscribeSDKEnabled(string(tt.mode)); got != tt.want {
+				t.Fatalf("AutoSubscribeSDKEnabled(%q) = %v, want %v", tt.mode, got, tt.want)
 			}
 		})
 	}
@@ -556,12 +557,13 @@ func TestShouldAutoSubscribeTrackMatchesReferenceModes(t *testing.T) {
 		{AutoSubscribeAudioOnly, lksdk.TrackKindVideo, false},
 		{AutoSubscribeVideoOnly, lksdk.TrackKindAudio, false},
 		{AutoSubscribeVideoOnly, lksdk.TrackKindVideo, true},
+		{"", lksdk.TrackKindAudio, false},
 	}
 
 	for _, tt := range tests {
 		t.Run(string(tt.mode)+"_"+string(tt.kind), func(t *testing.T) {
-			if got := shouldAutoSubscribeTrack(tt.mode, tt.kind); got != tt.want {
-				t.Fatalf("shouldAutoSubscribeTrack(%q, %q) = %v, want %v", tt.mode, tt.kind, got, tt.want)
+			if got := workerlivekit.ShouldAutoSubscribeTrack(string(tt.mode), tt.kind); got != tt.want {
+				t.Fatalf("ShouldAutoSubscribeTrack(%q, %q) = %v, want %v", tt.mode, tt.kind, got, tt.want)
 			}
 		})
 	}
