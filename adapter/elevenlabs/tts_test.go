@@ -421,7 +421,7 @@ func TestElevenLabsTTSUpdateOptionsMatchesReference(t *testing.T) {
 func TestElevenLabsStreamPayloadsUseReferenceContextProtocol(t *testing.T) {
 	const contextID = "ctx_test"
 
-	init := elevenLabsInitPayload(contextID)
+	init := elevenLabsInitPayload(contextID, nil)
 	if init["text"] != " " || init["context_id"] != contextID {
 		t.Fatalf("init payload = %#v, want warmup text with context_id", init)
 	}
@@ -434,6 +434,19 @@ func TestElevenLabsStreamPayloadsUseReferenceContextProtocol(t *testing.T) {
 	}
 	if _, ok := init["generation_config"]; ok {
 		t.Fatalf("init payload = %#v, want no generation_config without configured schedule", init)
+	}
+
+	scheduledInit := elevenLabsInitPayload(contextID, []int{80, 120, 200})
+	generationConfig, ok := scheduledInit["generation_config"].(map[string]any)
+	if !ok {
+		t.Fatalf("scheduled init generation_config = %#v, want object", scheduledInit["generation_config"])
+	}
+	chunkSchedule, ok := generationConfig["chunk_length_schedule"].([]int)
+	if !ok {
+		t.Fatalf("scheduled init chunk_length_schedule = %#v, want []int", generationConfig["chunk_length_schedule"])
+	}
+	if !equalIntSlices(chunkSchedule, []int{80, 120, 200}) {
+		t.Fatalf("scheduled init chunk_length_schedule = %#v, want [80 120 200]", chunkSchedule)
 	}
 
 	text := elevenLabsTextPayload(contextID, "hello")
@@ -475,7 +488,10 @@ func TestElevenLabsTTSStreamStartsContextOnFirstText(t *testing.T) {
 		websocket.DefaultDialer = oldDialer
 	}()
 
-	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5", WithElevenLabsBaseURL("ws://eleven.test/v1"))
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5",
+		WithElevenLabsBaseURL("ws://eleven.test/v1"),
+		WithElevenLabsChunkLengthSchedule([]int{80, 120, 200}),
+	)
 	if err != nil {
 		t.Fatalf("NewElevenLabsTTS() error = %v", err)
 	}
@@ -507,6 +523,14 @@ func TestElevenLabsTTSStreamStartsContextOnFirstText(t *testing.T) {
 	}
 	if _, ok := init["voice_settings"].(map[string]any); !ok {
 		t.Fatalf("init voice_settings = %#v, want object", init["voice_settings"])
+	}
+	generationConfig, ok := init["generation_config"].(map[string]any)
+	if !ok {
+		t.Fatalf("init generation_config = %#v, want object", init["generation_config"])
+	}
+	chunkSchedule, ok := generationConfig["chunk_length_schedule"].([]any)
+	if !ok || len(chunkSchedule) != 3 || chunkSchedule[0] != float64(80) || chunkSchedule[1] != float64(120) || chunkSchedule[2] != float64(200) {
+		t.Fatalf("init chunk_length_schedule = %#v, want [80 120 200]", generationConfig["chunk_length_schedule"])
 	}
 
 	text := readElevenLabsTTSStreamMessage(t, messages)
@@ -631,6 +655,18 @@ func readElevenLabsTTSStreamMessage(t *testing.T, messages <-chan map[string]any
 		t.Fatal("timed out waiting for ElevenLabs TTS websocket message")
 	}
 	return nil
+}
+
+func equalIntSlices(a []int, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func runElevenLabsClosingWebsocketServerAfterFrame(conn net.Conn, closed chan<- struct{}, errCh chan<- error) {

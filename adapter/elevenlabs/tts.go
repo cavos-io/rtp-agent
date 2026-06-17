@@ -30,14 +30,15 @@ const (
 )
 
 type ElevenLabsTTS struct {
-	apiKey            string
-	baseURL           string
-	voiceID           string
-	modelID           string
-	encoding          string
-	sampleRate        int
-	language          string
-	enableSSMLParsing bool
+	apiKey              string
+	baseURL             string
+	voiceID             string
+	modelID             string
+	encoding            string
+	sampleRate          int
+	language            string
+	enableSSMLParsing   bool
+	chunkLengthSchedule []int
 }
 
 type ElevenLabsTTSOption func(*ElevenLabsTTS)
@@ -84,6 +85,12 @@ func WithElevenLabsEncoding(encoding string) ElevenLabsTTSOption {
 			t.encoding = encoding
 			t.sampleRate = elevenLabsSampleRate(encoding)
 		}
+	}
+}
+
+func WithElevenLabsChunkLengthSchedule(schedule []int) ElevenLabsTTSOption {
+	return func(t *ElevenLabsTTS) {
+		t.chunkLengthSchedule = append([]int(nil), schedule...)
 	}
 }
 
@@ -289,14 +296,15 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 	contextID := "ctx_" + uuid.NewString()[:12]
 	ctx, cancel := context.WithCancel(ctx)
 	stream := &elevenLabsStream{
-		conn:       conn,
-		audio:      make(chan *tts.SynthesizedAudio, 100),
-		errCh:      make(chan error, 1),
-		ctx:        ctx,
-		cancel:     cancel,
-		encoding:   t.encoding,
-		sampleRate: t.sampleRate,
-		contextID:  contextID,
+		conn:                conn,
+		audio:               make(chan *tts.SynthesizedAudio, 100),
+		errCh:               make(chan error, 1),
+		ctx:                 ctx,
+		cancel:              cancel,
+		encoding:            t.encoding,
+		sampleRate:          t.sampleRate,
+		contextID:           contextID,
+		chunkLengthSchedule: append([]int(nil), t.chunkLengthSchedule...),
 	}
 
 	go stream.readLoop()
@@ -360,10 +368,11 @@ type elevenLabsStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	encoding   string
-	sampleRate int
-	contextID  string
-	initSent   bool
+	encoding            string
+	sampleRate          int
+	contextID           string
+	initSent            bool
+	chunkLengthSchedule []int
 
 	alignRunes    []rune
 	alignStartsMs []int
@@ -732,12 +741,18 @@ func (s *elevenLabsStream) Flush() error {
 	return nil
 }
 
-func elevenLabsInitPayload(contextID string) map[string]interface{} {
-	return map[string]interface{}{
+func elevenLabsInitPayload(contextID string, chunkLengthSchedule []int) map[string]interface{} {
+	payload := map[string]interface{}{
 		"text":           " ",
 		"voice_settings": map[string]interface{}{},
 		"context_id":     contextID,
 	}
+	if len(chunkLengthSchedule) > 0 {
+		payload["generation_config"] = map[string]interface{}{
+			"chunk_length_schedule": append([]int(nil), chunkLengthSchedule...),
+		}
+	}
+	return payload
 }
 
 func elevenLabsTextPayload(contextID string, text string) map[string]interface{} {
@@ -766,7 +781,7 @@ func (s *elevenLabsStream) sendInitLocked() error {
 	if s.initSent {
 		return nil
 	}
-	if err := s.conn.WriteJSON(elevenLabsInitPayload(s.contextID)); err != nil {
+	if err := s.conn.WriteJSON(elevenLabsInitPayload(s.contextID, s.chunkLengthSchedule)); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return fmt.Errorf("failed to write initial config to elevenlabs: %w", err)
 	}
