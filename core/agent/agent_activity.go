@@ -131,6 +131,7 @@ type AgentActivity struct {
 	commitUserTurnCancel             context.CancelFunc
 	commitUserTurnSeq                uint64
 	commitUserTurnActive             int
+	userTurnHookActive               int
 	pendingUserTranscript            string
 	pendingUserLanguage              string
 	pendingTranscriptConfidence      float64
@@ -2353,7 +2354,7 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 	}
 	ctx, cancelCommit := context.WithCancel(ctx)
 	a.commitUserTurnMu.Lock()
-	if a.commitUserTurnCancel != nil {
+	if a.commitUserTurnCancel != nil && a.userTurnHookActive == 0 {
 		a.commitUserTurnCancel()
 	}
 	a.commitUserTurnSeq++
@@ -2612,7 +2613,15 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 
 	chatCtx := a.RetrieveChatCtx().Copy()
 	hookStart := time.Now()
-	if err := a.AgentIntf.OnUserTurnCompleted(ctx, chatCtx, newMsg); err != nil {
+	a.commitUserTurnMu.Lock()
+	a.userTurnHookActive++
+	a.commitUserTurnMu.Unlock()
+	err := a.AgentIntf.OnUserTurnCompleted(ctx, chatCtx, newMsg)
+	a.commitUserTurnMu.Lock()
+	a.userTurnHookActive--
+	a.commitUserTurnMu.Unlock()
+	a.notifyUserTurnUpdated()
+	if err != nil {
 		var stopResponse llm.StopResponse
 		if errors.As(err, &stopResponse) {
 			a.cancelPreemptiveGeneration()
