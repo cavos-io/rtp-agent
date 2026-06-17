@@ -271,6 +271,37 @@ func TestTransportPublishPCMStopsAfterDisconnectedEvent(t *testing.T) {
 	}
 }
 
+func TestTransportPublishPCMStopsAfterErrorEvent(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+	frame := PCMFrame{
+		Data:       []byte{1, 2, 3, 4},
+		SampleRate: 100,
+		Channels:   2,
+	}
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	client.emit(Event{Kind: EventError, Channel: "support", Reason: 110, Err: errors.New("sdk error")})
+	select {
+	case <-tr.Events():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for error event")
+	}
+
+	err := tr.PublishPCM(context.Background(), frame)
+	if err == nil {
+		t.Fatal("PublishPCM() after error event error = nil, want failed transport error")
+	}
+	if !strings.Contains(err.Error(), "failed") {
+		t.Fatalf("PublishPCM() after error event error = %v, want failed transport error", err)
+	}
+	if client.publishCount != 0 {
+		t.Fatalf("publish count after error event = %d, want 0", client.publishCount)
+	}
+}
+
 func TestTransportReturnsClientErrors(t *testing.T) {
 	joinErr := errors.New("join failed")
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, &fakeChannelClient{joinErr: joinErr})

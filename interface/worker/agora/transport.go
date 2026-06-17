@@ -77,6 +77,7 @@ type Transport struct {
 	joinSeq      uint64
 	joined       bool
 	disconnected bool
+	failed       bool
 	users        map[string]struct{}
 	closing      bool
 	closed       bool
@@ -158,6 +159,7 @@ func (t *Transport) Join(ctx context.Context) error {
 	if !closed {
 		t.joined = true
 		t.disconnected = false
+		t.failed = false
 	}
 	t.mu.Unlock()
 	if closed {
@@ -182,6 +184,7 @@ func (t *Transport) Leave(ctx context.Context) error {
 	t.mu.Lock()
 	t.joined = false
 	t.disconnected = false
+	t.failed = false
 	t.users = nil
 	t.mu.Unlock()
 	return nil
@@ -204,9 +207,13 @@ func (t *Transport) PublishPCM(ctx context.Context, frame PCMFrame) error {
 	closed := t.closing || t.closed
 	joined := t.joined
 	disconnected := t.disconnected
+	failed := t.failed
 	t.mu.Unlock()
 	if closed {
 		return fmt.Errorf("agora transport is closed")
+	}
+	if failed {
+		return fmt.Errorf("agora transport has failed")
 	}
 	if disconnected {
 		return fmt.Errorf("agora transport is disconnected")
@@ -306,6 +313,8 @@ func (t *Transport) applyEventLocked(event Event) {
 	switch event.Kind {
 	case EventConnected:
 		t.disconnected = false
+	case EventError:
+		t.failed = true
 	case EventUserJoined:
 		if event.UserID == "" {
 			return
