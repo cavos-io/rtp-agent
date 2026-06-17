@@ -177,6 +177,9 @@ type AgentActivity struct {
 	falseInterruptionMu    sync.Mutex
 	pausedSpeech           *pausedSpeechInfo
 	falseInterruptionTimer *time.Timer
+
+	userTurnExceededCancel context.CancelFunc
+	userTurnExceededSeq    uint64
 }
 
 func NewAgentActivity(agentIntf AgentInterface, session *AgentSession) *AgentActivity {
@@ -668,18 +671,29 @@ func (a *AgentActivity) OnUserTurnExceeded(ev UserTurnExceededEvent) {
 		a.userTurnExceededMu.Unlock()
 		return
 	}
-	a.userTurnExceededLocked = true
+	if a.userTurnExceededCancel != nil {
+		a.userTurnExceededCancel()
+	}
+	ctx, cancel := context.WithCancel(a.ctx)
+	a.userTurnExceededSeq++
+	seq := a.userTurnExceededSeq
+	a.userTurnExceededCancel = cancel
 	a.userTurnExceededMu.Unlock()
 
 	go func() {
 		defer func() {
 			a.userTurnExceededMu.Lock()
-			a.userTurnExceededLocked = false
+			if a.userTurnExceededSeq == seq {
+				a.userTurnExceededCancel = nil
+			}
 			a.userTurnExceededMu.Unlock()
 		}()
 
-		shouldRun, err := a.waitForUserTurnExceededCallback(a.ctx)
+		shouldRun, err := a.waitForUserTurnExceededCallback(ctx)
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return
+			}
 			logger.Logger.Errorw("user turn exceeded wait failed", err)
 			return
 		}
@@ -692,6 +706,20 @@ func (a *AgentActivity) OnUserTurnExceeded(ev UserTurnExceededEvent) {
 		if schedulingPaused {
 			return
 		}
+		a.userTurnExceededMu.Lock()
+		if a.userTurnExceededSeq != seq || a.userTurnExceededLocked {
+			a.userTurnExceededMu.Unlock()
+			return
+		}
+		a.userTurnExceededLocked = true
+		a.userTurnExceededCancel = nil
+		a.userTurnExceededMu.Unlock()
+		defer func() {
+			a.userTurnExceededMu.Lock()
+			a.userTurnExceededLocked = false
+			a.userTurnExceededMu.Unlock()
+		}()
+
 		if err := a.AgentIntf.OnUserTurnExceeded(a.ctx, ev); err != nil {
 			logger.Logger.Errorw("error in OnUserTurnExceeded callback", err)
 		}
@@ -1636,7 +1664,11 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 	if a.realtimeUserTranscriptionEnabled() {
 		return
 	}
-	if a.turnDetectionMode() == TurnDetectionModeManual && a.manualTurnCommitted {
+	evType := stt.SpeechEventInterimTranscript
+	if ev != nil {
+		evType = ev.Type
+	}
+	if a.shouldIgnoreManualCommittedSTT(evType) {
 		return
 	}
 	if a.holdSTTEventWhileAgentSpeaking(ev) {
@@ -1700,13 +1732,12 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	if a.realtimeUserTranscriptionEnabled() {
 		return
 	}
-	if a.turnDetectionMode() == TurnDetectionModeManual && a.manualTurnCommitted {
+	if a.shouldIgnoreManualCommittedSTT(stt.SpeechEventFinalTranscript) {
 		return
 	}
 	if a.holdSTTEventWhileAgentSpeaking(ev) {
 		return
 	}
-	a.sttEOSReceived = true
 	transcript := ""
 	confidence := 0.0
 	language := ""
@@ -1777,17 +1808,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	if !matchesPreflightTranscript {
 		a.maybeStartPreemptiveGeneration(pendingTranscript, confidenceSum/float64(confidenceCount))
 	}
-	if turnDetection == TurnDetectionModeSTT && !a.speaking {
-		a.runEOUDetection(EndOfTurnInfo{
-			NewTranscript:        transcript,
-			Language:             language,
-			TranscriptConfidence: confidence,
-			TranscriptionDelay:   transcriptionDelay,
-			StartedSpeakingAt:    startedSpeakingAt,
-			StoppedSpeakingAt:    stoppedSpeakingAt,
-			AudioFrames:          a.userAudioSnapshot(),
-		})
-	} else if a.vadBasedTurnDetection() && !a.speaking {
+	if a.vadBasedTurnDetection() && !a.speaking {
 		a.runEOUDetection(EndOfTurnInfo{
 			NewTranscript:        transcript,
 			Language:             language,
@@ -2520,6 +2541,9 @@ collect:
 			SpeakerID:  fallbackSpeakerID,
 		})
 	}
+	if a.turnDetectionMode() == TurnDetectionModeManual {
+		a.manualTurnCommitted = true
+	}
 	if _, err := a.completeUserTurn(ctx, EndOfTurnInfo{
 		SkipReply:              opts.SkipReply,
 		ReplyAlreadyGenerated:  replyAlreadyGenerated,
@@ -2531,10 +2555,20 @@ collect:
 	}); err != nil {
 		return transcript, err
 	}
-	if a.turnDetectionMode() == TurnDetectionModeManual {
-		a.manualTurnCommitted = true
-	}
 	return transcript, nil
+}
+
+func (a *AgentActivity) shouldIgnoreManualCommittedSTT(evType stt.SpeechEventType) bool {
+	if a == nil || a.turnDetectionMode() != TurnDetectionModeManual || !a.manualTurnCommitted {
+		return false
+	}
+	if evType == stt.SpeechEventInterimTranscript {
+		return true
+	}
+	a.commitUserTurnMu.Lock()
+	activeHook := a.userTurnHookActive > 0
+	a.commitUserTurnMu.Unlock()
+	return !activeHook
 }
 
 func (a *AgentActivity) inputTranscriptionFlusher() (inputTranscriptionFlusher, bool) {
@@ -2652,7 +2686,11 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		if a.Session == nil {
 			return nil, nil
 		}
-		handle, err := a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{})
+		handle, err := a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+			UserMessage:   newMsg,
+			ChatCtx:       chatCtx,
+			InputModality: "audio",
+		})
 		if err != nil {
 			return nil, err
 		}

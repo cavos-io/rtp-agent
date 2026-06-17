@@ -631,7 +631,7 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 		}
 		insertChatItemIfMissing(va.chatCtx, speech.Generation.AssistantMessage)
 		_ = speech.MarkGenerationDone()
-		session.UpdateAgentState(AgentStateIdle)
+		session.UpdateAgentState(AgentStateListening)
 		return
 	}
 
@@ -655,14 +655,14 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 	if err != nil {
 		logger.Logger.Errorw("failed to register reply tools", err)
 		session.EmitError(ErrorEvent{Error: err, Source: va})
-		session.UpdateAgentState(AgentStateIdle)
+		session.UpdateAgentState(AgentStateListening)
 		return
 	}
 	selectedTools, err := resolveToolsByID(registeredTools, opts.Tools)
 	if err != nil {
 		logger.Logger.Errorw("failed to resolve reply tools", err)
 		session.EmitError(ErrorEvent{Error: err, Source: va})
-		session.UpdateAgentState(AgentStateIdle)
+		session.UpdateAgentState(AgentStateListening)
 		return
 	}
 	if opts.IgnoreOnEnterTools {
@@ -741,7 +741,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			if err != nil {
 				logger.Logger.Errorw("LLM inference failed", err)
 				va.emitLLMError(session, err)
-				session.UpdateAgentState(AgentStateIdle)
+				session.UpdateAgentState(AgentStateListening)
 				return
 			}
 		}
@@ -762,7 +762,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		if genData.StreamErr != nil {
 			logger.Logger.Errorw("LLM stream failed", genData.StreamErr)
 			va.emitLLMError(session, genData.StreamErr)
-			session.UpdateAgentState(AgentStateIdle)
+			session.UpdateAgentState(AgentStateListening)
 			return
 		}
 		va.emitLLMMetrics(session, genData)
@@ -859,11 +859,11 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 
 		// If no tool calls, we're done
 		if !executedTools {
-			session.UpdateAgentState(AgentStateIdle)
+			session.UpdateAgentState(AgentStateListening)
 			break
 		}
 		if !replyRequired {
-			session.UpdateAgentState(AgentStateIdle)
+			session.UpdateAgentState(AgentStateListening)
 			break
 		}
 		if opts.SpeechHandle != nil {

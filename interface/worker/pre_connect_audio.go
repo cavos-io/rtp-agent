@@ -206,7 +206,6 @@ func (h *PreConnectAudioHandler) publishBuffer(trackID string, buf *PreConnectAu
 func (h *PreConnectAudioHandler) WaitForData(ctx context.Context, trackID string) []*model.AudioFrame {
 	if h.afterConnect {
 		logger.Logger.Warnw("pre-connect audio handler registered after room connection", nil, "track_id", trackID)
-		return nil
 	}
 
 	h.mu.Lock()

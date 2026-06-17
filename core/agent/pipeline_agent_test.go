@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -905,6 +906,121 @@ func TestPipelineAgentMarksSpeakingAfterFirstAudioFrame(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("playTTSGenerationWithTranscript did not finish")
+	}
+}
+
+func TestPipelineAgentSayReturnsDirectSpeechToListeningWithoutIdle(t *testing.T) {
+	baseAgent := NewAgent("test")
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(baseAgent, session)
+	session.activity = activity
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	speech.Generation.Text = "direct speech"
+	speech.Generation.AssistantMessage = &llm.ChatMessage{
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{{Text: "direct speech"}},
+	}
+	activity.currentSpeech = speech
+	speech.AddDoneCallback(activity.OnPipelineReplyDone)
+	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{
+		stream: &fakePipelineTTSStream{
+			frames: []*model.AudioFrame{{
+				Data:              []byte{1, 2},
+				SampleRate:        1000,
+				NumChannels:       1,
+				SamplesPerChannel: 100,
+			}},
+		},
+	}, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	var got []AgentState
+	for {
+		select {
+		case ev := <-session.AgentStateChangedCh:
+			got = append(got, ev.NewState)
+		default:
+			want := []AgentState{AgentStateSpeaking, AgentStateListening}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("agent states = %#v, want %#v without transient idle", got, want)
+			}
+			return
+		}
+	}
+}
+
+func TestPipelineAgentGenerateReplyReturnsToListeningWithoutIdle(t *testing.T) {
+	baseAgent := NewAgent("test")
+	chatCtx := llm.NewChatContext()
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(baseAgent, session)
+	session.activity = activity
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = speech
+	speech.AddDoneCallback(activity.OnPipelineReplyDone)
+	agent := NewPipelineAgent(nil, nil, &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "reply"}}},
+		},
+	}, &fakePipelineTTS{
+		stream: &fakePipelineTTSStream{
+			frames: []*model.AudioFrame{{
+				Data:              []byte{1, 2},
+				SampleRate:        1000,
+				NumChannels:       1,
+				SamplesPerChannel: 100,
+			}},
+		},
+	}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	var got []AgentState
+	for {
+		select {
+		case ev := <-session.AgentStateChangedCh:
+			got = append(got, ev.NewState)
+		default:
+			want := []AgentState{AgentStateThinking, AgentStateSpeaking, AgentStateListening}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("agent states = %#v, want %#v without transient idle", got, want)
+			}
+			return
+		}
+	}
+}
+
+func TestPipelineAgentGenerateReplyErrorReturnsToListeningWithoutIdle(t *testing.T) {
+	baseAgent := NewAgent("test")
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(baseAgent, session)
+	session.activity = activity
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = speech
+	speech.AddDoneCallback(activity.OnPipelineReplyDone)
+	agent := NewPipelineAgent(nil, nil, erroringPipelineLLM{err: errors.New("llm failed")}, &fakePipelineTTS{}, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	var got []AgentState
+	for {
+		select {
+		case ev := <-session.AgentStateChangedCh:
+			got = append(got, ev.NewState)
+		default:
+			want := []AgentState{AgentStateThinking, AgentStateListening}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("agent states = %#v, want %#v without transient idle after LLM error", got, want)
+			}
+			return
+		}
 	}
 }
 
@@ -3765,6 +3881,14 @@ func receivePipelineClosed(t *testing.T, ch <-chan struct{}, name string) {
 	case <-time.After(time.Second):
 		t.Fatalf("%s stream was not closed", name)
 	}
+}
+
+type erroringPipelineLLM struct {
+	err error
+}
+
+func (e erroringPipelineLLM) Chat(context.Context, *llm.ChatContext, ...llm.ChatOption) (llm.LLMStream, error) {
+	return nil, e.err
 }
 
 type fakePipelineRecognizeStream struct {
