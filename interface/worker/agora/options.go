@@ -17,6 +17,7 @@ type Options struct {
 	PublishAudio   *bool
 	SubscribeAudio *bool
 	PublishData    *bool
+	RTMEnabled     *bool
 }
 
 func (opts Options) Validate() error {

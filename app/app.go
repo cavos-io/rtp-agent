@@ -709,6 +709,7 @@ func DefaultConfigFromEnv() AppConfig {
 			PublishAudio:   getenvOptionalBool("AGORA_PUBLISH_AUDIO"),
 			SubscribeAudio: getenvOptionalBool("AGORA_SUBSCRIBE_AUDIO"),
 			PublishData:    getenvOptionalBool("AGORA_PUBLISH_DATA"),
+			RTMEnabled:     getenvOptionalBool("AGORA_RTM_ENABLED"),
 		},
 		AgoraGreeting:                           getenvTrimmedDefaultUnsetOnly("AGORA_GREETING", defaultAgoraGreeting),
 		Instructions:                            getenvDefault("RTP_AGENT_INSTRUCTIONS", "You are a helpful realtime voice agent."),
@@ -1197,7 +1198,7 @@ func (a *App) runAgora(ctx context.Context) error {
 		<-eventsDone
 		stopObservingEvents()
 	}()
-	if workeragora.PublishDataEnabled(agoraOpts.PublishData) {
+	if workeragora.PublishDataEnabled(agoraOpts.PublishData) || workeragora.PublishDataEnabled(agoraOpts.RTMEnabled) {
 		dataPublisher, err := appNewAgoraDataPublisher(agoraOpts)
 		if err != nil {
 			return err

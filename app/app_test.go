@@ -607,6 +607,7 @@ func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 	t.Setenv("AGORA_PUBLISH_AUDIO", "false")
 	t.Setenv("AGORA_SUBSCRIBE_AUDIO", "false")
 	t.Setenv("AGORA_PUBLISH_DATA", "true")
+	t.Setenv("AGORA_RTM_ENABLED", "true")
 
 	cfg := DefaultConfigFromEnv()
 
@@ -657,6 +658,9 @@ func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 	}
 	if cfg.Agora.PublishData == nil || !*cfg.Agora.PublishData {
 		t.Fatalf("Agora.PublishData = %#v, want true", cfg.Agora.PublishData)
+	}
+	if cfg.Agora.RTMEnabled == nil || !*cfg.Agora.RTMEnabled {
+		t.Fatalf("Agora.RTMEnabled = %#v, want true", cfg.Agora.RTMEnabled)
 	}
 }
 
@@ -1401,6 +1405,78 @@ func TestRunAgoraPublishesTranscriptDataWhenPublishDataEnabled(t *testing.T) {
 	}
 	if !dataPublisher.isClosed() {
 		t.Fatal("data publisher was not closed")
+	}
+}
+
+func TestRunAgoraPublishesTranscriptDataWhenRTMEnabled(t *testing.T) {
+	client := &fakeAppAgoraChannelClient{joinedCh: make(chan struct{}, 1)}
+	dataPublisher := &fakeAppAgoraDataPublisher{published: make(chan []byte, 1)}
+	oldNewAgoraChannelClient := appNewAgoraChannelClient
+	appNewAgoraChannelClient = func() (workeragora.ChannelClient, error) {
+		return client, nil
+	}
+	oldNewAgoraDataPublisher := appNewAgoraDataPublisher
+	appNewAgoraDataPublisher = func(workeragora.Options) (workeragora.DataPublisher, error) {
+		return dataPublisher, nil
+	}
+	t.Cleanup(func() {
+		appNewAgoraChannelClient = oldNewAgoraChannelClient
+		appNewAgoraDataPublisher = oldNewAgoraDataPublisher
+	})
+
+	rtmEnabled := true
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	rtpApp := &App{
+		Session: session,
+		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
+		Config: AppConfig{
+			Agora: workeragora.Options{
+				AppID:          "app",
+				Channel:        "support",
+				UID:            "agent",
+				RemoteStreamID: "caller-7",
+				Token:          "token",
+				RTMEnabled:     &rtmEnabled,
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- rtpApp.runAgora(ctx)
+	}()
+
+	select {
+	case <-client.joinedCh:
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not join Agora channel")
+	}
+	if dataPublisher.dataHandler() == nil {
+		t.Fatal("runAgora() did not subscribe to Agora RTM data messages")
+	}
+
+	session.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "need help",
+		IsFinal:    true,
+		CreatedAt:  time.UnixMilli(1710000000789),
+	})
+
+	select {
+	case <-dataPublisher.published:
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not publish transcript data with RTMEnabled")
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("runAgora() error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not return after cancellation")
 	}
 }
 
