@@ -1449,7 +1449,7 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 	}
 	if endpointing := a.endpointing(); endpointing != nil && wasSpeaking {
 		shouldIgnore := a.overlapSpeechEnded && !a.interruptionDetected
-		endpointing.OnEndOfSpeech(vadEventTimestamp(ev), shouldIgnore)
+		endpointing.OnEndOfSpeech(vadSpeechEndTimestamp(ev), shouldIgnore)
 	}
 	a.overlapSpeechEnded = false
 	logger.Logger.Infow("End of speech detected")
@@ -2966,4 +2966,11 @@ func vadEventTimestamp(ev *vad.VADEvent) float64 {
 		return float64(time.Now().UnixNano()) / float64(time.Second)
 	}
 	return ev.Timestamp
+}
+
+func vadSpeechEndTimestamp(ev *vad.VADEvent) float64 {
+	if ev == nil {
+		return float64(time.Now().UnixNano()) / float64(time.Second)
+	}
+	return max(ev.Timestamp-ev.SilenceDuration-ev.InferenceDuration, 0)
 }

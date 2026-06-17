@@ -546,6 +546,28 @@ func TestAgentActivityOnEndOfSpeechSkipsEndpointingWhenNotSpeaking(t *testing.T)
 	}
 }
 
+func TestAgentActivityOnEndOfSpeechReportsActualSpeechEndTime(t *testing.T) {
+	endpointing := &recordingActivityEndpointing{}
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{Endpointing: endpointing})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech, Timestamp: 1.0})
+	activity.OnEndOfSpeech(&vad.VADEvent{
+		Type:              vad.VADEventEndOfSpeech,
+		Timestamp:         3.0,
+		SilenceDuration:   0.4,
+		InferenceDuration: 0.1,
+	})
+
+	if endpointing.endCount != 1 {
+		t.Fatalf("OnEndOfSpeech calls = %d, want 1", endpointing.endCount)
+	}
+	if endpointing.lastEnd != 2.5 {
+		t.Fatalf("OnEndOfSpeech endedAt = %v, want 2.5", endpointing.lastEnd)
+	}
+}
+
 func TestAgentActivityOnStartOfSpeechPausesThinkingSpeech(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{
@@ -4876,6 +4898,7 @@ func (r *recordingAudioOutputController) ResumeAudioOutput() {
 type recordingActivityEndpointing struct {
 	startCount       int
 	endCount         int
+	lastEnd          float64
 	lastShouldIgnore bool
 }
 
@@ -4890,8 +4913,9 @@ func (r *recordingActivityEndpointing) OnStartOfSpeech(float64, bool) {
 	r.startCount++
 }
 
-func (r *recordingActivityEndpointing) OnEndOfSpeech(_ float64, shouldIgnore bool) {
+func (r *recordingActivityEndpointing) OnEndOfSpeech(endedAt float64, shouldIgnore bool) {
 	r.endCount++
+	r.lastEnd = endedAt
 	r.lastShouldIgnore = shouldIgnore
 }
 
