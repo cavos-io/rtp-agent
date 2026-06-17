@@ -439,6 +439,27 @@ func TestAgentActivityUpdateOptionsForwardsRealtimeToolChoice(t *testing.T) {
 	}
 }
 
+func TestAgentActivityUpdateOptionsClearsRealtimeToolChoice(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Options.ToolChoice = llm.ToolChoice("required")
+	assistant := &recordingOptionsAssistant{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	var toolChoice llm.ToolChoice
+
+	if err := activity.UpdateOptions(AgentSessionUpdateOptions{ToolChoice: &toolChoice}); err != nil {
+		t.Fatalf("UpdateOptions error = %v, want nil", err)
+	}
+
+	if assistant.options.ToolChoice != nil {
+		t.Fatalf("realtime ToolChoice = %#v, want nil clear", assistant.options.ToolChoice)
+	}
+	if !assistant.options.ToolChoiceSet {
+		t.Fatal("realtime ToolChoiceSet = false, want true for explicit nil tool choice update")
+	}
+}
+
 func TestAgentActivityUpdateOptionsRefreshesRealtimeStoredToolChoice(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

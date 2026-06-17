@@ -791,12 +791,13 @@ func (a *AgentActivity) UpdateOptions(opts AgentSessionUpdateOptions) error {
 		return nil
 	}
 	var toolChoice llm.ToolChoice
+	explicitToolChoice := opts.ToolChoice != nil
 	if opts.ToolChoice != nil {
 		toolChoice = *opts.ToolChoice
 	} else {
 		toolChoice = a.Session.Options.ToolChoice
 	}
-	if toolChoice == nil {
+	if !explicitToolChoice && toolChoice == nil {
 		return nil
 	}
 	return updater.UpdateOptions(context.Background(), llm.RealtimeSessionOptions{
