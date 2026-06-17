@@ -579,10 +579,12 @@ func (c *JobContext) applyAutoSubscribeOptions(mode AutoSubscribe) {
 	for _, participant := range c.Room.GetRemoteParticipants() {
 		for _, publication := range participant.TrackPublications() {
 			remotePublication, ok := publication.(*lksdk.RemoteTrackPublication)
-			if ok && workerlivekit.ShouldAutoSubscribeTrack(string(mode), remotePublication.Kind()) {
-				if err := remotePublication.SetSubscribed(true); err != nil {
-					logger.Logger.Warnw("failed to subscribe remote track", err, "trackSid", remotePublication.SID())
-				}
+			if !ok {
+				continue
+			}
+			result := workerlivekit.SubscribeRemoteTrackIfAllowed(string(mode), remotePublication)
+			if result.Attempted && result.Err != nil {
+				logger.Logger.Warnw("failed to subscribe remote track", result.Err, "trackSid", result.TrackSID)
 			}
 		}
 	}
@@ -605,10 +607,9 @@ func (c *JobContext) roomCallbackWithEntrypoints(cb *lksdk.RoomCallback, autoSub
 		if onTrackPublished != nil {
 			onTrackPublished(publication, participant)
 		}
-		if publication != nil && workerlivekit.ShouldAutoSubscribeTrack(string(autoSubscribe), publication.Kind()) {
-			if err := publication.SetSubscribed(true); err != nil {
-				logger.Logger.Warnw("failed to subscribe published remote track", err, "trackSid", publication.SID())
-			}
+		result := workerlivekit.SubscribeRemoteTrackIfAllowed(string(autoSubscribe), publication)
+		if result.Attempted && result.Err != nil {
+			logger.Logger.Warnw("failed to subscribe published remote track", result.Err, "trackSid", result.TrackSID)
 		}
 	}
 	return wrapped

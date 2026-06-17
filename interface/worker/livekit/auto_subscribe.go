@@ -23,6 +23,30 @@ func ShouldAutoSubscribeTrack(mode string, kind lksdk.TrackKind) bool {
 	}
 }
 
+type RemoteTrackPublicationView interface {
+	SID() string
+	Kind() lksdk.TrackKind
+	SetSubscribed(bool) error
+}
+
+type RemoteTrackSubscriptionResult struct {
+	Attempted bool
+	TrackSID  string
+	Err       error
+}
+
+func SubscribeRemoteTrackIfAllowed(mode string, publication RemoteTrackPublicationView) RemoteTrackSubscriptionResult {
+	if publication == nil || !ShouldAutoSubscribeTrack(mode, publication.Kind()) {
+		return RemoteTrackSubscriptionResult{}
+	}
+	result := RemoteTrackSubscriptionResult{
+		Attempted: true,
+		TrackSID:  publication.SID(),
+	}
+	result.Err = publication.SetSubscribed(true)
+	return result
+}
+
 func NormalizeAutoSubscribeMode(mode string) string {
 	return normalizeAutoSubscribe(mode)
 }
