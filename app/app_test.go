@@ -127,10 +127,11 @@ type fakeAppAgoraChannelClient struct {
 }
 
 type fakeAppSessionAssistant struct {
-	audioCh  chan *model.AudioFrame
-	startCtx context.Context
-	started  chan struct{}
-	publish  func(ctx context.Context, frame *model.AudioFrame) error
+	audioCh   chan *model.AudioFrame
+	started   chan struct{}
+	startedCh chan struct{}
+	startCtx  context.Context
+	publish   func(ctx context.Context, frame *model.AudioFrame) error
 }
 
 func (f *fakeAppSessionAssistant) Start(ctx context.Context, s *agent.AgentSession) error {
@@ -138,6 +139,12 @@ func (f *fakeAppSessionAssistant) Start(ctx context.Context, s *agent.AgentSessi
 	if f.started != nil {
 		select {
 		case f.started <- struct{}{}:
+		default:
+		}
+	}
+	if f.startedCh != nil {
+		select {
+		case f.startedCh <- struct{}{}:
 		default:
 		}
 	}
@@ -686,6 +693,83 @@ func TestRunAgoraLogsConnectedTransportEvent(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for Agora connected log")
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("runAgora() error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not return after cancellation")
+	}
+}
+
+func TestRunAgoraSaysGreetingWhenFirstParticipantJoins(t *testing.T) {
+	client := &fakeAppAgoraChannelClient{joinedCh: make(chan struct{}, 1)}
+	oldNewAgoraChannelClient := appNewAgoraChannelClient
+	appNewAgoraChannelClient = func() (workeragora.ChannelClient, error) {
+		return client, nil
+	}
+	t.Cleanup(func() {
+		appNewAgoraChannelClient = oldNewAgoraChannelClient
+	})
+
+	assistant := &fakeAppSessionAssistant{startedCh: make(chan struct{}, 1)}
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	session.Assistant = assistant
+	session.TTS = &fakeAppTTS{}
+	rtpApp := &App{
+		Session: session,
+		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
+		Config: AppConfig{
+			Agora: workeragora.Options{
+				AppID:   "app",
+				Channel: "support",
+				UID:     "agent",
+				Token:   "token",
+			},
+			AgoraGreeting: "TEN Agent connected. How can I help you today?",
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- rtpApp.runAgora(ctx)
+	}()
+
+	select {
+	case <-client.joinedCh:
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not join Agora channel")
+	}
+	select {
+	case <-assistant.startedCh:
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not start session")
+	}
+	client.emit(workeragora.Event{Kind: workeragora.EventUserJoined, Channel: "support", UserID: "caller-1"})
+
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		if ev.Source != "say" {
+			t.Fatalf("speech source = %q, want say", ev.Source)
+		}
+		if ev.SpeechHandle == nil || ev.SpeechHandle.Generation.Text != "TEN Agent connected. How can I help you today?" {
+			t.Fatalf("speech text = %#v, want configured Agora greeting", ev.SpeechHandle)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Agora greeting speech")
+	}
+
+	client.emit(workeragora.Event{Kind: workeragora.EventUserJoined, Channel: "support", UserID: "caller-2"})
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("unexpected second greeting speech: %#v", ev)
+	case <-time.After(10 * time.Millisecond):
 	}
 
 	cancel()
