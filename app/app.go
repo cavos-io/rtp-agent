@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -1146,6 +1147,8 @@ func (a *App) runAgora(ctx context.Context) error {
 	if a.Session == nil {
 		return fmt.Errorf("agent session is not configured")
 	}
+	runCtx, cancelRun := context.WithCancelCause(ctx)
+	defer cancelRun(nil)
 	opts := a.Server.Options.Agora
 	agoraOpts := workeragora.Options{
 		AppID:          opts.AppID,
@@ -1162,15 +1165,15 @@ func (a *App) runAgora(ctx context.Context) error {
 		return err
 	}
 	transport := workeragora.NewTransport(agoraOpts, client)
-	audioInput := workeragora.NewAudioInput(ctx, a.Session)
+	audioInput := workeragora.NewAudioInput(runCtx, a.Session)
 	transport.SetAudioHandler(audioInput.HandleAudioFrame)
 	eventsCtx, stopObservingEvents := context.WithCancel(context.Background())
 	eventsDone := make(chan struct{})
 	go func() {
 		defer close(eventsDone)
-		observeAgoraTransportEvents(eventsCtx, transport.Events())
+		observeAgoraTransportEvents(eventsCtx, transport.Events(), cancelRun)
 	}()
-	if err := transport.Join(ctx); err != nil {
+	if err := transport.Join(runCtx); err != nil {
 		if closeErr := transport.Close(context.Background()); closeErr != nil {
 			logutil.Logger.Errorw("failed to close Agora transport after join error", closeErr)
 		}
@@ -1189,14 +1192,24 @@ func (a *App) runAgora(ctx context.Context) error {
 		<-eventsDone
 		stopObservingEvents()
 	}()
-	if err := a.runSessionWithContext(nil, ctx); err != nil {
+	if err := a.runSessionWithContext(nil, runCtx); err != nil {
+		if cause := context.Cause(runCtx); cause != nil && !errors.Is(cause, context.Canceled) && !errors.Is(cause, context.DeadlineExceeded) {
+			return cause
+		}
 		return err
 	}
-	<-ctx.Done()
+	<-runCtx.Done()
+	return runContextErr(runCtx)
+}
+
+func runContextErr(ctx context.Context) error {
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
 	return ctx.Err()
 }
 
-func observeAgoraTransportEvents(ctx context.Context, events <-chan workeragora.Event) {
+func observeAgoraTransportEvents(ctx context.Context, events <-chan workeragora.Event, onFatal func(error)) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -1206,7 +1219,26 @@ func observeAgoraTransportEvents(ctx context.Context, events <-chan workeragora.
 				return
 			}
 			logAgoraTransportEvent(event)
+			if onFatal != nil {
+				if err := agoraTransportFatalError(event); err != nil {
+					onFatal(err)
+				}
+			}
 		}
+	}
+}
+
+func agoraTransportFatalError(event workeragora.Event) error {
+	switch event.Kind {
+	case workeragora.EventDisconnected:
+		return fmt.Errorf("agora transport disconnected: channel %s reason %d", event.Channel, event.Reason)
+	case workeragora.EventError:
+		if event.Err != nil {
+			return fmt.Errorf("agora transport event error: %w", event.Err)
+		}
+		return fmt.Errorf("agora transport event error: channel %s reason %d", event.Channel, event.Reason)
+	default:
+		return nil
 	}
 }
 

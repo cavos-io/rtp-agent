@@ -698,6 +698,56 @@ func TestRunAgoraLogsConnectedTransportEvent(t *testing.T) {
 	}
 }
 
+func TestRunAgoraStopsSessionOnTransportDisconnect(t *testing.T) {
+	client := &fakeAppAgoraChannelClient{joinedCh: make(chan struct{}, 1)}
+	oldNewAgoraChannelClient := appNewAgoraChannelClient
+	appNewAgoraChannelClient = func() (workeragora.ChannelClient, error) {
+		return client, nil
+	}
+	t.Cleanup(func() {
+		appNewAgoraChannelClient = oldNewAgoraChannelClient
+	})
+
+	rtpApp := &App{
+		Session: agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{}),
+		Server: worker.NewAgentServer(worker.WorkerOptions{
+			Agora: worker.AgoraOptions{
+				AppID:   "app",
+				Channel: "support",
+				UID:     "agent",
+				Token:   "token",
+			},
+		}),
+	}
+
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- rtpApp.runAgora(context.Background())
+	}()
+
+	select {
+	case <-client.joinedCh:
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not join Agora channel")
+	}
+	client.emit(workeragora.Event{Kind: workeragora.EventDisconnected, Channel: "support", Reason: 99})
+
+	select {
+	case err := <-doneCh:
+		if err == nil {
+			t.Fatal("runAgora() error = nil, want transport disconnected error")
+		}
+		if !strings.Contains(err.Error(), "agora transport disconnected") {
+			t.Fatalf("runAgora() error = %v, want transport disconnected", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not stop after transport disconnect")
+	}
+	if !client.left {
+		t.Fatal("Agora client left = false, want true after transport disconnect")
+	}
+}
+
 func TestRunAgoraWaitsForDisconnectEventOnShutdown(t *testing.T) {
 	previousLogger := logutil.Logger
 	recorder := &appRecordingLogger{
