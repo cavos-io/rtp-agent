@@ -2662,6 +2662,9 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	if schedulingPaused {
 		a.cancelPreemptiveGeneration()
 		logger.Logger.Warnw("skipping reply to user input, speech scheduling is paused", nil, "userInput", info.NewTranscript)
+		if a.Session != nil && a.Session.isClosing() {
+			a.commitUserMessage(newMsg)
+		}
 		return nil, nil
 	}
 	handle, err := a.usePreemptiveGenerationIfMatching(chatCtx, newMsg)

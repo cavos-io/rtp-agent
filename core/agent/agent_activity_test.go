@@ -5148,6 +5148,60 @@ func TestAgentActivityCommitUserTurnSkipsReplyWhenHookPausesScheduling(t *testin
 	}
 }
 
+func TestAgentActivityCommitUserTurnRecordsClosingTurnWhenHookPausesScheduling(t *testing.T) {
+	agent := &pausingTurnAgent{
+		Agent: NewAgent("test"),
+		turns: make(chan *llm.ChatMessage, 1),
+	}
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	session.closing = true
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "closing after hook pause", Confidence: 0.9}},
+	})
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "closing after hook pause" {
+		t.Fatalf("CommitUserTurn transcript = %q, want closing after hook pause", transcript)
+	}
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "closing after hook pause" {
+			t.Fatalf("OnUserTurnCompleted message = %q, want closing after hook pause", msg.TextContent())
+		}
+	default:
+		t.Fatal("OnUserTurnCompleted was not called")
+	}
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		msg, ok := ev.Item.(*llm.ChatMessage)
+		if !ok || msg.TextContent() != "closing after hook pause" {
+			t.Fatalf("ConversationItemAdded item = %#v, want closing after hook pause", ev.Item)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConversationItemAddedEvents did not receive closing after hook pause")
+	}
+	if agent.ChatCtx == nil || len(agent.ChatCtx.Items) != 1 {
+		t.Fatalf("chat context items = %#v, want one closing user message", agent.ChatCtx)
+	}
+	if msg, ok := agent.ChatCtx.Items[0].(*llm.ChatMessage); !ok || msg.TextContent() != "closing after hook pause" {
+		t.Fatalf("chat context item = %#v, want closing after hook pause message", agent.ChatCtx.Items[0])
+	}
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("reply generated after hook paused scheduling during close: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func TestAgentActivityCommitUserTurnStopResponseSkipsReply(t *testing.T) {
 	agent := &stopResponseTurnAgent{
 		Agent: NewAgent("test"),
