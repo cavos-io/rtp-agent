@@ -159,6 +159,45 @@ func TestAzureSTTRecognizeUsesRESTRequestAndMapsDetailedResult(t *testing.T) {
 	}
 }
 
+func TestAzureSTTRecognizeUsesConfiguredSpeechHost(t *testing.T) {
+	provider, err := NewAzureSTT("", "", WithAzureSTTSpeechHost("https://speech.container.test"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Scheme != "https" || req.URL.Host != "speech.container.test" || req.URL.Path != "/speech/recognition/conversation/cognitiveservices/v1" {
+				t.Fatalf("URL = %q, want configured Azure Speech host endpoint", req.URL.String())
+			}
+			if req.URL.Query().Get("language") != "id-ID" {
+				t.Fatalf("language query = %q, want id-ID", req.URL.Query().Get("language"))
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body: io.NopCloser(strings.NewReader(`{
+					"RecognitionStatus":"Success",
+					"DisplayText":"host final"
+				}`)),
+				Request: req,
+			}, nil
+		}),
+	}
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}, "id-ID")
+	if err != nil {
+		t.Fatalf("Recognize error = %v, want nil", err)
+	}
+	if got := event.Alternatives[0].Text; got != "host final" {
+		t.Fatalf("recognized text = %q, want host final", got)
+	}
+}
+
 func TestAzureSTTRecognizeReportsRecognitionFailure(t *testing.T) {
 	provider, err := NewAzureSTT("key", "eastus")
 	if err != nil {

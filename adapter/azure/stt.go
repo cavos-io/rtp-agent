@@ -190,10 +190,23 @@ type azureSTTRecognizeResponse struct {
 }
 
 func buildAzureSTTRecognizeRequest(ctx context.Context, s *AzureSTT, frames []*model.AudioFrame, language string) (*http.Request, error) {
+	if s == nil {
+		return nil, fmt.Errorf("azure stt provider is nil")
+	}
 	u := url.URL{
 		Scheme: "https",
 		Host:   fmt.Sprintf("%s.stt.speech.microsoft.com", s.region),
 		Path:   "/speech/recognition/conversation/cognitiveservices/v1",
+	}
+	if s.speechHost != "" {
+		hostURL, err := url.Parse(s.speechHost)
+		if err == nil {
+			u.Scheme = hostURL.Scheme
+			u.Host = hostURL.Host
+			if hostURL.Path != "" && hostURL.Path != "/" {
+				u.Path = hostURL.Path
+			}
+		}
 	}
 	query := u.Query()
 	query.Set("language", s.streamLanguage(language))
