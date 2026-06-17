@@ -554,6 +554,7 @@ func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 	t.Setenv("AGORA_CHANNEL", " support-room ")
 	t.Setenv("AGORA_UID", " agent-42 ")
 	t.Setenv("AGORA_TOKEN", " agora-token ")
+	t.Setenv("AGORA_PUBLISH_AUDIO", "false")
 
 	cfg := DefaultConfigFromEnv()
 
@@ -585,6 +586,9 @@ func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 	}
 	if cfg.Agora.Token != "agora-token" {
 		t.Fatalf("Agora.Token = %q, want agora-token", cfg.Agora.Token)
+	}
+	if cfg.Agora.PublishAudio == nil || *cfg.Agora.PublishAudio {
+		t.Fatalf("Agora.PublishAudio = %#v, want false", cfg.Agora.PublishAudio)
 	}
 }
 
@@ -1127,6 +1131,64 @@ func TestRunAgoraPublishesAssistantAudioToChannel(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("assistant audio was not published to Agora")
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("runAgora() error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not return after cancellation")
+	}
+}
+
+func TestRunAgoraDoesNotWireAssistantAudioWhenPublishDisabled(t *testing.T) {
+	disabled := false
+	client := &fakeAppAgoraChannelClient{joinedCh: make(chan struct{}, 1)}
+	oldNewAgoraChannelClient := appNewAgoraChannelClient
+	appNewAgoraChannelClient = func() (workeragora.ChannelClient, error) {
+		return client, nil
+	}
+	t.Cleanup(func() {
+		appNewAgoraChannelClient = oldNewAgoraChannelClient
+	})
+
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	rtpApp := &App{
+		Session: session,
+		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
+		Config: AppConfig{
+			Agora: workeragora.Options{
+				AppID:        "app",
+				Channel:      "support",
+				UID:          "agent",
+				Token:        "token",
+				PublishAudio: &disabled,
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- rtpApp.runAgora(ctx)
+	}()
+
+	select {
+	case <-client.joinedCh:
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not join Agora channel")
+	}
+
+	pipeline, ok := session.EnsureAssistant().(*agent.PipelineAgent)
+	if !ok {
+		t.Fatalf("session assistant = %T, want *agent.PipelineAgent", session.Assistant)
+	}
+	if pipeline.PublishAudio != nil {
+		t.Fatal("session assistant PublishAudio was connected with Agora publish_audio disabled")
 	}
 
 	cancel()

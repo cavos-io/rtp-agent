@@ -78,6 +78,7 @@ type Transport struct {
 	joined       bool
 	disconnected bool
 	failed       bool
+	publishAudio bool
 	users        map[string]struct{}
 	closing      bool
 	closed       bool
@@ -142,6 +143,7 @@ func (t *Transport) Join(ctx context.Context) error {
 	t.joinSeq++
 	joinSeq := t.joinSeq
 	t.joinCancel = cancel
+	t.publishAudio = PublishAudioEnabled(opts.PublishAudio)
 	t.mu.Unlock()
 	defer func() {
 		t.mu.Lock()
@@ -208,6 +210,7 @@ func (t *Transport) PublishPCM(ctx context.Context, frame PCMFrame) error {
 	joined := t.joined
 	disconnected := t.disconnected
 	failed := t.failed
+	publishAudio := t.publishAudio
 	t.mu.Unlock()
 	if closed {
 		return fmt.Errorf("agora transport is closed")
@@ -220,6 +223,9 @@ func (t *Transport) PublishPCM(ctx context.Context, frame PCMFrame) error {
 	}
 	if !joined {
 		return fmt.Errorf("agora transport is not joined")
+	}
+	if !publishAudio {
+		return fmt.Errorf("agora publish audio disabled")
 	}
 	if t.client == nil {
 		return fmt.Errorf("agora channel client is required")

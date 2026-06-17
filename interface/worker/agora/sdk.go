@@ -220,7 +220,7 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts Options, handler Event
 		ChannelProfile:                agoraservice.ChannelProfileLiveBroadcasting,
 	}
 	publishCfg := agoraservice.NewRtcConPublishConfig()
-	publishCfg.IsPublishAudio = true
+	publishCfg.IsPublishAudio = PublishAudioEnabled(opts.PublishAudio)
 	publishCfg.IsPublishVideo = false
 	publishCfg.AudioPublishType = agoraservice.AudioPublishTypePcm
 	publishCfg.AudioScenario = agoraservice.AudioScenarioChorus
@@ -343,13 +343,15 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts Options, handler Event
 	if err != nil {
 		return err
 	}
-	ret, ok := c.publishActiveAudio(connection)
-	if !ok {
-		return fmt.Errorf("agora SDK channel left before publish audio")
-	}
-	if ret != 0 {
-		c.releaseActiveConnection(connection)
-		return fmt.Errorf("agora SDK publish audio failed: %d", ret)
+	if PublishAudioEnabled(opts.PublishAudio) {
+		ret, ok := c.publishActiveAudio(connection)
+		if !ok {
+			return fmt.Errorf("agora SDK channel left before publish audio")
+		}
+		if ret != 0 {
+			c.releaseActiveConnection(connection)
+			return fmt.Errorf("agora SDK publish audio failed: %d", ret)
+		}
 	}
 	if err, ok := pendingJoinError(joinErrCh); ok {
 		c.releaseActiveConnection(connection)

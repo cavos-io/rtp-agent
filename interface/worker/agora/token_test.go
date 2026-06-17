@@ -95,6 +95,40 @@ func TestResolveJoinOptionsDefaultsEmptyUIDForTokenGeneration(t *testing.T) {
 	}
 }
 
+func TestResolveJoinOptionsDefaultsPublishAudioToTENEnabled(t *testing.T) {
+	opts := Options{
+		AppID:   "app",
+		Channel: "support",
+	}
+
+	resolved, err := ResolveJoinOptions(opts)
+	if err != nil {
+		t.Fatalf("ResolveJoinOptions() error = %v", err)
+	}
+
+	if resolved.PublishAudio == nil || !*resolved.PublishAudio {
+		t.Fatalf("resolved PublishAudio = %#v, want enabled by default", resolved.PublishAudio)
+	}
+}
+
+func TestResolveJoinOptionsPreservesPublishAudioDisabled(t *testing.T) {
+	disabled := false
+	opts := Options{
+		AppID:        "app",
+		Channel:      "support",
+		PublishAudio: &disabled,
+	}
+
+	resolved, err := ResolveJoinOptions(opts)
+	if err != nil {
+		t.Fatalf("ResolveJoinOptions() error = %v", err)
+	}
+
+	if resolved.PublishAudio == nil || *resolved.PublishAudio {
+		t.Fatalf("resolved PublishAudio = %#v, want disabled", resolved.PublishAudio)
+	}
+}
+
 func TestOptionsValidateRequiresAppIDAndChannel(t *testing.T) {
 	if err := (Options{}).Validate(); err == nil {
 		t.Fatal("Options.Validate() error = nil, want missing app ID")

@@ -18,6 +18,10 @@ func ResolveJoinOptions(opts Options) (Options, error) {
 	opts.Channel = strings.TrimSpace(opts.Channel)
 	opts.UID = strings.TrimSpace(opts.UID)
 	opts.Token = strings.TrimSpace(opts.Token)
+	if opts.PublishAudio == nil {
+		enabled := true
+		opts.PublishAudio = &enabled
+	}
 	if strings.TrimSpace(opts.UID) == "" {
 		opts.UID = "0"
 	}
@@ -40,4 +44,8 @@ func ResolveJoinOptions(opts Options) (Options, error) {
 	}
 	opts.Token = token
 	return opts, nil
+}
+
+func PublishAudioEnabled(value *bool) bool {
+	return value == nil || *value
 }

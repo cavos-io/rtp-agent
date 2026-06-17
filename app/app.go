@@ -702,6 +702,7 @@ func DefaultConfigFromEnv() AppConfig {
 			Channel:        strings.TrimSpace(os.Getenv("AGORA_CHANNEL")),
 			UID:            strings.TrimSpace(os.Getenv("AGORA_UID")),
 			Token:          strings.TrimSpace(os.Getenv("AGORA_TOKEN")),
+			PublishAudio:   getenvOptionalBool("AGORA_PUBLISH_AUDIO"),
 		},
 		AgoraGreeting:                           getenvTrimmedDefaultUnsetOnly("AGORA_GREETING", defaultAgoraGreeting),
 		Instructions:                            getenvDefault("RTP_AGENT_INSTRUCTIONS", "You are a helpful realtime voice agent."),
@@ -1183,10 +1184,12 @@ func (a *App) runAgora(ctx context.Context) error {
 		stopObservingEvents()
 		return err
 	}
-	audioOutput := workeragora.NewAudioOutput(transport)
-	a.Session.EnsureAssistant().SetPublishAudio(func(ctx context.Context, frame *model.AudioFrame) error {
-		return audioOutput.PublishAudio(ctx, frame)
-	})
+	if workeragora.PublishAudioEnabled(agoraOpts.PublishAudio) {
+		audioOutput := workeragora.NewAudioOutput(transport)
+		a.Session.EnsureAssistant().SetPublishAudio(func(ctx context.Context, frame *model.AudioFrame) error {
+			return audioOutput.PublishAudio(ctx, frame)
+		})
+	}
 	defer func() {
 		if err := transport.Close(context.Background()); err != nil {
 			logutil.Logger.Errorw("failed to close Agora transport", err)

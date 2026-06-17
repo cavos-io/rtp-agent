@@ -302,6 +302,33 @@ func TestTransportPublishPCMStopsAfterErrorEvent(t *testing.T) {
 	}
 }
 
+func TestTransportPublishPCMRejectsPublishAudioDisabled(t *testing.T) {
+	disabled := false
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support", PublishAudio: &disabled}, client)
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+
+	frame := PCMFrame{
+		Data:       []byte{1, 2, 3, 4},
+		SampleRate: 100,
+		Channels:   2,
+	}
+
+	err := tr.PublishPCM(context.Background(), frame)
+	if err == nil {
+		t.Fatal("PublishPCM() error = nil, want publish audio disabled error")
+	}
+	if !strings.Contains(err.Error(), "publish audio disabled") {
+		t.Fatalf("PublishPCM() error = %v, want publish audio disabled", err)
+	}
+	if client.publishCount != 0 {
+		t.Fatalf("publish count = %d, want 0", client.publishCount)
+	}
+}
+
 func TestTransportReturnsClientErrors(t *testing.T) {
 	joinErr := errors.New("join failed")
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, &fakeChannelClient{joinErr: joinErr})

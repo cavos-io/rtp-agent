@@ -11,6 +11,7 @@ type Options struct {
 	Channel        string
 	UID            string
 	Token          string
+	PublishAudio   *bool
 }
 
 func (opts Options) Validate() error {
