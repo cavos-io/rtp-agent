@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -45,6 +46,23 @@ func TestValidateWorkerTransportAcceptsKnownTransports(t *testing.T) {
 				t.Fatalf("ValidateWorkerTransport(%q) error = %v", tt.transport, err)
 			}
 		})
+	}
+}
+
+func TestSharedWorkerOptionsDoNotOwnAgoraProviderOptions(t *testing.T) {
+	files := []string{"transport.go", "server.go"}
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		source := string(data)
+		if strings.Contains(source, "type AgoraOptions") {
+			t.Fatalf("%s defines Agora provider options; keep provider config in interface/worker/agora or app wiring", file)
+		}
+		if strings.Contains(source, "Agora          AgoraOptions") {
+			t.Fatalf("%s exposes Agora provider options on shared WorkerOptions", file)
+		}
 	}
 }
 

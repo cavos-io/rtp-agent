@@ -539,30 +539,30 @@ func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 		t.Fatalf("Transport = %q, want %q", cfg.WorkerOptions.Transport, worker.WorkerTransportAgora)
 	}
 	for name, value := range map[string]string{
-		"AppID":          cfg.WorkerOptions.Agora.AppID,
-		"AppCertificate": cfg.WorkerOptions.Agora.AppCertificate,
-		"Channel":        cfg.WorkerOptions.Agora.Channel,
-		"UID":            cfg.WorkerOptions.Agora.UID,
-		"Token":          cfg.WorkerOptions.Agora.Token,
+		"AppID":          cfg.Agora.AppID,
+		"AppCertificate": cfg.Agora.AppCertificate,
+		"Channel":        cfg.Agora.Channel,
+		"UID":            cfg.Agora.UID,
+		"Token":          cfg.Agora.Token,
 	} {
 		if strings.TrimSpace(value) != value {
 			t.Fatalf("Agora.%s = %q, want trimmed value", name, value)
 		}
 	}
-	if cfg.WorkerOptions.Agora.AppID != "agora-app" {
-		t.Fatalf("Agora.AppID = %q, want agora-app", cfg.WorkerOptions.Agora.AppID)
+	if cfg.Agora.AppID != "agora-app" {
+		t.Fatalf("Agora.AppID = %q, want agora-app", cfg.Agora.AppID)
 	}
-	if cfg.WorkerOptions.Agora.AppCertificate != "agora-cert" {
-		t.Fatalf("Agora.AppCertificate = %q, want agora-cert", cfg.WorkerOptions.Agora.AppCertificate)
+	if cfg.Agora.AppCertificate != "agora-cert" {
+		t.Fatalf("Agora.AppCertificate = %q, want agora-cert", cfg.Agora.AppCertificate)
 	}
-	if cfg.WorkerOptions.Agora.Channel != "support-room" {
-		t.Fatalf("Agora.Channel = %q, want support-room", cfg.WorkerOptions.Agora.Channel)
+	if cfg.Agora.Channel != "support-room" {
+		t.Fatalf("Agora.Channel = %q, want support-room", cfg.Agora.Channel)
 	}
-	if cfg.WorkerOptions.Agora.UID != "agent-42" {
-		t.Fatalf("Agora.UID = %q, want agent-42", cfg.WorkerOptions.Agora.UID)
+	if cfg.Agora.UID != "agent-42" {
+		t.Fatalf("Agora.UID = %q, want agent-42", cfg.Agora.UID)
 	}
-	if cfg.WorkerOptions.Agora.Token != "agora-token" {
-		t.Fatalf("Agora.Token = %q, want agora-token", cfg.WorkerOptions.Agora.Token)
+	if cfg.Agora.Token != "agora-token" {
+		t.Fatalf("Agora.Token = %q, want agora-token", cfg.Agora.Token)
 	}
 }
 
@@ -579,12 +579,12 @@ func TestAppRunUsesAgoraTransportWhenConfigured(t *testing.T) {
 	rtpApp, err := NewApp(AppConfig{
 		WorkerOptions: worker.WorkerOptions{
 			Transport: worker.WorkerTransportAgora,
-			Agora: worker.AgoraOptions{
-				AppID:   "app",
-				Channel: "support",
-				UID:     "agent",
-				Token:   "token",
-			},
+		},
+		Agora: workeragora.Options{
+			AppID:   "app",
+			Channel: "support",
+			UID:     "agent",
+			Token:   "token",
 		},
 	})
 	if err != nil {
@@ -648,14 +648,15 @@ func TestRunAgoraLogsConnectedTransportEvent(t *testing.T) {
 
 	rtpApp := &App{
 		Session: agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{}),
-		Server: worker.NewAgentServer(worker.WorkerOptions{
-			Agora: worker.AgoraOptions{
+		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
+		Config: AppConfig{
+			Agora: workeragora.Options{
 				AppID:   "app",
 				Channel: "support",
 				UID:     "agent",
 				Token:   "token",
 			},
-		}),
+		},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -710,14 +711,15 @@ func TestRunAgoraStopsSessionOnTransportDisconnect(t *testing.T) {
 
 	rtpApp := &App{
 		Session: agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{}),
-		Server: worker.NewAgentServer(worker.WorkerOptions{
-			Agora: worker.AgoraOptions{
+		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
+		Config: AppConfig{
+			Agora: workeragora.Options{
 				AppID:   "app",
 				Channel: "support",
 				UID:     "agent",
 				Token:   "token",
 			},
-		}),
+		},
 	}
 
 	doneCh := make(chan error, 1)
@@ -778,14 +780,15 @@ func TestRunAgoraWaitsForDisconnectEventOnShutdown(t *testing.T) {
 
 	rtpApp := &App{
 		Session: agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{}),
-		Server: worker.NewAgentServer(worker.WorkerOptions{
-			Agora: worker.AgoraOptions{
+		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
+		Config: AppConfig{
+			Agora: workeragora.Options{
 				AppID:   "app",
 				Channel: "support",
 				UID:     "agent",
 				Token:   "token",
 			},
-		}),
+		},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -854,14 +857,15 @@ func TestRunAgoraLogsJoinErrorTransportEvent(t *testing.T) {
 
 	rtpApp := &App{
 		Session: agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{}),
-		Server: worker.NewAgentServer(worker.WorkerOptions{
-			Agora: worker.AgoraOptions{
+		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
+		Config: AppConfig{
+			Agora: workeragora.Options{
 				AppID:   "app",
 				Channel: "support",
 				UID:     "agent",
 				Token:   "token",
 			},
-		}),
+		},
 	}
 
 	err := rtpApp.runAgora(context.Background())
@@ -897,14 +901,15 @@ func TestRunAgoraClosesTransportWhenJoinFails(t *testing.T) {
 
 	rtpApp := &App{
 		Session: agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{}),
-		Server: worker.NewAgentServer(worker.WorkerOptions{
-			Agora: worker.AgoraOptions{
+		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
+		Config: AppConfig{
+			Agora: workeragora.Options{
 				AppID:   "app",
 				Channel: "support",
 				UID:     "agent",
 				Token:   "token",
 			},
-		}),
+		},
 	}
 
 	err := rtpApp.runAgora(context.Background())
@@ -932,14 +937,15 @@ func TestRunAgoraPublishesAssistantAudioToChannel(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 	rtpApp := &App{
 		Session: session,
-		Server: worker.NewAgentServer(worker.WorkerOptions{
-			Agora: worker.AgoraOptions{
+		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
+		Config: AppConfig{
+			Agora: workeragora.Options{
 				AppID:   "app",
 				Channel: "support",
 				UID:     "agent",
 				Token:   "token",
 			},
-		}),
+		},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1027,13 +1033,14 @@ func TestRunAgoraForwardsChannelAudioToSession(t *testing.T) {
 	session.Assistant = assistant
 	rtpApp := &App{
 		Session: session,
-		Server: worker.NewAgentServer(worker.WorkerOptions{
-			Agora: worker.AgoraOptions{
+		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
+		Config: AppConfig{
+			Agora: workeragora.Options{
 				AppID:   "app",
 				Channel: "support",
 				UID:     "agent",
 			},
-		}),
+		},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1097,14 +1104,15 @@ func TestRunAgoraStartsSessionWithWorkerContext(t *testing.T) {
 	session.LLM = &fakeAppLLM{}
 	rtpApp := &App{
 		Session: session,
-		Server: worker.NewAgentServer(worker.WorkerOptions{
-			Agora: worker.AgoraOptions{
+		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
+		Config: AppConfig{
+			Agora: workeragora.Options{
 				AppID:   "app",
 				Channel: "support",
 				UID:     "agent",
 				Token:   "token",
 			},
-		}),
+		},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

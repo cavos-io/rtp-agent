@@ -319,6 +319,7 @@ const (
 
 type AppConfig struct {
 	WorkerOptions   worker.WorkerOptions
+	Agora           workeragora.Options
 	Logger          livekitlogger.Logger
 	MetricsRegistry *telemetry.MetricRegistry
 	Instructions    string
@@ -691,13 +692,13 @@ func DefaultConfigFromEnv() AppConfig {
 	return AppConfig{
 		WorkerOptions: worker.WorkerOptions{
 			Transport: worker.NormalizeWorkerTransport(os.Getenv("RTP_AGENT_TRANSPORT")),
-			Agora: worker.AgoraOptions{
-				AppID:          strings.TrimSpace(os.Getenv("AGORA_APP_ID")),
-				AppCertificate: strings.TrimSpace(os.Getenv("AGORA_APP_CERTIFICATE")),
-				Channel:        strings.TrimSpace(os.Getenv("AGORA_CHANNEL")),
-				UID:            strings.TrimSpace(os.Getenv("AGORA_UID")),
-				Token:          strings.TrimSpace(os.Getenv("AGORA_TOKEN")),
-			},
+		},
+		Agora: workeragora.Options{
+			AppID:          strings.TrimSpace(os.Getenv("AGORA_APP_ID")),
+			AppCertificate: strings.TrimSpace(os.Getenv("AGORA_APP_CERTIFICATE")),
+			Channel:        strings.TrimSpace(os.Getenv("AGORA_CHANNEL")),
+			UID:            strings.TrimSpace(os.Getenv("AGORA_UID")),
+			Token:          strings.TrimSpace(os.Getenv("AGORA_TOKEN")),
 		},
 		Instructions:                            getenvDefault("RTP_AGENT_INSTRUCTIONS", "You are a helpful realtime voice agent."),
 		TelemetryLogsEndpoint:                   os.Getenv("RTP_AGENT_OTLP_LOGS_ENDPOINT"),
@@ -1149,14 +1150,7 @@ func (a *App) runAgora(ctx context.Context) error {
 	}
 	runCtx, cancelRun := context.WithCancelCause(ctx)
 	defer cancelRun(nil)
-	opts := a.Server.Options.Agora
-	agoraOpts := workeragora.Options{
-		AppID:          opts.AppID,
-		AppCertificate: opts.AppCertificate,
-		Channel:        opts.Channel,
-		UID:            opts.UID,
-		Token:          opts.Token,
-	}
+	agoraOpts := a.Config.Agora
 	if err := agoraOpts.Validate(); err != nil {
 		return err
 	}

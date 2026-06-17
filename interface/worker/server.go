@@ -138,7 +138,6 @@ type WorkerOptions struct {
 	AgentNameIsEnv bool
 	WorkerType     WorkerType
 	Transport      WorkerTransport
-	Agora          AgoraOptions
 	MaxRetry       int
 	MaxRetrySet    bool
 	Version        string

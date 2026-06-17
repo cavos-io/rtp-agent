@@ -12,14 +12,6 @@ const (
 	WorkerTransportAgora   WorkerTransport = "agora"
 )
 
-type AgoraOptions struct {
-	AppID          string
-	AppCertificate string
-	Channel        string
-	UID            string
-	Token          string
-}
-
 func NormalizeWorkerTransport(value string) WorkerTransport {
 	normalized := strings.ToLower(strings.TrimSpace(value))
 	switch normalized {
