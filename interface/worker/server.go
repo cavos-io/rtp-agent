@@ -1846,7 +1846,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 	s.activeJobs[req.Job.Id] = jobCtx
 	s.mu.Unlock()
 
-	if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(req.Job.Id, livekit.JobStatus_JS_RUNNING)); err != nil {
+	if err := s.sendWorkerMessage(workerlivekit.JobRunningMessage(req.Job.Id)); err != nil {
 		logger.Logger.Errorw("failed to update job status", err, "jobId", req.Job.Id)
 	}
 

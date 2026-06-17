@@ -49,6 +49,10 @@ func JobStatusSucceeded(status lkprotocol.JobStatus) bool {
 	return status == lkprotocol.JobStatus_JS_SUCCESS
 }
 
+func JobRunningMessage(jobID string) *lkprotocol.WorkerMessage {
+	return JobStatusMessage(jobID, lkprotocol.JobStatus_JS_RUNNING)
+}
+
 func JobStatusMessage(jobID string, status lkprotocol.JobStatus) *lkprotocol.WorkerMessage {
 	return &lkprotocol.WorkerMessage{
 		Message: &lkprotocol.WorkerMessage_UpdateJob{

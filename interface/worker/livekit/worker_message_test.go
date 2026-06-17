@@ -24,6 +24,21 @@ func TestJobStatusMessageCarriesJobStatus(t *testing.T) {
 	}
 }
 
+func TestJobRunningMessageReportsRunningStatus(t *testing.T) {
+	msg := workerlivekit.JobRunningMessage("job-a")
+
+	update := msg.GetUpdateJob()
+	if update == nil {
+		t.Fatal("UpdateJob message is nil")
+	}
+	if update.JobId != "job-a" {
+		t.Fatalf("UpdateJob.JobId = %q, want job-a", update.JobId)
+	}
+	if update.Status != lkprotocol.JobStatus_JS_RUNNING {
+		t.Fatalf("UpdateJob.Status = %v, want JS_RUNNING", update.Status)
+	}
+}
+
 func TestJobStatusForEntrypointResultReportsSuccessWhenEntrypointClean(t *testing.T) {
 	got := workerlivekit.JobStatusForEntrypointResult(nil, nil)
 	if got != lkprotocol.JobStatus_JS_SUCCESS {
