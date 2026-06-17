@@ -153,6 +153,34 @@ func TestElevenLabsSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSVoiceSettingsMatchReference(t *testing.T) {
+	style := 0.35
+	speed := 1.05
+	boost := true
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5",
+		WithElevenLabsVoiceSettings(ElevenLabsVoiceSettings{
+			Stability:       0.7,
+			SimilarityBoost: 0.8,
+			Style:           &style,
+			Speed:           &speed,
+			UseSpeakerBoost: &boost,
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	_, body := buildElevenLabsSynthesizeRequest(provider, "hello")
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	assertElevenLabsTTSVoiceSettings(t, payload["voice_settings"])
+
+	init := elevenLabsInitPayload("ctx_test", elevenLabsVoiceSettingsPayload(provider.voiceSettings), nil)
+	assertElevenLabsTTSVoiceSettings(t, init["voice_settings"])
+}
+
 func TestElevenLabsSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
 	provider, err := NewElevenLabsTTS("test-key", "voice-1", "",
 		WithElevenLabsBaseURL("https://eleven.example/v1/"),
@@ -421,7 +449,7 @@ func TestElevenLabsTTSUpdateOptionsMatchesReference(t *testing.T) {
 func TestElevenLabsStreamPayloadsUseReferenceContextProtocol(t *testing.T) {
 	const contextID = "ctx_test"
 
-	init := elevenLabsInitPayload(contextID, nil)
+	init := elevenLabsInitPayload(contextID, nil, nil)
 	if init["text"] != " " || init["context_id"] != contextID {
 		t.Fatalf("init payload = %#v, want warmup text with context_id", init)
 	}
@@ -436,7 +464,7 @@ func TestElevenLabsStreamPayloadsUseReferenceContextProtocol(t *testing.T) {
 		t.Fatalf("init payload = %#v, want no generation_config without configured schedule", init)
 	}
 
-	scheduledInit := elevenLabsInitPayload(contextID, []int{80, 120, 200})
+	scheduledInit := elevenLabsInitPayload(contextID, nil, []int{80, 120, 200})
 	generationConfig, ok := scheduledInit["generation_config"].(map[string]any)
 	if !ok {
 		t.Fatalf("scheduled init generation_config = %#v, want object", scheduledInit["generation_config"])
@@ -667,6 +695,26 @@ func equalIntSlices(a []int, b []int) bool {
 		}
 	}
 	return true
+}
+
+func assertElevenLabsTTSVoiceSettings(t *testing.T, raw any) {
+	t.Helper()
+	settings, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("voice_settings = %#v, want object", raw)
+	}
+	want := map[string]any{
+		"stability":         0.7,
+		"similarity_boost":  0.8,
+		"style":             0.35,
+		"speed":             1.05,
+		"use_speaker_boost": true,
+	}
+	for key, wantValue := range want {
+		if settings[key] != wantValue {
+			t.Fatalf("voice_settings[%s] = %#v, want %#v in %#v", key, settings[key], wantValue, settings)
+		}
+	}
 }
 
 func runElevenLabsClosingWebsocketServerAfterFrame(conn net.Conn, closed chan<- struct{}, errCh chan<- error) {

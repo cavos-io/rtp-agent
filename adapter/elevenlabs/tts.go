@@ -39,9 +39,18 @@ type ElevenLabsTTS struct {
 	language            string
 	enableSSMLParsing   bool
 	chunkLengthSchedule []int
+	voiceSettings       *ElevenLabsVoiceSettings
 }
 
 type ElevenLabsTTSOption func(*ElevenLabsTTS)
+
+type ElevenLabsVoiceSettings struct {
+	Stability       float64
+	SimilarityBoost float64
+	Style           *float64
+	Speed           *float64
+	UseSpeakerBoost *bool
+}
 
 func WithElevenLabsVoiceID(voiceID string) ElevenLabsTTSOption {
 	return func(t *ElevenLabsTTS) {
@@ -91,6 +100,13 @@ func WithElevenLabsEncoding(encoding string) ElevenLabsTTSOption {
 func WithElevenLabsChunkLengthSchedule(schedule []int) ElevenLabsTTSOption {
 	return func(t *ElevenLabsTTS) {
 		t.chunkLengthSchedule = append([]int(nil), schedule...)
+	}
+}
+
+func WithElevenLabsVoiceSettings(settings ElevenLabsVoiceSettings) ElevenLabsTTSOption {
+	return func(t *ElevenLabsTTS) {
+		copied := settings
+		t.voiceSettings = &copied
 	}
 }
 
@@ -180,6 +196,9 @@ func buildElevenLabsSynthesizeRequest(t *ElevenLabsTTS, text string) (string, []
 	}
 	if t.enableSSMLParsing {
 		body["enable_ssml_parsing"] = true
+	}
+	if t.voiceSettings != nil {
+		body["voice_settings"] = elevenLabsVoiceSettingsPayload(t.voiceSettings)
 	}
 	jsonBody, _ := json.Marshal(body)
 	return apiURL, jsonBody
@@ -305,6 +324,7 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 		sampleRate:          t.sampleRate,
 		contextID:           contextID,
 		chunkLengthSchedule: append([]int(nil), t.chunkLengthSchedule...),
+		voiceSettings:       cloneElevenLabsVoiceSettings(t.voiceSettings),
 	}
 
 	go stream.readLoop()
@@ -373,6 +393,7 @@ type elevenLabsStream struct {
 	contextID           string
 	initSent            bool
 	chunkLengthSchedule []int
+	voiceSettings       *ElevenLabsVoiceSettings
 
 	alignRunes    []rune
 	alignStartsMs []int
@@ -741,10 +762,13 @@ func (s *elevenLabsStream) Flush() error {
 	return nil
 }
 
-func elevenLabsInitPayload(contextID string, chunkLengthSchedule []int) map[string]interface{} {
+func elevenLabsInitPayload(contextID string, voiceSettings map[string]interface{}, chunkLengthSchedule []int) map[string]interface{} {
+	if voiceSettings == nil {
+		voiceSettings = map[string]interface{}{}
+	}
 	payload := map[string]interface{}{
 		"text":           " ",
-		"voice_settings": map[string]interface{}{},
+		"voice_settings": voiceSettings,
 		"context_id":     contextID,
 	}
 	if len(chunkLengthSchedule) > 0 {
@@ -753,6 +777,34 @@ func elevenLabsInitPayload(contextID string, chunkLengthSchedule []int) map[stri
 		}
 	}
 	return payload
+}
+
+func elevenLabsVoiceSettingsPayload(settings *ElevenLabsVoiceSettings) map[string]interface{} {
+	if settings == nil {
+		return nil
+	}
+	payload := map[string]interface{}{
+		"stability":        settings.Stability,
+		"similarity_boost": settings.SimilarityBoost,
+	}
+	if settings.Style != nil {
+		payload["style"] = *settings.Style
+	}
+	if settings.Speed != nil {
+		payload["speed"] = *settings.Speed
+	}
+	if settings.UseSpeakerBoost != nil {
+		payload["use_speaker_boost"] = *settings.UseSpeakerBoost
+	}
+	return payload
+}
+
+func cloneElevenLabsVoiceSettings(settings *ElevenLabsVoiceSettings) *ElevenLabsVoiceSettings {
+	if settings == nil {
+		return nil
+	}
+	copied := *settings
+	return &copied
 }
 
 func elevenLabsTextPayload(contextID string, text string) map[string]interface{} {
@@ -781,7 +833,7 @@ func (s *elevenLabsStream) sendInitLocked() error {
 	if s.initSent {
 		return nil
 	}
-	if err := s.conn.WriteJSON(elevenLabsInitPayload(s.contextID, s.chunkLengthSchedule)); err != nil {
+	if err := s.conn.WriteJSON(elevenLabsInitPayload(s.contextID, elevenLabsVoiceSettingsPayload(s.voiceSettings), s.chunkLengthSchedule)); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return fmt.Errorf("failed to write initial config to elevenlabs: %w", err)
 	}
