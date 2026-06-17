@@ -624,8 +624,10 @@ func (c *JobContext) participantAvailable(participant workerlivekit.RemotePartic
 }
 
 func (c *JobContext) rememberAvailableParticipant(info *livekit.ParticipantInfo) {
+	infoDetails := workerlivekit.ParticipantInfoDetails(info)
 	for i, participant := range c.availableParticipants {
-		if participant.Identity == info.Identity {
+		participantDetails := workerlivekit.ParticipantInfoDetails(participant)
+		if participantDetails.Identity == infoDetails.Identity {
 			c.availableParticipants[i] = info
 			return
 		}
@@ -686,7 +688,8 @@ func (c *JobContext) AddParticipantEntrypoint(entrypoint ParticipantEntrypoint, 
 
 func (c *JobContext) scheduleParticipantEntrypointForExistingParticipants(registration participantEntrypointRegistration) {
 	for _, participant := range c.availableParticipants {
-		if !workerlivekit.ParticipantKindAllowed(registration.kinds, participant.Kind) {
+		participantDetails := workerlivekit.ParticipantInfoDetails(participant)
+		if !workerlivekit.ParticipantKindAllowed(registration.kinds, participantDetails.Kind) {
 			continue
 		}
 		c.scheduleParticipantEntrypoint(registration, participant)
@@ -758,8 +761,9 @@ func (c *JobContext) scheduleParticipantEntrypoints(participant *livekit.Partici
 	if participant == nil {
 		return
 	}
+	participantDetails := workerlivekit.ParticipantInfoDetails(participant)
 	for _, registered := range c.participantEntrypoints {
-		if !workerlivekit.ParticipantKindAllowed(registered.kinds, participant.Kind) {
+		if !workerlivekit.ParticipantKindAllowed(registered.kinds, participantDetails.Kind) {
 			continue
 		}
 		c.scheduleParticipantEntrypoint(registered, participant)
@@ -770,8 +774,9 @@ func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntry
 	if participant == nil {
 		return
 	}
+	participantDetails := workerlivekit.ParticipantInfoDetails(participant)
 	key := participantEntrypointTaskKey{
-		identity:   participant.Identity,
+		identity:   participantDetails.Identity,
 		entrypoint: reflect.ValueOf(registration.entrypoint).Pointer(),
 	}
 	c.participantTasksMu.Lock()
@@ -779,7 +784,7 @@ func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntry
 		c.participantTasks = make(map[participantEntrypointTaskKey]struct{})
 	}
 	if _, ok := c.participantTasks[key]; ok {
-		logger.Logger.Warnw("participant entrypoint already running for participant", nil, "participant", participant.Identity)
+		logger.Logger.Warnw("participant entrypoint already running for participant", nil, "participant", participantDetails.Identity)
 	}
 	c.participantTasks[key] = struct{}{}
 	c.participantTasksMu.Unlock()
@@ -787,7 +792,7 @@ func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntry
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				logger.Logger.Errorw("Participant entrypoint panicked", fmt.Errorf("%v", recovered), "participant", participant.Identity)
+				logger.Logger.Errorw("Participant entrypoint panicked", fmt.Errorf("%v", recovered), "participant", participantDetails.Identity)
 			}
 			c.participantTasksMu.Lock()
 			delete(c.participantTasks, key)

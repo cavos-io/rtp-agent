@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
+	lkprotocol "github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -74,5 +75,19 @@ func TestParticipantInfoFromRemoteParticipantCopiesAttributes(t *testing.T) {
 func TestParticipantInfoFromRemoteParticipantNil(t *testing.T) {
 	if info := workerlivekit.ParticipantInfoFromRemoteParticipant(nil); info != nil {
 		t.Fatalf("ParticipantInfoFromRemoteParticipant(nil) = %#v, want nil", info)
+	}
+}
+
+func TestParticipantInfoDetailsExposeIdentityAndKind(t *testing.T) {
+	details := workerlivekit.ParticipantInfoDetails(&lkprotocol.ParticipantInfo{
+		Identity: "caller-a",
+		Kind:     lkprotocol.ParticipantInfo_SIP,
+	})
+
+	if details.Identity != "caller-a" {
+		t.Fatalf("ParticipantInfoDetails().Identity = %q, want caller-a", details.Identity)
+	}
+	if details.Kind != lkprotocol.ParticipantInfo_SIP {
+		t.Fatalf("ParticipantInfoDetails().Kind = %v, want SIP", details.Kind)
 	}
 }

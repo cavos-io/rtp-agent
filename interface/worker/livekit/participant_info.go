@@ -29,3 +29,18 @@ func ParticipantInfoFromRemoteParticipant(participant RemoteParticipantView) *lk
 		Attributes: maps.Clone(participant.Attributes()),
 	}
 }
+
+type ParticipantDetails struct {
+	Identity string
+	Kind     lkprotocol.ParticipantInfo_Kind
+}
+
+func ParticipantInfoDetails(participant *lkprotocol.ParticipantInfo) ParticipantDetails {
+	if participant == nil {
+		return ParticipantDetails{}
+	}
+	return ParticipantDetails{
+		Identity: participant.Identity,
+		Kind:     participant.Kind,
+	}
+}
