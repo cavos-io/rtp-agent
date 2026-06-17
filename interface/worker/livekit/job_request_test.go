@@ -58,6 +58,9 @@ func TestJobAssignmentInfoUsesAssignmentURLTokenAndRecordingFlag(t *testing.T) {
 	if info.Job != job {
 		t.Fatal("JobAssignmentInfo().Job did not preserve assignment job")
 	}
+	if info.JobID != "job-a" {
+		t.Fatalf("JobAssignmentInfo().JobID = %q, want job-a", info.JobID)
+	}
 	if info.URL != "wss://assignment.example" {
 		t.Fatalf("JobAssignmentInfo().URL = %q, want assignment URL", info.URL)
 	}

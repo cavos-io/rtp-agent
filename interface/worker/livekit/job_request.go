@@ -43,6 +43,7 @@ func JobAgentName(job *lkprotocol.Job) string {
 
 type AssignmentInfo struct {
 	Job             *lkprotocol.Job
+	JobID           string
 	URL             string
 	Token           string
 	EnableRecording bool
@@ -58,6 +59,7 @@ func JobAssignmentInfo(req *lkprotocol.JobAssignment, defaultURL string) Assignm
 	}
 	return AssignmentInfo{
 		Job:             req.Job,
+		JobID:           JobID(req.Job),
 		URL:             jobURL,
 		Token:           req.GetToken(),
 		EnableRecording: req.Job.GetEnableRecording(),

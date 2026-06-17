@@ -1816,9 +1816,9 @@ func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) 
 }
 
 func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssignment) {
-	logger.Logger.Infow("Received job assignment", "jobId", req.Job.Id)
-
 	assignment := workerlivekit.JobAssignmentInfo(req, s.Options.WSRL)
+	jobID := assignment.JobID
+	logger.Logger.Infow("Received job assignment", "jobId", jobID)
 	jobCtx := NewJobContext(assignment.Job, assignment.URL, s.Options.APIKey, s.Options.APISecret)
 	jobCtx.process = s.newJobProcess()
 	if assignment.EnableRecording {
@@ -1827,26 +1827,26 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 	jobCtx.token = assignment.Token
 
 	s.mu.Lock()
-	args, accepted := s.pendingAccepts[req.Job.Id]
+	args, accepted := s.pendingAccepts[jobID]
 	if !accepted {
 		s.mu.Unlock()
-		logger.Logger.Warnw("received assignment for unknown job", nil, "jobId", req.Job.Id)
+		logger.Logger.Warnw("received assignment for unknown job", nil, "jobId", jobID)
 		return
 	}
 
 	jobCtx.workerID = s.workerID
 	jobCtx.AcceptArguments = args
 	jobCtx.LogContextFields()["worker_id"] = jobCtx.WorkerID()
-	delete(s.pendingAccepts, req.Job.Id)
-	if timer, ok := s.pendingTimers[req.Job.Id]; ok {
+	delete(s.pendingAccepts, jobID)
+	if timer, ok := s.pendingTimers[jobID]; ok {
 		timer.Stop()
-		delete(s.pendingTimers, req.Job.Id)
+		delete(s.pendingTimers, jobID)
 	}
-	s.activeJobs[req.Job.Id] = jobCtx
+	s.activeJobs[jobID] = jobCtx
 	s.mu.Unlock()
 
-	if err := s.sendWorkerMessage(workerlivekit.JobRunningMessage(req.Job.Id)); err != nil {
-		logger.Logger.Errorw("failed to update job status", err, "jobId", req.Job.Id)
+	if err := s.sendWorkerMessage(workerlivekit.JobRunningMessage(jobID)); err != nil {
+		logger.Logger.Errorw("failed to update job status", err, "jobId", jobID)
 	}
 
 	if s.entrypointFnc != nil {
@@ -1855,7 +1855,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 			status := workerlivekit.JobStatusForEntrypointResult(nil, nil)
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					logger.Logger.Errorw("Job entrypoint panicked", fmt.Errorf("%v", recovered), jobLogValues(jobCtx, "jobId", req.Job.Id)...)
+					logger.Logger.Errorw("Job entrypoint panicked", fmt.Errorf("%v", recovered), jobLogValues(jobCtx, "jobId", jobID)...)
 					status = workerlivekit.JobStatusForEntrypointResult(nil, recovered)
 				}
 				if jobCtx.Terminated() {
@@ -1872,20 +1872,20 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 						return
 					}
 				} else {
-					if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(req.Job.Id, status)); err != nil {
-						logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", req.Job.Id)...)
+					if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(jobID, status)); err != nil {
+						logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", jobID)...)
 					}
 					s.finishJob(jobCtx)
 					return
 				}
-				if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(req.Job.Id, status)); err != nil {
-					logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", req.Job.Id)...)
+				if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(jobID, status)); err != nil {
+					logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", jobID)...)
 				}
 			}()
 			defer jobCtx.markEntrypointDone()
 
 			if err := s.runJobEntrypoint(jobCtx); err != nil {
-				logger.Logger.Errorw("Job entrypoint failed", err, jobLogValues(jobCtx, "jobId", req.Job.Id)...)
+				logger.Logger.Errorw("Job entrypoint failed", err, jobLogValues(jobCtx, "jobId", jobID)...)
 				status = workerlivekit.JobStatusForEntrypointResult(err, nil)
 			}
 		}()
