@@ -85,9 +85,15 @@ func TestPreConnectAudioStaleBufferReturnsEmptyFrames(t *testing.T) {
 	}
 }
 
-func TestPreConnectAudioAfterConnectSkipsWait(t *testing.T) {
+func TestPreConnectAudioAfterConnectStillWaitsForData(t *testing.T) {
 	handler := NewPreConnectAudioHandler(nil, time.Second)
 	handler.afterConnect = true
+	frame := &model.AudioFrame{
+		Data:              []byte{1, 2, 3, 4},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}
 
 	done := make(chan []*model.AudioFrame, 1)
 	go func() {
@@ -96,11 +102,22 @@ func TestPreConnectAudioAfterConnectSkipsWait(t *testing.T) {
 
 	select {
 	case frames := <-done:
-		if frames != nil {
-			t.Fatalf("WaitForData() frames = %#v, want nil after room connection", frames)
-		}
+		t.Fatalf("WaitForData() returned before data after room connection: %#v", frames)
 	case <-time.After(50 * time.Millisecond):
-		t.Fatal("WaitForData() blocked after room connection")
+	}
+
+	handler.publishBuffer("track-late", &PreConnectAudioBuffer{
+		Timestamp: time.Now(),
+		Frames:    []*model.AudioFrame{frame},
+	})
+
+	select {
+	case frames := <-done:
+		if len(frames) != 1 || frames[0] != frame {
+			t.Fatalf("WaitForData() frames = %#v, want published frame after room connection", frames)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitForData() did not return published pre-connect audio after room connection")
 	}
 }
 
