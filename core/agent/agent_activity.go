@@ -2401,7 +2401,6 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		a.cancelPreemptiveGeneration()
 		return nil, nil
 	}
-	a.resetPreemptiveGenerationCount()
 	if currentSpeech != nil && !currentSpeech.IsInterrupted() && !currentSpeech.IsDone() {
 		paused := a.cancelPausedFalseInterruption(false)
 		if err := currentSpeech.Interrupt(false); err != nil {
@@ -2421,6 +2420,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		}
 		return nil, nil
 	}
+	a.resetPreemptiveGenerationCount()
 
 	chatCtx := a.RetrieveChatCtx().Copy()
 	hookStart := time.Now()

@@ -3864,6 +3864,58 @@ func TestAgentActivityUninterruptibleSpeechResetsPreemptiveRetryCount(t *testing
 	}
 }
 
+func TestAgentActivitySchedulingPausedDoesNotResetPreemptiveRetryCount(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	agent.LLM = &fakeGenerationLLM{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		PreemptiveGenerationMaxRetries:    1,
+		PreemptiveGenerationMaxRetriesSet: true,
+	})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	defer activity.Stop()
+
+	speechEvents := session.SpeechCreatedEvents()
+	activity.OnStartOfSpeech(&vad.VADEvent{})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "first turn", Confidence: 0.9}},
+	})
+
+	var firstPreemptive *SpeechHandle
+	select {
+	case ev := <-speechEvents:
+		firstPreemptive = ev.SpeechHandle
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive initial preemptive generation")
+	}
+
+	activity.schedulingPaused = true
+	if _, err := activity.completeUserTurn(context.Background(), EndOfTurnInfo{
+		NewTranscript:        "paused turn",
+		TranscriptConfidence: 0.9,
+	}); err != nil {
+		t.Fatalf("completeUserTurn error = %v, want nil", err)
+	}
+	if !firstPreemptive.IsInterrupted() {
+		t.Fatal("paused scheduling did not cancel stale preemptive generation")
+	}
+	activity.schedulingPaused = false
+
+	activity.OnStartOfSpeech(&vad.VADEvent{})
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Type:         stt.SpeechEventPreflightTranscript,
+		Alternatives: []stt.SpeechData{{Text: "next turn", Confidence: 0.9}},
+	})
+
+	select {
+	case ev := <-speechEvents:
+		t.Fatalf("SpeechCreatedEvents received retry %#v after paused turn reset retry count", ev)
+	default:
+	}
+}
+
 func TestAgentActivityCommitUserTurnSkipsWhenSchedulingPaused(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
