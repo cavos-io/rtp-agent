@@ -1396,6 +1396,19 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 			err = conn.WriteMessage(websocket.TextMessage, b)
 		}
 	}
+	var chatMsgs []map[string]any
+	if err == nil && s.remote != nil {
+		chatMsgs, err = openAIRealtimeChatContextCreateMessages(s.remote.ToChatCtx())
+		for _, chatMsg := range chatMsgs {
+			if err != nil {
+				break
+			}
+			b, err = json.Marshal(chatMsg)
+			if err == nil {
+				err = conn.WriteMessage(websocket.TextMessage, b)
+			}
+		}
+	}
 	if err != nil {
 		s.mu.Unlock()
 		_ = conn.Close()
