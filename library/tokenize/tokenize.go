@@ -165,7 +165,7 @@ func SplitSentences(text string, minSentenceLen int, retainFormat bool) []TokenD
 		}
 
 		buff += prePad + sentence
-		endPos += len(match)
+		endPos += len([]rune(match))
 		if len([]rune(buff)) > minSentenceLen {
 			prefixLen := len(prePad)
 			if len(buff) >= prefixLen {
@@ -179,7 +179,7 @@ func SplitSentences(text string, minSentenceLen int, retainFormat bool) []TokenD
 	if buff != "" {
 		prefixLen := len(prePad)
 		if len(buff) >= prefixLen {
-			sentences = append(sentences, TokenData{Token: buff[prefixLen:], Start: startPos, End: len(text) - 1})
+			sentences = append(sentences, TokenData{Token: buff[prefixLen:], Start: startPos, End: len([]rune(text)) - 1})
 		}
 	}
 
@@ -209,40 +209,47 @@ func SplitWords(text string, ignorePunctuation bool, splitCharacter bool, retain
 		charBasedCodes = regexp.MustCompile(`[\x{4e00}-\x{9fff}\x{3040}-\x{30ff}\x{3400}-\x{4dbf}\x{0E00}-\x{0E7F}]`)
 	}
 
-	wordStart := 0
+	wordStartByte := 0
+	wordStartRune := 0
 
-	addCurrentWord := func(start, end int) {
-		word := text[start:end]
+	addCurrentWord := func(startByte, endByte, startRune, endRune int) {
+		word := text[startByte:endByte]
 		if ignorePunctuation {
 			word = stripPunctuation(word)
 		}
 		if word != "" {
-			words = append(words, TokenData{Token: word, Start: start, End: end})
+			words = append(words, TokenData{Token: word, Start: startRune, End: endRune})
 		}
 	}
 
-	for pos, char := range text {
+	runePos := 0
+	for bytePos, char := range text {
 		if unicode.IsSpace(char) {
-			if retainFormat && strings.TrimSpace(text[wordStart:pos]) == "" {
+			if retainFormat && strings.TrimSpace(text[wordStartByte:bytePos]) == "" {
+				runePos++
 				continue
 			}
-			addCurrentWord(wordStart, pos)
+			addCurrentWord(wordStartByte, bytePos, wordStartRune, runePos)
 			if retainFormat {
-				wordStart = pos
+				wordStartByte = bytePos
+				wordStartRune = runePos
 			} else {
-				wordStart = pos + 1
+				wordStartByte = bytePos + len(string(char))
+				wordStartRune = runePos + 1
 			}
 		} else if charBasedCodes != nil && charBasedCodes.MatchString(string(char)) {
-			if wordStart < pos {
-				addCurrentWord(wordStart, pos)
+			if wordStartByte < bytePos {
+				addCurrentWord(wordStartByte, bytePos, wordStartRune, runePos)
 			}
-			nextPos := pos + len(string(char))
-			addCurrentWord(pos, nextPos)
-			wordStart = nextPos
+			nextBytePos := bytePos + len(string(char))
+			addCurrentWord(bytePos, nextBytePos, runePos, runePos+1)
+			wordStartByte = nextBytePos
+			wordStartRune = runePos + 1
 		}
+		runePos++
 	}
 
-	addCurrentWord(wordStart, len(text))
+	addCurrentWord(wordStartByte, len(text), wordStartRune, runePos)
 
 	return words
 }
@@ -268,10 +275,12 @@ func ReplaceWords(text string, replacements map[string]string) string {
 		}
 
 		punctuationOffset := len(word.Token) - len(noPunctuation)
-		builder.WriteString(text[lastIndex:word.Start])
+		wordStart := runeOffsetToByteOffset(text, word.Start)
+		wordEnd := runeOffsetToByteOffset(text, word.End)
+		builder.WriteString(text[lastIndex:wordStart])
 		builder.WriteString(replacement)
-		builder.WriteString(text[word.End-punctuationOffset : word.End])
-		lastIndex = word.End
+		builder.WriteString(text[wordEnd-punctuationOffset : wordEnd])
+		lastIndex = wordEnd
 	}
 
 	if lastIndex == 0 {
@@ -279,6 +288,37 @@ func ReplaceWords(text string, replacements map[string]string) string {
 	}
 	builder.WriteString(text[lastIndex:])
 	return builder.String()
+}
+
+func runeOffsetToByteOffset(text string, offset int) int {
+	if offset <= 0 {
+		return 0
+	}
+	runePos := 0
+	for bytePos := range text {
+		if runePos == offset {
+			return bytePos
+		}
+		runePos++
+	}
+	return len(text)
+}
+
+func byteOffsetToRuneOffset(text string, offset int) int {
+	if offset <= 0 {
+		return 0
+	}
+	if offset >= len(text) {
+		return len([]rune(text))
+	}
+	runePos := 0
+	for bytePos := range text {
+		if bytePos >= offset {
+			return runePos
+		}
+		runePos++
+	}
+	return len([]rune(text))
 }
 
 func SplitParagraphs(text string) []TokenData {
@@ -294,7 +334,8 @@ func SplitParagraphs(text string) []TokenData {
 			return paragraphs
 		}
 		startIndex := strings.Index(text, stripped)
-		return []TokenData{{Token: stripped, Start: startIndex, End: startIndex + len(stripped)}}
+		startRune := byteOffsetToRuneOffset(text, startIndex)
+		return []TokenData{{Token: stripped, Start: startRune, End: startRune + len([]rune(stripped))}}
 	}
 
 	for _, idx := range indices {
@@ -302,8 +343,9 @@ func SplitParagraphs(text string) []TokenData {
 		paragraph := strings.TrimSpace(text[start:end])
 		if paragraph != "" {
 			paraStart := start + strings.Index(text[start:end], paragraph)
-			paraEnd := paraStart + len(paragraph)
-			paragraphs = append(paragraphs, TokenData{Token: paragraph, Start: paraStart, End: paraEnd})
+			paraStartRune := byteOffsetToRuneOffset(text, paraStart)
+			paraEndRune := paraStartRune + len([]rune(paragraph))
+			paragraphs = append(paragraphs, TokenData{Token: paragraph, Start: paraStartRune, End: paraEndRune})
 		}
 		start = idx[1]
 	}
@@ -311,8 +353,9 @@ func SplitParagraphs(text string) []TokenData {
 	lastParagraph := strings.TrimSpace(text[start:])
 	if lastParagraph != "" {
 		paraStart := start + strings.Index(text[start:], lastParagraph)
-		paraEnd := paraStart + len(lastParagraph)
-		paragraphs = append(paragraphs, TokenData{Token: lastParagraph, Start: paraStart, End: paraEnd})
+		paraStartRune := byteOffsetToRuneOffset(text, paraStart)
+		paraEndRune := paraStartRune + len([]rune(lastParagraph))
+		paragraphs = append(paragraphs, TokenData{Token: lastParagraph, Start: paraStartRune, End: paraEndRune})
 	}
 
 	return paragraphs

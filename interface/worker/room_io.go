@@ -1648,19 +1648,27 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 	if rio == nil || rio.Options.DisableAudioOutput || rio.isAudioDisabled() {
 		return nil
 	}
-	rio.recordAudioOutputFrameReceived(frame)
-	if rio.Recorder != nil {
-		rio.Recorder.RecordOutput(frame)
-	}
-
 	rio.mu.Lock()
 	track := rio.audioTrack
 	encoder := rio.encoder
 	rio.mu.Unlock()
 
 	if track == nil {
+		rio.recordAudioOutputFrameReceived(frame)
+		if rio.Recorder != nil {
+			rio.Recorder.RecordOutput(frame)
+		}
 		rio.recordAudioOutputError(errors.New("room audio output track not started"))
 		return nil
+	}
+
+	if err := rio.waitForAudioSubscriptionReady(ctx); err != nil {
+		return err
+	}
+
+	rio.recordAudioOutputFrameReceived(frame)
+	if rio.Recorder != nil {
+		rio.Recorder.RecordOutput(frame)
 	}
 
 	drop, err := rio.waitForAudioOutputResume(ctx)
@@ -1728,6 +1736,24 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 	rio.recordAudioOutputFramePublished(frame, frame, len(frame.Data), 1)
 	rio.addPlaybackPosition(duration)
 	return nil
+}
+
+func (rio *RoomIO) waitForAudioSubscriptionReady(ctx context.Context) error {
+	if rio == nil {
+		return nil
+	}
+	rio.mu.Lock()
+	ch := rio.audioSubscribed
+	rio.mu.Unlock()
+	if ch == nil {
+		return nil
+	}
+	select {
+	case <-ch:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (rio *RoomIO) markAudioSubscribed() {

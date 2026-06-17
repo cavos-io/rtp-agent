@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
@@ -103,6 +104,7 @@ type streamAdapterWrapper struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	requestID string
+	segmentID string
 	eventCh   chan *SynthesizedAudio
 	errCh     chan error
 	inputCh   chan streamAdapterInput
@@ -141,6 +143,7 @@ func (a *StreamAdapter) Stream(ctx context.Context) (SynthesizeStream, error) {
 		ctx:       ctx,
 		cancel:    cancel,
 		requestID: cavosmath.ShortUUID(""),
+		segmentID: cavosmath.ShortUUID(""),
 		eventCh:   make(chan *SynthesizedAudio, 100),
 		errCh:     make(chan error, 1),
 		inputCh:   make(chan streamAdapterInput, 100),
@@ -196,7 +199,7 @@ func (w *streamAdapterWrapper) run() {
 			break
 		}
 		if tok.Token != "" {
-			if err := w.synthesize(tok.Token, tok.SegmentID); err != nil {
+			if err := w.synthesize(tok.Token, w.segmentID); err != nil {
 				if w.isClosed() {
 					w.markDone(nil)
 					return
@@ -216,7 +219,7 @@ func (w *streamAdapterWrapper) flushCompletedSegments() {
 	for {
 		select {
 		case <-w.flushCh:
-			w.flushSegmentPending(true)
+			w.flushSegmentPending(false)
 		default:
 			return
 		}
@@ -313,6 +316,9 @@ func (w *streamAdapterWrapper) setSegmentPending(audio *SynthesizedAudio, text s
 
 func (w *streamAdapterWrapper) flushSegmentPending(isFinal bool) {
 	if w.segmentPending == nil {
+		if isFinal {
+			w.sendFinalMarker(w.segmentID)
+		}
 		return
 	}
 	audio := cloneSynthesizedAudio(w.segmentPending)
@@ -322,6 +328,38 @@ func (w *streamAdapterWrapper) flushSegmentPending(isFinal bool) {
 	if isFinal {
 		w.emitSegmentMetrics(audio)
 	}
+	w.eventCh <- audio
+}
+
+func (w *streamAdapterWrapper) sendFinalMarker(segmentID string) {
+	if _, ok := w.metrics[segmentID]; !ok {
+		return
+	}
+	sampleRate := uint32(w.adapter.SampleRate())
+	numChannels := uint32(w.adapter.NumChannels())
+	if sampleRate == 0 {
+		sampleRate = 24000
+	}
+	if numChannels == 0 {
+		numChannels = 1
+	}
+	samples := sampleRate * finalTailMillis / 1000
+	if samples == 0 {
+		samples = 1
+	}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, samples*numChannels*2),
+		SampleRate:        sampleRate,
+		NumChannels:       numChannels,
+		SamplesPerChannel: samples,
+	}
+	audio := &SynthesizedAudio{
+		Frame:     frame,
+		RequestID: w.requestID,
+		SegmentID: segmentID,
+		IsFinal:   true,
+	}
+	w.emitSegmentMetrics(audio)
 	w.eventCh <- audio
 }
 

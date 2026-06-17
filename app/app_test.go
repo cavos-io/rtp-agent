@@ -10517,6 +10517,7 @@ func TestDefaultConfigFromEnvMapsAzureSTTLanguageAndEndpoint(t *testing.T) {
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "azure")
 	t.Setenv("RTP_AGENT_STT_LANGUAGE", "id-ID")
 	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://southindia.api.cognitive.microsoft.com/")
+	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "8000")
 	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
 
 	app, err := NewApp(DefaultConfigFromEnv())
@@ -10534,6 +10535,9 @@ func TestDefaultConfigFromEnvMapsAzureSTTLanguageAndEndpoint(t *testing.T) {
 	if got, want := state.FieldByName("speechHost").String(), "https://southindia.api.cognitive.microsoft.com/"; got != want {
 		t.Fatalf("Azure STT speechHost = %q, want %q", got, want)
 	}
+	if got, want := stt.InputSampleRate(azureProvider), uint32(8000); got != want {
+		t.Fatalf("Azure STT input sample rate = %d, want %d", got, want)
+	}
 }
 
 func TestNewAppMapsAzureSTTBundleSettingEndpoint(t *testing.T) {
@@ -10544,6 +10548,7 @@ func TestNewAppMapsAzureSTTBundleSettingEndpoint(t *testing.T) {
 		STTModelOptions: map[string]any{
 			"setting": map[string]any{
 				"azure_endpoint": "https://southindia.api.cognitive.microsoft.com/",
+				"sample_rate":    "8000",
 			},
 		},
 	}
@@ -10562,6 +10567,9 @@ func TestNewAppMapsAzureSTTBundleSettingEndpoint(t *testing.T) {
 	}
 	if got, want := state.FieldByName("speechHost").String(), "https://southindia.api.cognitive.microsoft.com/"; got != want {
 		t.Fatalf("Azure STT speechHost = %q, want %q", got, want)
+	}
+	if got, want := stt.InputSampleRate(azureProvider), uint32(8000); got != want {
+		t.Fatalf("Azure STT input sample rate = %d, want %d", got, want)
 	}
 }
 

@@ -46,7 +46,7 @@ manifest_keys="$(mktemp "${TMPDIR:-/tmp}/parity-inventory-manifest.XXXXXX")"
 discovered_tests="$(mktemp "${TMPDIR:-/tmp}/parity-inventory-tests.XXXXXX")"
 trap 'rm -f "$manifest_keys" "$discovered_tests"' EXIT
 
-awk -F '\t' 'NR > 1 && $2 == "go-test" && $5 != "" && $6 != "" {
+awk -F '\t' 'NR > 1 && $5 != "" && $6 != "" {
   print $5 "\t" $6
 }' "$MANIFEST" | sort -u > "$manifest_keys"
 

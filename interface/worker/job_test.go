@@ -582,6 +582,48 @@ func TestJobContextConnectAcceptsAutoSubscribeOptions(t *testing.T) {
 	}
 }
 
+func TestJobContextConnectPreparedRoomJoinsExistingRoom(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_prepared_room", Room: &livekit.Room{Name: "room-a"}},
+		"wss://livekit.example",
+		"key",
+		"secret",
+	)
+	room := lksdk.NewRoom(nil)
+	joined := false
+
+	oldJoinRoom := jobContextJoinRoom
+	jobContextJoinRoom = func(joinCtx context.Context, gotRoom *lksdk.Room, url string, info lksdk.ConnectInfo, opts ...lksdk.ConnectOption) error {
+		if joinCtx == nil {
+			t.Fatal("join context = nil")
+		}
+		if gotRoom != room {
+			t.Fatal("joined room did not match prepared room")
+		}
+		if url != "wss://livekit.example" {
+			t.Fatalf("join url = %q, want configured URL", url)
+		}
+		if info.RoomName != "room-a" {
+			t.Fatalf("join room name = %q, want room-a", info.RoomName)
+		}
+		joined = true
+		return nil
+	}
+	t.Cleanup(func() {
+		jobContextJoinRoom = oldJoinRoom
+	})
+
+	if err := ctx.ConnectPreparedRoom(context.Background(), room); err != nil {
+		t.Fatalf("ConnectPreparedRoom() error = %v", err)
+	}
+	if !joined {
+		t.Fatal("prepared room was not joined")
+	}
+	if ctx.Room != room {
+		t.Fatal("ConnectPreparedRoom did not install prepared room on context")
+	}
+}
+
 func TestJobContextAddParticipantEntrypointRejectsDuplicates(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_participant_entrypoint"}, "", "", "")
 	entrypoint := func(*JobContext, *livekit.ParticipantInfo) {}

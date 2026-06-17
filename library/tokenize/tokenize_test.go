@@ -175,6 +175,23 @@ func TestSplitSentencesUsesRuneLengthForReferenceMinimum(t *testing.T) {
 	}
 }
 
+func TestSplitSentencesUsesReferenceCharacterOffsets(t *testing.T) {
+	tokens := SplitSentences("你好。 World sentence long enough.", 1, false)
+
+	want := []TokenData{
+		{Token: "你好。", Start: 0, End: 3},
+		{Token: "World sentence long enough.", Start: 3, End: 31},
+	}
+	if len(tokens) != len(want) {
+		t.Fatalf("tokens = %#v, want %#v", tokens, want)
+	}
+	for i := range want {
+		if tokens[i] != want[i] {
+			t.Fatalf("tokens[%d] = %#v, want %#v", i, tokens[i], want[i])
+		}
+	}
+}
+
 func TestSplitWordsSplitsCharacterBasedUnicode(t *testing.T) {
 	tokens := SplitWords("你好 world", true, true, false)
 
@@ -190,6 +207,24 @@ func TestSplitWordsSplitsCharacterBasedUnicode(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("tokens = %#v, want %#v", got, want)
+		}
+	}
+}
+
+func TestSplitWordsUsesReferenceCharacterOffsets(t *testing.T) {
+	tokens := SplitWords("你好 world", true, true, false)
+
+	want := []TokenData{
+		{Token: "你", Start: 0, End: 1},
+		{Token: "好", Start: 1, End: 2},
+		{Token: "world", Start: 3, End: 8},
+	}
+	if len(tokens) != len(want) {
+		t.Fatalf("tokens = %#v, want %#v", tokens, want)
+	}
+	for i := range want {
+		if tokens[i] != want[i] {
+			t.Fatalf("tokens[%d] = %#v, want %#v", i, tokens[i], want[i])
 		}
 	}
 }
@@ -213,6 +248,13 @@ func TestSplitWordsStripsReferencePunctuationList(t *testing.T) {
 	}
 }
 
+func TestReplaceWordsHandlesReferenceCharacterOffsets(t *testing.T) {
+	got := ReplaceWords("Halo 你好 customer.", map[string]string{"customer": "agent"})
+	if got != "Halo 你好 agent." {
+		t.Fatalf("ReplaceWords() = %q, want unicode prefix preserved", got)
+	}
+}
+
 func TestSplitParagraphsSplitsOnBlankLinesAndTracksOffsets(t *testing.T) {
 	tokens := SplitParagraphs("  first paragraph\n\n \t\n second paragraph  \nthird line\n\n")
 
@@ -225,6 +267,23 @@ func TestSplitParagraphsSplitsOnBlankLinesAndTracksOffsets(t *testing.T) {
 	}
 	for i := range want {
 		if tokens[i].Token != want[i].Token || tokens[i].Start != want[i].Start || tokens[i].End != want[i].End {
+			t.Fatalf("tokens[%d] = %#v, want %#v", i, tokens[i], want[i])
+		}
+	}
+}
+
+func TestSplitParagraphsUsesReferenceCharacterOffsets(t *testing.T) {
+	tokens := SplitParagraphs("  你好\n\n world")
+
+	want := []TokenData{
+		{Token: "你好", Start: 2, End: 4},
+		{Token: "world", Start: 7, End: 12},
+	}
+	if len(tokens) != len(want) {
+		t.Fatalf("tokens = %#v, want %#v", tokens, want)
+	}
+	for i := range want {
+		if tokens[i] != want[i] {
 			t.Fatalf("tokens[%d] = %#v, want %#v", i, tokens[i], want[i])
 		}
 	}

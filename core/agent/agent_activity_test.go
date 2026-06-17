@@ -1895,6 +1895,30 @@ func TestAgentActivityInterruptReturnsImmediatelyWhenNoSpeech(t *testing.T) {
 	}
 }
 
+func TestAgentActivityInterruptCancelsPreemptiveGeneration(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	activity.preemptiveGeneration = &preemptiveGeneration{
+		speech:     speech,
+		transcript: "hello",
+		chatCtx:    llm.NewChatContext(),
+		createdAt:  time.Now(),
+	}
+
+	if err := activity.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt(false) error = %v, want nil", err)
+	}
+
+	if activity.preemptiveGeneration != nil {
+		t.Fatal("preemptiveGeneration still set after interrupt, want cleared")
+	}
+	if !speech.IsInterrupted() {
+		t.Fatal("preemptive speech was not interrupted")
+	}
+}
+
 func TestAgentActivityInterruptInterruptsRealtimeSession(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

@@ -604,18 +604,46 @@ func (c *JobContext) connectInfo() lksdk.ConnectInfo {
 	}
 }
 
+var jobContextNewRoom = lksdk.NewRoom
+
+var jobContextJoinRoom = func(ctx context.Context, room *lksdk.Room, url string, info lksdk.ConnectInfo, opts ...lksdk.ConnectOption) error {
+	return room.JoinWithContext(ctx, url, info, opts...)
+}
+
+var jobContextJoinRoomWithToken = func(ctx context.Context, room *lksdk.Room, url string, token string, opts ...lksdk.ConnectOption) error {
+	return room.JoinWithContextAndToken(ctx, url, token, opts...)
+}
+
+func (c *JobContext) NewRoom(cb *lksdk.RoomCallback, options ...ConnectOptions) *lksdk.Room {
+	opts := normalizeConnectOptions(options...)
+	return jobContextNewRoom(c.roomCallbackWithEntrypoints(cb, opts.AutoSubscribe))
+}
+
 func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback, options ...ConnectOptions) error {
 	if c.Room != nil {
 		return nil
 	}
 	opts := normalizeConnectOptions(options...)
-	cb = c.roomCallbackWithEntrypoints(cb, opts.AutoSubscribe)
+	room := c.NewRoom(cb, opts)
+	return c.ConnectPreparedRoom(ctx, room, opts)
+}
+
+func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *lksdk.Room, options ...ConnectOptions) error {
+	if c.Room != nil {
+		return nil
+	}
+	if room == nil {
+		return fmt.Errorf("prepared room is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	opts := normalizeConnectOptions(options...)
 	connectOptions := []lksdk.ConnectOption{
 		lksdk.WithAutoSubscribe(autoSubscribeSDKEnabled(opts.AutoSubscribe)),
 	}
 	if c.token != "" {
-		room, err := lksdk.ConnectToRoomWithToken(c.url, c.token, cb, connectOptions...)
-		if err != nil {
+		if err := jobContextJoinRoomWithToken(ctx, room, c.url, c.token, connectOptions...); err != nil {
 			return err
 		}
 		c.Room = room
@@ -625,8 +653,7 @@ func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback, option
 		return nil
 	}
 
-	room, err := lksdk.ConnectToRoom(c.url, c.connectInfo(), cb, connectOptions...)
-	if err != nil {
+	if err := jobContextJoinRoom(ctx, room, c.url, c.connectInfo(), connectOptions...); err != nil {
 		return err
 	}
 	c.Room = room

@@ -510,6 +510,14 @@ func (a *AgentActivity) recordInitialConfiguration() error {
 }
 
 func (a *AgentActivity) Interrupt(force bool) error {
+	return a.interrupt(force, true)
+}
+
+func (a *AgentActivity) interrupt(force bool, cancelPreemptive bool) error {
+	if cancelPreemptive {
+		a.cancelPreemptiveGeneration()
+	}
+
 	a.queueMu.Lock()
 	interrupted := make([]*SpeechHandle, 0, len(a.speechQueue)+1)
 	if a.currentSpeech != nil {
@@ -1756,9 +1764,6 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.userTurnMu.Unlock()
 	a.notifyUserTurnUpdated()
 	a.checkUserTurnLimit(transcript)
-	if !matchesPreflightTranscript {
-		a.maybeStartPreemptiveGeneration(pendingTranscript, confidenceSum/float64(confidenceCount))
-	}
 
 	turnDetection := a.turnDetectionMode()
 	if turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
@@ -1768,6 +1773,9 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 				a.startFalseInterruptionTimer()
 			}
 		}
+	}
+	if !matchesPreflightTranscript {
+		a.maybeStartPreemptiveGeneration(pendingTranscript, confidenceSum/float64(confidenceCount))
 	}
 	if turnDetection == TurnDetectionModeSTT && !a.speaking {
 		a.runEOUDetection(EndOfTurnInfo{
@@ -2128,7 +2136,7 @@ func (a *AgentActivity) interruptByAudioActivity(reason string, key string, valu
 		return
 	}
 	go func() {
-		if err := a.Interrupt(false); err != nil {
+		if err := a.interrupt(false, false); err != nil {
 			logger.Logger.Warnw("failed to interrupt speech for "+reason, err, key, value)
 		}
 	}()

@@ -55,8 +55,11 @@ func TestAzureSTTFallsBackToSpeechEnvironment(t *testing.T) {
 		t.Fatalf("Model = %q, want unknown", provider.Model())
 	}
 	caps := provider.Capabilities()
-	if !caps.Streaming || !caps.InterimResults || caps.AlignedTranscript != "chunk" || !caps.OfflineRecognize {
-		t.Fatalf("Capabilities = %+v, want streaming/interim/chunk with offline recognize", caps)
+	if !caps.Streaming || !caps.InterimResults || caps.AlignedTranscript != "chunk" || caps.OfflineRecognize {
+		t.Fatalf("Capabilities = %+v, want streaming/interim/chunk without offline recognize", caps)
+	}
+	if caps.OfflineRecognize {
+		t.Fatal("OfflineRecognize = true, want false like reference Azure STT")
 	}
 }
 
@@ -153,6 +156,45 @@ func TestAzureSTTRecognizeUsesRESTRequestAndMapsDetailedResult(t *testing.T) {
 	alt := event.Alternatives[0]
 	if alt.Text != "halo final" || alt.Confidence != 0.87 || alt.Language != "id-ID" {
 		t.Fatalf("alternative = %+v, want NBest text/confidence with requested language", alt)
+	}
+}
+
+func TestAzureSTTRecognizeUsesConfiguredSpeechHost(t *testing.T) {
+	provider, err := NewAzureSTT("", "", WithAzureSTTSpeechHost("https://speech.container.test"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Scheme != "https" || req.URL.Host != "speech.container.test" || req.URL.Path != "/speech/recognition/conversation/cognitiveservices/v1" {
+				t.Fatalf("URL = %q, want configured Azure Speech host endpoint", req.URL.String())
+			}
+			if req.URL.Query().Get("language") != "id-ID" {
+				t.Fatalf("language query = %q, want id-ID", req.URL.Query().Get("language"))
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body: io.NopCloser(strings.NewReader(`{
+					"RecognitionStatus":"Success",
+					"DisplayText":"host final"
+				}`)),
+				Request: req,
+			}, nil
+		}),
+	}
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}, "id-ID")
+	if err != nil {
+		t.Fatalf("Recognize error = %v, want nil", err)
+	}
+	if got := event.Alternatives[0].Text; got != "host final" {
+		t.Fatalf("recognized text = %q, want host final", got)
 	}
 }
 
@@ -313,6 +355,54 @@ func TestAzureSTTStreamUsesConfiguredDefaultLanguage(t *testing.T) {
 	}
 }
 
+func TestAzureSTTUpdateOptionsMatchesReference(t *testing.T) {
+	provider, err := NewAzureSTT("", "", WithAzureSTTSpeechHost("https://speech.container.test"), WithAzureSTTLanguage("en-US"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+
+	provider.UpdateOptions("id-ID")
+
+	streamURL := buildAzureSTTStreamURL(provider, provider.streamLanguage(""))
+	parsed, err := url.Parse(streamURL)
+	if err != nil {
+		t.Fatalf("parse stream URL: %v", err)
+	}
+	if got := parsed.Query().Get("language"); got != "id-ID" {
+		t.Fatalf("stream language = %q, want updated provider language id-ID", got)
+	}
+
+	req, err := buildAzureSTTRecognizeRequest(context.Background(), provider, []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
+	if err != nil {
+		t.Fatalf("build recognize request: %v", err)
+	}
+	if got := req.URL.Query().Get("language"); got != "id-ID" {
+		t.Fatalf("recognize language = %q, want updated provider language id-ID", got)
+	}
+}
+
+func TestAzureSTTExposesReferenceInputSampleRate(t *testing.T) {
+	provider, err := NewAzureSTT("key", "eastus")
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+
+	if got := provider.InputSampleRate(); got != 16000 {
+		t.Fatalf("InputSampleRate = %d, want reference sample rate 16000", got)
+	}
+}
+
+func TestAzureSTTExposesConfiguredInputSampleRate(t *testing.T) {
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTSampleRate(8000))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+
+	if got := provider.InputSampleRate(); got != 8000 {
+		t.Fatalf("InputSampleRate = %d, want configured sample rate 8000", got)
+	}
+}
+
 func TestAzureSTTStreamUsesWebsocketProtocol(t *testing.T) {
 	requests := make(chan *http.Request, 1)
 	configMessages := make(chan string, 1)
@@ -373,8 +463,11 @@ func TestAzureSTTStreamUsesWebsocketProtocol(t *testing.T) {
 	if audioHeaders["Path"] != "audio" {
 		t.Fatalf("audio Path = %q, want audio", audioHeaders["Path"])
 	}
-	if audioHeaders["Content-Type"] != "audio/x-wav" {
-		t.Fatalf("audio Content-Type = %q, want audio/x-wav", audioHeaders["Content-Type"])
+	if audioHeaders["Content-Type"] != "audio/x-wav;codec=audio/pcm;samplerate=16000" {
+		t.Fatalf("audio Content-Type = %q, want Azure raw PCM stream format", audioHeaders["Content-Type"])
+	}
+	if !strings.Contains(audioHeaders["Content-Type"], "codec=audio/pcm") {
+		t.Fatalf("audio Content-Type = %q, want explicit PCM codec", audioHeaders["Content-Type"])
 	}
 	if !bytes.Equal(audioPayload, []byte{0x01, 0x02, 0x03, 0x04}) {
 		t.Fatalf("audio payload = %v, want pushed PCM", audioPayload)
@@ -557,6 +650,64 @@ func TestAzureSTTStreamReconnectsAfterAudioWriteFailure(t *testing.T) {
 	}
 	if attempts != 2 {
 		t.Fatalf("dial attempts = %d, want 2", attempts)
+	}
+}
+
+func TestAzureSTTUpdateOptionsPropagatesLanguageToActiveStream(t *testing.T) {
+	requests := make(chan *http.Request, 2)
+	configMessages := make(chan string, 2)
+	audioMessages := make(chan []byte, 1)
+	serverClosed := make(chan struct{}, 1)
+
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	closingDialer := azureTestClosingDialer(t, requests, configMessages, serverClosed)
+	okDialer := azureTestDialer(t, requests, configMessages, audioMessages)
+	var attempts int
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			return closingDialer(ctx, endpoint, headers)
+		}
+		return okDialer(ctx, endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	firstReq := receiveAzureTestValue(t, requests, "first request")
+	if got := firstReq.URL.Query().Get("language"); got != "en-US" {
+		t.Fatalf("first stream language = %q, want en-US", got)
+	}
+	receiveAzureTestValue(t, configMessages, "first speech config")
+	receiveAzureTestSignal(t, serverClosed, "server close")
+
+	provider.UpdateOptions("id-ID")
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame after update error = %v", err)
+	}
+
+	secondReq := receiveAzureTestValue(t, requests, "second request")
+	if got := secondReq.URL.Query().Get("language"); got != "id-ID" {
+		t.Fatalf("second stream language = %q, want updated language id-ID", got)
+	}
+	receiveAzureTestValue(t, configMessages, "second speech config")
+	receiveAzureTestValue(t, audioMessages, "audio after update reconnect")
+
+	nextAzureTestEvent(t, stream)
+	interim := nextAzureTestEvent(t, stream)
+	if got := interim.Alternatives[0].Language; got != "id-ID" {
+		t.Fatalf("interim language = %q, want updated language id-ID", got)
 	}
 }
 
