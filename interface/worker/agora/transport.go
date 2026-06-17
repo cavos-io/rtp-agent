@@ -152,10 +152,14 @@ func (t *Transport) Join(ctx context.Context) error {
 		return err
 	}
 	t.mu.Lock()
-	if !t.closing && !t.closed {
+	closed := t.closing || t.closed
+	if !closed {
 		t.joined = true
 	}
 	t.mu.Unlock()
+	if closed {
+		return fmt.Errorf("agora transport is closed")
+	}
 	return nil
 }
 

@@ -12,21 +12,22 @@ import (
 )
 
 type fakeChannelClient struct {
-	joinOptions  Options
-	handler      EventHandler
-	audioHandler AudioHandler
-	pcmFrame     PCMFrame
-	joinCtx      context.Context
-	publishCtx   context.Context
-	joinErr      error
-	leaveErr     error
-	publishErr   error
-	blockJoin    bool
-	joinCount    int
-	leaveCount   int
-	publishCount int
-	joined       bool
-	left         bool
+	joinOptions             Options
+	handler                 EventHandler
+	audioHandler            AudioHandler
+	pcmFrame                PCMFrame
+	joinCtx                 context.Context
+	publishCtx              context.Context
+	joinErr                 error
+	leaveErr                error
+	publishErr              error
+	blockJoin               bool
+	joinAfterCancelSucceeds bool
+	joinCount               int
+	leaveCount              int
+	publishCount            int
+	joined                  bool
+	left                    bool
 }
 
 func (f *fakeChannelClient) Join(ctx context.Context, opts Options, handler EventHandler, audioHandler AudioHandler) error {
@@ -40,6 +41,9 @@ func (f *fakeChannelClient) Join(ctx context.Context, opts Options, handler Even
 	}
 	if f.blockJoin {
 		<-ctx.Done()
+		if f.joinAfterCancelSucceeds {
+			return nil
+		}
 		return ctx.Err()
 	}
 	f.joined = true
@@ -394,6 +398,44 @@ func TestTransportCloseCancelsInProgressJoin(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Join() did not return after Close canceled the transport")
+	}
+}
+
+func TestTransportJoinReportsClosedWhenCloseWinsJoinRace(t *testing.T) {
+	client := &fakeChannelClient{blockJoin: true, joinAfterCancelSucceeds: true}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+	joinDone := make(chan error, 1)
+
+	go func() {
+		joinDone <- tr.Join(context.Background())
+	}()
+
+	deadline := time.After(time.Second)
+	for {
+		if client.joinCtx != nil {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for Join to reach channel client")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if err := tr.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	select {
+	case err := <-joinDone:
+		if err == nil || !strings.Contains(err.Error(), "closed") {
+			t.Fatalf("Join() error = %v, want closed transport error", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Join() did not return after Close canceled the transport")
+	}
+	if client.leaveCount != 0 {
+		t.Fatalf("leave count = %d, want 0", client.leaveCount)
 	}
 }
 
