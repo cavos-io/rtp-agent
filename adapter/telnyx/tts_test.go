@@ -1,10 +1,13 @@
 package telnyx
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -115,6 +118,45 @@ func TestTelnyxTTSAudioFromMessageDecodesBase64Audio(t *testing.T) {
 	}
 	if empty != nil || !done {
 		t.Fatalf("empty=%+v done=%v, want done with no audio", empty, done)
+	}
+}
+
+func TestTelnyxTTSStreamDecodesReferenceMP3Audio(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+	stream := &telnyxTTSStream{
+		ctx:    context.Background(),
+		events: make(chan *tts.SynthesizedAudio, 10),
+		errCh:  make(chan error, 1),
+	}
+	stream.startDecoder()
+	defer stream.Close()
+
+	go func() {
+		stream.pushAudioData(mp3Data)
+		stream.endAudioInput()
+	}()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want decoded audio", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatal("audio frame = nil, want decoded PCM frame")
+	}
+	if audio.Frame.SampleRate != 48000 {
+		t.Fatalf("sample rate = %d, want decoded MP3 sample rate 48000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 2 {
+		t.Fatalf("channels = %d, want decoded MP3 stereo", audio.Frame.NumChannels)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded frame is empty")
+	}
+	if bytes.HasPrefix(mp3Data, audio.Frame.Data) {
+		t.Fatal("frame data still contains raw mp3 bytes")
 	}
 }
 

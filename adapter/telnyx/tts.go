@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
@@ -103,6 +105,7 @@ func (t *TelnyxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		events:     make(chan *tts.SynthesizedAudio, 100),
 		errCh:      make(chan error, 1),
 	}
+	stream.startDecoder()
 	if err := writeTelnyxTTSMessage(conn, buildTelnyxTTSTextMessage(" ")); err != nil {
 		conn.Close()
 		cancel()
@@ -160,6 +163,7 @@ type telnyxTTSStream struct {
 	sampleRate int
 	events     chan *tts.SynthesizedAudio
 	errCh      chan error
+	decoder    codecs.AudioStreamDecoder
 	mu         sync.Mutex
 	closed     bool
 }
@@ -179,7 +183,15 @@ func (s *telnyxTTSStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	s.cancel()
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.decoder != nil {
+		_ = s.decoder.Close()
+	}
+	if s.conn == nil {
+		return nil
+	}
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
 }
@@ -204,7 +216,7 @@ func (s *telnyxTTSStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *telnyxTTSStream) readLoop() {
-	defer close(s.events)
+	defer s.endAudioInput()
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
@@ -216,18 +228,69 @@ func (s *telnyxTTSStream) readLoop() {
 		if msgType != websocket.TextMessage {
 			continue
 		}
-		audio, done, err := telnyxTTSAudioFromMessage(payload, s.sampleRate)
+		audio, done, err := telnyxTTSAudioBytesFromMessage(payload)
 		if err != nil {
 			s.errCh <- err
 			return
 		}
-		if audio != nil {
-			s.events <- audio
+		if len(audio) > 0 {
+			s.pushAudioData(audio)
 		}
 		if done {
 			return
 		}
 	}
+}
+
+func (s *telnyxTTSStream) startDecoder() {
+	if s.decoder != nil {
+		return
+	}
+	s.decoder = codecs.NewMP3AudioStreamDecoder()
+	go s.decodeLoop()
+}
+
+func (s *telnyxTTSStream) pushAudioData(audio []byte) {
+	s.startDecoder()
+	s.decoder.Push(audio)
+}
+
+func (s *telnyxTTSStream) endAudioInput() {
+	if s.decoder != nil {
+		s.decoder.EndInput()
+	}
+}
+
+func (s *telnyxTTSStream) decodeLoop() {
+	defer close(s.events)
+	for {
+		frame, err := s.decoder.Next()
+		if err != nil {
+			if strings.Contains(err.Error(), "decoder closed") {
+				return
+			}
+			s.errCh <- err
+			return
+		}
+		s.events <- &tts.SynthesizedAudio{Frame: frame}
+	}
+}
+
+func telnyxTTSAudioBytesFromMessage(payload []byte) ([]byte, bool, error) {
+	var message struct {
+		Audio string `json:"audio"`
+	}
+	if err := json.Unmarshal(payload, &message); err != nil {
+		return nil, false, err
+	}
+	if message.Audio == "" {
+		return nil, true, nil
+	}
+	data, err := base64.StdEncoding.DecodeString(message.Audio)
+	if err != nil {
+		return nil, false, err
+	}
+	return data, false, nil
 }
 
 func telnyxTTSAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio, bool, error) {
