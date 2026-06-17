@@ -309,6 +309,31 @@ func TestMistralAITTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestMistralAITTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: mistralAITTSRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, context.DeadlineExceeded
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider, err := NewMistralAITTS("test-key", "", WithMistralAITTSBaseURL("https://mistral.example/v1"))
+	if err != nil {
+		t.Fatalf("new tts: %v", err)
+	}
+
+	_, err = provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("Synthesize error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Synthesize error = %T %v, want APITimeoutError", err, err)
+	}
+	if !timeoutErr.Retryable {
+		t.Fatal("retryable = false, want true")
+	}
+}
+
 func TestMistralAITTSStreamDecodeFailureReturnsAPIConnectionError(t *testing.T) {
 	stream := &mistralAITTSChunkedStream{
 		reader:         strings.NewReader(`data: {"event":"speech.audio.delta","data":{"audio_data":"not-base64"}}`),

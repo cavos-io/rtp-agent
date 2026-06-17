@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -118,6 +119,9 @@ func (t *MistralAITTS) Synthesize(ctx context.Context, text string) (tts.Chunked
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	if resp.StatusCode != http.StatusOK {
