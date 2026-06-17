@@ -1124,12 +1124,11 @@ func readSystemCPUTimes() (idle uint64, total uint64, err error) {
 }
 
 func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
-	permissions := workerlivekit.ResolveWorkerPermissions(s.Options.Permissions)
-	return workerlivekit.RegisterWorkerRequest(workerlivekit.RegisterWorkerOptions{
-		JobType:     workerlivekit.JobTypeForWorkerType(string(s.Options.WorkerType)),
+	return workerlivekit.RegisterWorkerMessage(workerlivekit.WorkerRegistrationOptions{
+		WorkerType:  string(s.Options.WorkerType),
 		AgentName:   s.Options.AgentName,
 		Version:     s.Options.Version,
-		Permissions: permissions,
+		Permissions: s.Options.Permissions,
 	})
 }
 
