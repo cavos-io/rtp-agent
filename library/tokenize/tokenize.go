@@ -165,7 +165,7 @@ func SplitSentences(text string, minSentenceLen int, retainFormat bool) []TokenD
 		}
 
 		buff += prePad + sentence
-		endPos += len(match)
+		endPos += len([]rune(match))
 		if len([]rune(buff)) > minSentenceLen {
 			prefixLen := len(prePad)
 			if len(buff) >= prefixLen {
@@ -179,7 +179,7 @@ func SplitSentences(text string, minSentenceLen int, retainFormat bool) []TokenD
 	if buff != "" {
 		prefixLen := len(prePad)
 		if len(buff) >= prefixLen {
-			sentences = append(sentences, TokenData{Token: buff[prefixLen:], Start: startPos, End: len(text) - 1})
+			sentences = append(sentences, TokenData{Token: buff[prefixLen:], Start: startPos, End: len([]rune(text)) - 1})
 		}
 	}
 
@@ -304,6 +304,23 @@ func runeOffsetToByteOffset(text string, offset int) int {
 	return len(text)
 }
 
+func byteOffsetToRuneOffset(text string, offset int) int {
+	if offset <= 0 {
+		return 0
+	}
+	if offset >= len(text) {
+		return len([]rune(text))
+	}
+	runePos := 0
+	for bytePos := range text {
+		if bytePos >= offset {
+			return runePos
+		}
+		runePos++
+	}
+	return len([]rune(text))
+}
+
 func SplitParagraphs(text string) []TokenData {
 	pattern := regexp.MustCompile(`\n\s*\n`)
 	indices := pattern.FindAllStringIndex(text, -1)
@@ -317,7 +334,8 @@ func SplitParagraphs(text string) []TokenData {
 			return paragraphs
 		}
 		startIndex := strings.Index(text, stripped)
-		return []TokenData{{Token: stripped, Start: startIndex, End: startIndex + len(stripped)}}
+		startRune := byteOffsetToRuneOffset(text, startIndex)
+		return []TokenData{{Token: stripped, Start: startRune, End: startRune + len([]rune(stripped))}}
 	}
 
 	for _, idx := range indices {
@@ -325,8 +343,9 @@ func SplitParagraphs(text string) []TokenData {
 		paragraph := strings.TrimSpace(text[start:end])
 		if paragraph != "" {
 			paraStart := start + strings.Index(text[start:end], paragraph)
-			paraEnd := paraStart + len(paragraph)
-			paragraphs = append(paragraphs, TokenData{Token: paragraph, Start: paraStart, End: paraEnd})
+			paraStartRune := byteOffsetToRuneOffset(text, paraStart)
+			paraEndRune := paraStartRune + len([]rune(paragraph))
+			paragraphs = append(paragraphs, TokenData{Token: paragraph, Start: paraStartRune, End: paraEndRune})
 		}
 		start = idx[1]
 	}
@@ -334,8 +353,9 @@ func SplitParagraphs(text string) []TokenData {
 	lastParagraph := strings.TrimSpace(text[start:])
 	if lastParagraph != "" {
 		paraStart := start + strings.Index(text[start:], lastParagraph)
-		paraEnd := paraStart + len(lastParagraph)
-		paragraphs = append(paragraphs, TokenData{Token: lastParagraph, Start: paraStart, End: paraEnd})
+		paraStartRune := byteOffsetToRuneOffset(text, paraStart)
+		paraEndRune := paraStartRune + len([]rune(lastParagraph))
+		paragraphs = append(paragraphs, TokenData{Token: lastParagraph, Start: paraStartRune, End: paraEndRune})
 	}
 
 	return paragraphs
