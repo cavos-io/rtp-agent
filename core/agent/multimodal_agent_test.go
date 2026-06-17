@@ -11,6 +11,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
@@ -140,6 +141,49 @@ func TestMultimodalAgentSendsSilenceToRealtimeDuringUninterruptibleSpeech(t *tes
 	}
 }
 
+func TestMultimodalAgentTTSFallbackMarksSpeakingAfterFirstAudioFrame(t *testing.T) {
+	releaseAudio := make(chan struct{})
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.TTS = &blockingRealtimeFallbackTTS{release: releaseAudio}
+	ma := &MultimodalAgent{
+		session: session,
+		ctx:     context.Background(),
+		PublishAudio: func(context.Context, *model.AudioFrame) error {
+			return nil
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := ma.publishTTSFallbackForRealtimeText(context.Background(), nil, "hello")
+		done <- err
+	}()
+
+	select {
+	case ev := <-session.AgentStateChangedCh:
+		t.Fatalf("agent state changed before first fallback audio frame: %#v", ev)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releaseAudio)
+	select {
+	case ev := <-session.AgentStateChangedCh:
+		if ev.NewState != AgentStateSpeaking {
+			t.Fatalf("agent state event = %#v, want speaking after first fallback audio frame", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("agent did not enter speaking after first fallback audio frame")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("publishTTSFallbackForRealtimeText error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("publishTTSFallbackForRealtimeText did not finish")
+	}
+}
+
 func TestMultimodalAgentEmitsRealtimeErrorWhenAudioPushFails(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -212,6 +256,53 @@ func TestMultimodalAgentEmitsRealtimeErrorWhenEventAudioPublishFails(t *testing.
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive realtime event audio publish error")
+	}
+}
+
+func TestMultimodalAgentRealtimeAudioMarksSpeakingAfterPublish(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	publishStarted := make(chan struct{})
+	releasePublish := make(chan struct{})
+	ma := &MultimodalAgent{session: session}
+	ma.PublishAudio = func(context.Context, *model.AudioFrame) error {
+		close(publishStarted)
+		<-releasePublish
+		return nil
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ma.handleRealtimeEvent(llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeAudio,
+			Data: []byte{0, 1},
+		})
+	}()
+
+	select {
+	case <-publishStarted:
+	case <-time.After(time.Second):
+		t.Fatal("PublishAudio was not called")
+	}
+	select {
+	case ev := <-session.AgentStateChangedCh:
+		t.Fatalf("agent state changed before realtime audio publish completed: %#v", ev)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releasePublish)
+	select {
+	case ev := <-session.AgentStateChangedCh:
+		if ev.NewState != AgentStateSpeaking {
+			t.Fatalf("agent state event = %#v, want speaking after realtime audio publish", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("agent did not enter speaking after realtime audio publish")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("handleRealtimeEvent did not finish")
 	}
 }
 
@@ -405,7 +496,10 @@ func TestMultimodalAgentGenerateReplySendsRealtimeOverrides(t *testing.T) {
 	lookup := &fakeGenerationTool{name: "lookup"}
 	calendar := &fakeGenerationTool{name: "calendar"}
 	rtSession := &fakeRealtimeSession{generateCh: make(chan llm.RealtimeGenerateReplyOptions, 1)}
-	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	ma := NewMultimodalAgent(&fakeRealtimeModel{
+		session:      rtSession,
+		capabilities: llm.RealtimeCapabilities{PerResponseToolChoice: true},
+	}, llm.NewChatContext())
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	session.Assistant = ma
 	session.Tools = []llm.Tool{lookup, calendar}
@@ -454,6 +548,90 @@ func TestMultimodalAgentGenerateReplySendsRealtimeOverrides(t *testing.T) {
 	}
 	if !handle.IsDone() {
 		t.Fatal("speech handle is not done after realtime GenerateReply")
+	}
+}
+
+func TestMultimodalAgentGenerateReplyUsesSessionToolChoiceWhenPerResponseUnsupported(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rtSession := &fakeRealtimeSession{generateCh: make(chan llm.RealtimeGenerateReplyOptions, 1)}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	sessionToolChoice := llm.ToolChoice("auto")
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{ToolChoice: sessionToolChoice})
+	session.Assistant = ma
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	_, err := session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+		ToolChoice: "none",
+	})
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions returned error: %v", err)
+	}
+
+	var opts llm.RealtimeGenerateReplyOptions
+	select {
+	case opts = <-rtSession.generateCh:
+	case <-time.After(time.Second):
+		t.Fatal("realtime session did not receive GenerateReply")
+	}
+	if opts.ToolChoice != nil {
+		t.Fatalf("GenerateReply ToolChoice = %#v, want nil when per-response tool_choice is unsupported", opts.ToolChoice)
+	}
+	if len(rtSession.optionUpdates) != 2 {
+		t.Fatalf("UpdateOptions calls = %d, want temporary tool_choice and reset", len(rtSession.optionUpdates))
+	}
+	if rtSession.optionUpdates[0].ToolChoice != "none" || !rtSession.optionUpdates[0].ToolChoiceSet {
+		t.Fatalf("first UpdateOptions = %#v, want explicit none", rtSession.optionUpdates[0])
+	}
+	if rtSession.optionUpdates[1].ToolChoice != "auto" || !rtSession.optionUpdates[1].ToolChoiceSet {
+		t.Fatalf("second UpdateOptions = %#v, want reset to stored auto", rtSession.optionUpdates[1])
+	}
+}
+
+func TestMultimodalAgentGenerateReplyUsesSessionToolsWhenPerResponseUnsupported(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	lookup := &fakeGenerationTool{name: "lookup"}
+	calendar := &fakeGenerationTool{name: "calendar"}
+	rtSession := &fakeRealtimeSession{generateCh: make(chan llm.RealtimeGenerateReplyOptions, 1)}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Assistant = ma
+	session.Tools = []llm.Tool{lookup, calendar}
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	_, err := session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+		Tools: []string{"lookup"},
+	})
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions returned error: %v", err)
+	}
+
+	var opts llm.RealtimeGenerateReplyOptions
+	select {
+	case opts = <-rtSession.generateCh:
+	case <-time.After(time.Second):
+		t.Fatal("realtime session did not receive GenerateReply")
+	}
+	if len(opts.Tools) != 0 {
+		t.Fatalf("GenerateReply Tools = %#v, want none when per-response tools are unsupported", toolNames(opts.Tools))
+	}
+	if len(rtSession.toolUpdateSets) < 3 {
+		t.Fatalf("UpdateTools calls = %d, want startup, temporary tools, and reset", len(rtSession.toolUpdateSets))
+	}
+	temporaryTools := rtSession.toolUpdateSets[len(rtSession.toolUpdateSets)-2]
+	if got, want := toolNames(temporaryTools), []string{"lookup"}; !equalStrings(got, want) {
+		t.Fatalf("temporary UpdateTools = %#v, want %#v", got, want)
+	}
+	resetTools := rtSession.toolUpdateSets[len(rtSession.toolUpdateSets)-1]
+	if got, want := toolNames(resetTools), []string{"lookup", "calendar"}; !equalStrings(got, want) {
+		t.Fatalf("reset UpdateTools = %#v, want %#v", got, want)
 	}
 }
 
@@ -1160,6 +1338,136 @@ func TestMultimodalAgentEmitsRealtimeErrorWhenMessageAudioPublishFails(t *testin
 	}
 }
 
+func TestMultimodalAgentRealtimeMessageAudioMarksSpeakingAfterPublish(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	publishStarted := make(chan struct{})
+	releasePublish := make(chan struct{})
+	ma := &MultimodalAgent{session: session}
+	ma.PublishAudio = func(context.Context, *model.AudioFrame) error {
+		close(publishStarted)
+		<-releasePublish
+		return nil
+	}
+	audioCh := make(chan *model.AudioFrame, 1)
+	audioCh <- &model.AudioFrame{
+		Data:              []byte{0, 1},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+	close(audioCh)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ma.consumeRealtimeMessage(context.Background(), NewSpeechHandle(false, DefaultInputDetails()), llm.MessageGeneration{
+			AudioCh: audioCh,
+		})
+	}()
+
+	select {
+	case <-publishStarted:
+	case <-time.After(time.Second):
+		t.Fatal("PublishAudio was not called for realtime message audio")
+	}
+	select {
+	case ev := <-session.AgentStateChangedCh:
+		t.Fatalf("agent state changed before realtime message audio publish completed: %#v", ev)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releasePublish)
+	select {
+	case ev := <-session.AgentStateChangedCh:
+		if ev.NewState != AgentStateSpeaking {
+			t.Fatalf("agent state event = %#v, want speaking after realtime message audio publish", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("agent did not enter speaking after realtime message audio publish")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("consumeRealtimeMessage did not finish")
+	}
+}
+
+func TestMultimodalAgentRealtimeMessageWaitsForPlayoutBeforeCommit(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	waitStarted := make(chan struct{})
+	releaseWait := make(chan struct{})
+	session.SetAudioPlaybackController(&fakePipelinePlaybackController{
+		waitStarted: waitStarted,
+		releaseWait: releaseWait,
+		result: AudioPlaybackResult{
+			PlaybackPosition: 200 * time.Millisecond,
+		},
+	})
+	ma := &MultimodalAgent{
+		session: session,
+		chatCtx: llm.NewChatContext(),
+		PublishAudio: func(context.Context, *model.AudioFrame) error {
+			return nil
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "played realtime message"
+	close(textCh)
+	audioCh := make(chan *model.AudioFrame, 1)
+	audioCh <- &model.AudioFrame{
+		Data:              []byte{0, 1},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+	close(audioCh)
+	events := session.ConversationItemAddedEvents()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ma.consumeRealtimeMessage(context.Background(), NewSpeechHandle(false, DefaultInputDetails()), llm.MessageGeneration{
+			MessageID: "msg_played",
+			TextCh:    textCh,
+			AudioCh:   audioCh,
+		})
+	}()
+
+	select {
+	case <-waitStarted:
+	case ev := <-events:
+		t.Fatalf("conversation item emitted before playback wait started: %#v", ev)
+	case <-time.After(time.Second):
+		t.Fatal("playback wait did not start")
+	}
+	select {
+	case ev := <-events:
+		t.Fatalf("conversation item emitted before playback completed: %#v", ev)
+	case <-time.After(50 * time.Millisecond):
+	}
+	select {
+	case <-done:
+		t.Fatal("consumeRealtimeMessage finished before playback completed")
+	default:
+	}
+
+	close(releaseWait)
+	select {
+	case ev := <-events:
+		msg, ok := ev.Item.(*llm.ChatMessage)
+		if !ok || msg.TextContent() != "played realtime message" {
+			t.Fatalf("conversation item = %#v, want played realtime assistant message", ev.Item)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConversationItemAddedEvents did not receive realtime assistant message")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("consumeRealtimeMessage did not finish after playback completed")
+	}
+}
+
 func TestMultimodalAgentSkipsServerGenerationWhenActivitySchedulingPaused(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -1471,6 +1779,73 @@ func TestMultimodalAgentUsesTTSFallbackForTextOnlyRealtimeMessage(t *testing.T) 
 	msg, ok := chatCtx.Items[0].(*llm.ChatMessage)
 	if !ok || msg.TextContent() != "spoken fallback" {
 		t.Fatalf("assistant message = %#v, want spoken fallback", chatCtx.Items[0])
+	}
+}
+
+func TestMultimodalAgentTTSFallbackWaitsForPlayoutBeforeCommit(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.TTS = &fakeGenerationTTS{stream: newEndInputGenerationTTSStream()}
+	waitStarted := make(chan struct{})
+	releaseWait := make(chan struct{})
+	session.SetAudioPlaybackController(&fakePipelinePlaybackController{
+		waitStarted: waitStarted,
+		releaseWait: releaseWait,
+		result: AudioPlaybackResult{
+			PlaybackPosition: 200 * time.Millisecond,
+		},
+	})
+	ma := &MultimodalAgent{
+		session: session,
+		chatCtx: llm.NewChatContext(),
+		PublishAudio: func(context.Context, *model.AudioFrame) error {
+			return nil
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "spoken fallback"
+	close(textCh)
+	modalitiesCh := make(chan []string, 1)
+	modalitiesCh <- []string{"text"}
+	close(modalitiesCh)
+	events := session.ConversationItemAddedEvents()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ma.consumeRealtimeMessage(context.Background(), NewSpeechHandle(true, DefaultInputDetails()), llm.MessageGeneration{
+			MessageID:    "msg_text_only",
+			TextCh:       textCh,
+			ModalitiesCh: modalitiesCh,
+		})
+	}()
+
+	select {
+	case <-waitStarted:
+	case ev := <-events:
+		t.Fatalf("conversation item emitted before fallback playback wait started: %#v", ev)
+	case <-time.After(time.Second):
+		t.Fatal("fallback playback wait did not start")
+	}
+	select {
+	case ev := <-events:
+		t.Fatalf("conversation item emitted before fallback playback completed: %#v", ev)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releaseWait)
+	select {
+	case ev := <-events:
+		msg, ok := ev.Item.(*llm.ChatMessage)
+		if !ok || msg.TextContent() != "spoken fallback" {
+			t.Fatalf("conversation item = %#v, want spoken fallback assistant message", ev.Item)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConversationItemAddedEvents did not receive fallback assistant message")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("consumeRealtimeMessage did not finish after fallback playback completed")
 	}
 }
 
@@ -1912,6 +2287,56 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
+type blockingRealtimeFallbackTTS struct {
+	tts.MetricsEmitter
+	tts.ErrorEmitter
+
+	release <-chan struct{}
+}
+
+func (b *blockingRealtimeFallbackTTS) Label() string { return "blocking-realtime-fallback" }
+
+func (b *blockingRealtimeFallbackTTS) Capabilities() tts.TTSCapabilities {
+	return tts.TTSCapabilities{Streaming: true}
+}
+
+func (b *blockingRealtimeFallbackTTS) SampleRate() int { return 24000 }
+
+func (b *blockingRealtimeFallbackTTS) NumChannels() int { return 1 }
+
+func (b *blockingRealtimeFallbackTTS) Synthesize(context.Context, string) (tts.ChunkedStream, error) {
+	return nil, errors.New("unexpected synthesize call")
+}
+
+func (b *blockingRealtimeFallbackTTS) Stream(context.Context) (tts.SynthesizeStream, error) {
+	return &blockingRealtimeFallbackTTSStream{release: b.release}, nil
+}
+
+type blockingRealtimeFallbackTTSStream struct {
+	release <-chan struct{}
+	sent    bool
+}
+
+func (s *blockingRealtimeFallbackTTSStream) PushText(string) error { return nil }
+
+func (s *blockingRealtimeFallbackTTSStream) Flush() error { return nil }
+
+func (s *blockingRealtimeFallbackTTSStream) Close() error { return nil }
+
+func (s *blockingRealtimeFallbackTTSStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.sent {
+		return nil, io.EOF
+	}
+	<-s.release
+	s.sent = true
+	return &tts.SynthesizedAudio{Frame: &model.AudioFrame{
+		Data:              []byte{1, 2},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}, nil
+}
+
 type fakeRealtimeModel struct {
 	label        string
 	model        string
@@ -1947,8 +2372,10 @@ type fakeRealtimeSession struct {
 	updated               *llm.ChatContext
 	generatedWithChatCtx  *llm.ChatContext
 	tools                 []llm.Tool
+	toolUpdateSets        [][]llm.Tool
 	instructions          string
 	options               llm.RealtimeSessionOptions
+	optionUpdates         []llm.RealtimeSessionOptions
 	generateCh            chan llm.RealtimeGenerateReplyOptions
 	sayCh                 chan string
 	eventCh               chan llm.RealtimeEvent
@@ -1987,12 +2414,14 @@ func (f *fakeRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error 
 
 func (f *fakeRealtimeSession) UpdateTools(tools []llm.Tool) error {
 	f.tools = append([]llm.Tool(nil), tools...)
+	f.toolUpdateSets = append(f.toolUpdateSets, append([]llm.Tool(nil), tools...))
 	f.toolUpdates++
 	return nil
 }
 
 func (f *fakeRealtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) error {
 	f.options = options
+	f.optionUpdates = append(f.optionUpdates, options)
 	return nil
 }
 

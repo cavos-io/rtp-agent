@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"reflect"
 	"sync"
 	"time"
 
@@ -380,9 +381,66 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 		}
 	}
 
-	options := llm.RealtimeGenerateReplyOptions{
-		ToolChoice: speech.Generation.ToolChoice,
-		Tools:      selectedTools,
+	emitRealtimeError := func(message string, err error) {
+		logger.Logger.Errorw(message, err)
+		if session != nil {
+			session.EmitError(ErrorEvent{
+				Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
+				Source: ma.model,
+			})
+		}
+	}
+
+	options := llm.RealtimeGenerateReplyOptions{}
+	if ma.model.Capabilities().PerResponseToolChoice {
+		options.ToolChoice = speech.Generation.ToolChoice
+		options.Tools = selectedTools
+	} else {
+		var storedToolChoice llm.ToolChoice
+		resetToolChoice := false
+		var storedTools []llm.Tool
+		resetTools := false
+		defer func() {
+			if resetToolChoice {
+				if err := rtSession.UpdateOptions(llm.RealtimeSessionOptions{
+					ToolChoice:    storedToolChoice,
+					ToolChoiceSet: true,
+				}); err != nil {
+					emitRealtimeError("failed to reset realtime tool choice", err)
+				}
+			}
+			if resetTools {
+				if err := rtSession.UpdateTools(storedTools); err != nil {
+					emitRealtimeError("failed to reset realtime tools", err)
+				}
+			}
+		}()
+		if session != nil {
+			storedToolChoice = session.Options.ToolChoice
+		}
+		if speech.Generation.ToolChoice != nil && !reflect.DeepEqual(speech.Generation.ToolChoice, storedToolChoice) {
+			if err := rtSession.UpdateOptions(llm.RealtimeSessionOptions{
+				ToolChoice:    speech.Generation.ToolChoice,
+				ToolChoiceSet: true,
+			}); err != nil {
+				emitRealtimeError("failed to update realtime tool choice", err)
+				return
+			}
+			resetToolChoice = true
+		}
+		if len(speech.Generation.Tools) > 0 {
+			var err error
+			storedTools, err = resolveToolsByID(registeredTools, nil)
+			if err != nil {
+				emitRealtimeError("failed to resolve realtime tools for reset", err)
+				return
+			}
+			if err := rtSession.UpdateTools(selectedTools); err != nil {
+				emitRealtimeError("failed to update realtime tools", err)
+				return
+			}
+			resetTools = true
+		}
 	}
 	if speech.Generation.Instructions != nil {
 		options.Instructions = speech.Generation.Instructions.AsModality(speech.InputDetails.Modality).String()
@@ -463,7 +521,6 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		}
 
 	case llm.RealtimeEventTypeAudio:
-		ma.session.UpdateAgentState(AgentStateSpeaking)
 		if ma.PublishAudio != nil {
 			// Decode and publish
 			frame := &model.AudioFrame{
@@ -472,11 +529,15 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 				NumChannels:       1,
 				SamplesPerChannel: uint32(len(ev.Data) / 2),
 			}
-			if err := ma.PublishAudio(context.Background(), frame); err != nil && ma.session != nil {
-				ma.session.EmitError(ErrorEvent{
-					Error:  llm.NewRealtimeError("failed to publish realtime audio", err),
-					Source: ma,
-				})
+			if err := ma.PublishAudio(context.Background(), frame); err != nil {
+				if ma.session != nil {
+					ma.session.EmitError(ErrorEvent{
+						Error:  llm.NewRealtimeError("failed to publish realtime audio", err),
+						Source: ma,
+					})
+				}
+			} else if ma.session != nil {
+				ma.session.UpdateAgentState(AgentStateSpeaking)
 			}
 		}
 
@@ -643,6 +704,8 @@ func (ma *MultimodalAgent) consumeRealtimeGeneration(ctx context.Context, speech
 func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *SpeechHandle, message llm.MessageGeneration) {
 	var text string
 	var modalities []string
+	startedSpeaking := false
+	publishedAudio := false
 	modalitiesCh := message.ModalitiesCh
 	for message.TextCh != nil || message.AudioCh != nil || modalitiesCh != nil {
 		select {
@@ -679,17 +742,18 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 					}
 					return
 				}
+				if !startedSpeaking && session != nil {
+					session.UpdateAgentState(AgentStateSpeaking)
+					startedSpeaking = true
+				}
+				publishedAudio = true
 			}
 		}
 	}
 	interrupted := speech != nil && speech.IsInterrupted()
-	if interrupted {
-		var playback AudioPlaybackResult
-		text, playback = ma.forwardedRealtimeTextAfterInterruption(ctx, text)
-		ma.truncateInterruptedRealtimeMessage(message.MessageID, modalities, text, playback)
-	}
-	if text != "" && len(modalities) > 0 && !realtimeModalitiesContain(modalities, "audio") {
-		if err := ma.publishTTSFallbackForRealtimeText(ctx, speech, text); err != nil {
+	if !interrupted && text != "" && len(modalities) > 0 && !realtimeModalitiesContain(modalities, "audio") {
+		fallbackPublishedAudio, err := ma.publishTTSFallbackForRealtimeText(ctx, speech, text)
+		if err != nil {
 			logger.Logger.Errorw("failed to synthesize text-only realtime response", err)
 			if ma.session != nil {
 				ma.session.EmitError(ErrorEvent{
@@ -699,6 +763,20 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 			}
 			return
 		}
+		publishedAudio = publishedAudio || fallbackPublishedAudio
+	}
+	if publishedAudio && !interrupted && ma.session != nil {
+		if playback := ma.session.AudioPlaybackController(); playback != nil {
+			if _, err := playback.WaitForPlayout(ctx); err != nil {
+				logger.Logger.Warnw("failed to wait for realtime message playback", err)
+			}
+		}
+		interrupted = speech != nil && speech.IsInterrupted()
+	}
+	if interrupted {
+		var playback AudioPlaybackResult
+		text, playback = ma.forwardedRealtimeTextAfterInterruption(ctx, text)
+		ma.truncateInterruptedRealtimeMessage(message.MessageID, modalities, text, playback)
 	}
 	if text == "" {
 		return
@@ -721,36 +799,42 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 	speech.AddChatItems(msg)
 }
 
-func (ma *MultimodalAgent) publishTTSFallbackForRealtimeText(ctx context.Context, speech *SpeechHandle, text string) error {
+func (ma *MultimodalAgent) publishTTSFallbackForRealtimeText(ctx context.Context, speech *SpeechHandle, text string) (bool, error) {
 	ma.mu.Lock()
 	session := ma.session
 	publish := ma.PublishAudio
 	ma.mu.Unlock()
 	if session == nil || session.TTS == nil || publish == nil {
-		return nil
+		return false, nil
 	}
 	textCh := make(chan string, 1)
 	textCh <- text
 	close(textCh)
 	ttsGen, err := PerformTTSInference(ctx, session.TTS, textCh, multimodalTTSInferenceOptions(session)...)
 	if err != nil {
-		return err
+		return false, err
 	}
-	session.UpdateAgentState(AgentStateSpeaking)
+	startedSpeaking := false
+	publishedAudio := false
 	for frame := range ttsGen.AudioCh {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return publishedAudio, ctx.Err()
 		default:
 			if speech != nil && speech.IsInterrupted() {
-				return nil
+				return publishedAudio, nil
 			}
 			if err := publish(ctx, frame); err != nil {
-				return err
+				return publishedAudio, err
+			}
+			publishedAudio = true
+			if !startedSpeaking {
+				session.UpdateAgentState(AgentStateSpeaking)
+				startedSpeaking = true
 			}
 		}
 	}
-	return ttsGen.StreamErr
+	return publishedAudio, ttsGen.StreamErr
 }
 
 func multimodalTTSInferenceOptions(session *AgentSession) []TTSInferenceOption {

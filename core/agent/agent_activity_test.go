@@ -439,6 +439,27 @@ func TestAgentActivityUpdateOptionsForwardsRealtimeToolChoice(t *testing.T) {
 	}
 }
 
+func TestAgentActivityUpdateOptionsClearsRealtimeToolChoice(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Options.ToolChoice = llm.ToolChoice("required")
+	assistant := &recordingOptionsAssistant{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	var toolChoice llm.ToolChoice
+
+	if err := activity.UpdateOptions(AgentSessionUpdateOptions{ToolChoice: &toolChoice}); err != nil {
+		t.Fatalf("UpdateOptions error = %v, want nil", err)
+	}
+
+	if assistant.options.ToolChoice != nil {
+		t.Fatalf("realtime ToolChoice = %#v, want nil clear", assistant.options.ToolChoice)
+	}
+	if !assistant.options.ToolChoiceSet {
+		t.Fatal("realtime ToolChoiceSet = false, want true for explicit nil tool choice update")
+	}
+}
+
 func TestAgentActivityUpdateOptionsRefreshesRealtimeStoredToolChoice(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -3453,6 +3474,56 @@ func TestAgentActivityCommitUserTurnFlushesSTTBeforeWaitingForFinal(t *testing.T
 	}
 	if flusher.flushDuration != 20*time.Millisecond {
 		t.Fatalf("FlushInputTranscription duration = %v, want 20ms", flusher.flushDuration)
+	}
+}
+
+func TestAgentActivityCommitUserTurnDefaultsFlushAndWaitForFinal(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	flusher := &recordingTranscriptFlusher{flushed: make(chan struct{}, 1)}
+	session.Assistant = flusher
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	done := make(chan string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+		if err != nil {
+			errCh <- err
+			return
+		}
+		done <- transcript
+	}()
+
+	select {
+	case <-flusher.flushed:
+	case transcript := <-done:
+		t.Fatalf("CommitUserTurn returned %q before default STT flush and final transcript", transcript)
+	case <-time.After(time.Second):
+		t.Fatal("CommitUserTurn did not flush input transcription with default options")
+	}
+	if flusher.flushDuration != 2*time.Second {
+		t.Fatalf("FlushInputTranscription duration = %v, want reference default 2s", flusher.flushDuration)
+	}
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "default flushed final",
+			Language:   "en",
+			Confidence: 0.92,
+		}},
+	})
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	case transcript := <-done:
+		if transcript != "default flushed final" {
+			t.Fatalf("CommitUserTurn transcript = %q, want default flushed final", transcript)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CommitUserTurn did not return after default flushed final transcript")
 	}
 }
 

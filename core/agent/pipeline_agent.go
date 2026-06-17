@@ -1034,7 +1034,7 @@ func (va *PipelineAgent) playTTSGeneration(ctx context.Context, session *AgentSe
 }
 
 func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, session *AgentSession, ttsGen *TTSGenerationData, transcriptSync *TranscriptSynchronizer, transcriptionDone <-chan struct{}, speech *SpeechHandle) (*TTSGenerationData, error) {
-	session.UpdateAgentState(AgentStateSpeaking)
+	startedSpeaking := false
 	for frame := range ttsGen.AudioCh {
 		select {
 		case <-ctx.Done():
@@ -1054,6 +1054,10 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 					<-transcriptionDone
 					return ttsGen, err
 				}
+			}
+			if !startedSpeaking {
+				session.UpdateAgentState(AgentStateSpeaking)
+				startedSpeaking = true
 			}
 			if speech != nil && speech.IsInterrupted() {
 				transcriptSync.Close()
