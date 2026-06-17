@@ -30,12 +30,13 @@ const (
 )
 
 type MistralAISTT struct {
-	apiKey      string
-	baseURL     string
-	model       string
-	language    string
-	contextBias []string
-	sampleRate  int
+	apiKey                 string
+	baseURL                string
+	model                  string
+	language               string
+	contextBias            []string
+	sampleRate             int
+	targetStreamingDelayMS *int
 
 	dialRealtime func(context.Context, string, http.Header) (mistralAISTTRealtimeConn, error)
 }
@@ -67,6 +68,12 @@ func WithMistralAISTTLanguage(language string) MistralAISTTOption {
 func WithMistralAISTTContextBias(contextBias []string) MistralAISTTOption {
 	return func(s *MistralAISTT) {
 		s.contextBias = contextBias
+	}
+}
+
+func WithMistralAISTTTargetStreamingDelay(delayMS int) MistralAISTTOption {
+	return func(s *MistralAISTT) {
+		s.targetStreamingDelayMS = &delayMS
 	}
 }
 
@@ -122,6 +129,18 @@ func (s *MistralAISTT) Stream(ctx context.Context, language string) (stt.Recogni
 		ctx:    streamCtx,
 		cancel: cancel,
 		state:  &mistralAISTTRealtimeState{},
+	}
+	if s.targetStreamingDelayMS != nil {
+		if err := stream.writeJSON(map[string]any{
+			"type": "session.update",
+			"session": map[string]any{
+				"target_streaming_delay_ms": *s.targetStreamingDelayMS,
+			},
+		}); err != nil {
+			cancel()
+			_ = conn.Close()
+			return nil, err
+		}
 	}
 	go stream.readLoop()
 	return stream, nil

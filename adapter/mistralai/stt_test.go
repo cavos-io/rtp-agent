@@ -11,6 +11,7 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -160,6 +161,29 @@ func TestMistralAISTTRealtimeStreamChunksAudioLikeReference(t *testing.T) {
 			t.Fatalf("chunk %d bytes = %d, want 1600", i, len(decoded))
 		}
 	}
+}
+
+func TestMistralAISTTRealtimeStreamSendsTargetStreamingDelayUpdate(t *testing.T) {
+	conn := &mistralAISTTFakeRealtimeConn{}
+	provider := NewMistralAISTT("test-key",
+		WithMistralAISTTModel("voxtral-realtime-latest"),
+		WithMistralAISTTTargetStreamingDelay(80),
+	)
+	provider.dialRealtime = func(ctx context.Context, endpoint string, headers http.Header) (mistralAISTTRealtimeConn, error) {
+		return conn, nil
+	}
+
+	if _, err := provider.Stream(context.Background(), ""); err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+
+	messages := conn.messages()
+	if len(messages) != 1 {
+		t.Fatalf("messages = %v, want session update", messages)
+	}
+	assertMistralRealtimeMessage(t, messages[0], "session.update", map[string]any{
+		"session": map[string]any{"target_streaming_delay_ms": float64(80)},
+	})
 }
 
 func TestMistralAISTTRealtimeStreamMapsReferenceEvents(t *testing.T) {
@@ -556,7 +580,7 @@ func assertMistralRealtimeMessage(t *testing.T, raw string, wantType string, wan
 		t.Fatalf("message type = %#v, want %q in %#v", got, wantType, msg)
 	}
 	for key, want := range wantFields {
-		if got := msg[key]; got != want {
+		if got := msg[key]; !reflect.DeepEqual(got, want) {
 			t.Fatalf("message %s = %#v, want %#v in %#v", key, got, want, msg)
 		}
 	}
