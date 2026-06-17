@@ -3,6 +3,7 @@ package mistralai
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -126,6 +127,39 @@ func TestMistralAISTTRealtimeStreamSendsReferenceMessages(t *testing.T) {
 	assertMistralRealtimeMessage(t, messages[0], "input_audio.append", map[string]any{"audio": "AQI="})
 	assertMistralRealtimeMessage(t, messages[1], "input_audio.flush", nil)
 	assertMistralRealtimeMessage(t, messages[2], "input_audio.end", nil)
+}
+
+func TestMistralAISTTRealtimeStreamChunksAudioLikeReference(t *testing.T) {
+	conn := &mistralAISTTFakeRealtimeConn{}
+	provider := NewMistralAISTT("test-key", WithMistralAISTTModel("voxtral-realtime-latest"))
+	provider.dialRealtime = func(ctx context.Context, endpoint string, headers http.Header) (mistralAISTTRealtimeConn, error) {
+		return conn, nil
+	}
+	audio := bytes.Repeat([]byte{0x7f}, 3200)
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: audio}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+
+	messages := conn.messages()
+	if len(messages) != 2 {
+		t.Fatalf("messages = %d, want two 50ms append chunks", len(messages))
+	}
+	for i, raw := range messages {
+		payload := assertMistralRealtimeMessage(t, raw, "input_audio.append", nil)
+		encoded, _ := payload["audio"].(string)
+		decoded, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			t.Fatalf("chunk %d audio is invalid base64: %v", i, err)
+		}
+		if len(decoded) != 1600 {
+			t.Fatalf("chunk %d bytes = %d, want 1600", i, len(decoded))
+		}
+	}
 }
 
 func TestMistralAISTTRealtimeStreamMapsReferenceEvents(t *testing.T) {
@@ -512,7 +546,7 @@ func (c *mistralAISTTFakeRealtimeConn) messages() []string {
 	return append([]string(nil), c.writes...)
 }
 
-func assertMistralRealtimeMessage(t *testing.T, raw string, wantType string, wantFields map[string]any) {
+func assertMistralRealtimeMessage(t *testing.T, raw string, wantType string, wantFields map[string]any) map[string]any {
 	t.Helper()
 	var msg map[string]any
 	if err := json.Unmarshal([]byte(raw), &msg); err != nil {
@@ -526,6 +560,7 @@ func assertMistralRealtimeMessage(t *testing.T, raw string, wantType string, wan
 			t.Fatalf("message %s = %#v, want %#v in %#v", key, got, want, msg)
 		}
 	}
+	return msg
 }
 
 func nextMistralSTTEvent(t *testing.T, stream stt.RecognizeStream) *stt.SpeechEvent {

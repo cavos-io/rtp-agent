@@ -26,6 +26,7 @@ const (
 	defaultMistralAISTTBaseURL    = "https://api.mistral.ai/v1"
 	defaultMistralAISTTModel      = "voxtral-mini-latest"
 	defaultMistralAISTTSampleRate = 16000
+	mistralAISTTRealtimeChunkSize = defaultMistralAISTTSampleRate / 20 * 2
 )
 
 type MistralAISTT struct {
@@ -299,11 +300,17 @@ func (s *mistralAISTTRealtimeStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	msg := map[string]any{
-		"type":  "input_audio.append",
-		"audio": base64.StdEncoding.EncodeToString(frame.Data),
+	for offset := 0; offset < len(frame.Data); offset += mistralAISTTRealtimeChunkSize {
+		end := min(offset+mistralAISTTRealtimeChunkSize, len(frame.Data))
+		msg := map[string]any{
+			"type":  "input_audio.append",
+			"audio": base64.StdEncoding.EncodeToString(frame.Data[offset:end]),
+		}
+		if err := s.writeJSON(msg); err != nil {
+			return err
+		}
 	}
-	return s.writeJSON(msg)
+	return nil
 }
 
 func (s *mistralAISTTRealtimeStream) Flush() error {
