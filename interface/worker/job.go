@@ -277,31 +277,19 @@ type JobRequest struct {
 }
 
 func (r *JobRequest) ID() string {
-	if r.Job == nil {
-		return ""
-	}
-	return r.Job.Id
+	return workerlivekit.JobID(r.Job)
 }
 
 func (r *JobRequest) Room() *livekit.Room {
-	if r.Job == nil {
-		return nil
-	}
-	return r.Job.Room
+	return workerlivekit.JobRoom(r.Job)
 }
 
 func (r *JobRequest) Publisher() *livekit.ParticipantInfo {
-	if r.Job == nil {
-		return nil
-	}
-	return r.Job.Participant
+	return workerlivekit.JobPublisher(r.Job)
 }
 
 func (r *JobRequest) AgentName() string {
-	if r.Job == nil {
-		return ""
-	}
-	return r.Job.AgentName
+	return workerlivekit.JobAgentName(r.Job)
 }
 
 func (r *JobRequest) Accept(args ...JobAcceptArguments) error {
