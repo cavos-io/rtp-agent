@@ -3527,6 +3527,98 @@ func TestAgentActivityCommitUserTurnDefaultsFlushAndWaitForFinal(t *testing.T) {
 	}
 }
 
+func TestAgentActivityCommitUserTurnSupersedesPendingCommit(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 2)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	flusher := &recordingTranscriptFlusher{flushed: make(chan struct{}, 2)}
+	session.Assistant = flusher
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	firstDone := make(chan string, 1)
+	firstErr := make(chan error, 1)
+	go func() {
+		transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{
+			TranscriptTimeout: 500 * time.Millisecond,
+			STTFlushDuration:  20 * time.Millisecond,
+		})
+		if err != nil {
+			firstErr <- err
+			return
+		}
+		firstDone <- transcript
+	}()
+
+	select {
+	case <-flusher.flushed:
+	case <-time.After(time.Second):
+		t.Fatal("first CommitUserTurn did not start waiting for a transcript")
+	}
+
+	secondDone := make(chan string, 1)
+	secondErr := make(chan error, 1)
+	go func() {
+		transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{
+			TranscriptTimeout: 500 * time.Millisecond,
+			STTFlushDuration:  20 * time.Millisecond,
+		})
+		if err != nil {
+			secondErr <- err
+			return
+		}
+		secondDone <- transcript
+	}()
+
+	select {
+	case err := <-firstErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("first CommitUserTurn error = %v, want context canceled", err)
+		}
+	case transcript := <-firstDone:
+		t.Fatalf("first CommitUserTurn transcript = %q, want superseded commit canceled", transcript)
+	case <-time.After(time.Second):
+		t.Fatal("first CommitUserTurn was not canceled by the newer commit")
+	}
+	select {
+	case <-flusher.flushed:
+	case <-time.After(time.Second):
+		t.Fatal("second CommitUserTurn did not start waiting for a transcript")
+	}
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "newer final",
+			Language:   "en",
+			Confidence: 0.91,
+		}},
+	})
+
+	select {
+	case err := <-secondErr:
+		t.Fatalf("second CommitUserTurn error = %v, want nil", err)
+	case transcript := <-secondDone:
+		if transcript != "newer final" {
+			t.Fatalf("second CommitUserTurn transcript = %q, want newer final", transcript)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second CommitUserTurn did not return after final transcript")
+	}
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "newer final" {
+			t.Fatalf("turn message text = %q, want newer final", msg.TextContent())
+		}
+	default:
+		t.Fatal("OnUserTurnCompleted was not called for newer commit")
+	}
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called more than once, extra transcript %q", msg.TextContent())
+	default:
+	}
+}
+
 func TestAgentActivityCommitUserTurnGeneratesReplyWhenLLMConfigured(t *testing.T) {
 	agent := NewAgent("test")
 	agent.TurnDetection = TurnDetectionModeManual

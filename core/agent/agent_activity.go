@@ -122,6 +122,9 @@ type AgentActivity struct {
 	pendingPreflightTranscript       string
 	pendingPreflightConfidence       float64
 	userTurnCompletionMu             sync.Mutex
+	commitUserTurnMu                 sync.Mutex
+	commitUserTurnCancel             context.CancelFunc
+	commitUserTurnSeq                uint64
 	pendingUserTranscript            string
 	pendingUserLanguage              string
 	pendingTranscriptConfidence      float64
@@ -2248,6 +2251,23 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 	if opts.TranscriptTimeout == 0 {
 		opts.TranscriptTimeout = 2 * time.Second
 	}
+	ctx, cancelCommit := context.WithCancel(ctx)
+	a.commitUserTurnMu.Lock()
+	if a.commitUserTurnCancel != nil {
+		a.commitUserTurnCancel()
+	}
+	a.commitUserTurnSeq++
+	commitSeq := a.commitUserTurnSeq
+	a.commitUserTurnCancel = cancelCommit
+	a.commitUserTurnMu.Unlock()
+	defer func() {
+		a.commitUserTurnMu.Lock()
+		if a.commitUserTurnSeq == commitSeq {
+			a.commitUserTurnCancel = nil
+		}
+		a.commitUserTurnMu.Unlock()
+		cancelCommit()
+	}()
 	if a.Session != nil {
 		a.Session.mu.Lock()
 		assistant := a.Session.Assistant
