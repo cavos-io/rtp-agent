@@ -14,8 +14,8 @@ func TestJobTypeForWorkerType(t *testing.T) {
 		want       lkprotocol.JobType
 	}{
 		{name: "default", workerType: "", want: lkprotocol.JobType_JT_ROOM},
-		{name: "room", workerType: "room", want: lkprotocol.JobType_JT_ROOM},
-		{name: "publisher", workerType: "publisher", want: lkprotocol.JobType_JT_PUBLISHER},
+		{name: "room", workerType: string(workerlivekit.WorkerTypeRoom), want: lkprotocol.JobType_JT_ROOM},
+		{name: "publisher", workerType: string(workerlivekit.WorkerTypePublisher), want: lkprotocol.JobType_JT_PUBLISHER},
 	}
 
 	for _, tt := range tests {
@@ -24,6 +24,15 @@ func TestJobTypeForWorkerType(t *testing.T) {
 				t.Fatalf("JobTypeForWorkerType(%q) = %v, want %v", tt.workerType, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestWorkerTypeConstantsUseLiveKitWireValues(t *testing.T) {
+	if got := string(workerlivekit.WorkerTypeRoom); got != "room" {
+		t.Fatalf("WorkerTypeRoom = %q, want room", got)
+	}
+	if got := string(workerlivekit.WorkerTypePublisher); got != "publisher" {
+		t.Fatalf("WorkerTypePublisher = %q, want publisher", got)
 	}
 }
 

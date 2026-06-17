@@ -30,11 +30,11 @@ import (
 	"github.com/livekit/protocol/livekit"
 )
 
-type WorkerType string
+type WorkerType = workerlivekit.WorkerType
 
 const (
-	WorkerTypeRoom      WorkerType = "room"
-	WorkerTypePublisher WorkerType = "publisher"
+	WorkerTypeRoom      = workerlivekit.WorkerTypeRoom
+	WorkerTypePublisher = workerlivekit.WorkerTypePublisher
 
 	defaultWorkerVersion  = "1.0.0"
 	defaultMaxRetry       = 16
