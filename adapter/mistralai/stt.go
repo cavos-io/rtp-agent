@@ -122,6 +122,9 @@ func (s *MistralAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusGatewayTimeout {
+			return nil, llm.NewAPITimeoutError(string(respBody))
+		}
 		return nil, llm.NewAPIStatusError("MistralAI STT request failed", resp.StatusCode, "", string(respBody))
 	}
 	var result mistralAISTTResponse

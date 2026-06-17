@@ -191,6 +191,33 @@ func TestMistralAISTTRecognizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestMistralAISTTRecognizeStatusTimeoutReturnsAPITimeoutError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: mistralAISTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusGatewayTimeout,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"timeout"}`)),
+			Header:     make(http.Header),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewMistralAISTT("test-key", WithMistralAISTTBaseURL("https://mistral.example/v1"))
+
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Recognize error = %T %v, want APITimeoutError", err, err)
+	}
+	if !timeoutErr.Retryable {
+		t.Fatal("retryable = false, want true")
+	}
+}
+
 func TestMistralAISTTRecognizeReturnsAPIConnectionError(t *testing.T) {
 	oldClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: mistralAISTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
