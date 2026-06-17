@@ -2,7 +2,6 @@ package assemblyai
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -212,6 +211,7 @@ func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 		events: make(chan *stt.SpeechEvent, 10),
 		errCh:  make(chan error, 1),
 	}
+	stream.writeBinary = stream.writeBinaryMessage
 
 	go stream.readLoop()
 
@@ -327,6 +327,8 @@ type assemblyAISTTStream struct {
 	errCh  chan error
 	mu     sync.Mutex
 	closed bool
+
+	writeBinary func([]byte) error
 }
 
 type aaiResponse struct {
@@ -420,18 +422,21 @@ func boolPtr(value bool) *bool {
 }
 
 func (s *assemblyAISTTStream) PushFrame(frame *model.AudioFrame) error {
+	if frame == nil || len(frame.Data) == 0 {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
 	}
 
-	b64 := base64.StdEncoding.EncodeToString(frame.Data)
-	msg := map[string]interface{}{
-		"audio_data": b64,
+	if err := s.writeBinaryData(frame.Data); err != nil {
+		s.closed = true
+		_ = s.closeConnection()
+		return err
 	}
-
-	return s.conn.WriteJSON(msg)
+	return nil
 }
 
 func (s *assemblyAISTTStream) Flush() error {
@@ -447,6 +452,27 @@ func (s *assemblyAISTTStream) Close() error {
 	s.closed = true
 	// Terminate session
 	s.conn.WriteJSON(map[string]bool{"terminate_session": true})
+	return s.conn.Close()
+}
+
+func (s *assemblyAISTTStream) writeBinaryData(data []byte) error {
+	if s.writeBinary != nil {
+		return s.writeBinary(data)
+	}
+	return s.writeBinaryMessage(data)
+}
+
+func (s *assemblyAISTTStream) writeBinaryMessage(data []byte) error {
+	if s.conn == nil {
+		return io.ErrClosedPipe
+	}
+	return s.conn.WriteMessage(websocket.BinaryMessage, data)
+}
+
+func (s *assemblyAISTTStream) closeConnection() error {
+	if s.conn == nil {
+		return nil
+	}
 	return s.conn.Close()
 }
 

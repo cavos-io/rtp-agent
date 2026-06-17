@@ -239,6 +239,32 @@ func TestAssemblyAIRealtimeTranscriptEventPreservesWordTimings(t *testing.T) {
 	}
 }
 
+func TestAssemblyAISTTStreamPushFrameSendsReferenceBinaryAudio(t *testing.T) {
+	var writes [][]byte
+	stream := &assemblyAISTTStream{
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+	}
+
+	err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02, 0x03, 0x04},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	})
+	if err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("binary writes = %d, want 1", len(writes))
+	}
+	if got := writes[0]; string(got) != string([]byte{0x01, 0x02, 0x03, 0x04}) {
+		t.Fatalf("binary write = %#v, want raw PCM bytes", got)
+	}
+}
+
 func TestAssemblyAISTTCapabilitiesMatchReference(t *testing.T) {
 	provider := NewAssemblyAISTT("test-key")
 	capabilities := provider.Capabilities()
