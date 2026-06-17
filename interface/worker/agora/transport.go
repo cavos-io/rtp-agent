@@ -76,6 +76,7 @@ type Transport struct {
 	joinCancel context.CancelFunc
 	joinSeq    uint64
 	joined     bool
+	users      map[string]struct{}
 	closing    bool
 	closed     bool
 }
@@ -178,6 +179,7 @@ func (t *Transport) Leave(ctx context.Context) error {
 	}
 	t.mu.Lock()
 	t.joined = false
+	t.users = nil
 	t.mu.Unlock()
 	return nil
 }
@@ -241,6 +243,9 @@ func (t *Transport) emit(event Event) {
 	if t.closed {
 		return
 	}
+	if !t.acceptEventLocked(event) {
+		return
+	}
 	select {
 	case t.events <- event:
 	default:
@@ -255,5 +260,36 @@ func (t *Transport) emit(event Event) {
 		case t.events <- event:
 		default:
 		}
+	}
+}
+
+func (t *Transport) acceptEventLocked(event Event) bool {
+	switch event.Kind {
+	case EventUserJoined:
+		if event.UserID == "" {
+			return true
+		}
+		if t.users == nil {
+			t.users = make(map[string]struct{})
+		}
+		if _, ok := t.users[event.UserID]; ok {
+			return false
+		}
+		t.users[event.UserID] = struct{}{}
+		return true
+	case EventUserLeft:
+		if event.UserID == "" {
+			return true
+		}
+		if _, ok := t.users[event.UserID]; !ok {
+			return false
+		}
+		delete(t.users, event.UserID)
+		return true
+	case EventDisconnected:
+		t.users = nil
+		return true
+	default:
+		return true
 	}
 }

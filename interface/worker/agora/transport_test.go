@@ -271,6 +271,47 @@ func TestTransportForwardsClientEvents(t *testing.T) {
 	}
 }
 
+func TestTransportFiltersDuplicateParticipantJoinEvents(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	client.emit(Event{Kind: EventUserJoined, Channel: "support", UserID: "user-1"})
+	client.emit(Event{Kind: EventUserJoined, Channel: "support", UserID: "user-1"})
+
+	select {
+	case event := <-tr.Events():
+		if event.Kind != EventUserJoined || event.UserID != "user-1" {
+			t.Fatalf("event = %#v, want first user-1 join", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first user join")
+	}
+	select {
+	case event := <-tr.Events():
+		t.Fatalf("duplicate participant event forwarded: %#v", event)
+	case <-time.After(10 * time.Millisecond):
+	}
+}
+
+func TestTransportDropsUnknownParticipantLeaveEvents(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	client.emit(Event{Kind: EventUserLeft, Channel: "support", UserID: "user-1"})
+
+	select {
+	case event := <-tr.Events():
+		t.Fatalf("unknown participant leave forwarded: %#v", event)
+	case <-time.After(10 * time.Millisecond):
+	}
+}
+
 func TestTransportPrioritizesErrorEventsWhenBufferIsFull(t *testing.T) {
 	client := &fakeChannelClient{}
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
