@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
 )
@@ -708,6 +709,59 @@ func TestElevenLabsTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
+	closed := make(chan struct{})
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runElevenLabsClosingWebsocketServerAfterFrames(serverConn, 2, closed, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5", WithElevenLabsBaseURL("ws://eleven.test/v1"))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test websocket close")
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test websocket server")
+	}
+
+	_, err = stream.Next()
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != websocket.CloseAbnormalClosure {
+		t.Fatalf("StatusCode = %d, want websocket close code", statusErr.StatusCode)
+	}
+}
+
 func readElevenLabsTTSStreamMessage(t *testing.T, messages <-chan map[string]any) map[string]any {
 	t.Helper()
 	select {
@@ -752,6 +806,10 @@ func assertElevenLabsTTSVoiceSettings(t *testing.T, raw any) {
 }
 
 func runElevenLabsClosingWebsocketServerAfterFrame(conn net.Conn, closed chan<- struct{}, errCh chan<- error) {
+	runElevenLabsClosingWebsocketServerAfterFrames(conn, 1, closed, errCh)
+}
+
+func runElevenLabsClosingWebsocketServerAfterFrames(conn net.Conn, frames int, closed chan<- struct{}, errCh chan<- error) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
 	req, err := http.ReadRequest(reader)
@@ -763,9 +821,11 @@ func runElevenLabsClosingWebsocketServerAfterFrame(conn net.Conn, closed chan<- 
 		errCh <- err
 		return
 	}
-	if err := readElevenLabsClientWebsocketFrame(reader); err != nil {
-		errCh <- err
-		return
+	for range frames {
+		if err := readElevenLabsClientWebsocketFrame(reader); err != nil {
+			errCh <- err
+			return
+		}
 	}
 	close(closed)
 	errCh <- nil

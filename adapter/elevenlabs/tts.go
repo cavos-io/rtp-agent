@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/google/uuid"
@@ -491,7 +493,7 @@ func (s *elevenLabsStream) readLoop() {
 		if err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
 				logger.Logger.Errorw("ElevenLabs WebSocket read error", err)
-				s.sendError(fmt.Errorf("elevenlabs TTS websocket read: %w", err))
+				s.sendError(elevenLabsTTSUnexpectedCloseError(err))
 			}
 			return
 		}
@@ -541,6 +543,15 @@ func (s *elevenLabsStream) readLoop() {
 			return
 		}
 	}
+}
+
+func elevenLabsTTSUnexpectedCloseError(err error) error {
+	statusCode := -1
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) && closeErr.Code != 0 {
+		statusCode = closeErr.Code
+	}
+	return llm.NewAPIStatusError("ElevenLabs websocket connection closed unexpectedly", statusCode, "", err.Error())
 }
 
 func elevenLabsSynthesizedAudio(resp elWSResponse, sampleRate int, encoding string) (*tts.SynthesizedAudio, error) {
@@ -944,6 +955,11 @@ func (s *elevenLabsStream) Close() error {
 func (s *elevenLabsStream) Next() (*tts.SynthesizedAudio, error) {
 	select {
 	case <-s.ctx.Done():
+		select {
+		case err := <-s.errCh:
+			return nil, err
+		default:
+		}
 		return nil, io.EOF
 	case err := <-s.errCh:
 		return nil, err
