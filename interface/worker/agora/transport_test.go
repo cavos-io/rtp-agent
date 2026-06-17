@@ -408,6 +408,34 @@ func TestTransportPrioritizesErrorEventsWhenBufferIsFull(t *testing.T) {
 	t.Fatal("transport dropped error event when buffer was full")
 }
 
+func TestTransportPrioritizesDisconnectedEventsWhenBufferIsFull(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	for i := 0; i < cap(tr.events); i++ {
+		client.emit(Event{Kind: EventUserJoined, Channel: "support", UserID: fmt.Sprintf("user-%d", i)})
+	}
+	client.emit(Event{Kind: EventDisconnected, Channel: "support", Reason: 17})
+
+	for i := 0; i < cap(tr.events); i++ {
+		select {
+		case event := <-tr.Events():
+			if event.Kind == EventDisconnected {
+				if event.Reason != 17 {
+					t.Fatalf("disconnect reason = %d, want 17", event.Reason)
+				}
+				return
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out draining transport events")
+		}
+	}
+	t.Fatal("transport dropped disconnected event when buffer was full")
+}
+
 func TestTransportForwardsClientAudioFrames(t *testing.T) {
 	client := &fakeChannelClient{}
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)

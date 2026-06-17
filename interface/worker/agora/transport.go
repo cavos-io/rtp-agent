@@ -250,7 +250,7 @@ func (t *Transport) emit(event Event) {
 	case t.events <- event:
 		t.applyEventLocked(event)
 	default:
-		if event.Kind != EventError {
+		if !eventNeedsPriority(event) {
 			return
 		}
 		select {
@@ -264,6 +264,10 @@ func (t *Transport) emit(event Event) {
 		default:
 		}
 	}
+}
+
+func eventNeedsPriority(event Event) bool {
+	return event.Kind == EventError || event.Kind == EventDisconnected
 }
 
 func (t *Transport) acceptEventLocked(event Event) bool {
