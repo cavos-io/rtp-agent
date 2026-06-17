@@ -10,7 +10,6 @@ import (
 	"math"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -134,14 +133,7 @@ type WorkerInfo struct {
 	CloudAgents bool
 }
 
-type LocalJobOptions struct {
-	FakeJob           bool
-	RoomInfo          *livekit.Room
-	Token             string
-	RecordingOptions  agent.RecordingOptions
-	SessionReportPath string
-	SessionDirectory  string
-}
+type LocalJobOptions = workerlivekit.LocalJobOptions
 
 type WorkerOptions struct {
 	AgentName      string
@@ -1419,18 +1411,12 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		return err
 	}
 
-	// Connect WS
-	// A robust implementation should include retries and proxy handling
-	dialer := *websocket.DefaultDialer
-	if s.Options.HTTPProxy != "" {
-		proxyURL, err := url.Parse(s.Options.HTTPProxy)
-		if err != nil {
-			return fmt.Errorf("invalid HTTP proxy URL: %w", err)
-		}
-		dialer.Proxy = http.ProxyURL(proxyURL)
+	dialer, err := workerlivekit.WorkerWebSocketDialer(s.Options.HTTPProxy)
+	if err != nil {
+		return err
 	}
 
-	conn, res, err := s.connectWorkerWebSocket(ctx, &dialer, connectInfo.URL, connectInfo.Header)
+	conn, res, err := s.connectWorkerWebSocket(ctx, dialer, connectInfo.URL, connectInfo.Header)
 	if err != nil {
 		return err
 	}
@@ -1449,26 +1435,7 @@ func (s *AgentServer) Run(ctx context.Context) error {
 
 	logger.Logger.Infow("Connected to LiveKit Server", "url", s.Options.WSRL)
 
-	// Send Register request
-	req := s.registerWorkerRequest()
-	binary, b, err := workerlivekit.WorkerMessageFrame(req)
-	if err != nil {
-		return err
-	}
-
-	msgType := websocket.TextMessage
-	if binary {
-		msgType = websocket.BinaryMessage
-	}
-	if err := conn.WriteMessage(msgType, b); err != nil {
-		return err
-	}
-
-	msgType, data, err := conn.ReadMessage()
-	if err != nil {
-		return err
-	}
-	msg, err := workerlivekit.InitialRegisterMessage(msgType == websocket.BinaryMessage, data)
+	msg, err := workerlivekit.ExchangeInitialRegisterWebSocket(conn, s.registerWorkerRequest())
 	if err != nil {
 		return err
 	}
@@ -1561,7 +1528,7 @@ func (s *AgentServer) runWorkerMessageLoop(ctx context.Context, readMessage func
 				return result.err
 			}
 
-			msg, err := workerlivekit.ServerMessageFrame(result.msgType == websocket.BinaryMessage, result.data)
+			msg, err := workerlivekit.ServerMessageWebSocketFrame(result.msgType, result.data)
 			if err != nil {
 				logger.Logger.Errorw("Failed to unmarshal server message", err)
 				continue
@@ -1735,19 +1702,14 @@ func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.Avail
 	defer s.releaseAvailabilitySlot()
 
 	answered := false
-	jobReq := &JobRequest{
-		Job: availability.Job,
-		acceptFnc: func(args JobAcceptArguments) error {
+	jobReq := workerlivekit.NewJobRequest(
+		availability.Job,
+		func(args JobAcceptArguments) error {
 			answered = true
 			s.storePendingAccept(jobID, args)
 			msg := workerlivekit.AvailabilityResponseForAccept(
 				req,
-				workerlivekit.AvailabilityAcceptOptions{
-					Name:       args.Name,
-					Identity:   args.Identity,
-					Metadata:   args.Metadata,
-					Attributes: args.Attributes,
-				},
+				args,
 				s.Options.AgentName,
 			)
 			if err := s.sendWorkerMessage(msg); err != nil {
@@ -1755,15 +1717,15 @@ func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.Avail
 			}
 			return nil
 		},
-		rejectFnc: func(args JobRejectArguments) error {
+		func(args JobRejectArguments) error {
 			answered = true
 			msg := workerlivekit.AvailabilityResponseForReject(
 				req,
-				workerlivekit.AvailabilityRejectOptions{Terminate: args.Terminate},
+				args,
 			)
 			return s.sendWorkerMessage(msg)
 		},
-	}
+	)
 
 	if s.requestFnc != nil {
 		if err := s.requestFnc(jobReq); err != nil {
@@ -1797,21 +1759,12 @@ func (s *AgentServer) sendWorkerMessage(msg *livekit.WorkerMessage) error {
 		return s.workerMessageSink(msg)
 	}
 
-	binary, b, err := workerlivekit.WorkerMessageFrame(msg)
-	if err != nil {
-		return err
-	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.conn == nil {
 		return fmt.Errorf("worker websocket is not connected")
 	}
-	msgType := websocket.TextMessage
-	if binary {
-		msgType = websocket.BinaryMessage
-	}
-	return s.conn.WriteMessage(msgType, b)
+	return workerlivekit.WriteWorkerMessageWebSocket(s.conn, msg)
 }
 
 func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) {

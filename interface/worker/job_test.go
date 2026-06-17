@@ -1325,14 +1325,12 @@ func TestJobContextPublisherInfoReturnsJobParticipant(t *testing.T) {
 func TestJobRequestAccessorsExposeJobFields(t *testing.T) {
 	room := &livekit.Room{Name: "room-a"}
 	publisher := &livekit.ParticipantInfo{Identity: "publisher-a"}
-	req := &JobRequest{
-		Job: &livekit.Job{
-			Id:          "job_request",
-			Room:        room,
-			Participant: publisher,
-			AgentName:   "agent-a",
-		},
-	}
+	req := workerlivekit.NewJobRequest(&livekit.Job{
+		Id:          "job_request",
+		Room:        room,
+		Participant: publisher,
+		AgentName:   "agent-a",
+	}, nil, nil)
 
 	if got := req.ID(); got != "job_request" {
 		t.Fatalf("ID() = %q, want job_request", got)
@@ -1345,6 +1343,14 @@ func TestJobRequestAccessorsExposeJobFields(t *testing.T) {
 	}
 	if got := req.AgentName(); got != "agent-a" {
 		t.Fatalf("AgentName() = %q, want agent-a", got)
+	}
+}
+
+func TestJobRequestRootAliasUsesLiveKitImplementation(t *testing.T) {
+	var req *JobRequest = workerlivekit.NewJobRequest(&livekit.Job{Id: "job_alias"}, nil, nil)
+
+	if got := req.ID(); got != "job_alias" {
+		t.Fatalf("ID() = %q, want job_alias", got)
 	}
 }
 

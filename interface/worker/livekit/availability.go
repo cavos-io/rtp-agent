@@ -4,16 +4,9 @@ import lkprotocol "github.com/livekit/protocol/livekit"
 
 const ParticipantAttributeAgentName = "lk.agent.name"
 
-type AvailabilityAcceptOptions struct {
-	Name       string
-	Identity   string
-	Metadata   string
-	Attributes map[string]string
-}
+type AvailabilityAcceptOptions = JobAcceptArguments
 
-type AvailabilityRejectOptions struct {
-	Terminate bool
-}
+type AvailabilityRejectOptions = JobRejectArguments
 
 type AvailabilityRequestInfo struct {
 	Job   *lkprotocol.Job

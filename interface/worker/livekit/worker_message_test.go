@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
+	"github.com/gorilla/websocket"
 	lkprotocol "github.com/livekit/protocol/livekit"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestJobStatusMessageCarriesJobStatus(t *testing.T) {
@@ -109,6 +111,92 @@ func TestWorkerStatusMessageCarriesStatusLoadAndJobCount(t *testing.T) {
 	}
 	if update.JobCount != 2 {
 		t.Fatalf("UpdateWorker.JobCount = %d, want 2", update.JobCount)
+	}
+}
+
+func TestWorkerMessageWebSocketFrameUsesBinaryMessage(t *testing.T) {
+	msgType, data, err := workerlivekit.WorkerMessageWebSocketFrame(workerlivekit.JobRunningMessage("job-a"))
+	if err != nil {
+		t.Fatalf("WorkerMessageWebSocketFrame() error = %v", err)
+	}
+	if msgType != websocket.BinaryMessage {
+		t.Fatalf("message type = %d, want websocket.BinaryMessage", msgType)
+	}
+	if len(data) == 0 {
+		t.Fatal("frame data is empty")
+	}
+}
+
+type recordingWorkerMessageWriter struct {
+	msgType int
+	data    []byte
+	err     error
+}
+
+func (w *recordingWorkerMessageWriter) WriteMessage(msgType int, data []byte) error {
+	if w.err != nil {
+		return w.err
+	}
+	w.msgType = msgType
+	w.data = append([]byte(nil), data...)
+	return nil
+}
+
+func TestWriteWorkerMessageWebSocketWritesBinaryFrame(t *testing.T) {
+	writer := &recordingWorkerMessageWriter{}
+
+	if err := workerlivekit.WriteWorkerMessageWebSocket(writer, workerlivekit.JobRunningMessage("job-a")); err != nil {
+		t.Fatalf("WriteWorkerMessageWebSocket() error = %v", err)
+	}
+	if writer.msgType != websocket.BinaryMessage {
+		t.Fatalf("message type = %d, want websocket.BinaryMessage", writer.msgType)
+	}
+	var decoded lkprotocol.WorkerMessage
+	if err := proto.Unmarshal(writer.data, &decoded); err != nil {
+		t.Fatalf("proto.Unmarshal() error = %v", err)
+	}
+	if decoded.GetUpdateJob().GetJobId() != "job-a" {
+		t.Fatalf("decoded job id = %q, want job-a", decoded.GetUpdateJob().GetJobId())
+	}
+}
+
+type initialRegisterWebSocket struct {
+	recordingWorkerMessageWriter
+	readType int
+	readData []byte
+	readErr  error
+}
+
+func (ws *initialRegisterWebSocket) ReadMessage() (int, []byte, error) {
+	return ws.readType, ws.readData, ws.readErr
+}
+
+func TestExchangeInitialRegisterWebSocketWritesRegisterAndReadsResponse(t *testing.T) {
+	response := &lkprotocol.ServerMessage{
+		Message: &lkprotocol.ServerMessage_Register{
+			Register: &lkprotocol.RegisterWorkerResponse{WorkerId: "worker-a"},
+		},
+	}
+	responseData, err := proto.Marshal(response)
+	if err != nil {
+		t.Fatalf("proto.Marshal() error = %v", err)
+	}
+	ws := &initialRegisterWebSocket{
+		readType: websocket.BinaryMessage,
+		readData: responseData,
+	}
+
+	msg, err := workerlivekit.ExchangeInitialRegisterWebSocket(ws, workerlivekit.RegisterWorkerMessage(workerlivekit.WorkerRegistrationOptions{
+		WorkerType: "room",
+	}))
+	if err != nil {
+		t.Fatalf("ExchangeInitialRegisterWebSocket() error = %v", err)
+	}
+	if ws.msgType != websocket.BinaryMessage {
+		t.Fatalf("written message type = %d, want websocket.BinaryMessage", ws.msgType)
+	}
+	if msg.GetRegister().GetWorkerId() != "worker-a" {
+		t.Fatalf("register worker id = %q, want worker-a", msg.GetRegister().GetWorkerId())
 	}
 }
 

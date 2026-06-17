@@ -3,6 +3,7 @@ package livekit
 import (
 	"sort"
 
+	"github.com/gorilla/websocket"
 	lkprotocol "github.com/livekit/protocol/livekit"
 )
 
@@ -16,6 +17,46 @@ func WorkerStatusMessage(status lkprotocol.WorkerStatus, load float64, jobCount 
 			},
 		},
 	}
+}
+
+func WorkerMessageWebSocketFrame(msg *lkprotocol.WorkerMessage) (int, []byte, error) {
+	binary, data, err := WorkerMessageFrame(msg)
+	if err != nil {
+		return 0, nil, err
+	}
+	msgType := websocket.TextMessage
+	if binary {
+		msgType = websocket.BinaryMessage
+	}
+	return msgType, data, nil
+}
+
+type WorkerMessageWebSocketWriter interface {
+	WriteMessage(int, []byte) error
+}
+
+type WorkerRegisterWebSocket interface {
+	WorkerMessageWebSocketWriter
+	ReadMessage() (int, []byte, error)
+}
+
+func WriteWorkerMessageWebSocket(writer WorkerMessageWebSocketWriter, msg *lkprotocol.WorkerMessage) error {
+	msgType, data, err := WorkerMessageWebSocketFrame(msg)
+	if err != nil {
+		return err
+	}
+	return writer.WriteMessage(msgType, data)
+}
+
+func ExchangeInitialRegisterWebSocket(conn WorkerRegisterWebSocket, msg *lkprotocol.WorkerMessage) (*lkprotocol.ServerMessage, error) {
+	if err := WriteWorkerMessageWebSocket(conn, msg); err != nil {
+		return nil, err
+	}
+	msgType, data, err := conn.ReadMessage()
+	if err != nil {
+		return nil, err
+	}
+	return InitialRegisterWebSocketMessage(msgType, data)
 }
 
 func AvailableWorkerStatusMessage(load float64, jobCount uint32, canAcceptJob bool) *lkprotocol.WorkerMessage {

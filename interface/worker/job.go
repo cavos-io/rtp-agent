@@ -131,16 +131,9 @@ func currentGoroutineID() (uint64, bool) {
 	return id, true
 }
 
-type JobAcceptArguments struct {
-	Name       string
-	Identity   string
-	Metadata   string
-	Attributes map[string]string
-}
+type JobAcceptArguments = workerlivekit.JobAcceptArguments
 
-type JobRejectArguments struct {
-	Terminate bool
-}
+type JobRejectArguments = workerlivekit.JobRejectArguments
 
 type JobExecutorType = workeripc.ExecutorType
 
@@ -241,51 +234,7 @@ type participantEntrypointTaskKey struct {
 	entrypoint uintptr
 }
 
-type JobRequest struct {
-	Job *livekit.Job
-
-	acceptFnc func(JobAcceptArguments) error
-	rejectFnc func(JobRejectArguments) error
-}
-
-func (r *JobRequest) ID() string {
-	return workerlivekit.JobID(r.Job)
-}
-
-func (r *JobRequest) Room() *livekit.Room {
-	return workerlivekit.JobRoom(r.Job)
-}
-
-func (r *JobRequest) Publisher() *livekit.ParticipantInfo {
-	return workerlivekit.JobPublisher(r.Job)
-}
-
-func (r *JobRequest) AgentName() string {
-	return workerlivekit.JobAgentName(r.Job)
-}
-
-func (r *JobRequest) Accept(args ...JobAcceptArguments) error {
-	acceptArgs := JobAcceptArguments{}
-	if len(args) > 0 {
-		acceptArgs = args[0]
-	}
-	acceptArgs.Identity = workerlivekit.JobAcceptIdentity(r.Job, acceptArgs.Identity)
-	if r.acceptFnc != nil {
-		return r.acceptFnc(acceptArgs)
-	}
-	return nil
-}
-
-func (r *JobRequest) Reject(args ...JobRejectArguments) error {
-	rejectArgs := JobRejectArguments{Terminate: true}
-	if len(args) > 0 {
-		rejectArgs = args[0]
-	}
-	if r.rejectFnc != nil {
-		return r.rejectFnc(rejectArgs)
-	}
-	return nil
-}
+type JobRequest = workerlivekit.JobRequest
 
 type JobContext struct {
 	Job                    *livekit.Job
@@ -871,11 +820,7 @@ func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunk
 		logger.Logger.Warnw("job context AddSIPParticipant is skipped for fake jobs", nil)
 		return &livekit.SIPParticipantInfo{}, nil
 	}
-	name := ""
-	if len(names) > 0 {
-		name = names[0]
-	}
-	return workerlivekit.CreateSIPParticipant(ctx, c.API().SIP, c.Job, callTo, trunkID, identity, name)
+	return workerlivekit.CreateSIPParticipantWithNames(ctx, c.API().SIP, c.Job, callTo, trunkID, identity, names...)
 }
 
 func (c *JobContext) CreateSIPParticipant(ctx context.Context, req *livekit.CreateSIPParticipantRequest) (*livekit.SIPParticipantInfo, error) {
@@ -896,13 +841,5 @@ func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, pa
 		logger.Logger.Warnw("job context TransferSIPParticipant is skipped for fake jobs", nil)
 		return nil
 	}
-	identity, err := workerlivekit.TransferSIPParticipantIdentity(participant)
-	if err != nil {
-		return err
-	}
-	playDialtone := false
-	if len(playDialtones) > 0 {
-		playDialtone = playDialtones[0]
-	}
-	return workerlivekit.TransferSIPParticipant(ctx, c.API().SIP, c.Job, identity, transferTo, playDialtone)
+	return workerlivekit.TransferSIPParticipantByParticipant(ctx, c.API().SIP, c.Job, participant, transferTo, playDialtones...)
 }

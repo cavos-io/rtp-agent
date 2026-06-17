@@ -1,6 +1,7 @@
 package livekit_test
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -49,5 +50,29 @@ func TestWorkerConnectInfoBuildsURLAndAuthHeader(t *testing.T) {
 	}
 	if got := info.Header.Get("Authorization"); !strings.HasPrefix(got, "Bearer ") {
 		t.Fatalf("WorkerConnectInfo().Header Authorization = %q, want bearer token", got)
+	}
+}
+
+func TestWorkerWebSocketDialerUsesHTTPProxy(t *testing.T) {
+	dialer, err := workerlivekit.WorkerWebSocketDialer("http://proxy.example:8080")
+	if err != nil {
+		t.Fatalf("WorkerWebSocketDialer() error = %v", err)
+	}
+	if dialer.Proxy == nil {
+		t.Fatal("WorkerWebSocketDialer().Proxy = nil, want configured proxy")
+	}
+
+	proxyURL, err := dialer.Proxy(&http.Request{})
+	if err != nil {
+		t.Fatalf("dialer.Proxy() error = %v", err)
+	}
+	if proxyURL.String() != "http://proxy.example:8080" {
+		t.Fatalf("dialer.Proxy() = %q, want configured proxy", proxyURL.String())
+	}
+}
+
+func TestWorkerWebSocketDialerRejectsInvalidProxy(t *testing.T) {
+	if _, err := workerlivekit.WorkerWebSocketDialer("://bad proxy"); err == nil {
+		t.Fatal("WorkerWebSocketDialer() error = nil, want invalid proxy error")
 	}
 }

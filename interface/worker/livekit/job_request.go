@@ -8,6 +8,84 @@ import (
 	lkprotocol "github.com/livekit/protocol/livekit"
 )
 
+type JobAcceptArguments struct {
+	Name       string            `json:"name"`
+	Identity   string            `json:"identity"`
+	Metadata   string            `json:"metadata"`
+	Attributes map[string]string `json:"attributes,omitempty"`
+}
+
+type JobRejectArguments struct {
+	Terminate bool
+}
+
+func JobAcceptArgumentsForJob(job *lkprotocol.Job, args JobAcceptArguments) JobAcceptArguments {
+	args.Identity = JobAcceptIdentity(job, args.Identity)
+	return args
+}
+
+func DefaultJobRejectArguments() JobRejectArguments {
+	return JobRejectArguments{Terminate: true}
+}
+
+type JobRequest struct {
+	Job *lkprotocol.Job
+
+	acceptFnc func(JobAcceptArguments) error
+	rejectFnc func(JobRejectArguments) error
+}
+
+func NewJobRequest(
+	job *lkprotocol.Job,
+	accept func(JobAcceptArguments) error,
+	reject func(JobRejectArguments) error,
+) *JobRequest {
+	return &JobRequest{
+		Job:       job,
+		acceptFnc: accept,
+		rejectFnc: reject,
+	}
+}
+
+func (r *JobRequest) ID() string {
+	return JobID(r.Job)
+}
+
+func (r *JobRequest) Room() *lkprotocol.Room {
+	return JobRoom(r.Job)
+}
+
+func (r *JobRequest) Publisher() *lkprotocol.ParticipantInfo {
+	return JobPublisher(r.Job)
+}
+
+func (r *JobRequest) AgentName() string {
+	return JobAgentName(r.Job)
+}
+
+func (r *JobRequest) Accept(args ...JobAcceptArguments) error {
+	acceptArgs := JobAcceptArguments{}
+	if len(args) > 0 {
+		acceptArgs = args[0]
+	}
+	acceptArgs = JobAcceptArgumentsForJob(r.Job, acceptArgs)
+	if r.acceptFnc != nil {
+		return r.acceptFnc(acceptArgs)
+	}
+	return nil
+}
+
+func (r *JobRequest) Reject(args ...JobRejectArguments) error {
+	rejectArgs := DefaultJobRejectArguments()
+	if len(args) > 0 {
+		rejectArgs = args[0]
+	}
+	if r.rejectFnc != nil {
+		return r.rejectFnc(rejectArgs)
+	}
+	return nil
+}
+
 func JobID(job *lkprotocol.Job) string {
 	if job == nil {
 		return ""

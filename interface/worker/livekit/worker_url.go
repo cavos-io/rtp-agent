@@ -1,10 +1,13 @@
 package livekit
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 type WorkerConnectOptions struct {
@@ -33,6 +36,19 @@ func WorkerConnectInfo(opts WorkerConnectOptions) (WorkerConnect, error) {
 		URL:    agentURL,
 		Header: WorkerAuthHeader(token),
 	}, nil
+}
+
+func WorkerWebSocketDialer(httpProxy string) (*websocket.Dialer, error) {
+	dialer := *websocket.DefaultDialer
+	if httpProxy == "" {
+		return &dialer, nil
+	}
+	proxyURL, err := url.Parse(httpProxy)
+	if err != nil {
+		return nil, fmt.Errorf("invalid HTTP proxy URL: %w", err)
+	}
+	dialer.Proxy = http.ProxyURL(proxyURL)
+	return &dialer, nil
 }
 
 func AgentWebSocketURL(rawURL string, workerToken string) (string, error) {

@@ -2,6 +2,7 @@ package livekit_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -34,6 +35,36 @@ func TestJobRequestAccessorsExposeJobFields(t *testing.T) {
 	}
 }
 
+func TestJobRequestAcceptInvokesCallbackWithDefaultIdentity(t *testing.T) {
+	var got workerlivekit.JobAcceptArguments
+	req := workerlivekit.NewJobRequest(&lkprotocol.Job{Id: "job_accept"}, func(args workerlivekit.JobAcceptArguments) error {
+		got = args
+		return nil
+	}, nil)
+
+	if err := req.Accept(); err != nil {
+		t.Fatalf("Accept() error = %v", err)
+	}
+	if got.Identity != "agent-job_accept" {
+		t.Fatalf("Accept() Identity = %q, want agent-job_accept", got.Identity)
+	}
+}
+
+func TestJobRequestRejectInvokesCallbackWithDefaultTerminate(t *testing.T) {
+	var got workerlivekit.JobRejectArguments
+	req := workerlivekit.NewJobRequest(nil, nil, func(args workerlivekit.JobRejectArguments) error {
+		got = args
+		return nil
+	})
+
+	if err := req.Reject(); err != nil {
+		t.Fatalf("Reject() error = %v", err)
+	}
+	if !got.Terminate {
+		t.Fatal("Reject() Terminate = false, want true")
+	}
+}
+
 func TestJobRequestAccessorsHandleNilJob(t *testing.T) {
 	if got := workerlivekit.JobID(nil); got != "" {
 		t.Fatalf("JobID(nil) = %q, want empty", got)
@@ -46,6 +77,69 @@ func TestJobRequestAccessorsHandleNilJob(t *testing.T) {
 	}
 	if got := workerlivekit.JobAgentName(nil); got != "" {
 		t.Fatalf("JobAgentName(nil) = %q, want empty", got)
+	}
+}
+
+func TestJobRequestArgumentsOwnLiveKitAcceptRejectShape(t *testing.T) {
+	accept := workerlivekit.JobAcceptArguments{
+		Name:       "Agent A",
+		Identity:   "agent-a",
+		Metadata:   "metadata-a",
+		Attributes: map[string]string{"tier": "gold"},
+	}
+	reject := workerlivekit.JobRejectArguments{Terminate: true}
+
+	if accept.Identity != "agent-a" {
+		t.Fatalf("accept identity = %q, want agent-a", accept.Identity)
+	}
+	if accept.Attributes["tier"] != "gold" {
+		t.Fatalf("accept tier = %q, want gold", accept.Attributes["tier"])
+	}
+	if !reject.Terminate {
+		t.Fatal("reject terminate = false, want true")
+	}
+}
+
+func TestJobAcceptArgumentsUseIPCWireJSONNames(t *testing.T) {
+	data, err := json.Marshal(workerlivekit.JobAcceptArguments{
+		Name:       "Agent A",
+		Identity:   "agent-a",
+		Metadata:   "metadata-a",
+		Attributes: map[string]string{"tier": "gold"},
+	})
+	if err != nil {
+		t.Fatalf("Marshal(JobAcceptArguments) error = %v", err)
+	}
+
+	want := `{"name":"Agent A","identity":"agent-a","metadata":"metadata-a","attributes":{"tier":"gold"}}`
+	if string(data) != want {
+		t.Fatalf("JobAcceptArguments JSON = %s, want %s", data, want)
+	}
+}
+
+func TestJobAcceptArgumentsForJobDefaultsIdentity(t *testing.T) {
+	got := workerlivekit.JobAcceptArgumentsForJob(&lkprotocol.Job{Id: "job-123"}, workerlivekit.JobAcceptArguments{})
+
+	if got.Identity != "agent-job-123" {
+		t.Fatalf("Identity = %q, want agent-job-123", got.Identity)
+	}
+}
+
+func TestJobAcceptArgumentsForJobPreservesProvidedIdentity(t *testing.T) {
+	got := workerlivekit.JobAcceptArgumentsForJob(&lkprotocol.Job{Id: "job-123"}, workerlivekit.JobAcceptArguments{
+		Identity: "custom-agent",
+	})
+
+	if got.Identity != "custom-agent" {
+		t.Fatalf("Identity = %q, want custom-agent", got.Identity)
+	}
+}
+
+func TestJobRejectArgumentsDefaultTerminates(t *testing.T) {
+	got := workerlivekit.DefaultJobRejectArguments()
+
+	if !got.Terminate {
+		t.Fatal("Terminate = false, want true")
 	}
 }
 

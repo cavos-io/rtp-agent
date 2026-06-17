@@ -42,6 +42,21 @@ func TestAvailabilityInfoExposesJobAndJobID(t *testing.T) {
 	}
 }
 
+func TestAvailabilityOptionsShareJobRequestArgumentTypes(t *testing.T) {
+	accept := workerlivekit.JobAcceptArguments{Identity: "agent-a"}
+	reject := workerlivekit.JobRejectArguments{Terminate: true}
+
+	var availabilityAccept workerlivekit.AvailabilityAcceptOptions = accept
+	var availabilityReject workerlivekit.AvailabilityRejectOptions = reject
+
+	if availabilityAccept.Identity != "agent-a" {
+		t.Fatalf("availability accept identity = %q, want agent-a", availabilityAccept.Identity)
+	}
+	if !availabilityReject.Terminate {
+		t.Fatal("availability reject terminate = false, want true")
+	}
+}
+
 func TestAvailabilityResponseAcceptUsesCustomArguments(t *testing.T) {
 	resp := workerlivekit.AvailabilityResponseForAccept(&lkprotocol.AvailabilityRequest{
 		Job: &lkprotocol.Job{Id: "job_custom"},

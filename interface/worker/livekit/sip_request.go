@@ -78,6 +78,22 @@ func CreateSIPParticipant(
 	return CreateSIPParticipantWithRequest(ctx, api, JobCreateSIPParticipantRequest(job, callTo, trunkID, identity, name))
 }
 
+func CreateSIPParticipantWithNames(
+	ctx context.Context,
+	api SIPAPI,
+	job *lkprotocol.Job,
+	callTo string,
+	trunkID string,
+	identity string,
+	names ...string,
+) (*lkprotocol.SIPParticipantInfo, error) {
+	name := ""
+	if len(names) > 0 {
+		name = names[0]
+	}
+	return CreateSIPParticipant(ctx, api, job, callTo, trunkID, identity, name)
+}
+
 func CreateSIPParticipantWithRequest(
 	ctx context.Context,
 	api SIPAPI,
@@ -103,4 +119,23 @@ func TransferSIPParticipant(
 	req := JobTransferSIPParticipantRequest(job, identity, transferTo, playDialtone)
 	_, err := api.TransferSIPParticipant(ctx, req)
 	return err
+}
+
+func TransferSIPParticipantByParticipant(
+	ctx context.Context,
+	api SIPAPI,
+	job *lkprotocol.Job,
+	participant any,
+	transferTo string,
+	playDialtones ...bool,
+) error {
+	identity, err := TransferSIPParticipantIdentity(participant)
+	if err != nil {
+		return err
+	}
+	playDialtone := false
+	if len(playDialtones) > 0 {
+		playDialtone = playDialtones[0]
+	}
+	return TransferSIPParticipant(ctx, api, job, identity, transferTo, playDialtone)
 }
