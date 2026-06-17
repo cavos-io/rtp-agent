@@ -134,14 +134,7 @@ type WorkerInfo struct {
 	CloudAgents bool
 }
 
-type LocalJobOptions struct {
-	FakeJob           bool
-	RoomInfo          *livekit.Room
-	Token             string
-	RecordingOptions  agent.RecordingOptions
-	SessionReportPath string
-	SessionDirectory  string
-}
+type LocalJobOptions = workerlivekit.LocalJobOptions
 
 type WorkerOptions struct {
 	AgentName      string
