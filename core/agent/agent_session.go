@@ -1028,6 +1028,7 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 
 func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) error {
 	s.mu.Lock()
+	oldTurnDetection := s.Options.TurnDetection
 
 	if opts.MinEndpointingDelay != nil {
 		s.Options.MinEndpointingDelay = *opts.MinEndpointingDelay
@@ -1060,6 +1061,9 @@ func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) error {
 	activity := s.activity
 	s.mu.Unlock()
 
+	if activity != nil && opts.TurnDetection != nil && (oldTurnDetection == TurnDetectionModeManual || *opts.TurnDetection == TurnDetectionModeManual) {
+		activity.cancelFalseInterruptionTimer()
+	}
 	if activity != nil {
 		return activity.UpdateOptions(opts)
 	}

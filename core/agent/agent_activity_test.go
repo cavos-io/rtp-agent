@@ -688,6 +688,27 @@ func TestAgentActivityOnStartOfSpeechCancelsPendingFalseInterruptionResume(t *te
 	current.MarkDone()
 }
 
+func TestAgentSessionUpdateOptionsToManualCancelsFalseInterruptionTimer(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection: TurnDetectionModeVAD,
+	})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	activity.falseInterruptionTimer = time.AfterFunc(time.Hour, func() {})
+	defer activity.cancelFalseInterruptionTimer()
+
+	manual := TurnDetectionModeManual
+	if err := session.UpdateOptions(AgentSessionUpdateOptions{TurnDetection: &manual}); err != nil {
+		t.Fatalf("UpdateOptions error = %v, want nil", err)
+	}
+
+	if activity.falseInterruptionTimer != nil {
+		t.Fatal("falseInterruptionTimer still armed after switching to manual turn detection")
+	}
+}
+
 func TestAgentActivityDuplicateStartOfSpeechKeepsActiveAudioFrames(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
