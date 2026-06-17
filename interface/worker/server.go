@@ -843,8 +843,7 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 		opts.LoadFunc = defaultWorkerLoadFunc
 	}
 	if opts.Permissions == nil {
-		permissions := workerlivekit.ResolveWorkerPermissions(nil)
-		opts.Permissions = &permissions
+		opts.Permissions = workerlivekit.DefaultWorkerPermissions()
 	}
 	if opts.WSURL == "" {
 		opts.WSURL = opts.WSRL

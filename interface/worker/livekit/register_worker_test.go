@@ -126,6 +126,29 @@ func TestResolveWorkerPermissionsDefaultsToLiveKitAgentPermissions(t *testing.T)
 	}
 }
 
+func TestDefaultWorkerPermissionsReturnsLiveKitAgentPermissions(t *testing.T) {
+	permissions := workerlivekit.DefaultWorkerPermissions()
+
+	if permissions == nil {
+		t.Fatal("DefaultWorkerPermissions() = nil")
+	}
+	if !permissions.CanPublish {
+		t.Fatal("permissions.CanPublish = false, want true")
+	}
+	if !permissions.CanSubscribe {
+		t.Fatal("permissions.CanSubscribe = false, want true")
+	}
+	if !permissions.CanPublishData {
+		t.Fatal("permissions.CanPublishData = false, want true")
+	}
+	if !permissions.CanUpdateMetadata {
+		t.Fatal("permissions.CanUpdateMetadata = false, want true")
+	}
+	if permissions.Hidden {
+		t.Fatal("permissions.Hidden = true, want false")
+	}
+}
+
 func TestResolveWorkerPermissionsUsesConfiguredPermissions(t *testing.T) {
 	configured := workerlivekit.WorkerPermissions{
 		CanSubscribe: true,

@@ -41,6 +41,11 @@ func ResolveWorkerPermissions(permissions *WorkerPermissions) WorkerPermissions 
 	return *permissions
 }
 
+func DefaultWorkerPermissions() *WorkerPermissions {
+	permissions := ResolveWorkerPermissions(nil)
+	return &permissions
+}
+
 func RegisterWorkerMessage(opts WorkerRegistrationOptions) *lkprotocol.WorkerMessage {
 	return RegisterWorkerRequest(RegisterWorkerOptions{
 		JobType:     JobTypeForWorkerType(opts.WorkerType),
