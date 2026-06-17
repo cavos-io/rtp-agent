@@ -41,6 +41,15 @@ func TestTelnyxSTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestTelnyxSTTInterimResultsOptionMatchesReference(t *testing.T) {
+	provider := NewTelnyxSTT("test-key", WithTelnyxSTTInterimResults(false))
+
+	caps := provider.Capabilities()
+	if !caps.Streaming || caps.InterimResults || !caps.OfflineRecognize {
+		t.Fatalf("capabilities = %+v, want streaming without interim and with offline recognize", caps)
+	}
+}
+
 func TestNewTelnyxSTTUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("TELNYX_API_KEY", "env-key")
 

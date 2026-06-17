@@ -63,6 +63,12 @@ func WithTelnyxSTTTranscriptionEngine(engine string) TelnyxSTTOption {
 	}
 }
 
+func WithTelnyxSTTInterimResults(interimResults bool) TelnyxSTTOption {
+	return func(s *TelnyxSTT) {
+		s.interimResults = interimResults
+	}
+}
+
 func WithTelnyxSTTSampleRate(sampleRate int) TelnyxSTTOption {
 	return func(s *TelnyxSTT) {
 		if sampleRate > 0 {
