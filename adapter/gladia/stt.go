@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -264,8 +265,9 @@ func (s *GladiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		ctx:    streamCtx,
 		cancel: cancel,
 		state: &gladiaSTTStreamState{
-			requestID: session.ID,
-			languages: provider.languages,
+			requestID:          session.ID,
+			languages:          provider.languages,
+			translationEnabled: provider.translationEnabled,
 		},
 	}
 	go stream.readLoop()
@@ -573,26 +575,41 @@ func (s *gladiaSTTStream) readLoop() {
 }
 
 type gladiaSTTStreamState struct {
-	requestID     string
-	languages     []string
-	speaking      bool
-	audioDuration float64
+	requestID          string
+	languages          []string
+	speaking           bool
+	audioDuration      float64
+	translationEnabled bool
 }
 
 func processGladiaMessage(state *gladiaSTTStreamState, data map[string]any) ([]*stt.SpeechEvent, error) {
 	messageType, _ := data["type"].(string)
-	if messageType != "transcript" {
-		if messageType == "error" {
-			return nil, fmt.Errorf("gladia websocket error: %v", data["data"])
-		}
+	if state == nil {
+		state = &gladiaSTTStreamState{}
+	}
+	switch messageType {
+	case "transcript":
+		return processGladiaTranscriptMessage(state, data)
+	case "translation":
+		return processGladiaTranslationMessage(state, data), nil
+	case "post_final_transcript":
+		state.speaking = false
+		return nil, nil
+	case "error":
+		return nil, fmt.Errorf("gladia websocket error: %v", data["data"])
+	default:
 		return nil, nil
 	}
+}
+
+func processGladiaTranscriptMessage(state *gladiaSTTStreamState, data map[string]any) ([]*stt.SpeechEvent, error) {
 	payload, _ := data["data"].(map[string]any)
 	utterance, _ := payload["utterance"].(map[string]any)
-	text := gladiaAnyString(utterance["text"])
+	text := strings.TrimSpace(gladiaAnyString(utterance["text"]))
 	if text == "" {
 		return nil, nil
 	}
+	utterance["text"] = text
 	isFinal, _ := payload["is_final"].(bool)
 	speechData := gladiaSpeechData(state, utterance)
 	events := []*stt.SpeechEvent{}
@@ -601,6 +618,9 @@ func processGladiaMessage(state *gladiaSTTStreamState, data map[string]any) ([]*
 		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech, RequestID: state.requestID})
 	}
 	if isFinal {
+		if state.translationEnabled {
+			return events, nil
+		}
 		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript, RequestID: state.requestID, Alternatives: []stt.SpeechData{speechData}})
 		state.speaking = false
 		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech, RequestID: state.requestID})
@@ -608,6 +628,40 @@ func processGladiaMessage(state *gladiaSTTStreamState, data map[string]any) ([]*
 	}
 	events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventInterimTranscript, RequestID: state.requestID, Alternatives: []stt.SpeechData{speechData}})
 	return events, nil
+}
+
+func processGladiaTranslationMessage(state *gladiaSTTStreamState, data map[string]any) []*stt.SpeechEvent {
+	if !state.translationEnabled {
+		return nil
+	}
+	payload, _ := data["data"].(map[string]any)
+	translatedUtterance, _ := payload["translated_utterance"].(map[string]any)
+	text := strings.TrimSpace(gladiaAnyString(translatedUtterance["text"]))
+	language := gladiaAnyString(translatedUtterance["language"])
+	if language == "" {
+		language = gladiaAnyString(payload["target_language"])
+	}
+	if text == "" || language == "" {
+		return nil
+	}
+	translatedUtterance["text"] = text
+	translatedUtterance["language"] = language
+	speechData := gladiaSpeechData(state, translatedUtterance)
+	originalUtterance, _ := payload["utterance"].(map[string]any)
+	if sourceLanguage := gladiaAnyString(originalUtterance["language"]); sourceLanguage != "" {
+		speechData.SourceLanguages = []string{sourceLanguage}
+		speechData.SourceTexts = []string{gladiaAnyString(originalUtterance["text"])}
+	}
+	events := []*stt.SpeechEvent{{
+		Type:         stt.SpeechEventFinalTranscript,
+		RequestID:    state.requestID,
+		Alternatives: []stt.SpeechData{speechData},
+	}}
+	if state.speaking {
+		state.speaking = false
+		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech, RequestID: state.requestID})
+	}
+	return events
 }
 
 func gladiaSpeechData(state *gladiaSTTStreamState, utterance map[string]any) stt.SpeechData {

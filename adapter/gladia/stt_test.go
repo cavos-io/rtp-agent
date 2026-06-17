@@ -308,6 +308,59 @@ func TestGladiaTranscriptEventsMatchReferenceLifecycle(t *testing.T) {
 	assertGladiaEvent(t, events, 1, stt.SpeechEventEndOfSpeech, "")
 }
 
+func TestGladiaTranslationFinalWaitsForTranslatedTranscript(t *testing.T) {
+	state := &gladiaSTTStreamState{requestID: "session-1", translationEnabled: true}
+	events, err := processGladiaMessage(state, map[string]any{
+		"type": "transcript",
+		"data": map[string]any{
+			"is_final": true,
+			"utterance": map[string]any{
+				"text":     "hello",
+				"language": "en",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("process original final: %v", err)
+	}
+	if len(events) != 1 || events[0].Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("original final events = %+v, want only start_of_speech while waiting for translation", events)
+	}
+
+	events, err = processGladiaMessage(state, map[string]any{
+		"type": "translation",
+		"data": map[string]any{
+			"target_language": "es",
+			"utterance": map[string]any{
+				"text":     "hello",
+				"language": "en",
+			},
+			"translated_utterance": map[string]any{
+				"text":       "hola",
+				"language":   "es",
+				"start":      0.2,
+				"end":        0.6,
+				"confidence": 0.91,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("process translation: %v", err)
+	}
+	assertGladiaEvent(t, events, 0, stt.SpeechEventFinalTranscript, "hola")
+	assertGladiaEvent(t, events, 1, stt.SpeechEventEndOfSpeech, "")
+	translated := events[0].Alternatives[0]
+	if translated.Language != "es" || translated.StartTime != 0.2 || translated.EndTime != 0.6 || translated.Confidence != 0.91 {
+		t.Fatalf("translated data = %+v, want es timing/confidence", translated)
+	}
+	if len(translated.SourceLanguages) != 1 || translated.SourceLanguages[0] != "en" {
+		t.Fatalf("source languages = %+v, want en", translated.SourceLanguages)
+	}
+	if len(translated.SourceTexts) != 1 || translated.SourceTexts[0] != "hello" {
+		t.Fatalf("source texts = %+v, want hello", translated.SourceTexts)
+	}
+}
+
 func assertGladiaField(t *testing.T, config map[string]any, key string, want any) {
 	t.Helper()
 	if got := config[key]; got != want {
