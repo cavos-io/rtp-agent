@@ -2849,6 +2849,21 @@ func (a *AgentActivity) turnDetectionMode() TurnDetectionMode {
 	} else if a.Session != nil {
 		mode = string(a.Session.Options.TurnDetection)
 	}
+	if realtime, turnDetection := a.realtimeTurnDetectionCapabilities(); realtime && TurnDetectionMode(mode) != TurnDetectionModeRealtimeLLM {
+		if turnDetection && mode != "" {
+			logger.Logger.Warnw("turn_detection is set to a local mode, but realtime server turn detection is enabled", nil)
+			return ""
+		}
+		if !turnDetection && (mode == "" || TurnDetectionMode(mode) == TurnDetectionModeSTT) {
+			if a.hasVADModel() {
+				return TurnDetectionModeVAD
+			}
+			if TurnDetectionMode(mode) == TurnDetectionModeSTT {
+				logger.Logger.Warnw("turn_detection is set to stt, but realtime model local STT turn detection is ignored", nil)
+				return ""
+			}
+		}
+	}
 	switch TurnDetectionMode(mode) {
 	case TurnDetectionModeSTT:
 		if (a.Agent == nil || a.Agent.STT == nil) && (a.Session == nil || a.Session.STT == nil) {
@@ -2884,9 +2899,7 @@ func (a *AgentActivity) realtimeTurnDetectionCapabilities() (bool, bool) {
 		return true, a.Agent.RealtimeModel.Capabilities().TurnDetection
 	}
 	if a.Session != nil {
-		a.Session.mu.Lock()
 		assistant := a.Session.Assistant
-		a.Session.mu.Unlock()
 		if capabilities, ok := assistant.(realtimeCapabilitiesAssistant); ok {
 			return true, capabilities.RealtimeCapabilities().TurnDetection
 		}

@@ -1715,6 +1715,57 @@ func TestAgentActivityRealtimeLLMTurnDetectionUsesRealtimeCapabilities(t *testin
 	})
 }
 
+func TestAgentActivityRealtimeModelIgnoresLocalTurnDetection(t *testing.T) {
+	t.Run("server turn detection ignores stt", func(t *testing.T) {
+		agent := NewAgent("test")
+		agent.STT = &fakePipelineSTT{}
+		agent.RealtimeModel = &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{TurnDetection: true}}
+		session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeSTT})
+		activity := NewAgentActivity(agent, session)
+
+		if got := activity.turnDetectionMode(); got != "" {
+			t.Fatalf("turnDetectionMode() = %q, want local STT ignored while realtime server turn detection is enabled", got)
+		}
+	})
+
+	t.Run("realtime without server turn detection falls back from stt to vad", func(t *testing.T) {
+		agent := NewAgent("test")
+		agent.STT = &fakePipelineSTT{}
+		agent.VAD = &fakePipelineVAD{}
+		agent.RealtimeModel = &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{TurnDetection: false}}
+		session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeSTT})
+		activity := NewAgentActivity(agent, session)
+
+		if got := activity.turnDetectionMode(); got != TurnDetectionModeVAD {
+			t.Fatalf("turnDetectionMode() = %q, want VAD fallback when realtime model lacks server turn detection", got)
+		}
+	})
+
+	t.Run("realtime without server turn detection ignores stt when vad missing", func(t *testing.T) {
+		agent := NewAgent("test")
+		agent.STT = &fakePipelineSTT{}
+		agent.RealtimeModel = &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{TurnDetection: false}}
+		session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeSTT})
+		activity := NewAgentActivity(agent, session)
+
+		if got := activity.turnDetectionMode(); got != "" {
+			t.Fatalf("turnDetectionMode() = %q, want no local STT mode for realtime model without VAD fallback", got)
+		}
+	})
+
+	t.Run("server turn detection ignores vad", func(t *testing.T) {
+		agent := NewAgent("test")
+		agent.VAD = &fakePipelineVAD{}
+		agent.RealtimeModel = &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{TurnDetection: true}}
+		session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeVAD})
+		activity := NewAgentActivity(agent, session)
+
+		if got := activity.turnDetectionMode(); got != "" {
+			t.Fatalf("turnDetectionMode() = %q, want local VAD ignored while realtime server turn detection is enabled", got)
+		}
+	})
+}
+
 func TestAgentActivityScheduleSpeechAllowsForcedSpeechWhilePaused(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
