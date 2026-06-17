@@ -2213,20 +2213,13 @@ func newLocalJobContext(roomName string, participantIdentity string, opts Worker
 func newLocalJobContextWithOptions(roomName string, participantIdentity string, opts WorkerOptions, options LocalJobOptions) *JobContext {
 	opts = resolveWorkerOptions(opts)
 	token := options.Token
-	if token != "" {
-		if identity, err := workerlivekit.TokenIdentity(token); err == nil {
-			participantIdentity = identity
-		}
-	}
+	participantIdentity = workerlivekit.LocalJobIdentity(token, participantIdentity, mathutil.ShortUUID)
 	job := workerlivekit.LocalRoomJob(workerlivekit.LocalRoomJobOptions{
 		RoomName: roomName,
 		RoomInfo: options.RoomInfo,
 		FakeJob:  options.FakeJob,
 	})
 
-	if participantIdentity == "" {
-		participantIdentity = mathutil.ShortUUID("fake-agent-")
-	}
 	jobCtx := NewJobContext(job, opts.WSRL, opts.APIKey, opts.APISecret)
 	jobCtx.AcceptArguments = JobAcceptArguments{Identity: participantIdentity}
 	jobCtx.fakeJob = options.FakeJob
