@@ -109,6 +109,17 @@ func PublishTranscript(ctx context.Context, publisher DataPublisher, role string
 	return publisher.PublishData(normalizeContext(ctx), payload)
 }
 
+func PublishReasoning(ctx context.Context, publisher DataPublisher, role string, text string, final bool, streamID string, createdAt time.Time) error {
+	if text == "" || publisher == nil {
+		return nil
+	}
+	payload, err := marshalTENReasoning(role, text, final, streamID, createdAt)
+	if err != nil {
+		return err
+	}
+	return publisher.PublishData(normalizeContext(ctx), payload)
+}
+
 func marshalTENTranscript(role string, text string, final bool, streamID string, createdAt time.Time) ([]byte, error) {
 	if createdAt.IsZero() {
 		createdAt = time.Now()
@@ -117,6 +128,29 @@ func marshalTENTranscript(role string, text string, final bool, streamID string,
 		"data_type": "transcribe",
 		"role":      role,
 		"text":      text,
+		"text_ts":   createdAt.UnixMilli(),
+		"is_final":  final,
+		"stream_id": transcriptStreamIDValue(streamID),
+	})
+}
+
+func marshalTENReasoning(role string, text string, final bool, streamID string, createdAt time.Time) ([]byte, error) {
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+	rawText, err := json.Marshal(map[string]any{
+		"type": "reasoning",
+		"data": map[string]any{
+			"text": text,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]any{
+		"data_type": "raw",
+		"role":      role,
+		"text":      string(rawText),
 		"text_ts":   createdAt.UnixMilli(),
 		"is_final":  final,
 		"stream_id": transcriptStreamIDValue(streamID),
