@@ -382,6 +382,40 @@ func TestRealtimeModelConstructorTruncationAppliesToInitialSession(t *testing.T)
 	}
 }
 
+func TestRealtimeModelConstructorReasoningAppliesToInitialSession(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime-2", WithOpenAIRealtimeReasoning(map[string]any{"effort": "low"}))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	initialUpdate := <-messages
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(initialUpdate), &msg); err != nil {
+		t.Fatalf("decode initial update: %v", err)
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	reasoning := sessionPayload["reasoning"].(map[string]any)
+	if reasoning["effort"] != "low" {
+		t.Fatalf("reasoning = %#v, want effort low", reasoning)
+	}
+}
+
 func TestRealtimeModelConstructorInputAudioTranscriptionAppliesToInitialSession(t *testing.T) {
 	messages := make(chan string, 4)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
@@ -1179,6 +1213,39 @@ func TestRealtimeUpdateOptionsMessageClearsTracing(t *testing.T) {
 	}
 	if value != nil {
 		t.Fatalf("tracing = %#v, want nil reset", value)
+	}
+}
+
+func TestRealtimeUpdateOptionsMessageMapsReasoning(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		Reasoning: map[string]any{"effort": "low"},
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	reasoning := session["reasoning"].(map[string]any)
+	if reasoning["effort"] != "low" {
+		t.Fatalf("reasoning = %#v, want effort low", reasoning)
+	}
+}
+
+func TestRealtimeUpdateOptionsMessageClearsReasoning(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		ReasoningSet: true,
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	value, ok := session["reasoning"]
+	if !ok {
+		t.Fatalf("reasoning missing from session payload: %#v", session)
+	}
+	if value != nil {
+		t.Fatalf("reasoning = %#v, want nil reset", value)
 	}
 }
 

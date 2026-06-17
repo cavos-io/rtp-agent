@@ -73,6 +73,13 @@ func WithOpenAIRealtimeTracing(tracing any) OpenAIRealtimeOption {
 	}
 }
 
+func WithOpenAIRealtimeReasoning(reasoning any) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.sessionOptions.Reasoning = reasoning
+		options.sessionOptions.ReasoningSet = true
+	}
+}
+
 func WithOpenAIRealtimeTruncation(truncation any) OpenAIRealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.sessionOptions.Truncation = truncation
@@ -760,6 +767,9 @@ func openAIRealtimeUpdateOptionsMessageWithEventID(options llm.RealtimeSessionOp
 	if options.TracingSet || options.Tracing != nil {
 		session["tracing"] = options.Tracing
 	}
+	if options.ReasoningSet || options.Reasoning != nil {
+		session["reasoning"] = options.Reasoning
+	}
 	input := make(map[string]any)
 	if options.TurnDetectionSet || options.TurnDetection != nil {
 		input["turn_detection"] = options.TurnDetection
@@ -829,6 +839,10 @@ func openAIRealtimeMergeSessionOptions(dst *llm.RealtimeSessionOptions, src llm.
 		dst.Tracing = src.Tracing
 		dst.TracingSet = true
 	}
+	if src.ReasoningSet || src.Reasoning != nil {
+		dst.Reasoning = src.Reasoning
+		dst.ReasoningSet = true
+	}
 	if src.TurnDetectionSet || src.TurnDetection != nil {
 		dst.TurnDetection = src.TurnDetection
 		dst.TurnDetectionSet = true
@@ -890,6 +904,9 @@ func openAIRealtimeOptionEntries(session map[string]any) map[string]any {
 	if value, ok := session["tracing"]; ok {
 		entries["tracing"] = value
 	}
+	if value, ok := session["reasoning"]; ok {
+		entries["reasoning"] = value
+	}
 	audio, _ := session["audio"].(map[string]any)
 	input, _ := audio["input"].(map[string]any)
 	if value, ok := input["turn_detection"]; ok {
@@ -917,7 +934,7 @@ func openAIRealtimeSessionFromOptionEntries(entries map[string]any) map[string]a
 	output := make(map[string]any)
 	for key, value := range entries {
 		switch key {
-		case "tool_choice", "max_output_tokens", "truncation", "tracing":
+		case "tool_choice", "max_output_tokens", "truncation", "tracing", "reasoning":
 			session[key] = value
 		case "audio.input.turn_detection":
 			input["turn_detection"] = value
