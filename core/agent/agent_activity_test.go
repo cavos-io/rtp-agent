@@ -2894,6 +2894,42 @@ func TestAgentActivityCommitUserTurnCompletesPendingManualTranscript(t *testing.
 	}
 }
 
+func TestAgentActivityManualCommitIgnoresLateInterimTranscript(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 2)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "first turn", Confidence: 0.9}},
+	})
+	if _, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{}); err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	select {
+	case <-agent.turns:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called for first manual commit")
+	}
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "late stale interim"}},
+	})
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{TranscriptTimeout: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("second CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "" {
+		t.Fatalf("second CommitUserTurn transcript = %q, want empty after late interim ignored", transcript)
+	}
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called for stale late interim with %q", msg.TextContent())
+	default:
+	}
+}
+
 func TestAgentActivityCommitUserTurnFallsBackToInterimTranscriptAfterTimeout(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual

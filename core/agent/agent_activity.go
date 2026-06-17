@@ -109,6 +109,7 @@ type AgentActivity struct {
 	speaking             bool
 	interruptionDetected bool
 	overlapSpeechEnded   bool
+	manualTurnCommitted  bool
 
 	providerUnsubscribes []func()
 	registeredTools      []llm.Tool
@@ -1383,6 +1384,7 @@ func (a *AgentActivity) nextSpeechIndexLocked() int {
 func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 	a.speaking = true
 	a.sttEOSReceived = false
+	a.manualTurnCommitted = false
 	a.interruptionDetected = false
 	a.overlapSpeechEnded = false
 	a.userSpeechStartedAt = time.Now()
@@ -1477,6 +1479,9 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 		return
 	}
 	if a.realtimeUserTranscriptionEnabled() {
+		return
+	}
+	if a.turnDetectionMode() == TurnDetectionModeManual && a.manualTurnCommitted {
 		return
 	}
 	if a.holdSTTEventWhileAgentSpeaking(ev) {
@@ -2167,6 +2172,7 @@ func (a *AgentActivity) ClearUserTurn() {
 
 	a.sttEOSReceived = false
 	a.speaking = false
+	a.manualTurnCommitted = false
 	a.userSpeechStartedAt = time.Time{}
 	a.userSpeechStoppedAt = time.Time{}
 	a.cancelPreemptiveGeneration()
@@ -2304,6 +2310,9 @@ collect:
 		AudioFrames:          a.userAudioSnapshot(),
 	}); err != nil {
 		return transcript, err
+	}
+	if a.turnDetectionMode() == TurnDetectionModeManual {
+		a.manualTurnCommitted = true
 	}
 	return transcript, nil
 }
