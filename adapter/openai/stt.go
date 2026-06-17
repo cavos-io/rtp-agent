@@ -357,6 +357,35 @@ func defaultOpenAIRealtimeSTTWebsocketDialer(ctx context.Context, endpoint strin
 }
 
 func (s *OpenAISTT) dialRealtimeSTTWebsocket(ctx context.Context) (*websocket.Conn, *http.Response, error) {
+	var (
+		conn *websocket.Conn
+		resp *http.Response
+		err  error
+	)
+	for attempt := 0; attempt <= s.connect.MaxRetry; attempt++ {
+		conn, resp, err = s.dialRealtimeSTTWebsocketAttempt(ctx)
+		if err == nil {
+			return conn, resp, nil
+		}
+		if attempt == s.connect.MaxRetry {
+			return nil, nil, err
+		}
+		retryInterval := s.connect.IntervalForRetry(attempt)
+		if retryInterval <= 0 {
+			continue
+		}
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil, nil, err
+}
+
+func (s *OpenAISTT) dialRealtimeSTTWebsocketAttempt(ctx context.Context) (*websocket.Conn, *http.Response, error) {
 	if s.connect.Timeout <= 0 {
 		return s.dialWebsocket(ctx, buildOpenAIRealtimeSTTWebsocketURL(s).String(), buildOpenAIRealtimeSTTHeaders(s))
 	}
