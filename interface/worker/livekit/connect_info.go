@@ -17,6 +17,10 @@ type ConnectInfoOptions struct {
 	ParticipantAttributes map[string]string
 }
 
+type ConnectOptions struct {
+	AutoSubscribe AutoSubscribe
+}
+
 func ConnectInfo(opts ConnectInfoOptions) lksdk.ConnectInfo {
 	return lksdk.ConnectInfo{
 		APIKey:                opts.APIKey,

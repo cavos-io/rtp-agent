@@ -80,6 +80,14 @@ func TestConnectOptionsForAutoSubscribeBuildsSDKOptions(t *testing.T) {
 	}
 }
 
+func TestConnectOptionsOwnsAutoSubscribeMode(t *testing.T) {
+	opts := workerlivekit.ConnectOptions{AutoSubscribe: workerlivekit.AutoSubscribeAudioOnly}
+
+	if opts.AutoSubscribe != workerlivekit.AutoSubscribeAudioOnly {
+		t.Fatalf("AutoSubscribe = %q, want %q", opts.AutoSubscribe, workerlivekit.AutoSubscribeAudioOnly)
+	}
+}
+
 func TestConnectRoomUsesTokenConnectorWhenTokenPresent(t *testing.T) {
 	wantRoom := lksdk.NewRoom(nil)
 	calledWithToken := false

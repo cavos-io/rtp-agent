@@ -225,9 +225,7 @@ const (
 	AutoSubscribeVideoOnly     = workerlivekit.AutoSubscribeVideoOnly
 )
 
-type ConnectOptions struct {
-	AutoSubscribe AutoSubscribe
-}
+type ConnectOptions = workerlivekit.ConnectOptions
 
 type ParticipantEntrypoint func(*JobContext, *livekit.ParticipantInfo)
 
