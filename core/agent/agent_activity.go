@@ -2245,6 +2245,9 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 	if ctx == nil {
 		ctx = a.ctx
 	}
+	if opts.TranscriptTimeout == 0 {
+		opts.TranscriptTimeout = 2 * time.Second
+	}
 	if a.Session != nil {
 		a.Session.mu.Lock()
 		assistant := a.Session.Assistant

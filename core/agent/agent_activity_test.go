@@ -3477,6 +3477,56 @@ func TestAgentActivityCommitUserTurnFlushesSTTBeforeWaitingForFinal(t *testing.T
 	}
 }
 
+func TestAgentActivityCommitUserTurnDefaultsFlushAndWaitForFinal(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	flusher := &recordingTranscriptFlusher{flushed: make(chan struct{}, 1)}
+	session.Assistant = flusher
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	done := make(chan string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+		if err != nil {
+			errCh <- err
+			return
+		}
+		done <- transcript
+	}()
+
+	select {
+	case <-flusher.flushed:
+	case transcript := <-done:
+		t.Fatalf("CommitUserTurn returned %q before default STT flush and final transcript", transcript)
+	case <-time.After(time.Second):
+		t.Fatal("CommitUserTurn did not flush input transcription with default options")
+	}
+	if flusher.flushDuration != 2*time.Second {
+		t.Fatalf("FlushInputTranscription duration = %v, want reference default 2s", flusher.flushDuration)
+	}
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "default flushed final",
+			Language:   "en",
+			Confidence: 0.92,
+		}},
+	})
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	case transcript := <-done:
+		if transcript != "default flushed final" {
+			t.Fatalf("CommitUserTurn transcript = %q, want default flushed final", transcript)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CommitUserTurn did not return after default flushed final transcript")
+	}
+}
+
 func TestAgentActivityCommitUserTurnGeneratesReplyWhenLLMConfigured(t *testing.T) {
 	agent := NewAgent("test")
 	agent.TurnDetection = TurnDetectionModeManual
