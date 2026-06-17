@@ -19,6 +19,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/gorilla/websocket"
 )
 
@@ -37,6 +38,7 @@ type MistralAISTT struct {
 	contextBias            []string
 	sampleRate             int
 	targetStreamingDelayMS *int
+	vad                    vad.VAD
 
 	dialRealtime func(context.Context, string, http.Header) (mistralAISTTRealtimeConn, error)
 }
@@ -74,6 +76,12 @@ func WithMistralAISTTContextBias(contextBias []string) MistralAISTTOption {
 func WithMistralAISTTTargetStreamingDelay(delayMS int) MistralAISTTOption {
 	return func(s *MistralAISTT) {
 		s.targetStreamingDelayMS = &delayMS
+	}
+}
+
+func WithMistralAISTTVAD(v vad.VAD) MistralAISTTOption {
+	return func(s *MistralAISTT) {
+		s.vad = v
 	}
 }
 
@@ -121,14 +129,23 @@ func (s *MistralAISTT) Stream(ctx context.Context, language string) (stt.Recogni
 	if err != nil {
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
+	var vadStream vad.VADStream
+	if s.vad != nil {
+		vadStream, err = s.vad.Stream(ctx)
+		if err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &mistralAISTTRealtimeStream{
-		conn:   conn,
-		events: make(chan *stt.SpeechEvent, 100),
-		errCh:  make(chan error, 1),
-		ctx:    streamCtx,
-		cancel: cancel,
-		state:  &mistralAISTTRealtimeState{},
+		conn:      conn,
+		events:    make(chan *stt.SpeechEvent, 100),
+		errCh:     make(chan error, 1),
+		ctx:       streamCtx,
+		cancel:    cancel,
+		state:     &mistralAISTTRealtimeState{},
+		vadStream: vadStream,
 	}
 	if s.targetStreamingDelayMS != nil {
 		if err := stream.writeJSON(map[string]any{
@@ -142,7 +159,22 @@ func (s *MistralAISTT) Stream(ctx context.Context, language string) (stt.Recogni
 			return nil, err
 		}
 	}
-	go stream.readLoop()
+	stream.wg.Add(1)
+	go func() {
+		defer stream.wg.Done()
+		stream.readLoop()
+	}()
+	if vadStream != nil {
+		stream.wg.Add(1)
+		go func() {
+			defer stream.wg.Done()
+			stream.vadLoop()
+		}()
+	}
+	go func() {
+		stream.wg.Wait()
+		close(stream.events)
+	}()
 	return stream, nil
 }
 
@@ -303,12 +335,16 @@ type mistralAISTTRealtimeStream struct {
 	events          chan *stt.SpeechEvent
 	errCh           chan error
 	mu              sync.Mutex
+	writeMu         sync.Mutex
+	wg              sync.WaitGroup
 	closed          bool
+	speaking        bool
 	startTimeOffset float64
 	startTime       float64
 	ctx             context.Context
 	cancel          context.CancelFunc
 	state           *mistralAISTTRealtimeState
+	vadStream       vad.VADStream
 }
 
 type mistralAISTTRealtimeState struct {
@@ -331,6 +367,11 @@ func (s *mistralAISTTRealtimeStream) PushFrame(frame *model.AudioFrame) error {
 			return err
 		}
 	}
+	if s.vadStream != nil {
+		if err := s.vadStream.PushFrame(frame); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -347,6 +388,10 @@ func (s *mistralAISTTRealtimeStream) Close() error {
 	s.closed = true
 	s.mu.Unlock()
 	s.cancel()
+	if s.vadStream != nil {
+		_ = s.vadStream.EndInput()
+		_ = s.vadStream.Close()
+	}
 	_ = s.writeJSON(map[string]any{"type": "input_audio.end"})
 	return s.conn.Close()
 }
@@ -401,7 +446,6 @@ func (s *mistralAISTTRealtimeStream) currentStartTimeOffset() float64 {
 }
 
 func (s *mistralAISTTRealtimeStream) readLoop() {
-	defer close(s.events)
 	for {
 		msgType, message, err := s.conn.ReadMessage()
 		if err != nil {
@@ -424,11 +468,60 @@ func (s *mistralAISTTRealtimeStream) readLoop() {
 	}
 }
 
+func (s *mistralAISTTRealtimeStream) vadLoop() {
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		default:
+		}
+		event, err := s.vadStream.Next()
+		if err != nil {
+			if err != io.EOF {
+				s.sendErr(err)
+			}
+			return
+		}
+		switch event.Type {
+		case vad.VADEventStartOfSpeech:
+			if !s.speaking {
+				s.speaking = true
+				s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
+			}
+		case vad.VADEventEndOfSpeech:
+			if err := s.Flush(); err != nil {
+				s.sendErr(err)
+				return
+			}
+			if s.speaking {
+				s.speaking = false
+				s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
+			}
+		}
+	}
+}
+
+func (s *mistralAISTTRealtimeStream) sendEvent(event *stt.SpeechEvent) {
+	select {
+	case s.events <- event:
+	case <-s.ctx.Done():
+	}
+}
+
+func (s *mistralAISTTRealtimeStream) sendErr(err error) {
+	select {
+	case s.errCh <- err:
+	default:
+	}
+}
+
 func (s *mistralAISTTRealtimeStream) writeJSON(msg map[string]any) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	return s.conn.WriteMessage(websocket.TextMessage, data)
 }
 

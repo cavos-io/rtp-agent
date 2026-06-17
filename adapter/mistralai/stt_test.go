@@ -19,6 +19,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/core/vad"
 )
 
 func TestMistralAISTTDefaultsMatchReference(t *testing.T) {
@@ -252,6 +253,46 @@ func TestMistralAISTTRealtimeStreamAppliesStartTimeOffset(t *testing.T) {
 	if word.StartTime != 11 || word.EndTime != 11.5 || word.StartTimeOffset != 10 {
 		t.Fatalf("word timing = %+v, want start/end with offset and StartTimeOffset", word)
 	}
+}
+
+func TestMistralAISTTRealtimeStreamUsesVADForEndpointing(t *testing.T) {
+	readGate := make(chan struct{})
+	t.Cleanup(func() { close(readGate) })
+	conn := &mistralAISTTFakeRealtimeConn{readGate: readGate}
+	vadStream := &mistralAISTTFakeVADStream{eventsOnPush: []*vad.VADEvent{
+		{Type: vad.VADEventStartOfSpeech},
+		{Type: vad.VADEventEndOfSpeech},
+	}}
+	provider := NewMistralAISTT("test-key",
+		WithMistralAISTTModel("voxtral-realtime-latest"),
+		WithMistralAISTTVAD(&mistralAISTTFakeVAD{stream: vadStream}),
+	)
+	provider.dialRealtime = func(ctx context.Context, endpoint string, headers http.Header) (mistralAISTTRealtimeConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01, 0x02}}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+
+	start := nextMistralSTTEvent(t, stream)
+	if start.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event = %s, want start_of_speech", start.Type)
+	}
+	end := nextMistralSTTEvent(t, stream)
+	if end.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("second event = %s, want end_of_speech", end.Type)
+	}
+	messages := conn.messages()
+	if len(messages) != 2 {
+		t.Fatalf("messages = %v, want append then VAD flush", messages)
+	}
+	assertMistralRealtimeMessage(t, messages[0], "input_audio.append", map[string]any{"audio": "AQI="})
+	assertMistralRealtimeMessage(t, messages[1], "input_audio.flush", nil)
 }
 
 func TestMistralAISTTRealtimeErrorEventReturnsAPIStatusError(t *testing.T) {
@@ -604,6 +645,62 @@ func (c *mistralAISTTFakeRealtimeConn) messages() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]string(nil), c.writes...)
+}
+
+type mistralAISTTFakeVAD struct {
+	stream vad.VADStream
+}
+
+func (f *mistralAISTTFakeVAD) Label() string { return "fake.VAD" }
+func (f *mistralAISTTFakeVAD) Model() string { return "fake" }
+func (f *mistralAISTTFakeVAD) Provider() string {
+	return "fake"
+}
+func (f *mistralAISTTFakeVAD) Capabilities() vad.VADCapabilities {
+	return vad.VADCapabilities{}
+}
+func (f *mistralAISTTFakeVAD) OnMetricsCollected(vad.VADMetricsHandler) func() {
+	return func() {}
+}
+func (f *mistralAISTTFakeVAD) Stream(context.Context) (vad.VADStream, error) {
+	if stream, ok := f.stream.(*mistralAISTTFakeVADStream); ok && stream.events == nil {
+		stream.events = make(chan *vad.VADEvent, len(stream.eventsOnPush))
+	}
+	return f.stream, nil
+}
+
+type mistralAISTTFakeVADStream struct {
+	eventsOnPush []*vad.VADEvent
+	events       chan *vad.VADEvent
+	initEvents   sync.Once
+}
+
+func (f *mistralAISTTFakeVADStream) PushFrame(*model.AudioFrame) error {
+	f.initEvents.Do(func() {
+		if f.events == nil {
+			f.events = make(chan *vad.VADEvent, len(f.eventsOnPush))
+		}
+		for _, event := range f.eventsOnPush {
+			f.events <- event
+		}
+		close(f.events)
+	})
+	return nil
+}
+
+func (f *mistralAISTTFakeVADStream) Flush() error { return nil }
+func (f *mistralAISTTFakeVADStream) EndInput() error {
+	return nil
+}
+func (f *mistralAISTTFakeVADStream) Close() error {
+	return nil
+}
+func (f *mistralAISTTFakeVADStream) Next() (*vad.VADEvent, error) {
+	event, ok := <-f.events
+	if !ok {
+		return nil, io.EOF
+	}
+	return event, nil
 }
 
 func assertMistralRealtimeMessage(t *testing.T, raw string, wantType string, wantFields map[string]any) map[string]any {
