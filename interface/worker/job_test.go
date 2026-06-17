@@ -597,25 +597,27 @@ func TestJobContextConnectPreparedRoomJoinsExistingRoom(t *testing.T) {
 	room := lksdk.NewRoom(nil)
 	joined := false
 
-	oldJoinRoom := jobContextJoinRoom
-	jobContextJoinRoom = func(joinCtx context.Context, gotRoom *lksdk.Room, url string, info lksdk.ConnectInfo, opts ...lksdk.ConnectOption) error {
-		if joinCtx == nil {
-			t.Fatal("join context = nil")
-		}
-		if gotRoom != room {
-			t.Fatal("joined room did not match prepared room")
-		}
-		if url != "wss://livekit.example" {
-			t.Fatalf("join url = %q, want configured URL", url)
-		}
-		if info.RoomName != "room-a" {
-			t.Fatalf("join room name = %q, want room-a", info.RoomName)
-		}
-		joined = true
-		return nil
+	oldConnector := jobContextRoomConnector
+	jobContextRoomConnector = workerlivekit.RoomConnector{
+		Join: func(joinCtx context.Context, gotRoom *lksdk.Room, url string, info lksdk.ConnectInfo, opts ...lksdk.ConnectOption) error {
+			if joinCtx == nil {
+				t.Fatal("join context = nil")
+			}
+			if gotRoom != room {
+				t.Fatal("joined room did not match prepared room")
+			}
+			if url != "wss://livekit.example" {
+				t.Fatalf("join url = %q, want configured URL", url)
+			}
+			if info.RoomName != "room-a" {
+				t.Fatalf("join room name = %q, want room-a", info.RoomName)
+			}
+			joined = true
+			return nil
+		},
 	}
 	t.Cleanup(func() {
-		jobContextJoinRoom = oldJoinRoom
+		jobContextRoomConnector = oldConnector
 	})
 
 	if err := ctx.ConnectPreparedRoom(context.Background(), room); err != nil {
@@ -640,19 +642,21 @@ func TestJobContextConnectPreparedRoomRegistersRoomIOPreConnectBeforeJoin(t *tes
 	room := ctx.NewRoom(rio.GetCallback())
 	rio.AttachRoom(room)
 
-	oldJoinRoom := jobContextJoinRoom
-	jobContextJoinRoom = func(_ context.Context, gotRoom *lksdk.Room, _ string, _ lksdk.ConnectInfo, _ ...lksdk.ConnectOption) error {
-		if gotRoom != room {
-			t.Fatal("joined room did not match prepared room")
-		}
-		err := room.RegisterByteStreamHandler(workerlivekit.PreConnectAudioBufferStream, func(*lksdk.ByteStreamReader, string) {})
-		if err == nil {
-			t.Fatal("pre-connect byte-stream handler was not registered before join")
-		}
-		return nil
+	oldConnector := jobContextRoomConnector
+	jobContextRoomConnector = workerlivekit.RoomConnector{
+		Join: func(_ context.Context, gotRoom *lksdk.Room, _ string, _ lksdk.ConnectInfo, _ ...lksdk.ConnectOption) error {
+			if gotRoom != room {
+				t.Fatal("joined room did not match prepared room")
+			}
+			err := room.RegisterByteStreamHandler(workerlivekit.PreConnectAudioBufferStream, func(*lksdk.ByteStreamReader, string) {})
+			if err == nil {
+				t.Fatal("pre-connect byte-stream handler was not registered before join")
+			}
+			return nil
+		},
 	}
 	t.Cleanup(func() {
-		jobContextJoinRoom = oldJoinRoom
+		jobContextRoomConnector = oldConnector
 		_ = rio.Close()
 	})
 

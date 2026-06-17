@@ -1,8 +1,13 @@
 package livekit
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 func RetryDelay(retryCount int) time.Duration {
@@ -14,5 +19,80 @@ func RetryDelay(retryCount int) time.Duration {
 }
 
 func ConnectFailureError(agentURL string, attempts int, err error) error {
-	return fmt.Errorf("failed to connect to LiveKit after %d attempts %s: %w", attempts, agentURL, err)
+	return &connectFailureError{
+		agentURL: agentURL,
+		attempts: attempts,
+		cause:    err,
+	}
+}
+
+type connectFailureError struct {
+	agentURL string
+	attempts int
+	cause    error
+}
+
+func (e *connectFailureError) Error() string {
+	return fmt.Sprintf("failed to connect to LiveKit after %d attempts %s: %v", e.attempts, e.agentURL, e.cause)
+}
+
+func (e *connectFailureError) Unwrap() error {
+	return e.cause
+}
+
+func IsConnectFailure(err error) bool {
+	var failure *connectFailureError
+	return errors.As(err, &failure)
+}
+
+type WorkerWebSocketDialFunc func(context.Context, *websocket.Dialer, string, http.Header) (*websocket.Conn, *http.Response, error)
+
+type WorkerWebSocketSleepFunc func(context.Context, time.Duration) error
+
+type WorkerWebSocketConnectOptions struct {
+	Dialer   *websocket.Dialer
+	URL      string
+	Headers  http.Header
+	MaxRetry int
+	Dial     WorkerWebSocketDialFunc
+	Sleep    WorkerWebSocketSleepFunc
+}
+
+func ConnectWorkerWebSocket(ctx context.Context, opts WorkerWebSocketConnectOptions) (*websocket.Conn, *http.Response, error) {
+	dial := opts.Dial
+	if dial == nil {
+		dial = func(ctx context.Context, dialer *websocket.Dialer, url string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+			return dialer.DialContext(ctx, url, headers)
+		}
+	}
+	sleep := opts.Sleep
+	if sleep == nil {
+		sleep = func(ctx context.Context, delay time.Duration) error {
+			timer := time.NewTimer(delay)
+			defer timer.Stop()
+
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-timer.C:
+				return nil
+			}
+		}
+	}
+
+	retryCount := 0
+	for {
+		conn, res, err := dial(ctx, opts.Dialer, opts.URL, opts.Headers)
+		if err == nil {
+			return conn, res, nil
+		}
+		if retryCount >= opts.MaxRetry {
+			return nil, nil, ConnectFailureError(opts.URL, retryCount, err)
+		}
+		delay := RetryDelay(retryCount)
+		retryCount++
+		if err := sleep(ctx, delay); err != nil {
+			return nil, nil, err
+		}
+	}
 }

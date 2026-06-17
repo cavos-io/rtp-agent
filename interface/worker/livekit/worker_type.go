@@ -2,9 +2,16 @@ package livekit
 
 import lkprotocol "github.com/livekit/protocol/livekit"
 
+type WorkerType string
+
+const (
+	WorkerTypeRoom      WorkerType = "room"
+	WorkerTypePublisher WorkerType = "publisher"
+)
+
 func JobTypeForWorkerType(workerType string) lkprotocol.JobType {
-	switch workerType {
-	case "publisher":
+	switch WorkerType(workerType) {
+	case WorkerTypePublisher:
 		return lkprotocol.JobType_JT_PUBLISHER
 	default:
 		return lkprotocol.JobType_JT_ROOM

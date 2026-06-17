@@ -2,21 +2,24 @@ package livekit
 
 import lksdk "github.com/livekit/server-sdk-go/v2"
 
+type AutoSubscribe string
+
 const (
-	autoSubscribeSubscribeAll = "subscribe_all"
-	autoSubscribeAudioOnly    = "audio_only"
-	autoSubscribeVideoOnly    = "video_only"
+	AutoSubscribeSubscribeAll  AutoSubscribe = "subscribe_all"
+	AutoSubscribeSubscribeNone AutoSubscribe = "subscribe_none"
+	AutoSubscribeAudioOnly     AutoSubscribe = "audio_only"
+	AutoSubscribeVideoOnly     AutoSubscribe = "video_only"
 )
 
 func AutoSubscribeSDKEnabled(mode string) bool {
-	return normalizeAutoSubscribe(mode) == autoSubscribeSubscribeAll
+	return normalizeAutoSubscribe(mode) == string(AutoSubscribeSubscribeAll)
 }
 
 func ShouldAutoSubscribeTrack(mode string, kind lksdk.TrackKind) bool {
 	switch normalizeAutoSubscribe(mode) {
-	case autoSubscribeAudioOnly:
+	case string(AutoSubscribeAudioOnly):
 		return kind == lksdk.TrackKindAudio
-	case autoSubscribeVideoOnly:
+	case string(AutoSubscribeVideoOnly):
 		return kind == lksdk.TrackKindVideo
 	default:
 		return false
@@ -73,7 +76,7 @@ func NormalizeAutoSubscribeMode(mode string) string {
 
 func normalizeAutoSubscribe(mode string) string {
 	if mode == "" {
-		return autoSubscribeSubscribeAll
+		return string(AutoSubscribeSubscribeAll)
 	}
 	return mode
 }

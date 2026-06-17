@@ -49,6 +49,27 @@ func TestAutoSubscribeSDKEnabledMatchesReferenceModes(t *testing.T) {
 	}
 }
 
+func TestAutoSubscribeConstantsUseLiveKitWireValues(t *testing.T) {
+	tests := []struct {
+		name string
+		mode workerlivekit.AutoSubscribe
+		want string
+	}{
+		{name: "subscribe all", mode: workerlivekit.AutoSubscribeSubscribeAll, want: "subscribe_all"},
+		{name: "subscribe none", mode: workerlivekit.AutoSubscribeSubscribeNone, want: "subscribe_none"},
+		{name: "audio only", mode: workerlivekit.AutoSubscribeAudioOnly, want: "audio_only"},
+		{name: "video only", mode: workerlivekit.AutoSubscribeVideoOnly, want: "video_only"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := string(tt.mode); got != tt.want {
+				t.Fatalf("%s = %q, want %q", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNormalizeAutoSubscribeModeDefaultsToSubscribeAll(t *testing.T) {
 	if got := workerlivekit.NormalizeAutoSubscribeMode(""); got != "subscribe_all" {
 		t.Fatalf("NormalizeAutoSubscribeMode(empty) = %q, want subscribe_all", got)

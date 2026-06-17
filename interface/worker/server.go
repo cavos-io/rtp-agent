@@ -30,11 +30,11 @@ import (
 	"github.com/livekit/protocol/livekit"
 )
 
-type WorkerType string
+type WorkerType = workerlivekit.WorkerType
 
 const (
-	WorkerTypeRoom      WorkerType = "room"
-	WorkerTypePublisher WorkerType = "publisher"
+	WorkerTypeRoom      = workerlivekit.WorkerTypeRoom
+	WorkerTypePublisher = workerlivekit.WorkerTypePublisher
 
 	defaultWorkerVersion  = "1.0.0"
 	defaultMaxRetry       = 16
@@ -127,7 +127,7 @@ type WorkerRegisteredInfo struct {
 
 type WorkerRegisteredInfoHandler func(WorkerRegisteredInfo)
 
-type WorkerRegisteredHandler func(workerID string, serverInfo *livekit.ServerInfo)
+type WorkerRegisteredHandler = workerlivekit.WorkerRegisteredHandler
 
 type WorkerInfo struct {
 	HTTPPort    int
@@ -842,27 +842,22 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.Permissions == nil {
 		opts.Permissions = workerlivekit.DefaultWorkerPermissions()
 	}
-	if opts.WSURL == "" {
-		opts.WSURL = opts.WSRL
-	}
-	if opts.WSURL == "" {
-		opts.WSURL = os.Getenv("LIVEKIT_URL")
-	}
-	opts.WSRL = opts.WSURL
-
-	if opts.APIKey == "" {
-		opts.APIKey = os.Getenv("LIVEKIT_API_KEY")
-	}
-	if opts.APISecret == "" {
-		opts.APISecret = os.Getenv("LIVEKIT_API_SECRET")
-	}
-	if opts.WorkerToken == "" {
-		opts.WorkerToken = os.Getenv("LIVEKIT_WORKER_TOKEN")
-	}
-	if opts.AgentName == "" {
-		opts.AgentName = os.Getenv("LIVEKIT_AGENT_NAME")
-		opts.AgentNameIsEnv = opts.AgentName != ""
-	}
+	livekitOptions := workerlivekit.ResolveWorkerConnectionOptions(workerlivekit.WorkerConnectionOptions{
+		WSURL:          opts.WSURL,
+		LegacyWSURL:    opts.WSRL,
+		APIKey:         opts.APIKey,
+		APISecret:      opts.APISecret,
+		WorkerToken:    opts.WorkerToken,
+		AgentName:      opts.AgentName,
+		AgentNameIsEnv: opts.AgentNameIsEnv,
+	})
+	opts.WSURL = livekitOptions.WSURL
+	opts.WSRL = livekitOptions.WSURL
+	opts.APIKey = livekitOptions.APIKey
+	opts.APISecret = livekitOptions.APISecret
+	opts.WorkerToken = livekitOptions.WorkerToken
+	opts.AgentName = livekitOptions.AgentName
+	opts.AgentNameIsEnv = livekitOptions.AgentNameIsEnv
 	if opts.HTTPProxy == "" && !opts.HTTPProxySet {
 		opts.HTTPProxy = os.Getenv("HTTPS_PROXY")
 		if opts.HTTPProxy == "" {
@@ -1624,29 +1619,22 @@ func (s *AgentServer) sendWorkerStatusUpdate() error {
 }
 
 func (s *AgentServer) connectWorkerWebSocket(ctx context.Context, dialer *websocket.Dialer, agentURL string, headers http.Header) (*websocket.Conn, *http.Response, error) {
-	retryCount := 0
-	for {
-		conn, res, err := workerDialContext(ctx, dialer, agentURL, headers)
-		if err == nil {
-			s.setConnectionFailed(false)
-			return conn, res, nil
-		}
-
-		if retryCount >= s.Options.MaxRetry {
+	conn, res, err := workerlivekit.ConnectWorkerWebSocket(ctx, workerlivekit.WorkerWebSocketConnectOptions{
+		Dialer:   dialer,
+		URL:      agentURL,
+		Headers:  headers,
+		MaxRetry: s.Options.MaxRetry,
+		Dial:     workerDialContext,
+		Sleep:    workerRetrySleep,
+	})
+	if err != nil {
+		if workerlivekit.IsConnectFailure(err) {
 			s.setConnectionFailed(true)
-			return nil, nil, workerlivekit.ConnectFailureError(agentURL, retryCount, err)
 		}
-
-		delay := workerRetryDelay(retryCount)
-		retryCount++
-		if err := workerRetrySleep(ctx, delay); err != nil {
-			return nil, nil, err
-		}
+		return nil, nil, err
 	}
-}
-
-func workerRetryDelay(retryCount int) time.Duration {
-	return workerlivekit.RetryDelay(retryCount)
+	s.setConnectionFailed(false)
+	return conn, res, nil
 }
 
 func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMessage) {
