@@ -2070,6 +2070,30 @@ func TestPipelineAgentVADLoopForwardsSpeechEventsToActivity(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentVADLoopEndsActiveSpeechWhenStreamCloses(t *testing.T) {
+	endpointing := &recordingPipelineEndpointing{}
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{Endpointing: endpointing})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	pipeline := NewPipelineAgent(&fakePipelineVAD{}, nil, nil, nil, nil)
+	pipeline.session = session
+
+	pipeline.vadLoop(&fakePipelineVADStream{
+		events: []*vad.VADEvent{{Type: vad.VADEventStartOfSpeech, Timestamp: 1.25}},
+	})
+
+	if got := session.UserState(); got != UserStateListening {
+		t.Fatalf("UserState() after VAD stream close = %q, want listening", got)
+	}
+	if endpointing.startCount != 1 || endpointing.startAt != 1.25 {
+		t.Fatalf("endpointing start = (%d, %.2f), want (1, 1.25)", endpointing.startCount, endpointing.startAt)
+	}
+	if endpointing.endCount != 1 {
+		t.Fatalf("endpointing end calls = %d, want 1 after VAD stream close", endpointing.endCount)
+	}
+}
+
 func TestPipelineAgentVADLoopForwardsInferenceEventsToActivity(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}
