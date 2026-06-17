@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -183,11 +184,8 @@ func (s *ElevenLabsSTT) Recognize(ctx context.Context, frames []*model.AudioFram
 	if elevenLabsSTTIsRealtime(s.modelID) {
 		return nil, fmt.Errorf("elevenlabs realtime models do not support offline recognize")
 	}
-	var audio bytes.Buffer
-	for _, frame := range frames {
-		audio.Write(frame.Data)
-	}
-	req, err := buildElevenLabsSTTRecognizeRequest(ctx, s, audio.Bytes(), language)
+	audio := elevenLabsSTTWAVBytes(frames, uint32(s.sampleRate), 1)
+	req, err := buildElevenLabsSTTRecognizeRequest(ctx, s, audio, language)
 	if err != nil {
 		return nil, err
 	}
@@ -205,6 +203,50 @@ func (s *ElevenLabsSTT) Recognize(ctx context.Context, frames []*model.AudioFram
 		return nil, err
 	}
 	return elevenLabsSTTSpeechEvent(resolveElevenLabsSTTLanguage(s, language), result), nil
+}
+
+func elevenLabsSTTWAVBytes(frames []*model.AudioFrame, defaultSampleRate uint32, defaultNumChannels uint32) []byte {
+	sampleRate := defaultSampleRate
+	numChannels := defaultNumChannels
+	var pcm bytes.Buffer
+	for _, frame := range frames {
+		if frame == nil {
+			continue
+		}
+		if frame.SampleRate != 0 {
+			sampleRate = frame.SampleRate
+		}
+		if frame.NumChannels != 0 {
+			numChannels = frame.NumChannels
+		}
+		pcm.Write(frame.Data)
+	}
+	if sampleRate == 0 {
+		sampleRate = 16000
+	}
+	if numChannels == 0 {
+		numChannels = 1
+	}
+	data := pcm.Bytes()
+	dataSize := uint32(len(data))
+	byteRate := sampleRate * numChannels * 2
+	blockAlign := numChannels * 2
+	var wav bytes.Buffer
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36)+dataSize)
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(numChannels))
+	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
+	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(blockAlign))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	wav.WriteString("data")
+	_ = binary.Write(&wav, binary.LittleEndian, dataSize)
+	wav.Write(data)
+	return wav.Bytes()
 }
 
 func buildElevenLabsSTTRecognizeRequest(ctx context.Context, s *ElevenLabsSTT, audio []byte, language string) (*http.Request, error) {
