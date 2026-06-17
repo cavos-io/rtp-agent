@@ -69,7 +69,9 @@ func TestSDKDataPublisherImplementationUsesBuildTag(t *testing.T) {
 	for _, want := range []string{
 		"Agora-Golang-Server-SDK",
 		"NewRtmClient",
+		"OnMessageEvent",
 		"Login",
+		"Subscribe",
 		"Publish",
 		"RtmChannelTypeMESSAGE",
 		"RtmMessageTypeSTRING",

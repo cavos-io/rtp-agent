@@ -1205,6 +1205,19 @@ func (a *App) runAgora(ctx context.Context) error {
 		transcriptForwarder := workeragora.NewTranscriptForwarder(a.Session, dataPublisher, workeragora.TranscriptForwarderOptions{
 			UserStreamID: agoraOpts.RemoteStreamID,
 		})
+		if subscriber, ok := dataPublisher.(workeragora.DataMessageSubscriber); ok {
+			router := workeragora.RTMMessageRouter{
+				AgentUserID: agoraOpts.RTMUserID,
+				TextInput: func(ctx context.Context, ev workeragora.TextInputEvent) error {
+					if err := workeragora.HandleTextInput(ctx, a.Session, ev.Text); err != nil {
+						logutil.Logger.Warnw("failed to handle Agora RTM text input", err, "channel", ev.Channel, "publisher", ev.Publisher)
+						return err
+					}
+					return nil
+				},
+			}
+			subscriber.SetDataMessageHandler(router.HandleDataMessage)
+		}
 		transcriptForwarder.Start(runCtx)
 		defer func() {
 			if err := transcriptForwarder.Stop(context.Background()); err != nil {

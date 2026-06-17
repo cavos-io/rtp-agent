@@ -131,6 +131,7 @@ type fakeAppAgoraDataPublisher struct {
 	payloads  [][]byte
 	closed    bool
 	published chan []byte
+	handler   workeragora.DataMessageHandler
 }
 
 func (f *fakeAppAgoraDataPublisher) PublishData(_ context.Context, payload []byte) error {
@@ -152,6 +153,18 @@ func (f *fakeAppAgoraDataPublisher) Close(context.Context) error {
 	defer f.mu.Unlock()
 	f.closed = true
 	return nil
+}
+
+func (f *fakeAppAgoraDataPublisher) SetDataMessageHandler(handler workeragora.DataMessageHandler) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.handler = handler
+}
+
+func (f *fakeAppAgoraDataPublisher) dataHandler() workeragora.DataMessageHandler {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.handler
 }
 
 func (f *fakeAppAgoraDataPublisher) isClosed() bool {
@@ -1273,6 +1286,9 @@ func TestRunAgoraPublishesTranscriptDataWhenPublishDataEnabled(t *testing.T) {
 	case <-client.joinedCh:
 	case <-time.After(time.Second):
 		t.Fatal("runAgora() did not join Agora channel")
+	}
+	if dataPublisher.dataHandler() == nil {
+		t.Fatal("runAgora() did not subscribe to Agora RTM data messages")
 	}
 
 	session.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{
