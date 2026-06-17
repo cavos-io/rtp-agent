@@ -2426,7 +2426,7 @@ func TestAvailabilityResponseAcceptsWithDefaultIdentity(t *testing.T) {
 		Job: &livekit.Job{Id: "job_abc123"},
 	}
 
-	resp := availabilityResponseForAccept(req, JobAcceptArguments{}, "")
+	resp := workerlivekit.AvailabilityResponseForAccept(req, workerlivekit.AvailabilityAcceptOptions{}, "")
 	availability := resp.GetAvailability()
 	if availability == nil {
 		t.Fatal("availability response is nil")
@@ -2454,7 +2454,7 @@ func TestAvailabilityResponseAcceptUsesCustomArguments(t *testing.T) {
 		Job: &livekit.Job{Id: "job_custom"},
 	}
 
-	resp := availabilityResponseForAccept(req, JobAcceptArguments{
+	resp := workerlivekit.AvailabilityResponseForAccept(req, workerlivekit.AvailabilityAcceptOptions{
 		Name:     "Agent Name",
 		Identity: "custom-agent",
 		Metadata: "custom-metadata",
@@ -2464,6 +2464,12 @@ func TestAvailabilityResponseAcceptUsesCustomArguments(t *testing.T) {
 	}, "sales-agent")
 
 	availability := resp.GetAvailability()
+	if !availability.Available {
+		t.Fatal("availability.Available = false, want true")
+	}
+	if availability.JobId != "job_custom" {
+		t.Fatalf("availability.JobId = %q, want job_custom", availability.JobId)
+	}
 	if availability.ParticipantIdentity != "custom-agent" {
 		t.Fatalf("availability.ParticipantIdentity = %q, want custom identity", availability.ParticipantIdentity)
 	}
@@ -2486,7 +2492,7 @@ func TestAvailabilityResponseRejectsJob(t *testing.T) {
 		Job: &livekit.Job{Id: "job_reject"},
 	}
 
-	resp := availabilityResponseForReject(req, JobRejectArguments{Terminate: true})
+	resp := workerlivekit.AvailabilityResponseForReject(req, workerlivekit.AvailabilityRejectOptions{Terminate: true})
 	availability := resp.GetAvailability()
 	if availability == nil {
 		t.Fatal("availability response is nil")
@@ -2507,7 +2513,7 @@ func TestAvailabilityResponseRejectCanAvoidTermination(t *testing.T) {
 		Job: &livekit.Job{Id: "job_requeue"},
 	}
 
-	resp := availabilityResponseForReject(req, JobRejectArguments{Terminate: false})
+	resp := workerlivekit.AvailabilityResponseForReject(req, workerlivekit.AvailabilityRejectOptions{Terminate: false})
 	availability := resp.GetAvailability()
 	if availability.Terminate {
 		t.Fatal("availability.Terminate = true, want false")

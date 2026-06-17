@@ -1123,21 +1123,6 @@ func readSystemCPUTimes() (idle uint64, total uint64, err error) {
 	return idle, total, nil
 }
 
-func availabilityResponseForAccept(req *livekit.AvailabilityRequest, args JobAcceptArguments, agentName string) *livekit.WorkerMessage {
-	return workerlivekit.AvailabilityResponseForAccept(req, workerlivekit.AvailabilityAcceptOptions{
-		Name:       args.Name,
-		Identity:   args.Identity,
-		Metadata:   args.Metadata,
-		Attributes: args.Attributes,
-	}, agentName)
-}
-
-func availabilityResponseForReject(req *livekit.AvailabilityRequest, args JobRejectArguments) *livekit.WorkerMessage {
-	return workerlivekit.AvailabilityResponseForReject(req, workerlivekit.AvailabilityRejectOptions{
-		Terminate: args.Terminate,
-	})
-}
-
 func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
 	permissions := workerlivekit.ResolveWorkerPermissions(s.Options.Permissions)
 	return workerlivekit.RegisterWorkerRequest(workerlivekit.RegisterWorkerOptions{
@@ -1746,7 +1731,11 @@ func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.Avail
 	logger.Logger.Infow("Received availability request", "jobId", req.Job.Id)
 
 	if !s.availableForJob() {
-		if err := s.sendWorkerMessage(availabilityResponseForReject(req, JobRejectArguments{Terminate: false})); err != nil {
+		msg := workerlivekit.AvailabilityResponseForReject(
+			req,
+			workerlivekit.AvailabilityRejectOptions{Terminate: false},
+		)
+		if err := s.sendWorkerMessage(msg); err != nil {
 			logger.Logger.Errorw("failed to reject availability while unavailable", err, "jobId", req.Job.Id)
 		}
 		return
@@ -1761,14 +1750,28 @@ func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.Avail
 		acceptFnc: func(args JobAcceptArguments) error {
 			answered = true
 			s.storePendingAccept(req.Job.Id, args)
-			if err := s.sendWorkerMessage(availabilityResponseForAccept(req, args, s.Options.AgentName)); err != nil {
+			msg := workerlivekit.AvailabilityResponseForAccept(
+				req,
+				workerlivekit.AvailabilityAcceptOptions{
+					Name:       args.Name,
+					Identity:   args.Identity,
+					Metadata:   args.Metadata,
+					Attributes: args.Attributes,
+				},
+				s.Options.AgentName,
+			)
+			if err := s.sendWorkerMessage(msg); err != nil {
 				return err
 			}
 			return nil
 		},
 		rejectFnc: func(args JobRejectArguments) error {
 			answered = true
-			return s.sendWorkerMessage(availabilityResponseForReject(req, args))
+			msg := workerlivekit.AvailabilityResponseForReject(
+				req,
+				workerlivekit.AvailabilityRejectOptions{Terminate: args.Terminate},
+			)
+			return s.sendWorkerMessage(msg)
 		},
 	}
 
