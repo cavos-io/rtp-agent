@@ -113,3 +113,56 @@ func TestParticipantInfoDetailsExposeIdentityAndKind(t *testing.T) {
 		t.Fatalf("ParticipantInfoDetails().Kind = %v, want SIP", details.Kind)
 	}
 }
+
+func TestRoomCallbackWithHandlersPreservesParticipantCallback(t *testing.T) {
+	participant := &lksdk.RemoteParticipant{}
+	existingCalled := false
+	handlerCalled := false
+	cb := workerlivekit.RoomCallbackWithHandlers(&lksdk.RoomCallback{
+		OnParticipantConnected: func(got *lksdk.RemoteParticipant) {
+			if got != participant {
+				t.Fatalf("OnParticipantConnected participant = %#v, want original", got)
+			}
+			existingCalled = true
+		},
+	}, workerlivekit.RoomCallbackHandlers{
+		OnParticipantConnected: func(got workerlivekit.RemoteParticipantView) {
+			if got != participant {
+				t.Fatalf("handler participant = %#v, want original", got)
+			}
+			handlerCalled = true
+		},
+	})
+
+	cb.OnParticipantConnected(participant)
+
+	if !existingCalled {
+		t.Fatal("existing OnParticipantConnected callback was not called")
+	}
+	if !handlerCalled {
+		t.Fatal("participant handler was not called")
+	}
+}
+
+func TestRoomCallbackWithHandlersPreservesTrackCallback(t *testing.T) {
+	publication := &lksdk.RemoteTrackPublication{}
+	participant := &lksdk.RemoteParticipant{}
+	existingCalled := false
+	existing := &lksdk.RoomCallback{}
+	existing.OnTrackPublished = func(gotPublication *lksdk.RemoteTrackPublication, gotParticipant *lksdk.RemoteParticipant) {
+		if gotPublication != publication {
+			t.Fatalf("OnTrackPublished publication = %#v, want original", gotPublication)
+		}
+		if gotParticipant != participant {
+			t.Fatalf("OnTrackPublished participant = %#v, want original", gotParticipant)
+		}
+		existingCalled = true
+	}
+	cb := workerlivekit.RoomCallbackWithHandlers(existing, workerlivekit.RoomCallbackHandlers{})
+
+	cb.OnTrackPublished(publication, participant)
+
+	if !existingCalled {
+		t.Fatal("existing OnTrackPublished callback was not called")
+	}
+}

@@ -16,6 +16,12 @@ type RemoteParticipantView interface {
 	Attributes() map[string]string
 }
 
+type RoomCallbackHandlers struct {
+	AutoSubscribe          string
+	OnParticipantConnected func(RemoteParticipantView)
+	OnTrackSubscribeError  func(RemoteTrackSubscriptionResult)
+}
+
 func RemoteParticipantViews(participants []*lksdk.RemoteParticipant) []RemoteParticipantView {
 	views := make([]RemoteParticipantView, 0, len(participants))
 	for _, participant := range participants {
@@ -31,6 +37,34 @@ func RoomLocalParticipant(room *lksdk.Room) *lksdk.LocalParticipant {
 		return nil
 	}
 	return room.LocalParticipant
+}
+
+func RoomCallbackWithHandlers(cb *lksdk.RoomCallback, handlers RoomCallbackHandlers) *lksdk.RoomCallback {
+	wrapped := lksdk.NewRoomCallback()
+	wrapped.Merge(cb)
+
+	onParticipantConnected := wrapped.OnParticipantConnected
+	wrapped.OnParticipantConnected = func(participant *lksdk.RemoteParticipant) {
+		if onParticipantConnected != nil {
+			onParticipantConnected(participant)
+		}
+		if participant != nil && handlers.OnParticipantConnected != nil {
+			handlers.OnParticipantConnected(participant)
+		}
+	}
+
+	onTrackPublished := wrapped.OnTrackPublished
+	wrapped.OnTrackPublished = func(publication *lksdk.RemoteTrackPublication, participant *lksdk.RemoteParticipant) {
+		if onTrackPublished != nil {
+			onTrackPublished(publication, participant)
+		}
+		result := SubscribeRemoteTrackIfAllowed(handlers.AutoSubscribe, publication)
+		if result.Attempted && result.Err != nil && handlers.OnTrackSubscribeError != nil {
+			handlers.OnTrackSubscribeError(result)
+		}
+	}
+
+	return wrapped
 }
 
 func ParticipantInfoFromRemoteParticipant(participant RemoteParticipantView) *lkprotocol.ParticipantInfo {

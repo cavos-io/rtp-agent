@@ -589,28 +589,13 @@ func (c *JobContext) applyAutoSubscribeOptions(mode AutoSubscribe) {
 }
 
 func (c *JobContext) roomCallbackWithEntrypoints(cb *lksdk.RoomCallback, autoSubscribe AutoSubscribe) *lksdk.RoomCallback {
-	wrapped := lksdk.NewRoomCallback()
-	wrapped.Merge(cb)
-	onParticipantConnected := wrapped.OnParticipantConnected
-	wrapped.OnParticipantConnected = func(participant *lksdk.RemoteParticipant) {
-		if onParticipantConnected != nil {
-			onParticipantConnected(participant)
-		}
-		if participant != nil {
-			c.participantAvailable(participant)
-		}
-	}
-	onTrackPublished := wrapped.OnTrackPublished
-	wrapped.OnTrackPublished = func(publication *lksdk.RemoteTrackPublication, participant *lksdk.RemoteParticipant) {
-		if onTrackPublished != nil {
-			onTrackPublished(publication, participant)
-		}
-		result := workerlivekit.SubscribeRemoteTrackIfAllowed(string(autoSubscribe), publication)
-		if result.Attempted && result.Err != nil {
+	return workerlivekit.RoomCallbackWithHandlers(cb, workerlivekit.RoomCallbackHandlers{
+		AutoSubscribe:          string(autoSubscribe),
+		OnParticipantConnected: c.participantAvailable,
+		OnTrackSubscribeError: func(result workerlivekit.RemoteTrackSubscriptionResult) {
 			logger.Logger.Warnw("failed to subscribe published remote track", result.Err, "trackSid", result.TrackSID)
-		}
-	}
-	return wrapped
+		},
+	})
 }
 
 func (c *JobContext) participantAvailable(participant workerlivekit.RemoteParticipantView) {
