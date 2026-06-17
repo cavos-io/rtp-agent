@@ -203,6 +203,88 @@ func TestAssemblyAIStreamURLEncodesReferenceTurnControls(t *testing.T) {
 	assertAssemblyAIQuery(t, query, "domain", "healthcare")
 }
 
+func TestAssemblyAISTTUpdateOptionsMatchesReferenceFutureStreams(t *testing.T) {
+	provider := NewAssemblyAISTT("test-key", WithAssemblyAISTTModel("u3-rt-pro"))
+
+	provider.UpdateOptions(
+		WithAssemblyAISTTMinTurnSilence(240),
+		WithAssemblyAISTTMaxTurnSilence(920),
+		WithAssemblyAISTTEndOfTurnConfidenceThreshold(0.66),
+		WithAssemblyAISTTPrompt("updated terms"),
+		WithAssemblyAISTTKeytermsPrompt([]string{"Cavos"}),
+		WithAssemblyAISTTVADThreshold(0.35),
+		WithAssemblyAISTTContinuousPartials(false),
+		WithAssemblyAISTTInterruptionDelay(180),
+	)
+
+	query := mustAssemblyAIStreamQuery(t, buildAssemblyAIStreamURL(provider))
+	assertAssemblyAIQuery(t, query, "min_turn_silence", "240")
+	assertAssemblyAIQuery(t, query, "max_turn_silence", "920")
+	assertAssemblyAIQuery(t, query, "end_of_turn_confidence_threshold", "0.66")
+	assertAssemblyAIQuery(t, query, "prompt", "updated terms")
+	assertAssemblyAIQuery(t, query, "keyterms_prompt", `["Cavos"]`)
+	assertAssemblyAIQuery(t, query, "vad_threshold", "0.35")
+	assertAssemblyAIQuery(t, query, "continuous_partials", "false")
+	assertAssemblyAIQuery(t, query, "interruption_delay", "180")
+}
+
+func TestAssemblyAISTTUpdateOptionsPropagatesReferenceActiveStreamConfig(t *testing.T) {
+	provider := NewAssemblyAISTT("test-key", WithAssemblyAISTTModel("u3-rt-pro"))
+	var messages []map[string]any
+	stream := &assemblyAISTTStream{
+		writeJSON: func(message any) error {
+			payload, ok := message.(map[string]any)
+			if !ok {
+				t.Fatalf("update message = %#v, want map[string]any", message)
+			}
+			messages = append(messages, payload)
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	provider.UpdateOptions(
+		WithAssemblyAISTTMinTurnSilence(240),
+		WithAssemblyAISTTMaxTurnSilence(920),
+		WithAssemblyAISTTEndOfTurnConfidenceThreshold(0.66),
+		WithAssemblyAISTTPrompt("updated terms"),
+		WithAssemblyAISTTKeytermsPrompt([]string{"Cavos"}),
+		WithAssemblyAISTTVADThreshold(0.35),
+		WithAssemblyAISTTContinuousPartials(false),
+		WithAssemblyAISTTInterruptionDelay(180),
+	)
+
+	if len(messages) != 1 {
+		t.Fatalf("messages = %d, want one UpdateConfiguration", len(messages))
+	}
+	msg := messages[0]
+	if msg["type"] != "UpdateConfiguration" {
+		t.Fatalf("message type = %v, want UpdateConfiguration", msg["type"])
+	}
+	if msg["min_turn_silence"] != 240 || msg["max_turn_silence"] != 920 {
+		t.Fatalf("silence update = %#v, want min 240 max 920", msg)
+	}
+	if msg["end_of_turn_confidence_threshold"] != 0.66 {
+		t.Fatalf("confidence threshold = %v, want 0.66", msg["end_of_turn_confidence_threshold"])
+	}
+	if msg["prompt"] != "updated terms" {
+		t.Fatalf("prompt = %v, want updated terms", msg["prompt"])
+	}
+	keyterms, ok := msg["keyterms_prompt"].([]string)
+	if !ok || len(keyterms) != 1 || keyterms[0] != "Cavos" {
+		t.Fatalf("keyterms_prompt = %#v, want [Cavos]", msg["keyterms_prompt"])
+	}
+	if msg["vad_threshold"] != 0.35 {
+		t.Fatalf("vad_threshold = %v, want 0.35", msg["vad_threshold"])
+	}
+	if msg["continuous_partials"] != false {
+		t.Fatalf("continuous_partials = %v, want false", msg["continuous_partials"])
+	}
+	if msg["interruption_delay"] != 180 {
+		t.Fatalf("interruption_delay = %v, want 180", msg["interruption_delay"])
+	}
+}
+
 func TestAssemblyAIRealtimeTranscriptEventPreservesWordTimings(t *testing.T) {
 	resp := aaiResponse{
 		Type:       "Turn",
