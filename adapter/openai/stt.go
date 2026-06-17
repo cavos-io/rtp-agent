@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -673,10 +672,20 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- openAIRealtimeSTTUnexpectedCloseError(err)
+			if s.isClosed() || s.ctx.Err() != nil {
+				return
 			}
-			return
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
+				return
+			}
+			if reconnectErr := s.reconnectAfterUnexpectedClose(); reconnectErr != nil {
+				if s.isClosed() || s.ctx.Err() != nil {
+					return
+				}
+				s.errCh <- reconnectErr
+				return
+			}
+			continue
 		}
 		if msgType != websocket.TextMessage {
 			continue
@@ -692,17 +701,37 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 	}
 }
 
-func openAIRealtimeSTTUnexpectedCloseError(err error) error {
-	var closeErr *websocket.CloseError
-	if errors.As(err, &closeErr) {
-		return llm.NewAPIStatusError(
-			"OpenAI Realtime STT connection closed unexpectedly",
-			closeErr.Code,
-			"",
-			closeErr.Text,
-		)
+func (s *openAIRealtimeSTTStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *openAIRealtimeSTTStream) reconnectAfterUnexpectedClose() error {
+	if s.owner == nil {
+		return llm.NewAPIStatusError("OpenAI Realtime STT connection closed unexpectedly", -1, "", "")
 	}
-	return mapOpenAIError(err)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	_ = s.conn.Close()
+	conn, _, err := s.owner.dialWebsocket(s.ctx, buildOpenAIRealtimeSTTWebsocketURL(s.owner).String(), buildOpenAIRealtimeSTTHeaders(s.owner))
+	if err != nil {
+		return mapOpenAIError(err)
+	}
+	sessionUpdate, err := buildOpenAIRealtimeSTTSessionUpdate(s.owner)
+	if err != nil {
+		_ = conn.Close()
+		return err
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, sessionUpdate); err != nil {
+		_ = conn.Close()
+		return mapOpenAIError(err)
+	}
+	s.conn = conn
+	return nil
 }
 
 func openAIRealtimeSTTChunkBytes() int {
