@@ -1,9 +1,12 @@
 package mistralai
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -11,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -185,6 +189,34 @@ func TestMistralAITTSStreamDecodesJSONAudioResponse(t *testing.T) {
 	}
 }
 
+func TestMistralAITTSStreamDecodesReferenceWAVResponse(t *testing.T) {
+	pcm := []byte{0x01, 0x02, 0x03, 0x04}
+	stream := &mistralAITTSChunkedStream{
+		reader:         strings.NewReader(`{"audio_data":"` + base64.StdEncoding.EncodeToString(mistralAITTSTestWAV(pcm, 16000, 1)) + `"}`),
+		responseFormat: "wav",
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("next audio: %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want frame", audio)
+	}
+	if !bytes.Equal(audio.Frame.Data, pcm) {
+		t.Fatalf("frame data = %#v, want decoded PCM %#v", audio.Frame.Data, pcm)
+	}
+	if audio.Frame.SampleRate != 16000 {
+		t.Fatalf("sample rate = %d, want WAV metadata 16000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("channels = %d, want WAV metadata mono", audio.Frame.NumChannels)
+	}
+	if bytes.HasPrefix(audio.Frame.Data, []byte("RIFF")) {
+		t.Fatal("frame data still contains WAV container")
+	}
+}
+
 func TestMistralAITTSStreamDecodesReferenceMP3Response(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
@@ -211,6 +243,120 @@ func TestMistralAITTSStreamDecodesReferenceMP3Response(t *testing.T) {
 	if string(audio.Frame.Data) == string(mp3Data[:len(audio.Frame.Data)]) {
 		t.Fatal("frame data still contains compressed mp3 bytes")
 	}
+}
+
+func TestMistralAITTSSynthesizeReturnsAPIStatusError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: mistralAITTSRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+			Header:     make(http.Header),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider, err := NewMistralAITTS("test-key", "", WithMistralAITTSBaseURL("https://mistral.example/v1"))
+	if err != nil {
+		t.Fatalf("new tts: %v", err)
+	}
+
+	_, err = provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("Synthesize error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	if statusErr.Body != `{"error":"rate limited"}` {
+		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("retryable = false, want true for 429")
+	}
+}
+
+func TestMistralAITTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: mistralAITTSRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, errors.New("dial refused")
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider, err := NewMistralAITTS("test-key", "", WithMistralAITTSBaseURL("https://mistral.example/v1"))
+	if err != nil {
+		t.Fatalf("new tts: %v", err)
+	}
+
+	_, err = provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("Synthesize error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message != `Post "https://mistral.example/v1/audio/speech": dial refused` {
+		t.Fatalf("connection message = %q, want transport error", connectionErr.Message)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("retryable = false, want true")
+	}
+}
+
+func TestMistralAITTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: mistralAITTSRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, context.DeadlineExceeded
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider, err := NewMistralAITTS("test-key", "", WithMistralAITTSBaseURL("https://mistral.example/v1"))
+	if err != nil {
+		t.Fatalf("new tts: %v", err)
+	}
+
+	_, err = provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("Synthesize error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Synthesize error = %T %v, want APITimeoutError", err, err)
+	}
+	if !timeoutErr.Retryable {
+		t.Fatal("retryable = false, want true")
+	}
+}
+
+func TestMistralAITTSStreamDecodeFailureReturnsAPIConnectionError(t *testing.T) {
+	stream := &mistralAITTSChunkedStream{
+		reader:         strings.NewReader(`data: {"event":"speech.audio.delta","data":{"audio_data":"not-base64"}}`),
+		responseFormat: "wav",
+	}
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message == "" {
+		t.Fatal("connection error message empty, want decode failure")
+	}
+}
+
+type mistralAITTSRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f mistralAITTSRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
 }
 
 func decodeMistralTTSBody(t *testing.T, req *http.Request) map[string]any {
@@ -243,4 +389,25 @@ func assertMistralTTSAudio(t *testing.T, audio *tts.SynthesizedAudio, want []byt
 	if audio.Frame.NumChannels != 1 {
 		t.Fatalf("channels = %d, want 1", audio.Frame.NumChannels)
 	}
+}
+
+func mistralAITTSTestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
+	var wav bytes.Buffer
+	byteRate := sampleRate * uint32(channels) * 2
+	blockAlign := channels * 2
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36+len(pcm)))
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, channels)
+	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
+	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
+	_ = binary.Write(&wav, binary.LittleEndian, blockAlign)
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	wav.WriteString("data")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(len(pcm)))
+	wav.Write(pcm)
+	return wav.Bytes()
 }

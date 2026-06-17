@@ -24,6 +24,14 @@ func TestNewMistralLLMUsesCustomModel(t *testing.T) {
 	}
 }
 
+func TestNewMistralLLMExposesReferenceProviderMetadata(t *testing.T) {
+	provider := NewMistralLLM("test-key", "")
+
+	if got := llm.Provider(provider); got != "MistralAI" {
+		t.Fatalf("provider metadata = %q, want MistralAI", got)
+	}
+}
+
 func TestNewMistralLLMUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("MISTRAL_API_KEY", "env-key")
 

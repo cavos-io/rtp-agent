@@ -4,14 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
+	"errors"
 	"io"
 	"mime"
 	"mime/multipart"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
@@ -85,6 +89,81 @@ func TestMistralAISTTRealtimeCapabilitiesFollowReference(t *testing.T) {
 	}
 }
 
+func TestMistralAISTTRealtimeStreamSendsReferenceMessages(t *testing.T) {
+	conn := &mistralAISTTFakeRealtimeConn{}
+	provider := NewMistralAISTT("test-key",
+		WithMistralAISTTBaseURL("https://mistral.example"),
+		WithMistralAISTTModel("voxtral-realtime-latest"),
+	)
+	provider.dialRealtime = func(ctx context.Context, endpoint string, headers http.Header) (mistralAISTTRealtimeConn, error) {
+		if endpoint != "wss://mistral.example/v1/audio/transcriptions/realtime?model=voxtral-realtime-latest" {
+			t.Fatalf("endpoint = %q, want reference realtime endpoint", endpoint)
+		}
+		if got := headers.Get("Authorization"); got != "Bearer test-key" {
+			t.Fatalf("authorization = %q, want bearer API key", got)
+		}
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01, 0x02}}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	messages := conn.messages()
+	if len(messages) != 3 {
+		t.Fatalf("messages = %v, want append, flush, end", messages)
+	}
+	assertMistralRealtimeMessage(t, messages[0], "input_audio.append", map[string]any{"audio": "AQI="})
+	assertMistralRealtimeMessage(t, messages[1], "input_audio.flush", nil)
+	assertMistralRealtimeMessage(t, messages[2], "input_audio.end", nil)
+}
+
+func TestMistralAISTTRealtimeStreamMapsReferenceEvents(t *testing.T) {
+	conn := &mistralAISTTFakeRealtimeConn{reads: [][]byte{
+		[]byte(`{"type":"session.created","session":{"request_id":"req_123","model":"voxtral-realtime-latest","audio_format":{"encoding":"pcm_s16le","sample_rate":16000}}}`),
+		[]byte(`{"type":"transcription.language","audio_language":"fr"}`),
+		[]byte(`{"type":"transcription.text.delta","text":"bon"}`),
+		[]byte(`{"type":"transcription.text.delta","text":"jour"}`),
+		[]byte(`{"type":"transcription.done","model":"voxtral-realtime-latest","text":"bonjour","language":null,"segments":[{"text":"bonjour","start":0.2,"end":0.7}],"usage":{"prompt_audio_seconds":2,"prompt_tokens":3,"completion_tokens":5}}`),
+	}}
+	provider := NewMistralAISTT("test-key", WithMistralAISTTModel("voxtral-realtime-latest"))
+	provider.dialRealtime = func(ctx context.Context, endpoint string, headers http.Header) (mistralAISTTRealtimeConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+
+	first := nextMistralSTTEvent(t, stream)
+	assertMistralSTTEvent(t, first, stt.SpeechEventInterimTranscript, "bon", "fr", "req_123")
+	second := nextMistralSTTEvent(t, stream)
+	assertMistralSTTEvent(t, second, stt.SpeechEventInterimTranscript, "bonjour", "fr", "req_123")
+	final := nextMistralSTTEvent(t, stream)
+	assertMistralSTTEvent(t, final, stt.SpeechEventFinalTranscript, "bonjour", "fr", "req_123")
+	if len(final.Alternatives[0].Words) != 1 || final.Alternatives[0].Words[0].StartTime != 0.2 || final.Alternatives[0].Words[0].EndTime != 0.7 {
+		t.Fatalf("final words = %+v, want segment timings", final.Alternatives[0].Words)
+	}
+	usage := nextMistralSTTEvent(t, stream)
+	if usage.Type != stt.SpeechEventRecognitionUsage || usage.RequestID != "req_123" || usage.RecognitionUsage == nil {
+		t.Fatalf("usage event = %+v, want recognition usage with request id", usage)
+	}
+	if usage.RecognitionUsage.AudioDuration != 2 || usage.RecognitionUsage.InputTokens != 3 || usage.RecognitionUsage.OutputTokens != 5 {
+		t.Fatalf("usage = %+v, want audio duration and tokens", usage.RecognitionUsage)
+	}
+}
+
 func TestMistralAISTTRecognizeRequestUsesReferenceMultipartFields(t *testing.T) {
 	provider := NewMistralAISTT("test-key",
 		WithMistralAISTTBaseURL("https://mistral.example/v1"),
@@ -153,6 +232,118 @@ func TestMistralAISTTRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "MISTRAL_API_KEY") {
 		t.Fatalf("Recognize error = %q, want MISTRAL_API_KEY guidance", err)
+	}
+}
+
+func TestMistralAISTTRecognizeReturnsAPIStatusError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: mistralAISTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusBadGateway,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"upstream"}`)),
+			Header:     make(http.Header),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewMistralAISTT("test-key", WithMistralAISTTBaseURL("https://mistral.example/v1"))
+
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Recognize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status code = %d, want 502", statusErr.StatusCode)
+	}
+	if statusErr.Body != `{"error":"upstream"}` {
+		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("retryable = false, want true for 502")
+	}
+}
+
+func TestMistralAISTTRecognizeStatusTimeoutReturnsAPITimeoutError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: mistralAISTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusGatewayTimeout,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"timeout"}`)),
+			Header:     make(http.Header),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewMistralAISTT("test-key", WithMistralAISTTBaseURL("https://mistral.example/v1"))
+
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Recognize error = %T %v, want APITimeoutError", err, err)
+	}
+	if !timeoutErr.Retryable {
+		t.Fatal("retryable = false, want true")
+	}
+}
+
+func TestMistralAISTTRecognizeReturnsAPIConnectionError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: mistralAISTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, errors.New("dial refused")
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewMistralAISTT("test-key", WithMistralAISTTBaseURL("https://mistral.example/v1"))
+
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message != `Post "https://mistral.example/v1/audio/transcriptions": dial refused` {
+		t.Fatalf("connection message = %q, want transport error", connectionErr.Message)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("retryable = false, want true")
+	}
+}
+
+func TestMistralAISTTRecognizeDecodeFailureReturnsAPIConnectionError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: mistralAISTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`not-json`)),
+			Header:     make(http.Header),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewMistralAISTT("test-key", WithMistralAISTTBaseURL("https://mistral.example/v1"))
+
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message == "" {
+		t.Fatal("connection error message empty, want decode failure")
 	}
 }
 
@@ -242,5 +433,91 @@ func assertMistralFormField(t *testing.T, fields map[string]string, key string, 
 	t.Helper()
 	if got := fields[key]; got != want {
 		t.Fatalf("%s = %q, want %q in fields %#v", key, got, want, fields)
+	}
+}
+
+type mistralAISTTRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f mistralAISTTRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+type mistralAISTTFakeRealtimeConn struct {
+	mu     sync.Mutex
+	writes []string
+	reads  [][]byte
+	closed bool
+}
+
+func (c *mistralAISTTFakeRealtimeConn) WriteMessage(messageType int, data []byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return io.ErrClosedPipe
+	}
+	c.writes = append(c.writes, string(data))
+	return nil
+}
+
+func (c *mistralAISTTFakeRealtimeConn) ReadMessage() (int, []byte, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.reads) == 0 {
+		return 0, nil, io.EOF
+	}
+	msg := append([]byte(nil), c.reads[0]...)
+	c.reads = c.reads[1:]
+	return 1, msg, nil
+}
+
+func (c *mistralAISTTFakeRealtimeConn) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = true
+	return nil
+}
+
+func (c *mistralAISTTFakeRealtimeConn) messages() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.writes...)
+}
+
+func assertMistralRealtimeMessage(t *testing.T, raw string, wantType string, wantFields map[string]any) {
+	t.Helper()
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(raw), &msg); err != nil {
+		t.Fatalf("message %q is not JSON: %v", raw, err)
+	}
+	if got := msg["type"]; got != wantType {
+		t.Fatalf("message type = %#v, want %q in %#v", got, wantType, msg)
+	}
+	for key, want := range wantFields {
+		if got := msg[key]; got != want {
+			t.Fatalf("message %s = %#v, want %#v in %#v", key, got, want, msg)
+		}
+	}
+}
+
+func nextMistralSTTEvent(t *testing.T, stream stt.RecognizeStream) *stt.SpeechEvent {
+	t.Helper()
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	return event
+}
+
+func assertMistralSTTEvent(t *testing.T, event *stt.SpeechEvent, eventType stt.SpeechEventType, text string, language string, requestID string) {
+	t.Helper()
+	if event.Type != eventType || event.RequestID != requestID {
+		t.Fatalf("event = %+v, want type %s request %q", event, eventType, requestID)
+	}
+	if len(event.Alternatives) != 1 {
+		t.Fatalf("alternatives = %d, want 1", len(event.Alternatives))
+	}
+	alt := event.Alternatives[0]
+	if alt.Text != text || alt.Language != language {
+		t.Fatalf("alternative = %+v, want text %q language %q", alt, text, language)
 	}
 }

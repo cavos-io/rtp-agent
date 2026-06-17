@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -117,12 +119,15 @@ func (t *MistralAITTS) Synthesize(ctx context.Context, text string) (tts.Chunked
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("mistralai tts error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("MistralAI TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	return &mistralAITTSChunkedStream{
 		reader:         resp.Body,
@@ -191,7 +196,7 @@ func (s *mistralAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if strings.HasPrefix(line, "data:") {
 			audio, done, err := mistralAITTSAudioFromStreamEvent(strings.TrimSpace(strings.TrimPrefix(line, "data:")), s.responseFormat)
 			if err != nil {
-				return nil, err
+				return nil, llm.NewAPIConnectionError(err.Error())
 			}
 			if done {
 				s.done = true
@@ -206,7 +211,7 @@ func (s *mistralAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			s.jsonRead = true
 			audio, err := mistralAITTSAudioFromJSONResponse(line, s.responseFormat)
 			if err != nil {
-				return nil, err
+				return nil, llm.NewAPIConnectionError(err.Error())
 			}
 			if audio != nil {
 				return audio, nil
@@ -214,7 +219,7 @@ func (s *mistralAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 	}
 	if err := s.scanner.Err(); err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	s.done = true
 	return nil, io.EOF
@@ -278,6 +283,13 @@ func decodeMistralAITTSAudioFrame(audioData string, responseFormat string) (*tts
 	if responseFormat == "pcm" {
 		return mistralAITTSAudioFrame(mistralAIF32LEToS16LE(audio)), nil
 	}
+	if responseFormat == "wav" {
+		frame, err := decodeMistralAIWAVPCM16(audio)
+		if err != nil {
+			return nil, err
+		}
+		return &tts.SynthesizedAudio{Frame: frame}, nil
+	}
 	if responseFormat == "mp3" {
 		return decodeMistralAIMP3Audio(audio)
 	}
@@ -325,4 +337,54 @@ func mistralAIF32LEToS16LE(data []byte) []byte {
 		binary.LittleEndian.PutUint16(out[i*2:i*2+2], uint16(int16(value)))
 	}
 	return out
+}
+
+func decodeMistralAIWAVPCM16(data []byte) (*model.AudioFrame, error) {
+	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
+		return nil, fmt.Errorf("invalid mistralai wav data")
+	}
+	offset := 12
+	var sampleRate uint32
+	var channels uint16
+	var bitsPerSample uint16
+	var pcm []byte
+	for offset+8 <= len(data) {
+		chunkID := string(data[offset : offset+4])
+		chunkSize := int(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
+		offset += 8
+		if chunkSize < 0 || offset+chunkSize > len(data) {
+			return nil, fmt.Errorf("invalid mistralai wav chunk size")
+		}
+		switch chunkID {
+		case "fmt ":
+			if chunkSize < 16 {
+				return nil, fmt.Errorf("invalid mistralai wav fmt chunk")
+			}
+			audioFormat := binary.LittleEndian.Uint16(data[offset : offset+2])
+			channels = binary.LittleEndian.Uint16(data[offset+2 : offset+4])
+			sampleRate = binary.LittleEndian.Uint32(data[offset+4 : offset+8])
+			bitsPerSample = binary.LittleEndian.Uint16(data[offset+14 : offset+16])
+			if audioFormat != 1 || bitsPerSample != 16 {
+				return nil, fmt.Errorf("unsupported mistralai wav format: audio_format=%d bits_per_sample=%d", audioFormat, bitsPerSample)
+			}
+		case "data":
+			pcm = bytes.Clone(data[offset : offset+chunkSize])
+		}
+		offset += chunkSize
+		if chunkSize%2 == 1 {
+			offset++
+		}
+	}
+	if sampleRate == 0 || channels == 0 || bitsPerSample == 0 {
+		return nil, fmt.Errorf("missing mistralai wav format metadata")
+	}
+	if pcm == nil {
+		return nil, fmt.Errorf("missing mistralai wav data chunk")
+	}
+	return &model.AudioFrame{
+		Data:              pcm,
+		SampleRate:        sampleRate,
+		NumChannels:       uint32(channels),
+		SamplesPerChannel: uint32(len(pcm) / int(channels) / 2),
+	}, nil
 }
