@@ -130,6 +130,11 @@ func (t *Transport) Join(ctx context.Context) error {
 		cancel()
 		return fmt.Errorf("agora transport is closed")
 	}
+	if t.joined || t.joinCancel != nil {
+		t.mu.Unlock()
+		cancel()
+		return fmt.Errorf("agora transport is already joined")
+	}
 	audio := t.audio
 	t.joinSeq++
 	joinSeq := t.joinSeq

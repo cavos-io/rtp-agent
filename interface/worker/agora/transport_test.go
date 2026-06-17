@@ -22,6 +22,7 @@ type fakeChannelClient struct {
 	leaveErr     error
 	publishErr   error
 	blockJoin    bool
+	joinCount    int
 	leaveCount   int
 	publishCount int
 	joined       bool
@@ -29,6 +30,7 @@ type fakeChannelClient struct {
 }
 
 func (f *fakeChannelClient) Join(ctx context.Context, opts Options, handler EventHandler, audioHandler AudioHandler) error {
+	f.joinCount++
 	f.joinCtx = ctx
 	f.joinOptions = opts
 	f.handler = handler
@@ -149,6 +151,25 @@ func TestTransportJoinGeneratesTokenFromCertificate(t *testing.T) {
 	}
 }
 
+func TestTransportJoinRejectsDuplicateJoinBeforeClient(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("first Join() error = %v", err)
+	}
+	err := tr.Join(context.Background())
+	if err == nil {
+		t.Fatal("second Join() error = nil, want already joined error")
+	}
+	if !strings.Contains(err.Error(), "already joined") {
+		t.Fatalf("second Join() error = %v, want already joined error", err)
+	}
+	if client.joinCount != 1 {
+		t.Fatalf("client join count = %d, want 1", client.joinCount)
+	}
+}
+
 func TestTransportLeaveDelegatesToClient(t *testing.T) {
 	client := &fakeChannelClient{}
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
@@ -163,7 +184,7 @@ func TestTransportLeaveDelegatesToClient(t *testing.T) {
 
 func TestTransportPublishPCMRequiresJoinedChannel(t *testing.T) {
 	client := &fakeChannelClient{}
-	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 	frame := PCMFrame{
 		Data:       []byte{1, 2, 3, 4},
 		SampleRate: 100,
