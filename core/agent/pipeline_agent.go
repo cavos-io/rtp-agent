@@ -326,7 +326,7 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 			va.emitSTTMetrics(ev)
 			continue
 		}
-		if ev.Type != stt.SpeechEventInterimTranscript && ev.Type != stt.SpeechEventFinalTranscript {
+		if ev.Type != stt.SpeechEventInterimTranscript && ev.Type != stt.SpeechEventPreflightTranscript && ev.Type != stt.SpeechEventFinalTranscript {
 			continue
 		}
 		if len(ev.Alternatives) == 0 {
@@ -339,7 +339,7 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 		ctx := va.ctx
 		va.mu.Unlock()
 		if session != nil && session.activity != nil {
-			if ev.Type == stt.SpeechEventInterimTranscript {
+			if ev.Type == stt.SpeechEventInterimTranscript || ev.Type == stt.SpeechEventPreflightTranscript {
 				session.activity.OnInterimTranscript(ev)
 				continue
 			}

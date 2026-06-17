@@ -1377,6 +1377,38 @@ func TestPipelineAgentRoutesSTTTranscriptsThroughActivity(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentRoutesPreflightTranscriptAsInterim(t *testing.T) {
+	baseAgent := NewAgent("test")
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	userTranscriptEvents := session.UserInputTranscribedEvents()
+	activity := NewAgentActivity(baseAgent, session)
+	session.activity = activity
+	pipeline := NewPipelineAgent(nil, nil, nil, nil, baseAgent.ChatCtx)
+	pipeline.session = session
+	pipeline.ctx = context.Background()
+	session.Assistant = pipeline
+
+	pipeline.sttLoop(&fakePipelineRecognizeStream{
+		events: []*stt.SpeechEvent{{
+			Type: stt.SpeechEventPreflightTranscript,
+			Alternatives: []stt.SpeechData{{
+				Language:   "en",
+				Text:       "preflight user text",
+				SpeakerID:  "speaker_1",
+				Confidence: 0.75,
+			}},
+		}},
+	})
+
+	transcriptEvent := receiveUserInputTranscribedEvent(t, userTranscriptEvents)
+	if transcriptEvent.Transcript != "preflight user text" || transcriptEvent.IsFinal {
+		t.Fatalf("UserInputTranscribedEvent = %#v, want non-final preflight transcript", transcriptEvent)
+	}
+	if activity.pendingInterimTranscript != "preflight user text" {
+		t.Fatalf("pending interim transcript = %q, want preflight user text", activity.pendingInterimTranscript)
+	}
+}
+
 func TestPipelineAgentVADTurnDetectionWaitsForEndOfSpeechBeforeCommit(t *testing.T) {
 	baseAgent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	baseAgent.TurnDetection = TurnDetectionModeVAD
