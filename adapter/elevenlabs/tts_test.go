@@ -873,6 +873,39 @@ func TestElevenLabsTTSAlignmentMapsTimedTranscript(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSUsesOriginalAlignmentForCJKReferenceDefault(t *testing.T) {
+	if got := elevenLabsDefaultPreferredAlignment("ja"); got != "original" {
+		t.Fatalf("default preferred alignment = %q, want original for ja", got)
+	}
+	if got := elevenLabsDefaultPreferredAlignment("en"); got != "normalized" {
+		t.Fatalf("default preferred alignment = %q, want normalized for en", got)
+	}
+
+	resp := elWSResponse{
+		Audio:   base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
+		IsFinal: true,
+		NormalizedAlignment: &elevenLabsAlignment{
+			Chars:            []string{"1"},
+			CharStartTimesMs: []int{0},
+			CharDurationsMs:  []int{10},
+		},
+		Alignment: &elevenLabsAlignment{
+			Chars:            []string{"あ"},
+			CharStartTimesMs: []int{20},
+			CharDurationsMs:  []int{30},
+		},
+	}
+
+	stream := &elevenLabsStream{preferredAlignment: "original"}
+	timed := stream.timedTranscriptFromAlignment(resp)
+	if len(timed) != 1 || timed[0].Text != "あ" || timed[0].StartTime != 0.02 || timed[0].EndTime != 0.05 {
+		t.Fatalf("timed transcript = %#v, want original alignment for CJK", timed)
+	}
+	if got := stream.deltaText(resp); got != "あ" {
+		t.Fatalf("delta text = %q, want original alignment text", got)
+	}
+}
+
 func TestElevenLabsSynthesizedAudioDecodesReferenceMP3WebsocketAudio(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {

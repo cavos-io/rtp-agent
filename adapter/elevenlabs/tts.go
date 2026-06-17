@@ -362,6 +362,7 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 		chunkLengthSchedule:       append([]int(nil), t.chunkLengthSchedule...),
 		voiceSettings:             cloneElevenLabsVoiceSettings(t.voiceSettings),
 		pronunciationDictionaries: append([]ElevenLabsPronunciationDictionaryLocator(nil), t.pronunciationDictionaries...),
+		preferredAlignment:        elevenLabsDefaultPreferredAlignment(t.language),
 	}
 
 	go stream.readLoop()
@@ -438,6 +439,7 @@ type elevenLabsStream struct {
 	chunkLengthSchedule       []int
 	voiceSettings             *ElevenLabsVoiceSettings
 	pronunciationDictionaries []ElevenLabsPronunciationDictionaryLocator
+	preferredAlignment        string
 
 	alignRunes    []rune
 	alignStartsMs []int
@@ -506,7 +508,7 @@ func (s *elevenLabsStream) readLoop() {
 			return
 		}
 
-		deltaText := elevenLabsDeltaText(resp)
+		deltaText := s.deltaText(resp)
 		timedTranscript := s.timedTranscriptFromAlignment(resp)
 
 		if resp.Audio != "" {
@@ -578,21 +580,26 @@ func elevenLabsSynthesizedAudio(resp elWSResponse, sampleRate int, encoding stri
 }
 
 func elevenLabsDeltaText(resp elWSResponse) string {
+	return elevenLabsAlignmentText(preferredElevenLabsAlignment(resp))
+}
+
+func (s *elevenLabsStream) deltaText(resp elWSResponse) string {
+	return elevenLabsAlignmentText(s.preferredElevenLabsAlignment(resp))
+}
+
+func elevenLabsAlignmentText(alignment *elevenLabsAlignment) string {
 	var deltaText strings.Builder
-	if resp.NormalizedAlignment != nil {
-		for _, char := range resp.NormalizedAlignment.Chars {
-			deltaText.WriteString(char)
-		}
-	} else if resp.Alignment != nil {
-		for _, char := range resp.Alignment.Chars {
-			deltaText.WriteString(char)
-		}
+	if alignment == nil {
+		return ""
+	}
+	for _, char := range alignment.Chars {
+		deltaText.WriteString(char)
 	}
 	return deltaText.String()
 }
 
 func (s *elevenLabsStream) timedTranscriptFromAlignment(resp elWSResponse) []tts.TimedString {
-	alignment := preferredElevenLabsAlignment(resp)
+	alignment := s.preferredElevenLabsAlignment(resp)
 	if alignment == nil {
 		return nil
 	}
@@ -622,6 +629,25 @@ func preferredElevenLabsAlignment(resp elWSResponse) *elevenLabsAlignment {
 		return resp.NormalizedAlignment
 	}
 	return resp.Alignment
+}
+
+func (s *elevenLabsStream) preferredElevenLabsAlignment(resp elWSResponse) *elevenLabsAlignment {
+	if s.preferredAlignment == "original" && resp.Alignment != nil {
+		return resp.Alignment
+	}
+	if s.preferredAlignment == "normalized" && resp.NormalizedAlignment != nil {
+		return resp.NormalizedAlignment
+	}
+	return preferredElevenLabsAlignment(resp)
+}
+
+func elevenLabsDefaultPreferredAlignment(language string) string {
+	switch language {
+	case "ja", "ko", "zh":
+		return "original"
+	default:
+		return "normalized"
+	}
 }
 
 func appendElevenLabsAlignment(runes *[]rune, starts *[]int, durations *[]int, alignment *elevenLabsAlignment) {
