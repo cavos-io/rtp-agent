@@ -1701,11 +1701,7 @@ func (s *AgentServer) connectWorkerWebSocket(ctx context.Context, dialer *websoc
 }
 
 func workerRetryDelay(retryCount int) time.Duration {
-	delaySeconds := retryCount * 2
-	if delaySeconds > 10 {
-		delaySeconds = 10
-	}
-	return time.Duration(delaySeconds) * time.Second
+	return workerlivekit.RetryDelay(retryCount)
 }
 
 func (s *AgentServer) handleInitialRegisterMessage(ctx context.Context, msg *livekit.ServerMessage) error {
