@@ -2249,17 +2249,20 @@ func TestWorkerStartedHandlerPanicDoesNotBlockOtherHandlers(t *testing.T) {
 	}
 }
 
-func TestWorkerStatusMessageIncludesCurrentLoad(t *testing.T) {
+func TestAvailableWorkerStatusMessageIncludesCurrentLoad(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		LoadFunc: func(*AgentServer) float64 {
 			return 0.42
 		},
 	})
 
-	msg := server.workerStatusMessage(livekit.WorkerStatus_WS_AVAILABLE)
+	msg := server.availableWorkerStatusMessage()
 	update := msg.GetUpdateWorker()
 	if update == nil {
 		t.Fatal("update worker message is nil")
+	}
+	if update.GetStatus() != livekit.WorkerStatus_WS_AVAILABLE {
+		t.Fatalf("UpdateWorker.Status = %v, want WS_AVAILABLE", update.GetStatus())
 	}
 	if update.Load != 0.42 {
 		t.Fatalf("UpdateWorker.Load = %v, want 0.42", update.Load)
@@ -2273,7 +2276,7 @@ func TestWorkerStatusMessagePreservesReferenceNegativeLoad(t *testing.T) {
 		},
 	})
 
-	msg := server.workerStatusMessage(livekit.WorkerStatus_WS_AVAILABLE)
+	msg := server.availableWorkerStatusMessage()
 	update := msg.GetUpdateWorker()
 	if update == nil {
 		t.Fatal("update worker message is nil")
@@ -2291,7 +2294,7 @@ func TestWorkerStatusMessageMarksOverloadedWorkerFull(t *testing.T) {
 		},
 	})
 
-	msg := server.workerStatusMessage(livekit.WorkerStatus_WS_AVAILABLE)
+	msg := server.availableWorkerStatusMessage()
 	update := msg.GetUpdateWorker()
 	if update == nil {
 		t.Fatal("update worker message is nil")
@@ -2312,7 +2315,7 @@ func TestWorkerStatusMessageUsesSingleLoadSample(t *testing.T) {
 		},
 	})
 
-	msg := server.workerStatusMessage(livekit.WorkerStatus_WS_AVAILABLE)
+	msg := server.availableWorkerStatusMessage()
 	update := msg.GetUpdateWorker()
 	if update == nil {
 		t.Fatal("update worker message is nil")
@@ -2338,7 +2341,7 @@ func TestWorkerStatusMessageSkipsFakeJobsInJobCount(t *testing.T) {
 	server.activeJobs[fakeCtx.Job.Id] = fakeCtx
 	server.mu.Unlock()
 
-	msg := server.workerStatusMessage(livekit.WorkerStatus_WS_AVAILABLE)
+	msg := server.availableWorkerStatusMessage()
 	update := msg.GetUpdateWorker()
 	if update == nil {
 		t.Fatal("update worker message is nil")

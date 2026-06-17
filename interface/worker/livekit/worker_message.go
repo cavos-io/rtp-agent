@@ -38,6 +38,21 @@ func DrainingWorkerStatusMessage(jobCount uint32) *lkprotocol.WorkerMessage {
 	}
 }
 
+func JobStatusForEntrypointResult(err error, recovered any) lkprotocol.JobStatus {
+	if err != nil || recovered != nil {
+		return lkprotocol.JobStatus_JS_FAILED
+	}
+	return lkprotocol.JobStatus_JS_SUCCESS
+}
+
+func JobStatusSucceeded(status lkprotocol.JobStatus) bool {
+	return status == lkprotocol.JobStatus_JS_SUCCESS
+}
+
+func JobRunningMessage(jobID string) *lkprotocol.WorkerMessage {
+	return JobStatusMessage(jobID, lkprotocol.JobStatus_JS_RUNNING)
+}
+
 func JobStatusMessage(jobID string, status lkprotocol.JobStatus) *lkprotocol.WorkerMessage {
 	return &lkprotocol.WorkerMessage{
 		Message: &lkprotocol.WorkerMessage_UpdateJob{

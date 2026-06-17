@@ -11,12 +11,83 @@ func MarshalWorkerMessage(msg *lkprotocol.WorkerMessage) ([]byte, error) {
 	return proto.Marshal(msg)
 }
 
+func WorkerMessageFrame(msg *lkprotocol.WorkerMessage) (bool, []byte, error) {
+	data, err := MarshalWorkerMessage(msg)
+	if err != nil {
+		return false, nil, err
+	}
+	return true, data, nil
+}
+
 func UnmarshalServerMessage(data []byte) (*lkprotocol.ServerMessage, error) {
 	msg := &lkprotocol.ServerMessage{}
 	if err := proto.Unmarshal(data, msg); err != nil {
 		return nil, err
 	}
 	return msg, nil
+}
+
+func ServerMessageFrame(binary bool, data []byte) (*lkprotocol.ServerMessage, error) {
+	if !binary {
+		return nil, nil
+	}
+	return UnmarshalServerMessage(data)
+}
+
+type ServerMessageKind string
+
+const (
+	ServerMessageKindUnknown      ServerMessageKind = "unknown"
+	ServerMessageKindRegister     ServerMessageKind = "register"
+	ServerMessageKindAvailability ServerMessageKind = "availability"
+	ServerMessageKindAssignment   ServerMessageKind = "assignment"
+	ServerMessageKindTermination  ServerMessageKind = "termination"
+)
+
+type RegisterMessageInfo struct {
+	WorkerID   string
+	ServerInfo *lkprotocol.ServerInfo
+}
+
+type ServerMessageDispatchInfo struct {
+	Kind         ServerMessageKind
+	Register     RegisterMessageInfo
+	Availability *lkprotocol.AvailabilityRequest
+	Assignment   *lkprotocol.JobAssignment
+	Termination  *lkprotocol.JobTermination
+}
+
+func ServerMessageDispatch(msg *lkprotocol.ServerMessage) ServerMessageDispatchInfo {
+	if msg == nil {
+		return ServerMessageDispatchInfo{Kind: ServerMessageKindUnknown}
+	}
+	switch m := msg.Message.(type) {
+	case *lkprotocol.ServerMessage_Register:
+		return ServerMessageDispatchInfo{
+			Kind: ServerMessageKindRegister,
+			Register: RegisterMessageInfo{
+				WorkerID:   m.Register.GetWorkerId(),
+				ServerInfo: m.Register.GetServerInfo(),
+			},
+		}
+	case *lkprotocol.ServerMessage_Availability:
+		return ServerMessageDispatchInfo{
+			Kind:         ServerMessageKindAvailability,
+			Availability: m.Availability,
+		}
+	case *lkprotocol.ServerMessage_Assignment:
+		return ServerMessageDispatchInfo{
+			Kind:       ServerMessageKindAssignment,
+			Assignment: m.Assignment,
+		}
+	case *lkprotocol.ServerMessage_Termination:
+		return ServerMessageDispatchInfo{
+			Kind:        ServerMessageKindTermination,
+			Termination: m.Termination,
+		}
+	default:
+		return ServerMessageDispatchInfo{Kind: ServerMessageKindUnknown}
+	}
 }
 
 func InitialRegisterMessage(binary bool, data []byte) (*lkprotocol.ServerMessage, error) {

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
+	"github.com/cavos-io/rtp-agent/library/inference"
 	lkprotocol "github.com/livekit/protocol/livekit"
 )
 
@@ -43,6 +44,100 @@ func TestJobRequestAccessorsHandleNilJob(t *testing.T) {
 	}
 	if got := workerlivekit.JobAgentName(nil); got != "" {
 		t.Fatalf("JobAgentName(nil) = %q, want empty", got)
+	}
+}
+
+func TestJobRuntimeInfoExposesJobIDAndRecordingFlag(t *testing.T) {
+	info := workerlivekit.JobRuntimeInfo(&lkprotocol.Job{
+		Id:              "job-runtime",
+		EnableRecording: true,
+	})
+
+	if info.JobID != "job-runtime" {
+		t.Fatalf("JobRuntimeInfo().JobID = %q, want job-runtime", info.JobID)
+	}
+	if !info.EnableRecording {
+		t.Fatal("JobRuntimeInfo().EnableRecording = false, want true")
+	}
+}
+
+func TestJobSessionReportInfoExposesJobAndRoomMetadata(t *testing.T) {
+	info := workerlivekit.JobSessionReportInfo(&lkprotocol.Job{
+		Id: "job-report",
+		Room: &lkprotocol.Room{
+			Sid:  "RM_report",
+			Name: "room-report",
+		},
+	})
+
+	if info.JobID != "job-report" {
+		t.Fatalf("JobSessionReportInfo().JobID = %q, want job-report", info.JobID)
+	}
+	if info.RoomID != "RM_report" {
+		t.Fatalf("JobSessionReportInfo().RoomID = %q, want RM_report", info.RoomID)
+	}
+	if info.Room != "room-report" {
+		t.Fatalf("JobSessionReportInfo().Room = %q, want room-report", info.Room)
+	}
+}
+
+func TestJobInferenceHeadersExposeLiveKitJobMetadata(t *testing.T) {
+	headers := workerlivekit.JobInferenceHeaders(&lkprotocol.Job{
+		Id: "job-inference",
+		Room: &lkprotocol.Room{
+			Sid: "RM_inference",
+		},
+	})
+
+	if headers[inference.HeaderJobID] != "job-inference" {
+		t.Fatalf("JobInferenceHeaders()[HeaderJobID] = %q, want job-inference", headers[inference.HeaderJobID])
+	}
+	if headers[inference.HeaderRoomID] != "RM_inference" {
+		t.Fatalf("JobInferenceHeaders()[HeaderRoomID] = %q, want RM_inference", headers[inference.HeaderRoomID])
+	}
+}
+
+func TestJobAssignmentInfoUsesAssignmentURLTokenAndRecordingFlag(t *testing.T) {
+	job := &lkprotocol.Job{Id: "job-a", EnableRecording: true}
+	assignmentURL := "wss://assignment.example"
+	info := workerlivekit.JobAssignmentInfo(&lkprotocol.JobAssignment{
+		Job:   job,
+		Url:   &assignmentURL,
+		Token: "assignment-token",
+	}, "wss://default.example")
+
+	if info.Job != job {
+		t.Fatal("JobAssignmentInfo().Job did not preserve assignment job")
+	}
+	if info.JobID != "job-a" {
+		t.Fatalf("JobAssignmentInfo().JobID = %q, want job-a", info.JobID)
+	}
+	if info.URL != "wss://assignment.example" {
+		t.Fatalf("JobAssignmentInfo().URL = %q, want assignment URL", info.URL)
+	}
+	if info.Token != "assignment-token" {
+		t.Fatalf("JobAssignmentInfo().Token = %q, want assignment token", info.Token)
+	}
+	if !info.EnableRecording {
+		t.Fatal("JobAssignmentInfo().EnableRecording = false, want true")
+	}
+}
+
+func TestJobAssignmentInfoDefaultsURLWhenAssignmentURLMissing(t *testing.T) {
+	info := workerlivekit.JobAssignmentInfo(&lkprotocol.JobAssignment{
+		Job: &lkprotocol.Job{Id: "job-a"},
+	}, "wss://default.example")
+
+	if info.URL != "wss://default.example" {
+		t.Fatalf("JobAssignmentInfo().URL = %q, want default URL", info.URL)
+	}
+}
+
+func TestJobTerminationInfoExposesJobID(t *testing.T) {
+	info := workerlivekit.JobTerminationInfo(&lkprotocol.JobTermination{JobId: "job-stop"})
+
+	if info.JobID != "job-stop" {
+		t.Fatalf("JobTerminationInfo().JobID = %q, want job-stop", info.JobID)
 	}
 }
 
@@ -87,6 +182,17 @@ func TestLocalRoomJobBuildsRoomWhenRoomInfoMissing(t *testing.T) {
 	}
 	if job.Type != lkprotocol.JobType_JT_ROOM {
 		t.Fatalf("Job.Type = %v, want JT_ROOM", job.Type)
+	}
+}
+
+func TestLocalJobInfoBuildsExecutorIDFromJobID(t *testing.T) {
+	info := workerlivekit.LocalJobInfo(&lkprotocol.Job{Id: "job-local"})
+
+	if info.JobID != "job-local" {
+		t.Fatalf("LocalJobInfo().JobID = %q, want job-local", info.JobID)
+	}
+	if info.ExecutorID != "local_job-local" {
+		t.Fatalf("LocalJobInfo().ExecutorID = %q, want local_job-local", info.ExecutorID)
 	}
 }
 

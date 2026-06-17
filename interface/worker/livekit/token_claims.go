@@ -1,6 +1,7 @@
 package livekit
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/go-jose/go-jose/v3"
@@ -14,6 +15,10 @@ func WorkerAuthToken(apiKey string, apiSecret string, ttl time.Duration) (string
 		SetVideoGrant(&auth.VideoGrant{Agent: true}).
 		SetValidFor(ttl).
 		ToJWT()
+}
+
+func WorkerAuthHeader(token string) http.Header {
+	return http.Header{"Authorization": []string{"Bearer " + token}}
 }
 
 func LocalAgentToken(apiKey string, apiSecret string, identity string, room string, ttl time.Duration) (string, error) {

@@ -1,6 +1,7 @@
 package livekit
 
 import (
+	"github.com/cavos-io/rtp-agent/library/inference"
 	"github.com/cavos-io/rtp-agent/library/math"
 	lkprotocol "github.com/livekit/protocol/livekit"
 )
@@ -41,6 +42,92 @@ func JobAgentName(job *lkprotocol.Job) string {
 	return job.AgentName
 }
 
+type RuntimeJobInfo struct {
+	JobID           string
+	EnableRecording bool
+}
+
+func JobRuntimeInfo(job *lkprotocol.Job) RuntimeJobInfo {
+	if job == nil {
+		return RuntimeJobInfo{}
+	}
+	return RuntimeJobInfo{
+		JobID:           job.Id,
+		EnableRecording: job.GetEnableRecording(),
+	}
+}
+
+type SessionReportInfo struct {
+	JobID  string
+	RoomID string
+	Room   string
+}
+
+func JobSessionReportInfo(job *lkprotocol.Job) SessionReportInfo {
+	if job == nil {
+		return SessionReportInfo{}
+	}
+	info := SessionReportInfo{JobID: job.GetId()}
+	if room := job.GetRoom(); room != nil {
+		info.RoomID = room.GetSid()
+		info.Room = room.GetName()
+	}
+	return info
+}
+
+func JobInferenceHeaders(job *lkprotocol.Job) map[string]string {
+	if job == nil {
+		return nil
+	}
+	headers := map[string]string{}
+	if jobID := job.GetId(); jobID != "" {
+		headers[inference.HeaderJobID] = jobID
+	}
+	if room := job.GetRoom(); room != nil && room.GetSid() != "" {
+		headers[inference.HeaderRoomID] = room.GetSid()
+	}
+	if len(headers) == 0 {
+		return nil
+	}
+	return headers
+}
+
+type AssignmentInfo struct {
+	Job             *lkprotocol.Job
+	JobID           string
+	URL             string
+	Token           string
+	EnableRecording bool
+}
+
+func JobAssignmentInfo(req *lkprotocol.JobAssignment, defaultURL string) AssignmentInfo {
+	if req == nil {
+		return AssignmentInfo{URL: defaultURL}
+	}
+	jobURL := defaultURL
+	if req.GetUrl() != "" {
+		jobURL = req.GetUrl()
+	}
+	return AssignmentInfo{
+		Job:             req.Job,
+		JobID:           JobID(req.Job),
+		URL:             jobURL,
+		Token:           req.GetToken(),
+		EnableRecording: req.Job.GetEnableRecording(),
+	}
+}
+
+type TerminationInfo struct {
+	JobID string
+}
+
+func JobTerminationInfo(req *lkprotocol.JobTermination) TerminationInfo {
+	if req == nil {
+		return TerminationInfo{}
+	}
+	return TerminationInfo{JobID: req.JobId}
+}
+
 type LocalRoomJobOptions struct {
 	RoomName string
 	RoomInfo *lkprotocol.Room
@@ -68,6 +155,19 @@ func LocalRoomJob(opts LocalRoomJobOptions) *lkprotocol.Job {
 		Id:   newID(jobIDPrefix),
 		Room: room,
 		Type: lkprotocol.JobType_JT_ROOM,
+	}
+}
+
+type LocalJobRuntimeInfo struct {
+	JobID      string
+	ExecutorID string
+}
+
+func LocalJobInfo(job *lkprotocol.Job) LocalJobRuntimeInfo {
+	jobID := JobID(job)
+	return LocalJobRuntimeInfo{
+		JobID:      jobID,
+		ExecutorID: "local_" + jobID,
 	}
 }
 

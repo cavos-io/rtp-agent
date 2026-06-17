@@ -37,14 +37,7 @@ func currentInferenceContextHeaders() map[string]string {
 	if !ok || ctx == nil || ctx.Job == nil {
 		return nil
 	}
-	headers := map[string]string{}
-	if jobID := ctx.Job.GetId(); jobID != "" {
-		headers[inference.HeaderJobID] = jobID
-	}
-	if room := ctx.Job.GetRoom(); room != nil && room.GetSid() != "" {
-		headers[inference.HeaderRoomID] = room.GetSid()
-	}
-	return headers
+	return workerlivekit.JobInferenceHeaders(ctx.Job)
 }
 
 type jobContextStack struct {
@@ -332,13 +325,10 @@ func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string
 	report := agent.NewSessionReport()
 	tagger := agent.NewTagger()
 	report.Tagger = tagger
-	if job != nil {
-		report.JobID = job.GetId()
-		if room := job.GetRoom(); room != nil {
-			report.RoomID = room.GetSid()
-			report.Room = room.GetName()
-		}
-	}
+	reportInfo := workerlivekit.JobSessionReportInfo(job)
+	report.JobID = reportInfo.JobID
+	report.RoomID = reportInfo.RoomID
+	report.Room = reportInfo.Room
 	return &JobContext{
 		Job:            job,
 		url:            url,
@@ -475,13 +465,10 @@ func (c *JobContext) MakeSessionReport(sessions ...*agent.AgentSession) (*agent.
 	}
 
 	report := agent.NewSessionReport(session)
-	if c.Job != nil {
-		report.JobID = c.Job.GetId()
-		if room := c.Job.GetRoom(); room != nil {
-			report.RoomID = room.GetSid()
-			report.Room = room.GetName()
-		}
-	}
+	reportInfo := workerlivekit.JobSessionReportInfo(c.Job)
+	report.JobID = reportInfo.JobID
+	report.RoomID = reportInfo.RoomID
+	report.Room = reportInfo.Room
 	if c.Report != nil {
 		report.RecordingOptions = c.Report.RecordingOptions
 		report.AudioRecordingPath = c.Report.AudioRecordingPath

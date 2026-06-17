@@ -1,6 +1,8 @@
 package livekit_test
 
 import (
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,5 +24,19 @@ func TestRetryDelayMatchesReferenceBackoff(t *testing.T) {
 		if got := workerlivekit.RetryDelay(test.retryCount); got != test.want {
 			t.Fatalf("RetryDelay(%d) = %v, want %v", test.retryCount, got, test.want)
 		}
+	}
+}
+
+func TestConnectFailureErrorIncludesReferenceMessageAndCause(t *testing.T) {
+	cause := errors.New("dial failed")
+	err := workerlivekit.ConnectFailureError("wss://livekit.example/agent", 3, cause)
+	if err == nil {
+		t.Fatal("ConnectFailureError() = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "failed to connect to LiveKit after 3 attempts wss://livekit.example/agent") {
+		t.Fatalf("ConnectFailureError() = %q, want LiveKit failure message", err.Error())
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("ConnectFailureError() does not wrap cause")
 	}
 }
