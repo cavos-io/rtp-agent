@@ -672,6 +672,33 @@ func TestOpenAISTTStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTStreamHonorsRealtimeConnectTimeout(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTConnectOptions(llm.APIConnectOptions{MaxRetry: 0, Timeout: 5 * time.Millisecond}),
+	)
+	provider.dialWebsocket = func(ctx context.Context, _ string, _ http.Header) (*websocket.Conn, *http.Response, error) {
+		<-ctx.Done()
+		return nil, nil, ctx.Err()
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := provider.Stream(context.Background(), "en")
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		var timeoutErr *llm.APITimeoutError
+		if !errors.As(err, &timeoutErr) {
+			t.Fatalf("Stream error = %T %v, want APITimeoutError", err, err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Stream did not honor realtime connect timeout")
+	}
+}
+
 func TestOpenAISTTStreamReturnsAPIConnectionErrorWhenReconnectFails(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
