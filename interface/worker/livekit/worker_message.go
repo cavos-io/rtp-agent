@@ -14,6 +14,14 @@ func WorkerStatusMessage(status lkprotocol.WorkerStatus, load float64, jobCount 
 	}
 }
 
+func AvailableWorkerStatusMessage(load float64, jobCount uint32, canAcceptJob bool) *lkprotocol.WorkerMessage {
+	status := lkprotocol.WorkerStatus_WS_AVAILABLE
+	if !canAcceptJob {
+		status = lkprotocol.WorkerStatus_WS_FULL
+	}
+	return WorkerStatusMessage(status, load, jobCount)
+}
+
 func DrainingWorkerStatusMessage(jobCount uint32) *lkprotocol.WorkerMessage {
 	status := lkprotocol.WorkerStatus_WS_FULL
 	return &lkprotocol.WorkerMessage{
