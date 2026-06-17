@@ -532,6 +532,21 @@ func TestDefaultConfigFromEnvDefaultsWorkerTransportToLiveKit(t *testing.T) {
 	}
 }
 
+func unsetEnvForTest(t *testing.T, key string) {
+	t.Helper()
+	old, ok := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatalf("unset %s: %v", key, err)
+	}
+	t.Cleanup(func() {
+		if ok {
+			_ = os.Setenv(key, old)
+			return
+		}
+		_ = os.Unsetenv(key)
+	})
+}
+
 func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 	t.Setenv("RTP_AGENT_TRANSPORT", " agora ")
 	t.Setenv("AGORA_APP_ID", " agora-app ")
@@ -574,12 +589,22 @@ func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 }
 
 func TestDefaultConfigFromEnvUsesTENAgoraGreetingDefault(t *testing.T) {
-	t.Setenv("AGORA_GREETING", "")
+	unsetEnvForTest(t, "AGORA_GREETING")
 
 	cfg := DefaultConfigFromEnv()
 
 	if cfg.AgoraGreeting != "Hello, I am your AI assistant." {
 		t.Fatalf("AgoraGreeting = %q, want TEN default greeting", cfg.AgoraGreeting)
+	}
+}
+
+func TestDefaultConfigFromEnvAllowsEmptyAgoraGreeting(t *testing.T) {
+	t.Setenv("AGORA_GREETING", "")
+
+	cfg := DefaultConfigFromEnv()
+
+	if cfg.AgoraGreeting != "" {
+		t.Fatalf("AgoraGreeting = %q, want empty greeting override", cfg.AgoraGreeting)
 	}
 }
 

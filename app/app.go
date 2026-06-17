@@ -703,7 +703,7 @@ func DefaultConfigFromEnv() AppConfig {
 			UID:            strings.TrimSpace(os.Getenv("AGORA_UID")),
 			Token:          strings.TrimSpace(os.Getenv("AGORA_TOKEN")),
 		},
-		AgoraGreeting:                           getenvDefault("AGORA_GREETING", defaultAgoraGreeting),
+		AgoraGreeting:                           getenvTrimmedDefaultUnsetOnly("AGORA_GREETING", defaultAgoraGreeting),
 		Instructions:                            getenvDefault("RTP_AGENT_INSTRUCTIONS", "You are a helpful realtime voice agent."),
 		TelemetryLogsEndpoint:                   os.Getenv("RTP_AGENT_OTLP_LOGS_ENDPOINT"),
 		TelemetryLogsHeaders:                    splitEnvStringMap("RTP_AGENT_OTLP_LOGS_HEADERS"),
@@ -6159,6 +6159,14 @@ func getenvDefault(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func getenvTrimmedDefaultUnsetOnly(name, fallback string) string {
+	value, ok := os.LookupEnv(name)
+	if !ok {
+		return fallback
+	}
+	return strings.TrimSpace(value)
 }
 
 func firstEnv(names ...string) string {
