@@ -3000,6 +3000,9 @@ func azureSTTFromConfig(cfg AppConfig) (*azure.AzureSTT, error) {
 	if language := azureSTTLanguageFromConfig(cfg); language != "" {
 		sttOpts = append(sttOpts, azure.WithAzureSTTLanguage(language))
 	}
+	if cfg.STTSampleRate != nil {
+		sttOpts = append(sttOpts, azure.WithAzureSTTSampleRate(*cfg.STTSampleRate))
+	}
 	return azure.NewAzureSTT("", cfg.STTRegion, sttOpts...)
 }
 

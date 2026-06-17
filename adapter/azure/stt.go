@@ -36,6 +36,7 @@ type AzureSTT struct {
 	region        string
 	speechHost    string
 	language      string
+	sampleRate    int
 	httpClient    *http.Client
 	websocketURL  string
 	dialWebsocket azureSTTWebsocketDialer
@@ -67,6 +68,14 @@ func WithAzureSTTLanguage(language string) AzureSTTOption {
 	}
 }
 
+func WithAzureSTTSampleRate(sampleRate int) AzureSTTOption {
+	return func(s *AzureSTT) {
+		if sampleRate > 0 {
+			s.sampleRate = sampleRate
+		}
+	}
+}
+
 func NewAzureSTT(apiKey string, region string, opts ...AzureSTTOption) (*AzureSTT, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(azureSpeechKeyEnv)
@@ -78,6 +87,7 @@ func NewAzureSTT(apiKey string, region string, opts ...AzureSTTOption) (*AzureST
 		apiKey:        apiKey,
 		region:        region,
 		speechHost:    os.Getenv(azureSpeechHostEnv),
+		sampleRate:    defaultAzureSTTSampleRate,
 		httpClient:    http.DefaultClient,
 		dialWebsocket: defaultAzureSTTWebsocketDialer,
 	}
@@ -95,7 +105,12 @@ func (s *AzureSTT) Model() string { return "unknown" }
 func (s *AzureSTT) Provider() string {
 	return "Azure STT"
 }
-func (s *AzureSTT) InputSampleRate() uint32 { return defaultAzureSTTSampleRate }
+func (s *AzureSTT) InputSampleRate() uint32 {
+	if s == nil || s.sampleRate <= 0 {
+		return defaultAzureSTTSampleRate
+	}
+	return uint32(s.sampleRate)
+}
 func (s *AzureSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "chunk", OfflineRecognize: true}
 }
@@ -390,7 +405,7 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 		return io.ErrClosedPipe
 	}
 	for {
-		if err := s.conn.WriteMessage(websocket.BinaryMessage, buildAzureSTTBinaryMessage("audio", s.connectionID, azureSTTStreamAudioContentType(frame), frame.Data)); err != nil {
+		if err := s.conn.WriteMessage(websocket.BinaryMessage, buildAzureSTTBinaryMessage("audio", s.connectionID, azureSTTStreamAudioContentType(s.provider, frame), frame.Data)); err != nil {
 			if reconnectErr := s.reconnectLocked(); reconnectErr == nil {
 				continue
 			}
@@ -403,8 +418,11 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 	return nil
 }
 
-func azureSTTStreamAudioContentType(frame *model.AudioFrame) string {
+func azureSTTStreamAudioContentType(provider *AzureSTT, frame *model.AudioFrame) string {
 	sampleRate := uint32(defaultAzureSTTSampleRate)
+	if provider != nil && provider.InputSampleRate() > 0 {
+		sampleRate = provider.InputSampleRate()
+	}
 	if frame != nil && frame.SampleRate > 0 {
 		sampleRate = frame.SampleRate
 	}
