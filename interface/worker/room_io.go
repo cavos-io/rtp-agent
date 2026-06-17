@@ -432,6 +432,25 @@ func (rio *RoomIO) startAgentTranscriptionListener() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	rio.agentTranscriptionCancel = cancel
+
+	speechEvents := rio.AgentSession.SpeechCreatedEvents()
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case _, ok := <-speechEvents:
+				if !ok {
+					return
+				}
+				rio.mu.Lock()
+				rio.agentTranscriptionSegmentID = ""
+				rio.agentTranscriptionText = ""
+				rio.mu.Unlock()
+			}
+		}
+	}()
+
 	events := rio.AgentSession.AgentOutputTranscribedEvents()
 	go func() {
 		for {
