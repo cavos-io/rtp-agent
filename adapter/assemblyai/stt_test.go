@@ -2,6 +2,8 @@ package assemblyai
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/url"
 	"strings"
 	"testing"
@@ -288,6 +290,54 @@ func TestAssemblyAIRealtimeTurnEmitsReferenceEventOrder(t *testing.T) {
 	}
 }
 
+func TestAssemblyAIRealtimeFormatTurnsWaitsForFormattedFinal(t *testing.T) {
+	resp := aaiResponse{
+		Type:       "Turn",
+		Transcript: "hello realtime",
+		Utterance:  "hello",
+		EndOfTurn:  true,
+		Words: []assemblyAIWord{
+			{Text: "hello", Start: 100, End: 300, Confidence: 0.95},
+			{Text: "realtime", Start: 350, End: 800, Confidence: 0.9},
+		},
+	}
+	state := &assemblyAIStreamState{requireFormattedFinal: true}
+
+	events := assemblyAIRealtimeTranscriptEvents(resp, state)
+	for i, event := range events {
+		if event.Type == stt.SpeechEventFinalTranscript || event.Type == stt.SpeechEventEndOfSpeech {
+			t.Fatalf("event[%d].Type = %s, want no final or end_of_speech until turn_is_formatted", i, event.Type)
+		}
+	}
+
+	resp.TurnIsFormatted = true
+	events = assemblyAIRealtimeTranscriptEvents(resp, state)
+	wantTypes := []stt.SpeechEventType{
+		stt.SpeechEventInterimTranscript,
+		stt.SpeechEventPreflightTranscript,
+		stt.SpeechEventFinalTranscript,
+		stt.SpeechEventEndOfSpeech,
+	}
+	if len(events) != len(wantTypes) {
+		t.Fatalf("formatted events = %d, want %d", len(events), len(wantTypes))
+	}
+	for i, wantType := range wantTypes {
+		if events[i].Type != wantType {
+			t.Fatalf("formatted event[%d].Type = %s, want %s", i, events[i].Type, wantType)
+		}
+	}
+}
+
+func TestAssemblyAIRealtimeSpeechStartedEmitsReferenceStart(t *testing.T) {
+	events := assemblyAIRealtimeEvents(aaiResponse{Type: "SpeechStarted"}, &assemblyAIStreamState{})
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want one start event", len(events))
+	}
+	if events[0].Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("event type = %s, want start_of_speech", events[0].Type)
+	}
+}
+
 func TestAssemblyAISTTStreamPushFrameSendsReferenceBinaryAudio(t *testing.T) {
 	var writes [][]byte
 	stream := &assemblyAISTTStream{
@@ -296,12 +346,16 @@ func TestAssemblyAISTTStreamPushFrameSendsReferenceBinaryAudio(t *testing.T) {
 			return nil
 		},
 	}
+	audioData := make([]byte, 1600)
+	for i := range audioData {
+		audioData[i] = byte(i)
+	}
 
 	err := stream.PushFrame(&model.AudioFrame{
-		Data:              []byte{0x01, 0x02, 0x03, 0x04},
+		Data:              audioData,
 		SampleRate:        16000,
 		NumChannels:       1,
-		SamplesPerChannel: 2,
+		SamplesPerChannel: 800,
 	})
 	if err != nil {
 		t.Fatalf("PushFrame() error = %v", err)
@@ -309,8 +363,88 @@ func TestAssemblyAISTTStreamPushFrameSendsReferenceBinaryAudio(t *testing.T) {
 	if len(writes) != 1 {
 		t.Fatalf("binary writes = %d, want 1", len(writes))
 	}
-	if got := writes[0]; string(got) != string([]byte{0x01, 0x02, 0x03, 0x04}) {
+	if got := writes[0]; string(got) != string(audioData) {
 		t.Fatalf("binary write = %#v, want raw PCM bytes", got)
+	}
+}
+
+func TestAssemblyAISTTStreamChunksAndFlushesReferenceAudio(t *testing.T) {
+	var writes [][]byte
+	stream := &assemblyAISTTStream{
+		sampleRate: 16000,
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+	}
+	audioData := make([]byte, 2000)
+	for i := range audioData {
+		audioData[i] = byte(i)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              audioData,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1000,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("binary writes after PushFrame = %d, want one 50ms chunk", len(writes))
+	}
+	if got := len(writes[0]); got != 1600 {
+		t.Fatalf("first chunk length = %d, want 1600", got)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if len(writes) != 2 {
+		t.Fatalf("binary writes after Flush = %d, want remainder chunk", len(writes))
+	}
+	if got := len(writes[1]); got != 400 {
+		t.Fatalf("flush chunk length = %d, want 400", got)
+	}
+}
+
+func TestAssemblyAISTTStreamCloseSendsReferenceTerminate(t *testing.T) {
+	var messages []map[string]string
+	closeCalls := 0
+	stream := &assemblyAISTTStream{
+		writeJSON: func(message any) error {
+			payload, ok := message.(map[string]string)
+			if !ok {
+				t.Fatalf("close message = %#v, want map[string]string", message)
+			}
+			messages = append(messages, payload)
+			return nil
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("close messages = %d, want 1", len(messages))
+	}
+	if got := messages[0]["type"]; got != "Terminate" {
+		t.Fatalf("close message type = %q, want Terminate", got)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls after idempotent close = %d, want 1", closeCalls)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01}}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after close error = %v, want io.ErrClosedPipe", err)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
@@ -207,12 +208,15 @@ func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 	}
 
 	stream := &assemblyAISTTStream{
-		conn:   conn,
-		events: make(chan *stt.SpeechEvent, 10),
-		errCh:  make(chan error, 1),
-		state:  &assemblyAIStreamState{},
+		conn:       conn,
+		events:     make(chan *stt.SpeechEvent, 10),
+		errCh:      make(chan error, 1),
+		state:      &assemblyAIStreamState{requireFormattedFinal: s.formatTurns != nil && *s.formatTurns},
+		sampleRate: s.sampleRate,
 	}
 	stream.writeBinary = stream.writeBinaryMessage
+	stream.writeJSON = stream.writeJSONMessage
+	stream.closeConn = stream.closeWebsocketConn
 
 	go stream.readLoop()
 
@@ -330,11 +334,16 @@ type assemblyAISTTStream struct {
 	closed bool
 
 	writeBinary func([]byte) error
+	writeJSON   func(any) error
+	closeConn   func() error
 	state       *assemblyAIStreamState
+	sampleRate  int
+	audioBuf    *audio.AudioByteStream
 }
 
 type assemblyAIStreamState struct {
 	lastPreflightStartTime float64
+	requireFormattedFinal  bool
 }
 
 type aaiResponse struct {
@@ -381,12 +390,20 @@ func (s *assemblyAISTTStream) readLoop() {
 			return
 		}
 
-		if resp.Type == "Turn" || resp.MessageType == "PartialTranscript" || resp.MessageType == "FinalTranscript" {
-			for _, event := range assemblyAIRealtimeTranscriptEvents(resp, s.state) {
-				s.events <- event
-			}
+		for _, event := range assemblyAIRealtimeEvents(resp, s.state) {
+			s.events <- event
 		}
 	}
+}
+
+func assemblyAIRealtimeEvents(resp aaiResponse, state *assemblyAIStreamState) []*stt.SpeechEvent {
+	if resp.Type == "SpeechStarted" {
+		return []*stt.SpeechEvent{{Type: stt.SpeechEventStartOfSpeech}}
+	}
+	if resp.Type == "Turn" || resp.MessageType == "PartialTranscript" || resp.MessageType == "FinalTranscript" {
+		return assemblyAIRealtimeTranscriptEvents(resp, state)
+	}
+	return nil
 }
 
 func assemblyAIRealtimeTranscriptEvent(resp aaiResponse) *stt.SpeechEvent {
@@ -433,7 +450,7 @@ func assemblyAIRealtimeTranscriptEvents(resp aaiResponse, state *assemblyAIStrea
 		events = append(events, assemblyAITranscriptEvent(stt.SpeechEventPreflightTranscript, resp, resp.Utterance, utteranceWords, state.lastPreflightStartTime, endTime))
 		state.lastPreflightStartTime = endTime
 	}
-	if resp.EndOfTurn {
+	if resp.EndOfTurn && (!state.requireFormattedFinal || resp.TurnIsFormatted) {
 		text := resp.Transcript
 		if text == "" {
 			text = resp.Text
@@ -545,16 +562,51 @@ func (s *assemblyAISTTStream) PushFrame(frame *model.AudioFrame) error {
 		return io.ErrClosedPipe
 	}
 
-	if err := s.writeBinaryData(frame.Data); err != nil {
-		s.closed = true
-		_ = s.closeConnection()
-		return err
+	if s.audioBuf == nil {
+		s.audioBuf = newAssemblyAISTTAudioByteStream(s, frame)
+	}
+	for _, chunk := range s.audioBuf.Push(frame.Data) {
+		if err := s.writeBinaryData(chunk.Data); err != nil {
+			s.closed = true
+			_ = s.closeConnection()
+			return err
+		}
 	}
 	return nil
 }
 
 func (s *assemblyAISTTStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.audioBuf == nil {
+		return nil
+	}
+	for _, chunk := range s.audioBuf.Flush() {
+		if err := s.writeBinaryData(chunk.Data); err != nil {
+			s.closed = true
+			_ = s.closeConnection()
+			return err
+		}
+	}
 	return nil
+}
+
+func newAssemblyAISTTAudioByteStream(s *assemblyAISTTStream, frame *model.AudioFrame) *audio.AudioByteStream {
+	sampleRate := uint32(s.sampleRate)
+	if frame.SampleRate > 0 {
+		sampleRate = frame.SampleRate
+	}
+	if sampleRate == 0 {
+		sampleRate = defaultAssemblyAISampleRate
+	}
+	numChannels := frame.NumChannels
+	if numChannels == 0 {
+		numChannels = 1
+	}
+	return audio.NewAudioByteStream(sampleRate, numChannels, sampleRate/20)
 }
 
 func (s *assemblyAISTTStream) Close() error {
@@ -564,9 +616,8 @@ func (s *assemblyAISTTStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	// Terminate session
-	s.conn.WriteJSON(map[string]bool{"terminate_session": true})
-	return s.conn.Close()
+	_ = s.writeJSONData(map[string]string{"type": "Terminate"})
+	return s.closeConnection()
 }
 
 func (s *assemblyAISTTStream) writeBinaryData(data []byte) error {
@@ -583,7 +634,28 @@ func (s *assemblyAISTTStream) writeBinaryMessage(data []byte) error {
 	return s.conn.WriteMessage(websocket.BinaryMessage, data)
 }
 
+func (s *assemblyAISTTStream) writeJSONData(message any) error {
+	if s.writeJSON != nil {
+		return s.writeJSON(message)
+	}
+	return s.writeJSONMessage(message)
+}
+
+func (s *assemblyAISTTStream) writeJSONMessage(message any) error {
+	if s.conn == nil {
+		return io.ErrClosedPipe
+	}
+	return s.conn.WriteJSON(message)
+}
+
 func (s *assemblyAISTTStream) closeConnection() error {
+	if s.closeConn != nil {
+		return s.closeConn()
+	}
+	return s.closeWebsocketConn()
+}
+
+func (s *assemblyAISTTStream) closeWebsocketConn() error {
 	if s.conn == nil {
 		return nil
 	}
