@@ -105,6 +105,36 @@ func (p *sdkDataPublisher) PublishData(ctx context.Context, payload []byte) erro
 	return nil
 }
 
+type sdkRTMLifecycleClient struct {
+	client *agorartm.IRtmClient
+}
+
+func (c sdkRTMLifecycleClient) Unsubscribe(channel string) error {
+	if c.client == nil {
+		return nil
+	}
+	if ret, _ := c.client.Unsubscribe(channel); ret != 0 {
+		return fmt.Errorf("agora RTM unsubscribe failed: %d", ret)
+	}
+	return nil
+}
+
+func (c sdkRTMLifecycleClient) Logout() error {
+	if c.client == nil {
+		return nil
+	}
+	if ret, _ := c.client.Logout(); ret != 0 {
+		return fmt.Errorf("agora RTM logout failed: %d", ret)
+	}
+	return nil
+}
+
+func (c sdkRTMLifecycleClient) Release() {
+	if c.client != nil {
+		c.client.Release()
+	}
+}
+
 func (p *sdkDataPublisher) Close(context.Context) error {
 	if p == nil || p.client == nil {
 		return nil
@@ -115,14 +145,5 @@ func (p *sdkDataPublisher) Close(context.Context) error {
 		return nil
 	}
 	p.closed = true
-	if ret, _ := p.client.Unsubscribe(p.channel); ret != 0 {
-		p.client.Release()
-		return fmt.Errorf("agora RTM unsubscribe failed: %d", ret)
-	}
-	if ret, _ := p.client.Logout(); ret != 0 {
-		p.client.Release()
-		return fmt.Errorf("agora RTM logout failed: %d", ret)
-	}
-	p.client.Release()
-	return nil
+	return closeRTMClient(sdkRTMLifecycleClient{client: p.client}, p.channel)
 }

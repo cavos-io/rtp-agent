@@ -82,6 +82,16 @@ func TestSDKDataPublisherImplementationUsesBuildTag(t *testing.T) {
 	}
 }
 
+func TestSDKDataPublisherCloseUsesLifecycleHelper(t *testing.T) {
+	source, err := os.ReadFile("sdk_rtm.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk_rtm.go) error = %v", err)
+	}
+	if !strings.Contains(string(source), "closeRTMClient") {
+		t.Fatal("sdk_rtm.go Close must use closeRTMClient so logout and release still run after unsubscribe failure")
+	}
+}
+
 func TestSDKClientImplementationRegistersInboundAudioObserver(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {
