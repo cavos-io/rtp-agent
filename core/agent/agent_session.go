@@ -2444,6 +2444,10 @@ func realtimeTurnDetectionEnabled(assistant any) bool {
 	return false
 }
 
+func realtimeModelTurnDetectionEnabled(model llm.RealtimeModel) bool {
+	return model != nil && model.Capabilities().TurnDetection
+}
+
 func (s *AgentSession) validateRealtimeTurnDetectionInterruptions(assistant any) error {
 	if realtimeTurnDetectionEnabled(assistant) && !s.defaultAllowInterruptions() {
 		return errRealtimeTurnDetectionInterruptionsDisabled
@@ -2452,11 +2456,11 @@ func (s *AgentSession) validateRealtimeTurnDetectionInterruptions(assistant any)
 }
 
 func (s *AgentSession) defaultAllowInterruptions() bool {
+	return s.defaultAllowInterruptionsForAgent(s.agentConfig())
+}
+
+func (s *AgentSession) defaultAllowInterruptionsForAgent(agent *Agent) bool {
 	allowInterruptions := s.Options.AllowInterruptions
-	if s.Agent == nil {
-		return allowInterruptions
-	}
-	agent := s.Agent.GetAgent()
 	if agent == nil {
 		return allowInterruptions
 	}
@@ -2464,6 +2468,13 @@ func (s *AgentSession) defaultAllowInterruptions() bool {
 		return agent.AllowInterruptions
 	}
 	return allowInterruptions
+}
+
+func (s *AgentSession) agentConfig() *Agent {
+	if s.Agent == nil {
+		return nil
+	}
+	return s.Agent.GetAgent()
 }
 
 func (s *AgentSession) watchActiveRunSpeechHandle(handle *SpeechHandle) bool {
@@ -2520,6 +2531,11 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	baseAgent := agent.GetAgent()
 
 	s.mu.Lock()
+	if s.started && s.invalidRealtimeTurnDetectionHandoffLocked(baseAgent) {
+		s.mu.Unlock()
+		s.EmitError(ErrorEvent{Error: errRealtimeTurnDetectionInterruptionsDisabled, Source: agent})
+		return
+	}
 	oldActivity := s.activity
 	started := s.started
 	s.Agent = agent
@@ -2585,6 +2601,17 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	}
 	s.EmitConversationItemAdded(handoff)
 	newActivity.Start()
+}
+
+func (s *AgentSession) invalidRealtimeTurnDetectionHandoffLocked(agent *Agent) bool {
+	if s.defaultAllowInterruptionsForAgent(agent) {
+		return false
+	}
+	realtimeModel := s.RealtimeModel
+	if agent != nil && agent.RealtimeModel != nil {
+		realtimeModel = agent.RealtimeModel
+	}
+	return realtimeModelTurnDetectionEnabled(realtimeModel)
 }
 
 func copySessionTools(tools []llm.Tool) []llm.Tool {
