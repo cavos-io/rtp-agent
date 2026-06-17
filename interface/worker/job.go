@@ -664,7 +664,7 @@ func (c *JobContext) roomCallbackWithEntrypoints(cb *lksdk.RoomCallback, autoSub
 }
 
 func (c *JobContext) participantAvailable(participant remoteParticipantView) {
-	info := participantInfoFromRemoteParticipant(participant)
+	info := workerlivekit.ParticipantInfoFromRemoteParticipant(participant)
 	if info == nil {
 		return
 	}
@@ -696,10 +696,6 @@ func remoteParticipantsAsViews(participants []*lksdk.RemoteParticipant) []remote
 		}
 	}
 	return views
-}
-
-func participantInfoFromRemoteParticipant(participant remoteParticipantView) *livekit.ParticipantInfo {
-	return workerlivekit.ParticipantInfoFromRemoteParticipant(participant)
 }
 
 func (c *JobContext) AddShutdownCallback(callback any) error {

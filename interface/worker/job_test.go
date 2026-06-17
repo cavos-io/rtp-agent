@@ -771,7 +771,7 @@ func (p fakeParticipantView) Metadata() string              { return p.metadata 
 func (p fakeParticipantView) Attributes() map[string]string { return p.attributes }
 
 func TestParticipantInfoFromRemoteParticipantCopiesJoinFields(t *testing.T) {
-	info := participantInfoFromRemoteParticipant(fakeParticipantView{
+	info := workerlivekit.ParticipantInfoFromRemoteParticipant(fakeParticipantView{
 		sid:      "PA_sip",
 		identity: "caller",
 		name:     "SIP Caller",
@@ -804,11 +804,17 @@ func TestParticipantInfoFromRemoteParticipantCopiesJoinFields(t *testing.T) {
 
 func TestParticipantInfoFromRemoteParticipantCopiesAttributes(t *testing.T) {
 	attrs := map[string]string{"tier": "gold"}
-	info := participantInfoFromRemoteParticipant(fakeParticipantView{attributes: attrs})
+	info := workerlivekit.ParticipantInfoFromRemoteParticipant(fakeParticipantView{attributes: attrs})
 	attrs["tier"] = "platinum"
 
 	if info.Attributes["tier"] != "gold" {
 		t.Fatalf("ParticipantInfo attributes were not copied, got %q", info.Attributes["tier"])
+	}
+}
+
+func TestParticipantInfoFromRemoteParticipantNil(t *testing.T) {
+	if info := workerlivekit.ParticipantInfoFromRemoteParticipant(nil); info != nil {
+		t.Fatalf("ParticipantInfoFromRemoteParticipant(nil) = %#v, want nil", info)
 	}
 }
 
