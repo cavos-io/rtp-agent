@@ -126,7 +126,7 @@ func (s *MistralAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame
 	}
 	var result mistralAISTTResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	return mistralAISTTSpeechEvent(resolveMistralAISTTLanguage(s, language), result), nil
 }
