@@ -1527,6 +1527,53 @@ func TestRoomIOReusesAgentTranscriptionSegmentUntilFinal(t *testing.T) {
 	}
 }
 
+func TestRoomIOSpeechCreatedResetsAgentTranscriptionSegment(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	published := make(chan roomIOPublishedText, 4)
+	rio := &RoomIO{
+		AgentSession: session,
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+	rio.startAgentTranscriptionListener()
+	defer rio.agentTranscriptionCancel()
+
+	// First speech: emit a delta (not final) to establish a segment ID.
+	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "hello",
+		IsFinal:    false,
+	})
+	first := receivePublishedText(t, published, "first delta")
+	firstSegmentID := first.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if firstSegmentID == "" {
+		t.Fatal("first segment id must not be empty")
+	}
+
+	// New speech created before the first segment ends.
+	session.EmitSpeechCreated(agent.SpeechCreatedEvent{
+		SpeechHandle: agent.NewSpeechHandle(false, agent.DefaultInputDetails()),
+		Source:       "say",
+	})
+
+	// Give the goroutine time to process SpeechCreated and reset state.
+	time.Sleep(20 * time.Millisecond)
+
+	// Second speech delta must use a new segment ID.
+	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "world",
+		IsFinal:    false,
+	})
+	second := receivePublishedText(t, published, "second delta after new speech")
+	secondSegmentID := second.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if secondSegmentID == "" {
+		t.Fatal("second segment id must not be empty")
+	}
+	if firstSegmentID == secondSegmentID {
+		t.Fatalf("segment id must reset on SpeechCreated: both = %q", firstSegmentID)
+	}
+}
+
 func TestRoomIOPublishesAgentOutputTranscriptionTrackID(t *testing.T) {
 	published := make(chan roomIOPublishedText, 1)
 	rio := &RoomIO{
