@@ -1249,7 +1249,7 @@ func installAgoraRTMDataMessageHandler(subscriber workeragora.DataMessageSubscri
 	router := workeragora.RTMMessageRouter{
 		AgentUserID: agentUserID,
 		TextInput: func(ctx context.Context, ev workeragora.TextInputEvent) error {
-			if err := workeragora.HandleTextInput(ctx, responder, ev.Text); err != nil {
+			if err := workeragora.HandleTextInputEvent(ctx, responder, ev); err != nil {
 				logutil.Logger.Warnw("failed to handle Agora RTM text input", err, "channel", ev.Channel, "publisher", ev.Publisher)
 				return err
 			}

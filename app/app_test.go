@@ -174,7 +174,8 @@ func (f *fakeAppAgoraDataPublisher) isClosed() bool {
 }
 
 type recordingAppTextResponder struct {
-	calls []string
+	calls           []string
+	userTranscripts []agent.UserInputTranscribedEvent
 }
 
 func (r *recordingAppTextResponder) Interrupt(force bool) error {
@@ -194,6 +195,10 @@ func (r *recordingAppTextResponder) GenerateReply(_ context.Context, text string
 func (r *recordingAppTextResponder) ClaimUserTurn(ctx context.Context, fn func(context.Context) error) error {
 	r.calls = append(r.calls, "claim")
 	return fn(ctx)
+}
+
+func (r *recordingAppTextResponder) EmitUserInputTranscribed(ev agent.UserInputTranscribedEvent) {
+	r.userTranscripts = append(r.userTranscripts, ev)
 }
 
 type fakeAppSessionAssistant struct {
@@ -1616,6 +1621,13 @@ func TestInstallAgoraRTMDataMessageHandlerDispatchesInputText(t *testing.T) {
 	}
 	if got := strings.Join(responder.calls, ","); got != "claim,interrupt:false,generate:hello from chat" {
 		t.Fatalf("responder calls = %q, want input_text turn dispatch", got)
+	}
+	if len(responder.userTranscripts) != 1 {
+		t.Fatalf("user transcripts = %d, want one final RTM input transcript", len(responder.userTranscripts))
+	}
+	transcript := responder.userTranscripts[0]
+	if transcript.Transcript != "hello from chat" || !transcript.IsFinal || transcript.SpeakerID != "caller-7" {
+		t.Fatalf("user transcript = %#v, want final RTM input transcript with stream id", transcript)
 	}
 }
 

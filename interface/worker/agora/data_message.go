@@ -89,7 +89,15 @@ type TextTurnClaimer interface {
 	ClaimUserTurn(context.Context, func(context.Context) error) error
 }
 
+type TextInputTranscriber interface {
+	EmitUserInputTranscribed(agent.UserInputTranscribedEvent)
+}
+
 func HandleTextInput(ctx context.Context, responder TextResponder, text string) error {
+	return HandleTextInputEvent(ctx, responder, TextInputEvent{Text: text})
+}
+
+func HandleTextInputEvent(ctx context.Context, responder TextResponder, ev TextInputEvent) error {
 	if responder == nil {
 		return nil
 	}
@@ -97,7 +105,14 @@ func HandleTextInput(ctx context.Context, responder TextResponder, text string) 
 		if err := responder.Interrupt(false); err != nil {
 			return err
 		}
-		_, err := responder.GenerateReply(ctx, text)
+		if transcriber, ok := responder.(TextInputTranscriber); ok {
+			transcriber.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{
+				Transcript: ev.Text,
+				IsFinal:    true,
+				SpeakerID:  ev.StreamID,
+			})
+		}
+		_, err := responder.GenerateReply(ctx, ev.Text)
 		return err
 	}
 	if claimer, ok := responder.(TextTurnClaimer); ok {
