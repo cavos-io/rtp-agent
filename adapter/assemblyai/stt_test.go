@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -338,6 +339,24 @@ func TestAssemblyAIRealtimeSpeechStartedEmitsReferenceStart(t *testing.T) {
 	}
 }
 
+func TestAssemblyAIRealtimeSpeechStartedUsesReferenceTimestamp(t *testing.T) {
+	streamStart := 1000.25
+	timestampMS := 750.0
+	events := assemblyAIRealtimeEvents(
+		aaiResponse{Type: "SpeechStarted", Timestamp: &timestampMS},
+		&assemblyAIStreamState{streamStartTime: &streamStart},
+	)
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want one start event", len(events))
+	}
+	if events[0].SpeechStartTime == nil {
+		t.Fatal("speech start time = nil, want stream anchor plus timestamp")
+	}
+	if *events[0].SpeechStartTime != 1001.0 {
+		t.Fatalf("speech start time = %v, want 1001", *events[0].SpeechStartTime)
+	}
+}
+
 func TestAssemblyAISTTStreamPushFrameSendsReferenceBinaryAudio(t *testing.T) {
 	var writes [][]byte
 	stream := &assemblyAISTTStream{
@@ -365,6 +384,49 @@ func TestAssemblyAISTTStreamPushFrameSendsReferenceBinaryAudio(t *testing.T) {
 	}
 	if got := writes[0]; string(got) != string(audioData) {
 		t.Fatalf("binary write = %#v, want raw PCM bytes", got)
+	}
+}
+
+func TestAssemblyAISTTStreamAnchorsReferenceStartTimeOnFirstChunk(t *testing.T) {
+	streamStart := float64(1234)
+	stream := &assemblyAISTTStream{
+		state: &assemblyAIStreamState{},
+		clock: func() time.Time {
+			return time.Unix(int64(streamStart), 0)
+		},
+		writeBinary: func([]byte) error {
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if stream.state.streamStartTime == nil {
+		t.Fatal("stream start time = nil, want first sent chunk anchor")
+	}
+	if *stream.state.streamStartTime != streamStart {
+		t.Fatalf("stream start time = %v, want %v", *stream.state.streamStartTime, streamStart)
+	}
+
+	stream.clock = func() time.Time {
+		return time.Unix(int64(streamStart+10), 0)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("second PushFrame() error = %v", err)
+	}
+	if *stream.state.streamStartTime != streamStart {
+		t.Fatalf("stream start time after second chunk = %v, want original %v", *stream.state.streamStartTime, streamStart)
 	}
 }
 

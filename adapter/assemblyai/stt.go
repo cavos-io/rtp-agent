@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -213,6 +214,7 @@ func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 		errCh:      make(chan error, 1),
 		state:      &assemblyAIStreamState{requireFormattedFinal: s.formatTurns != nil && *s.formatTurns},
 		sampleRate: s.sampleRate,
+		clock:      time.Now,
 	}
 	stream.writeBinary = stream.writeBinaryMessage
 	stream.writeJSON = stream.writeJSONMessage
@@ -339,11 +341,14 @@ type assemblyAISTTStream struct {
 	state       *assemblyAIStreamState
 	sampleRate  int
 	audioBuf    *audio.AudioByteStream
+	clock       func() time.Time
 }
 
 type assemblyAIStreamState struct {
+	mu                     sync.Mutex
 	lastPreflightStartTime float64
 	requireFormattedFinal  bool
+	streamStartTime        *float64
 }
 
 type aaiResponse struct {
@@ -355,6 +360,7 @@ type aaiResponse struct {
 	Confidence      float64          `json:"confidence"`
 	EndOfTurn       bool             `json:"end_of_turn"`
 	TurnIsFormatted bool             `json:"turn_is_formatted"`
+	Timestamp       *float64         `json:"timestamp"`
 	Language        string           `json:"language_code"`
 	SpeakerID       string           `json:"speaker_label"`
 	Words           []assemblyAIWord `json:"words"`
@@ -398,12 +404,40 @@ func (s *assemblyAISTTStream) readLoop() {
 
 func assemblyAIRealtimeEvents(resp aaiResponse, state *assemblyAIStreamState) []*stt.SpeechEvent {
 	if resp.Type == "SpeechStarted" {
-		return []*stt.SpeechEvent{{Type: stt.SpeechEventStartOfSpeech}}
+		return []*stt.SpeechEvent{{
+			Type:            stt.SpeechEventStartOfSpeech,
+			SpeechStartTime: state.speechStartTime(resp.Timestamp),
+		}}
 	}
 	if resp.Type == "Turn" || resp.MessageType == "PartialTranscript" || resp.MessageType == "FinalTranscript" {
 		return assemblyAIRealtimeTranscriptEvents(resp, state)
 	}
 	return nil
+}
+
+func (state *assemblyAIStreamState) anchorStreamStart(startTime float64) {
+	if state == nil {
+		return
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.streamStartTime != nil {
+		return
+	}
+	state.streamStartTime = &startTime
+}
+
+func (state *assemblyAIStreamState) speechStartTime(timestampMS *float64) *float64 {
+	if state == nil || timestampMS == nil {
+		return nil
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.streamStartTime == nil {
+		return nil
+	}
+	startTime := *state.streamStartTime + *timestampMS/1000
+	return &startTime
 }
 
 func assemblyAIRealtimeTranscriptEvent(resp aaiResponse) *stt.SpeechEvent {
@@ -566,6 +600,7 @@ func (s *assemblyAISTTStream) PushFrame(frame *model.AudioFrame) error {
 		s.audioBuf = newAssemblyAISTTAudioByteStream(s, frame)
 	}
 	for _, chunk := range s.audioBuf.Push(frame.Data) {
+		s.anchorStreamStart()
 		if err := s.writeBinaryData(chunk.Data); err != nil {
 			s.closed = true
 			_ = s.closeConnection()
@@ -585,6 +620,7 @@ func (s *assemblyAISTTStream) Flush() error {
 		return nil
 	}
 	for _, chunk := range s.audioBuf.Flush() {
+		s.anchorStreamStart()
 		if err := s.writeBinaryData(chunk.Data); err != nil {
 			s.closed = true
 			_ = s.closeConnection()
@@ -592,6 +628,18 @@ func (s *assemblyAISTTStream) Flush() error {
 		}
 	}
 	return nil
+}
+
+func (s *assemblyAISTTStream) anchorStreamStart() {
+	if s.state == nil {
+		return
+	}
+	clock := s.clock
+	if clock == nil {
+		clock = time.Now
+	}
+	now := float64(clock().UnixNano()) / float64(time.Second)
+	s.state.anchorStreamStart(now)
 }
 
 func newAssemblyAISTTAudioByteStream(s *assemblyAISTTStream, frame *model.AudioFrame) *audio.AudioByteStream {
