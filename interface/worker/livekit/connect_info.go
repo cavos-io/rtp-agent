@@ -1,6 +1,9 @@
 package livekit
 
-import lksdk "github.com/livekit/server-sdk-go/v2"
+import (
+	lkprotocol "github.com/livekit/protocol/livekit"
+	lksdk "github.com/livekit/server-sdk-go/v2"
+)
 
 type ConnectInfoOptions struct {
 	APIKey                string
@@ -23,4 +26,9 @@ func ConnectInfo(opts ConnectInfoOptions) lksdk.ConnectInfo {
 		ParticipantMetadata:   opts.ParticipantMetadata,
 		ParticipantAttributes: opts.ParticipantAttributes,
 	}
+}
+
+func JobConnectInfo(job *lkprotocol.Job, opts ConnectInfoOptions) lksdk.ConnectInfo {
+	opts.RoomName = JobRoomName(job)
+	return ConnectInfo(opts)
 }

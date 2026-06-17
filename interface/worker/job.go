@@ -557,14 +557,13 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *lksdk.Room, 
 		c.Room = room
 		c.participantsAvailable(remoteParticipantsAsViews(room.GetRemoteParticipants()))
 		c.applyAutoSubscribeOptions(opts.AutoSubscribe)
-		logger.Logger.Infow("Connected to room", "room", c.Job.Room.Name)
+		logger.Logger.Infow("Connected to room", "room", workerlivekit.JobRoomName(c.Job))
 		return nil
 	}
 
-	info := workerlivekit.ConnectInfo(workerlivekit.ConnectInfoOptions{
+	info := workerlivekit.JobConnectInfo(c.Job, workerlivekit.ConnectInfoOptions{
 		APIKey:                c.apiKey,
 		APISecret:             c.apiSecret,
-		RoomName:              c.Job.Room.Name,
 		ParticipantName:       c.AcceptArguments.Name,
 		ParticipantIdentity:   c.ParticipantIdentity(),
 		ParticipantMetadata:   c.AcceptArguments.Metadata,
@@ -576,7 +575,7 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *lksdk.Room, 
 	c.Room = room
 	c.participantsAvailable(remoteParticipantsAsViews(room.GetRemoteParticipants()))
 	c.applyAutoSubscribeOptions(opts.AutoSubscribe)
-	logger.Logger.Infow("Connected to room", "room", c.Job.Room.Name)
+	logger.Logger.Infow("Connected to room", "room", workerlivekit.JobRoomName(c.Job))
 	return nil
 }
 

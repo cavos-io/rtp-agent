@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
+	lkprotocol "github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -43,5 +44,26 @@ func TestConnectInfoUsesAcceptedParticipantFields(t *testing.T) {
 	}
 	if info.ParticipantKind != lksdk.ParticipantAgent {
 		t.Fatalf("ConnectInfo.ParticipantKind = %v, want ParticipantAgent", info.ParticipantKind)
+	}
+}
+
+func TestJobConnectInfoUsesJobRoomName(t *testing.T) {
+	info := workerlivekit.JobConnectInfo(&lkprotocol.Job{
+		Room: &lkprotocol.Room{Name: "room-a"},
+	}, workerlivekit.ConnectInfoOptions{
+		APIKey:              "key",
+		APISecret:           "secret",
+		ParticipantName:     "Agent Name",
+		ParticipantIdentity: "custom-agent",
+	})
+
+	if info.RoomName != "room-a" {
+		t.Fatalf("JobConnectInfo.RoomName = %q, want room-a", info.RoomName)
+	}
+	if info.ParticipantIdentity != "custom-agent" {
+		t.Fatalf("JobConnectInfo.ParticipantIdentity = %q, want custom-agent", info.ParticipantIdentity)
+	}
+	if info.ParticipantKind != lksdk.ParticipantAgent {
+		t.Fatalf("JobConnectInfo.ParticipantKind = %v, want ParticipantAgent", info.ParticipantKind)
 	}
 }
