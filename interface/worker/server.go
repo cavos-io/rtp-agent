@@ -1284,6 +1284,9 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	defer s.finishRun()
 
 	if NormalizeWorkerTransport(string(s.Options.Transport)) == WorkerTransportAgora {
+		if err := s.validateRunPreconditions(); err != nil {
+			return err
+		}
 		s.mu.Lock()
 		transportRun := s.transportRun
 		s.mu.Unlock()
