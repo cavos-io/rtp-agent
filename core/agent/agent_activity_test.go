@@ -1676,6 +1676,45 @@ func TestAgentActivityInterruptionEnabledRequiresDetectionModeAndAllowance(t *te
 	}
 }
 
+func TestAgentActivityRealtimeLLMTurnDetectionRequiresRealtimeModel(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeRealtimeLLM})
+	activity := NewAgentActivity(agent, session)
+
+	if got := activity.turnDetectionMode(); got != "" {
+		t.Fatalf("turnDetectionMode() = %q, want reference fallback when no realtime model exists", got)
+	}
+	if !activity.vadBasedTurnDetection() {
+		t.Fatal("vadBasedTurnDetection() = false, want VAD fallback after ignored realtime_llm mode")
+	}
+}
+
+func TestAgentActivityRealtimeLLMTurnDetectionUsesRealtimeCapabilities(t *testing.T) {
+	t.Run("server turn detection", func(t *testing.T) {
+		agent := NewAgent("test")
+		agent.RealtimeModel = &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{TurnDetection: true}}
+		session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeRealtimeLLM})
+		activity := NewAgentActivity(agent, session)
+
+		if got := activity.turnDetectionMode(); got != TurnDetectionModeRealtimeLLM {
+			t.Fatalf("turnDetectionMode() = %q, want realtime_llm when realtime model supports turn detection", got)
+		}
+	})
+
+	t.Run("realtime without server turn detection falls back to vad", func(t *testing.T) {
+		agent := NewAgent("test")
+		agent.VAD = &fakePipelineVAD{}
+		agent.RealtimeModel = &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{TurnDetection: false}}
+		session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeRealtimeLLM})
+		activity := NewAgentActivity(agent, session)
+
+		if got := activity.turnDetectionMode(); got != TurnDetectionModeVAD {
+			t.Fatalf("turnDetectionMode() = %q, want vad fallback when realtime model lacks turn detection", got)
+		}
+	})
+}
+
 func TestAgentActivityScheduleSpeechAllowsForcedSpeechWhilePaused(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

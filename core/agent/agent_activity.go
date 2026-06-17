@@ -2860,12 +2860,38 @@ func (a *AgentActivity) turnDetectionMode() TurnDetectionMode {
 			logger.Logger.Warnw("turn_detection is set to vad, but no VAD model is provided", nil)
 			return ""
 		}
+	case TurnDetectionModeRealtimeLLM:
+		if realtime, turnDetection := a.realtimeTurnDetectionCapabilities(); !realtime || !turnDetection {
+			logger.Logger.Warnw("turn_detection is set to realtime_llm, but no realtime model with turn detection is provided", nil)
+			if realtime && a.hasVADModel() {
+				return TurnDetectionModeVAD
+			}
+			return ""
+		}
 	}
 	return TurnDetectionMode(mode)
 }
 
 func (a *AgentActivity) hasVADModel() bool {
 	return a != nil && ((a.Agent != nil && a.Agent.VAD != nil) || (a.Session != nil && a.Session.VAD != nil))
+}
+
+func (a *AgentActivity) realtimeTurnDetectionCapabilities() (bool, bool) {
+	if a == nil {
+		return false, false
+	}
+	if a.Agent != nil && a.Agent.RealtimeModel != nil {
+		return true, a.Agent.RealtimeModel.Capabilities().TurnDetection
+	}
+	if a.Session != nil {
+		a.Session.mu.Lock()
+		assistant := a.Session.Assistant
+		a.Session.mu.Unlock()
+		if capabilities, ok := assistant.(realtimeCapabilitiesAssistant); ok {
+			return true, capabilities.RealtimeCapabilities().TurnDetection
+		}
+	}
+	return false, false
 }
 
 func firstNonEmpty(values ...string) string {
