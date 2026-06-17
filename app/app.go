@@ -1813,9 +1813,8 @@ func (a *App) configureMetricsCollector(ctx *worker.JobContext) {
 	}
 	labels := telemetry.MetricLabels{AgentName: a.Server.Options.AgentName}
 	if ctx != nil && ctx.Job != nil {
-		if room := ctx.Job.GetRoom(); room != nil {
-			labels.RoomName = room.GetName()
-		}
+		metricInfo := workerlivekit.JobMetricInfo(ctx.Job)
+		labels.RoomName = metricInfo.RoomName
 		labels.ParticipantIdentity = ctx.ParticipantIdentity()
 	}
 	a.Session.MetricsCollector = a.MetricsRegistry.GetUsageCollector(labels)
