@@ -16,6 +16,14 @@ func JobRoom(job *lkprotocol.Job) *lkprotocol.Room {
 	return job.Room
 }
 
+func JobRoomName(job *lkprotocol.Job) string {
+	room := JobRoom(job)
+	if room == nil {
+		return ""
+	}
+	return room.Name
+}
+
 func JobPublisher(job *lkprotocol.Job) *lkprotocol.ParticipantInfo {
 	if job == nil {
 		return nil

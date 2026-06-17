@@ -942,7 +942,7 @@ func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunk
 	if len(names) > 0 {
 		name = names[0]
 	}
-	req := workerlivekit.CreateSIPParticipantRequest(c.Job.Room.Name, callTo, trunkID, identity, name)
+	req := workerlivekit.JobCreateSIPParticipantRequest(c.Job, callTo, trunkID, identity, name)
 	return c.API().SIP.CreateSIPParticipant(ctx, req)
 }
 
@@ -972,7 +972,7 @@ func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, pa
 	if len(playDialtones) > 0 {
 		playDialtone = playDialtones[0]
 	}
-	req := workerlivekit.TransferSIPParticipantRequest(c.Job.Room.Name, identity, transferTo, playDialtone)
+	req := workerlivekit.JobTransferSIPParticipantRequest(c.Job, identity, transferTo, playDialtone)
 	_, err = c.API().SIP.TransferSIPParticipant(ctx, req)
 	return err
 }
