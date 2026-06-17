@@ -668,7 +668,7 @@ func (c *JobContext) WaitForParticipant(
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
 	}
-	return utils.WaitForParticipant(ctx, c.Room, identity, workerlivekit.DefaultParticipantKindsWhenUnset(kinds)...)
+	return workerlivekit.WaitForParticipant(ctx, c.Room, identity, kinds...)
 }
 
 func (c *JobContext) WaitForAgent(
@@ -678,7 +678,7 @@ func (c *JobContext) WaitForAgent(
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
 	}
-	return utils.WaitForAgent(ctx, c.Room, agentName...)
+	return workerlivekit.WaitForAgent(ctx, c.Room, agentName...)
 }
 
 func (c *JobContext) WaitForTrackPublication(
@@ -689,7 +689,7 @@ func (c *JobContext) WaitForTrackPublication(
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
 	}
-	return utils.WaitForTrackPublication(ctx, c.Room, identity, kinds...)
+	return workerlivekit.WaitForTrackPublication(ctx, c.Room, identity, kinds...)
 }
 
 func (c *JobContext) WaitForTrackPublicationWithOptions(
@@ -699,7 +699,7 @@ func (c *JobContext) WaitForTrackPublicationWithOptions(
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
 	}
-	return utils.WaitForTrackPublicationWithOptions(ctx, c.Room, options)
+	return workerlivekit.WaitForTrackPublicationWithOptions(ctx, c.Room, options)
 }
 
 func (c *JobContext) WaitForParticipantAttribute(
@@ -711,7 +711,7 @@ func (c *JobContext) WaitForParticipantAttribute(
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return err
 	}
-	return utils.WaitForParticipantAttribute(ctx, c.Room, identity, attribute, value)
+	return workerlivekit.WaitForParticipantAttribute(ctx, c.Room, identity, attribute, value)
 }
 
 func (c *JobContext) ensureRoomConnected(ctx context.Context) error {
