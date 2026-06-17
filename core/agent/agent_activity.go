@@ -77,16 +77,17 @@ type ttsErrorCollector interface {
 }
 
 type EndOfTurnInfo struct {
-	SkipReply             bool
-	ReplyAlreadyGenerated bool
-	NewTranscript         string
-	Language              string
-	TranscriptConfidence  float64
-	EndOfTurnDelay        float64
-	TranscriptionDelay    float64
-	StartedSpeakingAt     *float64
-	StoppedSpeakingAt     *float64
-	AudioFrames           []*model.AudioFrame
+	SkipReply              bool
+	ReplyAlreadyGenerated  bool
+	GenerateReplyAfterHook bool
+	NewTranscript          string
+	Language               string
+	TranscriptConfidence   float64
+	EndOfTurnDelay         float64
+	TranscriptionDelay     float64
+	StartedSpeakingAt      *float64
+	StoppedSpeakingAt      *float64
+	AudioFrames            []*model.AudioFrame
 }
 
 // AgentActivity handles the internal event loops, I/O processing, and
@@ -2372,6 +2373,8 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 		a.notifyUserTurnUpdated()
 	}()
 	replyAlreadyGenerated := false
+	generateReplyAfterHook := false
+	pendingTranscriptBeforeRealtime := a.pendingFinalTranscriptPresent()
 	if a.Session != nil && !opts.SkipRealtimeAudio {
 		a.Session.mu.Lock()
 		assistant := a.Session.Assistant
@@ -2384,12 +2387,16 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 				return "", err
 			}
 			if !opts.SkipReply && activity == a {
-				if _, err := a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{}); err != nil {
-					return "", err
+				if pendingTranscriptBeforeRealtime {
+					generateReplyAfterHook = true
+				} else {
+					if _, err := a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{}); err != nil {
+						return "", err
+					}
+					replyAlreadyGenerated = true
 				}
-				replyAlreadyGenerated = true
 			}
-			if !replyAlreadyGenerated {
+			if !replyAlreadyGenerated && !generateReplyAfterHook {
 				opts.SkipReply = true
 			}
 		}
@@ -2504,12 +2511,13 @@ collect:
 		})
 	}
 	if _, err := a.completeUserTurn(ctx, EndOfTurnInfo{
-		SkipReply:             opts.SkipReply,
-		ReplyAlreadyGenerated: replyAlreadyGenerated,
-		NewTranscript:         transcript,
-		Language:              firstNonEmpty(language, fallbackLanguage),
-		TranscriptConfidence:  confidence,
-		AudioFrames:           a.userAudioSnapshot(),
+		SkipReply:              opts.SkipReply,
+		ReplyAlreadyGenerated:  replyAlreadyGenerated,
+		GenerateReplyAfterHook: generateReplyAfterHook,
+		NewTranscript:          transcript,
+		Language:               firstNonEmpty(language, fallbackLanguage),
+		TranscriptConfidence:   confidence,
+		AudioFrames:            a.userAudioSnapshot(),
 	}); err != nil {
 		return transcript, err
 	}
@@ -2619,6 +2627,17 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	if info.ReplyAlreadyGenerated {
 		a.cancelPreemptiveGeneration()
 		return nil, nil
+	}
+	if info.GenerateReplyAfterHook {
+		a.cancelPreemptiveGeneration()
+		if a.Session == nil {
+			return nil, nil
+		}
+		handle, err := a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{})
+		if err != nil {
+			return nil, err
+		}
+		return handle, nil
 	}
 	if a.Agent.LLM == nil || a.Session == nil {
 		a.cancelPreemptiveGeneration()
