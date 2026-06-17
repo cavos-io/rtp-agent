@@ -631,7 +631,7 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 		}
 		insertChatItemIfMissing(va.chatCtx, speech.Generation.AssistantMessage)
 		_ = speech.MarkGenerationDone()
-		session.UpdateAgentState(AgentStateIdle)
+		session.UpdateAgentState(AgentStateListening)
 		return
 	}
 
@@ -859,11 +859,11 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 
 		// If no tool calls, we're done
 		if !executedTools {
-			session.UpdateAgentState(AgentStateIdle)
+			session.UpdateAgentState(AgentStateListening)
 			break
 		}
 		if !replyRequired {
-			session.UpdateAgentState(AgentStateIdle)
+			session.UpdateAgentState(AgentStateListening)
 			break
 		}
 		if opts.SpeechHandle != nil {
