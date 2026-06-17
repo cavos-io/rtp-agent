@@ -1311,14 +1311,7 @@ func TestJobRequestAccessorsExposeJobFields(t *testing.T) {
 }
 
 func TestJobContextCreateSIPParticipantRequestUsesReferenceDefaultName(t *testing.T) {
-	ctx := NewJobContext(
-		&livekit.Job{Id: "job_sip", Room: &livekit.Room{Name: "room-a"}},
-		"",
-		"",
-		"",
-	)
-
-	req := ctx.createSIPParticipantRequest("+15551234567", "trunk-a", "caller-a", "")
+	req := workerlivekit.CreateSIPParticipantRequest("room-a", "+15551234567", "trunk-a", "caller-a", "")
 
 	if req.RoomName != "room-a" {
 		t.Fatalf("CreateSIPParticipantRequest.RoomName = %q, want room-a", req.RoomName)
@@ -1338,17 +1331,13 @@ func TestJobContextCreateSIPParticipantRequestUsesReferenceDefaultName(t *testin
 }
 
 func TestJobContextCreateSIPParticipantRequestPreservesExplicitName(t *testing.T) {
-	ctx := NewJobContext(
-		&livekit.Job{Id: "job_sip", Room: &livekit.Room{Name: "room-a"}},
-		"",
-		"",
-		"",
-	)
-
-	req := ctx.createSIPParticipantRequest("+15551234567", "trunk-a", "caller-a", "SIP Caller")
+	req := workerlivekit.CreateSIPParticipantRequest("room-a", "+15551234567", "trunk-a", "caller-a", "SIP Caller")
 
 	if req.ParticipantName != "SIP Caller" {
 		t.Fatalf("CreateSIPParticipantRequest.ParticipantName = %q, want SIP Caller", req.ParticipantName)
+	}
+	if workerlivekit.DefaultSIPParticipantName != "SIP-participant" {
+		t.Fatalf("DefaultSIPParticipantName = %q, want SIP-participant", workerlivekit.DefaultSIPParticipantName)
 	}
 }
 
@@ -1380,15 +1369,32 @@ func TestJobContextCreateSIPParticipantUsesProvidedRequest(t *testing.T) {
 	}
 }
 
-func TestJobContextTransferSIPParticipantRequestMatchesReferenceFields(t *testing.T) {
+func TestJobContextAddSIPParticipantBuildsReferenceRequest(t *testing.T) {
 	ctx := NewJobContext(
-		&livekit.Job{Id: "job_sip_transfer", Room: &livekit.Room{Name: "room-a"}},
+		&livekit.Job{Id: "job_sip_add", Room: &livekit.Room{Name: "room-a"}},
 		"",
 		"",
 		"",
 	)
+	sip := &fakeJobSIPAPI{}
+	ctx.api = &JobAPI{SIP: sip}
 
-	req := ctx.transferSIPParticipantRequest("caller-a", "+15557654321", true)
+	if _, err := ctx.AddSIPParticipant(context.Background(), "+15551234567", "trunk-a", "caller-a"); err != nil {
+		t.Fatalf("AddSIPParticipant() error = %v", err)
+	}
+	if sip.createRequest == nil {
+		t.Fatal("AddSIPParticipant() did not call SIP create API")
+	}
+	if sip.createRequest.RoomName != "room-a" {
+		t.Fatalf("AddSIPParticipant() RoomName = %q, want room-a", sip.createRequest.RoomName)
+	}
+	if sip.createRequest.ParticipantName != workerlivekit.DefaultSIPParticipantName {
+		t.Fatalf("AddSIPParticipant() ParticipantName = %q, want %q", sip.createRequest.ParticipantName, workerlivekit.DefaultSIPParticipantName)
+	}
+}
+
+func TestJobContextTransferSIPParticipantRequestMatchesReferenceFields(t *testing.T) {
+	req := workerlivekit.TransferSIPParticipantRequest("room-a", "caller-a", "+15557654321", true)
 
 	if req.RoomName != "room-a" {
 		t.Fatalf("TransferSIPParticipantRequest.RoomName = %q, want room-a", req.RoomName)
@@ -1549,38 +1555,48 @@ func (f *fakeJobRoomServiceAPI) MoveParticipant(_ context.Context, req *livekit.
 }
 
 func TestTransferSIPParticipantIdentityAcceptsString(t *testing.T) {
-	identity, err := transferSIPParticipantIdentity("caller-a")
+	identity, err := workerlivekit.TransferSIPParticipantIdentity("caller-a")
 	if err != nil {
-		t.Fatalf("transferSIPParticipantIdentity(string) error = %v", err)
+		t.Fatalf("TransferSIPParticipantIdentity(string) error = %v", err)
 	}
 	if identity != "caller-a" {
-		t.Fatalf("transferSIPParticipantIdentity(string) = %q, want caller-a", identity)
+		t.Fatalf("TransferSIPParticipantIdentity(string) = %q, want caller-a", identity)
 	}
 }
 
 func TestTransferSIPParticipantIdentityAcceptsSIPParticipant(t *testing.T) {
-	identity, err := transferSIPParticipantIdentity(fakeParticipantView{
+	identity, err := workerlivekit.TransferSIPParticipantIdentity(fakeParticipantView{
 		identity: "caller-a",
 		kind:     lksdk.ParticipantSIP,
 	})
 	if err != nil {
-		t.Fatalf("transferSIPParticipantIdentity(SIP participant) error = %v", err)
+		t.Fatalf("TransferSIPParticipantIdentity(SIP participant) error = %v", err)
 	}
 	if identity != "caller-a" {
-		t.Fatalf("transferSIPParticipantIdentity(SIP participant) = %q, want caller-a", identity)
+		t.Fatalf("TransferSIPParticipantIdentity(SIP participant) = %q, want caller-a", identity)
 	}
 }
 
 func TestTransferSIPParticipantIdentityRejectsNonSIPParticipant(t *testing.T) {
-	_, err := transferSIPParticipantIdentity(fakeParticipantView{
+	_, err := workerlivekit.TransferSIPParticipantIdentity(fakeParticipantView{
 		identity: "agent-a",
 		kind:     lksdk.ParticipantAgent,
 	})
 	if err == nil {
-		t.Fatal("transferSIPParticipantIdentity(agent participant) error = nil, want error")
+		t.Fatal("TransferSIPParticipantIdentity(agent participant) error = nil, want error")
 	}
 	if got, want := err.Error(), "Participant must be a SIP participant"; got != want {
-		t.Fatalf("transferSIPParticipantIdentity(agent participant) error = %q, want %q", got, want)
+		t.Fatalf("TransferSIPParticipantIdentity(agent participant) error = %q, want %q", got, want)
+	}
+}
+
+func TestTransferSIPParticipantIdentityRejectsUnsupportedValue(t *testing.T) {
+	_, err := workerlivekit.TransferSIPParticipantIdentity(42)
+	if err == nil {
+		t.Fatal("TransferSIPParticipantIdentity(int) error = nil, want error")
+	}
+	if got, want := err.Error(), "participant must be a SIP participant or identity string"; got != want {
+		t.Fatalf("TransferSIPParticipantIdentity(int) error = %q, want %q", got, want)
 	}
 }
 

@@ -979,7 +979,8 @@ func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunk
 	if len(names) > 0 {
 		name = names[0]
 	}
-	return c.API().SIP.CreateSIPParticipant(ctx, c.createSIPParticipantRequest(callTo, trunkID, identity, name))
+	req := workerlivekit.CreateSIPParticipantRequest(c.Job.Room.Name, callTo, trunkID, identity, name)
+	return c.API().SIP.CreateSIPParticipant(ctx, req)
 }
 
 func (c *JobContext) CreateSIPParticipant(ctx context.Context, req *livekit.CreateSIPParticipantRequest) (*livekit.SIPParticipantInfo, error) {
@@ -988,10 +989,6 @@ func (c *JobContext) CreateSIPParticipant(ctx context.Context, req *livekit.Crea
 		return &livekit.SIPParticipantInfo{}, nil
 	}
 	return c.API().SIP.CreateSIPParticipant(ctx, req)
-}
-
-func (c *JobContext) createSIPParticipantRequest(callTo string, trunkID string, identity string, name string) *livekit.CreateSIPParticipantRequest {
-	return workerlivekit.CreateSIPParticipantRequest(c.Job.Room.Name, callTo, trunkID, identity, name)
 }
 
 // TransferSIPParticipant transfers a SIP participant to another number.
@@ -1004,7 +1001,7 @@ func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, pa
 		logger.Logger.Warnw("job context TransferSIPParticipant is skipped for fake jobs", nil)
 		return nil
 	}
-	identity, err := transferSIPParticipantIdentity(participant)
+	identity, err := workerlivekit.TransferSIPParticipantIdentity(participant)
 	if err != nil {
 		return err
 	}
@@ -1012,14 +1009,7 @@ func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, pa
 	if len(playDialtones) > 0 {
 		playDialtone = playDialtones[0]
 	}
-	_, err = c.API().SIP.TransferSIPParticipant(ctx, c.transferSIPParticipantRequest(identity, transferTo, playDialtone))
+	req := workerlivekit.TransferSIPParticipantRequest(c.Job.Room.Name, identity, transferTo, playDialtone)
+	_, err = c.API().SIP.TransferSIPParticipant(ctx, req)
 	return err
-}
-
-func transferSIPParticipantIdentity(participant any) (string, error) {
-	return workerlivekit.TransferSIPParticipantIdentity(participant)
-}
-
-func (c *JobContext) transferSIPParticipantRequest(identity string, transferTo string, playDialtone bool) *livekit.TransferSIPParticipantRequest {
-	return workerlivekit.TransferSIPParticipantRequest(c.Job.Room.Name, identity, transferTo, playDialtone)
 }
