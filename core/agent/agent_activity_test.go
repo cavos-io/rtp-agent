@@ -2217,6 +2217,28 @@ func TestAgentActivityOnFinalTranscriptEmitsUserInputTranscribed(t *testing.T) {
 	}
 }
 
+func TestAgentActivityFinalTranscriptsAccumulateBeforeCommit(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "hello", Confidence: 0.8}},
+	})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "world", Confidence: 0.9}},
+	})
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "hello world" {
+		t.Fatalf("CommitUserTurn transcript = %q, want accumulated final transcript", transcript)
+	}
+}
+
 func TestAgentActivityDropsFinalTranscriptBeforeAgentSpeechEnd(t *testing.T) {
 	agent := NewAgent("test")
 	agent.TurnDetection = TurnDetectionModeManual
