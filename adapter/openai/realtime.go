@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -33,6 +34,7 @@ type RealtimeModel struct {
 	mu            sync.Mutex
 	options       llm.RealtimeSessionOptions
 	modalities    []string
+	maxSession    time.Duration
 	sessions      map[*realtimeSession]struct{}
 }
 
@@ -42,6 +44,7 @@ type openAIRealtimeModelOptions struct {
 	sessionOptions llm.RealtimeSessionOptions
 	modalities     []string
 	baseURL        string
+	maxSession     time.Duration
 }
 
 type OpenAIRealtimeOption func(*openAIRealtimeModelOptions)
@@ -121,6 +124,12 @@ func WithOpenAIRealtimeMaxResponseOutputTokens(tokens any) OpenAIRealtimeOption 
 	}
 }
 
+func WithOpenAIRealtimeMaxSessionDuration(duration time.Duration) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.maxSession = duration
+	}
+}
+
 func WithOpenAIRealtimeBaseURL(baseURL string) OpenAIRealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.baseURL = baseURL
@@ -152,6 +161,7 @@ func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *Realt
 		dialWebsocket: defaultOpenAIRealtimeWebsocketDialer,
 		options:       options.sessionOptions,
 		modalities:    options.modalities,
+		maxSession:    options.maxSession,
 	}
 }
 
@@ -269,6 +279,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to OpenAI realtime: %w", err)
 	}
+	openAIRealtimeApplySessionDeadline(conn, m.maxSession)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	initialSession := openAIRealtimeInitialSession(m.model, m.modalities)
@@ -314,6 +325,13 @@ func (m *RealtimeModel) unregisterSession(session *realtimeSession) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.sessions, session)
+}
+
+func openAIRealtimeApplySessionDeadline(conn *websocket.Conn, duration time.Duration) {
+	if conn == nil || duration <= 0 {
+		return
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(duration))
 }
 
 func openAIRealtimeBaseURL(rawURL string) string {
@@ -1370,6 +1388,7 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 	if err != nil {
 		return fmt.Errorf("failed to reconnect to OpenAI realtime: %w", err)
 	}
+	openAIRealtimeApplySessionDeadline(conn, s.model.maxSession)
 
 	s.mu.Lock()
 	oldConn := s.conn
