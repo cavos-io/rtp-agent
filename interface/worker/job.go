@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
-	"github.com/cavos-io/rtp-agent/interface/worker/internal/livekiterr"
 	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"github.com/cavos-io/rtp-agent/library/inference"
@@ -944,7 +943,7 @@ func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*livekit.
 		Room: roomName,
 	})
 	if err != nil {
-		if livekiterr.RoomDeleteNotFound(err) {
+		if workerlivekit.RoomDeleteNotFound(err) {
 			return &livekit.DeleteRoomResponse{}, nil
 		}
 		logger.Logger.Warnw("error while deleting room", err)

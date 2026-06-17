@@ -13,7 +13,6 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/interface/worker/internal/livekiterr"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/google/uuid"
 	"github.com/hraban/opus"
@@ -771,7 +770,7 @@ func (rio *RoomIO) handleAgentSessionClose(ev agent.CloseEvent) {
 			rio.mu.Unlock()
 			close(done)
 		}()
-		if err := deleteRoom(context.Background(), roomName); err != nil && !livekiterr.RoomDeleteNotFound(err) {
+		if err := deleteRoom(context.Background(), roomName); err != nil && !RoomDeleteNotFound(err) {
 			logger.Logger.Warnw("failed to delete room on agent session close", err, "room", roomName, "reason", reason)
 		}
 	}()
