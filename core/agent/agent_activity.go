@@ -128,6 +128,9 @@ type AgentActivity struct {
 	pendingTranscriptConfidenceSum   float64
 	pendingTranscriptConfidenceCount int
 	pendingUserTranscriptPresent     bool
+	pendingStartedSpeakingAt         *float64
+	pendingStoppedSpeakingAt         *float64
+	pendingTranscriptionDelay        float64
 	userTurnLimitStartedAt           time.Time
 	userTurnLimitTranscript          string
 	userTurnLimitWordCount           int
@@ -1580,6 +1583,8 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 		})
 	}
 
+	startedSpeakingAt, stoppedSpeakingAt, transcriptionDelay := a.finalTranscriptTiming(ev)
+
 	a.userTurnMu.Lock()
 	pendingTranscript := strings.TrimSpace(strings.Join([]string{a.pendingUserTranscript, transcript}, " "))
 	matchesPreflightTranscript := a.pendingPreflightTranscript != "" && pendingTranscript == a.pendingPreflightTranscript
@@ -1591,6 +1596,9 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.pendingTranscriptConfidenceCount = confidenceCount
 	a.pendingTranscriptConfidence = confidenceSum / float64(confidenceCount)
 	a.pendingUserTranscriptPresent = true
+	a.pendingStartedSpeakingAt = startedSpeakingAt
+	a.pendingStoppedSpeakingAt = stoppedSpeakingAt
+	a.pendingTranscriptionDelay = transcriptionDelay
 	a.pendingInterimTranscript = ""
 	a.pendingInterimLanguage = ""
 	a.pendingInterimSpeakerID = ""
@@ -1602,7 +1610,6 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	if !matchesPreflightTranscript {
 		a.maybeStartPreemptiveGeneration(pendingTranscript, confidenceSum/float64(confidenceCount))
 	}
-	startedSpeakingAt, stoppedSpeakingAt, transcriptionDelay := a.finalTranscriptTiming(ev)
 
 	turnDetection := a.turnDetectionMode()
 	if turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
@@ -2284,6 +2291,9 @@ collect:
 	a.pendingTranscriptConfidenceSum = 0
 	a.pendingTranscriptConfidenceCount = 0
 	a.pendingUserTranscriptPresent = false
+	a.pendingStartedSpeakingAt = nil
+	a.pendingStoppedSpeakingAt = nil
+	a.pendingTranscriptionDelay = 0
 	a.pendingInterimTranscript = ""
 	a.pendingInterimLanguage = ""
 	a.pendingInterimSpeakerID = ""
@@ -2721,6 +2731,9 @@ func (a *AgentActivity) clearPendingUserTurn() {
 	a.pendingTranscriptConfidenceSum = 0
 	a.pendingTranscriptConfidenceCount = 0
 	a.pendingUserTranscriptPresent = false
+	a.pendingStartedSpeakingAt = nil
+	a.pendingStoppedSpeakingAt = nil
+	a.pendingTranscriptionDelay = 0
 	a.pendingInterimTranscript = ""
 	a.pendingInterimLanguage = ""
 	a.pendingInterimSpeakerID = ""
@@ -2751,13 +2764,16 @@ func (a *AgentActivity) pendingFinalEndOfTurnInfo() EndOfTurnInfo {
 		NewTranscript:        a.pendingUserTranscript,
 		Language:             a.pendingUserLanguage,
 		TranscriptConfidence: a.pendingTranscriptConfidence,
+		TranscriptionDelay:   a.pendingTranscriptionDelay,
+		StartedSpeakingAt:    a.pendingStartedSpeakingAt,
+		StoppedSpeakingAt:    a.pendingStoppedSpeakingAt,
 		AudioFrames:          a.userAudioSnapshot(),
 	}
-	if !a.userSpeechStartedAt.IsZero() {
+	if info.StartedSpeakingAt == nil && !a.userSpeechStartedAt.IsZero() {
 		started := timeToUnixSeconds(a.userSpeechStartedAt)
 		info.StartedSpeakingAt = &started
 	}
-	if !a.userSpeechStoppedAt.IsZero() {
+	if info.StoppedSpeakingAt == nil && !a.userSpeechStoppedAt.IsZero() {
 		stopped := timeToUnixSeconds(a.userSpeechStoppedAt)
 		info.StoppedSpeakingAt = &stopped
 	}

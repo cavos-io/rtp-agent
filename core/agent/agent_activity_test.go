@@ -2027,6 +2027,35 @@ func TestAgentActivitySTTTurnWaitsForEndOfSpeechBeforeCommit(t *testing.T) {
 	}
 }
 
+func TestAgentActivityPendingSTTFinalUsesTranscriptEndTimeAfterEndOfSpeech(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.08})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	activity.userSpeechStartedAt = time.Now().Add(-180 * time.Millisecond)
+	activity.speaking = true
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "timestamped pending final",
+			Confidence: 0.9,
+			EndTime:    0.05,
+		}},
+	})
+	activity.OnEndOfSpeech(nil)
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "timestamped pending final" {
+			t.Fatalf("turn message text = %q, want timestamped pending final", msg.TextContent())
+		}
+	case <-time.After(30 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted waited a full endpointing delay instead of using pending STT end time")
+	}
+}
+
 func TestAgentActivityUsesSessionMaxEndpointingDelay(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeSTT
