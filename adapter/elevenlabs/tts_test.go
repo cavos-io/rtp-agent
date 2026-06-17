@@ -114,6 +114,7 @@ func TestElevenLabsSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	provider, err := NewElevenLabsTTS("test-key", "", "",
 		WithElevenLabsLanguage("en"),
 		WithElevenLabsEnableSSMLParsing(true),
+		WithElevenLabsStreamingLatency(3),
 	)
 	if err != nil {
 		t.Fatalf("NewElevenLabsTTS() error = %v", err)
@@ -134,6 +135,9 @@ func TestElevenLabsSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	if parsed.Query().Get("output_format") != "mp3_22050_32" {
 		t.Fatalf("output_format = %q, want mp3_22050_32", parsed.Query().Get("output_format"))
 	}
+	if parsed.Query().Get("optimize_streaming_latency") != "3" {
+		t.Fatalf("optimize_streaming_latency = %q, want 3", parsed.Query().Get("optimize_streaming_latency"))
+	}
 
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
@@ -151,6 +155,34 @@ func TestElevenLabsSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	if payload["enable_ssml_parsing"] != true {
 		t.Fatalf("enable_ssml_parsing = %#v, want true", payload["enable_ssml_parsing"])
 	}
+}
+
+func TestElevenLabsTTSVoiceSettingsMatchReference(t *testing.T) {
+	style := 0.35
+	speed := 1.05
+	boost := true
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5",
+		WithElevenLabsVoiceSettings(ElevenLabsVoiceSettings{
+			Stability:       0.7,
+			SimilarityBoost: 0.8,
+			Style:           &style,
+			Speed:           &speed,
+			UseSpeakerBoost: &boost,
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	_, body := buildElevenLabsSynthesizeRequest(provider, "hello")
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	assertElevenLabsTTSVoiceSettings(t, payload["voice_settings"])
+
+	init := elevenLabsInitPayload("ctx_test", elevenLabsVoiceSettingsPayload(provider.voiceSettings), nil)
+	assertElevenLabsTTSVoiceSettings(t, init["voice_settings"])
 }
 
 func TestElevenLabsSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
@@ -421,7 +453,7 @@ func TestElevenLabsTTSUpdateOptionsMatchesReference(t *testing.T) {
 func TestElevenLabsStreamPayloadsUseReferenceContextProtocol(t *testing.T) {
 	const contextID = "ctx_test"
 
-	init := elevenLabsInitPayload(contextID)
+	init := elevenLabsInitPayload(contextID, nil, nil)
 	if init["text"] != " " || init["context_id"] != contextID {
 		t.Fatalf("init payload = %#v, want warmup text with context_id", init)
 	}
@@ -434,6 +466,19 @@ func TestElevenLabsStreamPayloadsUseReferenceContextProtocol(t *testing.T) {
 	}
 	if _, ok := init["generation_config"]; ok {
 		t.Fatalf("init payload = %#v, want no generation_config without configured schedule", init)
+	}
+
+	scheduledInit := elevenLabsInitPayload(contextID, nil, []int{80, 120, 200})
+	generationConfig, ok := scheduledInit["generation_config"].(map[string]any)
+	if !ok {
+		t.Fatalf("scheduled init generation_config = %#v, want object", scheduledInit["generation_config"])
+	}
+	chunkSchedule, ok := generationConfig["chunk_length_schedule"].([]int)
+	if !ok {
+		t.Fatalf("scheduled init chunk_length_schedule = %#v, want []int", generationConfig["chunk_length_schedule"])
+	}
+	if !equalIntSlices(chunkSchedule, []int{80, 120, 200}) {
+		t.Fatalf("scheduled init chunk_length_schedule = %#v, want [80 120 200]", chunkSchedule)
 	}
 
 	text := elevenLabsTextPayload(contextID, "hello")
@@ -475,7 +520,10 @@ func TestElevenLabsTTSStreamStartsContextOnFirstText(t *testing.T) {
 		websocket.DefaultDialer = oldDialer
 	}()
 
-	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5", WithElevenLabsBaseURL("ws://eleven.test/v1"))
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5",
+		WithElevenLabsBaseURL("ws://eleven.test/v1"),
+		WithElevenLabsChunkLengthSchedule([]int{80, 120, 200}),
+	)
 	if err != nil {
 		t.Fatalf("NewElevenLabsTTS() error = %v", err)
 	}
@@ -507,6 +555,14 @@ func TestElevenLabsTTSStreamStartsContextOnFirstText(t *testing.T) {
 	}
 	if _, ok := init["voice_settings"].(map[string]any); !ok {
 		t.Fatalf("init voice_settings = %#v, want object", init["voice_settings"])
+	}
+	generationConfig, ok := init["generation_config"].(map[string]any)
+	if !ok {
+		t.Fatalf("init generation_config = %#v, want object", init["generation_config"])
+	}
+	chunkSchedule, ok := generationConfig["chunk_length_schedule"].([]any)
+	if !ok || len(chunkSchedule) != 3 || chunkSchedule[0] != float64(80) || chunkSchedule[1] != float64(120) || chunkSchedule[2] != float64(200) {
+		t.Fatalf("init chunk_length_schedule = %#v, want [80 120 200]", generationConfig["chunk_length_schedule"])
 	}
 
 	text := readElevenLabsTTSStreamMessage(t, messages)
@@ -633,6 +689,38 @@ func readElevenLabsTTSStreamMessage(t *testing.T, messages <-chan map[string]any
 	return nil
 }
 
+func equalIntSlices(a []int, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func assertElevenLabsTTSVoiceSettings(t *testing.T, raw any) {
+	t.Helper()
+	settings, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("voice_settings = %#v, want object", raw)
+	}
+	want := map[string]any{
+		"stability":         0.7,
+		"similarity_boost":  0.8,
+		"style":             0.35,
+		"speed":             1.05,
+		"use_speaker_boost": true,
+	}
+	for key, wantValue := range want {
+		if settings[key] != wantValue {
+			t.Fatalf("voice_settings[%s] = %#v, want %#v in %#v", key, settings[key], wantValue, settings)
+		}
+	}
+}
+
 func runElevenLabsClosingWebsocketServerAfterFrame(conn net.Conn, closed chan<- struct{}, errCh chan<- error) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
@@ -723,6 +811,35 @@ func TestElevenLabsSynthesizedAudioUsesConfiguredSampleRate(t *testing.T) {
 	}
 	if audio.Frame.SampleRate != 22050 {
 		t.Fatalf("sample rate = %d, want 22050", audio.Frame.SampleRate)
+	}
+}
+
+func TestElevenLabsTTSAlignmentMapsTimedTranscript(t *testing.T) {
+	resp := elWSResponse{
+		Audio:   base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
+		IsFinal: true,
+		NormalizedAlignment: &elevenLabsAlignment{
+			Chars:            []string{"h", "e", "l", "l", "o", " ", "w", "o", "r", "l", "d"},
+			CharStartTimesMs: []int{0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100},
+			CharDurationsMs:  []int{10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10},
+		},
+	}
+
+	audio, err := elevenLabsSynthesizedAudio(resp, 22050, "pcm_22050")
+	if err != nil {
+		t.Fatalf("elevenLabsSynthesizedAudio() error = %v", err)
+	}
+	if audio.DeltaText != "hello world" {
+		t.Fatalf("DeltaText = %q, want hello world", audio.DeltaText)
+	}
+	if len(audio.TimedTranscript) != 2 {
+		t.Fatalf("TimedTranscript = %#v, want two timed words", audio.TimedTranscript)
+	}
+	if got := audio.TimedTranscript[0]; got.Text != "hello " || got.StartTime != 0 || got.EndTime != 0.06 {
+		t.Fatalf("TimedTranscript[0] = %#v, want hello from 0 to 0.06", got)
+	}
+	if got := audio.TimedTranscript[1]; got.Text != "world" || got.StartTime != 0.06 || got.EndTime != 0.11 {
+		t.Fatalf("TimedTranscript[1] = %#v, want world from 0.06 to 0.11", got)
 	}
 }
 
