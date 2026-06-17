@@ -270,8 +270,6 @@ type remoteParticipantView = workerlivekit.RemoteParticipantView
 
 var defaultParticipantEntrypointKinds = workerlivekit.DefaultParticipantKinds()
 
-const defaultSIPParticipantName = "SIP-participant"
-
 type JobRequest struct {
 	Job *livekit.Job
 
@@ -1059,16 +1057,7 @@ func (c *JobContext) CreateSIPParticipant(ctx context.Context, req *livekit.Crea
 }
 
 func (c *JobContext) createSIPParticipantRequest(callTo string, trunkID string, identity string, name string) *livekit.CreateSIPParticipantRequest {
-	if name == "" {
-		name = defaultSIPParticipantName
-	}
-	return &livekit.CreateSIPParticipantRequest{
-		RoomName:            c.Job.Room.Name,
-		ParticipantIdentity: identity,
-		ParticipantName:     name,
-		SipTrunkId:          trunkID,
-		SipCallTo:           callTo,
-	}
+	return workerlivekit.CreateSIPParticipantRequest(c.Job.Room.Name, callTo, trunkID, identity, name)
 }
 
 // TransferSIPParticipant transfers a SIP participant to another number.
@@ -1098,10 +1087,5 @@ func transferSIPParticipantIdentity(participant any) (string, error) {
 }
 
 func (c *JobContext) transferSIPParticipantRequest(identity string, transferTo string, playDialtone bool) *livekit.TransferSIPParticipantRequest {
-	return &livekit.TransferSIPParticipantRequest{
-		ParticipantIdentity: identity,
-		RoomName:            c.Job.Room.Name,
-		TransferTo:          transferTo,
-		PlayDialtone:        playDialtone,
-	}
+	return workerlivekit.TransferSIPParticipantRequest(c.Job.Room.Name, identity, transferTo, playDialtone)
 }
