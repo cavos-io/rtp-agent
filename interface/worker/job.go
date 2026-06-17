@@ -252,8 +252,6 @@ type participantEntrypointTaskKey struct {
 
 type remoteParticipantView = workerlivekit.RemoteParticipantView
 
-var defaultParticipantEntrypointKinds = workerlivekit.DefaultParticipantKinds()
-
 type JobRequest struct {
 	Job *livekit.Job
 
@@ -722,7 +720,7 @@ func (c *JobContext) AddParticipantEntrypoint(entrypoint ParticipantEntrypoint, 
 		}
 	}
 	if len(kinds) == 0 {
-		kinds = defaultParticipantEntrypointKinds
+		kinds = workerlivekit.DefaultParticipantKinds()
 	}
 	registration := participantEntrypointRegistration{
 		entrypoint: entrypoint,
@@ -735,7 +733,7 @@ func (c *JobContext) AddParticipantEntrypoint(entrypoint ParticipantEntrypoint, 
 
 func (c *JobContext) scheduleParticipantEntrypointForExistingParticipants(registration participantEntrypointRegistration) {
 	for _, participant := range c.availableParticipants {
-		if !participantEntrypointMatchesKind(registration.kinds, participant.Kind) {
+		if !workerlivekit.ParticipantKindAllowed(registration.kinds, participant.Kind) {
 			continue
 		}
 		c.scheduleParticipantEntrypoint(registration, participant)
@@ -750,7 +748,7 @@ func (c *JobContext) WaitForParticipant(
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
 	}
-	return utils.WaitForParticipant(ctx, c.Room, identity, defaultParticipantWaitKinds(kinds)...)
+	return utils.WaitForParticipant(ctx, c.Room, identity, workerlivekit.DefaultParticipantKindsWhenUnset(kinds)...)
 }
 
 func (c *JobContext) WaitForAgent(
@@ -803,16 +801,12 @@ func (c *JobContext) ensureRoomConnected(ctx context.Context) error {
 	return c.Connect(ctx, nil)
 }
 
-func defaultParticipantWaitKinds(kinds []livekit.ParticipantInfo_Kind) []livekit.ParticipantInfo_Kind {
-	return workerlivekit.DefaultParticipantKindsWhenUnset(kinds)
-}
-
 func (c *JobContext) scheduleParticipantEntrypoints(participant *livekit.ParticipantInfo) {
 	if participant == nil {
 		return
 	}
 	for _, registered := range c.participantEntrypoints {
-		if !participantEntrypointMatchesKind(registered.kinds, participant.Kind) {
+		if !workerlivekit.ParticipantKindAllowed(registered.kinds, participant.Kind) {
 			continue
 		}
 		c.scheduleParticipantEntrypoint(registered, participant)
@@ -851,10 +845,6 @@ func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntry
 			return nil
 		})
 	}()
-}
-
-func participantEntrypointMatchesKind(kinds []livekit.ParticipantInfo_Kind, kind livekit.ParticipantInfo_Kind) bool {
-	return workerlivekit.ParticipantKindAllowed(kinds, kind)
 }
 
 func (c *JobContext) Shutdown(reasons ...string) {

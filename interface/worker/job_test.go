@@ -1134,7 +1134,7 @@ func TestJobContextWaitForParticipantAttributeConnectsBeforeWaiting(t *testing.T
 }
 
 func TestJobContextDefaultParticipantWaitKindsMatchReference(t *testing.T) {
-	got := defaultParticipantWaitKinds(nil)
+	got := workerlivekit.DefaultParticipantKindsWhenUnset(nil)
 	want := []livekit.ParticipantInfo_Kind{
 		livekit.ParticipantInfo_CONNECTOR,
 		livekit.ParticipantInfo_SIP,
@@ -1142,6 +1142,11 @@ func TestJobContextDefaultParticipantWaitKindsMatchReference(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("default participant wait kinds = %#v, want %#v", got, want)
+	}
+
+	configured := []livekit.ParticipantInfo_Kind{livekit.ParticipantInfo_AGENT}
+	if got := workerlivekit.DefaultParticipantKindsWhenUnset(configured); !reflect.DeepEqual(got, configured) {
+		t.Fatalf("configured participant wait kinds = %#v, want %#v", got, configured)
 	}
 }
 
