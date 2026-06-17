@@ -41,6 +41,21 @@ func JobAgentName(job *lkprotocol.Job) string {
 	return job.AgentName
 }
 
+type RuntimeJobInfo struct {
+	JobID           string
+	EnableRecording bool
+}
+
+func JobRuntimeInfo(job *lkprotocol.Job) RuntimeJobInfo {
+	if job == nil {
+		return RuntimeJobInfo{}
+	}
+	return RuntimeJobInfo{
+		JobID:           job.Id,
+		EnableRecording: job.GetEnableRecording(),
+	}
+}
+
 type AssignmentInfo struct {
 	Job             *lkprotocol.Job
 	JobID           string

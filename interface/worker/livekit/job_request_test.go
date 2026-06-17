@@ -46,6 +46,20 @@ func TestJobRequestAccessorsHandleNilJob(t *testing.T) {
 	}
 }
 
+func TestJobRuntimeInfoExposesJobIDAndRecordingFlag(t *testing.T) {
+	info := workerlivekit.JobRuntimeInfo(&lkprotocol.Job{
+		Id:              "job-runtime",
+		EnableRecording: true,
+	})
+
+	if info.JobID != "job-runtime" {
+		t.Fatalf("JobRuntimeInfo().JobID = %q, want job-runtime", info.JobID)
+	}
+	if !info.EnableRecording {
+		t.Fatal("JobRuntimeInfo().EnableRecording = false, want true")
+	}
+}
+
 func TestJobAssignmentInfoUsesAssignmentURLTokenAndRecordingFlag(t *testing.T) {
 	job := &lkprotocol.Job{Id: "job-a", EnableRecording: true}
 	assignmentURL := "wss://assignment.example"

@@ -377,9 +377,10 @@ func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.Ru
 		if jobURL == "" {
 			jobURL = info.URL
 		}
+		runtimeJob := workerlivekit.JobRuntimeInfo(info.Job)
 		jobCtx := NewJobContext(info.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
 		jobCtx.process = s.newJobProcess()
-		if info.Job.GetEnableRecording() {
+		if runtimeJob.EnableRecording {
 			jobCtx.InitRecording(allRecordingOptions())
 		}
 		jobCtx.token = info.Token
@@ -396,7 +397,7 @@ func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.Ru
 		if jobCtx.WorkerID() == "" {
 			jobCtx.workerID = s.workerID
 		}
-		s.activeJobs[info.Job.Id] = jobCtx
+		s.activeJobs[runtimeJob.JobID] = jobCtx
 		s.mu.Unlock()
 
 		s.launchReloadedJob(ctx, jobCtx)
@@ -417,9 +418,10 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 	if s.Options.WSRL != "" {
 		jobURL = s.Options.WSRL
 	}
+	runtimeJob := workerlivekit.JobRuntimeInfo(info.Job)
 	jobCtx := NewJobContext(info.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
 	jobCtx.process = s.newJobProcess()
-	if info.Job.GetEnableRecording() {
+	if runtimeJob.EnableRecording {
 		jobCtx.InitRecording(allRecordingOptions())
 	}
 	jobCtx.token = info.Token
@@ -436,7 +438,7 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 	}
 
 	s.mu.Lock()
-	s.activeJobs[info.Job.Id] = jobCtx
+	s.activeJobs[runtimeJob.JobID] = jobCtx
 	s.mu.Unlock()
 
 	doneCh := make(chan error, 1)
@@ -445,7 +447,7 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 		defer jobCtx.markEntrypointDone()
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				logger.Logger.Errorw("Running job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", info.Job.Id)
+				logger.Logger.Errorw("Running job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", runtimeJob.JobID)
 				doneCh <- fmt.Errorf("running job entrypoint panicked: %v", recovered)
 			}
 		}()
@@ -455,7 +457,7 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 	select {
 	case err := <-doneCh:
 		if err != nil {
-			logger.Logger.Errorw("Running job entrypoint failed", err, "jobId", info.Job.Id)
+			logger.Logger.Errorw("Running job entrypoint failed", err, "jobId", runtimeJob.JobID)
 			s.finishJob(jobCtx)
 			return err
 		}
@@ -471,7 +473,7 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 	case <-ctx.Done():
 		jobCtx.Shutdown("")
 		if !jobCtx.waitForEntrypointDone(localEntrypointCloseWait) {
-			logger.Logger.Warnw("running job entrypoint did not exit before context cancellation finalized", nil, "jobId", info.Job.Id)
+			logger.Logger.Warnw("running job entrypoint did not exit before context cancellation finalized", nil, "jobId", runtimeJob.JobID)
 		}
 		s.finishJob(jobCtx)
 		return ctx.Err()
