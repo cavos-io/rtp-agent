@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"reflect"
 	"runtime"
@@ -267,14 +266,7 @@ type participantEntrypointTaskKey struct {
 	entrypoint uintptr
 }
 
-type remoteParticipantView interface {
-	SID() string
-	Identity() string
-	Name() string
-	Kind() lksdk.ParticipantKind
-	Metadata() string
-	Attributes() map[string]string
-}
+type remoteParticipantView = workerlivekit.RemoteParticipantView
 
 var defaultParticipantEntrypointKinds = []livekit.ParticipantInfo_Kind{
 	livekit.ParticipantInfo_CONNECTOR,
@@ -762,17 +754,7 @@ func remoteParticipantsAsViews(participants []*lksdk.RemoteParticipant) []remote
 }
 
 func participantInfoFromRemoteParticipant(participant remoteParticipantView) *livekit.ParticipantInfo {
-	if participant == nil {
-		return nil
-	}
-	return &livekit.ParticipantInfo{
-		Sid:        participant.SID(),
-		Identity:   participant.Identity(),
-		Name:       participant.Name(),
-		Kind:       livekit.ParticipantInfo_Kind(participant.Kind()),
-		Metadata:   participant.Metadata(),
-		Attributes: maps.Clone(participant.Attributes()),
-	}
+	return workerlivekit.ParticipantInfoFromRemoteParticipant(participant)
 }
 
 func (c *JobContext) AddShutdownCallback(callback any) error {
