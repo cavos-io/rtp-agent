@@ -46,6 +46,50 @@ func TestJobRequestAccessorsHandleNilJob(t *testing.T) {
 	}
 }
 
+func TestLocalRoomJobUsesFakeJobPrefixAndRoomInfo(t *testing.T) {
+	room := &lkprotocol.Room{Name: "configured-room", Sid: "SRM_configured"}
+	job := workerlivekit.LocalRoomJob(workerlivekit.LocalRoomJobOptions{
+		RoomName: "ignored-room",
+		RoomInfo: room,
+		FakeJob:  true,
+		NewID: func(prefix string) string {
+			return prefix + "id"
+		},
+	})
+
+	if job.Id != "mock-job-id" {
+		t.Fatalf("Job.Id = %q, want mock-job-id", job.Id)
+	}
+	if job.Room != room {
+		t.Fatal("Job.Room did not use configured room info")
+	}
+	if job.Type != lkprotocol.JobType_JT_ROOM {
+		t.Fatalf("Job.Type = %v, want JT_ROOM", job.Type)
+	}
+}
+
+func TestLocalRoomJobBuildsRoomWhenRoomInfoMissing(t *testing.T) {
+	job := workerlivekit.LocalRoomJob(workerlivekit.LocalRoomJobOptions{
+		RoomName: "local-room",
+		NewID: func(prefix string) string {
+			return prefix + "id"
+		},
+	})
+
+	if job.Id != "job-id" {
+		t.Fatalf("Job.Id = %q, want job-id", job.Id)
+	}
+	if job.GetRoom().GetName() != "local-room" {
+		t.Fatalf("Job.Room.Name = %q, want local-room", job.GetRoom().GetName())
+	}
+	if job.GetRoom().GetSid() != "SRM_id" {
+		t.Fatalf("Job.Room.Sid = %q, want SRM_id", job.GetRoom().GetSid())
+	}
+	if job.Type != lkprotocol.JobType_JT_ROOM {
+		t.Fatalf("Job.Type = %v, want JT_ROOM", job.Type)
+	}
+}
+
 func TestJobAcceptIdentityDefaultsFromJobID(t *testing.T) {
 	got := workerlivekit.JobAcceptIdentity(&lkprotocol.Job{Id: "job_accept"}, "")
 	if got != "agent-job_accept" {

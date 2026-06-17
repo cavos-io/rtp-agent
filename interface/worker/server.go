@@ -2197,21 +2197,11 @@ func newLocalJobContextWithOptions(roomName string, participantIdentity string, 
 			participantIdentity = verifier.Identity()
 		}
 	}
-	jobIDPrefix := "job-"
-	if options.FakeJob {
-		jobIDPrefix = "mock-job-"
-	}
-	job := &livekit.Job{
-		Id: mathutil.ShortUUID(jobIDPrefix),
-		Room: &livekit.Room{
-			Name: roomName,
-			Sid:  mathutil.ShortUUID("SRM_"),
-		},
-		Type: livekit.JobType_JT_ROOM,
-	}
-	if options.RoomInfo != nil {
-		job.Room = options.RoomInfo
-	}
+	job := workerlivekit.LocalRoomJob(workerlivekit.LocalRoomJobOptions{
+		RoomName: roomName,
+		RoomInfo: options.RoomInfo,
+		FakeJob:  options.FakeJob,
+	})
 
 	if participantIdentity == "" {
 		participantIdentity = mathutil.ShortUUID("fake-agent-")

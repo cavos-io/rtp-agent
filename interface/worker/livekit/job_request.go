@@ -1,6 +1,9 @@
 package livekit
 
-import lkprotocol "github.com/livekit/protocol/livekit"
+import (
+	"github.com/cavos-io/rtp-agent/library/math"
+	lkprotocol "github.com/livekit/protocol/livekit"
+)
 
 func JobID(job *lkprotocol.Job) string {
 	if job == nil {
@@ -36,6 +39,36 @@ func JobAgentName(job *lkprotocol.Job) string {
 		return ""
 	}
 	return job.AgentName
+}
+
+type LocalRoomJobOptions struct {
+	RoomName string
+	RoomInfo *lkprotocol.Room
+	FakeJob  bool
+	NewID    func(prefix string) string
+}
+
+func LocalRoomJob(opts LocalRoomJobOptions) *lkprotocol.Job {
+	newID := opts.NewID
+	if newID == nil {
+		newID = math.ShortUUID
+	}
+	jobIDPrefix := "job-"
+	if opts.FakeJob {
+		jobIDPrefix = "mock-job-"
+	}
+	room := opts.RoomInfo
+	if room == nil {
+		room = &lkprotocol.Room{
+			Name: opts.RoomName,
+			Sid:  newID("SRM_"),
+		}
+	}
+	return &lkprotocol.Job{
+		Id:   newID(jobIDPrefix),
+		Room: room,
+		Type: lkprotocol.JobType_JT_ROOM,
+	}
 }
 
 func JobAcceptIdentity(job *lkprotocol.Job, identity string) string {
