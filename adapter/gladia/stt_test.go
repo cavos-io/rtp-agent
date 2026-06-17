@@ -308,6 +308,26 @@ func TestGladiaTranscriptEventsMatchReferenceLifecycle(t *testing.T) {
 	assertGladiaEvent(t, events, 1, stt.SpeechEventEndOfSpeech, "")
 }
 
+func TestGladiaInterimResultsFalseSuppressesInterimTranscript(t *testing.T) {
+	interimResults := false
+	state := &gladiaSTTStreamState{requestID: "session-1", interimResults: &interimResults}
+	events, err := processGladiaMessage(state, map[string]any{
+		"type": "transcript",
+		"data": map[string]any{
+			"is_final": false,
+			"utterance": map[string]any{
+				"text": "partial",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("process interim: %v", err)
+	}
+	if len(events) != 1 || events[0].Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("events = %+v, want only start_of_speech when interim_results is false", events)
+	}
+}
+
 func TestGladiaTranslationFinalWaitsForTranslatedTranscript(t *testing.T) {
 	state := &gladiaSTTStreamState{requestID: "session-1", translationEnabled: true}
 	events, err := processGladiaMessage(state, map[string]any{

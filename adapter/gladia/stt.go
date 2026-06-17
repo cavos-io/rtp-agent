@@ -258,6 +258,7 @@ func (s *GladiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		return nil, err
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
+	interimResults := provider.interimResults
 	stream := &gladiaSTTStream{
 		conn:   conn,
 		events: make(chan *stt.SpeechEvent, 100),
@@ -267,6 +268,7 @@ func (s *GladiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		state: &gladiaSTTStreamState{
 			requestID:          session.ID,
 			languages:          provider.languages,
+			interimResults:     &interimResults,
 			translationEnabled: provider.translationEnabled,
 		},
 	}
@@ -579,6 +581,7 @@ type gladiaSTTStreamState struct {
 	languages          []string
 	speaking           bool
 	audioDuration      float64
+	interimResults     *bool
 	translationEnabled bool
 }
 
@@ -626,8 +629,14 @@ func processGladiaTranscriptMessage(state *gladiaSTTStreamState, data map[string
 		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech, RequestID: state.requestID})
 		return events, nil
 	}
-	events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventInterimTranscript, RequestID: state.requestID, Alternatives: []stt.SpeechData{speechData}})
+	if gladiaInterimResultsEnabled(state) {
+		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventInterimTranscript, RequestID: state.requestID, Alternatives: []stt.SpeechData{speechData}})
+	}
 	return events, nil
+}
+
+func gladiaInterimResultsEnabled(state *gladiaSTTStreamState) bool {
+	return state.interimResults == nil || *state.interimResults
 }
 
 func processGladiaTranslationMessage(state *gladiaSTTStreamState, data map[string]any) []*stt.SpeechEvent {
