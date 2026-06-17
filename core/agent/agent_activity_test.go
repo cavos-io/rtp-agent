@@ -920,6 +920,47 @@ func TestAgentActivityOnVADInferenceDoneInterruptsCurrentSpeech(t *testing.T) {
 	current.MarkDone()
 }
 
+func TestAgentActivityVADInferenceRawSpeechSeedsTurnTiming(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	beforeInference := time.Now()
+	activity.OnVADInferenceDone(&vad.VADEvent{
+		Type:                 vad.VADEventInferenceDone,
+		SpeechDuration:       0.1,
+		RawAccumulatedSpeech: 0.3,
+	})
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "vad timed",
+			Confidence: 0.9,
+		}},
+	})
+
+	info := activity.pendingFinalEndOfTurnInfo()
+	if info.StartedSpeakingAt == nil {
+		t.Fatal("StartedSpeakingAt = nil, want raw VAD speech start")
+	}
+	started := unixSecondsToTime(*info.StartedSpeakingAt)
+	if started.After(beforeInference.Add(-250 * time.Millisecond)) {
+		t.Fatalf("StartedSpeakingAt = %v, want at least 250ms before inference", started.Sub(beforeInference))
+	}
+	if started.Before(beforeInference.Add(-500 * time.Millisecond)) {
+		t.Fatalf("StartedSpeakingAt = %v, want close to raw VAD speech start", started.Sub(beforeInference))
+	}
+	if info.StoppedSpeakingAt == nil {
+		t.Fatal("StoppedSpeakingAt = nil, want raw VAD last-speaking time")
+	}
+	stopped := unixSecondsToTime(*info.StoppedSpeakingAt)
+	if stopped.Before(beforeInference.Add(-50*time.Millisecond)) || stopped.After(time.Now().Add(50*time.Millisecond)) {
+		t.Fatalf("StoppedSpeakingAt = %v, want near VAD inference time", stopped.Sub(beforeInference))
+	}
+}
+
 func TestAgentActivityOnVADInferenceDonePausesFalseInterruption(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}

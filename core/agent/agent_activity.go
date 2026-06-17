@@ -1493,6 +1493,7 @@ func (a *AgentActivity) OnInterruption(ev OverlappingSpeechEvent) {
 }
 
 func (a *AgentActivity) OnVADInferenceDone(ev *vad.VADEvent) {
+	a.updateVADInferenceTiming(ev)
 	turnDetection := a.turnDetectionMode()
 	if turnDetection == TurnDetectionModeManual || turnDetection == TurnDetectionModeRealtimeLLM {
 		return
@@ -1507,6 +1508,18 @@ func (a *AgentActivity) OnVADInferenceDone(ev *vad.VADEvent) {
 		return
 	}
 	a.interruptByAudioActivity("VAD inference", "speech_duration", ev.SpeechDuration, time.Time{})
+}
+
+func (a *AgentActivity) updateVADInferenceTiming(ev *vad.VADEvent) {
+	if a == nil || ev == nil || ev.RawAccumulatedSpeech <= 0 {
+		return
+	}
+	now := time.Now()
+	a.userSpeechStoppedAt = now
+	if a.userSpeechStartedAt.IsZero() {
+		delay := time.Duration(ev.RawAccumulatedSpeech * float64(time.Second))
+		a.userSpeechStartedAt = now.Add(-delay)
+	}
 }
 
 func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
