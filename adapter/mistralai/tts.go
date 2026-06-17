@@ -112,6 +112,35 @@ func (t *MistralAITTS) NumChannels() int { return mistralAITTSNumChannels }
 func (t *MistralAITTS) Model() string    { return t.model }
 func (t *MistralAITTS) Provider() string { return "MistralAI" }
 
+func (t *MistralAITTS) UpdateOptions(opts ...MistralAITTSOption) error {
+	updated := *t
+	voiceUpdated := false
+	refAudioUpdated := false
+	for _, opt := range opts {
+		beforeVoice := updated.voice
+		beforeRefAudio := updated.refAudio
+		opt(&updated)
+		voiceChanged := updated.voice != beforeVoice
+		refAudioChanged := updated.refAudio != beforeRefAudio
+		if voiceChanged {
+			voiceUpdated = true
+			updated.refAudio = ""
+		}
+		if refAudioChanged {
+			refAudioUpdated = true
+			updated.voice = ""
+		}
+	}
+	if voiceUpdated && refAudioUpdated {
+		return fmt.Errorf("only one of voice or ref_audio may be provided")
+	}
+	if updated.voice == "" && updated.refAudio == "" {
+		updated.voice = defaultMistralAITTSVoice
+	}
+	*t = updated
+	return nil
+}
+
 func (t *MistralAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	req, err := buildMistralAITTSRequest(ctx, t, text)
 	if err != nil {

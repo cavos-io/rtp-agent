@@ -151,6 +151,49 @@ func TestMistralAITTSRequestUsesReferenceAudioInsteadOfVoice(t *testing.T) {
 	}
 }
 
+func TestMistralAITTSUpdateOptionsMatchesReference(t *testing.T) {
+	provider, err := NewMistralAITTS("test-key", "")
+	if err != nil {
+		t.Fatalf("new tts: %v", err)
+	}
+
+	if err := provider.UpdateOptions(
+		WithMistralAITTSModel("voxtral-mini-tts-2603"),
+		WithMistralAITTSRefAudio("base64-audio"),
+		WithMistralAITTSResponseFormat("pcm"),
+	); err != nil {
+		t.Fatalf("UpdateOptions ref audio error = %v", err)
+	}
+	req, err := buildMistralAITTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build ref audio request: %v", err)
+	}
+	body := decodeMistralTTSBody(t, req)
+	assertMistralTTSBody(t, body, "model", "voxtral-mini-tts-2603")
+	assertMistralTTSBody(t, body, "response_format", "pcm")
+	assertMistralTTSBody(t, body, "ref_audio", "base64-audio")
+	if _, ok := body["voice_id"]; ok {
+		t.Fatalf("voice_id present after ref_audio update: %#v", body)
+	}
+
+	if err := provider.UpdateOptions(WithMistralAITTSVoice("voice-2")); err != nil {
+		t.Fatalf("UpdateOptions voice error = %v", err)
+	}
+	req, err = buildMistralAITTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build voice request: %v", err)
+	}
+	body = decodeMistralTTSBody(t, req)
+	assertMistralTTSBody(t, body, "voice_id", "voice-2")
+	if _, ok := body["ref_audio"]; ok {
+		t.Fatalf("ref_audio present after voice update: %#v", body)
+	}
+
+	if err := provider.UpdateOptions(WithMistralAITTSVoice("voice-3"), WithMistralAITTSRefAudio("audio-3")); err == nil {
+		t.Fatal("UpdateOptions conflict error = nil, want voice/ref_audio conflict")
+	}
+}
+
 func TestMistralAITTSStreamDecodesAudioDeltaDoneAndPCM(t *testing.T) {
 	pcmF32 := []byte{0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x00, 0xbf}
 	stream := &mistralAITTSChunkedStream{
