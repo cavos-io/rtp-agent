@@ -4,8 +4,16 @@ import (
 	"errors"
 	"strings"
 
+	lkprotocol "github.com/livekit/protocol/livekit"
 	"github.com/twitchtv/twirp"
 )
+
+func DeleteRoomRequest(job *lkprotocol.Job, roomName string) *lkprotocol.DeleteRoomRequest {
+	if roomName == "" && job != nil && job.Room != nil {
+		roomName = job.Room.Name
+	}
+	return &lkprotocol.DeleteRoomRequest{Room: roomName}
+}
 
 func RoomDeleteNotFound(err error) bool {
 	if err == nil {

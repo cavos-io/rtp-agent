@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,10 +26,7 @@ import (
 	mathutil "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils"
-	"github.com/go-jose/go-jose/v3"
-	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/gorilla/websocket"
-	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 )
 
@@ -343,22 +339,7 @@ func refreshRunningJobTokenForReload(info workeripc.RunningJobInfo, apiSecret st
 	if apiSecret == "" {
 		return workeripc.RunningJobInfo{}, fmt.Errorf("api_secret is required to reload jobs")
 	}
-	tok, err := jwt.ParseSigned(info.Token)
-	if err != nil {
-		return workeripc.RunningJobInfo{}, err
-	}
-	standardClaims := jwt.Claims{}
-	grants := auth.ClaimGrants{}
-	if err := tok.Claims([]byte(apiSecret), &standardClaims, &grants); err != nil {
-		return workeripc.RunningJobInfo{}, err
-	}
-	standardClaims.Expiry = jwt.NewNumericDate(now.Add(time.Hour))
-
-	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: []byte(apiSecret)}, (&jose.SignerOptions{}).WithType("JWT"))
-	if err != nil {
-		return workeripc.RunningJobInfo{}, err
-	}
-	token, err := jwt.Signed(signer).Claims(standardClaims).Claims(grants).CompactSerialize()
+	token, err := workerlivekit.RefreshToken(info.Token, apiSecret, now, time.Hour)
 	if err != nil {
 		return workeripc.RunningJobInfo{}, err
 	}
@@ -843,8 +824,7 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 		opts.LoadFunc = defaultWorkerLoadFunc
 	}
 	if opts.Permissions == nil {
-		permissions := workerlivekit.ResolveWorkerPermissions(nil)
-		opts.Permissions = &permissions
+		opts.Permissions = workerlivekit.DefaultWorkerPermissions()
 	}
 	if opts.WSURL == "" {
 		opts.WSURL = opts.WSRL
@@ -914,7 +894,7 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 		body := workerMetadataResponse{
 			AgentName:       s.Options.AgentName,
 			AgentNameIsEnv:  s.Options.AgentNameIsEnv,
-			WorkerType:      livekit.JobType_name[int32(workerlivekit.JobTypeForWorkerType(string(s.Options.WorkerType)))],
+			WorkerType:      workerlivekit.JobTypeNameForWorkerType(string(s.Options.WorkerType)),
 			WorkerLoad:      s.currentLoad(),
 			ActiveJobs:      s.activeJobCount(),
 			SDKVersion:      s.Options.Version,
@@ -1124,20 +1104,19 @@ func readSystemCPUTimes() (idle uint64, total uint64, err error) {
 }
 
 func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
-	permissions := workerlivekit.ResolveWorkerPermissions(s.Options.Permissions)
-	return workerlivekit.RegisterWorkerRequest(workerlivekit.RegisterWorkerOptions{
-		JobType:     workerlivekit.JobTypeForWorkerType(string(s.Options.WorkerType)),
+	return workerlivekit.RegisterWorkerMessage(workerlivekit.WorkerRegistrationOptions{
+		WorkerType:  string(s.Options.WorkerType),
 		AgentName:   s.Options.AgentName,
 		Version:     s.Options.Version,
-		Permissions: permissions,
+		Permissions: s.Options.Permissions,
 	})
 }
 
 func (s *AgentServer) workerStatusMessage(status livekit.WorkerStatus) *livekit.WorkerMessage {
 	jobCount := uint32(s.activeJobCount())
 	load := s.currentLoad()
-	if status == livekit.WorkerStatus_WS_AVAILABLE && !s.availableForJobWithLoad(load) {
-		status = livekit.WorkerStatus_WS_FULL
+	if status == livekit.WorkerStatus_WS_AVAILABLE {
+		return workerlivekit.AvailableWorkerStatusMessage(load, jobCount, s.availableForJobWithLoad(load))
 	}
 	return workerlivekit.WorkerStatusMessage(status, load, jobCount)
 }
@@ -1709,7 +1688,6 @@ func (s *AgentServer) reportActiveJobs() {
 		return
 	}
 
-	sort.Strings(jobIDs)
 	if err := s.sendWorkerMessage(workerlivekit.MigrateJobMessage(jobIDs)); err != nil {
 		logger.Logger.Errorw("failed to report active jobs", err, "jobIds", jobIDs)
 	}
@@ -1942,11 +1920,11 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 
 func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName string, participantIdentity string, options LocalJobOptions) error {
 	if options.Token != "" {
-		verifier, err := auth.ParseAPIToken(options.Token)
+		identity, err := workerlivekit.TokenIdentity(options.Token)
 		if err != nil {
 			return fmt.Errorf("invalid local job token: %w", err)
 		}
-		participantIdentity = verifier.Identity()
+		participantIdentity = identity
 	}
 	if !options.FakeJob && participantIdentity == "" && options.Token == "" {
 		return fmt.Errorf("agent_identity is None but fake_job is False")
@@ -2197,25 +2175,15 @@ func newLocalJobContextWithOptions(roomName string, participantIdentity string, 
 	opts = resolveWorkerOptions(opts)
 	token := options.Token
 	if token != "" {
-		if verifier, err := auth.ParseAPIToken(token); err == nil {
-			participantIdentity = verifier.Identity()
+		if identity, err := workerlivekit.TokenIdentity(token); err == nil {
+			participantIdentity = identity
 		}
 	}
-	jobIDPrefix := "job-"
-	if options.FakeJob {
-		jobIDPrefix = "mock-job-"
-	}
-	job := &livekit.Job{
-		Id: mathutil.ShortUUID(jobIDPrefix),
-		Room: &livekit.Room{
-			Name: roomName,
-			Sid:  mathutil.ShortUUID("SRM_"),
-		},
-		Type: livekit.JobType_JT_ROOM,
-	}
-	if options.RoomInfo != nil {
-		job.Room = options.RoomInfo
-	}
+	job := workerlivekit.LocalRoomJob(workerlivekit.LocalRoomJobOptions{
+		RoomName: roomName,
+		RoomInfo: options.RoomInfo,
+		FakeJob:  options.FakeJob,
+	})
 
 	if participantIdentity == "" {
 		participantIdentity = mathutil.ShortUUID("fake-agent-")
@@ -2231,16 +2199,7 @@ func newLocalJobContextWithOptions(roomName string, participantIdentity string, 
 	if token != "" {
 		jobCtx.token = token
 	} else if opts.APIKey != "" && opts.APISecret != "" {
-		generatedToken, err := auth.NewAccessToken(opts.APIKey, opts.APISecret).
-			SetIdentity(participantIdentity).
-			SetKind(livekit.ParticipantInfo_AGENT).
-			SetVideoGrant(&auth.VideoGrant{
-				RoomJoin: true,
-				Room:     roomName,
-				Agent:    true,
-			}).
-			SetValidFor(time.Hour).
-			ToJWT()
+		generatedToken, err := workerlivekit.LocalAgentToken(opts.APIKey, opts.APISecret, participantIdentity, roomName, time.Hour)
 		if err == nil {
 			jobCtx.token = generatedToken
 		}

@@ -766,6 +766,8 @@ type fakeParticipantView struct {
 	attributes map[string]string
 }
 
+var _ workerlivekit.RemoteParticipantView = fakeParticipantView{}
+
 func (p fakeParticipantView) SID() string                   { return p.sid }
 func (p fakeParticipantView) Identity() string              { return p.identity }
 func (p fakeParticipantView) Name() string                  { return p.name }
@@ -1048,7 +1050,7 @@ func TestJobContextParticipantsAvailableReplaysExistingParticipants(t *testing.T
 		t.Fatalf("AddParticipantEntrypoint() error = %v", err)
 	}
 
-	ctx.participantsAvailable([]remoteParticipantView{
+	ctx.participantsAvailable([]workerlivekit.RemoteParticipantView{
 		fakeParticipantView{identity: "agent-a", kind: lksdk.ParticipantAgent},
 		fakeParticipantView{identity: "caller-a", kind: lksdk.ParticipantSIP},
 		fakeParticipantView{identity: "caller-b", kind: lksdk.ParticipantStandard},

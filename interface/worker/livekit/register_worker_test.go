@@ -29,6 +29,31 @@ func TestRegisterWorkerRequestUsesConfiguredFields(t *testing.T) {
 	}
 }
 
+func TestRegisterWorkerMessageResolvesWorkerTypeAndPermissions(t *testing.T) {
+	req := workerlivekit.RegisterWorkerMessage(workerlivekit.WorkerRegistrationOptions{
+		WorkerType: "publisher",
+		AgentName:  "publisher-agent",
+		Version:    "2.3.4",
+	})
+
+	register := req.GetRegister()
+	if register == nil {
+		t.Fatal("register worker message is nil")
+	}
+	if register.Type != lkprotocol.JobType_JT_PUBLISHER {
+		t.Fatalf("register.Type = %v, want JT_PUBLISHER", register.Type)
+	}
+	if register.AgentName != "publisher-agent" {
+		t.Fatalf("register.AgentName = %q, want publisher-agent", register.AgentName)
+	}
+	if register.Version != "2.3.4" {
+		t.Fatalf("register.Version = %q, want 2.3.4", register.Version)
+	}
+	if permissions := register.GetAllowedPermissions(); permissions == nil || !permissions.CanPublish || !permissions.CanSubscribe {
+		t.Fatalf("register.AllowedPermissions = %#v, want default publish/subscribe permissions", permissions)
+	}
+}
+
 func TestRegisterWorkerRequestIncludesPermissions(t *testing.T) {
 	req := workerlivekit.RegisterWorkerRequest(workerlivekit.RegisterWorkerOptions{
 		Permissions: workerlivekit.WorkerPermissions{
@@ -98,6 +123,29 @@ func TestResolveWorkerPermissionsDefaultsToLiveKitAgentPermissions(t *testing.T)
 	}
 	if len(permissions.CanPublishSources) != 0 {
 		t.Fatalf("permissions.CanPublishSources len = %d, want 0", len(permissions.CanPublishSources))
+	}
+}
+
+func TestDefaultWorkerPermissionsReturnsLiveKitAgentPermissions(t *testing.T) {
+	permissions := workerlivekit.DefaultWorkerPermissions()
+
+	if permissions == nil {
+		t.Fatal("DefaultWorkerPermissions() = nil")
+	}
+	if !permissions.CanPublish {
+		t.Fatal("permissions.CanPublish = false, want true")
+	}
+	if !permissions.CanSubscribe {
+		t.Fatal("permissions.CanSubscribe = false, want true")
+	}
+	if !permissions.CanPublishData {
+		t.Fatal("permissions.CanPublishData = false, want true")
+	}
+	if !permissions.CanUpdateMetadata {
+		t.Fatal("permissions.CanUpdateMetadata = false, want true")
+	}
+	if permissions.Hidden {
+		t.Fatal("permissions.Hidden = true, want false")
 	}
 }
 

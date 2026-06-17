@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
+	lkprotocol "github.com/livekit/protocol/livekit"
 )
 
 func TestCreateSIPParticipantRequestUsesReferenceDefaultName(t *testing.T) {
@@ -34,6 +35,19 @@ func TestCreateSIPParticipantRequestPreservesExplicitName(t *testing.T) {
 	}
 }
 
+func TestJobCreateSIPParticipantRequestUsesJobRoomName(t *testing.T) {
+	req := workerlivekit.JobCreateSIPParticipantRequest(&lkprotocol.Job{
+		Room: &lkprotocol.Room{Name: "room-a"},
+	}, "+15551234567", "trunk-a", "caller-a", "")
+
+	if req.RoomName != "room-a" {
+		t.Fatalf("JobCreateSIPParticipantRequest.RoomName = %q, want room-a", req.RoomName)
+	}
+	if req.ParticipantName != workerlivekit.DefaultSIPParticipantName {
+		t.Fatalf("JobCreateSIPParticipantRequest.ParticipantName = %q, want default name", req.ParticipantName)
+	}
+}
+
 func TestTransferSIPParticipantRequestMatchesReferenceFields(t *testing.T) {
 	req := workerlivekit.TransferSIPParticipantRequest("room-a", "caller-a", "+15557654321", true)
 
@@ -48,5 +62,21 @@ func TestTransferSIPParticipantRequestMatchesReferenceFields(t *testing.T) {
 	}
 	if !req.PlayDialtone {
 		t.Fatal("TransferSIPParticipantRequest.PlayDialtone = false, want true")
+	}
+}
+
+func TestJobTransferSIPParticipantRequestUsesJobRoomName(t *testing.T) {
+	req := workerlivekit.JobTransferSIPParticipantRequest(&lkprotocol.Job{
+		Room: &lkprotocol.Room{Name: "room-a"},
+	}, "caller-a", "+15557654321", false)
+
+	if req.RoomName != "room-a" {
+		t.Fatalf("JobTransferSIPParticipantRequest.RoomName = %q, want room-a", req.RoomName)
+	}
+	if req.ParticipantIdentity != "caller-a" {
+		t.Fatalf("JobTransferSIPParticipantRequest.ParticipantIdentity = %q, want caller-a", req.ParticipantIdentity)
+	}
+	if req.PlayDialtone {
+		t.Fatal("JobTransferSIPParticipantRequest.PlayDialtone = true, want false")
 	}
 }

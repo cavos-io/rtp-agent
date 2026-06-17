@@ -22,6 +22,13 @@ type RegisterWorkerOptions struct {
 	Permissions WorkerPermissions
 }
 
+type WorkerRegistrationOptions struct {
+	WorkerType  string
+	AgentName   string
+	Version     string
+	Permissions *WorkerPermissions
+}
+
 func ResolveWorkerPermissions(permissions *WorkerPermissions) WorkerPermissions {
 	if permissions == nil {
 		return WorkerPermissions{
@@ -32,6 +39,20 @@ func ResolveWorkerPermissions(permissions *WorkerPermissions) WorkerPermissions 
 		}
 	}
 	return *permissions
+}
+
+func DefaultWorkerPermissions() *WorkerPermissions {
+	permissions := ResolveWorkerPermissions(nil)
+	return &permissions
+}
+
+func RegisterWorkerMessage(opts WorkerRegistrationOptions) *lkprotocol.WorkerMessage {
+	return RegisterWorkerRequest(RegisterWorkerOptions{
+		JobType:     JobTypeForWorkerType(opts.WorkerType),
+		AgentName:   opts.AgentName,
+		Version:     opts.Version,
+		Permissions: ResolveWorkerPermissions(opts.Permissions),
+	})
 }
 
 func RegisterWorkerRequest(opts RegisterWorkerOptions) *lkprotocol.WorkerMessage {

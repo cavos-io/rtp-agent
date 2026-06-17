@@ -28,6 +28,15 @@ func TestAutoSubscribeSDKEnabledMatchesReferenceModes(t *testing.T) {
 	}
 }
 
+func TestNormalizeAutoSubscribeModeDefaultsToSubscribeAll(t *testing.T) {
+	if got := workerlivekit.NormalizeAutoSubscribeMode(""); got != "subscribe_all" {
+		t.Fatalf("NormalizeAutoSubscribeMode(empty) = %q, want subscribe_all", got)
+	}
+	if got := workerlivekit.NormalizeAutoSubscribeMode("audio_only"); got != "audio_only" {
+		t.Fatalf("NormalizeAutoSubscribeMode(audio_only) = %q, want audio_only", got)
+	}
+}
+
 func TestShouldAutoSubscribeTrackMatchesReferenceModes(t *testing.T) {
 	tests := []struct {
 		mode string

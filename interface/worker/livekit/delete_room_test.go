@@ -5,8 +5,29 @@ import (
 	"testing"
 
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
+	lkprotocol "github.com/livekit/protocol/livekit"
 	"github.com/twitchtv/twirp"
 )
+
+func TestDeleteRoomRequestUsesExplicitRoomName(t *testing.T) {
+	req := workerlivekit.DeleteRoomRequest(&lkprotocol.Job{
+		Room: &lkprotocol.Room{Name: "job-room"},
+	}, "explicit-room")
+
+	if req.GetRoom() != "explicit-room" {
+		t.Fatalf("DeleteRoomRequest().Room = %q, want explicit-room", req.GetRoom())
+	}
+}
+
+func TestDeleteRoomRequestFallsBackToJobRoomName(t *testing.T) {
+	req := workerlivekit.DeleteRoomRequest(&lkprotocol.Job{
+		Room: &lkprotocol.Room{Name: "job-room"},
+	}, "")
+
+	if req.GetRoom() != "job-room" {
+		t.Fatalf("DeleteRoomRequest().Room = %q, want job-room", req.GetRoom())
+	}
+}
 
 func TestRoomDeleteNotFoundRecognizesLiveKitCleanupErrors(t *testing.T) {
 	cases := []struct {

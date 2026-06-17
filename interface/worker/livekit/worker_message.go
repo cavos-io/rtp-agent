@@ -1,6 +1,10 @@
 package livekit
 
-import lkprotocol "github.com/livekit/protocol/livekit"
+import (
+	"sort"
+
+	lkprotocol "github.com/livekit/protocol/livekit"
+)
 
 func WorkerStatusMessage(status lkprotocol.WorkerStatus, load float64, jobCount uint32) *lkprotocol.WorkerMessage {
 	return &lkprotocol.WorkerMessage{
@@ -12,6 +16,14 @@ func WorkerStatusMessage(status lkprotocol.WorkerStatus, load float64, jobCount 
 			},
 		},
 	}
+}
+
+func AvailableWorkerStatusMessage(load float64, jobCount uint32, canAcceptJob bool) *lkprotocol.WorkerMessage {
+	status := lkprotocol.WorkerStatus_WS_AVAILABLE
+	if !canAcceptJob {
+		status = lkprotocol.WorkerStatus_WS_FULL
+	}
+	return WorkerStatusMessage(status, load, jobCount)
 }
 
 func DrainingWorkerStatusMessage(jobCount uint32) *lkprotocol.WorkerMessage {
@@ -38,9 +50,11 @@ func JobStatusMessage(jobID string, status lkprotocol.JobStatus) *lkprotocol.Wor
 }
 
 func MigrateJobMessage(jobIDs []string) *lkprotocol.WorkerMessage {
+	sortedJobIDs := append([]string(nil), jobIDs...)
+	sort.Strings(sortedJobIDs)
 	return &lkprotocol.WorkerMessage{
 		Message: &lkprotocol.WorkerMessage_MigrateJob{
-			MigrateJob: &lkprotocol.MigrateJobRequest{JobIds: jobIDs},
+			MigrateJob: &lkprotocol.MigrateJobRequest{JobIds: sortedJobIDs},
 		},
 	}
 }

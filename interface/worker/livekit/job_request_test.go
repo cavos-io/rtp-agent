@@ -45,3 +45,114 @@ func TestJobRequestAccessorsHandleNilJob(t *testing.T) {
 		t.Fatalf("JobAgentName(nil) = %q, want empty", got)
 	}
 }
+
+func TestLocalRoomJobUsesFakeJobPrefixAndRoomInfo(t *testing.T) {
+	room := &lkprotocol.Room{Name: "configured-room", Sid: "SRM_configured"}
+	job := workerlivekit.LocalRoomJob(workerlivekit.LocalRoomJobOptions{
+		RoomName: "ignored-room",
+		RoomInfo: room,
+		FakeJob:  true,
+		NewID: func(prefix string) string {
+			return prefix + "id"
+		},
+	})
+
+	if job.Id != "mock-job-id" {
+		t.Fatalf("Job.Id = %q, want mock-job-id", job.Id)
+	}
+	if job.Room != room {
+		t.Fatal("Job.Room did not use configured room info")
+	}
+	if job.Type != lkprotocol.JobType_JT_ROOM {
+		t.Fatalf("Job.Type = %v, want JT_ROOM", job.Type)
+	}
+}
+
+func TestLocalRoomJobBuildsRoomWhenRoomInfoMissing(t *testing.T) {
+	job := workerlivekit.LocalRoomJob(workerlivekit.LocalRoomJobOptions{
+		RoomName: "local-room",
+		NewID: func(prefix string) string {
+			return prefix + "id"
+		},
+	})
+
+	if job.Id != "job-id" {
+		t.Fatalf("Job.Id = %q, want job-id", job.Id)
+	}
+	if job.GetRoom().GetName() != "local-room" {
+		t.Fatalf("Job.Room.Name = %q, want local-room", job.GetRoom().GetName())
+	}
+	if job.GetRoom().GetSid() != "SRM_id" {
+		t.Fatalf("Job.Room.Sid = %q, want SRM_id", job.GetRoom().GetSid())
+	}
+	if job.Type != lkprotocol.JobType_JT_ROOM {
+		t.Fatalf("Job.Type = %v, want JT_ROOM", job.Type)
+	}
+}
+
+func TestJobAcceptIdentityDefaultsFromJobID(t *testing.T) {
+	got := workerlivekit.JobAcceptIdentity(&lkprotocol.Job{Id: "job_accept"}, "")
+	if got != "agent-job_accept" {
+		t.Fatalf("JobAcceptIdentity() = %q, want default identity", got)
+	}
+}
+
+func TestJobAcceptIdentityKeepsConfiguredIdentity(t *testing.T) {
+	got := workerlivekit.JobAcceptIdentity(&lkprotocol.Job{Id: "job_accept"}, "custom-agent")
+	if got != "custom-agent" {
+		t.Fatalf("JobAcceptIdentity() = %q, want configured identity", got)
+	}
+}
+
+func TestJobParticipantIdentityDefaultsFromJobID(t *testing.T) {
+	got := workerlivekit.JobParticipantIdentity(&lkprotocol.Job{Id: "job_context"}, "")
+	if got != "agent-job_context" {
+		t.Fatalf("JobParticipantIdentity() = %q, want default identity", got)
+	}
+}
+
+func TestJobParticipantIdentityKeepsAcceptedIdentity(t *testing.T) {
+	got := workerlivekit.JobParticipantIdentity(&lkprotocol.Job{Id: "job_context"}, "accepted-agent")
+	if got != "accepted-agent" {
+		t.Fatalf("JobParticipantIdentity() = %q, want accepted identity", got)
+	}
+}
+
+func TestJobParticipantIdentityHandlesNilJob(t *testing.T) {
+	got := workerlivekit.JobParticipantIdentity(nil, "")
+	if got != "" {
+		t.Fatalf("JobParticipantIdentity(nil) = %q, want empty", got)
+	}
+}
+
+func TestMoveParticipantRequestUsesExplicitDestinationRoom(t *testing.T) {
+	req := workerlivekit.MoveParticipantRequest(
+		&lkprotocol.Job{Room: &lkprotocol.Room{Name: "caller-room"}},
+		"human-room",
+		"human-agent-sip",
+		"destination-room",
+	)
+
+	if req.Room != "human-room" {
+		t.Fatalf("MoveParticipantRequest.Room = %q, want human-room", req.Room)
+	}
+	if req.Identity != "human-agent-sip" {
+		t.Fatalf("MoveParticipantRequest.Identity = %q, want human-agent-sip", req.Identity)
+	}
+	if req.DestinationRoom != "destination-room" {
+		t.Fatalf("MoveParticipantRequest.DestinationRoom = %q, want destination-room", req.DestinationRoom)
+	}
+}
+
+func TestMoveParticipantRequestDefaultsDestinationRoomFromJob(t *testing.T) {
+	req := workerlivekit.MoveParticipantRequest(
+		&lkprotocol.Job{Room: &lkprotocol.Room{Name: "caller-room"}},
+		"human-room",
+		"human-agent-sip",
+		"",
+	)
+
+	if req.DestinationRoom != "caller-room" {
+		t.Fatalf("MoveParticipantRequest.DestinationRoom = %q, want caller-room", req.DestinationRoom)
+	}
+}
