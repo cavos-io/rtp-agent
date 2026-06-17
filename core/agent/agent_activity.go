@@ -1385,12 +1385,28 @@ func (a *AgentActivity) nextSpeechIndexLocked() int {
 
 // Event callbacks from the active audio pipeline.
 func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
+	a.onStartOfSpeech(ev, nil)
+}
+
+func (a *AgentActivity) OnSTTStartOfSpeech(ev *stt.SpeechEvent) {
+	var startedAt *float64
+	if ev != nil {
+		startedAt = ev.SpeechStartTime
+	}
+	a.onStartOfSpeech(nil, startedAt)
+}
+
+func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64) {
 	a.speaking = true
 	a.sttEOSReceived = false
 	a.manualTurnCommitted = false
 	a.interruptionDetected = false
 	a.overlapSpeechEnded = false
-	a.userSpeechStartedAt = time.Now()
+	if sttStartedAt != nil {
+		a.userSpeechStartedAt = unixSecondsToTime(*sttStartedAt)
+	} else {
+		a.userSpeechStartedAt = time.Now()
+	}
 	a.userSpeechStoppedAt = time.Time{}
 	a.clearUserAudioFrames()
 	a.clearHeldUserTranscriptWindow()
@@ -1399,6 +1415,9 @@ func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 	}
 	if endpointing := a.endpointing(); endpointing != nil {
 		startedAt := vadEventTimestamp(ev)
+		if sttStartedAt != nil {
+			startedAt = *sttStartedAt
+		}
 		overlapping := a.Session != nil && a.Session.AgentStateValue() == AgentStateSpeaking
 		endpointing.OnStartOfSpeech(startedAt, overlapping)
 	}

@@ -1493,6 +1493,37 @@ func TestPipelineAgentSTTTurnDetectionWaitsForEndOfSpeechBeforeCommit(t *testing
 	}
 }
 
+func TestPipelineAgentSTTStartSpeechUsesProviderSpeechStartTime(t *testing.T) {
+	endpointing := &recordingPipelineEndpointing{}
+	baseAgent := NewAgent("test")
+	baseAgent.TurnDetection = TurnDetectionModeSTT
+	baseAgent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{Endpointing: endpointing})
+	activity := NewAgentActivity(baseAgent, session)
+	session.activity = activity
+	defer activity.Stop()
+	pipeline := NewPipelineAgent(nil, baseAgent.STT, nil, nil, baseAgent.ChatCtx)
+	pipeline.session = session
+	startTime := 42.5
+
+	pipeline.sttLoop(&fakePipelineRecognizeStream{
+		events: []*stt.SpeechEvent{{
+			Type:            stt.SpeechEventStartOfSpeech,
+			SpeechStartTime: &startTime,
+		}},
+	})
+
+	if endpointing.startCount != 1 {
+		t.Fatalf("OnStartOfSpeech calls = %d, want 1", endpointing.startCount)
+	}
+	if endpointing.startAt != startTime {
+		t.Fatalf("endpointing startAt = %v, want provider speech_start_time %v", endpointing.startAt, startTime)
+	}
+	if got := timeToUnixSeconds(activity.userSpeechStartedAt); got != startTime {
+		t.Fatalf("userSpeechStartedAt = %v, want provider speech_start_time %v", got, startTime)
+	}
+}
+
 func TestPipelineAgentFlushInputTranscriptionPushesSilenceAndFlushesSTT(t *testing.T) {
 	stream := &fakePipelineRecognizeStream{}
 	pipeline := NewPipelineAgent(nil, nil, nil, nil, nil)
