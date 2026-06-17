@@ -1542,6 +1542,9 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	if a.realtimeUserTranscriptionEnabled() {
 		return
 	}
+	if a.turnDetectionMode() == TurnDetectionModeManual && a.manualTurnCommitted {
+		return
+	}
 	if a.holdSTTEventWhileAgentSpeaking(ev) {
 		return
 	}
