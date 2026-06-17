@@ -638,6 +638,27 @@ func TestAgentActivityOnStartOfSpeechCancelsPendingFalseInterruptionResume(t *te
 	current.MarkDone()
 }
 
+func TestAgentActivityDuplicateStartOfSpeechKeepsActiveAudioFrames(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	activity.RecordUserAudioFrame(&model.AudioFrame{
+		Data:              []byte{1, 2},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	})
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+
+	frames := activity.userAudioSnapshot()
+	if len(frames) != 1 {
+		t.Fatalf("user audio frames after duplicate start = %d, want 1", len(frames))
+	}
+}
+
 func TestAgentActivityOverlapSpeechEndedEmitsAndMarksInterruption(t *testing.T) {
 	endpointing := &recordingActivityEndpointing{}
 	agent := NewAgent("test")

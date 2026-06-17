@@ -1397,18 +1397,21 @@ func (a *AgentActivity) OnSTTStartOfSpeech(ev *stt.SpeechEvent) {
 }
 
 func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64) {
+	wasSpeaking := a.speaking
 	a.speaking = true
 	a.sttEOSReceived = false
 	a.manualTurnCommitted = false
 	a.interruptionDetected = false
 	a.overlapSpeechEnded = false
-	if sttStartedAt != nil {
-		a.userSpeechStartedAt = unixSecondsToTime(*sttStartedAt)
-	} else {
-		a.userSpeechStartedAt = time.Now()
+	if !wasSpeaking {
+		if sttStartedAt != nil {
+			a.userSpeechStartedAt = unixSecondsToTime(*sttStartedAt)
+		} else {
+			a.userSpeechStartedAt = time.Now()
+		}
+		a.clearUserAudioFrames()
 	}
 	a.userSpeechStoppedAt = time.Time{}
-	a.clearUserAudioFrames()
 	a.clearHeldUserTranscriptWindow()
 	if a.Session != nil {
 		a.Session.UpdateUserState(UserStateSpeaking)
