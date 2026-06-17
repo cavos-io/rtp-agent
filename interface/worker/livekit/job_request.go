@@ -1,6 +1,7 @@
 package livekit
 
 import (
+	"github.com/cavos-io/rtp-agent/library/inference"
 	"github.com/cavos-io/rtp-agent/library/math"
 	lkprotocol "github.com/livekit/protocol/livekit"
 )
@@ -72,6 +73,23 @@ func JobSessionReportInfo(job *lkprotocol.Job) SessionReportInfo {
 		info.Room = room.GetName()
 	}
 	return info
+}
+
+func JobInferenceHeaders(job *lkprotocol.Job) map[string]string {
+	if job == nil {
+		return nil
+	}
+	headers := map[string]string{}
+	if jobID := job.GetId(); jobID != "" {
+		headers[inference.HeaderJobID] = jobID
+	}
+	if room := job.GetRoom(); room != nil && room.GetSid() != "" {
+		headers[inference.HeaderRoomID] = room.GetSid()
+	}
+	if len(headers) == 0 {
+		return nil
+	}
+	return headers
 }
 
 type AssignmentInfo struct {

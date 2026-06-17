@@ -37,14 +37,7 @@ func currentInferenceContextHeaders() map[string]string {
 	if !ok || ctx == nil || ctx.Job == nil {
 		return nil
 	}
-	headers := map[string]string{}
-	if jobID := ctx.Job.GetId(); jobID != "" {
-		headers[inference.HeaderJobID] = jobID
-	}
-	if room := ctx.Job.GetRoom(); room != nil && room.GetSid() != "" {
-		headers[inference.HeaderRoomID] = room.GetSid()
-	}
-	return headers
+	return workerlivekit.JobInferenceHeaders(ctx.Job)
 }
 
 type jobContextStack struct {

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
+	"github.com/cavos-io/rtp-agent/library/inference"
 	lkprotocol "github.com/livekit/protocol/livekit"
 )
 
@@ -77,6 +78,22 @@ func TestJobSessionReportInfoExposesJobAndRoomMetadata(t *testing.T) {
 	}
 	if info.Room != "room-report" {
 		t.Fatalf("JobSessionReportInfo().Room = %q, want room-report", info.Room)
+	}
+}
+
+func TestJobInferenceHeadersExposeLiveKitJobMetadata(t *testing.T) {
+	headers := workerlivekit.JobInferenceHeaders(&lkprotocol.Job{
+		Id: "job-inference",
+		Room: &lkprotocol.Room{
+			Sid: "RM_inference",
+		},
+	})
+
+	if headers[inference.HeaderJobID] != "job-inference" {
+		t.Fatalf("JobInferenceHeaders()[HeaderJobID] = %q, want job-inference", headers[inference.HeaderJobID])
+	}
+	if headers[inference.HeaderRoomID] != "RM_inference" {
+		t.Fatalf("JobInferenceHeaders()[HeaderRoomID] = %q, want RM_inference", headers[inference.HeaderRoomID])
 	}
 }
 
