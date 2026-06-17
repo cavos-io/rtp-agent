@@ -9,9 +9,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
-	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
-	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
 type Event interface {
@@ -557,45 +555,7 @@ func GetRunContext(ctx context.Context) *RunContext {
 	return nil
 }
 
-// ClientEventsDispatcher manages sending Agent states to the LiveKit Room DataChannel
-type ClientEventsDispatcher struct {
-	room *lksdk.Room
-	mu   sync.Mutex
-}
-
-func NewClientEventsDispatcher(room *lksdk.Room) *ClientEventsDispatcher {
-	return &ClientEventsDispatcher{
-		room: room,
-	}
-}
-
-type ClientEventPayload struct {
-	Type  string `json:"type"`
-	State string `json:"state,omitempty"`
-}
-
-func (d *ClientEventsDispatcher) dispatchData(payload ClientEventPayload) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	if d.room == nil || d.room.LocalParticipant == nil || d.room.ConnectionState() != lksdk.ConnectionStateConnected {
-		return
-	}
-
-	b, err := json.Marshal(payload)
-	if err != nil {
-		logger.Logger.Errorw("Failed to marshal client event", err)
-		return
-	}
-
-	// Publish to the "lk-agent-state" topic which the frontend UI components listen to
-	err = d.room.LocalParticipant.PublishDataPacket(lksdk.UserData(b), lksdk.WithDataPublishReliable(true), lksdk.WithDataPublishTopic("lk-agent-state"))
-	if err != nil {
-		logger.Logger.Errorw("Failed to publish client event data", err)
-	}
-}
-
-func clientAgentStateString(state AgentState) (string, bool) {
+func ClientAgentStateString(state AgentState) (string, bool) {
 	switch state {
 	case AgentStateInitializing:
 		return "initializing", true
@@ -610,20 +570,7 @@ func clientAgentStateString(state AgentState) (string, bool) {
 	}
 }
 
-// DispatchAgentState emits reference-style client agent states.
-func (d *ClientEventsDispatcher) DispatchAgentState(state AgentState) {
-	stateStr, ok := clientAgentStateString(state)
-	if !ok {
-		return
-	}
-
-	d.dispatchData(ClientEventPayload{
-		Type:  "agent_state_changed",
-		State: stateStr,
-	})
-}
-
-func clientUserStateString(state UserState) (string, bool) {
+func ClientUserStateString(state UserState) (string, bool) {
 	switch state {
 	case UserStateListening:
 		return "listening", true
@@ -634,17 +581,4 @@ func clientUserStateString(state UserState) (string, bool) {
 	default:
 		return "", false
 	}
-}
-
-// DispatchUserState emits reference-style client user states.
-func (d *ClientEventsDispatcher) DispatchUserState(state UserState) {
-	stateStr, ok := clientUserStateString(state)
-	if !ok {
-		return
-	}
-
-	d.dispatchData(ClientEventPayload{
-		Type:  "user_state_changed",
-		State: stateStr,
-	})
 }
