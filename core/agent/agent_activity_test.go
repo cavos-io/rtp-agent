@@ -2426,6 +2426,23 @@ func TestAgentActivitySTTEndOfSpeechMarksEOSReceived(t *testing.T) {
 	}
 }
 
+func TestAgentActivityFinalTranscriptDoesNotMarkSTTEOSReceived(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnSTTStartOfSpeech(&stt.SpeechEvent{})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "partial turn", Confidence: 0.9}},
+	})
+
+	if activity.sttEOSReceived {
+		t.Fatal("sttEOSReceived = true after final transcript, want only STT end-of-speech to mark EOS")
+	}
+}
+
 func TestAgentActivityPendingSTTFinalUsesTranscriptEndTimeAfterEndOfSpeech(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeSTT

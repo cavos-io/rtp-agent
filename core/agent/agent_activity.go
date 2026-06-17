@@ -1706,7 +1706,6 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	if a.holdSTTEventWhileAgentSpeaking(ev) {
 		return
 	}
-	a.sttEOSReceived = true
 	transcript := ""
 	confidence := 0.0
 	language := ""
