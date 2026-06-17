@@ -1697,7 +1697,9 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.Avail
 }
 
 func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.AvailabilityRequest) {
-	logger.Logger.Infow("Received availability request", "jobId", req.Job.Id)
+	availability := workerlivekit.AvailabilityInfo(req)
+	jobID := availability.JobID
+	logger.Logger.Infow("Received availability request", "jobId", jobID)
 
 	if !s.availableForJob() {
 		msg := workerlivekit.AvailabilityResponseForReject(
@@ -1705,7 +1707,7 @@ func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.Avail
 			workerlivekit.AvailabilityRejectOptions{Terminate: false},
 		)
 		if err := s.sendWorkerMessage(msg); err != nil {
-			logger.Logger.Errorw("failed to reject availability while unavailable", err, "jobId", req.Job.Id)
+			logger.Logger.Errorw("failed to reject availability while unavailable", err, "jobId", jobID)
 		}
 		return
 	}
@@ -1715,10 +1717,10 @@ func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.Avail
 
 	answered := false
 	jobReq := &JobRequest{
-		Job: req.Job,
+		Job: availability.Job,
 		acceptFnc: func(args JobAcceptArguments) error {
 			answered = true
-			s.storePendingAccept(req.Job.Id, args)
+			s.storePendingAccept(jobID, args)
 			msg := workerlivekit.AvailabilityResponseForAccept(
 				req,
 				workerlivekit.AvailabilityAcceptOptions{
@@ -1746,7 +1748,7 @@ func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.Avail
 
 	if s.requestFnc != nil {
 		if err := s.requestFnc(jobReq); err != nil {
-			logger.Logger.Errorw("availability request callback failed", err, "jobId", req.Job.Id)
+			logger.Logger.Errorw("availability request callback failed", err, "jobId", jobID)
 		}
 	} else {
 		_ = jobReq.Accept(JobAcceptArguments{})

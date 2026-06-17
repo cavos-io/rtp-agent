@@ -15,6 +15,21 @@ type AvailabilityRejectOptions struct {
 	Terminate bool
 }
 
+type AvailabilityRequestInfo struct {
+	Job   *lkprotocol.Job
+	JobID string
+}
+
+func AvailabilityInfo(req *lkprotocol.AvailabilityRequest) AvailabilityRequestInfo {
+	if req == nil {
+		return AvailabilityRequestInfo{}
+	}
+	return AvailabilityRequestInfo{
+		Job:   req.Job,
+		JobID: JobID(req.Job),
+	}
+}
+
 func AvailabilityResponseForAccept(
 	req *lkprotocol.AvailabilityRequest,
 	args AvailabilityAcceptOptions,

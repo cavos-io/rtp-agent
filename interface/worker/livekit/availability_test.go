@@ -30,6 +30,18 @@ func TestAvailabilityResponseAcceptsWithDefaultIdentity(t *testing.T) {
 	}
 }
 
+func TestAvailabilityInfoExposesJobAndJobID(t *testing.T) {
+	job := &lkprotocol.Job{Id: "job_available"}
+	info := workerlivekit.AvailabilityInfo(&lkprotocol.AvailabilityRequest{Job: job})
+
+	if info.Job != job {
+		t.Fatal("AvailabilityInfo().Job did not preserve request job")
+	}
+	if info.JobID != "job_available" {
+		t.Fatalf("AvailabilityInfo().JobID = %q, want job_available", info.JobID)
+	}
+}
+
 func TestAvailabilityResponseAcceptUsesCustomArguments(t *testing.T) {
 	resp := workerlivekit.AvailabilityResponseForAccept(&lkprotocol.AvailabilityRequest{
 		Job: &lkprotocol.Job{Id: "job_custom"},
