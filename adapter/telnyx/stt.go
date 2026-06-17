@@ -146,8 +146,12 @@ func (s *TelnyxSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	if err := stream.Flush(); err != nil {
 		return nil, err
 	}
-	var finalText bytes.Buffer
 	resolvedLanguage := resolveTelnyxSTTLanguage(s, language)
+	return collectTelnyxFinalTranscript(stream, resolvedLanguage)
+}
+
+func collectTelnyxFinalTranscript(stream stt.RecognizeStream, resolvedLanguage string) (*stt.SpeechEvent, error) {
+	var finalText bytes.Buffer
 	for {
 		event, err := stream.Next()
 		if err != nil {
@@ -158,7 +162,6 @@ func (s *TelnyxSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		}
 		if event.Type == stt.SpeechEventFinalTranscript && len(event.Alternatives) > 0 {
 			finalText.WriteString(event.Alternatives[0].Text)
-			break
 		}
 	}
 	return &stt.SpeechEvent{

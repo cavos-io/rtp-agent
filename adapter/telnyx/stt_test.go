@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"io"
 	"net/url"
 	"strconv"
 	"strings"
@@ -247,6 +248,25 @@ func TestTelnyxSTTStreamCloseFlushesBufferedAudioBeforeClose(t *testing.T) {
 	}
 }
 
+func TestTelnyxSTTFinalTranscriptCollectsAllReferenceFinals(t *testing.T) {
+	stream := &fakeTelnyxRecognizeStream{events: []*stt.SpeechEvent{
+		{Type: stt.SpeechEventInterimTranscript, Alternatives: []stt.SpeechData{{Text: "ignored"}}},
+		{Type: stt.SpeechEventFinalTranscript, Alternatives: []stt.SpeechData{{Text: "hello "}}},
+		{Type: stt.SpeechEventFinalTranscript, Alternatives: []stt.SpeechData{{Text: "world"}}},
+	}}
+
+	event, err := collectTelnyxFinalTranscript(stream, "en")
+	if err != nil {
+		t.Fatalf("collect final transcript error = %v, want nil", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event type = %v, want final transcript", event.Type)
+	}
+	if len(event.Alternatives) != 1 || event.Alternatives[0].Text != "hello world" {
+		t.Fatalf("alternatives = %+v, want concatenated final text", event.Alternatives)
+	}
+}
+
 func TestTelnyxSTTEventsMatchReferenceLifecycle(t *testing.T) {
 	state := &telnyxSTTStreamState{language: "en"}
 
@@ -295,4 +315,22 @@ func telnyxWriteSizes(writes [][]byte) string {
 		sizes = append(sizes, strconv.Itoa(len(write)))
 	}
 	return strings.Join(sizes, ",")
+}
+
+type fakeTelnyxRecognizeStream struct {
+	events []*stt.SpeechEvent
+	index  int
+}
+
+func (f *fakeTelnyxRecognizeStream) PushFrame(*model.AudioFrame) error { return nil }
+func (f *fakeTelnyxRecognizeStream) Flush() error                      { return nil }
+func (f *fakeTelnyxRecognizeStream) Close() error                      { return nil }
+
+func (f *fakeTelnyxRecognizeStream) Next() (*stt.SpeechEvent, error) {
+	if f.index >= len(f.events) {
+		return nil, io.EOF
+	}
+	event := f.events[f.index]
+	f.index++
+	return event, nil
 }
