@@ -507,10 +507,10 @@ type ToolExecutionOutput struct {
 }
 
 type activeToolCall struct {
-	call               llm.FunctionCall
-	cancel             context.CancelFunc
-	cancellable        bool
-	allowInterruptions bool
+	call         llm.FunctionCall
+	cancel       context.CancelFunc
+	cancellable  bool
+	speechHandle *SpeechHandle
 }
 
 type ToolExecutionOptions struct {
@@ -631,12 +631,11 @@ func PerformToolExecutions(
 				}
 			}
 			if len(duplicateNameCalls) == 0 && !duplicateCallID {
-				allowInterruptions := options.SpeechHandle == nil || options.SpeechHandle.AllowInterruptions
 				activeCall := activeToolCall{
-					call:               functionCall,
-					cancel:             callCancel,
-					cancellable:        llm.ToolHasFlag(tool, llm.ToolFlagCancellable),
-					allowInterruptions: allowInterruptions,
+					call:         functionCall,
+					cancel:       callCancel,
+					cancellable:  llm.ToolHasFlag(tool, llm.ToolFlagCancellable),
+					speechHandle: options.SpeechHandle,
 				}
 				if fncCall.CallID != "" {
 					activeCallsByID[fncCall.CallID] = activeCall
@@ -906,7 +905,7 @@ func cancelRunningTask(
 	if !active.cancellable {
 		return "", nil, llm.NewToolError(fmt.Sprintf("Tool call %s is not cancellable", callID))
 	}
-	if !active.allowInterruptions {
+	if !active.speechHandle.AllowsInterruptions() {
 		return "", nil, llm.NewToolError(fmt.Sprintf("Tool call %s is not cancellable because interruptions are disallowed", callID))
 	}
 	activeMu.Lock()

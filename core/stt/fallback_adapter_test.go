@@ -1244,6 +1244,36 @@ func TestFallbackAdapterCloseCancelsRecognizeRecovery(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterAllFailedRecoveryAttemptsOncePerProvider(t *testing.T) {
+	primary := &metadataSTT{
+		label:         "primary",
+		capabilities:  STTCapabilities{Streaming: true},
+		recognizeErrs: []error{errors.New("primary failed"), errors.New("primary recovery failed")},
+	}
+	fallback := &metadataSTT{
+		label:         "fallback",
+		capabilities:  STTCapabilities{Streaming: true},
+		recognizeErrs: []error{errors.New("fallback failed"), errors.New("fallback recovery failed")},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		DisableRetries: true,
+	})
+
+	_, err := adapter.Recognize(context.Background(), nil, "en")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want all STTs failed error")
+	}
+	waitForRecognizeCalls(t, primary, 2)
+	waitForRecognizeCalls(t, fallback, 2)
+
+	if primary.recognizeCalls != 2 {
+		t.Fatalf("primary recognize calls = %d, want active attempt plus one recovery attempt", primary.recognizeCalls)
+	}
+	if fallback.recognizeCalls != 2 {
+		t.Fatalf("fallback recognize calls = %d, want active attempt plus one recovery attempt", fallback.recognizeCalls)
+	}
+}
+
 func TestFallbackStreamSkipsUnavailableSTTFromRecognizeFailure(t *testing.T) {
 	primaryErr := errors.New("primary recognize failed")
 	primary := &metadataSTT{

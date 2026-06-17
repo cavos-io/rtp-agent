@@ -1486,6 +1486,75 @@ func TestPerformToolExecutionsCancelTaskToolCancelsCancellableTool(t *testing.T)
 	}
 }
 
+func TestPerformToolExecutionsCancelTaskHonorsCurrentSpeechInterruptions(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	tool := &blockingGenerationTool{
+		flags:   llm.ToolFlagCancellable,
+		started: make(chan struct{}, 1),
+		args:    make(chan string, 1),
+		release: make(chan struct{}),
+	}
+	toolCtx := llm.NewToolContext([]interface{}{tool, getRunningTasksTool{}, cancelTaskTool{}})
+	functionCh := make(chan *llm.FunctionToolCall)
+	outputs := PerformToolExecutions(
+		context.Background(),
+		functionCh,
+		toolCtx,
+		WithToolExecutionSession(session),
+		WithToolExecutionSpeechHandle(speech),
+	)
+
+	functionCh <- &llm.FunctionToolCall{
+		ID:        "item_lookup",
+		Type:      "function",
+		Name:      "lookup",
+		CallID:    "call_lookup_a",
+		Arguments: `{"city":"Paris"}`,
+	}
+	select {
+	case <-tool.started:
+	case <-testTimeout():
+		t.Fatal("cancellable lookup did not start")
+	}
+	if err := speech.SetAllowInterruptions(false); err != nil {
+		t.Fatalf("SetAllowInterruptions(false) error = %v, want nil before interruption", err)
+	}
+
+	functionCh <- &llm.FunctionToolCall{
+		ID:        "item_cancel",
+		Type:      "function",
+		Name:      cancelTaskToolName,
+		CallID:    "call_cancel",
+		Arguments: `{"call_id":"call_lookup_a"}`,
+	}
+	cancelOutput := mustReceiveToolOutput(t, outputs)
+	if cancelOutput.FncCall.Name != cancelTaskToolName {
+		t.Fatalf("first output = %s, want cancel task output", cancelOutput.FncCall.Name)
+	}
+	if cancelOutput.RawError == nil {
+		t.Fatal("cancel task RawError = nil, want interruptions-disallowed ToolError")
+	}
+	if got, want := cancelOutput.RawError.Error(), "Tool call call_lookup_a is not cancellable because interruptions are disallowed"; got != want {
+		t.Fatalf("cancel task RawError = %q, want reference message %q", got, want)
+	}
+	if cancelOutput.FncCallOut == nil || !cancelOutput.FncCallOut.IsError || cancelOutput.FncCallOut.Output != cancelOutput.RawError.Error() {
+		t.Fatalf("cancel task FncCallOut = %#v, want visible ToolError output", cancelOutput.FncCallOut)
+	}
+
+	close(tool.release)
+	close(functionCh)
+	var lookupCompleted bool
+	for output := range outputs {
+		if output.FncCall.Name == "lookup" {
+			lookupCompleted = output.RawOutput == "ok" && output.RawError == nil
+		}
+	}
+	if !lookupCompleted {
+		t.Fatal("lookup did not complete normally after cancellation was rejected")
+	}
+}
+
 func TestPerformToolExecutionsDetachesRunContextAfterReturn(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	tool := &runContextRecordingTool{}

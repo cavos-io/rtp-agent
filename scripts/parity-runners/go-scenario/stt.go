@@ -935,7 +935,7 @@ func runSTTFallback(input json.RawMessage) (any, error) {
 			recognizeErr:   errors.New("fallback failed"),
 			recognizeCalls: &fallbackCalls,
 		}
-		adapter := lkstt.NewFallbackAdapterWithOptions([]lkstt.STT{primary, fallback}, lkstt.FallbackAdapterOptions{MaxRetryPerSTT: 0})
+		adapter := lkstt.NewFallbackAdapterWithOptions([]lkstt.STT{primary, fallback}, lkstt.FallbackAdapterOptions{DisableRetries: true})
 		_, err := adapter.Recognize(context.Background(), nil, "en")
 		errorClass := ""
 		retryable := false

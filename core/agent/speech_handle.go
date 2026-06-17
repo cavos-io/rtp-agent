@@ -177,6 +177,16 @@ func (s *SpeechHandle) SetAllowInterruptions(allow bool) error {
 	return nil
 }
 
+func (s *SpeechHandle) AllowsInterruptions() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.AllowInterruptions
+}
+
 func (s *SpeechHandle) SetRunFinalOutput(output any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
