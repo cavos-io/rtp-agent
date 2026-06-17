@@ -87,6 +87,32 @@ func TestJobAcceptArgumentsUseIPCWireJSONNames(t *testing.T) {
 	}
 }
 
+func TestJobAcceptArgumentsForJobDefaultsIdentity(t *testing.T) {
+	got := workerlivekit.JobAcceptArgumentsForJob(&lkprotocol.Job{Id: "job-123"}, workerlivekit.JobAcceptArguments{})
+
+	if got.Identity != "agent-job-123" {
+		t.Fatalf("Identity = %q, want agent-job-123", got.Identity)
+	}
+}
+
+func TestJobAcceptArgumentsForJobPreservesProvidedIdentity(t *testing.T) {
+	got := workerlivekit.JobAcceptArgumentsForJob(&lkprotocol.Job{Id: "job-123"}, workerlivekit.JobAcceptArguments{
+		Identity: "custom-agent",
+	})
+
+	if got.Identity != "custom-agent" {
+		t.Fatalf("Identity = %q, want custom-agent", got.Identity)
+	}
+}
+
+func TestJobRejectArgumentsDefaultTerminates(t *testing.T) {
+	got := workerlivekit.DefaultJobRejectArguments()
+
+	if !got.Terminate {
+		t.Fatal("Terminate = false, want true")
+	}
+}
+
 func TestJobRuntimeInfoExposesJobIDAndRecordingFlag(t *testing.T) {
 	info := workerlivekit.JobRuntimeInfo(&lkprotocol.Job{
 		Id:              "job-runtime",

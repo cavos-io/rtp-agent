@@ -262,7 +262,7 @@ func (r *JobRequest) Accept(args ...JobAcceptArguments) error {
 	if len(args) > 0 {
 		acceptArgs = args[0]
 	}
-	acceptArgs.Identity = workerlivekit.JobAcceptIdentity(r.Job, acceptArgs.Identity)
+	acceptArgs = workerlivekit.JobAcceptArgumentsForJob(r.Job, acceptArgs)
 	if r.acceptFnc != nil {
 		return r.acceptFnc(acceptArgs)
 	}
@@ -270,7 +270,7 @@ func (r *JobRequest) Accept(args ...JobAcceptArguments) error {
 }
 
 func (r *JobRequest) Reject(args ...JobRejectArguments) error {
-	rejectArgs := JobRejectArguments{Terminate: true}
+	rejectArgs := workerlivekit.DefaultJobRejectArguments()
 	if len(args) > 0 {
 		rejectArgs = args[0]
 	}
