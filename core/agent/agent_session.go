@@ -114,13 +114,14 @@ type AgentSessionUpdateOptions struct {
 }
 
 var (
-	ErrAgentSessionNotRunning       = errors.New("AgentSession isn't running")
-	ErrAgentSessionNestedRun        = errors.New("nested runs are not supported")
-	ErrAgentSessionUserdataNotSet   = errors.New("AgentSession userdata is not set")
-	ErrAgentSessionJobContextNotSet = errors.New("agent session job context is not set")
-	errGenerateReplyMissingLLM      = errors.New("trying to generate reply without an LLM model")
-	errAgentSessionClosingSay       = agentSessionClosingError("AgentSession is closing, cannot use say()")
-	errAgentSessionClosingReply     = agentSessionClosingError("AgentSession is closing, cannot use generate_reply()")
+	ErrAgentSessionNotRunning                     = errors.New("AgentSession isn't running")
+	ErrAgentSessionNestedRun                      = errors.New("nested runs are not supported")
+	ErrAgentSessionUserdataNotSet                 = errors.New("AgentSession userdata is not set")
+	ErrAgentSessionJobContextNotSet               = errors.New("agent session job context is not set")
+	errGenerateReplyMissingLLM                    = errors.New("trying to generate reply without an LLM model")
+	errAgentSessionClosingSay                     = agentSessionClosingError("AgentSession is closing, cannot use say()")
+	errAgentSessionClosingReply                   = agentSessionClosingError("AgentSession is closing, cannot use generate_reply()")
+	errRealtimeTurnDetectionInterruptionsDisabled = errors.New("the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False, disable turn_detection in the RealtimeModel and use VAD on the AgentSession instead")
 )
 
 type agentSessionClosingError string
@@ -1028,6 +1029,7 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 
 func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) error {
 	s.mu.Lock()
+	oldTurnDetection := s.Options.TurnDetection
 
 	if opts.MinEndpointingDelay != nil {
 		s.Options.MinEndpointingDelay = *opts.MinEndpointingDelay
@@ -1060,6 +1062,9 @@ func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) error {
 	activity := s.activity
 	s.mu.Unlock()
 
+	if activity != nil && opts.TurnDetection != nil && (oldTurnDetection == TurnDetectionModeManual || *opts.TurnDetection == TurnDetectionModeManual) {
+		activity.cancelFalseInterruptionTimer()
+	}
 	if activity != nil {
 		return activity.UpdateOptions(opts)
 	}
@@ -1977,6 +1982,11 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 	}
 	s.mu.Unlock()
 
+	if err := s.validateRealtimeTurnDetectionInterruptions(assistant); err != nil {
+		s.clearRunStateIfCurrent(runState)
+		return nil, err
+	}
+
 	s.UpdateAgentState(AgentStateInitializing)
 
 	if backgroundAudio != nil && room != nil {
@@ -2434,12 +2444,23 @@ func realtimeTurnDetectionEnabled(assistant any) bool {
 	return false
 }
 
-func (s *AgentSession) defaultAllowInterruptions() bool {
-	allowInterruptions := s.Options.AllowInterruptions
-	if s.Agent == nil {
-		return allowInterruptions
+func realtimeModelTurnDetectionEnabled(model llm.RealtimeModel) bool {
+	return model != nil && model.Capabilities().TurnDetection
+}
+
+func (s *AgentSession) validateRealtimeTurnDetectionInterruptions(assistant any) error {
+	if realtimeTurnDetectionEnabled(assistant) && !s.defaultAllowInterruptions() {
+		return errRealtimeTurnDetectionInterruptionsDisabled
 	}
-	agent := s.Agent.GetAgent()
+	return nil
+}
+
+func (s *AgentSession) defaultAllowInterruptions() bool {
+	return s.defaultAllowInterruptionsForAgent(s.agentConfig())
+}
+
+func (s *AgentSession) defaultAllowInterruptionsForAgent(agent *Agent) bool {
+	allowInterruptions := s.Options.AllowInterruptions
 	if agent == nil {
 		return allowInterruptions
 	}
@@ -2447,6 +2468,13 @@ func (s *AgentSession) defaultAllowInterruptions() bool {
 		return agent.AllowInterruptions
 	}
 	return allowInterruptions
+}
+
+func (s *AgentSession) agentConfig() *Agent {
+	if s.Agent == nil {
+		return nil
+	}
+	return s.Agent.GetAgent()
 }
 
 func (s *AgentSession) watchActiveRunSpeechHandle(handle *SpeechHandle) bool {
@@ -2503,6 +2531,11 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	baseAgent := agent.GetAgent()
 
 	s.mu.Lock()
+	if s.started && s.invalidRealtimeTurnDetectionHandoffLocked(baseAgent) {
+		s.mu.Unlock()
+		s.EmitError(ErrorEvent{Error: errRealtimeTurnDetectionInterruptionsDisabled, Source: agent})
+		return
+	}
 	oldActivity := s.activity
 	started := s.started
 	s.Agent = agent
@@ -2568,6 +2601,17 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	}
 	s.EmitConversationItemAdded(handoff)
 	newActivity.Start()
+}
+
+func (s *AgentSession) invalidRealtimeTurnDetectionHandoffLocked(agent *Agent) bool {
+	if s.defaultAllowInterruptionsForAgent(agent) {
+		return false
+	}
+	realtimeModel := s.RealtimeModel
+	if agent != nil && agent.RealtimeModel != nil {
+		realtimeModel = agent.RealtimeModel
+	}
+	return realtimeModelTurnDetectionEnabled(realtimeModel)
 }
 
 func copySessionTools(tools []llm.Tool) []llm.Tool {

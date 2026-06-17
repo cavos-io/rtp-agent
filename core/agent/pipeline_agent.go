@@ -277,6 +277,7 @@ func (va *PipelineAgent) run(ctx context.Context) {
 }
 
 func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
+	defer va.endActiveVADSpeechOnStreamExit()
 	for {
 		ev, err := stream.Next()
 		if err != nil {
@@ -322,6 +323,24 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 				va.session.activity.OnVADInferenceDone(ev)
 			}
 		}
+	}
+}
+
+func (va *PipelineAgent) endActiveVADSpeechOnStreamExit() {
+	va.mu.Lock()
+	started := va.vadSpeechStarted
+	va.vadSpeechStarted = false
+	session := va.session
+	va.mu.Unlock()
+	if !started {
+		return
+	}
+	if session != nil && session.activity != nil {
+		session.activity.OnEndOfSpeech(nil)
+		return
+	}
+	if session != nil {
+		session.UpdateUserState(UserStateListening)
 	}
 }
 

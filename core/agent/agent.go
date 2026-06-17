@@ -220,11 +220,13 @@ func (a *Agent) OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContex
 const defaultUserTurnExceededInstructions = "The user has been speaking too long without giving a chance to reply. Politely cut in with a short reply or notice. Keep it short since the user cannot interrupt it."
 
 func (a *Agent) OnUserTurnExceeded(ctx context.Context, ev UserTurnExceededEvent) error {
-	if a.activity == nil || a.activity.Session == nil {
+	activity := a.activity
+	if activity == nil || activity.Session == nil {
 		return ErrAgentSessionNotRunning
 	}
+	session := activity.Session
 	allowInterruptions := false
-	_, err := a.activity.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+	_, err := session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
 		UserInput:          ev.Transcript,
 		Instructions:       defaultUserTurnExceededInstructions,
 		AllowInterruptions: &allowInterruptions,

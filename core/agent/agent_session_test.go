@@ -4009,6 +4009,30 @@ func TestAgentSessionUpdateAgentBeforeStartUsesNextRealtimeModel(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStartRejectsRealtimeTurnDetectionWithDisabledInterruptions(t *testing.T) {
+	agent := NewAgent("test")
+	agent.RealtimeModel = &fakeRealtimeModel{
+		session:      &fakeRealtimeSession{},
+		capabilities: llm.RealtimeCapabilities{TurnDetection: true},
+	}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		AllowInterruptions:    false,
+		AllowInterruptionsSet: true,
+	})
+
+	err := session.Start(context.Background())
+	if err == nil {
+		t.Fatal("Start error = nil, want reference realtime turn detection interruption error")
+	}
+	want := "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False, disable turn_detection in the RealtimeModel and use VAD on the AgentSession instead"
+	if got := err.Error(); got != want {
+		t.Fatalf("Start error = %q, want %q", got, want)
+	}
+	if session.started {
+		t.Fatal("session.started = true, want start rejected before activity starts")
+	}
+}
+
 func TestAgentSessionUpdateAgentWhileRunningRefreshesMultimodalRealtimeModel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -4047,6 +4071,46 @@ func TestAgentSessionUpdateAgentWhileRunningRefreshesMultimodalRealtimeModel(t *
 	}
 	if initialRealtimeSession.closed != 1 {
 		t.Fatalf("initial realtime session closed = %d, want 1", initialRealtimeSession.closed)
+	}
+}
+
+func TestAgentSessionUpdateAgentRejectsRealtimeTurnDetectionWithDisabledInterruptions(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	next.RealtimeModel = &fakeRealtimeModel{
+		session:      &fakeRealtimeSession{},
+		capabilities: llm.RealtimeCapabilities{TurnDetection: true},
+	}
+	session := NewAgentSession(initial, nil, AgentSessionOptions{
+		AllowInterruptions:    false,
+		AllowInterruptionsSet: true,
+	})
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+	defer session.Stop(context.Background())
+	initialActivity := session.activity
+	events := session.ErrorEvents()
+
+	session.UpdateAgent(next)
+
+	if session.activity != initialActivity {
+		t.Fatalf("session.activity changed to %#v, want invalid handoff to preserve current activity", session.activity)
+	}
+	if session.Agent != initial {
+		t.Fatalf("session.Agent = %#v, want invalid handoff to preserve current agent", session.Agent)
+	}
+	select {
+	case ev := <-events:
+		want := "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False, disable turn_detection in the RealtimeModel and use VAD on the AgentSession instead"
+		if ev.Error == nil || ev.Error.Error() != want {
+			t.Fatalf("error event = %#v, want realtime turn detection interruption error", ev)
+		}
+	case <-testTimeout():
+		t.Fatal("ErrorEvents did not receive invalid realtime handoff error")
 	}
 }
 

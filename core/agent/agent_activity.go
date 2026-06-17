@@ -1397,24 +1397,29 @@ func (a *AgentActivity) OnSTTStartOfSpeech(ev *stt.SpeechEvent) {
 }
 
 func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64) {
+	wasSpeaking := a.speaking
 	a.speaking = true
 	a.sttEOSReceived = false
 	a.manualTurnCommitted = false
 	a.interruptionDetected = false
 	a.overlapSpeechEnded = false
-	if sttStartedAt != nil {
-		a.userSpeechStartedAt = unixSecondsToTime(*sttStartedAt)
-	} else {
-		a.userSpeechStartedAt = time.Now()
+	if !wasSpeaking {
+		if sttStartedAt != nil {
+			a.userSpeechStartedAt = unixSecondsToTime(*sttStartedAt)
+		} else if ev != nil {
+			a.userSpeechStartedAt = vadSpeechStartedAt(ev)
+		} else {
+			a.userSpeechStartedAt = time.Now()
+		}
+		a.clearUserAudioFrames()
 	}
 	a.userSpeechStoppedAt = time.Time{}
-	a.clearUserAudioFrames()
 	a.clearHeldUserTranscriptWindow()
 	if a.Session != nil {
 		a.Session.UpdateUserState(UserStateSpeaking)
 	}
 	if endpointing := a.endpointing(); endpointing != nil {
-		startedAt := vadEventTimestamp(ev)
+		startedAt := vadSpeechStartTimestamp(ev)
 		if sttStartedAt != nil {
 			startedAt = *sttStartedAt
 		}
@@ -1438,14 +1443,18 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 }
 
 func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
+	wasSpeaking := a.speaking
 	a.speaking = false
-	a.userSpeechStoppedAt = time.Now()
+	a.userSpeechStoppedAt = vadSpeechStoppedAt(ev)
+	if ev == nil {
+		a.sttEOSReceived = true
+	}
 	if a.Session != nil {
 		a.Session.UpdateUserState(UserStateListening)
 	}
-	if endpointing := a.endpointing(); endpointing != nil {
+	if endpointing := a.endpointing(); endpointing != nil && wasSpeaking {
 		shouldIgnore := a.overlapSpeechEnded && !a.interruptionDetected
-		endpointing.OnEndOfSpeech(vadEventTimestamp(ev), shouldIgnore)
+		endpointing.OnEndOfSpeech(vadSpeechEndTimestamp(ev), shouldIgnore)
 	}
 	a.overlapSpeechEnded = false
 	logger.Logger.Infow("End of speech detected")
@@ -1477,10 +1486,14 @@ func (a *AgentActivity) OnInterruption(ev OverlappingSpeechEvent) {
 	a.overlapSpeechEnded = true
 	a.interruptionDetected = true
 	a.restoreAudioActivityInterruption()
-	a.interruptByAudioActivity("overlapping speech", "detected_at", ev.DetectedAt, overlappingSpeechIgnoreUntil(ev))
+	ignoreUntil := overlappingSpeechIgnoreUntil(ev)
+	a.interruptByAudioActivity("overlapping speech", "detected_at", ev.DetectedAt, ignoreUntil)
+	a.onAgentSpeechEnded(ignoreUntil)
+	a.flushHeldSTTEvents()
 }
 
 func (a *AgentActivity) OnVADInferenceDone(ev *vad.VADEvent) {
+	a.updateVADInferenceTiming(ev)
 	turnDetection := a.turnDetectionMode()
 	if turnDetection == TurnDetectionModeManual || turnDetection == TurnDetectionModeRealtimeLLM {
 		return
@@ -1495,6 +1508,18 @@ func (a *AgentActivity) OnVADInferenceDone(ev *vad.VADEvent) {
 		return
 	}
 	a.interruptByAudioActivity("VAD inference", "speech_duration", ev.SpeechDuration, time.Time{})
+}
+
+func (a *AgentActivity) updateVADInferenceTiming(ev *vad.VADEvent) {
+	if a == nil || ev == nil || ev.RawAccumulatedSpeech <= 0 {
+		return
+	}
+	now := time.Now()
+	a.userSpeechStoppedAt = now
+	if a.userSpeechStartedAt.IsZero() {
+		delay := time.Duration(ev.RawAccumulatedSpeech * float64(time.Second))
+		a.userSpeechStartedAt = now.Add(-delay)
+	}
 }
 
 func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
@@ -2364,7 +2389,6 @@ func (a *AgentActivity) inputTranscriptionFlusher() (inputTranscriptionFlusher, 
 func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo) (*SpeechHandle, error) {
 	a.userTurnCompletionMu.Lock()
 	defer a.userTurnCompletionMu.Unlock()
-	a.resetPreemptiveGenerationCount()
 
 	if rejectsZeroConfidenceTranscript(info.NewTranscript, info.TranscriptConfidence) {
 		a.cancelPreemptiveGeneration()
@@ -2380,6 +2404,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	}
 	if info.SkipReply {
 		a.cancelPreemptiveGeneration()
+		a.resetPreemptiveGenerationCount()
 		a.commitUserMessage(newMsg)
 		return nil, nil
 	}
@@ -2389,22 +2414,13 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	a.queueMu.Unlock()
 	if currentSpeech != nil && !currentSpeech.AllowInterruptions && !currentSpeech.IsInterrupted() && !currentSpeech.IsDone() {
 		a.cancelPreemptiveGeneration()
+		a.resetPreemptiveGenerationCount()
 		logger.Logger.Warnw("skipping reply to user input, current speech generation cannot be interrupted", nil, "userInput", info.NewTranscript)
 		return nil, nil
 	}
 	if a.shouldSkipShortInterruption(currentSpeech, info.NewTranscript) {
 		a.cancelPreemptiveGeneration()
 		return nil, nil
-	}
-	if currentSpeech != nil && !currentSpeech.IsInterrupted() && !currentSpeech.IsDone() {
-		paused := a.cancelPausedFalseInterruption(false)
-		if err := currentSpeech.Interrupt(false); err != nil {
-			return nil, err
-		}
-		if err := currentSpeech.Wait(ctx); err != nil {
-			return nil, err
-		}
-		a.resumeCanceledFalseInterruption(paused)
 	}
 	if schedulingPaused {
 		a.cancelPreemptiveGeneration()
@@ -2414,6 +2430,17 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 			a.commitUserMessage(newMsg)
 		}
 		return nil, nil
+	}
+	a.resetPreemptiveGenerationCount()
+	if currentSpeech != nil && !currentSpeech.IsInterrupted() && !currentSpeech.IsDone() {
+		paused := a.cancelPausedFalseInterruption(false)
+		if err := currentSpeech.Interrupt(false); err != nil {
+			return nil, err
+		}
+		if err := currentSpeech.Wait(ctx); err != nil {
+			return nil, err
+		}
+		a.resumeCanceledFalseInterruption(paused)
 	}
 
 	chatCtx := a.RetrieveChatCtx().Copy()
@@ -2586,6 +2613,7 @@ func (a *AgentActivity) maybeStartPreemptiveGeneration(transcript string, confid
 	if schedulingPaused || (currentSpeech != nil && !currentSpeech.IsInterrupted()) {
 		return
 	}
+	a.cancelPreemptiveGeneration()
 	if opts.PreemptiveGenerationMaxSpeechDuration > 0 && !a.userSpeechStartedAt.IsZero() &&
 		time.Since(a.userSpeechStartedAt).Seconds() > opts.PreemptiveGenerationMaxSpeechDuration {
 		return
@@ -2598,8 +2626,6 @@ func (a *AgentActivity) maybeStartPreemptiveGeneration(transcript string, confid
 	}
 	a.preemptiveGenerationCount++
 	a.preemptiveMu.Unlock()
-
-	a.cancelPreemptiveGeneration()
 
 	msg := &llm.ChatMessage{
 		Role:                 llm.ChatRoleUser,
@@ -2823,6 +2849,21 @@ func (a *AgentActivity) turnDetectionMode() TurnDetectionMode {
 	} else if a.Session != nil {
 		mode = string(a.Session.Options.TurnDetection)
 	}
+	if realtime, turnDetection := a.realtimeTurnDetectionCapabilities(); realtime && TurnDetectionMode(mode) != TurnDetectionModeRealtimeLLM {
+		if turnDetection && mode != "" {
+			logger.Logger.Warnw("turn_detection is set to a local mode, but realtime server turn detection is enabled", nil)
+			return ""
+		}
+		if !turnDetection && (mode == "" || TurnDetectionMode(mode) == TurnDetectionModeSTT) {
+			if a.hasVADModel() {
+				return TurnDetectionModeVAD
+			}
+			if TurnDetectionMode(mode) == TurnDetectionModeSTT {
+				logger.Logger.Warnw("turn_detection is set to stt, but realtime model local STT turn detection is ignored", nil)
+				return ""
+			}
+		}
+	}
 	switch TurnDetectionMode(mode) {
 	case TurnDetectionModeSTT:
 		if (a.Agent == nil || a.Agent.STT == nil) && (a.Session == nil || a.Session.STT == nil) {
@@ -2834,12 +2875,36 @@ func (a *AgentActivity) turnDetectionMode() TurnDetectionMode {
 			logger.Logger.Warnw("turn_detection is set to vad, but no VAD model is provided", nil)
 			return ""
 		}
+	case TurnDetectionModeRealtimeLLM:
+		if realtime, turnDetection := a.realtimeTurnDetectionCapabilities(); !realtime || !turnDetection {
+			logger.Logger.Warnw("turn_detection is set to realtime_llm, but no realtime model with turn detection is provided", nil)
+			if realtime && a.hasVADModel() {
+				return TurnDetectionModeVAD
+			}
+			return ""
+		}
 	}
 	return TurnDetectionMode(mode)
 }
 
 func (a *AgentActivity) hasVADModel() bool {
 	return a != nil && ((a.Agent != nil && a.Agent.VAD != nil) || (a.Session != nil && a.Session.VAD != nil))
+}
+
+func (a *AgentActivity) realtimeTurnDetectionCapabilities() (bool, bool) {
+	if a == nil {
+		return false, false
+	}
+	if a.Agent != nil && a.Agent.RealtimeModel != nil {
+		return true, a.Agent.RealtimeModel.Capabilities().TurnDetection
+	}
+	if a.Session != nil {
+		assistant := a.Session.Assistant
+		if capabilities, ok := assistant.(realtimeCapabilitiesAssistant); ok {
+			return true, capabilities.RealtimeCapabilities().TurnDetection
+		}
+	}
+	return false, false
 }
 
 func firstNonEmpty(values ...string) string {
@@ -2956,9 +3021,34 @@ func (a *AgentActivity) endpointing() Endpointing {
 	return a.Session.Options.Endpointing
 }
 
-func vadEventTimestamp(ev *vad.VADEvent) float64 {
+func vadSpeechStartTimestamp(ev *vad.VADEvent) float64 {
 	if ev == nil {
 		return float64(time.Now().UnixNano()) / float64(time.Second)
 	}
-	return ev.Timestamp
+	return max(ev.Timestamp-ev.SpeechDuration-ev.InferenceDuration, 0)
+}
+
+func vadSpeechEndTimestamp(ev *vad.VADEvent) float64 {
+	if ev == nil {
+		return float64(time.Now().UnixNano()) / float64(time.Second)
+	}
+	return max(ev.Timestamp-ev.SilenceDuration-ev.InferenceDuration, 0)
+}
+
+func vadSpeechStoppedAt(ev *vad.VADEvent) time.Time {
+	stoppedAt := time.Now()
+	if ev == nil {
+		return stoppedAt
+	}
+	delay := time.Duration((ev.SilenceDuration + ev.InferenceDuration) * float64(time.Second))
+	return stoppedAt.Add(-delay)
+}
+
+func vadSpeechStartedAt(ev *vad.VADEvent) time.Time {
+	startedAt := time.Now()
+	if ev == nil {
+		return startedAt
+	}
+	delay := time.Duration((ev.SpeechDuration + ev.InferenceDuration) * float64(time.Second))
+	return startedAt.Add(-delay)
 }

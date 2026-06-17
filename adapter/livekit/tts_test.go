@@ -288,6 +288,12 @@ func (c *recordingTTSConn) WriteJSON(v any) error {
 
 func (c *recordingTTSConn) ReadMessage() (int, []byte, error) {
 	if c.readCh != nil {
+		for c.writeCount.Load() < 2 && !c.closed.Load() {
+			time.Sleep(time.Millisecond)
+		}
+		if c.closed.Load() {
+			return 0, nil, context.Canceled
+		}
 		msg, ok := <-c.readCh
 		if !ok {
 			c.closed.Store(true)
