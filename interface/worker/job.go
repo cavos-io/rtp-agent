@@ -494,15 +494,7 @@ func (c *JobContext) MakeSessionReport(sessions ...*agent.AgentSession) (*agent.
 }
 
 func (c *JobContext) AvatarStartInfo() agent.AvatarStartInfo {
-	opts := workerlivekit.AvatarStartInfoOptions{
-		URL:           c.url,
-		Token:         c.token,
-		AgentIdentity: c.LocalParticipantIdentity(),
-	}
-	if c.Job != nil && c.Job.Room != nil {
-		opts.RoomName = c.Job.Room.Name
-	}
-	return workerlivekit.AvatarStartInfo(opts)
+	return workerlivekit.JobAvatarStartInfo(c.Job, c.url, c.token, c.LocalParticipantIdentity())
 }
 
 func (c *JobContext) RoomInfo() *livekit.Room {
