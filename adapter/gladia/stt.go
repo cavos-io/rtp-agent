@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,9 +33,12 @@ const (
 	defaultGladiaEncoding                          = "wav/pcm"
 	defaultGladiaTranslationModel                  = "base"
 	defaultGladiaPreProcessingSpeechThreshold      = 0.6
+	defaultGladiaEnergyMinSilence                  = 1.5
+	defaultGladiaEnergyThreshold                   = 0.004 * 0.004
 )
 
 type GladiaSTT struct {
+	mu                                 sync.Mutex
 	apiKey                             string
 	baseURL                            string
 	model                              string
@@ -60,6 +64,8 @@ type GladiaSTT struct {
 	customSpelling                     map[string][]string
 	preProcessingAudioEnhancer         bool
 	preProcessingSpeechThreshold       float64
+	energyFilter                       *gladiaAudioEnergyFilterConfig
+	streams                            map[*gladiaSTTStream]struct{}
 }
 
 type GladiaSTTOption func(*GladiaSTT)
@@ -183,6 +189,21 @@ func WithGladiaPreProcessing(audioEnhancer bool, speechThreshold float64) Gladia
 	}
 }
 
+func WithGladiaEnergyFilter(minSilence float64, rmsThreshold float64) GladiaSTTOption {
+	return func(s *GladiaSTT) {
+		if minSilence <= 0 {
+			minSilence = defaultGladiaEnergyMinSilence
+		}
+		if rmsThreshold <= 0 {
+			rmsThreshold = defaultGladiaEnergyThreshold
+		}
+		s.energyFilter = &gladiaAudioEnergyFilterConfig{
+			minSilence:   minSilence,
+			rmsThreshold: rmsThreshold,
+		}
+	}
+}
+
 func NewGladiaSTT(apiKey string, opts ...GladiaSTTOption) *GladiaSTT {
 	if apiKey == "" {
 		apiKey = os.Getenv("GLADIA_API_KEY")
@@ -227,6 +248,50 @@ func (s *GladiaSTT) Capabilities() stt.STTCapabilities {
 	}
 }
 
+func (s *GladiaSTT) UpdateOptions(opts ...GladiaSTTOption) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	for _, opt := range opts {
+		opt(s)
+	}
+	streams := make([]*gladiaSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.mu.Unlock()
+
+	for _, stream := range streams {
+		stream.updateOptions(s)
+	}
+}
+
+func (s *GladiaSTT) registerStream(stream *gladiaSTTStream) {
+	if s == nil || stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.streams == nil {
+		s.streams = map[*gladiaSTTStream]struct{}{}
+	}
+	s.streams[stream] = struct{}{}
+	stream.owner = s
+}
+
+func (s *GladiaSTT) unregisterStream(stream *gladiaSTTStream) {
+	if s == nil || stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.streams, stream)
+	if stream.owner == s {
+		stream.owner = nil
+	}
+}
+
 func (s *GladiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if err := validateGladiaAPIKey(s.apiKey); err != nil {
 		return nil, err
@@ -258,6 +323,11 @@ func (s *GladiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		return nil, err
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
+	var energyFilter *gladiaAudioEnergyFilter
+	if provider.energyFilter != nil {
+		energyFilter = provider.energyFilter.newFilter()
+	}
+	interimResults := provider.interimResults
 	stream := &gladiaSTTStream{
 		conn:   conn,
 		events: make(chan *stt.SpeechEvent, 100),
@@ -267,9 +337,12 @@ func (s *GladiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		state: &gladiaSTTStreamState{
 			requestID:          session.ID,
 			languages:          provider.languages,
+			interimResults:     &interimResults,
 			translationEnabled: provider.translationEnabled,
 		},
+		energyFilter: energyFilter,
 	}
+	s.registerStream(stream)
 	go stream.readLoop()
 	return stream, nil
 }
@@ -407,15 +480,58 @@ func writeGladiaMessage(conn *websocket.Conn, message map[string]any) error {
 }
 
 func (s *GladiaSTT) cloneWithLanguage(language string) *GladiaSTT {
-	clone := *s
-	clone.languages = append([]string(nil), s.languages...)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	clone := &GladiaSTT{
+		apiKey:                             s.apiKey,
+		baseURL:                            s.baseURL,
+		model:                              s.model,
+		languages:                          append([]string(nil), s.languages...),
+		codeSwitching:                      s.codeSwitching,
+		interimResults:                     s.interimResults,
+		sampleRate:                         s.sampleRate,
+		bitDepth:                           s.bitDepth,
+		channels:                           s.channels,
+		endpointing:                        s.endpointing,
+		maximumDurationWithoutEndpointing:  s.maximumDurationWithoutEndpointing,
+		region:                             s.region,
+		encoding:                           s.encoding,
+		translationEnabled:                 s.translationEnabled,
+		translationTargetLanguages:         append([]string(nil), s.translationTargetLanguages...),
+		translationModel:                   s.translationModel,
+		translationMatchOriginalUtterances: s.translationMatchOriginalUtterances,
+		translationLipsync:                 s.translationLipsync,
+		translationContextAdaptation:       s.translationContextAdaptation,
+		translationContext:                 s.translationContext,
+		translationInformal:                s.translationInformal,
+		customVocabulary:                   append([]any(nil), s.customVocabulary...),
+		customSpelling:                     cloneGladiaCustomSpelling(s.customSpelling),
+		preProcessingAudioEnhancer:         s.preProcessingAudioEnhancer,
+		preProcessingSpeechThreshold:       s.preProcessingSpeechThreshold,
+	}
 	if language != "" {
 		clone.languages = []string{language}
 	}
-	return &clone
+	if s.energyFilter != nil {
+		filter := *s.energyFilter
+		clone.energyFilter = &filter
+	}
+	return clone
+}
+
+func cloneGladiaCustomSpelling(spelling map[string][]string) map[string][]string {
+	if spelling == nil {
+		return nil
+	}
+	clone := make(map[string][]string, len(spelling))
+	for word, variants := range spelling {
+		clone[word] = append([]string(nil), variants...)
+	}
+	return clone
 }
 
 type gladiaSTTStream struct {
+	owner  *GladiaSTT
 	conn   *websocket.Conn
 	events chan *stt.SpeechEvent
 	errCh  chan error
@@ -427,6 +543,9 @@ type gladiaSTTStream struct {
 	audio  *audio.AudioByteStream
 
 	writeText func(map[string]any) error
+
+	energyFilter *gladiaAudioEnergyFilter
+	lastFrame    *model.AudioFrame
 }
 
 func (s *gladiaSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -438,19 +557,56 @@ func (s *gladiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
+	frames, ended := s.framesForEnergyState(frame)
 	if s.audio == nil {
 		s.audio = newGladiaAudioByteStream(frame)
 	}
 	if s.state == nil {
 		s.state = &gladiaSTTStreamState{}
 	}
-	for _, chunk := range s.audio.Push(frame.Data) {
-		if err := s.writeTextMessage(buildGladiaAudioChunkMessage(chunk.Data)); err != nil {
+	for _, frame := range frames {
+		for _, chunk := range s.audio.Push(frame.Data) {
+			if err := s.writeTextMessage(buildGladiaAudioChunkMessage(chunk.Data)); err != nil {
+				return err
+			}
+			s.state.audioDuration += audio.CalculateFrameDuration(chunk)
+		}
+	}
+	if ended {
+		for _, chunk := range s.audio.Flush() {
+			if err := s.writeTextMessage(buildGladiaAudioChunkMessage(chunk.Data)); err != nil {
+				return err
+			}
+			s.state.audioDuration += audio.CalculateFrameDuration(chunk)
+		}
+		if err := s.writeTextMessage(buildGladiaStopRecordingMessage()); err != nil {
 			return err
 		}
-		s.state.audioDuration += audio.CalculateFrameDuration(chunk)
+		s.emitRecognitionUsage()
 	}
 	return nil
+}
+
+func (s *gladiaSTTStream) framesForEnergyState(frame *model.AudioFrame) ([]*model.AudioFrame, bool) {
+	if s.energyFilter == nil {
+		return []*model.AudioFrame{frame}, false
+	}
+	switch s.energyFilter.update(frame) {
+	case gladiaEnergyStart, gladiaEnergySpeaking:
+		frames := make([]*model.AudioFrame, 0, 2)
+		if s.lastFrame != nil {
+			frames = append(frames, s.lastFrame)
+			s.lastFrame = nil
+		}
+		frames = append(frames, frame)
+		return frames, false
+	case gladiaEnergyEnd:
+		s.lastFrame = nil
+		return nil, true
+	case gladiaEnergySilence:
+		s.lastFrame = frame
+	}
+	return nil, false
 }
 
 func (s *gladiaSTTStream) Flush() error {
@@ -502,6 +658,76 @@ func (s *gladiaSTTStream) emitRecognitionUsage() {
 	}
 }
 
+type gladiaAudioEnergyFilterConfig struct {
+	minSilence   float64
+	rmsThreshold float64
+}
+
+func (c gladiaAudioEnergyFilterConfig) newFilter() *gladiaAudioEnergyFilter {
+	return newGladiaAudioEnergyFilter(c.minSilence, c.rmsThreshold)
+}
+
+type gladiaEnergyState int
+
+const (
+	gladiaEnergyStart gladiaEnergyState = iota
+	gladiaEnergySpeaking
+	gladiaEnergySilence
+	gladiaEnergyEnd
+)
+
+type gladiaAudioEnergyFilter struct {
+	cooldownSeconds float64
+	cooldown        float64
+	state           gladiaEnergyState
+	rmsThreshold    float64
+}
+
+func newGladiaAudioEnergyFilter(minSilence float64, rmsThreshold float64) *gladiaAudioEnergyFilter {
+	return &gladiaAudioEnergyFilter{
+		cooldownSeconds: minSilence,
+		cooldown:        minSilence,
+		state:           gladiaEnergySilence,
+		rmsThreshold:    rmsThreshold,
+	}
+}
+
+func (f *gladiaAudioEnergyFilter) update(frame *model.AudioFrame) gladiaEnergyState {
+	if gladiaFrameRMS(frame) > f.rmsThreshold {
+		f.cooldown = f.cooldownSeconds
+		if f.state == gladiaEnergySilence || f.state == gladiaEnergyEnd {
+			f.state = gladiaEnergyStart
+		} else {
+			f.state = gladiaEnergySpeaking
+		}
+		return f.state
+	}
+	if f.cooldown <= 0 {
+		if f.state == gladiaEnergySpeaking || f.state == gladiaEnergyStart {
+			f.state = gladiaEnergyEnd
+		} else if f.state == gladiaEnergyEnd {
+			f.state = gladiaEnergySilence
+		}
+	} else {
+		f.cooldown -= audio.CalculateFrameDuration(frame)
+		f.state = gladiaEnergySpeaking
+	}
+	return f.state
+}
+
+func gladiaFrameRMS(frame *model.AudioFrame) float64 {
+	if frame == nil || len(frame.Data) < 2 {
+		return 0
+	}
+	samples := len(frame.Data) / 2
+	var sum float64
+	for i := 0; i < samples; i++ {
+		v := float64(int16(binary.LittleEndian.Uint16(frame.Data[i*2:]))) / 32768.0
+		sum += v * v
+	}
+	return sum / float64(samples)
+}
+
 func newGladiaAudioByteStream(frame *model.AudioFrame) *audio.AudioByteStream {
 	sampleRate := frame.SampleRate
 	if sampleRate == 0 {
@@ -523,7 +749,35 @@ func (s *gladiaSTTStream) Close() error {
 	s.closed = true
 	s.cancel()
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.conn.Close()
+	err := s.conn.Close()
+	if s.owner != nil {
+		s.owner.unregisterStream(s)
+	}
+	return err
+}
+
+func (s *gladiaSTTStream) updateOptions(provider *GladiaSTT) {
+	if s == nil || provider == nil {
+		return
+	}
+	provider.mu.Lock()
+	languages := append([]string(nil), provider.languages...)
+	interimResults := provider.interimResults
+	translationEnabled := provider.translationEnabled
+	var energyFilter *gladiaAudioEnergyFilter
+	if provider.energyFilter != nil {
+		energyFilter = provider.energyFilter.newFilter()
+	}
+	provider.mu.Unlock()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state := s.ensureStateLocked()
+	state.languages = languages
+	state.interimResults = &interimResults
+	state.translationEnabled = translationEnabled
+	s.energyFilter = energyFilter
+	s.lastFrame = nil
 }
 
 func (s *gladiaSTTStream) Next() (*stt.SpeechEvent, error) {
@@ -543,6 +797,37 @@ func (s *gladiaSTTStream) Next() (*stt.SpeechEvent, error) {
 	case <-s.ctx.Done():
 		return nil, s.ctx.Err()
 	}
+}
+
+func (s *gladiaSTTStream) StartTimeOffset() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ensureStateLocked().startTimeOffset
+}
+
+func (s *gladiaSTTStream) SetStartTimeOffset(offset float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureStateLocked().startTimeOffset = offset
+}
+
+func (s *gladiaSTTStream) StartTime() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ensureStateLocked().startTime
+}
+
+func (s *gladiaSTTStream) SetStartTime(startTime float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureStateLocked().startTime = startTime
+}
+
+func (s *gladiaSTTStream) ensureStateLocked() *gladiaSTTStreamState {
+	if s.state == nil {
+		s.state = &gladiaSTTStreamState{}
+	}
+	return s.state
 }
 
 func (s *gladiaSTTStream) readLoop() {
@@ -579,7 +864,10 @@ type gladiaSTTStreamState struct {
 	languages          []string
 	speaking           bool
 	audioDuration      float64
+	interimResults     *bool
 	translationEnabled bool
+	startTimeOffset    float64
+	startTime          float64
 }
 
 func processGladiaMessage(state *gladiaSTTStreamState, data map[string]any) ([]*stt.SpeechEvent, error) {
@@ -626,8 +914,14 @@ func processGladiaTranscriptMessage(state *gladiaSTTStreamState, data map[string
 		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech, RequestID: state.requestID})
 		return events, nil
 	}
-	events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventInterimTranscript, RequestID: state.requestID, Alternatives: []stt.SpeechData{speechData}})
+	if gladiaInterimResultsEnabled(state) {
+		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventInterimTranscript, RequestID: state.requestID, Alternatives: []stt.SpeechData{speechData}})
+	}
 	return events, nil
+}
+
+func gladiaInterimResultsEnabled(state *gladiaSTTStreamState) bool {
+	return state.interimResults == nil || *state.interimResults
 }
 
 func processGladiaTranslationMessage(state *gladiaSTTStreamState, data map[string]any) []*stt.SpeechEvent {
@@ -675,14 +969,14 @@ func gladiaSpeechData(state *gladiaSTTStreamState, utterance map[string]any) stt
 	return stt.SpeechData{
 		Language:   language,
 		Text:       gladiaAnyString(utterance["text"]),
-		StartTime:  gladiaAnyFloat(utterance["start"]),
-		EndTime:    gladiaAnyFloat(utterance["end"]),
+		StartTime:  gladiaAnyFloat(utterance["start"]) + state.startTimeOffset,
+		EndTime:    gladiaAnyFloat(utterance["end"]) + state.startTimeOffset,
 		Confidence: gladiaConfidence(utterance["confidence"]),
-		Words:      gladiaWordsFromAny(utterance["words"]),
+		Words:      gladiaWordsFromAny(utterance["words"], state.startTimeOffset),
 	}
 }
 
-func gladiaWordsFromAny(raw any) []stt.TimedString {
+func gladiaWordsFromAny(raw any, startTimeOffset float64) []stt.TimedString {
 	rawWords, ok := raw.([]any)
 	if !ok {
 		return nil
@@ -694,9 +988,10 @@ func gladiaWordsFromAny(raw any) []stt.TimedString {
 			continue
 		}
 		words = append(words, stt.TimedString{
-			Text:      gladiaAnyString(wordMap["word"]),
-			StartTime: gladiaAnyFloat(wordMap["start"]),
-			EndTime:   gladiaAnyFloat(wordMap["end"]),
+			Text:            gladiaAnyString(wordMap["word"]),
+			StartTime:       gladiaAnyFloat(wordMap["start"]) + startTimeOffset,
+			EndTime:         gladiaAnyFloat(wordMap["end"]) + startTimeOffset,
+			StartTimeOffset: startTimeOffset,
 		})
 	}
 	return words

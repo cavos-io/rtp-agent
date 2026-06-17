@@ -200,6 +200,7 @@ func TestElevenLabsSTTStreamChunksAndFlushesReferenceAudio(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	messages := make(chan map[string]any, 2)
 	serverErr := make(chan error, 1)
+	releaseServer := make(chan struct{})
 	upgrader := websocket.Upgrader{}
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -217,9 +218,13 @@ func TestElevenLabsSTTStreamChunksAndFlushesReferenceAudio(t *testing.T) {
 			messages <- msg
 		}
 		serverErr <- nil
+		<-releaseServer
 	})}
 	go server.Serve(&singleElevenLabsConnListener{conn: serverConn})
-	defer server.Close()
+	defer func() {
+		close(releaseServer)
+		server.Close()
+	}()
 
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
@@ -267,6 +272,55 @@ func TestElevenLabsSTTStreamChunksAndFlushesReferenceAudio(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for test websocket server")
+	}
+}
+
+func TestElevenLabsSTTStreamFlushReportsReferenceUsage(t *testing.T) {
+	var messages []map[string]any
+	stream := &elevenLabsSTTStream{
+		events:     make(chan *stt.SpeechEvent, 1),
+		sampleRate: 16000,
+		state:      &elevenLabsSTTStreamState{language: "en"},
+		writeJSON: func(message map[string]any) error {
+			messages = append(messages, message)
+			return nil
+		},
+	}
+
+	frame := &model.AudioFrame{
+		Data:              bytes.Repeat([]byte{0x11}, 2000),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1000,
+	}
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages after PushFrame = %d, want one 50ms chunk", len(messages))
+	}
+	assertElevenLabsSTTAudioMessage(t, messages[0], 1600, false)
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages after Flush = %d, want full chunk and remainder", len(messages))
+	}
+	assertElevenLabsSTTAudioMessage(t, messages[1], 400, false)
+
+	select {
+	case usage := <-stream.events:
+		if usage.Type != stt.SpeechEventRecognitionUsage {
+			t.Fatalf("event type = %v, want recognition_usage", usage.Type)
+		}
+		if usage.RecognitionUsage == nil {
+			t.Fatal("RecognitionUsage = nil, want audio duration")
+		}
+		if usage.RecognitionUsage.AudioDuration != 0.0625 {
+			t.Fatalf("audio duration = %v, want 0.0625", usage.RecognitionUsage.AudioDuration)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for recognition_usage")
 	}
 }
 
@@ -662,7 +716,7 @@ func assertElevenLabsSTTAudioMessage(t *testing.T, msg map[string]any, wantBytes
 	if got := msg["commit"]; got != wantCommit {
 		t.Fatalf("commit = %v, want %v in %#v", got, wantCommit, msg)
 	}
-	if got := msg["sample_rate"]; got != float64(16000) {
+	if got := msg["sample_rate"]; got != float64(16000) && got != 16000 {
 		t.Fatalf("sample_rate = %v, want 16000 in %#v", got, msg)
 	}
 	audioBase64, _ := msg["audio_base_64"].(string)

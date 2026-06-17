@@ -425,6 +425,13 @@ func TestElevenLabsStreamPayloadsUseReferenceContextProtocol(t *testing.T) {
 	if init["text"] != " " || init["context_id"] != contextID {
 		t.Fatalf("init payload = %#v, want warmup text with context_id", init)
 	}
+	voiceSettings, ok := init["voice_settings"].(map[string]any)
+	if !ok {
+		t.Fatalf("init voice_settings = %#v, want empty settings object", init["voice_settings"])
+	}
+	if len(voiceSettings) != 0 {
+		t.Fatalf("init voice_settings = %#v, want empty settings object", voiceSettings)
+	}
 	if _, ok := init["generation_config"]; ok {
 		t.Fatalf("init payload = %#v, want no generation_config without configured schedule", init)
 	}
@@ -448,6 +455,104 @@ func TestElevenLabsStreamPayloadsUseReferenceContextProtocol(t *testing.T) {
 	closeContext := elevenLabsCloseContextPayload(contextID)
 	if closeContext["context_id"] != contextID || closeContext["close_context"] != true {
 		t.Fatalf("close payload = %#v, want context_id and close_context=true", closeContext)
+	}
+}
+
+func TestElevenLabsTTSStreamStartsContextOnFirstText(t *testing.T) {
+	messages := make(chan map[string]any, 4)
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runElevenLabsTTSWebsocketServer(messages, serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5", WithElevenLabsBaseURL("ws://eleven.test/v1"))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case msg := <-messages:
+		t.Fatalf("Stream() sent websocket packet before first text: %#v", msg)
+	case err := <-serverErr:
+		t.Fatalf("test websocket server error: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+
+	init := readElevenLabsTTSStreamMessage(t, messages)
+	if init["text"] != " " {
+		t.Fatalf("init text = %#v, want warmup space in %#v", init["text"], init)
+	}
+	contextID, _ := init["context_id"].(string)
+	if contextID == "" {
+		t.Fatalf("init context_id = %#v, want non-empty string", init["context_id"])
+	}
+	if _, ok := init["voice_settings"].(map[string]any); !ok {
+		t.Fatalf("init voice_settings = %#v, want object", init["voice_settings"])
+	}
+
+	text := readElevenLabsTTSStreamMessage(t, messages)
+	if text["text"] != "hello" || text["context_id"] != contextID {
+		t.Fatalf("text packet = %#v, want hello with context_id %q", text, contextID)
+	}
+	if _, ok := text["flush"]; ok {
+		t.Fatalf("text packet = %#v, want no flush before Flush()", text)
+	}
+}
+
+func runElevenLabsTTSWebsocketServer(messages chan<- map[string]any, conn net.Conn, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", elevenLabsTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+
+	if err := conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond)); err != nil {
+		errCh <- err
+		return
+	}
+	msg, err := readElevenLabsClientWebsocketJSONFrame(reader)
+	if err == nil {
+		messages <- msg
+	} else if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+		errCh <- err
+		return
+	}
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		errCh <- err
+		return
+	}
+
+	for {
+		msg, err := readElevenLabsClientWebsocketJSONFrame(reader)
+		if err != nil {
+			return
+		}
+		messages <- msg
 	}
 }
 
@@ -478,20 +583,22 @@ func TestElevenLabsTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	}
 	defer stream.Close()
 
-	select {
-	case <-closed:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for test websocket close")
-	}
-	select {
-	case err := <-serverErr:
-		if err != nil {
-			t.Fatalf("test websocket server error: %v", err)
+	writeErr := stream.PushText("hello")
+	if writeErr == nil {
+		select {
+		case <-closed:
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for test websocket close")
 		}
-	default:
+		select {
+		case err := <-serverErr:
+			if err != nil {
+				t.Fatalf("test websocket server error: %v", err)
+			}
+		default:
+		}
 	}
 
-	var writeErr error
 	for range 3 {
 		writeErr = stream.PushText("hello")
 		if writeErr != nil {
@@ -515,6 +622,17 @@ func TestElevenLabsTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	}
 }
 
+func readElevenLabsTTSStreamMessage(t *testing.T, messages <-chan map[string]any) map[string]any {
+	t.Helper()
+	select {
+	case msg := <-messages:
+		return msg
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for ElevenLabs TTS websocket message")
+	}
+	return nil
+}
+
 func runElevenLabsClosingWebsocketServerAfterFrame(conn net.Conn, closed chan<- struct{}, errCh chan<- error) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
@@ -536,12 +654,29 @@ func runElevenLabsClosingWebsocketServerAfterFrame(conn net.Conn, closed chan<- 
 }
 
 func readElevenLabsClientWebsocketFrame(reader *bufio.Reader) error {
+	_, err := readElevenLabsClientWebsocketFramePayload(reader)
+	return err
+}
+
+func readElevenLabsClientWebsocketJSONFrame(reader *bufio.Reader) (map[string]any, error) {
+	payload, err := readElevenLabsClientWebsocketFramePayload(reader)
+	if err != nil {
+		return nil, err
+	}
+	var msg map[string]any
+	if err := json.Unmarshal(payload, &msg); err != nil {
+		return nil, err
+	}
+	return msg, nil
+}
+
+func readElevenLabsClientWebsocketFramePayload(reader *bufio.Reader) ([]byte, error) {
 	if _, err := reader.ReadByte(); err != nil {
-		return err
+		return nil, err
 	}
 	lengthByte, err := reader.ReadByte()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	masked := lengthByte&0x80 != 0
 	length := uint64(lengthByte & 0x7f)
@@ -549,24 +684,32 @@ func readElevenLabsClientWebsocketFrame(reader *bufio.Reader) error {
 	case 126:
 		var buf [2]byte
 		if _, err := io.ReadFull(reader, buf[:]); err != nil {
-			return err
+			return nil, err
 		}
 		length = uint64(binary.BigEndian.Uint16(buf[:]))
 	case 127:
 		var buf [8]byte
 		if _, err := io.ReadFull(reader, buf[:]); err != nil {
-			return err
+			return nil, err
 		}
 		length = binary.BigEndian.Uint64(buf[:])
 	}
+	var mask [4]byte
 	if masked {
-		var mask [4]byte
 		if _, err := io.ReadFull(reader, mask[:]); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	_, err = io.CopyN(io.Discard, reader, int64(length))
-	return err
+	payload := make([]byte, length)
+	if _, err := io.ReadFull(reader, payload); err != nil {
+		return nil, err
+	}
+	if masked {
+		for i := range payload {
+			payload[i] ^= mask[i%4]
+		}
+	}
+	return payload, nil
 }
 
 func TestElevenLabsSynthesizedAudioUsesConfiguredSampleRate(t *testing.T) {

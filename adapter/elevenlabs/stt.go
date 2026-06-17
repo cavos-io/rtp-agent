@@ -328,7 +328,9 @@ type elevenLabsSTTStream struct {
 	cancel     context.CancelFunc
 	sampleRate int
 	audioBuf   *audio.AudioByteStream
+	audioDur   float64
 	state      *elevenLabsSTTStreamState
+	writeJSON  func(map[string]any) error
 }
 
 func (s *elevenLabsSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -347,6 +349,7 @@ func (s *elevenLabsSTTStream) PushFrame(frame *model.AudioFrame) error {
 		if err := s.writeMessageLocked(buildElevenLabsSTTAudioChunkMessage(chunk.Data, s.sampleRate, false)); err != nil {
 			return err
 		}
+		s.audioDur += audio.CalculateFrameDuration(chunk)
 	}
 	return nil
 }
@@ -364,7 +367,9 @@ func (s *elevenLabsSTTStream) Flush() error {
 		if err := s.writeMessageLocked(buildElevenLabsSTTAudioChunkMessage(chunk.Data, s.sampleRate, false)); err != nil {
 			return err
 		}
+		s.audioDur += audio.CalculateFrameDuration(chunk)
 	}
+	s.emitRecognitionUsageLocked()
 	return nil
 }
 
@@ -381,6 +386,9 @@ func (s *elevenLabsSTTStream) Close() error {
 }
 
 func (s *elevenLabsSTTStream) writeMessageLocked(message map[string]any) error {
+	if s.writeJSON != nil {
+		return s.writeJSON(message)
+	}
 	if err := writeElevenLabsSTTMessage(s.conn, message); err != nil {
 		s.closed = true
 		s.cancel()
@@ -388,6 +396,18 @@ func (s *elevenLabsSTTStream) writeMessageLocked(message map[string]any) error {
 		return err
 	}
 	return nil
+}
+
+func (s *elevenLabsSTTStream) emitRecognitionUsageLocked() {
+	if s.events == nil || s.audioDur <= 0 {
+		return
+	}
+	duration := s.audioDur
+	s.audioDur = 0
+	s.events <- &stt.SpeechEvent{
+		Type:             stt.SpeechEventRecognitionUsage,
+		RecognitionUsage: &stt.RecognitionUsage{AudioDuration: duration},
+	}
 }
 
 func (s *elevenLabsSTTStream) Next() (*stt.SpeechEvent, error) {

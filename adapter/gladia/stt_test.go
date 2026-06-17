@@ -142,6 +142,58 @@ func TestGladiaSTTConfigOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestGladiaSTTUpdateOptionsPropagatesReferenceOptions(t *testing.T) {
+	provider := NewGladiaSTT("test-key")
+	interimResults := true
+	stream := &gladiaSTTStream{state: &gladiaSTTStreamState{
+		requestID:      "session-1",
+		languages:      []string{"en"},
+		interimResults: &interimResults,
+	}}
+	provider.registerStream(stream)
+
+	provider.UpdateOptions(
+		WithGladiaModel("solaria-1-large"),
+		WithGladiaLanguages([]string{"id"}),
+		WithGladiaInterimResults(false),
+		WithGladiaTranslation([]string{"es"}),
+		WithGladiaEndpointing(0.2, 8.5),
+		WithGladiaPreProcessing(true, 0.7),
+	)
+
+	config := buildGladiaStreamingConfig(provider)
+	assertGladiaField(t, config, "model", "solaria-1-large")
+	assertGladiaField(t, config, "endpointing", 0.2)
+	assertGladiaField(t, config, "maximum_duration_without_endpointing", 8.5)
+	languageConfig := config["language_config"].(map[string]any)
+	languages := languageConfig["languages"].([]string)
+	if len(languages) != 1 || languages[0] != "id" {
+		t.Fatalf("updated languages = %+v, want id", languages)
+	}
+	messages := config["messages_config"].(map[string]any)
+	if messages["receive_partial_transcripts"] != false {
+		t.Fatalf("receive_partial_transcripts = %#v, want false", messages["receive_partial_transcripts"])
+	}
+	realtime := config["realtime_processing"].(map[string]any)
+	if realtime["translation"] != true {
+		t.Fatalf("translation = %#v, want true", realtime["translation"])
+	}
+	pre := config["pre_processing"].(map[string]any)
+	if pre["audio_enhancer"] != true || pre["speech_threshold"] != 0.7 {
+		t.Fatalf("pre_processing = %+v, want enhancer threshold", pre)
+	}
+
+	if len(stream.state.languages) != 1 || stream.state.languages[0] != "id" {
+		t.Fatalf("stream languages = %+v, want id", stream.state.languages)
+	}
+	if stream.state.interimResults == nil || *stream.state.interimResults {
+		t.Fatalf("stream interimResults = %v, want false", stream.state.interimResults)
+	}
+	if !stream.state.translationEnabled {
+		t.Fatal("stream translationEnabled = false, want true")
+	}
+}
+
 func TestGladiaTranslationConfigOptionsMatchReference(t *testing.T) {
 	provider := NewGladiaSTT("test-key",
 		WithGladiaTranslationConfig([]string{"es", "fr"}, "enhanced", false, false, true, "medical appointment", true),
@@ -267,6 +319,46 @@ func TestGladiaPushFrameChunksFlushesAndReportsReferenceUsage(t *testing.T) {
 	}
 }
 
+func TestGladiaEnergyFilterFlushesBufferedSilenceOnReferenceEnd(t *testing.T) {
+	provider := NewGladiaSTT("test-key", WithGladiaEnergyFilter(0.02, defaultGladiaEnergyThreshold))
+	var messages []map[string]any
+	stream := &gladiaSTTStream{
+		events:       make(chan *stt.SpeechEvent, 2),
+		state:        &gladiaSTTStreamState{requestID: "session-1"},
+		energyFilter: provider.energyFilter.newFilter(),
+		writeText: func(message map[string]any) error {
+			messages = append(messages, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(gladiaConstantPCMFrame(1600, 2000)); err != nil {
+		t.Fatalf("PushFrame speech: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages after speech = %d, want one speech chunk", len(messages))
+	}
+	assertGladiaAudioChunkBytes(t, messages[0], 3200)
+
+	if err := stream.PushFrame(gladiaConstantPCMFrame(320, 0)); err != nil {
+		t.Fatalf("PushFrame first silence: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages after first silence = %d, want silence buffered", len(messages))
+	}
+
+	if err := stream.PushFrame(gladiaConstantPCMFrame(320, 0)); err != nil {
+		t.Fatalf("PushFrame end silence: %v", err)
+	}
+	if len(messages) != 3 {
+		t.Fatalf("messages after end silence = %d, want speech, buffered silence, stop", len(messages))
+	}
+	assertGladiaAudioChunkBytes(t, messages[1], 640)
+	if messages[2]["type"] != "stop_recording" {
+		t.Fatalf("final message type = %q, want stop_recording", messages[2]["type"])
+	}
+}
+
 func TestGladiaTranscriptEventsMatchReferenceLifecycle(t *testing.T) {
 	state := &gladiaSTTStreamState{requestID: "session-1", languages: []string{"en"}}
 	events, err := processGladiaMessage(state, map[string]any{
@@ -306,6 +398,59 @@ func TestGladiaTranscriptEventsMatchReferenceLifecycle(t *testing.T) {
 	}
 	assertGladiaEvent(t, events, 0, stt.SpeechEventFinalTranscript, "hello final")
 	assertGladiaEvent(t, events, 1, stt.SpeechEventEndOfSpeech, "")
+}
+
+func TestGladiaInterimResultsFalseSuppressesInterimTranscript(t *testing.T) {
+	interimResults := false
+	state := &gladiaSTTStreamState{requestID: "session-1", interimResults: &interimResults}
+	events, err := processGladiaMessage(state, map[string]any{
+		"type": "transcript",
+		"data": map[string]any{
+			"is_final": false,
+			"utterance": map[string]any{
+				"text": "partial",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("process interim: %v", err)
+	}
+	if len(events) != 1 || events[0].Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("events = %+v, want only start_of_speech when interim_results is false", events)
+	}
+}
+
+func TestGladiaTranscriptTimingAppliesStartTimeOffset(t *testing.T) {
+	stream := &gladiaSTTStream{state: &gladiaSTTStreamState{requestID: "session-1"}}
+	stream.SetStartTimeOffset(1.5)
+
+	events, err := processGladiaMessage(stream.state, map[string]any{
+		"type": "transcript",
+		"data": map[string]any{
+			"is_final": true,
+			"utterance": map[string]any{
+				"text":  "timed",
+				"start": 0.2,
+				"end":   0.7,
+				"words": []any{map[string]any{"word": "timed", "start": 0.2, "end": 0.7}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("process timed transcript: %v", err)
+	}
+	assertGladiaEvent(t, events, 1, stt.SpeechEventFinalTranscript, "timed")
+	data := events[1].Alternatives[0]
+	if data.StartTime != 1.7 || data.EndTime != 2.2 {
+		t.Fatalf("timing = %v-%v, want offset timing 1.7-2.2", data.StartTime, data.EndTime)
+	}
+	if len(data.Words) != 1 {
+		t.Fatalf("words = %+v, want one timed word", data.Words)
+	}
+	word := data.Words[0]
+	if word.StartTime != 1.7 || word.EndTime != 2.2 || word.StartTimeOffset != 1.5 {
+		t.Fatalf("word timing = %+v, want offset word timing", word)
+	}
 }
 
 func TestGladiaTranslationFinalWaitsForTranslatedTranscript(t *testing.T) {
@@ -396,5 +541,19 @@ func assertGladiaAudioChunkBytes(t *testing.T, message map[string]any, want int)
 	}
 	if len(chunk) != want {
 		t.Fatalf("chunk bytes = %d, want %d", len(chunk), want)
+	}
+}
+
+func gladiaConstantPCMFrame(samples int, sample int16) *model.AudioFrame {
+	data := make([]byte, samples*2)
+	for i := 0; i < samples; i++ {
+		data[i*2] = byte(sample)
+		data[i*2+1] = byte(sample >> 8)
+	}
+	return &model.AudioFrame{
+		Data:              data,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(samples),
 	}
 }
