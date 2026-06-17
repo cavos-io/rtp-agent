@@ -483,6 +483,55 @@ func TestSDKClientImplementationPublishesAfterConnected(t *testing.T) {
 	}
 }
 
+func TestSDKClientImplementationHonorsPublishAudioDisabled(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"publishCfg.IsPublishAudio = PublishAudioEnabled(opts.PublishAudio)",
+		"if PublishAudioEnabled(opts.PublishAudio)",
+		"c.publishActiveAudio(connection)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}
+
+func TestSDKClientImplementationHonorsSubscribeAudioDisabled(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"AutoSubscribeAudio:            SubscribeAudioEnabled(opts.SubscribeAudio)",
+		"if audioHandler != nil && SubscribeAudioEnabled(opts.SubscribeAudio)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}
+
+func TestSDKClientImplementationFiltersRemoteStreamID(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"if !acceptRemoteStream(opts.RemoteStreamID, uid)",
+		"if !acceptRemoteStream(opts.RemoteStreamID, userID)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}
+
 func TestSDKClientImplementationEmitsConnectedAfterPublishAudio(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {

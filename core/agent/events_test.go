@@ -9,7 +9,6 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
-	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
 func TestRunContextDisallowInterruptionsUpdatesSpeechHandle(t *testing.T) {
@@ -1043,26 +1042,6 @@ func TestRunContextRoundTrip(t *testing.T) {
 	}
 }
 
-func TestClientEventsDispatcherNoopsWithoutRoom(t *testing.T) {
-	dispatcher := NewClientEventsDispatcher(nil)
-
-	dispatcher.DispatchAgentState(AgentStateIdle)
-	dispatcher.DispatchAgentState(AgentStateThinking)
-	dispatcher.DispatchAgentState(AgentStateSpeaking)
-	dispatcher.DispatchAgentState(AgentState("unknown"))
-	dispatcher.DispatchUserState(UserStateListening)
-	dispatcher.DispatchUserState(UserStateSpeaking)
-	dispatcher.DispatchUserState(UserStateAway)
-	dispatcher.DispatchUserState(UserState("unknown"))
-}
-
-func TestClientEventsDispatcherNoopsWhenRoomDisconnected(t *testing.T) {
-	dispatcher := NewClientEventsDispatcher(&lksdk.Room{LocalParticipant: &lksdk.LocalParticipant{}})
-
-	dispatcher.DispatchAgentState(AgentStateThinking)
-	dispatcher.DispatchUserState(UserStateSpeaking)
-}
-
 func TestClientAgentStateStringMapsIdleToReferenceListening(t *testing.T) {
 	tests := []struct {
 		state AgentState
@@ -1078,17 +1057,17 @@ func TestClientAgentStateStringMapsIdleToReferenceListening(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got, ok := clientAgentStateString(tt.state)
+		got, ok := ClientAgentStateString(tt.state)
 		if ok != tt.ok || got != tt.want {
-			t.Fatalf("clientAgentStateString(%q) = %q, %v; want %q, %v", tt.state, got, ok, tt.want, tt.ok)
+			t.Fatalf("ClientAgentStateString(%q) = %q, %v; want %q, %v", tt.state, got, ok, tt.want, tt.ok)
 		}
 	}
 }
 
 func TestClientAgentStateStringIncludesReferenceInitializing(t *testing.T) {
-	got, ok := clientAgentStateString(AgentStateInitializing)
+	got, ok := ClientAgentStateString(AgentStateInitializing)
 	if !ok || got != "initializing" {
-		t.Fatalf("clientAgentStateString(%q) = %q, %v; want initializing, true", AgentStateInitializing, got, ok)
+		t.Fatalf("ClientAgentStateString(%q) = %q, %v; want initializing, true", AgentStateInitializing, got, ok)
 	}
 }
 
@@ -1105,9 +1084,39 @@ func TestClientUserStateStringIncludesReferenceAway(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got, ok := clientUserStateString(tt.state)
+		got, ok := ClientUserStateString(tt.state)
 		if ok != tt.ok || got != tt.want {
-			t.Fatalf("clientUserStateString(%q) = %q, %v; want %q, %v", tt.state, got, ok, tt.want, tt.ok)
+			t.Fatalf("ClientUserStateString(%q) = %q, %v; want %q, %v", tt.state, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+func TestClientStateStringsRejectUnknownStates(t *testing.T) {
+	if got, ok := ClientAgentStateString(AgentState("done")); ok || got != "" {
+		t.Fatalf("ClientAgentStateString(unknown) = %q, %v; want empty, false", got, ok)
+	}
+	if got, ok := ClientUserStateString(UserState("idle")); ok || got != "" {
+		t.Fatalf("ClientUserStateString(unknown) = %q, %v; want empty, false", got, ok)
+	}
+}
+
+func TestClientStateStringsExposeReferenceVocabulary(t *testing.T) {
+	agentStates := []AgentState{
+		AgentStateInitializing,
+		AgentStateIdle,
+		AgentStateListening,
+		AgentStateThinking,
+		AgentStateSpeaking,
+	}
+	for _, state := range agentStates {
+		if got, ok := ClientAgentStateString(state); !ok || got == "" {
+			t.Fatalf("ClientAgentStateString(%q) = %q, %v; want reference state", state, got, ok)
+		}
+	}
+	userStates := []UserState{UserStateListening, UserStateSpeaking, UserStateAway}
+	for _, state := range userStates {
+		if got, ok := ClientUserStateString(state); !ok || got == "" {
+			t.Fatalf("ClientUserStateString(%q) = %q, %v; want reference state", state, got, ok)
 		}
 	}
 }

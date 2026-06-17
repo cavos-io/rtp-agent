@@ -315,11 +315,14 @@ const (
 	providerUpliftAI     = "upliftai"
 	providerXAI          = "xai"
 	providerLiveKit      = "livekit"
+
+	defaultAgoraGreeting = "Hello, I am your AI assistant."
 )
 
 type AppConfig struct {
 	WorkerOptions   worker.WorkerOptions
 	Agora           workeragora.Options
+	AgoraGreeting   string
 	Logger          livekitlogger.Logger
 	MetricsRegistry *telemetry.MetricRegistry
 	Instructions    string
@@ -697,9 +700,13 @@ func DefaultConfigFromEnv() AppConfig {
 			AppID:          strings.TrimSpace(os.Getenv("AGORA_APP_ID")),
 			AppCertificate: strings.TrimSpace(os.Getenv("AGORA_APP_CERTIFICATE")),
 			Channel:        strings.TrimSpace(os.Getenv("AGORA_CHANNEL")),
-			UID:            strings.TrimSpace(os.Getenv("AGORA_UID")),
+			UID:            firstTrimmedEnv("AGORA_UID", "AGORA_STREAM_ID"),
+			RemoteStreamID: strings.TrimSpace(os.Getenv("AGORA_REMOTE_STREAM_ID")),
 			Token:          strings.TrimSpace(os.Getenv("AGORA_TOKEN")),
+			PublishAudio:   getenvOptionalBool("AGORA_PUBLISH_AUDIO"),
+			SubscribeAudio: getenvOptionalBool("AGORA_SUBSCRIBE_AUDIO"),
 		},
+		AgoraGreeting:                           getenvTrimmedDefaultUnsetOnly("AGORA_GREETING", defaultAgoraGreeting),
 		Instructions:                            getenvDefault("RTP_AGENT_INSTRUCTIONS", "You are a helpful realtime voice agent."),
 		TelemetryLogsEndpoint:                   os.Getenv("RTP_AGENT_OTLP_LOGS_ENDPOINT"),
 		TelemetryLogsHeaders:                    splitEnvStringMap("RTP_AGENT_OTLP_LOGS_HEADERS"),
@@ -1161,11 +1168,15 @@ func (a *App) runAgora(ctx context.Context) error {
 	transport := workeragora.NewTransport(agoraOpts, client)
 	audioInput := workeragora.NewAudioInput(runCtx, a.Session)
 	transport.SetAudioHandler(audioInput.HandleAudioFrame)
+	agoraEvents := &agoraRuntimeEventHandler{
+		session:  a.Session,
+		greeting: a.Config.AgoraGreeting,
+	}
 	eventsCtx, stopObservingEvents := context.WithCancel(context.Background())
 	eventsDone := make(chan struct{})
 	go func() {
 		defer close(eventsDone)
-		observeAgoraTransportEvents(eventsCtx, transport.Events(), cancelRun)
+		observeAgoraTransportEvents(eventsCtx, transport.Events(), cancelRun, agoraEvents.Handle)
 	}()
 	if err := transport.Join(runCtx); err != nil {
 		if closeErr := transport.Close(context.Background()); closeErr != nil {
@@ -1175,10 +1186,12 @@ func (a *App) runAgora(ctx context.Context) error {
 		stopObservingEvents()
 		return err
 	}
-	audioOutput := workeragora.NewAudioOutput(transport)
-	a.Session.EnsureAssistant().SetPublishAudio(func(ctx context.Context, frame *model.AudioFrame) error {
-		return audioOutput.PublishAudio(ctx, frame)
-	})
+	if workeragora.PublishAudioEnabled(agoraOpts.PublishAudio) {
+		audioOutput := workeragora.NewAudioOutput(transport)
+		a.Session.EnsureAssistant().SetPublishAudio(func(ctx context.Context, frame *model.AudioFrame) error {
+			return audioOutput.PublishAudio(ctx, frame)
+		})
+	}
 	defer func() {
 		if err := transport.Close(context.Background()); err != nil {
 			logutil.Logger.Errorw("failed to close Agora transport", err)
@@ -1203,7 +1216,34 @@ func runContextErr(ctx context.Context) error {
 	return ctx.Err()
 }
 
-func observeAgoraTransportEvents(ctx context.Context, events <-chan workeragora.Event, onFatal func(error)) {
+type agoraRuntimeEventHandler struct {
+	session  *agent.AgentSession
+	greeting string
+	users    int
+}
+
+func (h *agoraRuntimeEventHandler) Handle(event workeragora.Event) {
+	if h == nil {
+		return
+	}
+	switch event.Kind {
+	case workeragora.EventUserJoined:
+		h.users++
+		if h.users == 1 && h.greeting != "" && h.session != nil {
+			if _, err := h.session.Say(context.Background(), h.greeting); err != nil {
+				logutil.Logger.Warnw("failed to say Agora greeting", err, "channel", event.Channel, "userID", event.UserID)
+			}
+		}
+	case workeragora.EventUserLeft:
+		if h.users > 0 {
+			h.users--
+		}
+	case workeragora.EventDisconnected, workeragora.EventError:
+		h.users = 0
+	}
+}
+
+func observeAgoraTransportEvents(ctx context.Context, events <-chan workeragora.Event, onFatal func(error), onEvent func(workeragora.Event)) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -1213,6 +1253,9 @@ func observeAgoraTransportEvents(ctx context.Context, events <-chan workeragora.
 				return
 			}
 			logAgoraTransportEvent(event)
+			if onEvent != nil {
+				onEvent(event)
+			}
 			if onFatal != nil {
 				if err := agoraTransportFatalError(event); err != nil {
 					onFatal(err)
@@ -6123,9 +6166,26 @@ func getenvDefault(name, fallback string) string {
 	return fallback
 }
 
+func getenvTrimmedDefaultUnsetOnly(name, fallback string) string {
+	value, ok := os.LookupEnv(name)
+	if !ok {
+		return fallback
+	}
+	return strings.TrimSpace(value)
+}
+
 func firstEnv(names ...string) string {
 	for _, name := range names {
 		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstTrimmedEnv(names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
 			return value
 		}
 	}

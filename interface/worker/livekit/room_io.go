@@ -351,7 +351,7 @@ func (rio *RoomIO) AttachRoom(room *lksdk.Room) {
 		return
 	}
 	rio.Room = room
-	rio.clientEvents = agent.NewClientEventsDispatcher(room)
+	rio.clientEvents = newClientEventsDispatcher(room)
 	if !rio.Options.DisableAudioInput && !rio.Options.DisablePreConnectAudio && rio.preConnectAudio == nil {
 		rio.preConnectAudio = NewPreConnectAudioHandler(room, roomIOPreConnectAudioTimeout(rio.Options))
 		rio.preConnectAudio.Register()

@@ -17,7 +17,16 @@ func ResolveJoinOptions(opts Options) (Options, error) {
 	opts.AppCertificate = strings.TrimSpace(opts.AppCertificate)
 	opts.Channel = strings.TrimSpace(opts.Channel)
 	opts.UID = strings.TrimSpace(opts.UID)
+	opts.RemoteStreamID = strings.TrimSpace(opts.RemoteStreamID)
 	opts.Token = strings.TrimSpace(opts.Token)
+	if opts.PublishAudio == nil {
+		enabled := true
+		opts.PublishAudio = &enabled
+	}
+	if opts.SubscribeAudio == nil {
+		enabled := true
+		opts.SubscribeAudio = &enabled
+	}
 	if strings.TrimSpace(opts.UID) == "" {
 		opts.UID = "0"
 	}
@@ -40,4 +49,20 @@ func ResolveJoinOptions(opts Options) (Options, error) {
 	}
 	opts.Token = token
 	return opts, nil
+}
+
+func PublishAudioEnabled(value *bool) bool {
+	return value == nil || *value
+}
+
+func SubscribeAudioEnabled(value *bool) bool {
+	return value == nil || *value
+}
+
+func acceptRemoteStream(remoteStreamID, userID string) bool {
+	remoteStreamID = strings.TrimSpace(remoteStreamID)
+	if remoteStreamID == "" {
+		return true
+	}
+	return userID == remoteStreamID
 }
