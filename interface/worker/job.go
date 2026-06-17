@@ -863,13 +863,9 @@ func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*livekit.
 		logger.Logger.Warnw("job context DeleteRoom is skipped for fake jobs", nil)
 		return &livekit.DeleteRoomResponse{}, nil
 	}
-	resp, err := c.API().RoomService.DeleteRoom(ctx, workerlivekit.DeleteRoomRequest(c.Job, roomName))
-	if err != nil {
-		if workerlivekit.RoomDeleteNotFound(err) {
-			return &livekit.DeleteRoomResponse{}, nil
-		}
-		logger.Logger.Warnw("error while deleting room", err)
-		return &livekit.DeleteRoomResponse{}, nil
+	resp, warnErr := workerlivekit.DeleteRoomBestEffort(ctx, c.API().RoomService, c.Job, roomName)
+	if warnErr != nil {
+		logger.Logger.Warnw("error while deleting room", warnErr)
 	}
 	return resp, nil
 }

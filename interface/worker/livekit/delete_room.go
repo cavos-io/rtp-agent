@@ -1,6 +1,7 @@
 package livekit
 
 import (
+	"context"
 	"errors"
 	"strings"
 
@@ -13,6 +14,24 @@ func DeleteRoomRequest(job *lkprotocol.Job, roomName string) *lkprotocol.DeleteR
 		roomName = job.Room.Name
 	}
 	return &lkprotocol.DeleteRoomRequest{Room: roomName}
+}
+
+type DeleteRoomAPI interface {
+	DeleteRoom(context.Context, *lkprotocol.DeleteRoomRequest) (*lkprotocol.DeleteRoomResponse, error)
+}
+
+func DeleteRoomBestEffort(ctx context.Context, api DeleteRoomAPI, job *lkprotocol.Job, roomName string) (*lkprotocol.DeleteRoomResponse, error) {
+	if api == nil {
+		return &lkprotocol.DeleteRoomResponse{}, nil
+	}
+	resp, err := api.DeleteRoom(ctx, DeleteRoomRequest(job, roomName))
+	if err != nil {
+		if RoomDeleteNotFound(err) {
+			return &lkprotocol.DeleteRoomResponse{}, nil
+		}
+		return &lkprotocol.DeleteRoomResponse{}, err
+	}
+	return resp, nil
 }
 
 func RoomDeleteNotFound(err error) bool {

@@ -1,6 +1,7 @@
 package livekit_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -64,4 +65,62 @@ func TestRoomDeleteNotFoundRecognizesLiveKitCleanupErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDeleteRoomBestEffortUsesJobRoomName(t *testing.T) {
+	api := &fakeDeleteRoomAPI{}
+	resp, warnErr := workerlivekit.DeleteRoomBestEffort(context.Background(), api, &lkprotocol.Job{
+		Room: &lkprotocol.Room{Name: "job-room"},
+	}, "")
+
+	if warnErr != nil {
+		t.Fatalf("DeleteRoomBestEffort() warnErr = %v, want nil", warnErr)
+	}
+	if resp == nil {
+		t.Fatal("DeleteRoomBestEffort() response = nil")
+	}
+	if api.request == nil {
+		t.Fatal("DeleteRoomBestEffort() did not call room API")
+	}
+	if api.request.Room != "job-room" {
+		t.Fatalf("DeleteRoomBestEffort() room = %q, want job-room", api.request.Room)
+	}
+}
+
+func TestDeleteRoomBestEffortSuppressesNotFound(t *testing.T) {
+	api := &fakeDeleteRoomAPI{err: twirp.NotFoundError("room not found")}
+	resp, warnErr := workerlivekit.DeleteRoomBestEffort(context.Background(), api, &lkprotocol.Job{}, "room-a")
+
+	if warnErr != nil {
+		t.Fatalf("DeleteRoomBestEffort() warnErr = %v, want nil for not found", warnErr)
+	}
+	if resp == nil {
+		t.Fatal("DeleteRoomBestEffort() response = nil")
+	}
+}
+
+func TestDeleteRoomBestEffortReturnsWarningErrorForUnknownFailure(t *testing.T) {
+	wantErr := errors.New("server disconnected")
+	api := &fakeDeleteRoomAPI{err: wantErr}
+	resp, warnErr := workerlivekit.DeleteRoomBestEffort(context.Background(), api, &lkprotocol.Job{}, "room-a")
+
+	if !errors.Is(warnErr, wantErr) {
+		t.Fatalf("DeleteRoomBestEffort() warnErr = %v, want %v", warnErr, wantErr)
+	}
+	if resp == nil {
+		t.Fatal("DeleteRoomBestEffort() response = nil")
+	}
+}
+
+type fakeDeleteRoomAPI struct {
+	request *lkprotocol.DeleteRoomRequest
+	err     error
+}
+
+func (f *fakeDeleteRoomAPI) DeleteRoom(_ context.Context, req *lkprotocol.DeleteRoomRequest) (*lkprotocol.DeleteRoomResponse, error) {
+	f.request = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &lkprotocol.DeleteRoomResponse{}, nil
 }
