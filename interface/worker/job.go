@@ -17,6 +17,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/interface/worker/internal/livekiterr"
 	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
+	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"github.com/cavos-io/rtp-agent/library/inference"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/utils"
@@ -676,18 +677,11 @@ func normalizeConnectOptions(options ...ConnectOptions) ConnectOptions {
 }
 
 func autoSubscribeSDKEnabled(mode AutoSubscribe) bool {
-	return normalizeConnectOptions(ConnectOptions{AutoSubscribe: mode}).AutoSubscribe == AutoSubscribeSubscribeAll
+	return workerlivekit.AutoSubscribeSDKEnabled(string(mode))
 }
 
 func shouldAutoSubscribeTrack(mode AutoSubscribe, kind lksdk.TrackKind) bool {
-	switch normalizeConnectOptions(ConnectOptions{AutoSubscribe: mode}).AutoSubscribe {
-	case AutoSubscribeAudioOnly:
-		return kind == lksdk.TrackKindAudio
-	case AutoSubscribeVideoOnly:
-		return kind == lksdk.TrackKindVideo
-	default:
-		return false
-	}
+	return workerlivekit.ShouldAutoSubscribeTrack(string(mode), kind)
 }
 
 func (c *JobContext) applyAutoSubscribeOptions(mode AutoSubscribe) {
