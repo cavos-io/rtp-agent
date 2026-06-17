@@ -427,22 +427,17 @@ func TestJobContextAPIReturnsCachedLiveKitClients(t *testing.T) {
 }
 
 func TestJobContextConnectInfoUsesAcceptedParticipantFields(t *testing.T) {
-	ctx := NewJobContext(
-		&livekit.Job{Id: "job_connect_info", Room: &livekit.Room{Name: "room-a"}},
-		"wss://livekit.example",
-		"key",
-		"secret",
-	)
-	ctx.AcceptArguments = JobAcceptArguments{
-		Name:     "Agent Name",
-		Identity: "custom-agent",
-		Metadata: "custom-metadata",
-		Attributes: map[string]string{
+	info := workerlivekit.ConnectInfo(workerlivekit.ConnectInfoOptions{
+		APIKey:              "key",
+		APISecret:           "secret",
+		RoomName:            "room-a",
+		ParticipantName:     "Agent Name",
+		ParticipantIdentity: "custom-agent",
+		ParticipantMetadata: "custom-metadata",
+		ParticipantAttributes: map[string]string{
 			"tier": "gold",
 		},
-	}
-
-	info := ctx.connectInfo()
+	})
 
 	if info.APIKey != "key" {
 		t.Fatalf("ConnectInfo.APIKey = %q, want key", info.APIKey)
@@ -467,6 +462,14 @@ func TestJobContextConnectInfoUsesAcceptedParticipantFields(t *testing.T) {
 	}
 	if info.ParticipantKind != lksdk.ParticipantAgent {
 		t.Fatalf("ConnectInfo.ParticipantKind = %v, want ParticipantAgent", info.ParticipantKind)
+	}
+
+	defaultInfo := workerlivekit.ConnectInfo(workerlivekit.ConnectInfoOptions{})
+	if defaultInfo.ParticipantKind != lksdk.ParticipantAgent {
+		t.Fatalf("default ConnectInfo.ParticipantKind = %v, want ParticipantAgent", defaultInfo.ParticipantKind)
+	}
+	if defaultInfo.ParticipantAttributes != nil {
+		t.Fatalf("default ConnectInfo.ParticipantAttributes = %#v, want nil", defaultInfo.ParticipantAttributes)
 	}
 }
 

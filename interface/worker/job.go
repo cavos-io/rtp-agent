@@ -537,18 +537,6 @@ func (c *JobContext) Agent() *lksdk.LocalParticipant {
 	return c.Room.LocalParticipant
 }
 
-func (c *JobContext) connectInfo() lksdk.ConnectInfo {
-	return workerlivekit.ConnectInfo(workerlivekit.ConnectInfoOptions{
-		APIKey:                c.apiKey,
-		APISecret:             c.apiSecret,
-		RoomName:              c.Job.Room.Name,
-		ParticipantName:       c.AcceptArguments.Name,
-		ParticipantIdentity:   c.ParticipantIdentity(),
-		ParticipantMetadata:   c.AcceptArguments.Metadata,
-		ParticipantAttributes: c.AcceptArguments.Attributes,
-	})
-}
-
 var jobContextNewRoom = lksdk.NewRoom
 
 var jobContextJoinRoom = func(ctx context.Context, room *lksdk.Room, url string, info lksdk.ConnectInfo, opts ...lksdk.ConnectOption) error {
@@ -598,7 +586,16 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *lksdk.Room, 
 		return nil
 	}
 
-	if err := jobContextJoinRoom(ctx, room, c.url, c.connectInfo(), connectOptions...); err != nil {
+	info := workerlivekit.ConnectInfo(workerlivekit.ConnectInfoOptions{
+		APIKey:                c.apiKey,
+		APISecret:             c.apiSecret,
+		RoomName:              c.Job.Room.Name,
+		ParticipantName:       c.AcceptArguments.Name,
+		ParticipantIdentity:   c.ParticipantIdentity(),
+		ParticipantMetadata:   c.AcceptArguments.Metadata,
+		ParticipantAttributes: c.AcceptArguments.Attributes,
+	})
+	if err := jobContextJoinRoom(ctx, room, c.url, info, connectOptions...); err != nil {
 		return err
 	}
 	c.Room = room
