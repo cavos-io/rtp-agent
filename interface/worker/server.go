@@ -1125,15 +1125,7 @@ func readSystemCPUTimes() (idle uint64, total uint64, err error) {
 }
 
 func resolveWorkerPermissions(permissions *WorkerPermissions) WorkerPermissions {
-	if permissions == nil {
-		return WorkerPermissions{
-			CanPublish:        true,
-			CanSubscribe:      true,
-			CanPublishData:    true,
-			CanUpdateMetadata: true,
-		}
-	}
-	return *permissions
+	return workerlivekit.ResolveWorkerPermissions(permissions)
 }
 
 func workerTypeToJobType(workerType WorkerType) livekit.JobType {

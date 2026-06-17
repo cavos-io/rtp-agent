@@ -77,3 +77,60 @@ func TestRegisterWorkerRequestIncludesPermissions(t *testing.T) {
 		t.Fatalf("permissions.CanPublishSources[1] = %v, want SCREEN_SHARE", permissions.CanPublishSources[1])
 	}
 }
+
+func TestResolveWorkerPermissionsDefaultsToLiveKitAgentPermissions(t *testing.T) {
+	permissions := workerlivekit.ResolveWorkerPermissions(nil)
+
+	if !permissions.CanPublish {
+		t.Fatal("permissions.CanPublish = false, want true")
+	}
+	if !permissions.CanSubscribe {
+		t.Fatal("permissions.CanSubscribe = false, want true")
+	}
+	if !permissions.CanPublishData {
+		t.Fatal("permissions.CanPublishData = false, want true")
+	}
+	if !permissions.CanUpdateMetadata {
+		t.Fatal("permissions.CanUpdateMetadata = false, want true")
+	}
+	if permissions.Hidden {
+		t.Fatal("permissions.Hidden = true, want false")
+	}
+	if len(permissions.CanPublishSources) != 0 {
+		t.Fatalf("permissions.CanPublishSources len = %d, want 0", len(permissions.CanPublishSources))
+	}
+}
+
+func TestResolveWorkerPermissionsUsesConfiguredPermissions(t *testing.T) {
+	configured := workerlivekit.WorkerPermissions{
+		CanSubscribe: true,
+		CanPublishSources: []lkprotocol.TrackSource{
+			lkprotocol.TrackSource_CAMERA,
+		},
+		Hidden: true,
+	}
+
+	permissions := workerlivekit.ResolveWorkerPermissions(&configured)
+
+	if permissions.CanPublish {
+		t.Fatal("permissions.CanPublish = true, want false")
+	}
+	if !permissions.CanSubscribe {
+		t.Fatal("permissions.CanSubscribe = false, want true")
+	}
+	if permissions.CanPublishData {
+		t.Fatal("permissions.CanPublishData = true, want false")
+	}
+	if permissions.CanUpdateMetadata {
+		t.Fatal("permissions.CanUpdateMetadata = true, want false")
+	}
+	if !permissions.Hidden {
+		t.Fatal("permissions.Hidden = false, want true")
+	}
+	if len(permissions.CanPublishSources) != 1 {
+		t.Fatalf("permissions.CanPublishSources len = %d, want 1", len(permissions.CanPublishSources))
+	}
+	if permissions.CanPublishSources[0] != lkprotocol.TrackSource_CAMERA {
+		t.Fatalf("permissions.CanPublishSources[0] = %v, want CAMERA", permissions.CanPublishSources[0])
+	}
+}

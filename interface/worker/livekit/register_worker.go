@@ -18,6 +18,18 @@ type RegisterWorkerOptions struct {
 	Permissions WorkerPermissions
 }
 
+func ResolveWorkerPermissions(permissions *WorkerPermissions) WorkerPermissions {
+	if permissions == nil {
+		return WorkerPermissions{
+			CanPublish:        true,
+			CanSubscribe:      true,
+			CanPublishData:    true,
+			CanUpdateMetadata: true,
+		}
+	}
+	return *permissions
+}
+
 func RegisterWorkerRequest(opts RegisterWorkerOptions) *lkprotocol.WorkerMessage {
 	return &lkprotocol.WorkerMessage{
 		Message: &lkprotocol.WorkerMessage_Register{
