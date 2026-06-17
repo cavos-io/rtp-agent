@@ -215,6 +215,8 @@ func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 		sampleRate: s.sampleRate,
 	}
 	stream.writeBinary = stream.writeBinaryMessage
+	stream.writeJSON = stream.writeJSONMessage
+	stream.closeConn = stream.closeWebsocketConn
 
 	go stream.readLoop()
 
@@ -332,6 +334,8 @@ type assemblyAISTTStream struct {
 	closed bool
 
 	writeBinary func([]byte) error
+	writeJSON   func(any) error
+	closeConn   func() error
 	state       *assemblyAIStreamState
 	sampleRate  int
 	audioBuf    *audio.AudioByteStream
@@ -603,9 +607,8 @@ func (s *assemblyAISTTStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	// Terminate session
-	s.conn.WriteJSON(map[string]bool{"terminate_session": true})
-	return s.conn.Close()
+	_ = s.writeJSONData(map[string]string{"type": "Terminate"})
+	return s.closeConnection()
 }
 
 func (s *assemblyAISTTStream) writeBinaryData(data []byte) error {
@@ -622,7 +625,28 @@ func (s *assemblyAISTTStream) writeBinaryMessage(data []byte) error {
 	return s.conn.WriteMessage(websocket.BinaryMessage, data)
 }
 
+func (s *assemblyAISTTStream) writeJSONData(message any) error {
+	if s.writeJSON != nil {
+		return s.writeJSON(message)
+	}
+	return s.writeJSONMessage(message)
+}
+
+func (s *assemblyAISTTStream) writeJSONMessage(message any) error {
+	if s.conn == nil {
+		return io.ErrClosedPipe
+	}
+	return s.conn.WriteJSON(message)
+}
+
 func (s *assemblyAISTTStream) closeConnection() error {
+	if s.closeConn != nil {
+		return s.closeConn()
+	}
+	return s.closeWebsocketConn()
+}
+
+func (s *assemblyAISTTStream) closeWebsocketConn() error {
 	if s.conn == nil {
 		return nil
 	}

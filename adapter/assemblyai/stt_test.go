@@ -2,6 +2,8 @@ package assemblyai
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/url"
 	"strings"
 	"testing"
@@ -354,6 +356,47 @@ func TestAssemblyAISTTStreamChunksAndFlushesReferenceAudio(t *testing.T) {
 	}
 	if got := len(writes[1]); got != 400 {
 		t.Fatalf("flush chunk length = %d, want 400", got)
+	}
+}
+
+func TestAssemblyAISTTStreamCloseSendsReferenceTerminate(t *testing.T) {
+	var messages []map[string]string
+	closeCalls := 0
+	stream := &assemblyAISTTStream{
+		writeJSON: func(message any) error {
+			payload, ok := message.(map[string]string)
+			if !ok {
+				t.Fatalf("close message = %#v, want map[string]string", message)
+			}
+			messages = append(messages, payload)
+			return nil
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("close messages = %d, want 1", len(messages))
+	}
+	if got := messages[0]["type"]; got != "Terminate" {
+		t.Fatalf("close message type = %q, want Terminate", got)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls after idempotent close = %d, want 1", closeCalls)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01}}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after close error = %v, want io.ErrClosedPipe", err)
 	}
 }
 
