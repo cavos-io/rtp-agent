@@ -315,6 +315,8 @@ const (
 	providerUpliftAI     = "upliftai"
 	providerXAI          = "xai"
 	providerLiveKit      = "livekit"
+
+	defaultAgoraGreeting = "Hello, I am your AI assistant."
 )
 
 type AppConfig struct {
@@ -701,7 +703,7 @@ func DefaultConfigFromEnv() AppConfig {
 			UID:            strings.TrimSpace(os.Getenv("AGORA_UID")),
 			Token:          strings.TrimSpace(os.Getenv("AGORA_TOKEN")),
 		},
-		AgoraGreeting:                           strings.TrimSpace(os.Getenv("AGORA_GREETING")),
+		AgoraGreeting:                           getenvDefault("AGORA_GREETING", defaultAgoraGreeting),
 		Instructions:                            getenvDefault("RTP_AGENT_INSTRUCTIONS", "You are a helpful realtime voice agent."),
 		TelemetryLogsEndpoint:                   os.Getenv("RTP_AGENT_OTLP_LOGS_ENDPOINT"),
 		TelemetryLogsHeaders:                    splitEnvStringMap("RTP_AGENT_OTLP_LOGS_HEADERS"),

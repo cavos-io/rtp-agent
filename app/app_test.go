@@ -573,6 +573,16 @@ func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvUsesTENAgoraGreetingDefault(t *testing.T) {
+	t.Setenv("AGORA_GREETING", "")
+
+	cfg := DefaultConfigFromEnv()
+
+	if cfg.AgoraGreeting != "Hello, I am your AI assistant." {
+		t.Fatalf("AgoraGreeting = %q, want TEN default greeting", cfg.AgoraGreeting)
+	}
+}
+
 func TestAppRunUsesAgoraTransportWhenConfigured(t *testing.T) {
 	client := &fakeAppAgoraChannelClient{joinedCh: make(chan struct{}, 1)}
 	oldNewAgoraChannelClient := appNewAgoraChannelClient
