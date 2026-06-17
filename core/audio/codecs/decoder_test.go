@@ -35,6 +35,31 @@ func TestPCMAudioStreamDecoderReturnsClosedAfterDrain(t *testing.T) {
 	}
 }
 
+func TestPCMAudioStreamDecoderDropsIncompleteFinalSample(t *testing.T) {
+	decoder := NewPCMAudioStreamDecoder(48000, 1)
+	decoder.Push([]byte{1, 2, 3})
+	decoder.EndInput()
+
+	errCh := make(chan error, 1)
+	go func() {
+		frame, err := decoder.Next()
+		if frame != nil {
+			errCh <- nil
+			return
+		}
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		if err == nil || !strings.Contains(err.Error(), "decoder closed") {
+			t.Fatalf("Next() error = %v, want decoder closed without malformed partial-sample frame", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() blocked, want decoder closed after dropping incomplete final sample")
+	}
+}
+
 func TestPCMAudioStreamDecoderCloseIsIdempotent(t *testing.T) {
 	decoder := NewPCMAudioStreamDecoder(48000, 1)
 

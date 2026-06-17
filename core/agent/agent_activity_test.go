@@ -3724,6 +3724,76 @@ func TestAgentActivityCommitUserTurnSupersedesPendingCommit(t *testing.T) {
 	}
 }
 
+func TestAgentActivityCommitUserTurnDoesNotCancelActiveHook(t *testing.T) {
+	agent := &blockingTurnAgent{
+		Agent:   NewAgent("test"),
+		started: make(chan *llm.ChatMessage, 2),
+		release: make(chan struct{}),
+	}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "first active hook", Confidence: 0.9}},
+	})
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+		firstDone <- err
+	}()
+	select {
+	case msg := <-agent.started:
+		if got := msg.TextContent(); got != "first active hook" {
+			t.Fatalf("first hook message = %q, want first active hook", got)
+		}
+	case <-testTimeout():
+		t.Fatal("first hook did not start")
+	}
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "second active hook", Confidence: 0.9}},
+	})
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+		secondDone <- err
+	}()
+
+	select {
+	case err := <-firstDone:
+		t.Fatalf("first CommitUserTurn returned before hook release: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(agent.release)
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatalf("first CommitUserTurn error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("first CommitUserTurn did not finish after release")
+	}
+	select {
+	case msg := <-agent.started:
+		if got := msg.TextContent(); got != "second active hook" {
+			t.Fatalf("second hook message = %q, want second active hook", got)
+		}
+	case <-testTimeout():
+		t.Fatal("second hook did not start after first hook finished")
+	}
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("second CommitUserTurn error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("second CommitUserTurn did not finish")
+	}
+}
+
 func TestAgentActivityCommitUserTurnFlushesWhenLastFinalIsStale(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
@@ -3970,6 +4040,155 @@ func TestAgentActivityCommitUserTurnCommitsRealtimeAudioAndGeneratesReply(t *tes
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("SpeechCreatedEvents did not receive realtime commit reply")
+	}
+}
+
+func TestAgentActivityCommitUserTurnCallsHookAfterRealtimeCommit(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	assistant := &recordingRealtimeCommitAssistant{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "realtime hook", Confidence: 0.9}},
+	})
+
+	if _, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{}); err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if assistant.commits != 1 {
+		t.Fatalf("CommitAudio calls = %d, want 1", assistant.commits)
+	}
+	select {
+	case msg := <-agent.turns:
+		if got := msg.TextContent(); got != "realtime hook" {
+			t.Fatalf("turn message text = %q, want realtime hook", got)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called after realtime commit")
+	}
+}
+
+func TestAgentActivityRealtimeCommitWaitsForCurrentSpeechBeforeReply(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	assistant := &recordingRealtimeCommitAssistant{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	session.activity = activity
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "realtime reply after speech", Confidence: 0.9}},
+	})
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	events := session.SpeechCreatedEvents()
+	done := make(chan error, 1)
+	go func() {
+		_, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+		done <- err
+	}()
+
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for !current.IsInterrupted() {
+		select {
+		case <-deadline:
+			t.Fatal("current speech was not interrupted")
+		case <-ticker.C:
+		}
+	}
+	select {
+	case ev := <-events:
+		t.Fatalf("SpeechCreated before current speech finished: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+	current.MarkDone()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("CommitUserTurn error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("CommitUserTurn did not return after current speech finished")
+	}
+	select {
+	case ev := <-events:
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated source = %q, want generate_reply", ev.Source)
+		}
+	case <-testTimeout():
+		t.Fatal("SpeechCreatedEvents did not receive realtime reply after current speech")
+	}
+}
+
+func TestAgentActivityRealtimeCommitReplyEmitsEOUMetrics(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	assistant := &recordingRealtimeCommitAssistant{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	session.activity = activity
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "realtime metrics", Confidence: 0.9}},
+	})
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	events := session.SpeechCreatedEvents()
+	metricsEvents := session.MetricsCollectedEvents()
+	done := make(chan error, 1)
+	go func() {
+		_, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+		done <- err
+	}()
+
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for !current.IsInterrupted() {
+		select {
+		case <-deadline:
+			t.Fatal("current speech was not interrupted")
+		case <-ticker.C:
+		}
+	}
+	current.MarkDone()
+
+	var speechID string
+	select {
+	case ev := <-events:
+		speechID = ev.SpeechHandle.ID
+	case <-testTimeout():
+		t.Fatal("SpeechCreatedEvents did not receive realtime reply")
+	}
+	select {
+	case ev := <-metricsEvents:
+		metrics, ok := ev.Metrics.(*telemetry.EOUMetrics)
+		if !ok {
+			t.Fatalf("metrics = %T, want *telemetry.EOUMetrics", ev.Metrics)
+		}
+		if metrics.SpeechID != speechID {
+			t.Fatalf("EOUMetrics SpeechID = %q, want %q", metrics.SpeechID, speechID)
+		}
+	case <-testTimeout():
+		t.Fatal("MetricsCollectedEvents did not receive EOU metrics for realtime reply")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("CommitUserTurn error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("CommitUserTurn did not return")
 	}
 }
 
@@ -4355,6 +4574,90 @@ func TestAgentActivityCompleteUserTurnWaitsForPreviousHook(t *testing.T) {
 	}
 }
 
+func TestAgentActivityCompleteUserTurnInterruptsObsoleteReply(t *testing.T) {
+	agent := &blockingTurnAgent{
+		Agent:   NewAgent("test"),
+		started: make(chan *llm.ChatMessage, 2),
+		release: make(chan struct{}),
+	}
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	events := session.SpeechCreatedEvents()
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := activity.completeUserTurn(context.Background(), EndOfTurnInfo{
+			NewTranscript:        "first obsolete",
+			TranscriptConfidence: 0.9,
+		})
+		firstDone <- err
+	}()
+	select {
+	case msg := <-agent.started:
+		if got := msg.TextContent(); got != "first obsolete" {
+			t.Fatalf("first hook message = %q, want first obsolete", got)
+		}
+	case <-testTimeout():
+		t.Fatal("first hook did not start")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := activity.completeUserTurn(context.Background(), EndOfTurnInfo{
+			NewTranscript:        "second current",
+			TranscriptConfidence: 0.9,
+		})
+		secondDone <- err
+	}()
+
+	select {
+	case msg := <-agent.started:
+		close(agent.release)
+		t.Fatalf("second hook started before first completed with %q", msg.TextContent())
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(agent.release)
+	var firstSpeech *SpeechHandle
+	select {
+	case ev := <-events:
+		firstSpeech = ev.SpeechHandle
+	case <-testTimeout():
+		t.Fatal("first reply was not generated")
+	}
+	if !firstSpeech.IsInterrupted() {
+		t.Fatal("first reply was not interrupted after newer turn started")
+	}
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatalf("first completeUserTurn error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("first completeUserTurn did not finish")
+	}
+	select {
+	case msg := <-agent.started:
+		if got := msg.TextContent(); got != "second current" {
+			t.Fatalf("second hook message = %q, want second current", got)
+		}
+	case <-testTimeout():
+		t.Fatal("second hook did not start")
+	}
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("second completeUserTurn error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("second completeUserTurn did not finish")
+	}
+}
+
 func TestAgentActivityCompleteUserTurnSkipsShortInterruptions(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeSTT
@@ -4714,6 +5017,53 @@ func TestAgentActivityCommitUserTurnDoesNotInterruptCurrentSpeechWhilePaused(t *
 	}
 }
 
+func TestAgentActivityCommitUserTurnInterruptsRealtimeSessionForCurrentSpeech(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	assistant := &fakeInterruptingSessionAssistant{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	session.activity = activity
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "interrupt realtime current speech now", Confidence: 0.9}},
+	})
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+		done <- err
+	}()
+
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for !current.IsInterrupted() {
+		select {
+		case <-deadline:
+			t.Fatal("current speech was not interrupted")
+		case <-ticker.C:
+		}
+	}
+	current.MarkDone()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("CommitUserTurn error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("CommitUserTurn did not return after interrupted speech completed")
+	}
+	if assistant.interrupts != 1 {
+		t.Fatalf("realtime Interrupt calls = %d, want 1", assistant.interrupts)
+	}
+}
+
 func TestAgentActivityCommitUserTurnRecordsClosingPausedTurn(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
@@ -4794,6 +5144,60 @@ func TestAgentActivityCommitUserTurnSkipsReplyWhenHookPausesScheduling(t *testin
 	select {
 	case ev := <-session.SpeechCreatedEvents():
 		t.Fatalf("reply generated after hook paused scheduling: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestAgentActivityCommitUserTurnRecordsClosingTurnWhenHookPausesScheduling(t *testing.T) {
+	agent := &pausingTurnAgent{
+		Agent: NewAgent("test"),
+		turns: make(chan *llm.ChatMessage, 1),
+	}
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	session.closing = true
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "closing after hook pause", Confidence: 0.9}},
+	})
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "closing after hook pause" {
+		t.Fatalf("CommitUserTurn transcript = %q, want closing after hook pause", transcript)
+	}
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "closing after hook pause" {
+			t.Fatalf("OnUserTurnCompleted message = %q, want closing after hook pause", msg.TextContent())
+		}
+	default:
+		t.Fatal("OnUserTurnCompleted was not called")
+	}
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		msg, ok := ev.Item.(*llm.ChatMessage)
+		if !ok || msg.TextContent() != "closing after hook pause" {
+			t.Fatalf("ConversationItemAdded item = %#v, want closing after hook pause", ev.Item)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConversationItemAddedEvents did not receive closing after hook pause")
+	}
+	if agent.ChatCtx == nil || len(agent.ChatCtx.Items) != 1 {
+		t.Fatalf("chat context items = %#v, want one closing user message", agent.ChatCtx)
+	}
+	if msg, ok := agent.ChatCtx.Items[0].(*llm.ChatMessage); !ok || msg.TextContent() != "closing after hook pause" {
+		t.Fatalf("chat context item = %#v, want closing after hook pause message", agent.ChatCtx.Items[0])
+	}
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("reply generated after hook paused scheduling during close: %#v", ev)
 	case <-time.After(20 * time.Millisecond):
 	}
 }

@@ -227,7 +227,8 @@ func (d *PCMAudioStreamDecoder) processLoop() {
 			}
 		} else if d.ended {
 			// Flush remaining
-			if d.buffer.Len() > 0 {
+			bytesPerSample := d.numChannels * 2
+			if bytesPerSample > 0 && d.buffer.Len() > 0 && d.buffer.Len()%bytesPerSample == 0 {
 				chunk := d.buffer.Bytes()
 				d.buffer.Reset()
 				d.mu.Unlock()

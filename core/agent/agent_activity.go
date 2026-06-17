@@ -77,15 +77,17 @@ type ttsErrorCollector interface {
 }
 
 type EndOfTurnInfo struct {
-	SkipReply            bool
-	NewTranscript        string
-	Language             string
-	TranscriptConfidence float64
-	EndOfTurnDelay       float64
-	TranscriptionDelay   float64
-	StartedSpeakingAt    *float64
-	StoppedSpeakingAt    *float64
-	AudioFrames          []*model.AudioFrame
+	SkipReply              bool
+	ReplyAlreadyGenerated  bool
+	GenerateReplyAfterHook bool
+	NewTranscript          string
+	Language               string
+	TranscriptConfidence   float64
+	EndOfTurnDelay         float64
+	TranscriptionDelay     float64
+	StartedSpeakingAt      *float64
+	StoppedSpeakingAt      *float64
+	AudioFrames            []*model.AudioFrame
 }
 
 // AgentActivity handles the internal event loops, I/O processing, and
@@ -125,9 +127,12 @@ type AgentActivity struct {
 	pendingPreflightTranscript       string
 	pendingPreflightConfidence       float64
 	userTurnCompletionMu             sync.Mutex
+	userTurnCompletionSeq            uint64
 	commitUserTurnMu                 sync.Mutex
 	commitUserTurnCancel             context.CancelFunc
 	commitUserTurnSeq                uint64
+	commitUserTurnActive             int
+	userTurnHookActive               int
 	pendingUserTranscript            string
 	pendingUserLanguage              string
 	pendingTranscriptConfidence      float64
@@ -148,6 +153,7 @@ type AgentActivity struct {
 
 	eouMu     sync.Mutex
 	eouCancel context.CancelFunc
+	eouDone   chan struct{}
 
 	userTurnExceededMu     sync.Mutex
 	userTurnExceededLocked bool
@@ -547,6 +553,26 @@ func (a *AgentActivity) WaitForInactive(ctx context.Context) error {
 		a.processQueue()
 		active := a.activeSpeechHandles()
 		if len(active) == 0 {
+			if done, ok := a.pendingEOUDetection(); ok {
+				select {
+				case <-done:
+				case <-a.ctx.Done():
+					return errAgentActivityClosed
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				continue
+			}
+			if a.pendingUserTurnCompletion() {
+				select {
+				case <-a.userTurnUpdated():
+				case <-a.ctx.Done():
+					return errAgentActivityClosed
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				continue
+			}
 			if !a.isUserSpeaking() {
 				return nil
 			}
@@ -597,6 +623,27 @@ func (a *AgentActivity) userTurnUpdated() <-chan struct{} {
 	a.userTurnMu.Lock()
 	defer a.userTurnMu.Unlock()
 	return a.userTurnUpdatedCh
+}
+
+func (a *AgentActivity) pendingEOUDetection() (<-chan struct{}, bool) {
+	if a == nil {
+		return nil, false
+	}
+	a.eouMu.Lock()
+	defer a.eouMu.Unlock()
+	if a.eouDone == nil {
+		return nil, false
+	}
+	return a.eouDone, true
+}
+
+func (a *AgentActivity) pendingUserTurnCompletion() bool {
+	if a == nil {
+		return false
+	}
+	a.commitUserTurnMu.Lock()
+	defer a.commitUserTurnMu.Unlock()
+	return a.commitUserTurnActive > 0
 }
 
 func (a *AgentActivity) OnUserTurnExceeded(ev UserTurnExceededEvent) {
@@ -857,6 +904,7 @@ func (a *AgentActivity) cancelPendingEOUDetection() {
 	}
 	a.eouMu.Unlock()
 	a.manualTurnCommitted = false
+	a.notifyUserTurnUpdated()
 }
 
 func (a *AgentActivity) updateRealtimeChatContext(ctx context.Context) error {
@@ -1484,12 +1532,7 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 	logger.Logger.Infow("Start of speech detected")
 
 	// Cancel pending EOU detection
-	a.eouMu.Lock()
-	if a.eouCancel != nil {
-		a.eouCancel()
-		a.eouCancel = nil
-	}
-	a.eouMu.Unlock()
+	a.cancelPendingEOUDetection()
 
 	a.cancelFalseInterruptionTimer()
 	if a.pauseThinkingSpeechForFalseInterruption() {
@@ -2267,12 +2310,7 @@ func (a *AgentActivity) resumeFinishedPausedSpeech(speech *SpeechHandle) {
 }
 
 func (a *AgentActivity) ClearUserTurn() {
-	a.eouMu.Lock()
-	if a.eouCancel != nil {
-		a.eouCancel()
-		a.eouCancel = nil
-	}
-	a.eouMu.Unlock()
+	a.cancelPendingEOUDetection()
 
 	a.clearPendingUserTurn()
 
@@ -2307,12 +2345,7 @@ func (a *AgentActivity) isUserSpeaking() bool {
 }
 
 func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnOptions) (string, error) {
-	a.eouMu.Lock()
-	if a.eouCancel != nil {
-		a.eouCancel()
-		a.eouCancel = nil
-	}
-	a.eouMu.Unlock()
+	a.cancelPendingEOUDetection()
 
 	if ctx == nil {
 		ctx = a.ctx
@@ -2322,21 +2355,28 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 	}
 	ctx, cancelCommit := context.WithCancel(ctx)
 	a.commitUserTurnMu.Lock()
-	if a.commitUserTurnCancel != nil {
+	if a.commitUserTurnCancel != nil && a.userTurnHookActive == 0 {
 		a.commitUserTurnCancel()
 	}
 	a.commitUserTurnSeq++
 	commitSeq := a.commitUserTurnSeq
 	a.commitUserTurnCancel = cancelCommit
+	a.commitUserTurnActive++
 	a.commitUserTurnMu.Unlock()
+	a.notifyUserTurnUpdated()
 	defer func() {
 		a.commitUserTurnMu.Lock()
 		if a.commitUserTurnSeq == commitSeq {
 			a.commitUserTurnCancel = nil
 		}
+		a.commitUserTurnActive--
 		a.commitUserTurnMu.Unlock()
 		cancelCommit()
+		a.notifyUserTurnUpdated()
 	}()
+	replyAlreadyGenerated := false
+	generateReplyAfterHook := false
+	pendingTranscriptBeforeRealtime := a.pendingFinalTranscriptPresent()
 	if a.Session != nil && !opts.SkipRealtimeAudio {
 		a.Session.mu.Lock()
 		assistant := a.Session.Assistant
@@ -2349,11 +2389,18 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 				return "", err
 			}
 			if !opts.SkipReply && activity == a {
-				if _, err := a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{}); err != nil {
-					return "", err
+				if pendingTranscriptBeforeRealtime {
+					generateReplyAfterHook = true
+				} else {
+					if _, err := a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{}); err != nil {
+						return "", err
+					}
+					replyAlreadyGenerated = true
 				}
 			}
-			opts.SkipReply = true
+			if !replyAlreadyGenerated && !generateReplyAfterHook {
+				opts.SkipReply = true
+			}
 		}
 	}
 	if opts.TranscriptTimeout > 0 {
@@ -2466,11 +2513,13 @@ collect:
 		})
 	}
 	if _, err := a.completeUserTurn(ctx, EndOfTurnInfo{
-		SkipReply:            opts.SkipReply,
-		NewTranscript:        transcript,
-		Language:             firstNonEmpty(language, fallbackLanguage),
-		TranscriptConfidence: confidence,
-		AudioFrames:          a.userAudioSnapshot(),
+		SkipReply:              opts.SkipReply,
+		ReplyAlreadyGenerated:  replyAlreadyGenerated,
+		GenerateReplyAfterHook: generateReplyAfterHook,
+		NewTranscript:          transcript,
+		Language:               firstNonEmpty(language, fallbackLanguage),
+		TranscriptConfidence:   confidence,
+		AudioFrames:            a.userAudioSnapshot(),
 	}); err != nil {
 		return transcript, err
 	}
@@ -2492,6 +2541,7 @@ func (a *AgentActivity) inputTranscriptionFlusher() (inputTranscriptionFlusher, 
 }
 
 func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo) (*SpeechHandle, error) {
+	turnSeq := a.nextUserTurnCompletionSeq()
 	a.userTurnCompletionMu.Lock()
 	defer a.userTurnCompletionMu.Unlock()
 
@@ -2550,12 +2600,30 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		if err := currentSpeech.Wait(ctx); err != nil {
 			return nil, err
 		}
+		if a.Session != nil {
+			a.Session.mu.Lock()
+			assistant := a.Session.Assistant
+			a.Session.mu.Unlock()
+			if interrupter, ok := assistant.(realtimeInterrupter); ok {
+				if err := interrupter.Interrupt(); err != nil {
+					return nil, err
+				}
+			}
+		}
 		a.resumeCanceledFalseInterruption(paused)
 	}
 
 	chatCtx := a.RetrieveChatCtx().Copy()
 	hookStart := time.Now()
-	if err := a.AgentIntf.OnUserTurnCompleted(ctx, chatCtx, newMsg); err != nil {
+	a.commitUserTurnMu.Lock()
+	a.userTurnHookActive++
+	a.commitUserTurnMu.Unlock()
+	err := a.AgentIntf.OnUserTurnCompleted(ctx, chatCtx, newMsg)
+	a.commitUserTurnMu.Lock()
+	a.userTurnHookActive--
+	a.commitUserTurnMu.Unlock()
+	a.notifyUserTurnUpdated()
+	if err != nil {
 		var stopResponse llm.StopResponse
 		if errors.As(err, &stopResponse) {
 			a.cancelPreemptiveGeneration()
@@ -2567,6 +2635,23 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	}
 	hookDelay := time.Since(hookStart).Seconds()
 	newMsg.Metrics = metricsReportFromEndOfTurn(info, hookDelay)
+	if info.ReplyAlreadyGenerated {
+		a.cancelPreemptiveGeneration()
+		return nil, nil
+	}
+	if info.GenerateReplyAfterHook {
+		a.cancelPreemptiveGeneration()
+		if a.Session == nil {
+			return nil, nil
+		}
+		handle, err := a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{})
+		if err != nil {
+			return nil, err
+		}
+		a.interruptObsoleteUserTurnReply(turnSeq, handle)
+		a.emitEOUMetrics(handle, info, hookDelay)
+		return handle, nil
+	}
 	if a.Agent.LLM == nil || a.Session == nil {
 		a.cancelPreemptiveGeneration()
 		return nil, nil
@@ -2577,6 +2662,9 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	if schedulingPaused {
 		a.cancelPreemptiveGeneration()
 		logger.Logger.Warnw("skipping reply to user input, speech scheduling is paused", nil, "userInput", info.NewTranscript)
+		if a.Session != nil && a.Session.isClosing() {
+			a.commitUserMessage(newMsg)
+		}
 		return nil, nil
 	}
 	handle, err := a.usePreemptiveGenerationIfMatching(chatCtx, newMsg)
@@ -2592,6 +2680,34 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		if err != nil {
 			return nil, err
 		}
+	}
+	a.interruptObsoleteUserTurnReply(turnSeq, handle)
+	a.emitEOUMetrics(handle, info, hookDelay)
+	return handle, nil
+}
+
+func (a *AgentActivity) nextUserTurnCompletionSeq() uint64 {
+	a.commitUserTurnMu.Lock()
+	defer a.commitUserTurnMu.Unlock()
+	a.userTurnCompletionSeq++
+	return a.userTurnCompletionSeq
+}
+
+func (a *AgentActivity) interruptObsoleteUserTurnReply(turnSeq uint64, handle *SpeechHandle) {
+	if a == nil || handle == nil {
+		return
+	}
+	a.commitUserTurnMu.Lock()
+	obsolete := a.userTurnCompletionSeq != turnSeq
+	a.commitUserTurnMu.Unlock()
+	if obsolete {
+		_ = handle.Interrupt(false)
+	}
+}
+
+func (a *AgentActivity) emitEOUMetrics(handle *SpeechHandle, info EndOfTurnInfo, hookDelay float64) {
+	if a == nil || a.Session == nil || handle == nil {
+		return
 	}
 	mode := a.turnDetectionMode()
 	metadata := (*telemetry.Metadata)(nil)
@@ -2609,7 +2725,6 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		SpeechID:                 handle.ID,
 		Metadata:                 metadata,
 	})
-	return handle, nil
 }
 
 func (a *AgentActivity) shouldSkipShortInterruption(currentSpeech *SpeechHandle, transcript string) bool {
@@ -3050,11 +3165,24 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 		a.eouCancel()
 	}
 	ctx, cancel := context.WithCancel(a.ctx)
+	done := make(chan struct{})
 	a.eouCancel = cancel
+	a.eouDone = done
 	a.eouMu.Unlock()
+	a.notifyUserTurnUpdated()
 
 	go func() {
-		defer cancel()
+		defer func() {
+			cancel()
+			a.eouMu.Lock()
+			if a.eouDone == done {
+				a.eouCancel = nil
+				a.eouDone = nil
+			}
+			a.eouMu.Unlock()
+			close(done)
+			a.notifyUserTurnUpdated()
+		}()
 
 		endpointingDelay := a.minEndpointingDelay()
 

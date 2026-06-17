@@ -3438,6 +3438,106 @@ func TestAgentSessionWaitForInactiveWaitsForUserSpeech(t *testing.T) {
 	}
 }
 
+func TestAgentSessionWaitForInactiveWaitsForPendingEOU(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.05})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	session.activity = activity
+
+	activity.runEOUDetection(EndOfTurnInfo{NewTranscript: "need help", TranscriptConfidence: 0.9})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.WaitForInactive(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("WaitForInactive returned while EOU was pending: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	select {
+	case msg := <-agent.turns:
+		if got := msg.TextContent(); got != "need help" {
+			t.Fatalf("completed turn text = %q, want need help", got)
+		}
+	case <-testTimeout():
+		t.Fatal("pending EOU did not complete user turn")
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("WaitForInactive error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("WaitForInactive did not return after pending EOU completed")
+	}
+}
+
+func TestAgentSessionWaitForInactiveWaitsForManualTurnCompletion(t *testing.T) {
+	agent := &blockingTurnAgent{
+		Agent:   NewAgent("test"),
+		started: make(chan *llm.ChatMessage, 1),
+		release: make(chan struct{}),
+	}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	session.activity = activity
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "manual wait", Confidence: 0.9}},
+	})
+
+	commitDone := make(chan error, 1)
+	go func() {
+		_, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+		commitDone <- err
+	}()
+
+	select {
+	case msg := <-agent.started:
+		if got := msg.TextContent(); got != "manual wait" {
+			t.Fatalf("completed turn text = %q, want manual wait", got)
+		}
+	case <-testTimeout():
+		t.Fatal("manual turn completion did not start")
+	}
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- session.WaitForInactive(context.Background())
+	}()
+
+	select {
+	case err := <-waitDone:
+		t.Fatalf("WaitForInactive returned while manual turn completion was running: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(agent.release)
+
+	select {
+	case err := <-commitDone:
+		if err != nil {
+			t.Fatalf("CommitUserTurn error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("manual CommitUserTurn did not return")
+	}
+	select {
+	case err := <-waitDone:
+		if err != nil {
+			t.Fatalf("WaitForInactive error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("WaitForInactive did not return after manual turn completion")
+	}
+}
+
 func TestAgentSessionWaitForInactiveAndHoldBlocksOtherWaiters(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -4034,6 +4134,19 @@ func TestAgentSessionCloseSoonDoesNotCommitRealtimeAudioOrReply(t *testing.T) {
 	case ev := <-events:
 		t.Fatalf("unexpected SpeechCreated event on close: %#v", ev)
 	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestAgentSessionStopTreatsCloseTranscriptTimeoutAsGraceful(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{SessionCloseTranscriptTimeout: 0.01})
+	session.Assistant = blockingCloseTranscriptFlusher{}
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+
+	if err := session.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop() error = %v, want nil after close transcript timeout", err)
 	}
 }
 
@@ -5303,6 +5416,20 @@ func (f *fakeAvatarProvider) Start(ctx context.Context) error {
 func (f *fakeAvatarProvider) UpdateState(state AvatarState) error {
 	f.state = state
 	return nil
+}
+
+type blockingCloseTranscriptFlusher struct{}
+
+func (blockingCloseTranscriptFlusher) Start(context.Context, *AgentSession) error { return nil }
+
+func (blockingCloseTranscriptFlusher) OnAudioFrame(context.Context, *model.AudioFrame) {}
+
+func (blockingCloseTranscriptFlusher) SetPublishAudio(func(context.Context, *model.AudioFrame) error) {
+}
+
+func (blockingCloseTranscriptFlusher) FlushInputTranscription(ctx context.Context, _ time.Duration) error {
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 type fakeSessionMCPServer struct {
