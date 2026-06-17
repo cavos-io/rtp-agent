@@ -1391,6 +1391,82 @@ func TestMultimodalAgentRealtimeMessageAudioMarksSpeakingAfterPublish(t *testing
 	}
 }
 
+func TestMultimodalAgentRealtimeMessageWaitsForPlayoutBeforeCommit(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	waitStarted := make(chan struct{})
+	releaseWait := make(chan struct{})
+	session.SetAudioPlaybackController(&fakePipelinePlaybackController{
+		waitStarted: waitStarted,
+		releaseWait: releaseWait,
+		result: AudioPlaybackResult{
+			PlaybackPosition: 200 * time.Millisecond,
+		},
+	})
+	ma := &MultimodalAgent{
+		session: session,
+		chatCtx: llm.NewChatContext(),
+		PublishAudio: func(context.Context, *model.AudioFrame) error {
+			return nil
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "played realtime message"
+	close(textCh)
+	audioCh := make(chan *model.AudioFrame, 1)
+	audioCh <- &model.AudioFrame{
+		Data:              []byte{0, 1},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+	close(audioCh)
+	events := session.ConversationItemAddedEvents()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ma.consumeRealtimeMessage(context.Background(), NewSpeechHandle(false, DefaultInputDetails()), llm.MessageGeneration{
+			MessageID: "msg_played",
+			TextCh:    textCh,
+			AudioCh:   audioCh,
+		})
+	}()
+
+	select {
+	case <-waitStarted:
+	case ev := <-events:
+		t.Fatalf("conversation item emitted before playback wait started: %#v", ev)
+	case <-time.After(time.Second):
+		t.Fatal("playback wait did not start")
+	}
+	select {
+	case ev := <-events:
+		t.Fatalf("conversation item emitted before playback completed: %#v", ev)
+	case <-time.After(50 * time.Millisecond):
+	}
+	select {
+	case <-done:
+		t.Fatal("consumeRealtimeMessage finished before playback completed")
+	default:
+	}
+
+	close(releaseWait)
+	select {
+	case ev := <-events:
+		msg, ok := ev.Item.(*llm.ChatMessage)
+		if !ok || msg.TextContent() != "played realtime message" {
+			t.Fatalf("conversation item = %#v, want played realtime assistant message", ev.Item)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConversationItemAddedEvents did not receive realtime assistant message")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("consumeRealtimeMessage did not finish after playback completed")
+	}
+}
+
 func TestMultimodalAgentSkipsServerGenerationWhenActivitySchedulingPaused(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

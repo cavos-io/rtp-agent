@@ -705,6 +705,7 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 	var text string
 	var modalities []string
 	startedSpeaking := false
+	publishedAudio := false
 	modalitiesCh := message.ModalitiesCh
 	for message.TextCh != nil || message.AudioCh != nil || modalitiesCh != nil {
 		select {
@@ -745,10 +746,19 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 					session.UpdateAgentState(AgentStateSpeaking)
 					startedSpeaking = true
 				}
+				publishedAudio = true
 			}
 		}
 	}
 	interrupted := speech != nil && speech.IsInterrupted()
+	if publishedAudio && !interrupted && ma.session != nil {
+		if playback := ma.session.AudioPlaybackController(); playback != nil {
+			if _, err := playback.WaitForPlayout(ctx); err != nil {
+				logger.Logger.Warnw("failed to wait for realtime message playback", err)
+			}
+		}
+		interrupted = speech != nil && speech.IsInterrupted()
+	}
 	if interrupted {
 		var playback AudioPlaybackResult
 		text, playback = ma.forwardedRealtimeTextAfterInterruption(ctx, text)
