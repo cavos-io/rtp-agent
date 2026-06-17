@@ -111,6 +111,7 @@ import (
 )
 
 var appNewAgoraChannelClient = workeragora.NewSDKChannelClient
+var appNewAgoraDataPublisher = workeragora.NewSDKDataPublisher
 
 type appGoogleTTSConfig struct {
 	language         string
@@ -703,8 +704,11 @@ func DefaultConfigFromEnv() AppConfig {
 			UID:            firstTrimmedEnv("AGORA_UID", "AGORA_STREAM_ID"),
 			RemoteStreamID: strings.TrimSpace(os.Getenv("AGORA_REMOTE_STREAM_ID")),
 			Token:          strings.TrimSpace(os.Getenv("AGORA_TOKEN")),
+			RTMUserID:      strings.TrimSpace(os.Getenv("AGORA_RTM_USER_ID")),
+			RTMToken:       strings.TrimSpace(os.Getenv("AGORA_RTM_TOKEN")),
 			PublishAudio:   getenvOptionalBool("AGORA_PUBLISH_AUDIO"),
 			SubscribeAudio: getenvOptionalBool("AGORA_SUBSCRIBE_AUDIO"),
+			PublishData:    getenvOptionalBool("AGORA_PUBLISH_DATA"),
 		},
 		AgoraGreeting:                           getenvTrimmedDefaultUnsetOnly("AGORA_GREETING", defaultAgoraGreeting),
 		Instructions:                            getenvDefault("RTP_AGENT_INSTRUCTIONS", "You are a helpful realtime voice agent."),
@@ -1186,12 +1190,6 @@ func (a *App) runAgora(ctx context.Context) error {
 		stopObservingEvents()
 		return err
 	}
-	if workeragora.PublishAudioEnabled(agoraOpts.PublishAudio) {
-		audioOutput := workeragora.NewAudioOutput(transport)
-		a.Session.EnsureAssistant().SetPublishAudio(func(ctx context.Context, frame *model.AudioFrame) error {
-			return audioOutput.PublishAudio(ctx, frame)
-		})
-	}
 	defer func() {
 		if err := transport.Close(context.Background()); err != nil {
 			logutil.Logger.Errorw("failed to close Agora transport", err)
@@ -1199,6 +1197,27 @@ func (a *App) runAgora(ctx context.Context) error {
 		<-eventsDone
 		stopObservingEvents()
 	}()
+	if workeragora.PublishDataEnabled(agoraOpts.PublishData) {
+		dataPublisher, err := appNewAgoraDataPublisher(agoraOpts)
+		if err != nil {
+			return err
+		}
+		transcriptForwarder := workeragora.NewTranscriptForwarder(a.Session, dataPublisher, workeragora.TranscriptForwarderOptions{
+			UserStreamID: agoraOpts.RemoteStreamID,
+		})
+		transcriptForwarder.Start(runCtx)
+		defer func() {
+			if err := transcriptForwarder.Stop(context.Background()); err != nil {
+				logutil.Logger.Errorw("failed to close Agora data publisher", err)
+			}
+		}()
+	}
+	if workeragora.PublishAudioEnabled(agoraOpts.PublishAudio) {
+		audioOutput := workeragora.NewAudioOutput(transport)
+		a.Session.EnsureAssistant().SetPublishAudio(func(ctx context.Context, frame *model.AudioFrame) error {
+			return audioOutput.PublishAudio(ctx, frame)
+		})
+	}
 	if err := a.runSessionWithContext(nil, runCtx); err != nil {
 		if cause := context.Cause(runCtx); cause != nil && !errors.Is(cause, context.Canceled) && !errors.Is(cause, context.DeadlineExceeded) {
 			return cause

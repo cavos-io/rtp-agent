@@ -28,6 +28,22 @@ func TestNewSDKChannelClientReportsBuildTagRequirement(t *testing.T) {
 	}
 }
 
+func TestNewSDKDataPublisherReportsBuildTagRequirement(t *testing.T) {
+	if agoraSDKBuild {
+		return
+	}
+	publisher, err := NewSDKDataPublisher(Options{})
+	if err == nil {
+		t.Fatal("NewSDKDataPublisher() error = nil, want build-tag requirement")
+	}
+	if publisher != nil {
+		t.Fatalf("NewSDKDataPublisher() publisher = %#v, want nil", publisher)
+	}
+	if !strings.Contains(err.Error(), "agora_sdk") {
+		t.Fatalf("NewSDKDataPublisher() error = %v, want agora_sdk build tag mention", err)
+	}
+}
+
 func TestSDKClientImplementationUsesBuildTag(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {
@@ -38,6 +54,29 @@ func TestSDKClientImplementationUsesBuildTag(t *testing.T) {
 	}
 	if !strings.Contains(string(source), "Agora-Golang-Server-SDK") {
 		t.Fatal("sdk.go does not reference the Agora Golang Server SDK")
+	}
+}
+
+func TestSDKDataPublisherImplementationUsesBuildTag(t *testing.T) {
+	source, err := os.ReadFile("sdk_rtm.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk_rtm.go) error = %v", err)
+	}
+	text := string(source)
+	if !strings.Contains(text, "//go:build agora_sdk") {
+		t.Fatal("sdk_rtm.go missing agora_sdk build tag")
+	}
+	for _, want := range []string{
+		"Agora-Golang-Server-SDK",
+		"NewRtmClient",
+		"Login",
+		"Publish",
+		"RtmChannelTypeMESSAGE",
+		"RtmMessageTypeSTRING",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk_rtm.go missing %q", want)
+		}
 	}
 }
 
