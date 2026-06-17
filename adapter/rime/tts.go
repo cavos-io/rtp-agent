@@ -241,6 +241,8 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		events:    make(chan *tts.SynthesizedAudio, 100),
 		errCh:     make(chan error, 1),
 	}
+	stream.writeMessage = stream.writeWebsocketMessage
+	stream.closeConn = stream.closeWebsocketConn
 	go stream.readLoop()
 	return stream, nil
 }
@@ -343,6 +345,9 @@ type rimeTTSSynthesizeStream struct {
 	mu        sync.Mutex
 	closed    bool
 	started   bool
+
+	writeMessage func(int, []byte) error
+	closeConn    func() error
 }
 
 func (s *rimeTTSSynthesizeStream) PushText(text string) error {
@@ -359,7 +364,11 @@ func (s *rimeTTSSynthesizeStream) PushText(text string) error {
 		return err
 	}
 	s.started = true
-	return s.conn.WriteMessage(websocket.TextMessage, message)
+	if err := s.writeMessageData(websocket.TextMessage, message); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *rimeTTSSynthesizeStream) Flush() error {
@@ -375,7 +384,11 @@ func (s *rimeTTSSynthesizeStream) Flush() error {
 	if err != nil {
 		return err
 	}
-	return s.conn.WriteMessage(websocket.TextMessage, message)
+	if err := s.writeMessageData(websocket.TextMessage, message); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *rimeTTSSynthesizeStream) Close() error {
@@ -386,9 +399,40 @@ func (s *rimeTTSSynthesizeStream) Close() error {
 	}
 	s.closed = true
 	s.cancel()
-	_ = s.conn.WriteMessage(websocket.TextMessage, []byte(`{"operation":"eos"}`))
+	_ = s.writeMessageData(websocket.TextMessage, []byte(`{"operation":"eos"}`))
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	return s.closeConnection()
+}
+
+func (s *rimeTTSSynthesizeStream) writeMessageData(messageType int, data []byte) error {
+	if s.writeMessage != nil {
+		return s.writeMessage(messageType, data)
+	}
+	return s.writeWebsocketMessage(messageType, data)
+}
+
+func (s *rimeTTSSynthesizeStream) writeWebsocketMessage(messageType int, data []byte) error {
+	return s.conn.WriteMessage(messageType, data)
+}
+
+func (s *rimeTTSSynthesizeStream) closeConnection() error {
+	if s.closeConn != nil {
+		return s.closeConn()
+	}
+	return s.closeWebsocketConn()
+}
+
+func (s *rimeTTSSynthesizeStream) closeWebsocketConn() error {
 	return s.conn.Close()
+}
+
+func (s *rimeTTSSynthesizeStream) closeAfterWriteFailureLocked() {
+	if s.closed {
+		return
+	}
+	s.closed = true
+	s.cancel()
+	_ = s.closeConnection()
 }
 
 func (s *rimeTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {

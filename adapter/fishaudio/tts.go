@@ -280,6 +280,8 @@ func (t *FishAudioTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error)
 		events:     make(chan *tts.SynthesizedAudio, 100),
 		errCh:      make(chan error, 1),
 	}
+	stream.writeMessage = stream.writeWebsocketMessage
+	stream.closeConn = stream.closeWebsocketConn
 	go stream.readLoop()
 	return stream, nil
 }
@@ -328,25 +330,46 @@ type fishAudioTTSSynthesizeStream struct {
 	errCh      chan error
 	mu         sync.Mutex
 	closed     bool
+
+	writeMessage func(int, []byte) error
+	closeConn    func() error
 }
 
 func (s *fishAudioTTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("fishaudio tts stream is closed")
+	}
 	message, err := buildFishAudioTTSTextMessage(text)
 	if err != nil {
 		return err
 	}
-	return s.conn.WriteMessage(websocket.BinaryMessage, message)
+	if err := s.writeMessageData(websocket.BinaryMessage, message); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *fishAudioTTSSynthesizeStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("fishaudio tts stream is closed")
+	}
 	message, err := buildFishAudioTTSSimpleEvent("flush")
 	if err != nil {
 		return err
 	}
-	return s.conn.WriteMessage(websocket.BinaryMessage, message)
+	if err := s.writeMessageData(websocket.BinaryMessage, message); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *fishAudioTTSSynthesizeStream) Close() error {
@@ -358,10 +381,41 @@ func (s *fishAudioTTSSynthesizeStream) Close() error {
 	s.closed = true
 	s.cancel()
 	if stopMessage, err := buildFishAudioTTSSimpleEvent("stop"); err == nil {
-		_ = s.conn.WriteMessage(websocket.BinaryMessage, stopMessage)
+		_ = s.writeMessageData(websocket.BinaryMessage, stopMessage)
 	}
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	return s.closeConnection()
+}
+
+func (s *fishAudioTTSSynthesizeStream) writeMessageData(messageType int, data []byte) error {
+	if s.writeMessage != nil {
+		return s.writeMessage(messageType, data)
+	}
+	return s.writeWebsocketMessage(messageType, data)
+}
+
+func (s *fishAudioTTSSynthesizeStream) writeWebsocketMessage(messageType int, data []byte) error {
+	return s.conn.WriteMessage(messageType, data)
+}
+
+func (s *fishAudioTTSSynthesizeStream) closeConnection() error {
+	if s.closeConn != nil {
+		return s.closeConn()
+	}
+	return s.closeWebsocketConn()
+}
+
+func (s *fishAudioTTSSynthesizeStream) closeWebsocketConn() error {
 	return s.conn.Close()
+}
+
+func (s *fishAudioTTSSynthesizeStream) closeAfterWriteFailureLocked() {
+	if s.closed {
+		return
+	}
+	s.closed = true
+	s.cancel()
+	_ = s.closeConnection()
 }
 
 func (s *fishAudioTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {

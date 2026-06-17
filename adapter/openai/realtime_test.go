@@ -1481,6 +1481,18 @@ func TestRealtimeEventMapsInputAudioTranscriptionDelta(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventIgnoresEmptyInputAudioTranscriptionDelta(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type":          "conversation.item.input_audio_transcription.delta",
+		"item_id":       "item_123",
+		"content_index": 1,
+		"delta":         "",
+	})
+	if ok {
+		t.Fatalf("openAIRealtimeEvent = %#v, want empty delta ignored", ev)
+	}
+}
+
 func TestRealtimeEventMapsOutputAudioTranscriptDelta(t *testing.T) {
 	for _, eventType := range []string{
 		"response.output_audio_transcript.delta",

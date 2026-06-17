@@ -293,6 +293,41 @@ func TestBasetenTTSStreamSendsReferenceSetupTextAndEnd(t *testing.T) {
 	}
 }
 
+func TestBasetenTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
+	writeErr := errors.New("write failed")
+	cancelled := false
+	closeCalls := 0
+	stream := &basetenTTSSynthesizeStream{
+		cancel: func() { cancelled = true },
+		writeMessage: func(int, []byte) error {
+			return writeErr
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+
+	if err := stream.PushText("hello"); !errors.Is(err, writeErr) {
+		t.Fatalf("PushText error = %v, want write error", err)
+	}
+	if !cancelled {
+		t.Fatal("cancel not called after write failure")
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushText after write failure error = %v, want closed stream error", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after write failure error = %v, want nil", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls after idempotent Close = %d, want 1", closeCalls)
+	}
+}
+
 func TestBasetenTTSStreamReturnsBinaryAudioFrames(t *testing.T) {
 	dialer := newBasetenTTSTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
 		if _, _, err := conn.ReadMessage(); err != nil {
