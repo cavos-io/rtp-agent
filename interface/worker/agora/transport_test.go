@@ -9,11 +9,10 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/interface/worker"
 )
 
 type fakeChannelClient struct {
-	joinOptions  worker.AgoraOptions
+	joinOptions  Options
 	handler      EventHandler
 	audioHandler AudioHandler
 	pcmFrame     PCMFrame
@@ -29,7 +28,7 @@ type fakeChannelClient struct {
 	left         bool
 }
 
-func (f *fakeChannelClient) Join(ctx context.Context, opts worker.AgoraOptions, handler EventHandler, audioHandler AudioHandler) error {
+func (f *fakeChannelClient) Join(ctx context.Context, opts Options, handler EventHandler, audioHandler AudioHandler) error {
 	f.joinCtx = ctx
 	f.joinOptions = opts
 	f.handler = handler
@@ -73,7 +72,7 @@ func (f *fakeChannelClient) emitAudio(frame *model.AudioFrame) {
 }
 
 func TestTransportJoinValidatesOptions(t *testing.T) {
-	tr := NewTransport(worker.AgoraOptions{}, &fakeChannelClient{})
+	tr := NewTransport(Options{}, &fakeChannelClient{})
 
 	err := tr.Join(context.Background())
 	if err == nil {
@@ -83,7 +82,7 @@ func TestTransportJoinValidatesOptions(t *testing.T) {
 
 func TestTransportJoinPassesOptionsToClient(t *testing.T) {
 	client := &fakeChannelClient{}
-	opts := worker.AgoraOptions{
+	opts := Options{
 		AppID:   "app",
 		Channel: "support",
 		UID:     "agent",
@@ -100,11 +99,20 @@ func TestTransportJoinPassesOptionsToClient(t *testing.T) {
 	if client.joinOptions.Channel != "support" {
 		t.Fatalf("client channel = %q, want support", client.joinOptions.Channel)
 	}
+	if client.joinOptions.AppID != "app" {
+		t.Fatalf("client app ID = %q, want app", client.joinOptions.AppID)
+	}
+	if client.joinOptions.UID != "agent" {
+		t.Fatalf("client UID = %q, want agent", client.joinOptions.UID)
+	}
+	if client.joinOptions.Token != "token" {
+		t.Fatalf("client token = %q, want token", client.joinOptions.Token)
+	}
 }
 
 func TestTransportJoinRejectsCanceledContext(t *testing.T) {
 	client := &fakeChannelClient{}
-	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -122,7 +130,7 @@ func TestTransportJoinRejectsCanceledContext(t *testing.T) {
 
 func TestTransportJoinGeneratesTokenFromCertificate(t *testing.T) {
 	client := &fakeChannelClient{}
-	opts := worker.AgoraOptions{
+	opts := Options{
 		AppID:          "970CA35de60c44645bbae8a215061b33",
 		AppCertificate: "5CFd2fd1755d40ecb72977518be15d3b",
 		Channel:        "support",
@@ -143,7 +151,7 @@ func TestTransportJoinGeneratesTokenFromCertificate(t *testing.T) {
 
 func TestTransportLeaveDelegatesToClient(t *testing.T) {
 	client := &fakeChannelClient{}
-	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 
 	if err := tr.Leave(context.Background()); err != nil {
 		t.Fatalf("Leave() error = %v", err)
@@ -155,7 +163,7 @@ func TestTransportLeaveDelegatesToClient(t *testing.T) {
 
 func TestTransportReturnsClientErrors(t *testing.T) {
 	joinErr := errors.New("join failed")
-	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, &fakeChannelClient{joinErr: joinErr})
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, &fakeChannelClient{joinErr: joinErr})
 
 	if err := tr.Join(context.Background()); !errors.Is(err, joinErr) {
 		t.Fatalf("Join() error = %v, want %v", err, joinErr)
@@ -164,7 +172,7 @@ func TestTransportReturnsClientErrors(t *testing.T) {
 
 func TestTransportForwardsClientEvents(t *testing.T) {
 	client := &fakeChannelClient{}
-	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 
 	if err := tr.Join(context.Background()); err != nil {
 		t.Fatalf("Join() error = %v", err)
@@ -186,7 +194,7 @@ func TestTransportForwardsClientEvents(t *testing.T) {
 
 func TestTransportPrioritizesErrorEventsWhenBufferIsFull(t *testing.T) {
 	client := &fakeChannelClient{}
-	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 
 	if err := tr.Join(context.Background()); err != nil {
 		t.Fatalf("Join() error = %v", err)
@@ -214,7 +222,7 @@ func TestTransportPrioritizesErrorEventsWhenBufferIsFull(t *testing.T) {
 
 func TestTransportForwardsClientAudioFrames(t *testing.T) {
 	client := &fakeChannelClient{}
-	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 	received := make(chan *model.AudioFrame, 1)
 	tr.SetAudioHandler(func(frame *model.AudioFrame) {
 		received <- frame
@@ -245,7 +253,7 @@ func TestTransportForwardsClientAudioFrames(t *testing.T) {
 
 func TestTransportCloseLeavesClientAndClosesEvents(t *testing.T) {
 	client := &fakeChannelClient{}
-	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 
 	if err := tr.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -263,7 +271,7 @@ func TestTransportCloseLeavesClientAndClosesEvents(t *testing.T) {
 
 func TestTransportCloseCancelsInProgressJoin(t *testing.T) {
 	client := &fakeChannelClient{blockJoin: true}
-	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 	joinDone := make(chan error, 1)
 
 	go func() {
@@ -298,7 +306,7 @@ func TestTransportCloseCancelsInProgressJoin(t *testing.T) {
 
 func TestTransportJoinAfterCloseReturnsError(t *testing.T) {
 	client := &fakeChannelClient{}
-	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 
 	if err := tr.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -317,7 +325,7 @@ func TestTransportJoinAfterCloseReturnsError(t *testing.T) {
 
 func TestTransportPublishPCMValidatesAndDelegates(t *testing.T) {
 	client := &fakeChannelClient{}
-	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 	frame := PCMFrame{
 		Data:       []byte{1, 2, 3, 4},
 		SampleRate: 100,
@@ -338,7 +346,7 @@ func TestTransportPublishPCMValidatesAndDelegates(t *testing.T) {
 
 func TestTransportPublishPCMNormalizesNilContext(t *testing.T) {
 	client := &fakeChannelClient{}
-	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 	frame := PCMFrame{
 		Data:       []byte{1, 2, 3, 4},
 		SampleRate: 100,
@@ -356,7 +364,7 @@ func TestTransportPublishPCMNormalizesNilContext(t *testing.T) {
 
 func TestTransportPublishPCMRejectsCanceledContext(t *testing.T) {
 	client := &fakeChannelClient{}
-	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 	frame := PCMFrame{
 		Data:       []byte{1, 2, 3, 4},
 		SampleRate: 100,
@@ -376,7 +384,7 @@ func TestTransportPublishPCMRejectsCanceledContext(t *testing.T) {
 
 func TestTransportPublishPCMAfterCloseReturnsError(t *testing.T) {
 	client := &fakeChannelClient{}
-	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 	frame := PCMFrame{
 		Data:       []byte{1, 2, 3, 4},
 		SampleRate: 100,
@@ -400,7 +408,7 @@ func TestTransportPublishPCMAfterCloseReturnsError(t *testing.T) {
 
 func TestTransportPublishPCMRejectsNonTenMillisecondFrames(t *testing.T) {
 	client := &fakeChannelClient{}
-	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 	frame := PCMFrame{
 		Data:       []byte{1, 2},
 		SampleRate: 100,
@@ -421,7 +429,7 @@ func TestTransportPublishPCMRejectsNonTenMillisecondFrames(t *testing.T) {
 
 func TestTransportPublishPCMRejectsTwentyMillisecondFrames(t *testing.T) {
 	client := &fakeChannelClient{}
-	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 	frame := PCMFrame{
 		Data:       make([]byte, 640),
 		SampleRate: 16000,

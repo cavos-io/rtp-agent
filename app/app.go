@@ -1147,14 +1147,21 @@ func (a *App) runAgora(ctx context.Context) error {
 		return fmt.Errorf("agent session is not configured")
 	}
 	opts := a.Server.Options.Agora
-	if err := opts.Validate(); err != nil {
+	agoraOpts := workeragora.Options{
+		AppID:          opts.AppID,
+		AppCertificate: opts.AppCertificate,
+		Channel:        opts.Channel,
+		UID:            opts.UID,
+		Token:          opts.Token,
+	}
+	if err := agoraOpts.Validate(); err != nil {
 		return err
 	}
 	client, err := appNewAgoraChannelClient()
 	if err != nil {
 		return err
 	}
-	transport := workeragora.NewTransport(opts, client)
+	transport := workeragora.NewTransport(agoraOpts, client)
 	audioInput := workeragora.NewAudioInput(ctx, a.Session)
 	transport.SetAudioHandler(audioInput.HandleAudioFrame)
 	eventsCtx, stopObservingEvents := context.WithCancel(context.Background())

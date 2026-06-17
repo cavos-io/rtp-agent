@@ -2,12 +2,10 @@ package agora
 
 import (
 	"testing"
-
-	"github.com/cavos-io/rtp-agent/interface/worker"
 )
 
 func TestResolveJoinOptionsPreservesExplicitToken(t *testing.T) {
-	opts := worker.AgoraOptions{
+	opts := Options{
 		AppID:          "app",
 		AppCertificate: "cert",
 		Channel:        "support",
@@ -26,7 +24,7 @@ func TestResolveJoinOptionsPreservesExplicitToken(t *testing.T) {
 }
 
 func TestResolveJoinOptionsTrimsJoinFields(t *testing.T) {
-	opts := worker.AgoraOptions{
+	opts := Options{
 		AppID:          " app ",
 		AppCertificate: " cert ",
 		Channel:        " support ",
@@ -57,7 +55,7 @@ func TestResolveJoinOptionsTrimsJoinFields(t *testing.T) {
 }
 
 func TestResolveJoinOptionsBuildsTokenFromCertificate(t *testing.T) {
-	opts := worker.AgoraOptions{
+	opts := Options{
 		AppID:          "970CA35de60c44645bbae8a215061b33",
 		AppCertificate: "5CFd2fd1755d40ecb72977518be15d3b",
 		Channel:        "support",
@@ -78,7 +76,7 @@ func TestResolveJoinOptionsBuildsTokenFromCertificate(t *testing.T) {
 }
 
 func TestResolveJoinOptionsDefaultsEmptyUIDForTokenGeneration(t *testing.T) {
-	opts := worker.AgoraOptions{
+	opts := Options{
 		AppID:          "970CA35de60c44645bbae8a215061b33",
 		AppCertificate: "5CFd2fd1755d40ecb72977518be15d3b",
 		Channel:        "support",
@@ -94,5 +92,17 @@ func TestResolveJoinOptionsDefaultsEmptyUIDForTokenGeneration(t *testing.T) {
 	}
 	if resolved.Token == "" {
 		t.Fatal("resolved token is empty, want generated RTC token")
+	}
+}
+
+func TestOptionsValidateRequiresAppIDAndChannel(t *testing.T) {
+	if err := (Options{}).Validate(); err == nil {
+		t.Fatal("Options.Validate() error = nil, want missing app ID")
+	}
+	if err := (Options{AppID: "app"}).Validate(); err == nil {
+		t.Fatal("Options.Validate() error = nil, want missing channel")
+	}
+	if err := (Options{AppID: "app", Channel: "support"}).Validate(); err != nil {
+		t.Fatalf("Options.Validate() error = %v, want nil", err)
 	}
 }

@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-
-	"github.com/cavos-io/rtp-agent/interface/worker"
 )
 
 type EventKind string
@@ -63,13 +61,13 @@ func normalizeContext(ctx context.Context) context.Context {
 }
 
 type ChannelClient interface {
-	Join(context.Context, worker.AgoraOptions, EventHandler, AudioHandler) error
+	Join(context.Context, Options, EventHandler, AudioHandler) error
 	Leave(context.Context) error
 	PublishPCM(context.Context, PCMFrame) error
 }
 
 type Transport struct {
-	opts       worker.AgoraOptions
+	opts       Options
 	client     ChannelClient
 	events     chan Event
 	audio      AudioHandler
@@ -81,7 +79,7 @@ type Transport struct {
 	closed     bool
 }
 
-func NewTransport(opts worker.AgoraOptions, client ChannelClient) *Transport {
+func NewTransport(opts Options, client ChannelClient) *Transport {
 	return &Transport{
 		opts:   opts,
 		client: client,
