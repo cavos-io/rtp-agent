@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -33,15 +35,24 @@ type RealtimeModel struct {
 	mu            sync.Mutex
 	options       llm.RealtimeSessionOptions
 	modalities    []string
+	maxSession    time.Duration
+	connect       llm.APIConnectOptions
 	sessions      map[*realtimeSession]struct{}
 }
 
 type openAIRealtimeWebsocketDialer func(string, http.Header) (*websocket.Conn, *http.Response, error)
 
+type openAIRealtimeDialResult struct {
+	conn *websocket.Conn
+	err  error
+}
+
 type openAIRealtimeModelOptions struct {
 	sessionOptions llm.RealtimeSessionOptions
 	modalities     []string
 	baseURL        string
+	maxSession     time.Duration
+	connect        *llm.APIConnectOptions
 }
 
 type OpenAIRealtimeOption func(*openAIRealtimeModelOptions)
@@ -121,6 +132,18 @@ func WithOpenAIRealtimeMaxResponseOutputTokens(tokens any) OpenAIRealtimeOption 
 	}
 }
 
+func WithOpenAIRealtimeMaxSessionDuration(duration time.Duration) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.maxSession = duration
+	}
+}
+
+func WithOpenAIRealtimeConnectOptions(connectOptions llm.APIConnectOptions) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.connect = &connectOptions
+	}
+}
+
 func WithOpenAIRealtimeBaseURL(baseURL string) OpenAIRealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.baseURL = baseURL
@@ -145,6 +168,10 @@ func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *Realt
 	if options.baseURL != "" {
 		baseURL = options.baseURL
 	}
+	connectOptions := llm.DefaultAPIConnectOptions()
+	if options.connect != nil {
+		connectOptions = *options.connect
+	}
 	return &RealtimeModel{
 		apiKey:        apiKey,
 		model:         model,
@@ -152,6 +179,8 @@ func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *Realt
 		dialWebsocket: defaultOpenAIRealtimeWebsocketDialer,
 		options:       options.sessionOptions,
 		modalities:    options.modalities,
+		maxSession:    options.maxSession,
+		connect:       connectOptions,
 	}
 }
 
@@ -215,6 +244,7 @@ type realtimeSession struct {
 	generation       *realtimeGeneration
 	pendingResponses int
 	instructions     string
+	tools            []llm.Tool
 	audioBStream     *audio.AudioByteStream
 	pushedDuration   float64
 	optionsState     map[string]any
@@ -264,7 +294,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	header.Add("Authorization", "Bearer "+m.apiKey)
 	header.Add("OpenAI-Beta", "realtime=v1")
 
-	conn, _, err := m.dialWebsocket(wsURL, header)
+	conn, err := m.dialRealtimeWebsocket(context.Background(), wsURL, header)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to OpenAI realtime: %w", err)
 	}
@@ -313,6 +343,76 @@ func (m *RealtimeModel) unregisterSession(session *realtimeSession) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.sessions, session)
+}
+
+func (m *RealtimeModel) dialRealtimeWebsocket(ctx context.Context, wsURL string, header http.Header) (*websocket.Conn, error) {
+	var (
+		conn *websocket.Conn
+		err  error
+	)
+	for attempt := 0; attempt <= m.connect.MaxRetry; attempt++ {
+		conn, err = m.dialRealtimeWebsocketAttempt(ctx, wsURL, header)
+		if err == nil {
+			openAIRealtimeApplySessionDeadline(conn, m.maxSession)
+			return conn, nil
+		}
+		if attempt == m.connect.MaxRetry {
+			return nil, err
+		}
+		retryInterval := m.connect.IntervalForRetry(attempt)
+		if retryInterval <= 0 {
+			continue
+		}
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil, err
+}
+
+func (m *RealtimeModel) dialRealtimeWebsocketAttempt(ctx context.Context, wsURL string, header http.Header) (*websocket.Conn, error) {
+	attemptCtx := ctx
+	cancel := func() {}
+	if m.connect.Timeout > 0 {
+		attemptCtx, cancel = context.WithTimeout(ctx, m.connect.Timeout)
+	} else if ctx != nil {
+		attemptCtx, cancel = context.WithCancel(ctx)
+	}
+	defer cancel()
+
+	resultCh := make(chan openAIRealtimeDialResult, 1)
+	go func() {
+		conn, _, err := m.dialWebsocket(wsURL, header)
+		result := openAIRealtimeDialResult{conn: conn, err: err}
+		select {
+		case resultCh <- result:
+		case <-attemptCtx.Done():
+			if conn != nil {
+				_ = conn.Close()
+			}
+		}
+	}()
+
+	select {
+	case result := <-resultCh:
+		return result.conn, result.err
+	case <-attemptCtx.Done():
+		if errors.Is(attemptCtx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("OpenAI realtime connection timed out")
+		}
+		return nil, attemptCtx.Err()
+	}
+}
+
+func openAIRealtimeApplySessionDeadline(conn *websocket.Conn, duration time.Duration) {
+	if conn == nil || duration <= 0 {
+		return
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(duration))
 }
 
 func openAIRealtimeBaseURL(rawURL string) string {
@@ -450,7 +550,13 @@ func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
 			"tools": openAIRealtimeTools(tools),
 		},
 	}
-	return s.sendMsg(msg)
+	if err := s.sendMsg(msg); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.tools = append([]llm.Tool(nil), tools...)
+	s.mu.Unlock()
+	return nil
 }
 
 func openAIRealtimeTools(tools []llm.Tool) []map[string]any {
@@ -1151,10 +1257,6 @@ func (s *realtimeSession) Say(text string) error {
 	return llm.NewRealtimeError("openai realtime session does not support say", nil)
 }
 
-func openAIRealtimeGenerateReplyMessage(options llm.RealtimeGenerateReplyOptions) map[string]any {
-	return openAIRealtimeGenerateReplyMessageWithSessionInstructions(options, "")
-}
-
 func openAIRealtimeGenerateReplyMessageWithSessionInstructions(options llm.RealtimeGenerateReplyOptions, sessionInstructions string) map[string]any {
 	response := make(map[string]any)
 	eventID := cavosmath.ShortUUID("response_create_")
@@ -1306,9 +1408,15 @@ func (s *realtimeSession) eventLoop() {
 		default:
 			_, msg, err := s.conn.ReadMessage()
 			if err != nil {
-				logger.Logger.Errorw("OpenAI realtime disconnected", err)
-				s.cancel()
-				return
+				if s.ctx.Err() != nil {
+					return
+				}
+				if reconnectErr := s.reconnectAfterDisconnect(); reconnectErr != nil {
+					logger.Logger.Errorw("OpenAI realtime disconnected", reconnectErr)
+					s.cancel()
+					return
+				}
+				continue
 			}
 
 			var ev map[string]any
@@ -1342,6 +1450,76 @@ func (s *realtimeSession) eventLoop() {
 			}
 		}
 	}
+}
+
+func (s *realtimeSession) reconnectAfterDisconnect() error {
+	if s.model == nil {
+		return fmt.Errorf("OpenAI realtime disconnected")
+	}
+	wsURL := openAIRealtimeSessionURL(s.model.baseURL, s.model.model)
+	header := http.Header{}
+	header.Add("Authorization", "Bearer "+s.model.apiKey)
+	header.Add("OpenAI-Beta", "realtime=v1")
+
+	conn, err := s.model.dialRealtimeWebsocket(s.ctx, wsURL, header)
+	if err != nil {
+		return fmt.Errorf("failed to reconnect to OpenAI realtime: %w", err)
+	}
+
+	s.mu.Lock()
+	oldConn := s.conn
+	initialSession := openAIRealtimeInitialSession(s.model.model, s.model.modalities)
+	openAIRealtimeMergeSessionPayload(initialSession, openAIRealtimeSessionFromOptionEntries(s.optionsState))
+	if s.instructions != "" {
+		initialSession["instructions"] = s.instructions
+	}
+	msg := openAIRealtimeInitialSessionUpdateMessage(initialSession)
+	b, err := json.Marshal(msg)
+	if err == nil {
+		err = conn.WriteMessage(websocket.TextMessage, b)
+	}
+	if err == nil && len(s.tools) > 0 {
+		toolsMsg := map[string]any{
+			"type":     "session.update",
+			"event_id": cavosmath.ShortUUID("tools_update_"),
+			"session": map[string]any{
+				"tools": openAIRealtimeTools(s.tools),
+			},
+		}
+		b, err = json.Marshal(toolsMsg)
+		if err == nil {
+			err = conn.WriteMessage(websocket.TextMessage, b)
+		}
+	}
+	var chatMsgs []map[string]any
+	if err == nil && s.remote != nil {
+		chatMsgs, err = openAIRealtimeChatContextCreateMessages(s.remote.ToChatCtx())
+		for _, chatMsg := range chatMsgs {
+			if err != nil {
+				break
+			}
+			b, err = json.Marshal(chatMsg)
+			if err == nil {
+				err = conn.WriteMessage(websocket.TextMessage, b)
+			}
+		}
+	}
+	if err != nil {
+		s.mu.Unlock()
+		_ = conn.Close()
+		return err
+	}
+	s.conn = conn
+	s.pendingResponses = 0
+	s.mu.Unlock()
+
+	_ = oldConn.Close()
+	s.closeRealtimeGeneration()
+	s.eventCh <- llm.RealtimeEvent{
+		Type:      llm.RealtimeEventTypeSessionReconnected,
+		Reconnect: &llm.RealtimeSessionReconnectedEvent{},
+	}
+	return nil
 }
 
 func (s *realtimeSession) clearPendingRealtimeResponse() {
