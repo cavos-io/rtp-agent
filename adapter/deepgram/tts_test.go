@@ -210,6 +210,39 @@ func TestDeepgramTTSStreamCloseSendsReferenceFlushAndClose(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
+	writeErr := errors.New("write failed")
+	closeCalls := 0
+	stream := &deepgramTTSStream{
+		writeJSON: func(any) error {
+			return writeErr
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+
+	if err := stream.PushText("hello"); !errors.Is(err, writeErr) {
+		t.Fatalf("PushText error = %v, want write error", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after write failure error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after write failure error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after write failure error = %v, want nil", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls after idempotent Close = %d, want 1", closeCalls)
+	}
+}
+
 func assertDeepgramTTSQuery(t *testing.T, query url.Values, key string, want string) {
 	t.Helper()
 	if got := query.Get(key); got != want {

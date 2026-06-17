@@ -279,7 +279,11 @@ func (s *deepgramTTSStream) PushText(text string) error {
 		"type": "Speak",
 		"text": text,
 	}
-	return s.writeJSONData(msg)
+	if err := s.writeJSONData(msg); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *deepgramTTSStream) Flush() error {
@@ -291,7 +295,11 @@ func (s *deepgramTTSStream) Flush() error {
 	msg := map[string]interface{}{
 		"type": "Flush",
 	}
-	return s.writeJSONData(msg)
+	if err := s.writeJSONData(msg); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *deepgramTTSStream) Close() error {
@@ -334,6 +342,14 @@ func (s *deepgramTTSStream) closeConnection() error {
 
 func (s *deepgramTTSStream) closeWebsocketConn() error {
 	return s.conn.Close()
+}
+
+func (s *deepgramTTSStream) closeAfterWriteFailureLocked() {
+	if s.closed {
+		return
+	}
+	s.closed = true
+	_ = s.closeConnection()
 }
 
 func (s *deepgramTTSStream) Next() (*tts.SynthesizedAudio, error) {
