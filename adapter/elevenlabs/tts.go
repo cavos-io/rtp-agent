@@ -40,6 +40,7 @@ type ElevenLabsTTS struct {
 	enableSSMLParsing   bool
 	chunkLengthSchedule []int
 	voiceSettings       *ElevenLabsVoiceSettings
+	streamingLatency    *int
 }
 
 type ElevenLabsTTSOption func(*ElevenLabsTTS)
@@ -107,6 +108,12 @@ func WithElevenLabsVoiceSettings(settings ElevenLabsVoiceSettings) ElevenLabsTTS
 	return func(t *ElevenLabsTTS) {
 		copied := settings
 		t.voiceSettings = &copied
+	}
+}
+
+func WithElevenLabsStreamingLatency(latency int) ElevenLabsTTSOption {
+	return func(t *ElevenLabsTTS) {
+		t.streamingLatency = &latency
 	}
 }
 
@@ -187,6 +194,9 @@ func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.Chunke
 
 func buildElevenLabsSynthesizeRequest(t *ElevenLabsTTS, text string) (string, []byte) {
 	apiURL := fmt.Sprintf("%s/text-to-speech/%s/stream?model_id=%s&output_format=%s", strings.TrimRight(t.baseURL, "/"), t.voiceID, url.QueryEscape(t.modelID), url.QueryEscape(t.encoding))
+	if t.streamingLatency != nil {
+		apiURL += "&optimize_streaming_latency=" + strconv.Itoa(*t.streamingLatency)
+	}
 	body := map[string]interface{}{
 		"text":     text,
 		"model_id": t.modelID,

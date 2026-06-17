@@ -114,6 +114,7 @@ func TestElevenLabsSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	provider, err := NewElevenLabsTTS("test-key", "", "",
 		WithElevenLabsLanguage("en"),
 		WithElevenLabsEnableSSMLParsing(true),
+		WithElevenLabsStreamingLatency(3),
 	)
 	if err != nil {
 		t.Fatalf("NewElevenLabsTTS() error = %v", err)
@@ -133,6 +134,9 @@ func TestElevenLabsSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	}
 	if parsed.Query().Get("output_format") != "mp3_22050_32" {
 		t.Fatalf("output_format = %q, want mp3_22050_32", parsed.Query().Get("output_format"))
+	}
+	if parsed.Query().Get("optimize_streaming_latency") != "3" {
+		t.Fatalf("optimize_streaming_latency = %q, want 3", parsed.Query().Get("optimize_streaming_latency"))
 	}
 
 	var payload map[string]any
