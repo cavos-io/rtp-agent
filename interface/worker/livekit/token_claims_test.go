@@ -88,3 +88,30 @@ func TestWorkerAuthTokenCarriesAgentGrant(t *testing.T) {
 		t.Fatal("TokenClaims().Video.RoomJoin = true, want false")
 	}
 }
+
+func TestLocalAgentTokenCarriesRoomJoinAgentGrant(t *testing.T) {
+	token, err := workerlivekit.LocalAgentToken("api-key", "api-secret", "local-agent", "room-a", time.Hour)
+	if err != nil {
+		t.Fatalf("LocalAgentToken() error = %v", err)
+	}
+
+	claims, err := workerlivekit.TokenClaims(token)
+	if err != nil {
+		t.Fatalf("TokenClaims() error = %v", err)
+	}
+	if claims.Identity != "local-agent" {
+		t.Fatalf("TokenClaims().Identity = %q, want local-agent", claims.Identity)
+	}
+	if claims.Video == nil {
+		t.Fatal("TokenClaims().Video = nil, want video grant")
+	}
+	if !claims.Video.RoomJoin {
+		t.Fatal("TokenClaims().Video.RoomJoin = false, want true")
+	}
+	if !claims.Video.Agent {
+		t.Fatal("TokenClaims().Video.Agent = false, want true")
+	}
+	if claims.Video.Room != "room-a" {
+		t.Fatalf("TokenClaims().Video.Room = %q, want room-a", claims.Video.Room)
+	}
+}

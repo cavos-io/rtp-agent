@@ -2217,16 +2217,7 @@ func newLocalJobContextWithOptions(roomName string, participantIdentity string, 
 	if token != "" {
 		jobCtx.token = token
 	} else if opts.APIKey != "" && opts.APISecret != "" {
-		generatedToken, err := auth.NewAccessToken(opts.APIKey, opts.APISecret).
-			SetIdentity(participantIdentity).
-			SetKind(livekit.ParticipantInfo_AGENT).
-			SetVideoGrant(&auth.VideoGrant{
-				RoomJoin: true,
-				Room:     roomName,
-				Agent:    true,
-			}).
-			SetValidFor(time.Hour).
-			ToJWT()
+		generatedToken, err := workerlivekit.LocalAgentToken(opts.APIKey, opts.APISecret, participantIdentity, roomName, time.Hour)
 		if err == nil {
 			jobCtx.token = generatedToken
 		}

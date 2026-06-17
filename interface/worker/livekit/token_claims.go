@@ -5,11 +5,25 @@ import (
 
 	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/livekit/protocol/auth"
+	lkprotocol "github.com/livekit/protocol/livekit"
 )
 
 func WorkerAuthToken(apiKey string, apiSecret string, ttl time.Duration) (string, error) {
 	return auth.NewAccessToken(apiKey, apiSecret).
 		SetVideoGrant(&auth.VideoGrant{Agent: true}).
+		SetValidFor(ttl).
+		ToJWT()
+}
+
+func LocalAgentToken(apiKey string, apiSecret string, identity string, room string, ttl time.Duration) (string, error) {
+	return auth.NewAccessToken(apiKey, apiSecret).
+		SetIdentity(identity).
+		SetKind(lkprotocol.ParticipantInfo_AGENT).
+		SetVideoGrant(&auth.VideoGrant{
+			RoomJoin: true,
+			Room:     room,
+			Agent:    true,
+		}).
 		SetValidFor(ttl).
 		ToJWT()
 }
