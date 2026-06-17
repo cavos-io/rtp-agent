@@ -2368,7 +2368,6 @@ func (a *AgentActivity) inputTranscriptionFlusher() (inputTranscriptionFlusher, 
 func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo) (*SpeechHandle, error) {
 	a.userTurnCompletionMu.Lock()
 	defer a.userTurnCompletionMu.Unlock()
-	a.resetPreemptiveGenerationCount()
 
 	if rejectsZeroConfidenceTranscript(info.NewTranscript, info.TranscriptConfidence) {
 		a.cancelPreemptiveGeneration()
@@ -2400,6 +2399,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		a.cancelPreemptiveGeneration()
 		return nil, nil
 	}
+	a.resetPreemptiveGenerationCount()
 	if currentSpeech != nil && !currentSpeech.IsInterrupted() && !currentSpeech.IsDone() {
 		paused := a.cancelPausedFalseInterruption(false)
 		if err := currentSpeech.Interrupt(false); err != nil {
