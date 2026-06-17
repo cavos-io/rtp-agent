@@ -60,6 +60,26 @@ func TestJobRuntimeInfoExposesJobIDAndRecordingFlag(t *testing.T) {
 	}
 }
 
+func TestJobSessionReportInfoExposesJobAndRoomMetadata(t *testing.T) {
+	info := workerlivekit.JobSessionReportInfo(&lkprotocol.Job{
+		Id: "job-report",
+		Room: &lkprotocol.Room{
+			Sid:  "RM_report",
+			Name: "room-report",
+		},
+	})
+
+	if info.JobID != "job-report" {
+		t.Fatalf("JobSessionReportInfo().JobID = %q, want job-report", info.JobID)
+	}
+	if info.RoomID != "RM_report" {
+		t.Fatalf("JobSessionReportInfo().RoomID = %q, want RM_report", info.RoomID)
+	}
+	if info.Room != "room-report" {
+		t.Fatalf("JobSessionReportInfo().Room = %q, want room-report", info.Room)
+	}
+}
+
 func TestJobAssignmentInfoUsesAssignmentURLTokenAndRecordingFlag(t *testing.T) {
 	job := &lkprotocol.Job{Id: "job-a", EnableRecording: true}
 	assignmentURL := "wss://assignment.example"

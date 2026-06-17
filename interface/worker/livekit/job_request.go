@@ -56,6 +56,24 @@ func JobRuntimeInfo(job *lkprotocol.Job) RuntimeJobInfo {
 	}
 }
 
+type SessionReportInfo struct {
+	JobID  string
+	RoomID string
+	Room   string
+}
+
+func JobSessionReportInfo(job *lkprotocol.Job) SessionReportInfo {
+	if job == nil {
+		return SessionReportInfo{}
+	}
+	info := SessionReportInfo{JobID: job.GetId()}
+	if room := job.GetRoom(); room != nil {
+		info.RoomID = room.GetSid()
+		info.Room = room.GetName()
+	}
+	return info
+}
+
 type AssignmentInfo struct {
 	Job             *lkprotocol.Job
 	JobID           string
