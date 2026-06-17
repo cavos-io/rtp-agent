@@ -38,6 +38,7 @@ const (
 )
 
 type GladiaSTT struct {
+	mu                                 sync.Mutex
 	apiKey                             string
 	baseURL                            string
 	model                              string
@@ -64,6 +65,7 @@ type GladiaSTT struct {
 	preProcessingAudioEnhancer         bool
 	preProcessingSpeechThreshold       float64
 	energyFilter                       *gladiaAudioEnergyFilterConfig
+	streams                            map[*gladiaSTTStream]struct{}
 }
 
 type GladiaSTTOption func(*GladiaSTT)
@@ -246,6 +248,50 @@ func (s *GladiaSTT) Capabilities() stt.STTCapabilities {
 	}
 }
 
+func (s *GladiaSTT) UpdateOptions(opts ...GladiaSTTOption) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	for _, opt := range opts {
+		opt(s)
+	}
+	streams := make([]*gladiaSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.mu.Unlock()
+
+	for _, stream := range streams {
+		stream.updateOptions(s)
+	}
+}
+
+func (s *GladiaSTT) registerStream(stream *gladiaSTTStream) {
+	if s == nil || stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.streams == nil {
+		s.streams = map[*gladiaSTTStream]struct{}{}
+	}
+	s.streams[stream] = struct{}{}
+	stream.owner = s
+}
+
+func (s *GladiaSTT) unregisterStream(stream *gladiaSTTStream) {
+	if s == nil || stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.streams, stream)
+	if stream.owner == s {
+		stream.owner = nil
+	}
+}
+
 func (s *GladiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if err := validateGladiaAPIKey(s.apiKey); err != nil {
 		return nil, err
@@ -296,6 +342,7 @@ func (s *GladiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		},
 		energyFilter: energyFilter,
 	}
+	s.registerStream(stream)
 	go stream.readLoop()
 	return stream, nil
 }
@@ -433,8 +480,35 @@ func writeGladiaMessage(conn *websocket.Conn, message map[string]any) error {
 }
 
 func (s *GladiaSTT) cloneWithLanguage(language string) *GladiaSTT {
-	clone := *s
-	clone.languages = append([]string(nil), s.languages...)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	clone := &GladiaSTT{
+		apiKey:                             s.apiKey,
+		baseURL:                            s.baseURL,
+		model:                              s.model,
+		languages:                          append([]string(nil), s.languages...),
+		codeSwitching:                      s.codeSwitching,
+		interimResults:                     s.interimResults,
+		sampleRate:                         s.sampleRate,
+		bitDepth:                           s.bitDepth,
+		channels:                           s.channels,
+		endpointing:                        s.endpointing,
+		maximumDurationWithoutEndpointing:  s.maximumDurationWithoutEndpointing,
+		region:                             s.region,
+		encoding:                           s.encoding,
+		translationEnabled:                 s.translationEnabled,
+		translationTargetLanguages:         append([]string(nil), s.translationTargetLanguages...),
+		translationModel:                   s.translationModel,
+		translationMatchOriginalUtterances: s.translationMatchOriginalUtterances,
+		translationLipsync:                 s.translationLipsync,
+		translationContextAdaptation:       s.translationContextAdaptation,
+		translationContext:                 s.translationContext,
+		translationInformal:                s.translationInformal,
+		customVocabulary:                   append([]any(nil), s.customVocabulary...),
+		customSpelling:                     cloneGladiaCustomSpelling(s.customSpelling),
+		preProcessingAudioEnhancer:         s.preProcessingAudioEnhancer,
+		preProcessingSpeechThreshold:       s.preProcessingSpeechThreshold,
+	}
 	if language != "" {
 		clone.languages = []string{language}
 	}
@@ -442,10 +516,22 @@ func (s *GladiaSTT) cloneWithLanguage(language string) *GladiaSTT {
 		filter := *s.energyFilter
 		clone.energyFilter = &filter
 	}
-	return &clone
+	return clone
+}
+
+func cloneGladiaCustomSpelling(spelling map[string][]string) map[string][]string {
+	if spelling == nil {
+		return nil
+	}
+	clone := make(map[string][]string, len(spelling))
+	for word, variants := range spelling {
+		clone[word] = append([]string(nil), variants...)
+	}
+	return clone
 }
 
 type gladiaSTTStream struct {
+	owner  *GladiaSTT
 	conn   *websocket.Conn
 	events chan *stt.SpeechEvent
 	errCh  chan error
@@ -663,7 +749,35 @@ func (s *gladiaSTTStream) Close() error {
 	s.closed = true
 	s.cancel()
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.conn.Close()
+	err := s.conn.Close()
+	if s.owner != nil {
+		s.owner.unregisterStream(s)
+	}
+	return err
+}
+
+func (s *gladiaSTTStream) updateOptions(provider *GladiaSTT) {
+	if s == nil || provider == nil {
+		return
+	}
+	provider.mu.Lock()
+	languages := append([]string(nil), provider.languages...)
+	interimResults := provider.interimResults
+	translationEnabled := provider.translationEnabled
+	var energyFilter *gladiaAudioEnergyFilter
+	if provider.energyFilter != nil {
+		energyFilter = provider.energyFilter.newFilter()
+	}
+	provider.mu.Unlock()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state := s.ensureStateLocked()
+	state.languages = languages
+	state.interimResults = &interimResults
+	state.translationEnabled = translationEnabled
+	s.energyFilter = energyFilter
+	s.lastFrame = nil
 }
 
 func (s *gladiaSTTStream) Next() (*stt.SpeechEvent, error) {

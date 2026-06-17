@@ -142,6 +142,58 @@ func TestGladiaSTTConfigOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestGladiaSTTUpdateOptionsPropagatesReferenceOptions(t *testing.T) {
+	provider := NewGladiaSTT("test-key")
+	interimResults := true
+	stream := &gladiaSTTStream{state: &gladiaSTTStreamState{
+		requestID:      "session-1",
+		languages:      []string{"en"},
+		interimResults: &interimResults,
+	}}
+	provider.registerStream(stream)
+
+	provider.UpdateOptions(
+		WithGladiaModel("solaria-1-large"),
+		WithGladiaLanguages([]string{"id"}),
+		WithGladiaInterimResults(false),
+		WithGladiaTranslation([]string{"es"}),
+		WithGladiaEndpointing(0.2, 8.5),
+		WithGladiaPreProcessing(true, 0.7),
+	)
+
+	config := buildGladiaStreamingConfig(provider)
+	assertGladiaField(t, config, "model", "solaria-1-large")
+	assertGladiaField(t, config, "endpointing", 0.2)
+	assertGladiaField(t, config, "maximum_duration_without_endpointing", 8.5)
+	languageConfig := config["language_config"].(map[string]any)
+	languages := languageConfig["languages"].([]string)
+	if len(languages) != 1 || languages[0] != "id" {
+		t.Fatalf("updated languages = %+v, want id", languages)
+	}
+	messages := config["messages_config"].(map[string]any)
+	if messages["receive_partial_transcripts"] != false {
+		t.Fatalf("receive_partial_transcripts = %#v, want false", messages["receive_partial_transcripts"])
+	}
+	realtime := config["realtime_processing"].(map[string]any)
+	if realtime["translation"] != true {
+		t.Fatalf("translation = %#v, want true", realtime["translation"])
+	}
+	pre := config["pre_processing"].(map[string]any)
+	if pre["audio_enhancer"] != true || pre["speech_threshold"] != 0.7 {
+		t.Fatalf("pre_processing = %+v, want enhancer threshold", pre)
+	}
+
+	if len(stream.state.languages) != 1 || stream.state.languages[0] != "id" {
+		t.Fatalf("stream languages = %+v, want id", stream.state.languages)
+	}
+	if stream.state.interimResults == nil || *stream.state.interimResults {
+		t.Fatalf("stream interimResults = %v, want false", stream.state.interimResults)
+	}
+	if !stream.state.translationEnabled {
+		t.Fatal("stream translationEnabled = false, want true")
+	}
+}
+
 func TestGladiaTranslationConfigOptionsMatchReference(t *testing.T) {
 	provider := NewGladiaSTT("test-key",
 		WithGladiaTranslationConfig([]string{"es", "fr"}, "enhanced", false, false, true, "medical appointment", true),
