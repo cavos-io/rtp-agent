@@ -134,9 +134,11 @@ func buildSpeechmaticsTTSRequest(ctx context.Context, t *SpeechmaticsTTS, text s
 }
 
 func (t *SpeechmaticsTTS) UpdateOptions(opts ...SpeechmaticsTTSOption) {
+	sampleRate := t.sampleRate
 	for _, opt := range opts {
 		opt(t)
 	}
+	t.sampleRate = sampleRate
 }
 
 func (t *SpeechmaticsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
