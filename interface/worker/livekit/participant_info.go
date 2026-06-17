@@ -26,6 +26,13 @@ func RemoteParticipantViews(participants []*lksdk.RemoteParticipant) []RemotePar
 	return views
 }
 
+func RoomLocalParticipant(room *lksdk.Room) *lksdk.LocalParticipant {
+	if room == nil {
+		return nil
+	}
+	return room.LocalParticipant
+}
+
 func ParticipantInfoFromRemoteParticipant(participant RemoteParticipantView) *lkprotocol.ParticipantInfo {
 	if participant == nil {
 		return nil

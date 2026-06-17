@@ -86,6 +86,20 @@ func TestRemoteParticipantViewsFiltersNilParticipants(t *testing.T) {
 	}
 }
 
+func TestRoomLocalParticipantReturnsLocalParticipant(t *testing.T) {
+	room := lksdk.NewRoom(nil)
+
+	if got := workerlivekit.RoomLocalParticipant(room); got != room.LocalParticipant {
+		t.Fatal("RoomLocalParticipant() did not return room local participant")
+	}
+}
+
+func TestRoomLocalParticipantHandlesNilRoom(t *testing.T) {
+	if got := workerlivekit.RoomLocalParticipant(nil); got != nil {
+		t.Fatalf("RoomLocalParticipant(nil) = %#v, want nil", got)
+	}
+}
+
 func TestParticipantInfoDetailsExposeIdentityAndKind(t *testing.T) {
 	details := workerlivekit.ParticipantInfoDetails(&lkprotocol.ParticipantInfo{
 		Identity: "caller-a",

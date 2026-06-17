@@ -490,10 +490,10 @@ func (c *JobContext) PublisherInfo() *livekit.ParticipantInfo {
 }
 
 func (c *JobContext) Agent() *lksdk.LocalParticipant {
-	if c == nil || c.Room == nil {
+	if c == nil {
 		return nil
 	}
-	return c.Room.LocalParticipant
+	return workerlivekit.RoomLocalParticipant(c.Room)
 }
 
 var jobContextNewRoom = lksdk.NewRoom
