@@ -127,7 +127,7 @@ type WorkerRegisteredInfo struct {
 
 type WorkerRegisteredInfoHandler func(WorkerRegisteredInfo)
 
-type WorkerRegisteredHandler func(workerID string, serverInfo *livekit.ServerInfo)
+type WorkerRegisteredHandler = workerlivekit.WorkerRegisteredHandler
 
 type WorkerInfo struct {
 	HTTPPort    int
