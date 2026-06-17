@@ -4714,6 +4714,53 @@ func TestAgentActivityCommitUserTurnDoesNotInterruptCurrentSpeechWhilePaused(t *
 	}
 }
 
+func TestAgentActivityCommitUserTurnInterruptsRealtimeSessionForCurrentSpeech(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	assistant := &fakeInterruptingSessionAssistant{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	session.activity = activity
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "interrupt realtime current speech now", Confidence: 0.9}},
+	})
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+		done <- err
+	}()
+
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for !current.IsInterrupted() {
+		select {
+		case <-deadline:
+			t.Fatal("current speech was not interrupted")
+		case <-ticker.C:
+		}
+	}
+	current.MarkDone()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("CommitUserTurn error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("CommitUserTurn did not return after interrupted speech completed")
+	}
+	if assistant.interrupts != 1 {
+		t.Fatalf("realtime Interrupt calls = %d, want 1", assistant.interrupts)
+	}
+}
+
 func TestAgentActivityCommitUserTurnRecordsClosingPausedTurn(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual

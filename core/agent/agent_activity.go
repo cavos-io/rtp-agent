@@ -2583,6 +2583,16 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		if err := currentSpeech.Wait(ctx); err != nil {
 			return nil, err
 		}
+		if a.Session != nil {
+			a.Session.mu.Lock()
+			assistant := a.Session.Assistant
+			a.Session.mu.Unlock()
+			if interrupter, ok := assistant.(realtimeInterrupter); ok {
+				if err := interrupter.Interrupt(); err != nil {
+					return nil, err
+				}
+			}
+		}
 		a.resumeCanceledFalseInterruption(paused)
 	}
 
