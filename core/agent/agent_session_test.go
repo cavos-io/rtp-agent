@@ -3477,6 +3477,67 @@ func TestAgentSessionWaitForInactiveWaitsForPendingEOU(t *testing.T) {
 	}
 }
 
+func TestAgentSessionWaitForInactiveWaitsForManualTurnCompletion(t *testing.T) {
+	agent := &blockingTurnAgent{
+		Agent:   NewAgent("test"),
+		started: make(chan *llm.ChatMessage, 1),
+		release: make(chan struct{}),
+	}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	session.activity = activity
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "manual wait", Confidence: 0.9}},
+	})
+
+	commitDone := make(chan error, 1)
+	go func() {
+		_, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+		commitDone <- err
+	}()
+
+	select {
+	case msg := <-agent.started:
+		if got := msg.TextContent(); got != "manual wait" {
+			t.Fatalf("completed turn text = %q, want manual wait", got)
+		}
+	case <-testTimeout():
+		t.Fatal("manual turn completion did not start")
+	}
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- session.WaitForInactive(context.Background())
+	}()
+
+	select {
+	case err := <-waitDone:
+		t.Fatalf("WaitForInactive returned while manual turn completion was running: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(agent.release)
+
+	select {
+	case err := <-commitDone:
+		if err != nil {
+			t.Fatalf("CommitUserTurn error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("manual CommitUserTurn did not return")
+	}
+	select {
+	case err := <-waitDone:
+		if err != nil {
+			t.Fatalf("WaitForInactive error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("WaitForInactive did not return after manual turn completion")
+	}
+}
+
 func TestAgentSessionWaitForInactiveAndHoldBlocksOtherWaiters(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

@@ -128,6 +128,7 @@ type AgentActivity struct {
 	commitUserTurnMu                 sync.Mutex
 	commitUserTurnCancel             context.CancelFunc
 	commitUserTurnSeq                uint64
+	commitUserTurnActive             int
 	pendingUserTranscript            string
 	pendingUserLanguage              string
 	pendingTranscriptConfidence      float64
@@ -558,6 +559,16 @@ func (a *AgentActivity) WaitForInactive(ctx context.Context) error {
 				}
 				continue
 			}
+			if a.pendingUserTurnCompletion() {
+				select {
+				case <-a.userTurnUpdated():
+				case <-a.ctx.Done():
+					return errAgentActivityClosed
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				continue
+			}
 			if !a.isUserSpeaking() {
 				return nil
 			}
@@ -620,6 +631,15 @@ func (a *AgentActivity) pendingEOUDetection() (<-chan struct{}, bool) {
 		return nil, false
 	}
 	return a.eouDone, true
+}
+
+func (a *AgentActivity) pendingUserTurnCompletion() bool {
+	if a == nil {
+		return false
+	}
+	a.commitUserTurnMu.Lock()
+	defer a.commitUserTurnMu.Unlock()
+	return a.commitUserTurnActive > 0
 }
 
 func (a *AgentActivity) OnUserTurnExceeded(ev UserTurnExceededEvent) {
@@ -2337,14 +2357,18 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 	a.commitUserTurnSeq++
 	commitSeq := a.commitUserTurnSeq
 	a.commitUserTurnCancel = cancelCommit
+	a.commitUserTurnActive++
 	a.commitUserTurnMu.Unlock()
+	a.notifyUserTurnUpdated()
 	defer func() {
 		a.commitUserTurnMu.Lock()
 		if a.commitUserTurnSeq == commitSeq {
 			a.commitUserTurnCancel = nil
 		}
+		a.commitUserTurnActive--
 		a.commitUserTurnMu.Unlock()
 		cancelCommit()
+		a.notifyUserTurnUpdated()
 	}()
 	if a.Session != nil && !opts.SkipRealtimeAudio {
 		a.Session.mu.Lock()
