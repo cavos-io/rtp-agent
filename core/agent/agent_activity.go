@@ -20,7 +20,10 @@ import (
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 )
 
-var ErrSpeechSchedulingPaused = errors.New("speech scheduling is paused")
+var (
+	ErrSpeechSchedulingPaused = errors.New("speech scheduling is paused")
+	errAgentActivityClosed    = errors.New("agent activity closed")
+)
 
 const agentInstructionsMessageID = "lk.agent_task.instructions"
 const audioTurnDetectorWindowSeconds = 8.0
@@ -549,14 +552,20 @@ func (a *AgentActivity) WaitForInactive(ctx context.Context) error {
 			}
 			select {
 			case <-a.userTurnUpdated():
+			case <-a.ctx.Done():
+				return errAgentActivityClosed
 			case <-ctx.Done():
 				return ctx.Err()
 			}
 			continue
 		}
 		for _, speech := range active {
-			if err := speech.Wait(ctx); err != nil {
-				return err
+			select {
+			case <-speech.doneCh:
+			case <-a.ctx.Done():
+				return errAgentActivityClosed
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 			a.processQueue()
 		}

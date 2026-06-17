@@ -3329,6 +3329,38 @@ func TestAgentSessionWaitForInactiveRetargetsDuringAgentHandoff(t *testing.T) {
 	}
 }
 
+func TestAgentSessionWaitForInactiveRetargetsStoppedActivityDuringHandoff(t *testing.T) {
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(initial, session)
+	session.Assistant = &fakeSessionAssistant{}
+	session.started = true
+	session.activity.currentSpeech = NewSpeechHandle(true, DefaultInputDetails())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.WaitForInactive(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("WaitForInactive returned before handoff stopped previous activity: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	session.UpdateAgent(next)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("WaitForInactive error = %v, want nil after handoff retargets to idle activity", err)
+		}
+	case <-testTimeout():
+		t.Fatal("WaitForInactive did not retarget after previous activity stopped")
+	}
+}
+
 func TestAgentSessionWaitForInactiveWaitsForClaimedUserTurn(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
