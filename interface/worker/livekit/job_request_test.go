@@ -46,6 +46,39 @@ func TestJobRequestAccessorsHandleNilJob(t *testing.T) {
 	}
 }
 
+func TestJobAssignmentInfoUsesAssignmentURLTokenAndRecordingFlag(t *testing.T) {
+	job := &lkprotocol.Job{Id: "job-a", EnableRecording: true}
+	assignmentURL := "wss://assignment.example"
+	info := workerlivekit.JobAssignmentInfo(&lkprotocol.JobAssignment{
+		Job:   job,
+		Url:   &assignmentURL,
+		Token: "assignment-token",
+	}, "wss://default.example")
+
+	if info.Job != job {
+		t.Fatal("JobAssignmentInfo().Job did not preserve assignment job")
+	}
+	if info.URL != "wss://assignment.example" {
+		t.Fatalf("JobAssignmentInfo().URL = %q, want assignment URL", info.URL)
+	}
+	if info.Token != "assignment-token" {
+		t.Fatalf("JobAssignmentInfo().Token = %q, want assignment token", info.Token)
+	}
+	if !info.EnableRecording {
+		t.Fatal("JobAssignmentInfo().EnableRecording = false, want true")
+	}
+}
+
+func TestJobAssignmentInfoDefaultsURLWhenAssignmentURLMissing(t *testing.T) {
+	info := workerlivekit.JobAssignmentInfo(&lkprotocol.JobAssignment{
+		Job: &lkprotocol.Job{Id: "job-a"},
+	}, "wss://default.example")
+
+	if info.URL != "wss://default.example" {
+		t.Fatalf("JobAssignmentInfo().URL = %q, want default URL", info.URL)
+	}
+}
+
 func TestLocalRoomJobUsesFakeJobPrefixAndRoomInfo(t *testing.T) {
 	room := &lkprotocol.Room{Name: "configured-room", Sid: "SRM_configured"}
 	job := workerlivekit.LocalRoomJob(workerlivekit.LocalRoomJobOptions{

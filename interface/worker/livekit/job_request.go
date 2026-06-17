@@ -41,6 +41,29 @@ func JobAgentName(job *lkprotocol.Job) string {
 	return job.AgentName
 }
 
+type AssignmentInfo struct {
+	Job             *lkprotocol.Job
+	URL             string
+	Token           string
+	EnableRecording bool
+}
+
+func JobAssignmentInfo(req *lkprotocol.JobAssignment, defaultURL string) AssignmentInfo {
+	if req == nil {
+		return AssignmentInfo{URL: defaultURL}
+	}
+	jobURL := defaultURL
+	if req.GetUrl() != "" {
+		jobURL = req.GetUrl()
+	}
+	return AssignmentInfo{
+		Job:             req.Job,
+		URL:             jobURL,
+		Token:           req.GetToken(),
+		EnableRecording: req.Job.GetEnableRecording(),
+	}
+}
+
 type LocalRoomJobOptions struct {
 	RoomName string
 	RoomInfo *lkprotocol.Room

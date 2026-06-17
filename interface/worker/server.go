@@ -1818,17 +1818,13 @@ func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) 
 func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssignment) {
 	logger.Logger.Infow("Received job assignment", "jobId", req.Job.Id)
 
-	// Spin up a job context here
-	jobURL := s.Options.WSRL
-	if req.GetUrl() != "" {
-		jobURL = req.GetUrl()
-	}
-	jobCtx := NewJobContext(req.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
+	assignment := workerlivekit.JobAssignmentInfo(req, s.Options.WSRL)
+	jobCtx := NewJobContext(assignment.Job, assignment.URL, s.Options.APIKey, s.Options.APISecret)
 	jobCtx.process = s.newJobProcess()
-	if req.Job.GetEnableRecording() {
+	if assignment.EnableRecording {
 		jobCtx.InitRecording(allRecordingOptions())
 	}
-	jobCtx.token = req.GetToken()
+	jobCtx.token = assignment.Token
 
 	s.mu.Lock()
 	args, accepted := s.pendingAccepts[req.Job.Id]
