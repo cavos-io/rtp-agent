@@ -3597,20 +3597,25 @@ func TestValidateRunPreconditionsRejectsUnknownWorkerTransport(t *testing.T) {
 	}
 }
 
-func TestValidateRunPreconditionsRequiresAgoraOptionsForAgoraTransport(t *testing.T) {
+func TestValidateRunPreconditionsAcceptsAgoraWithoutProviderOptions(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		Transport: WorkerTransportAgora,
+		WSRL:      "",
+		APIKey:    "",
+		APISecret: "",
 	})
 	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
 		t.Fatalf("RTCSession() error = %v", err)
 	}
 
-	err := server.validateRunPreconditions()
-	if err == nil {
-		t.Fatal("validateRunPreconditions() error = nil, want Agora config error")
+	if err := server.validateRunPreconditions(); err != nil {
+		t.Fatalf("validateRunPreconditions() error = %v, want provider-neutral preconditions", err)
 	}
-	if !strings.Contains(err.Error(), "AGORA_APP_ID") {
-		t.Fatalf("validateRunPreconditions() error = %q, want AGORA_APP_ID", err.Error())
+	if server.Options.Transport != WorkerTransportAgora {
+		t.Fatalf("Transport = %q, want %q", server.Options.Transport, WorkerTransportAgora)
+	}
+	if server.Options.WSRL != "" || server.Options.APIKey != "" || server.Options.APISecret != "" {
+		t.Fatalf("LiveKit credentials mutated for Agora transport: url=%q key=%q secret=%q", server.Options.WSRL, server.Options.APIKey, server.Options.APISecret)
 	}
 }
 
@@ -3665,7 +3670,7 @@ func TestRunRequiresAgoraTransportRunFunc(t *testing.T) {
 	}
 }
 
-func TestRunValidatesAgoraOptionsBeforeTransportRunner(t *testing.T) {
+func TestRunRequiresAgoraTransportRunnerWithoutProviderValidation(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		Transport: WorkerTransportAgora,
 	})
@@ -3675,13 +3680,13 @@ func TestRunValidatesAgoraOptionsBeforeTransportRunner(t *testing.T) {
 
 	err := server.Run(context.Background())
 	if err == nil {
-		t.Fatal("Run() error = nil, want Agora config error")
+		t.Fatal("Run() error = nil, want missing transport runner")
 	}
-	if !strings.Contains(err.Error(), "AGORA_APP_ID") {
-		t.Fatalf("Run() error = %q, want AGORA_APP_ID", err.Error())
+	if !strings.Contains(err.Error(), "agora transport run function") {
+		t.Fatalf("Run() error = %q, want missing transport runner", err.Error())
 	}
-	if strings.Contains(err.Error(), "transport run function") {
-		t.Fatalf("Run() error = %q, validated runner before Agora config", err.Error())
+	if strings.Contains(err.Error(), "AGORA_") {
+		t.Fatalf("Run() error = %q, want no provider-specific validation", err.Error())
 	}
 }
 

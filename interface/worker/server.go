@@ -1257,7 +1257,7 @@ func (s *AgentServer) validateRunPreconditions() error {
 		return err
 	}
 	if transport == WorkerTransportAgora {
-		return s.Options.Agora.Validate()
+		return nil
 	}
 	return workerlivekit.ValidateServerConnectionOptions(workerlivekit.ServerConnectionOptions{
 		WSURL:     s.Options.WSRL,

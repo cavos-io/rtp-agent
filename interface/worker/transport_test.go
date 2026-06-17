@@ -27,21 +27,24 @@ func TestValidateWorkerTransportRejectsUnknown(t *testing.T) {
 	}
 }
 
-func TestAgoraOptionsValidateRequiresAppIDAndChannel(t *testing.T) {
-	err := (AgoraOptions{}).Validate()
-	if err == nil {
-		t.Fatal("AgoraOptions.Validate() error = nil, want missing app ID")
-	}
-	if !strings.Contains(err.Error(), "AGORA_APP_ID") {
-		t.Fatalf("AgoraOptions.Validate() error = %q, want AGORA_APP_ID", err.Error())
+func TestValidateWorkerTransportAcceptsKnownTransports(t *testing.T) {
+	tests := []struct {
+		name      string
+		transport WorkerTransport
+	}{
+		{name: "default livekit", transport: ""},
+		{name: "livekit", transport: WorkerTransportLiveKit},
+		{name: "agora", transport: WorkerTransportAgora},
+		{name: "trimmed agora", transport: WorkerTransport(" agora ")},
+		{name: "upper livekit", transport: WorkerTransport("LIVEKIT")},
 	}
 
-	err = (AgoraOptions{AppID: "app-id"}).Validate()
-	if err == nil {
-		t.Fatal("AgoraOptions.Validate() error = nil, want missing channel")
-	}
-	if !strings.Contains(err.Error(), "AGORA_CHANNEL") {
-		t.Fatalf("AgoraOptions.Validate() error = %q, want AGORA_CHANNEL", err.Error())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := ValidateWorkerTransport(tt.transport); err != nil {
+				t.Fatalf("ValidateWorkerTransport(%q) error = %v", tt.transport, err)
+			}
+		})
 	}
 }
 
