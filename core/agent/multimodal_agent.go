@@ -704,6 +704,7 @@ func (ma *MultimodalAgent) consumeRealtimeGeneration(ctx context.Context, speech
 func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *SpeechHandle, message llm.MessageGeneration) {
 	var text string
 	var modalities []string
+	startedSpeaking := false
 	modalitiesCh := message.ModalitiesCh
 	for message.TextCh != nil || message.AudioCh != nil || modalitiesCh != nil {
 		select {
@@ -739,6 +740,10 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 						})
 					}
 					return
+				}
+				if !startedSpeaking && session != nil {
+					session.UpdateAgentState(AgentStateSpeaking)
+					startedSpeaking = true
 				}
 			}
 		}
