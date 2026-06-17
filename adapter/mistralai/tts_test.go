@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -241,6 +243,48 @@ func TestMistralAITTSStreamDecodesReferenceMP3Response(t *testing.T) {
 	if string(audio.Frame.Data) == string(mp3Data[:len(audio.Frame.Data)]) {
 		t.Fatal("frame data still contains compressed mp3 bytes")
 	}
+}
+
+func TestMistralAITTSSynthesizeReturnsAPIStatusError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: mistralAITTSRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+			Header:     make(http.Header),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider, err := NewMistralAITTS("test-key", "", WithMistralAITTSBaseURL("https://mistral.example/v1"))
+	if err != nil {
+		t.Fatalf("new tts: %v", err)
+	}
+
+	_, err = provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("Synthesize error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	if statusErr.Body != `{"error":"rate limited"}` {
+		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("retryable = false, want true for 429")
+	}
+}
+
+type mistralAITTSRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f mistralAITTSRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
 }
 
 func decodeMistralTTSBody(t *testing.T, req *http.Request) map[string]any {

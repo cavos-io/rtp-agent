@@ -16,6 +16,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -122,7 +123,7 @@ func (t *MistralAITTS) Synthesize(ctx context.Context, text string) (tts.Chunked
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("mistralai tts error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("MistralAI TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	return &mistralAITTSChunkedStream{
 		reader:         resp.Body,
