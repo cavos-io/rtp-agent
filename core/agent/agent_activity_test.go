@@ -6006,6 +6006,34 @@ func TestAgentActivityUserTurnExceededSkipsWhenAgentStartsSpeaking(t *testing.T)
 	}
 }
 
+func TestAgentActivityUserTurnExceededKeepsLatestWhileWaiting(t *testing.T) {
+	agent := &countingExceededAgent{Agent: NewAgent("test"), calls: make(chan UserTurnExceededEvent, 1)}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnUserTurnExceeded(UserTurnExceededEvent{Transcript: "first", AccumulatedWordCount: 3})
+	activity.OnUserTurnExceeded(UserTurnExceededEvent{Transcript: "second", AccumulatedWordCount: 4})
+	current.MarkDone()
+
+	select {
+	case ev := <-agent.calls:
+		if ev.Transcript != "second" || ev.AccumulatedWordCount != 4 {
+			t.Fatalf("OnUserTurnExceeded event = %#v, want latest second/4", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("OnUserTurnExceeded was not called after active speech completed")
+	}
+	select {
+	case ev := <-agent.calls:
+		t.Fatalf("OnUserTurnExceeded called more than once: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 type turnCompletedAgent struct {
 	*Agent
 	turns chan *llm.ChatMessage
