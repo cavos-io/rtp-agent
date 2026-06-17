@@ -22,6 +22,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
+	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	mathutil "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -1154,30 +1155,7 @@ func workerTypeToJobType(workerType WorkerType) livekit.JobType {
 }
 
 func agentWebSocketURL(rawURL string, workerToken string) (string, error) {
-	wsURL, err := url.Parse(rawURL)
-	if err != nil {
-		return "", err
-	}
-
-	if wsURL.Scheme == "http" {
-		wsURL.Scheme = "ws"
-	} else if wsURL.Scheme == "https" {
-		wsURL.Scheme = "wss"
-	}
-
-	basePath := strings.TrimRight(wsURL.Path, "/")
-	wsURL.Path = basePath + "/agent"
-	if basePath == "" {
-		wsURL.Path = "/agent"
-	}
-
-	values := url.Values{}
-	if workerToken != "" {
-		values.Set("worker_token", workerToken)
-	}
-	wsURL.RawQuery = values.Encode()
-
-	return wsURL.String(), nil
+	return workerlivekit.AgentWebSocketURL(rawURL, workerToken)
 }
 
 func agentIdentityForJobID(jobID string) string {
