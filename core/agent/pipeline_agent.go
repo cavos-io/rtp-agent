@@ -625,7 +625,17 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 		if session == nil {
 			return
 		}
-		if _, err := va.synthesizeSpeech(ctx, session, singleTextChannel(speech.Generation.Text), speech); err != nil {
+		speechCtx, speechCancel := context.WithCancel(ctx)
+		go func() {
+			select {
+			case <-speech.interruptCh:
+				speechCancel()
+			case <-speechCtx.Done():
+			}
+		}()
+		_, err := va.synthesizeSpeech(speechCtx, session, singleTextChannel(speech.Generation.Text), speech)
+		speechCancel()
+		if err != nil && !errors.Is(err, context.Canceled) {
 			logger.Logger.Errorw("TTS inference failed", err)
 			va.emitTTSError(session, err)
 		}
