@@ -1127,10 +1127,6 @@ func resolveWorkerPermissions(permissions *WorkerPermissions) WorkerPermissions 
 	return workerlivekit.ResolveWorkerPermissions(permissions)
 }
 
-func agentWebSocketURL(rawURL string, workerToken string) (string, error) {
-	return workerlivekit.AgentWebSocketURL(rawURL, workerToken)
-}
-
 func agentIdentityForJobID(jobID string) string {
 	return workerlivekit.AgentIdentityForJobID(jobID)
 }
@@ -1456,7 +1452,7 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		}()
 	}
 
-	agentURL, err := agentWebSocketURL(s.Options.WSRL, s.Options.WorkerToken)
+	agentURL, err := workerlivekit.AgentWebSocketURL(s.Options.WSRL, s.Options.WorkerToken)
 	if err != nil {
 		return err
 	}

@@ -933,26 +933,34 @@ func TestUpdateOptionsRejectsAfterHTTPServerStarted(t *testing.T) {
 }
 
 func TestAgentWebSocketURLPreservesBasePath(t *testing.T) {
-	got, err := agentWebSocketURL("https://livekit.example/project-a", "")
+	got, err := workerlivekit.AgentWebSocketURL("https://livekit.example/project-a", "")
 	if err != nil {
-		t.Fatalf("agentWebSocketURL() error = %v", err)
+		t.Fatalf("AgentWebSocketURL() error = %v", err)
 	}
 
 	want := "wss://livekit.example/project-a/agent"
 	if got != want {
-		t.Fatalf("agentWebSocketURL() = %q, want %q", got, want)
+		t.Fatalf("AgentWebSocketURL() = %q, want %q", got, want)
+	}
+
+	got, err = workerlivekit.AgentWebSocketURL("http://livekit.example/project-a", "")
+	if err != nil {
+		t.Fatalf("AgentWebSocketURL(http) error = %v", err)
+	}
+	if want := "ws://livekit.example/project-a/agent"; got != want {
+		t.Fatalf("AgentWebSocketURL(http) = %q, want %q", got, want)
 	}
 }
 
 func TestAgentWebSocketURLAddsWorkerToken(t *testing.T) {
-	got, err := agentWebSocketURL("wss://livekit.example/project-a/", "cloud token")
+	got, err := workerlivekit.AgentWebSocketURL("wss://livekit.example/project-a/", "cloud token")
 	if err != nil {
-		t.Fatalf("agentWebSocketURL() error = %v", err)
+		t.Fatalf("AgentWebSocketURL() error = %v", err)
 	}
 
 	want := "wss://livekit.example/project-a/agent?worker_token=cloud+token"
 	if got != want {
-		t.Fatalf("agentWebSocketURL() = %q, want %q", got, want)
+		t.Fatalf("AgentWebSocketURL() = %q, want %q", got, want)
 	}
 }
 
