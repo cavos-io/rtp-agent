@@ -417,6 +417,15 @@ func processMistralAISTTRealtimeMessage(state *mistralAISTTRealtimeState, messag
 		}}
 		events = append(events, mistralAISTTRealtimeUsageEvent(state.requestID, payload["usage"]))
 		return events, nil
+	case "error":
+		errPayload, _ := payload["error"].(map[string]any)
+		return nil, llm.NewAPIStatusErrorWithRetryable(
+			payloadString(errPayload, "message"),
+			int(payloadFloat(errPayload, "code")),
+			state.requestID,
+			errPayload,
+			false,
+		)
 	}
 	return nil, nil
 }

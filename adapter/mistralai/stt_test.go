@@ -164,6 +164,35 @@ func TestMistralAISTTRealtimeStreamMapsReferenceEvents(t *testing.T) {
 	}
 }
 
+func TestMistralAISTTRealtimeErrorEventReturnsAPIStatusError(t *testing.T) {
+	conn := &mistralAISTTFakeRealtimeConn{reads: [][]byte{
+		[]byte(`{"type":"error","error":{"message":"bad request","code":400}}`),
+	}}
+	provider := NewMistralAISTT("test-key", WithMistralAISTTModel("voxtral-realtime-latest"))
+	provider.dialRealtime = func(ctx context.Context, endpoint string, headers http.Header) (mistralAISTTRealtimeConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != 400 || statusErr.Message != "bad request" {
+		t.Fatalf("status error = %+v, want code 400 message bad request", statusErr)
+	}
+	if statusErr.Retryable {
+		t.Fatal("retryable = true, want false for provider realtime error event")
+	}
+}
+
 func TestMistralAISTTRecognizeRequestUsesReferenceMultipartFields(t *testing.T) {
 	provider := NewMistralAISTT("test-key",
 		WithMistralAISTTBaseURL("https://mistral.example/v1"),
