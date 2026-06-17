@@ -148,6 +148,7 @@ type AgentActivity struct {
 
 	eouMu     sync.Mutex
 	eouCancel context.CancelFunc
+	eouDone   chan struct{}
 
 	userTurnExceededMu     sync.Mutex
 	userTurnExceededLocked bool
@@ -547,6 +548,16 @@ func (a *AgentActivity) WaitForInactive(ctx context.Context) error {
 		a.processQueue()
 		active := a.activeSpeechHandles()
 		if len(active) == 0 {
+			if done, ok := a.pendingEOUDetection(); ok {
+				select {
+				case <-done:
+				case <-a.ctx.Done():
+					return errAgentActivityClosed
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				continue
+			}
 			if !a.isUserSpeaking() {
 				return nil
 			}
@@ -597,6 +608,18 @@ func (a *AgentActivity) userTurnUpdated() <-chan struct{} {
 	a.userTurnMu.Lock()
 	defer a.userTurnMu.Unlock()
 	return a.userTurnUpdatedCh
+}
+
+func (a *AgentActivity) pendingEOUDetection() (<-chan struct{}, bool) {
+	if a == nil {
+		return nil, false
+	}
+	a.eouMu.Lock()
+	defer a.eouMu.Unlock()
+	if a.eouDone == nil {
+		return nil, false
+	}
+	return a.eouDone, true
 }
 
 func (a *AgentActivity) OnUserTurnExceeded(ev UserTurnExceededEvent) {
@@ -857,6 +880,7 @@ func (a *AgentActivity) cancelPendingEOUDetection() {
 	}
 	a.eouMu.Unlock()
 	a.manualTurnCommitted = false
+	a.notifyUserTurnUpdated()
 }
 
 func (a *AgentActivity) updateRealtimeChatContext(ctx context.Context) error {
@@ -1484,12 +1508,7 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 	logger.Logger.Infow("Start of speech detected")
 
 	// Cancel pending EOU detection
-	a.eouMu.Lock()
-	if a.eouCancel != nil {
-		a.eouCancel()
-		a.eouCancel = nil
-	}
-	a.eouMu.Unlock()
+	a.cancelPendingEOUDetection()
 
 	a.cancelFalseInterruptionTimer()
 	if a.pauseThinkingSpeechForFalseInterruption() {
@@ -2267,12 +2286,7 @@ func (a *AgentActivity) resumeFinishedPausedSpeech(speech *SpeechHandle) {
 }
 
 func (a *AgentActivity) ClearUserTurn() {
-	a.eouMu.Lock()
-	if a.eouCancel != nil {
-		a.eouCancel()
-		a.eouCancel = nil
-	}
-	a.eouMu.Unlock()
+	a.cancelPendingEOUDetection()
 
 	a.clearPendingUserTurn()
 
@@ -2307,12 +2321,7 @@ func (a *AgentActivity) isUserSpeaking() bool {
 }
 
 func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnOptions) (string, error) {
-	a.eouMu.Lock()
-	if a.eouCancel != nil {
-		a.eouCancel()
-		a.eouCancel = nil
-	}
-	a.eouMu.Unlock()
+	a.cancelPendingEOUDetection()
 
 	if ctx == nil {
 		ctx = a.ctx
@@ -3050,11 +3059,24 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 		a.eouCancel()
 	}
 	ctx, cancel := context.WithCancel(a.ctx)
+	done := make(chan struct{})
 	a.eouCancel = cancel
+	a.eouDone = done
 	a.eouMu.Unlock()
+	a.notifyUserTurnUpdated()
 
 	go func() {
-		defer cancel()
+		defer func() {
+			cancel()
+			a.eouMu.Lock()
+			if a.eouDone == done {
+				a.eouCancel = nil
+				a.eouDone = nil
+			}
+			a.eouMu.Unlock()
+			close(done)
+			a.notifyUserTurnUpdated()
+		}()
 
 		endpointingDelay := a.minEndpointingDelay()
 

@@ -3438,6 +3438,45 @@ func TestAgentSessionWaitForInactiveWaitsForUserSpeech(t *testing.T) {
 	}
 }
 
+func TestAgentSessionWaitForInactiveWaitsForPendingEOU(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.05})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	session.activity = activity
+
+	activity.runEOUDetection(EndOfTurnInfo{NewTranscript: "need help", TranscriptConfidence: 0.9})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.WaitForInactive(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("WaitForInactive returned while EOU was pending: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	select {
+	case msg := <-agent.turns:
+		if got := msg.TextContent(); got != "need help" {
+			t.Fatalf("completed turn text = %q, want need help", got)
+		}
+	case <-testTimeout():
+		t.Fatal("pending EOU did not complete user turn")
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("WaitForInactive error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("WaitForInactive did not return after pending EOU completed")
+	}
+}
+
 func TestAgentSessionWaitForInactiveAndHoldBlocksOtherWaiters(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
