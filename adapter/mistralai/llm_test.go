@@ -88,10 +88,13 @@ func TestMistralLLMUpdateOptionsAppliesReferenceSamplingParams(t *testing.T) {
 
 	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
-	for _, want := range []string{`"temperature":0.3`, `"top_p":0.4`, `"max_completion_tokens":256`} {
+	for _, want := range []string{`"temperature":0.3`, `"top_p":0.4`, `"max_tokens":256`} {
 		if !strings.Contains(capture.requestBody, want) {
 			t.Fatalf("request body = %s, want %s", capture.requestBody, want)
 		}
+	}
+	if strings.Contains(capture.requestBody, `"max_completion_tokens"`) {
+		t.Fatalf("request body = %s, want reference max_tokens key", capture.requestBody)
 	}
 }
 

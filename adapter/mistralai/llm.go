@@ -44,7 +44,7 @@ func WithMistralLLMTopP(topP float64) MistralLLMOption {
 
 func WithMistralLLMMaxCompletionTokens(maxCompletionTokens int) MistralLLMOption {
 	return func(l *MistralLLM) {
-		l.setExtraParam("max_completion_tokens", maxCompletionTokens)
+		l.setExtraParam("max_tokens", maxCompletionTokens)
 	}
 }
 
