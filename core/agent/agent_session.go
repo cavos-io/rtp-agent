@@ -764,6 +764,12 @@ func (s *AgentSession) WaitForInactive(ctx context.Context) error {
 			if err := activity.WaitForInactive(ctx); err != nil {
 				return err
 			}
+			s.mu.Lock()
+			currentActivity := s.activity
+			s.mu.Unlock()
+			if currentActivity != activity {
+				continue
+			}
 		}
 		s.mu.Lock()
 		claims := s.userTurnClaims
