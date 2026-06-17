@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
@@ -156,6 +158,39 @@ func TestMistralAISTTRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 }
 
+func TestMistralAISTTRecognizeReturnsAPIStatusError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: mistralAISTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusBadGateway,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"upstream"}`)),
+			Header:     make(http.Header),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewMistralAISTT("test-key", WithMistralAISTTBaseURL("https://mistral.example/v1"))
+
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Recognize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status code = %d, want 502", statusErr.StatusCode)
+	}
+	if statusErr.Body != `{"error":"upstream"}` {
+		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("retryable = false, want true for 502")
+	}
+}
+
 func TestMistralAISTTRecognizeRequestLanguageSkipsTimestampGranularity(t *testing.T) {
 	provider := NewMistralAISTT("test-key", WithMistralAISTTLanguage("en"))
 
@@ -243,4 +278,10 @@ func assertMistralFormField(t *testing.T, fields map[string]string, key string, 
 	if got := fields[key]; got != want {
 		t.Fatalf("%s = %q, want %q in fields %#v", key, got, want, fields)
 	}
+}
+
+type mistralAISTTRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f mistralAISTTRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
 }
