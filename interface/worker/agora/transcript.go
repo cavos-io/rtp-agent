@@ -46,9 +46,11 @@ func (f *TranscriptForwarder) Start(ctx context.Context) {
 	f.cancel = cancel
 	userEvents := f.session.UserInputTranscribedEvents()
 	agentEvents := f.session.AgentOutputTranscribedEvents()
-	f.wg.Add(2)
+	reasoningEvents := f.session.AgentReasoningTranscribedEvents()
+	f.wg.Add(3)
 	go f.forwardUserTranscripts(ctx, userEvents)
 	go f.forwardAgentTranscripts(ctx, agentEvents)
+	go f.forwardAgentReasoning(ctx, reasoningEvents)
 }
 
 func (f *TranscriptForwarder) Stop(ctx context.Context) error {
@@ -91,11 +93,30 @@ func (f *TranscriptForwarder) forwardAgentTranscripts(ctx context.Context, event
 	}
 }
 
+func (f *TranscriptForwarder) forwardAgentReasoning(ctx context.Context, events <-chan agent.AgentReasoningTranscribedEvent) {
+	defer f.wg.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev := <-events:
+			f.publishReasoning(ctx, ev.Text, ev.IsFinal, f.opts.AssistantStreamID, ev.CreatedAt)
+		}
+	}
+}
+
 func (f *TranscriptForwarder) publishTranscript(ctx context.Context, role string, text string, final bool, streamID string, createdAt time.Time) {
 	if text == "" || f == nil || f.publisher == nil {
 		return
 	}
 	_ = PublishTranscript(ctx, f.publisher, role, text, final, streamID, createdAt)
+}
+
+func (f *TranscriptForwarder) publishReasoning(ctx context.Context, text string, final bool, streamID string, createdAt time.Time) {
+	if text == "" || f == nil || f.publisher == nil {
+		return
+	}
+	_ = PublishReasoning(ctx, f.publisher, "assistant", text, final, streamID, createdAt)
 }
 
 func PublishTranscript(ctx context.Context, publisher DataPublisher, role string, text string, final bool, streamID string, createdAt time.Time) error {

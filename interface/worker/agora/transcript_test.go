@@ -136,6 +136,59 @@ func TestPublishReasoningSendsTENRawPayload(t *testing.T) {
 	}
 }
 
+func TestTranscriptForwarderPublishesTENReasoningTranscript(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	publisher := &recordingDataPublisher{}
+	forwarder := NewTranscriptForwarder(session, publisher, TranscriptForwarderOptions{
+		AssistantStreamID: "100",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	forwarder.Start(ctx)
+	defer forwarder.Stop(context.Background())
+
+	session.EmitAgentReasoningTranscribed(agent.AgentReasoningTranscribedEvent{
+		Text:      "thinking step",
+		IsFinal:   true,
+		CreatedAt: time.UnixMilli(1710000000999),
+	})
+
+	got := waitForPublishedTranscript(t, publisher)
+	if got["data_type"] != "raw" {
+		t.Fatalf("data_type = %#v, want raw", got["data_type"])
+	}
+	if got["role"] != "assistant" {
+		t.Fatalf("role = %#v, want assistant", got["role"])
+	}
+	if got["is_final"] != true {
+		t.Fatalf("is_final = %#v, want true", got["is_final"])
+	}
+	if got["text_ts"] != float64(1710000000999) {
+		t.Fatalf("text_ts = %#v, want event millis", got["text_ts"])
+	}
+	if got["stream_id"] != float64(100) {
+		t.Fatalf("stream_id = %#v, want numeric assistant stream", got["stream_id"])
+	}
+	rawText, ok := got["text"].(string)
+	if !ok {
+		t.Fatalf("text = %#v, want raw JSON string", got["text"])
+	}
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(rawText), &raw); err != nil {
+		t.Fatalf("raw text is not JSON: %v", err)
+	}
+	if raw["type"] != "reasoning" {
+		t.Fatalf("raw type = %#v, want reasoning", raw["type"])
+	}
+	data, ok := raw["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("raw data = %#v, want object", raw["data"])
+	}
+	if data["text"] != "thinking step" {
+		t.Fatalf("raw data text = %#v, want reasoning text", data["text"])
+	}
+}
+
 func waitForPublishedTranscript(t *testing.T, publisher *recordingDataPublisher) map[string]any {
 	t.Helper()
 	deadline := time.After(time.Second)

@@ -70,6 +70,26 @@ func (e *AgentOutputTranscribedEvent) MarshalJSON() ([]byte, error) {
 	})
 }
 
+type AgentReasoningTranscribedEvent struct {
+	Text      string
+	IsFinal   bool
+	CreatedAt time.Time
+}
+
+func (e *AgentReasoningTranscribedEvent) GetType() string { return "agent_reasoning_transcribed" }
+
+func (e *AgentReasoningTranscribedEvent) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(map[string]any{
+		"type":       e.GetType(),
+		"text":       e.Text,
+		"is_final":   e.IsFinal,
+		"created_at": timeToUnixSeconds(e.CreatedAt),
+	})
+}
+
 type UserTurnExceededEvent struct {
 	Transcript            string
 	AccumulatedTranscript string
