@@ -2398,6 +2398,68 @@ func TestRealtimeSessionDisconnectReconnectsAndContinuesEvents(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionReconnectReplaysTools(t *testing.T) {
+	var dialCount atomic.Int32
+	toolsReplayed := make(chan map[string]any, 1)
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		attempt := dialCount.Add(1)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		_, toolsPayload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("Read tools update error = %v", err)
+			return
+		}
+		if attempt == 1 {
+			_ = conn.Close()
+			return
+		}
+		var toolsUpdate map[string]any
+		if err := json.Unmarshal(toolsPayload, &toolsUpdate); err != nil {
+			t.Errorf("Decode tools update error = %v", err)
+			return
+		}
+		toolsReplayed <- toolsUpdate
+		<-releaseSecond
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateTools([]llm.Tool{requestTestTool{}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+
+	select {
+	case update := <-toolsReplayed:
+		if update["type"] != "session.update" {
+			t.Fatalf("replayed tools update type = %#v, want session.update", update["type"])
+		}
+		sessionPayload := update["session"].(map[string]any)
+		tools := sessionPayload["tools"].([]any)
+		tool := tools[0].(map[string]any)
+		if tool["name"] != "lookup" {
+			t.Fatalf("replayed tools = %#v, want lookup", tools)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("session did not replay tools after reconnect")
+	}
+	reconnected := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if reconnected.Reconnect == nil {
+		t.Fatal("Reconnect payload = nil")
+	}
+}
+
 func TestRealtimeSessionIgnoresResponseDoneWithoutGeneration(t *testing.T) {
 	releaseServer := make(chan struct{})
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {

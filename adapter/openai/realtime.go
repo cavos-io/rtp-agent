@@ -215,6 +215,7 @@ type realtimeSession struct {
 	generation       *realtimeGeneration
 	pendingResponses int
 	instructions     string
+	tools            []llm.Tool
 	audioBStream     *audio.AudioByteStream
 	pushedDuration   float64
 	optionsState     map[string]any
@@ -450,7 +451,13 @@ func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
 			"tools": openAIRealtimeTools(tools),
 		},
 	}
-	return s.sendMsg(msg)
+	if err := s.sendMsg(msg); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.tools = append([]llm.Tool(nil), tools...)
+	s.mu.Unlock()
+	return nil
 }
 
 func openAIRealtimeTools(tools []llm.Tool) []map[string]any {
@@ -1375,6 +1382,19 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 	b, err := json.Marshal(msg)
 	if err == nil {
 		err = conn.WriteMessage(websocket.TextMessage, b)
+	}
+	if err == nil && len(s.tools) > 0 {
+		toolsMsg := map[string]any{
+			"type":     "session.update",
+			"event_id": cavosmath.ShortUUID("tools_update_"),
+			"session": map[string]any{
+				"tools": openAIRealtimeTools(s.tools),
+			},
+		}
+		b, err = json.Marshal(toolsMsg)
+		if err == nil {
+			err = conn.WriteMessage(websocket.TextMessage, b)
+		}
 	}
 	if err != nil {
 		s.mu.Unlock()
