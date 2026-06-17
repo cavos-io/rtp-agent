@@ -401,10 +401,7 @@ func (c *JobContext) TokenClaims() (*auth.ClaimGrants, error) {
 }
 
 func (c *JobContext) JobID() string {
-	if c.Job == nil {
-		return ""
-	}
-	return c.Job.Id
+	return workerlivekit.JobID(c.Job)
 }
 
 func (c *JobContext) IsFakeJob() bool {
