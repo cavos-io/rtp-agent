@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"github.com/livekit/protocol/livekit"
 )
 
@@ -147,12 +148,7 @@ type PongResponse struct {
 	Timestamp     int64 `json:"timestamp"`
 }
 
-type JobAcceptArguments struct {
-	Name       string            `json:"name"`
-	Identity   string            `json:"identity"`
-	Metadata   string            `json:"metadata"`
-	Attributes map[string]string `json:"attributes,omitempty"`
-}
+type JobAcceptArguments = workerlivekit.JobAcceptArguments
 
 type RunningJobInfo struct {
 	AcceptArguments JobAcceptArguments `json:"accept_arguments"`

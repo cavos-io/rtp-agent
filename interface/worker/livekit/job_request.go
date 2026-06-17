@@ -9,10 +9,10 @@ import (
 )
 
 type JobAcceptArguments struct {
-	Name       string
-	Identity   string
-	Metadata   string
-	Attributes map[string]string
+	Name       string            `json:"name"`
+	Identity   string            `json:"identity"`
+	Metadata   string            `json:"metadata"`
+	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
 type JobRejectArguments struct {

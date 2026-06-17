@@ -2,6 +2,7 @@ package livekit_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -66,6 +67,23 @@ func TestJobRequestArgumentsOwnLiveKitAcceptRejectShape(t *testing.T) {
 	}
 	if !reject.Terminate {
 		t.Fatal("reject terminate = false, want true")
+	}
+}
+
+func TestJobAcceptArgumentsUseIPCWireJSONNames(t *testing.T) {
+	data, err := json.Marshal(workerlivekit.JobAcceptArguments{
+		Name:       "Agent A",
+		Identity:   "agent-a",
+		Metadata:   "metadata-a",
+		Attributes: map[string]string{"tier": "gold"},
+	})
+	if err != nil {
+		t.Fatalf("Marshal(JobAcceptArguments) error = %v", err)
+	}
+
+	want := `{"name":"Agent A","identity":"agent-a","metadata":"metadata-a","attributes":{"tier":"gold"}}`
+	if string(data) != want {
+		t.Fatalf("JobAcceptArguments JSON = %s, want %s", data, want)
 	}
 }
 
