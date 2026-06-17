@@ -1146,12 +1146,7 @@ func resolveWorkerPermissions(permissions *WorkerPermissions) WorkerPermissions 
 }
 
 func workerTypeToJobType(workerType WorkerType) livekit.JobType {
-	switch workerType {
-	case WorkerTypePublisher:
-		return livekit.JobType_JT_PUBLISHER
-	default:
-		return livekit.JobType_JT_ROOM
-	}
+	return workerlivekit.JobTypeForWorkerType(string(workerType))
 }
 
 func agentWebSocketURL(rawURL string, workerToken string) (string, error) {
