@@ -1624,29 +1624,22 @@ func (s *AgentServer) sendWorkerStatusUpdate() error {
 }
 
 func (s *AgentServer) connectWorkerWebSocket(ctx context.Context, dialer *websocket.Dialer, agentURL string, headers http.Header) (*websocket.Conn, *http.Response, error) {
-	retryCount := 0
-	for {
-		conn, res, err := workerDialContext(ctx, dialer, agentURL, headers)
-		if err == nil {
-			s.setConnectionFailed(false)
-			return conn, res, nil
-		}
-
-		if retryCount >= s.Options.MaxRetry {
+	conn, res, err := workerlivekit.ConnectWorkerWebSocket(ctx, workerlivekit.WorkerWebSocketConnectOptions{
+		Dialer:   dialer,
+		URL:      agentURL,
+		Headers:  headers,
+		MaxRetry: s.Options.MaxRetry,
+		Dial:     workerDialContext,
+		Sleep:    workerRetrySleep,
+	})
+	if err != nil {
+		if workerlivekit.IsConnectFailure(err) {
 			s.setConnectionFailed(true)
-			return nil, nil, workerlivekit.ConnectFailureError(agentURL, retryCount, err)
 		}
-
-		delay := workerRetryDelay(retryCount)
-		retryCount++
-		if err := workerRetrySleep(ctx, delay); err != nil {
-			return nil, nil, err
-		}
+		return nil, nil, err
 	}
-}
-
-func workerRetryDelay(retryCount int) time.Duration {
-	return workerlivekit.RetryDelay(retryCount)
+	s.setConnectionFailed(false)
+	return conn, res, nil
 }
 
 func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMessage) {
