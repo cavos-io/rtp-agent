@@ -425,6 +425,13 @@ func TestElevenLabsStreamPayloadsUseReferenceContextProtocol(t *testing.T) {
 	if init["text"] != " " || init["context_id"] != contextID {
 		t.Fatalf("init payload = %#v, want warmup text with context_id", init)
 	}
+	voiceSettings, ok := init["voice_settings"].(map[string]any)
+	if !ok {
+		t.Fatalf("init voice_settings = %#v, want empty settings object", init["voice_settings"])
+	}
+	if len(voiceSettings) != 0 {
+		t.Fatalf("init voice_settings = %#v, want empty settings object", voiceSettings)
+	}
 	if _, ok := init["generation_config"]; ok {
 		t.Fatalf("init payload = %#v, want no generation_config without configured schedule", init)
 	}

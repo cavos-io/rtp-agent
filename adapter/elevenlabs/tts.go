@@ -598,8 +598,9 @@ func (s *elevenLabsStream) Flush() error {
 
 func elevenLabsInitPayload(contextID string) map[string]interface{} {
 	return map[string]interface{}{
-		"text":       " ",
-		"context_id": contextID,
+		"text":           " ",
+		"voice_settings": map[string]interface{}{},
+		"context_id":     contextID,
 	}
 }
 
