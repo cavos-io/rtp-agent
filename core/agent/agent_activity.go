@@ -113,19 +113,21 @@ type AgentActivity struct {
 	providerUnsubscribes []func()
 	registeredTools      []llm.Tool
 
-	userTurnMu                   sync.Mutex
-	userTurnUpdatedCh            chan struct{}
-	pendingInterimTranscript     string
-	pendingInterimLanguage       string
-	pendingInterimSpeakerID      string
-	userTurnCompletionMu         sync.Mutex
-	pendingUserTranscript        string
-	pendingUserLanguage          string
-	pendingTranscriptConfidence  float64
-	pendingUserTranscriptPresent bool
-	userTurnLimitStartedAt       time.Time
-	userTurnLimitTranscript      string
-	userTurnLimitWordCount       int
+	userTurnMu                       sync.Mutex
+	userTurnUpdatedCh                chan struct{}
+	pendingInterimTranscript         string
+	pendingInterimLanguage           string
+	pendingInterimSpeakerID          string
+	userTurnCompletionMu             sync.Mutex
+	pendingUserTranscript            string
+	pendingUserLanguage              string
+	pendingTranscriptConfidence      float64
+	pendingTranscriptConfidenceSum   float64
+	pendingTranscriptConfidenceCount int
+	pendingUserTranscriptPresent     bool
+	userTurnLimitStartedAt           time.Time
+	userTurnLimitTranscript          string
+	userTurnLimitWordCount           int
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -1558,9 +1560,13 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 
 	a.userTurnMu.Lock()
 	pendingTranscript := strings.TrimSpace(strings.Join([]string{a.pendingUserTranscript, transcript}, " "))
+	confidenceSum := a.pendingTranscriptConfidenceSum + confidence
+	confidenceCount := a.pendingTranscriptConfidenceCount + 1
 	a.pendingUserTranscript = pendingTranscript
 	a.pendingUserLanguage = language
-	a.pendingTranscriptConfidence = confidence
+	a.pendingTranscriptConfidenceSum = confidenceSum
+	a.pendingTranscriptConfidenceCount = confidenceCount
+	a.pendingTranscriptConfidence = confidenceSum / float64(confidenceCount)
 	a.pendingUserTranscriptPresent = true
 	a.pendingInterimTranscript = ""
 	a.pendingInterimLanguage = ""
@@ -1568,7 +1574,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.userTurnMu.Unlock()
 	a.notifyUserTurnUpdated()
 	a.checkUserTurnLimit(transcript)
-	a.maybeStartPreemptiveGeneration(pendingTranscript, confidence)
+	a.maybeStartPreemptiveGeneration(pendingTranscript, confidenceSum/float64(confidenceCount))
 	startedSpeakingAt, stoppedSpeakingAt, transcriptionDelay := a.finalTranscriptTiming(ev)
 
 	turnDetection := a.turnDetectionMode()
@@ -2235,6 +2241,8 @@ collect:
 	a.pendingUserTranscript = ""
 	a.pendingUserLanguage = ""
 	a.pendingTranscriptConfidence = 0
+	a.pendingTranscriptConfidenceSum = 0
+	a.pendingTranscriptConfidenceCount = 0
 	a.pendingUserTranscriptPresent = false
 	a.pendingInterimTranscript = ""
 	a.pendingInterimLanguage = ""
@@ -2665,6 +2673,8 @@ func (a *AgentActivity) clearPendingUserTurn() {
 	a.pendingUserTranscript = ""
 	a.pendingUserLanguage = ""
 	a.pendingTranscriptConfidence = 0
+	a.pendingTranscriptConfidenceSum = 0
+	a.pendingTranscriptConfidenceCount = 0
 	a.pendingUserTranscriptPresent = false
 	a.pendingInterimTranscript = ""
 	a.pendingInterimLanguage = ""

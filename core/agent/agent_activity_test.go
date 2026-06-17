@@ -2239,6 +2239,34 @@ func TestAgentActivityFinalTranscriptsAccumulateBeforeCommit(t *testing.T) {
 	}
 }
 
+func TestAgentActivityFinalTranscriptConfidenceAveragesBeforeCommit(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "hello", Confidence: 0.2}},
+	})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "world", Confidence: 0.8}},
+	})
+
+	if _, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{SkipReply: true}); err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if len(agent.ChatCtx.Items) != 1 {
+		t.Fatalf("agent chat context has %d items, want committed user message", len(agent.ChatCtx.Items))
+	}
+	msg, ok := agent.ChatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("committed chat item = %T, want *llm.ChatMessage", agent.ChatCtx.Items[0])
+	}
+	if msg.TranscriptConfidence == nil || *msg.TranscriptConfidence != 0.5 {
+		t.Fatalf("TranscriptConfidence = %v, want averaged 0.5", msg.TranscriptConfidence)
+	}
+}
+
 func TestAgentActivityDropsFinalTranscriptBeforeAgentSpeechEnd(t *testing.T) {
 	agent := NewAgent("test")
 	agent.TurnDetection = TurnDetectionModeManual
