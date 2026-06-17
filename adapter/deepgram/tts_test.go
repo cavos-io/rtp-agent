@@ -210,6 +210,41 @@ func TestDeepgramTTSStreamCloseSendsReferenceFlushAndClose(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSStreamMarksFinalAudioOnReferenceFlushed(t *testing.T) {
+	stream := &deepgramTTSStream{
+		audio: make(chan *tts.SynthesizedAudio, 1),
+		errCh: make(chan error, 1),
+	}
+
+	if err := stream.handleTextMessage([]byte(`{"type":"Flushed"}`)); err != nil {
+		t.Fatalf("handleTextMessage Flushed error = %v", err)
+	}
+
+	select {
+	case audio := <-stream.audio:
+		if audio == nil || !audio.IsFinal {
+			t.Fatalf("Flushed audio = %+v, want final marker", audio)
+		}
+	default:
+		t.Fatal("Flushed did not emit final audio marker")
+	}
+}
+
+func TestDeepgramTTSStreamPropagatesReferenceErrorMessage(t *testing.T) {
+	stream := &deepgramTTSStream{
+		audio: make(chan *tts.SynthesizedAudio, 1),
+		errCh: make(chan error, 1),
+	}
+
+	err := stream.handleTextMessage([]byte(`{"type":"Error","message":"bad request"}`))
+	if err == nil {
+		t.Fatal("handleTextMessage Error returned nil, want error")
+	}
+	if !strings.Contains(err.Error(), "bad request") {
+		t.Fatalf("error = %q, want bad request", err)
+	}
+}
+
 func TestDeepgramTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	closeCalls := 0

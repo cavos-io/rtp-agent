@@ -258,15 +258,32 @@ func (s *deepgramTTSStream) readLoop() {
 				},
 			}
 		} else {
-			// Deepgram sends metadata as text
-			var metadata map[string]interface{}
-			if err := json.Unmarshal(message, &metadata); err == nil {
-				if metadata["type"] == "Flushed" {
-					// handle flush if needed
-				}
+			if err := s.handleTextMessage(message); err != nil {
+				s.errCh <- err
+				return
 			}
 		}
 	}
+}
+
+func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
+	var metadata map[string]interface{}
+	if err := json.Unmarshal(message, &metadata); err != nil {
+		return nil
+	}
+	switch metadata["type"] {
+	case "Flushed":
+		s.audio <- &tts.SynthesizedAudio{IsFinal: true}
+	case "Error", "error":
+		if msg, ok := metadata["message"].(string); ok && msg != "" {
+			return fmt.Errorf("deepgram tts error: %s", msg)
+		}
+		if msg, ok := metadata["error"].(string); ok && msg != "" {
+			return fmt.Errorf("deepgram tts error: %s", msg)
+		}
+		return fmt.Errorf("deepgram tts error: %v", metadata)
+	}
+	return nil
 }
 
 func (s *deepgramTTSStream) PushText(text string) error {
