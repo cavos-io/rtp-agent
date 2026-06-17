@@ -292,6 +292,13 @@ func (s *telnyxSTTStream) Close() error {
 	if s.cancel != nil {
 		s.cancel()
 	}
+	if s.audioBStream != nil {
+		for _, chunk := range s.audioBStream.Flush() {
+			if err := s.writeBinaryData(chunk.Data); err != nil {
+				return err
+			}
+		}
+	}
 	if s.conn != nil {
 		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	}

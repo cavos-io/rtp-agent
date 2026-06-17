@@ -210,6 +210,43 @@ func TestTelnyxSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	}
 }
 
+func TestTelnyxSTTStreamCloseFlushesBufferedAudioBeforeClose(t *testing.T) {
+	var writes [][]byte
+	closeCalls := 0
+	stream := &telnyxSTTStream{
+		cancel: func() {},
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 800),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 400,
+	}); err != nil {
+		t.Fatalf("PushFrame error = %v, want nil", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes before close = %s, want none", telnyxWriteSizes(writes))
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil", err)
+	}
+	if len(writes) != 1 || len(writes[0]) != 800 {
+		t.Fatalf("writes after close = %s, want buffered 800-byte audio", telnyxWriteSizes(writes))
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+}
+
 func TestTelnyxSTTEventsMatchReferenceLifecycle(t *testing.T) {
 	state := &telnyxSTTStreamState{language: "en"}
 
