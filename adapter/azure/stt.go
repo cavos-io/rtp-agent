@@ -40,6 +40,8 @@ type AzureSTT struct {
 	httpClient    *http.Client
 	websocketURL  string
 	dialWebsocket azureSTTWebsocketDialer
+	mu            sync.Mutex
+	streams       map[*azureSTTStream]struct{}
 }
 
 type AzureSTTOption func(*AzureSTT)
@@ -90,6 +92,7 @@ func NewAzureSTT(apiKey string, region string, opts ...AzureSTTOption) (*AzureST
 		sampleRate:    defaultAzureSTTSampleRate,
 		httpClient:    http.DefaultClient,
 		dialWebsocket: defaultAzureSTTWebsocketDialer,
+		streams:       make(map[*azureSTTStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -106,8 +109,18 @@ func (s *AzureSTT) Provider() string {
 	return "Azure STT"
 }
 func (s *AzureSTT) UpdateOptions(language string) {
-	if language != "" {
-		s.language = language
+	if language == "" {
+		return
+	}
+	var streams []*azureSTTStream
+	s.mu.Lock()
+	s.language = language
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.mu.Unlock()
+	for _, stream := range streams {
+		stream.updateOptions(language)
 	}
 }
 func (s *AzureSTT) InputSampleRate() uint32 {
@@ -140,8 +153,21 @@ func (s *AzureSTT) Stream(ctx context.Context, language string) (stt.RecognizeSt
 		cancel:        cancel,
 		maxReconnects: defaultAzureSTTRetries,
 	}
+	s.registerStream(stream)
 	go stream.readLoop(conn)
 	return stream, nil
+}
+
+func (s *AzureSTT) registerStream(stream *azureSTTStream) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.streams[stream] = struct{}{}
+}
+
+func (s *AzureSTT) unregisterStream(stream *azureSTTStream) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.streams, stream)
 }
 
 func openAzureSTTStreamConnection(ctx context.Context, provider *AzureSTT, streamURL string) (*websocket.Conn, string, error) {
@@ -407,6 +433,7 @@ type azureSTTStream struct {
 	mu            sync.Mutex
 	closed        bool
 	audioWritten  bool
+	reconnectNext bool
 	reconnects    int
 	maxReconnects int
 	ctx           context.Context
@@ -421,6 +448,13 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
+	}
+	if s.reconnectNext {
+		if err := s.reconnectLocked(); err != nil {
+			s.finishWithErrorLocked(err)
+			return err
+		}
+		s.reconnectNext = false
 	}
 	for {
 		if err := s.conn.WriteMessage(websocket.BinaryMessage, buildAzureSTTBinaryMessage("audio", s.connectionID, azureSTTStreamAudioContentType(s.provider, frame), frame.Data)); err != nil {
@@ -455,12 +489,19 @@ func (s *azureSTTStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
+		if s.provider != nil {
+			s.provider.unregisterStream(s)
+		}
 		return nil
 	}
 	s.closed = true
 	s.cancel()
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.conn.Close()
+	err := s.conn.Close()
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
+	return err
 }
 
 func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
@@ -485,6 +526,20 @@ func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 	case <-s.ctx.Done():
 		return nil, s.ctx.Err()
 	}
+}
+
+func (s *azureSTTStream) updateOptions(language string) {
+	if language == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.language = language
+	s.streamURL = buildAzureSTTStreamURL(s.provider, language)
+	s.reconnectNext = true
 }
 
 func (s *azureSTTStream) reconnectLocked() error {
@@ -524,6 +579,9 @@ func (s *azureSTTStream) finishWithErrorLocked(err error) {
 	}
 	s.cancel()
 	_ = s.conn.Close()
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
 }
 
 func (s *azureSTTStream) readLoop(conn *websocket.Conn) {
