@@ -596,6 +596,28 @@ func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvUsesAgoraStreamIDAsUIDFallback(t *testing.T) {
+	unsetEnvForTest(t, "AGORA_UID")
+	t.Setenv("AGORA_STREAM_ID", " 1234 ")
+
+	cfg := DefaultConfigFromEnv()
+
+	if cfg.Agora.UID != "1234" {
+		t.Fatalf("Agora.UID = %q, want AGORA_STREAM_ID fallback", cfg.Agora.UID)
+	}
+}
+
+func TestDefaultConfigFromEnvPrefersAgoraUIDOverStreamID(t *testing.T) {
+	t.Setenv("AGORA_UID", " agent-42 ")
+	t.Setenv("AGORA_STREAM_ID", " 1234 ")
+
+	cfg := DefaultConfigFromEnv()
+
+	if cfg.Agora.UID != "agent-42" {
+		t.Fatalf("Agora.UID = %q, want AGORA_UID override", cfg.Agora.UID)
+	}
+}
+
 func TestDefaultConfigFromEnvUsesTENAgoraGreetingDefault(t *testing.T) {
 	unsetEnvForTest(t, "AGORA_GREETING")
 

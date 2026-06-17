@@ -700,7 +700,7 @@ func DefaultConfigFromEnv() AppConfig {
 			AppID:          strings.TrimSpace(os.Getenv("AGORA_APP_ID")),
 			AppCertificate: strings.TrimSpace(os.Getenv("AGORA_APP_CERTIFICATE")),
 			Channel:        strings.TrimSpace(os.Getenv("AGORA_CHANNEL")),
-			UID:            strings.TrimSpace(os.Getenv("AGORA_UID")),
+			UID:            firstTrimmedEnv("AGORA_UID", "AGORA_STREAM_ID"),
 			Token:          strings.TrimSpace(os.Getenv("AGORA_TOKEN")),
 			PublishAudio:   getenvOptionalBool("AGORA_PUBLISH_AUDIO"),
 			SubscribeAudio: getenvOptionalBool("AGORA_SUBSCRIBE_AUDIO"),
@@ -6176,6 +6176,15 @@ func getenvTrimmedDefaultUnsetOnly(name, fallback string) string {
 func firstEnv(names ...string) string {
 	for _, name := range names {
 		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstTrimmedEnv(names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
 			return value
 		}
 	}
