@@ -1484,7 +1484,10 @@ func (a *AgentActivity) OnInterruption(ev OverlappingSpeechEvent) {
 	a.overlapSpeechEnded = true
 	a.interruptionDetected = true
 	a.restoreAudioActivityInterruption()
-	a.interruptByAudioActivity("overlapping speech", "detected_at", ev.DetectedAt, overlappingSpeechIgnoreUntil(ev))
+	ignoreUntil := overlappingSpeechIgnoreUntil(ev)
+	a.interruptByAudioActivity("overlapping speech", "detected_at", ev.DetectedAt, ignoreUntil)
+	a.onAgentSpeechEnded(ignoreUntil)
+	a.flushHeldSTTEvents()
 }
 
 func (a *AgentActivity) OnVADInferenceDone(ev *vad.VADEvent) {

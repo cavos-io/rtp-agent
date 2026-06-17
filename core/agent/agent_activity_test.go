@@ -825,6 +825,51 @@ func TestAgentActivityOnInterruptionPauseUsesOverlapTimestampForHeldTranscripts(
 	}
 }
 
+func TestAgentActivityOnInterruptionFlushesHeldSTTWithOverlapCutoff(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:              TurnDetectionModeVAD,
+		BackchannelBoundaryEnd:     0,
+		BackchannelBoundaryEndSet:  true,
+		MinInterruptionDuration:    0.05,
+		MinInterruptionDurationSet: true,
+	})
+	session.agentState = AgentStateSpeaking
+	activity := NewAgentActivity(agent, session)
+	activity.holdSTTWhileAgentSpeaking = true
+	activity.userSpeechStartedAt = time.Unix(100, 0)
+	userTranscriptEvents := session.UserInputTranscribedEvents()
+	overlapStartedAt := activity.userSpeechStartedAt.Add(2 * time.Second)
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text:       "assistant overlap",
+			EndTime:    0.5,
+			Confidence: 0.9,
+		}},
+	})
+	if len(activity.heldSTTEvents) != 1 {
+		t.Fatalf("held STT events = %d, want 1 buffered while agent speaking", len(activity.heldSTTEvents))
+	}
+
+	activity.OnInterruption(OverlappingSpeechEvent{
+		IsInterruption:   true,
+		DetectedAt:       overlapStartedAt.Add(250 * time.Millisecond),
+		OverlapStartedAt: &overlapStartedAt,
+	})
+
+	if len(activity.heldSTTEvents) != 0 {
+		t.Fatalf("held STT events = %d, want flushed after interruption", len(activity.heldSTTEvents))
+	}
+	select {
+	case ev := <-userTranscriptEvents:
+		t.Fatalf("unexpected stale held transcript after interruption flush: %#v", ev)
+	default:
+	}
+}
+
 func TestAgentActivityOnVADInferenceDoneInterruptsCurrentSpeech(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}
