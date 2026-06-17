@@ -858,6 +858,56 @@ func TestPipelineAgentEmitsFinalAlignedAgentOutputTranscription(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentMarksSpeakingAfterFirstAudioFrame(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, nil, nil, llm.NewChatContext())
+	ttsGen := &TTSGenerationData{
+		AudioCh:     make(chan *model.AudioFrame),
+		TimedTextCh: make(chan tts.TimedString),
+	}
+	transcriptSync := NewTranscriptSynchronizer(0)
+	defer transcriptSync.Close()
+	done := closedChannel()
+
+	playDone := make(chan error, 1)
+	go func() {
+		_, err := agent.playTTSGenerationWithTranscript(context.Background(), session, ttsGen, transcriptSync, done, nil)
+		playDone <- err
+	}()
+
+	select {
+	case ev := <-session.AgentStateChangedCh:
+		t.Fatalf("agent state changed before first audio frame: %#v", ev)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	ttsGen.AudioCh <- &model.AudioFrame{
+		Data:              []byte{1, 2},
+		SampleRate:        1000,
+		NumChannels:       1,
+		SamplesPerChannel: 100,
+	}
+	close(ttsGen.AudioCh)
+	close(ttsGen.TimedTextCh)
+
+	select {
+	case ev := <-session.AgentStateChangedCh:
+		if ev.NewState != AgentStateSpeaking {
+			t.Fatalf("agent state event = %#v, want speaking after first audio frame", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("agent did not enter speaking after first audio frame")
+	}
+	select {
+	case err := <-playDone:
+		if err != nil {
+			t.Fatalf("playTTSGenerationWithTranscript error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("playTTSGenerationWithTranscript did not finish")
+	}
+}
+
 func TestPipelineAgentSendsSilenceToSTTDuringAECWarmup(t *testing.T) {
 	vadStream := &fakePipelineVADStream{pushedCh: make(chan *model.AudioFrame, 1)}
 	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1)}
