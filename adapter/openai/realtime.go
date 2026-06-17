@@ -288,11 +288,10 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	header.Add("Authorization", "Bearer "+m.apiKey)
 	header.Add("OpenAI-Beta", "realtime=v1")
 
-	conn, _, err := m.dialWebsocket(wsURL, header)
+	conn, err := m.dialRealtimeWebsocket(context.Background(), wsURL, header)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to OpenAI realtime: %w", err)
 	}
-	openAIRealtimeApplySessionDeadline(conn, m.maxSession)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	initialSession := openAIRealtimeInitialSession(m.model, m.modalities)
@@ -338,6 +337,35 @@ func (m *RealtimeModel) unregisterSession(session *realtimeSession) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.sessions, session)
+}
+
+func (m *RealtimeModel) dialRealtimeWebsocket(ctx context.Context, wsURL string, header http.Header) (*websocket.Conn, error) {
+	var (
+		conn *websocket.Conn
+		err  error
+	)
+	for attempt := 0; attempt <= m.connect.MaxRetry; attempt++ {
+		conn, _, err = m.dialWebsocket(wsURL, header)
+		if err == nil {
+			openAIRealtimeApplySessionDeadline(conn, m.maxSession)
+			return conn, nil
+		}
+		if attempt == m.connect.MaxRetry {
+			return nil, err
+		}
+		retryInterval := m.connect.IntervalForRetry(attempt)
+		if retryInterval <= 0 {
+			continue
+		}
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil, err
 }
 
 func openAIRealtimeApplySessionDeadline(conn *websocket.Conn, duration time.Duration) {
@@ -1393,31 +1421,10 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 	header.Add("Authorization", "Bearer "+s.model.apiKey)
 	header.Add("OpenAI-Beta", "realtime=v1")
 
-	var (
-		conn *websocket.Conn
-		err  error
-	)
-	for attempt := 0; attempt <= s.model.connect.MaxRetry; attempt++ {
-		conn, _, err = s.model.dialWebsocket(wsURL, header)
-		if err == nil {
-			break
-		}
-		if attempt == s.model.connect.MaxRetry {
-			return fmt.Errorf("failed to reconnect to OpenAI realtime: %w", err)
-		}
-		retryInterval := s.model.connect.IntervalForRetry(attempt)
-		if retryInterval <= 0 {
-			continue
-		}
-		timer := time.NewTimer(retryInterval)
-		select {
-		case <-s.ctx.Done():
-			timer.Stop()
-			return s.ctx.Err()
-		case <-timer.C:
-		}
+	conn, err := s.model.dialRealtimeWebsocket(s.ctx, wsURL, header)
+	if err != nil {
+		return fmt.Errorf("failed to reconnect to OpenAI realtime: %w", err)
 	}
-	openAIRealtimeApplySessionDeadline(conn, s.model.maxSession)
 
 	s.mu.Lock()
 	oldConn := s.conn

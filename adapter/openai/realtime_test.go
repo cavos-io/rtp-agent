@@ -91,7 +91,7 @@ func TestOpenAIRealtimeSessionRequiresAPIKeyBeforeDial(t *testing.T) {
 
 func TestOpenAIRealtimeSessionUsesEnvBaseURL(t *testing.T) {
 	t.Setenv("OPENAI_BASE_URL", "https://openai.test/openai/v1")
-	model := NewRealtimeModel("test-key", "gpt-realtime")
+	model := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 	var endpoint string
 	model.dialWebsocket = func(url string, _ http.Header) (*websocket.Conn, *http.Response, error) {
 		endpoint = url
@@ -111,7 +111,12 @@ func TestOpenAIRealtimeSessionUsesEnvBaseURL(t *testing.T) {
 
 func TestOpenAIRealtimeSessionUsesConstructorBaseURL(t *testing.T) {
 	t.Setenv("OPENAI_BASE_URL", "https://env.openai.test/openai/v1")
-	model := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeBaseURL("https://constructor.openai.test/openai/v1"))
+	model := NewRealtimeModel(
+		"test-key",
+		"gpt-realtime",
+		WithOpenAIRealtimeBaseURL("https://constructor.openai.test/openai/v1"),
+		WithOpenAIRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
 	var endpoint string
 	model.dialWebsocket = func(url string, _ http.Header) (*websocket.Conn, *http.Response, error) {
 		endpoint = url
@@ -2613,6 +2618,50 @@ func TestRealtimeSessionReconnectRetriesDialFailure(t *testing.T) {
 	}
 	if got := dialCount.Load(); got != 3 {
 		t.Fatalf("dial count = %d, want initial plus failed and successful reconnect", got)
+	}
+}
+
+func TestRealtimeSessionInitialConnectRetriesDialFailure(t *testing.T) {
+	var dialCount atomic.Int32
+	connected := make(chan struct{})
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	baseDialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		close(connected)
+		<-releaseServer
+	})
+	dialer := func(endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		attempt := dialCount.Add(1)
+		if attempt == 1 {
+			return nil, nil, errors.New("temporary initial dial failure")
+		}
+		return baseDialer(endpoint, headers)
+	}
+	realtimeModel := NewRealtimeModel(
+		"test-key",
+		"gpt-realtime",
+		WithOpenAIRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 1, RetryInterval: time.Millisecond}),
+	)
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v, want retry success", err)
+	}
+	defer session.Close()
+
+	select {
+	case <-connected:
+	case <-time.After(time.Second):
+		t.Fatal("initial session update was not sent after retry")
+	}
+	if got := dialCount.Load(); got != 2 {
+		t.Fatalf("dial count = %d, want failed initial dial plus successful retry", got)
 	}
 }
 
