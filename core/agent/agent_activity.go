@@ -2338,24 +2338,30 @@ collect:
 	present := a.pendingUserTranscriptPresent
 	preflightTranscript := a.pendingPreflightTranscript
 	preflightConfidence := a.pendingPreflightConfidence
+	interimTranscript := a.pendingInterimTranscript
+	interimLanguage := a.pendingInterimLanguage
+	interimSpeakerID := a.pendingInterimSpeakerID
 	fallbackLanguage := ""
 	fallbackSpeakerID := ""
+	fallbackTranscript := ""
 	fallbackFinal := false
 	if preflightTranscript != "" {
 		transcript = preflightTranscript
 		confidence = preflightConfidence
-		if !present {
-			fallbackLanguage = a.pendingInterimLanguage
-			fallbackSpeakerID = a.pendingInterimSpeakerID
-			present = true
-			fallbackFinal = true
-		}
+		fallbackLanguage = interimLanguage
+		fallbackSpeakerID = interimSpeakerID
+		fallbackTranscript = interimTranscript
+		present = true
+		fallbackFinal = interimTranscript != ""
 	}
-	if !present && a.pendingInterimTranscript != "" {
-		transcript = a.pendingInterimTranscript
-		confidence = 1
-		fallbackLanguage = a.pendingInterimLanguage
-		fallbackSpeakerID = a.pendingInterimSpeakerID
+	if preflightTranscript == "" && interimTranscript != "" {
+		transcript = strings.TrimSpace(strings.Join([]string{transcript, interimTranscript}, " "))
+		if !present {
+			confidence = 1
+		}
+		fallbackLanguage = interimLanguage
+		fallbackSpeakerID = interimSpeakerID
+		fallbackTranscript = interimTranscript
 		present = true
 		fallbackFinal = true
 	}
@@ -2386,7 +2392,7 @@ collect:
 	if fallbackFinal && a.Session != nil {
 		a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
 			Language:   fallbackLanguage,
-			Transcript: transcript,
+			Transcript: fallbackTranscript,
 			IsFinal:    true,
 			SpeakerID:  fallbackSpeakerID,
 		})

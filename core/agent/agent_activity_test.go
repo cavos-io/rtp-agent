@@ -3720,6 +3720,53 @@ func TestAgentActivityCommitUserTurnTreatsPreflightAsFreshTranscript(t *testing.
 	}
 }
 
+func TestAgentActivityCommitUserTurnAppendsInterimToPendingFinal(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "confirmed words",
+			Confidence: 0.9,
+		}},
+	})
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:      "latest words",
+			Language:  "en",
+			SpeakerID: "speaker-1",
+		}},
+	})
+
+	finalEvents := session.UserInputTranscribedEvents()
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "confirmed words latest words" {
+		t.Fatalf("CommitUserTurn transcript = %q, want confirmed words latest words", transcript)
+	}
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "confirmed words latest words" {
+			t.Fatalf("turn message text = %q, want confirmed words latest words", msg.TextContent())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("OnUserTurnCompleted was not called")
+	}
+	select {
+	case ev := <-finalEvents:
+		if !ev.IsFinal || ev.Transcript != "latest words" || ev.Language != "en" || ev.SpeakerID != "speaker-1" {
+			t.Fatalf("fallback final event = %#v, want final latest words/en/speaker-1", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserInputTranscribedEvents did not receive fallback final interim transcript")
+	}
+}
+
 func TestAgentActivityCommitUserTurnGeneratesReplyWhenLLMConfigured(t *testing.T) {
 	agent := NewAgent("test")
 	agent.TurnDetection = TurnDetectionModeManual
