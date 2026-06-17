@@ -3,6 +3,7 @@ package telnyx
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"net/url"
 	"strconv"
 	"strings"
@@ -156,6 +157,56 @@ func TestTelnyxSTTStreamChunksAndFlushesReferenceAudio(t *testing.T) {
 	}
 	if len(writes) != 2 || len(writes[1]) != 400 {
 		t.Fatalf("writes after flush = %s, want flushed 400-byte remainder", telnyxWriteSizes(writes))
+	}
+}
+
+func TestTelnyxSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
+	writeErr := errors.New("write failed")
+	cancelled := false
+	closeCalls := 0
+	stream := &telnyxSTTStream{
+		cancel: func() { cancelled = true },
+		writeBinary: func([]byte) error {
+			return writeErr
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+
+	err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	})
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("PushFrame error = %v, want write error", err)
+	}
+	if !cancelled {
+		t.Fatal("cancel not called after write failure")
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+	err = stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	})
+	if err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushFrame after write failure error = %v, want closed stream error", err)
+	}
+	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("Flush after write failure error = %v, want closed stream error", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after write failure error = %v, want nil", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls after idempotent Close = %d, want 1", closeCalls)
 	}
 }
 
