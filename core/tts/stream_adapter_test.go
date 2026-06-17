@@ -513,6 +513,45 @@ func TestStreamAdapterPropagatesTokenizerSegmentIDWithinSegment(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterFlushReleasesAudioWithoutFinalUntilEndInput(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{
+		events: []*SynthesizedAudio{
+			{Frame: &model.AudioFrame{Data: []byte{1}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}},
+		},
+	}
+	stream, err := NewStreamAdapter(provider).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("flush releases audio"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	flushed := nextStreamAdapterAudio(t, stream)
+	if flushed.IsFinal {
+		t.Fatal("flushed audio IsFinal = true, want false until EndInput")
+	}
+	if flushed.SegmentID == "" {
+		t.Fatal("flushed SegmentID is empty")
+	}
+
+	if err := EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput returned error: %v", err)
+	}
+	final := nextStreamAdapterAudio(t, stream)
+	if !final.IsFinal {
+		t.Fatal("final audio IsFinal = false, want true after EndInput")
+	}
+	if final.SegmentID != flushed.SegmentID {
+		t.Fatalf("final SegmentID = %q, want flushed segment id %q", final.SegmentID, flushed.SegmentID)
+	}
+}
+
 func TestStreamAdapterForwardsPushAfterFlush(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{}
 	stream, err := NewStreamAdapter(provider).Stream(context.Background())
@@ -568,8 +607,18 @@ func TestStreamAdapterMarksLastFrameInSegmentFinal(t *testing.T) {
 		t.Fatal("first audio IsFinal = true, want false")
 	}
 	second := nextStreamAdapterAudio(t, stream)
-	if !second.IsFinal {
-		t.Fatal("second audio IsFinal = false, want true")
+	if second.IsFinal {
+		t.Fatal("second audio IsFinal = true, want false before EndInput")
+	}
+	if err := EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput returned error: %v", err)
+	}
+	final := nextStreamAdapterAudio(t, stream)
+	if !final.IsFinal {
+		t.Fatal("final audio IsFinal = false, want true after EndInput")
+	}
+	if final.SegmentID != first.SegmentID {
+		t.Fatalf("final SegmentID = %q, want %q", final.SegmentID, first.SegmentID)
 	}
 }
 
@@ -598,6 +647,9 @@ func TestStreamAdapterDoesNotMarkIntermediateSentenceFinal(t *testing.T) {
 	}
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush returned error: %v", err)
+	}
+	if err := EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput returned error: %v", err)
 	}
 
 	first := nextStreamAdapterAudio(t, stream)
@@ -683,8 +735,15 @@ func TestStreamAdapterClearsProviderFinalBeforeLastFrame(t *testing.T) {
 		t.Fatal("first audio IsFinal = true, want adapter to clear provider final before last frame")
 	}
 	second := nextStreamAdapterAudio(t, stream)
-	if !second.IsFinal {
-		t.Fatal("second audio IsFinal = false, want adapter-owned final marker")
+	if second.IsFinal {
+		t.Fatal("second audio IsFinal = true, want adapter to wait for EndInput")
+	}
+	if err := EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput returned error: %v", err)
+	}
+	final := nextStreamAdapterAudio(t, stream)
+	if !final.IsFinal {
+		t.Fatal("final audio IsFinal = false, want adapter-owned final marker")
 	}
 }
 
@@ -823,8 +882,11 @@ func TestStreamAdapterDoesNotMutateProviderAudioMetadata(t *testing.T) {
 	if got == providerAudio {
 		t.Fatal("returned provider audio pointer, want wrapper-owned event")
 	}
-	if got.RequestID == providerAudio.RequestID || got.SegmentID == providerAudio.SegmentID || !got.IsFinal {
-		t.Fatalf("wrapped metadata = request:%q segment:%q final:%t, want wrapper metadata", got.RequestID, got.SegmentID, got.IsFinal)
+	if got.RequestID == providerAudio.RequestID || got.SegmentID == providerAudio.SegmentID {
+		t.Fatalf("wrapped metadata = request:%q segment:%q, want wrapper metadata", got.RequestID, got.SegmentID)
+	}
+	if got.IsFinal {
+		t.Fatal("wrapped audio IsFinal = true, want non-final until EndInput")
 	}
 	if providerAudio.RequestID != "provider-request" || providerAudio.SegmentID != "provider-segment" || providerAudio.IsFinal {
 		t.Fatalf("provider audio mutated: %#v", providerAudio)
