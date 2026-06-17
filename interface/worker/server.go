@@ -1618,7 +1618,7 @@ func (s *AgentServer) connectWorkerWebSocket(ctx context.Context, dialer *websoc
 
 		if retryCount >= s.Options.MaxRetry {
 			s.setConnectionFailed(true)
-			return nil, nil, fmt.Errorf("failed to connect to LiveKit after %d attempts %s: %w", retryCount, agentURL, err)
+			return nil, nil, workerlivekit.ConnectFailureError(agentURL, retryCount, err)
 		}
 
 		delay := workerRetryDelay(retryCount)
