@@ -233,6 +233,7 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 		cancel:      cancel,
 		sampleRate:  s.sampleRate,
 		numChannels: s.numChannels,
+		language:    languageStr,
 	}
 
 	go stream.readLoop()
@@ -277,7 +278,7 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 		return nil, err
 	}
 
-	return deepgramRecognizeSpeechEvent(result), nil
+	return deepgramRecognizeSpeechEventForLanguage(result, languageStr), nil
 }
 
 func validateDeepgramSTTAPIKey(apiKey string) error {
@@ -466,6 +467,7 @@ type deepgramStream struct {
 
 	sampleRate   int
 	numChannels  int
+	language     string
 	audioBStream *audio.AudioByteStream
 	writeBinary  func([]byte) error
 	writeJSON    func(any) error
@@ -510,10 +512,14 @@ type dgResponse struct {
 }
 
 func deepgramRecognizeSpeechEvent(resp dgRecognitionResponse) *stt.SpeechEvent {
+	return deepgramRecognizeSpeechEventForLanguage(resp, "")
+}
+
+func deepgramRecognizeSpeechEventForLanguage(resp dgRecognitionResponse, languageStr string) *stt.SpeechEvent {
 	event := &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,
 		Alternatives: []stt.SpeechData{
-			{},
+			{Language: languageStr},
 		},
 	}
 
@@ -523,6 +529,7 @@ func deepgramRecognizeSpeechEvent(resp dgRecognitionResponse) *stt.SpeechEvent {
 
 	alt := resp.Results.Channels[0].Alternatives[0]
 	event.Alternatives[0] = stt.SpeechData{
+		Language:   languageStr,
 		Text:       alt.Transcript,
 		Confidence: alt.Confidence,
 		Words:      deepgramTimedStrings(alt.Words),
@@ -531,6 +538,10 @@ func deepgramRecognizeSpeechEvent(resp dgRecognitionResponse) *stt.SpeechEvent {
 }
 
 func deepgramSpeechEvent(resp dgResponse) *stt.SpeechEvent {
+	return deepgramSpeechEventForLanguage(resp, "")
+}
+
+func deepgramSpeechEventForLanguage(resp dgResponse, languageStr string) *stt.SpeechEvent {
 	if resp.Type != "Results" || len(resp.Channel.Alternatives) == 0 {
 		return nil
 	}
@@ -547,6 +558,7 @@ func deepgramSpeechEvent(resp dgResponse) *stt.SpeechEvent {
 	for _, alt := range resp.Channel.Alternatives {
 		transcriptBuilder += alt.Transcript
 		event.Alternatives = append(event.Alternatives, stt.SpeechData{
+			Language:   languageStr,
 			Text:       alt.Transcript,
 			Confidence: alt.Confidence,
 			StartTime:  resp.Start,
@@ -615,7 +627,7 @@ func (s *deepgramStream) readLoop() {
 			s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
 
 		case "Results":
-			if event := deepgramSpeechEvent(resp); event != nil {
+			if event := deepgramSpeechEventForLanguage(resp, s.language); event != nil {
 				if !s.speaking {
 					s.speaking = true
 					s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})

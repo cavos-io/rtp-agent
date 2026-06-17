@@ -91,6 +91,19 @@ func TestDeepgramSpeechEventSkipsEmptyFinalTranscript(t *testing.T) {
 	}
 }
 
+func TestDeepgramSpeechEventSetsReferenceLanguage(t *testing.T) {
+	resp := dgResponse{Type: "Results", IsFinal: true}
+	resp.Channel.Alternatives = []dgAlternative{{Transcript: "halo", Confidence: 0.9}}
+
+	event := deepgramSpeechEventForLanguage(resp, "id-ID")
+	if event == nil || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %+v, want one alternative", event)
+	}
+	if got := event.Alternatives[0].Language; got != "id-ID" {
+		t.Fatalf("language = %q, want id-ID", got)
+	}
+}
+
 func TestDeepgramRecognizeSpeechEventPreservesAlternativeWords(t *testing.T) {
 	speaker := 0
 	resp := dgRecognitionResponse{}
@@ -129,6 +142,21 @@ func TestDeepgramRecognizeSpeechEventPreservesAlternativeWords(t *testing.T) {
 	}
 	if got := alt.Words[1]; got.Text != "offline" || got.StartTime != 0.4 || got.EndTime != 0.8 || got.Confidence != 0.9 || got.SpeakerID != "0" {
 		t.Fatalf("second word = %+v, want offline timing with speaker 0", got)
+	}
+}
+
+func TestDeepgramRecognizeSpeechEventSetsReferenceLanguage(t *testing.T) {
+	resp := dgRecognitionResponse{}
+	resp.Results.Channels = []dgRecognitionChannel{
+		{Alternatives: []dgAlternative{{Transcript: "bonjour", Confidence: 0.9}}},
+	}
+
+	event := deepgramRecognizeSpeechEventForLanguage(resp, "fr")
+	if len(event.Alternatives) != 1 {
+		t.Fatalf("alternatives = %d, want 1", len(event.Alternatives))
+	}
+	if got := event.Alternatives[0].Language; got != "fr" {
+		t.Fatalf("language = %q, want fr", got)
 	}
 }
 
