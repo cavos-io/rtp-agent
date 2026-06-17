@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"reflect"
 	"sync"
 	"time"
 
@@ -380,9 +381,43 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 		}
 	}
 
-	options := llm.RealtimeGenerateReplyOptions{
-		ToolChoice: speech.Generation.ToolChoice,
-		Tools:      selectedTools,
+	options := llm.RealtimeGenerateReplyOptions{Tools: selectedTools}
+	if ma.model.Capabilities().PerResponseToolChoice {
+		options.ToolChoice = speech.Generation.ToolChoice
+	} else {
+		var storedToolChoice llm.ToolChoice
+		if session != nil {
+			storedToolChoice = session.Options.ToolChoice
+		}
+		if speech.Generation.ToolChoice != nil && !reflect.DeepEqual(speech.Generation.ToolChoice, storedToolChoice) {
+			if err := rtSession.UpdateOptions(llm.RealtimeSessionOptions{
+				ToolChoice:    speech.Generation.ToolChoice,
+				ToolChoiceSet: true,
+			}); err != nil {
+				logger.Logger.Errorw("failed to update realtime tool choice", err)
+				if session != nil {
+					session.EmitError(ErrorEvent{
+						Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
+						Source: ma.model,
+					})
+				}
+				return
+			}
+			defer func() {
+				if err := rtSession.UpdateOptions(llm.RealtimeSessionOptions{
+					ToolChoice:    storedToolChoice,
+					ToolChoiceSet: true,
+				}); err != nil {
+					logger.Logger.Errorw("failed to reset realtime tool choice", err)
+					if session != nil {
+						session.EmitError(ErrorEvent{
+							Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
+							Source: ma.model,
+						})
+					}
+				}
+			}()
+		}
 	}
 	if speech.Generation.Instructions != nil {
 		options.Instructions = speech.Generation.Instructions.AsModality(speech.InputDetails.Modality).String()

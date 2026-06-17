@@ -405,7 +405,10 @@ func TestMultimodalAgentGenerateReplySendsRealtimeOverrides(t *testing.T) {
 	lookup := &fakeGenerationTool{name: "lookup"}
 	calendar := &fakeGenerationTool{name: "calendar"}
 	rtSession := &fakeRealtimeSession{generateCh: make(chan llm.RealtimeGenerateReplyOptions, 1)}
-	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	ma := NewMultimodalAgent(&fakeRealtimeModel{
+		session:      rtSession,
+		capabilities: llm.RealtimeCapabilities{PerResponseToolChoice: true},
+	}, llm.NewChatContext())
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	session.Assistant = ma
 	session.Tools = []llm.Tool{lookup, calendar}
@@ -454,6 +457,46 @@ func TestMultimodalAgentGenerateReplySendsRealtimeOverrides(t *testing.T) {
 	}
 	if !handle.IsDone() {
 		t.Fatal("speech handle is not done after realtime GenerateReply")
+	}
+}
+
+func TestMultimodalAgentGenerateReplyUsesSessionToolChoiceWhenPerResponseUnsupported(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rtSession := &fakeRealtimeSession{generateCh: make(chan llm.RealtimeGenerateReplyOptions, 1)}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	sessionToolChoice := llm.ToolChoice("auto")
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{ToolChoice: sessionToolChoice})
+	session.Assistant = ma
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	_, err := session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+		ToolChoice: "none",
+	})
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions returned error: %v", err)
+	}
+
+	var opts llm.RealtimeGenerateReplyOptions
+	select {
+	case opts = <-rtSession.generateCh:
+	case <-time.After(time.Second):
+		t.Fatal("realtime session did not receive GenerateReply")
+	}
+	if opts.ToolChoice != nil {
+		t.Fatalf("GenerateReply ToolChoice = %#v, want nil when per-response tool_choice is unsupported", opts.ToolChoice)
+	}
+	if len(rtSession.optionUpdates) != 2 {
+		t.Fatalf("UpdateOptions calls = %d, want temporary tool_choice and reset", len(rtSession.optionUpdates))
+	}
+	if rtSession.optionUpdates[0].ToolChoice != "none" || !rtSession.optionUpdates[0].ToolChoiceSet {
+		t.Fatalf("first UpdateOptions = %#v, want explicit none", rtSession.optionUpdates[0])
+	}
+	if rtSession.optionUpdates[1].ToolChoice != "auto" || !rtSession.optionUpdates[1].ToolChoiceSet {
+		t.Fatalf("second UpdateOptions = %#v, want reset to stored auto", rtSession.optionUpdates[1])
 	}
 }
 
@@ -1949,6 +1992,7 @@ type fakeRealtimeSession struct {
 	tools                 []llm.Tool
 	instructions          string
 	options               llm.RealtimeSessionOptions
+	optionUpdates         []llm.RealtimeSessionOptions
 	generateCh            chan llm.RealtimeGenerateReplyOptions
 	sayCh                 chan string
 	eventCh               chan llm.RealtimeEvent
@@ -1993,6 +2037,7 @@ func (f *fakeRealtimeSession) UpdateTools(tools []llm.Tool) error {
 
 func (f *fakeRealtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) error {
 	f.options = options
+	f.optionUpdates = append(f.optionUpdates, options)
 	return nil
 }
 
