@@ -131,6 +131,7 @@ type AgentActivity struct {
 	pendingTranscriptConfidenceSum   float64
 	pendingTranscriptConfidenceCount int
 	pendingUserTranscriptPresent     bool
+	lastFinalTranscriptTime          time.Time
 	pendingStartedSpeakingAt         *float64
 	pendingStoppedSpeakingAt         *float64
 	pendingTranscriptionDelay        float64
@@ -1644,6 +1645,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.pendingTranscriptConfidenceCount = confidenceCount
 	a.pendingTranscriptConfidence = confidenceSum / float64(confidenceCount)
 	a.pendingUserTranscriptPresent = true
+	a.lastFinalTranscriptTime = time.Now()
 	a.pendingStartedSpeakingAt = startedSpeakingAt
 	a.pendingStoppedSpeakingAt = stoppedSpeakingAt
 	a.pendingTranscriptionDelay = transcriptionDelay
@@ -2288,9 +2290,11 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 	if opts.TranscriptTimeout > 0 {
 		a.userTurnMu.Lock()
 		present := a.pendingUserTranscriptPresent
+		lastFinalTranscriptTime := a.lastFinalTranscriptTime
 		hasInterim := a.pendingInterimTranscript != ""
 		a.userTurnMu.Unlock()
-		if !present {
+		needNewFinal := present && !lastFinalTranscriptTime.IsZero() && time.Since(lastFinalTranscriptTime) > 500*time.Millisecond
+		if !present || needNewFinal {
 			flusher, ok := a.inputTranscriptionFlusher()
 			if ok {
 				flushDuration := opts.STTFlushDuration
@@ -2307,9 +2311,10 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 				for {
 					a.userTurnMu.Lock()
 					present := a.pendingUserTranscriptPresent
+					currentFinalTime := a.lastFinalTranscriptTime
 					ch := a.userTurnUpdatedCh
 					a.userTurnMu.Unlock()
-					if present {
+					if present && (!needNewFinal || currentFinalTime.After(lastFinalTranscriptTime)) {
 						break
 					}
 					select {
@@ -2359,6 +2364,7 @@ collect:
 	a.pendingTranscriptConfidenceSum = 0
 	a.pendingTranscriptConfidenceCount = 0
 	a.pendingUserTranscriptPresent = false
+	a.lastFinalTranscriptTime = time.Time{}
 	a.pendingStartedSpeakingAt = nil
 	a.pendingStoppedSpeakingAt = nil
 	a.pendingTranscriptionDelay = 0
@@ -2800,6 +2806,7 @@ func (a *AgentActivity) clearPendingUserTurn() {
 	a.pendingTranscriptConfidenceSum = 0
 	a.pendingTranscriptConfidenceCount = 0
 	a.pendingUserTranscriptPresent = false
+	a.lastFinalTranscriptTime = time.Time{}
 	a.pendingStartedSpeakingAt = nil
 	a.pendingStoppedSpeakingAt = nil
 	a.pendingTranscriptionDelay = 0

@@ -3619,6 +3619,64 @@ func TestAgentActivityCommitUserTurnSupersedesPendingCommit(t *testing.T) {
 	}
 }
 
+func TestAgentActivityCommitUserTurnFlushesWhenLastFinalIsStale(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	flusher := &recordingTranscriptFlusher{flushed: make(chan struct{}, 1)}
+	session.Assistant = flusher
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "old final",
+			Confidence: 0.88,
+		}},
+	})
+	time.Sleep(550 * time.Millisecond)
+
+	done := make(chan string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{
+			TranscriptTimeout: 500 * time.Millisecond,
+			STTFlushDuration:  20 * time.Millisecond,
+		})
+		if err != nil {
+			errCh <- err
+			return
+		}
+		done <- transcript
+	}()
+
+	select {
+	case <-flusher.flushed:
+	case transcript := <-done:
+		t.Fatalf("CommitUserTurn returned %q before flushing stale final transcript", transcript)
+	case <-time.After(time.Second):
+		t.Fatal("CommitUserTurn did not flush after stale final transcript")
+	}
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "fresh final",
+			Confidence: 0.92,
+		}},
+	})
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	case transcript := <-done:
+		if transcript != "old final fresh final" {
+			t.Fatalf("CommitUserTurn transcript = %q, want old final fresh final", transcript)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CommitUserTurn did not return after fresh final transcript")
+	}
+}
+
 func TestAgentActivityCommitUserTurnGeneratesReplyWhenLLMConfigured(t *testing.T) {
 	agent := NewAgent("test")
 	agent.TurnDetection = TurnDetectionModeManual
