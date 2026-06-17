@@ -23,6 +23,10 @@ func ShouldAutoSubscribeTrack(mode string, kind lksdk.TrackKind) bool {
 	}
 }
 
+func NormalizeAutoSubscribeMode(mode string) string {
+	return normalizeAutoSubscribe(mode)
+}
+
 func normalizeAutoSubscribe(mode string) string {
 	if mode == "" {
 		return autoSubscribeSubscribeAll

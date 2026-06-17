@@ -584,9 +584,7 @@ func normalizeConnectOptions(options ...ConnectOptions) ConnectOptions {
 	if len(options) > 0 {
 		opts = options[0]
 	}
-	if opts.AutoSubscribe == "" {
-		opts.AutoSubscribe = AutoSubscribeSubscribeAll
-	}
+	opts.AutoSubscribe = AutoSubscribe(workerlivekit.NormalizeAutoSubscribeMode(string(opts.AutoSubscribe)))
 	return opts
 }
 
