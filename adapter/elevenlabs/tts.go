@@ -286,14 +286,7 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 		return nil, fmt.Errorf("failed to dial elevenlabs websocket: %w", err)
 	}
 
-	// Send initial configuration
 	contextID := "ctx_" + uuid.NewString()[:12]
-	initMsg := elevenLabsInitPayload(contextID)
-	if err := conn.WriteJSON(initMsg); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("failed to write initial config to elevenlabs: %w", err)
-	}
-
 	ctx, cancel := context.WithCancel(ctx)
 	stream := &elevenLabsStream{
 		conn:       conn,
@@ -370,6 +363,7 @@ type elevenLabsStream struct {
 	encoding   string
 	sampleRate int
 	contextID  string
+	initSent   bool
 }
 
 type elWSResponse struct {
@@ -576,6 +570,9 @@ func (s *elevenLabsStream) PushText(text string) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if err := s.sendInitLocked(); err != nil {
+		return err
+	}
 	if err := s.conn.WriteJSON(elevenLabsTextPayload(s.contextID, text)); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return fmt.Errorf("failed to write text to elevenlabs: %w", err)
@@ -588,6 +585,9 @@ func (s *elevenLabsStream) Flush() error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
+	}
+	if err := s.sendInitLocked(); err != nil {
+		return err
 	}
 	if err := s.conn.WriteJSON(elevenLabsFlushPayload(s.contextID)); err != nil {
 		s.closeAfterWriteFailureLocked()
@@ -626,6 +626,18 @@ func elevenLabsCloseContextPayload(contextID string) map[string]interface{} {
 	}
 }
 
+func (s *elevenLabsStream) sendInitLocked() error {
+	if s.initSent {
+		return nil
+	}
+	if err := s.conn.WriteJSON(elevenLabsInitPayload(s.contextID)); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return fmt.Errorf("failed to write initial config to elevenlabs: %w", err)
+	}
+	s.initSent = true
+	return nil
+}
+
 func (s *elevenLabsStream) closeAfterWriteFailureLocked() {
 	s.closed = true
 	s.cancel()
@@ -640,7 +652,9 @@ func (s *elevenLabsStream) Close() error {
 	}
 	s.closed = true
 	s.cancel()
-	_ = s.conn.WriteJSON(elevenLabsCloseContextPayload(s.contextID))
+	if s.initSent {
+		_ = s.conn.WriteJSON(elevenLabsCloseContextPayload(s.contextID))
+	}
 	return s.conn.Close()
 }
 
