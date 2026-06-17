@@ -61,3 +61,13 @@ func TestMistralLLMRequiresAPIKeyBeforeRequest(t *testing.T) {
 		t.Fatalf("Chat error = %q, want MISTRAL_API_KEY guidance", err)
 	}
 }
+
+func TestMistralLLMUpdateOptionsChangesReferenceModel(t *testing.T) {
+	provider := NewMistralLLM("test-key", "")
+
+	provider.UpdateOptions(WithMistralLLMModel("mistral-small-latest"))
+
+	if provider.Model() != "mistral-small-latest" {
+		t.Fatalf("model = %q, want updated model", provider.Model())
+	}
+}
