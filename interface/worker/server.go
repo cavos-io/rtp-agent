@@ -1198,27 +1198,11 @@ func (s *AgentServer) workerStatusMessage(status livekit.WorkerStatus) *livekit.
 	if status == livekit.WorkerStatus_WS_AVAILABLE && !s.availableForJobWithLoad(load) {
 		status = livekit.WorkerStatus_WS_FULL
 	}
-	return &livekit.WorkerMessage{
-		Message: &livekit.WorkerMessage_UpdateWorker{
-			UpdateWorker: &livekit.UpdateWorkerStatus{
-				Status:   &status,
-				Load:     float32(load),
-				JobCount: jobCount,
-			},
-		},
-	}
+	return workerlivekit.WorkerStatusMessage(status, load, jobCount)
 }
 
 func (s *AgentServer) drainingWorkerStatusMessage() *livekit.WorkerMessage {
-	status := livekit.WorkerStatus_WS_FULL
-	return &livekit.WorkerMessage{
-		Message: &livekit.WorkerMessage_UpdateWorker{
-			UpdateWorker: &livekit.UpdateWorkerStatus{
-				Status:   &status,
-				JobCount: uint32(s.activeJobCount()),
-			},
-		},
-	}
+	return workerlivekit.DrainingWorkerStatusMessage(uint32(s.activeJobCount()))
 }
 
 func jobStatusMessage(jobID string, status livekit.JobStatus) *livekit.WorkerMessage {
