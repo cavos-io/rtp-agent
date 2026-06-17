@@ -318,6 +318,8 @@ func (t *MinimaxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		errCh:      make(chan error, 1),
 		traceID:    "",
 	}
+	stream.writeMessage = stream.writeWebsocketMessage
+	stream.closeConn = stream.closeWebsocketConn
 	go stream.readLoop()
 	return stream, nil
 }
@@ -524,20 +526,37 @@ type minimaxTTSSynthesizeStream struct {
 	traceID    string
 	mu         sync.Mutex
 	closed     bool
+
+	writeMessage func([]byte) error
+	closeConn    func() error
 }
 
 func (s *minimaxTTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("minimax tts stream is closed")
+	}
 	message, err := buildMinimaxTTSTaskContinueMessage(text)
 	if err != nil {
 		return err
 	}
-	return s.conn.WriteMessage(websocket.TextMessage, message)
+	if err := s.writeMessageData(message); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *minimaxTTSSynthesizeStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("minimax tts stream is closed")
+	}
 	return nil
 }
 
@@ -551,10 +570,41 @@ func (s *minimaxTTSSynthesizeStream) Close() error {
 	s.cancel()
 	finishMessage, err := buildMinimaxTTSTaskFinishMessage()
 	if err == nil {
-		_ = s.conn.WriteMessage(websocket.TextMessage, finishMessage)
+		_ = s.writeMessageData(finishMessage)
 	}
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	return s.closeConnection()
+}
+
+func (s *minimaxTTSSynthesizeStream) writeMessageData(message []byte) error {
+	if s.writeMessage != nil {
+		return s.writeMessage(message)
+	}
+	return s.writeWebsocketMessage(message)
+}
+
+func (s *minimaxTTSSynthesizeStream) writeWebsocketMessage(message []byte) error {
+	return s.conn.WriteMessage(websocket.TextMessage, message)
+}
+
+func (s *minimaxTTSSynthesizeStream) closeConnection() error {
+	if s.closeConn != nil {
+		return s.closeConn()
+	}
+	return s.closeWebsocketConn()
+}
+
+func (s *minimaxTTSSynthesizeStream) closeWebsocketConn() error {
 	return s.conn.Close()
+}
+
+func (s *minimaxTTSSynthesizeStream) closeAfterWriteFailureLocked() {
+	if s.closed {
+		return
+	}
+	s.closed = true
+	s.cancel()
+	_ = s.closeConnection()
 }
 
 func (s *minimaxTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {

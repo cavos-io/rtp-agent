@@ -189,6 +189,8 @@ func (t *RespeecherTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 		events:    make(chan *tts.SynthesizedAudio, 100),
 		errCh:     make(chan error, 1),
 	}
+	stream.writeMessage = stream.writeWebsocketMessage
+	stream.closeConn = stream.closeWebsocketConn
 	go stream.readLoop()
 	return stream, nil
 }
@@ -280,25 +282,46 @@ type respeecherTTSSynthesizeStream struct {
 	errCh     chan error
 	mu        sync.Mutex
 	closed    bool
+
+	writeMessage func([]byte) error
+	closeConn    func() error
 }
 
 func (s *respeecherTTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("respeecher tts stream is closed")
+	}
 	message, err := buildRespeecherTTSTextMessage(s.provider, s.contextID, text, true)
 	if err != nil {
 		return err
 	}
-	return s.conn.WriteMessage(websocket.TextMessage, message)
+	if err := s.writeMessageData(message); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *respeecherTTSSynthesizeStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("respeecher tts stream is closed")
+	}
 	message, err := buildRespeecherTTSEndMessage(s.provider, s.contextID)
 	if err != nil {
 		return err
 	}
-	return s.conn.WriteMessage(websocket.TextMessage, message)
+	if err := s.writeMessageData(message); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *respeecherTTSSynthesizeStream) Close() error {
@@ -310,7 +333,38 @@ func (s *respeecherTTSSynthesizeStream) Close() error {
 	s.closed = true
 	s.cancel()
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	return s.closeConnection()
+}
+
+func (s *respeecherTTSSynthesizeStream) writeMessageData(message []byte) error {
+	if s.writeMessage != nil {
+		return s.writeMessage(message)
+	}
+	return s.writeWebsocketMessage(message)
+}
+
+func (s *respeecherTTSSynthesizeStream) writeWebsocketMessage(message []byte) error {
+	return s.conn.WriteMessage(websocket.TextMessage, message)
+}
+
+func (s *respeecherTTSSynthesizeStream) closeConnection() error {
+	if s.closeConn != nil {
+		return s.closeConn()
+	}
+	return s.closeWebsocketConn()
+}
+
+func (s *respeecherTTSSynthesizeStream) closeWebsocketConn() error {
 	return s.conn.Close()
+}
+
+func (s *respeecherTTSSynthesizeStream) closeAfterWriteFailureLocked() {
+	if s.closed {
+		return
+	}
+	s.closed = true
+	s.cancel()
+	_ = s.closeConnection()
 }
 
 func (s *respeecherTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {

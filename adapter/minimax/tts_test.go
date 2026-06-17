@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -462,6 +463,44 @@ func TestMinimaxTTSWebsocketMessagesMatchReference(t *testing.T) {
 		t.Fatalf("decode finish message: %v", err)
 	}
 	assertMinimaxPayload(t, payload, "event", "task_finish")
+}
+
+func TestMinimaxTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
+	writeErr := errors.New("write failed")
+	cancelled := false
+	closeCalls := 0
+	stream := &minimaxTTSSynthesizeStream{
+		cancel: func() { cancelled = true },
+		writeMessage: func([]byte) error {
+			return writeErr
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+
+	if err := stream.PushText("hello"); !errors.Is(err, writeErr) {
+		t.Fatalf("PushText error = %v, want write error", err)
+	}
+	if !cancelled {
+		t.Fatal("cancel not called after write failure")
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushText after write failure error = %v, want closed stream error", err)
+	}
+	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("Flush after write failure error = %v, want closed stream error", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after write failure error = %v, want nil", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls after idempotent Close = %d, want 1", closeCalls)
+	}
 }
 
 func TestMinimaxTTSAudioFromWebsocketMessage(t *testing.T) {

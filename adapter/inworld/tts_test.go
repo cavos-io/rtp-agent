@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -226,6 +228,48 @@ func TestInworldTTSWebsocketMessagesMatchReference(t *testing.T) {
 	}
 	if _, ok := closePayload["close_context"].(map[string]any); !ok {
 		t.Fatalf("close_context missing from %#v", closePayload)
+	}
+}
+
+func TestInworldTTSStreamClosesAfterFlushWriteFailure(t *testing.T) {
+	writeErr := errors.New("write failed")
+	cancelled := false
+	closeCalls := 0
+	stream := &inworldTTSSynthesizeStream{
+		cancel:    func() { cancelled = true },
+		contextID: "ctx-1",
+		writeMessage: func(int, []byte) error {
+			return writeErr
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText error = %v, want nil", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, writeErr) {
+		t.Fatalf("Flush error = %v, want write error", err)
+	}
+	if !cancelled {
+		t.Fatal("cancel not called after write failure")
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushText after write failure error = %v, want closed stream error", err)
+	}
+	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("Flush after write failure error = %v, want closed stream error", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after write failure error = %v, want nil", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls after idempotent Close = %d, want 1", closeCalls)
 	}
 }
 

@@ -1,10 +1,14 @@
 package telnyx
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -90,6 +94,44 @@ func TestTelnyxTTSTextMessagesMatchReference(t *testing.T) {
 	assertTelnyxTextPayload(t, flush, "")
 }
 
+func TestTelnyxTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
+	writeErr := errors.New("write failed")
+	cancelled := false
+	closeCalls := 0
+	stream := &telnyxTTSStream{
+		cancel: func() { cancelled = true },
+		writeMessage: func(map[string]string) error {
+			return writeErr
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+
+	if err := stream.PushText("hello"); !errors.Is(err, writeErr) {
+		t.Fatalf("PushText error = %v, want write error", err)
+	}
+	if !cancelled {
+		t.Fatal("cancel not called after write failure")
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushText after write failure error = %v, want closed stream error", err)
+	}
+	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("Flush after write failure error = %v, want closed stream error", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after write failure error = %v, want nil", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls after idempotent Close = %d, want 1", closeCalls)
+	}
+}
+
 func TestTelnyxTTSAudioFromMessageDecodesBase64Audio(t *testing.T) {
 	payload, _ := json.Marshal(map[string]string{
 		"audio": base64.StdEncoding.EncodeToString([]byte{1, 2, 3, 4}),
@@ -115,6 +157,45 @@ func TestTelnyxTTSAudioFromMessageDecodesBase64Audio(t *testing.T) {
 	}
 	if empty != nil || !done {
 		t.Fatalf("empty=%+v done=%v, want done with no audio", empty, done)
+	}
+}
+
+func TestTelnyxTTSStreamDecodesReferenceMP3Audio(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+	stream := &telnyxTTSStream{
+		ctx:    context.Background(),
+		events: make(chan *tts.SynthesizedAudio, 10),
+		errCh:  make(chan error, 1),
+	}
+	stream.startDecoder()
+	defer stream.Close()
+
+	go func() {
+		stream.pushAudioData(mp3Data)
+		stream.endAudioInput()
+	}()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want decoded audio", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatal("audio frame = nil, want decoded PCM frame")
+	}
+	if audio.Frame.SampleRate != 48000 {
+		t.Fatalf("sample rate = %d, want decoded MP3 sample rate 48000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 2 {
+		t.Fatalf("channels = %d, want decoded MP3 stereo", audio.Frame.NumChannels)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded frame is empty")
+	}
+	if bytes.HasPrefix(mp3Data, audio.Frame.Data) {
+		t.Fatal("frame data still contains raw mp3 bytes")
 	}
 }
 
