@@ -10,3 +10,7 @@ func JobTypeForWorkerType(workerType string) lkprotocol.JobType {
 		return lkprotocol.JobType_JT_ROOM
 	}
 }
+
+func JobTypeNameForWorkerType(workerType string) string {
+	return lkprotocol.JobType_name[int32(JobTypeForWorkerType(workerType))]
+}

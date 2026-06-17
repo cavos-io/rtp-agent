@@ -26,3 +26,23 @@ func TestJobTypeForWorkerType(t *testing.T) {
 		})
 	}
 }
+
+func TestJobTypeNameForWorkerType(t *testing.T) {
+	tests := []struct {
+		name       string
+		workerType string
+		want       string
+	}{
+		{name: "default", workerType: "", want: "JT_ROOM"},
+		{name: "room", workerType: "room", want: "JT_ROOM"},
+		{name: "publisher", workerType: "publisher", want: "JT_PUBLISHER"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := workerlivekit.JobTypeNameForWorkerType(tt.workerType); got != tt.want {
+				t.Fatalf("JobTypeNameForWorkerType(%q) = %q, want %q", tt.workerType, got, tt.want)
+			}
+		})
+	}
+}

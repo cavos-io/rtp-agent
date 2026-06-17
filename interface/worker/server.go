@@ -914,7 +914,7 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 		body := workerMetadataResponse{
 			AgentName:       s.Options.AgentName,
 			AgentNameIsEnv:  s.Options.AgentNameIsEnv,
-			WorkerType:      livekit.JobType_name[int32(workerlivekit.JobTypeForWorkerType(string(s.Options.WorkerType)))],
+			WorkerType:      workerlivekit.JobTypeNameForWorkerType(string(s.Options.WorkerType)),
 			WorkerLoad:      s.currentLoad(),
 			ActiveJobs:      s.activeJobCount(),
 			SDKVersion:      s.Options.Version,
