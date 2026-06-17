@@ -67,18 +67,19 @@ type ChannelClient interface {
 }
 
 type Transport struct {
-	opts       Options
-	client     ChannelClient
-	events     chan Event
-	audio      AudioHandler
-	closeOnce  sync.Once
-	mu         sync.Mutex
-	joinCancel context.CancelFunc
-	joinSeq    uint64
-	joined     bool
-	users      map[string]struct{}
-	closing    bool
-	closed     bool
+	opts         Options
+	client       ChannelClient
+	events       chan Event
+	audio        AudioHandler
+	closeOnce    sync.Once
+	mu           sync.Mutex
+	joinCancel   context.CancelFunc
+	joinSeq      uint64
+	joined       bool
+	disconnected bool
+	users        map[string]struct{}
+	closing      bool
+	closed       bool
 }
 
 func NewTransport(opts Options, client ChannelClient) *Transport {
@@ -156,6 +157,7 @@ func (t *Transport) Join(ctx context.Context) error {
 	closed := t.closing || t.closed
 	if !closed {
 		t.joined = true
+		t.disconnected = false
 	}
 	t.mu.Unlock()
 	if closed {
@@ -179,6 +181,7 @@ func (t *Transport) Leave(ctx context.Context) error {
 	}
 	t.mu.Lock()
 	t.joined = false
+	t.disconnected = false
 	t.users = nil
 	t.mu.Unlock()
 	return nil
@@ -200,9 +203,13 @@ func (t *Transport) PublishPCM(ctx context.Context, frame PCMFrame) error {
 	t.mu.Lock()
 	closed := t.closing || t.closed
 	joined := t.joined
+	disconnected := t.disconnected
 	t.mu.Unlock()
 	if closed {
 		return fmt.Errorf("agora transport is closed")
+	}
+	if disconnected {
+		return fmt.Errorf("agora transport is disconnected")
 	}
 	if !joined {
 		return fmt.Errorf("agora transport is not joined")
@@ -297,6 +304,8 @@ func (t *Transport) acceptEventLocked(event Event) bool {
 
 func (t *Transport) applyEventLocked(event Event) {
 	switch event.Kind {
+	case EventConnected:
+		t.disconnected = false
 	case EventUserJoined:
 		if event.UserID == "" {
 			return
@@ -310,6 +319,7 @@ func (t *Transport) applyEventLocked(event Event) {
 			delete(t.users, event.UserID)
 		}
 	case EventDisconnected:
+		t.disconnected = true
 		t.users = nil
 	}
 }
