@@ -500,6 +500,50 @@ func TestMultimodalAgentGenerateReplyUsesSessionToolChoiceWhenPerResponseUnsuppo
 	}
 }
 
+func TestMultimodalAgentGenerateReplyUsesSessionToolsWhenPerResponseUnsupported(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	lookup := &fakeGenerationTool{name: "lookup"}
+	calendar := &fakeGenerationTool{name: "calendar"}
+	rtSession := &fakeRealtimeSession{generateCh: make(chan llm.RealtimeGenerateReplyOptions, 1)}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Assistant = ma
+	session.Tools = []llm.Tool{lookup, calendar}
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	_, err := session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+		Tools: []string{"lookup"},
+	})
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions returned error: %v", err)
+	}
+
+	var opts llm.RealtimeGenerateReplyOptions
+	select {
+	case opts = <-rtSession.generateCh:
+	case <-time.After(time.Second):
+		t.Fatal("realtime session did not receive GenerateReply")
+	}
+	if len(opts.Tools) != 0 {
+		t.Fatalf("GenerateReply Tools = %#v, want none when per-response tools are unsupported", toolNames(opts.Tools))
+	}
+	if len(rtSession.toolUpdateSets) < 3 {
+		t.Fatalf("UpdateTools calls = %d, want startup, temporary tools, and reset", len(rtSession.toolUpdateSets))
+	}
+	temporaryTools := rtSession.toolUpdateSets[len(rtSession.toolUpdateSets)-2]
+	if got, want := toolNames(temporaryTools), []string{"lookup"}; !equalStrings(got, want) {
+		t.Fatalf("temporary UpdateTools = %#v, want %#v", got, want)
+	}
+	resetTools := rtSession.toolUpdateSets[len(rtSession.toolUpdateSets)-1]
+	if got, want := toolNames(resetTools), []string{"lookup", "calendar"}; !equalStrings(got, want) {
+		t.Fatalf("reset UpdateTools = %#v, want %#v", got, want)
+	}
+}
+
 func TestMultimodalAgentGenerateReplyAppliesInstructionInputModality(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1990,6 +2034,7 @@ type fakeRealtimeSession struct {
 	updated               *llm.ChatContext
 	generatedWithChatCtx  *llm.ChatContext
 	tools                 []llm.Tool
+	toolUpdateSets        [][]llm.Tool
 	instructions          string
 	options               llm.RealtimeSessionOptions
 	optionUpdates         []llm.RealtimeSessionOptions
@@ -2031,6 +2076,7 @@ func (f *fakeRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error 
 
 func (f *fakeRealtimeSession) UpdateTools(tools []llm.Tool) error {
 	f.tools = append([]llm.Tool(nil), tools...)
+	f.toolUpdateSets = append(f.toolUpdateSets, append([]llm.Tool(nil), tools...))
 	f.toolUpdates++
 	return nil
 }

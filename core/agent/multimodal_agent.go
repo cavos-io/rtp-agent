@@ -381,11 +381,40 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 		}
 	}
 
-	options := llm.RealtimeGenerateReplyOptions{Tools: selectedTools}
+	emitRealtimeError := func(message string, err error) {
+		logger.Logger.Errorw(message, err)
+		if session != nil {
+			session.EmitError(ErrorEvent{
+				Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
+				Source: ma.model,
+			})
+		}
+	}
+
+	options := llm.RealtimeGenerateReplyOptions{}
 	if ma.model.Capabilities().PerResponseToolChoice {
 		options.ToolChoice = speech.Generation.ToolChoice
+		options.Tools = selectedTools
 	} else {
 		var storedToolChoice llm.ToolChoice
+		resetToolChoice := false
+		var storedTools []llm.Tool
+		resetTools := false
+		defer func() {
+			if resetToolChoice {
+				if err := rtSession.UpdateOptions(llm.RealtimeSessionOptions{
+					ToolChoice:    storedToolChoice,
+					ToolChoiceSet: true,
+				}); err != nil {
+					emitRealtimeError("failed to reset realtime tool choice", err)
+				}
+			}
+			if resetTools {
+				if err := rtSession.UpdateTools(storedTools); err != nil {
+					emitRealtimeError("failed to reset realtime tools", err)
+				}
+			}
+		}()
 		if session != nil {
 			storedToolChoice = session.Options.ToolChoice
 		}
@@ -394,29 +423,23 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 				ToolChoice:    speech.Generation.ToolChoice,
 				ToolChoiceSet: true,
 			}); err != nil {
-				logger.Logger.Errorw("failed to update realtime tool choice", err)
-				if session != nil {
-					session.EmitError(ErrorEvent{
-						Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
-						Source: ma.model,
-					})
-				}
+				emitRealtimeError("failed to update realtime tool choice", err)
 				return
 			}
-			defer func() {
-				if err := rtSession.UpdateOptions(llm.RealtimeSessionOptions{
-					ToolChoice:    storedToolChoice,
-					ToolChoiceSet: true,
-				}); err != nil {
-					logger.Logger.Errorw("failed to reset realtime tool choice", err)
-					if session != nil {
-						session.EmitError(ErrorEvent{
-							Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
-							Source: ma.model,
-						})
-					}
-				}
-			}()
+			resetToolChoice = true
+		}
+		if len(speech.Generation.Tools) > 0 {
+			var err error
+			storedTools, err = resolveToolsByID(registeredTools, nil)
+			if err != nil {
+				emitRealtimeError("failed to resolve realtime tools for reset", err)
+				return
+			}
+			if err := rtSession.UpdateTools(selectedTools); err != nil {
+				emitRealtimeError("failed to update realtime tools", err)
+				return
+			}
+			resetTools = true
 		}
 	}
 	if speech.Generation.Instructions != nil {
