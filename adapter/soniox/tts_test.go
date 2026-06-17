@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -131,6 +133,30 @@ func TestSonioxTTSOutboundMessagesMatchReference(t *testing.T) {
 	keepalive := buildSonioxTTSKeepaliveMessage()
 	if keepalive["keep_alive"] != true {
 		t.Fatalf("keepalive = %#v, want keep_alive true", keepalive)
+	}
+}
+
+func TestSonioxTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
+	writeErr := errors.New("websocket closed")
+	stream := &sonioxTTSSynthesizeStream{
+		streamID: "stream-1",
+		writeMessage: func(map[string]any) error {
+			return writeErr
+		},
+	}
+
+	err := stream.PushText("hello")
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("PushText error = %v, want write error", err)
+	}
+	if !stream.closed {
+		t.Fatal("stream closed = false after write failure, want true")
+	}
+	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("second PushText error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush error = %v, want io.ErrClosedPipe", err)
 	}
 }
 
