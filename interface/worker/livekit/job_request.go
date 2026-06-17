@@ -122,6 +122,19 @@ func LocalRoomJob(opts LocalRoomJobOptions) *lkprotocol.Job {
 	}
 }
 
+type LocalJobRuntimeInfo struct {
+	JobID      string
+	ExecutorID string
+}
+
+func LocalJobInfo(job *lkprotocol.Job) LocalJobRuntimeInfo {
+	jobID := JobID(job)
+	return LocalJobRuntimeInfo{
+		JobID:      jobID,
+		ExecutorID: "local_" + jobID,
+	}
+}
+
 func JobAcceptIdentity(job *lkprotocol.Job, identity string) string {
 	if identity != "" || job == nil {
 		return identity

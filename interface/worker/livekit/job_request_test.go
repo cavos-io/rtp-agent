@@ -148,6 +148,17 @@ func TestLocalRoomJobBuildsRoomWhenRoomInfoMissing(t *testing.T) {
 	}
 }
 
+func TestLocalJobInfoBuildsExecutorIDFromJobID(t *testing.T) {
+	info := workerlivekit.LocalJobInfo(&lkprotocol.Job{Id: "job-local"})
+
+	if info.JobID != "job-local" {
+		t.Fatalf("LocalJobInfo().JobID = %q, want job-local", info.JobID)
+	}
+	if info.ExecutorID != "local_job-local" {
+		t.Fatalf("LocalJobInfo().ExecutorID = %q, want local_job-local", info.ExecutorID)
+	}
+}
+
 func TestJobAcceptIdentityDefaultsFromJobID(t *testing.T) {
 	got := workerlivekit.JobAcceptIdentity(&lkprotocol.Job{Id: "job_accept"}, "")
 	if got != "agent-job_accept" {

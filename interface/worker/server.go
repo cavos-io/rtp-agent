@@ -1944,6 +1944,7 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	if options == (LocalJobOptions{FakeJob: true}) {
 		jobCtx = newLocalJobContext(roomName, participantIdentity, s.Options)
 	}
+	localJob := workerlivekit.LocalJobInfo(jobCtx.Job)
 	jobCtx.workerID = s.workerID
 	jobCtx.LogContextFields()["worker_id"] = jobCtx.WorkerID()
 	shutdownCh := make(chan struct{})
@@ -1953,19 +1954,19 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	entrypointDone := make(chan struct{})
 
 	s.mu.Lock()
-	s.activeJobs[jobCtx.Job.Id] = jobCtx
+	s.activeJobs[localJob.JobID] = jobCtx
 	s.mu.Unlock()
 
 	entrypoint := func() error {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				logger.Logger.Errorw("Local job entrypoint panicked", fmt.Errorf("%v", recovered), jobLogValues(jobCtx, "jobId", jobCtx.Job.Id)...)
+				logger.Logger.Errorw("Local job entrypoint panicked", fmt.Errorf("%v", recovered), jobLogValues(jobCtx, "jobId", localJob.JobID)...)
 				jobCtx.Shutdown("job crashed")
 				panic(recovered)
 			}
 		}()
 		if err := s.runJobEntrypoint(jobCtx); err != nil {
-			logger.Logger.Errorw("Local job entrypoint failed", err, jobLogValues(jobCtx, "jobId", jobCtx.Job.Id)...)
+			logger.Logger.Errorw("Local job entrypoint failed", err, jobLogValues(jobCtx, "jobId", localJob.JobID)...)
 			jobCtx.Shutdown("job failed")
 			return err
 		}
@@ -1995,6 +1996,7 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 
 func (s *AgentServer) launchLocalJobExecutor(ctx context.Context, jobCtx *JobContext, entrypoint func() error, entrypointDone chan<- struct{}) error {
 	info := runningJobInfoFromContext(jobCtx)
+	localJob := workerlivekit.LocalJobInfo(jobCtx.Job)
 	if s.Options.NumIdleProcessesSet && s.Options.NumIdleProcesses > 0 {
 		pool := newLocalProcPool(s.Options.NumIdleProcesses, workeripc.ExecutorTypeThread, entrypoint)
 		pool.SetTargetIdleProcesses(s.Options.NumIdleProcesses)
@@ -2008,7 +2010,7 @@ func (s *AgentServer) launchLocalJobExecutor(ctx context.Context, jobCtx *JobCon
 			return err
 		}
 		go func() {
-			if executor := pool.GetByJobID(jobCtx.Job.Id); executor != nil {
+			if executor := pool.GetByJobID(localJob.JobID); executor != nil {
 				_ = executor.Close(context.Background())
 			}
 			_ = pool.Close()
@@ -2017,7 +2019,7 @@ func (s *AgentServer) launchLocalJobExecutor(ctx context.Context, jobCtx *JobCon
 		return nil
 	}
 
-	executor := newLocalJobExecutor("local_"+jobCtx.Job.Id, entrypoint)
+	executor := newLocalJobExecutor(localJob.ExecutorID, entrypoint)
 	if err := executor.LaunchRunningJob(ctx, info); err != nil {
 		return err
 	}
