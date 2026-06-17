@@ -544,7 +544,15 @@ func (a *AgentActivity) WaitForInactive(ctx context.Context) error {
 		a.processQueue()
 		active := a.activeSpeechHandles()
 		if len(active) == 0 {
-			return nil
+			if !a.isUserSpeaking() {
+				return nil
+			}
+			select {
+			case <-a.userTurnUpdated():
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			continue
 		}
 		for _, speech := range active {
 			if err := speech.Wait(ctx); err != nil {
@@ -569,6 +577,17 @@ func (a *AgentActivity) activeSpeechHandles() []*SpeechHandle {
 		}
 	}
 	return active
+}
+
+func (a *AgentActivity) userTurnUpdated() <-chan struct{} {
+	if a == nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	a.userTurnMu.Lock()
+	defer a.userTurnMu.Unlock()
+	return a.userTurnUpdatedCh
 }
 
 func (a *AgentActivity) OnUserTurnExceeded(ev UserTurnExceededEvent) {
@@ -1444,6 +1463,7 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 	if a.Session != nil {
 		a.Session.UpdateUserState(UserStateSpeaking)
 	}
+	a.notifyUserTurnUpdated()
 	if endpointing := a.endpointing(); endpointing != nil {
 		startedAt := vadSpeechStartTimestamp(ev)
 		if sttStartedAt != nil {
@@ -1478,6 +1498,7 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 	if a.Session != nil {
 		a.Session.UpdateUserState(UserStateListening)
 	}
+	a.notifyUserTurnUpdated()
 	if endpointing := a.endpointing(); endpointing != nil && wasSpeaking {
 		shouldIgnore := a.overlapSpeechEnded && !a.interruptionDetected
 		endpointing.OnEndOfSpeech(vadSpeechEndTimestamp(ev), shouldIgnore)
@@ -2264,6 +2285,7 @@ func (a *AgentActivity) ClearUserTurn() {
 
 	a.sttEOSReceived = false
 	a.speaking = false
+	a.notifyUserTurnUpdated()
 	a.manualTurnCommitted = false
 	a.userSpeechStartedAt = time.Time{}
 	a.userSpeechStoppedAt = time.Time{}

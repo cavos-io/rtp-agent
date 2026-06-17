@@ -3376,6 +3376,36 @@ func TestAgentSessionWaitForInactiveWaitsForClaimedUserTurn(t *testing.T) {
 	}
 }
 
+func TestAgentSessionWaitForInactiveWaitsForUserSpeech(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	activity.speaking = true
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.WaitForInactive(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("WaitForInactive returned while user speech was active: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	activity.OnEndOfSpeech(nil)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("WaitForInactive error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("WaitForInactive did not return after user speech ended")
+	}
+}
+
 func TestAgentSessionWaitForInactiveAndHoldBlocksOtherWaiters(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
