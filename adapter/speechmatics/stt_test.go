@@ -128,6 +128,44 @@ func TestSpeechmaticsPushFrameTracksReferenceSpeechDuration(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsPushFrameChunksAndFlushesReferenceAudio(t *testing.T) {
+	var writes [][]byte
+	stream := &speechmaticsSTTStream{
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+	}
+	audioData := make([]byte, 4000)
+	for i := range audioData {
+		audioData[i] = byte(i)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              audioData,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 2000,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("binary writes after PushFrame = %d, want one 100ms chunk", len(writes))
+	}
+	if got := len(writes[0]); got != 3200 {
+		t.Fatalf("first chunk length = %d, want 3200", got)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if len(writes) != 2 {
+		t.Fatalf("binary writes after Flush = %d, want remainder chunk", len(writes))
+	}
+	if got := len(writes[1]); got != 800 {
+		t.Fatalf("flush chunk length = %d, want 800", got)
+	}
+}
+
 func TestSpeechmaticsSTTCapabilitiesMatchReference(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 	capabilities := provider.Capabilities()

@@ -341,6 +341,7 @@ type speechmaticsSTTStream struct {
 
 	writeBinary func([]byte) error
 	state       *speechmaticsStreamState
+	audioBuf    *audio.AudioByteStream
 }
 
 type speechmaticsStreamState struct {
@@ -512,10 +513,15 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.state == nil {
 		s.state = &speechmaticsStreamState{}
 	}
-	if err := s.writeBinaryData(frame.Data); err != nil {
-		return err
+	if s.audioBuf == nil {
+		s.audioBuf = newSpeechmaticsAudioByteStream(frame)
 	}
-	s.state.speechDuration += audio.CalculateFrameDuration(frame)
+	for _, chunk := range s.audioBuf.Push(frame.Data) {
+		if err := s.writeBinaryData(chunk.Data); err != nil {
+			return err
+		}
+		s.state.speechDuration += audio.CalculateFrameDuration(chunk)
+	}
 	return nil
 }
 
@@ -534,7 +540,36 @@ func (s *speechmaticsSTTStream) writeBinaryMessage(data []byte) error {
 }
 
 func (s *speechmaticsSTTStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.audioBuf == nil {
+		return nil
+	}
+	if s.state == nil {
+		s.state = &speechmaticsStreamState{}
+	}
+	for _, chunk := range s.audioBuf.Flush() {
+		if err := s.writeBinaryData(chunk.Data); err != nil {
+			return err
+		}
+		s.state.speechDuration += audio.CalculateFrameDuration(chunk)
+	}
 	return nil
+}
+
+func newSpeechmaticsAudioByteStream(frame *model.AudioFrame) *audio.AudioByteStream {
+	sampleRate := frame.SampleRate
+	if sampleRate == 0 {
+		sampleRate = 16000
+	}
+	numChannels := frame.NumChannels
+	if numChannels == 0 {
+		numChannels = 1
+	}
+	return audio.NewAudioByteStream(sampleRate, numChannels, 0)
 }
 
 func (s *speechmaticsSTTStream) Close() error {
