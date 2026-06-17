@@ -1636,20 +1636,21 @@ func workerRetryDelay(retryCount int) time.Duration {
 }
 
 func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMessage) {
-	switch m := msg.Message.(type) {
-	case *livekit.ServerMessage_Register:
-		logger.Logger.Infow("Worker Registered", "workerId", m.Register.WorkerId, "serverInfo", m.Register.ServerInfo)
+	dispatch := workerlivekit.ServerMessageDispatch(msg)
+	switch dispatch.Kind {
+	case workerlivekit.ServerMessageKindRegister:
+		logger.Logger.Infow("Worker Registered", "workerId", dispatch.Register.WorkerID, "serverInfo", dispatch.Register.ServerInfo)
 		s.mu.Lock()
-		s.workerID = m.Register.WorkerId
+		s.workerID = dispatch.Register.WorkerID
 		s.mu.Unlock()
-		s.emitWorkerRegistered(m.Register.WorkerId, m.Register.ServerInfo)
+		s.emitWorkerRegistered(dispatch.Register.WorkerID, dispatch.Register.ServerInfo)
 		s.reportActiveJobs()
-	case *livekit.ServerMessage_Availability:
-		s.handleAvailability(ctx, m.Availability)
-	case *livekit.ServerMessage_Assignment:
-		s.handleAssignment(ctx, m.Assignment)
-	case *livekit.ServerMessage_Termination:
-		s.handleTermination(m.Termination)
+	case workerlivekit.ServerMessageKindAvailability:
+		s.handleAvailability(ctx, dispatch.Availability)
+	case workerlivekit.ServerMessageKindAssignment:
+		s.handleAssignment(ctx, dispatch.Assignment)
+	case workerlivekit.ServerMessageKindTermination:
+		s.handleTermination(dispatch.Termination)
 	default:
 		logger.Logger.Warnw("Unhandled message type received", nil)
 	}

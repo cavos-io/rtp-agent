@@ -100,6 +100,90 @@ func TestServerMessageFrameDecodesBinaryFrame(t *testing.T) {
 	}
 }
 
+func TestServerMessageDispatchClassifiesRegisterMessage(t *testing.T) {
+	serverInfo := &lkprotocol.ServerInfo{Region: "iad"}
+	dispatch := workerlivekit.ServerMessageDispatch(&lkprotocol.ServerMessage{
+		Message: &lkprotocol.ServerMessage_Register{
+			Register: &lkprotocol.RegisterWorkerResponse{
+				WorkerId:   "worker-a",
+				ServerInfo: serverInfo,
+			},
+		},
+	})
+
+	if dispatch.Kind != workerlivekit.ServerMessageKindRegister {
+		t.Fatalf("ServerMessageDispatch().Kind = %q, want register", dispatch.Kind)
+	}
+	if dispatch.Register.WorkerID != "worker-a" {
+		t.Fatalf("ServerMessageDispatch().Register.WorkerID = %q, want worker-a", dispatch.Register.WorkerID)
+	}
+	if dispatch.Register.ServerInfo != serverInfo {
+		t.Fatal("ServerMessageDispatch().Register.ServerInfo did not preserve server info")
+	}
+}
+
+func TestServerMessageDispatchClassifiesJobMessages(t *testing.T) {
+	availability := &lkprotocol.AvailabilityRequest{Job: &lkprotocol.Job{Id: "job-available"}}
+	assignment := &lkprotocol.JobAssignment{Job: &lkprotocol.Job{Id: "job-assigned"}}
+	termination := &lkprotocol.JobTermination{JobId: "job-stop"}
+	tests := []struct {
+		name string
+		msg  *lkprotocol.ServerMessage
+		kind workerlivekit.ServerMessageKind
+		want any
+	}{
+		{
+			name: "availability",
+			msg:  &lkprotocol.ServerMessage{Message: &lkprotocol.ServerMessage_Availability{Availability: availability}},
+			kind: workerlivekit.ServerMessageKindAvailability,
+			want: availability,
+		},
+		{
+			name: "assignment",
+			msg:  &lkprotocol.ServerMessage{Message: &lkprotocol.ServerMessage_Assignment{Assignment: assignment}},
+			kind: workerlivekit.ServerMessageKindAssignment,
+			want: assignment,
+		},
+		{
+			name: "termination",
+			msg:  &lkprotocol.ServerMessage{Message: &lkprotocol.ServerMessage_Termination{Termination: termination}},
+			kind: workerlivekit.ServerMessageKindTermination,
+			want: termination,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dispatch := workerlivekit.ServerMessageDispatch(tt.msg)
+			if dispatch.Kind != tt.kind {
+				t.Fatalf("ServerMessageDispatch().Kind = %q, want %q", dispatch.Kind, tt.kind)
+			}
+			switch tt.kind {
+			case workerlivekit.ServerMessageKindAvailability:
+				if dispatch.Availability != tt.want {
+					t.Fatal("ServerMessageDispatch().Availability did not preserve request")
+				}
+			case workerlivekit.ServerMessageKindAssignment:
+				if dispatch.Assignment != tt.want {
+					t.Fatal("ServerMessageDispatch().Assignment did not preserve assignment")
+				}
+			case workerlivekit.ServerMessageKindTermination:
+				if dispatch.Termination != tt.want {
+					t.Fatal("ServerMessageDispatch().Termination did not preserve termination")
+				}
+			}
+		})
+	}
+}
+
+func TestServerMessageDispatchClassifiesUnknownMessage(t *testing.T) {
+	dispatch := workerlivekit.ServerMessageDispatch(&lkprotocol.ServerMessage{})
+
+	if dispatch.Kind != workerlivekit.ServerMessageKindUnknown {
+		t.Fatalf("ServerMessageDispatch().Kind = %q, want unknown", dispatch.Kind)
+	}
+}
+
 func TestInitialRegisterMessageDecodesBinaryRegisterFrame(t *testing.T) {
 	msg := &lkprotocol.ServerMessage{
 		Message: &lkprotocol.ServerMessage_Register{
