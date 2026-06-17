@@ -1,6 +1,8 @@
 package livekit_test
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
@@ -271,4 +273,49 @@ func TestMoveParticipantRequestDefaultsDestinationRoomFromJob(t *testing.T) {
 	if req.DestinationRoom != "caller-room" {
 		t.Fatalf("MoveParticipantRequest.DestinationRoom = %q, want caller-room", req.DestinationRoom)
 	}
+}
+
+func TestMoveParticipantCallsRoomAPI(t *testing.T) {
+	api := &fakeMoveParticipantAPI{}
+	err := workerlivekit.MoveParticipant(context.Background(), api, &lkprotocol.Job{
+		Room: &lkprotocol.Room{Name: "caller-room"},
+	}, "human-room", "human-agent-sip", "")
+	if err != nil {
+		t.Fatalf("MoveParticipant() error = %v", err)
+	}
+	if api.request == nil {
+		t.Fatal("MoveParticipant() did not call room API")
+	}
+	if api.request.Room != "human-room" {
+		t.Fatalf("MoveParticipant().Room = %q, want human-room", api.request.Room)
+	}
+	if api.request.Identity != "human-agent-sip" {
+		t.Fatalf("MoveParticipant().Identity = %q, want human-agent-sip", api.request.Identity)
+	}
+	if api.request.DestinationRoom != "caller-room" {
+		t.Fatalf("MoveParticipant().DestinationRoom = %q, want caller-room", api.request.DestinationRoom)
+	}
+}
+
+func TestMoveParticipantReturnsRoomAPIError(t *testing.T) {
+	wantErr := errors.New("move failed")
+	api := &fakeMoveParticipantAPI{err: wantErr}
+
+	err := workerlivekit.MoveParticipant(context.Background(), api, nil, "room-a", "caller-a", "room-b")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("MoveParticipant() error = %v, want %v", err, wantErr)
+	}
+}
+
+type fakeMoveParticipantAPI struct {
+	request *lkprotocol.MoveParticipantRequest
+	err     error
+}
+
+func (f *fakeMoveParticipantAPI) MoveParticipant(_ context.Context, req *lkprotocol.MoveParticipantRequest) (*lkprotocol.MoveParticipantResponse, error) {
+	f.request = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &lkprotocol.MoveParticipantResponse{}, nil
 }

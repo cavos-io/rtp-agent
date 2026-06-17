@@ -1,6 +1,8 @@
 package livekit
 
 import (
+	"context"
+
 	"github.com/cavos-io/rtp-agent/library/inference"
 	"github.com/cavos-io/rtp-agent/library/math"
 	lkprotocol "github.com/livekit/protocol/livekit"
@@ -205,4 +207,16 @@ func MoveParticipantRequest(job *lkprotocol.Job, room string, identity string, d
 		Identity:        identity,
 		DestinationRoom: destinationRoom,
 	}
+}
+
+type MoveParticipantAPI interface {
+	MoveParticipant(context.Context, *lkprotocol.MoveParticipantRequest) (*lkprotocol.MoveParticipantResponse, error)
+}
+
+func MoveParticipant(ctx context.Context, api MoveParticipantAPI, job *lkprotocol.Job, room string, identity string, destinationRoom string) error {
+	if api == nil {
+		return nil
+	}
+	_, err := api.MoveParticipant(ctx, MoveParticipantRequest(job, room, identity, destinationRoom))
+	return err
 }

@@ -1,6 +1,11 @@
 package livekit
 
-import lkprotocol "github.com/livekit/protocol/livekit"
+import (
+	"context"
+
+	lkprotocol "github.com/livekit/protocol/livekit"
+	"google.golang.org/protobuf/types/known/emptypb"
+)
 
 const DefaultSIPParticipantName = "SIP-participant"
 
@@ -54,4 +59,48 @@ func JobTransferSIPParticipantRequest(
 	playDialtone bool,
 ) *lkprotocol.TransferSIPParticipantRequest {
 	return TransferSIPParticipantRequest(JobRoomName(job), identity, transferTo, playDialtone)
+}
+
+type SIPAPI interface {
+	CreateSIPParticipant(context.Context, *lkprotocol.CreateSIPParticipantRequest) (*lkprotocol.SIPParticipantInfo, error)
+	TransferSIPParticipant(context.Context, *lkprotocol.TransferSIPParticipantRequest) (*emptypb.Empty, error)
+}
+
+func CreateSIPParticipant(
+	ctx context.Context,
+	api SIPAPI,
+	job *lkprotocol.Job,
+	callTo string,
+	trunkID string,
+	identity string,
+	name string,
+) (*lkprotocol.SIPParticipantInfo, error) {
+	return CreateSIPParticipantWithRequest(ctx, api, JobCreateSIPParticipantRequest(job, callTo, trunkID, identity, name))
+}
+
+func CreateSIPParticipantWithRequest(
+	ctx context.Context,
+	api SIPAPI,
+	req *lkprotocol.CreateSIPParticipantRequest,
+) (*lkprotocol.SIPParticipantInfo, error) {
+	if api == nil {
+		return &lkprotocol.SIPParticipantInfo{}, nil
+	}
+	return api.CreateSIPParticipant(ctx, req)
+}
+
+func TransferSIPParticipant(
+	ctx context.Context,
+	api SIPAPI,
+	job *lkprotocol.Job,
+	identity string,
+	transferTo string,
+	playDialtone bool,
+) error {
+	if api == nil {
+		return nil
+	}
+	req := JobTransferSIPParticipantRequest(job, identity, transferTo, playDialtone)
+	_, err := api.TransferSIPParticipant(ctx, req)
+	return err
 }

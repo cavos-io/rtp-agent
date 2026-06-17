@@ -1954,7 +1954,7 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 
 func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName string, participantIdentity string, options LocalJobOptions) error {
 	if options.Token != "" {
-		identity, err := workerlivekit.TokenIdentity(options.Token)
+		identity, err := workerlivekit.LocalJobTokenIdentity(options.Token)
 		if err != nil {
 			return fmt.Errorf("invalid local job token: %w", err)
 		}
@@ -2213,20 +2213,13 @@ func newLocalJobContext(roomName string, participantIdentity string, opts Worker
 func newLocalJobContextWithOptions(roomName string, participantIdentity string, opts WorkerOptions, options LocalJobOptions) *JobContext {
 	opts = resolveWorkerOptions(opts)
 	token := options.Token
-	if token != "" {
-		if identity, err := workerlivekit.TokenIdentity(token); err == nil {
-			participantIdentity = identity
-		}
-	}
+	participantIdentity = workerlivekit.LocalJobIdentity(token, participantIdentity, mathutil.ShortUUID)
 	job := workerlivekit.LocalRoomJob(workerlivekit.LocalRoomJobOptions{
 		RoomName: roomName,
 		RoomInfo: options.RoomInfo,
 		FakeJob:  options.FakeJob,
 	})
 
-	if participantIdentity == "" {
-		participantIdentity = mathutil.ShortUUID("fake-agent-")
-	}
 	jobCtx := NewJobContext(job, opts.WSRL, opts.APIKey, opts.APISecret)
 	jobCtx.AcceptArguments = JobAcceptArguments{Identity: participantIdentity}
 	jobCtx.fakeJob = options.FakeJob
@@ -2235,13 +2228,9 @@ func newLocalJobContextWithOptions(roomName string, participantIdentity string, 
 	}
 	jobCtx.SetSessionDirectory(options.SessionDirectory)
 	jobCtx.process = NewJobProcess(JobExecutorTypeThread, opts.UserArguments, opts.HTTPProxy)
-	if token != "" {
-		jobCtx.token = token
-	} else if opts.APIKey != "" && opts.APISecret != "" {
-		generatedToken, err := workerlivekit.LocalAgentToken(opts.APIKey, opts.APISecret, participantIdentity, roomName, time.Hour)
-		if err == nil {
-			jobCtx.token = generatedToken
-		}
+	generatedToken, err := workerlivekit.LocalJobToken(token, opts.APIKey, opts.APISecret, participantIdentity, roomName, time.Hour)
+	if err == nil {
+		jobCtx.token = generatedToken
 	}
 	return jobCtx
 }

@@ -80,3 +80,32 @@ func LocalParticipantIdentity(token string, fallbackIdentity string) string {
 	}
 	return fallbackIdentity
 }
+
+func LocalJobIdentity(token string, explicitIdentity string, newIdentity func(string) string) string {
+	if token != "" {
+		if identity, err := TokenIdentity(token); err == nil && identity != "" {
+			return identity
+		}
+	}
+	if explicitIdentity != "" {
+		return explicitIdentity
+	}
+	if newIdentity == nil {
+		return ""
+	}
+	return newIdentity("fake-agent-")
+}
+
+func LocalJobTokenIdentity(token string) (string, error) {
+	return TokenIdentity(token)
+}
+
+func LocalJobToken(existingToken string, apiKey string, apiSecret string, identity string, room string, ttl time.Duration) (string, error) {
+	if existingToken != "" {
+		return existingToken, nil
+	}
+	if apiKey == "" || apiSecret == "" {
+		return "", nil
+	}
+	return LocalAgentToken(apiKey, apiSecret, identity, room, ttl)
+}

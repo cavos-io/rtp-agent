@@ -18,7 +18,6 @@ import (
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"github.com/cavos-io/rtp-agent/library/inference"
 	"github.com/cavos-io/rtp-agent/library/logger"
-	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
@@ -231,6 +230,8 @@ type ConnectOptions struct {
 }
 
 type ParticipantEntrypoint func(*JobContext, *livekit.ParticipantInfo)
+
+type TrackPublicationWaitOptions = workerlivekit.TrackPublicationWaitOptions
 
 type participantEntrypointRegistration struct {
 	entrypoint ParticipantEntrypoint
@@ -694,7 +695,7 @@ func (c *JobContext) WaitForTrackPublication(
 
 func (c *JobContext) WaitForTrackPublicationWithOptions(
 	ctx context.Context,
-	options utils.TrackPublicationWaitOptions,
+	options TrackPublicationWaitOptions,
 ) (*lksdk.RemoteTrackPublication, error) {
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
@@ -862,13 +863,9 @@ func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*livekit.
 		logger.Logger.Warnw("job context DeleteRoom is skipped for fake jobs", nil)
 		return &livekit.DeleteRoomResponse{}, nil
 	}
-	resp, err := c.API().RoomService.DeleteRoom(ctx, workerlivekit.DeleteRoomRequest(c.Job, roomName))
-	if err != nil {
-		if workerlivekit.RoomDeleteNotFound(err) {
-			return &livekit.DeleteRoomResponse{}, nil
-		}
-		logger.Logger.Warnw("error while deleting room", err)
-		return &livekit.DeleteRoomResponse{}, nil
+	resp, warnErr := workerlivekit.DeleteRoomBestEffort(ctx, c.API().RoomService, c.Job, roomName)
+	if warnErr != nil {
+		logger.Logger.Warnw("error while deleting room", warnErr)
 	}
 	return resp, nil
 }
@@ -878,8 +875,7 @@ func (c *JobContext) MoveParticipant(ctx context.Context, room string, identity 
 		logger.Logger.Warnw("job context MoveParticipant is skipped for fake jobs", nil)
 		return nil
 	}
-	_, err := c.API().RoomService.MoveParticipant(ctx, workerlivekit.MoveParticipantRequest(c.Job, room, identity, destinationRoom))
-	return err
+	return workerlivekit.MoveParticipant(ctx, c.API().RoomService, c.Job, room, identity, destinationRoom)
 }
 
 // AddSIPParticipant adds a SIP participant to the room.
@@ -892,8 +888,7 @@ func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunk
 	if len(names) > 0 {
 		name = names[0]
 	}
-	req := workerlivekit.JobCreateSIPParticipantRequest(c.Job, callTo, trunkID, identity, name)
-	return c.API().SIP.CreateSIPParticipant(ctx, req)
+	return workerlivekit.CreateSIPParticipant(ctx, c.API().SIP, c.Job, callTo, trunkID, identity, name)
 }
 
 func (c *JobContext) CreateSIPParticipant(ctx context.Context, req *livekit.CreateSIPParticipantRequest) (*livekit.SIPParticipantInfo, error) {
@@ -901,7 +896,7 @@ func (c *JobContext) CreateSIPParticipant(ctx context.Context, req *livekit.Crea
 		logger.Logger.Warnw("job context CreateSIPParticipant is skipped for fake jobs", nil)
 		return &livekit.SIPParticipantInfo{}, nil
 	}
-	return c.API().SIP.CreateSIPParticipant(ctx, req)
+	return workerlivekit.CreateSIPParticipantWithRequest(ctx, c.API().SIP, req)
 }
 
 // TransferSIPParticipant transfers a SIP participant to another number.
@@ -922,7 +917,5 @@ func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, pa
 	if len(playDialtones) > 0 {
 		playDialtone = playDialtones[0]
 	}
-	req := workerlivekit.JobTransferSIPParticipantRequest(c.Job, identity, transferTo, playDialtone)
-	_, err = c.API().SIP.TransferSIPParticipant(ctx, req)
-	return err
+	return workerlivekit.TransferSIPParticipant(ctx, c.API().SIP, c.Job, identity, transferTo, playDialtone)
 }
