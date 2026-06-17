@@ -3,6 +3,7 @@ package agora
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -22,6 +23,7 @@ type DataMessageSubscriber interface {
 
 type TextInputEvent struct {
 	Text      string
+	StreamID  string
 	Channel   string
 	Publisher string
 }
@@ -40,21 +42,42 @@ func (r RTMMessageRouter) HandleDataMessage(ctx context.Context, msg DataMessage
 	if strings.TrimSpace(r.AgentUserID) != "" && msg.Publisher == strings.TrimSpace(r.AgentUserID) {
 		return nil
 	}
+	if strings.TrimSpace(string(msg.Payload)) == "" {
+		return nil
+	}
 	var payload struct {
 		DataType string `json:"data_type"`
+		Type     string `json:"type"`
 		Text     string `json:"text"`
+		StreamID any    `json:"stream_id"`
 	}
 	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 		return err
 	}
-	if payload.DataType != "input_text" || payload.Text == "" {
+	messageType := payload.DataType
+	if messageType == "" {
+		messageType = payload.Type
+	}
+	if messageType != "input_text" || payload.Text == "" {
 		return nil
 	}
 	return r.TextInput(normalizeContext(ctx), TextInputEvent{
 		Text:      payload.Text,
+		StreamID:  rtmStreamIDValue(payload.StreamID),
 		Channel:   msg.Channel,
 		Publisher: msg.Publisher,
 	})
+}
+
+func rtmStreamIDValue(value any) string {
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	default:
+		return ""
+	}
 }
 
 type TextResponder interface {
@@ -66,7 +89,15 @@ type TextTurnClaimer interface {
 	ClaimUserTurn(context.Context, func(context.Context) error) error
 }
 
+type TextInputTranscriber interface {
+	EmitUserInputTranscribed(agent.UserInputTranscribedEvent)
+}
+
 func HandleTextInput(ctx context.Context, responder TextResponder, text string) error {
+	return HandleTextInputEvent(ctx, responder, TextInputEvent{Text: text})
+}
+
+func HandleTextInputEvent(ctx context.Context, responder TextResponder, ev TextInputEvent) error {
 	if responder == nil {
 		return nil
 	}
@@ -74,8 +105,18 @@ func HandleTextInput(ctx context.Context, responder TextResponder, text string) 
 		if err := responder.Interrupt(false); err != nil {
 			return err
 		}
-		_, err := responder.GenerateReply(ctx, text)
-		return err
+		_, err := responder.GenerateReply(ctx, ev.Text)
+		if err != nil {
+			return err
+		}
+		if transcriber, ok := responder.(TextInputTranscriber); ok {
+			transcriber.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{
+				Transcript: ev.Text,
+				IsFinal:    true,
+				SpeakerID:  ev.StreamID,
+			})
+		}
+		return nil
 	}
 	if claimer, ok := responder.(TextTurnClaimer); ok {
 		return claimer.ClaimUserTurn(normalizeContext(ctx), run)

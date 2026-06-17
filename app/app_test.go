@@ -173,6 +173,34 @@ func (f *fakeAppAgoraDataPublisher) isClosed() bool {
 	return f.closed
 }
 
+type recordingAppTextResponder struct {
+	calls           []string
+	userTranscripts []agent.UserInputTranscribedEvent
+}
+
+func (r *recordingAppTextResponder) Interrupt(force bool) error {
+	if force {
+		r.calls = append(r.calls, "interrupt:true")
+		return nil
+	}
+	r.calls = append(r.calls, "interrupt:false")
+	return nil
+}
+
+func (r *recordingAppTextResponder) GenerateReply(_ context.Context, text string) (*agent.SpeechHandle, error) {
+	r.calls = append(r.calls, "generate:"+text)
+	return nil, nil
+}
+
+func (r *recordingAppTextResponder) ClaimUserTurn(ctx context.Context, fn func(context.Context) error) error {
+	r.calls = append(r.calls, "claim")
+	return fn(ctx)
+}
+
+func (r *recordingAppTextResponder) EmitUserInputTranscribed(ev agent.UserInputTranscribedEvent) {
+	r.userTranscripts = append(r.userTranscripts, ev)
+}
+
 type fakeAppSessionAssistant struct {
 	audioCh   chan *model.AudioFrame
 	started   chan struct{}
@@ -1477,6 +1505,129 @@ func TestRunAgoraPublishesTranscriptDataWhenRTMEnabled(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("runAgora() did not return after cancellation")
+	}
+}
+
+func TestRunAgoraLogsRTMDataMessageErrors(t *testing.T) {
+	previousLogger := logutil.Logger
+	recorder := &appRecordingLogger{entriesCh: make(chan appLogEntry, 8)}
+	logutil.Logger = recorder
+	t.Cleanup(func() {
+		logutil.Logger = previousLogger
+	})
+
+	client := &fakeAppAgoraChannelClient{joinedCh: make(chan struct{}, 1)}
+	dataPublisher := &fakeAppAgoraDataPublisher{}
+	oldNewAgoraChannelClient := appNewAgoraChannelClient
+	appNewAgoraChannelClient = func() (workeragora.ChannelClient, error) {
+		return client, nil
+	}
+	oldNewAgoraDataPublisher := appNewAgoraDataPublisher
+	appNewAgoraDataPublisher = func(workeragora.Options) (workeragora.DataPublisher, error) {
+		return dataPublisher, nil
+	}
+	t.Cleanup(func() {
+		appNewAgoraChannelClient = oldNewAgoraChannelClient
+		appNewAgoraDataPublisher = oldNewAgoraDataPublisher
+	})
+
+	rtmEnabled := true
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	rtpApp := &App{
+		Session: session,
+		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
+		Config: AppConfig{
+			Agora: workeragora.Options{
+				AppID:      "app",
+				Channel:    "support",
+				UID:        "agent",
+				Token:      "token",
+				RTMEnabled: &rtmEnabled,
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- rtpApp.runAgora(ctx)
+	}()
+
+	select {
+	case <-client.joinedCh:
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not join Agora channel")
+	}
+	handler := dataPublisher.dataHandler()
+	if handler == nil {
+		t.Fatal("runAgora() did not subscribe to Agora RTM data messages")
+	}
+	err := handler(context.Background(), workeragora.DataMessage{
+		Channel:   "support",
+		Publisher: "caller-7",
+		Payload:   []byte(`{bad json`),
+	})
+	if err == nil {
+		t.Fatal("RTM data handler error = nil, want malformed payload error")
+	}
+
+	select {
+	case entry := <-recorder.entriesCh:
+		if entry.level != "warn" {
+			t.Fatalf("log level = %q, want warn", entry.level)
+		}
+		if entry.msg != "failed to handle Agora RTM data message" {
+			t.Fatalf("log msg = %q, want failed to handle Agora RTM data message", entry.msg)
+		}
+		if got := entry.value("channel"); got != "support" {
+			t.Fatalf("log channel = %#v, want support", got)
+		}
+		if got := entry.value("publisher"); got != "caller-7" {
+			t.Fatalf("log publisher = %#v, want caller-7", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Agora RTM data message warning")
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("runAgora() error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not return after cancellation")
+	}
+}
+
+func TestInstallAgoraRTMDataMessageHandlerDispatchesInputText(t *testing.T) {
+	dataPublisher := &fakeAppAgoraDataPublisher{}
+	responder := &recordingAppTextResponder{}
+
+	installAgoraRTMDataMessageHandler(dataPublisher, responder, "agent-rtm")
+
+	handler := dataPublisher.dataHandler()
+	if handler == nil {
+		t.Fatal("installAgoraRTMDataMessageHandler() did not install handler")
+	}
+	err := handler(context.Background(), workeragora.DataMessage{
+		Channel:   "support",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"type":"input_text","text":"hello from chat","stream_id":"caller-7"}`),
+	})
+	if err != nil {
+		t.Fatalf("RTM data handler error = %v, want nil", err)
+	}
+	if got := strings.Join(responder.calls, ","); got != "claim,interrupt:false,generate:hello from chat" {
+		t.Fatalf("responder calls = %q, want input_text turn dispatch", got)
+	}
+	if len(responder.userTranscripts) != 1 {
+		t.Fatalf("user transcripts = %d, want one final RTM input transcript", len(responder.userTranscripts))
+	}
+	transcript := responder.userTranscripts[0]
+	if transcript.Transcript != "hello from chat" || !transcript.IsFinal || transcript.SpeakerID != "caller-7" {
+		t.Fatalf("user transcript = %#v, want final RTM input transcript with stream id", transcript)
 	}
 }
 

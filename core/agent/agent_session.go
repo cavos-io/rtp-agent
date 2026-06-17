@@ -301,6 +301,7 @@ type AgentSession struct {
 	userStateSubs        []chan UserStateChangedEvent
 	userInputSubs        []chan UserInputTranscribedEvent
 	agentOutputSubs      []chan AgentOutputTranscribedEvent
+	agentReasoningSubs   []chan AgentReasoningTranscribedEvent
 	speechCreatedCh      chan SpeechCreatedEvent
 	speechCreatedSubd    bool
 	speechCreatedSubs    []chan SpeechCreatedEvent
@@ -1227,6 +1228,39 @@ func (s *AgentSession) agentOutputTranscribedSubscribers() []chan AgentOutputTra
 	defer s.mu.Unlock()
 
 	return append([]chan AgentOutputTranscribedEvent(nil), s.agentOutputSubs...)
+}
+
+func (s *AgentSession) AgentReasoningTranscribedEvents() <-chan AgentReasoningTranscribedEvent {
+	return s.agentReasoningTranscribedEvents()
+}
+
+func (s *AgentSession) EmitAgentReasoningTranscribed(ev AgentReasoningTranscribedEvent) {
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = time.Now()
+	}
+	s.recordEvent(&ev)
+	for _, ch := range s.agentReasoningTranscribedSubscribers() {
+		select {
+		case ch <- ev:
+		default:
+		}
+	}
+}
+
+func (s *AgentSession) agentReasoningTranscribedEvents() chan AgentReasoningTranscribedEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ch := make(chan AgentReasoningTranscribedEvent, 10)
+	s.agentReasoningSubs = append(s.agentReasoningSubs, ch)
+	return ch
+}
+
+func (s *AgentSession) agentReasoningTranscribedSubscribers() []chan AgentReasoningTranscribedEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return append([]chan AgentReasoningTranscribedEvent(nil), s.agentReasoningSubs...)
 }
 
 func (s *AgentSession) SpeechCreatedEvents() <-chan SpeechCreatedEvent {
