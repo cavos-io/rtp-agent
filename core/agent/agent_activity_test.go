@@ -1967,6 +1967,39 @@ func TestAgentActivityEOUDelayAnchorsToLastSpeechTime(t *testing.T) {
 	}
 }
 
+func TestAgentActivityPendingFinalUsesVADAdjustedSpeechEndTime(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	activity.userSpeechStartedAt = time.Now().Add(-time.Second)
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "timed by vad",
+			Confidence: 0.9,
+		}},
+	})
+
+	beforeEnd := time.Now()
+	activity.OnEndOfSpeech(&vad.VADEvent{
+		Type:              vad.VADEventEndOfSpeech,
+		SilenceDuration:   0.4,
+		InferenceDuration: 0.1,
+	})
+
+	info := activity.pendingFinalEndOfTurnInfo()
+	if info.StoppedSpeakingAt == nil {
+		t.Fatal("StoppedSpeakingAt = nil, want VAD-adjusted stop time")
+	}
+	stopped := unixSecondsToTime(*info.StoppedSpeakingAt)
+	if stopped.After(beforeEnd.Add(-450 * time.Millisecond)) {
+		t.Fatalf("StoppedSpeakingAt = %v, want at least 450ms before OnEndOfSpeech", stopped.Sub(beforeEnd))
+	}
+	if stopped.Before(beforeEnd.Add(-700 * time.Millisecond)) {
+		t.Fatalf("StoppedSpeakingAt = %v, want close to VAD-adjusted end", stopped.Sub(beforeEnd))
+	}
+}
+
 func TestAgentActivityFinalTranscriptEOUDelayUsesSTTEndTime(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.STT = &fakePipelineSTT{}

@@ -1443,7 +1443,7 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 	wasSpeaking := a.speaking
 	a.speaking = false
-	a.userSpeechStoppedAt = time.Now()
+	a.userSpeechStoppedAt = vadSpeechStoppedAt(ev)
 	if a.Session != nil {
 		a.Session.UpdateUserState(UserStateListening)
 	}
@@ -2973,4 +2973,13 @@ func vadSpeechEndTimestamp(ev *vad.VADEvent) float64 {
 		return float64(time.Now().UnixNano()) / float64(time.Second)
 	}
 	return max(ev.Timestamp-ev.SilenceDuration-ev.InferenceDuration, 0)
+}
+
+func vadSpeechStoppedAt(ev *vad.VADEvent) time.Time {
+	stoppedAt := time.Now()
+	if ev == nil {
+		return stoppedAt
+	}
+	delay := time.Duration((ev.SilenceDuration + ev.InferenceDuration) * float64(time.Second))
+	return stoppedAt.Add(-delay)
 }
