@@ -1664,7 +1664,11 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 	if a.realtimeUserTranscriptionEnabled() {
 		return
 	}
-	if a.shouldIgnoreManualCommittedSTT(true) {
+	evType := stt.SpeechEventInterimTranscript
+	if ev != nil {
+		evType = ev.Type
+	}
+	if a.shouldIgnoreManualCommittedSTT(evType) {
 		return
 	}
 	if a.holdSTTEventWhileAgentSpeaking(ev) {
@@ -1728,7 +1732,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	if a.realtimeUserTranscriptionEnabled() {
 		return
 	}
-	if a.shouldIgnoreManualCommittedSTT(false) {
+	if a.shouldIgnoreManualCommittedSTT(stt.SpeechEventFinalTranscript) {
 		return
 	}
 	if a.holdSTTEventWhileAgentSpeaking(ev) {
@@ -2554,11 +2558,11 @@ collect:
 	return transcript, nil
 }
 
-func (a *AgentActivity) shouldIgnoreManualCommittedSTT(interim bool) bool {
+func (a *AgentActivity) shouldIgnoreManualCommittedSTT(evType stt.SpeechEventType) bool {
 	if a == nil || a.turnDetectionMode() != TurnDetectionModeManual || !a.manualTurnCommitted {
 		return false
 	}
-	if interim {
+	if evType == stt.SpeechEventInterimTranscript {
 		return true
 	}
 	a.commitUserTurnMu.Lock()
