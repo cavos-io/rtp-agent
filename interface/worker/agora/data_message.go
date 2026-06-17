@@ -45,12 +45,17 @@ func (r RTMMessageRouter) HandleDataMessage(ctx context.Context, msg DataMessage
 	}
 	var payload struct {
 		DataType string `json:"data_type"`
+		Type     string `json:"type"`
 		Text     string `json:"text"`
 	}
 	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 		return err
 	}
-	if payload.DataType != "input_text" || payload.Text == "" {
+	messageType := payload.DataType
+	if messageType == "" {
+		messageType = payload.Type
+	}
+	if messageType != "input_text" || payload.Text == "" {
 		return nil
 	}
 	return r.TextInput(normalizeContext(ctx), TextInputEvent{

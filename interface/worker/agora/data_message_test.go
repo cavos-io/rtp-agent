@@ -30,6 +30,28 @@ func TestRTMMessageRouterDispatchesInputText(t *testing.T) {
 	}
 }
 
+func TestRTMMessageRouterDispatchesTENInputTextType(t *testing.T) {
+	var got TextInputEvent
+	router := RTMMessageRouter{
+		TextInput: func(_ context.Context, ev TextInputEvent) error {
+			got = ev
+			return nil
+		},
+	}
+
+	err := router.HandleDataMessage(context.Background(), DataMessage{
+		Channel:   "support",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"type":"input_text","text":"hello from ten","stream_id":"caller-7"}`),
+	})
+	if err != nil {
+		t.Fatalf("HandleDataMessage() error = %v, want nil", err)
+	}
+	if got.Text != "hello from ten" || got.Publisher != "caller-7" || got.Channel != "support" {
+		t.Fatalf("TextInputEvent = %#v, want TEN input_text event", got)
+	}
+}
+
 func TestRTMMessageRouterIgnoresSelfPublisher(t *testing.T) {
 	called := false
 	router := RTMMessageRouter{
