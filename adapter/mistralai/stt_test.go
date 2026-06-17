@@ -227,6 +227,33 @@ func TestMistralAISTTUpdateOptionsMatchesReferenceFutureCalls(t *testing.T) {
 	})
 }
 
+func TestMistralAISTTUpdateOptionsUpdatesActiveRealtimeStreams(t *testing.T) {
+	readGate := make(chan struct{})
+	conn := &mistralAISTTFakeRealtimeConn{readGate: readGate}
+	provider := NewMistralAISTT("test-key", WithMistralAISTTModel("voxtral-realtime-latest"))
+	provider.dialRealtime = func(ctx context.Context, endpoint string, headers http.Header) (mistralAISTTRealtimeConn, error) {
+		return conn, nil
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+
+	provider.UpdateOptions(WithMistralAISTTTargetStreamingDelay(180))
+
+	messages := conn.messages()
+	if len(messages) != 1 {
+		t.Fatalf("messages = %v, want active stream session update", messages)
+	}
+	assertMistralRealtimeMessage(t, messages[0], "session.update", map[string]any{
+		"session": map[string]any{"target_streaming_delay_ms": float64(180)},
+	})
+	close(readGate)
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+}
+
 func TestMistralAISTTRealtimeStreamMapsReferenceEvents(t *testing.T) {
 	conn := &mistralAISTTFakeRealtimeConn{reads: [][]byte{
 		[]byte(`{"type":"session.created","session":{"request_id":"req_123","model":"voxtral-realtime-latest","audio_format":{"encoding":"pcm_s16le","sample_rate":16000}}}`),

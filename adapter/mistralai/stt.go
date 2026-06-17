@@ -40,7 +40,9 @@ type MistralAISTT struct {
 	targetStreamingDelayMS *int
 	vad                    vad.VAD
 
-	dialRealtime func(context.Context, string, http.Header) (mistralAISTTRealtimeConn, error)
+	dialRealtime  func(context.Context, string, http.Header) (mistralAISTTRealtimeConn, error)
+	streamsMu     sync.Mutex
+	activeStreams map[*mistralAISTTRealtimeStream]struct{}
 }
 
 type MistralAISTTOption func(*MistralAISTT)
@@ -119,8 +121,17 @@ func (s *MistralAISTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *MistralAISTT) UpdateOptions(opts ...MistralAISTTOption) {
+	beforeDelay := cloneIntPtr(s.targetStreamingDelayMS)
 	for _, opt := range opts {
 		opt(s)
+	}
+	if intPtrsEqual(beforeDelay, s.targetStreamingDelayMS) || s.targetStreamingDelayMS == nil {
+		return
+	}
+	for _, stream := range s.snapshotRealtimeStreams() {
+		if err := stream.updateTargetStreamingDelay(*s.targetStreamingDelayMS); err != nil {
+			stream.sendErr(err)
+		}
 	}
 }
 
@@ -153,14 +164,11 @@ func (s *MistralAISTT) Stream(ctx context.Context, language string) (stt.Recogni
 		state:     &mistralAISTTRealtimeState{},
 		vadStream: vadStream,
 	}
+	s.registerRealtimeStream(stream)
 	if s.targetStreamingDelayMS != nil {
-		if err := stream.writeJSON(map[string]any{
-			"type": "session.update",
-			"session": map[string]any{
-				"target_streaming_delay_ms": *s.targetStreamingDelayMS,
-			},
-		}); err != nil {
+		if err := stream.updateTargetStreamingDelay(*s.targetStreamingDelayMS); err != nil {
 			cancel()
+			s.unregisterRealtimeStream(stream)
 			_ = conn.Close()
 			return nil, err
 		}
@@ -179,9 +187,50 @@ func (s *MistralAISTT) Stream(ctx context.Context, language string) (stt.Recogni
 	}
 	go func() {
 		stream.wg.Wait()
+		s.unregisterRealtimeStream(stream)
 		close(stream.events)
 	}()
 	return stream, nil
+}
+
+func cloneIntPtr(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func intPtrsEqual(left *int, right *int) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
+}
+
+func (s *MistralAISTT) registerRealtimeStream(stream *mistralAISTTRealtimeStream) {
+	s.streamsMu.Lock()
+	defer s.streamsMu.Unlock()
+	if s.activeStreams == nil {
+		s.activeStreams = map[*mistralAISTTRealtimeStream]struct{}{}
+	}
+	s.activeStreams[stream] = struct{}{}
+}
+
+func (s *MistralAISTT) unregisterRealtimeStream(stream *mistralAISTTRealtimeStream) {
+	s.streamsMu.Lock()
+	defer s.streamsMu.Unlock()
+	delete(s.activeStreams, stream)
+}
+
+func (s *MistralAISTT) snapshotRealtimeStreams() []*mistralAISTTRealtimeStream {
+	s.streamsMu.Lock()
+	defer s.streamsMu.Unlock()
+	streams := make([]*mistralAISTTRealtimeStream, 0, len(s.activeStreams))
+	for stream := range s.activeStreams {
+		streams = append(streams, stream)
+	}
+	return streams
 }
 
 func (s *MistralAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
@@ -383,6 +432,15 @@ func (s *mistralAISTTRealtimeStream) PushFrame(frame *model.AudioFrame) error {
 
 func (s *mistralAISTTRealtimeStream) Flush() error {
 	return s.writeJSON(map[string]any{"type": "input_audio.flush"})
+}
+
+func (s *mistralAISTTRealtimeStream) updateTargetStreamingDelay(delayMS int) error {
+	return s.writeJSON(map[string]any{
+		"type": "session.update",
+		"session": map[string]any{
+			"target_streaming_delay_ms": delayMS,
+		},
+	})
 }
 
 func (s *mistralAISTTRealtimeStream) Close() error {
