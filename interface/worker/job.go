@@ -875,8 +875,7 @@ func (c *JobContext) MoveParticipant(ctx context.Context, room string, identity 
 		logger.Logger.Warnw("job context MoveParticipant is skipped for fake jobs", nil)
 		return nil
 	}
-	_, err := c.API().RoomService.MoveParticipant(ctx, workerlivekit.MoveParticipantRequest(c.Job, room, identity, destinationRoom))
-	return err
+	return workerlivekit.MoveParticipant(ctx, c.API().RoomService, c.Job, room, identity, destinationRoom)
 }
 
 // AddSIPParticipant adds a SIP participant to the room.
