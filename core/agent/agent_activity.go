@@ -2383,6 +2383,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	}
 	if info.SkipReply {
 		a.cancelPreemptiveGeneration()
+		a.resetPreemptiveGenerationCount()
 		a.commitUserMessage(newMsg)
 		return nil, nil
 	}
