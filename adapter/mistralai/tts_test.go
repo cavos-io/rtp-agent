@@ -1,8 +1,10 @@
 package mistralai
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -185,6 +187,34 @@ func TestMistralAITTSStreamDecodesJSONAudioResponse(t *testing.T) {
 	}
 }
 
+func TestMistralAITTSStreamDecodesReferenceWAVResponse(t *testing.T) {
+	pcm := []byte{0x01, 0x02, 0x03, 0x04}
+	stream := &mistralAITTSChunkedStream{
+		reader:         strings.NewReader(`{"audio_data":"` + base64.StdEncoding.EncodeToString(mistralAITTSTestWAV(pcm, 16000, 1)) + `"}`),
+		responseFormat: "wav",
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("next audio: %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want frame", audio)
+	}
+	if !bytes.Equal(audio.Frame.Data, pcm) {
+		t.Fatalf("frame data = %#v, want decoded PCM %#v", audio.Frame.Data, pcm)
+	}
+	if audio.Frame.SampleRate != 16000 {
+		t.Fatalf("sample rate = %d, want WAV metadata 16000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("channels = %d, want WAV metadata mono", audio.Frame.NumChannels)
+	}
+	if bytes.HasPrefix(audio.Frame.Data, []byte("RIFF")) {
+		t.Fatal("frame data still contains WAV container")
+	}
+}
+
 func TestMistralAITTSStreamDecodesReferenceMP3Response(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
@@ -243,4 +273,25 @@ func assertMistralTTSAudio(t *testing.T, audio *tts.SynthesizedAudio, want []byt
 	if audio.Frame.NumChannels != 1 {
 		t.Fatalf("channels = %d, want 1", audio.Frame.NumChannels)
 	}
+}
+
+func mistralAITTSTestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
+	var wav bytes.Buffer
+	byteRate := sampleRate * uint32(channels) * 2
+	blockAlign := channels * 2
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36+len(pcm)))
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, channels)
+	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
+	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
+	_ = binary.Write(&wav, binary.LittleEndian, blockAlign)
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	wav.WriteString("data")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(len(pcm)))
+	wav.Write(pcm)
+	return wav.Bytes()
 }
