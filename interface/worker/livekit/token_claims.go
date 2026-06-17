@@ -40,6 +40,14 @@ func TokenClaims(token string) (*auth.ClaimGrants, error) {
 	return claims, nil
 }
 
+func TokenIdentity(token string) (string, error) {
+	verifier, err := auth.ParseAPIToken(token)
+	if err != nil {
+		return "", err
+	}
+	return verifier.Identity(), nil
+}
+
 func LocalParticipantIdentity(token string, fallbackIdentity string) string {
 	claims, err := TokenClaims(token)
 	if err == nil && claims.Identity != "" {

@@ -68,6 +68,30 @@ func TestLocalParticipantIdentityFallsBackWhenTokenInvalidOrEmpty(t *testing.T) 
 	}
 }
 
+func TestTokenIdentityReturnsParsedAPIIdentity(t *testing.T) {
+	token, err := auth.NewAccessToken("key", "secret").
+		SetIdentity("token-agent").
+		ToJWT()
+	if err != nil {
+		t.Fatalf("ToJWT() error = %v", err)
+	}
+
+	identity, err := workerlivekit.TokenIdentity(token)
+	if err != nil {
+		t.Fatalf("TokenIdentity() error = %v", err)
+	}
+	if identity != "token-agent" {
+		t.Fatalf("TokenIdentity() = %q, want token-agent", identity)
+	}
+}
+
+func TestTokenIdentityRejectsInvalidToken(t *testing.T) {
+	_, err := workerlivekit.TokenIdentity("not-a-jwt")
+	if err == nil {
+		t.Fatal("TokenIdentity(invalid token) error = nil, want error")
+	}
+}
+
 func TestWorkerAuthTokenCarriesAgentGrant(t *testing.T) {
 	token, err := workerlivekit.WorkerAuthToken("api-key", "api-secret", time.Hour)
 	if err != nil {
