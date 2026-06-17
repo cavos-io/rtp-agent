@@ -751,6 +751,20 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 		}
 	}
 	interrupted := speech != nil && speech.IsInterrupted()
+	if !interrupted && text != "" && len(modalities) > 0 && !realtimeModalitiesContain(modalities, "audio") {
+		fallbackPublishedAudio, err := ma.publishTTSFallbackForRealtimeText(ctx, speech, text)
+		if err != nil {
+			logger.Logger.Errorw("failed to synthesize text-only realtime response", err)
+			if ma.session != nil {
+				ma.session.EmitError(ErrorEvent{
+					Error:  err,
+					Source: ma,
+				})
+			}
+			return
+		}
+		publishedAudio = publishedAudio || fallbackPublishedAudio
+	}
 	if publishedAudio && !interrupted && ma.session != nil {
 		if playback := ma.session.AudioPlaybackController(); playback != nil {
 			if _, err := playback.WaitForPlayout(ctx); err != nil {
@@ -763,18 +777,6 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 		var playback AudioPlaybackResult
 		text, playback = ma.forwardedRealtimeTextAfterInterruption(ctx, text)
 		ma.truncateInterruptedRealtimeMessage(message.MessageID, modalities, text, playback)
-	}
-	if text != "" && len(modalities) > 0 && !realtimeModalitiesContain(modalities, "audio") {
-		if err := ma.publishTTSFallbackForRealtimeText(ctx, speech, text); err != nil {
-			logger.Logger.Errorw("failed to synthesize text-only realtime response", err)
-			if ma.session != nil {
-				ma.session.EmitError(ErrorEvent{
-					Error:  err,
-					Source: ma,
-				})
-			}
-			return
-		}
 	}
 	if text == "" {
 		return
@@ -797,40 +799,42 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 	speech.AddChatItems(msg)
 }
 
-func (ma *MultimodalAgent) publishTTSFallbackForRealtimeText(ctx context.Context, speech *SpeechHandle, text string) error {
+func (ma *MultimodalAgent) publishTTSFallbackForRealtimeText(ctx context.Context, speech *SpeechHandle, text string) (bool, error) {
 	ma.mu.Lock()
 	session := ma.session
 	publish := ma.PublishAudio
 	ma.mu.Unlock()
 	if session == nil || session.TTS == nil || publish == nil {
-		return nil
+		return false, nil
 	}
 	textCh := make(chan string, 1)
 	textCh <- text
 	close(textCh)
 	ttsGen, err := PerformTTSInference(ctx, session.TTS, textCh, multimodalTTSInferenceOptions(session)...)
 	if err != nil {
-		return err
+		return false, err
 	}
 	startedSpeaking := false
+	publishedAudio := false
 	for frame := range ttsGen.AudioCh {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return publishedAudio, ctx.Err()
 		default:
 			if speech != nil && speech.IsInterrupted() {
-				return nil
+				return publishedAudio, nil
 			}
 			if err := publish(ctx, frame); err != nil {
-				return err
+				return publishedAudio, err
 			}
+			publishedAudio = true
 			if !startedSpeaking {
 				session.UpdateAgentState(AgentStateSpeaking)
 				startedSpeaking = true
 			}
 		}
 	}
-	return ttsGen.StreamErr
+	return publishedAudio, ttsGen.StreamErr
 }
 
 func multimodalTTSInferenceOptions(session *AgentSession) []TTSInferenceOption {

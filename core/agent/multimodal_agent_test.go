@@ -155,7 +155,8 @@ func TestMultimodalAgentTTSFallbackMarksSpeakingAfterFirstAudioFrame(t *testing.
 
 	done := make(chan error, 1)
 	go func() {
-		done <- ma.publishTTSFallbackForRealtimeText(context.Background(), nil, "hello")
+		_, err := ma.publishTTSFallbackForRealtimeText(context.Background(), nil, "hello")
+		done <- err
 	}()
 
 	select {
@@ -1778,6 +1779,73 @@ func TestMultimodalAgentUsesTTSFallbackForTextOnlyRealtimeMessage(t *testing.T) 
 	msg, ok := chatCtx.Items[0].(*llm.ChatMessage)
 	if !ok || msg.TextContent() != "spoken fallback" {
 		t.Fatalf("assistant message = %#v, want spoken fallback", chatCtx.Items[0])
+	}
+}
+
+func TestMultimodalAgentTTSFallbackWaitsForPlayoutBeforeCommit(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.TTS = &fakeGenerationTTS{stream: newEndInputGenerationTTSStream()}
+	waitStarted := make(chan struct{})
+	releaseWait := make(chan struct{})
+	session.SetAudioPlaybackController(&fakePipelinePlaybackController{
+		waitStarted: waitStarted,
+		releaseWait: releaseWait,
+		result: AudioPlaybackResult{
+			PlaybackPosition: 200 * time.Millisecond,
+		},
+	})
+	ma := &MultimodalAgent{
+		session: session,
+		chatCtx: llm.NewChatContext(),
+		PublishAudio: func(context.Context, *model.AudioFrame) error {
+			return nil
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "spoken fallback"
+	close(textCh)
+	modalitiesCh := make(chan []string, 1)
+	modalitiesCh <- []string{"text"}
+	close(modalitiesCh)
+	events := session.ConversationItemAddedEvents()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ma.consumeRealtimeMessage(context.Background(), NewSpeechHandle(true, DefaultInputDetails()), llm.MessageGeneration{
+			MessageID:    "msg_text_only",
+			TextCh:       textCh,
+			ModalitiesCh: modalitiesCh,
+		})
+	}()
+
+	select {
+	case <-waitStarted:
+	case ev := <-events:
+		t.Fatalf("conversation item emitted before fallback playback wait started: %#v", ev)
+	case <-time.After(time.Second):
+		t.Fatal("fallback playback wait did not start")
+	}
+	select {
+	case ev := <-events:
+		t.Fatalf("conversation item emitted before fallback playback completed: %#v", ev)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releaseWait)
+	select {
+	case ev := <-events:
+		msg, ok := ev.Item.(*llm.ChatMessage)
+		if !ok || msg.TextContent() != "spoken fallback" {
+			t.Fatalf("conversation item = %#v, want spoken fallback assistant message", ev.Item)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConversationItemAddedEvents did not receive fallback assistant message")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("consumeRealtimeMessage did not finish after fallback playback completed")
 	}
 }
 
