@@ -100,6 +100,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	workeragora "github.com/cavos-io/rtp-agent/interface/worker/agora"
+	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/plugin"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -11131,7 +11132,7 @@ func TestRunSessionConnectsRoomIOToSession(t *testing.T) {
 	app := &App{
 		Session:     session,
 		Server:      worker.NewAgentServer(worker.WorkerOptions{}),
-		RoomOptions: worker.RoomOptions{DisablePreConnectAudio: true, DisableTextInput: true},
+		RoomOptions: workerlivekit.RoomOptions{DisablePreConnectAudio: true, DisableTextInput: true},
 	}
 	jobCtx := &worker.JobContext{Room: lksdk.NewRoom(nil)}
 
@@ -11164,7 +11165,7 @@ func TestRunSessionWiresRoomDeleteToJobContext(t *testing.T) {
 	app := &App{
 		Session:     session,
 		Server:      worker.NewAgentServer(worker.WorkerOptions{}),
-		RoomOptions: worker.RoomOptions{DisablePreConnectAudio: true, DisableTextInput: true},
+		RoomOptions: workerlivekit.RoomOptions{DisablePreConnectAudio: true, DisableTextInput: true},
 	}
 	jobCtx := worker.NewJobContext(&livekit.Job{Id: "job_delete_room", Room: &livekit.Room{Name: "room-a"}}, "", "", "")
 	jobCtx.Room = lksdk.NewRoom(nil)
@@ -11194,7 +11195,7 @@ func TestRunSessionStartsAudioRecorderForRecordedJob(t *testing.T) {
 	app := &App{
 		Session:     session,
 		Server:      worker.NewAgentServer(worker.WorkerOptions{}),
-		RoomOptions: worker.RoomOptions{DisablePreConnectAudio: true, DisableTextInput: true},
+		RoomOptions: workerlivekit.RoomOptions{DisablePreConnectAudio: true, DisableTextInput: true},
 	}
 	jobCtx := worker.NewJobContext(&livekit.Job{Id: "job_record_audio", Room: &livekit.Room{Name: "room-a"}}, "", "", "")
 	jobCtx.Room = lksdk.NewRoom(nil)
