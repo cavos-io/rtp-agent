@@ -28,6 +28,28 @@ func TestMarshalWorkerMessageProducesLiveKitProtobuf(t *testing.T) {
 	}
 }
 
+func TestWorkerMessageFrameEncodesBinaryLiveKitProtobuf(t *testing.T) {
+	msg := workerlivekit.JobRunningMessage("job-a")
+
+	binary, data, err := workerlivekit.WorkerMessageFrame(msg)
+	if err != nil {
+		t.Fatalf("WorkerMessageFrame() error = %v", err)
+	}
+	if !binary {
+		t.Fatal("WorkerMessageFrame() binary = false, want true")
+	}
+	var decoded lkprotocol.WorkerMessage
+	if err := proto.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("proto.Unmarshal() error = %v", err)
+	}
+	if decoded.GetUpdateJob().GetJobId() != "job-a" {
+		t.Fatalf("decoded job id = %q, want job-a", decoded.GetUpdateJob().GetJobId())
+	}
+	if decoded.GetUpdateJob().GetStatus() != lkprotocol.JobStatus_JS_RUNNING {
+		t.Fatalf("decoded status = %v, want JS_RUNNING", decoded.GetUpdateJob().GetStatus())
+	}
+}
+
 func TestUnmarshalServerMessageReadsLiveKitProtobuf(t *testing.T) {
 	msg := &lkprotocol.ServerMessage{
 		Message: &lkprotocol.ServerMessage_Register{

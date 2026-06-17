@@ -1444,12 +1444,16 @@ func (s *AgentServer) Run(ctx context.Context) error {
 
 	// Send Register request
 	req := s.registerWorkerRequest()
-	b, err := workerlivekit.MarshalWorkerMessage(req)
+	binary, b, err := workerlivekit.WorkerMessageFrame(req)
 	if err != nil {
 		return err
 	}
 
-	if err := conn.WriteMessage(websocket.BinaryMessage, b); err != nil {
+	msgType := websocket.TextMessage
+	if binary {
+		msgType = websocket.BinaryMessage
+	}
+	if err := conn.WriteMessage(msgType, b); err != nil {
 		return err
 	}
 
@@ -1776,7 +1780,7 @@ func (s *AgentServer) sendWorkerMessage(msg *livekit.WorkerMessage) error {
 		return s.workerMessageSink(msg)
 	}
 
-	b, err := workerlivekit.MarshalWorkerMessage(msg)
+	binary, b, err := workerlivekit.WorkerMessageFrame(msg)
 	if err != nil {
 		return err
 	}
@@ -1786,7 +1790,11 @@ func (s *AgentServer) sendWorkerMessage(msg *livekit.WorkerMessage) error {
 	if s.conn == nil {
 		return fmt.Errorf("worker websocket is not connected")
 	}
-	return s.conn.WriteMessage(websocket.BinaryMessage, b)
+	msgType := websocket.TextMessage
+	if binary {
+		msgType = websocket.BinaryMessage
+	}
+	return s.conn.WriteMessage(msgType, b)
 }
 
 func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) {

@@ -11,6 +11,14 @@ func MarshalWorkerMessage(msg *lkprotocol.WorkerMessage) ([]byte, error) {
 	return proto.Marshal(msg)
 }
 
+func WorkerMessageFrame(msg *lkprotocol.WorkerMessage) (bool, []byte, error) {
+	data, err := MarshalWorkerMessage(msg)
+	if err != nil {
+		return false, nil, err
+	}
+	return true, data, nil
+}
+
 func UnmarshalServerMessage(data []byte) (*lkprotocol.ServerMessage, error) {
 	msg := &lkprotocol.ServerMessage{}
 	if err := proto.Unmarshal(data, msg); err != nil {
