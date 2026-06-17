@@ -589,6 +589,8 @@ func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 	t.Setenv("AGORA_UID", " agent-42 ")
 	t.Setenv("AGORA_REMOTE_STREAM_ID", " caller-7 ")
 	t.Setenv("AGORA_TOKEN", " agora-token ")
+	t.Setenv("AGORA_RTM_USER_ID", " rtm-agent ")
+	t.Setenv("AGORA_RTM_TOKEN", " rtm-token ")
 	t.Setenv("AGORA_PUBLISH_AUDIO", "false")
 	t.Setenv("AGORA_SUBSCRIBE_AUDIO", "false")
 	t.Setenv("AGORA_PUBLISH_DATA", "true")
@@ -627,6 +629,12 @@ func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 	}
 	if cfg.Agora.Token != "agora-token" {
 		t.Fatalf("Agora.Token = %q, want agora-token", cfg.Agora.Token)
+	}
+	if cfg.Agora.RTMUserID != "rtm-agent" {
+		t.Fatalf("Agora.RTMUserID = %q, want rtm-agent", cfg.Agora.RTMUserID)
+	}
+	if cfg.Agora.RTMToken != "rtm-token" {
+		t.Fatalf("Agora.RTMToken = %q, want rtm-token", cfg.Agora.RTMToken)
 	}
 	if cfg.Agora.PublishAudio == nil || *cfg.Agora.PublishAudio {
 		t.Fatalf("Agora.PublishAudio = %#v, want false", cfg.Agora.PublishAudio)
@@ -1225,6 +1233,9 @@ func TestRunAgoraPublishesTranscriptDataWhenPublishDataEnabled(t *testing.T) {
 		if opts.Channel != "support" {
 			t.Fatalf("data publisher channel = %q, want support", opts.Channel)
 		}
+		if opts.RTMUserID != "rtm-agent" || opts.RTMToken != "rtm-token" {
+			t.Fatalf("data publisher RTM opts = user %q token %q, want RTM credentials", opts.RTMUserID, opts.RTMToken)
+		}
 		return dataPublisher, nil
 	}
 	t.Cleanup(func() {
@@ -1244,6 +1255,8 @@ func TestRunAgoraPublishesTranscriptDataWhenPublishDataEnabled(t *testing.T) {
 				UID:            "agent",
 				RemoteStreamID: "caller-7",
 				Token:          "token",
+				RTMUserID:      "rtm-agent",
+				RTMToken:       "rtm-token",
 				PublishData:    &publishData,
 			},
 		},

@@ -18,7 +18,7 @@ type sdkDataPublisher struct {
 }
 
 func NewSDKDataPublisher(opts Options) (DataPublisher, error) {
-	resolved, err := ResolveJoinOptions(opts)
+	resolved, err := ResolveDataOptions(opts)
 	if err != nil {
 		return nil, err
 	}

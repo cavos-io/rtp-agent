@@ -12,6 +12,8 @@ type Options struct {
 	UID            string
 	RemoteStreamID string
 	Token          string
+	RTMUserID      string
+	RTMToken       string
 	PublishAudio   *bool
 	SubscribeAudio *bool
 	PublishData    *bool
