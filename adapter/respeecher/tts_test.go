@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -238,6 +239,46 @@ func TestRespeecherTTSWebsocketMessagesMatchReference(t *testing.T) {
 	assertRespeecherPayload(t, payload, "transcript", " ")
 	if payload["continue"] != false {
 		t.Fatalf("continue = %#v, want false", payload["continue"])
+	}
+}
+
+func TestRespeecherTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
+	writeErr := errors.New("write failed")
+	cancelled := false
+	closeCalls := 0
+	stream := &respeecherTTSSynthesizeStream{
+		cancel:    func() { cancelled = true },
+		provider:  NewRespeecherTTS("test-key", ""),
+		contextID: "ctx-1",
+		writeMessage: func([]byte) error {
+			return writeErr
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+
+	if err := stream.PushText("hello"); !errors.Is(err, writeErr) {
+		t.Fatalf("PushText error = %v, want write error", err)
+	}
+	if !cancelled {
+		t.Fatal("cancel not called after write failure")
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushText after write failure error = %v, want closed stream error", err)
+	}
+	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("Flush after write failure error = %v, want closed stream error", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after write failure error = %v, want nil", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls after idempotent Close = %d, want 1", closeCalls)
 	}
 }
 
