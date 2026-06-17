@@ -3002,6 +3002,8 @@ func azureSTTFromConfig(cfg AppConfig) (*azure.AzureSTT, error) {
 	}
 	if cfg.STTSampleRate != nil {
 		sttOpts = append(sttOpts, azure.WithAzureSTTSampleRate(*cfg.STTSampleRate))
+	} else if sampleRate := azureSTTIntModelOption(cfg.STTModelOptions, "sample_rate"); sampleRate > 0 {
+		sttOpts = append(sttOpts, azure.WithAzureSTTSampleRate(sampleRate))
 	}
 	return azure.NewAzureSTT("", cfg.STTRegion, sttOpts...)
 }
@@ -3032,6 +3034,17 @@ func azureSTTLanguageFromConfig(cfg AppConfig) string {
 		return strings.TrimSpace(cfg.STTLanguage)
 	}
 	return azureSTTModelOption(cfg.STTModelOptions, "language")
+}
+
+func azureSTTIntModelOption(options map[string]any, key string) int {
+	if value := modelOptionInt(options, key); value > 0 {
+		return value
+	}
+	setting, ok := options["setting"].(map[string]any)
+	if !ok {
+		return 0
+	}
+	return modelOptionInt(setting, key)
 }
 
 func azureSTTModelOption(options map[string]any, key string) string {
@@ -6273,6 +6286,27 @@ func modelOptionFloat(options map[string]any, key string) *float64 {
 		return &parsed
 	default:
 		return nil
+	}
+}
+
+func modelOptionInt(options map[string]any, key string) int {
+	value, ok := options[key]
+	if !ok {
+		return 0
+	}
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case float64:
+		return int(typed)
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(typed))
+		if err != nil {
+			return 0
+		}
+		return parsed
+	default:
+		return 0
 	}
 }
 

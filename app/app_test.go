@@ -10548,6 +10548,7 @@ func TestNewAppMapsAzureSTTBundleSettingEndpoint(t *testing.T) {
 		STTModelOptions: map[string]any{
 			"setting": map[string]any{
 				"azure_endpoint": "https://southindia.api.cognitive.microsoft.com/",
+				"sample_rate":    "8000",
 			},
 		},
 	}
@@ -10566,6 +10567,9 @@ func TestNewAppMapsAzureSTTBundleSettingEndpoint(t *testing.T) {
 	}
 	if got, want := state.FieldByName("speechHost").String(), "https://southindia.api.cognitive.microsoft.com/"; got != want {
 		t.Fatalf("Azure STT speechHost = %q, want %q", got, want)
+	}
+	if got, want := stt.InputSampleRate(azureProvider), uint32(8000); got != want {
+		t.Fatalf("Azure STT input sample rate = %d, want %d", got, want)
 	}
 }
 
