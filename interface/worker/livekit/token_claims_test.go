@@ -109,6 +109,30 @@ func TestLocalJobIdentityGeneratesFakeAgentIdentityWhenMissing(t *testing.T) {
 	}
 }
 
+func TestLocalJobTokenIdentityReturnsParsedIdentity(t *testing.T) {
+	token, err := auth.NewAccessToken("key", "secret").
+		SetIdentity("token-agent").
+		ToJWT()
+	if err != nil {
+		t.Fatalf("ToJWT() error = %v", err)
+	}
+
+	identity, err := workerlivekit.LocalJobTokenIdentity(token)
+	if err != nil {
+		t.Fatalf("LocalJobTokenIdentity() error = %v", err)
+	}
+	if identity != "token-agent" {
+		t.Fatalf("LocalJobTokenIdentity() = %q, want token-agent", identity)
+	}
+}
+
+func TestLocalJobTokenIdentityRejectsInvalidToken(t *testing.T) {
+	_, err := workerlivekit.LocalJobTokenIdentity("not-a-jwt")
+	if err == nil {
+		t.Fatal("LocalJobTokenIdentity(invalid token) error = nil, want error")
+	}
+}
+
 func TestTokenIdentityReturnsParsedAPIIdentity(t *testing.T) {
 	token, err := auth.NewAccessToken("key", "secret").
 		SetIdentity("token-agent").

@@ -95,3 +95,7 @@ func LocalJobIdentity(token string, explicitIdentity string, newIdentity func(st
 	}
 	return newIdentity("fake-agent-")
 }
+
+func LocalJobTokenIdentity(token string) (string, error) {
+	return TokenIdentity(token)
+}
