@@ -3973,6 +3973,34 @@ func TestAgentActivityCommitUserTurnCommitsRealtimeAudioAndGeneratesReply(t *tes
 	}
 }
 
+func TestAgentActivityCommitUserTurnCallsHookAfterRealtimeCommit(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	assistant := &recordingRealtimeCommitAssistant{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "realtime hook", Confidence: 0.9}},
+	})
+
+	if _, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{}); err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if assistant.commits != 1 {
+		t.Fatalf("CommitAudio calls = %d, want 1", assistant.commits)
+	}
+	select {
+	case msg := <-agent.turns:
+		if got := msg.TextContent(); got != "realtime hook" {
+			t.Fatalf("turn message text = %q, want realtime hook", got)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called after realtime commit")
+	}
+}
+
 func TestAgentActivityCommitUserTurnSkipReplyCommitsRealtimeAudioOnly(t *testing.T) {
 	agent := NewAgent("test")
 	agent.TurnDetection = TurnDetectionModeManual

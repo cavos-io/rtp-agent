@@ -77,15 +77,16 @@ type ttsErrorCollector interface {
 }
 
 type EndOfTurnInfo struct {
-	SkipReply            bool
-	NewTranscript        string
-	Language             string
-	TranscriptConfidence float64
-	EndOfTurnDelay       float64
-	TranscriptionDelay   float64
-	StartedSpeakingAt    *float64
-	StoppedSpeakingAt    *float64
-	AudioFrames          []*model.AudioFrame
+	SkipReply             bool
+	ReplyAlreadyGenerated bool
+	NewTranscript         string
+	Language              string
+	TranscriptConfidence  float64
+	EndOfTurnDelay        float64
+	TranscriptionDelay    float64
+	StartedSpeakingAt     *float64
+	StoppedSpeakingAt     *float64
+	AudioFrames           []*model.AudioFrame
 }
 
 // AgentActivity handles the internal event loops, I/O processing, and
@@ -2370,6 +2371,7 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 		cancelCommit()
 		a.notifyUserTurnUpdated()
 	}()
+	replyAlreadyGenerated := false
 	if a.Session != nil && !opts.SkipRealtimeAudio {
 		a.Session.mu.Lock()
 		assistant := a.Session.Assistant
@@ -2385,8 +2387,11 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 				if _, err := a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{}); err != nil {
 					return "", err
 				}
+				replyAlreadyGenerated = true
 			}
-			opts.SkipReply = true
+			if !replyAlreadyGenerated {
+				opts.SkipReply = true
+			}
 		}
 	}
 	if opts.TranscriptTimeout > 0 {
@@ -2499,11 +2504,12 @@ collect:
 		})
 	}
 	if _, err := a.completeUserTurn(ctx, EndOfTurnInfo{
-		SkipReply:            opts.SkipReply,
-		NewTranscript:        transcript,
-		Language:             firstNonEmpty(language, fallbackLanguage),
-		TranscriptConfidence: confidence,
-		AudioFrames:          a.userAudioSnapshot(),
+		SkipReply:             opts.SkipReply,
+		ReplyAlreadyGenerated: replyAlreadyGenerated,
+		NewTranscript:         transcript,
+		Language:              firstNonEmpty(language, fallbackLanguage),
+		TranscriptConfidence:  confidence,
+		AudioFrames:           a.userAudioSnapshot(),
 	}); err != nil {
 		return transcript, err
 	}
@@ -2610,6 +2616,10 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	}
 	hookDelay := time.Since(hookStart).Seconds()
 	newMsg.Metrics = metricsReportFromEndOfTurn(info, hookDelay)
+	if info.ReplyAlreadyGenerated {
+		a.cancelPreemptiveGeneration()
+		return nil, nil
+	}
 	if a.Agent.LLM == nil || a.Session == nil {
 		a.cancelPreemptiveGeneration()
 		return nil, nil
