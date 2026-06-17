@@ -2103,7 +2103,7 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 				endpointing.OnEndOfAgentSpeech(now)
 			}
 			if activity != nil {
-				activity.cancelBackchannelBoundary()
+				activity.onAgentSpeechEnded(nowTime)
 			}
 		}
 	}

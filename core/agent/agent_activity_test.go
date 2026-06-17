@@ -2293,6 +2293,43 @@ func TestAgentActivityHeldFinalTranscriptUsesReferenceEndCooldown(t *testing.T) 
 	}
 }
 
+func TestAgentActivityAgentSpeechEndHoldsStaleFinalTranscript(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:              TurnDetectionModeVAD,
+		BackchannelBoundaryEnd:     0,
+		BackchannelBoundaryEndSet:  true,
+		MinInterruptionDuration:    0.05,
+		MinInterruptionDurationSet: true,
+	})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	userTranscriptEvents := session.UserInputTranscribedEvents()
+	startedAt := time.Now().Add(-3 * time.Second)
+	activity.userSpeechStartedAt = startedAt
+
+	session.UpdateAgentState(AgentStateSpeaking)
+	session.UpdateAgentState(AgentStateListening)
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "assistant echo",
+			EndTime:    0.25,
+			Confidence: 0.9,
+		}},
+	})
+
+	select {
+	case ev := <-userTranscriptEvents:
+		t.Fatalf("unexpected stale final transcript after agent speech end: %#v", ev)
+	default:
+	}
+	if activity.pendingUserTranscriptPresent {
+		t.Fatalf("pending user transcript = %q, want stale transcript dropped", activity.pendingUserTranscript)
+	}
+}
+
 func TestAgentActivityDropsInterimTranscriptBeforeAgentSpeechEnd(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}

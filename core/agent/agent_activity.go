@@ -1637,6 +1637,16 @@ func (a *AgentActivity) cancelBackchannelBoundary() {
 	a.backchannelBoundaryMu.Unlock()
 }
 
+func (a *AgentActivity) onAgentSpeechEnded(endedAt time.Time) {
+	if a == nil {
+		return
+	}
+	a.cancelBackchannelBoundary()
+	if a.InterruptionEnabled() {
+		a.holdUserTranscriptsUntil(endedAt)
+	}
+}
+
 func (a *AgentActivity) audioActivityInterruptionDisabled(now time.Time) bool {
 	if a == nil || a.Session == nil {
 		return false
