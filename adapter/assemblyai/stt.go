@@ -389,12 +389,20 @@ func (s *assemblyAISTTStream) readLoop() {
 			return
 		}
 
-		if resp.Type == "Turn" || resp.MessageType == "PartialTranscript" || resp.MessageType == "FinalTranscript" {
-			for _, event := range assemblyAIRealtimeTranscriptEvents(resp, s.state) {
-				s.events <- event
-			}
+		for _, event := range assemblyAIRealtimeEvents(resp, s.state) {
+			s.events <- event
 		}
 	}
+}
+
+func assemblyAIRealtimeEvents(resp aaiResponse, state *assemblyAIStreamState) []*stt.SpeechEvent {
+	if resp.Type == "SpeechStarted" {
+		return []*stt.SpeechEvent{{Type: stt.SpeechEventStartOfSpeech}}
+	}
+	if resp.Type == "Turn" || resp.MessageType == "PartialTranscript" || resp.MessageType == "FinalTranscript" {
+		return assemblyAIRealtimeTranscriptEvents(resp, state)
+	}
+	return nil
 }
 
 func assemblyAIRealtimeTranscriptEvent(resp aaiResponse) *stt.SpeechEvent {

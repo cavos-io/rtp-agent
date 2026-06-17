@@ -290,6 +290,16 @@ func TestAssemblyAIRealtimeTurnEmitsReferenceEventOrder(t *testing.T) {
 	}
 }
 
+func TestAssemblyAIRealtimeSpeechStartedEmitsReferenceStart(t *testing.T) {
+	events := assemblyAIRealtimeEvents(aaiResponse{Type: "SpeechStarted"}, &assemblyAIStreamState{})
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want one start event", len(events))
+	}
+	if events[0].Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("event type = %s, want start_of_speech", events[0].Type)
+	}
+}
+
 func TestAssemblyAISTTStreamPushFrameSendsReferenceBinaryAudio(t *testing.T) {
 	var writes [][]byte
 	stream := &assemblyAISTTStream{
