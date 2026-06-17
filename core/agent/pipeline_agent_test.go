@@ -1377,6 +1377,38 @@ func TestPipelineAgentRoutesSTTTranscriptsThroughActivity(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentRoutesPreflightTranscriptAsInterim(t *testing.T) {
+	baseAgent := NewAgent("test")
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	userTranscriptEvents := session.UserInputTranscribedEvents()
+	activity := NewAgentActivity(baseAgent, session)
+	session.activity = activity
+	pipeline := NewPipelineAgent(nil, nil, nil, nil, baseAgent.ChatCtx)
+	pipeline.session = session
+	pipeline.ctx = context.Background()
+	session.Assistant = pipeline
+
+	pipeline.sttLoop(&fakePipelineRecognizeStream{
+		events: []*stt.SpeechEvent{{
+			Type: stt.SpeechEventPreflightTranscript,
+			Alternatives: []stt.SpeechData{{
+				Language:   "en",
+				Text:       "preflight user text",
+				SpeakerID:  "speaker_1",
+				Confidence: 0.75,
+			}},
+		}},
+	})
+
+	transcriptEvent := receiveUserInputTranscribedEvent(t, userTranscriptEvents)
+	if transcriptEvent.Transcript != "preflight user text" || transcriptEvent.IsFinal {
+		t.Fatalf("UserInputTranscribedEvent = %#v, want non-final preflight transcript", transcriptEvent)
+	}
+	if activity.pendingInterimTranscript != "preflight user text" {
+		t.Fatalf("pending interim transcript = %q, want preflight user text", activity.pendingInterimTranscript)
+	}
+}
+
 func TestPipelineAgentVADTurnDetectionWaitsForEndOfSpeechBeforeCommit(t *testing.T) {
 	baseAgent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	baseAgent.TurnDetection = TurnDetectionModeVAD
@@ -1415,6 +1447,158 @@ func TestPipelineAgentVADTurnDetectionWaitsForEndOfSpeechBeforeCommit(t *testing
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("OnUserTurnCompleted was not called after VAD end-of-speech")
+	}
+}
+
+func TestPipelineAgentVADTurnDetectionIgnoresSTTEndOfSpeech(t *testing.T) {
+	baseAgent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	baseAgent.TurnDetection = TurnDetectionModeVAD
+	baseAgent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(baseAgent, session)
+	baseAgent.activity = activity
+	session.activity = activity
+	defer activity.Stop()
+
+	pipeline := NewPipelineAgent(baseAgent.VAD, &fakePipelineSTT{}, nil, nil, baseAgent.ChatCtx)
+	pipeline.session = session
+	pipeline.ctx = context.Background()
+	session.Assistant = pipeline
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Timestamp: 1.0})
+	pipeline.sttLoop(&fakePipelineRecognizeStream{
+		events: []*stt.SpeechEvent{
+			{
+				Type:         stt.SpeechEventFinalTranscript,
+				Alternatives: []stt.SpeechData{{Text: "wait for vad only", Confidence: 0.9}},
+			},
+			{Type: stt.SpeechEventEndOfSpeech},
+		},
+	})
+
+	select {
+	case msg := <-baseAgent.turns:
+		t.Fatalf("OnUserTurnCompleted called from STT end-of-speech in VAD mode with %q", msg.TextContent())
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	activity.OnEndOfSpeech(&vad.VADEvent{Timestamp: 1.5})
+
+	select {
+	case msg := <-baseAgent.turns:
+		if msg.TextContent() != "wait for vad only" {
+			t.Fatalf("turn message text = %q, want wait for vad only", msg.TextContent())
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called after VAD end-of-speech")
+	}
+}
+
+func TestPipelineAgentSTTTurnDetectionWaitsForEndOfSpeechBeforeCommit(t *testing.T) {
+	baseAgent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	baseAgent.TurnDetection = TurnDetectionModeSTT
+	baseAgent.STT = &fakePipelineSTT{}
+	endpointing := &recordingPipelineEndpointing{}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{Endpointing: endpointing, MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(baseAgent, session)
+	baseAgent.activity = activity
+	session.activity = activity
+	defer activity.Stop()
+
+	pipeline := NewPipelineAgent(nil, baseAgent.STT, nil, nil, baseAgent.ChatCtx)
+	pipeline.session = session
+	pipeline.ctx = context.Background()
+	session.Assistant = pipeline
+
+	pipeline.sttLoop(&fakePipelineRecognizeStream{
+		events: []*stt.SpeechEvent{
+			{Type: stt.SpeechEventStartOfSpeech},
+			{
+				Type:         stt.SpeechEventFinalTranscript,
+				Alternatives: []stt.SpeechData{{Text: "finish after stt eos", Confidence: 0.9}},
+			},
+			{Type: stt.SpeechEventEndOfSpeech},
+		},
+	})
+
+	if endpointing.startCount != 1 {
+		t.Fatalf("OnStartOfSpeech calls = %d, want 1 for STT start_of_speech", endpointing.startCount)
+	}
+	if endpointing.endCount != 1 {
+		t.Fatalf("OnEndOfSpeech calls = %d, want 1 for STT end_of_speech", endpointing.endCount)
+	}
+	select {
+	case msg := <-baseAgent.turns:
+		if msg.TextContent() != "finish after stt eos" {
+			t.Fatalf("turn message text = %q, want finish after stt eos", msg.TextContent())
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called after STT end-of-speech")
+	}
+}
+
+func TestPipelineAgentSTTEndOfSpeechFlushesActiveVADSegment(t *testing.T) {
+	baseAgent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	baseAgent.TurnDetection = TurnDetectionModeSTT
+	baseAgent.STT = &fakePipelineSTT{}
+	baseAgent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(baseAgent, session)
+	baseAgent.activity = activity
+	session.activity = activity
+	defer activity.Stop()
+
+	vadStream := &fakePipelineVADStream{}
+	pipeline := NewPipelineAgent(baseAgent.VAD, baseAgent.STT, nil, nil, baseAgent.ChatCtx)
+	pipeline.session = session
+	pipeline.ctx = context.Background()
+	pipeline.vadStream = vadStream
+	pipeline.vadSpeechStarted = true
+
+	pipeline.sttLoop(&fakePipelineRecognizeStream{
+		events: []*stt.SpeechEvent{
+			{Type: stt.SpeechEventStartOfSpeech},
+			{
+				Type:         stt.SpeechEventFinalTranscript,
+				Alternatives: []stt.SpeechData{{Text: "stt eos flushes vad", Confidence: 0.9}},
+			},
+			{Type: stt.SpeechEventEndOfSpeech},
+		},
+	})
+
+	if vadStream.flushCount != 1 {
+		t.Fatalf("VAD Flush calls = %d, want 1 after STT end-of-speech during active VAD segment", vadStream.flushCount)
+	}
+}
+
+func TestPipelineAgentSTTStartSpeechUsesProviderSpeechStartTime(t *testing.T) {
+	endpointing := &recordingPipelineEndpointing{}
+	baseAgent := NewAgent("test")
+	baseAgent.TurnDetection = TurnDetectionModeSTT
+	baseAgent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{Endpointing: endpointing})
+	activity := NewAgentActivity(baseAgent, session)
+	session.activity = activity
+	defer activity.Stop()
+	pipeline := NewPipelineAgent(nil, baseAgent.STT, nil, nil, baseAgent.ChatCtx)
+	pipeline.session = session
+	startTime := 42.5
+
+	pipeline.sttLoop(&fakePipelineRecognizeStream{
+		events: []*stt.SpeechEvent{{
+			Type:            stt.SpeechEventStartOfSpeech,
+			SpeechStartTime: &startTime,
+		}},
+	})
+
+	if endpointing.startCount != 1 {
+		t.Fatalf("OnStartOfSpeech calls = %d, want 1", endpointing.startCount)
+	}
+	if endpointing.startAt != startTime {
+		t.Fatalf("endpointing startAt = %v, want provider speech_start_time %v", endpointing.startAt, startTime)
+	}
+	if got := timeToUnixSeconds(activity.userSpeechStartedAt); got != startTime {
+		t.Fatalf("userSpeechStartedAt = %v, want provider speech_start_time %v", got, startTime)
 	}
 }
 
@@ -3235,14 +3419,15 @@ func (f *fakePipelineVAD) Stream(context.Context) (vad.VADStream, error) {
 }
 
 type fakePipelineVADStream struct {
-	events    []*vad.VADEvent
-	index     int
-	err       error
-	pushErr   error
-	frames    []*model.AudioFrame
-	pushedCh  chan *model.AudioFrame
-	closedCh  chan struct{}
-	closeOnce sync.Once
+	events     []*vad.VADEvent
+	index      int
+	err        error
+	pushErr    error
+	frames     []*model.AudioFrame
+	pushedCh   chan *model.AudioFrame
+	closedCh   chan struct{}
+	closeOnce  sync.Once
+	flushCount int
 }
 
 func (f *fakePipelineVADStream) PushFrame(frame *model.AudioFrame) error {
@@ -3253,7 +3438,10 @@ func (f *fakePipelineVADStream) PushFrame(frame *model.AudioFrame) error {
 	return f.pushErr
 }
 
-func (f *fakePipelineVADStream) Flush() error { return nil }
+func (f *fakePipelineVADStream) Flush() error {
+	f.flushCount++
+	return nil
+}
 
 func (f *fakePipelineVADStream) EndInput() error { return nil }
 

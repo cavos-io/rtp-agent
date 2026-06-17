@@ -35,12 +35,14 @@ type PipelineAgent struct {
 
 	ttsStreamPacer *tts.SentenceStreamPacerOptions
 
-	audioInCh      chan *model.AudioFrame
-	audioInputHook atomic.Pointer[AudioInputHook]
-	mu             sync.Mutex
-	session        *AgentSession
-	sttStream      stt.RecognizeStream
-	lastSTTFrame   *model.AudioFrame
+	audioInCh        chan *model.AudioFrame
+	audioInputHook   atomic.Pointer[AudioInputHook]
+	mu               sync.Mutex
+	session          *AgentSession
+	vadStream        vad.VADStream
+	vadSpeechStarted bool
+	sttStream        stt.RecognizeStream
+	lastSTTFrame     *model.AudioFrame
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -164,11 +166,21 @@ func (va *PipelineAgent) run(ctx context.Context) {
 			return
 		}
 		vadStream = stream
+		va.mu.Lock()
+		va.vadStream = stream
+		va.vadSpeechStarted = false
+		va.mu.Unlock()
 		defer func() {
 			if err := vadStream.Close(); err != nil && !isSpeechStreamShutdownError(err) {
 				logger.Logger.Errorw("failed to close VAD stream", err)
 				va.emitError(err, va.vad)
 			}
+			va.mu.Lock()
+			if va.vadStream == vadStream {
+				va.vadStream = nil
+				va.vadSpeechStarted = false
+			}
+			va.mu.Unlock()
 		}()
 		go va.vadLoop(vadStream)
 	}
@@ -277,6 +289,9 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 
 		if ev.Type == vad.VADEventStartOfSpeech {
 			logger.Logger.Infow("User started speaking")
+			va.mu.Lock()
+			va.vadSpeechStarted = true
+			va.mu.Unlock()
 			if va.session != nil && va.session.activity != nil {
 				va.session.activity.OnStartOfSpeech(ev)
 			} else if va.session != nil {
@@ -294,6 +309,9 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 			va.mu.Unlock()
 		} else if ev.Type == vad.VADEventEndOfSpeech {
 			logger.Logger.Infow("User stopped speaking")
+			va.mu.Lock()
+			va.vadSpeechStarted = false
+			va.mu.Unlock()
 			if va.session != nil && va.session.activity != nil {
 				va.session.activity.OnEndOfSpeech(ev)
 			} else if va.session != nil {
@@ -326,7 +344,23 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 			va.emitSTTMetrics(ev)
 			continue
 		}
-		if ev.Type != stt.SpeechEventInterimTranscript && ev.Type != stt.SpeechEventFinalTranscript {
+		if ev.Type == stt.SpeechEventStartOfSpeech || ev.Type == stt.SpeechEventEndOfSpeech {
+			va.mu.Lock()
+			session := va.session
+			va.mu.Unlock()
+			if session != nil && session.activity != nil {
+				if session.activity.turnDetectionMode() == TurnDetectionModeSTT {
+					if ev.Type == stt.SpeechEventStartOfSpeech {
+						session.activity.OnSTTStartOfSpeech(ev)
+					} else {
+						va.flushActiveVADSegment()
+						session.activity.OnEndOfSpeech(nil)
+					}
+				}
+			}
+			continue
+		}
+		if ev.Type != stt.SpeechEventInterimTranscript && ev.Type != stt.SpeechEventPreflightTranscript && ev.Type != stt.SpeechEventFinalTranscript {
 			continue
 		}
 		if len(ev.Alternatives) == 0 {
@@ -339,7 +373,7 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 		ctx := va.ctx
 		va.mu.Unlock()
 		if session != nil && session.activity != nil {
-			if ev.Type == stt.SpeechEventInterimTranscript {
+			if ev.Type == stt.SpeechEventInterimTranscript || ev.Type == stt.SpeechEventPreflightTranscript {
 				session.activity.OnInterimTranscript(ev)
 				continue
 			}
@@ -380,6 +414,20 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 
 			go va.generateReply()
 		}
+	}
+}
+
+func (va *PipelineAgent) flushActiveVADSegment() {
+	va.mu.Lock()
+	stream := va.vadStream
+	started := va.vadSpeechStarted
+	va.mu.Unlock()
+	if stream == nil || !started {
+		return
+	}
+	if err := stream.Flush(); err != nil && !isSpeechStreamShutdownError(err) {
+		logger.Logger.Warnw("failed to flush VAD stream after STT end-of-speech", err)
+		va.emitError(err, va.vad)
 	}
 }
 
