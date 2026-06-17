@@ -30,18 +30,20 @@ const (
 )
 
 type ElevenLabsTTS struct {
-	apiKey                    string
-	baseURL                   string
-	voiceID                   string
-	modelID                   string
-	encoding                  string
-	sampleRate                int
-	language                  string
-	enableSSMLParsing         bool
-	chunkLengthSchedule       []int
-	voiceSettings             *ElevenLabsVoiceSettings
-	streamingLatency          *int
-	pronunciationDictionaries []ElevenLabsPronunciationDictionaryLocator
+	apiKey                         string
+	baseURL                        string
+	voiceID                        string
+	modelID                        string
+	encoding                       string
+	sampleRate                     int
+	language                       string
+	enableSSMLParsing              bool
+	chunkLengthSchedule            []int
+	voiceSettings                  *ElevenLabsVoiceSettings
+	streamingLatency               *int
+	pronunciationDictionaries      []ElevenLabsPronunciationDictionaryLocator
+	autoMode                       *bool
+	applyLanguageTextNormalization *bool
 }
 
 type ElevenLabsTTSOption func(*ElevenLabsTTS)
@@ -126,6 +128,18 @@ func WithElevenLabsStreamingLatency(latency int) ElevenLabsTTSOption {
 func WithElevenLabsPronunciationDictionaries(locators []ElevenLabsPronunciationDictionaryLocator) ElevenLabsTTSOption {
 	return func(t *ElevenLabsTTS) {
 		t.pronunciationDictionaries = append([]ElevenLabsPronunciationDictionaryLocator(nil), locators...)
+	}
+}
+
+func WithElevenLabsAutoMode(enabled bool) ElevenLabsTTSOption {
+	return func(t *ElevenLabsTTS) {
+		t.autoMode = &enabled
+	}
+}
+
+func WithElevenLabsApplyLanguageTextNormalization(enabled bool) ElevenLabsTTSOption {
+	return func(t *ElevenLabsTTS) {
+		t.applyLanguageTextNormalization = &enabled
 	}
 }
 
@@ -376,7 +390,13 @@ func buildElevenLabsStreamURL(t *ElevenLabsTTS) string {
 	q.Set("enable_logging", "true")
 	q.Set("inactivity_timeout", strconv.Itoa(defaultElevenLabsInactivityTimeout))
 	q.Set("apply_text_normalization", "auto")
+	if t.applyLanguageTextNormalization != nil {
+		q.Set("apply_language_text_normalization", strconv.FormatBool(*t.applyLanguageTextNormalization))
+	}
 	q.Set("sync_alignment", "true")
+	if t.autoMode != nil {
+		q.Set("auto_mode", strconv.FormatBool(*t.autoMode))
+	}
 	parsed.RawQuery = q.Encode()
 	return parsed.String()
 }

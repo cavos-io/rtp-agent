@@ -332,6 +332,8 @@ func TestElevenLabsStreamURLUsesReferenceOptions(t *testing.T) {
 	provider, err := NewElevenLabsTTS("test-key", "", "",
 		WithElevenLabsLanguage("en"),
 		WithElevenLabsEnableSSMLParsing(true),
+		WithElevenLabsAutoMode(true),
+		WithElevenLabsApplyLanguageTextNormalization(true),
 	)
 	if err != nil {
 		t.Fatalf("NewElevenLabsTTS() error = %v", err)
@@ -372,6 +374,12 @@ func TestElevenLabsStreamURLUsesReferenceOptions(t *testing.T) {
 	}
 	if parsed.Query().Get("sync_alignment") != "true" {
 		t.Fatalf("sync_alignment = %q, want true", parsed.Query().Get("sync_alignment"))
+	}
+	if parsed.Query().Get("auto_mode") != "true" {
+		t.Fatalf("auto_mode = %q, want true", parsed.Query().Get("auto_mode"))
+	}
+	if parsed.Query().Get("apply_language_text_normalization") != "true" {
+		t.Fatalf("apply_language_text_normalization = %q, want true", parsed.Query().Get("apply_language_text_normalization"))
 	}
 }
 
