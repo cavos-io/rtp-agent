@@ -367,6 +367,90 @@ func TestRoomIOAudioSubscriptionWaitFallsBackAfterTimeout(t *testing.T) {
 	}
 }
 
+func TestRoomIOPublishAudioWaitsForSubscriptionBeforeEncoding(t *testing.T) {
+	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
+	rio := &RoomIO{
+		audioTrack:      newRoomIOTestAudioTrack(t),
+		encoder:         encoder,
+		audioSubscribed: make(chan struct{}),
+	}
+
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+	published := make(chan error, 1)
+	go func() {
+		published <- rio.PublishAudio(context.Background(), frame)
+	}()
+
+	select {
+	case err := <-published:
+		t.Fatalf("PublishAudio returned before subscription with error %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if len(encoder.calls) != 0 {
+		t.Fatalf("encoder calls = %d, want 0 before audio subscription", len(encoder.calls))
+	}
+
+	rio.markAudioSubscribed()
+
+	select {
+	case err := <-published:
+		if err != nil {
+			t.Fatalf("PublishAudio after subscription error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("PublishAudio did not return after audio subscription")
+	}
+	if len(encoder.calls) == 0 {
+		t.Fatal("encoder was not called after audio subscription")
+	}
+}
+
+func TestRoomIOPublishAudioWaitForSubscriptionHonorsContext(t *testing.T) {
+	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
+	rio := &RoomIO{
+		audioTrack:      newRoomIOTestAudioTrack(t),
+		encoder:         encoder,
+		audioSubscribed: make(chan struct{}),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+	published := make(chan error, 1)
+	go func() {
+		published <- rio.PublishAudio(ctx, frame)
+	}()
+
+	select {
+	case err := <-published:
+		t.Fatalf("PublishAudio returned before cancellation with error %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	cancel()
+
+	select {
+	case err := <-published:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("PublishAudio error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("PublishAudio did not return after context cancellation")
+	}
+	if len(encoder.calls) != 0 {
+		t.Fatalf("encoder calls = %d, want 0 when subscription wait is canceled", len(encoder.calls))
+	}
+}
+
 func TestRoomIOPlaybackEventsFollowCaptureAndFlush(t *testing.T) {
 	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
 	var started []PlaybackStartedEvent
