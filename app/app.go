@@ -1738,11 +1738,12 @@ func (a *App) runSessionWithContext(ctx *worker.JobContext, sessionCtx context.C
 		var roomIO *worker.RoomIO
 		if ctx.Room == nil {
 			roomIO = worker.NewRoomIO(nil, a.Session, roomOptions)
-			if err := ctx.Connect(context.Background(), roomIO.GetCallback()); err != nil {
+			room := ctx.NewRoom(roomIO.GetCallback())
+			roomIO.AttachRoom(room)
+			if err := ctx.ConnectPreparedRoom(context.Background(), room); err != nil {
 				_ = roomIO.Close()
 				return err
 			}
-			roomIO.AttachRoom(ctx.Room)
 		}
 		if ctx.Room != nil {
 			a.Session.Room = ctx.Room

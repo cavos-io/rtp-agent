@@ -270,6 +270,38 @@ func TestRoomIOAttachRoomRegistersDeferredRoomHandlers(t *testing.T) {
 	}
 }
 
+func TestRoomIOPreparedRoomRegistersPreConnectBeforeJoin(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_preconnect_roomio", Room: &livekit.Room{Name: "room-a"}},
+		"wss://livekit.example",
+		"key",
+		"secret",
+	)
+	rio := NewRoomIO(nil, &agent.AgentSession{}, RoomOptions{DisableTextInput: true})
+	room := ctx.NewRoom(rio.GetCallback())
+	rio.AttachRoom(room)
+
+	oldJoinRoom := jobContextJoinRoom
+	jobContextJoinRoom = func(_ context.Context, gotRoom *lksdk.Room, _ string, _ lksdk.ConnectInfo, _ ...lksdk.ConnectOption) error {
+		if gotRoom != room {
+			t.Fatal("joined room did not match prepared room")
+		}
+		err := room.RegisterByteStreamHandler(PreConnectAudioBufferStream, func(*lksdk.ByteStreamReader, string) {})
+		if err == nil {
+			t.Fatal("pre-connect byte-stream handler was not registered before join")
+		}
+		return nil
+	}
+	t.Cleanup(func() {
+		jobContextJoinRoom = oldJoinRoom
+		_ = rio.Close()
+	})
+
+	if err := ctx.ConnectPreparedRoom(context.Background(), room); err != nil {
+		t.Fatalf("ConnectPreparedRoom() error = %v", err)
+	}
+}
+
 func TestNewRoomIOCanDisableAudioOutput(t *testing.T) {
 	assistant := &agent.PipelineAgent{}
 	session := &agent.AgentSession{Assistant: assistant}
