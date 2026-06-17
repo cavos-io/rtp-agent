@@ -45,3 +45,17 @@ func TestJobRequestAccessorsHandleNilJob(t *testing.T) {
 		t.Fatalf("JobAgentName(nil) = %q, want empty", got)
 	}
 }
+
+func TestJobAcceptIdentityDefaultsFromJobID(t *testing.T) {
+	got := workerlivekit.JobAcceptIdentity(&lkprotocol.Job{Id: "job_accept"}, "")
+	if got != "agent-job_accept" {
+		t.Fatalf("JobAcceptIdentity() = %q, want default identity", got)
+	}
+}
+
+func TestJobAcceptIdentityKeepsConfiguredIdentity(t *testing.T) {
+	got := workerlivekit.JobAcceptIdentity(&lkprotocol.Job{Id: "job_accept"}, "custom-agent")
+	if got != "custom-agent" {
+		t.Fatalf("JobAcceptIdentity() = %q, want configured identity", got)
+	}
+}

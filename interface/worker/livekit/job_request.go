@@ -29,3 +29,10 @@ func JobAgentName(job *lkprotocol.Job) string {
 	}
 	return job.AgentName
 }
+
+func JobAcceptIdentity(job *lkprotocol.Job, identity string) string {
+	if identity != "" || job == nil {
+		return identity
+	}
+	return AgentIdentityForJobID(job.Id)
+}

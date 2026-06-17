@@ -277,9 +277,7 @@ func (r *JobRequest) Accept(args ...JobAcceptArguments) error {
 	if len(args) > 0 {
 		acceptArgs = args[0]
 	}
-	if acceptArgs.Identity == "" && r.Job != nil {
-		acceptArgs.Identity = workerlivekit.AgentIdentityForJobID(r.Job.Id)
-	}
+	acceptArgs.Identity = workerlivekit.JobAcceptIdentity(r.Job, acceptArgs.Identity)
 	if r.acceptFnc != nil {
 		return r.acceptFnc(acceptArgs)
 	}
