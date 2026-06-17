@@ -1109,23 +1109,7 @@ func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, pa
 }
 
 func transferSIPParticipantIdentity(participant any) (string, error) {
-	switch p := participant.(type) {
-	case string:
-		return p, nil
-	case remoteParticipantView:
-		if p.Kind() != lksdk.ParticipantSIP {
-			return "", participantMustBeSIPError{}
-		}
-		return p.Identity(), nil
-	default:
-		return "", fmt.Errorf("participant must be a SIP participant or identity string")
-	}
-}
-
-type participantMustBeSIPError struct{}
-
-func (participantMustBeSIPError) Error() string {
-	return "Participant must be a SIP participant"
+	return workerlivekit.TransferSIPParticipantIdentity(participant)
 }
 
 func (c *JobContext) transferSIPParticipantRequest(identity string, transferTo string, playDialtone bool) *livekit.TransferSIPParticipantRequest {
