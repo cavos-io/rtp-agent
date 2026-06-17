@@ -329,8 +329,11 @@ func TestElevenLabsStreamURLUsesReferenceOptions(t *testing.T) {
 	if parsed.Query().Get("enable_logging") != "true" {
 		t.Fatalf("enable_logging = %q, want true", parsed.Query().Get("enable_logging"))
 	}
-	if parsed.Query().Get("inactivity_timeout") != "300" {
-		t.Fatalf("inactivity_timeout = %q, want 300", parsed.Query().Get("inactivity_timeout"))
+	if defaultElevenLabsInactivityTimeout != 180 {
+		t.Fatalf("default inactivity timeout = %d, want reference 180", defaultElevenLabsInactivityTimeout)
+	}
+	if parsed.Query().Get("inactivity_timeout") != "180" {
+		t.Fatalf("inactivity_timeout = %q, want 180", parsed.Query().Get("inactivity_timeout"))
 	}
 	if parsed.Query().Get("apply_text_normalization") != "auto" {
 		t.Fatalf("apply_text_normalization = %q, want auto", parsed.Query().Get("apply_text_normalization"))
