@@ -4009,6 +4009,32 @@ func TestAgentActivityPreflightTranscriptStartsPreemptiveGeneration(t *testing.T
 	}
 }
 
+func TestAgentActivityPreflightTranscriptIncludesPriorFinalTranscript(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "hello", Confidence: 0.8}},
+	})
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Type: stt.SpeechEventPreflightTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text:       "world",
+			Confidence: 0.6,
+		}},
+	})
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "hello world" {
+		t.Fatalf("CommitUserTurn transcript = %q, want final plus preflight transcript", transcript)
+	}
+}
+
 func TestAgentActivityPreemptiveGenerationStartsTTSBeforeSchedulingWhenEnabled(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeVAD

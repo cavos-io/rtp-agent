@@ -118,6 +118,8 @@ type AgentActivity struct {
 	pendingInterimTranscript         string
 	pendingInterimLanguage           string
 	pendingInterimSpeakerID          string
+	pendingPreflightTranscript       string
+	pendingPreflightConfidence       float64
 	userTurnCompletionMu             sync.Mutex
 	pendingUserTranscript            string
 	pendingUserLanguage              string
@@ -1495,9 +1497,20 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 		return
 	}
 	a.userTurnMu.Lock()
+	preflightTranscript := ""
+	preflightConfidence := 0.0
+	if ev != nil && ev.Type == stt.SpeechEventPreflightTranscript && transcript != "" {
+		preflightTranscript = strings.TrimSpace(strings.Join([]string{a.pendingUserTranscript, transcript}, " "))
+		preflightConfidence = confidence
+		if a.pendingTranscriptConfidenceCount > 0 {
+			preflightConfidence = (a.pendingTranscriptConfidenceSum + confidence) / float64(a.pendingTranscriptConfidenceCount+1)
+		}
+	}
 	a.pendingInterimTranscript = transcript
 	a.pendingInterimLanguage = language
 	a.pendingInterimSpeakerID = speakerID
+	a.pendingPreflightTranscript = preflightTranscript
+	a.pendingPreflightConfidence = preflightConfidence
 	a.userTurnMu.Unlock()
 
 	a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
@@ -1515,8 +1528,8 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 			}
 		}
 	}
-	if ev != nil && ev.Type == stt.SpeechEventPreflightTranscript && transcript != "" {
-		a.maybeStartPreemptiveGeneration(transcript, confidence)
+	if preflightTranscript != "" {
+		a.maybeStartPreemptiveGeneration(preflightTranscript, preflightConfidence)
 	}
 }
 
@@ -1571,6 +1584,8 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.pendingInterimTranscript = ""
 	a.pendingInterimLanguage = ""
 	a.pendingInterimSpeakerID = ""
+	a.pendingPreflightTranscript = ""
+	a.pendingPreflightConfidence = 0
 	a.userTurnMu.Unlock()
 	a.notifyUserTurnUpdated()
 	a.checkUserTurnLimit(transcript)
@@ -2227,9 +2242,21 @@ collect:
 	language := a.pendingUserLanguage
 	confidence := a.pendingTranscriptConfidence
 	present := a.pendingUserTranscriptPresent
+	preflightTranscript := a.pendingPreflightTranscript
+	preflightConfidence := a.pendingPreflightConfidence
 	fallbackLanguage := ""
 	fallbackSpeakerID := ""
 	fallbackFinal := false
+	if preflightTranscript != "" {
+		transcript = preflightTranscript
+		confidence = preflightConfidence
+		if !present {
+			fallbackLanguage = a.pendingInterimLanguage
+			fallbackSpeakerID = a.pendingInterimSpeakerID
+			present = true
+			fallbackFinal = true
+		}
+	}
 	if !present && a.pendingInterimTranscript != "" {
 		transcript = a.pendingInterimTranscript
 		confidence = 1
@@ -2247,6 +2274,8 @@ collect:
 	a.pendingInterimTranscript = ""
 	a.pendingInterimLanguage = ""
 	a.pendingInterimSpeakerID = ""
+	a.pendingPreflightTranscript = ""
+	a.pendingPreflightConfidence = 0
 	a.userTurnMu.Unlock()
 
 	if !present || transcript == "" {
@@ -2679,6 +2708,8 @@ func (a *AgentActivity) clearPendingUserTurn() {
 	a.pendingInterimTranscript = ""
 	a.pendingInterimLanguage = ""
 	a.pendingInterimSpeakerID = ""
+	a.pendingPreflightTranscript = ""
+	a.pendingPreflightConfidence = 0
 }
 
 func (a *AgentActivity) notifyUserTurnUpdated() {
