@@ -3808,6 +3808,62 @@ func TestAgentActivitySkipReplyResetsPreemptiveRetryCount(t *testing.T) {
 	}
 }
 
+func TestAgentActivityUninterruptibleSpeechResetsPreemptiveRetryCount(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	agent.LLM = &fakeGenerationLLM{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		PreemptiveGenerationMaxRetries:    1,
+		PreemptiveGenerationMaxRetriesSet: true,
+	})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	defer activity.Stop()
+
+	speechEvents := session.SpeechCreatedEvents()
+	activity.OnStartOfSpeech(&vad.VADEvent{})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "first turn", Confidence: 0.9}},
+	})
+
+	var firstPreemptive *SpeechHandle
+	select {
+	case ev := <-speechEvents:
+		firstPreemptive = ev.SpeechHandle
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive initial preemptive generation")
+	}
+
+	activity.currentSpeech = NewSpeechHandle(false, DefaultInputDetails())
+	if _, err := activity.completeUserTurn(context.Background(), EndOfTurnInfo{
+		NewTranscript:        "blocked turn",
+		TranscriptConfidence: 0.9,
+	}); err != nil {
+		t.Fatalf("completeUserTurn error = %v, want nil", err)
+	}
+	if !firstPreemptive.IsInterrupted() {
+		t.Fatal("uninterruptible current speech did not cancel stale preemptive generation")
+	}
+	activity.currentSpeech.MarkDone()
+	activity.currentSpeech = nil
+
+	activity.OnStartOfSpeech(&vad.VADEvent{})
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Type:         stt.SpeechEventPreflightTranscript,
+		Alternatives: []stt.SpeechData{{Text: "next turn", Confidence: 0.9}},
+	})
+
+	select {
+	case ev := <-speechEvents:
+		if ev.SpeechHandle == nil || ev.SpeechHandle == firstPreemptive {
+			t.Fatalf("second preemptive speech = %#v, want new handle", ev.SpeechHandle)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive preemptive generation after uninterruptible speech reset")
+	}
+}
+
 func TestAgentActivityCommitUserTurnSkipsWhenSchedulingPaused(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
