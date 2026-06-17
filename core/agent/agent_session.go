@@ -2077,6 +2077,7 @@ func (s *AgentSession) reportUsageLoop(ctx context.Context) {
 }
 
 func (s *AgentSession) UpdateAgentState(state AgentState) {
+	var flushHeldSTTActivity *AgentActivity
 	s.mu.Lock()
 	oldState := s.agentState
 	s.agentState = state
@@ -2104,10 +2105,15 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 			}
 			if activity != nil {
 				activity.onAgentSpeechEnded(nowTime)
+				flushHeldSTTActivity = activity
 			}
 		}
 	}
 	s.mu.Unlock()
+
+	if flushHeldSTTActivity != nil {
+		flushHeldSTTActivity.flushHeldSTTEvents()
+	}
 
 	if oldState != state {
 		if backgroundAudio != nil {

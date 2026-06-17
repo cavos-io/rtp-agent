@@ -145,6 +145,8 @@ type AgentActivity struct {
 	userSpeechStartedAt       time.Time
 	userSpeechStoppedAt       time.Time
 	ignoreUserTranscriptUntil time.Time
+	heldSTTEvents             []*stt.SpeechEvent
+	holdSTTWhileAgentSpeaking bool
 
 	backchannelBoundaryMu    sync.Mutex
 	backchannelBoundaryUntil time.Time
@@ -1473,6 +1475,9 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 	if a.realtimeUserTranscriptionEnabled() {
 		return
 	}
+	if a.holdSTTEventWhileAgentSpeaking(ev) {
+		return
+	}
 	transcript := ""
 	language := ""
 	speakerID := ""
@@ -1510,6 +1515,9 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 
 func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	if a.realtimeUserTranscriptionEnabled() {
+		return
+	}
+	if a.holdSTTEventWhileAgentSpeaking(ev) {
 		return
 	}
 	a.sttEOSReceived = true
@@ -1625,6 +1633,9 @@ func (a *AgentActivity) armBackchannelBoundary(startedAt time.Time) {
 		a.audioActivityDisabled = true
 	}
 	a.backchannelBoundaryMu.Unlock()
+	a.userTurnMu.Lock()
+	a.holdSTTWhileAgentSpeaking = a.InterruptionEnabled()
+	a.userTurnMu.Unlock()
 }
 
 func (a *AgentActivity) cancelBackchannelBoundary() {
@@ -1645,6 +1656,9 @@ func (a *AgentActivity) onAgentSpeechEnded(endedAt time.Time) {
 	if a.InterruptionEnabled() {
 		a.holdUserTranscriptsUntil(endedAt)
 	}
+	a.userTurnMu.Lock()
+	a.holdSTTWhileAgentSpeaking = false
+	a.userTurnMu.Unlock()
 }
 
 func (a *AgentActivity) audioActivityInterruptionDisabled(now time.Time) bool {
@@ -1715,7 +1729,60 @@ func (a *AgentActivity) clearHeldUserTranscriptWindow() {
 	}
 	a.userTurnMu.Lock()
 	a.ignoreUserTranscriptUntil = time.Time{}
+	a.heldSTTEvents = nil
+	a.holdSTTWhileAgentSpeaking = false
 	a.userTurnMu.Unlock()
+}
+
+func (a *AgentActivity) holdSTTEventWhileAgentSpeaking(ev *stt.SpeechEvent) bool {
+	if a == nil || a.Session == nil || ev == nil || a.Session.AgentStateValue() != AgentStateSpeaking {
+		return false
+	}
+	switch ev.Type {
+	case "", stt.SpeechEventInterimTranscript, stt.SpeechEventFinalTranscript:
+	default:
+		return false
+	}
+	a.userTurnMu.Lock()
+	if !a.holdSTTWhileAgentSpeaking {
+		a.userTurnMu.Unlock()
+		return false
+	}
+	a.heldSTTEvents = append(a.heldSTTEvents, cloneSpeechEvent(ev))
+	a.userTurnMu.Unlock()
+	return true
+}
+
+func (a *AgentActivity) flushHeldSTTEvents() {
+	if a == nil {
+		return
+	}
+	a.userTurnMu.Lock()
+	events := a.heldSTTEvents
+	a.heldSTTEvents = nil
+	a.userTurnMu.Unlock()
+	for _, ev := range events {
+		if ev == nil {
+			continue
+		}
+		switch ev.Type {
+		case stt.SpeechEventInterimTranscript:
+			a.OnInterimTranscript(ev)
+		default:
+			a.OnFinalTranscript(ev)
+		}
+	}
+}
+
+func cloneSpeechEvent(ev *stt.SpeechEvent) *stt.SpeechEvent {
+	if ev == nil {
+		return nil
+	}
+	clone := *ev
+	if ev.Alternatives != nil {
+		clone.Alternatives = append([]stt.SpeechData(nil), ev.Alternatives...)
+	}
+	return &clone
 }
 
 func (a *AgentActivity) shouldDropFinalTranscriptBeforeAgentSpeechEnd(ev *stt.SpeechEvent) bool {

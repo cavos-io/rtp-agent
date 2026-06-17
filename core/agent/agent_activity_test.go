@@ -2330,6 +2330,59 @@ func TestAgentActivityAgentSpeechEndHoldsStaleFinalTranscript(t *testing.T) {
 	}
 }
 
+func TestAgentActivityBuffersFinalTranscriptWhileAgentSpeaking(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:              TurnDetectionModeVAD,
+		BackchannelBoundaryEnd:     0,
+		BackchannelBoundaryEndSet:  true,
+		MinInterruptionDuration:    0.05,
+		MinInterruptionDurationSet: true,
+	})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	userTranscriptEvents := session.UserInputTranscribedEvents()
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	defer current.MarkDone()
+	startedAt := time.Now().Add(-3 * time.Second)
+	activity.userSpeechStartedAt = startedAt
+
+	session.UpdateAgentState(AgentStateSpeaking)
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text:       "after assistant",
+			EndTime:    4,
+			Confidence: 0.9,
+		}},
+	})
+
+	select {
+	case ev := <-userTranscriptEvents:
+		t.Fatalf("transcript emitted while agent speaking: %#v", ev)
+	default:
+	}
+	if current.IsInterrupted() {
+		t.Fatal("current speech interrupted before held transcript flush")
+	}
+
+	session.UpdateAgentState(AgentStateListening)
+
+	select {
+	case ev := <-userTranscriptEvents:
+		if ev.Transcript != "after assistant" || !ev.IsFinal {
+			t.Fatalf("event = %#v, want final held transcript", ev)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("UserInputTranscribedEvents did not receive held transcript after agent speech end")
+	}
+	if !activity.pendingUserTranscriptPresent || activity.pendingUserTranscript != "after assistant" {
+		t.Fatalf("pending transcript = %q/%v, want held transcript", activity.pendingUserTranscript, activity.pendingUserTranscriptPresent)
+	}
+}
+
 func TestAgentActivityDropsInterimTranscriptBeforeAgentSpeechEnd(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}
