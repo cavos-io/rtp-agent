@@ -3287,6 +3287,66 @@ func TestPipelineAgentScheduledSaySkipsInterruptedSpeechBeforeSynthesis(t *testi
 	}
 }
 
+func TestPipelineAgentScheduledSayInterruptDuringSynthesisSuppressesTTSError(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	blockStream := &blockingPipelineTTSStream{started: make(chan struct{}), unblock: make(chan struct{})}
+	ttsSource := &blockingPipelineTTS{stream: blockStream}
+	agent := NewPipelineAgent(nil, nil, nil, ttsSource, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	speech.Generation.Text = "hello"
+	speech.Generation.AssistantMessage = &llm.ChatMessage{
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{{Text: "hello"}},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.OnSpeechScheduled(context.Background(), speech)
+	}()
+
+	<-blockStream.started
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+	close(blockStream.unblock)
+	<-done
+
+	select {
+	case ev := <-session.ErrorEvents():
+		t.Fatalf("ErrorEvents received unexpected error = %v, want no TTS error on interrupt", ev.Error)
+	default:
+	}
+}
+
+func TestPipelineAgentScheduledSayRealTTSErrorStillEmittedAfterInterruptSuppression(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("real tts failure")
+	ttsSource := &fakePipelineTTS{streamErr: cause}
+	agent := NewPipelineAgent(nil, nil, nil, ttsSource, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(false, DefaultInputDetails())
+	speech.Generation.Text = "hello"
+	speech.Generation.AssistantMessage = &llm.ChatMessage{
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{{Text: "hello"}},
+	}
+
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	select {
+	case ev := <-session.ErrorEvents():
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want cause %v", ev.Error, cause)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive TTS error for real failure")
+	}
+}
+
 func TestPipelineAgentScheduledSayPersistsAssistantTextInAgentChatContext(t *testing.T) {
 	pipelineCtx := llm.NewChatContext()
 	ttsStream := &fakePipelineTTSStream{}
@@ -3558,6 +3618,46 @@ type fakePipelineTTSStream struct {
 	timedTranscripts [][]tts.TimedString
 	next             int
 	err              error
+}
+
+type blockingPipelineTTSStream struct {
+	started chan struct{}
+	unblock chan struct{}
+}
+
+func (b *blockingPipelineTTSStream) PushText(string) error { return nil }
+func (b *blockingPipelineTTSStream) Flush() error          { return nil }
+func (b *blockingPipelineTTSStream) Close() error          { return nil }
+func (b *blockingPipelineTTSStream) Next() (*tts.SynthesizedAudio, error) {
+	if b.started != nil {
+		select {
+		case <-b.started:
+		default:
+			close(b.started)
+			b.started = nil
+		}
+	}
+	<-b.unblock
+	return nil, io.EOF
+}
+
+type blockingPipelineTTS struct {
+	tts.MetricsEmitter
+	tts.ErrorEmitter
+	stream *blockingPipelineTTSStream
+}
+
+func (b *blockingPipelineTTS) Label() string                               { return "fake-blocking" }
+func (b *blockingPipelineTTS) Model() string                               { return "" }
+func (b *blockingPipelineTTS) Provider() string                            { return "" }
+func (b *blockingPipelineTTS) Capabilities() tts.TTSCapabilities           { return tts.TTSCapabilities{Streaming: true} }
+func (b *blockingPipelineTTS) SampleRate() int                             { return 24000 }
+func (b *blockingPipelineTTS) NumChannels() int                            { return 1 }
+func (b *blockingPipelineTTS) Synthesize(context.Context, string) (tts.ChunkedStream, error) {
+	return nil, nil
+}
+func (b *blockingPipelineTTS) Stream(context.Context) (tts.SynthesizeStream, error) {
+	return b.stream, nil
 }
 
 type fakePipelinePlaybackController struct {
