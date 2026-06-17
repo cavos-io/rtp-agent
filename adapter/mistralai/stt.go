@@ -3,6 +3,7 @@ package mistralai
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -10,12 +11,15 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"net/url"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/gorilla/websocket"
 )
 
 const (
@@ -31,6 +35,8 @@ type MistralAISTT struct {
 	language    string
 	contextBias []string
 	sampleRate  int
+
+	dialRealtime func(context.Context, string, http.Header) (mistralAISTTRealtimeConn, error)
 }
 
 type MistralAISTTOption func(*MistralAISTT)
@@ -73,6 +79,7 @@ func NewMistralAISTT(apiKey string, opts ...MistralAISTTOption) *MistralAISTT {
 		model:      defaultMistralAISTTModel,
 		sampleRate: defaultMistralAISTTSampleRate,
 	}
+	provider.dialRealtime = defaultMistralAISTTRealtimeDialer
 	for _, opt := range opts {
 		opt(provider)
 	}
@@ -96,10 +103,26 @@ func (s *MistralAISTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *MistralAISTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
-	if mistralAISTTIsRealtime(s.model) {
-		return nil, fmt.Errorf("mistralai realtime stt streaming is not implemented")
+	if err := validateMistralAISTTAPIKey(s.apiKey); err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("mistralai stt streaming is only available for realtime models")
+	if !mistralAISTTIsRealtime(s.model) {
+		return nil, fmt.Errorf("mistralai stt streaming is only available for realtime models")
+	}
+	conn, err := s.dialRealtime(ctx, buildMistralAISTTRealtimeURL(s), buildMistralAISTTRealtimeHeaders(s))
+	if err != nil {
+		return nil, llm.NewAPIConnectionError(err.Error())
+	}
+	streamCtx, cancel := context.WithCancel(ctx)
+	stream := &mistralAISTTRealtimeStream{
+		conn:   conn,
+		events: make(chan *stt.SpeechEvent, 100),
+		errCh:  make(chan error, 1),
+		ctx:    streamCtx,
+		cancel: cancel,
+	}
+	go stream.readLoop()
+	return stream, nil
 }
 
 func (s *MistralAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
@@ -216,6 +239,123 @@ func buildMistralAISTTRecognizeRequest(ctx context.Context, s *MistralAISTT, aud
 	req.Header.Set("x-api-key", s.apiKey)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	return req, nil
+}
+
+func buildMistralAISTTRealtimeURL(s *MistralAISTT) string {
+	base := strings.TrimRight(s.baseURL, "/")
+	if !strings.HasSuffix(base, "/v1") {
+		base += "/v1"
+	}
+	endpoint := base + "/audio/transcriptions/realtime"
+	u, _ := url.Parse(endpoint)
+	switch u.Scheme {
+	case "https":
+		u.Scheme = "wss"
+	case "http":
+		u.Scheme = "ws"
+	}
+	q := u.Query()
+	q.Set("model", s.model)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func buildMistralAISTTRealtimeHeaders(s *MistralAISTT) http.Header {
+	headers := make(http.Header)
+	headers.Set("Authorization", "Bearer "+s.apiKey)
+	return headers
+}
+
+type mistralAISTTRealtimeConn interface {
+	WriteMessage(messageType int, data []byte) error
+	ReadMessage() (int, []byte, error)
+	Close() error
+}
+
+func defaultMistralAISTTRealtimeDialer(ctx context.Context, endpoint string, headers http.Header) (mistralAISTTRealtimeConn, error) {
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
+	return conn, err
+}
+
+type mistralAISTTRealtimeStream struct {
+	conn   mistralAISTTRealtimeConn
+	events chan *stt.SpeechEvent
+	errCh  chan error
+	mu     sync.Mutex
+	closed bool
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+func (s *mistralAISTTRealtimeStream) PushFrame(frame *model.AudioFrame) error {
+	if frame == nil || len(frame.Data) == 0 {
+		return nil
+	}
+	msg := map[string]any{
+		"type":  "input_audio.append",
+		"audio": base64.StdEncoding.EncodeToString(frame.Data),
+	}
+	return s.writeJSON(msg)
+}
+
+func (s *mistralAISTTRealtimeStream) Flush() error {
+	return s.writeJSON(map[string]any{"type": "input_audio.flush"})
+}
+
+func (s *mistralAISTTRealtimeStream) Close() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	s.mu.Unlock()
+	s.cancel()
+	_ = s.writeJSON(map[string]any{"type": "input_audio.end"})
+	return s.conn.Close()
+}
+
+func (s *mistralAISTTRealtimeStream) Next() (*stt.SpeechEvent, error) {
+	select {
+	case event, ok := <-s.events:
+		if !ok {
+			select {
+			case err := <-s.errCh:
+				return nil, err
+			default:
+				return nil, io.EOF
+			}
+		}
+		return event, nil
+	case err := <-s.errCh:
+		return nil, err
+	case <-s.ctx.Done():
+		return nil, s.ctx.Err()
+	}
+}
+
+func (s *mistralAISTTRealtimeStream) readLoop() {
+	defer close(s.events)
+	for {
+		msgType, _, err := s.conn.ReadMessage()
+		if err != nil {
+			if err != io.EOF && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				s.errCh <- llm.NewAPIConnectionError(err.Error())
+			}
+			return
+		}
+		if msgType != websocket.TextMessage {
+			continue
+		}
+	}
+}
+
+func (s *mistralAISTTRealtimeStream) writeJSON(msg map[string]any) error {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	return s.conn.WriteMessage(websocket.TextMessage, data)
 }
 
 func validateMistralAISTTAPIKey(apiKey string) error {
