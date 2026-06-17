@@ -730,6 +730,31 @@ func TestAgentSessionUpdateOptionsToManualCancelsFalseInterruptionTimer(t *testi
 	}
 }
 
+func TestAgentSessionUpdateOptionsToManualCancelsPendingEOU(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		MinEndpointingDelay: 0.05,
+		TurnDetection:       TurnDetectionModeSTT,
+	})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	defer activity.Stop()
+
+	activity.runEOUDetection(EndOfTurnInfo{NewTranscript: "pending automatic", TranscriptConfidence: 0.9})
+	manual := TurnDetectionModeManual
+	if err := session.UpdateOptions(AgentSessionUpdateOptions{TurnDetection: &manual}); err != nil {
+		t.Fatalf("UpdateOptions error = %v, want nil", err)
+	}
+
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called after switching to manual with %q", msg.TextContent())
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestAgentActivityDuplicateStartOfSpeechKeepsActiveAudioFrames(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

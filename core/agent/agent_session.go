@@ -1064,6 +1064,7 @@ func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) error {
 
 	if activity != nil && opts.TurnDetection != nil && (oldTurnDetection == TurnDetectionModeManual || *opts.TurnDetection == TurnDetectionModeManual) {
 		activity.cancelFalseInterruptionTimer()
+		activity.cancelPendingEOUDetection()
 	}
 	if activity != nil {
 		return activity.UpdateOptions(opts)

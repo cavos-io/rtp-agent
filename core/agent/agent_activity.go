@@ -794,6 +794,9 @@ func (a *AgentActivity) UpdateOptions(opts AgentSessionUpdateOptions) error {
 	if a == nil || a.Session == nil {
 		return nil
 	}
+	if opts.TurnDetection != nil && *opts.TurnDetection == TurnDetectionModeManual {
+		a.cancelPendingEOUDetection()
+	}
 	updater, ok := a.Session.Assistant.(realtimeOptionsUpdatingAssistant)
 	if !ok {
 		return nil
@@ -812,6 +815,19 @@ func (a *AgentActivity) UpdateOptions(opts AgentSessionUpdateOptions) error {
 		ToolChoice:    toolChoice,
 		ToolChoiceSet: true,
 	})
+}
+
+func (a *AgentActivity) cancelPendingEOUDetection() {
+	if a == nil {
+		return
+	}
+	a.eouMu.Lock()
+	if a.eouCancel != nil {
+		a.eouCancel()
+		a.eouCancel = nil
+	}
+	a.eouMu.Unlock()
+	a.manualTurnCommitted = false
 }
 
 func (a *AgentActivity) updateRealtimeChatContext(ctx context.Context) error {
