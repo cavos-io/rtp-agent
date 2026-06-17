@@ -1450,6 +1450,50 @@ func TestPipelineAgentVADTurnDetectionWaitsForEndOfSpeechBeforeCommit(t *testing
 	}
 }
 
+func TestPipelineAgentVADTurnDetectionIgnoresSTTEndOfSpeech(t *testing.T) {
+	baseAgent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	baseAgent.TurnDetection = TurnDetectionModeVAD
+	baseAgent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(baseAgent, session)
+	baseAgent.activity = activity
+	session.activity = activity
+	defer activity.Stop()
+
+	pipeline := NewPipelineAgent(baseAgent.VAD, &fakePipelineSTT{}, nil, nil, baseAgent.ChatCtx)
+	pipeline.session = session
+	pipeline.ctx = context.Background()
+	session.Assistant = pipeline
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Timestamp: 1.0})
+	pipeline.sttLoop(&fakePipelineRecognizeStream{
+		events: []*stt.SpeechEvent{
+			{
+				Type:         stt.SpeechEventFinalTranscript,
+				Alternatives: []stt.SpeechData{{Text: "wait for vad only", Confidence: 0.9}},
+			},
+			{Type: stt.SpeechEventEndOfSpeech},
+		},
+	})
+
+	select {
+	case msg := <-baseAgent.turns:
+		t.Fatalf("OnUserTurnCompleted called from STT end-of-speech in VAD mode with %q", msg.TextContent())
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	activity.OnEndOfSpeech(&vad.VADEvent{Timestamp: 1.5})
+
+	select {
+	case msg := <-baseAgent.turns:
+		if msg.TextContent() != "wait for vad only" {
+			t.Fatalf("turn message text = %q, want wait for vad only", msg.TextContent())
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called after VAD end-of-speech")
+	}
+}
+
 func TestPipelineAgentSTTTurnDetectionWaitsForEndOfSpeechBeforeCommit(t *testing.T) {
 	baseAgent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	baseAgent.TurnDetection = TurnDetectionModeSTT

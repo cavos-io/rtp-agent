@@ -331,10 +331,12 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 			session := va.session
 			va.mu.Unlock()
 			if session != nil && session.activity != nil {
-				if ev.Type == stt.SpeechEventStartOfSpeech {
-					session.activity.OnSTTStartOfSpeech(ev)
-				} else {
-					session.activity.OnEndOfSpeech(nil)
+				if session.activity.turnDetectionMode() == TurnDetectionModeSTT {
+					if ev.Type == stt.SpeechEventStartOfSpeech {
+						session.activity.OnSTTStartOfSpeech(ev)
+					} else {
+						session.activity.OnEndOfSpeech(nil)
+					}
 				}
 			}
 			continue
