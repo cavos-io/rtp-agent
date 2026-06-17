@@ -179,6 +179,7 @@ type CommitUserTurnOptions struct {
 	TranscriptTimeout time.Duration
 	STTFlushDuration  time.Duration
 	SkipReply         bool
+	SkipRealtimeAudio bool
 }
 
 type SessionAssistant interface {
@@ -2720,6 +2721,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 			}
 			if _, err := activity.CommitUserTurn(commitCtx, CommitUserTurnOptions{
 				TranscriptTimeout: time.Duration(s.Options.SessionCloseTranscriptTimeout * float64(time.Second)),
+				SkipRealtimeAudio: true,
 			}); err != nil {
 				stopErr = err
 			}

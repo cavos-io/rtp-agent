@@ -2302,7 +2302,7 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 		a.commitUserTurnMu.Unlock()
 		cancelCommit()
 	}()
-	if a.Session != nil {
+	if a.Session != nil && !opts.SkipRealtimeAudio {
 		a.Session.mu.Lock()
 		assistant := a.Session.Assistant
 		activity := a.Session.activity

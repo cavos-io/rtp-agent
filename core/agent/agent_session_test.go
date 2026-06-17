@@ -3906,6 +3906,28 @@ func TestAgentSessionCloseSoonCommitsPendingUserTurn(t *testing.T) {
 	}
 }
 
+func TestAgentSessionCloseSoonDoesNotCommitRealtimeAudioOrReply(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{SessionCloseTranscriptTimeout: 0.25})
+	assistant := &recordingRealtimeCommitAssistant{}
+	session.Assistant = assistant
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+
+	events := session.SpeechCreatedEvents()
+	session.CloseSoon(CloseReasonUserInitiated)
+
+	if assistant.commits != 0 {
+		t.Fatalf("CommitAudio calls = %d, want 0 on close", assistant.commits)
+	}
+	select {
+	case ev := <-events:
+		t.Fatalf("unexpected SpeechCreated event on close: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func TestAgentSessionStopCancelsActiveAgentTask(t *testing.T) {
 	task := NewAgentTask[string]("collect data")
 	task.ID = "collect_data"
