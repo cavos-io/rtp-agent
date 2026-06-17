@@ -11,6 +11,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
@@ -137,6 +138,48 @@ func TestMultimodalAgentSendsSilenceToRealtimeDuringUninterruptibleSpeech(t *tes
 	}
 	if !bytes.Equal(got.Data, make([]byte, len(frame.Data))) {
 		t.Fatalf("realtime audio data = %v, want silence", got.Data)
+	}
+}
+
+func TestMultimodalAgentTTSFallbackMarksSpeakingAfterFirstAudioFrame(t *testing.T) {
+	releaseAudio := make(chan struct{})
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.TTS = &blockingRealtimeFallbackTTS{release: releaseAudio}
+	ma := &MultimodalAgent{
+		session: session,
+		ctx:     context.Background(),
+		PublishAudio: func(context.Context, *model.AudioFrame) error {
+			return nil
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- ma.publishTTSFallbackForRealtimeText(context.Background(), nil, "hello")
+	}()
+
+	select {
+	case ev := <-session.AgentStateChangedCh:
+		t.Fatalf("agent state changed before first fallback audio frame: %#v", ev)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releaseAudio)
+	select {
+	case ev := <-session.AgentStateChangedCh:
+		if ev.NewState != AgentStateSpeaking {
+			t.Fatalf("agent state event = %#v, want speaking after first fallback audio frame", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("agent did not enter speaking after first fallback audio frame")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("publishTTSFallbackForRealtimeText error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("publishTTSFallbackForRealtimeText did not finish")
 	}
 }
 
@@ -1997,6 +2040,56 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+type blockingRealtimeFallbackTTS struct {
+	tts.MetricsEmitter
+	tts.ErrorEmitter
+
+	release <-chan struct{}
+}
+
+func (b *blockingRealtimeFallbackTTS) Label() string { return "blocking-realtime-fallback" }
+
+func (b *blockingRealtimeFallbackTTS) Capabilities() tts.TTSCapabilities {
+	return tts.TTSCapabilities{Streaming: true}
+}
+
+func (b *blockingRealtimeFallbackTTS) SampleRate() int { return 24000 }
+
+func (b *blockingRealtimeFallbackTTS) NumChannels() int { return 1 }
+
+func (b *blockingRealtimeFallbackTTS) Synthesize(context.Context, string) (tts.ChunkedStream, error) {
+	return nil, errors.New("unexpected synthesize call")
+}
+
+func (b *blockingRealtimeFallbackTTS) Stream(context.Context) (tts.SynthesizeStream, error) {
+	return &blockingRealtimeFallbackTTSStream{release: b.release}, nil
+}
+
+type blockingRealtimeFallbackTTSStream struct {
+	release <-chan struct{}
+	sent    bool
+}
+
+func (s *blockingRealtimeFallbackTTSStream) PushText(string) error { return nil }
+
+func (s *blockingRealtimeFallbackTTSStream) Flush() error { return nil }
+
+func (s *blockingRealtimeFallbackTTSStream) Close() error { return nil }
+
+func (s *blockingRealtimeFallbackTTSStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.sent {
+		return nil, io.EOF
+	}
+	<-s.release
+	s.sent = true
+	return &tts.SynthesizedAudio{Frame: &model.AudioFrame{
+		Data:              []byte{1, 2},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}, nil
 }
 
 type fakeRealtimeModel struct {

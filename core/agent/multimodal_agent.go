@@ -794,7 +794,7 @@ func (ma *MultimodalAgent) publishTTSFallbackForRealtimeText(ctx context.Context
 	if err != nil {
 		return err
 	}
-	session.UpdateAgentState(AgentStateSpeaking)
+	startedSpeaking := false
 	for frame := range ttsGen.AudioCh {
 		select {
 		case <-ctx.Done():
@@ -805,6 +805,10 @@ func (ma *MultimodalAgent) publishTTSFallbackForRealtimeText(ctx context.Context
 			}
 			if err := publish(ctx, frame); err != nil {
 				return err
+			}
+			if !startedSpeaking {
+				session.UpdateAgentState(AgentStateSpeaking)
+				startedSpeaking = true
 			}
 		}
 	}
