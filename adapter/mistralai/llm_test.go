@@ -98,6 +98,27 @@ func TestMistralLLMUpdateOptionsAppliesReferenceSamplingParams(t *testing.T) {
 	}
 }
 
+func TestMistralLLMUpdateOptionsAppliesReferencePenaltyAndSeedParams(t *testing.T) {
+	capture := &mistralLLMCaptureHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	provider := NewMistralLLM("test-key", "", withMistralLLMHTTPClient(capture))
+	provider.UpdateOptions(
+		WithMistralLLMPresencePenalty(0.2),
+		WithMistralLLMFrequencyPenalty(0.5),
+		WithMistralLLMRandomSeed(42),
+	)
+
+	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	for _, want := range []string{`"presence_penalty":0.2`, `"frequency_penalty":0.5`, `"random_seed":42`} {
+		if !strings.Contains(capture.requestBody, want) {
+			t.Fatalf("request body = %s, want %s", capture.requestBody, want)
+		}
+	}
+}
+
 func TestMistralLLMUpdateOptionsAppliesReferenceToolChoice(t *testing.T) {
 	capture := &mistralLLMCaptureHTTPClient{
 		statusCode:   http.StatusBadRequest,

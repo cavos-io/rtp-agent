@@ -1,8 +1,12 @@
 package mistralai
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 
 	"github.com/cavos-io/rtp-agent/adapter/openai"
@@ -45,6 +49,24 @@ func WithMistralLLMTopP(topP float64) MistralLLMOption {
 func WithMistralLLMMaxCompletionTokens(maxCompletionTokens int) MistralLLMOption {
 	return func(l *MistralLLM) {
 		l.setExtraParam("max_tokens", maxCompletionTokens)
+	}
+}
+
+func WithMistralLLMPresencePenalty(presencePenalty float64) MistralLLMOption {
+	return func(l *MistralLLM) {
+		l.setExtraParam("presence_penalty", presencePenalty)
+	}
+}
+
+func WithMistralLLMFrequencyPenalty(frequencyPenalty float64) MistralLLMOption {
+	return func(l *MistralLLM) {
+		l.setExtraParam("frequency_penalty", frequencyPenalty)
+	}
+}
+
+func WithMistralLLMRandomSeed(randomSeed int) MistralLLMOption {
+	return func(l *MistralLLM) {
+		l.setExtraParam("seed", randomSeed)
 	}
 }
 
@@ -112,11 +134,17 @@ func (l *MistralLLM) rebuildInner() {
 	if l.toolChoice != nil {
 		opts = append(opts, openai.WithOpenAILLMToolChoice(l.toolChoice))
 	}
-	if l.httpClient != nil {
-		l.inner = openai.NewOpenAILLMWithBaseURLAndHTTPClient(l.apiKey, l.model, l.baseURL, l.httpClient, opts...)
-		return
+	httpClient := l.httpClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
 	}
-	l.inner = openai.NewOpenAILLMWithBaseURL(l.apiKey, l.model, l.baseURL, opts...)
+	l.inner = openai.NewOpenAILLMWithBaseURLAndHTTPClient(
+		l.apiKey,
+		l.model,
+		l.baseURL,
+		mistralLLMRequestRewriter{next: httpClient},
+		opts...,
+	)
 }
 
 func (l *MistralLLM) setExtraParam(key string, value any) {
@@ -135,4 +163,46 @@ func cloneMistralLLMAnyMap(values map[string]any) map[string]any {
 		clone[key] = value
 	}
 	return clone
+}
+
+type mistralLLMRequestRewriter struct {
+	next goopenai.HTTPDoer
+}
+
+func (r mistralLLMRequestRewriter) Do(req *http.Request) (*http.Response, error) {
+	if req.Body == nil {
+		return r.next.Do(req)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil, err
+	}
+	req.Body.Close()
+	body = rewriteMistralLLMRequestBody(body)
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	req.ContentLength = int64(len(body))
+	req.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(body)), nil
+	}
+	return r.next.Do(req)
+}
+
+func rewriteMistralLLMRequestBody(body []byte) []byte {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return body
+	}
+	seed, ok := payload["seed"]
+	if !ok {
+		return body
+	}
+	if _, exists := payload["random_seed"]; !exists {
+		payload["random_seed"] = seed
+	}
+	delete(payload, "seed")
+	rewritten, err := json.Marshal(payload)
+	if err != nil {
+		return body
+	}
+	return rewritten
 }
