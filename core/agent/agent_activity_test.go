@@ -3292,6 +3292,29 @@ func TestAgentActivityClearUserTurnClearsInputTranscription(t *testing.T) {
 	}
 }
 
+func TestAgentActivityClearUserTurnResetsUserTurnLimitTracker(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{UserTurnLimitMaxWords: 3})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	events := session.UserTurnExceededEvents()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "one two", Confidence: 0.9}},
+	})
+	activity.ClearUserTurn()
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "three", Confidence: 0.9}},
+	})
+
+	select {
+	case ev := <-events:
+		t.Fatalf("UserTurnExceeded emitted after cleared tracker: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func TestAgentActivityCommitUserTurnCompletesPendingManualTranscript(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual

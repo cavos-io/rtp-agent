@@ -2246,6 +2246,7 @@ func (a *AgentActivity) ClearUserTurn() {
 	a.manualTurnCommitted = false
 	a.userSpeechStartedAt = time.Time{}
 	a.userSpeechStoppedAt = time.Time{}
+	a.resetUserTurnLimitTracker()
 	a.cancelPreemptiveGeneration()
 }
 
