@@ -355,6 +355,32 @@ func TestAzureSTTStreamUsesConfiguredDefaultLanguage(t *testing.T) {
 	}
 }
 
+func TestAzureSTTUpdateOptionsMatchesReference(t *testing.T) {
+	provider, err := NewAzureSTT("", "", WithAzureSTTSpeechHost("https://speech.container.test"), WithAzureSTTLanguage("en-US"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+
+	provider.UpdateOptions("id-ID")
+
+	streamURL := buildAzureSTTStreamURL(provider, provider.streamLanguage(""))
+	parsed, err := url.Parse(streamURL)
+	if err != nil {
+		t.Fatalf("parse stream URL: %v", err)
+	}
+	if got := parsed.Query().Get("language"); got != "id-ID" {
+		t.Fatalf("stream language = %q, want updated provider language id-ID", got)
+	}
+
+	req, err := buildAzureSTTRecognizeRequest(context.Background(), provider, []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
+	if err != nil {
+		t.Fatalf("build recognize request: %v", err)
+	}
+	if got := req.URL.Query().Get("language"); got != "id-ID" {
+		t.Fatalf("recognize language = %q, want updated provider language id-ID", got)
+	}
+}
+
 func TestAzureSTTExposesReferenceInputSampleRate(t *testing.T) {
 	provider, err := NewAzureSTT("key", "eastus")
 	if err != nil {

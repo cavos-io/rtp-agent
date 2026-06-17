@@ -105,6 +105,11 @@ func (s *AzureSTT) Model() string { return "unknown" }
 func (s *AzureSTT) Provider() string {
 	return "Azure STT"
 }
+func (s *AzureSTT) UpdateOptions(language string) {
+	if language != "" {
+		s.language = language
+	}
+}
 func (s *AzureSTT) InputSampleRate() uint32 {
 	if s == nil || s.sampleRate <= 0 {
 		return defaultAzureSTTSampleRate
