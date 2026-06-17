@@ -80,3 +80,35 @@ func TestJobParticipantIdentityHandlesNilJob(t *testing.T) {
 		t.Fatalf("JobParticipantIdentity(nil) = %q, want empty", got)
 	}
 }
+
+func TestMoveParticipantRequestUsesExplicitDestinationRoom(t *testing.T) {
+	req := workerlivekit.MoveParticipantRequest(
+		&lkprotocol.Job{Room: &lkprotocol.Room{Name: "caller-room"}},
+		"human-room",
+		"human-agent-sip",
+		"destination-room",
+	)
+
+	if req.Room != "human-room" {
+		t.Fatalf("MoveParticipantRequest.Room = %q, want human-room", req.Room)
+	}
+	if req.Identity != "human-agent-sip" {
+		t.Fatalf("MoveParticipantRequest.Identity = %q, want human-agent-sip", req.Identity)
+	}
+	if req.DestinationRoom != "destination-room" {
+		t.Fatalf("MoveParticipantRequest.DestinationRoom = %q, want destination-room", req.DestinationRoom)
+	}
+}
+
+func TestMoveParticipantRequestDefaultsDestinationRoomFromJob(t *testing.T) {
+	req := workerlivekit.MoveParticipantRequest(
+		&lkprotocol.Job{Room: &lkprotocol.Room{Name: "caller-room"}},
+		"human-room",
+		"human-agent-sip",
+		"",
+	)
+
+	if req.DestinationRoom != "caller-room" {
+		t.Fatalf("MoveParticipantRequest.DestinationRoom = %q, want caller-room", req.DestinationRoom)
+	}
+}

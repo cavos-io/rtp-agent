@@ -928,14 +928,7 @@ func (c *JobContext) MoveParticipant(ctx context.Context, room string, identity 
 		logger.Logger.Warnw("job context MoveParticipant is skipped for fake jobs", nil)
 		return nil
 	}
-	if destinationRoom == "" {
-		destinationRoom = c.Job.Room.Name
-	}
-	_, err := c.API().RoomService.MoveParticipant(ctx, &livekit.MoveParticipantRequest{
-		Room:            room,
-		Identity:        identity,
-		DestinationRoom: destinationRoom,
-	})
+	_, err := c.API().RoomService.MoveParticipant(ctx, workerlivekit.MoveParticipantRequest(c.Job, room, identity, destinationRoom))
 	return err
 }
 

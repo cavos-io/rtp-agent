@@ -43,3 +43,14 @@ func JobParticipantIdentity(job *lkprotocol.Job, acceptedIdentity string) string
 	}
 	return AgentIdentityForJobID(job.Id)
 }
+
+func MoveParticipantRequest(job *lkprotocol.Job, room string, identity string, destinationRoom string) *lkprotocol.MoveParticipantRequest {
+	if destinationRoom == "" && job != nil && job.Room != nil {
+		destinationRoom = job.Room.Name
+	}
+	return &lkprotocol.MoveParticipantRequest{
+		Room:            room,
+		Identity:        identity,
+		DestinationRoom: destinationRoom,
+	}
+}
