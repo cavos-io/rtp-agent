@@ -36,6 +36,23 @@ func TestMigrateJobMessageCarriesJobIDs(t *testing.T) {
 	}
 }
 
+func TestMigrateJobMessageSortsJobIDsWithoutMutatingInput(t *testing.T) {
+	jobIDs := []string{"job-b", "job-a"}
+	msg := workerlivekit.MigrateJobMessage(jobIDs)
+
+	migrate := msg.GetMigrateJob()
+	if migrate == nil {
+		t.Fatal("MigrateJob message is nil")
+	}
+	want := []string{"job-a", "job-b"}
+	if !reflect.DeepEqual(migrate.JobIds, want) {
+		t.Fatalf("MigrateJob.JobIds = %#v, want %#v", migrate.JobIds, want)
+	}
+	if !reflect.DeepEqual(jobIDs, []string{"job-b", "job-a"}) {
+		t.Fatalf("input jobIDs = %#v, want original order", jobIDs)
+	}
+}
+
 func TestWorkerStatusMessageCarriesStatusLoadAndJobCount(t *testing.T) {
 	msg := workerlivekit.WorkerStatusMessage(lkprotocol.WorkerStatus_WS_AVAILABLE, 0.42, 2)
 

@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1707,7 +1706,6 @@ func (s *AgentServer) reportActiveJobs() {
 		return
 	}
 
-	sort.Strings(jobIDs)
 	if err := s.sendWorkerMessage(workerlivekit.MigrateJobMessage(jobIDs)); err != nil {
 		logger.Logger.Errorw("failed to report active jobs", err, "jobIds", jobIDs)
 	}
