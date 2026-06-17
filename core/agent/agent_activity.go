@@ -1776,17 +1776,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	if !matchesPreflightTranscript {
 		a.maybeStartPreemptiveGeneration(pendingTranscript, confidenceSum/float64(confidenceCount))
 	}
-	if turnDetection == TurnDetectionModeSTT && !a.speaking {
-		a.runEOUDetection(EndOfTurnInfo{
-			NewTranscript:        transcript,
-			Language:             language,
-			TranscriptConfidence: confidence,
-			TranscriptionDelay:   transcriptionDelay,
-			StartedSpeakingAt:    startedSpeakingAt,
-			StoppedSpeakingAt:    stoppedSpeakingAt,
-			AudioFrames:          a.userAudioSnapshot(),
-		})
-	} else if a.vadBasedTurnDetection() && !a.speaking {
+	if a.vadBasedTurnDetection() && !a.speaking {
 		a.runEOUDetection(EndOfTurnInfo{
 			NewTranscript:        transcript,
 			Language:             language,
