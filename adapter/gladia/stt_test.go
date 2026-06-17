@@ -328,6 +328,39 @@ func TestGladiaInterimResultsFalseSuppressesInterimTranscript(t *testing.T) {
 	}
 }
 
+func TestGladiaTranscriptTimingAppliesStartTimeOffset(t *testing.T) {
+	stream := &gladiaSTTStream{state: &gladiaSTTStreamState{requestID: "session-1"}}
+	stream.SetStartTimeOffset(1.5)
+
+	events, err := processGladiaMessage(stream.state, map[string]any{
+		"type": "transcript",
+		"data": map[string]any{
+			"is_final": true,
+			"utterance": map[string]any{
+				"text":  "timed",
+				"start": 0.2,
+				"end":   0.7,
+				"words": []any{map[string]any{"word": "timed", "start": 0.2, "end": 0.7}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("process timed transcript: %v", err)
+	}
+	assertGladiaEvent(t, events, 1, stt.SpeechEventFinalTranscript, "timed")
+	data := events[1].Alternatives[0]
+	if data.StartTime != 1.7 || data.EndTime != 2.2 {
+		t.Fatalf("timing = %v-%v, want offset timing 1.7-2.2", data.StartTime, data.EndTime)
+	}
+	if len(data.Words) != 1 {
+		t.Fatalf("words = %+v, want one timed word", data.Words)
+	}
+	word := data.Words[0]
+	if word.StartTime != 1.7 || word.EndTime != 2.2 || word.StartTimeOffset != 1.5 {
+		t.Fatalf("word timing = %+v, want offset word timing", word)
+	}
+}
+
 func TestGladiaTranslationFinalWaitsForTranslatedTranscript(t *testing.T) {
 	state := &gladiaSTTStreamState{requestID: "session-1", translationEnabled: true}
 	events, err := processGladiaMessage(state, map[string]any{

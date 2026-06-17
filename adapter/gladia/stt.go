@@ -547,6 +547,37 @@ func (s *gladiaSTTStream) Next() (*stt.SpeechEvent, error) {
 	}
 }
 
+func (s *gladiaSTTStream) StartTimeOffset() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ensureStateLocked().startTimeOffset
+}
+
+func (s *gladiaSTTStream) SetStartTimeOffset(offset float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureStateLocked().startTimeOffset = offset
+}
+
+func (s *gladiaSTTStream) StartTime() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ensureStateLocked().startTime
+}
+
+func (s *gladiaSTTStream) SetStartTime(startTime float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureStateLocked().startTime = startTime
+}
+
+func (s *gladiaSTTStream) ensureStateLocked() *gladiaSTTStreamState {
+	if s.state == nil {
+		s.state = &gladiaSTTStreamState{}
+	}
+	return s.state
+}
+
 func (s *gladiaSTTStream) readLoop() {
 	defer close(s.events)
 	for {
@@ -583,6 +614,8 @@ type gladiaSTTStreamState struct {
 	audioDuration      float64
 	interimResults     *bool
 	translationEnabled bool
+	startTimeOffset    float64
+	startTime          float64
 }
 
 func processGladiaMessage(state *gladiaSTTStreamState, data map[string]any) ([]*stt.SpeechEvent, error) {
@@ -684,14 +717,14 @@ func gladiaSpeechData(state *gladiaSTTStreamState, utterance map[string]any) stt
 	return stt.SpeechData{
 		Language:   language,
 		Text:       gladiaAnyString(utterance["text"]),
-		StartTime:  gladiaAnyFloat(utterance["start"]),
-		EndTime:    gladiaAnyFloat(utterance["end"]),
+		StartTime:  gladiaAnyFloat(utterance["start"]) + state.startTimeOffset,
+		EndTime:    gladiaAnyFloat(utterance["end"]) + state.startTimeOffset,
 		Confidence: gladiaConfidence(utterance["confidence"]),
-		Words:      gladiaWordsFromAny(utterance["words"]),
+		Words:      gladiaWordsFromAny(utterance["words"], state.startTimeOffset),
 	}
 }
 
-func gladiaWordsFromAny(raw any) []stt.TimedString {
+func gladiaWordsFromAny(raw any, startTimeOffset float64) []stt.TimedString {
 	rawWords, ok := raw.([]any)
 	if !ok {
 		return nil
@@ -703,9 +736,10 @@ func gladiaWordsFromAny(raw any) []stt.TimedString {
 			continue
 		}
 		words = append(words, stt.TimedString{
-			Text:      gladiaAnyString(wordMap["word"]),
-			StartTime: gladiaAnyFloat(wordMap["start"]),
-			EndTime:   gladiaAnyFloat(wordMap["end"]),
+			Text:            gladiaAnyString(wordMap["word"]),
+			StartTime:       gladiaAnyFloat(wordMap["start"]) + startTimeOffset,
+			EndTime:         gladiaAnyFloat(wordMap["end"]) + startTimeOffset,
+			StartTimeOffset: startTimeOffset,
 		})
 	}
 	return words
