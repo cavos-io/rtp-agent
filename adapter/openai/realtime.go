@@ -1262,6 +1262,7 @@ func (s *realtimeSession) Close() error {
 	if s.model != nil {
 		s.model.unregisterSession(s)
 	}
+	s.closeRealtimeGeneration()
 	s.cancel()
 	s.mu.Lock()
 	defer s.mu.Unlock()
