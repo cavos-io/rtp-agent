@@ -1220,7 +1220,13 @@ func (a *App) runAgora(ctx context.Context) error {
 					return nil
 				},
 			}
-			subscriber.SetDataMessageHandler(router.HandleDataMessage)
+			subscriber.SetDataMessageHandler(func(ctx context.Context, msg workeragora.DataMessage) error {
+				if err := router.HandleDataMessage(ctx, msg); err != nil {
+					logutil.Logger.Warnw("failed to handle Agora RTM data message", err, "channel", msg.Channel, "publisher", msg.Publisher)
+					return err
+				}
+				return nil
+			})
 		}
 		transcriptForwarder.Start(runCtx)
 		defer func() {
