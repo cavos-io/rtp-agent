@@ -2072,9 +2072,10 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
 	if !finalized {
 		return false
 	}
+	runtimeJob := workerlivekit.JobRuntimeInfo(jobCtx.Job)
 
 	s.mu.Lock()
-	delete(s.activeJobs, jobCtx.Job.Id)
+	delete(s.activeJobs, runtimeJob.JobID)
 	s.mu.Unlock()
 
 	s.runSessionEnd(jobCtx)
@@ -2088,6 +2089,7 @@ func (s *AgentServer) uploadJobSessionReport(jobCtx *JobContext) {
 	if !shouldUploadJobSessionReport(jobCtx) {
 		return
 	}
+	runtimeJob := workerlivekit.JobRuntimeInfo(jobCtx.Job)
 	go func() {
 		err := uploadSessionReport(
 			jobCtx.url,
@@ -2097,7 +2099,7 @@ func (s *AgentServer) uploadJobSessionReport(jobCtx *JobContext) {
 			jobCtx.Report,
 		)
 		if err != nil {
-			logger.Logger.Errorw("failed to upload session report", err, jobLogValues(jobCtx, "jobId", jobCtx.Job.GetId())...)
+			logger.Logger.Errorw("failed to upload session report", err, jobLogValues(jobCtx, "jobId", runtimeJob.JobID)...)
 		}
 	}()
 }
@@ -2125,6 +2127,7 @@ func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
 		return
 	}
 
+	runtimeJob := workerlivekit.JobRuntimeInfo(jobCtx.Job)
 	timeout := time.Duration(s.Options.SessionEndTimeoutSeconds * float64(time.Second))
 	doneCh := make(chan error, 1)
 	go func() {
@@ -2133,7 +2136,7 @@ func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
 
 	if timeout <= 0 {
 		if err := <-doneCh; err != nil {
-			logger.Logger.Errorw("Session end callback failed", err, jobLogValues(jobCtx, "jobId", jobCtx.Job.Id)...)
+			logger.Logger.Errorw("Session end callback failed", err, jobLogValues(jobCtx, "jobId", runtimeJob.JobID)...)
 		}
 		return
 	}
@@ -2141,10 +2144,10 @@ func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
 	select {
 	case err := <-doneCh:
 		if err != nil {
-			logger.Logger.Errorw("Session end callback failed", err, jobLogValues(jobCtx, "jobId", jobCtx.Job.Id)...)
+			logger.Logger.Errorw("Session end callback failed", err, jobLogValues(jobCtx, "jobId", runtimeJob.JobID)...)
 		}
 	case <-time.After(timeout):
-		logger.Logger.Errorw("Session end callback timed out", nil, jobLogValues(jobCtx, "jobId", jobCtx.Job.Id, "timeout", timeout)...)
+		logger.Logger.Errorw("Session end callback timed out", nil, jobLogValues(jobCtx, "jobId", runtimeJob.JobID, "timeout", timeout)...)
 	}
 }
 
