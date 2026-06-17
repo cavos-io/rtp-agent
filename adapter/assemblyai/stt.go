@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
@@ -207,10 +208,11 @@ func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 	}
 
 	stream := &assemblyAISTTStream{
-		conn:   conn,
-		events: make(chan *stt.SpeechEvent, 10),
-		errCh:  make(chan error, 1),
-		state:  &assemblyAIStreamState{},
+		conn:       conn,
+		events:     make(chan *stt.SpeechEvent, 10),
+		errCh:      make(chan error, 1),
+		state:      &assemblyAIStreamState{},
+		sampleRate: s.sampleRate,
 	}
 	stream.writeBinary = stream.writeBinaryMessage
 
@@ -331,6 +333,8 @@ type assemblyAISTTStream struct {
 
 	writeBinary func([]byte) error
 	state       *assemblyAIStreamState
+	sampleRate  int
+	audioBuf    *audio.AudioByteStream
 }
 
 type assemblyAIStreamState struct {
@@ -545,16 +549,51 @@ func (s *assemblyAISTTStream) PushFrame(frame *model.AudioFrame) error {
 		return io.ErrClosedPipe
 	}
 
-	if err := s.writeBinaryData(frame.Data); err != nil {
-		s.closed = true
-		_ = s.closeConnection()
-		return err
+	if s.audioBuf == nil {
+		s.audioBuf = newAssemblyAISTTAudioByteStream(s, frame)
+	}
+	for _, chunk := range s.audioBuf.Push(frame.Data) {
+		if err := s.writeBinaryData(chunk.Data); err != nil {
+			s.closed = true
+			_ = s.closeConnection()
+			return err
+		}
 	}
 	return nil
 }
 
 func (s *assemblyAISTTStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.audioBuf == nil {
+		return nil
+	}
+	for _, chunk := range s.audioBuf.Flush() {
+		if err := s.writeBinaryData(chunk.Data); err != nil {
+			s.closed = true
+			_ = s.closeConnection()
+			return err
+		}
+	}
 	return nil
+}
+
+func newAssemblyAISTTAudioByteStream(s *assemblyAISTTStream, frame *model.AudioFrame) *audio.AudioByteStream {
+	sampleRate := uint32(s.sampleRate)
+	if frame.SampleRate > 0 {
+		sampleRate = frame.SampleRate
+	}
+	if sampleRate == 0 {
+		sampleRate = defaultAssemblyAISampleRate
+	}
+	numChannels := frame.NumChannels
+	if numChannels == 0 {
+		numChannels = 1
+	}
+	return audio.NewAudioByteStream(sampleRate, numChannels, sampleRate/20)
 }
 
 func (s *assemblyAISTTStream) Close() error {
