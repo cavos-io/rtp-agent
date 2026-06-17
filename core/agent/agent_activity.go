@@ -1563,6 +1563,7 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 		if a.pendingTranscriptConfidenceCount > 0 {
 			preflightConfidence = (a.pendingTranscriptConfidenceSum + confidence) / float64(a.pendingTranscriptConfidenceCount+1)
 		}
+		a.lastFinalTranscriptTime = time.Now()
 	}
 	a.pendingInterimTranscript = transcript
 	a.pendingInterimLanguage = language

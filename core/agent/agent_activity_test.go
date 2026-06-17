@@ -3677,6 +3677,49 @@ func TestAgentActivityCommitUserTurnFlushesWhenLastFinalIsStale(t *testing.T) {
 	}
 }
 
+func TestAgentActivityCommitUserTurnTreatsPreflightAsFreshTranscript(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	flusher := &recordingTranscriptFlusher{flushed: make(chan struct{}, 1)}
+	session.Assistant = flusher
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "old final",
+			Confidence: 0.88,
+		}},
+	})
+	time.Sleep(550 * time.Millisecond)
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Type: stt.SpeechEventPreflightTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text:       "preflight final",
+			Confidence: 0.92,
+		}},
+	})
+
+	started := time.Now()
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{
+		TranscriptTimeout: 100 * time.Millisecond,
+		STTFlushDuration:  20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "old final preflight final" {
+		t.Fatalf("CommitUserTurn transcript = %q, want old final preflight final", transcript)
+	}
+	if flusher.calls != 0 {
+		t.Fatalf("FlushInputTranscription calls = %d, want 0 after fresh preflight transcript", flusher.calls)
+	}
+	if elapsed := time.Since(started); elapsed >= 100*time.Millisecond {
+		t.Fatalf("CommitUserTurn elapsed = %v, want no transcript timeout wait after fresh preflight transcript", elapsed)
+	}
+}
+
 func TestAgentActivityCommitUserTurnGeneratesReplyWhenLLMConfigured(t *testing.T) {
 	agent := NewAgent("test")
 	agent.TurnDetection = TurnDetectionModeManual
