@@ -258,6 +258,53 @@ func TestMultimodalAgentEmitsRealtimeErrorWhenEventAudioPublishFails(t *testing.
 	}
 }
 
+func TestMultimodalAgentRealtimeAudioMarksSpeakingAfterPublish(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	publishStarted := make(chan struct{})
+	releasePublish := make(chan struct{})
+	ma := &MultimodalAgent{session: session}
+	ma.PublishAudio = func(context.Context, *model.AudioFrame) error {
+		close(publishStarted)
+		<-releasePublish
+		return nil
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ma.handleRealtimeEvent(llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeAudio,
+			Data: []byte{0, 1},
+		})
+	}()
+
+	select {
+	case <-publishStarted:
+	case <-time.After(time.Second):
+		t.Fatal("PublishAudio was not called")
+	}
+	select {
+	case ev := <-session.AgentStateChangedCh:
+		t.Fatalf("agent state changed before realtime audio publish completed: %#v", ev)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releasePublish)
+	select {
+	case ev := <-session.AgentStateChangedCh:
+		if ev.NewState != AgentStateSpeaking {
+			t.Fatalf("agent state event = %#v, want speaking after realtime audio publish", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("agent did not enter speaking after realtime audio publish")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("handleRealtimeEvent did not finish")
+	}
+}
+
 func TestMultimodalAgentStartUpdatesRealtimeSessionWithSessionAndAgentTools(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

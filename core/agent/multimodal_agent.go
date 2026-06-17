@@ -521,7 +521,6 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		}
 
 	case llm.RealtimeEventTypeAudio:
-		ma.session.UpdateAgentState(AgentStateSpeaking)
 		if ma.PublishAudio != nil {
 			// Decode and publish
 			frame := &model.AudioFrame{
@@ -530,11 +529,15 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 				NumChannels:       1,
 				SamplesPerChannel: uint32(len(ev.Data) / 2),
 			}
-			if err := ma.PublishAudio(context.Background(), frame); err != nil && ma.session != nil {
-				ma.session.EmitError(ErrorEvent{
-					Error:  llm.NewRealtimeError("failed to publish realtime audio", err),
-					Source: ma,
-				})
+			if err := ma.PublishAudio(context.Background(), frame); err != nil {
+				if ma.session != nil {
+					ma.session.EmitError(ErrorEvent{
+						Error:  llm.NewRealtimeError("failed to publish realtime audio", err),
+						Source: ma,
+					})
+				}
+			} else if ma.session != nil {
+				ma.session.UpdateAgentState(AgentStateSpeaking)
 			}
 		}
 
