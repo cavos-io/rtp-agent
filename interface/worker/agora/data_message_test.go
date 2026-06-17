@@ -73,6 +73,27 @@ func TestRTMMessageRouterIgnoresNonInputText(t *testing.T) {
 	}
 }
 
+func TestRTMMessageRouterIgnoresEmptyPayload(t *testing.T) {
+	called := false
+	router := RTMMessageRouter{
+		TextInput: func(context.Context, TextInputEvent) error {
+			called = true
+			return nil
+		},
+	}
+
+	err := router.HandleDataMessage(context.Background(), DataMessage{
+		Publisher: "caller-7",
+		Payload:   nil,
+	})
+	if err != nil {
+		t.Fatalf("HandleDataMessage() error = %v, want nil", err)
+	}
+	if called {
+		t.Fatal("empty RTM message was dispatched")
+	}
+}
+
 func TestHandleTextInputInterruptsBeforeGenerateReply(t *testing.T) {
 	responder := &recordingTextResponder{}
 

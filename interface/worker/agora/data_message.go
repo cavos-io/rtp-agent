@@ -40,6 +40,9 @@ func (r RTMMessageRouter) HandleDataMessage(ctx context.Context, msg DataMessage
 	if strings.TrimSpace(r.AgentUserID) != "" && msg.Publisher == strings.TrimSpace(r.AgentUserID) {
 		return nil
 	}
+	if strings.TrimSpace(string(msg.Payload)) == "" {
+		return nil
+	}
 	var payload struct {
 		DataType string `json:"data_type"`
 		Text     string `json:"text"`
