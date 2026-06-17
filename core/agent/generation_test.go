@@ -261,6 +261,30 @@ func TestPerformTTSInferenceRecordsTTSNodeSpan(t *testing.T) {
 	}
 }
 
+func TestPerformTTSInferenceTTFBStartsAtFirstInputText(t *testing.T) {
+	stream := newEndInputGenerationTTSStream()
+	stream.emitAfterPush = true
+	stream.nextDelay = 20 * time.Millisecond
+	provider := &fakeGenerationTTS{stream: stream}
+	textCh := make(chan string)
+
+	data, err := PerformTTSInference(context.Background(), provider, textCh)
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+
+	time.Sleep(150 * time.Millisecond)
+	textCh <- "hello"
+	close(textCh)
+
+	if _, ok := <-data.AudioCh; !ok {
+		t.Fatal("AudioCh closed before audio, want synthesized frame")
+	}
+	if data.TTFB >= 100*time.Millisecond {
+		t.Fatalf("TTFB = %v, want measured from first text input, not stream setup delay", data.TTFB)
+	}
+}
+
 func TestLLMToolSpanAttributesIncludeToolContextGroups(t *testing.T) {
 	lookup := &fakeGenerationTool{name: "lookup"}
 	search := &fakeGenerationTool{name: "search"}
@@ -2113,6 +2137,7 @@ type endInputGenerationTTSStream struct {
 	pushErr       error
 	endErr        error
 	emitAfterPush bool
+	nextDelay     time.Duration
 }
 
 func newEndInputGenerationTTSStream() *endInputGenerationTTSStream {
@@ -2171,6 +2196,9 @@ func (s *endInputGenerationTTSStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	if s.emitted || s.closed {
 		return nil, io.EOF
+	}
+	if s.nextDelay > 0 {
+		time.Sleep(s.nextDelay)
 	}
 	s.emitted = true
 	return &tts.SynthesizedAudio{

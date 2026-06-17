@@ -375,7 +375,28 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		defer cancelStream()
 		defer span.End()
 
-		startTime := time.Now()
+		streamOpenedAt := time.Now()
+		startTime := streamOpenedAt
+		var startTimeSet bool
+		var ttfbObserved bool
+		var startTimeMu sync.Mutex
+		markStartTime := func() {
+			startTimeMu.Lock()
+			if !startTimeSet && !ttfbObserved {
+				startTime = time.Now()
+				startTimeSet = true
+			}
+			startTimeMu.Unlock()
+		}
+		timeSinceStart := func() (time.Duration, bool) {
+			startTimeMu.Lock()
+			defer startTimeMu.Unlock()
+			if !startTimeSet {
+				startTime = streamOpenedAt
+			}
+			ttfbObserved = true
+			return time.Since(startTime), true
+		}
 		replaceBuffer := newTTSReplacementBuffer(options)
 		var streamErrMu sync.Mutex
 		setStreamErr := func(err error) {
@@ -409,12 +430,14 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			defer wg.Done()
 			if options.DisableTextTransforms {
 				for text := range textCh {
+					markStartTime()
 					if !pushChunks(replaceBuffer.Push(text)) {
 						return
 					}
 				}
 			} else {
 				for text := range textCh {
+					markStartTime()
 					for _, filteredText := range transformBuffer.Push(text) {
 						if !pushChunks(replaceBuffer.Push(filteredText)) {
 							return
@@ -446,8 +469,10 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 					return
 				}
 				if data.TTFB == 0 {
-					data.TTFB = time.Since(startTime)
-					span.SetAttributes(attribute.Float64(telemetry.AttrResponseTTFB, data.TTFB.Seconds()))
+					if ttfb, ok := timeSinceStart(); ok {
+						data.TTFB = ttfb
+						span.SetAttributes(attribute.Float64(telemetry.AttrResponseTTFB, data.TTFB.Seconds()))
+					}
 				}
 				for _, timedText := range audio.TimedTranscript {
 					select {
