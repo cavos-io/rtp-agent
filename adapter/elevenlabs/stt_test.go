@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -611,6 +612,59 @@ func TestElevenLabsSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("second Close after write failure error = %v", err)
+	}
+}
+
+func TestElevenLabsSTTStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
+	closed := make(chan struct{})
+	closeAfterHandshake := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runElevenLabsClosingWebsocketServer(serverConn, closeAfterHandshake, closed, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTModel("scribe_v2_realtime"),
+		WithElevenLabsSTTBaseURL("ws://eleven.test/v1"),
+	)
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	close(closeAfterHandshake)
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test websocket close")
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test websocket server")
+	}
+
+	_, err = stream.Next()
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != websocket.CloseAbnormalClosure {
+		t.Fatalf("StatusCode = %d, want websocket close code", statusErr.StatusCode)
 	}
 }
 

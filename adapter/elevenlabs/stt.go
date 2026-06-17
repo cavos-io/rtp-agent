@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -477,7 +479,7 @@ func (s *elevenLabsSTTStream) readLoop() {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- err
+				s.errCh <- elevenLabsSTTUnexpectedCloseError(err)
 			}
 			return
 		}
@@ -497,6 +499,15 @@ func (s *elevenLabsSTTStream) readLoop() {
 			s.events <- event
 		}
 	}
+}
+
+func elevenLabsSTTUnexpectedCloseError(err error) error {
+	statusCode := -1
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) && closeErr.Code != 0 {
+		statusCode = closeErr.Code
+	}
+	return llm.NewAPIStatusError("ElevenLabs STT connection closed unexpectedly", statusCode, "", err.Error())
 }
 
 func (s *elevenLabsSTTStream) keepAliveLoop() {
