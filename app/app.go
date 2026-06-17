@@ -1202,6 +1202,9 @@ func (a *App) runAgora(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		agoraEvents.publishGreetingTranscript = func(ctx context.Context, text string) error {
+			return workeragora.PublishTranscript(ctx, dataPublisher, "assistant", text, true, "100", time.Now())
+		}
 		transcriptForwarder := workeragora.NewTranscriptForwarder(a.Session, dataPublisher, workeragora.TranscriptForwarderOptions{
 			UserStreamID: agoraOpts.RemoteStreamID,
 		})
@@ -1249,9 +1252,10 @@ func runContextErr(ctx context.Context) error {
 }
 
 type agoraRuntimeEventHandler struct {
-	session  *agent.AgentSession
-	greeting string
-	users    int
+	session                   *agent.AgentSession
+	greeting                  string
+	publishGreetingTranscript func(context.Context, string) error
+	users                     int
 }
 
 func (h *agoraRuntimeEventHandler) Handle(event workeragora.Event) {
@@ -1264,6 +1268,12 @@ func (h *agoraRuntimeEventHandler) Handle(event workeragora.Event) {
 		if h.users == 1 && h.greeting != "" && h.session != nil {
 			if _, err := h.session.Say(context.Background(), h.greeting); err != nil {
 				logutil.Logger.Warnw("failed to say Agora greeting", err, "channel", event.Channel, "userID", event.UserID)
+				return
+			}
+			if h.publishGreetingTranscript != nil {
+				if err := h.publishGreetingTranscript(context.Background(), h.greeting); err != nil {
+					logutil.Logger.Warnw("failed to publish Agora greeting transcript", err, "channel", event.Channel, "userID", event.UserID)
+				}
 			}
 		}
 	case workeragora.EventUserLeft:

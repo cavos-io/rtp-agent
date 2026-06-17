@@ -95,11 +95,18 @@ func (f *TranscriptForwarder) publishTranscript(ctx context.Context, role string
 	if text == "" || f == nil || f.publisher == nil {
 		return
 	}
+	_ = PublishTranscript(ctx, f.publisher, role, text, final, streamID, createdAt)
+}
+
+func PublishTranscript(ctx context.Context, publisher DataPublisher, role string, text string, final bool, streamID string, createdAt time.Time) error {
+	if text == "" || publisher == nil {
+		return nil
+	}
 	payload, err := marshalTENTranscript(role, text, final, streamID, createdAt)
 	if err != nil {
-		return
+		return err
 	}
-	_ = f.publisher.PublishData(ctx, payload)
+	return publisher.PublishData(normalizeContext(ctx), payload)
 }
 
 func marshalTENTranscript(role string, text string, final bool, streamID string, createdAt time.Time) ([]byte, error) {
