@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"reflect"
 	"runtime"
@@ -21,7 +20,6 @@ import (
 	"github.com/cavos-io/rtp-agent/library/inference"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/utils"
-	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
@@ -267,22 +265,9 @@ type participantEntrypointTaskKey struct {
 	entrypoint uintptr
 }
 
-type remoteParticipantView interface {
-	SID() string
-	Identity() string
-	Name() string
-	Kind() lksdk.ParticipantKind
-	Metadata() string
-	Attributes() map[string]string
-}
+type remoteParticipantView = workerlivekit.RemoteParticipantView
 
-var defaultParticipantEntrypointKinds = []livekit.ParticipantInfo_Kind{
-	livekit.ParticipantInfo_CONNECTOR,
-	livekit.ParticipantInfo_SIP,
-	livekit.ParticipantInfo_STANDARD,
-}
-
-const defaultSIPParticipantName = "SIP-participant"
+var defaultParticipantEntrypointKinds = workerlivekit.DefaultParticipantKinds()
 
 type JobRequest struct {
 	Job *livekit.Job
@@ -292,31 +277,19 @@ type JobRequest struct {
 }
 
 func (r *JobRequest) ID() string {
-	if r.Job == nil {
-		return ""
-	}
-	return r.Job.Id
+	return workerlivekit.JobID(r.Job)
 }
 
 func (r *JobRequest) Room() *livekit.Room {
-	if r.Job == nil {
-		return nil
-	}
-	return r.Job.Room
+	return workerlivekit.JobRoom(r.Job)
 }
 
 func (r *JobRequest) Publisher() *livekit.ParticipantInfo {
-	if r.Job == nil {
-		return nil
-	}
-	return r.Job.Participant
+	return workerlivekit.JobPublisher(r.Job)
 }
 
 func (r *JobRequest) AgentName() string {
-	if r.Job == nil {
-		return ""
-	}
-	return r.Job.AgentName
+	return workerlivekit.JobAgentName(r.Job)
 }
 
 func (r *JobRequest) Accept(args ...JobAcceptArguments) error {
@@ -458,23 +431,11 @@ func (c *JobContext) ParticipantIdentity() string {
 }
 
 func (c *JobContext) LocalParticipantIdentity() string {
-	claims, err := c.TokenClaims()
-	if err == nil && claims.Identity != "" {
-		return claims.Identity
-	}
-	return c.ParticipantIdentity()
+	return workerlivekit.LocalParticipantIdentity(c.token, c.ParticipantIdentity())
 }
 
 func (c *JobContext) TokenClaims() (*auth.ClaimGrants, error) {
-	tok, err := jwt.ParseSigned(c.token)
-	if err != nil {
-		return nil, err
-	}
-	claims := &auth.ClaimGrants{}
-	if err := tok.UnsafeClaimsWithoutVerification(claims); err != nil {
-		return nil, err
-	}
-	return claims, nil
+	return workerlivekit.TokenClaims(c.token)
 }
 
 func (c *JobContext) JobID() string {
@@ -561,15 +522,15 @@ func (c *JobContext) MakeSessionReport(sessions ...*agent.AgentSession) (*agent.
 }
 
 func (c *JobContext) AvatarStartInfo() agent.AvatarStartInfo {
-	info := agent.AvatarStartInfo{
-		LiveKitURL:    c.url,
-		LiveKitToken:  c.token,
+	opts := workerlivekit.AvatarStartInfoOptions{
+		URL:           c.url,
+		Token:         c.token,
 		AgentIdentity: c.LocalParticipantIdentity(),
 	}
 	if c.Job != nil && c.Job.Room != nil {
-		info.RoomName = c.Job.Room.Name
+		opts.RoomName = c.Job.Room.Name
 	}
-	return info
+	return workerlivekit.AvatarStartInfo(opts)
 }
 
 func (c *JobContext) RoomInfo() *livekit.Room {
@@ -594,16 +555,15 @@ func (c *JobContext) Agent() *lksdk.LocalParticipant {
 }
 
 func (c *JobContext) connectInfo() lksdk.ConnectInfo {
-	return lksdk.ConnectInfo{
+	return workerlivekit.ConnectInfo(workerlivekit.ConnectInfoOptions{
 		APIKey:                c.apiKey,
 		APISecret:             c.apiSecret,
 		RoomName:              c.Job.Room.Name,
 		ParticipantName:       c.AcceptArguments.Name,
 		ParticipantIdentity:   c.ParticipantIdentity(),
-		ParticipantKind:       lksdk.ParticipantAgent,
 		ParticipantMetadata:   c.AcceptArguments.Metadata,
 		ParticipantAttributes: c.AcceptArguments.Attributes,
-	}
+	})
 }
 
 var jobContextNewRoom = lksdk.NewRoom
@@ -762,17 +722,7 @@ func remoteParticipantsAsViews(participants []*lksdk.RemoteParticipant) []remote
 }
 
 func participantInfoFromRemoteParticipant(participant remoteParticipantView) *livekit.ParticipantInfo {
-	if participant == nil {
-		return nil
-	}
-	return &livekit.ParticipantInfo{
-		Sid:        participant.SID(),
-		Identity:   participant.Identity(),
-		Name:       participant.Name(),
-		Kind:       livekit.ParticipantInfo_Kind(participant.Kind()),
-		Metadata:   participant.Metadata(),
-		Attributes: maps.Clone(participant.Attributes()),
-	}
+	return workerlivekit.ParticipantInfoFromRemoteParticipant(participant)
 }
 
 func (c *JobContext) AddShutdownCallback(callback any) error {
@@ -881,10 +831,7 @@ func (c *JobContext) ensureRoomConnected(ctx context.Context) error {
 }
 
 func defaultParticipantWaitKinds(kinds []livekit.ParticipantInfo_Kind) []livekit.ParticipantInfo_Kind {
-	if len(kinds) > 0 {
-		return kinds
-	}
-	return defaultParticipantEntrypointKinds
+	return workerlivekit.DefaultParticipantKindsWhenUnset(kinds)
 }
 
 func (c *JobContext) scheduleParticipantEntrypoints(participant *livekit.ParticipantInfo) {
@@ -934,15 +881,7 @@ func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntry
 }
 
 func participantEntrypointMatchesKind(kinds []livekit.ParticipantInfo_Kind, kind livekit.ParticipantInfo_Kind) bool {
-	if len(kinds) == 0 {
-		return true
-	}
-	for _, allowed := range kinds {
-		if allowed == kind {
-			return true
-		}
-	}
-	return false
+	return workerlivekit.ParticipantKindAllowed(kinds, kind)
 }
 
 func (c *JobContext) Shutdown(reasons ...string) {
@@ -1092,16 +1031,7 @@ func (c *JobContext) CreateSIPParticipant(ctx context.Context, req *livekit.Crea
 }
 
 func (c *JobContext) createSIPParticipantRequest(callTo string, trunkID string, identity string, name string) *livekit.CreateSIPParticipantRequest {
-	if name == "" {
-		name = defaultSIPParticipantName
-	}
-	return &livekit.CreateSIPParticipantRequest{
-		RoomName:            c.Job.Room.Name,
-		ParticipantIdentity: identity,
-		ParticipantName:     name,
-		SipTrunkId:          trunkID,
-		SipCallTo:           callTo,
-	}
+	return workerlivekit.CreateSIPParticipantRequest(c.Job.Room.Name, callTo, trunkID, identity, name)
 }
 
 // TransferSIPParticipant transfers a SIP participant to another number.
@@ -1127,30 +1057,9 @@ func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, pa
 }
 
 func transferSIPParticipantIdentity(participant any) (string, error) {
-	switch p := participant.(type) {
-	case string:
-		return p, nil
-	case remoteParticipantView:
-		if p.Kind() != lksdk.ParticipantSIP {
-			return "", participantMustBeSIPError{}
-		}
-		return p.Identity(), nil
-	default:
-		return "", fmt.Errorf("participant must be a SIP participant or identity string")
-	}
-}
-
-type participantMustBeSIPError struct{}
-
-func (participantMustBeSIPError) Error() string {
-	return "Participant must be a SIP participant"
+	return workerlivekit.TransferSIPParticipantIdentity(participant)
 }
 
 func (c *JobContext) transferSIPParticipantRequest(identity string, transferTo string, playDialtone bool) *livekit.TransferSIPParticipantRequest {
-	return &livekit.TransferSIPParticipantRequest{
-		ParticipantIdentity: identity,
-		RoomName:            c.Job.Room.Name,
-		TransferTo:          transferTo,
-		PlayDialtone:        playDialtone,
-	}
+	return workerlivekit.TransferSIPParticipantRequest(c.Job.Room.Name, identity, transferTo, playDialtone)
 }
