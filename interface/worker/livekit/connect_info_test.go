@@ -1,6 +1,7 @@
 package livekit_test
 
 import (
+	"context"
 	"testing"
 
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
@@ -76,5 +77,94 @@ func TestConnectOptionsForAutoSubscribeBuildsSDKOptions(t *testing.T) {
 	}
 	if options[0] == nil {
 		t.Fatal("ConnectOptionsForAutoSubscribe()[0] = nil, want SDK option")
+	}
+}
+
+func TestConnectRoomUsesTokenConnectorWhenTokenPresent(t *testing.T) {
+	wantRoom := lksdk.NewRoom(nil)
+	calledWithToken := false
+	room, err := workerlivekit.ConnectRoom(context.Background(), workerlivekit.RoomConnectOptions{
+		URL:           "wss://livekit.example",
+		Token:         "room-token",
+		AutoSubscribe: "audio_only",
+		Connector: workerlivekit.RoomConnector{
+			ConnectWithToken: func(url string, token string, _ *lksdk.RoomCallback, options ...lksdk.ConnectOption) (*lksdk.Room, error) {
+				calledWithToken = true
+				if url != "wss://livekit.example" {
+					t.Fatalf("ConnectWithToken url = %q, want wss://livekit.example", url)
+				}
+				if token != "room-token" {
+					t.Fatalf("ConnectWithToken token = %q, want room-token", token)
+				}
+				if len(options) != 1 {
+					t.Fatalf("ConnectWithToken options = %d, want 1", len(options))
+				}
+				return wantRoom, nil
+			},
+			Connect: func(string, lksdk.ConnectInfo, *lksdk.RoomCallback, ...lksdk.ConnectOption) (*lksdk.Room, error) {
+				t.Fatal("Connect was called, want token connector")
+				return nil, nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ConnectRoom() error = %v", err)
+	}
+	if !calledWithToken {
+		t.Fatal("ConnectWithToken was not called")
+	}
+	if room != wantRoom {
+		t.Fatal("ConnectRoom() room did not match connector room")
+	}
+}
+
+func TestConnectRoomUsesJobConnectInfoWithoutToken(t *testing.T) {
+	wantRoom := lksdk.NewRoom(nil)
+	room, err := workerlivekit.ConnectRoom(context.Background(), workerlivekit.RoomConnectOptions{
+		URL:           "wss://livekit.example",
+		APIKey:        "key",
+		APISecret:     "secret",
+		Job:           &lkprotocol.Job{Room: &lkprotocol.Room{Name: "room-a"}},
+		AutoSubscribe: "video_only",
+		Accept: workerlivekit.ConnectInfoOptions{
+			ParticipantName:     "Agent Name",
+			ParticipantIdentity: "agent-a",
+		},
+		Connector: workerlivekit.RoomConnector{
+			ConnectWithToken: func(string, string, *lksdk.RoomCallback, ...lksdk.ConnectOption) (*lksdk.Room, error) {
+				t.Fatal("ConnectWithToken was called, want API key connector")
+				return nil, nil
+			},
+			Connect: func(url string, info lksdk.ConnectInfo, _ *lksdk.RoomCallback, options ...lksdk.ConnectOption) (*lksdk.Room, error) {
+				if url != "wss://livekit.example" {
+					t.Fatalf("Connect url = %q, want wss://livekit.example", url)
+				}
+				if info.APIKey != "key" {
+					t.Fatalf("ConnectInfo.APIKey = %q, want key", info.APIKey)
+				}
+				if info.APISecret != "secret" {
+					t.Fatalf("ConnectInfo.APISecret = %q, want secret", info.APISecret)
+				}
+				if info.RoomName != "room-a" {
+					t.Fatalf("ConnectInfo.RoomName = %q, want room-a", info.RoomName)
+				}
+				if info.ParticipantName != "Agent Name" {
+					t.Fatalf("ConnectInfo.ParticipantName = %q, want Agent Name", info.ParticipantName)
+				}
+				if info.ParticipantIdentity != "agent-a" {
+					t.Fatalf("ConnectInfo.ParticipantIdentity = %q, want agent-a", info.ParticipantIdentity)
+				}
+				if len(options) != 1 {
+					t.Fatalf("Connect options = %d, want 1", len(options))
+				}
+				return wantRoom, nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ConnectRoom() error = %v", err)
+	}
+	if room != wantRoom {
+		t.Fatal("ConnectRoom() room did not match connector room")
 	}
 }
