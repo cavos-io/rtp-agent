@@ -128,15 +128,18 @@ type fakeAppAgoraChannelClient struct {
 
 type fakeAppSessionAssistant struct {
 	audioCh  chan *model.AudioFrame
-	started  chan struct{}
 	startCtx context.Context
+	started  chan struct{}
 	publish  func(ctx context.Context, frame *model.AudioFrame) error
 }
 
 func (f *fakeAppSessionAssistant) Start(ctx context.Context, s *agent.AgentSession) error {
 	f.startCtx = ctx
 	if f.started != nil {
-		close(f.started)
+		select {
+		case f.started <- struct{}{}:
+		default:
+		}
 	}
 	return nil
 }
@@ -1038,7 +1041,7 @@ func TestRunAgoraStartsSessionWithWorkerContext(t *testing.T) {
 		appNewAgoraChannelClient = oldNewAgoraChannelClient
 	})
 
-	assistant := &fakeAppSessionAssistant{started: make(chan struct{})}
+	assistant := &fakeAppSessionAssistant{started: make(chan struct{}, 1)}
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 	session.Assistant = assistant
 	session.LLM = &fakeAppLLM{}
