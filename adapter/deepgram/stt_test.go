@@ -494,12 +494,13 @@ func TestDeepgramSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	}
 
 	var writeErr error
+	fullChunk := make([]byte, 1600)
 	for range 3 {
 		writeErr = stream.PushFrame(&model.AudioFrame{
-			Data:              []byte{0x01, 0x02},
+			Data:              fullChunk,
 			SampleRate:        16000,
 			NumChannels:       1,
-			SamplesPerChannel: 1,
+			SamplesPerChannel: 800,
 		})
 		if writeErr != nil {
 			break
@@ -517,10 +518,10 @@ func TestDeepgramSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	}
 
 	err = stream.PushFrame(&model.AudioFrame{
-		Data:              []byte{0x03, 0x04},
+		Data:              fullChunk,
 		SampleRate:        16000,
 		NumChannels:       1,
-		SamplesPerChannel: 1,
+		SamplesPerChannel: 800,
 	})
 	if !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("second PushFrame error = %v, want io.ErrClosedPipe", err)
@@ -530,6 +531,62 @@ func TestDeepgramSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("second Close after write failure error = %v", err)
+	}
+}
+
+func TestDeepgramSTTStreamChunksAndFinalizesReferenceAudio(t *testing.T) {
+	var binaryWrites [][]byte
+	var jsonWrites []any
+	stream := &deepgramStream{
+		sampleRate:  16000,
+		numChannels: 1,
+		writeBinary: func(data []byte) error {
+			binaryWrites = append(binaryWrites, append([]byte(nil), data...))
+			return nil
+		},
+		writeJSON: func(payload any) error {
+			jsonWrites = append(jsonWrites, payload)
+			return nil
+		},
+	}
+
+	audioData := make([]byte, 2000)
+	for i := range audioData {
+		audioData[i] = byte(i)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              audioData,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1000,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(binaryWrites) != 1 {
+		t.Fatalf("binary writes after PushFrame = %d, want 1 full 50ms chunk", len(binaryWrites))
+	}
+	if got := len(binaryWrites[0]); got != 1600 {
+		t.Fatalf("first binary write length = %d, want 1600", got)
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if len(binaryWrites) != 2 {
+		t.Fatalf("binary writes after Flush = %d, want remainder chunk", len(binaryWrites))
+	}
+	if got := len(binaryWrites[1]); got != 400 {
+		t.Fatalf("flush binary write length = %d, want 400", got)
+	}
+	if len(jsonWrites) != 1 {
+		t.Fatalf("json writes after Flush = %d, want Finalize", len(jsonWrites))
+	}
+	finalize, ok := jsonWrites[0].(map[string]string)
+	if !ok {
+		t.Fatalf("Finalize payload = %T, want map[string]string", jsonWrites[0])
+	}
+	if got := finalize["type"]; got != "Finalize" {
+		t.Fatalf("Finalize type = %q, want Finalize", got)
 	}
 }
 

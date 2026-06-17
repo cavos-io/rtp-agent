@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/library/logger"
@@ -222,11 +223,13 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &deepgramStream{
-		conn:   conn,
-		events: make(chan *stt.SpeechEvent, 100),
-		errCh:  make(chan error, 1),
-		ctx:    streamCtx,
-		cancel: cancel,
+		conn:        conn,
+		events:      make(chan *stt.SpeechEvent, 100),
+		errCh:       make(chan error, 1),
+		ctx:         streamCtx,
+		cancel:      cancel,
+		sampleRate:  s.sampleRate,
+		numChannels: s.numChannels,
 	}
 
 	go stream.readLoop()
@@ -414,6 +417,12 @@ type deepgramStream struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	sampleRate   int
+	numChannels  int
+	audioBStream *audio.AudioByteStream
+	writeBinary  func([]byte) error
+	writeJSON    func(any) error
 }
 
 type dgWord struct {
@@ -610,23 +619,44 @@ func (s *deepgramStream) sendError(err error) {
 }
 
 func (s *deepgramStream) PushFrame(frame *model.AudioFrame) error {
+	if frame == nil || len(frame.Data) == 0 {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	if err := s.conn.WriteMessage(websocket.BinaryMessage, frame.Data); err != nil {
-		s.closed = true
-		s.cancel()
-		_ = s.conn.Close()
-		return err
+	if s.audioBStream == nil {
+		s.audioBStream = newDeepgramSTTAudioByteStream(s, frame)
+	}
+	for _, chunk := range s.audioBStream.Push(frame.Data) {
+		if err := s.writeBinaryData(chunk.Data); err != nil {
+			s.closeAfterWriteFailureLocked()
+			return err
+		}
 	}
 	return nil
 }
 
 func (s *deepgramStream) Flush() error {
-	// Deepgram forces a flush by sending a CloseStream payload (but we want to stay alive)
-	// We can send an empty audio frame or rely on Endpointing
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.audioBStream != nil {
+		for _, chunk := range s.audioBStream.Flush() {
+			if err := s.writeBinaryData(chunk.Data); err != nil {
+				s.closeAfterWriteFailureLocked()
+				return err
+			}
+		}
+	}
+	if err := s.writeJSONData(map[string]string{"type": "Finalize"}); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
 	return nil
 }
 
@@ -637,10 +667,65 @@ func (s *deepgramStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	s.cancel()
-	_ = s.conn.WriteJSON(map[string]string{"type": "CloseStream"})
+	if s.cancel != nil {
+		s.cancel()
+	}
+	_ = s.writeJSONData(map[string]string{"type": "CloseStream"})
 	// Wait a tiny bit for the final transcript
 	time.Sleep(50 * time.Millisecond)
+	return s.closeConnection()
+}
+
+func newDeepgramSTTAudioByteStream(s *deepgramStream, frame *model.AudioFrame) *audio.AudioByteStream {
+	sampleRate := uint32(s.sampleRate)
+	if frame.SampleRate > 0 {
+		sampleRate = frame.SampleRate
+	}
+	if sampleRate == 0 {
+		sampleRate = 16000
+	}
+	numChannels := uint32(s.numChannels)
+	if frame.NumChannels > 0 {
+		numChannels = frame.NumChannels
+	}
+	if numChannels == 0 {
+		numChannels = 1
+	}
+	return audio.NewAudioByteStream(sampleRate, numChannels, sampleRate/20)
+}
+
+func (s *deepgramStream) writeBinaryData(data []byte) error {
+	if s.writeBinary != nil {
+		return s.writeBinary(data)
+	}
+	if s.conn == nil {
+		return io.ErrClosedPipe
+	}
+	return s.conn.WriteMessage(websocket.BinaryMessage, data)
+}
+
+func (s *deepgramStream) writeJSONData(payload any) error {
+	if s.writeJSON != nil {
+		return s.writeJSON(payload)
+	}
+	if s.conn == nil {
+		return io.ErrClosedPipe
+	}
+	return s.conn.WriteJSON(payload)
+}
+
+func (s *deepgramStream) closeAfterWriteFailureLocked() {
+	s.closed = true
+	if s.cancel != nil {
+		s.cancel()
+	}
+	_ = s.closeConnection()
+}
+
+func (s *deepgramStream) closeConnection() error {
+	if s.conn == nil {
+		return nil
+	}
 	return s.conn.Close()
 }
 
