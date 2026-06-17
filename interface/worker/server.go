@@ -1154,7 +1154,7 @@ func agentWebSocketURL(rawURL string, workerToken string) (string, error) {
 }
 
 func agentIdentityForJobID(jobID string) string {
-	return "agent-" + jobID
+	return workerlivekit.AgentIdentityForJobID(jobID)
 }
 
 func availabilityResponseForAccept(req *livekit.AvailabilityRequest, args JobAcceptArguments, agentName string) *livekit.WorkerMessage {
