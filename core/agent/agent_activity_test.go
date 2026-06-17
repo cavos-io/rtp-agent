@@ -2116,6 +2116,21 @@ func TestAgentActivitySTTTurnWaitsForEndOfSpeechBeforeCommit(t *testing.T) {
 	}
 }
 
+func TestAgentActivitySTTEndOfSpeechMarksEOSReceived(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnSTTStartOfSpeech(&stt.SpeechEvent{})
+	activity.OnEndOfSpeech(nil)
+
+	if !activity.sttEOSReceived {
+		t.Fatal("sttEOSReceived = false, want true after STT end-of-speech")
+	}
+}
+
 func TestAgentActivityPendingSTTFinalUsesTranscriptEndTimeAfterEndOfSpeech(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeSTT

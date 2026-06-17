@@ -1444,6 +1444,9 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 	wasSpeaking := a.speaking
 	a.speaking = false
 	a.userSpeechStoppedAt = vadSpeechStoppedAt(ev)
+	if ev == nil {
+		a.sttEOSReceived = true
+	}
 	if a.Session != nil {
 		a.Session.UpdateUserState(UserStateListening)
 	}
