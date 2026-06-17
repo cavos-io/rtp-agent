@@ -1664,7 +1664,7 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 	if a.realtimeUserTranscriptionEnabled() {
 		return
 	}
-	if a.turnDetectionMode() == TurnDetectionModeManual && a.manualTurnCommitted {
+	if a.shouldIgnoreManualCommittedSTT(true) {
 		return
 	}
 	if a.holdSTTEventWhileAgentSpeaking(ev) {
@@ -1728,7 +1728,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	if a.realtimeUserTranscriptionEnabled() {
 		return
 	}
-	if a.turnDetectionMode() == TurnDetectionModeManual && a.manualTurnCommitted {
+	if a.shouldIgnoreManualCommittedSTT(false) {
 		return
 	}
 	if a.holdSTTEventWhileAgentSpeaking(ev) {
@@ -2537,6 +2537,9 @@ collect:
 			SpeakerID:  fallbackSpeakerID,
 		})
 	}
+	if a.turnDetectionMode() == TurnDetectionModeManual {
+		a.manualTurnCommitted = true
+	}
 	if _, err := a.completeUserTurn(ctx, EndOfTurnInfo{
 		SkipReply:              opts.SkipReply,
 		ReplyAlreadyGenerated:  replyAlreadyGenerated,
@@ -2548,10 +2551,20 @@ collect:
 	}); err != nil {
 		return transcript, err
 	}
-	if a.turnDetectionMode() == TurnDetectionModeManual {
-		a.manualTurnCommitted = true
-	}
 	return transcript, nil
+}
+
+func (a *AgentActivity) shouldIgnoreManualCommittedSTT(interim bool) bool {
+	if a == nil || a.turnDetectionMode() != TurnDetectionModeManual || !a.manualTurnCommitted {
+		return false
+	}
+	if interim {
+		return true
+	}
+	a.commitUserTurnMu.Lock()
+	activeHook := a.userTurnHookActive > 0
+	a.commitUserTurnMu.Unlock()
+	return !activeHook
 }
 
 func (a *AgentActivity) inputTranscriptionFlusher() (inputTranscriptionFlusher, bool) {

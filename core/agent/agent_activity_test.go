@@ -3882,6 +3882,68 @@ func TestAgentActivityCommitUserTurnDoesNotCancelActiveHook(t *testing.T) {
 	}
 }
 
+func TestAgentActivityManualCommitIgnoresInterimWhileHookActive(t *testing.T) {
+	agent := &blockingTurnAgent{
+		Agent:   NewAgent("test"),
+		started: make(chan *llm.ChatMessage, 2),
+		release: make(chan struct{}),
+	}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "first manual turn", Confidence: 0.9}},
+	})
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+		firstDone <- err
+	}()
+	select {
+	case msg := <-agent.started:
+		if got := msg.TextContent(); got != "first manual turn" {
+			t.Fatalf("first hook message = %q, want first manual turn", got)
+		}
+	case <-testTimeout():
+		t.Fatal("first hook did not start")
+	}
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Type: stt.SpeechEventInterimTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text:       "stale interim",
+			Confidence: 0.9,
+		}},
+	})
+
+	close(agent.release)
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatalf("first CommitUserTurn error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("first CommitUserTurn did not finish")
+	}
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{
+		TranscriptTimeout: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("second CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "" {
+		t.Fatalf("second CommitUserTurn transcript = %q, want empty after active-hook interim ignored", transcript)
+	}
+	select {
+	case msg := <-agent.started:
+		t.Fatalf("OnUserTurnCompleted called for stale active-hook interim with %q", msg.TextContent())
+	default:
+	}
+}
+
 func TestAgentActivityCommitUserTurnFlushesWhenLastFinalIsStale(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
