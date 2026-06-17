@@ -75,6 +75,7 @@ type Transport struct {
 	mu         sync.Mutex
 	joinCancel context.CancelFunc
 	joinSeq    uint64
+	joined     bool
 	closing    bool
 	closed     bool
 }
@@ -142,14 +143,28 @@ func (t *Transport) Join(ctx context.Context) error {
 		t.mu.Unlock()
 		cancel()
 	}()
-	return t.client.Join(joinCtx, opts, t.emit, audio)
+	if err := t.client.Join(joinCtx, opts, t.emit, audio); err != nil {
+		return err
+	}
+	t.mu.Lock()
+	if !t.closing && !t.closed {
+		t.joined = true
+	}
+	t.mu.Unlock()
+	return nil
 }
 
 func (t *Transport) Leave(ctx context.Context) error {
 	if t == nil || t.client == nil {
 		return nil
 	}
-	return t.client.Leave(normalizeContext(ctx))
+	if err := t.client.Leave(normalizeContext(ctx)); err != nil {
+		return err
+	}
+	t.mu.Lock()
+	t.joined = false
+	t.mu.Unlock()
+	return nil
 }
 
 func (t *Transport) PublishPCM(ctx context.Context, frame PCMFrame) error {
@@ -167,9 +182,13 @@ func (t *Transport) PublishPCM(ctx context.Context, frame PCMFrame) error {
 	}
 	t.mu.Lock()
 	closed := t.closing || t.closed
+	joined := t.joined
 	t.mu.Unlock()
 	if closed {
 		return fmt.Errorf("agora transport is closed")
+	}
+	if !joined {
+		return fmt.Errorf("agora transport is not joined")
 	}
 	if t.client == nil {
 		return fmt.Errorf("agora channel client is required")

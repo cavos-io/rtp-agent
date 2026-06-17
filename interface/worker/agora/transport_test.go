@@ -161,6 +161,48 @@ func TestTransportLeaveDelegatesToClient(t *testing.T) {
 	}
 }
 
+func TestTransportPublishPCMRequiresJoinedChannel(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(worker.AgoraOptions{AppID: "app", Channel: "support"}, client)
+	frame := PCMFrame{
+		Data:       []byte{1, 2, 3, 4},
+		SampleRate: 100,
+		Channels:   2,
+	}
+
+	err := tr.PublishPCM(context.Background(), frame)
+	if err == nil {
+		t.Fatal("PublishPCM() before Join error = nil, want not joined error")
+	}
+	if !strings.Contains(err.Error(), "not joined") {
+		t.Fatalf("PublishPCM() before Join error = %v, want not joined error", err)
+	}
+	if client.publishCount != 0 {
+		t.Fatalf("publish count before Join = %d, want 0", client.publishCount)
+	}
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	if err := tr.PublishPCM(context.Background(), frame); err != nil {
+		t.Fatalf("PublishPCM() after Join error = %v", err)
+	}
+	if err := tr.Leave(context.Background()); err != nil {
+		t.Fatalf("Leave() error = %v", err)
+	}
+
+	err = tr.PublishPCM(context.Background(), frame)
+	if err == nil {
+		t.Fatal("PublishPCM() after Leave error = nil, want not joined error")
+	}
+	if !strings.Contains(err.Error(), "not joined") {
+		t.Fatalf("PublishPCM() after Leave error = %v, want not joined error", err)
+	}
+	if client.publishCount != 1 {
+		t.Fatalf("publish count = %d, want 1", client.publishCount)
+	}
+}
+
 func TestTransportReturnsClientErrors(t *testing.T) {
 	joinErr := errors.New("join failed")
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, &fakeChannelClient{joinErr: joinErr})
@@ -333,6 +375,9 @@ func TestTransportPublishPCMValidatesAndDelegates(t *testing.T) {
 		StartPTSMS: 42,
 	}
 
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
 	if err := tr.PublishPCM(context.Background(), frame); err != nil {
 		t.Fatalf("PublishPCM() error = %v", err)
 	}
@@ -353,6 +398,9 @@ func TestTransportPublishPCMNormalizesNilContext(t *testing.T) {
 		Channels:   2,
 	}
 
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
 	var nilCtx context.Context
 	if err := tr.PublishPCM(nilCtx, frame); err != nil {
 		t.Fatalf("PublishPCM() error = %v", err)
