@@ -1573,6 +1573,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 
 	a.userTurnMu.Lock()
 	pendingTranscript := strings.TrimSpace(strings.Join([]string{a.pendingUserTranscript, transcript}, " "))
+	matchesPreflightTranscript := a.pendingPreflightTranscript != "" && pendingTranscript == a.pendingPreflightTranscript
 	confidenceSum := a.pendingTranscriptConfidenceSum + confidence
 	confidenceCount := a.pendingTranscriptConfidenceCount + 1
 	a.pendingUserTranscript = pendingTranscript
@@ -1589,7 +1590,9 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.userTurnMu.Unlock()
 	a.notifyUserTurnUpdated()
 	a.checkUserTurnLimit(transcript)
-	a.maybeStartPreemptiveGeneration(pendingTranscript, confidenceSum/float64(confidenceCount))
+	if !matchesPreflightTranscript {
+		a.maybeStartPreemptiveGeneration(pendingTranscript, confidenceSum/float64(confidenceCount))
+	}
 	startedSpeakingAt, stoppedSpeakingAt, transcriptionDelay := a.finalTranscriptTiming(ev)
 
 	turnDetection := a.turnDetectionMode()

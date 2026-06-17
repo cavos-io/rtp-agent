@@ -4035,6 +4035,74 @@ func TestAgentActivityPreflightTranscriptIncludesPriorFinalTranscript(t *testing
 	}
 }
 
+func TestAgentActivityMatchingFinalTranscriptKeepsPreflightGeneration(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	countingLLM := &preemptiveCountingLLM{
+		calls: make(chan struct{}, 3),
+		stream: &fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{
+			Delta: &llm.ChoiceDelta{Content: "preflight reply"},
+		}}},
+	}
+	agent.LLM = countingLLM
+	agent.TTS = &fakePipelineTTS{stream: &fakePipelineTTSStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	pipeline := NewPipelineAgent(nil, nil, agent.LLM, agent.TTS, agent.ChatCtx)
+	pipeline.session = session
+	session.Assistant = pipeline
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	defer activity.Stop()
+
+	speechEvents := session.SpeechCreatedEvents()
+	activity.OnStartOfSpeech(&vad.VADEvent{})
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Type: stt.SpeechEventPreflightTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text:       "same final",
+			Confidence: 0.8,
+		}},
+	})
+
+	var preemptive *SpeechHandle
+	select {
+	case ev := <-speechEvents:
+		preemptive = ev.SpeechHandle
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive preflight generation")
+	}
+	select {
+	case <-countingLLM.calls:
+	case <-time.After(time.Second):
+		t.Fatal("LLM was not started for preflight generation")
+	}
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "same final",
+			Confidence: 0.8,
+		}},
+	})
+
+	select {
+	case ev := <-speechEvents:
+		t.Fatalf("SpeechCreatedEvents received second generation %#v, want preflight handle kept", ev)
+	default:
+	}
+	select {
+	case <-countingLLM.calls:
+		t.Fatal("LLM started again for matching final transcript")
+	default:
+	}
+
+	if _, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{}); err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if !preemptive.IsScheduled() {
+		t.Fatal("preflight generation was not scheduled after matching final turn")
+	}
+}
+
 func TestAgentActivityPreemptiveGenerationStartsTTSBeforeSchedulingWhenEnabled(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeVAD
