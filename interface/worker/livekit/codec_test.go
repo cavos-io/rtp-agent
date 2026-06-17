@@ -48,6 +48,36 @@ func TestUnmarshalServerMessageReadsLiveKitProtobuf(t *testing.T) {
 	}
 }
 
+func TestServerMessageFrameIgnoresNonBinaryFrame(t *testing.T) {
+	decoded, err := workerlivekit.ServerMessageFrame(false, []byte("ignored"))
+	if err != nil {
+		t.Fatalf("ServerMessageFrame(non-binary) error = %v", err)
+	}
+	if decoded != nil {
+		t.Fatalf("ServerMessageFrame(non-binary) = %#v, want nil", decoded)
+	}
+}
+
+func TestServerMessageFrameDecodesBinaryFrame(t *testing.T) {
+	msg := &lkprotocol.ServerMessage{
+		Message: &lkprotocol.ServerMessage_Register{
+			Register: &lkprotocol.RegisterWorkerResponse{WorkerId: "worker-a"},
+		},
+	}
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		t.Fatalf("proto.Marshal() error = %v", err)
+	}
+
+	decoded, err := workerlivekit.ServerMessageFrame(true, data)
+	if err != nil {
+		t.Fatalf("ServerMessageFrame(binary) error = %v", err)
+	}
+	if decoded.GetRegister().GetWorkerId() != "worker-a" {
+		t.Fatalf("decoded worker id = %q, want worker-a", decoded.GetRegister().GetWorkerId())
+	}
+}
+
 func TestInitialRegisterMessageDecodesBinaryRegisterFrame(t *testing.T) {
 	msg := &lkprotocol.ServerMessage{
 		Message: &lkprotocol.ServerMessage_Register{

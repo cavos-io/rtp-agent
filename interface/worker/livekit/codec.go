@@ -19,6 +19,13 @@ func UnmarshalServerMessage(data []byte) (*lkprotocol.ServerMessage, error) {
 	return msg, nil
 }
 
+func ServerMessageFrame(binary bool, data []byte) (*lkprotocol.ServerMessage, error) {
+	if !binary {
+		return nil, nil
+	}
+	return UnmarshalServerMessage(data)
+}
+
 func InitialRegisterMessage(binary bool, data []byte) (*lkprotocol.ServerMessage, error) {
 	if !binary {
 		return nil, fmt.Errorf("expected register response as first message")

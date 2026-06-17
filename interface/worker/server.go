@@ -1550,13 +1550,12 @@ func (s *AgentServer) runWorkerMessageLoop(ctx context.Context, readMessage func
 				return result.err
 			}
 
-			if result.msgType != websocket.BinaryMessage {
-				continue
-			}
-
-			msg, err := workerlivekit.UnmarshalServerMessage(result.data)
+			msg, err := workerlivekit.ServerMessageFrame(result.msgType == websocket.BinaryMessage, result.data)
 			if err != nil {
 				logger.Logger.Errorw("Failed to unmarshal server message", err)
+				continue
+			}
+			if msg == nil {
 				continue
 			}
 
