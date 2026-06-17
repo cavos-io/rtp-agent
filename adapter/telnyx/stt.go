@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
@@ -126,6 +127,7 @@ func (s *TelnyxSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 			language: resolveTelnyxSTTLanguage(s, language),
 		},
 	}
+	stream.writeBinary = stream.writeBinaryMessage
 	go stream.readLoop()
 	return stream, nil
 }
@@ -235,16 +237,35 @@ type telnyxSTTStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	state  *telnyxSTTStreamState
+
+	audioBStream *audio.AudioByteStream
+	writeBinary  func([]byte) error
 }
 
 func (s *telnyxSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	return s.conn.WriteMessage(websocket.BinaryMessage, frame.Data)
+	if s.audioBStream == nil {
+		s.audioBStream = newTelnyxSTTAudioByteStream(frame)
+	}
+	for _, chunk := range s.audioBStream.Write(frame.Data) {
+		if err := s.writeBinaryData(chunk.Data); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *telnyxSTTStream) Flush() error {
+	if s.audioBStream == nil {
+		return nil
+	}
+	for _, chunk := range s.audioBStream.Flush() {
+		if err := s.writeBinaryData(chunk.Data); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -258,6 +279,29 @@ func (s *telnyxSTTStream) Close() error {
 	s.cancel()
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
+}
+
+func newTelnyxSTTAudioByteStream(frame *model.AudioFrame) *audio.AudioByteStream {
+	sampleRate := frame.SampleRate
+	if sampleRate == 0 {
+		sampleRate = defaultTelnyxSTTSampleRate
+	}
+	numChannels := frame.NumChannels
+	if numChannels == 0 {
+		numChannels = telnyxSTTNumChannels
+	}
+	return audio.NewAudioByteStream(sampleRate, numChannels, sampleRate/20)
+}
+
+func (s *telnyxSTTStream) writeBinaryData(data []byte) error {
+	if s.writeBinary != nil {
+		return s.writeBinary(data)
+	}
+	return s.writeBinaryMessage(data)
+}
+
+func (s *telnyxSTTStream) writeBinaryMessage(data []byte) error {
+	return s.conn.WriteMessage(websocket.BinaryMessage, data)
 }
 
 func (s *telnyxSTTStream) Next() (*stt.SpeechEvent, error) {

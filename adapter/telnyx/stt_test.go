@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/binary"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
@@ -108,6 +110,55 @@ func TestTelnyxSTTWAVHeaderMatchesReference(t *testing.T) {
 	}
 }
 
+func TestTelnyxSTTStreamChunksAndFlushesReferenceAudio(t *testing.T) {
+	var writes [][]byte
+	stream := &telnyxSTTStream{
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 800),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 400,
+	}); err != nil {
+		t.Fatalf("PushFrame half chunk error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes = %d, want no write before 50ms chunk", len(writes))
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 800),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 400,
+	}); err != nil {
+		t.Fatalf("PushFrame full chunk error = %v", err)
+	}
+	if len(writes) != 1 || len(writes[0]) != 1600 {
+		t.Fatalf("writes = %s, want one 50ms 1600-byte chunk", telnyxWriteSizes(writes))
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 400),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 200,
+	}); err != nil {
+		t.Fatalf("PushFrame remainder error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if len(writes) != 2 || len(writes[1]) != 400 {
+		t.Fatalf("writes after flush = %s, want flushed 400-byte remainder", telnyxWriteSizes(writes))
+	}
+}
+
 func TestTelnyxSTTEventsMatchReferenceLifecycle(t *testing.T) {
 	state := &telnyxSTTStreamState{language: "en"}
 
@@ -148,4 +199,12 @@ func assertTelnyxSTTEvent(t *testing.T, events []*stt.SpeechEvent, index int, ev
 	if len(events[index].Alternatives) != 1 || events[index].Alternatives[0].Text != text {
 		t.Fatalf("alternatives = %+v, want text %q", events[index].Alternatives, text)
 	}
+}
+
+func telnyxWriteSizes(writes [][]byte) string {
+	sizes := make([]string, 0, len(writes))
+	for _, write := range writes {
+		sizes = append(sizes, strconv.Itoa(len(write)))
+	}
+	return strings.Join(sizes, ",")
 }
