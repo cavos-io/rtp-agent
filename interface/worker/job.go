@@ -18,7 +18,6 @@ import (
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"github.com/cavos-io/rtp-agent/library/inference"
 	"github.com/cavos-io/rtp-agent/library/logger"
-	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
@@ -231,6 +230,8 @@ type ConnectOptions struct {
 }
 
 type ParticipantEntrypoint func(*JobContext, *livekit.ParticipantInfo)
+
+type TrackPublicationWaitOptions = workerlivekit.TrackPublicationWaitOptions
 
 type participantEntrypointRegistration struct {
 	entrypoint ParticipantEntrypoint
@@ -694,7 +695,7 @@ func (c *JobContext) WaitForTrackPublication(
 
 func (c *JobContext) WaitForTrackPublicationWithOptions(
 	ctx context.Context,
-	options utils.TrackPublicationWaitOptions,
+	options TrackPublicationWaitOptions,
 ) (*lksdk.RemoteTrackPublication, error) {
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
