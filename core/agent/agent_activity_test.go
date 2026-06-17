@@ -533,6 +533,19 @@ func TestAgentActivityVADSpeechCallbacksUpdateUserState(t *testing.T) {
 	}
 }
 
+func TestAgentActivityOnEndOfSpeechSkipsEndpointingWhenNotSpeaking(t *testing.T) {
+	endpointing := &recordingActivityEndpointing{}
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{Endpointing: endpointing})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech, Timestamp: 2.5})
+
+	if endpointing.endCount != 0 {
+		t.Fatalf("OnEndOfSpeech calls = %d, want 0 for stale end-of-speech", endpointing.endCount)
+	}
+}
+
 func TestAgentActivityOnStartOfSpeechPausesThinkingSpeech(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{

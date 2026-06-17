@@ -1438,12 +1438,13 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 }
 
 func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
+	wasSpeaking := a.speaking
 	a.speaking = false
 	a.userSpeechStoppedAt = time.Now()
 	if a.Session != nil {
 		a.Session.UpdateUserState(UserStateListening)
 	}
-	if endpointing := a.endpointing(); endpointing != nil {
+	if endpointing := a.endpointing(); endpointing != nil && wasSpeaking {
 		shouldIgnore := a.overlapSpeechEnded && !a.interruptionDetected
 		endpointing.OnEndOfSpeech(vadEventTimestamp(ev), shouldIgnore)
 	}
