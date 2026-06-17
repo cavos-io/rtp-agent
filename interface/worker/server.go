@@ -843,7 +843,7 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 		opts.LoadFunc = defaultWorkerLoadFunc
 	}
 	if opts.Permissions == nil {
-		permissions := resolveWorkerPermissions(nil)
+		permissions := workerlivekit.ResolveWorkerPermissions(nil)
 		opts.Permissions = &permissions
 	}
 	if opts.WSURL == "" {
@@ -1123,10 +1123,6 @@ func readSystemCPUTimes() (idle uint64, total uint64, err error) {
 	return idle, total, nil
 }
 
-func resolveWorkerPermissions(permissions *WorkerPermissions) WorkerPermissions {
-	return workerlivekit.ResolveWorkerPermissions(permissions)
-}
-
 func availabilityResponseForAccept(req *livekit.AvailabilityRequest, args JobAcceptArguments, agentName string) *livekit.WorkerMessage {
 	return workerlivekit.AvailabilityResponseForAccept(req, workerlivekit.AvailabilityAcceptOptions{
 		Name:       args.Name,
@@ -1143,7 +1139,7 @@ func availabilityResponseForReject(req *livekit.AvailabilityRequest, args JobRej
 }
 
 func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
-	permissions := resolveWorkerPermissions(s.Options.Permissions)
+	permissions := workerlivekit.ResolveWorkerPermissions(s.Options.Permissions)
 	return workerlivekit.RegisterWorkerRequest(workerlivekit.RegisterWorkerOptions{
 		JobType:     workerlivekit.JobTypeForWorkerType(string(s.Options.WorkerType)),
 		AgentName:   s.Options.AgentName,
