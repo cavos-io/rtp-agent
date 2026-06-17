@@ -1406,6 +1406,8 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 	if !wasSpeaking {
 		if sttStartedAt != nil {
 			a.userSpeechStartedAt = unixSecondsToTime(*sttStartedAt)
+		} else if ev != nil {
+			a.userSpeechStartedAt = vadSpeechStartedAt(ev)
 		} else {
 			a.userSpeechStartedAt = time.Now()
 		}
@@ -1417,7 +1419,7 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 		a.Session.UpdateUserState(UserStateSpeaking)
 	}
 	if endpointing := a.endpointing(); endpointing != nil {
-		startedAt := vadEventTimestamp(ev)
+		startedAt := vadSpeechStartTimestamp(ev)
 		if sttStartedAt != nil {
 			startedAt = *sttStartedAt
 		}
@@ -2967,11 +2969,11 @@ func (a *AgentActivity) endpointing() Endpointing {
 	return a.Session.Options.Endpointing
 }
 
-func vadEventTimestamp(ev *vad.VADEvent) float64 {
+func vadSpeechStartTimestamp(ev *vad.VADEvent) float64 {
 	if ev == nil {
 		return float64(time.Now().UnixNano()) / float64(time.Second)
 	}
-	return ev.Timestamp
+	return max(ev.Timestamp-ev.SpeechDuration-ev.InferenceDuration, 0)
 }
 
 func vadSpeechEndTimestamp(ev *vad.VADEvent) float64 {
@@ -2988,4 +2990,13 @@ func vadSpeechStoppedAt(ev *vad.VADEvent) time.Time {
 	}
 	delay := time.Duration((ev.SilenceDuration + ev.InferenceDuration) * float64(time.Second))
 	return stoppedAt.Add(-delay)
+}
+
+func vadSpeechStartedAt(ev *vad.VADEvent) time.Time {
+	startedAt := time.Now()
+	if ev == nil {
+		return startedAt
+	}
+	delay := time.Duration((ev.SpeechDuration + ev.InferenceDuration) * float64(time.Second))
+	return startedAt.Add(-delay)
 }

@@ -568,6 +568,34 @@ func TestAgentActivityOnEndOfSpeechReportsActualSpeechEndTime(t *testing.T) {
 	}
 }
 
+func TestAgentActivityOnStartOfSpeechReportsActualSpeechStartTime(t *testing.T) {
+	endpointing := &recordingActivityEndpointing{}
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{Endpointing: endpointing})
+	activity := NewAgentActivity(agent, session)
+
+	beforeStart := time.Now()
+	activity.OnStartOfSpeech(&vad.VADEvent{
+		Type:              vad.VADEventStartOfSpeech,
+		Timestamp:         3.0,
+		SpeechDuration:    0.4,
+		InferenceDuration: 0.1,
+	})
+
+	if endpointing.startCount != 1 {
+		t.Fatalf("OnStartOfSpeech calls = %d, want 1", endpointing.startCount)
+	}
+	if endpointing.lastStart != 2.5 {
+		t.Fatalf("OnStartOfSpeech startedAt = %v, want 2.5", endpointing.lastStart)
+	}
+	if activity.userSpeechStartedAt.After(beforeStart.Add(-450 * time.Millisecond)) {
+		t.Fatalf("userSpeechStartedAt = %v, want at least 450ms before OnStartOfSpeech", activity.userSpeechStartedAt.Sub(beforeStart))
+	}
+	if activity.userSpeechStartedAt.Before(beforeStart.Add(-700 * time.Millisecond)) {
+		t.Fatalf("userSpeechStartedAt = %v, want close to VAD-adjusted start", activity.userSpeechStartedAt.Sub(beforeStart))
+	}
+}
+
 func TestAgentActivityOnStartOfSpeechPausesThinkingSpeech(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{
@@ -4991,6 +5019,7 @@ func (r *recordingAudioOutputController) ResumeAudioOutput() {
 type recordingActivityEndpointing struct {
 	startCount       int
 	endCount         int
+	lastStart        float64
 	lastEnd          float64
 	lastShouldIgnore bool
 }
@@ -5002,8 +5031,9 @@ func (r *recordingActivityEndpointing) Overlapping() bool                { retur
 func (r *recordingActivityEndpointing) OnStartOfAgentSpeech(float64)     {}
 func (r *recordingActivityEndpointing) OnEndOfAgentSpeech(float64)       {}
 
-func (r *recordingActivityEndpointing) OnStartOfSpeech(float64, bool) {
+func (r *recordingActivityEndpointing) OnStartOfSpeech(startedAt float64, _ bool) {
 	r.startCount++
+	r.lastStart = startedAt
 }
 
 func (r *recordingActivityEndpointing) OnEndOfSpeech(endedAt float64, shouldIgnore bool) {
