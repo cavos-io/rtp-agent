@@ -216,13 +216,13 @@ func NewJobAPI(url string, apiKey string, apiSecret string) *JobAPI {
 	return workerlivekit.NewJobAPI(url, apiKey, apiSecret)
 }
 
-type AutoSubscribe string
+type AutoSubscribe = workerlivekit.AutoSubscribe
 
 const (
-	AutoSubscribeSubscribeAll  AutoSubscribe = "subscribe_all"
-	AutoSubscribeSubscribeNone AutoSubscribe = "subscribe_none"
-	AutoSubscribeAudioOnly     AutoSubscribe = "audio_only"
-	AutoSubscribeVideoOnly     AutoSubscribe = "video_only"
+	AutoSubscribeSubscribeAll  = workerlivekit.AutoSubscribeSubscribeAll
+	AutoSubscribeSubscribeNone = workerlivekit.AutoSubscribeSubscribeNone
+	AutoSubscribeAudioOnly     = workerlivekit.AutoSubscribeAudioOnly
+	AutoSubscribeVideoOnly     = workerlivekit.AutoSubscribeVideoOnly
 )
 
 type ConnectOptions struct {
