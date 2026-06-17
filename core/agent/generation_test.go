@@ -1113,6 +1113,44 @@ func TestPerformToolExecutionsUsesFirstRunContextUpdateAsOutput(t *testing.T) {
 	}
 }
 
+func TestPerformToolExecutionsEmitsFinalReturnAfterRunContextUpdate(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	tool := &runContextUpdatingTool{}
+	toolCtx := llm.NewToolContext([]interface{}{tool})
+	functionCh := make(chan *llm.FunctionToolCall, 1)
+	functionCh <- &llm.FunctionToolCall{
+		ID:        "reply-a/fnc_0",
+		Name:      tool.Name(),
+		CallID:    "call_lookup",
+		Arguments: `{"city": "Jakarta"}`,
+	}
+	close(functionCh)
+
+	outputs := PerformToolExecutions(context.Background(), functionCh, toolCtx, WithToolExecutionSession(session))
+	first := mustReceiveToolOutput(t, outputs)
+	second := mustReceiveToolOutput(t, outputs)
+	if _, ok := <-outputs; ok {
+		t.Fatal("PerformToolExecutions emitted more than update and final return outputs")
+	}
+
+	wantUpdate := "The tool `lookup` has updated, message: searching\nThe task is still running, so DON'T make up or give information not included in the message above."
+	if first.RawOutput != wantUpdate {
+		t.Fatalf("first RawOutput = %#v, want progress update", first.RawOutput)
+	}
+	if second.RawError != nil {
+		t.Fatalf("final RawError = %v, want nil", second.RawError)
+	}
+	if second.FncCall.CallID != "call_lookup_final" || second.FncCall.Name != "lookup" {
+		t.Fatalf("final FncCall = %#v, want call_lookup_final lookup", second.FncCall)
+	}
+	if second.RawOutput != "final result" {
+		t.Fatalf("final RawOutput = %#v, want final result", second.RawOutput)
+	}
+	if second.FncCallOut == nil || second.FncCallOut.CallID != "call_lookup_final" || second.FncCallOut.Output != "final result" || second.FncCallOut.IsError {
+		t.Fatalf("final FncCallOut = %#v, want successful final output", second.FncCallOut)
+	}
+}
+
 func TestPerformToolExecutionsRejectsDuplicateInFlightCallID(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	tool := &blockingGenerationTool{

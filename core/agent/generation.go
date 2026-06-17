@@ -719,7 +719,7 @@ func PerformToolExecutions(
 					execCtx = WithRunContext(execCtx, runCtx)
 				}
 				executionToolCtx := mockToolContext(execCtx, toolCtx, options.Session, fc.Name)
-				result := llm.FunctionCallResult{}
+				var result llm.FunctionCallResult
 				if executionToolCtx == nil || executionToolCtx.GetFunctionTool(fc.Name) == nil {
 					fncCall := makeExecutionFunctionCall(fc, fc.Arguments)
 					result = llm.MakeToolOutput(fncCall, nil, llm.NewToolError(fmt.Sprintf("Unknown function: %s", fc.Name)))
@@ -728,14 +728,15 @@ func PerformToolExecutions(
 				}
 				if runCtx != nil {
 					updates := runCtx.Updates()
-					runCtx.detach()
 					if len(updates) > 0 {
-						result.FncCall = *updates[0].FunctionCall
-						result.FncCallOut = updates[0].FunctionCallOutput
-						if result.FncCallOut != nil {
-							result.RawOutput = result.FncCallOut.Output
+						outCh <- toolExecutionOutputFromUpdate(updates[0])
+						if finalOutput, ok := makeRunContextFinalToolOutput(runCtx, result); ok {
+							outCh <- finalOutput
 						}
+						runCtx.detach()
+						return
 					}
+					runCtx.detach()
 				}
 				outCh <- ToolExecutionOutput{
 					FncCall:    result.FncCall,
@@ -750,6 +751,35 @@ func PerformToolExecutions(
 	}()
 
 	return outCh
+}
+
+func toolExecutionOutputFromUpdate(update RunContextUpdate) ToolExecutionOutput {
+	output := ToolExecutionOutput{}
+	if update.FunctionCall != nil {
+		output.FncCall = *update.FunctionCall
+	}
+	output.FncCallOut = update.FunctionCallOutput
+	if update.FunctionCallOutput != nil {
+		output.RawOutput = update.FunctionCallOutput.Output
+	}
+	return output
+}
+
+func makeRunContextFinalToolOutput(runCtx *RunContext, result llm.FunctionCallResult) (ToolExecutionOutput, bool) {
+	if runCtx == nil || runCtx.FunctionCall == nil || result.FncCallOut == nil {
+		return ToolExecutionOutput{}, false
+	}
+	call := copyRunContextUpdateCall(runCtx.FunctionCall, "_final")
+	finalResult := llm.MakeToolOutput(*call, result.RawOutput, result.RawError)
+	if finalResult.FncCallOut == nil {
+		return ToolExecutionOutput{}, false
+	}
+	return ToolExecutionOutput{
+		FncCall:    finalResult.FncCall,
+		FncCallOut: finalResult.FncCallOut,
+		RawOutput:  finalResult.RawOutput,
+		RawError:   finalResult.RawError,
+	}, true
 }
 
 func copyFunctionToolCallWithArguments(fc *llm.FunctionToolCall, arguments string) *llm.FunctionToolCall {
