@@ -888,8 +888,7 @@ func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunk
 	if len(names) > 0 {
 		name = names[0]
 	}
-	req := workerlivekit.JobCreateSIPParticipantRequest(c.Job, callTo, trunkID, identity, name)
-	return c.API().SIP.CreateSIPParticipant(ctx, req)
+	return workerlivekit.CreateSIPParticipant(ctx, c.API().SIP, c.Job, callTo, trunkID, identity, name)
 }
 
 func (c *JobContext) CreateSIPParticipant(ctx context.Context, req *livekit.CreateSIPParticipantRequest) (*livekit.SIPParticipantInfo, error) {
@@ -897,7 +896,7 @@ func (c *JobContext) CreateSIPParticipant(ctx context.Context, req *livekit.Crea
 		logger.Logger.Warnw("job context CreateSIPParticipant is skipped for fake jobs", nil)
 		return &livekit.SIPParticipantInfo{}, nil
 	}
-	return c.API().SIP.CreateSIPParticipant(ctx, req)
+	return workerlivekit.CreateSIPParticipantWithRequest(ctx, c.API().SIP, req)
 }
 
 // TransferSIPParticipant transfers a SIP participant to another number.
@@ -918,7 +917,5 @@ func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, pa
 	if len(playDialtones) > 0 {
 		playDialtone = playDialtones[0]
 	}
-	req := workerlivekit.JobTransferSIPParticipantRequest(c.Job, identity, transferTo, playDialtone)
-	_, err = c.API().SIP.TransferSIPParticipant(ctx, req)
-	return err
+	return workerlivekit.TransferSIPParticipant(ctx, c.API().SIP, c.Job, identity, transferTo, playDialtone)
 }

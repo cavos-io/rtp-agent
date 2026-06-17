@@ -1,10 +1,13 @@
 package livekit_test
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	lkprotocol "github.com/livekit/protocol/livekit"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestCreateSIPParticipantRequestUsesReferenceDefaultName(t *testing.T) {
@@ -79,4 +82,92 @@ func TestJobTransferSIPParticipantRequestUsesJobRoomName(t *testing.T) {
 	if req.PlayDialtone {
 		t.Fatal("JobTransferSIPParticipantRequest.PlayDialtone = true, want false")
 	}
+}
+
+func TestCreateSIPParticipantCallsSIPAPI(t *testing.T) {
+	api := &fakeSIPAPI{}
+	info, err := workerlivekit.CreateSIPParticipant(context.Background(), api, &lkprotocol.Job{
+		Room: &lkprotocol.Room{Name: "room-a"},
+	}, "+15551234567", "trunk-a", "caller-a", "")
+	if err != nil {
+		t.Fatalf("CreateSIPParticipant() error = %v", err)
+	}
+	if info == nil {
+		t.Fatal("CreateSIPParticipant() info = nil")
+	}
+	if api.createRequest == nil {
+		t.Fatal("CreateSIPParticipant() did not call SIP API")
+	}
+	if api.createRequest.RoomName != "room-a" {
+		t.Fatalf("CreateSIPParticipant().RoomName = %q, want room-a", api.createRequest.RoomName)
+	}
+	if api.createRequest.ParticipantName != workerlivekit.DefaultSIPParticipantName {
+		t.Fatalf("CreateSIPParticipant().ParticipantName = %q, want default", api.createRequest.ParticipantName)
+	}
+}
+
+func TestCreateSIPParticipantWithRequestUsesProvidedRequest(t *testing.T) {
+	api := &fakeSIPAPI{}
+	req := &lkprotocol.CreateSIPParticipantRequest{RoomName: "room-a", ParticipantIdentity: "caller-a"}
+	info, err := workerlivekit.CreateSIPParticipantWithRequest(context.Background(), api, req)
+	if err != nil {
+		t.Fatalf("CreateSIPParticipantWithRequest() error = %v", err)
+	}
+	if info == nil {
+		t.Fatal("CreateSIPParticipantWithRequest() info = nil")
+	}
+	if api.createRequest != req {
+		t.Fatalf("CreateSIPParticipantWithRequest() request = %#v, want provided request", api.createRequest)
+	}
+}
+
+func TestTransferSIPParticipantCallsSIPAPI(t *testing.T) {
+	api := &fakeSIPAPI{}
+	err := workerlivekit.TransferSIPParticipant(context.Background(), api, &lkprotocol.Job{
+		Room: &lkprotocol.Room{Name: "room-a"},
+	}, "caller-a", "+15557654321", true)
+	if err != nil {
+		t.Fatalf("TransferSIPParticipant() error = %v", err)
+	}
+	if api.transferRequest == nil {
+		t.Fatal("TransferSIPParticipant() did not call SIP API")
+	}
+	if api.transferRequest.RoomName != "room-a" {
+		t.Fatalf("TransferSIPParticipant().RoomName = %q, want room-a", api.transferRequest.RoomName)
+	}
+	if !api.transferRequest.PlayDialtone {
+		t.Fatal("TransferSIPParticipant().PlayDialtone = false, want true")
+	}
+}
+
+func TestTransferSIPParticipantReturnsSIPAPIError(t *testing.T) {
+	wantErr := errors.New("transfer failed")
+	api := &fakeSIPAPI{err: wantErr}
+
+	err := workerlivekit.TransferSIPParticipant(context.Background(), api, nil, "caller-a", "+15557654321", false)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("TransferSIPParticipant() error = %v, want %v", err, wantErr)
+	}
+}
+
+type fakeSIPAPI struct {
+	createRequest   *lkprotocol.CreateSIPParticipantRequest
+	transferRequest *lkprotocol.TransferSIPParticipantRequest
+	err             error
+}
+
+func (f *fakeSIPAPI) CreateSIPParticipant(_ context.Context, req *lkprotocol.CreateSIPParticipantRequest) (*lkprotocol.SIPParticipantInfo, error) {
+	f.createRequest = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &lkprotocol.SIPParticipantInfo{}, nil
+}
+
+func (f *fakeSIPAPI) TransferSIPParticipant(_ context.Context, req *lkprotocol.TransferSIPParticipantRequest) (*emptypb.Empty, error) {
+	f.transferRequest = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &emptypb.Empty{}, nil
 }
