@@ -4610,6 +4610,57 @@ func TestAgentSessionUpdateAgentBlocksRealtimeGenerationOnPreviousActivity(t *te
 	}
 }
 
+func TestAgentSessionUpdateAgentBlocksPreviousActivityDuringReplacementStart(t *testing.T) {
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	initial.VAD = &fakePipelineVAD{}
+	initial.STT = &fakePipelineSTT{}
+	initial.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	initial.TTS = &fakePipelineTTS{}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	sessionStarted := make(chan struct{})
+	releaseSession := make(chan struct{})
+	next.RealtimeModel = &fakeRealtimeModel{
+		session:        &fakeRealtimeSession{},
+		sessionStarted: sessionStarted,
+		sessionRelease: releaseSession,
+	}
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+	oldActivity := NewAgentActivity(initial, session)
+	session.activity = oldActivity
+	session.Assistant = &PipelineAgent{}
+	session.started = true
+
+	done := make(chan struct{})
+	go func() {
+		session.UpdateAgent(next)
+		close(done)
+	}()
+	<-sessionStarted
+
+	handle, err := oldActivity.OnGenerationCreated(llm.GenerationCreatedEvent{
+		ResponseID:    "response_1",
+		UserInitiated: false,
+	})
+	if !errors.Is(err, ErrSpeechSchedulingPaused) {
+		t.Fatalf("OnGenerationCreated during replacement start error = %v, want ErrSpeechSchedulingPaused", err)
+	}
+	if handle != nil {
+		t.Fatalf("OnGenerationCreated handle = %#v, want nil while replacement starts", handle)
+	}
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("unexpected SpeechCreated event from previous activity during replacement start: %#v", ev)
+	default:
+	}
+
+	close(releaseSession)
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("UpdateAgent did not finish after releasing replacement session")
+	}
+}
+
 func testTimeout() <-chan time.Time {
 	return time.After(time.Second)
 }

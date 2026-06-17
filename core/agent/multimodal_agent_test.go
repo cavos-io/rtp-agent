@@ -2338,12 +2338,14 @@ func (s *blockingRealtimeFallbackTTSStream) Next() (*tts.SynthesizedAudio, error
 }
 
 type fakeRealtimeModel struct {
-	label        string
-	model        string
-	provider     string
-	session      *fakeRealtimeSession
-	sessionErr   error
-	capabilities llm.RealtimeCapabilities
+	label          string
+	model          string
+	provider       string
+	session        *fakeRealtimeSession
+	sessionErr     error
+	capabilities   llm.RealtimeCapabilities
+	sessionStarted chan struct{}
+	sessionRelease chan struct{}
 }
 
 func (f *fakeRealtimeModel) Capabilities() llm.RealtimeCapabilities {
@@ -2351,6 +2353,12 @@ func (f *fakeRealtimeModel) Capabilities() llm.RealtimeCapabilities {
 }
 
 func (f *fakeRealtimeModel) Session() (llm.RealtimeSession, error) {
+	if f.sessionStarted != nil {
+		close(f.sessionStarted)
+	}
+	if f.sessionRelease != nil {
+		<-f.sessionRelease
+	}
 	if f.sessionErr != nil {
 		return nil, f.sessionErr
 	}

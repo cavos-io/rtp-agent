@@ -2563,6 +2563,7 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	oldAgent := (*Agent)(nil)
 	if oldActivity != nil {
 		oldAgent = oldActivity.Agent
+		oldActivity.PauseScheduling()
 	}
 	runState := s.runState
 
