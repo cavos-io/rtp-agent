@@ -223,6 +223,8 @@ func (t *BasetenTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		events:     make(chan *tts.SynthesizedAudio, 100),
 		errCh:      make(chan error, 1),
 	}
+	stream.writeMessage = stream.writeWebsocketMessage
+	stream.closeConn = stream.closeWebsocketConn
 	go stream.readLoop()
 	return stream, nil
 }
@@ -293,17 +295,29 @@ type basetenTTSSynthesizeStream struct {
 	errCh      chan error
 	mu         sync.Mutex
 	closed     bool
+
+	writeMessage func(int, []byte) error
+	closeConn    func() error
 }
 
 func (s *basetenTTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("baseten tts stream is closed")
+	}
 	message, err := buildBasetenTTSTextMessage(text)
 	if err != nil {
 		return err
 	}
-	return s.conn.WriteMessage(websocket.TextMessage, message)
+	if err := s.writeMessageData(websocket.TextMessage, message); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *basetenTTSSynthesizeStream) Flush() error {
@@ -319,10 +333,41 @@ func (s *basetenTTSSynthesizeStream) Close() error {
 	s.closed = true
 	s.cancel()
 	if endMessage, err := buildBasetenTTSEndMessage(); err == nil {
-		_ = s.conn.WriteMessage(websocket.TextMessage, endMessage)
+		_ = s.writeMessageData(websocket.TextMessage, endMessage)
 	}
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	return s.closeConnection()
+}
+
+func (s *basetenTTSSynthesizeStream) writeMessageData(messageType int, data []byte) error {
+	if s.writeMessage != nil {
+		return s.writeMessage(messageType, data)
+	}
+	return s.writeWebsocketMessage(messageType, data)
+}
+
+func (s *basetenTTSSynthesizeStream) writeWebsocketMessage(messageType int, data []byte) error {
+	return s.conn.WriteMessage(messageType, data)
+}
+
+func (s *basetenTTSSynthesizeStream) closeConnection() error {
+	if s.closeConn != nil {
+		return s.closeConn()
+	}
+	return s.closeWebsocketConn()
+}
+
+func (s *basetenTTSSynthesizeStream) closeWebsocketConn() error {
 	return s.conn.Close()
+}
+
+func (s *basetenTTSSynthesizeStream) closeAfterWriteFailureLocked() {
+	if s.closed {
+		return
+	}
+	s.closed = true
+	s.cancel()
+	_ = s.closeConnection()
 }
 
 func (s *basetenTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
