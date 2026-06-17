@@ -529,7 +529,7 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 			case <-ctx.Done():
 				logger.Logger.Debugw("reload job status skipped after context cancellation", "jobId", jobCtx.JobID())
 			default:
-				if err := s.sendWorkerMessage(jobStatusMessage(jobCtx.JobID(), status)); err != nil {
+				if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(jobCtx.JobID(), status)); err != nil {
 					logger.Logger.Errorw("failed to update reloaded job status", err, "jobId", jobCtx.JobID())
 				}
 			}
@@ -1146,14 +1146,6 @@ func (s *AgentServer) drainingWorkerStatusMessage() *livekit.WorkerMessage {
 	return workerlivekit.DrainingWorkerStatusMessage(uint32(s.activeJobCount()))
 }
 
-func jobStatusMessage(jobID string, status livekit.JobStatus) *livekit.WorkerMessage {
-	return workerlivekit.JobStatusMessage(jobID, status)
-}
-
-func migrateJobMessage(jobIDs []string) *livekit.WorkerMessage {
-	return workerlivekit.MigrateJobMessage(jobIDs)
-}
-
 func (s *AgentServer) RTCSession(
 	entrypoint func(*JobContext) error,
 	request func(*JobRequest) error,
@@ -1718,7 +1710,7 @@ func (s *AgentServer) reportActiveJobs() {
 	}
 
 	sort.Strings(jobIDs)
-	if err := s.sendWorkerMessage(migrateJobMessage(jobIDs)); err != nil {
+	if err := s.sendWorkerMessage(workerlivekit.MigrateJobMessage(jobIDs)); err != nil {
 		logger.Logger.Errorw("failed to report active jobs", err, "jobIds", jobIDs)
 	}
 }
@@ -1876,7 +1868,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 	s.activeJobs[req.Job.Id] = jobCtx
 	s.mu.Unlock()
 
-	if err := s.sendWorkerMessage(jobStatusMessage(req.Job.Id, livekit.JobStatus_JS_RUNNING)); err != nil {
+	if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(req.Job.Id, livekit.JobStatus_JS_RUNNING)); err != nil {
 		logger.Logger.Errorw("failed to update job status", err, "jobId", req.Job.Id)
 	}
 
@@ -1903,13 +1895,13 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 						return
 					}
 				} else {
-					if err := s.sendWorkerMessage(jobStatusMessage(req.Job.Id, status)); err != nil {
+					if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(req.Job.Id, status)); err != nil {
 						logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", req.Job.Id)...)
 					}
 					s.finishJob(jobCtx)
 					return
 				}
-				if err := s.sendWorkerMessage(jobStatusMessage(req.Job.Id, status)); err != nil {
+				if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(req.Job.Id, status)); err != nil {
 					logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", req.Job.Id)...)
 				}
 			}()
