@@ -120,6 +120,7 @@ func (s *MistralAISTT) Stream(ctx context.Context, language string) (stt.Recogni
 		errCh:  make(chan error, 1),
 		ctx:    streamCtx,
 		cancel: cancel,
+		state:  &mistralAISTTRealtimeState{},
 	}
 	go stream.readLoop()
 	return stream, nil
@@ -285,6 +286,13 @@ type mistralAISTTRealtimeStream struct {
 	closed bool
 	ctx    context.Context
 	cancel context.CancelFunc
+	state  *mistralAISTTRealtimeState
+}
+
+type mistralAISTTRealtimeState struct {
+	requestID        string
+	detectedLanguage string
+	currentText      string
 }
 
 func (s *mistralAISTTRealtimeStream) PushFrame(frame *model.AudioFrame) error {
@@ -337,7 +345,7 @@ func (s *mistralAISTTRealtimeStream) Next() (*stt.SpeechEvent, error) {
 func (s *mistralAISTTRealtimeStream) readLoop() {
 	defer close(s.events)
 	for {
-		msgType, _, err := s.conn.ReadMessage()
+		msgType, message, err := s.conn.ReadMessage()
 		if err != nil {
 			if err != io.EOF && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				s.errCh <- llm.NewAPIConnectionError(err.Error())
@@ -346,6 +354,14 @@ func (s *mistralAISTTRealtimeStream) readLoop() {
 		}
 		if msgType != websocket.TextMessage {
 			continue
+		}
+		events, err := processMistralAISTTRealtimeMessage(s.state, message)
+		if err != nil {
+			s.errCh <- err
+			return
+		}
+		for _, event := range events {
+			s.events <- event
 		}
 	}
 }
@@ -356,6 +372,102 @@ func (s *mistralAISTTRealtimeStream) writeJSON(msg map[string]any) error {
 		return err
 	}
 	return s.conn.WriteMessage(websocket.TextMessage, data)
+}
+
+func processMistralAISTTRealtimeMessage(state *mistralAISTTRealtimeState, message []byte) ([]*stt.SpeechEvent, error) {
+	var payload map[string]any
+	if err := json.Unmarshal(message, &payload); err != nil {
+		return nil, llm.NewAPIConnectionError(err.Error())
+	}
+	switch payloadString(payload, "type") {
+	case "session.created":
+		if session, ok := payload["session"].(map[string]any); ok {
+			state.requestID = payloadString(session, "request_id")
+		}
+	case "transcription.language":
+		state.detectedLanguage = payloadString(payload, "audio_language")
+	case "transcription.text.delta":
+		state.currentText += payloadString(payload, "text")
+		if state.currentText == "" {
+			return nil, nil
+		}
+		return []*stt.SpeechEvent{{
+			Type:      stt.SpeechEventInterimTranscript,
+			RequestID: state.requestID,
+			Alternatives: []stt.SpeechData{{
+				Text:     state.currentText,
+				Language: state.detectedLanguage,
+			}},
+		}}, nil
+	case "transcription.done":
+		text := payloadString(payload, "text")
+		language := payloadString(payload, "language")
+		if language == "" {
+			language = state.detectedLanguage
+		}
+		state.currentText = ""
+		events := []*stt.SpeechEvent{{
+			Type:      stt.SpeechEventFinalTranscript,
+			RequestID: state.requestID,
+			Alternatives: []stt.SpeechData{{
+				Text:     text,
+				Language: language,
+				Words:    mistralAISTTRealtimeSegments(payload["segments"]),
+			}},
+		}}
+		events = append(events, mistralAISTTRealtimeUsageEvent(state.requestID, payload["usage"]))
+		return events, nil
+	}
+	return nil, nil
+}
+
+func mistralAISTTRealtimeSegments(value any) []stt.TimedString {
+	items, ok := value.([]any)
+	if !ok || len(items) == 0 {
+		return nil
+	}
+	segments := make([]stt.TimedString, 0, len(items))
+	for _, item := range items {
+		data, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		segments = append(segments, stt.TimedString{
+			Text:      payloadString(data, "text"),
+			StartTime: payloadFloat(data, "start"),
+			EndTime:   payloadFloat(data, "end"),
+		})
+	}
+	return segments
+}
+
+func mistralAISTTRealtimeUsageEvent(requestID string, value any) *stt.SpeechEvent {
+	usage, _ := value.(map[string]any)
+	return &stt.SpeechEvent{
+		Type:      stt.SpeechEventRecognitionUsage,
+		RequestID: requestID,
+		RecognitionUsage: &stt.RecognitionUsage{
+			AudioDuration: payloadFloat(usage, "prompt_audio_seconds"),
+			InputTokens:   int(payloadFloat(usage, "prompt_tokens")),
+			OutputTokens:  int(payloadFloat(usage, "completion_tokens")),
+		},
+	}
+}
+
+func payloadString(payload map[string]any, key string) string {
+	value, _ := payload[key].(string)
+	return value
+}
+
+func payloadFloat(payload map[string]any, key string) float64 {
+	switch value := payload[key].(type) {
+	case float64:
+		return value
+	case int:
+		return float64(value)
+	default:
+		return 0
+	}
 }
 
 func validateMistralAISTTAPIKey(apiKey string) error {

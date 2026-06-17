@@ -128,6 +128,42 @@ func TestMistralAISTTRealtimeStreamSendsReferenceMessages(t *testing.T) {
 	assertMistralRealtimeMessage(t, messages[2], "input_audio.end", nil)
 }
 
+func TestMistralAISTTRealtimeStreamMapsReferenceEvents(t *testing.T) {
+	conn := &mistralAISTTFakeRealtimeConn{reads: [][]byte{
+		[]byte(`{"type":"session.created","session":{"request_id":"req_123","model":"voxtral-realtime-latest","audio_format":{"encoding":"pcm_s16le","sample_rate":16000}}}`),
+		[]byte(`{"type":"transcription.language","audio_language":"fr"}`),
+		[]byte(`{"type":"transcription.text.delta","text":"bon"}`),
+		[]byte(`{"type":"transcription.text.delta","text":"jour"}`),
+		[]byte(`{"type":"transcription.done","model":"voxtral-realtime-latest","text":"bonjour","language":null,"segments":[{"text":"bonjour","start":0.2,"end":0.7}],"usage":{"prompt_audio_seconds":2,"prompt_tokens":3,"completion_tokens":5}}`),
+	}}
+	provider := NewMistralAISTT("test-key", WithMistralAISTTModel("voxtral-realtime-latest"))
+	provider.dialRealtime = func(ctx context.Context, endpoint string, headers http.Header) (mistralAISTTRealtimeConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+
+	first := nextMistralSTTEvent(t, stream)
+	assertMistralSTTEvent(t, first, stt.SpeechEventInterimTranscript, "bon", "fr", "req_123")
+	second := nextMistralSTTEvent(t, stream)
+	assertMistralSTTEvent(t, second, stt.SpeechEventInterimTranscript, "bonjour", "fr", "req_123")
+	final := nextMistralSTTEvent(t, stream)
+	assertMistralSTTEvent(t, final, stt.SpeechEventFinalTranscript, "bonjour", "fr", "req_123")
+	if len(final.Alternatives[0].Words) != 1 || final.Alternatives[0].Words[0].StartTime != 0.2 || final.Alternatives[0].Words[0].EndTime != 0.7 {
+		t.Fatalf("final words = %+v, want segment timings", final.Alternatives[0].Words)
+	}
+	usage := nextMistralSTTEvent(t, stream)
+	if usage.Type != stt.SpeechEventRecognitionUsage || usage.RequestID != "req_123" || usage.RecognitionUsage == nil {
+		t.Fatalf("usage event = %+v, want recognition usage with request id", usage)
+	}
+	if usage.RecognitionUsage.AudioDuration != 2 || usage.RecognitionUsage.InputTokens != 3 || usage.RecognitionUsage.OutputTokens != 5 {
+		t.Fatalf("usage = %+v, want audio duration and tokens", usage.RecognitionUsage)
+	}
+}
+
 func TestMistralAISTTRecognizeRequestUsesReferenceMultipartFields(t *testing.T) {
 	provider := NewMistralAISTT("test-key",
 		WithMistralAISTTBaseURL("https://mistral.example/v1"),
@@ -409,6 +445,7 @@ func (f mistralAISTTRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, e
 type mistralAISTTFakeRealtimeConn struct {
 	mu     sync.Mutex
 	writes []string
+	reads  [][]byte
 	closed bool
 }
 
@@ -423,7 +460,14 @@ func (c *mistralAISTTFakeRealtimeConn) WriteMessage(messageType int, data []byte
 }
 
 func (c *mistralAISTTFakeRealtimeConn) ReadMessage() (int, []byte, error) {
-	return 0, nil, io.EOF
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.reads) == 0 {
+		return 0, nil, io.EOF
+	}
+	msg := append([]byte(nil), c.reads[0]...)
+	c.reads = c.reads[1:]
+	return 1, msg, nil
 }
 
 func (c *mistralAISTTFakeRealtimeConn) Close() error {
@@ -452,5 +496,28 @@ func assertMistralRealtimeMessage(t *testing.T, raw string, wantType string, wan
 		if got := msg[key]; got != want {
 			t.Fatalf("message %s = %#v, want %#v in %#v", key, got, want, msg)
 		}
+	}
+}
+
+func nextMistralSTTEvent(t *testing.T, stream stt.RecognizeStream) *stt.SpeechEvent {
+	t.Helper()
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	return event
+}
+
+func assertMistralSTTEvent(t *testing.T, event *stt.SpeechEvent, eventType stt.SpeechEventType, text string, language string, requestID string) {
+	t.Helper()
+	if event.Type != eventType || event.RequestID != requestID {
+		t.Fatalf("event = %+v, want type %s request %q", event, eventType, requestID)
+	}
+	if len(event.Alternatives) != 1 {
+		t.Fatalf("alternatives = %d, want 1", len(event.Alternatives))
+	}
+	alt := event.Alternatives[0]
+	if alt.Text != text || alt.Language != language {
+		t.Fatalf("alternative = %+v, want text %q language %q", alt, text, language)
 	}
 }
