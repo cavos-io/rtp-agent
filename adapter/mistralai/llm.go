@@ -201,8 +201,11 @@ func rewriteMistralLLMRequestBody(body []byte) []byte {
 		delete(payload, "seed")
 		changed = true
 	}
-	if rewriteMistralLLMProviderTools(payload) {
+	if toolsChanged, hasProviderTools := rewriteMistralLLMProviderTools(payload); toolsChanged {
 		changed = true
+		if hasProviderTools && remapMistralLLMToolChoiceForProviderTools(payload) {
+			changed = true
+		}
 	}
 	if !changed {
 		return body
@@ -214,18 +217,20 @@ func rewriteMistralLLMRequestBody(body []byte) []byte {
 	return rewritten
 }
 
-func rewriteMistralLLMProviderTools(payload map[string]any) bool {
+func rewriteMistralLLMProviderTools(payload map[string]any) (bool, bool) {
 	tools, ok := payload["tools"].([]any)
 	if !ok || len(tools) == 0 {
-		return false
+		return false, false
 	}
 	changed := false
+	hasProviderTools := false
 	rewritten := make([]any, 0, len(tools))
 	for _, tool := range tools {
 		mistralTool, ok := mistralLLMProviderToolPayload(tool)
 		if ok {
 			rewritten = append(rewritten, mistralTool)
 			changed = true
+			hasProviderTools = true
 			continue
 		}
 		rewritten = append(rewritten, tool)
@@ -233,7 +238,7 @@ func rewriteMistralLLMProviderTools(payload map[string]any) bool {
 	if changed {
 		payload["tools"] = rewritten
 	}
-	return changed
+	return changed, hasProviderTools
 }
 
 func mistralLLMProviderToolPayload(tool any) (map[string]any, bool) {
@@ -269,4 +274,22 @@ func mistralLLMProviderToolPayload(tool any) (map[string]any, bool) {
 		}
 		return nil, false
 	}
+}
+
+func remapMistralLLMToolChoiceForProviderTools(payload map[string]any) bool {
+	choice, ok := payload["tool_choice"]
+	if !ok {
+		return false
+	}
+	switch choice := choice.(type) {
+	case string:
+		if choice != "required" {
+			return false
+		}
+	case map[string]any:
+	default:
+		return false
+	}
+	payload["tool_choice"] = "auto"
+	return true
 }

@@ -170,6 +170,29 @@ func TestMistralLLMSerializesReferenceProviderTools(t *testing.T) {
 	}
 }
 
+func TestMistralLLMProviderToolsMapRequiredToolChoiceToAuto(t *testing.T) {
+	capture := &mistralLLMCaptureHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	provider := NewMistralLLM("test-key", "", withMistralLLMHTTPClient(capture))
+	provider.UpdateOptions(WithMistralLLMToolChoice("required"))
+
+	_, _ = provider.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithTools([]llm.Tool{&WebSearchTool{}}),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+
+	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
+		t.Fatalf("request body = %s, want provider tool_choice auto", capture.requestBody)
+	}
+	if strings.Contains(capture.requestBody, `"tool_choice":"required"`) {
+		t.Fatalf("request body = %s, want required remapped for provider tools", capture.requestBody)
+	}
+}
+
 type mistralLLMCaptureHTTPClient struct {
 	statusCode   int
 	responseBody string
