@@ -21,11 +21,12 @@ import (
 )
 
 const (
-	azureSpeechHostEnv      = "AZURE_SPEECH_HOST"
-	azureSpeechKeyEnv       = "AZURE_SPEECH_KEY"
-	azureSpeechRegionEnv    = "AZURE_SPEECH_REGION"
-	defaultAzureSTTLanguage = "en-US"
-	defaultAzureSTTRetries  = 3
+	azureSpeechHostEnv        = "AZURE_SPEECH_HOST"
+	azureSpeechKeyEnv         = "AZURE_SPEECH_KEY"
+	azureSpeechRegionEnv      = "AZURE_SPEECH_REGION"
+	defaultAzureSTTLanguage   = "en-US"
+	defaultAzureSTTSampleRate = 16000
+	defaultAzureSTTRetries    = 3
 )
 
 type azureSTTWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
@@ -94,6 +95,7 @@ func (s *AzureSTT) Model() string { return "unknown" }
 func (s *AzureSTT) Provider() string {
 	return "Azure STT"
 }
+func (s *AzureSTT) InputSampleRate() uint32 { return defaultAzureSTTSampleRate }
 func (s *AzureSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "chunk", OfflineRecognize: true}
 }
@@ -402,7 +404,7 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 }
 
 func azureSTTStreamAudioContentType(frame *model.AudioFrame) string {
-	sampleRate := uint32(16000)
+	sampleRate := uint32(defaultAzureSTTSampleRate)
 	if frame != nil && frame.SampleRate > 0 {
 		sampleRate = frame.SampleRate
 	}

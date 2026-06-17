@@ -313,6 +313,17 @@ func TestAzureSTTStreamUsesConfiguredDefaultLanguage(t *testing.T) {
 	}
 }
 
+func TestAzureSTTExposesReferenceInputSampleRate(t *testing.T) {
+	provider, err := NewAzureSTT("key", "eastus")
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+
+	if got := provider.InputSampleRate(); got != 16000 {
+		t.Fatalf("InputSampleRate = %d, want reference sample rate 16000", got)
+	}
+}
+
 func TestAzureSTTStreamUsesWebsocketProtocol(t *testing.T) {
 	requests := make(chan *http.Request, 1)
 	configMessages := make(chan string, 1)
