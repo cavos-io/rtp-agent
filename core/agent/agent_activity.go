@@ -2401,16 +2401,6 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		a.cancelPreemptiveGeneration()
 		return nil, nil
 	}
-	if currentSpeech != nil && !currentSpeech.IsInterrupted() && !currentSpeech.IsDone() {
-		paused := a.cancelPausedFalseInterruption(false)
-		if err := currentSpeech.Interrupt(false); err != nil {
-			return nil, err
-		}
-		if err := currentSpeech.Wait(ctx); err != nil {
-			return nil, err
-		}
-		a.resumeCanceledFalseInterruption(paused)
-	}
 	if schedulingPaused {
 		a.cancelPreemptiveGeneration()
 		logger.Logger.Warnw("skipping on_user_turn_completed, speech scheduling is paused", nil, "userInput", info.NewTranscript)
@@ -2421,6 +2411,16 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		return nil, nil
 	}
 	a.resetPreemptiveGenerationCount()
+	if currentSpeech != nil && !currentSpeech.IsInterrupted() && !currentSpeech.IsDone() {
+		paused := a.cancelPausedFalseInterruption(false)
+		if err := currentSpeech.Interrupt(false); err != nil {
+			return nil, err
+		}
+		if err := currentSpeech.Wait(ctx); err != nil {
+			return nil, err
+		}
+		a.resumeCanceledFalseInterruption(paused)
+	}
 
 	chatCtx := a.RetrieveChatCtx().Copy()
 	hookStart := time.Now()

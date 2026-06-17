@@ -3946,6 +3946,34 @@ func TestAgentActivityCommitUserTurnSkipsWhenSchedulingPaused(t *testing.T) {
 	}
 }
 
+func TestAgentActivityCommitUserTurnDoesNotInterruptCurrentSpeechWhilePaused(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	activity.schedulingPaused = true
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "paused turn", Confidence: 0.9}},
+	})
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "paused turn" {
+		t.Fatalf("CommitUserTurn transcript = %q, want paused turn", transcript)
+	}
+	if current.IsInterrupted() {
+		t.Fatal("current speech was interrupted while scheduling was paused")
+	}
+}
+
 func TestAgentActivityCommitUserTurnRecordsClosingPausedTurn(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
