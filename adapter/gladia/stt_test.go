@@ -267,6 +267,46 @@ func TestGladiaPushFrameChunksFlushesAndReportsReferenceUsage(t *testing.T) {
 	}
 }
 
+func TestGladiaEnergyFilterFlushesBufferedSilenceOnReferenceEnd(t *testing.T) {
+	provider := NewGladiaSTT("test-key", WithGladiaEnergyFilter(0.02, defaultGladiaEnergyThreshold))
+	var messages []map[string]any
+	stream := &gladiaSTTStream{
+		events:       make(chan *stt.SpeechEvent, 2),
+		state:        &gladiaSTTStreamState{requestID: "session-1"},
+		energyFilter: provider.energyFilter.newFilter(),
+		writeText: func(message map[string]any) error {
+			messages = append(messages, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(gladiaConstantPCMFrame(1600, 2000)); err != nil {
+		t.Fatalf("PushFrame speech: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages after speech = %d, want one speech chunk", len(messages))
+	}
+	assertGladiaAudioChunkBytes(t, messages[0], 3200)
+
+	if err := stream.PushFrame(gladiaConstantPCMFrame(320, 0)); err != nil {
+		t.Fatalf("PushFrame first silence: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages after first silence = %d, want silence buffered", len(messages))
+	}
+
+	if err := stream.PushFrame(gladiaConstantPCMFrame(320, 0)); err != nil {
+		t.Fatalf("PushFrame end silence: %v", err)
+	}
+	if len(messages) != 3 {
+		t.Fatalf("messages after end silence = %d, want speech, buffered silence, stop", len(messages))
+	}
+	assertGladiaAudioChunkBytes(t, messages[1], 640)
+	if messages[2]["type"] != "stop_recording" {
+		t.Fatalf("final message type = %q, want stop_recording", messages[2]["type"])
+	}
+}
+
 func TestGladiaTranscriptEventsMatchReferenceLifecycle(t *testing.T) {
 	state := &gladiaSTTStreamState{requestID: "session-1", languages: []string{"en"}}
 	events, err := processGladiaMessage(state, map[string]any{
@@ -449,5 +489,19 @@ func assertGladiaAudioChunkBytes(t *testing.T, message map[string]any, want int)
 	}
 	if len(chunk) != want {
 		t.Fatalf("chunk bytes = %d, want %d", len(chunk), want)
+	}
+}
+
+func gladiaConstantPCMFrame(samples int, sample int16) *model.AudioFrame {
+	data := make([]byte, samples*2)
+	for i := 0; i < samples; i++ {
+		data[i*2] = byte(sample)
+		data[i*2+1] = byte(sample >> 8)
+	}
+	return &model.AudioFrame{
+		Data:              data,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(samples),
 	}
 }

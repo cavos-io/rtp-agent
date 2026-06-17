@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,6 +33,8 @@ const (
 	defaultGladiaEncoding                          = "wav/pcm"
 	defaultGladiaTranslationModel                  = "base"
 	defaultGladiaPreProcessingSpeechThreshold      = 0.6
+	defaultGladiaEnergyMinSilence                  = 1.5
+	defaultGladiaEnergyThreshold                   = 0.004 * 0.004
 )
 
 type GladiaSTT struct {
@@ -60,6 +63,7 @@ type GladiaSTT struct {
 	customSpelling                     map[string][]string
 	preProcessingAudioEnhancer         bool
 	preProcessingSpeechThreshold       float64
+	energyFilter                       *gladiaAudioEnergyFilterConfig
 }
 
 type GladiaSTTOption func(*GladiaSTT)
@@ -183,6 +187,21 @@ func WithGladiaPreProcessing(audioEnhancer bool, speechThreshold float64) Gladia
 	}
 }
 
+func WithGladiaEnergyFilter(minSilence float64, rmsThreshold float64) GladiaSTTOption {
+	return func(s *GladiaSTT) {
+		if minSilence <= 0 {
+			minSilence = defaultGladiaEnergyMinSilence
+		}
+		if rmsThreshold <= 0 {
+			rmsThreshold = defaultGladiaEnergyThreshold
+		}
+		s.energyFilter = &gladiaAudioEnergyFilterConfig{
+			minSilence:   minSilence,
+			rmsThreshold: rmsThreshold,
+		}
+	}
+}
+
 func NewGladiaSTT(apiKey string, opts ...GladiaSTTOption) *GladiaSTT {
 	if apiKey == "" {
 		apiKey = os.Getenv("GLADIA_API_KEY")
@@ -258,6 +277,10 @@ func (s *GladiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		return nil, err
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
+	var energyFilter *gladiaAudioEnergyFilter
+	if provider.energyFilter != nil {
+		energyFilter = provider.energyFilter.newFilter()
+	}
 	interimResults := provider.interimResults
 	stream := &gladiaSTTStream{
 		conn:   conn,
@@ -271,6 +294,7 @@ func (s *GladiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 			interimResults:     &interimResults,
 			translationEnabled: provider.translationEnabled,
 		},
+		energyFilter: energyFilter,
 	}
 	go stream.readLoop()
 	return stream, nil
@@ -414,6 +438,10 @@ func (s *GladiaSTT) cloneWithLanguage(language string) *GladiaSTT {
 	if language != "" {
 		clone.languages = []string{language}
 	}
+	if s.energyFilter != nil {
+		filter := *s.energyFilter
+		clone.energyFilter = &filter
+	}
 	return &clone
 }
 
@@ -429,6 +457,9 @@ type gladiaSTTStream struct {
 	audio  *audio.AudioByteStream
 
 	writeText func(map[string]any) error
+
+	energyFilter *gladiaAudioEnergyFilter
+	lastFrame    *model.AudioFrame
 }
 
 func (s *gladiaSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -440,19 +471,56 @@ func (s *gladiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
+	frames, ended := s.framesForEnergyState(frame)
 	if s.audio == nil {
 		s.audio = newGladiaAudioByteStream(frame)
 	}
 	if s.state == nil {
 		s.state = &gladiaSTTStreamState{}
 	}
-	for _, chunk := range s.audio.Push(frame.Data) {
-		if err := s.writeTextMessage(buildGladiaAudioChunkMessage(chunk.Data)); err != nil {
+	for _, frame := range frames {
+		for _, chunk := range s.audio.Push(frame.Data) {
+			if err := s.writeTextMessage(buildGladiaAudioChunkMessage(chunk.Data)); err != nil {
+				return err
+			}
+			s.state.audioDuration += audio.CalculateFrameDuration(chunk)
+		}
+	}
+	if ended {
+		for _, chunk := range s.audio.Flush() {
+			if err := s.writeTextMessage(buildGladiaAudioChunkMessage(chunk.Data)); err != nil {
+				return err
+			}
+			s.state.audioDuration += audio.CalculateFrameDuration(chunk)
+		}
+		if err := s.writeTextMessage(buildGladiaStopRecordingMessage()); err != nil {
 			return err
 		}
-		s.state.audioDuration += audio.CalculateFrameDuration(chunk)
+		s.emitRecognitionUsage()
 	}
 	return nil
+}
+
+func (s *gladiaSTTStream) framesForEnergyState(frame *model.AudioFrame) ([]*model.AudioFrame, bool) {
+	if s.energyFilter == nil {
+		return []*model.AudioFrame{frame}, false
+	}
+	switch s.energyFilter.update(frame) {
+	case gladiaEnergyStart, gladiaEnergySpeaking:
+		frames := make([]*model.AudioFrame, 0, 2)
+		if s.lastFrame != nil {
+			frames = append(frames, s.lastFrame)
+			s.lastFrame = nil
+		}
+		frames = append(frames, frame)
+		return frames, false
+	case gladiaEnergyEnd:
+		s.lastFrame = nil
+		return nil, true
+	case gladiaEnergySilence:
+		s.lastFrame = frame
+	}
+	return nil, false
 }
 
 func (s *gladiaSTTStream) Flush() error {
@@ -502,6 +570,76 @@ func (s *gladiaSTTStream) emitRecognitionUsage() {
 			AudioDuration: duration,
 		},
 	}
+}
+
+type gladiaAudioEnergyFilterConfig struct {
+	minSilence   float64
+	rmsThreshold float64
+}
+
+func (c gladiaAudioEnergyFilterConfig) newFilter() *gladiaAudioEnergyFilter {
+	return newGladiaAudioEnergyFilter(c.minSilence, c.rmsThreshold)
+}
+
+type gladiaEnergyState int
+
+const (
+	gladiaEnergyStart gladiaEnergyState = iota
+	gladiaEnergySpeaking
+	gladiaEnergySilence
+	gladiaEnergyEnd
+)
+
+type gladiaAudioEnergyFilter struct {
+	cooldownSeconds float64
+	cooldown        float64
+	state           gladiaEnergyState
+	rmsThreshold    float64
+}
+
+func newGladiaAudioEnergyFilter(minSilence float64, rmsThreshold float64) *gladiaAudioEnergyFilter {
+	return &gladiaAudioEnergyFilter{
+		cooldownSeconds: minSilence,
+		cooldown:        minSilence,
+		state:           gladiaEnergySilence,
+		rmsThreshold:    rmsThreshold,
+	}
+}
+
+func (f *gladiaAudioEnergyFilter) update(frame *model.AudioFrame) gladiaEnergyState {
+	if gladiaFrameRMS(frame) > f.rmsThreshold {
+		f.cooldown = f.cooldownSeconds
+		if f.state == gladiaEnergySilence || f.state == gladiaEnergyEnd {
+			f.state = gladiaEnergyStart
+		} else {
+			f.state = gladiaEnergySpeaking
+		}
+		return f.state
+	}
+	if f.cooldown <= 0 {
+		if f.state == gladiaEnergySpeaking || f.state == gladiaEnergyStart {
+			f.state = gladiaEnergyEnd
+		} else if f.state == gladiaEnergyEnd {
+			f.state = gladiaEnergySilence
+		}
+	} else {
+		f.cooldown -= audio.CalculateFrameDuration(frame)
+		f.state = gladiaEnergySpeaking
+	}
+	return f.state
+}
+
+func gladiaFrameRMS(frame *model.AudioFrame) float64 {
+	if frame == nil || len(frame.Data) < 2 {
+		return 0
+	}
+	samples := len(frame.Data) / 2
+	var sum float64
+	for i := 0; i < samples; i++ {
+		v := float64(int16(binary.LittleEndian.Uint16(frame.Data[i*2:]))) / 32768.0
+		sum += v * v
+	}
+	return sum / float64(samples)
 }
 
 func newGladiaAudioByteStream(frame *model.AudioFrame) *audio.AudioByteStream {
