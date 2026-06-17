@@ -2302,6 +2302,68 @@ func TestRealtimeSessionIgnoresResponseDoneWithoutGeneration(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionClearsPendingResponseOnStaleResponseDone(t *testing.T) {
+	messages := make(chan string, 10)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		sentDone := false
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+			var payload map[string]any
+			if err := json.Unmarshal(msg, &payload); err != nil {
+				t.Errorf("decode client message: %v", err)
+				return
+			}
+			if payload["type"] == "response.create" && !sentDone {
+				sentDone = true
+				if err := conn.WriteJSON(map[string]any{
+					"type": "response.done",
+					"response": map[string]any{
+						"id":     "resp_stale",
+						"status": "cancelled",
+						"usage":  map[string]any{"total_tokens": 1.0},
+					},
+				}); err != nil {
+					t.Errorf("Write response.done error = %v", err)
+				}
+			}
+		}
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "hello"}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "response.create", "hello")
+	select {
+	case ev, ok := <-session.EventCh():
+		if !ok {
+			t.Fatal("EventCh closed before stale response.done was ignored")
+		}
+		t.Fatalf("EventCh emitted %#v, want stale response.done ignored", ev)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "stale response.done should clear pending response")
+}
+
 func TestRealtimeSessionPersistsAudioTranscriptOnResponseDone(t *testing.T) {
 	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
 	if err := session.remote.Insert(nil, &llm.ChatMessage{

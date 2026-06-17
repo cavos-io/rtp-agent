@@ -1300,6 +1300,7 @@ func (s *realtimeSession) eventLoop() {
 			}
 
 			if openAIRealtimeString(ev["type"]) == "response.done" && s.generation == nil {
+				s.clearPendingRealtimeResponse()
 				continue
 			}
 
@@ -1323,6 +1324,14 @@ func (s *realtimeSession) eventLoop() {
 				s.eventCh <- trackedEvent
 			}
 		}
+	}
+}
+
+func (s *realtimeSession) clearPendingRealtimeResponse() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pendingResponses > 0 {
+		s.pendingResponses--
 	}
 }
 
