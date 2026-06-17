@@ -498,17 +498,11 @@ func (c *JobContext) AvatarStartInfo() agent.AvatarStartInfo {
 }
 
 func (c *JobContext) RoomInfo() *livekit.Room {
-	if c.Job == nil {
-		return nil
-	}
-	return c.Job.Room
+	return workerlivekit.JobRoom(c.Job)
 }
 
 func (c *JobContext) PublisherInfo() *livekit.ParticipantInfo {
-	if c.Job == nil {
-		return nil
-	}
-	return c.Job.Participant
+	return workerlivekit.JobPublisher(c.Job)
 }
 
 func (c *JobContext) Agent() *lksdk.LocalParticipant {
