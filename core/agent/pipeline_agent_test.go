@@ -1685,6 +1685,43 @@ func TestPipelineAgentFlushInputTranscriptionPushesSilenceAndFlushesSTT(t *testi
 	}
 }
 
+func TestPipelineAgentClearInputTranscriptionReplacesSTTStream(t *testing.T) {
+	first := &fakePipelineRecognizeStream{closedCh: make(chan struct{})}
+	second := &fakePipelineRecognizeStream{}
+	sttObj := &queuedPipelineSTT{streams: []stt.RecognizeStream{second}}
+	pipeline := NewPipelineAgent(nil, sttObj, nil, nil, nil)
+	pipeline.sttStream = first
+	pipeline.ctx = context.Background()
+
+	if err := pipeline.ClearInputTranscription(); err != nil {
+		t.Fatalf("ClearInputTranscription error = %v, want nil", err)
+	}
+
+	select {
+	case <-first.closedCh:
+	case <-time.After(time.Second):
+		t.Fatal("old STT stream was not closed")
+	}
+	if pipeline.sttStream != second {
+		t.Fatalf("pipeline sttStream = %#v, want replacement stream", pipeline.sttStream)
+	}
+
+	frame := &model.AudioFrame{
+		Data:              []byte{0x01, 0x00},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+	pipeline.pushSTTFrame(frame)
+
+	if len(first.frames) != 0 {
+		t.Fatalf("old stream frames = %d, want 0 after clear", len(first.frames))
+	}
+	if len(second.frames) != 1 {
+		t.Fatalf("new stream frames = %d, want 1 after clear", len(second.frames))
+	}
+}
+
 func TestPipelineAgentEmitsUserInputTranscribedEvents(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
@@ -3445,6 +3482,31 @@ type fakePipelineSTTWithSampleRate struct {
 }
 
 func (f *fakePipelineSTTWithSampleRate) InputSampleRate() uint32 { return f.inputSampleRate }
+
+type queuedPipelineSTT struct {
+	stt.MetricsEmitter
+	stt.ErrorEmitter
+	streams []stt.RecognizeStream
+}
+
+func (q *queuedPipelineSTT) Label() string { return "queued-stt" }
+
+func (q *queuedPipelineSTT) Capabilities() stt.STTCapabilities {
+	return stt.STTCapabilities{Streaming: true}
+}
+
+func (q *queuedPipelineSTT) Stream(context.Context, string) (stt.RecognizeStream, error) {
+	if len(q.streams) == 0 {
+		return nil, io.EOF
+	}
+	stream := q.streams[0]
+	q.streams = q.streams[1:]
+	return stream, nil
+}
+
+func (q *queuedPipelineSTT) Recognize(context.Context, []*model.AudioFrame, string) (*stt.SpeechEvent, error) {
+	return nil, nil
+}
 
 type fakePipelineVAD struct {
 	metricsHandlers []vad.VADMetricsHandler

@@ -122,12 +122,17 @@ type AgentActivity struct {
 	pendingPreflightTranscript       string
 	pendingPreflightConfidence       float64
 	userTurnCompletionMu             sync.Mutex
+	commitUserTurnMu                 sync.Mutex
+	commitUserTurnCancel             context.CancelFunc
+	commitUserTurnSeq                uint64
 	pendingUserTranscript            string
 	pendingUserLanguage              string
 	pendingTranscriptConfidence      float64
 	pendingTranscriptConfidenceSum   float64
 	pendingTranscriptConfidenceCount int
 	pendingUserTranscriptPresent     bool
+	lastFinalTranscriptTime          time.Time
+	lastUserLanguage                 string
 	pendingStartedSpeakingAt         *float64
 	pendingStoppedSpeakingAt         *float64
 	pendingTranscriptionDelay        float64
@@ -195,6 +200,10 @@ type pausedSpeechInfo struct {
 
 type inputTranscriptionFlusher interface {
 	FlushInputTranscription(context.Context, time.Duration) error
+}
+
+type inputTranscriptionClearer interface {
+	ClearInputTranscription() error
 }
 
 type preemptiveGeneration struct {
@@ -786,6 +795,9 @@ func (a *AgentActivity) UpdateOptions(opts AgentSessionUpdateOptions) error {
 	if a == nil || a.Session == nil {
 		return nil
 	}
+	if opts.TurnDetection != nil && *opts.TurnDetection == TurnDetectionModeManual {
+		a.cancelPendingEOUDetection()
+	}
 	updater, ok := a.Session.Assistant.(realtimeOptionsUpdatingAssistant)
 	if !ok {
 		return nil
@@ -804,6 +816,19 @@ func (a *AgentActivity) UpdateOptions(opts AgentSessionUpdateOptions) error {
 		ToolChoice:    toolChoice,
 		ToolChoiceSet: true,
 	})
+}
+
+func (a *AgentActivity) cancelPendingEOUDetection() {
+	if a == nil {
+		return
+	}
+	a.eouMu.Lock()
+	if a.eouCancel != nil {
+		a.eouCancel()
+		a.eouCancel = nil
+	}
+	a.eouMu.Unlock()
+	a.manualTurnCommitted = false
 }
 
 func (a *AgentActivity) updateRealtimeChatContext(ctx context.Context) error {
@@ -1554,11 +1579,14 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 	preflightTranscript := ""
 	preflightConfidence := 0.0
 	if ev != nil && ev.Type == stt.SpeechEventPreflightTranscript && transcript != "" {
+		language = referenceTranscriptLanguage(a.lastUserLanguage, language, transcript)
+		a.lastUserLanguage = language
 		preflightTranscript = strings.TrimSpace(strings.Join([]string{a.pendingUserTranscript, transcript}, " "))
 		preflightConfidence = confidence
 		if a.pendingTranscriptConfidenceCount > 0 {
 			preflightConfidence = (a.pendingTranscriptConfidenceSum + confidence) / float64(a.pendingTranscriptConfidenceCount+1)
 		}
+		a.lastFinalTranscriptTime = time.Now()
 	}
 	a.pendingInterimTranscript = transcript
 	a.pendingInterimLanguage = language
@@ -1635,12 +1663,15 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	matchesPreflightTranscript := a.pendingPreflightTranscript != "" && pendingTranscript == a.pendingPreflightTranscript
 	confidenceSum := a.pendingTranscriptConfidenceSum + confidence
 	confidenceCount := a.pendingTranscriptConfidenceCount + 1
+	language = referenceTranscriptLanguage(a.lastUserLanguage, language, transcript)
 	a.pendingUserTranscript = pendingTranscript
 	a.pendingUserLanguage = language
+	a.lastUserLanguage = language
 	a.pendingTranscriptConfidenceSum = confidenceSum
 	a.pendingTranscriptConfidenceCount = confidenceCount
 	a.pendingTranscriptConfidence = confidenceSum / float64(confidenceCount)
 	a.pendingUserTranscriptPresent = true
+	a.lastFinalTranscriptTime = time.Now()
 	a.pendingStartedSpeakingAt = startedSpeakingAt
 	a.pendingStoppedSpeakingAt = stoppedSpeakingAt
 	a.pendingTranscriptionDelay = transcriptionDelay
@@ -2224,6 +2255,11 @@ func (a *AgentActivity) ClearUserTurn() {
 				logger.Logger.Warnw("failed to clear realtime audio", err)
 			}
 		}
+		if clearer, ok := assistant.(inputTranscriptionClearer); ok {
+			if err := clearer.ClearInputTranscription(); err != nil {
+				logger.Logger.Warnw("failed to clear input transcription", err)
+			}
+		}
 	}
 
 	a.sttEOSReceived = false
@@ -2231,7 +2267,12 @@ func (a *AgentActivity) ClearUserTurn() {
 	a.manualTurnCommitted = false
 	a.userSpeechStartedAt = time.Time{}
 	a.userSpeechStoppedAt = time.Time{}
+	a.resetUserTurnLimitTracker()
 	a.cancelPreemptiveGeneration()
+}
+
+func (a *AgentActivity) isUserSpeaking() bool {
+	return a != nil && a.speaking
 }
 
 func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnOptions) (string, error) {
@@ -2248,7 +2289,24 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 	if opts.TranscriptTimeout == 0 {
 		opts.TranscriptTimeout = 2 * time.Second
 	}
-	if a.Session != nil {
+	ctx, cancelCommit := context.WithCancel(ctx)
+	a.commitUserTurnMu.Lock()
+	if a.commitUserTurnCancel != nil {
+		a.commitUserTurnCancel()
+	}
+	a.commitUserTurnSeq++
+	commitSeq := a.commitUserTurnSeq
+	a.commitUserTurnCancel = cancelCommit
+	a.commitUserTurnMu.Unlock()
+	defer func() {
+		a.commitUserTurnMu.Lock()
+		if a.commitUserTurnSeq == commitSeq {
+			a.commitUserTurnCancel = nil
+		}
+		a.commitUserTurnMu.Unlock()
+		cancelCommit()
+	}()
+	if a.Session != nil && !opts.SkipRealtimeAudio {
 		a.Session.mu.Lock()
 		assistant := a.Session.Assistant
 		activity := a.Session.activity
@@ -2268,9 +2326,11 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 	if opts.TranscriptTimeout > 0 {
 		a.userTurnMu.Lock()
 		present := a.pendingUserTranscriptPresent
+		lastFinalTranscriptTime := a.lastFinalTranscriptTime
 		hasInterim := a.pendingInterimTranscript != ""
 		a.userTurnMu.Unlock()
-		if !present {
+		needNewFinal := present && !lastFinalTranscriptTime.IsZero() && time.Since(lastFinalTranscriptTime) > 500*time.Millisecond
+		if !present || needNewFinal {
 			flusher, ok := a.inputTranscriptionFlusher()
 			if ok {
 				flushDuration := opts.STTFlushDuration
@@ -2287,9 +2347,10 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 				for {
 					a.userTurnMu.Lock()
 					present := a.pendingUserTranscriptPresent
+					currentFinalTime := a.lastFinalTranscriptTime
 					ch := a.userTurnUpdatedCh
 					a.userTurnMu.Unlock()
-					if present {
+					if present && (!needNewFinal || currentFinalTime.After(lastFinalTranscriptTime)) {
 						break
 					}
 					select {
@@ -2312,24 +2373,30 @@ collect:
 	present := a.pendingUserTranscriptPresent
 	preflightTranscript := a.pendingPreflightTranscript
 	preflightConfidence := a.pendingPreflightConfidence
+	interimTranscript := a.pendingInterimTranscript
+	interimLanguage := a.pendingInterimLanguage
+	interimSpeakerID := a.pendingInterimSpeakerID
 	fallbackLanguage := ""
 	fallbackSpeakerID := ""
+	fallbackTranscript := ""
 	fallbackFinal := false
 	if preflightTranscript != "" {
 		transcript = preflightTranscript
 		confidence = preflightConfidence
-		if !present {
-			fallbackLanguage = a.pendingInterimLanguage
-			fallbackSpeakerID = a.pendingInterimSpeakerID
-			present = true
-			fallbackFinal = true
-		}
+		fallbackLanguage = interimLanguage
+		fallbackSpeakerID = interimSpeakerID
+		fallbackTranscript = interimTranscript
+		present = true
+		fallbackFinal = interimTranscript != ""
 	}
-	if !present && a.pendingInterimTranscript != "" {
-		transcript = a.pendingInterimTranscript
-		confidence = 1
-		fallbackLanguage = a.pendingInterimLanguage
-		fallbackSpeakerID = a.pendingInterimSpeakerID
+	if preflightTranscript == "" && interimTranscript != "" {
+		transcript = strings.TrimSpace(strings.Join([]string{transcript, interimTranscript}, " "))
+		if !present {
+			confidence = 1
+		}
+		fallbackLanguage = interimLanguage
+		fallbackSpeakerID = interimSpeakerID
+		fallbackTranscript = interimTranscript
 		present = true
 		fallbackFinal = true
 	}
@@ -2339,6 +2406,7 @@ collect:
 	a.pendingTranscriptConfidenceSum = 0
 	a.pendingTranscriptConfidenceCount = 0
 	a.pendingUserTranscriptPresent = false
+	a.lastFinalTranscriptTime = time.Time{}
 	a.pendingStartedSpeakingAt = nil
 	a.pendingStoppedSpeakingAt = nil
 	a.pendingTranscriptionDelay = 0
@@ -2359,7 +2427,7 @@ collect:
 	if fallbackFinal && a.Session != nil {
 		a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
 			Language:   fallbackLanguage,
-			Transcript: transcript,
+			Transcript: fallbackTranscript,
 			IsFinal:    true,
 			SpeakerID:  fallbackSpeakerID,
 		})
@@ -2780,6 +2848,7 @@ func (a *AgentActivity) clearPendingUserTurn() {
 	a.pendingTranscriptConfidenceSum = 0
 	a.pendingTranscriptConfidenceCount = 0
 	a.pendingUserTranscriptPresent = false
+	a.lastFinalTranscriptTime = time.Time{}
 	a.pendingStartedSpeakingAt = nil
 	a.pendingStoppedSpeakingAt = nil
 	a.pendingTranscriptionDelay = 0
@@ -2920,6 +2989,13 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+func referenceTranscriptLanguage(current, language, transcript string) string {
+	if current == "" || (language != "" && len(transcript) > 5) {
+		return language
+	}
+	return current
+}
+
 func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 	a.eouMu.Lock()
 	if a.eouCancel != nil {
@@ -2974,10 +3050,18 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			a.clearPendingUserTurn()
 			if strings.TrimSpace(info.NewTranscript) == "" {
+				a.clearPendingUserTurn()
 				return
 			}
+			a.queueMu.Lock()
+			currentSpeech := a.currentSpeech
+			a.queueMu.Unlock()
+			if a.shouldSkipShortInterruption(currentSpeech, info.NewTranscript) {
+				a.cancelPreemptiveGeneration()
+				return
+			}
+			a.clearPendingUserTurn()
 			if _, err := a.completeUserTurn(a.ctx, info); err != nil {
 				logger.Logger.Errorw("user turn completion failed", err)
 				return

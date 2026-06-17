@@ -3906,6 +3906,28 @@ func TestAgentSessionCloseSoonCommitsPendingUserTurn(t *testing.T) {
 	}
 }
 
+func TestAgentSessionCloseSoonDoesNotCommitRealtimeAudioOrReply(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{SessionCloseTranscriptTimeout: 0.25})
+	assistant := &recordingRealtimeCommitAssistant{}
+	session.Assistant = assistant
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+
+	events := session.SpeechCreatedEvents()
+	session.CloseSoon(CloseReasonUserInitiated)
+
+	if assistant.commits != 0 {
+		t.Fatalf("CommitAudio calls = %d, want 0 on close", assistant.commits)
+	}
+	select {
+	case ev := <-events:
+		t.Fatalf("unexpected SpeechCreated event on close: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func TestAgentSessionStopCancelsActiveAgentTask(t *testing.T) {
 	task := NewAgentTask[string]("collect data")
 	task.ID = "collect_data"
@@ -4878,6 +4900,23 @@ func TestAgentSessionClaimUserTurnPinsUserStateUntilRelease(t *testing.T) {
 	}
 	if got := session.UserState(); got != UserStateListening {
 		t.Fatalf("UserState() after claim release = %q, want %q", got, UserStateListening)
+	}
+}
+
+func TestAgentSessionClaimUserTurnReleaseDerivesStateFromActivity(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.UpdateUserState(UserStateSpeaking)
+
+	err := session.ClaimUserTurn(context.Background(), func(context.Context) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ClaimUserTurn error = %v", err)
+	}
+	if got := session.UserState(); got != UserStateListening {
+		t.Fatalf("UserState() after claim release = %q, want %q when activity is silent", got, UserStateListening)
 	}
 }
 

@@ -179,6 +179,7 @@ type CommitUserTurnOptions struct {
 	TranscriptTimeout time.Duration
 	STTFlushDuration  time.Duration
 	SkipReply         bool
+	SkipRealtimeAudio bool
 }
 
 type SessionAssistant interface {
@@ -435,7 +436,6 @@ func (s *AgentSession) ClaimUserTurn(ctx context.Context, fn func(context.Contex
 	}
 
 	s.mu.Lock()
-	previous := s.userState
 	s.userTurnClaims++
 	first := s.userTurnClaims == 1
 	if first {
@@ -446,17 +446,18 @@ func (s *AgentSession) ClaimUserTurn(ctx context.Context, fn func(context.Contex
 	if first {
 		s.UpdateUserState(UserStateSpeaking)
 	}
-	defer s.releaseUserTurnClaim(previous)
+	defer s.releaseUserTurnClaim()
 
 	return fn(ctx)
 }
 
-func (s *AgentSession) releaseUserTurnClaim(previous UserState) {
+func (s *AgentSession) releaseUserTurnClaim() {
 	s.mu.Lock()
 	if s.userTurnClaims > 0 {
 		s.userTurnClaims--
 	}
 	remaining := s.userTurnClaims
+	activity := s.activity
 	done := s.userTurnDone
 	if remaining == 0 && done != nil {
 		close(done)
@@ -468,7 +469,7 @@ func (s *AgentSession) releaseUserTurnClaim(previous UserState) {
 		return
 	}
 
-	if previous == UserStateSpeaking {
+	if activity != nil && activity.isUserSpeaking() {
 		s.UpdateUserState(UserStateSpeaking)
 		return
 	}
@@ -1064,6 +1065,7 @@ func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) error {
 
 	if activity != nil && opts.TurnDetection != nil && (oldTurnDetection == TurnDetectionModeManual || *opts.TurnDetection == TurnDetectionModeManual) {
 		activity.cancelFalseInterruptionTimer()
+		activity.cancelPendingEOUDetection()
 	}
 	if activity != nil {
 		return activity.UpdateOptions(opts)
@@ -2719,6 +2721,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 			}
 			if _, err := activity.CommitUserTurn(commitCtx, CommitUserTurnOptions{
 				TranscriptTimeout: time.Duration(s.Options.SessionCloseTranscriptTimeout * float64(time.Second)),
+				SkipRealtimeAudio: true,
 			}); err != nil {
 				stopErr = err
 			}

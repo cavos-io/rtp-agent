@@ -730,6 +730,31 @@ func TestAgentSessionUpdateOptionsToManualCancelsFalseInterruptionTimer(t *testi
 	}
 }
 
+func TestAgentSessionUpdateOptionsToManualCancelsPendingEOU(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		MinEndpointingDelay: 0.05,
+		TurnDetection:       TurnDetectionModeSTT,
+	})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	defer activity.Stop()
+
+	activity.runEOUDetection(EndOfTurnInfo{NewTranscript: "pending automatic", TranscriptConfidence: 0.9})
+	manual := TurnDetectionModeManual
+	if err := session.UpdateOptions(AgentSessionUpdateOptions{TurnDetection: &manual}); err != nil {
+		t.Fatalf("UpdateOptions error = %v, want nil", err)
+	}
+
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called after switching to manual with %q", msg.TextContent())
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestAgentActivityDuplicateStartOfSpeechKeepsActiveAudioFrames(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -2461,6 +2486,47 @@ func TestAgentActivityUsesTurnDetectorLanguageThreshold(t *testing.T) {
 	}
 }
 
+func TestAgentActivityKeepsReferenceLanguageForShortFinalTranscript(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.STT = &fakePipelineSTT{}
+	agent.TurnDetector = thresholdTurnDetector{
+		probability: 0.4,
+		thresholds:  map[string]float64{"en-US": 0.3},
+	}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		MinEndpointingDelay: 0.01,
+		MaxEndpointingDelay: 0.12,
+	})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	activity.speaking = true
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "hello there",
+			Language:   "en-US",
+			Confidence: 0.9,
+		}},
+	})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "yo",
+			Confidence: 0.9,
+		}},
+	})
+	activity.OnEndOfSpeech(nil)
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "hello there yo" {
+			t.Fatalf("turn message text = %q, want hello there yo", msg.TextContent())
+		}
+	case <-time.After(70 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted waited for max delay; short final transcript lost reference language")
+	}
+}
+
 func TestAgentActivityUsesAudioTurnDetectorMaxEndpointingDelay(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeSTT
@@ -3276,6 +3342,45 @@ func TestAgentActivityClearUserTurnClearsRealtimeAudio(t *testing.T) {
 	}
 }
 
+func TestAgentActivityClearUserTurnClearsInputTranscription(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	assistant := &recordingInputTranscriptionClearer{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.ClearUserTurn()
+
+	if assistant.clears != 1 {
+		t.Fatalf("ClearInputTranscription calls = %d, want 1", assistant.clears)
+	}
+}
+
+func TestAgentActivityClearUserTurnResetsUserTurnLimitTracker(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{UserTurnLimitMaxWords: 3})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	events := session.UserTurnExceededEvents()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "one two", Confidence: 0.9}},
+	})
+	activity.ClearUserTurn()
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "three", Confidence: 0.9}},
+	})
+
+	select {
+	case ev := <-events:
+		t.Fatalf("UserTurnExceeded emitted after cleared tracker: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func TestAgentActivityCommitUserTurnCompletesPendingManualTranscript(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
@@ -3524,6 +3629,246 @@ func TestAgentActivityCommitUserTurnDefaultsFlushAndWaitForFinal(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("CommitUserTurn did not return after default flushed final transcript")
+	}
+}
+
+func TestAgentActivityCommitUserTurnSupersedesPendingCommit(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 2)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	flusher := &recordingTranscriptFlusher{flushed: make(chan struct{}, 2)}
+	session.Assistant = flusher
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	firstDone := make(chan string, 1)
+	firstErr := make(chan error, 1)
+	go func() {
+		transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{
+			TranscriptTimeout: 500 * time.Millisecond,
+			STTFlushDuration:  20 * time.Millisecond,
+		})
+		if err != nil {
+			firstErr <- err
+			return
+		}
+		firstDone <- transcript
+	}()
+
+	select {
+	case <-flusher.flushed:
+	case <-time.After(time.Second):
+		t.Fatal("first CommitUserTurn did not start waiting for a transcript")
+	}
+
+	secondDone := make(chan string, 1)
+	secondErr := make(chan error, 1)
+	go func() {
+		transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{
+			TranscriptTimeout: 500 * time.Millisecond,
+			STTFlushDuration:  20 * time.Millisecond,
+		})
+		if err != nil {
+			secondErr <- err
+			return
+		}
+		secondDone <- transcript
+	}()
+
+	select {
+	case err := <-firstErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("first CommitUserTurn error = %v, want context canceled", err)
+		}
+	case transcript := <-firstDone:
+		t.Fatalf("first CommitUserTurn transcript = %q, want superseded commit canceled", transcript)
+	case <-time.After(time.Second):
+		t.Fatal("first CommitUserTurn was not canceled by the newer commit")
+	}
+	select {
+	case <-flusher.flushed:
+	case <-time.After(time.Second):
+		t.Fatal("second CommitUserTurn did not start waiting for a transcript")
+	}
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "newer final",
+			Language:   "en",
+			Confidence: 0.91,
+		}},
+	})
+
+	select {
+	case err := <-secondErr:
+		t.Fatalf("second CommitUserTurn error = %v, want nil", err)
+	case transcript := <-secondDone:
+		if transcript != "newer final" {
+			t.Fatalf("second CommitUserTurn transcript = %q, want newer final", transcript)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second CommitUserTurn did not return after final transcript")
+	}
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "newer final" {
+			t.Fatalf("turn message text = %q, want newer final", msg.TextContent())
+		}
+	default:
+		t.Fatal("OnUserTurnCompleted was not called for newer commit")
+	}
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called more than once, extra transcript %q", msg.TextContent())
+	default:
+	}
+}
+
+func TestAgentActivityCommitUserTurnFlushesWhenLastFinalIsStale(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	flusher := &recordingTranscriptFlusher{flushed: make(chan struct{}, 1)}
+	session.Assistant = flusher
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "old final",
+			Confidence: 0.88,
+		}},
+	})
+	time.Sleep(550 * time.Millisecond)
+
+	done := make(chan string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{
+			TranscriptTimeout: 500 * time.Millisecond,
+			STTFlushDuration:  20 * time.Millisecond,
+		})
+		if err != nil {
+			errCh <- err
+			return
+		}
+		done <- transcript
+	}()
+
+	select {
+	case <-flusher.flushed:
+	case transcript := <-done:
+		t.Fatalf("CommitUserTurn returned %q before flushing stale final transcript", transcript)
+	case <-time.After(time.Second):
+		t.Fatal("CommitUserTurn did not flush after stale final transcript")
+	}
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "fresh final",
+			Confidence: 0.92,
+		}},
+	})
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	case transcript := <-done:
+		if transcript != "old final fresh final" {
+			t.Fatalf("CommitUserTurn transcript = %q, want old final fresh final", transcript)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CommitUserTurn did not return after fresh final transcript")
+	}
+}
+
+func TestAgentActivityCommitUserTurnTreatsPreflightAsFreshTranscript(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	flusher := &recordingTranscriptFlusher{flushed: make(chan struct{}, 1)}
+	session.Assistant = flusher
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "old final",
+			Confidence: 0.88,
+		}},
+	})
+	time.Sleep(550 * time.Millisecond)
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Type: stt.SpeechEventPreflightTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text:       "preflight final",
+			Confidence: 0.92,
+		}},
+	})
+
+	started := time.Now()
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{
+		TranscriptTimeout: 100 * time.Millisecond,
+		STTFlushDuration:  20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "old final preflight final" {
+		t.Fatalf("CommitUserTurn transcript = %q, want old final preflight final", transcript)
+	}
+	if flusher.calls != 0 {
+		t.Fatalf("FlushInputTranscription calls = %d, want 0 after fresh preflight transcript", flusher.calls)
+	}
+	if elapsed := time.Since(started); elapsed >= 100*time.Millisecond {
+		t.Fatalf("CommitUserTurn elapsed = %v, want no transcript timeout wait after fresh preflight transcript", elapsed)
+	}
+}
+
+func TestAgentActivityCommitUserTurnAppendsInterimToPendingFinal(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "confirmed words",
+			Confidence: 0.9,
+		}},
+	})
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:      "latest words",
+			Language:  "en",
+			SpeakerID: "speaker-1",
+		}},
+	})
+
+	finalEvents := session.UserInputTranscribedEvents()
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "confirmed words latest words" {
+		t.Fatalf("CommitUserTurn transcript = %q, want confirmed words latest words", transcript)
+	}
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "confirmed words latest words" {
+			t.Fatalf("turn message text = %q, want confirmed words latest words", msg.TextContent())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("OnUserTurnCompleted was not called")
+	}
+	select {
+	case ev := <-finalEvents:
+		if !ev.IsFinal || ev.Transcript != "latest words" || ev.Language != "en" || ev.SpeakerID != "speaker-1" {
+			t.Fatalf("fallback final event = %#v, want final latest words/en/speaker-1", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserInputTranscribedEvents did not receive fallback final interim transcript")
 	}
 }
 
@@ -4587,6 +4932,42 @@ func TestAgentActivityAutomaticTurnRejectsZeroConfidenceTranscript(t *testing.T)
 	}
 }
 
+func TestAgentActivityAutomaticShortInterruptionRetainsPendingTranscript(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		MinEndpointingDelay:  0.01,
+		MinInterruptionWords: 2,
+	})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "hi", Confidence: 0.9}},
+	})
+
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called for short false interruption with %q", msg.TextContent())
+	case <-time.After(50 * time.Millisecond):
+	}
+	current.MarkDone()
+	activity.currentSpeech = nil
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{
+		SkipReply: true,
+	})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "hi" {
+		t.Fatalf("CommitUserTurn transcript = %q, want retained short transcript", transcript)
+	}
+}
+
 func TestAgentActivityCommitUserTurnSkipReplyAddsUserMessageWithoutCallback(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
@@ -5126,6 +5507,22 @@ func (r *recordingTranscriptFlusher) FlushInputTranscription(_ context.Context, 
 	case r.flushed <- struct{}{}:
 	default:
 	}
+	return nil
+}
+
+type recordingInputTranscriptionClearer struct {
+	clears int
+}
+
+func (r *recordingInputTranscriptionClearer) Start(context.Context, *AgentSession) error { return nil }
+
+func (r *recordingInputTranscriptionClearer) OnAudioFrame(context.Context, *model.AudioFrame) {}
+
+func (r *recordingInputTranscriptionClearer) SetPublishAudio(func(context.Context, *model.AudioFrame) error) {
+}
+
+func (r *recordingInputTranscriptionClearer) ClearInputTranscription() error {
+	r.clears++
 	return nil
 }
 
