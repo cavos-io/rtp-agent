@@ -32,7 +32,6 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
-	"google.golang.org/protobuf/proto"
 )
 
 type WorkerType string
@@ -1508,7 +1507,7 @@ func (s *AgentServer) Run(ctx context.Context) error {
 
 	// Send Register request
 	req := s.registerWorkerRequest()
-	b, err := proto.Marshal(req)
+	b, err := workerlivekit.MarshalWorkerMessage(req)
 	if err != nil {
 		return err
 	}
@@ -1521,17 +1520,11 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if msgType != websocket.BinaryMessage {
-		return fmt.Errorf("expected register response as first message")
-	}
-
-	msg := &livekit.ServerMessage{}
-	if err := proto.Unmarshal(data, msg); err != nil {
+	msg, err := workerlivekit.InitialRegisterMessage(msgType == websocket.BinaryMessage, data)
+	if err != nil {
 		return err
 	}
-	if err := s.handleInitialRegisterMessage(ctx, msg); err != nil {
-		return err
-	}
+	s.handleMessage(ctx, msg)
 
 	statusCtx, stopStatusUpdates := context.WithCancel(ctx)
 	defer stopStatusUpdates()
