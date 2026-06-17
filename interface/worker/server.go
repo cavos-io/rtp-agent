@@ -488,13 +488,13 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 
 	jobCtx.markEntrypointStarted()
 	go func() {
-		status := livekit.JobStatus_JS_SUCCESS
+		status := workerlivekit.JobStatusForEntrypointResult(nil, nil)
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				logger.Logger.Errorw("Reloaded job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", jobCtx.JobID())
-				status = livekit.JobStatus_JS_FAILED
+				status = workerlivekit.JobStatusForEntrypointResult(nil, recovered)
 			}
-			if status == livekit.JobStatus_JS_SUCCESS {
+			if workerlivekit.JobStatusSucceeded(status) {
 				select {
 				case <-jobCtx.ShutdownDone():
 				case <-ctx.Done():
@@ -519,7 +519,7 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 		defer jobCtx.markEntrypointDone()
 		if err := s.runJobEntrypoint(jobCtx); err != nil {
 			logger.Logger.Errorw("Reloaded job entrypoint failed", err, "jobId", jobCtx.JobID())
-			status = livekit.JobStatus_JS_FAILED
+			status = workerlivekit.JobStatusForEntrypointResult(err, nil)
 		}
 	}()
 }
@@ -1853,17 +1853,17 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 	if s.entrypointFnc != nil {
 		jobCtx.markEntrypointStarted()
 		go func() {
-			status := livekit.JobStatus_JS_SUCCESS
+			status := workerlivekit.JobStatusForEntrypointResult(nil, nil)
 			defer func() {
 				if recovered := recover(); recovered != nil {
 					logger.Logger.Errorw("Job entrypoint panicked", fmt.Errorf("%v", recovered), jobLogValues(jobCtx, "jobId", req.Job.Id)...)
-					status = livekit.JobStatus_JS_FAILED
+					status = workerlivekit.JobStatusForEntrypointResult(nil, recovered)
 				}
 				if jobCtx.Terminated() {
 					s.finishJob(jobCtx)
 					return
 				}
-				if status == livekit.JobStatus_JS_SUCCESS {
+				if workerlivekit.JobStatusSucceeded(status) {
 					select {
 					case <-jobCtx.ShutdownDone():
 					case <-ctx.Done():
@@ -1887,7 +1887,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 
 			if err := s.runJobEntrypoint(jobCtx); err != nil {
 				logger.Logger.Errorw("Job entrypoint failed", err, jobLogValues(jobCtx, "jobId", req.Job.Id)...)
-				status = livekit.JobStatus_JS_FAILED
+				status = workerlivekit.JobStatusForEntrypointResult(err, nil)
 			}
 		}()
 	}

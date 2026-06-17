@@ -1,6 +1,7 @@
 package livekit_test
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 
@@ -20,6 +21,31 @@ func TestJobStatusMessageCarriesJobStatus(t *testing.T) {
 	}
 	if update.Status != lkprotocol.JobStatus_JS_RUNNING {
 		t.Fatalf("UpdateJob.Status = %v, want JS_RUNNING", update.Status)
+	}
+}
+
+func TestJobStatusForEntrypointResultReportsSuccessWhenEntrypointClean(t *testing.T) {
+	got := workerlivekit.JobStatusForEntrypointResult(nil, nil)
+	if got != lkprotocol.JobStatus_JS_SUCCESS {
+		t.Fatalf("JobStatusForEntrypointResult(nil, nil) = %v, want JS_SUCCESS", got)
+	}
+}
+
+func TestJobStatusForEntrypointResultReportsFailedOnErrorOrPanic(t *testing.T) {
+	if got := workerlivekit.JobStatusForEntrypointResult(errors.New("boom"), nil); got != lkprotocol.JobStatus_JS_FAILED {
+		t.Fatalf("JobStatusForEntrypointResult(error, nil) = %v, want JS_FAILED", got)
+	}
+	if got := workerlivekit.JobStatusForEntrypointResult(nil, "panic"); got != lkprotocol.JobStatus_JS_FAILED {
+		t.Fatalf("JobStatusForEntrypointResult(nil, panic) = %v, want JS_FAILED", got)
+	}
+}
+
+func TestJobStatusSucceededIdentifiesSuccessOnly(t *testing.T) {
+	if !workerlivekit.JobStatusSucceeded(lkprotocol.JobStatus_JS_SUCCESS) {
+		t.Fatal("JobStatusSucceeded(JS_SUCCESS) = false, want true")
+	}
+	if workerlivekit.JobStatusSucceeded(lkprotocol.JobStatus_JS_FAILED) {
+		t.Fatal("JobStatusSucceeded(JS_FAILED) = true, want false")
 	}
 }
 
