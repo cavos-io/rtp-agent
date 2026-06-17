@@ -888,7 +888,7 @@ func TestRunAgoraLogsJoinErrorTransportEvent(t *testing.T) {
 	}
 }
 
-func TestRunAgoraClosesTransportWhenJoinFails(t *testing.T) {
+func TestRunAgoraDoesNotLeaveChannelWhenJoinFailsBeforeStart(t *testing.T) {
 	joinErr := errors.New("join failed")
 	client := &fakeAppAgoraChannelClient{joinErr: joinErr}
 	oldNewAgoraChannelClient := appNewAgoraChannelClient
@@ -916,8 +916,11 @@ func TestRunAgoraClosesTransportWhenJoinFails(t *testing.T) {
 	if !errors.Is(err, joinErr) {
 		t.Fatalf("runAgora() error = %v, want join failed", err)
 	}
-	if !client.left {
-		t.Fatal("Agora client left = false, want true after join failure")
+	if client.joined {
+		t.Fatal("Agora client joined = true after failed join")
+	}
+	if client.left {
+		t.Fatal("Agora client left = true after failed join before active channel")
 	}
 }
 

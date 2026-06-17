@@ -163,6 +163,12 @@ func (t *Transport) Leave(ctx context.Context) error {
 	if t == nil || t.client == nil {
 		return nil
 	}
+	t.mu.Lock()
+	joined := t.joined
+	t.mu.Unlock()
+	if !joined {
+		return nil
+	}
 	if err := t.client.Leave(normalizeContext(ctx)); err != nil {
 		return err
 	}

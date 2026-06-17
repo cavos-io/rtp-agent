@@ -170,15 +170,27 @@ func TestTransportJoinRejectsDuplicateJoinBeforeClient(t *testing.T) {
 	}
 }
 
-func TestTransportLeaveDelegatesToClient(t *testing.T) {
+func TestTransportLeaveDelegatesOnlyAfterJoinedChannel(t *testing.T) {
 	client := &fakeChannelClient{}
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 
 	if err := tr.Leave(context.Background()); err != nil {
-		t.Fatalf("Leave() error = %v", err)
+		t.Fatalf("Leave() before Join error = %v", err)
+	}
+	if client.leaveCount != 0 {
+		t.Fatalf("leave count before Join = %d, want 0", client.leaveCount)
+	}
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	if err := tr.Leave(context.Background()); err != nil {
+		t.Fatalf("Leave() after Join error = %v", err)
+	}
+	if client.leaveCount != 1 {
+		t.Fatalf("leave count after Join = %d, want 1", client.leaveCount)
 	}
 	if !client.left {
-		t.Fatal("client left = false, want true")
+		t.Fatal("client left after Join = false, want true")
 	}
 }
 
@@ -318,6 +330,9 @@ func TestTransportCloseLeavesClientAndClosesEvents(t *testing.T) {
 	client := &fakeChannelClient{}
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
 	if err := tr.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
@@ -326,6 +341,21 @@ func TestTransportCloseLeavesClientAndClosesEvents(t *testing.T) {
 	}
 	if client.leaveCount != 1 {
 		t.Fatalf("leave count = %d, want 1", client.leaveCount)
+	}
+	if _, ok := <-tr.Events(); ok {
+		t.Fatal("events channel open after Close(), want closed")
+	}
+}
+
+func TestTransportCloseBeforeJoinDoesNotLeaveClient(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+
+	if err := tr.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if client.leaveCount != 0 {
+		t.Fatalf("leave count = %d, want 0", client.leaveCount)
 	}
 	if _, ok := <-tr.Events(); ok {
 		t.Fatal("events channel open after Close(), want closed")
