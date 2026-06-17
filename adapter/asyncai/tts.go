@@ -141,13 +141,16 @@ func (t *AsyncAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		return nil, err
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
-	return &asyncAITTSStream{
+	stream := &asyncAITTSStream{
 		conn:       conn,
 		ctx:        streamCtx,
 		cancel:     cancel,
 		contextID:  fmt.Sprintf("ctx-%d", time.Now().UnixNano()),
 		sampleRate: t.sampleRate,
-	}, nil
+	}
+	stream.writeMessage = stream.writeWebsocketMessage
+	stream.closeConn = stream.closeWebsocketConn
+	return stream, nil
 }
 
 func (t *AsyncAITTS) validateStreamConfig() error {
@@ -253,6 +256,9 @@ type asyncAITTSStream struct {
 	pendingText bytes.Buffer
 	mu          sync.Mutex
 	closed      bool
+
+	writeMessage func([]byte) error
+	closeConn    func() error
 }
 
 func (s *asyncAITTSStream) PushText(text string) error {
@@ -274,7 +280,7 @@ func (s *asyncAITTSStream) Flush() error {
 	if s.closed {
 		return fmt.Errorf("asyncai tts stream is closed")
 	}
-	if s.conn == nil {
+	if s.conn == nil && s.writeMessage == nil {
 		s.pendingText.Reset()
 		return nil
 	}
@@ -285,7 +291,8 @@ func (s *asyncAITTSStream) Flush() error {
 		if err != nil {
 			return err
 		}
-		if err := s.conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+		if err := s.writeMessageData(payload); err != nil {
+			s.closeAfterWriteFailureLocked()
 			return err
 		}
 	}
@@ -293,7 +300,11 @@ func (s *asyncAITTSStream) Flush() error {
 	if err != nil {
 		return err
 	}
-	return s.conn.WriteMessage(websocket.TextMessage, endPayload)
+	if err := s.writeMessageData(endPayload); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *asyncAITTSStream) Close() error {
@@ -310,7 +321,43 @@ func (s *asyncAITTSStream) Close() error {
 		return nil
 	}
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	return s.closeConnection()
+}
+
+func (s *asyncAITTSStream) writeMessageData(payload []byte) error {
+	if s.writeMessage != nil {
+		return s.writeMessage(payload)
+	}
+	return s.writeWebsocketMessage(payload)
+}
+
+func (s *asyncAITTSStream) writeWebsocketMessage(payload []byte) error {
+	return s.conn.WriteMessage(websocket.TextMessage, payload)
+}
+
+func (s *asyncAITTSStream) closeConnection() error {
+	if s.closeConn != nil {
+		return s.closeConn()
+	}
+	return s.closeWebsocketConn()
+}
+
+func (s *asyncAITTSStream) closeWebsocketConn() error {
+	if s.conn == nil {
+		return nil
+	}
 	return s.conn.Close()
+}
+
+func (s *asyncAITTSStream) closeAfterWriteFailureLocked() {
+	if s.closed {
+		return
+	}
+	s.closed = true
+	if s.cancel != nil {
+		s.cancel()
+	}
+	_ = s.closeConnection()
 }
 
 func (s *asyncAITTSStream) Next() (*tts.SynthesizedAudio, error) {
