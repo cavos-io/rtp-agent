@@ -36,3 +36,10 @@ func JobAcceptIdentity(job *lkprotocol.Job, identity string) string {
 	}
 	return AgentIdentityForJobID(job.Id)
 }
+
+func JobParticipantIdentity(job *lkprotocol.Job, acceptedIdentity string) string {
+	if acceptedIdentity != "" || job == nil {
+		return acceptedIdentity
+	}
+	return AgentIdentityForJobID(job.Id)
+}

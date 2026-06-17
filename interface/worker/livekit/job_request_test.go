@@ -59,3 +59,24 @@ func TestJobAcceptIdentityKeepsConfiguredIdentity(t *testing.T) {
 		t.Fatalf("JobAcceptIdentity() = %q, want configured identity", got)
 	}
 }
+
+func TestJobParticipantIdentityDefaultsFromJobID(t *testing.T) {
+	got := workerlivekit.JobParticipantIdentity(&lkprotocol.Job{Id: "job_context"}, "")
+	if got != "agent-job_context" {
+		t.Fatalf("JobParticipantIdentity() = %q, want default identity", got)
+	}
+}
+
+func TestJobParticipantIdentityKeepsAcceptedIdentity(t *testing.T) {
+	got := workerlivekit.JobParticipantIdentity(&lkprotocol.Job{Id: "job_context"}, "accepted-agent")
+	if got != "accepted-agent" {
+		t.Fatalf("JobParticipantIdentity() = %q, want accepted identity", got)
+	}
+}
+
+func TestJobParticipantIdentityHandlesNilJob(t *testing.T) {
+	got := workerlivekit.JobParticipantIdentity(nil, "")
+	if got != "" {
+		t.Fatalf("JobParticipantIdentity(nil) = %q, want empty", got)
+	}
+}

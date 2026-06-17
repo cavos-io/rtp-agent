@@ -399,13 +399,7 @@ func (c *JobContext) API() *JobAPI {
 }
 
 func (c *JobContext) ParticipantIdentity() string {
-	if c.AcceptArguments.Identity != "" {
-		return c.AcceptArguments.Identity
-	}
-	if c.Job == nil {
-		return ""
-	}
-	return workerlivekit.AgentIdentityForJobID(c.Job.Id)
+	return workerlivekit.JobParticipantIdentity(c.Job, c.AcceptArguments.Identity)
 }
 
 func (c *JobContext) LocalParticipantIdentity() string {
