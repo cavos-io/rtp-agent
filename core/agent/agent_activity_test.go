@@ -4058,6 +4058,70 @@ func TestAgentActivityRealtimeCommitWaitsForCurrentSpeechBeforeReply(t *testing.
 	}
 }
 
+func TestAgentActivityRealtimeCommitReplyEmitsEOUMetrics(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	assistant := &recordingRealtimeCommitAssistant{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	session.activity = activity
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "realtime metrics", Confidence: 0.9}},
+	})
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	events := session.SpeechCreatedEvents()
+	metricsEvents := session.MetricsCollectedEvents()
+	done := make(chan error, 1)
+	go func() {
+		_, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+		done <- err
+	}()
+
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for !current.IsInterrupted() {
+		select {
+		case <-deadline:
+			t.Fatal("current speech was not interrupted")
+		case <-ticker.C:
+		}
+	}
+	current.MarkDone()
+
+	var speechID string
+	select {
+	case ev := <-events:
+		speechID = ev.SpeechHandle.ID
+	case <-testTimeout():
+		t.Fatal("SpeechCreatedEvents did not receive realtime reply")
+	}
+	select {
+	case ev := <-metricsEvents:
+		metrics, ok := ev.Metrics.(*telemetry.EOUMetrics)
+		if !ok {
+			t.Fatalf("metrics = %T, want *telemetry.EOUMetrics", ev.Metrics)
+		}
+		if metrics.SpeechID != speechID {
+			t.Fatalf("EOUMetrics SpeechID = %q, want %q", metrics.SpeechID, speechID)
+		}
+	case <-testTimeout():
+		t.Fatal("MetricsCollectedEvents did not receive EOU metrics for realtime reply")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("CommitUserTurn error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("CommitUserTurn did not return")
+	}
+}
+
 func TestAgentActivityCommitUserTurnSkipReplyCommitsRealtimeAudioOnly(t *testing.T) {
 	agent := NewAgent("test")
 	agent.TurnDetection = TurnDetectionModeManual

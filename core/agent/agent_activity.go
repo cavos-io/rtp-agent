@@ -2637,6 +2637,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		if err != nil {
 			return nil, err
 		}
+		a.emitEOUMetrics(handle, info, hookDelay)
 		return handle, nil
 	}
 	if a.Agent.LLM == nil || a.Session == nil {
@@ -2665,6 +2666,14 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 			return nil, err
 		}
 	}
+	a.emitEOUMetrics(handle, info, hookDelay)
+	return handle, nil
+}
+
+func (a *AgentActivity) emitEOUMetrics(handle *SpeechHandle, info EndOfTurnInfo, hookDelay float64) {
+	if a == nil || a.Session == nil || handle == nil {
+		return
+	}
 	mode := a.turnDetectionMode()
 	metadata := (*telemetry.Metadata)(nil)
 	if mode != "" {
@@ -2681,7 +2690,6 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		SpeechID:                 handle.ID,
 		Metadata:                 metadata,
 	})
-	return handle, nil
 }
 
 func (a *AgentActivity) shouldSkipShortInterruption(currentSpeech *SpeechHandle, transcript string) bool {
