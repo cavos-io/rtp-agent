@@ -1112,13 +1112,10 @@ func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
 	})
 }
 
-func (s *AgentServer) workerStatusMessage(status livekit.WorkerStatus) *livekit.WorkerMessage {
+func (s *AgentServer) availableWorkerStatusMessage() *livekit.WorkerMessage {
 	jobCount := uint32(s.activeJobCount())
 	load := s.currentLoad()
-	if status == livekit.WorkerStatus_WS_AVAILABLE {
-		return workerlivekit.AvailableWorkerStatusMessage(load, jobCount, s.availableForJobWithLoad(load))
-	}
-	return workerlivekit.WorkerStatusMessage(status, load, jobCount)
+	return workerlivekit.AvailableWorkerStatusMessage(load, jobCount, s.availableForJobWithLoad(load))
 }
 
 func (s *AgentServer) drainingWorkerStatusMessage() *livekit.WorkerMessage {
@@ -1608,7 +1605,7 @@ func (s *AgentServer) sendWorkerStatusUpdate() error {
 	if s.Draining() {
 		return s.sendWorkerMessage(s.drainingWorkerStatusMessage())
 	}
-	return s.sendWorkerMessage(s.workerStatusMessage(livekit.WorkerStatus_WS_AVAILABLE))
+	return s.sendWorkerMessage(s.availableWorkerStatusMessage())
 }
 
 func (s *AgentServer) connectWorkerWebSocket(ctx context.Context, dialer *websocket.Dialer, agentURL string, headers http.Header) (*websocket.Conn, *http.Response, error) {
