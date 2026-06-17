@@ -299,14 +299,16 @@ func defaultMistralAISTTRealtimeDialer(ctx context.Context, endpoint string, hea
 }
 
 type mistralAISTTRealtimeStream struct {
-	conn   mistralAISTTRealtimeConn
-	events chan *stt.SpeechEvent
-	errCh  chan error
-	mu     sync.Mutex
-	closed bool
-	ctx    context.Context
-	cancel context.CancelFunc
-	state  *mistralAISTTRealtimeState
+	conn            mistralAISTTRealtimeConn
+	events          chan *stt.SpeechEvent
+	errCh           chan error
+	mu              sync.Mutex
+	closed          bool
+	startTimeOffset float64
+	startTime       float64
+	ctx             context.Context
+	cancel          context.CancelFunc
+	state           *mistralAISTTRealtimeState
 }
 
 type mistralAISTTRealtimeState struct {
@@ -368,6 +370,36 @@ func (s *mistralAISTTRealtimeStream) Next() (*stt.SpeechEvent, error) {
 	}
 }
 
+func (s *mistralAISTTRealtimeStream) StartTimeOffset() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startTimeOffset
+}
+
+func (s *mistralAISTTRealtimeStream) SetStartTimeOffset(offset float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.startTimeOffset = nonNegativeMistralAISTTStreamTime(offset)
+}
+
+func (s *mistralAISTTRealtimeStream) StartTime() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startTime
+}
+
+func (s *mistralAISTTRealtimeStream) SetStartTime(startTime float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.startTime = nonNegativeMistralAISTTStreamTime(startTime)
+}
+
+func (s *mistralAISTTRealtimeStream) currentStartTimeOffset() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startTimeOffset
+}
+
 func (s *mistralAISTTRealtimeStream) readLoop() {
 	defer close(s.events)
 	for {
@@ -381,7 +413,7 @@ func (s *mistralAISTTRealtimeStream) readLoop() {
 		if msgType != websocket.TextMessage {
 			continue
 		}
-		events, err := processMistralAISTTRealtimeMessage(s.state, message)
+		events, err := processMistralAISTTRealtimeMessage(s.state, message, s.currentStartTimeOffset())
 		if err != nil {
 			s.errCh <- err
 			return
@@ -400,7 +432,7 @@ func (s *mistralAISTTRealtimeStream) writeJSON(msg map[string]any) error {
 	return s.conn.WriteMessage(websocket.TextMessage, data)
 }
 
-func processMistralAISTTRealtimeMessage(state *mistralAISTTRealtimeState, message []byte) ([]*stt.SpeechEvent, error) {
+func processMistralAISTTRealtimeMessage(state *mistralAISTTRealtimeState, message []byte, startTimeOffset float64) ([]*stt.SpeechEvent, error) {
 	var payload map[string]any
 	if err := json.Unmarshal(message, &payload); err != nil {
 		return nil, llm.NewAPIConnectionError(err.Error())
@@ -438,7 +470,7 @@ func processMistralAISTTRealtimeMessage(state *mistralAISTTRealtimeState, messag
 			Alternatives: []stt.SpeechData{{
 				Text:     text,
 				Language: language,
-				Words:    mistralAISTTRealtimeSegments(payload["segments"]),
+				Words:    mistralAISTTRealtimeSegments(payload["segments"], startTimeOffset),
 			}},
 		}}
 		events = append(events, mistralAISTTRealtimeUsageEvent(state.requestID, payload["usage"]))
@@ -456,7 +488,7 @@ func processMistralAISTTRealtimeMessage(state *mistralAISTTRealtimeState, messag
 	return nil, nil
 }
 
-func mistralAISTTRealtimeSegments(value any) []stt.TimedString {
+func mistralAISTTRealtimeSegments(value any, startTimeOffset float64) []stt.TimedString {
 	items, ok := value.([]any)
 	if !ok || len(items) == 0 {
 		return nil
@@ -468,12 +500,20 @@ func mistralAISTTRealtimeSegments(value any) []stt.TimedString {
 			continue
 		}
 		segments = append(segments, stt.TimedString{
-			Text:      payloadString(data, "text"),
-			StartTime: payloadFloat(data, "start"),
-			EndTime:   payloadFloat(data, "end"),
+			Text:            payloadString(data, "text"),
+			StartTime:       startTimeOffset + payloadFloat(data, "start"),
+			EndTime:         startTimeOffset + payloadFloat(data, "end"),
+			StartTimeOffset: startTimeOffset,
 		})
 	}
 	return segments
+}
+
+func nonNegativeMistralAISTTStreamTime(value float64) float64 {
+	if value < 0 {
+		return 0
+	}
+	return value
 }
 
 func mistralAISTTRealtimeUsageEvent(requestID string, value any) *stt.SpeechEvent {

@@ -222,6 +222,38 @@ func TestMistralAISTTRealtimeStreamMapsReferenceEvents(t *testing.T) {
 	}
 }
 
+func TestMistralAISTTRealtimeStreamAppliesStartTimeOffset(t *testing.T) {
+	readGate := make(chan struct{})
+	conn := &mistralAISTTFakeRealtimeConn{reads: [][]byte{
+		[]byte(`{"type":"session.created","session":{"request_id":"req_123"}}`),
+		[]byte(`{"type":"transcription.done","text":"hello","language":"en","segments":[{"text":"hello","start":1.0,"end":1.5}],"usage":{}}`),
+	}, readGate: readGate}
+	provider := NewMistralAISTT("test-key", WithMistralAISTTModel("voxtral-realtime-latest"))
+	provider.dialRealtime = func(ctx context.Context, endpoint string, headers http.Header) (mistralAISTTRealtimeConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	timing, ok := stream.(stt.StreamTiming)
+	if !ok {
+		t.Fatalf("stream does not implement stt.StreamTiming")
+	}
+	timing.SetStartTimeOffset(10)
+	close(readGate)
+
+	final := nextMistralSTTEvent(t, stream)
+	if final.Type != stt.SpeechEventFinalTranscript || len(final.Alternatives) != 1 || len(final.Alternatives[0].Words) != 1 {
+		t.Fatalf("final event = %+v, want one final word", final)
+	}
+	word := final.Alternatives[0].Words[0]
+	if word.StartTime != 11 || word.EndTime != 11.5 || word.StartTimeOffset != 10 {
+		t.Fatalf("word timing = %+v, want start/end with offset and StartTimeOffset", word)
+	}
+}
+
 func TestMistralAISTTRealtimeErrorEventReturnsAPIStatusError(t *testing.T) {
 	conn := &mistralAISTTFakeRealtimeConn{reads: [][]byte{
 		[]byte(`{"type":"error","error":{"message":"bad request","code":400}}`),
@@ -530,10 +562,11 @@ func (f mistralAISTTRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, e
 }
 
 type mistralAISTTFakeRealtimeConn struct {
-	mu     sync.Mutex
-	writes []string
-	reads  [][]byte
-	closed bool
+	mu       sync.Mutex
+	writes   []string
+	reads    [][]byte
+	readGate <-chan struct{}
+	closed   bool
 }
 
 func (c *mistralAISTTFakeRealtimeConn) WriteMessage(messageType int, data []byte) error {
@@ -547,6 +580,9 @@ func (c *mistralAISTTFakeRealtimeConn) WriteMessage(messageType int, data []byte
 }
 
 func (c *mistralAISTTFakeRealtimeConn) ReadMessage() (int, []byte, error) {
+	if c.readGate != nil {
+		<-c.readGate
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.reads) == 0 {
