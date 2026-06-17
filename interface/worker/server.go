@@ -1222,22 +1222,11 @@ func (s *AgentServer) drainingWorkerStatusMessage() *livekit.WorkerMessage {
 }
 
 func jobStatusMessage(jobID string, status livekit.JobStatus) *livekit.WorkerMessage {
-	return &livekit.WorkerMessage{
-		Message: &livekit.WorkerMessage_UpdateJob{
-			UpdateJob: &livekit.UpdateJobStatus{
-				JobId:  jobID,
-				Status: status,
-			},
-		},
-	}
+	return workerlivekit.JobStatusMessage(jobID, status)
 }
 
 func migrateJobMessage(jobIDs []string) *livekit.WorkerMessage {
-	return &livekit.WorkerMessage{
-		Message: &livekit.WorkerMessage_MigrateJob{
-			MigrateJob: &livekit.MigrateJobRequest{JobIds: jobIDs},
-		},
-	}
+	return workerlivekit.MigrateJobMessage(jobIDs)
 }
 
 func (s *AgentServer) RTCSession(
