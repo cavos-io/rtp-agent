@@ -93,14 +93,23 @@ func TestSpeechmaticsTTSUpdateOptionsMatchesReference(t *testing.T) {
 
 	provider.UpdateOptions(
 		WithSpeechmaticsTTSVoice("theo"),
-		WithSpeechmaticsTTSSampleRate(24000),
 	)
 
 	if provider.voice != "theo" {
 		t.Fatalf("voice = %q, want theo", provider.voice)
 	}
-	if provider.sampleRate != 24000 {
-		t.Fatalf("sample rate = %d, want 24000", provider.sampleRate)
+	if provider.sampleRate != 16000 {
+		t.Fatalf("sample rate = %d, want unchanged 16000", provider.sampleRate)
+	}
+}
+
+func TestSpeechmaticsTTSUpdateOptionsPreservesReferenceSampleRate(t *testing.T) {
+	provider := NewSpeechmaticsTTS("test-key")
+
+	provider.UpdateOptions(WithSpeechmaticsTTSSampleRate(24000))
+
+	if provider.sampleRate != 16000 {
+		t.Fatalf("sample rate = %d, want unchanged 16000", provider.sampleRate)
 	}
 }
 

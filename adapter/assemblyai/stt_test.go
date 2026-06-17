@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -202,6 +203,88 @@ func TestAssemblyAIStreamURLEncodesReferenceTurnControls(t *testing.T) {
 	assertAssemblyAIQuery(t, query, "domain", "healthcare")
 }
 
+func TestAssemblyAISTTUpdateOptionsMatchesReferenceFutureStreams(t *testing.T) {
+	provider := NewAssemblyAISTT("test-key", WithAssemblyAISTTModel("u3-rt-pro"))
+
+	provider.UpdateOptions(
+		WithAssemblyAISTTMinTurnSilence(240),
+		WithAssemblyAISTTMaxTurnSilence(920),
+		WithAssemblyAISTTEndOfTurnConfidenceThreshold(0.66),
+		WithAssemblyAISTTPrompt("updated terms"),
+		WithAssemblyAISTTKeytermsPrompt([]string{"Cavos"}),
+		WithAssemblyAISTTVADThreshold(0.35),
+		WithAssemblyAISTTContinuousPartials(false),
+		WithAssemblyAISTTInterruptionDelay(180),
+	)
+
+	query := mustAssemblyAIStreamQuery(t, buildAssemblyAIStreamURL(provider))
+	assertAssemblyAIQuery(t, query, "min_turn_silence", "240")
+	assertAssemblyAIQuery(t, query, "max_turn_silence", "920")
+	assertAssemblyAIQuery(t, query, "end_of_turn_confidence_threshold", "0.66")
+	assertAssemblyAIQuery(t, query, "prompt", "updated terms")
+	assertAssemblyAIQuery(t, query, "keyterms_prompt", `["Cavos"]`)
+	assertAssemblyAIQuery(t, query, "vad_threshold", "0.35")
+	assertAssemblyAIQuery(t, query, "continuous_partials", "false")
+	assertAssemblyAIQuery(t, query, "interruption_delay", "180")
+}
+
+func TestAssemblyAISTTUpdateOptionsPropagatesReferenceActiveStreamConfig(t *testing.T) {
+	provider := NewAssemblyAISTT("test-key", WithAssemblyAISTTModel("u3-rt-pro"))
+	var messages []map[string]any
+	stream := &assemblyAISTTStream{
+		writeJSON: func(message any) error {
+			payload, ok := message.(map[string]any)
+			if !ok {
+				t.Fatalf("update message = %#v, want map[string]any", message)
+			}
+			messages = append(messages, payload)
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	provider.UpdateOptions(
+		WithAssemblyAISTTMinTurnSilence(240),
+		WithAssemblyAISTTMaxTurnSilence(920),
+		WithAssemblyAISTTEndOfTurnConfidenceThreshold(0.66),
+		WithAssemblyAISTTPrompt("updated terms"),
+		WithAssemblyAISTTKeytermsPrompt([]string{"Cavos"}),
+		WithAssemblyAISTTVADThreshold(0.35),
+		WithAssemblyAISTTContinuousPartials(false),
+		WithAssemblyAISTTInterruptionDelay(180),
+	)
+
+	if len(messages) != 1 {
+		t.Fatalf("messages = %d, want one UpdateConfiguration", len(messages))
+	}
+	msg := messages[0]
+	if msg["type"] != "UpdateConfiguration" {
+		t.Fatalf("message type = %v, want UpdateConfiguration", msg["type"])
+	}
+	if msg["min_turn_silence"] != 240 || msg["max_turn_silence"] != 920 {
+		t.Fatalf("silence update = %#v, want min 240 max 920", msg)
+	}
+	if msg["end_of_turn_confidence_threshold"] != 0.66 {
+		t.Fatalf("confidence threshold = %v, want 0.66", msg["end_of_turn_confidence_threshold"])
+	}
+	if msg["prompt"] != "updated terms" {
+		t.Fatalf("prompt = %v, want updated terms", msg["prompt"])
+	}
+	keyterms, ok := msg["keyterms_prompt"].([]string)
+	if !ok || len(keyterms) != 1 || keyterms[0] != "Cavos" {
+		t.Fatalf("keyterms_prompt = %#v, want [Cavos]", msg["keyterms_prompt"])
+	}
+	if msg["vad_threshold"] != 0.35 {
+		t.Fatalf("vad_threshold = %v, want 0.35", msg["vad_threshold"])
+	}
+	if msg["continuous_partials"] != false {
+		t.Fatalf("continuous_partials = %v, want false", msg["continuous_partials"])
+	}
+	if msg["interruption_delay"] != 180 {
+		t.Fatalf("interruption_delay = %v, want 180", msg["interruption_delay"])
+	}
+}
+
 func TestAssemblyAIRealtimeTranscriptEventPreservesWordTimings(t *testing.T) {
 	resp := aaiResponse{
 		Type:       "Turn",
@@ -328,6 +411,36 @@ func TestAssemblyAIRealtimeFormatTurnsWaitsForFormattedFinal(t *testing.T) {
 	}
 }
 
+func TestAssemblyAIRealtimeFinalEmitsReferenceRecognitionUsage(t *testing.T) {
+	resp := aaiResponse{
+		Type:       "Turn",
+		Transcript: "hello",
+		EndOfTurn:  true,
+		Words: []assemblyAIWord{
+			{Text: "hello", Start: 100, End: 300, Confidence: 0.95},
+		},
+	}
+	state := &assemblyAIStreamState{speechDuration: 1.25}
+
+	events := assemblyAIRealtimeTranscriptEvents(resp, state)
+	if len(events) != 4 {
+		t.Fatalf("events = %d, want interim, final, end_of_speech, usage", len(events))
+	}
+	usage := events[3]
+	if usage.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("usage event type = %s, want recognition_usage", usage.Type)
+	}
+	if usage.RecognitionUsage == nil {
+		t.Fatal("RecognitionUsage = nil, want audio duration")
+	}
+	if usage.RecognitionUsage.AudioDuration != 1.25 {
+		t.Fatalf("audio duration = %v, want 1.25", usage.RecognitionUsage.AudioDuration)
+	}
+	if state.speechDuration != 0 {
+		t.Fatalf("speech duration after usage = %v, want reset to 0", state.speechDuration)
+	}
+}
+
 func TestAssemblyAIRealtimeSpeechStartedEmitsReferenceStart(t *testing.T) {
 	events := assemblyAIRealtimeEvents(aaiResponse{Type: "SpeechStarted"}, &assemblyAIStreamState{})
 	if len(events) != 1 {
@@ -335,6 +448,24 @@ func TestAssemblyAIRealtimeSpeechStartedEmitsReferenceStart(t *testing.T) {
 	}
 	if events[0].Type != stt.SpeechEventStartOfSpeech {
 		t.Fatalf("event type = %s, want start_of_speech", events[0].Type)
+	}
+}
+
+func TestAssemblyAIRealtimeSpeechStartedUsesReferenceTimestamp(t *testing.T) {
+	streamStart := 1000.25
+	timestampMS := 750.0
+	events := assemblyAIRealtimeEvents(
+		aaiResponse{Type: "SpeechStarted", Timestamp: &timestampMS},
+		&assemblyAIStreamState{streamStartTime: &streamStart},
+	)
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want one start event", len(events))
+	}
+	if events[0].SpeechStartTime == nil {
+		t.Fatal("speech start time = nil, want stream anchor plus timestamp")
+	}
+	if *events[0].SpeechStartTime != 1001.0 {
+		t.Fatalf("speech start time = %v, want 1001", *events[0].SpeechStartTime)
 	}
 }
 
@@ -365,6 +496,55 @@ func TestAssemblyAISTTStreamPushFrameSendsReferenceBinaryAudio(t *testing.T) {
 	}
 	if got := writes[0]; string(got) != string(audioData) {
 		t.Fatalf("binary write = %#v, want raw PCM bytes", got)
+	}
+}
+
+func TestAssemblyAISTTStreamAnchorsReferenceStartTimeOnFirstChunk(t *testing.T) {
+	streamStart := float64(1234)
+	stream := &assemblyAISTTStream{
+		state: &assemblyAIStreamState{},
+		clock: func() time.Time {
+			return time.Unix(int64(streamStart), 0)
+		},
+		writeBinary: func([]byte) error {
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if stream.state.streamStartTime == nil {
+		t.Fatal("stream start time = nil, want first sent chunk anchor")
+	}
+	if *stream.state.streamStartTime != streamStart {
+		t.Fatalf("stream start time = %v, want %v", *stream.state.streamStartTime, streamStart)
+	}
+	if stream.state.speechDuration < 0.049 || stream.state.speechDuration > 0.051 {
+		t.Fatalf("speech duration after first chunk = %v, want 0.05", stream.state.speechDuration)
+	}
+
+	stream.clock = func() time.Time {
+		return time.Unix(int64(streamStart+10), 0)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("second PushFrame() error = %v", err)
+	}
+	if *stream.state.streamStartTime != streamStart {
+		t.Fatalf("stream start time after second chunk = %v, want original %v", *stream.state.streamStartTime, streamStart)
+	}
+	if stream.state.speechDuration < 0.099 || stream.state.speechDuration > 0.101 {
+		t.Fatalf("speech duration after second chunk = %v, want 0.1", stream.state.speechDuration)
 	}
 }
 
@@ -445,6 +625,35 @@ func TestAssemblyAISTTStreamCloseSendsReferenceTerminate(t *testing.T) {
 	}
 	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01}}); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("PushFrame after close error = %v, want io.ErrClosedPipe", err)
+	}
+}
+
+func TestAssemblyAISTTStreamForceEndpointSendsReferenceMessage(t *testing.T) {
+	var messages []map[string]string
+	stream := &assemblyAISTTStream{
+		writeJSON: func(message any) error {
+			payload, ok := message.(map[string]string)
+			if !ok {
+				t.Fatalf("force endpoint message = %#v, want map[string]string", message)
+			}
+			messages = append(messages, payload)
+			return nil
+		},
+	}
+
+	if err := stream.ForceEndpoint(); err != nil {
+		t.Fatalf("ForceEndpoint() error = %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages = %d, want 1", len(messages))
+	}
+	if got := messages[0]["type"]; got != "ForceEndpoint" {
+		t.Fatalf("message type = %q, want ForceEndpoint", got)
+	}
+
+	stream.closed = true
+	if err := stream.ForceEndpoint(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("ForceEndpoint after close error = %v, want io.ErrClosedPipe", err)
 	}
 }
 

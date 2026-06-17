@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
@@ -234,7 +235,9 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 		conn:   conn,
 		events: make(chan *stt.SpeechEvent, 10),
 		errCh:  make(chan error, 1),
+		state:  &speechmaticsStreamState{},
 	}
+	stream.writeBinary = stream.writeBinaryMessage
 
 	initMsg := buildSpeechmaticsSTTStartMessage(s, language)
 
@@ -335,6 +338,14 @@ type speechmaticsSTTStream struct {
 	errCh  chan error
 	mu     sync.Mutex
 	closed bool
+
+	writeBinary func([]byte) error
+	state       *speechmaticsStreamState
+	audioBuf    *audio.AudioByteStream
+}
+
+type speechmaticsStreamState struct {
+	speechDuration float64
 }
 
 type smResponse struct {
@@ -371,16 +382,46 @@ func (s *speechmaticsSTTStream) readLoop() {
 			continue
 		}
 
-		if resp.Message == "AddPartialTranscript" || resp.Message == "AddTranscript" {
-			if event := speechmaticsTranscriptEvent(resp); event != nil {
-				s.events <- event
-			}
-		} else if resp.Message == "EndOfTranscript" {
+		if resp.Message == "EndOfTranscript" {
 			return
-		} else if resp.Message == "Error" {
+		}
+		if resp.Message == "Error" {
 			s.errCh <- fmt.Errorf("speechmatics error: %s", string(message))
 			return
 		}
+		for _, event := range speechmaticsEvents(resp, s.state) {
+			s.events <- event
+		}
+	}
+}
+
+func speechmaticsEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {
+	switch resp.Message {
+	case "AddPartialTranscript", "AddTranscript":
+		if event := speechmaticsTranscriptEvent(resp); event != nil {
+			return []*stt.SpeechEvent{event}
+		}
+	case "StartOfTurn":
+		return []*stt.SpeechEvent{{Type: stt.SpeechEventStartOfSpeech}}
+	case "EndOfTurn":
+		events := []*stt.SpeechEvent{{Type: stt.SpeechEventEndOfSpeech}}
+		if usage := speechmaticsRecognitionUsageEvent(state); usage != nil {
+			events = append(events, usage)
+		}
+		return events
+	}
+	return nil
+}
+
+func speechmaticsRecognitionUsageEvent(state *speechmaticsStreamState) *stt.SpeechEvent {
+	if state == nil || state.speechDuration <= 0 {
+		return nil
+	}
+	duration := state.speechDuration
+	state.speechDuration = 0
+	return &stt.SpeechEvent{
+		Type:             stt.SpeechEventRecognitionUsage,
+		RecognitionUsage: &stt.RecognitionUsage{AudioDuration: duration},
 	}
 }
 
@@ -466,12 +507,69 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	// Speechmatics accepts raw binary audio frames
-	return s.conn.WriteMessage(websocket.BinaryMessage, frame.Data)
+	if frame == nil || len(frame.Data) == 0 {
+		return nil
+	}
+	if s.state == nil {
+		s.state = &speechmaticsStreamState{}
+	}
+	if s.audioBuf == nil {
+		s.audioBuf = newSpeechmaticsAudioByteStream(frame)
+	}
+	for _, chunk := range s.audioBuf.Push(frame.Data) {
+		if err := s.writeBinaryData(chunk.Data); err != nil {
+			return err
+		}
+		s.state.speechDuration += audio.CalculateFrameDuration(chunk)
+	}
+	return nil
+}
+
+func (s *speechmaticsSTTStream) writeBinaryData(data []byte) error {
+	if s.writeBinary != nil {
+		return s.writeBinary(data)
+	}
+	return s.writeBinaryMessage(data)
+}
+
+func (s *speechmaticsSTTStream) writeBinaryMessage(data []byte) error {
+	if s.conn == nil {
+		return io.ErrClosedPipe
+	}
+	return s.conn.WriteMessage(websocket.BinaryMessage, data)
 }
 
 func (s *speechmaticsSTTStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.audioBuf == nil {
+		return nil
+	}
+	if s.state == nil {
+		s.state = &speechmaticsStreamState{}
+	}
+	for _, chunk := range s.audioBuf.Flush() {
+		if err := s.writeBinaryData(chunk.Data); err != nil {
+			return err
+		}
+		s.state.speechDuration += audio.CalculateFrameDuration(chunk)
+	}
 	return nil
+}
+
+func newSpeechmaticsAudioByteStream(frame *model.AudioFrame) *audio.AudioByteStream {
+	sampleRate := frame.SampleRate
+	if sampleRate == 0 {
+		sampleRate = 16000
+	}
+	numChannels := frame.NumChannels
+	if numChannels == 0 {
+		numChannels = 1
+	}
+	return audio.NewAudioByteStream(sampleRate, numChannels, 0)
 }
 
 func (s *speechmaticsSTTStream) Close() error {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
@@ -71,6 +72,97 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 	}
 	if words[1].Text != "world" || words[1].StartTime != 0.4 || words[1].EndTime != 0.8 || words[1].Confidence != 0.88 {
 		t.Fatalf("second word = %#v, want preserved word timing", words[1])
+	}
+}
+
+func TestSpeechmaticsTurnBoundaryEventsMatchReference(t *testing.T) {
+	state := &speechmaticsStreamState{speechDuration: 1.25}
+
+	startEvents := speechmaticsEvents(smResponse{Message: "StartOfTurn"}, state)
+	if len(startEvents) != 1 {
+		t.Fatalf("start events = %d, want 1", len(startEvents))
+	}
+	if startEvents[0].Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("start event type = %s, want start_of_speech", startEvents[0].Type)
+	}
+
+	endEvents := speechmaticsEvents(smResponse{Message: "EndOfTurn"}, state)
+	if len(endEvents) != 2 {
+		t.Fatalf("end events = %d, want end_of_speech and recognition_usage", len(endEvents))
+	}
+	if endEvents[0].Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("end event type = %s, want end_of_speech", endEvents[0].Type)
+	}
+	usage := endEvents[1]
+	if usage.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("usage event type = %s, want recognition_usage", usage.Type)
+	}
+	if usage.RecognitionUsage == nil {
+		t.Fatal("RecognitionUsage = nil, want audio duration")
+	}
+	if usage.RecognitionUsage.AudioDuration != 1.25 {
+		t.Fatalf("audio duration = %v, want 1.25", usage.RecognitionUsage.AudioDuration)
+	}
+	if state.speechDuration != 0 {
+		t.Fatalf("speech duration after usage = %v, want reset to 0", state.speechDuration)
+	}
+}
+
+func TestSpeechmaticsPushFrameTracksReferenceSpeechDuration(t *testing.T) {
+	stream := &speechmaticsSTTStream{
+		writeBinary: func([]byte) error {
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 3200),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if stream.state.speechDuration < 0.099 || stream.state.speechDuration > 0.101 {
+		t.Fatalf("speech duration = %v, want 0.1", stream.state.speechDuration)
+	}
+}
+
+func TestSpeechmaticsPushFrameChunksAndFlushesReferenceAudio(t *testing.T) {
+	var writes [][]byte
+	stream := &speechmaticsSTTStream{
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+	}
+	audioData := make([]byte, 4000)
+	for i := range audioData {
+		audioData[i] = byte(i)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              audioData,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 2000,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("binary writes after PushFrame = %d, want one 100ms chunk", len(writes))
+	}
+	if got := len(writes[0]); got != 3200 {
+		t.Fatalf("first chunk length = %d, want 3200", got)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if len(writes) != 2 {
+		t.Fatalf("binary writes after Flush = %d, want remainder chunk", len(writes))
+	}
+	if got := len(writes[1]); got != 800 {
+		t.Fatalf("flush chunk length = %d, want 800", got)
 	}
 }
 

@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -27,6 +29,7 @@ const (
 )
 
 type AssemblyAISTT struct {
+	mu                 sync.Mutex
 	apiKey             string
 	baseURL            string
 	sampleRate         int
@@ -45,6 +48,7 @@ type AssemblyAISTT struct {
 	speakerLabels      *bool
 	maxSpeakers        *int
 	domain             string
+	streams            map[*assemblyAISTTStream]struct{}
 }
 
 type AssemblyAISTTOption func(*AssemblyAISTT)
@@ -192,6 +196,55 @@ func (s *AssemblyAISTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: s.speakerLabels != nil && *s.speakerLabels, AlignedTranscript: "word", OfflineRecognize: false}
 }
 
+func (s *AssemblyAISTT) UpdateOptions(opts ...AssemblyAISTTOption) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	before := assemblyAIConfigSnapshotFromSTT(s)
+	for _, opt := range opts {
+		opt(s)
+	}
+	after := assemblyAIConfigSnapshotFromSTT(s)
+	update := assemblyAIUpdateConfigurationMessage(before, after)
+	streams := make([]*assemblyAISTTStream, 0, len(s.streams))
+	if len(update) > 1 {
+		for stream := range s.streams {
+			streams = append(streams, stream)
+		}
+	}
+	s.mu.Unlock()
+
+	for _, stream := range streams {
+		_ = stream.updateConfiguration(update)
+	}
+}
+
+func (s *AssemblyAISTT) registerStream(stream *assemblyAISTTStream) {
+	if s == nil || stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.streams == nil {
+		s.streams = map[*assemblyAISTTStream]struct{}{}
+	}
+	stream.owner = s
+	s.streams[stream] = struct{}{}
+}
+
+func (s *AssemblyAISTT) unregisterStream(stream *assemblyAISTTStream) {
+	if s == nil || stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.streams, stream)
+	if stream.owner == s {
+		stream.owner = nil
+	}
+}
+
 func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if err := s.validateStreamConfig(); err != nil {
 		return nil, err
@@ -213,10 +266,12 @@ func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 		errCh:      make(chan error, 1),
 		state:      &assemblyAIStreamState{requireFormattedFinal: s.formatTurns != nil && *s.formatTurns},
 		sampleRate: s.sampleRate,
+		clock:      time.Now,
 	}
 	stream.writeBinary = stream.writeBinaryMessage
 	stream.writeJSON = stream.writeJSONMessage
 	stream.closeConn = stream.closeWebsocketConn
+	s.registerStream(stream)
 
 	go stream.readLoop()
 
@@ -303,6 +358,59 @@ func buildAssemblyAIStreamURL(s *AssemblyAISTT) string {
 	return u.String()
 }
 
+type assemblyAIConfigSnapshot struct {
+	endTurnConfidence  *float64
+	minTurnSilence     *int
+	maxTurnSilence     *int
+	continuousPartials *bool
+	interruptionDelay  *int
+	keytermsPrompt     []string
+	prompt             string
+	vadThreshold       *float64
+}
+
+func assemblyAIConfigSnapshotFromSTT(s *AssemblyAISTT) assemblyAIConfigSnapshot {
+	return assemblyAIConfigSnapshot{
+		endTurnConfidence:  cloneFloat64Ptr(s.endTurnConfidence),
+		minTurnSilence:     cloneIntPtr(s.minTurnSilence),
+		maxTurnSilence:     cloneIntPtr(s.maxTurnSilence),
+		continuousPartials: cloneBoolPtr(s.continuousPartials),
+		interruptionDelay:  cloneIntPtr(s.interruptionDelay),
+		keytermsPrompt:     append([]string(nil), s.keytermsPrompt...),
+		prompt:             s.prompt,
+		vadThreshold:       cloneFloat64Ptr(s.vadThreshold),
+	}
+}
+
+func assemblyAIUpdateConfigurationMessage(before, after assemblyAIConfigSnapshot) map[string]any {
+	msg := map[string]any{"type": "UpdateConfiguration"}
+	if !intPtrEqual(before.minTurnSilence, after.minTurnSilence) && after.minTurnSilence != nil {
+		msg["min_turn_silence"] = *after.minTurnSilence
+	}
+	if !intPtrEqual(before.maxTurnSilence, after.maxTurnSilence) && after.maxTurnSilence != nil {
+		msg["max_turn_silence"] = *after.maxTurnSilence
+	}
+	if !float64PtrEqual(before.endTurnConfidence, after.endTurnConfidence) && after.endTurnConfidence != nil {
+		msg["end_of_turn_confidence_threshold"] = *after.endTurnConfidence
+	}
+	if before.prompt != after.prompt {
+		msg["prompt"] = after.prompt
+	}
+	if !slices.Equal(before.keytermsPrompt, after.keytermsPrompt) {
+		msg["keyterms_prompt"] = append([]string(nil), after.keytermsPrompt...)
+	}
+	if !float64PtrEqual(before.vadThreshold, after.vadThreshold) && after.vadThreshold != nil {
+		msg["vad_threshold"] = *after.vadThreshold
+	}
+	if !boolPtrEqual(before.continuousPartials, after.continuousPartials) && after.continuousPartials != nil {
+		msg["continuous_partials"] = *after.continuousPartials
+	}
+	if !intPtrEqual(before.interruptionDelay, after.interruptionDelay) && after.interruptionDelay != nil {
+		msg["interruption_delay"] = *after.interruptionDelay
+	}
+	return msg
+}
+
 type assemblyAIWord struct {
 	Text       string  `json:"text"`
 	Start      int     `json:"start"`
@@ -332,6 +440,7 @@ type assemblyAISTTStream struct {
 	errCh  chan error
 	mu     sync.Mutex
 	closed bool
+	owner  *AssemblyAISTT
 
 	writeBinary func([]byte) error
 	writeJSON   func(any) error
@@ -339,11 +448,15 @@ type assemblyAISTTStream struct {
 	state       *assemblyAIStreamState
 	sampleRate  int
 	audioBuf    *audio.AudioByteStream
+	clock       func() time.Time
 }
 
 type assemblyAIStreamState struct {
+	mu                     sync.Mutex
 	lastPreflightStartTime float64
 	requireFormattedFinal  bool
+	streamStartTime        *float64
+	speechDuration         float64
 }
 
 type aaiResponse struct {
@@ -355,6 +468,7 @@ type aaiResponse struct {
 	Confidence      float64          `json:"confidence"`
 	EndOfTurn       bool             `json:"end_of_turn"`
 	TurnIsFormatted bool             `json:"turn_is_formatted"`
+	Timestamp       *float64         `json:"timestamp"`
 	Language        string           `json:"language_code"`
 	SpeakerID       string           `json:"speaker_label"`
 	Words           []assemblyAIWord `json:"words"`
@@ -362,7 +476,12 @@ type aaiResponse struct {
 }
 
 func (s *assemblyAISTTStream) readLoop() {
-	defer close(s.events)
+	defer func() {
+		if s.owner != nil {
+			s.owner.unregisterStream(s)
+		}
+		close(s.events)
+	}()
 	for {
 		_, message, err := s.conn.ReadMessage()
 		if err != nil {
@@ -398,12 +517,66 @@ func (s *assemblyAISTTStream) readLoop() {
 
 func assemblyAIRealtimeEvents(resp aaiResponse, state *assemblyAIStreamState) []*stt.SpeechEvent {
 	if resp.Type == "SpeechStarted" {
-		return []*stt.SpeechEvent{{Type: stt.SpeechEventStartOfSpeech}}
+		return []*stt.SpeechEvent{{
+			Type:            stt.SpeechEventStartOfSpeech,
+			SpeechStartTime: state.speechStartTime(resp.Timestamp),
+		}}
 	}
 	if resp.Type == "Turn" || resp.MessageType == "PartialTranscript" || resp.MessageType == "FinalTranscript" {
 		return assemblyAIRealtimeTranscriptEvents(resp, state)
 	}
 	return nil
+}
+
+func (state *assemblyAIStreamState) anchorStreamStart(startTime float64) {
+	if state == nil {
+		return
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.streamStartTime != nil {
+		return
+	}
+	state.streamStartTime = &startTime
+}
+
+func (state *assemblyAIStreamState) speechStartTime(timestampMS *float64) *float64 {
+	if state == nil || timestampMS == nil {
+		return nil
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.streamStartTime == nil {
+		return nil
+	}
+	startTime := *state.streamStartTime + *timestampMS/1000
+	return &startTime
+}
+
+func (state *assemblyAIStreamState) addSpeechDuration(duration float64) {
+	if state == nil || duration <= 0 {
+		return
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.speechDuration += duration
+}
+
+func (state *assemblyAIStreamState) recognitionUsageEvent() *stt.SpeechEvent {
+	if state == nil {
+		return nil
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.speechDuration <= 0 {
+		return nil
+	}
+	duration := state.speechDuration
+	state.speechDuration = 0
+	return &stt.SpeechEvent{
+		Type:             stt.SpeechEventRecognitionUsage,
+		RecognitionUsage: &stt.RecognitionUsage{AudioDuration: duration},
+	}
 }
 
 func assemblyAIRealtimeTranscriptEvent(resp aaiResponse) *stt.SpeechEvent {
@@ -459,6 +632,9 @@ func assemblyAIRealtimeTranscriptEvents(resp aaiResponse, state *assemblyAIStrea
 			events = append(events, assemblyAITranscriptEvent(stt.SpeechEventFinalTranscript, resp, text, words, startTime, endTime))
 		}
 		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
+		if usage := state.recognitionUsageEvent(); usage != nil {
+			events = append(events, usage)
+		}
 		state.lastPreflightStartTime = 0
 	}
 	return events
@@ -552,6 +728,51 @@ func boolPtr(value bool) *bool {
 	return &value
 }
 
+func cloneIntPtr(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneBoolPtr(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneFloat64Ptr(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func intPtrEqual(a, b *int) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func boolPtrEqual(a, b *bool) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func float64PtrEqual(a, b *float64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
 func (s *assemblyAISTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
@@ -566,11 +787,13 @@ func (s *assemblyAISTTStream) PushFrame(frame *model.AudioFrame) error {
 		s.audioBuf = newAssemblyAISTTAudioByteStream(s, frame)
 	}
 	for _, chunk := range s.audioBuf.Push(frame.Data) {
+		s.anchorStreamStart()
 		if err := s.writeBinaryData(chunk.Data); err != nil {
 			s.closed = true
 			_ = s.closeConnection()
 			return err
 		}
+		s.state.addSpeechDuration(audio.CalculateFrameDuration(chunk))
 	}
 	return nil
 }
@@ -585,13 +808,27 @@ func (s *assemblyAISTTStream) Flush() error {
 		return nil
 	}
 	for _, chunk := range s.audioBuf.Flush() {
+		s.anchorStreamStart()
 		if err := s.writeBinaryData(chunk.Data); err != nil {
 			s.closed = true
 			_ = s.closeConnection()
 			return err
 		}
+		s.state.addSpeechDuration(audio.CalculateFrameDuration(chunk))
 	}
 	return nil
+}
+
+func (s *assemblyAISTTStream) anchorStreamStart() {
+	if s.state == nil {
+		return
+	}
+	clock := s.clock
+	if clock == nil {
+		clock = time.Now
+	}
+	now := float64(clock().UnixNano()) / float64(time.Second)
+	s.state.anchorStreamStart(now)
 }
 
 func newAssemblyAISTTAudioByteStream(s *assemblyAISTTStream, frame *model.AudioFrame) *audio.AudioByteStream {
@@ -618,6 +855,27 @@ func (s *assemblyAISTTStream) Close() error {
 	s.closed = true
 	_ = s.writeJSONData(map[string]string{"type": "Terminate"})
 	return s.closeConnection()
+}
+
+func (s *assemblyAISTTStream) ForceEndpoint() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	return s.writeJSONData(map[string]string{"type": "ForceEndpoint"})
+}
+
+func (s *assemblyAISTTStream) updateConfiguration(message map[string]any) error {
+	if len(message) <= 1 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	return s.writeJSONData(message)
 }
 
 func (s *assemblyAISTTStream) writeBinaryData(data []byte) error {

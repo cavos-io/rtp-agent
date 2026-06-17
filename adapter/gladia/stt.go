@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
@@ -263,8 +265,9 @@ func (s *GladiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		ctx:    streamCtx,
 		cancel: cancel,
 		state: &gladiaSTTStreamState{
-			requestID: session.ID,
-			languages: provider.languages,
+			requestID:          session.ID,
+			languages:          provider.languages,
+			translationEnabled: provider.translationEnabled,
 		},
 	}
 	go stream.readLoop()
@@ -421,6 +424,9 @@ type gladiaSTTStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	state  *gladiaSTTStreamState
+	audio  *audio.AudioByteStream
+
+	writeText func(map[string]any) error
 }
 
 func (s *gladiaSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -432,7 +438,19 @@ func (s *gladiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	return writeGladiaMessage(s.conn, buildGladiaAudioChunkMessage(frame.Data))
+	if s.audio == nil {
+		s.audio = newGladiaAudioByteStream(frame)
+	}
+	if s.state == nil {
+		s.state = &gladiaSTTStreamState{}
+	}
+	for _, chunk := range s.audio.Push(frame.Data) {
+		if err := s.writeTextMessage(buildGladiaAudioChunkMessage(chunk.Data)); err != nil {
+			return err
+		}
+		s.state.audioDuration += audio.CalculateFrameDuration(chunk)
+	}
+	return nil
 }
 
 func (s *gladiaSTTStream) Flush() error {
@@ -441,7 +459,59 @@ func (s *gladiaSTTStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	return writeGladiaMessage(s.conn, buildGladiaStopRecordingMessage())
+	if s.state == nil {
+		s.state = &gladiaSTTStreamState{}
+	}
+	if s.audio != nil {
+		for _, chunk := range s.audio.Flush() {
+			if err := s.writeTextMessage(buildGladiaAudioChunkMessage(chunk.Data)); err != nil {
+				return err
+			}
+			s.state.audioDuration += audio.CalculateFrameDuration(chunk)
+		}
+	}
+	if err := s.writeTextMessage(buildGladiaStopRecordingMessage()); err != nil {
+		return err
+	}
+	s.emitRecognitionUsage()
+	return nil
+}
+
+func (s *gladiaSTTStream) writeTextMessage(message map[string]any) error {
+	if s.writeText != nil {
+		return s.writeText(message)
+	}
+	if s.conn == nil {
+		return io.ErrClosedPipe
+	}
+	return writeGladiaMessage(s.conn, message)
+}
+
+func (s *gladiaSTTStream) emitRecognitionUsage() {
+	if s.events == nil || s.state == nil || s.state.audioDuration <= 0 {
+		return
+	}
+	duration := s.state.audioDuration
+	s.state.audioDuration = 0
+	s.events <- &stt.SpeechEvent{
+		Type:      stt.SpeechEventRecognitionUsage,
+		RequestID: s.state.requestID,
+		RecognitionUsage: &stt.RecognitionUsage{
+			AudioDuration: duration,
+		},
+	}
+}
+
+func newGladiaAudioByteStream(frame *model.AudioFrame) *audio.AudioByteStream {
+	sampleRate := frame.SampleRate
+	if sampleRate == 0 {
+		sampleRate = defaultGladiaSampleRate
+	}
+	numChannels := frame.NumChannels
+	if numChannels == 0 {
+		numChannels = defaultGladiaChannels
+	}
+	return audio.NewAudioByteStream(sampleRate, numChannels, 0)
 }
 
 func (s *gladiaSTTStream) Close() error {
@@ -505,25 +575,41 @@ func (s *gladiaSTTStream) readLoop() {
 }
 
 type gladiaSTTStreamState struct {
-	requestID string
-	languages []string
-	speaking  bool
+	requestID          string
+	languages          []string
+	speaking           bool
+	audioDuration      float64
+	translationEnabled bool
 }
 
 func processGladiaMessage(state *gladiaSTTStreamState, data map[string]any) ([]*stt.SpeechEvent, error) {
 	messageType, _ := data["type"].(string)
-	if messageType != "transcript" {
-		if messageType == "error" {
-			return nil, fmt.Errorf("gladia websocket error: %v", data["data"])
-		}
+	if state == nil {
+		state = &gladiaSTTStreamState{}
+	}
+	switch messageType {
+	case "transcript":
+		return processGladiaTranscriptMessage(state, data)
+	case "translation":
+		return processGladiaTranslationMessage(state, data), nil
+	case "post_final_transcript":
+		state.speaking = false
+		return nil, nil
+	case "error":
+		return nil, fmt.Errorf("gladia websocket error: %v", data["data"])
+	default:
 		return nil, nil
 	}
+}
+
+func processGladiaTranscriptMessage(state *gladiaSTTStreamState, data map[string]any) ([]*stt.SpeechEvent, error) {
 	payload, _ := data["data"].(map[string]any)
 	utterance, _ := payload["utterance"].(map[string]any)
-	text := gladiaAnyString(utterance["text"])
+	text := strings.TrimSpace(gladiaAnyString(utterance["text"]))
 	if text == "" {
 		return nil, nil
 	}
+	utterance["text"] = text
 	isFinal, _ := payload["is_final"].(bool)
 	speechData := gladiaSpeechData(state, utterance)
 	events := []*stt.SpeechEvent{}
@@ -532,6 +618,9 @@ func processGladiaMessage(state *gladiaSTTStreamState, data map[string]any) ([]*
 		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech, RequestID: state.requestID})
 	}
 	if isFinal {
+		if state.translationEnabled {
+			return events, nil
+		}
 		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript, RequestID: state.requestID, Alternatives: []stt.SpeechData{speechData}})
 		state.speaking = false
 		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech, RequestID: state.requestID})
@@ -539,6 +628,40 @@ func processGladiaMessage(state *gladiaSTTStreamState, data map[string]any) ([]*
 	}
 	events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventInterimTranscript, RequestID: state.requestID, Alternatives: []stt.SpeechData{speechData}})
 	return events, nil
+}
+
+func processGladiaTranslationMessage(state *gladiaSTTStreamState, data map[string]any) []*stt.SpeechEvent {
+	if !state.translationEnabled {
+		return nil
+	}
+	payload, _ := data["data"].(map[string]any)
+	translatedUtterance, _ := payload["translated_utterance"].(map[string]any)
+	text := strings.TrimSpace(gladiaAnyString(translatedUtterance["text"]))
+	language := gladiaAnyString(translatedUtterance["language"])
+	if language == "" {
+		language = gladiaAnyString(payload["target_language"])
+	}
+	if text == "" || language == "" {
+		return nil
+	}
+	translatedUtterance["text"] = text
+	translatedUtterance["language"] = language
+	speechData := gladiaSpeechData(state, translatedUtterance)
+	originalUtterance, _ := payload["utterance"].(map[string]any)
+	if sourceLanguage := gladiaAnyString(originalUtterance["language"]); sourceLanguage != "" {
+		speechData.SourceLanguages = []string{sourceLanguage}
+		speechData.SourceTexts = []string{gladiaAnyString(originalUtterance["text"])}
+	}
+	events := []*stt.SpeechEvent{{
+		Type:         stt.SpeechEventFinalTranscript,
+		RequestID:    state.requestID,
+		Alternatives: []stt.SpeechData{speechData},
+	}}
+	if state.speaking {
+		state.speaking = false
+		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech, RequestID: state.requestID})
+	}
+	return events
 }
 
 func gladiaSpeechData(state *gladiaSTTStreamState, utterance map[string]any) stt.SpeechData {
