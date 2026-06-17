@@ -629,6 +629,38 @@ func TestJobContextConnectPreparedRoomJoinsExistingRoom(t *testing.T) {
 	}
 }
 
+func TestJobContextConnectPreparedRoomRegistersRoomIOPreConnectBeforeJoin(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_preconnect_roomio", Room: &livekit.Room{Name: "room-a"}},
+		"wss://livekit.example",
+		"key",
+		"secret",
+	)
+	rio := workerlivekit.NewRoomIO(nil, &agent.AgentSession{}, workerlivekit.RoomOptions{DisableTextInput: true})
+	room := ctx.NewRoom(rio.GetCallback())
+	rio.AttachRoom(room)
+
+	oldJoinRoom := jobContextJoinRoom
+	jobContextJoinRoom = func(_ context.Context, gotRoom *lksdk.Room, _ string, _ lksdk.ConnectInfo, _ ...lksdk.ConnectOption) error {
+		if gotRoom != room {
+			t.Fatal("joined room did not match prepared room")
+		}
+		err := room.RegisterByteStreamHandler(workerlivekit.PreConnectAudioBufferStream, func(*lksdk.ByteStreamReader, string) {})
+		if err == nil {
+			t.Fatal("pre-connect byte-stream handler was not registered before join")
+		}
+		return nil
+	}
+	t.Cleanup(func() {
+		jobContextJoinRoom = oldJoinRoom
+		_ = rio.Close()
+	})
+
+	if err := ctx.ConnectPreparedRoom(context.Background(), room); err != nil {
+		t.Fatalf("ConnectPreparedRoom() error = %v", err)
+	}
+}
+
 func TestJobContextAddParticipantEntrypointRejectsDuplicates(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_participant_entrypoint"}, "", "", "")
 	entrypoint := func(*JobContext, *livekit.ParticipantInfo) {}

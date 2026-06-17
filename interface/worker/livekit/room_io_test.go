@@ -270,35 +270,42 @@ func TestRoomIOAttachRoomRegistersDeferredRoomHandlers(t *testing.T) {
 	}
 }
 
-func TestRoomIOPreparedRoomRegistersPreConnectBeforeJoin(t *testing.T) {
-	ctx := NewJobContext(
-		&livekit.Job{Id: "job_preconnect_roomio", Room: &livekit.Room{Name: "room-a"}},
-		"wss://livekit.example",
-		"key",
-		"secret",
-	)
+func TestRoomIOAttachRoomRegistersPreConnectAudioHandler(t *testing.T) {
 	rio := NewRoomIO(nil, &agent.AgentSession{}, RoomOptions{DisableTextInput: true})
-	room := ctx.NewRoom(rio.GetCallback())
-	rio.AttachRoom(room)
+	room := lksdk.NewRoom(nil)
 
-	oldJoinRoom := jobContextJoinRoom
-	jobContextJoinRoom = func(_ context.Context, gotRoom *lksdk.Room, _ string, _ lksdk.ConnectInfo, _ ...lksdk.ConnectOption) error {
-		if gotRoom != room {
-			t.Fatal("joined room did not match prepared room")
-		}
-		err := room.RegisterByteStreamHandler(PreConnectAudioBufferStream, func(*lksdk.ByteStreamReader, string) {})
-		if err == nil {
-			t.Fatal("pre-connect byte-stream handler was not registered before join")
-		}
-		return nil
+	err := room.RegisterByteStreamHandler(PreConnectAudioBufferStream, func(*lksdk.ByteStreamReader, string) {})
+	if err != nil {
+		t.Fatalf("RegisterByteStreamHandler before AttachRoom() error = %v", err)
 	}
+	room.UnregisterByteStreamHandler(PreConnectAudioBufferStream)
+
+	rio.AttachRoom(room)
 	t.Cleanup(func() {
-		jobContextJoinRoom = oldJoinRoom
 		_ = rio.Close()
 	})
 
-	if err := ctx.ConnectPreparedRoom(context.Background(), room); err != nil {
-		t.Fatalf("ConnectPreparedRoom() error = %v", err)
+	err = room.RegisterByteStreamHandler(PreConnectAudioBufferStream, func(*lksdk.ByteStreamReader, string) {})
+	if err == nil {
+		t.Fatal("RegisterByteStreamHandler after AttachRoom() error = nil, want existing pre-connect handler")
+	}
+}
+
+func TestRoomIOAttachRoomSkipsPreConnectAudioHandlerWhenDisabled(t *testing.T) {
+	rio := NewRoomIO(nil, &agent.AgentSession{}, RoomOptions{
+		DisablePreConnectAudio: true,
+		DisableTextInput:       true,
+	})
+	room := lksdk.NewRoom(nil)
+
+	rio.AttachRoom(room)
+	t.Cleanup(func() {
+		_ = rio.Close()
+	})
+
+	err := room.RegisterByteStreamHandler(PreConnectAudioBufferStream, func(*lksdk.ByteStreamReader, string) {})
+	if err != nil {
+		t.Fatalf("RegisterByteStreamHandler after disabled AttachRoom() error = %v, want nil", err)
 	}
 }
 
