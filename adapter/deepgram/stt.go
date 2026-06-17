@@ -3,6 +3,7 @@ package deepgram
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/library/logger"
@@ -50,6 +52,8 @@ type DeepgramKeyword struct {
 }
 
 type DeepgramSTTOption func(*DeepgramSTT)
+
+const deepgramSTTKeepAliveInterval = 5 * time.Second
 
 func WithDeepgramSTTBaseURL(baseURL string) DeepgramSTTOption {
 	return func(s *DeepgramSTT) {
@@ -222,11 +226,14 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &deepgramStream{
-		conn:   conn,
-		events: make(chan *stt.SpeechEvent, 100),
-		errCh:  make(chan error, 1),
-		ctx:    streamCtx,
-		cancel: cancel,
+		conn:        conn,
+		events:      make(chan *stt.SpeechEvent, 100),
+		errCh:       make(chan error, 1),
+		ctx:         streamCtx,
+		cancel:      cancel,
+		sampleRate:  s.sampleRate,
+		numChannels: s.numChannels,
+		language:    languageStr,
 	}
 
 	go stream.readLoop()
@@ -245,12 +252,9 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 
 	languageStr = language.NormalizeLanguage(languageStr)
 
-	var buf bytes.Buffer
-	for _, f := range frames {
-		buf.Write(f.Data)
-	}
+	wav := deepgramSTTWAVBytes(frames, uint32(s.sampleRate), uint32(s.numChannels))
 
-	req, err := http.NewRequestWithContext(ctx, "POST", buildDeepgramRecognizeURL(s, languageStr), bytes.NewReader(buf.Bytes()))
+	req, err := http.NewRequestWithContext(ctx, "POST", buildDeepgramRecognizeURL(s, languageStr), bytes.NewReader(wav))
 	if err != nil {
 		return nil, err
 	}
@@ -274,7 +278,7 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 		return nil, err
 	}
 
-	return deepgramRecognizeSpeechEvent(result), nil
+	return deepgramRecognizeSpeechEventForLanguage(result, languageStr), nil
 }
 
 func validateDeepgramSTTAPIKey(apiKey string) error {
@@ -282,6 +286,52 @@ func validateDeepgramSTTAPIKey(apiKey string) error {
 		return fmt.Errorf("deepgram API key is required, either as argument or set DEEPGRAM_API_KEY environment variable")
 	}
 	return nil
+}
+
+func deepgramSTTWAVBytes(frames []*model.AudioFrame, defaultSampleRate uint32, defaultNumChannels uint32) []byte {
+	sampleRate := defaultSampleRate
+	if sampleRate == 0 {
+		sampleRate = 16000
+	}
+	numChannels := defaultNumChannels
+	if numChannels == 0 {
+		numChannels = 1
+	}
+	var data bytes.Buffer
+	for _, frame := range frames {
+		if frame == nil {
+			continue
+		}
+		if frame.SampleRate > 0 && data.Len() == 0 {
+			sampleRate = frame.SampleRate
+		}
+		if frame.NumChannels > 0 && data.Len() == 0 {
+			numChannels = frame.NumChannels
+		}
+		data.Write(frame.Data)
+	}
+
+	pcm := data.Bytes()
+	dataSize := uint32(len(pcm))
+	byteRate := sampleRate * numChannels * 2
+	blockAlign := numChannels * 2
+
+	var wav bytes.Buffer
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36)+dataSize)
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(numChannels))
+	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
+	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(blockAlign))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	wav.WriteString("data")
+	_ = binary.Write(&wav, binary.LittleEndian, dataSize)
+	wav.Write(pcm)
+	return wav.Bytes()
 }
 
 func validateDeepgramSTTOptions(s *DeepgramSTT) error {
@@ -414,6 +464,13 @@ type deepgramStream struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	sampleRate   int
+	numChannels  int
+	language     string
+	audioBStream *audio.AudioByteStream
+	writeBinary  func([]byte) error
+	writeJSON    func(any) error
 }
 
 type dgWord struct {
@@ -455,10 +512,14 @@ type dgResponse struct {
 }
 
 func deepgramRecognizeSpeechEvent(resp dgRecognitionResponse) *stt.SpeechEvent {
+	return deepgramRecognizeSpeechEventForLanguage(resp, "")
+}
+
+func deepgramRecognizeSpeechEventForLanguage(resp dgRecognitionResponse, languageStr string) *stt.SpeechEvent {
 	event := &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,
 		Alternatives: []stt.SpeechData{
-			{},
+			{Language: languageStr},
 		},
 	}
 
@@ -468,6 +529,7 @@ func deepgramRecognizeSpeechEvent(resp dgRecognitionResponse) *stt.SpeechEvent {
 
 	alt := resp.Results.Channels[0].Alternatives[0]
 	event.Alternatives[0] = stt.SpeechData{
+		Language:   languageStr,
 		Text:       alt.Transcript,
 		Confidence: alt.Confidence,
 		Words:      deepgramTimedStrings(alt.Words),
@@ -476,6 +538,10 @@ func deepgramRecognizeSpeechEvent(resp dgRecognitionResponse) *stt.SpeechEvent {
 }
 
 func deepgramSpeechEvent(resp dgResponse) *stt.SpeechEvent {
+	return deepgramSpeechEventForLanguage(resp, "")
+}
+
+func deepgramSpeechEventForLanguage(resp dgResponse, languageStr string) *stt.SpeechEvent {
 	if resp.Type != "Results" || len(resp.Channel.Alternatives) == 0 {
 		return nil
 	}
@@ -492,6 +558,7 @@ func deepgramSpeechEvent(resp dgResponse) *stt.SpeechEvent {
 	for _, alt := range resp.Channel.Alternatives {
 		transcriptBuilder += alt.Transcript
 		event.Alternatives = append(event.Alternatives, stt.SpeechData{
+			Language:   languageStr,
 			Text:       alt.Transcript,
 			Confidence: alt.Confidence,
 			StartTime:  resp.Start,
@@ -560,7 +627,7 @@ func (s *deepgramStream) readLoop() {
 			s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
 
 		case "Results":
-			if event := deepgramSpeechEvent(resp); event != nil {
+			if event := deepgramSpeechEventForLanguage(resp, s.language); event != nil {
 				if !s.speaking {
 					s.speaking = true
 					s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
@@ -576,9 +643,9 @@ func (s *deepgramStream) readLoop() {
 	}
 }
 
-// keepAliveLoop sends a native KeepAlive payload every 10 seconds to prevent Deepgram from dropping idle streams.
+// keepAliveLoop sends a native KeepAlive payload to prevent Deepgram from dropping idle streams.
 func (s *deepgramStream) keepAliveLoop() {
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(deepgramSTTKeepAliveInterval)
 	defer ticker.Stop()
 
 	for {
@@ -610,23 +677,44 @@ func (s *deepgramStream) sendError(err error) {
 }
 
 func (s *deepgramStream) PushFrame(frame *model.AudioFrame) error {
+	if frame == nil || len(frame.Data) == 0 {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	if err := s.conn.WriteMessage(websocket.BinaryMessage, frame.Data); err != nil {
-		s.closed = true
-		s.cancel()
-		_ = s.conn.Close()
-		return err
+	if s.audioBStream == nil {
+		s.audioBStream = newDeepgramSTTAudioByteStream(s, frame)
+	}
+	for _, chunk := range s.audioBStream.Push(frame.Data) {
+		if err := s.writeBinaryData(chunk.Data); err != nil {
+			s.closeAfterWriteFailureLocked()
+			return err
+		}
 	}
 	return nil
 }
 
 func (s *deepgramStream) Flush() error {
-	// Deepgram forces a flush by sending a CloseStream payload (but we want to stay alive)
-	// We can send an empty audio frame or rely on Endpointing
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.audioBStream != nil {
+		for _, chunk := range s.audioBStream.Flush() {
+			if err := s.writeBinaryData(chunk.Data); err != nil {
+				s.closeAfterWriteFailureLocked()
+				return err
+			}
+		}
+	}
+	if err := s.writeJSONData(map[string]string{"type": "Finalize"}); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
 	return nil
 }
 
@@ -637,10 +725,65 @@ func (s *deepgramStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	s.cancel()
-	_ = s.conn.WriteJSON(map[string]string{"type": "CloseStream"})
+	if s.cancel != nil {
+		s.cancel()
+	}
+	_ = s.writeJSONData(map[string]string{"type": "CloseStream"})
 	// Wait a tiny bit for the final transcript
 	time.Sleep(50 * time.Millisecond)
+	return s.closeConnection()
+}
+
+func newDeepgramSTTAudioByteStream(s *deepgramStream, frame *model.AudioFrame) *audio.AudioByteStream {
+	sampleRate := uint32(s.sampleRate)
+	if frame.SampleRate > 0 {
+		sampleRate = frame.SampleRate
+	}
+	if sampleRate == 0 {
+		sampleRate = 16000
+	}
+	numChannels := uint32(s.numChannels)
+	if frame.NumChannels > 0 {
+		numChannels = frame.NumChannels
+	}
+	if numChannels == 0 {
+		numChannels = 1
+	}
+	return audio.NewAudioByteStream(sampleRate, numChannels, sampleRate/20)
+}
+
+func (s *deepgramStream) writeBinaryData(data []byte) error {
+	if s.writeBinary != nil {
+		return s.writeBinary(data)
+	}
+	if s.conn == nil {
+		return io.ErrClosedPipe
+	}
+	return s.conn.WriteMessage(websocket.BinaryMessage, data)
+}
+
+func (s *deepgramStream) writeJSONData(payload any) error {
+	if s.writeJSON != nil {
+		return s.writeJSON(payload)
+	}
+	if s.conn == nil {
+		return io.ErrClosedPipe
+	}
+	return s.conn.WriteJSON(payload)
+}
+
+func (s *deepgramStream) closeAfterWriteFailureLocked() {
+	s.closed = true
+	if s.cancel != nil {
+		s.cancel()
+	}
+	_ = s.closeConnection()
+}
+
+func (s *deepgramStream) closeConnection() error {
+	if s.conn == nil {
+		return nil
+	}
 	return s.conn.Close()
 }
 

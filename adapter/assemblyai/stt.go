@@ -2,7 +2,6 @@ package assemblyai
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -211,7 +210,9 @@ func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 		conn:   conn,
 		events: make(chan *stt.SpeechEvent, 10),
 		errCh:  make(chan error, 1),
+		state:  &assemblyAIStreamState{},
 	}
+	stream.writeBinary = stream.writeBinaryMessage
 
 	go stream.readLoop()
 
@@ -327,17 +328,28 @@ type assemblyAISTTStream struct {
 	errCh  chan error
 	mu     sync.Mutex
 	closed bool
+
+	writeBinary func([]byte) error
+	state       *assemblyAIStreamState
+}
+
+type assemblyAIStreamState struct {
+	lastPreflightStartTime float64
 }
 
 type aaiResponse struct {
-	Type        string           `json:"type"`
-	MessageType string           `json:"message_type"`
-	Text        string           `json:"text"`
-	Transcript  string           `json:"transcript"`
-	Confidence  float64          `json:"confidence"`
-	EndOfTurn   bool             `json:"end_of_turn"`
-	Words       []assemblyAIWord `json:"words"`
-	Error       string           `json:"error"`
+	Type            string           `json:"type"`
+	MessageType     string           `json:"message_type"`
+	Text            string           `json:"text"`
+	Transcript      string           `json:"transcript"`
+	Utterance       string           `json:"utterance"`
+	Confidence      float64          `json:"confidence"`
+	EndOfTurn       bool             `json:"end_of_turn"`
+	TurnIsFormatted bool             `json:"turn_is_formatted"`
+	Language        string           `json:"language_code"`
+	SpeakerID       string           `json:"speaker_label"`
+	Words           []assemblyAIWord `json:"words"`
+	Error           string           `json:"error"`
 }
 
 func (s *assemblyAISTTStream) readLoop() {
@@ -370,7 +382,7 @@ func (s *assemblyAISTTStream) readLoop() {
 		}
 
 		if resp.Type == "Turn" || resp.MessageType == "PartialTranscript" || resp.MessageType == "FinalTranscript" {
-			if event := assemblyAIRealtimeTranscriptEvent(resp); event != nil {
+			for _, event := range assemblyAIRealtimeTranscriptEvents(resp, s.state) {
 				s.events <- event
 			}
 		}
@@ -378,37 +390,141 @@ func (s *assemblyAISTTStream) readLoop() {
 }
 
 func assemblyAIRealtimeTranscriptEvent(resp aaiResponse) *stt.SpeechEvent {
+	events := assemblyAIRealtimeTranscriptEvents(resp, &assemblyAIStreamState{})
+	for _, event := range events {
+		if event.Type == stt.SpeechEventFinalTranscript {
+			return event
+		}
+	}
+	if len(events) > 0 {
+		return events[0]
+	}
+	return nil
+}
+
+func assemblyAIRealtimeTranscriptEvents(resp aaiResponse, state *assemblyAIStreamState) []*stt.SpeechEvent {
+	if state == nil {
+		state = &assemblyAIStreamState{}
+	}
+	if resp.MessageType == "PartialTranscript" {
+		if text := assemblyAIResponseText(resp); text != "" {
+			return []*stt.SpeechEvent{assemblyAITranscriptEvent(stt.SpeechEventInterimTranscript, resp, text, assemblyAITimedStrings(resp.Words), 0, 0)}
+		}
+		return nil
+	}
+	if resp.MessageType == "FinalTranscript" {
+		if text := assemblyAIResponseText(resp); text != "" {
+			return []*stt.SpeechEvent{assemblyAITranscriptEvent(stt.SpeechEventFinalTranscript, resp, text, assemblyAITimedStrings(resp.Words), 0, 0)}
+		}
+		return nil
+	}
+
+	words := assemblyAITimedStrings(resp.Words)
+	startTime, endTime := assemblyAIWordTimeRange(words)
+	events := make([]*stt.SpeechEvent, 0, 4)
+	if len(words) > 0 {
+		events = append(events, assemblyAITranscriptEvent(stt.SpeechEventInterimTranscript, resp, assemblyAITextFromTimedWords(words), words, startTime, endTime))
+	}
+	if resp.Utterance != "" {
+		if state.lastPreflightStartTime == 0 {
+			state.lastPreflightStartTime = startTime
+		}
+		utteranceWords := assemblyAIWordsFromStart(words, state.lastPreflightStartTime)
+		events = append(events, assemblyAITranscriptEvent(stt.SpeechEventPreflightTranscript, resp, resp.Utterance, utteranceWords, state.lastPreflightStartTime, endTime))
+		state.lastPreflightStartTime = endTime
+	}
+	if resp.EndOfTurn {
+		text := resp.Transcript
+		if text == "" {
+			text = resp.Text
+		}
+		if text != "" {
+			events = append(events, assemblyAITranscriptEvent(stt.SpeechEventFinalTranscript, resp, text, words, startTime, endTime))
+		}
+		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
+		state.lastPreflightStartTime = 0
+	}
+	return events
+}
+
+func assemblyAIResponseText(resp aaiResponse) string {
 	text := resp.Text
 	if text == "" {
 		text = resp.Transcript
 	}
-	if text == "" {
-		return nil
-	}
+	return text
+}
 
-	eventType := stt.SpeechEventInterimTranscript
-	if resp.EndOfTurn || resp.MessageType == "FinalTranscript" {
-		eventType = stt.SpeechEventFinalTranscript
-	}
-	words := assemblyAITimedStrings(resp.Words)
-	confidence := resp.Confidence
-	if confidence == 0 && len(words) > 0 {
-		for _, word := range words {
-			confidence += word.Confidence
-		}
-		confidence /= float64(len(words))
-	}
+func assemblyAITranscriptEvent(eventType stt.SpeechEventType, resp aaiResponse, text string, words []stt.TimedString, startTime float64, endTime float64) *stt.SpeechEvent {
+	confidence := assemblyAIConfidence(resp.Confidence, words)
 
 	return &stt.SpeechEvent{
 		Type: eventType,
 		Alternatives: []stt.SpeechData{
 			{
+				Language:   assemblyAILanguage(resp.Language),
 				Text:       text,
+				StartTime:  startTime,
+				EndTime:    endTime,
 				Confidence: confidence,
 				Words:      words,
+				SpeakerID:  assemblyAISpeakerID(resp.SpeakerID),
 			},
 		},
 	}
+}
+
+func assemblyAIConfidence(respConfidence float64, words []stt.TimedString) float64 {
+	if respConfidence != 0 || len(words) == 0 {
+		return respConfidence
+	}
+	var confidence float64
+	for _, word := range words {
+		confidence += word.Confidence
+	}
+	return confidence / float64(len(words))
+}
+
+func assemblyAIWordTimeRange(words []stt.TimedString) (float64, float64) {
+	if len(words) == 0 {
+		return 0, 0
+	}
+	return words[0].StartTime, words[len(words)-1].EndTime
+}
+
+func assemblyAITextFromTimedWords(words []stt.TimedString) string {
+	parts := make([]string, 0, len(words))
+	for _, word := range words {
+		parts = append(parts, word.Text)
+	}
+	return strings.Join(parts, " ")
+}
+
+func assemblyAIWordsFromStart(words []stt.TimedString, startTime float64) []stt.TimedString {
+	if len(words) == 0 {
+		return nil
+	}
+	filtered := make([]stt.TimedString, 0, len(words))
+	for _, word := range words {
+		if word.StartTime >= startTime {
+			filtered = append(filtered, word)
+		}
+	}
+	return filtered
+}
+
+func assemblyAILanguage(language string) string {
+	if language == "" {
+		return "en"
+	}
+	return language
+}
+
+func assemblyAISpeakerID(speakerID string) string {
+	if speakerID == "" || speakerID == "UNKNOWN" {
+		return ""
+	}
+	return speakerID
 }
 
 func intPtr(value int) *int {
@@ -420,18 +536,21 @@ func boolPtr(value bool) *bool {
 }
 
 func (s *assemblyAISTTStream) PushFrame(frame *model.AudioFrame) error {
+	if frame == nil || len(frame.Data) == 0 {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
 	}
 
-	b64 := base64.StdEncoding.EncodeToString(frame.Data)
-	msg := map[string]interface{}{
-		"audio_data": b64,
+	if err := s.writeBinaryData(frame.Data); err != nil {
+		s.closed = true
+		_ = s.closeConnection()
+		return err
 	}
-
-	return s.conn.WriteJSON(msg)
+	return nil
 }
 
 func (s *assemblyAISTTStream) Flush() error {
@@ -447,6 +566,27 @@ func (s *assemblyAISTTStream) Close() error {
 	s.closed = true
 	// Terminate session
 	s.conn.WriteJSON(map[string]bool{"terminate_session": true})
+	return s.conn.Close()
+}
+
+func (s *assemblyAISTTStream) writeBinaryData(data []byte) error {
+	if s.writeBinary != nil {
+		return s.writeBinary(data)
+	}
+	return s.writeBinaryMessage(data)
+}
+
+func (s *assemblyAISTTStream) writeBinaryMessage(data []byte) error {
+	if s.conn == nil {
+		return io.ErrClosedPipe
+	}
+	return s.conn.WriteMessage(websocket.BinaryMessage, data)
+}
+
+func (s *assemblyAISTTStream) closeConnection() error {
+	if s.conn == nil {
+		return nil
+	}
 	return s.conn.Close()
 }
 

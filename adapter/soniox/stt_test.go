@@ -257,6 +257,35 @@ func TestSonioxProcessMessageEmitsInterimPreflightFinalAndUsage(t *testing.T) {
 	}
 }
 
+func TestSonioxProcessMessageRoutesTranslationTokensLikeReference(t *testing.T) {
+	state := &sonioxMessageState{translationMode: true}
+
+	events, err := processSonioxMessage(state, []byte(`{"tokens":[{"text":"hello","language":"en","is_final":true,"start_ms":0,"end_ms":100,"confidence":0.9},{"text":"hola","language":"es","is_final":true,"translation_status":"translation","start_ms":0,"end_ms":100,"confidence":0.95}]}`))
+	if err != nil {
+		t.Fatalf("process translated preflight: %v", err)
+	}
+	assertSonioxEvent(t, events, 0, stt.SpeechEventStartOfSpeech, "")
+	assertSonioxEvent(t, events, 1, stt.SpeechEventPreflightTranscript, "hola")
+	preflight := events[1].Alternatives[0]
+	if len(preflight.SourceLanguages) != 1 || preflight.SourceLanguages[0] != "en" || len(preflight.SourceTexts) != 1 || preflight.SourceTexts[0] != "hello" {
+		t.Fatalf("preflight source fields = %#v/%#v, want en/hello", preflight.SourceLanguages, preflight.SourceTexts)
+	}
+	if len(preflight.TargetLanguages) != 1 || preflight.TargetLanguages[0] != "es" || len(preflight.TargetTexts) != 1 || preflight.TargetTexts[0] != "hola" {
+		t.Fatalf("preflight target fields = %#v/%#v, want es/hola", preflight.TargetLanguages, preflight.TargetTexts)
+	}
+
+	events, err = processSonioxMessage(state, []byte(`{"tokens":[{"text":"<end>","is_final":true}],"total_audio_proc_ms":100}`))
+	if err != nil {
+		t.Fatalf("process translated endpoint: %v", err)
+	}
+	assertSonioxEvent(t, events, 0, stt.SpeechEventFinalTranscript, "hola")
+	final := events[0].Alternatives[0]
+	if len(final.SourceTexts) != 1 || final.SourceTexts[0] != "hello" || len(final.TargetTexts) != 1 || final.TargetTexts[0] != "hola" {
+		t.Fatalf("final source/target fields = %#v/%#v, want hello/hola", final.SourceTexts, final.TargetTexts)
+	}
+	assertSonioxEvent(t, events, 1, stt.SpeechEventEndOfSpeech, "")
+}
+
 func TestSonioxProcessMessageReturnsStatusError(t *testing.T) {
 	_, err := processSonioxMessage(&sonioxMessageState{}, []byte(`{"error_code":"429","error_message":"rate limited","tokens":[]}`))
 	if err == nil {

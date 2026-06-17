@@ -239,6 +239,81 @@ func TestAssemblyAIRealtimeTranscriptEventPreservesWordTimings(t *testing.T) {
 	}
 }
 
+func TestAssemblyAIRealtimeTurnEmitsReferenceEventOrder(t *testing.T) {
+	resp := aaiResponse{
+		Type:       "Turn",
+		Transcript: "hello realtime",
+		Utterance:  "hello",
+		EndOfTurn:  true,
+		Language:   "en",
+		SpeakerID:  "A",
+		Words: []assemblyAIWord{
+			{Text: "hello", Start: 100, End: 300, Confidence: 0.95},
+			{Text: "realtime", Start: 350, End: 800, Confidence: 0.9},
+		},
+	}
+
+	events := assemblyAIRealtimeTranscriptEvents(resp, &assemblyAIStreamState{})
+	if len(events) != 4 {
+		t.Fatalf("events = %d, want interim, preflight, final, end_of_speech", len(events))
+	}
+	wantTypes := []stt.SpeechEventType{
+		stt.SpeechEventInterimTranscript,
+		stt.SpeechEventPreflightTranscript,
+		stt.SpeechEventFinalTranscript,
+		stt.SpeechEventEndOfSpeech,
+	}
+	for i, wantType := range wantTypes {
+		if events[i].Type != wantType {
+			t.Fatalf("event[%d].Type = %s, want %s", i, events[i].Type, wantType)
+		}
+	}
+	if got := events[0].Alternatives[0].Text; got != "hello realtime" {
+		t.Fatalf("interim text = %q, want cumulative words text", got)
+	}
+	if got := events[1].Alternatives[0].Text; got != "hello" {
+		t.Fatalf("preflight text = %q, want utterance", got)
+	}
+	if got := events[2].Alternatives[0].Text; got != "hello realtime" {
+		t.Fatalf("final text = %q, want transcript", got)
+	}
+	for i, event := range events[:3] {
+		alt := event.Alternatives[0]
+		if alt.Language != "en" {
+			t.Fatalf("event[%d] language = %q, want en", i, alt.Language)
+		}
+		if alt.SpeakerID != "A" {
+			t.Fatalf("event[%d] speaker = %q, want A", i, alt.SpeakerID)
+		}
+	}
+}
+
+func TestAssemblyAISTTStreamPushFrameSendsReferenceBinaryAudio(t *testing.T) {
+	var writes [][]byte
+	stream := &assemblyAISTTStream{
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+	}
+
+	err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02, 0x03, 0x04},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	})
+	if err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("binary writes = %d, want 1", len(writes))
+	}
+	if got := writes[0]; string(got) != string([]byte{0x01, 0x02, 0x03, 0x04}) {
+		t.Fatalf("binary write = %#v, want raw PCM bytes", got)
+	}
+}
+
 func TestAssemblyAISTTCapabilitiesMatchReference(t *testing.T) {
 	provider := NewAssemblyAISTT("test-key")
 	capabilities := provider.Capabilities()

@@ -311,7 +311,7 @@ func TestElevenLabsStreamURLUsesReferenceOptions(t *testing.T) {
 		t.Fatalf("parse stream url: %v", err)
 	}
 
-	if parsed.Path != "/v1/text-to-speech/hpp4J3VqNfWAUOO0d1Us/stream-input" {
+	if parsed.Path != "/v1/text-to-speech/hpp4J3VqNfWAUOO0d1Us/multi-stream-input" {
 		t.Fatalf("path = %q, want default voice stream path", parsed.Path)
 	}
 	if parsed.Query().Get("model_id") != "eleven_turbo_v2_5" {
@@ -360,7 +360,7 @@ func TestElevenLabsStreamURLUsesConfiguredBaseURL(t *testing.T) {
 	if parsed.Scheme != "wss" || parsed.Host != "eleven.example" {
 		t.Fatalf("stream url = %q, want configured websocket host", streamURL)
 	}
-	if parsed.Path != "/v1/text-to-speech/voice-1/stream-input" {
+	if parsed.Path != "/v1/text-to-speech/voice-1/multi-stream-input" {
 		t.Fatalf("path = %q, want configured base URL with stream path", parsed.Path)
 	}
 }
@@ -404,7 +404,7 @@ func TestElevenLabsTTSUpdateOptionsMatchesReference(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse stream url: %v", err)
 	}
-	if parsedStream.Path != "/v1/text-to-speech/voice-updated/stream-input" {
+	if parsedStream.Path != "/v1/text-to-speech/voice-updated/multi-stream-input" {
 		t.Fatalf("stream path = %q, want updated voice", parsedStream.Path)
 	}
 	if parsedStream.Query().Get("model_id") != "eleven_multilingual_v2" {
@@ -418,13 +418,36 @@ func TestElevenLabsTTSUpdateOptionsMatchesReference(t *testing.T) {
 	}
 }
 
-func TestElevenLabsStreamFlushUsesEndOfInputSignal(t *testing.T) {
-	flush := elevenLabsFlushPayload()
+func TestElevenLabsStreamPayloadsUseReferenceContextProtocol(t *testing.T) {
+	const contextID = "ctx_test"
+
+	init := elevenLabsInitPayload(contextID)
+	if init["text"] != " " || init["context_id"] != contextID {
+		t.Fatalf("init payload = %#v, want warmup text with context_id", init)
+	}
+	if _, ok := init["generation_config"]; ok {
+		t.Fatalf("init payload = %#v, want no generation_config without configured schedule", init)
+	}
+
+	text := elevenLabsTextPayload(contextID, "hello")
+	if text["text"] != "hello" || text["context_id"] != contextID {
+		t.Fatalf("text payload = %#v, want text with context_id", text)
+	}
+	if _, ok := text["try_trigger_generation"]; ok {
+		t.Fatalf("text payload = %#v, want no legacy try_trigger_generation flag", text)
+	}
+
+	flush := elevenLabsFlushPayload(contextID)
 	if flush["text"] != "" {
 		t.Fatalf("flush text = %#v, want empty end-of-input signal", flush["text"])
 	}
-	if _, ok := flush["flush"]; ok {
-		t.Fatalf("flush payload = %#v, want no flush flag for stream-input close", flush)
+	if flush["context_id"] != contextID || flush["flush"] != true {
+		t.Fatalf("flush payload = %#v, want context_id and flush=true", flush)
+	}
+
+	closeContext := elevenLabsCloseContextPayload(contextID)
+	if closeContext["context_id"] != contextID || closeContext["close_context"] != true {
+		t.Fatalf("close payload = %#v, want context_id and close_context=true", closeContext)
 	}
 }
 

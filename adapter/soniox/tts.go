@@ -161,6 +161,7 @@ func (t *SonioxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		events:     make(chan *tts.SynthesizedAudio, 100),
 		errCh:      make(chan error, 1),
 	}
+	stream.writeMessage = stream.writeWebsocketMessage
 	if err := writeSonioxTTSMessage(conn, buildSonioxTTSStartConfig(t, streamID)); err != nil {
 		conn.Close()
 		cancel()
@@ -194,17 +195,37 @@ type sonioxTTSSynthesizeStream struct {
 	errCh      chan error
 	mu         sync.Mutex
 	closed     bool
+
+	writeMessage func(map[string]any) error
 }
 
 func (s *sonioxTTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
-	return writeSonioxTTSMessage(s.conn, buildSonioxTTSTextMessage(s.streamID, text, false))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if err := s.writeMessageData(buildSonioxTTSTextMessage(s.streamID, text, false)); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *sonioxTTSSynthesizeStream) Flush() error {
-	return writeSonioxTTSMessage(s.conn, buildSonioxTTSTextMessage(s.streamID, "", true))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if err := s.writeMessageData(buildSonioxTTSTextMessage(s.streamID, "", true)); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *sonioxTTSSynthesizeStream) Close() error {
@@ -218,6 +239,27 @@ func (s *sonioxTTSSynthesizeStream) Close() error {
 	_ = writeSonioxTTSMessage(s.conn, buildSonioxTTSCancelMessage(s.streamID))
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
+}
+
+func (s *sonioxTTSSynthesizeStream) writeMessageData(message map[string]any) error {
+	if s.writeMessage != nil {
+		return s.writeMessage(message)
+	}
+	return s.writeWebsocketMessage(message)
+}
+
+func (s *sonioxTTSSynthesizeStream) writeWebsocketMessage(message map[string]any) error {
+	return writeSonioxTTSMessage(s.conn, message)
+}
+
+func (s *sonioxTTSSynthesizeStream) closeAfterWriteFailureLocked() {
+	s.closed = true
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.conn != nil {
+		_ = s.conn.Close()
+	}
 }
 
 func (s *sonioxTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {

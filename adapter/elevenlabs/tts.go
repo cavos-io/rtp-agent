@@ -20,6 +20,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -286,16 +287,8 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 	}
 
 	// Send initial configuration
-	initMsg := map[string]interface{}{
-		"text": " ", // Start with a space to initialize
-		"voice_settings": map[string]interface{}{
-			"stability":        0.5,
-			"similarity_boost": 0.8,
-		},
-		"generation_config": map[string]interface{}{
-			"chunk_length_schedule": []int{120, 160, 250, 290},
-		},
-	}
+	contextID := "ctx_" + uuid.NewString()[:12]
+	initMsg := elevenLabsInitPayload(contextID)
 	if err := conn.WriteJSON(initMsg); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("failed to write initial config to elevenlabs: %w", err)
@@ -310,6 +303,7 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 		cancel:     cancel,
 		encoding:   t.encoding,
 		sampleRate: t.sampleRate,
+		contextID:  contextID,
 	}
 
 	go stream.readLoop()
@@ -323,9 +317,9 @@ func buildElevenLabsStreamURL(t *ElevenLabsTTS) string {
 	if strings.HasPrefix(streamBaseURL, "http://") || strings.HasPrefix(streamBaseURL, "https://") {
 		streamBaseURL = strings.Replace(streamBaseURL, "http", "ws", 1)
 	}
-	parsed, err := url.Parse(streamBaseURL + fmt.Sprintf("/text-to-speech/%s/stream-input", t.voiceID))
+	parsed, err := url.Parse(streamBaseURL + fmt.Sprintf("/text-to-speech/%s/multi-stream-input", t.voiceID))
 	if err != nil {
-		u := url.URL{Scheme: "wss", Host: "api.elevenlabs.io", Path: fmt.Sprintf("/v1/text-to-speech/%s/stream-input", t.voiceID)}
+		u := url.URL{Scheme: "wss", Host: "api.elevenlabs.io", Path: fmt.Sprintf("/v1/text-to-speech/%s/multi-stream-input", t.voiceID)}
 		parsed = &u
 	}
 	q := parsed.Query()
@@ -375,6 +369,7 @@ type elevenLabsStream struct {
 
 	encoding   string
 	sampleRate int
+	contextID  string
 }
 
 type elWSResponse struct {
@@ -581,11 +576,7 @@ func (s *elevenLabsStream) PushText(text string) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	msg := map[string]interface{}{
-		"text":                   text,
-		"try_trigger_generation": true,
-	}
-	if err := s.conn.WriteJSON(msg); err != nil {
+	if err := s.conn.WriteJSON(elevenLabsTextPayload(s.contextID, text)); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return fmt.Errorf("failed to write text to elevenlabs: %w", err)
 	}
@@ -598,15 +589,40 @@ func (s *elevenLabsStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	if err := s.conn.WriteJSON(elevenLabsFlushPayload()); err != nil {
+	if err := s.conn.WriteJSON(elevenLabsFlushPayload(s.contextID)); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
 	return nil
 }
 
-func elevenLabsFlushPayload() map[string]interface{} {
-	return map[string]interface{}{"text": ""}
+func elevenLabsInitPayload(contextID string) map[string]interface{} {
+	return map[string]interface{}{
+		"text":       " ",
+		"context_id": contextID,
+	}
+}
+
+func elevenLabsTextPayload(contextID string, text string) map[string]interface{} {
+	return map[string]interface{}{
+		"text":       text,
+		"context_id": contextID,
+	}
+}
+
+func elevenLabsFlushPayload(contextID string) map[string]interface{} {
+	return map[string]interface{}{
+		"text":       "",
+		"context_id": contextID,
+		"flush":      true,
+	}
+}
+
+func elevenLabsCloseContextPayload(contextID string) map[string]interface{} {
+	return map[string]interface{}{
+		"context_id":    contextID,
+		"close_context": true,
+	}
 }
 
 func (s *elevenLabsStream) closeAfterWriteFailureLocked() {
@@ -623,10 +639,7 @@ func (s *elevenLabsStream) Close() error {
 	}
 	s.closed = true
 	s.cancel()
-	// Clean close via empty text
-	_ = s.conn.WriteJSON(map[string]interface{}{"text": ""})
-	// Wait a moment for final chunks
-	time.Sleep(50 * time.Millisecond)
+	_ = s.conn.WriteJSON(elevenLabsCloseContextPayload(s.contextID))
 	return s.conn.Close()
 }
 

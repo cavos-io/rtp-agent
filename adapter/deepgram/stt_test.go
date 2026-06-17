@@ -2,14 +2,17 @@ package deepgram
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha1"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -88,6 +91,19 @@ func TestDeepgramSpeechEventSkipsEmptyFinalTranscript(t *testing.T) {
 	}
 }
 
+func TestDeepgramSpeechEventSetsReferenceLanguage(t *testing.T) {
+	resp := dgResponse{Type: "Results", IsFinal: true}
+	resp.Channel.Alternatives = []dgAlternative{{Transcript: "halo", Confidence: 0.9}}
+
+	event := deepgramSpeechEventForLanguage(resp, "id-ID")
+	if event == nil || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %+v, want one alternative", event)
+	}
+	if got := event.Alternatives[0].Language; got != "id-ID" {
+		t.Fatalf("language = %q, want id-ID", got)
+	}
+}
+
 func TestDeepgramRecognizeSpeechEventPreservesAlternativeWords(t *testing.T) {
 	speaker := 0
 	resp := dgRecognitionResponse{}
@@ -126,6 +142,21 @@ func TestDeepgramRecognizeSpeechEventPreservesAlternativeWords(t *testing.T) {
 	}
 	if got := alt.Words[1]; got.Text != "offline" || got.StartTime != 0.4 || got.EndTime != 0.8 || got.Confidence != 0.9 || got.SpeakerID != "0" {
 		t.Fatalf("second word = %+v, want offline timing with speaker 0", got)
+	}
+}
+
+func TestDeepgramRecognizeSpeechEventSetsReferenceLanguage(t *testing.T) {
+	resp := dgRecognitionResponse{}
+	resp.Results.Channels = []dgRecognitionChannel{
+		{Alternatives: []dgAlternative{{Transcript: "bonjour", Confidence: 0.9}}},
+	}
+
+	event := deepgramRecognizeSpeechEventForLanguage(resp, "fr")
+	if len(event.Alternatives) != 1 {
+		t.Fatalf("alternatives = %d, want 1", len(event.Alternatives))
+	}
+	if got := event.Alternatives[0].Language; got != "fr" {
+		t.Fatalf("language = %q, want fr", got)
 	}
 }
 
@@ -174,6 +205,12 @@ func TestDeepgramSTTDefaultsMatchReference(t *testing.T) {
 	}
 	if got := stt.Provider(provider); got != "Deepgram" {
 		t.Fatalf("provider metadata = %q, want Deepgram", got)
+	}
+}
+
+func TestDeepgramSTTKeepAliveIntervalMatchesReference(t *testing.T) {
+	if deepgramSTTKeepAliveInterval != 5*time.Second {
+		t.Fatalf("keepalive interval = %v, want 5s", deepgramSTTKeepAliveInterval)
 	}
 }
 
@@ -324,6 +361,52 @@ func TestDeepgramRecognizeURLUsesReferenceOptions(t *testing.T) {
 	assertDeepgramQuery(t, query, "language", "id-ID")
 	assertDeepgramQuery(t, query, "punctuate", "true")
 	assertDeepgramQuery(t, query, "smart_format", "false")
+}
+
+func TestDeepgramSTTRecognizeUploadsReferenceWAV(t *testing.T) {
+	var uploaded []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var err error
+		uploaded, err = io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		if got := r.Header.Get("Content-Type"); got != "audio/wav" {
+			t.Fatalf("content-type = %q, want audio/wav", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":{"channels":[{"alternatives":[{"transcript":"ok","confidence":1,"words":[]}]}]}}`))
+	}))
+	defer server.Close()
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL(server.URL+"/v1/listen"))
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{
+		{
+			Data:              []byte{0x01, 0x02, 0x03, 0x04},
+			SampleRate:        8000,
+			NumChannels:       1,
+			SamplesPerChannel: 2,
+		},
+	}, "en-US")
+	if err != nil {
+		t.Fatalf("Recognize() error = %v", err)
+	}
+
+	if len(uploaded) < 48 {
+		t.Fatalf("uploaded bytes = %d, want wav header plus pcm", len(uploaded))
+	}
+	if string(uploaded[0:4]) != "RIFF" || string(uploaded[8:12]) != "WAVE" || string(uploaded[36:40]) != "data" {
+		t.Fatalf("uploaded prefix = %q/%q/%q, want RIFF/WAVE/data", uploaded[0:4], uploaded[8:12], uploaded[36:40])
+	}
+	if got := binary.LittleEndian.Uint32(uploaded[24:28]); got != 8000 {
+		t.Fatalf("wav sample rate = %d, want 8000", got)
+	}
+	if got := binary.LittleEndian.Uint16(uploaded[22:24]); got != 1 {
+		t.Fatalf("wav channels = %d, want 1", got)
+	}
+	if got := uploaded[len(uploaded)-4:]; !bytes.Equal(got, []byte{0x01, 0x02, 0x03, 0x04}) {
+		t.Fatalf("wav payload tail = %#v, want original pcm", got)
+	}
 }
 
 func TestDeepgramSTTEnglishOnlyModelFallsBackForNonEnglishLanguage(t *testing.T) {
@@ -494,12 +577,13 @@ func TestDeepgramSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	}
 
 	var writeErr error
+	fullChunk := make([]byte, 1600)
 	for range 3 {
 		writeErr = stream.PushFrame(&model.AudioFrame{
-			Data:              []byte{0x01, 0x02},
+			Data:              fullChunk,
 			SampleRate:        16000,
 			NumChannels:       1,
-			SamplesPerChannel: 1,
+			SamplesPerChannel: 800,
 		})
 		if writeErr != nil {
 			break
@@ -517,10 +601,10 @@ func TestDeepgramSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	}
 
 	err = stream.PushFrame(&model.AudioFrame{
-		Data:              []byte{0x03, 0x04},
+		Data:              fullChunk,
 		SampleRate:        16000,
 		NumChannels:       1,
-		SamplesPerChannel: 1,
+		SamplesPerChannel: 800,
 	})
 	if !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("second PushFrame error = %v, want io.ErrClosedPipe", err)
@@ -530,6 +614,62 @@ func TestDeepgramSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("second Close after write failure error = %v", err)
+	}
+}
+
+func TestDeepgramSTTStreamChunksAndFinalizesReferenceAudio(t *testing.T) {
+	var binaryWrites [][]byte
+	var jsonWrites []any
+	stream := &deepgramStream{
+		sampleRate:  16000,
+		numChannels: 1,
+		writeBinary: func(data []byte) error {
+			binaryWrites = append(binaryWrites, append([]byte(nil), data...))
+			return nil
+		},
+		writeJSON: func(payload any) error {
+			jsonWrites = append(jsonWrites, payload)
+			return nil
+		},
+	}
+
+	audioData := make([]byte, 2000)
+	for i := range audioData {
+		audioData[i] = byte(i)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              audioData,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1000,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(binaryWrites) != 1 {
+		t.Fatalf("binary writes after PushFrame = %d, want 1 full 50ms chunk", len(binaryWrites))
+	}
+	if got := len(binaryWrites[0]); got != 1600 {
+		t.Fatalf("first binary write length = %d, want 1600", got)
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if len(binaryWrites) != 2 {
+		t.Fatalf("binary writes after Flush = %d, want remainder chunk", len(binaryWrites))
+	}
+	if got := len(binaryWrites[1]); got != 400 {
+		t.Fatalf("flush binary write length = %d, want 400", got)
+	}
+	if len(jsonWrites) != 1 {
+		t.Fatalf("json writes after Flush = %d, want Finalize", len(jsonWrites))
+	}
+	finalize, ok := jsonWrites[0].(map[string]string)
+	if !ok {
+		t.Fatalf("Finalize payload = %T, want map[string]string", jsonWrites[0])
+	}
+	if got := finalize["type"]; got != "Finalize" {
+		t.Fatalf("Finalize type = %q, want Finalize", got)
 	}
 }
 
