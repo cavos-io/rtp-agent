@@ -842,27 +842,22 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.Permissions == nil {
 		opts.Permissions = workerlivekit.DefaultWorkerPermissions()
 	}
-	if opts.WSURL == "" {
-		opts.WSURL = opts.WSRL
-	}
-	if opts.WSURL == "" {
-		opts.WSURL = os.Getenv("LIVEKIT_URL")
-	}
-	opts.WSRL = opts.WSURL
-
-	if opts.APIKey == "" {
-		opts.APIKey = os.Getenv("LIVEKIT_API_KEY")
-	}
-	if opts.APISecret == "" {
-		opts.APISecret = os.Getenv("LIVEKIT_API_SECRET")
-	}
-	if opts.WorkerToken == "" {
-		opts.WorkerToken = os.Getenv("LIVEKIT_WORKER_TOKEN")
-	}
-	if opts.AgentName == "" {
-		opts.AgentName = os.Getenv("LIVEKIT_AGENT_NAME")
-		opts.AgentNameIsEnv = opts.AgentName != ""
-	}
+	livekitOptions := workerlivekit.ResolveWorkerConnectionOptions(workerlivekit.WorkerConnectionOptions{
+		WSURL:          opts.WSURL,
+		LegacyWSURL:    opts.WSRL,
+		APIKey:         opts.APIKey,
+		APISecret:      opts.APISecret,
+		WorkerToken:    opts.WorkerToken,
+		AgentName:      opts.AgentName,
+		AgentNameIsEnv: opts.AgentNameIsEnv,
+	})
+	opts.WSURL = livekitOptions.WSURL
+	opts.WSRL = livekitOptions.WSURL
+	opts.APIKey = livekitOptions.APIKey
+	opts.APISecret = livekitOptions.APISecret
+	opts.WorkerToken = livekitOptions.WorkerToken
+	opts.AgentName = livekitOptions.AgentName
+	opts.AgentNameIsEnv = livekitOptions.AgentNameIsEnv
 	if opts.HTTPProxy == "" && !opts.HTTPProxySet {
 		opts.HTTPProxy = os.Getenv("HTTPS_PROXY")
 		if opts.HTTPProxy == "" {
