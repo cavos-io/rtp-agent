@@ -1465,10 +1465,7 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		return err
 	}
 
-	// Create JWT token
-	at := auth.NewAccessToken(s.Options.APIKey, s.Options.APISecret)
-	at.SetVideoGrant(&auth.VideoGrant{Agent: true}).SetValidFor(time.Hour)
-	token, err := at.ToJWT()
+	token, err := workerlivekit.WorkerAuthToken(s.Options.APIKey, s.Options.APISecret, time.Hour)
 	if err != nil {
 		return err
 	}
