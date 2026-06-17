@@ -118,6 +118,12 @@ func (s *MistralAISTT) Capabilities() stt.STTCapabilities {
 	}
 }
 
+func (s *MistralAISTT) UpdateOptions(opts ...MistralAISTTOption) {
+	for _, opt := range opts {
+		opt(s)
+	}
+}
+
 func (s *MistralAISTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if err := validateMistralAISTTAPIKey(s.apiKey); err != nil {
 		return nil, err

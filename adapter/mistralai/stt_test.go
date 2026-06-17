@@ -187,6 +187,46 @@ func TestMistralAISTTRealtimeStreamSendsTargetStreamingDelayUpdate(t *testing.T)
 	})
 }
 
+func TestMistralAISTTUpdateOptionsMatchesReferenceFutureCalls(t *testing.T) {
+	provider := NewMistralAISTT("test-key")
+
+	provider.UpdateOptions(
+		WithMistralAISTTModel("voxtral-mini-2507"),
+		WithMistralAISTTLanguage("fr"),
+		WithMistralAISTTContextBias([]string{"Cavos", "LiveKit"}),
+	)
+	req, err := buildMistralAISTTRecognizeRequest(context.Background(), provider, []byte{0x01}, "")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	fields, _ := readMistralMultipartRequest(t, req)
+	if fields["model"] != "voxtral-mini-2507" || fields["language"] != "fr" || fields["context_bias"] != "Cavos,LiveKit" {
+		t.Fatalf("updated request fields = %#v, want model/language/context_bias", fields)
+	}
+	if _, ok := fields["timestamp_granularities"]; ok {
+		t.Fatalf("timestamp_granularities present with updated language: %#v", fields)
+	}
+
+	conn := &mistralAISTTFakeRealtimeConn{}
+	provider.UpdateOptions(
+		WithMistralAISTTModel("voxtral-realtime-latest"),
+		WithMistralAISTTTargetStreamingDelay(120),
+	)
+	provider.dialRealtime = func(ctx context.Context, endpoint string, headers http.Header) (mistralAISTTRealtimeConn, error) {
+		return conn, nil
+	}
+	if _, err := provider.Stream(context.Background(), ""); err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	messages := conn.messages()
+	if len(messages) != 1 {
+		t.Fatalf("messages = %v, want target delay update", messages)
+	}
+	assertMistralRealtimeMessage(t, messages[0], "session.update", map[string]any{
+		"session": map[string]any{"target_streaming_delay_ms": float64(120)},
+	})
+}
+
 func TestMistralAISTTRealtimeStreamMapsReferenceEvents(t *testing.T) {
 	conn := &mistralAISTTFakeRealtimeConn{reads: [][]byte{
 		[]byte(`{"type":"session.created","session":{"request_id":"req_123","model":"voxtral-realtime-latest","audio_format":{"encoding":"pcm_s16le","sample_rate":16000}}}`),
