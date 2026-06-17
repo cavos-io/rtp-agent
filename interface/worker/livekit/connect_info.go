@@ -32,3 +32,9 @@ func JobConnectInfo(job *lkprotocol.Job, opts ConnectInfoOptions) lksdk.ConnectI
 	opts.RoomName = JobRoomName(job)
 	return ConnectInfo(opts)
 }
+
+func ConnectOptionsForAutoSubscribe(mode string) []lksdk.ConnectOption {
+	return []lksdk.ConnectOption{
+		lksdk.WithAutoSubscribe(AutoSubscribeSDKEnabled(mode)),
+	}
+}

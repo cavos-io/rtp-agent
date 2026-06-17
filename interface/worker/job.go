@@ -531,9 +531,7 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *lksdk.Room, 
 		ctx = context.Background()
 	}
 	opts := normalizeConnectOptions(options...)
-	connectOptions := []lksdk.ConnectOption{
-		lksdk.WithAutoSubscribe(workerlivekit.AutoSubscribeSDKEnabled(string(opts.AutoSubscribe))),
-	}
+	connectOptions := workerlivekit.ConnectOptionsForAutoSubscribe(string(opts.AutoSubscribe))
 	if c.token != "" {
 		if err := jobContextJoinRoomWithToken(ctx, room, c.url, c.token, connectOptions...); err != nil {
 			return err

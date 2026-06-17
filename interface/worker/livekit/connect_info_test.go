@@ -67,3 +67,14 @@ func TestJobConnectInfoUsesJobRoomName(t *testing.T) {
 		t.Fatalf("JobConnectInfo.ParticipantKind = %v, want ParticipantAgent", info.ParticipantKind)
 	}
 }
+
+func TestConnectOptionsForAutoSubscribeBuildsSDKOptions(t *testing.T) {
+	options := workerlivekit.ConnectOptionsForAutoSubscribe("audio_only")
+
+	if len(options) != 1 {
+		t.Fatalf("ConnectOptionsForAutoSubscribe() len = %d, want 1", len(options))
+	}
+	if options[0] == nil {
+		t.Fatal("ConnectOptionsForAutoSubscribe()[0] = nil, want SDK option")
+	}
+}
