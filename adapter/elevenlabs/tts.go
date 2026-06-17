@@ -364,22 +364,46 @@ type elevenLabsStream struct {
 	sampleRate int
 	contextID  string
 	initSent   bool
+
+	alignRunes    []rune
+	alignStartsMs []int
+	alignDurMs    []int
+}
+
+type elevenLabsAlignment struct {
+	Chars             []string `json:"chars"`
+	CharStartTimesMs  []int    `json:"charStartTimesMs"`
+	CharsStartTimesMs []int    `json:"charsStartTimesMs"`
+	CharDurationsMs   []int    `json:"charDurationsMs"`
+	CharsDurationsMs  []int    `json:"charsDurationsMs"`
+}
+
+func (a *elevenLabsAlignment) starts() []int {
+	if a == nil {
+		return nil
+	}
+	if len(a.CharStartTimesMs) > 0 {
+		return a.CharStartTimesMs
+	}
+	return a.CharsStartTimesMs
+}
+
+func (a *elevenLabsAlignment) durations() []int {
+	if a == nil {
+		return nil
+	}
+	if len(a.CharDurationsMs) > 0 {
+		return a.CharDurationsMs
+	}
+	return a.CharsDurationsMs
 }
 
 type elWSResponse struct {
-	Audio               string `json:"audio"`
-	IsFinal             bool   `json:"isFinal"`
-	NormalizedAlignment *struct {
-		Chars            []string `json:"chars"`
-		CharStartTimesMs []int    `json:"charStartTimesMs"`
-		CharDurationsMs  []int    `json:"charDurationsMs"`
-	} `json:"normalizedAlignment"`
-	Alignment *struct {
-		Chars            []string `json:"chars"`
-		CharStartTimesMs []int    `json:"charStartTimesMs"`
-		CharDurationsMs  []int    `json:"charDurationsMs"`
-	} `json:"alignment"`
-	Error string `json:"error,omitempty"`
+	Audio               string               `json:"audio"`
+	IsFinal             bool                 `json:"isFinal"`
+	NormalizedAlignment *elevenLabsAlignment `json:"normalizedAlignment"`
+	Alignment           *elevenLabsAlignment `json:"alignment"`
+	Error               string               `json:"error,omitempty"`
 }
 
 func (s *elevenLabsStream) readLoop() {
@@ -408,16 +432,8 @@ func (s *elevenLabsStream) readLoop() {
 			return
 		}
 
-		var deltaText strings.Builder
-		if resp.NormalizedAlignment != nil {
-			for _, char := range resp.NormalizedAlignment.Chars {
-				deltaText.WriteString(char)
-			}
-		} else if resp.Alignment != nil {
-			for _, char := range resp.Alignment.Chars {
-				deltaText.WriteString(char)
-			}
-		}
+		deltaText := elevenLabsDeltaText(resp)
+		timedTranscript := s.timedTranscriptFromAlignment(resp)
 
 		if resp.Audio != "" {
 			audio, err := elevenLabsSynthesizedAudio(resp, s.sampleRate, s.encoding)
@@ -426,19 +442,21 @@ func (s *elevenLabsStream) readLoop() {
 				s.sendError(fmt.Errorf("elevenlabs TTS websocket audio decode: %w", err))
 				return
 			}
+			audio.TimedTranscript = timedTranscript
 			select {
 			case <-s.ctx.Done():
 				return
 			case s.audio <- audio:
 			}
-		} else if resp.IsFinal || deltaText.Len() > 0 {
+		} else if resp.IsFinal || deltaText != "" {
 			// Even if there's no audio, pass alignment or final flags
 			select {
 			case <-s.ctx.Done():
 				return
 			case s.audio <- &tts.SynthesizedAudio{
-				IsFinal:   resp.IsFinal,
-				DeltaText: deltaText.String(),
+				IsFinal:         resp.IsFinal,
+				DeltaText:       deltaText,
+				TimedTranscript: timedTranscript,
 			}:
 			}
 		}
@@ -454,26 +472,21 @@ func elevenLabsSynthesizedAudio(resp elWSResponse, sampleRate int, encoding stri
 	if err != nil {
 		return nil, err
 	}
-	var deltaText strings.Builder
-	if resp.NormalizedAlignment != nil {
-		for _, char := range resp.NormalizedAlignment.Chars {
-			deltaText.WriteString(char)
-		}
-	} else if resp.Alignment != nil {
-		for _, char := range resp.Alignment.Chars {
-			deltaText.WriteString(char)
-		}
+	deltaText := elevenLabsDeltaText(resp)
+	timedTranscript := elevenLabsTimedTranscript(resp, resp.IsFinal)
+	if len(timedTranscript) == 0 {
+		timedTranscript = nil
 	}
-
 	if strings.HasPrefix(encoding, "mp3") {
 		frame, err := decodeElevenLabsMP3Audio(data, sampleRate)
 		if err != nil {
 			return nil, err
 		}
 		return &tts.SynthesizedAudio{
-			Frame:     frame,
-			IsFinal:   resp.IsFinal,
-			DeltaText: deltaText.String(),
+			Frame:           frame,
+			IsFinal:         resp.IsFinal,
+			DeltaText:       deltaText,
+			TimedTranscript: timedTranscript,
 		}, nil
 	}
 
@@ -484,9 +497,132 @@ func elevenLabsSynthesizedAudio(resp elWSResponse, sampleRate int, encoding stri
 			NumChannels:       1,
 			SamplesPerChannel: uint32(len(data) / 2),
 		},
-		IsFinal:   resp.IsFinal,
-		DeltaText: deltaText.String(),
+		IsFinal:         resp.IsFinal,
+		DeltaText:       deltaText,
+		TimedTranscript: timedTranscript,
 	}, nil
+}
+
+func elevenLabsDeltaText(resp elWSResponse) string {
+	var deltaText strings.Builder
+	if resp.NormalizedAlignment != nil {
+		for _, char := range resp.NormalizedAlignment.Chars {
+			deltaText.WriteString(char)
+		}
+	} else if resp.Alignment != nil {
+		for _, char := range resp.Alignment.Chars {
+			deltaText.WriteString(char)
+		}
+	}
+	return deltaText.String()
+}
+
+func (s *elevenLabsStream) timedTranscriptFromAlignment(resp elWSResponse) []tts.TimedString {
+	alignment := preferredElevenLabsAlignment(resp)
+	if alignment == nil {
+		return nil
+	}
+	appendElevenLabsAlignment(&s.alignRunes, &s.alignStartsMs, &s.alignDurMs, alignment)
+	timed, remainingRunes, remainingStarts, remainingDurations := elevenLabsTimedWords(s.alignRunes, s.alignStartsMs, s.alignDurMs, resp.IsFinal)
+	s.alignRunes = remainingRunes
+	s.alignStartsMs = remainingStarts
+	s.alignDurMs = remainingDurations
+	return timed
+}
+
+func elevenLabsTimedTranscript(resp elWSResponse, flush bool) []tts.TimedString {
+	alignment := preferredElevenLabsAlignment(resp)
+	if alignment == nil {
+		return nil
+	}
+	var runes []rune
+	var starts []int
+	var durations []int
+	appendElevenLabsAlignment(&runes, &starts, &durations, alignment)
+	timed, _, _, _ := elevenLabsTimedWords(runes, starts, durations, flush)
+	return timed
+}
+
+func preferredElevenLabsAlignment(resp elWSResponse) *elevenLabsAlignment {
+	if resp.NormalizedAlignment != nil {
+		return resp.NormalizedAlignment
+	}
+	return resp.Alignment
+}
+
+func appendElevenLabsAlignment(runes *[]rune, starts *[]int, durations *[]int, alignment *elevenLabsAlignment) {
+	if alignment == nil {
+		return
+	}
+	startTimes := alignment.starts()
+	durationTimes := alignment.durations()
+	if len(alignment.Chars) != len(startTimes) || len(alignment.Chars) != len(durationTimes) {
+		return
+	}
+	for i, char := range alignment.Chars {
+		charRunes := []rune(char)
+		if len(charRunes) == 0 {
+			continue
+		}
+		for j, r := range charRunes {
+			*runes = append(*runes, r)
+			*starts = append(*starts, startTimes[i])
+			if j == len(charRunes)-1 {
+				*durations = append(*durations, durationTimes[i])
+			} else {
+				*durations = append(*durations, 0)
+			}
+		}
+	}
+}
+
+func elevenLabsTimedWords(runes []rune, starts []int, durations []int, flush bool) ([]tts.TimedString, []rune, []int, []int) {
+	if len(runes) == 0 || len(runes) != len(starts) || len(runes) != len(durations) {
+		return nil, runes, starts, durations
+	}
+	wordStarts := elevenLabsWordStartIndices(runes)
+	if len(wordStarts) == 0 {
+		return nil, runes, starts, durations
+	}
+
+	timestamps := append(append([]int(nil), starts...), starts[len(starts)-1]+durations[len(durations)-1])
+	timed := make([]tts.TimedString, 0, len(wordStarts))
+	end := 0
+	for i := 0; i+1 < len(wordStarts); i++ {
+		start := wordStarts[i]
+		end = wordStarts[i+1]
+		timed = append(timed, tts.TimedString{
+			Text:      string(runes[start:end]),
+			StartTime: float64(timestamps[start]) / 1000,
+			EndTime:   float64(timestamps[end]) / 1000,
+		})
+	}
+	if flush {
+		start := end
+		timed = append(timed, tts.TimedString{
+			Text:      string(runes[start:]),
+			StartTime: float64(timestamps[start]) / 1000,
+			EndTime:   float64(timestamps[len(runes)]) / 1000,
+		})
+		end = len(runes)
+	}
+	return timed, append([]rune(nil), runes[end:]...), append([]int(nil), starts[end:]...), append([]int(nil), durations[end:]...)
+}
+
+func elevenLabsWordStartIndices(runes []rune) []int {
+	starts := []int{}
+	inWord := false
+	for i, r := range runes {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			inWord = false
+			continue
+		}
+		if !inWord {
+			starts = append(starts, i)
+			inWord = true
+		}
+	}
+	return starts
 }
 
 func decodeElevenLabsMP3Audio(data []byte, sampleRate int) (*model.AudioFrame, error) {

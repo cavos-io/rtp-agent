@@ -726,6 +726,35 @@ func TestElevenLabsSynthesizedAudioUsesConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSAlignmentMapsTimedTranscript(t *testing.T) {
+	resp := elWSResponse{
+		Audio:   base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
+		IsFinal: true,
+		NormalizedAlignment: &elevenLabsAlignment{
+			Chars:            []string{"h", "e", "l", "l", "o", " ", "w", "o", "r", "l", "d"},
+			CharStartTimesMs: []int{0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100},
+			CharDurationsMs:  []int{10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10},
+		},
+	}
+
+	audio, err := elevenLabsSynthesizedAudio(resp, 22050, "pcm_22050")
+	if err != nil {
+		t.Fatalf("elevenLabsSynthesizedAudio() error = %v", err)
+	}
+	if audio.DeltaText != "hello world" {
+		t.Fatalf("DeltaText = %q, want hello world", audio.DeltaText)
+	}
+	if len(audio.TimedTranscript) != 2 {
+		t.Fatalf("TimedTranscript = %#v, want two timed words", audio.TimedTranscript)
+	}
+	if got := audio.TimedTranscript[0]; got.Text != "hello " || got.StartTime != 0 || got.EndTime != 0.06 {
+		t.Fatalf("TimedTranscript[0] = %#v, want hello from 0 to 0.06", got)
+	}
+	if got := audio.TimedTranscript[1]; got.Text != "world" || got.StartTime != 0.06 || got.EndTime != 0.11 {
+		t.Fatalf("TimedTranscript[1] = %#v, want world from 0.06 to 0.11", got)
+	}
+}
+
 func TestElevenLabsSynthesizedAudioDecodesReferenceMP3WebsocketAudio(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
