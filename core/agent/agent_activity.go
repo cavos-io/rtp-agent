@@ -132,6 +132,7 @@ type AgentActivity struct {
 	pendingTranscriptConfidenceCount int
 	pendingUserTranscriptPresent     bool
 	lastFinalTranscriptTime          time.Time
+	lastUserLanguage                 string
 	pendingStartedSpeakingAt         *float64
 	pendingStoppedSpeakingAt         *float64
 	pendingTranscriptionDelay        float64
@@ -1578,6 +1579,8 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 	preflightTranscript := ""
 	preflightConfidence := 0.0
 	if ev != nil && ev.Type == stt.SpeechEventPreflightTranscript && transcript != "" {
+		language = referenceTranscriptLanguage(a.lastUserLanguage, language, transcript)
+		a.lastUserLanguage = language
 		preflightTranscript = strings.TrimSpace(strings.Join([]string{a.pendingUserTranscript, transcript}, " "))
 		preflightConfidence = confidence
 		if a.pendingTranscriptConfidenceCount > 0 {
@@ -1660,8 +1663,10 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	matchesPreflightTranscript := a.pendingPreflightTranscript != "" && pendingTranscript == a.pendingPreflightTranscript
 	confidenceSum := a.pendingTranscriptConfidenceSum + confidence
 	confidenceCount := a.pendingTranscriptConfidenceCount + 1
+	language = referenceTranscriptLanguage(a.lastUserLanguage, language, transcript)
 	a.pendingUserTranscript = pendingTranscript
 	a.pendingUserLanguage = language
+	a.lastUserLanguage = language
 	a.pendingTranscriptConfidenceSum = confidenceSum
 	a.pendingTranscriptConfidenceCount = confidenceCount
 	a.pendingTranscriptConfidence = confidenceSum / float64(confidenceCount)
@@ -2978,6 +2983,13 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func referenceTranscriptLanguage(current, language, transcript string) string {
+	if current == "" || (language != "" && len(transcript) > 5) {
+		return language
+	}
+	return current
 }
 
 func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {

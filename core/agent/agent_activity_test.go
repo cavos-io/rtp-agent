@@ -2486,6 +2486,47 @@ func TestAgentActivityUsesTurnDetectorLanguageThreshold(t *testing.T) {
 	}
 }
 
+func TestAgentActivityKeepsReferenceLanguageForShortFinalTranscript(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.STT = &fakePipelineSTT{}
+	agent.TurnDetector = thresholdTurnDetector{
+		probability: 0.4,
+		thresholds:  map[string]float64{"en-US": 0.3},
+	}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		MinEndpointingDelay: 0.01,
+		MaxEndpointingDelay: 0.12,
+	})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	activity.speaking = true
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "hello there",
+			Language:   "en-US",
+			Confidence: 0.9,
+		}},
+	})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "yo",
+			Confidence: 0.9,
+		}},
+	})
+	activity.OnEndOfSpeech(nil)
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "hello there yo" {
+			t.Fatalf("turn message text = %q, want hello there yo", msg.TextContent())
+		}
+	case <-time.After(70 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted waited for max delay; short final transcript lost reference language")
+	}
+}
+
 func TestAgentActivityUsesAudioTurnDetectorMaxEndpointingDelay(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeSTT
