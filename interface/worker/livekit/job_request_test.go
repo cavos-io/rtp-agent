@@ -82,6 +82,14 @@ func TestJobAssignmentInfoDefaultsURLWhenAssignmentURLMissing(t *testing.T) {
 	}
 }
 
+func TestJobTerminationInfoExposesJobID(t *testing.T) {
+	info := workerlivekit.JobTerminationInfo(&lkprotocol.JobTermination{JobId: "job-stop"})
+
+	if info.JobID != "job-stop" {
+		t.Fatalf("JobTerminationInfo().JobID = %q, want job-stop", info.JobID)
+	}
+}
+
 func TestLocalRoomJobUsesFakeJobPrefixAndRoomInfo(t *testing.T) {
 	room := &lkprotocol.Room{Name: "configured-room", Sid: "SRM_configured"}
 	job := workerlivekit.LocalRoomJob(workerlivekit.LocalRoomJobOptions{

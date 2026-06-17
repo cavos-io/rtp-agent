@@ -1895,12 +1895,14 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 }
 
 func (s *AgentServer) handleTermination(req *livekit.JobTermination) {
-	logger.Logger.Infow("Received job termination", "jobId", req.JobId)
+	termination := workerlivekit.JobTerminationInfo(req)
+	jobID := termination.JobID
+	logger.Logger.Infow("Received job termination", "jobId", jobID)
 
 	s.mu.Lock()
-	jobCtx, exists := s.activeJobs[req.JobId]
+	jobCtx, exists := s.activeJobs[jobID]
 	if exists {
-		delete(s.activeJobs, req.JobId)
+		delete(s.activeJobs, jobID)
 	}
 	s.mu.Unlock()
 
@@ -1908,7 +1910,7 @@ func (s *AgentServer) handleTermination(req *livekit.JobTermination) {
 		jobCtx.markTerminated()
 		jobCtx.Shutdown("")
 		if !jobCtx.waitForEntrypointDone(localEntrypointCloseWait) {
-			logger.Logger.Warnw("job entrypoint did not exit before termination finalized", nil, "jobId", req.JobId)
+			logger.Logger.Warnw("job entrypoint did not exit before termination finalized", nil, "jobId", jobID)
 		}
 		s.finishJob(jobCtx)
 	}

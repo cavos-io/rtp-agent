@@ -66,6 +66,17 @@ func JobAssignmentInfo(req *lkprotocol.JobAssignment, defaultURL string) Assignm
 	}
 }
 
+type TerminationInfo struct {
+	JobID string
+}
+
+func JobTerminationInfo(req *lkprotocol.JobTermination) TerminationInfo {
+	if req == nil {
+		return TerminationInfo{}
+	}
+	return TerminationInfo{JobID: req.JobId}
+}
+
 type LocalRoomJobOptions struct {
 	RoomName string
 	RoomInfo *lkprotocol.Room
