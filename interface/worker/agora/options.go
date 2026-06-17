@@ -14,6 +14,7 @@ type Options struct {
 	Token          string
 	PublishAudio   *bool
 	SubscribeAudio *bool
+	PublishData    *bool
 }
 
 func (opts Options) Validate() error {
@@ -24,4 +25,8 @@ func (opts Options) Validate() error {
 		return fmt.Errorf("AGORA_CHANNEL is required for agora worker transport")
 	}
 	return nil
+}
+
+func PublishDataEnabled(value *bool) bool {
+	return value != nil && *value
 }

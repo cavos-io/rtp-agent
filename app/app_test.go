@@ -126,6 +126,40 @@ type fakeAppAgoraChannelClient struct {
 	left        bool
 }
 
+type fakeAppAgoraDataPublisher struct {
+	mu        sync.Mutex
+	payloads  [][]byte
+	closed    bool
+	published chan []byte
+}
+
+func (f *fakeAppAgoraDataPublisher) PublishData(_ context.Context, payload []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	copied := append([]byte(nil), payload...)
+	f.payloads = append(f.payloads, copied)
+	if f.published != nil {
+		select {
+		case f.published <- copied:
+		default:
+		}
+	}
+	return nil
+}
+
+func (f *fakeAppAgoraDataPublisher) Close(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closed = true
+	return nil
+}
+
+func (f *fakeAppAgoraDataPublisher) isClosed() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.closed
+}
+
 type fakeAppSessionAssistant struct {
 	audioCh   chan *model.AudioFrame
 	started   chan struct{}
@@ -557,6 +591,7 @@ func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 	t.Setenv("AGORA_TOKEN", " agora-token ")
 	t.Setenv("AGORA_PUBLISH_AUDIO", "false")
 	t.Setenv("AGORA_SUBSCRIBE_AUDIO", "false")
+	t.Setenv("AGORA_PUBLISH_DATA", "true")
 
 	cfg := DefaultConfigFromEnv()
 
@@ -598,6 +633,9 @@ func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 	}
 	if cfg.Agora.SubscribeAudio == nil || *cfg.Agora.SubscribeAudio {
 		t.Fatalf("Agora.SubscribeAudio = %#v, want false", cfg.Agora.SubscribeAudio)
+	}
+	if cfg.Agora.PublishData == nil || !*cfg.Agora.PublishData {
+		t.Fatalf("Agora.PublishData = %#v, want true", cfg.Agora.PublishData)
 	}
 }
 
@@ -1172,6 +1210,88 @@ func TestRunAgoraPublishesAssistantAudioToChannel(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("runAgora() did not return after cancellation")
+	}
+}
+
+func TestRunAgoraPublishesTranscriptDataWhenPublishDataEnabled(t *testing.T) {
+	client := &fakeAppAgoraChannelClient{joinedCh: make(chan struct{}, 1)}
+	dataPublisher := &fakeAppAgoraDataPublisher{published: make(chan []byte, 1)}
+	oldNewAgoraChannelClient := appNewAgoraChannelClient
+	appNewAgoraChannelClient = func() (workeragora.ChannelClient, error) {
+		return client, nil
+	}
+	oldNewAgoraDataPublisher := appNewAgoraDataPublisher
+	appNewAgoraDataPublisher = func(opts workeragora.Options) (workeragora.DataPublisher, error) {
+		if opts.Channel != "support" {
+			t.Fatalf("data publisher channel = %q, want support", opts.Channel)
+		}
+		return dataPublisher, nil
+	}
+	t.Cleanup(func() {
+		appNewAgoraChannelClient = oldNewAgoraChannelClient
+		appNewAgoraDataPublisher = oldNewAgoraDataPublisher
+	})
+
+	publishData := true
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	rtpApp := &App{
+		Session: session,
+		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
+		Config: AppConfig{
+			Agora: workeragora.Options{
+				AppID:          "app",
+				Channel:        "support",
+				UID:            "agent",
+				RemoteStreamID: "caller-7",
+				Token:          "token",
+				PublishData:    &publishData,
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- rtpApp.runAgora(ctx)
+	}()
+
+	select {
+	case <-client.joinedCh:
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not join Agora channel")
+	}
+
+	session.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "need help",
+		IsFinal:    true,
+		CreatedAt:  time.UnixMilli(1710000000789),
+	})
+
+	select {
+	case payload := <-dataPublisher.published:
+		var got map[string]any
+		if err := json.Unmarshal(payload, &got); err != nil {
+			t.Fatalf("published transcript payload is not JSON: %v", err)
+		}
+		if got["role"] != "user" || got["text"] != "need help" || got["stream_id"] != "caller-7" {
+			t.Fatalf("published transcript = %#v, want TEN user transcript for remote stream", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not publish transcript data")
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("runAgora() error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not return after cancellation")
+	}
+	if !dataPublisher.isClosed() {
+		t.Fatal("data publisher was not closed")
 	}
 }
 
