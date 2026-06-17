@@ -516,6 +516,22 @@ func TestSDKClientImplementationHonorsSubscribeAudioDisabled(t *testing.T) {
 	}
 }
 
+func TestSDKClientImplementationFiltersRemoteStreamID(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"if !acceptRemoteStream(opts.RemoteStreamID, uid)",
+		"if !acceptRemoteStream(opts.RemoteStreamID, userID)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}
+
 func TestSDKClientImplementationEmitsConnectedAfterPublishAudio(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {

@@ -252,9 +252,15 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts Options, handler Event
 			emitSDKEvent(handler, event)
 		},
 		OnUserJoined: func(_ *agoraservice.RtcConnection, uid string) {
+			if !acceptRemoteStream(opts.RemoteStreamID, uid) {
+				return
+			}
 			emitSDKEvent(handler, Event{Kind: EventUserJoined, Channel: opts.Channel, UserID: uid})
 		},
 		OnUserLeft: func(_ *agoraservice.RtcConnection, uid string, reason int) {
+			if !acceptRemoteStream(opts.RemoteStreamID, uid) {
+				return
+			}
 			emitSDKEvent(handler, Event{Kind: EventUserLeft, Channel: opts.Channel, UserID: uid, Reason: reason})
 		},
 		OnError: func(_ *agoraservice.RtcConnection, errCode int, msg string) {
@@ -290,9 +296,15 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts Options, handler Event
 		}
 		if ret := connection.RegisterLocalUserObserver(&agoraservice.LocalUserObserver{
 			OnUserAudioTrackSubscribed: func(_ *agoraservice.LocalUser, uid string, _ *agoraservice.RemoteAudioTrack) {
+				if !acceptRemoteStream(opts.RemoteStreamID, uid) {
+					return
+				}
 				emitSDKEvent(handler, Event{Kind: EventUserJoined, Channel: opts.Channel, UserID: uid})
 			},
 			OnUserAudioTrackStateChanged: func(_ *agoraservice.LocalUser, uid string, _ *agoraservice.RemoteAudioTrack, state int, reason int, _ int) {
+				if !acceptRemoteStream(opts.RemoteStreamID, uid) {
+					return
+				}
 				if state == remoteAudioStateStopped && reason == remoteAudioReasonRemoteOffline {
 					emitSDKEvent(handler, Event{Kind: EventUserLeft, Channel: opts.Channel, UserID: uid, Reason: reason})
 				}
@@ -309,6 +321,9 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts Options, handler Event
 		}
 		if ret := connection.RegisterAudioFrameObserver(&agoraservice.AudioFrameObserver{
 			OnPlaybackAudioFrameBeforeMixing: func(_ *agoraservice.LocalUser, channelID string, userID string, frame *agoraservice.AudioFrame, _ agoraservice.VadState, _ *agoraservice.AudioFrame) bool {
+				if !acceptRemoteStream(opts.RemoteStreamID, userID) {
+					return true
+				}
 				if audioFrame := sdkAudioFrameToModel(frame); audioFrame != nil {
 					audioHandler(audioFrame)
 				}

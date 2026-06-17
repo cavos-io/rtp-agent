@@ -10,6 +10,7 @@ type Options struct {
 	AppCertificate string
 	Channel        string
 	UID            string
+	RemoteStreamID string
 	Token          string
 	PublishAudio   *bool
 	SubscribeAudio *bool

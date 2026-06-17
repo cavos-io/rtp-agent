@@ -30,6 +30,7 @@ func TestResolveJoinOptionsTrimsJoinFields(t *testing.T) {
 		Channel:        " support ",
 		UID:            " agent ",
 		Token:          " token ",
+		RemoteStreamID: " remote-42 ",
 	}
 
 	resolved, err := ResolveJoinOptions(opts)
@@ -51,6 +52,9 @@ func TestResolveJoinOptionsTrimsJoinFields(t *testing.T) {
 	}
 	if resolved.Token != "token" {
 		t.Fatalf("resolved Token = %q, want token", resolved.Token)
+	}
+	if resolved.RemoteStreamID != "remote-42" {
+		t.Fatalf("resolved RemoteStreamID = %q, want remote-42", resolved.RemoteStreamID)
 	}
 }
 
@@ -172,5 +176,17 @@ func TestOptionsValidateRequiresAppIDAndChannel(t *testing.T) {
 	}
 	if err := (Options{AppID: "app", Channel: "support"}).Validate(); err != nil {
 		t.Fatalf("Options.Validate() error = %v, want nil", err)
+	}
+}
+
+func TestAcceptRemoteStreamMatchesConfiguredStream(t *testing.T) {
+	if !acceptRemoteStream("", "caller-1") {
+		t.Fatal("acceptRemoteStream(empty, caller-1) = false, want true")
+	}
+	if !acceptRemoteStream("caller-1", "caller-1") {
+		t.Fatal("acceptRemoteStream(caller-1, caller-1) = false, want true")
+	}
+	if acceptRemoteStream("caller-1", "caller-2") {
+		t.Fatal("acceptRemoteStream(caller-1, caller-2) = true, want false")
 	}
 }

@@ -553,6 +553,7 @@ func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 	t.Setenv("AGORA_APP_CERTIFICATE", " agora-cert ")
 	t.Setenv("AGORA_CHANNEL", " support-room ")
 	t.Setenv("AGORA_UID", " agent-42 ")
+	t.Setenv("AGORA_REMOTE_STREAM_ID", " caller-7 ")
 	t.Setenv("AGORA_TOKEN", " agora-token ")
 	t.Setenv("AGORA_PUBLISH_AUDIO", "false")
 	t.Setenv("AGORA_SUBSCRIBE_AUDIO", "false")
@@ -567,6 +568,7 @@ func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 		"AppCertificate": cfg.Agora.AppCertificate,
 		"Channel":        cfg.Agora.Channel,
 		"UID":            cfg.Agora.UID,
+		"RemoteStreamID": cfg.Agora.RemoteStreamID,
 		"Token":          cfg.Agora.Token,
 	} {
 		if strings.TrimSpace(value) != value {
@@ -584,6 +586,9 @@ func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 	}
 	if cfg.Agora.UID != "agent-42" {
 		t.Fatalf("Agora.UID = %q, want agent-42", cfg.Agora.UID)
+	}
+	if cfg.Agora.RemoteStreamID != "caller-7" {
+		t.Fatalf("Agora.RemoteStreamID = %q, want caller-7", cfg.Agora.RemoteStreamID)
 	}
 	if cfg.Agora.Token != "agora-token" {
 		t.Fatalf("Agora.Token = %q, want agora-token", cfg.Agora.Token)

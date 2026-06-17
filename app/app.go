@@ -701,6 +701,7 @@ func DefaultConfigFromEnv() AppConfig {
 			AppCertificate: strings.TrimSpace(os.Getenv("AGORA_APP_CERTIFICATE")),
 			Channel:        strings.TrimSpace(os.Getenv("AGORA_CHANNEL")),
 			UID:            firstTrimmedEnv("AGORA_UID", "AGORA_STREAM_ID"),
+			RemoteStreamID: strings.TrimSpace(os.Getenv("AGORA_REMOTE_STREAM_ID")),
 			Token:          strings.TrimSpace(os.Getenv("AGORA_TOKEN")),
 			PublishAudio:   getenvOptionalBool("AGORA_PUBLISH_AUDIO"),
 			SubscribeAudio: getenvOptionalBool("AGORA_SUBSCRIBE_AUDIO"),
