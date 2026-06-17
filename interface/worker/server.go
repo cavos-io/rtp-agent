@@ -1397,12 +1397,13 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		}()
 	}
 
-	agentURL, err := workerlivekit.AgentWebSocketURL(s.Options.WSRL, s.Options.WorkerToken)
-	if err != nil {
-		return err
-	}
-
-	token, err := workerlivekit.WorkerAuthToken(s.Options.APIKey, s.Options.APISecret, time.Hour)
+	connectInfo, err := workerlivekit.WorkerConnectInfo(workerlivekit.WorkerConnectOptions{
+		WSURL:       s.Options.WSRL,
+		WorkerToken: s.Options.WorkerToken,
+		APIKey:      s.Options.APIKey,
+		APISecret:   s.Options.APISecret,
+		TTL:         time.Hour,
+	})
 	if err != nil {
 		return err
 	}
@@ -1418,7 +1419,7 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		dialer.Proxy = http.ProxyURL(proxyURL)
 	}
 
-	conn, res, err := s.connectWorkerWebSocket(ctx, &dialer, agentURL, workerlivekit.WorkerAuthHeader(token))
+	conn, res, err := s.connectWorkerWebSocket(ctx, &dialer, connectInfo.URL, connectInfo.Header)
 	if err != nil {
 		return err
 	}
