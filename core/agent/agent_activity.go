@@ -2311,7 +2311,9 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 		assistant := a.Session.Assistant
 		activity := a.Session.activity
 		a.Session.mu.Unlock()
-		if committer, ok := assistant.(realtimeAudioCommitter); ok {
+		if realtimeTurnDetectionEnabled(assistant) {
+			opts.SkipReply = true
+		} else if committer, ok := assistant.(realtimeAudioCommitter); ok {
 			if err := committer.CommitAudio(); err != nil {
 				return "", err
 			}
@@ -2474,6 +2476,11 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		TranscriptConfidence: &confidence,
 		CreatedAt:            time.Now(),
 	}
+	if a.realtimeServerTurnDetectionEnabled() {
+		a.cancelPreemptiveGeneration()
+		a.resetPreemptiveGenerationCount()
+		return nil, nil
+	}
 	if info.SkipReply {
 		a.cancelPreemptiveGeneration()
 		a.resetPreemptiveGenerationCount()
@@ -2598,6 +2605,16 @@ func (a *AgentActivity) shortInterruptionTranscript(transcript string) bool {
 		wordCount = len(tokenize.SplitWords(transcript, true, true, false))
 	}
 	return wordCount < a.Session.Options.MinInterruptionWords
+}
+
+func (a *AgentActivity) realtimeServerTurnDetectionEnabled() bool {
+	if a == nil || a.Session == nil {
+		return false
+	}
+	a.Session.mu.Lock()
+	assistant := a.Session.Assistant
+	a.Session.mu.Unlock()
+	return realtimeTurnDetectionEnabled(assistant)
 }
 
 func (a *AgentActivity) currentInterruptionTranscript() string {

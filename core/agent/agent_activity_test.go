@@ -3996,6 +3996,35 @@ func TestAgentActivityCommitUserTurnSkipReplyCommitsRealtimeAudioOnly(t *testing
 	}
 }
 
+func TestAgentActivityCommitUserTurnSkipsRealtimeCommitWithServerTurnDetection(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	assistant := &recordingRealtimeCommitAssistant{
+		capabilities: llm.RealtimeCapabilities{TurnDetection: true},
+	}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+
+	events := session.SpeechCreatedEvents()
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "" {
+		t.Fatalf("CommitUserTurn transcript = %q, want empty without STT final", transcript)
+	}
+	if assistant.commits != 0 {
+		t.Fatalf("CommitAudio calls = %d, want 0 with server-side turn detection", assistant.commits)
+	}
+	select {
+	case ev := <-events:
+		t.Fatalf("unexpected SpeechCreated event with server-side turn detection: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func TestAgentActivityCompleteUserTurnEmitsEOUMetricsForGeneratedReply(t *testing.T) {
 	agent := NewAgent("test")
 	agent.TurnDetection = TurnDetectionModeManual
@@ -5927,9 +5956,10 @@ func (r *recordingOptionsAssistant) UpdateOptions(_ context.Context, options llm
 }
 
 type recordingRealtimeCommitAssistant struct {
-	commits    int
-	clears     int
-	interrupts int
+	capabilities llm.RealtimeCapabilities
+	commits      int
+	clears       int
+	interrupts   int
 }
 
 func (r *recordingRealtimeCommitAssistant) Start(context.Context, *AgentSession) error {
@@ -5945,6 +5975,10 @@ func (r *recordingRealtimeCommitAssistant) SetPublishAudio(func(context.Context,
 func (r *recordingRealtimeCommitAssistant) CommitAudio() error {
 	r.commits++
 	return nil
+}
+
+func (r *recordingRealtimeCommitAssistant) RealtimeCapabilities() llm.RealtimeCapabilities {
+	return r.capabilities
 }
 
 func (r *recordingRealtimeCommitAssistant) ClearAudio() error {
