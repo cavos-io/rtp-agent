@@ -1624,8 +1624,8 @@ func (s *AgentServer) runWorkerMessageLoop(ctx context.Context, readMessage func
 				continue
 			}
 
-			msg := &livekit.ServerMessage{}
-			if err := proto.Unmarshal(result.data, msg); err != nil {
+			msg, err := workerlivekit.UnmarshalServerMessage(result.data)
+			if err != nil {
 				logger.Logger.Errorw("Failed to unmarshal server message", err)
 				continue
 			}
@@ -1838,7 +1838,7 @@ func (s *AgentServer) sendWorkerMessage(msg *livekit.WorkerMessage) error {
 		return s.workerMessageSink(msg)
 	}
 
-	b, err := proto.Marshal(msg)
+	b, err := workerlivekit.MarshalWorkerMessage(msg)
 	if err != nil {
 		return err
 	}
