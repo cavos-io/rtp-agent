@@ -2621,6 +2621,61 @@ func TestRealtimeSessionReconnectRetriesDialFailure(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionReconnectClearsPendingResponse(t *testing.T) {
+	var dialCount atomic.Int32
+	secondMessages := make(chan string, 10)
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		attempt := dialCount.Add(1)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		if attempt == 1 {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("Read response.create error = %v", err)
+				return
+			}
+			_ = conn.Close()
+			return
+		}
+		for {
+			select {
+			case <-releaseSecond:
+				return
+			default:
+			}
+			if _, payload, err := conn.ReadMessage(); err != nil {
+				return
+			} else {
+				secondMessages <- string(payload)
+			}
+		}
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "hello"}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	reconnected := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if reconnected.Reconnect == nil {
+		t.Fatal("Reconnect payload = nil")
+	}
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	assertNoRealtimeMessage(t, secondMessages, "reconnect should discard pending response")
+}
+
 func TestRealtimeSessionInitialConnectRetriesDialFailure(t *testing.T) {
 	var dialCount atomic.Int32
 	connected := make(chan struct{})

@@ -1470,6 +1470,7 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 		return err
 	}
 	s.conn = conn
+	s.pendingResponses = 0
 	s.mu.Unlock()
 
 	_ = oldConn.Close()
