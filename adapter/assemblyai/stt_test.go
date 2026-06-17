@@ -546,6 +546,35 @@ func TestAssemblyAISTTStreamCloseSendsReferenceTerminate(t *testing.T) {
 	}
 }
 
+func TestAssemblyAISTTStreamForceEndpointSendsReferenceMessage(t *testing.T) {
+	var messages []map[string]string
+	stream := &assemblyAISTTStream{
+		writeJSON: func(message any) error {
+			payload, ok := message.(map[string]string)
+			if !ok {
+				t.Fatalf("force endpoint message = %#v, want map[string]string", message)
+			}
+			messages = append(messages, payload)
+			return nil
+		},
+	}
+
+	if err := stream.ForceEndpoint(); err != nil {
+		t.Fatalf("ForceEndpoint() error = %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages = %d, want 1", len(messages))
+	}
+	if got := messages[0]["type"]; got != "ForceEndpoint" {
+		t.Fatalf("message type = %q, want ForceEndpoint", got)
+	}
+
+	stream.closed = true
+	if err := stream.ForceEndpoint(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("ForceEndpoint after close error = %v, want io.ErrClosedPipe", err)
+	}
+}
+
 func TestAssemblyAISTTCapabilitiesMatchReference(t *testing.T) {
 	provider := NewAssemblyAISTT("test-key")
 	capabilities := provider.Capabilities()

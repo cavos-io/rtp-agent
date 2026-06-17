@@ -700,6 +700,15 @@ func (s *assemblyAISTTStream) Close() error {
 	return s.closeConnection()
 }
 
+func (s *assemblyAISTTStream) ForceEndpoint() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	return s.writeJSONData(map[string]string{"type": "ForceEndpoint"})
+}
+
 func (s *assemblyAISTTStream) writeBinaryData(data []byte) error {
 	if s.writeBinary != nil {
 		return s.writeBinary(data)
