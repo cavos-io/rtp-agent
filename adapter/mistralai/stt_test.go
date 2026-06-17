@@ -191,6 +191,31 @@ func TestMistralAISTTRecognizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestMistralAISTTRecognizeReturnsAPIConnectionError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: mistralAISTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, errors.New("dial refused")
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewMistralAISTT("test-key", WithMistralAISTTBaseURL("https://mistral.example/v1"))
+
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message != `Post "https://mistral.example/v1/audio/transcriptions": dial refused` {
+		t.Fatalf("connection message = %q, want transport error", connectionErr.Message)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("retryable = false, want true")
+	}
+}
+
 func TestMistralAISTTRecognizeRequestLanguageSkipsTimestampGranularity(t *testing.T) {
 	provider := NewMistralAISTT("test-key", WithMistralAISTTLanguage("en"))
 

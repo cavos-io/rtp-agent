@@ -117,7 +117,7 @@ func (s *MistralAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
