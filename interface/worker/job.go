@@ -499,13 +499,7 @@ func (c *JobContext) Agent() *lksdk.LocalParticipant {
 
 var jobContextNewRoom = lksdk.NewRoom
 
-var jobContextJoinRoom = func(ctx context.Context, room *lksdk.Room, url string, info lksdk.ConnectInfo, opts ...lksdk.ConnectOption) error {
-	return room.JoinWithContext(ctx, url, info, opts...)
-}
-
-var jobContextJoinRoomWithToken = func(ctx context.Context, room *lksdk.Room, url string, token string, opts ...lksdk.ConnectOption) error {
-	return room.JoinWithContextAndToken(ctx, url, token, opts...)
-}
+var jobContextRoomConnector workerlivekit.RoomConnector
 
 func (c *JobContext) NewRoom(cb *lksdk.RoomCallback, options ...ConnectOptions) *lksdk.Room {
 	opts := normalizeConnectOptions(options...)
@@ -532,27 +526,22 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *lksdk.Room, 
 		ctx = context.Background()
 	}
 	opts := normalizeConnectOptions(options...)
-	connectOptions := workerlivekit.ConnectOptionsForAutoSubscribe(string(opts.AutoSubscribe))
-	if c.token != "" {
-		if err := jobContextJoinRoomWithToken(ctx, room, c.url, c.token, connectOptions...); err != nil {
-			return err
-		}
-		c.Room = room
-		c.participantsAvailable(workerlivekit.RoomRemoteParticipantViews(room))
-		c.applyAutoSubscribeOptions(opts.AutoSubscribe)
-		logger.Logger.Infow("Connected to room", "room", workerlivekit.JobRoomName(c.Job))
-		return nil
-	}
-
-	info := workerlivekit.JobConnectInfo(c.Job, workerlivekit.ConnectInfoOptions{
-		APIKey:                c.apiKey,
-		APISecret:             c.apiSecret,
-		ParticipantName:       c.AcceptArguments.Name,
-		ParticipantIdentity:   c.ParticipantIdentity(),
-		ParticipantMetadata:   c.AcceptArguments.Metadata,
-		ParticipantAttributes: c.AcceptArguments.Attributes,
-	})
-	if err := jobContextJoinRoom(ctx, room, c.url, info, connectOptions...); err != nil {
+	if err := workerlivekit.JoinPreparedRoom(ctx, workerlivekit.PreparedRoomConnectOptions{
+		Room:          room,
+		URL:           c.url,
+		Token:         c.token,
+		Job:           c.Job,
+		APIKey:        c.apiKey,
+		APISecret:     c.apiSecret,
+		AutoSubscribe: string(opts.AutoSubscribe),
+		Connector:     jobContextRoomConnector,
+		Accept: workerlivekit.ConnectInfoOptions{
+			ParticipantName:       c.AcceptArguments.Name,
+			ParticipantIdentity:   c.ParticipantIdentity(),
+			ParticipantMetadata:   c.AcceptArguments.Metadata,
+			ParticipantAttributes: c.AcceptArguments.Attributes,
+		},
+	}); err != nil {
 		return err
 	}
 	c.Room = room

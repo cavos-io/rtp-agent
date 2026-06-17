@@ -168,3 +168,58 @@ func TestConnectRoomUsesJobConnectInfoWithoutToken(t *testing.T) {
 		t.Fatal("ConnectRoom() room did not match connector room")
 	}
 }
+
+func TestJoinPreparedRoomUsesExistingRoomWithJobConnectInfo(t *testing.T) {
+	prepared := lksdk.NewRoom(nil)
+	joined := false
+
+	err := workerlivekit.JoinPreparedRoom(context.Background(), workerlivekit.PreparedRoomConnectOptions{
+		Room:          prepared,
+		URL:           "wss://livekit.example",
+		APIKey:        "key",
+		APISecret:     "secret",
+		Job:           &lkprotocol.Job{Room: &lkprotocol.Room{Name: "room-a"}},
+		AutoSubscribe: "audio_only",
+		Accept: workerlivekit.ConnectInfoOptions{
+			ParticipantName:     "Agent Name",
+			ParticipantIdentity: "agent-a",
+		},
+		Connector: workerlivekit.RoomConnector{
+			JoinWithToken: func(context.Context, *lksdk.Room, string, string, ...lksdk.ConnectOption) error {
+				t.Fatal("JoinWithToken was called, want API key join")
+				return nil
+			},
+			Join: func(joinCtx context.Context, room *lksdk.Room, url string, info lksdk.ConnectInfo, options ...lksdk.ConnectOption) error {
+				if joinCtx == nil {
+					t.Fatal("join context = nil")
+				}
+				if room != prepared {
+					t.Fatal("joined room did not match prepared room")
+				}
+				if url != "wss://livekit.example" {
+					t.Fatalf("join url = %q, want wss://livekit.example", url)
+				}
+				if info.RoomName != "room-a" {
+					t.Fatalf("ConnectInfo.RoomName = %q, want room-a", info.RoomName)
+				}
+				if info.ParticipantName != "Agent Name" {
+					t.Fatalf("ConnectInfo.ParticipantName = %q, want Agent Name", info.ParticipantName)
+				}
+				if info.ParticipantIdentity != "agent-a" {
+					t.Fatalf("ConnectInfo.ParticipantIdentity = %q, want agent-a", info.ParticipantIdentity)
+				}
+				if len(options) != 1 {
+					t.Fatalf("join options = %d, want 1", len(options))
+				}
+				joined = true
+				return nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("JoinPreparedRoom() error = %v", err)
+	}
+	if !joined {
+		t.Fatal("prepared room was not joined")
+	}
+}
