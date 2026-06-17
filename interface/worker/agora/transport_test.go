@@ -12,21 +12,22 @@ import (
 )
 
 type fakeChannelClient struct {
-	joinOptions  Options
-	handler      EventHandler
-	audioHandler AudioHandler
-	pcmFrame     PCMFrame
-	joinCtx      context.Context
-	publishCtx   context.Context
-	joinErr      error
-	leaveErr     error
-	publishErr   error
-	blockJoin    bool
-	joinCount    int
-	leaveCount   int
-	publishCount int
-	joined       bool
-	left         bool
+	joinOptions             Options
+	handler                 EventHandler
+	audioHandler            AudioHandler
+	pcmFrame                PCMFrame
+	joinCtx                 context.Context
+	publishCtx              context.Context
+	joinErr                 error
+	leaveErr                error
+	publishErr              error
+	blockJoin               bool
+	joinAfterCancelSucceeds bool
+	joinCount               int
+	leaveCount              int
+	publishCount            int
+	joined                  bool
+	left                    bool
 }
 
 func (f *fakeChannelClient) Join(ctx context.Context, opts Options, handler EventHandler, audioHandler AudioHandler) error {
@@ -40,6 +41,9 @@ func (f *fakeChannelClient) Join(ctx context.Context, opts Options, handler Even
 	}
 	if f.blockJoin {
 		<-ctx.Done()
+		if f.joinAfterCancelSucceeds {
+			return nil
+		}
 		return ctx.Err()
 	}
 	f.joined = true
@@ -170,15 +174,27 @@ func TestTransportJoinRejectsDuplicateJoinBeforeClient(t *testing.T) {
 	}
 }
 
-func TestTransportLeaveDelegatesToClient(t *testing.T) {
+func TestTransportLeaveDelegatesOnlyAfterJoinedChannel(t *testing.T) {
 	client := &fakeChannelClient{}
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 
 	if err := tr.Leave(context.Background()); err != nil {
-		t.Fatalf("Leave() error = %v", err)
+		t.Fatalf("Leave() before Join error = %v", err)
+	}
+	if client.leaveCount != 0 {
+		t.Fatalf("leave count before Join = %d, want 0", client.leaveCount)
+	}
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	if err := tr.Leave(context.Background()); err != nil {
+		t.Fatalf("Leave() after Join error = %v", err)
+	}
+	if client.leaveCount != 1 {
+		t.Fatalf("leave count after Join = %d, want 1", client.leaveCount)
 	}
 	if !client.left {
-		t.Fatal("client left = false, want true")
+		t.Fatal("client left after Join = false, want true")
 	}
 }
 
@@ -224,6 +240,68 @@ func TestTransportPublishPCMRequiresJoinedChannel(t *testing.T) {
 	}
 }
 
+func TestTransportPublishPCMStopsAfterDisconnectedEvent(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+	frame := PCMFrame{
+		Data:       []byte{1, 2, 3, 4},
+		SampleRate: 100,
+		Channels:   2,
+	}
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	client.emit(Event{Kind: EventDisconnected, Channel: "support", Reason: 17})
+	select {
+	case <-tr.Events():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for disconnected event")
+	}
+
+	err := tr.PublishPCM(context.Background(), frame)
+	if err == nil {
+		t.Fatal("PublishPCM() after disconnect error = nil, want disconnected error")
+	}
+	if !strings.Contains(err.Error(), "disconnected") {
+		t.Fatalf("PublishPCM() after disconnect error = %v, want disconnected error", err)
+	}
+	if client.publishCount != 0 {
+		t.Fatalf("publish count after disconnect = %d, want 0", client.publishCount)
+	}
+}
+
+func TestTransportPublishPCMStopsAfterErrorEvent(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+	frame := PCMFrame{
+		Data:       []byte{1, 2, 3, 4},
+		SampleRate: 100,
+		Channels:   2,
+	}
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	client.emit(Event{Kind: EventError, Channel: "support", Reason: 110, Err: errors.New("sdk error")})
+	select {
+	case <-tr.Events():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for error event")
+	}
+
+	err := tr.PublishPCM(context.Background(), frame)
+	if err == nil {
+		t.Fatal("PublishPCM() after error event error = nil, want failed transport error")
+	}
+	if !strings.Contains(err.Error(), "failed") {
+		t.Fatalf("PublishPCM() after error event error = %v, want failed transport error", err)
+	}
+	if client.publishCount != 0 {
+		t.Fatalf("publish count after error event = %d, want 0", client.publishCount)
+	}
+}
+
 func TestTransportReturnsClientErrors(t *testing.T) {
 	joinErr := errors.New("join failed")
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, &fakeChannelClient{joinErr: joinErr})
@@ -255,6 +333,115 @@ func TestTransportForwardsClientEvents(t *testing.T) {
 	}
 }
 
+func TestTransportFiltersDuplicateParticipantJoinEvents(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	client.emit(Event{Kind: EventUserJoined, Channel: "support", UserID: "user-1"})
+	client.emit(Event{Kind: EventUserJoined, Channel: "support", UserID: "user-1"})
+
+	select {
+	case event := <-tr.Events():
+		if event.Kind != EventUserJoined || event.UserID != "user-1" {
+			t.Fatalf("event = %#v, want first user-1 join", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first user join")
+	}
+	select {
+	case event := <-tr.Events():
+		t.Fatalf("duplicate participant event forwarded: %#v", event)
+	case <-time.After(10 * time.Millisecond):
+	}
+}
+
+func TestTransportDropsUnknownParticipantLeaveEvents(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	client.emit(Event{Kind: EventUserLeft, Channel: "support", UserID: "user-1"})
+
+	select {
+	case event := <-tr.Events():
+		t.Fatalf("unknown participant leave forwarded: %#v", event)
+	case <-time.After(10 * time.Millisecond):
+	}
+}
+
+func TestTransportDoesNotTrackDroppedParticipantJoinEvents(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	for i := 0; i < cap(tr.events); i++ {
+		client.emit(Event{Kind: EventConnected, Channel: "support", Reason: i})
+	}
+	client.emit(Event{Kind: EventUserJoined, Channel: "support", UserID: "user-1"})
+	for i := 0; i < cap(tr.events); i++ {
+		select {
+		case <-tr.Events():
+		case <-time.After(time.Second):
+			t.Fatal("timed out draining full event buffer")
+		}
+	}
+
+	client.emit(Event{Kind: EventUserJoined, Channel: "support", UserID: "user-1"})
+
+	select {
+	case event := <-tr.Events():
+		if event.Kind != EventUserJoined || event.UserID != "user-1" {
+			t.Fatalf("event = %#v, want user-1 join after dropped join", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for user join after dropped join")
+	}
+}
+
+func TestTransportDoesNotTrackDroppedParticipantLeaveEvents(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	client.emit(Event{Kind: EventUserJoined, Channel: "support", UserID: "user-1"})
+	select {
+	case <-tr.Events():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first user join")
+	}
+	for i := 0; i < cap(tr.events); i++ {
+		client.emit(Event{Kind: EventConnected, Channel: "support", Reason: i})
+	}
+	client.emit(Event{Kind: EventUserLeft, Channel: "support", UserID: "user-1"})
+	for i := 0; i < cap(tr.events); i++ {
+		select {
+		case <-tr.Events():
+		case <-time.After(time.Second):
+			t.Fatal("timed out draining full event buffer")
+		}
+	}
+
+	client.emit(Event{Kind: EventUserLeft, Channel: "support", UserID: "user-1"})
+
+	select {
+	case event := <-tr.Events():
+		if event.Kind != EventUserLeft || event.UserID != "user-1" {
+			t.Fatalf("event = %#v, want user-1 leave after dropped leave", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for user leave after dropped leave")
+	}
+}
+
 func TestTransportPrioritizesErrorEventsWhenBufferIsFull(t *testing.T) {
 	client := &fakeChannelClient{}
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
@@ -281,6 +468,34 @@ func TestTransportPrioritizesErrorEventsWhenBufferIsFull(t *testing.T) {
 		}
 	}
 	t.Fatal("transport dropped error event when buffer was full")
+}
+
+func TestTransportPrioritizesDisconnectedEventsWhenBufferIsFull(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	for i := 0; i < cap(tr.events); i++ {
+		client.emit(Event{Kind: EventUserJoined, Channel: "support", UserID: fmt.Sprintf("user-%d", i)})
+	}
+	client.emit(Event{Kind: EventDisconnected, Channel: "support", Reason: 17})
+
+	for i := 0; i < cap(tr.events); i++ {
+		select {
+		case event := <-tr.Events():
+			if event.Kind == EventDisconnected {
+				if event.Reason != 17 {
+					t.Fatalf("disconnect reason = %d, want 17", event.Reason)
+				}
+				return
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out draining transport events")
+		}
+	}
+	t.Fatal("transport dropped disconnected event when buffer was full")
 }
 
 func TestTransportForwardsClientAudioFrames(t *testing.T) {
@@ -318,6 +533,9 @@ func TestTransportCloseLeavesClientAndClosesEvents(t *testing.T) {
 	client := &fakeChannelClient{}
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
 	if err := tr.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
@@ -326,6 +544,21 @@ func TestTransportCloseLeavesClientAndClosesEvents(t *testing.T) {
 	}
 	if client.leaveCount != 1 {
 		t.Fatalf("leave count = %d, want 1", client.leaveCount)
+	}
+	if _, ok := <-tr.Events(); ok {
+		t.Fatal("events channel open after Close(), want closed")
+	}
+}
+
+func TestTransportCloseBeforeJoinDoesNotLeaveClient(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+
+	if err := tr.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if client.leaveCount != 0 {
+		t.Fatalf("leave count = %d, want 0", client.leaveCount)
 	}
 	if _, ok := <-tr.Events(); ok {
 		t.Fatal("events channel open after Close(), want closed")
@@ -364,6 +597,44 @@ func TestTransportCloseCancelsInProgressJoin(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Join() did not return after Close canceled the transport")
+	}
+}
+
+func TestTransportJoinReportsClosedWhenCloseWinsJoinRace(t *testing.T) {
+	client := &fakeChannelClient{blockJoin: true, joinAfterCancelSucceeds: true}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+	joinDone := make(chan error, 1)
+
+	go func() {
+		joinDone <- tr.Join(context.Background())
+	}()
+
+	deadline := time.After(time.Second)
+	for {
+		if client.joinCtx != nil {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for Join to reach channel client")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if err := tr.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	select {
+	case err := <-joinDone:
+		if err == nil || !strings.Contains(err.Error(), "closed") {
+			t.Fatalf("Join() error = %v, want closed transport error", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Join() did not return after Close canceled the transport")
+	}
+	if client.leaveCount != 0 {
+		t.Fatalf("leave count = %d, want 0", client.leaveCount)
 	}
 }
 

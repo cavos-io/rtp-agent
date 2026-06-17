@@ -67,17 +67,20 @@ type ChannelClient interface {
 }
 
 type Transport struct {
-	opts       Options
-	client     ChannelClient
-	events     chan Event
-	audio      AudioHandler
-	closeOnce  sync.Once
-	mu         sync.Mutex
-	joinCancel context.CancelFunc
-	joinSeq    uint64
-	joined     bool
-	closing    bool
-	closed     bool
+	opts         Options
+	client       ChannelClient
+	events       chan Event
+	audio        AudioHandler
+	closeOnce    sync.Once
+	mu           sync.Mutex
+	joinCancel   context.CancelFunc
+	joinSeq      uint64
+	joined       bool
+	disconnected bool
+	failed       bool
+	users        map[string]struct{}
+	closing      bool
+	closed       bool
 }
 
 func NewTransport(opts Options, client ChannelClient) *Transport {
@@ -152,10 +155,16 @@ func (t *Transport) Join(ctx context.Context) error {
 		return err
 	}
 	t.mu.Lock()
-	if !t.closing && !t.closed {
+	closed := t.closing || t.closed
+	if !closed {
 		t.joined = true
+		t.disconnected = false
+		t.failed = false
 	}
 	t.mu.Unlock()
+	if closed {
+		return fmt.Errorf("agora transport is closed")
+	}
 	return nil
 }
 
@@ -163,11 +172,20 @@ func (t *Transport) Leave(ctx context.Context) error {
 	if t == nil || t.client == nil {
 		return nil
 	}
+	t.mu.Lock()
+	joined := t.joined
+	t.mu.Unlock()
+	if !joined {
+		return nil
+	}
 	if err := t.client.Leave(normalizeContext(ctx)); err != nil {
 		return err
 	}
 	t.mu.Lock()
 	t.joined = false
+	t.disconnected = false
+	t.failed = false
+	t.users = nil
 	t.mu.Unlock()
 	return nil
 }
@@ -188,9 +206,17 @@ func (t *Transport) PublishPCM(ctx context.Context, frame PCMFrame) error {
 	t.mu.Lock()
 	closed := t.closing || t.closed
 	joined := t.joined
+	disconnected := t.disconnected
+	failed := t.failed
 	t.mu.Unlock()
 	if closed {
 		return fmt.Errorf("agora transport is closed")
+	}
+	if failed {
+		return fmt.Errorf("agora transport has failed")
+	}
+	if disconnected {
+		return fmt.Errorf("agora transport is disconnected")
 	}
 	if !joined {
 		return fmt.Errorf("agora transport is not joined")
@@ -231,19 +257,95 @@ func (t *Transport) emit(event Event) {
 	if t.closed {
 		return
 	}
+	if !t.acceptEventLocked(event) {
+		return
+	}
 	select {
 	case t.events <- event:
+		t.applyEventLocked(event)
 	default:
-		if event.Kind != EventError {
+		if !eventNeedsPriority(event) {
 			return
 		}
 		select {
-		case <-t.events:
+		case dropped := <-t.events:
+			t.revertEventLocked(dropped)
 		default:
 		}
 		select {
 		case t.events <- event:
+			t.applyEventLocked(event)
 		default:
 		}
+	}
+}
+
+func eventNeedsPriority(event Event) bool {
+	return event.Kind == EventError || event.Kind == EventDisconnected
+}
+
+func (t *Transport) acceptEventLocked(event Event) bool {
+	switch event.Kind {
+	case EventUserJoined:
+		if event.UserID == "" {
+			return true
+		}
+		if _, ok := t.users[event.UserID]; ok {
+			return false
+		}
+		return true
+	case EventUserLeft:
+		if event.UserID == "" {
+			return true
+		}
+		if _, ok := t.users[event.UserID]; !ok {
+			return false
+		}
+		return true
+	case EventDisconnected:
+		return true
+	default:
+		return true
+	}
+}
+
+func (t *Transport) applyEventLocked(event Event) {
+	switch event.Kind {
+	case EventConnected:
+		t.disconnected = false
+	case EventError:
+		t.failed = true
+	case EventUserJoined:
+		if event.UserID == "" {
+			return
+		}
+		if t.users == nil {
+			t.users = make(map[string]struct{})
+		}
+		t.users[event.UserID] = struct{}{}
+	case EventUserLeft:
+		if event.UserID != "" {
+			delete(t.users, event.UserID)
+		}
+	case EventDisconnected:
+		t.disconnected = true
+		t.users = nil
+	}
+}
+
+func (t *Transport) revertEventLocked(event Event) {
+	switch event.Kind {
+	case EventUserJoined:
+		if event.UserID != "" {
+			delete(t.users, event.UserID)
+		}
+	case EventUserLeft:
+		if event.UserID == "" {
+			return
+		}
+		if t.users == nil {
+			t.users = make(map[string]struct{})
+		}
+		t.users[event.UserID] = struct{}{}
 	}
 }
