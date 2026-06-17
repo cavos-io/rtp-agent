@@ -281,6 +281,34 @@ func TestMistralAITTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestMistralAITTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: mistralAITTSRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, errors.New("dial refused")
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider, err := NewMistralAITTS("test-key", "", WithMistralAITTSBaseURL("https://mistral.example/v1"))
+	if err != nil {
+		t.Fatalf("new tts: %v", err)
+	}
+
+	_, err = provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("Synthesize error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message != `Post "https://mistral.example/v1/audio/speech": dial refused` {
+		t.Fatalf("connection message = %q, want transport error", connectionErr.Message)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("retryable = false, want true")
+	}
+}
+
 type mistralAITTSRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f mistralAITTSRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {

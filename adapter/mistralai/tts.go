@@ -118,7 +118,7 @@ func (t *MistralAITTS) Synthesize(ctx context.Context, text string) (tts.Chunked
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
