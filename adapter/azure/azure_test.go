@@ -55,8 +55,11 @@ func TestAzureSTTFallsBackToSpeechEnvironment(t *testing.T) {
 		t.Fatalf("Model = %q, want unknown", provider.Model())
 	}
 	caps := provider.Capabilities()
-	if !caps.Streaming || !caps.InterimResults || caps.AlignedTranscript != "chunk" || !caps.OfflineRecognize {
-		t.Fatalf("Capabilities = %+v, want streaming/interim/chunk with offline recognize", caps)
+	if !caps.Streaming || !caps.InterimResults || caps.AlignedTranscript != "chunk" || caps.OfflineRecognize {
+		t.Fatalf("Capabilities = %+v, want streaming/interim/chunk without offline recognize", caps)
+	}
+	if caps.OfflineRecognize {
+		t.Fatal("OfflineRecognize = true, want false like reference Azure STT")
 	}
 }
 

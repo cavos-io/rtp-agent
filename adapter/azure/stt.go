@@ -112,7 +112,7 @@ func (s *AzureSTT) InputSampleRate() uint32 {
 	return uint32(s.sampleRate)
 }
 func (s *AzureSTT) Capabilities() stt.STTCapabilities {
-	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "chunk", OfflineRecognize: true}
+	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "chunk", OfflineRecognize: false}
 }
 
 func (s *AzureSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
