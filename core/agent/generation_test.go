@@ -1151,6 +1151,40 @@ func TestPerformToolExecutionsEmitsFinalReturnAfterRunContextUpdate(t *testing.T
 	}
 }
 
+func TestPerformToolExecutionsEmitsSubsequentRunContextUpdatesBeforeFinalReturn(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	tool := &multiRunContextUpdatingTool{}
+	toolCtx := llm.NewToolContext([]interface{}{tool})
+	functionCh := make(chan *llm.FunctionToolCall, 1)
+	functionCh <- &llm.FunctionToolCall{
+		ID:        "reply-a/fnc_0",
+		Name:      tool.Name(),
+		CallID:    "call_lookup",
+		Arguments: `{"city": "Jakarta"}`,
+	}
+	close(functionCh)
+
+	outputs := PerformToolExecutions(context.Background(), functionCh, toolCtx, WithToolExecutionSession(session))
+	first := mustReceiveToolOutput(t, outputs)
+	second := mustReceiveToolOutput(t, outputs)
+	third := mustReceiveToolOutput(t, outputs)
+	if _, ok := <-outputs; ok {
+		t.Fatal("PerformToolExecutions emitted more than two updates and final return outputs")
+	}
+
+	wantFirst := "The tool `lookup` has updated, message: searching\nThe task is still running, so DON'T make up or give information not included in the message above."
+	wantSecond := "The tool `lookup` has updated, message: ranking\nThe task is still running, so DON'T make up or give information not included in the message above."
+	if first.FncCall.CallID != "call_lookup" || first.RawOutput != wantFirst {
+		t.Fatalf("first update = (%q, %#v), want call_lookup first progress", first.FncCall.CallID, first.RawOutput)
+	}
+	if second.FncCall.CallID != "call_lookup_update_1" || second.RawOutput != wantSecond {
+		t.Fatalf("second update = (%q, %#v), want call_lookup_update_1 second progress", second.FncCall.CallID, second.RawOutput)
+	}
+	if third.FncCall.CallID != "call_lookup_final" || third.RawOutput != "final result" {
+		t.Fatalf("final output = (%q, %#v), want call_lookup_final final result", third.FncCall.CallID, third.RawOutput)
+	}
+}
+
 func TestPerformToolExecutionsRejectsDuplicateInFlightCallID(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	tool := &blockingGenerationTool{
@@ -1846,6 +1880,31 @@ func (r *runContextUpdatingTool) Execute(ctx context.Context, args string) (stri
 	r.runContext = GetRunContext(ctx)
 	if r.runContext != nil {
 		if err := r.runContext.Update("searching"); err != nil {
+			return "", err
+		}
+	}
+	return "final result", nil
+}
+
+type multiRunContextUpdatingTool struct {
+	runContext *RunContext
+}
+
+func (m *multiRunContextUpdatingTool) ID() string { return "lookup" }
+
+func (m *multiRunContextUpdatingTool) Name() string { return "lookup" }
+
+func (m *multiRunContextUpdatingTool) Description() string { return "" }
+
+func (m *multiRunContextUpdatingTool) Parameters() map[string]any { return nil }
+
+func (m *multiRunContextUpdatingTool) Execute(ctx context.Context, args string) (string, error) {
+	m.runContext = GetRunContext(ctx)
+	if m.runContext != nil {
+		if err := m.runContext.Update("searching"); err != nil {
+			return "", err
+		}
+		if err := m.runContext.Update("ranking"); err != nil {
 			return "", err
 		}
 	}

@@ -729,7 +729,9 @@ func PerformToolExecutions(
 				if runCtx != nil {
 					updates := runCtx.Updates()
 					if len(updates) > 0 {
-						outCh <- toolExecutionOutputFromUpdate(updates[0])
+						for _, update := range updates {
+							outCh <- toolExecutionOutputFromUpdate(update)
+						}
 						if finalOutput, ok := makeRunContextFinalToolOutput(runCtx, result); ok {
 							outCh <- finalOutput
 						}
