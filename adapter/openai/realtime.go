@@ -1787,7 +1787,7 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 		itemID, _ := ev["item_id"].(string)
 		contentIndex := openAIRealtimeInt(ev["content_index"])
 		delta, _ := ev["delta"].(string)
-		if itemID == "" && delta == "" {
+		if delta == "" {
 			return llm.RealtimeEvent{}, false
 		}
 		return llm.RealtimeEvent{
