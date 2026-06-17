@@ -223,7 +223,7 @@ func (s *SonioxSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		errCh:  make(chan error, 1),
 		ctx:    streamCtx,
 		cancel: cancel,
-		state:  &sonioxMessageState{},
+		state:  &sonioxMessageState{translationMode: len(s.translation) > 0},
 	}
 	go stream.readLoop()
 	go stream.keepAliveLoop()
@@ -370,8 +370,10 @@ func (s *sonioxStream) Next() (*stt.SpeechEvent, error) {
 
 type sonioxMessageState struct {
 	final              sonioxTokenAccumulator
+	finalOriginal      sonioxTokenAccumulator
 	speaking           bool
 	reportedDurationMS int
+	translationMode    bool
 }
 
 type sonioxMessage struct {
@@ -404,22 +406,31 @@ func processSonioxMessage(state *sonioxMessageState, payload []byte) ([]*stt.Spe
 
 	var events []*stt.SpeechEvent
 	nonFinal := &sonioxTokenAccumulator{}
+	nonFinalOriginal := &sonioxTokenAccumulator{}
 
 	flushFinal := func() {
 		if state.final.text == "" {
 			state.final.reset()
+			state.finalOriginal.reset()
 			return
+		}
+		sourceLanguages, sourceTexts := sonioxSourceTargetFields(&state.final)
+		targetLanguages, targetTexts := []string(nil), []string(nil)
+		if state.translationMode {
+			sourceLanguages, sourceTexts = sonioxSourceTargetFields(&state.finalOriginal)
+			targetLanguages, targetTexts = sonioxSourceTargetFields(&state.final)
 		}
 		events = append(events,
 			&stt.SpeechEvent{
 				Type: stt.SpeechEventFinalTranscript,
 				Alternatives: []stt.SpeechData{
-					state.final.toSpeechData(0, nil, nil, nil, nil),
+					state.final.toSpeechData(0, sourceLanguages, sourceTexts, targetLanguages, targetTexts),
 				},
 			},
 			&stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech},
 		)
 		state.final.reset()
+		state.finalOriginal.reset()
 		state.speaking = false
 	}
 
@@ -427,6 +438,14 @@ func processSonioxMessage(state *sonioxMessageState, payload []byte) ([]*stt.Spe
 		if isSonioxEndToken(token) {
 			flushFinal()
 			events = append(events, sonioxUsageEvents(state, message.TotalAudioProcMS)...)
+			continue
+		}
+		if state.translationMode && token.TranslationStatus != "translation" {
+			if token.IsFinal {
+				state.finalOriginal.update(token)
+			} else {
+				nonFinalOriginal.update(token)
+			}
 			continue
 		}
 		if token.IsFinal {
@@ -441,6 +460,12 @@ func processSonioxMessage(state *sonioxMessageState, payload []byte) ([]*stt.Spe
 			state.speaking = true
 			events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
 		}
+		sourceLanguages, sourceTexts := sonioxSourceTargetFields(state.final.mergedAccumulator(nonFinal))
+		targetLanguages, targetTexts := []string(nil), []string(nil)
+		if state.translationMode {
+			sourceLanguages, sourceTexts = sonioxSourceTargetFields(state.finalOriginal.mergedAccumulator(nonFinalOriginal))
+			targetLanguages, targetTexts = sonioxSourceTargetFields(state.final.mergedAccumulator(nonFinal))
+		}
 		eventType := stt.SpeechEventInterimTranscript
 		if state.final.text != "" && nonFinal.text == "" {
 			eventType = stt.SpeechEventPreflightTranscript
@@ -448,7 +473,7 @@ func processSonioxMessage(state *sonioxMessageState, payload []byte) ([]*stt.Spe
 		events = append(events, &stt.SpeechEvent{
 			Type: eventType,
 			Alternatives: []stt.SpeechData{
-				state.final.mergedSpeechData(nonFinal, 0, nil, nil, nil, nil),
+				state.final.mergedSpeechData(nonFinal, 0, sourceLanguages, sourceTexts, targetLanguages, targetTexts),
 			},
 		})
 	}
@@ -475,6 +500,17 @@ func sonioxUsageEvents(state *sonioxMessageState, totalAudioProcMS float64) []*s
 			},
 		},
 	}
+}
+
+func sonioxSourceTargetFields(acc *sonioxTokenAccumulator) ([]string, []string) {
+	if acc == nil || acc.text == "" {
+		return nil, nil
+	}
+	language := acc.language
+	if language == "" {
+		return nil, []string{acc.text}
+	}
+	return []string{language}, []string{acc.text}
 }
 
 func isSonioxEndToken(token sonioxToken) bool {
@@ -522,6 +558,30 @@ func (a *sonioxTokenAccumulator) confidence() float64 {
 		return 0
 	}
 	return a.confidenceSum / float64(a.confidenceCount)
+}
+
+func (a *sonioxTokenAccumulator) mergedAccumulator(other *sonioxTokenAccumulator) *sonioxTokenAccumulator {
+	merged := *a
+	if other == nil || other.text == "" {
+		return &merged
+	}
+	merged.text += other.text
+	if merged.language == "" {
+		merged.language = other.language
+	}
+	if merged.speakerID == "" {
+		merged.speakerID = other.speakerID
+	}
+	if !merged.hasStartMS || (other.hasStartMS && other.startMS < merged.startMS) {
+		merged.startMS = other.startMS
+		merged.hasStartMS = other.hasStartMS
+	}
+	if other.endMS > merged.endMS {
+		merged.endMS = other.endMS
+	}
+	merged.confidenceSum += other.confidenceSum
+	merged.confidenceCount += other.confidenceCount
+	return &merged
 }
 
 func (a *sonioxTokenAccumulator) toSpeechData(startTimeOffset float64, sourceLanguages []string, sourceTexts []string, targetLanguages []string, targetTexts []string) stt.SpeechData {
