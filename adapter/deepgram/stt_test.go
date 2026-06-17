@@ -2,14 +2,17 @@ package deepgram
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha1"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -330,6 +333,52 @@ func TestDeepgramRecognizeURLUsesReferenceOptions(t *testing.T) {
 	assertDeepgramQuery(t, query, "language", "id-ID")
 	assertDeepgramQuery(t, query, "punctuate", "true")
 	assertDeepgramQuery(t, query, "smart_format", "false")
+}
+
+func TestDeepgramSTTRecognizeUploadsReferenceWAV(t *testing.T) {
+	var uploaded []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var err error
+		uploaded, err = io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		if got := r.Header.Get("Content-Type"); got != "audio/wav" {
+			t.Fatalf("content-type = %q, want audio/wav", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":{"channels":[{"alternatives":[{"transcript":"ok","confidence":1,"words":[]}]}]}}`))
+	}))
+	defer server.Close()
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL(server.URL+"/v1/listen"))
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{
+		{
+			Data:              []byte{0x01, 0x02, 0x03, 0x04},
+			SampleRate:        8000,
+			NumChannels:       1,
+			SamplesPerChannel: 2,
+		},
+	}, "en-US")
+	if err != nil {
+		t.Fatalf("Recognize() error = %v", err)
+	}
+
+	if len(uploaded) < 48 {
+		t.Fatalf("uploaded bytes = %d, want wav header plus pcm", len(uploaded))
+	}
+	if string(uploaded[0:4]) != "RIFF" || string(uploaded[8:12]) != "WAVE" || string(uploaded[36:40]) != "data" {
+		t.Fatalf("uploaded prefix = %q/%q/%q, want RIFF/WAVE/data", uploaded[0:4], uploaded[8:12], uploaded[36:40])
+	}
+	if got := binary.LittleEndian.Uint32(uploaded[24:28]); got != 8000 {
+		t.Fatalf("wav sample rate = %d, want 8000", got)
+	}
+	if got := binary.LittleEndian.Uint16(uploaded[22:24]); got != 1 {
+		t.Fatalf("wav channels = %d, want 1", got)
+	}
+	if got := uploaded[len(uploaded)-4:]; !bytes.Equal(got, []byte{0x01, 0x02, 0x03, 0x04}) {
+		t.Fatalf("wav payload tail = %#v, want original pcm", got)
+	}
 }
 
 func TestDeepgramSTTEnglishOnlyModelFallsBackForNonEnglishLanguage(t *testing.T) {

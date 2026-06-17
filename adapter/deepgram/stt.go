@@ -3,6 +3,7 @@ package deepgram
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -250,12 +251,9 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 
 	languageStr = language.NormalizeLanguage(languageStr)
 
-	var buf bytes.Buffer
-	for _, f := range frames {
-		buf.Write(f.Data)
-	}
+	wav := deepgramSTTWAVBytes(frames, uint32(s.sampleRate), uint32(s.numChannels))
 
-	req, err := http.NewRequestWithContext(ctx, "POST", buildDeepgramRecognizeURL(s, languageStr), bytes.NewReader(buf.Bytes()))
+	req, err := http.NewRequestWithContext(ctx, "POST", buildDeepgramRecognizeURL(s, languageStr), bytes.NewReader(wav))
 	if err != nil {
 		return nil, err
 	}
@@ -287,6 +285,52 @@ func validateDeepgramSTTAPIKey(apiKey string) error {
 		return fmt.Errorf("deepgram API key is required, either as argument or set DEEPGRAM_API_KEY environment variable")
 	}
 	return nil
+}
+
+func deepgramSTTWAVBytes(frames []*model.AudioFrame, defaultSampleRate uint32, defaultNumChannels uint32) []byte {
+	sampleRate := defaultSampleRate
+	if sampleRate == 0 {
+		sampleRate = 16000
+	}
+	numChannels := defaultNumChannels
+	if numChannels == 0 {
+		numChannels = 1
+	}
+	var data bytes.Buffer
+	for _, frame := range frames {
+		if frame == nil {
+			continue
+		}
+		if frame.SampleRate > 0 && data.Len() == 0 {
+			sampleRate = frame.SampleRate
+		}
+		if frame.NumChannels > 0 && data.Len() == 0 {
+			numChannels = frame.NumChannels
+		}
+		data.Write(frame.Data)
+	}
+
+	pcm := data.Bytes()
+	dataSize := uint32(len(pcm))
+	byteRate := sampleRate * numChannels * 2
+	blockAlign := numChannels * 2
+
+	var wav bytes.Buffer
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36)+dataSize)
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(numChannels))
+	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
+	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(blockAlign))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	wav.WriteString("data")
+	_ = binary.Write(&wav, binary.LittleEndian, dataSize)
+	wav.Write(pcm)
+	return wav.Bytes()
 }
 
 func validateDeepgramSTTOptions(s *DeepgramSTT) error {
