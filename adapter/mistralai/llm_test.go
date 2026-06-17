@@ -2,6 +2,8 @@ package mistralai
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -70,4 +72,47 @@ func TestMistralLLMUpdateOptionsChangesReferenceModel(t *testing.T) {
 	if provider.Model() != "mistral-small-latest" {
 		t.Fatalf("model = %q, want updated model", provider.Model())
 	}
+}
+
+func TestMistralLLMUpdateOptionsAppliesReferenceSamplingParams(t *testing.T) {
+	capture := &mistralLLMCaptureHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	provider := NewMistralLLM("test-key", "", withMistralLLMHTTPClient(capture))
+	provider.UpdateOptions(
+		WithMistralLLMTemperature(0.3),
+		WithMistralLLMTopP(0.4),
+		WithMistralLLMMaxCompletionTokens(256),
+	)
+
+	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	for _, want := range []string{`"temperature":0.3`, `"top_p":0.4`, `"max_completion_tokens":256`} {
+		if !strings.Contains(capture.requestBody, want) {
+			t.Fatalf("request body = %s, want %s", capture.requestBody, want)
+		}
+	}
+}
+
+type mistralLLMCaptureHTTPClient struct {
+	statusCode   int
+	responseBody string
+	requestBody  string
+}
+
+func (c *mistralLLMCaptureHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	body, _ := io.ReadAll(req.Body)
+	c.requestBody = string(body)
+	status := c.statusCode
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return &http.Response{
+		StatusCode: status,
+		Status:     http.StatusText(status),
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(c.responseBody)),
+		Request:    req,
+	}, nil
 }
