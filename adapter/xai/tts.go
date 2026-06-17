@@ -113,11 +113,14 @@ func (t *XaiTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		return nil, fmt.Errorf("failed to dial xai tts websocket: %w", err)
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
-	return &xaiTTSSynthesizeStream{
+	stream := &xaiTTSSynthesizeStream{
 		conn:   conn,
 		ctx:    streamCtx,
 		cancel: cancel,
-	}, nil
+	}
+	stream.writeMessage = stream.writeTTSMessage
+	stream.closeConn = stream.closeWebsocketConn
+	return stream, nil
 }
 
 func validateXaiAPIKey(apiKey string) error {
@@ -195,22 +198,42 @@ func (s *xaiTTSWebsocketChunkedStream) Close() error {
 }
 
 type xaiTTSSynthesizeStream struct {
-	conn   *websocket.Conn
-	ctx    context.Context
-	cancel context.CancelFunc
-	mu     sync.Mutex
-	closed bool
+	conn         *websocket.Conn
+	ctx          context.Context
+	cancel       context.CancelFunc
+	mu           sync.Mutex
+	closed       bool
+	writeMessage func(map[string]any) error
+	closeConn    func() error
 }
 
 func (s *xaiTTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
-	return writeXaiTTSMessage(s.conn, buildXaiTTSTextDeltaMessage(text))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("xai tts stream is closed")
+	}
+	if err := s.writeMessageData(buildXaiTTSTextDeltaMessage(text)); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *xaiTTSSynthesizeStream) Flush() error {
-	return writeXaiTTSMessage(s.conn, buildXaiTTSTextDoneMessage())
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("xai tts stream is closed")
+	}
+	if err := s.writeMessageData(buildXaiTTSTextDoneMessage()); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *xaiTTSSynthesizeStream) Close() error {
@@ -222,7 +245,38 @@ func (s *xaiTTSSynthesizeStream) Close() error {
 	s.closed = true
 	s.cancel()
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	return s.closeConnection()
+}
+
+func (s *xaiTTSSynthesizeStream) writeMessageData(message map[string]any) error {
+	if s.writeMessage != nil {
+		return s.writeMessage(message)
+	}
+	return s.writeTTSMessage(message)
+}
+
+func (s *xaiTTSSynthesizeStream) writeTTSMessage(message map[string]any) error {
+	return writeXaiTTSMessage(s.conn, message)
+}
+
+func (s *xaiTTSSynthesizeStream) closeConnection() error {
+	if s.closeConn != nil {
+		return s.closeConn()
+	}
+	return s.closeWebsocketConn()
+}
+
+func (s *xaiTTSSynthesizeStream) closeWebsocketConn() error {
 	return s.conn.Close()
+}
+
+func (s *xaiTTSSynthesizeStream) closeAfterWriteFailureLocked() {
+	if s.closed {
+		return
+	}
+	s.closed = true
+	s.cancel()
+	_ = s.closeConnection()
 }
 
 func (s *xaiTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
