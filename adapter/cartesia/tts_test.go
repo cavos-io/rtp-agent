@@ -216,6 +216,37 @@ func TestCartesiaStreamInitMessageUsesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSStreamFlushUsesReferenceEndPacket(t *testing.T) {
+	var writes []map[string]any
+	stream := &cartesiaTTSStream{
+		writeJSON: func(msg any) error {
+			payload, ok := msg.(map[string]interface{})
+			if !ok {
+				t.Fatalf("message = %T, want map[string]interface{}", msg)
+			}
+			writes = append(writes, payload)
+			return nil
+		},
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+
+	if len(writes) != 1 {
+		t.Fatalf("writes = %d, want 1", len(writes))
+	}
+	if writes[0]["context_id"] != "default" {
+		t.Fatalf("context_id = %#v, want default", writes[0]["context_id"])
+	}
+	if writes[0]["transcript"] != " " {
+		t.Fatalf("transcript = %#v, want single space reference end packet", writes[0]["transcript"])
+	}
+	if writes[0]["continue"] != false {
+		t.Fatalf("continue = %#v, want false", writes[0]["continue"])
+	}
+}
+
 func TestCartesiaWebsocketURLAndHeadersMatchReference(t *testing.T) {
 	provider := NewCartesiaTTS("test-key", "", "",
 		WithCartesiaBaseURL("https://cartesia.example"),
