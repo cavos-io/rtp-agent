@@ -54,6 +54,7 @@ type OpenAISTT struct {
 	noiseReduction  string
 	useRealtime     bool
 	connect         llm.APIConnectOptions
+	maxSession      time.Duration
 	dialWebsocket   openAIRealtimeSTTWebsocketDialer
 	streamsMu       sync.Mutex
 	streams         map[*openAIRealtimeSTTStream]struct{}
@@ -158,6 +159,7 @@ func NewOpenAISTT(apiKey string, model string, opts ...OpenAISTTOption) (*OpenAI
 		model:         model,
 		language:      "en",
 		connect:       llm.DefaultAPIConnectOptions(),
+		maxSession:    10 * time.Minute,
 		dialWebsocket: defaultOpenAIRealtimeSTTWebsocketDialer,
 	}
 	for _, opt := range opts {
@@ -204,6 +206,7 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 		model:         model,
 		language:      "en",
 		connect:       llm.DefaultAPIConnectOptions(),
+		maxSession:    10 * time.Minute,
 		dialWebsocket: defaultOpenAIRealtimeSTTWebsocketDialer,
 	}
 	for _, opt := range opts {
@@ -748,6 +751,7 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 		}
 		close(s.events)
 	}()
+	connectedAt := time.Now()
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
@@ -777,7 +781,32 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 		for _, event := range events {
 			s.events <- event
 		}
+		if s.shouldRecycleAfterEvents(events, connectedAt) {
+			if reconnectErr := s.reconnectAfterUnexpectedClose(); reconnectErr != nil {
+				if s.isClosed() || s.ctx.Err() != nil {
+					return
+				}
+				s.errCh <- reconnectErr
+				return
+			}
+			connectedAt = time.Now()
+		}
 	}
+}
+
+func (s *openAIRealtimeSTTStream) shouldRecycleAfterEvents(events []*stt.SpeechEvent, connectedAt time.Time) bool {
+	if s == nil || s.owner == nil || s.owner.maxSession <= 0 {
+		return false
+	}
+	if time.Since(connectedAt) <= s.owner.maxSession {
+		return false
+	}
+	for _, event := range events {
+		if event != nil && event.Type == stt.SpeechEventRecognitionUsage {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *openAIRealtimeSTTStream) isClosed() bool {

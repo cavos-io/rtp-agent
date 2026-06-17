@@ -852,6 +852,62 @@ func TestOpenAISTTStreamReconnectsAfterUnexpectedClose(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTStreamRecyclesAfterMaxSessionDuration(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	provider.maxSession = time.Nanosecond
+	var dialCount atomic.Int32
+	secondConnected := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		attempt := dialCount.Add(1)
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			if attempt == 1 {
+				if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
+					"type":"conversation.item.input_audio_transcription.completed",
+					"item_id":"item-1",
+					"transcript":"before recycle"
+				}`)); err != nil {
+					t.Errorf("write final transcript: %v", err)
+				}
+				return
+			}
+			close(secondConnected)
+			<-releaseSecond
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+	defer close(releaseSecond)
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error before recycle = %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event type = %v, want FINAL_TRANSCRIPT", event.Type)
+	}
+	select {
+	case <-secondConnected:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not recycle after max session duration")
+	}
+	if got := dialCount.Load(); got != 2 {
+		t.Fatalf("dial count = %d, want recycled connection", got)
+	}
+}
+
 func TestOpenAIRealtimeSTTStreamBuffersAndFlushesReferenceAudioChunks(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
