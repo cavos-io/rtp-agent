@@ -98,6 +98,7 @@ import (
 	corevad "github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	workeragora "github.com/cavos-io/rtp-agent/interface/worker/agora"
+	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/plugin"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -670,8 +671,8 @@ type App struct {
 	Evaluator       *evals.JudgeGroup
 	MCPServers      []llm.MCPServer
 	MetricsRegistry *telemetry.MetricRegistry
-	RoomIO          *worker.RoomIO
-	RoomOptions     worker.RoomOptions
+	RoomIO          *workerlivekit.RoomIO
+	RoomOptions     workerlivekit.RoomOptions
 	Config          AppConfig
 	telemetryLogs   bool
 }
@@ -1735,9 +1736,9 @@ func (a *App) runSessionWithContext(ctx *worker.JobContext, sessionCtx context.C
 				return err
 			}
 		}
-		var roomIO *worker.RoomIO
+		var roomIO *workerlivekit.RoomIO
 		if ctx.Room == nil {
-			roomIO = worker.NewRoomIO(nil, a.Session, roomOptions)
+			roomIO = workerlivekit.NewRoomIO(nil, a.Session, roomOptions)
 			room := ctx.NewRoom(roomIO.GetCallback())
 			roomIO.AttachRoom(room)
 			if err := ctx.ConnectPreparedRoom(context.Background(), room); err != nil {
@@ -1748,7 +1749,7 @@ func (a *App) runSessionWithContext(ctx *worker.JobContext, sessionCtx context.C
 		if ctx.Room != nil {
 			a.Session.Room = ctx.Room
 			if roomIO == nil {
-				roomIO = worker.NewRoomIO(ctx.Room, a.Session, roomOptions)
+				roomIO = workerlivekit.NewRoomIO(ctx.Room, a.Session, roomOptions)
 			}
 			a.RoomIO = roomIO
 			if err := a.startAudioRecorder(ctx, roomIO); err != nil {
@@ -1782,7 +1783,7 @@ func (a *App) runSessionWithContext(ctx *worker.JobContext, sessionCtx context.C
 	return nil
 }
 
-func (a *App) startAudioRecorder(ctx *worker.JobContext, roomIO *worker.RoomIO) error {
+func (a *App) startAudioRecorder(ctx *worker.JobContext, roomIO *workerlivekit.RoomIO) error {
 	if ctx == nil || roomIO == nil || roomIO.Recorder == nil || ctx.Report == nil {
 		return nil
 	}

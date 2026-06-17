@@ -1,4 +1,4 @@
-package worker
+package livekit
 
 import (
 	"context"
@@ -7,13 +7,13 @@ import (
 	"io"
 	"reflect"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/interface/worker/internal/livekiterr"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/google/uuid"
 	"github.com/hraban/opus"
@@ -23,7 +23,6 @@ import (
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
-	"github.com/twitchtv/twirp"
 )
 
 type AudioDecoder interface {
@@ -772,22 +771,10 @@ func (rio *RoomIO) handleAgentSessionClose(ev agent.CloseEvent) {
 			rio.mu.Unlock()
 			close(done)
 		}()
-		if err := deleteRoom(context.Background(), roomName); err != nil && !roomDeleteNotFound(err) {
+		if err := deleteRoom(context.Background(), roomName); err != nil && !livekiterr.RoomDeleteNotFound(err) {
 			logger.Logger.Warnw("failed to delete room on agent session close", err, "room", roomName, "reason", reason)
 		}
 	}()
-}
-
-func roomDeleteNotFound(err error) bool {
-	if err == nil {
-		return false
-	}
-	var twerr twirp.Error
-	if errors.As(err, &twerr) && twerr.Code() == twirp.NotFound {
-		return true
-	}
-	errText := strings.ToLower(err.Error())
-	return strings.Contains(errText, "not_found") && strings.Contains(errText, "room")
 }
 
 func (rio *RoomIO) liveKitRoomName() string {
