@@ -1306,9 +1306,15 @@ func (s *realtimeSession) eventLoop() {
 		default:
 			_, msg, err := s.conn.ReadMessage()
 			if err != nil {
-				logger.Logger.Errorw("OpenAI realtime disconnected", err)
-				s.cancel()
-				return
+				if s.ctx.Err() != nil {
+					return
+				}
+				if reconnectErr := s.reconnectAfterDisconnect(); reconnectErr != nil {
+					logger.Logger.Errorw("OpenAI realtime disconnected", reconnectErr)
+					s.cancel()
+					return
+				}
+				continue
 			}
 
 			var ev map[string]any
@@ -1342,6 +1348,49 @@ func (s *realtimeSession) eventLoop() {
 			}
 		}
 	}
+}
+
+func (s *realtimeSession) reconnectAfterDisconnect() error {
+	if s.model == nil {
+		return fmt.Errorf("OpenAI realtime disconnected")
+	}
+	wsURL := openAIRealtimeSessionURL(s.model.baseURL, s.model.model)
+	header := http.Header{}
+	header.Add("Authorization", "Bearer "+s.model.apiKey)
+	header.Add("OpenAI-Beta", "realtime=v1")
+
+	conn, _, err := s.model.dialWebsocket(wsURL, header)
+	if err != nil {
+		return fmt.Errorf("failed to reconnect to OpenAI realtime: %w", err)
+	}
+
+	s.mu.Lock()
+	oldConn := s.conn
+	initialSession := openAIRealtimeInitialSession(s.model.model, s.model.modalities)
+	openAIRealtimeMergeSessionPayload(initialSession, openAIRealtimeSessionFromOptionEntries(s.optionsState))
+	if s.instructions != "" {
+		initialSession["instructions"] = s.instructions
+	}
+	msg := openAIRealtimeInitialSessionUpdateMessage(initialSession)
+	b, err := json.Marshal(msg)
+	if err == nil {
+		err = conn.WriteMessage(websocket.TextMessage, b)
+	}
+	if err != nil {
+		s.mu.Unlock()
+		_ = conn.Close()
+		return err
+	}
+	s.conn = conn
+	s.mu.Unlock()
+
+	_ = oldConn.Close()
+	s.closeRealtimeGeneration()
+	s.eventCh <- llm.RealtimeEvent{
+		Type:      llm.RealtimeEventTypeSessionReconnected,
+		Reconnect: &llm.RealtimeSessionReconnectedEvent{},
+	}
+	return nil
 }
 
 func (s *realtimeSession) clearPendingRealtimeResponse() {

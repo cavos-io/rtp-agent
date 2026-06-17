@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2233,9 +2234,19 @@ func TestRealtimeSessionCloseClosesActiveGenerationStreams(t *testing.T) {
 }
 
 func TestRealtimeSessionDisconnectClosesActiveGenerationStreams(t *testing.T) {
+	var dialCount atomic.Int32
+	secondConnected := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		attempt := dialCount.Add(1)
 		if _, _, err := conn.ReadMessage(); err != nil {
 			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		if attempt > 1 {
+			close(secondConnected)
+			<-releaseSecond
 			return
 		}
 		if err := conn.WriteJSON(map[string]any{
@@ -2266,6 +2277,7 @@ func TestRealtimeSessionDisconnectClosesActiveGenerationStreams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Session error = %v", err)
 	}
+	defer session.Close()
 
 	created := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
 	var msg llm.MessageGeneration
@@ -2275,12 +2287,13 @@ func TestRealtimeSessionDisconnectClosesActiveGenerationStreams(t *testing.T) {
 		t.Fatal("timed out waiting for message generation")
 	}
 	select {
-	case _, ok := <-session.EventCh():
-		if ok {
-			t.Fatal("EventCh emitted unexpected event, want close after websocket disconnect")
-		}
+	case <-secondConnected:
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for session event channel close")
+		t.Fatal("timed out waiting for session reconnect")
+	}
+	reconnected := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if reconnected.Reconnect == nil {
+		t.Fatal("Reconnect payload = nil")
 	}
 
 	select {
@@ -2325,6 +2338,63 @@ func TestRealtimeSessionDisconnectClosesActiveGenerationStreams(t *testing.T) {
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for generation function stream close")
+	}
+}
+
+func TestRealtimeSessionDisconnectReconnectsAndContinuesEvents(t *testing.T) {
+	var dialCount atomic.Int32
+	secondConnected := make(chan struct{})
+	sendResponse := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		attempt := dialCount.Add(1)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		if attempt == 1 {
+			_ = conn.Close()
+			return
+		}
+		close(secondConnected)
+		<-sendResponse
+		if err := conn.WriteJSON(map[string]any{
+			"type": "response.created",
+			"response": map[string]any{
+				"id": "resp_after_reconnect",
+			},
+		}); err != nil {
+			t.Errorf("Write response.created error = %v", err)
+		}
+		<-releaseSecond
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	select {
+	case <-secondConnected:
+	case <-time.After(time.Second):
+		t.Fatal("session did not reconnect after websocket disconnect")
+	}
+	reconnected := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if reconnected.Reconnect == nil {
+		t.Fatal("Reconnect payload = nil")
+	}
+	close(sendResponse)
+	created := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if created.Generation == nil {
+		t.Fatal("Generation = nil after reconnect")
+	}
+	if got := dialCount.Load(); got != 2 {
+		t.Fatalf("dial count = %d, want 2", got)
 	}
 }
 
