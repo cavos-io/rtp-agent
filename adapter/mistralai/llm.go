@@ -36,6 +36,8 @@ func (l *MistralLLM) Model() string {
 	return l.inner.Model()
 }
 
+func (l *MistralLLM) Provider() string { return "MistralAI" }
+
 func (l *MistralLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	if l.apiKey == "" {
 		return nil, fmt.Errorf("mistral AI API key is required; set MISTRAL_API_KEY or pass api_key")
