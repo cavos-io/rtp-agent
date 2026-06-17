@@ -580,16 +580,15 @@ func (c *JobContext) Agent() *lksdk.LocalParticipant {
 }
 
 func (c *JobContext) connectInfo() lksdk.ConnectInfo {
-	return lksdk.ConnectInfo{
+	return workerlivekit.ConnectInfo(workerlivekit.ConnectInfoOptions{
 		APIKey:                c.apiKey,
 		APISecret:             c.apiSecret,
 		RoomName:              c.Job.Room.Name,
 		ParticipantName:       c.AcceptArguments.Name,
 		ParticipantIdentity:   c.ParticipantIdentity(),
-		ParticipantKind:       lksdk.ParticipantAgent,
 		ParticipantMetadata:   c.AcceptArguments.Metadata,
 		ParticipantAttributes: c.AcceptArguments.Attributes,
-	}
+	})
 }
 
 var jobContextNewRoom = lksdk.NewRoom
