@@ -111,6 +111,8 @@ func (t *TelnyxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		cancel()
 		return nil, err
 	}
+	stream.writeMessage = stream.writeTTSMessage
+	stream.closeConn = stream.closeWebsocketConn
 	go stream.readLoop()
 	return stream, nil
 }
@@ -166,14 +168,35 @@ type telnyxTTSStream struct {
 	decoder    codecs.AudioStreamDecoder
 	mu         sync.Mutex
 	closed     bool
+
+	writeMessage func(map[string]string) error
+	closeConn    func() error
 }
 
 func (s *telnyxTTSStream) PushText(text string) error {
-	return writeTelnyxTTSMessage(s.conn, buildTelnyxTTSTextMessage(text))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("telnyx tts stream is closed")
+	}
+	if err := s.writeMessageData(buildTelnyxTTSTextMessage(text)); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *telnyxTTSStream) Flush() error {
-	return writeTelnyxTTSMessage(s.conn, buildTelnyxTTSTextMessage(""))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("telnyx tts stream is closed")
+	}
+	if err := s.writeMessageData(buildTelnyxTTSTextMessage("")); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *telnyxTTSStream) Close() error {
@@ -193,7 +216,46 @@ func (s *telnyxTTSStream) Close() error {
 		return nil
 	}
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	return s.closeConnection()
+}
+
+func (s *telnyxTTSStream) writeMessageData(message map[string]string) error {
+	if s.writeMessage != nil {
+		return s.writeMessage(message)
+	}
+	return s.writeTTSMessage(message)
+}
+
+func (s *telnyxTTSStream) writeTTSMessage(message map[string]string) error {
+	return writeTelnyxTTSMessage(s.conn, message)
+}
+
+func (s *telnyxTTSStream) closeConnection() error {
+	if s.closeConn != nil {
+		return s.closeConn()
+	}
+	return s.closeWebsocketConn()
+}
+
+func (s *telnyxTTSStream) closeWebsocketConn() error {
+	if s.conn == nil {
+		return nil
+	}
 	return s.conn.Close()
+}
+
+func (s *telnyxTTSStream) closeAfterWriteFailureLocked() {
+	if s.closed {
+		return
+	}
+	s.closed = true
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.decoder != nil {
+		_ = s.decoder.Close()
+	}
+	_ = s.closeConnection()
 }
 
 func (s *telnyxTTSStream) Next() (*tts.SynthesizedAudio, error) {
