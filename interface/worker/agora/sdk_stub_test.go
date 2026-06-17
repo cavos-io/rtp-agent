@@ -69,7 +69,9 @@ func TestSDKDataPublisherImplementationUsesBuildTag(t *testing.T) {
 	for _, want := range []string{
 		"Agora-Golang-Server-SDK",
 		"NewRtmClient",
+		"OnMessageEvent",
 		"Login",
+		"Subscribe",
 		"Publish",
 		"RtmChannelTypeMESSAGE",
 		"RtmMessageTypeSTRING",
@@ -77,6 +79,16 @@ func TestSDKDataPublisherImplementationUsesBuildTag(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("sdk_rtm.go missing %q", want)
 		}
+	}
+}
+
+func TestSDKDataPublisherCloseUsesLifecycleHelper(t *testing.T) {
+	source, err := os.ReadFile("sdk_rtm.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk_rtm.go) error = %v", err)
+	}
+	if !strings.Contains(string(source), "closeRTMClient") {
+		t.Fatal("sdk_rtm.go Close must use closeRTMClient so logout and release still run after unsubscribe failure")
 	}
 }
 

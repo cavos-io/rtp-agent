@@ -15,6 +15,7 @@ type sdkDataPublisher struct {
 	client  *agorartm.IRtmClient
 	mu      sync.Mutex
 	closed  bool
+	handler DataMessageHandler
 }
 
 func NewSDKDataPublisher(opts Options) (DataPublisher, error) {
@@ -29,6 +30,14 @@ func NewSDKDataPublisher(opts Options) (DataPublisher, error) {
 	cfg.AppId = resolved.AppID
 	cfg.UserId = resolved.UID
 	cfg.UseStringUserId = true
+	publisher := &sdkDataPublisher{
+		channel: resolved.Channel,
+	}
+	cfg.EventHandler = &agorartm.RtmEventHandler{
+		OnMessageEvent: func(event *agorartm.MessageEvent) {
+			publisher.handleMessageEvent(event)
+		},
+	}
 	client := agorartm.NewRtmClient(cfg)
 	if client == nil {
 		return nil, fmt.Errorf("agora RTM client creation failed")
@@ -37,10 +46,39 @@ func NewSDKDataPublisher(opts Options) (DataPublisher, error) {
 		client.Release()
 		return nil, fmt.Errorf("agora RTM login failed: %d", ret)
 	}
-	return &sdkDataPublisher{
-		channel: resolved.Channel,
-		client:  client,
-	}, nil
+	if ret, _ := client.Subscribe(resolved.Channel, agorartm.NewSubscribeOptions()); ret != 0 {
+		client.Logout()
+		client.Release()
+		return nil, fmt.Errorf("agora RTM subscribe failed: %d", ret)
+	}
+	publisher.client = client
+	return publisher, nil
+}
+
+func (p *sdkDataPublisher) SetDataMessageHandler(handler DataMessageHandler) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.handler = handler
+	p.mu.Unlock()
+}
+
+func (p *sdkDataPublisher) handleMessageEvent(event *agorartm.MessageEvent) {
+	if p == nil || event == nil {
+		return
+	}
+	p.mu.Lock()
+	handler := p.handler
+	p.mu.Unlock()
+	if handler == nil {
+		return
+	}
+	_ = handler(context.Background(), DataMessage{
+		Channel:   event.ChannelName,
+		Publisher: event.Publisher,
+		Payload:   append([]byte(nil), event.Message...),
+	})
 }
 
 func (p *sdkDataPublisher) PublishData(ctx context.Context, payload []byte) error {
@@ -67,6 +105,36 @@ func (p *sdkDataPublisher) PublishData(ctx context.Context, payload []byte) erro
 	return nil
 }
 
+type sdkRTMLifecycleClient struct {
+	client *agorartm.IRtmClient
+}
+
+func (c sdkRTMLifecycleClient) Unsubscribe(channel string) error {
+	if c.client == nil {
+		return nil
+	}
+	if ret, _ := c.client.Unsubscribe(channel); ret != 0 {
+		return fmt.Errorf("agora RTM unsubscribe failed: %d", ret)
+	}
+	return nil
+}
+
+func (c sdkRTMLifecycleClient) Logout() error {
+	if c.client == nil {
+		return nil
+	}
+	if ret, _ := c.client.Logout(); ret != 0 {
+		return fmt.Errorf("agora RTM logout failed: %d", ret)
+	}
+	return nil
+}
+
+func (c sdkRTMLifecycleClient) Release() {
+	if c.client != nil {
+		c.client.Release()
+	}
+}
+
 func (p *sdkDataPublisher) Close(context.Context) error {
 	if p == nil || p.client == nil {
 		return nil
@@ -77,10 +145,5 @@ func (p *sdkDataPublisher) Close(context.Context) error {
 		return nil
 	}
 	p.closed = true
-	if ret, _ := p.client.Logout(); ret != 0 {
-		p.client.Release()
-		return fmt.Errorf("agora RTM logout failed: %d", ret)
-	}
-	p.client.Release()
-	return nil
+	return closeRTMClient(sdkRTMLifecycleClient{client: p.client}, p.channel)
 }

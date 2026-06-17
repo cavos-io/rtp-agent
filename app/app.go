@@ -709,6 +709,7 @@ func DefaultConfigFromEnv() AppConfig {
 			PublishAudio:   getenvOptionalBool("AGORA_PUBLISH_AUDIO"),
 			SubscribeAudio: getenvOptionalBool("AGORA_SUBSCRIBE_AUDIO"),
 			PublishData:    getenvOptionalBool("AGORA_PUBLISH_DATA"),
+			RTMEnabled:     getenvOptionalBool("AGORA_RTM_ENABLED"),
 		},
 		AgoraGreeting:                           getenvTrimmedDefaultUnsetOnly("AGORA_GREETING", defaultAgoraGreeting),
 		Instructions:                            getenvDefault("RTP_AGENT_INSTRUCTIONS", "You are a helpful realtime voice agent."),
@@ -1197,14 +1198,30 @@ func (a *App) runAgora(ctx context.Context) error {
 		<-eventsDone
 		stopObservingEvents()
 	}()
-	if workeragora.PublishDataEnabled(agoraOpts.PublishData) {
+	if workeragora.PublishDataEnabled(agoraOpts.PublishData) || workeragora.PublishDataEnabled(agoraOpts.RTMEnabled) {
 		dataPublisher, err := appNewAgoraDataPublisher(agoraOpts)
 		if err != nil {
 			return err
 		}
+		agoraEvents.publishGreetingTranscript = func(ctx context.Context, text string) error {
+			return workeragora.PublishTranscript(ctx, dataPublisher, "assistant", text, true, "100", time.Now())
+		}
 		transcriptForwarder := workeragora.NewTranscriptForwarder(a.Session, dataPublisher, workeragora.TranscriptForwarderOptions{
 			UserStreamID: agoraOpts.RemoteStreamID,
 		})
+		if subscriber, ok := dataPublisher.(workeragora.DataMessageSubscriber); ok {
+			router := workeragora.RTMMessageRouter{
+				AgentUserID: agoraOpts.RTMUserID,
+				TextInput: func(ctx context.Context, ev workeragora.TextInputEvent) error {
+					if err := workeragora.HandleTextInput(ctx, a.Session, ev.Text); err != nil {
+						logutil.Logger.Warnw("failed to handle Agora RTM text input", err, "channel", ev.Channel, "publisher", ev.Publisher)
+						return err
+					}
+					return nil
+				},
+			}
+			subscriber.SetDataMessageHandler(router.HandleDataMessage)
+		}
 		transcriptForwarder.Start(runCtx)
 		defer func() {
 			if err := transcriptForwarder.Stop(context.Background()); err != nil {
@@ -1236,9 +1253,10 @@ func runContextErr(ctx context.Context) error {
 }
 
 type agoraRuntimeEventHandler struct {
-	session  *agent.AgentSession
-	greeting string
-	users    int
+	session                   *agent.AgentSession
+	greeting                  string
+	publishGreetingTranscript func(context.Context, string) error
+	users                     int
 }
 
 func (h *agoraRuntimeEventHandler) Handle(event workeragora.Event) {
@@ -1251,6 +1269,12 @@ func (h *agoraRuntimeEventHandler) Handle(event workeragora.Event) {
 		if h.users == 1 && h.greeting != "" && h.session != nil {
 			if _, err := h.session.Say(context.Background(), h.greeting); err != nil {
 				logutil.Logger.Warnw("failed to say Agora greeting", err, "channel", event.Channel, "userID", event.UserID)
+				return
+			}
+			if h.publishGreetingTranscript != nil {
+				if err := h.publishGreetingTranscript(context.Background(), h.greeting); err != nil {
+					logutil.Logger.Warnw("failed to publish Agora greeting transcript", err, "channel", event.Channel, "userID", event.UserID)
+				}
 			}
 		}
 	case workeragora.EventUserLeft:
