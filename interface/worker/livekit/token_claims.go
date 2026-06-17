@@ -3,6 +3,7 @@ package livekit
 import (
 	"time"
 
+	"github.com/go-jose/go-jose/v3"
 	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/livekit/protocol/auth"
 	lkprotocol "github.com/livekit/protocol/livekit"
@@ -46,6 +47,25 @@ func TokenIdentity(token string) (string, error) {
 		return "", err
 	}
 	return verifier.Identity(), nil
+}
+
+func RefreshToken(token string, apiSecret string, now time.Time, ttl time.Duration) (string, error) {
+	tok, err := jwt.ParseSigned(token)
+	if err != nil {
+		return "", err
+	}
+	standardClaims := jwt.Claims{}
+	grants := auth.ClaimGrants{}
+	if err := tok.Claims([]byte(apiSecret), &standardClaims, &grants); err != nil {
+		return "", err
+	}
+	standardClaims.Expiry = jwt.NewNumericDate(now.Add(ttl))
+
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: []byte(apiSecret)}, (&jose.SignerOptions{}).WithType("JWT"))
+	if err != nil {
+		return "", err
+	}
+	return jwt.Signed(signer).Claims(standardClaims).Claims(grants).CompactSerialize()
 }
 
 func LocalParticipantIdentity(token string, fallbackIdentity string) string {

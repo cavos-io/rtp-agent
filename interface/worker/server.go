@@ -26,10 +26,7 @@ import (
 	mathutil "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils"
-	"github.com/go-jose/go-jose/v3"
-	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/gorilla/websocket"
-	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 )
 
@@ -342,22 +339,7 @@ func refreshRunningJobTokenForReload(info workeripc.RunningJobInfo, apiSecret st
 	if apiSecret == "" {
 		return workeripc.RunningJobInfo{}, fmt.Errorf("api_secret is required to reload jobs")
 	}
-	tok, err := jwt.ParseSigned(info.Token)
-	if err != nil {
-		return workeripc.RunningJobInfo{}, err
-	}
-	standardClaims := jwt.Claims{}
-	grants := auth.ClaimGrants{}
-	if err := tok.Claims([]byte(apiSecret), &standardClaims, &grants); err != nil {
-		return workeripc.RunningJobInfo{}, err
-	}
-	standardClaims.Expiry = jwt.NewNumericDate(now.Add(time.Hour))
-
-	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: []byte(apiSecret)}, (&jose.SignerOptions{}).WithType("JWT"))
-	if err != nil {
-		return workeripc.RunningJobInfo{}, err
-	}
-	token, err := jwt.Signed(signer).Claims(standardClaims).Claims(grants).CompactSerialize()
+	token, err := workerlivekit.RefreshToken(info.Token, apiSecret, now, time.Hour)
 	if err != nil {
 		return workeripc.RunningJobInfo{}, err
 	}

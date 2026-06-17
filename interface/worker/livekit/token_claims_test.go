@@ -5,7 +5,9 @@ import (
 	"time"
 
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
+	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/livekit/protocol/auth"
+	lkprotocol "github.com/livekit/protocol/livekit"
 )
 
 func TestTokenClaimsReturnsUnverifiedTokenClaims(t *testing.T) {
@@ -137,5 +139,58 @@ func TestLocalAgentTokenCarriesRoomJoinAgentGrant(t *testing.T) {
 	}
 	if claims.Video.Room != "room-a" {
 		t.Fatalf("TokenClaims().Video.Room = %q, want room-a", claims.Video.Room)
+	}
+}
+
+func TestRefreshTokenPreservesGrantsAndUpdatesExpiry(t *testing.T) {
+	original, err := auth.NewAccessToken("api-key", "api-secret").
+		SetIdentity("agent-a").
+		SetName("Agent A").
+		SetMetadata("metadata-a").
+		SetKind(lkprotocol.ParticipantInfo_AGENT).
+		SetVideoGrant(&auth.VideoGrant{RoomJoin: true, Room: "room-a", Agent: true}).
+		ToJWT()
+	if err != nil {
+		t.Fatalf("ToJWT() error = %v", err)
+	}
+	now := time.Unix(1700000000, 0)
+
+	refreshed, err := workerlivekit.RefreshToken(original, "api-secret", now, time.Hour)
+	if err != nil {
+		t.Fatalf("RefreshToken() error = %v", err)
+	}
+	if refreshed == "" || refreshed == original {
+		t.Fatal("RefreshToken() did not return a new token")
+	}
+
+	tok, err := jwt.ParseSigned(refreshed)
+	if err != nil {
+		t.Fatalf("ParseSigned(refreshed) error = %v", err)
+	}
+	standardClaims := jwt.Claims{}
+	grants := auth.ClaimGrants{}
+	if err := tok.Claims([]byte("api-secret"), &standardClaims, &grants); err != nil {
+		t.Fatalf("refreshed token Claims() error = %v", err)
+	}
+	if standardClaims.Expiry == nil {
+		t.Fatal("refreshed token expiry = nil, want expiry")
+	}
+	if got := standardClaims.Expiry.Time(); !got.Equal(now.Add(time.Hour)) {
+		t.Fatalf("refreshed token expiry = %v, want %v", got, now.Add(time.Hour))
+	}
+	if grants.Identity != "agent-a" {
+		t.Fatalf("refreshed identity = %q, want agent-a", grants.Identity)
+	}
+	if grants.Name != "Agent A" {
+		t.Fatalf("refreshed name = %q, want Agent A", grants.Name)
+	}
+	if grants.Metadata != "metadata-a" {
+		t.Fatalf("refreshed metadata = %q, want metadata-a", grants.Metadata)
+	}
+	if grants.GetParticipantKind() != lkprotocol.ParticipantInfo_AGENT {
+		t.Fatalf("refreshed kind = %v, want AGENT", grants.GetParticipantKind())
+	}
+	if grants.Video == nil || !grants.Video.RoomJoin || !grants.Video.Agent || grants.Video.Room != "room-a" {
+		t.Fatalf("refreshed video grant = %#v, want room join agent grant", grants.Video)
 	}
 }
