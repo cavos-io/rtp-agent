@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -192,17 +193,80 @@ func rewriteMistralLLMRequestBody(body []byte) []byte {
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return body
 	}
-	seed, ok := payload["seed"]
-	if !ok {
+	changed := false
+	if seed, ok := payload["seed"]; ok {
+		if _, exists := payload["random_seed"]; !exists {
+			payload["random_seed"] = seed
+		}
+		delete(payload, "seed")
+		changed = true
+	}
+	if rewriteMistralLLMProviderTools(payload) {
+		changed = true
+	}
+	if !changed {
 		return body
 	}
-	if _, exists := payload["random_seed"]; !exists {
-		payload["random_seed"] = seed
-	}
-	delete(payload, "seed")
 	rewritten, err := json.Marshal(payload)
 	if err != nil {
 		return body
 	}
 	return rewritten
+}
+
+func rewriteMistralLLMProviderTools(payload map[string]any) bool {
+	tools, ok := payload["tools"].([]any)
+	if !ok || len(tools) == 0 {
+		return false
+	}
+	changed := false
+	rewritten := make([]any, 0, len(tools))
+	for _, tool := range tools {
+		mistralTool, ok := mistralLLMProviderToolPayload(tool)
+		if ok {
+			rewritten = append(rewritten, mistralTool)
+			changed = true
+			continue
+		}
+		rewritten = append(rewritten, tool)
+	}
+	if changed {
+		payload["tools"] = rewritten
+	}
+	return changed
+}
+
+func mistralLLMProviderToolPayload(tool any) (map[string]any, bool) {
+	toolMap, ok := tool.(map[string]any)
+	if !ok || toolMap["type"] != "function" {
+		return nil, false
+	}
+	function, ok := toolMap["function"].(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	name, ok := function["name"].(string)
+	if !ok {
+		return nil, false
+	}
+	switch name {
+	case "mistral_web_search":
+		return map[string]any{"type": "web_search"}, true
+	case "mistral_document_library":
+		out := map[string]any{"type": "document_library"}
+		if params, ok := function["parameters"].(map[string]any); ok {
+			if libraryIDs, ok := params["library_ids"]; ok {
+				out["library_ids"] = libraryIDs
+			}
+		}
+		return out, true
+	case "mistral_code_interpreter":
+		return map[string]any{"type": "code_interpreter"}, true
+	default:
+		const prefix = "mistral_connector_"
+		if connectorID := strings.TrimPrefix(name, prefix); connectorID != name && connectorID != "" {
+			return map[string]any{"type": "connector", "connector_id": connectorID}, true
+		}
+		return nil, false
+	}
 }

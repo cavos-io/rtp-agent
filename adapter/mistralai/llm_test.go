@@ -134,6 +134,42 @@ func TestMistralLLMUpdateOptionsAppliesReferenceToolChoice(t *testing.T) {
 	}
 }
 
+func TestMistralLLMSerializesReferenceProviderTools(t *testing.T) {
+	capture := &mistralLLMCaptureHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	provider := NewMistralLLM("test-key", "", withMistralLLMHTTPClient(capture))
+
+	_, _ = provider.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithTools([]llm.Tool{
+			&WebSearchTool{},
+			&DocumentLibraryTool{LibraryIDs: []string{"library-a", "library-b"}},
+			&CodeInterpreterTool{},
+			&ConnectorTool{ConnectorID: "salesforce"},
+		}),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+
+	for _, want := range []string{
+		`"type":"web_search"`,
+		`"type":"document_library"`,
+		`"library_ids":["library-a","library-b"]`,
+		`"type":"code_interpreter"`,
+		`"type":"connector"`,
+		`"connector_id":"salesforce"`,
+	} {
+		if !strings.Contains(capture.requestBody, want) {
+			t.Fatalf("request body = %s, want %s", capture.requestBody, want)
+		}
+	}
+	if strings.Contains(capture.requestBody, `"type":"function"`) {
+		t.Fatalf("request body = %s, want provider tools instead of function wrappers", capture.requestBody)
+	}
+}
+
 type mistralLLMCaptureHTTPClient struct {
 	statusCode   int
 	responseBody string
