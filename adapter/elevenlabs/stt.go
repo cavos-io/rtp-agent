@@ -157,7 +157,10 @@ func (s *ElevenLabsSTT) Stream(ctx context.Context, language string) (stt.Recogn
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildElevenLabsSTTStreamURL(s, language), buildElevenLabsSTTHeaders(s))
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial elevenlabs stt websocket: %w", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &elevenLabsSTTStream{
@@ -193,16 +196,19 @@ func (s *ElevenLabsSTT) Recognize(ctx context.Context, frames []*model.AudioFram
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("elevenlabs stt error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("ElevenLabs STT request failed", resp.StatusCode, "", string(respBody))
 	}
 	var result elevenLabsSTTResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	return elevenLabsSTTSpeechEvent(resolveElevenLabsSTTLanguage(s, language), result), nil
 }

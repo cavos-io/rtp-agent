@@ -2,6 +2,8 @@ package mistralai
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -60,4 +62,155 @@ func TestMistralLLMRequiresAPIKeyBeforeRequest(t *testing.T) {
 	if !strings.Contains(err.Error(), "MISTRAL_API_KEY") {
 		t.Fatalf("Chat error = %q, want MISTRAL_API_KEY guidance", err)
 	}
+}
+
+func TestMistralLLMUpdateOptionsChangesReferenceModel(t *testing.T) {
+	provider := NewMistralLLM("test-key", "")
+
+	provider.UpdateOptions(WithMistralLLMModel("mistral-small-latest"))
+
+	if provider.Model() != "mistral-small-latest" {
+		t.Fatalf("model = %q, want updated model", provider.Model())
+	}
+}
+
+func TestMistralLLMUpdateOptionsAppliesReferenceSamplingParams(t *testing.T) {
+	capture := &mistralLLMCaptureHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	provider := NewMistralLLM("test-key", "", withMistralLLMHTTPClient(capture))
+	provider.UpdateOptions(
+		WithMistralLLMTemperature(0.3),
+		WithMistralLLMTopP(0.4),
+		WithMistralLLMMaxCompletionTokens(256),
+	)
+
+	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	for _, want := range []string{`"temperature":0.3`, `"top_p":0.4`, `"max_tokens":256`} {
+		if !strings.Contains(capture.requestBody, want) {
+			t.Fatalf("request body = %s, want %s", capture.requestBody, want)
+		}
+	}
+	if strings.Contains(capture.requestBody, `"max_completion_tokens"`) {
+		t.Fatalf("request body = %s, want reference max_tokens key", capture.requestBody)
+	}
+}
+
+func TestMistralLLMUpdateOptionsAppliesReferencePenaltyAndSeedParams(t *testing.T) {
+	capture := &mistralLLMCaptureHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	provider := NewMistralLLM("test-key", "", withMistralLLMHTTPClient(capture))
+	provider.UpdateOptions(
+		WithMistralLLMPresencePenalty(0.2),
+		WithMistralLLMFrequencyPenalty(0.5),
+		WithMistralLLMRandomSeed(42),
+	)
+
+	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	for _, want := range []string{`"presence_penalty":0.2`, `"frequency_penalty":0.5`, `"random_seed":42`} {
+		if !strings.Contains(capture.requestBody, want) {
+			t.Fatalf("request body = %s, want %s", capture.requestBody, want)
+		}
+	}
+}
+
+func TestMistralLLMUpdateOptionsAppliesReferenceToolChoice(t *testing.T) {
+	capture := &mistralLLMCaptureHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	provider := NewMistralLLM("test-key", "", withMistralLLMHTTPClient(capture))
+	provider.UpdateOptions(WithMistralLLMToolChoice("none"))
+
+	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"tool_choice":"none"`) {
+		t.Fatalf("request body = %s, want tool_choice none", capture.requestBody)
+	}
+}
+
+func TestMistralLLMSerializesReferenceProviderTools(t *testing.T) {
+	capture := &mistralLLMCaptureHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	provider := NewMistralLLM("test-key", "", withMistralLLMHTTPClient(capture))
+
+	_, _ = provider.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithTools([]llm.Tool{
+			&WebSearchTool{},
+			&DocumentLibraryTool{LibraryIDs: []string{"library-a", "library-b"}},
+			&CodeInterpreterTool{},
+			&ConnectorTool{ConnectorID: "salesforce"},
+		}),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+
+	for _, want := range []string{
+		`"type":"web_search"`,
+		`"type":"document_library"`,
+		`"library_ids":["library-a","library-b"]`,
+		`"type":"code_interpreter"`,
+		`"type":"connector"`,
+		`"connector_id":"salesforce"`,
+	} {
+		if !strings.Contains(capture.requestBody, want) {
+			t.Fatalf("request body = %s, want %s", capture.requestBody, want)
+		}
+	}
+	if strings.Contains(capture.requestBody, `"type":"function"`) {
+		t.Fatalf("request body = %s, want provider tools instead of function wrappers", capture.requestBody)
+	}
+}
+
+func TestMistralLLMProviderToolsMapRequiredToolChoiceToAuto(t *testing.T) {
+	capture := &mistralLLMCaptureHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	provider := NewMistralLLM("test-key", "", withMistralLLMHTTPClient(capture))
+	provider.UpdateOptions(WithMistralLLMToolChoice("required"))
+
+	_, _ = provider.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithTools([]llm.Tool{&WebSearchTool{}}),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+
+	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
+		t.Fatalf("request body = %s, want provider tool_choice auto", capture.requestBody)
+	}
+	if strings.Contains(capture.requestBody, `"tool_choice":"required"`) {
+		t.Fatalf("request body = %s, want required remapped for provider tools", capture.requestBody)
+	}
+}
+
+type mistralLLMCaptureHTTPClient struct {
+	statusCode   int
+	responseBody string
+	requestBody  string
+}
+
+func (c *mistralLLMCaptureHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	body, _ := io.ReadAll(req.Body)
+	c.requestBody = string(body)
+	status := c.statusCode
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return &http.Response{
+		StatusCode: status,
+		Status:     http.StatusText(status),
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(c.responseBody)),
+		Request:    req,
+	}, nil
 }
