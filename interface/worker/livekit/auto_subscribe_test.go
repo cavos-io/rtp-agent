@@ -130,3 +130,19 @@ func TestSubscribeRemoteTrackIfAllowedReturnsSubscribeError(t *testing.T) {
 		t.Fatalf("SubscribeRemoteTrackIfAllowed().Err = %v, want %v", result.Err, wantErr)
 	}
 }
+
+func TestApplyAutoSubscribeToRoomHandlesNilRoom(t *testing.T) {
+	results := workerlivekit.ApplyAutoSubscribeToRoom(nil, "audio_only")
+
+	if len(results) != 0 {
+		t.Fatalf("ApplyAutoSubscribeToRoom(nil) results = %d, want 0", len(results))
+	}
+}
+
+func TestApplyAutoSubscribeToRoomHandlesRoomWithoutRemoteParticipants(t *testing.T) {
+	results := workerlivekit.ApplyAutoSubscribeToRoom(lksdk.NewRoom(nil), "audio_only")
+
+	if len(results) != 0 {
+		t.Fatalf("ApplyAutoSubscribeToRoom(empty room) results = %d, want 0", len(results))
+	}
+}

@@ -571,19 +571,9 @@ func normalizeConnectOptions(options ...ConnectOptions) ConnectOptions {
 }
 
 func (c *JobContext) applyAutoSubscribeOptions(mode AutoSubscribe) {
-	if c.Room == nil {
-		return
-	}
-	for _, participant := range c.Room.GetRemoteParticipants() {
-		for _, publication := range participant.TrackPublications() {
-			remotePublication, ok := publication.(*lksdk.RemoteTrackPublication)
-			if !ok {
-				continue
-			}
-			result := workerlivekit.SubscribeRemoteTrackIfAllowed(string(mode), remotePublication)
-			if result.Attempted && result.Err != nil {
-				logger.Logger.Warnw("failed to subscribe remote track", result.Err, "trackSid", result.TrackSID)
-			}
+	for _, result := range workerlivekit.ApplyAutoSubscribeToRoom(c.Room, string(mode)) {
+		if result.Err != nil {
+			logger.Logger.Warnw("failed to subscribe remote track", result.Err, "trackSid", result.TrackSID)
 		}
 	}
 }

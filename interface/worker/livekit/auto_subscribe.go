@@ -47,6 +47,26 @@ func SubscribeRemoteTrackIfAllowed(mode string, publication RemoteTrackPublicati
 	return result
 }
 
+func ApplyAutoSubscribeToRoom(room *lksdk.Room, mode string) []RemoteTrackSubscriptionResult {
+	if room == nil {
+		return nil
+	}
+	var results []RemoteTrackSubscriptionResult
+	for _, participant := range room.GetRemoteParticipants() {
+		for _, publication := range participant.TrackPublications() {
+			remotePublication, ok := publication.(*lksdk.RemoteTrackPublication)
+			if !ok {
+				continue
+			}
+			result := SubscribeRemoteTrackIfAllowed(mode, remotePublication)
+			if result.Attempted {
+				results = append(results, result)
+			}
+		}
+	}
+	return results
+}
+
 func NormalizeAutoSubscribeMode(mode string) string {
 	return normalizeAutoSubscribe(mode)
 }
