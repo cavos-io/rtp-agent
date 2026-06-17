@@ -127,6 +127,7 @@ type AgentActivity struct {
 	pendingPreflightTranscript       string
 	pendingPreflightConfidence       float64
 	userTurnCompletionMu             sync.Mutex
+	userTurnCompletionSeq            uint64
 	commitUserTurnMu                 sync.Mutex
 	commitUserTurnCancel             context.CancelFunc
 	commitUserTurnSeq                uint64
@@ -2540,6 +2541,7 @@ func (a *AgentActivity) inputTranscriptionFlusher() (inputTranscriptionFlusher, 
 }
 
 func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo) (*SpeechHandle, error) {
+	turnSeq := a.nextUserTurnCompletionSeq()
 	a.userTurnCompletionMu.Lock()
 	defer a.userTurnCompletionMu.Unlock()
 
@@ -2646,6 +2648,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		if err != nil {
 			return nil, err
 		}
+		a.interruptObsoleteUserTurnReply(turnSeq, handle)
 		a.emitEOUMetrics(handle, info, hookDelay)
 		return handle, nil
 	}
@@ -2675,8 +2678,28 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 			return nil, err
 		}
 	}
+	a.interruptObsoleteUserTurnReply(turnSeq, handle)
 	a.emitEOUMetrics(handle, info, hookDelay)
 	return handle, nil
+}
+
+func (a *AgentActivity) nextUserTurnCompletionSeq() uint64 {
+	a.commitUserTurnMu.Lock()
+	defer a.commitUserTurnMu.Unlock()
+	a.userTurnCompletionSeq++
+	return a.userTurnCompletionSeq
+}
+
+func (a *AgentActivity) interruptObsoleteUserTurnReply(turnSeq uint64, handle *SpeechHandle) {
+	if a == nil || handle == nil {
+		return
+	}
+	a.commitUserTurnMu.Lock()
+	obsolete := a.userTurnCompletionSeq != turnSeq
+	a.commitUserTurnMu.Unlock()
+	if obsolete {
+		_ = handle.Interrupt(false)
+	}
 }
 
 func (a *AgentActivity) emitEOUMetrics(handle *SpeechHandle, info EndOfTurnInfo, hookDelay float64) {

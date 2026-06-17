@@ -4574,6 +4574,90 @@ func TestAgentActivityCompleteUserTurnWaitsForPreviousHook(t *testing.T) {
 	}
 }
 
+func TestAgentActivityCompleteUserTurnInterruptsObsoleteReply(t *testing.T) {
+	agent := &blockingTurnAgent{
+		Agent:   NewAgent("test"),
+		started: make(chan *llm.ChatMessage, 2),
+		release: make(chan struct{}),
+	}
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	events := session.SpeechCreatedEvents()
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := activity.completeUserTurn(context.Background(), EndOfTurnInfo{
+			NewTranscript:        "first obsolete",
+			TranscriptConfidence: 0.9,
+		})
+		firstDone <- err
+	}()
+	select {
+	case msg := <-agent.started:
+		if got := msg.TextContent(); got != "first obsolete" {
+			t.Fatalf("first hook message = %q, want first obsolete", got)
+		}
+	case <-testTimeout():
+		t.Fatal("first hook did not start")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := activity.completeUserTurn(context.Background(), EndOfTurnInfo{
+			NewTranscript:        "second current",
+			TranscriptConfidence: 0.9,
+		})
+		secondDone <- err
+	}()
+
+	select {
+	case msg := <-agent.started:
+		close(agent.release)
+		t.Fatalf("second hook started before first completed with %q", msg.TextContent())
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(agent.release)
+	var firstSpeech *SpeechHandle
+	select {
+	case ev := <-events:
+		firstSpeech = ev.SpeechHandle
+	case <-testTimeout():
+		t.Fatal("first reply was not generated")
+	}
+	if !firstSpeech.IsInterrupted() {
+		t.Fatal("first reply was not interrupted after newer turn started")
+	}
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatalf("first completeUserTurn error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("first completeUserTurn did not finish")
+	}
+	select {
+	case msg := <-agent.started:
+		if got := msg.TextContent(); got != "second current" {
+			t.Fatalf("second hook message = %q, want second current", got)
+		}
+	case <-testTimeout():
+		t.Fatal("second hook did not start")
+	}
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("second completeUserTurn error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("second completeUserTurn did not finish")
+	}
+}
+
 func TestAgentActivityCompleteUserTurnSkipsShortInterruptions(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeSTT
