@@ -3,7 +3,10 @@ package deepgram
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -171,6 +174,39 @@ func TestDeepgramTTSUpdateOptionsMatchesReference(t *testing.T) {
 	assertDeepgramTTSQuery(t, parsedStream.Query(), "model", "aura-2-asteria-en")
 	if got := provider.Model(); got != "aura-2-asteria-en" {
 		t.Fatalf("Model() = %q, want aura-2-asteria-en", got)
+	}
+}
+
+func TestDeepgramTTSStreamCloseSendsReferenceFlushAndClose(t *testing.T) {
+	var writes []string
+	closed := false
+	stream := &deepgramTTSStream{
+		writeJSON: func(v any) error {
+			msg, ok := v.(map[string]interface{})
+			if !ok {
+				t.Fatalf("writeJSON payload = %#v, want map", v)
+			}
+			msgType, _ := msg["type"].(string)
+			writes = append(writes, msgType)
+			return nil
+		},
+		closeConn: func() error {
+			closed = true
+			return nil
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v, want nil", err)
+	}
+	if !reflect.DeepEqual(writes, []string{"Flush", "Close"}) {
+		t.Fatalf("writes = %#v, want Flush then Close", writes)
+	}
+	if !closed {
+		t.Fatal("connection not closed")
+	}
+	if err := stream.PushText("later"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after Close error = %v, want io.ErrClosedPipe", err)
 	}
 }
 
