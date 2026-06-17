@@ -2727,9 +2727,11 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	if activity != nil {
 		if commitPendingUserTurn {
 			commitCtx := ctx
+			parentCtx := ctx
 			var cancel context.CancelFunc
 			if commitCtx == nil {
 				commitCtx = context.Background()
+				parentCtx = commitCtx
 			}
 			if timeout := s.Options.SessionCloseTranscriptTimeout; timeout > 0 {
 				commitCtx, cancel = context.WithTimeout(commitCtx, time.Duration(timeout*float64(time.Second)))
@@ -2737,7 +2739,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 			if _, err := activity.CommitUserTurn(commitCtx, CommitUserTurnOptions{
 				TranscriptTimeout: time.Duration(s.Options.SessionCloseTranscriptTimeout * float64(time.Second)),
 				SkipRealtimeAudio: true,
-			}); err != nil {
+			}); err != nil && !(cancel != nil && errors.Is(err, context.DeadlineExceeded) && parentCtx.Err() == nil) {
 				stopErr = err
 			}
 			if cancel != nil {

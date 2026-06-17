@@ -4137,6 +4137,19 @@ func TestAgentSessionCloseSoonDoesNotCommitRealtimeAudioOrReply(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStopTreatsCloseTranscriptTimeoutAsGraceful(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{SessionCloseTranscriptTimeout: 0.01})
+	session.Assistant = blockingCloseTranscriptFlusher{}
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+
+	if err := session.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop() error = %v, want nil after close transcript timeout", err)
+	}
+}
+
 func TestAgentSessionStopCancelsActiveAgentTask(t *testing.T) {
 	task := NewAgentTask[string]("collect data")
 	task.ID = "collect_data"
@@ -5403,6 +5416,20 @@ func (f *fakeAvatarProvider) Start(ctx context.Context) error {
 func (f *fakeAvatarProvider) UpdateState(state AvatarState) error {
 	f.state = state
 	return nil
+}
+
+type blockingCloseTranscriptFlusher struct{}
+
+func (blockingCloseTranscriptFlusher) Start(context.Context, *AgentSession) error { return nil }
+
+func (blockingCloseTranscriptFlusher) OnAudioFrame(context.Context, *model.AudioFrame) {}
+
+func (blockingCloseTranscriptFlusher) SetPublishAudio(func(context.Context, *model.AudioFrame) error) {
+}
+
+func (blockingCloseTranscriptFlusher) FlushInputTranscription(ctx context.Context, _ time.Duration) error {
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 type fakeSessionMCPServer struct {
