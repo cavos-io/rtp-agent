@@ -128,12 +128,16 @@ type fakeAppAgoraChannelClient struct {
 
 type fakeAppSessionAssistant struct {
 	audioCh  chan *model.AudioFrame
+	started  chan struct{}
 	startCtx context.Context
 	publish  func(ctx context.Context, frame *model.AudioFrame) error
 }
 
 func (f *fakeAppSessionAssistant) Start(ctx context.Context, s *agent.AgentSession) error {
 	f.startCtx = ctx
+	if f.started != nil {
+		close(f.started)
+	}
 	return nil
 }
 
@@ -1034,7 +1038,7 @@ func TestRunAgoraStartsSessionWithWorkerContext(t *testing.T) {
 		appNewAgoraChannelClient = oldNewAgoraChannelClient
 	})
 
-	assistant := &fakeAppSessionAssistant{}
+	assistant := &fakeAppSessionAssistant{started: make(chan struct{})}
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 	session.Assistant = assistant
 	session.LLM = &fakeAppLLM{}
@@ -1061,6 +1065,11 @@ func TestRunAgoraStartsSessionWithWorkerContext(t *testing.T) {
 	case <-client.joinedCh:
 	case <-time.After(time.Second):
 		t.Fatal("runAgora() did not join Agora channel")
+	}
+	select {
+	case <-assistant.started:
+	case <-time.After(time.Second):
+		t.Fatal("assistant Start was not called")
 	}
 	if assistant.startCtx == nil {
 		t.Fatal("assistant Start context = nil, want worker context")
