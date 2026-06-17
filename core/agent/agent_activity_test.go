@@ -3276,6 +3276,22 @@ func TestAgentActivityClearUserTurnClearsRealtimeAudio(t *testing.T) {
 	}
 }
 
+func TestAgentActivityClearUserTurnClearsInputTranscription(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	assistant := &recordingInputTranscriptionClearer{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.ClearUserTurn()
+
+	if assistant.clears != 1 {
+		t.Fatalf("ClearInputTranscription calls = %d, want 1", assistant.clears)
+	}
+}
+
 func TestAgentActivityCommitUserTurnCompletesPendingManualTranscript(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
@@ -5366,6 +5382,22 @@ func (r *recordingTranscriptFlusher) FlushInputTranscription(_ context.Context, 
 	case r.flushed <- struct{}{}:
 	default:
 	}
+	return nil
+}
+
+type recordingInputTranscriptionClearer struct {
+	clears int
+}
+
+func (r *recordingInputTranscriptionClearer) Start(context.Context, *AgentSession) error { return nil }
+
+func (r *recordingInputTranscriptionClearer) OnAudioFrame(context.Context, *model.AudioFrame) {}
+
+func (r *recordingInputTranscriptionClearer) SetPublishAudio(func(context.Context, *model.AudioFrame) error) {
+}
+
+func (r *recordingInputTranscriptionClearer) ClearInputTranscription() error {
+	r.clears++
 	return nil
 }
 

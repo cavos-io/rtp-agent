@@ -201,6 +201,10 @@ type inputTranscriptionFlusher interface {
 	FlushInputTranscription(context.Context, time.Duration) error
 }
 
+type inputTranscriptionClearer interface {
+	ClearInputTranscription() error
+}
+
 type preemptiveGeneration struct {
 	speech     *SpeechHandle
 	userMsg    *llm.ChatMessage
@@ -2228,6 +2232,11 @@ func (a *AgentActivity) ClearUserTurn() {
 		if clearer, ok := assistant.(realtimeAudioClearer); ok {
 			if err := clearer.ClearAudio(); err != nil {
 				logger.Logger.Warnw("failed to clear realtime audio", err)
+			}
+		}
+		if clearer, ok := assistant.(inputTranscriptionClearer); ok {
+			if err := clearer.ClearInputTranscription(); err != nil {
+				logger.Logger.Warnw("failed to clear input transcription", err)
 			}
 		}
 	}

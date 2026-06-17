@@ -143,6 +143,38 @@ func (va *PipelineAgent) FlushInputTranscription(ctx context.Context, duration t
 	return stream.Flush()
 }
 
+func (va *PipelineAgent) ClearInputTranscription() error {
+	if va == nil {
+		return nil
+	}
+	va.mu.Lock()
+	oldStream := va.sttStream
+	sttObj := va.stt
+	ctx := va.ctx
+	va.mu.Unlock()
+	if oldStream != nil {
+		if err := oldStream.Close(); err != nil && !isSpeechStreamShutdownError(err) {
+			return err
+		}
+	}
+	if sttObj == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	stream, err := sttObj.Stream(ctx, "")
+	if err != nil {
+		return err
+	}
+	va.mu.Lock()
+	va.sttStream = stream
+	va.lastSTTFrame = nil
+	va.mu.Unlock()
+	go va.sttLoop(stream)
+	return nil
+}
+
 func (va *PipelineAgent) UpdateComponents(vadObj vad.VAD, sttObj stt.STT, llmObj llm.LLM, ttsObj tts.TTS) {
 	va.mu.Lock()
 	defer va.mu.Unlock()
@@ -203,22 +235,7 @@ func (va *PipelineAgent) run(ctx context.Context) {
 		va.mu.Lock()
 		va.sttStream = stream
 		va.mu.Unlock()
-		defer func() {
-			va.mu.Lock()
-			if va.sttStream == stream {
-				va.sttStream = nil
-				va.lastSTTFrame = nil
-			}
-			va.mu.Unlock()
-			if err := sttStream.Close(); err != nil && !isSpeechStreamShutdownError(err) {
-				logger.Logger.Errorw("failed to close STT stream", err)
-				label := "stt"
-				if va.stt != nil {
-					label = va.stt.Label()
-				}
-				va.emitError(stt.NewSTTError(label, err, false), va.stt)
-			}
-		}()
+		defer va.closeInputTranscriptionStream()
 		go va.sttLoop(sttStream)
 	}
 
@@ -241,28 +258,7 @@ func (va *PipelineAgent) run(ctx context.Context) {
 					}
 				}
 			}
-			if sttStream == nil {
-				continue
-			}
-			sttFrame := frame
-			if va.session != nil && va.session.shouldSilenceInputAudio() {
-				sttFrame = audio.SilenceFrameLike(frame)
-			}
-			if targetRate := stt.InputSampleRate(va.stt); targetRate > 0 && sttFrame.SampleRate != targetRate {
-				if resampled, err := audio.ResampleAudioFrame(sttFrame, targetRate); err == nil {
-					sttFrame = resampled
-				} else {
-					logger.Logger.Warnw("STT resample failed", err, "from", sttFrame.SampleRate, "to", targetRate)
-				}
-			}
-			va.mu.Lock()
-			va.lastSTTFrame = &model.AudioFrame{
-				SampleRate:        sttFrame.SampleRate,
-				NumChannels:       sttFrame.NumChannels,
-				SamplesPerChannel: sttFrame.SamplesPerChannel,
-			}
-			va.mu.Unlock()
-			if err := sttStream.PushFrame(sttFrame); err != nil {
+			if err := va.pushSTTFrame(frame); err != nil {
 				if !isSpeechStreamShutdownError(err) {
 					logger.Logger.Errorw("STT push frame failed", err)
 					label := "stt"
@@ -273,6 +269,59 @@ func (va *PipelineAgent) run(ctx context.Context) {
 				}
 			}
 		}
+	}
+}
+
+func (va *PipelineAgent) pushSTTFrame(frame *model.AudioFrame) error {
+	if va == nil || frame == nil {
+		return nil
+	}
+	va.mu.Lock()
+	sttStream := va.sttStream
+	sttObj := va.stt
+	session := va.session
+	va.mu.Unlock()
+	if sttStream == nil {
+		return nil
+	}
+	sttFrame := frame
+	if session != nil && session.shouldSilenceInputAudio() {
+		sttFrame = audio.SilenceFrameLike(frame)
+	}
+	if targetRate := stt.InputSampleRate(sttObj); targetRate > 0 && sttFrame.SampleRate != targetRate {
+		if resampled, err := audio.ResampleAudioFrame(sttFrame, targetRate); err == nil {
+			sttFrame = resampled
+		} else {
+			logger.Logger.Warnw("STT resample failed", err, "from", sttFrame.SampleRate, "to", targetRate)
+		}
+	}
+	va.mu.Lock()
+	va.lastSTTFrame = &model.AudioFrame{
+		SampleRate:        sttFrame.SampleRate,
+		NumChannels:       sttFrame.NumChannels,
+		SamplesPerChannel: sttFrame.SamplesPerChannel,
+	}
+	va.mu.Unlock()
+	return sttStream.PushFrame(sttFrame)
+}
+
+func (va *PipelineAgent) closeInputTranscriptionStream() {
+	va.mu.Lock()
+	stream := va.sttStream
+	sttObj := va.stt
+	va.sttStream = nil
+	va.lastSTTFrame = nil
+	va.mu.Unlock()
+	if stream == nil {
+		return
+	}
+	if err := stream.Close(); err != nil && !isSpeechStreamShutdownError(err) {
+		logger.Logger.Errorw("failed to close STT stream", err)
+		label := "stt"
+		if sttObj != nil {
+			label = sttObj.Label()
+		}
+		va.emitError(stt.NewSTTError(label, err, false), sttObj)
 	}
 }
 
