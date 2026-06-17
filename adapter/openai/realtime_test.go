@@ -1374,14 +1374,14 @@ func TestRealtimeAudioBufferMessages(t *testing.T) {
 }
 
 func TestRealtimeGenerateReplyMessageMapsPerResponseOptions(t *testing.T) {
-	msg := openAIRealtimeGenerateReplyMessage(llm.RealtimeGenerateReplyOptions{
+	msg := openAIRealtimeGenerateReplyMessageWithSessionInstructions(llm.RealtimeGenerateReplyOptions{
 		Instructions: "answer briefly",
 		ToolChoice: map[string]any{
 			"type":     "function",
 			"function": map[string]any{"name": "lookup"},
 		},
 		Tools: []llm.Tool{requestTestTool{}},
-	})
+	}, "")
 
 	if msg["type"] != "response.create" {
 		t.Fatalf("message type = %#v, want response.create", msg["type"])
@@ -1401,7 +1401,7 @@ func TestRealtimeGenerateReplyMessageMapsPerResponseOptions(t *testing.T) {
 }
 
 func TestRealtimeGenerateReplyMessageIncludesClientEventMetadata(t *testing.T) {
-	msg := openAIRealtimeGenerateReplyMessage(llm.RealtimeGenerateReplyOptions{})
+	msg := openAIRealtimeGenerateReplyMessageWithSessionInstructions(llm.RealtimeGenerateReplyOptions{}, "")
 
 	if msg["type"] != "response.create" {
 		t.Fatalf("message type = %#v, want response.create", msg["type"])
@@ -2561,6 +2561,58 @@ func TestRealtimeSessionMaxSessionDurationReconnectsIdleSession(t *testing.T) {
 	}
 	if got := dialCount.Load(); got != 2 {
 		t.Fatalf("dial count = %d, want 2", got)
+	}
+}
+
+func TestRealtimeSessionReconnectRetriesDialFailure(t *testing.T) {
+	var dialCount atomic.Int32
+	secondConnected := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	baseDialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		if dialCount.Load() > 2 {
+			close(secondConnected)
+			<-releaseSecond
+			return
+		}
+		_ = conn.Close()
+	})
+	dialer := func(endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		attempt := dialCount.Add(1)
+		if attempt == 2 {
+			return nil, nil, errors.New("temporary redial failure")
+		}
+		return baseDialer(endpoint, headers)
+	}
+	realtimeModel := NewRealtimeModel(
+		"test-key",
+		"gpt-realtime",
+		WithOpenAIRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 1, RetryInterval: time.Millisecond}),
+	)
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	select {
+	case <-secondConnected:
+	case <-time.After(time.Second):
+		t.Fatal("session did not retry reconnect after redial failure")
+	}
+	reconnected := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if reconnected.Reconnect == nil {
+		t.Fatal("Reconnect payload = nil")
+	}
+	if got := dialCount.Load(); got != 3 {
+		t.Fatalf("dial count = %d, want initial plus failed and successful reconnect", got)
 	}
 }
 
@@ -4148,6 +4200,7 @@ func TestRealtimeResponseDoneFailedReportsRecoverableError(t *testing.T) {
 		t.Fatal("APIError Retryable = false, want true")
 	}
 
+	releaseServer := make(chan struct{})
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
 		if _, _, err := conn.ReadMessage(); err != nil {
 			t.Errorf("Read initial session update error = %v", err)
@@ -4166,6 +4219,7 @@ func TestRealtimeResponseDoneFailedReportsRecoverableError(t *testing.T) {
 			t.Errorf("Write response.done error = %v", err)
 			return
 		}
+		<-releaseServer
 	})
 	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
 	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
@@ -4175,6 +4229,7 @@ func TestRealtimeResponseDoneFailedReportsRecoverableError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Session error = %v", err)
 	}
+	defer close(releaseServer)
 	defer liveSession.Close()
 
 	assertRealtimeEventType(t, liveSession.EventCh(), llm.RealtimeEventTypeGenerationCreated)

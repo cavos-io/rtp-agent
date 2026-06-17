@@ -35,6 +35,7 @@ type RealtimeModel struct {
 	options       llm.RealtimeSessionOptions
 	modalities    []string
 	maxSession    time.Duration
+	connect       llm.APIConnectOptions
 	sessions      map[*realtimeSession]struct{}
 }
 
@@ -45,6 +46,7 @@ type openAIRealtimeModelOptions struct {
 	modalities     []string
 	baseURL        string
 	maxSession     time.Duration
+	connect        *llm.APIConnectOptions
 }
 
 type OpenAIRealtimeOption func(*openAIRealtimeModelOptions)
@@ -130,6 +132,12 @@ func WithOpenAIRealtimeMaxSessionDuration(duration time.Duration) OpenAIRealtime
 	}
 }
 
+func WithOpenAIRealtimeConnectOptions(connectOptions llm.APIConnectOptions) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.connect = &connectOptions
+	}
+}
+
 func WithOpenAIRealtimeBaseURL(baseURL string) OpenAIRealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.baseURL = baseURL
@@ -154,6 +162,10 @@ func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *Realt
 	if options.baseURL != "" {
 		baseURL = options.baseURL
 	}
+	connectOptions := llm.DefaultAPIConnectOptions()
+	if options.connect != nil {
+		connectOptions = *options.connect
+	}
 	return &RealtimeModel{
 		apiKey:        apiKey,
 		model:         model,
@@ -162,6 +174,7 @@ func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *Realt
 		options:       options.sessionOptions,
 		modalities:    options.modalities,
 		maxSession:    options.maxSession,
+		connect:       connectOptions,
 	}
 }
 
@@ -1176,10 +1189,6 @@ func (s *realtimeSession) Say(text string) error {
 	return llm.NewRealtimeError("openai realtime session does not support say", nil)
 }
 
-func openAIRealtimeGenerateReplyMessage(options llm.RealtimeGenerateReplyOptions) map[string]any {
-	return openAIRealtimeGenerateReplyMessageWithSessionInstructions(options, "")
-}
-
 func openAIRealtimeGenerateReplyMessageWithSessionInstructions(options llm.RealtimeGenerateReplyOptions, sessionInstructions string) map[string]any {
 	response := make(map[string]any)
 	eventID := cavosmath.ShortUUID("response_create_")
@@ -1384,9 +1393,29 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 	header.Add("Authorization", "Bearer "+s.model.apiKey)
 	header.Add("OpenAI-Beta", "realtime=v1")
 
-	conn, _, err := s.model.dialWebsocket(wsURL, header)
-	if err != nil {
-		return fmt.Errorf("failed to reconnect to OpenAI realtime: %w", err)
+	var (
+		conn *websocket.Conn
+		err  error
+	)
+	for attempt := 0; attempt <= s.model.connect.MaxRetry; attempt++ {
+		conn, _, err = s.model.dialWebsocket(wsURL, header)
+		if err == nil {
+			break
+		}
+		if attempt == s.model.connect.MaxRetry {
+			return fmt.Errorf("failed to reconnect to OpenAI realtime: %w", err)
+		}
+		retryInterval := s.model.connect.IntervalForRetry(attempt)
+		if retryInterval <= 0 {
+			continue
+		}
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-s.ctx.Done():
+			timer.Stop()
+			return s.ctx.Err()
+		case <-timer.C:
+		}
 	}
 	openAIRealtimeApplySessionDeadline(conn, s.model.maxSession)
 
