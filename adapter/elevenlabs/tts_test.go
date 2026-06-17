@@ -181,7 +181,7 @@ func TestElevenLabsTTSVoiceSettingsMatchReference(t *testing.T) {
 	}
 	assertElevenLabsTTSVoiceSettings(t, payload["voice_settings"])
 
-	init := elevenLabsInitPayload("ctx_test", elevenLabsVoiceSettingsPayload(provider.voiceSettings), nil)
+	init := elevenLabsInitPayload("ctx_test", elevenLabsVoiceSettingsPayload(provider.voiceSettings), nil, nil)
 	assertElevenLabsTTSVoiceSettings(t, init["voice_settings"])
 }
 
@@ -453,7 +453,7 @@ func TestElevenLabsTTSUpdateOptionsMatchesReference(t *testing.T) {
 func TestElevenLabsStreamPayloadsUseReferenceContextProtocol(t *testing.T) {
 	const contextID = "ctx_test"
 
-	init := elevenLabsInitPayload(contextID, nil, nil)
+	init := elevenLabsInitPayload(contextID, nil, nil, nil)
 	if init["text"] != " " || init["context_id"] != contextID {
 		t.Fatalf("init payload = %#v, want warmup text with context_id", init)
 	}
@@ -468,7 +468,7 @@ func TestElevenLabsStreamPayloadsUseReferenceContextProtocol(t *testing.T) {
 		t.Fatalf("init payload = %#v, want no generation_config without configured schedule", init)
 	}
 
-	scheduledInit := elevenLabsInitPayload(contextID, nil, []int{80, 120, 200})
+	scheduledInit := elevenLabsInitPayload(contextID, nil, []int{80, 120, 200}, nil)
 	generationConfig, ok := scheduledInit["generation_config"].(map[string]any)
 	if !ok {
 		t.Fatalf("scheduled init generation_config = %#v, want object", scheduledInit["generation_config"])
@@ -479,6 +479,17 @@ func TestElevenLabsStreamPayloadsUseReferenceContextProtocol(t *testing.T) {
 	}
 	if !equalIntSlices(chunkSchedule, []int{80, 120, 200}) {
 		t.Fatalf("scheduled init chunk_length_schedule = %#v, want [80 120 200]", chunkSchedule)
+	}
+
+	dictionaryInit := elevenLabsInitPayload(contextID, nil, nil, []ElevenLabsPronunciationDictionaryLocator{
+		{PronunciationDictionaryID: "dict-1", VersionID: "version-1"},
+	})
+	locators, ok := dictionaryInit["pronunciation_dictionary_locators"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("dictionary init locators = %#v, want locator list", dictionaryInit["pronunciation_dictionary_locators"])
+	}
+	if len(locators) != 1 || locators[0]["pronunciation_dictionary_id"] != "dict-1" || locators[0]["version_id"] != "version-1" {
+		t.Fatalf("dictionary init locators = %#v, want reference locator payload", locators)
 	}
 
 	text := elevenLabsTextPayload(contextID, "hello")
@@ -523,6 +534,9 @@ func TestElevenLabsTTSStreamStartsContextOnFirstText(t *testing.T) {
 	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5",
 		WithElevenLabsBaseURL("ws://eleven.test/v1"),
 		WithElevenLabsChunkLengthSchedule([]int{80, 120, 200}),
+		WithElevenLabsPronunciationDictionaries([]ElevenLabsPronunciationDictionaryLocator{
+			{PronunciationDictionaryID: "dict-1", VersionID: "version-1"},
+		}),
 	)
 	if err != nil {
 		t.Fatalf("NewElevenLabsTTS() error = %v", err)
@@ -563,6 +577,14 @@ func TestElevenLabsTTSStreamStartsContextOnFirstText(t *testing.T) {
 	chunkSchedule, ok := generationConfig["chunk_length_schedule"].([]any)
 	if !ok || len(chunkSchedule) != 3 || chunkSchedule[0] != float64(80) || chunkSchedule[1] != float64(120) || chunkSchedule[2] != float64(200) {
 		t.Fatalf("init chunk_length_schedule = %#v, want [80 120 200]", generationConfig["chunk_length_schedule"])
+	}
+	locators, ok := init["pronunciation_dictionary_locators"].([]any)
+	if !ok || len(locators) != 1 {
+		t.Fatalf("init pronunciation_dictionary_locators = %#v, want one locator", init["pronunciation_dictionary_locators"])
+	}
+	locator, ok := locators[0].(map[string]any)
+	if !ok || locator["pronunciation_dictionary_id"] != "dict-1" || locator["version_id"] != "version-1" {
+		t.Fatalf("init pronunciation_dictionary_locators[0] = %#v, want reference locator", locators[0])
 	}
 
 	text := readElevenLabsTTSStreamMessage(t, messages)

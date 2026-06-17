@@ -30,17 +30,18 @@ const (
 )
 
 type ElevenLabsTTS struct {
-	apiKey              string
-	baseURL             string
-	voiceID             string
-	modelID             string
-	encoding            string
-	sampleRate          int
-	language            string
-	enableSSMLParsing   bool
-	chunkLengthSchedule []int
-	voiceSettings       *ElevenLabsVoiceSettings
-	streamingLatency    *int
+	apiKey                    string
+	baseURL                   string
+	voiceID                   string
+	modelID                   string
+	encoding                  string
+	sampleRate                int
+	language                  string
+	enableSSMLParsing         bool
+	chunkLengthSchedule       []int
+	voiceSettings             *ElevenLabsVoiceSettings
+	streamingLatency          *int
+	pronunciationDictionaries []ElevenLabsPronunciationDictionaryLocator
 }
 
 type ElevenLabsTTSOption func(*ElevenLabsTTS)
@@ -51,6 +52,11 @@ type ElevenLabsVoiceSettings struct {
 	Style           *float64
 	Speed           *float64
 	UseSpeakerBoost *bool
+}
+
+type ElevenLabsPronunciationDictionaryLocator struct {
+	PronunciationDictionaryID string
+	VersionID                 string
 }
 
 func WithElevenLabsVoiceID(voiceID string) ElevenLabsTTSOption {
@@ -114,6 +120,12 @@ func WithElevenLabsVoiceSettings(settings ElevenLabsVoiceSettings) ElevenLabsTTS
 func WithElevenLabsStreamingLatency(latency int) ElevenLabsTTSOption {
 	return func(t *ElevenLabsTTS) {
 		t.streamingLatency = &latency
+	}
+}
+
+func WithElevenLabsPronunciationDictionaries(locators []ElevenLabsPronunciationDictionaryLocator) ElevenLabsTTSOption {
+	return func(t *ElevenLabsTTS) {
+		t.pronunciationDictionaries = append([]ElevenLabsPronunciationDictionaryLocator(nil), locators...)
 	}
 }
 
@@ -325,16 +337,17 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 	contextID := "ctx_" + uuid.NewString()[:12]
 	ctx, cancel := context.WithCancel(ctx)
 	stream := &elevenLabsStream{
-		conn:                conn,
-		audio:               make(chan *tts.SynthesizedAudio, 100),
-		errCh:               make(chan error, 1),
-		ctx:                 ctx,
-		cancel:              cancel,
-		encoding:            t.encoding,
-		sampleRate:          t.sampleRate,
-		contextID:           contextID,
-		chunkLengthSchedule: append([]int(nil), t.chunkLengthSchedule...),
-		voiceSettings:       cloneElevenLabsVoiceSettings(t.voiceSettings),
+		conn:                      conn,
+		audio:                     make(chan *tts.SynthesizedAudio, 100),
+		errCh:                     make(chan error, 1),
+		ctx:                       ctx,
+		cancel:                    cancel,
+		encoding:                  t.encoding,
+		sampleRate:                t.sampleRate,
+		contextID:                 contextID,
+		chunkLengthSchedule:       append([]int(nil), t.chunkLengthSchedule...),
+		voiceSettings:             cloneElevenLabsVoiceSettings(t.voiceSettings),
+		pronunciationDictionaries: append([]ElevenLabsPronunciationDictionaryLocator(nil), t.pronunciationDictionaries...),
 	}
 
 	go stream.readLoop()
@@ -398,12 +411,13 @@ type elevenLabsStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	encoding            string
-	sampleRate          int
-	contextID           string
-	initSent            bool
-	chunkLengthSchedule []int
-	voiceSettings       *ElevenLabsVoiceSettings
+	encoding                  string
+	sampleRate                int
+	contextID                 string
+	initSent                  bool
+	chunkLengthSchedule       []int
+	voiceSettings             *ElevenLabsVoiceSettings
+	pronunciationDictionaries []ElevenLabsPronunciationDictionaryLocator
 
 	alignRunes    []rune
 	alignStartsMs []int
@@ -772,7 +786,7 @@ func (s *elevenLabsStream) Flush() error {
 	return nil
 }
 
-func elevenLabsInitPayload(contextID string, voiceSettings map[string]interface{}, chunkLengthSchedule []int) map[string]interface{} {
+func elevenLabsInitPayload(contextID string, voiceSettings map[string]interface{}, chunkLengthSchedule []int, dictionaries []ElevenLabsPronunciationDictionaryLocator) map[string]interface{} {
 	if voiceSettings == nil {
 		voiceSettings = map[string]interface{}{}
 	}
@@ -785,6 +799,16 @@ func elevenLabsInitPayload(contextID string, voiceSettings map[string]interface{
 		payload["generation_config"] = map[string]interface{}{
 			"chunk_length_schedule": append([]int(nil), chunkLengthSchedule...),
 		}
+	}
+	if len(dictionaries) > 0 {
+		locators := make([]map[string]interface{}, 0, len(dictionaries))
+		for _, locator := range dictionaries {
+			locators = append(locators, map[string]interface{}{
+				"pronunciation_dictionary_id": locator.PronunciationDictionaryID,
+				"version_id":                  locator.VersionID,
+			})
+		}
+		payload["pronunciation_dictionary_locators"] = locators
 	}
 	return payload
 }
@@ -843,7 +867,7 @@ func (s *elevenLabsStream) sendInitLocked() error {
 	if s.initSent {
 		return nil
 	}
-	if err := s.conn.WriteJSON(elevenLabsInitPayload(s.contextID, elevenLabsVoiceSettingsPayload(s.voiceSettings), s.chunkLengthSchedule)); err != nil {
+	if err := s.conn.WriteJSON(elevenLabsInitPayload(s.contextID, elevenLabsVoiceSettingsPayload(s.voiceSettings), s.chunkLengthSchedule, s.pronunciationDictionaries)); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return fmt.Errorf("failed to write initial config to elevenlabs: %w", err)
 	}
