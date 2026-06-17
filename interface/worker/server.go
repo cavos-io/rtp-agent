@@ -1418,9 +1418,7 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		dialer.Proxy = http.ProxyURL(proxyURL)
 	}
 
-	conn, res, err := s.connectWorkerWebSocket(ctx, &dialer, agentURL, http.Header{
-		"Authorization": []string{fmt.Sprintf("Bearer %s", token)},
-	})
+	conn, res, err := s.connectWorkerWebSocket(ctx, &dialer, agentURL, workerlivekit.WorkerAuthHeader(token))
 	if err != nil {
 		return err
 	}

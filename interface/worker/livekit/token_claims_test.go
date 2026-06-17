@@ -115,6 +115,13 @@ func TestWorkerAuthTokenCarriesAgentGrant(t *testing.T) {
 	}
 }
 
+func TestWorkerAuthHeaderUsesBearerToken(t *testing.T) {
+	header := workerlivekit.WorkerAuthHeader("worker-token")
+	if got := header.Get("Authorization"); got != "Bearer worker-token" {
+		t.Fatalf("Authorization header = %q, want bearer token", got)
+	}
+}
+
 func TestLocalAgentTokenCarriesRoomJoinAgentGrant(t *testing.T) {
 	token, err := workerlivekit.LocalAgentToken("api-key", "api-secret", "local-agent", "room-a", time.Hour)
 	if err != nil {
