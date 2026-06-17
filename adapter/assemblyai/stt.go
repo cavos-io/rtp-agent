@@ -211,7 +211,7 @@ func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 		conn:       conn,
 		events:     make(chan *stt.SpeechEvent, 10),
 		errCh:      make(chan error, 1),
-		state:      &assemblyAIStreamState{},
+		state:      &assemblyAIStreamState{requireFormattedFinal: s.formatTurns != nil && *s.formatTurns},
 		sampleRate: s.sampleRate,
 	}
 	stream.writeBinary = stream.writeBinaryMessage
@@ -343,6 +343,7 @@ type assemblyAISTTStream struct {
 
 type assemblyAIStreamState struct {
 	lastPreflightStartTime float64
+	requireFormattedFinal  bool
 }
 
 type aaiResponse struct {
@@ -449,7 +450,7 @@ func assemblyAIRealtimeTranscriptEvents(resp aaiResponse, state *assemblyAIStrea
 		events = append(events, assemblyAITranscriptEvent(stt.SpeechEventPreflightTranscript, resp, resp.Utterance, utteranceWords, state.lastPreflightStartTime, endTime))
 		state.lastPreflightStartTime = endTime
 	}
-	if resp.EndOfTurn {
+	if resp.EndOfTurn && (!state.requireFormattedFinal || resp.TurnIsFormatted) {
 		text := resp.Transcript
 		if text == "" {
 			text = resp.Text

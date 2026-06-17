@@ -290,6 +290,44 @@ func TestAssemblyAIRealtimeTurnEmitsReferenceEventOrder(t *testing.T) {
 	}
 }
 
+func TestAssemblyAIRealtimeFormatTurnsWaitsForFormattedFinal(t *testing.T) {
+	resp := aaiResponse{
+		Type:       "Turn",
+		Transcript: "hello realtime",
+		Utterance:  "hello",
+		EndOfTurn:  true,
+		Words: []assemblyAIWord{
+			{Text: "hello", Start: 100, End: 300, Confidence: 0.95},
+			{Text: "realtime", Start: 350, End: 800, Confidence: 0.9},
+		},
+	}
+	state := &assemblyAIStreamState{requireFormattedFinal: true}
+
+	events := assemblyAIRealtimeTranscriptEvents(resp, state)
+	for i, event := range events {
+		if event.Type == stt.SpeechEventFinalTranscript || event.Type == stt.SpeechEventEndOfSpeech {
+			t.Fatalf("event[%d].Type = %s, want no final or end_of_speech until turn_is_formatted", i, event.Type)
+		}
+	}
+
+	resp.TurnIsFormatted = true
+	events = assemblyAIRealtimeTranscriptEvents(resp, state)
+	wantTypes := []stt.SpeechEventType{
+		stt.SpeechEventInterimTranscript,
+		stt.SpeechEventPreflightTranscript,
+		stt.SpeechEventFinalTranscript,
+		stt.SpeechEventEndOfSpeech,
+	}
+	if len(events) != len(wantTypes) {
+		t.Fatalf("formatted events = %d, want %d", len(events), len(wantTypes))
+	}
+	for i, wantType := range wantTypes {
+		if events[i].Type != wantType {
+			t.Fatalf("formatted event[%d].Type = %s, want %s", i, events[i].Type, wantType)
+		}
+	}
+}
+
 func TestAssemblyAIRealtimeSpeechStartedEmitsReferenceStart(t *testing.T) {
 	events := assemblyAIRealtimeEvents(aaiResponse{Type: "SpeechStarted"}, &assemblyAIStreamState{})
 	if len(events) != 1 {
