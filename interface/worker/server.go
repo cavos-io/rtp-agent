@@ -53,8 +53,6 @@ const (
 	defaultProdHTTPPort   = 8081
 	defaultDevHTTPPort    = 0
 
-	participantAttributeAgentName = "lk.agent.name"
-
 	rtcSessionRequiredMessage = "No RTC session entrypoint has been registered.\n" +
 		"Define one using the @server.rtc_session() decorator, for example:\n" +
 		"    @server.rtc_session(agent_name=\"my_agent\")\n" +
@@ -124,14 +122,7 @@ var workerListen = net.Listen
 var workerPrometheusListen = net.Listen
 var workerReloadIPCDial = net.Dial
 
-type WorkerPermissions struct {
-	CanPublish        bool
-	CanSubscribe      bool
-	CanPublishData    bool
-	CanUpdateMetadata bool
-	CanPublishSources []livekit.TrackSource
-	Hidden            bool
-}
+type WorkerPermissions = workerlivekit.WorkerPermissions
 
 type WorkerStartedHandler func()
 
@@ -1134,15 +1125,7 @@ func readSystemCPUTimes() (idle uint64, total uint64, err error) {
 }
 
 func resolveWorkerPermissions(permissions *WorkerPermissions) WorkerPermissions {
-	if permissions == nil {
-		return WorkerPermissions{
-			CanPublish:        true,
-			CanSubscribe:      true,
-			CanPublishData:    true,
-			CanUpdateMetadata: true,
-		}
-	}
-	return *permissions
+	return workerlivekit.ResolveWorkerPermissions(permissions)
 }
 
 func workerTypeToJobType(workerType WorkerType) livekit.JobType {
@@ -1158,61 +1141,28 @@ func agentIdentityForJobID(jobID string) string {
 }
 
 func availabilityResponseForAccept(req *livekit.AvailabilityRequest, args JobAcceptArguments, agentName string) *livekit.WorkerMessage {
-	if args.Identity == "" {
-		args.Identity = agentIdentityForJobID(req.Job.Id)
-	}
-	attributes := make(map[string]string, len(args.Attributes)+1)
-	attributes[participantAttributeAgentName] = agentName
-	for key, value := range args.Attributes {
-		attributes[key] = value
-	}
-
-	return &livekit.WorkerMessage{
-		Message: &livekit.WorkerMessage_Availability{
-			Availability: &livekit.AvailabilityResponse{
-				JobId:                 req.Job.Id,
-				Available:             true,
-				ParticipantIdentity:   args.Identity,
-				ParticipantName:       args.Name,
-				ParticipantMetadata:   args.Metadata,
-				ParticipantAttributes: attributes,
-			},
-		},
-	}
+	return workerlivekit.AvailabilityResponseForAccept(req, workerlivekit.AvailabilityAcceptOptions{
+		Name:       args.Name,
+		Identity:   args.Identity,
+		Metadata:   args.Metadata,
+		Attributes: args.Attributes,
+	}, agentName)
 }
 
 func availabilityResponseForReject(req *livekit.AvailabilityRequest, args JobRejectArguments) *livekit.WorkerMessage {
-	return &livekit.WorkerMessage{
-		Message: &livekit.WorkerMessage_Availability{
-			Availability: &livekit.AvailabilityResponse{
-				JobId:     req.Job.Id,
-				Available: false,
-				Terminate: args.Terminate,
-			},
-		},
-	}
+	return workerlivekit.AvailabilityResponseForReject(req, workerlivekit.AvailabilityRejectOptions{
+		Terminate: args.Terminate,
+	})
 }
 
 func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
 	permissions := resolveWorkerPermissions(s.Options.Permissions)
-	return &livekit.WorkerMessage{
-		Message: &livekit.WorkerMessage_Register{
-			Register: &livekit.RegisterWorkerRequest{
-				Type:      workerTypeToJobType(s.Options.WorkerType),
-				AgentName: s.Options.AgentName,
-				Version:   s.Options.Version,
-				AllowedPermissions: &livekit.ParticipantPermission{
-					CanPublish:        permissions.CanPublish,
-					CanSubscribe:      permissions.CanSubscribe,
-					CanPublishData:    permissions.CanPublishData,
-					CanUpdateMetadata: permissions.CanUpdateMetadata,
-					CanPublishSources: permissions.CanPublishSources,
-					Hidden:            permissions.Hidden,
-					Agent:             true,
-				},
-			},
-		},
-	}
+	return workerlivekit.RegisterWorkerRequest(workerlivekit.RegisterWorkerOptions{
+		JobType:     workerTypeToJobType(s.Options.WorkerType),
+		AgentName:   s.Options.AgentName,
+		Version:     s.Options.Version,
+		Permissions: permissions,
+	})
 }
 
 func (s *AgentServer) workerStatusMessage(status livekit.WorkerStatus) *livekit.WorkerMessage {
@@ -1221,46 +1171,19 @@ func (s *AgentServer) workerStatusMessage(status livekit.WorkerStatus) *livekit.
 	if status == livekit.WorkerStatus_WS_AVAILABLE && !s.availableForJobWithLoad(load) {
 		status = livekit.WorkerStatus_WS_FULL
 	}
-	return &livekit.WorkerMessage{
-		Message: &livekit.WorkerMessage_UpdateWorker{
-			UpdateWorker: &livekit.UpdateWorkerStatus{
-				Status:   &status,
-				Load:     float32(load),
-				JobCount: jobCount,
-			},
-		},
-	}
+	return workerlivekit.WorkerStatusMessage(status, load, jobCount)
 }
 
 func (s *AgentServer) drainingWorkerStatusMessage() *livekit.WorkerMessage {
-	status := livekit.WorkerStatus_WS_FULL
-	return &livekit.WorkerMessage{
-		Message: &livekit.WorkerMessage_UpdateWorker{
-			UpdateWorker: &livekit.UpdateWorkerStatus{
-				Status:   &status,
-				JobCount: uint32(s.activeJobCount()),
-			},
-		},
-	}
+	return workerlivekit.DrainingWorkerStatusMessage(uint32(s.activeJobCount()))
 }
 
 func jobStatusMessage(jobID string, status livekit.JobStatus) *livekit.WorkerMessage {
-	return &livekit.WorkerMessage{
-		Message: &livekit.WorkerMessage_UpdateJob{
-			UpdateJob: &livekit.UpdateJobStatus{
-				JobId:  jobID,
-				Status: status,
-			},
-		},
-	}
+	return workerlivekit.JobStatusMessage(jobID, status)
 }
 
 func migrateJobMessage(jobIDs []string) *livekit.WorkerMessage {
-	return &livekit.WorkerMessage{
-		Message: &livekit.WorkerMessage_MigrateJob{
-			MigrateJob: &livekit.MigrateJobRequest{JobIds: jobIDs},
-		},
-	}
+	return workerlivekit.MigrateJobMessage(jobIDs)
 }
 
 func (s *AgentServer) RTCSession(
@@ -1701,8 +1624,8 @@ func (s *AgentServer) runWorkerMessageLoop(ctx context.Context, readMessage func
 				continue
 			}
 
-			msg := &livekit.ServerMessage{}
-			if err := proto.Unmarshal(result.data, msg); err != nil {
+			msg, err := workerlivekit.UnmarshalServerMessage(result.data)
+			if err != nil {
 				logger.Logger.Errorw("Failed to unmarshal server message", err)
 				continue
 			}
@@ -1778,16 +1701,12 @@ func (s *AgentServer) connectWorkerWebSocket(ctx context.Context, dialer *websoc
 }
 
 func workerRetryDelay(retryCount int) time.Duration {
-	delaySeconds := retryCount * 2
-	if delaySeconds > 10 {
-		delaySeconds = 10
-	}
-	return time.Duration(delaySeconds) * time.Second
+	return workerlivekit.RetryDelay(retryCount)
 }
 
 func (s *AgentServer) handleInitialRegisterMessage(ctx context.Context, msg *livekit.ServerMessage) error {
-	if msg.GetRegister() == nil {
-		return fmt.Errorf("expected register response as first message")
+	if _, err := workerlivekit.InitialRegisterResponse(msg); err != nil {
+		return err
 	}
 	s.handleMessage(ctx, msg)
 	return nil
@@ -1919,7 +1838,7 @@ func (s *AgentServer) sendWorkerMessage(msg *livekit.WorkerMessage) error {
 		return s.workerMessageSink(msg)
 	}
 
-	b, err := proto.Marshal(msg)
+	b, err := workerlivekit.MarshalWorkerMessage(msg)
 	if err != nil {
 		return err
 	}

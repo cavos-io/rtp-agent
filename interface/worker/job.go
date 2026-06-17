@@ -23,7 +23,6 @@ import (
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 var currentJobContexts sync.Map
@@ -218,26 +217,12 @@ func (p *JobProcess) HTTPProxy() string {
 	return p.httpProxy
 }
 
-type JobRoomServiceAPI interface {
-	DeleteRoom(context.Context, *livekit.DeleteRoomRequest) (*livekit.DeleteRoomResponse, error)
-	MoveParticipant(context.Context, *livekit.MoveParticipantRequest) (*livekit.MoveParticipantResponse, error)
-}
-
-type JobSIPAPI interface {
-	CreateSIPParticipant(context.Context, *livekit.CreateSIPParticipantRequest) (*livekit.SIPParticipantInfo, error)
-	TransferSIPParticipant(context.Context, *livekit.TransferSIPParticipantRequest) (*emptypb.Empty, error)
-}
-
-type JobAPI struct {
-	RoomService JobRoomServiceAPI
-	SIP         JobSIPAPI
-}
+type JobRoomServiceAPI = workerlivekit.JobRoomServiceAPI
+type JobSIPAPI = workerlivekit.JobSIPAPI
+type JobAPI = workerlivekit.JobAPI
 
 func NewJobAPI(url string, apiKey string, apiSecret string) *JobAPI {
-	return &JobAPI{
-		RoomService: lksdk.NewRoomServiceClient(url, apiKey, apiSecret),
-		SIP:         lksdk.NewSIPClient(url, apiKey, apiSecret),
-	}
+	return workerlivekit.NewJobAPI(url, apiKey, apiSecret)
 }
 
 type AutoSubscribe string
