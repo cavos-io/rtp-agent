@@ -1500,6 +1500,8 @@ type RealtimeSessionOptions struct {
 	TruncationSet               bool
 	Tracing                     any
 	TracingSet                  bool
+	Reasoning                   any
+	ReasoningSet                bool
 	TurnDetection               any
 	TurnDetectionSet            bool
 	InputAudioTranscription     any

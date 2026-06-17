@@ -12,15 +12,18 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/sashabaranov/go-openai"
 )
 
 type OpenAITTS struct {
+	tts.MetricsEmitter
 	client         *openai.Client
 	httpClient     openai.HTTPDoer
 	apiKey         string
@@ -234,6 +237,8 @@ func (t *OpenAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 		resp:           resp,
 		responseFormat: t.responseFormat,
 		streamFormat:   openAITTSStreamFormatForModel(t.model),
+		provider:       t,
+		inputText:      text,
 	}, nil
 }
 
@@ -257,6 +262,8 @@ type openaiTTSChunkedStream struct {
 	resp           io.ReadCloser
 	responseFormat openai.SpeechResponseFormat
 	streamFormat   string
+	provider       *OpenAITTS
+	inputText      string
 	scanner        *bufio.Scanner
 	decoder        codecs.AudioStreamDecoder
 	decodeStarted  bool
@@ -381,6 +388,7 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 				},
 			}, nil
 		case "speech.audio.done":
+			s.emitSSEUsageMetrics(event)
 			return nil, io.EOF
 		}
 	}
@@ -454,6 +462,7 @@ func (s *openaiTTSChunkedStream) feedSSEMP3Audio() {
 			}
 			s.decoder.Push(audioData)
 		case "speech.audio.done":
+			s.emitSSEUsageMetrics(event)
 			return
 		}
 	}
@@ -482,6 +491,30 @@ func (s *openaiTTSChunkedStream) decodeReadError() error {
 	default:
 		return nil
 	}
+}
+
+func (s *openaiTTSChunkedStream) emitSSEUsageMetrics(event map[string]any) {
+	if s.provider == nil {
+		return
+	}
+	usage, _ := event["usage"].(map[string]any)
+	inputTokens := openAIInt(usage["input_tokens"])
+	outputTokens := openAIInt(usage["output_tokens"])
+	if inputTokens == 0 && outputTokens == 0 {
+		return
+	}
+	s.provider.EmitMetricsCollected(&telemetry.TTSMetrics{
+		Label:           s.provider.Label(),
+		Timestamp:       time.Now(),
+		CharactersCount: len(s.inputText),
+		InputTokens:     inputTokens,
+		OutputTokens:    outputTokens,
+		Streamed:        false,
+		Metadata: &telemetry.Metadata{
+			ModelName:     s.provider.Model(),
+			ModelProvider: s.provider.Provider(),
+		},
+	})
 }
 
 func (s *openaiTTSChunkedStream) Close() error {

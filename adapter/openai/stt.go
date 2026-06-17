@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -611,10 +610,23 @@ func (s *openAIRealtimeSTTStream) UpdateOptions(language string) {
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.state == nil {
 		s.state = &openAIRealtimeSTTMessageState{}
 	}
 	s.state.language = language
+	if s.closed || s.conn == nil || s.owner == nil {
+		return
+	}
+	sessionUpdate, err := buildOpenAIRealtimeSTTSessionUpdate(s.owner)
+	if err != nil {
+		s.sendErrorLocked(err)
+		return
+	}
+	if err := s.conn.WriteMessage(websocket.TextMessage, sessionUpdate); err != nil {
+		s.closeAfterWriteFailureLocked()
+	}
 }
 
 func (s *openAIRealtimeSTTStream) Close() error {
@@ -644,6 +656,16 @@ func (s *openAIRealtimeSTTStream) closeAfterWriteFailureLocked() {
 	_ = s.conn.Close()
 }
 
+func (s *openAIRealtimeSTTStream) sendErrorLocked(err error) {
+	if err == nil || s.errCh == nil {
+		return
+	}
+	select {
+	case s.errCh <- err:
+	default:
+	}
+}
+
 func (s *openAIRealtimeSTTStream) Next() (*stt.SpeechEvent, error) {
 	select {
 	case event, ok := <-s.events:
@@ -664,14 +686,29 @@ func (s *openAIRealtimeSTTStream) Next() (*stt.SpeechEvent, error) {
 }
 
 func (s *openAIRealtimeSTTStream) readLoop() {
-	defer close(s.events)
+	defer func() {
+		if s.owner != nil {
+			s.owner.unregisterRealtimeSTTStream(s)
+		}
+		close(s.events)
+	}()
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- openAIRealtimeSTTUnexpectedCloseError(err)
+			if s.isClosed() || s.ctx.Err() != nil {
+				return
 			}
-			return
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
+				return
+			}
+			if reconnectErr := s.reconnectAfterUnexpectedClose(); reconnectErr != nil {
+				if s.isClosed() || s.ctx.Err() != nil {
+					return
+				}
+				s.errCh <- reconnectErr
+				return
+			}
+			continue
 		}
 		if msgType != websocket.TextMessage {
 			continue
@@ -687,17 +724,37 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 	}
 }
 
-func openAIRealtimeSTTUnexpectedCloseError(err error) error {
-	var closeErr *websocket.CloseError
-	if errors.As(err, &closeErr) {
-		return llm.NewAPIStatusError(
-			"OpenAI Realtime STT connection closed unexpectedly",
-			closeErr.Code,
-			"",
-			closeErr.Text,
-		)
+func (s *openAIRealtimeSTTStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *openAIRealtimeSTTStream) reconnectAfterUnexpectedClose() error {
+	if s.owner == nil {
+		return llm.NewAPIStatusError("OpenAI Realtime STT connection closed unexpectedly", -1, "", "")
 	}
-	return mapOpenAIError(err)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	_ = s.conn.Close()
+	conn, _, err := s.owner.dialWebsocket(s.ctx, buildOpenAIRealtimeSTTWebsocketURL(s.owner).String(), buildOpenAIRealtimeSTTHeaders(s.owner))
+	if err != nil {
+		return mapOpenAIError(err)
+	}
+	sessionUpdate, err := buildOpenAIRealtimeSTTSessionUpdate(s.owner)
+	if err != nil {
+		_ = conn.Close()
+		return err
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, sessionUpdate); err != nil {
+		_ = conn.Close()
+		return mapOpenAIError(err)
+	}
+	s.conn = conn
+	return nil
 }
 
 func openAIRealtimeSTTChunkBytes() int {

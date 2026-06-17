@@ -15,6 +15,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	goopenai "github.com/sashabaranov/go-openai"
 )
 
@@ -512,6 +513,45 @@ func TestOpenAITTSSSEStreamHandlesLargeAudioDelta(t *testing.T) {
 	got := audio.Frame.Data
 	if len(got) != len(wantAudio) || got[0] != 'x' || got[len(got)-1] != 'x' {
 		t.Fatalf("audio bytes length/sample = %d/%q/%q, want %d x bytes", len(got), got[0], got[len(got)-1], len(wantAudio))
+	}
+}
+
+func TestOpenAITTSSSEDoneEmitsTokenUsageMetrics(t *testing.T) {
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		sse := `data: {"type":"speech.audio.done","usage":{"input_tokens":7,"output_tokens":11}}` + "\n\n"
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(sse)),
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModelGPT4oMini, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+	metricsCh := make(chan int, 1)
+	provider.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+		if metrics.InputTokens == 7 && metrics.OutputTokens == 11 {
+			metricsCh <- metrics.CharactersCount
+		}
+	})
+
+	stream, err := provider.Synthesize(context.Background(), "hello tokens")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want EOF after done event", err)
+	}
+
+	select {
+	case chars := <-metricsCh:
+		if chars != len("hello tokens") {
+			t.Fatalf("CharactersCount = %d, want input text length", chars)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for SSE done usage metrics")
 	}
 }
 
