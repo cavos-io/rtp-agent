@@ -114,13 +114,14 @@ type AgentSessionUpdateOptions struct {
 }
 
 var (
-	ErrAgentSessionNotRunning       = errors.New("AgentSession isn't running")
-	ErrAgentSessionNestedRun        = errors.New("nested runs are not supported")
-	ErrAgentSessionUserdataNotSet   = errors.New("AgentSession userdata is not set")
-	ErrAgentSessionJobContextNotSet = errors.New("agent session job context is not set")
-	errGenerateReplyMissingLLM      = errors.New("trying to generate reply without an LLM model")
-	errAgentSessionClosingSay       = agentSessionClosingError("AgentSession is closing, cannot use say()")
-	errAgentSessionClosingReply     = agentSessionClosingError("AgentSession is closing, cannot use generate_reply()")
+	ErrAgentSessionNotRunning                     = errors.New("AgentSession isn't running")
+	ErrAgentSessionNestedRun                      = errors.New("nested runs are not supported")
+	ErrAgentSessionUserdataNotSet                 = errors.New("AgentSession userdata is not set")
+	ErrAgentSessionJobContextNotSet               = errors.New("agent session job context is not set")
+	errGenerateReplyMissingLLM                    = errors.New("trying to generate reply without an LLM model")
+	errAgentSessionClosingSay                     = agentSessionClosingError("AgentSession is closing, cannot use say()")
+	errAgentSessionClosingReply                   = agentSessionClosingError("AgentSession is closing, cannot use generate_reply()")
+	errRealtimeTurnDetectionInterruptionsDisabled = errors.New("the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False, disable turn_detection in the RealtimeModel and use VAD on the AgentSession instead")
 )
 
 type agentSessionClosingError string
@@ -1981,6 +1982,11 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 	}
 	s.mu.Unlock()
 
+	if err := s.validateRealtimeTurnDetectionInterruptions(assistant); err != nil {
+		s.clearRunStateIfCurrent(runState)
+		return nil, err
+	}
+
 	s.UpdateAgentState(AgentStateInitializing)
 
 	if backgroundAudio != nil && room != nil {
@@ -2436,6 +2442,13 @@ func realtimeTurnDetectionEnabled(assistant any) bool {
 		return capabilities.RealtimeCapabilities().TurnDetection
 	}
 	return false
+}
+
+func (s *AgentSession) validateRealtimeTurnDetectionInterruptions(assistant any) error {
+	if realtimeTurnDetectionEnabled(assistant) && !s.defaultAllowInterruptions() {
+		return errRealtimeTurnDetectionInterruptionsDisabled
+	}
+	return nil
 }
 
 func (s *AgentSession) defaultAllowInterruptions() bool {
