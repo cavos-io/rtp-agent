@@ -1996,6 +1996,37 @@ func TestAgentActivityVADTurnCompletesPendingFinalTranscriptAfterEndOfSpeech(t *
 	}
 }
 
+func TestAgentActivitySTTTurnWaitsForEndOfSpeechBeforeCommit(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.OnStartOfSpeech(nil)
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "wait for stt eos", Confidence: 0.9}},
+	})
+
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called before STT end-of-speech with %q", msg.TextContent())
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	activity.OnEndOfSpeech(nil)
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "wait for stt eos" {
+			t.Fatalf("turn message text = %q, want wait for stt eos", msg.TextContent())
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called after STT end-of-speech")
+	}
+}
+
 func TestAgentActivityUsesSessionMaxEndpointingDelay(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeSTT

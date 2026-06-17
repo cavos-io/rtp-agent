@@ -1428,7 +1428,8 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 	a.overlapSpeechEnded = false
 	logger.Logger.Infow("End of speech detected")
 
-	if a.vadBasedTurnDetection() {
+	turnDetection := a.turnDetectionMode()
+	if a.vadBasedTurnDetection() || (turnDetection == TurnDetectionModeSTT && a.pendingFinalTranscriptPresent()) {
 		// Trigger EOU detection
 		a.runEOUDetection(a.pendingFinalEndOfTurnInfo())
 	}
@@ -1612,7 +1613,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 			}
 		}
 	}
-	if turnDetection == TurnDetectionModeSTT {
+	if turnDetection == TurnDetectionModeSTT && !a.speaking {
 		a.runEOUDetection(EndOfTurnInfo{
 			NewTranscript:        transcript,
 			Language:             language,
@@ -2761,6 +2762,15 @@ func (a *AgentActivity) pendingFinalEndOfTurnInfo() EndOfTurnInfo {
 		info.StoppedSpeakingAt = &stopped
 	}
 	return info
+}
+
+func (a *AgentActivity) pendingFinalTranscriptPresent() bool {
+	if a == nil {
+		return false
+	}
+	a.userTurnMu.Lock()
+	defer a.userTurnMu.Unlock()
+	return a.pendingUserTranscriptPresent
 }
 
 func (a *AgentActivity) vadBasedTurnDetection() bool {

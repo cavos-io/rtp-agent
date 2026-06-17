@@ -326,6 +326,19 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 			va.emitSTTMetrics(ev)
 			continue
 		}
+		if ev.Type == stt.SpeechEventStartOfSpeech || ev.Type == stt.SpeechEventEndOfSpeech {
+			va.mu.Lock()
+			session := va.session
+			va.mu.Unlock()
+			if session != nil && session.activity != nil {
+				if ev.Type == stt.SpeechEventStartOfSpeech {
+					session.activity.OnStartOfSpeech(nil)
+				} else {
+					session.activity.OnEndOfSpeech(nil)
+				}
+			}
+			continue
+		}
 		if ev.Type != stt.SpeechEventInterimTranscript && ev.Type != stt.SpeechEventPreflightTranscript && ev.Type != stt.SpeechEventFinalTranscript {
 			continue
 		}

@@ -1450,6 +1450,49 @@ func TestPipelineAgentVADTurnDetectionWaitsForEndOfSpeechBeforeCommit(t *testing
 	}
 }
 
+func TestPipelineAgentSTTTurnDetectionWaitsForEndOfSpeechBeforeCommit(t *testing.T) {
+	baseAgent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	baseAgent.TurnDetection = TurnDetectionModeSTT
+	baseAgent.STT = &fakePipelineSTT{}
+	endpointing := &recordingPipelineEndpointing{}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{Endpointing: endpointing, MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(baseAgent, session)
+	baseAgent.activity = activity
+	session.activity = activity
+	defer activity.Stop()
+
+	pipeline := NewPipelineAgent(nil, baseAgent.STT, nil, nil, baseAgent.ChatCtx)
+	pipeline.session = session
+	pipeline.ctx = context.Background()
+	session.Assistant = pipeline
+
+	pipeline.sttLoop(&fakePipelineRecognizeStream{
+		events: []*stt.SpeechEvent{
+			{Type: stt.SpeechEventStartOfSpeech},
+			{
+				Type:         stt.SpeechEventFinalTranscript,
+				Alternatives: []stt.SpeechData{{Text: "finish after stt eos", Confidence: 0.9}},
+			},
+			{Type: stt.SpeechEventEndOfSpeech},
+		},
+	})
+
+	if endpointing.startCount != 1 {
+		t.Fatalf("OnStartOfSpeech calls = %d, want 1 for STT start_of_speech", endpointing.startCount)
+	}
+	if endpointing.endCount != 1 {
+		t.Fatalf("OnEndOfSpeech calls = %d, want 1 for STT end_of_speech", endpointing.endCount)
+	}
+	select {
+	case msg := <-baseAgent.turns:
+		if msg.TextContent() != "finish after stt eos" {
+			t.Fatalf("turn message text = %q, want finish after stt eos", msg.TextContent())
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called after STT end-of-speech")
+	}
+}
+
 func TestPipelineAgentFlushInputTranscriptionPushesSilenceAndFlushesSTT(t *testing.T) {
 	stream := &fakePipelineRecognizeStream{}
 	pipeline := NewPipelineAgent(nil, nil, nil, nil, nil)
