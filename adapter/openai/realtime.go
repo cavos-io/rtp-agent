@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -40,6 +41,11 @@ type RealtimeModel struct {
 }
 
 type openAIRealtimeWebsocketDialer func(string, http.Header) (*websocket.Conn, *http.Response, error)
+
+type openAIRealtimeDialResult struct {
+	conn *websocket.Conn
+	err  error
+}
 
 type openAIRealtimeModelOptions struct {
 	sessionOptions llm.RealtimeSessionOptions
@@ -345,7 +351,7 @@ func (m *RealtimeModel) dialRealtimeWebsocket(ctx context.Context, wsURL string,
 		err  error
 	)
 	for attempt := 0; attempt <= m.connect.MaxRetry; attempt++ {
-		conn, _, err = m.dialWebsocket(wsURL, header)
+		conn, err = m.dialRealtimeWebsocketAttempt(ctx, wsURL, header)
 		if err == nil {
 			openAIRealtimeApplySessionDeadline(conn, m.maxSession)
 			return conn, nil
@@ -366,6 +372,40 @@ func (m *RealtimeModel) dialRealtimeWebsocket(ctx context.Context, wsURL string,
 		}
 	}
 	return nil, err
+}
+
+func (m *RealtimeModel) dialRealtimeWebsocketAttempt(ctx context.Context, wsURL string, header http.Header) (*websocket.Conn, error) {
+	attemptCtx := ctx
+	cancel := func() {}
+	if m.connect.Timeout > 0 {
+		attemptCtx, cancel = context.WithTimeout(ctx, m.connect.Timeout)
+	} else if ctx != nil {
+		attemptCtx, cancel = context.WithCancel(ctx)
+	}
+	defer cancel()
+
+	resultCh := make(chan openAIRealtimeDialResult, 1)
+	go func() {
+		conn, _, err := m.dialWebsocket(wsURL, header)
+		result := openAIRealtimeDialResult{conn: conn, err: err}
+		select {
+		case resultCh <- result:
+		case <-attemptCtx.Done():
+			if conn != nil {
+				_ = conn.Close()
+			}
+		}
+	}()
+
+	select {
+	case result := <-resultCh:
+		return result.conn, result.err
+	case <-attemptCtx.Done():
+		if errors.Is(attemptCtx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("OpenAI realtime connection timed out")
+		}
+		return nil, attemptCtx.Err()
+	}
 }
 
 func openAIRealtimeApplySessionDeadline(conn *websocket.Conn, duration time.Duration) {

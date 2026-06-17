@@ -2720,6 +2720,39 @@ func TestRealtimeSessionInitialConnectRetriesDialFailure(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionInitialConnectHonorsTimeout(t *testing.T) {
+	blockDial := make(chan struct{})
+	defer close(blockDial)
+	realtimeModel := NewRealtimeModel(
+		"test-key",
+		"gpt-realtime",
+		WithOpenAIRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 0, Timeout: 5 * time.Millisecond}),
+	)
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = func(string, http.Header) (*websocket.Conn, *http.Response, error) {
+		<-blockDial
+		return nil, nil, errors.New("late dial failure")
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := realtimeModel.Session()
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Session error = nil, want timeout")
+		}
+		if !strings.Contains(err.Error(), "connection timed out") {
+			t.Fatalf("Session error = %v, want connection timed out", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Session did not honor connect timeout")
+	}
+}
+
 func TestRealtimeSessionIgnoresResponseDoneWithoutGeneration(t *testing.T) {
 	releaseServer := make(chan struct{})
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
