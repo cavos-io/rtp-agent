@@ -268,11 +268,7 @@ type participantEntrypointTaskKey struct {
 
 type remoteParticipantView = workerlivekit.RemoteParticipantView
 
-var defaultParticipantEntrypointKinds = []livekit.ParticipantInfo_Kind{
-	livekit.ParticipantInfo_CONNECTOR,
-	livekit.ParticipantInfo_SIP,
-	livekit.ParticipantInfo_STANDARD,
-}
+var defaultParticipantEntrypointKinds = workerlivekit.DefaultParticipantKinds()
 
 const defaultSIPParticipantName = "SIP-participant"
 
@@ -863,10 +859,7 @@ func (c *JobContext) ensureRoomConnected(ctx context.Context) error {
 }
 
 func defaultParticipantWaitKinds(kinds []livekit.ParticipantInfo_Kind) []livekit.ParticipantInfo_Kind {
-	if len(kinds) > 0 {
-		return kinds
-	}
-	return defaultParticipantEntrypointKinds
+	return workerlivekit.DefaultParticipantKindsWhenUnset(kinds)
 }
 
 func (c *JobContext) scheduleParticipantEntrypoints(participant *livekit.ParticipantInfo) {
@@ -916,15 +909,7 @@ func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntry
 }
 
 func participantEntrypointMatchesKind(kinds []livekit.ParticipantInfo_Kind, kind livekit.ParticipantInfo_Kind) bool {
-	if len(kinds) == 0 {
-		return true
-	}
-	for _, allowed := range kinds {
-		if allowed == kind {
-			return true
-		}
-	}
-	return false
+	return workerlivekit.ParticipantKindAllowed(kinds, kind)
 }
 
 func (c *JobContext) Shutdown(reasons ...string) {
