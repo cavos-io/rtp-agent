@@ -17,6 +17,7 @@ type MistralLLM struct {
 	baseURL     string
 	httpClient  goopenai.HTTPDoer
 	extraParams map[string]any
+	toolChoice  llm.ToolChoice
 }
 
 type MistralLLMOption func(*MistralLLM)
@@ -44,6 +45,12 @@ func WithMistralLLMTopP(topP float64) MistralLLMOption {
 func WithMistralLLMMaxCompletionTokens(maxCompletionTokens int) MistralLLMOption {
 	return func(l *MistralLLM) {
 		l.setExtraParam("max_completion_tokens", maxCompletionTokens)
+	}
+}
+
+func WithMistralLLMToolChoice(toolChoice llm.ToolChoice) MistralLLMOption {
+	return func(l *MistralLLM) {
+		l.toolChoice = toolChoice
 	}
 }
 
@@ -101,6 +108,9 @@ func (l *MistralLLM) rebuildInner() {
 	opts := []openai.OpenAILLMOption{}
 	if len(l.extraParams) > 0 {
 		opts = append(opts, openai.WithOpenAILLMExtraParams(cloneMistralLLMAnyMap(l.extraParams)))
+	}
+	if l.toolChoice != nil {
+		opts = append(opts, openai.WithOpenAILLMToolChoice(l.toolChoice))
 	}
 	if l.httpClient != nil {
 		l.inner = openai.NewOpenAILLMWithBaseURLAndHTTPClient(l.apiKey, l.model, l.baseURL, l.httpClient, opts...)

@@ -95,6 +95,21 @@ func TestMistralLLMUpdateOptionsAppliesReferenceSamplingParams(t *testing.T) {
 	}
 }
 
+func TestMistralLLMUpdateOptionsAppliesReferenceToolChoice(t *testing.T) {
+	capture := &mistralLLMCaptureHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	provider := NewMistralLLM("test-key", "", withMistralLLMHTTPClient(capture))
+	provider.UpdateOptions(WithMistralLLMToolChoice("none"))
+
+	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"tool_choice":"none"`) {
+		t.Fatalf("request body = %s, want tool_choice none", capture.requestBody)
+	}
+}
+
 type mistralLLMCaptureHTTPClient struct {
 	statusCode   int
 	responseBody string
