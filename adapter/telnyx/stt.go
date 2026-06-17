@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
@@ -59,6 +60,12 @@ func WithTelnyxSTTTranscriptionEngine(engine string) TelnyxSTTOption {
 		if engine != "" {
 			s.transcriptionEngine = engine
 		}
+	}
+}
+
+func WithTelnyxSTTInterimResults(interimResults bool) TelnyxSTTOption {
+	return func(s *TelnyxSTT) {
+		s.interimResults = interimResults
 	}
 }
 
@@ -126,6 +133,7 @@ func (s *TelnyxSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 			language: resolveTelnyxSTTLanguage(s, language),
 		},
 	}
+	stream.writeBinary = stream.writeBinaryMessage
 	go stream.readLoop()
 	return stream, nil
 }
@@ -144,8 +152,12 @@ func (s *TelnyxSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	if err := stream.Flush(); err != nil {
 		return nil, err
 	}
-	var finalText bytes.Buffer
 	resolvedLanguage := resolveTelnyxSTTLanguage(s, language)
+	return collectTelnyxFinalTranscript(stream, resolvedLanguage)
+}
+
+func collectTelnyxFinalTranscript(stream stt.RecognizeStream, resolvedLanguage string) (*stt.SpeechEvent, error) {
+	var finalText bytes.Buffer
 	for {
 		event, err := stream.Next()
 		if err != nil {
@@ -156,7 +168,6 @@ func (s *TelnyxSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		}
 		if event.Type == stt.SpeechEventFinalTranscript && len(event.Alternatives) > 0 {
 			finalText.WriteString(event.Alternatives[0].Text)
-			break
 		}
 	}
 	return &stt.SpeechEvent{
@@ -235,16 +246,48 @@ type telnyxSTTStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	state  *telnyxSTTStreamState
+
+	audioBStream *audio.AudioByteStream
+	writeBinary  func([]byte) error
+	closeConn    func() error
 }
 
 func (s *telnyxSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	return s.conn.WriteMessage(websocket.BinaryMessage, frame.Data)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("telnyx stt stream is closed")
+	}
+	if s.audioBStream == nil {
+		s.audioBStream = newTelnyxSTTAudioByteStream(frame)
+	}
+	for _, chunk := range s.audioBStream.Write(frame.Data) {
+		if err := s.writeBinaryData(chunk.Data); err != nil {
+			s.closeAfterWriteFailureLocked()
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *telnyxSTTStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("telnyx stt stream is closed")
+	}
+	if s.audioBStream == nil {
+		return nil
+	}
+	for _, chunk := range s.audioBStream.Flush() {
+		if err := s.writeBinaryData(chunk.Data); err != nil {
+			s.closeAfterWriteFailureLocked()
+			return err
+		}
+	}
 	return nil
 }
 
@@ -255,9 +298,68 @@ func (s *telnyxSTTStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	s.cancel()
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.audioBStream != nil {
+		for _, chunk := range s.audioBStream.Flush() {
+			if err := s.writeBinaryData(chunk.Data); err != nil {
+				return err
+			}
+		}
+	}
+	if s.conn != nil {
+		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	}
+	return s.closeConnection()
+}
+
+func newTelnyxSTTAudioByteStream(frame *model.AudioFrame) *audio.AudioByteStream {
+	sampleRate := frame.SampleRate
+	if sampleRate == 0 {
+		sampleRate = defaultTelnyxSTTSampleRate
+	}
+	numChannels := frame.NumChannels
+	if numChannels == 0 {
+		numChannels = telnyxSTTNumChannels
+	}
+	return audio.NewAudioByteStream(sampleRate, numChannels, sampleRate/20)
+}
+
+func (s *telnyxSTTStream) writeBinaryData(data []byte) error {
+	if s.writeBinary != nil {
+		return s.writeBinary(data)
+	}
+	return s.writeBinaryMessage(data)
+}
+
+func (s *telnyxSTTStream) writeBinaryMessage(data []byte) error {
+	return s.conn.WriteMessage(websocket.BinaryMessage, data)
+}
+
+func (s *telnyxSTTStream) closeConnection() error {
+	if s.closeConn != nil {
+		return s.closeConn()
+	}
+	return s.closeWebsocketConn()
+}
+
+func (s *telnyxSTTStream) closeWebsocketConn() error {
+	if s.conn == nil {
+		return nil
+	}
 	return s.conn.Close()
+}
+
+func (s *telnyxSTTStream) closeAfterWriteFailureLocked() {
+	if s.closed {
+		return
+	}
+	s.closed = true
+	if s.cancel != nil {
+		s.cancel()
+	}
+	_ = s.closeConnection()
 }
 
 func (s *telnyxSTTStream) Next() (*stt.SpeechEvent, error) {

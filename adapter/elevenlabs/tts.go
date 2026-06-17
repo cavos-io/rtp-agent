@@ -23,7 +23,10 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const defaultElevenLabsBaseURL = "https://api.elevenlabs.io/v1"
+const (
+	defaultElevenLabsBaseURL           = "https://api.elevenlabs.io/v1"
+	defaultElevenLabsInactivityTimeout = 180
+)
 
 type ElevenLabsTTS struct {
 	apiKey            string
@@ -333,7 +336,7 @@ func buildElevenLabsStreamURL(t *ElevenLabsTTS) string {
 	}
 	q.Set("enable_ssml_parsing", strconv.FormatBool(t.enableSSMLParsing))
 	q.Set("enable_logging", "true")
-	q.Set("inactivity_timeout", "300")
+	q.Set("inactivity_timeout", strconv.Itoa(defaultElevenLabsInactivityTimeout))
 	q.Set("apply_text_normalization", "auto")
 	q.Set("sync_alignment", "true")
 	parsed.RawQuery = q.Encode()

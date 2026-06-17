@@ -2719,6 +2719,9 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		if cfg.STTModel != "" {
 			sttOpts = append(sttOpts, telnyx.WithTelnyxSTTTranscriptionEngine(cfg.STTModel))
 		}
+		if cfg.STTInterimResults != nil {
+			sttOpts = append(sttOpts, telnyx.WithTelnyxSTTInterimResults(*cfg.STTInterimResults))
+		}
 		if cfg.STTSampleRate != nil {
 			sttOpts = append(sttOpts, telnyx.WithTelnyxSTTSampleRate(*cfg.STTSampleRate))
 		}
@@ -4944,6 +4947,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.STTModel != "" {
 			sttOpts = append(sttOpts, telnyx.WithTelnyxSTTTranscriptionEngine(cfg.STTModel))
+		}
+		if cfg.STTInterimResults != nil {
+			sttOpts = append(sttOpts, telnyx.WithTelnyxSTTInterimResults(*cfg.STTInterimResults))
 		}
 		if cfg.STTSampleRate != nil {
 			sttOpts = append(sttOpts, telnyx.WithTelnyxSTTSampleRate(*cfg.STTSampleRate))

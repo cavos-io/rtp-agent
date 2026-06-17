@@ -128,15 +128,18 @@ type fakeAppAgoraChannelClient struct {
 
 type fakeAppSessionAssistant struct {
 	audioCh  chan *model.AudioFrame
-	started  chan struct{}
 	startCtx context.Context
+	started  chan struct{}
 	publish  func(ctx context.Context, frame *model.AudioFrame) error
 }
 
 func (f *fakeAppSessionAssistant) Start(ctx context.Context, s *agent.AgentSession) error {
 	f.startCtx = ctx
 	if f.started != nil {
-		close(f.started)
+		select {
+		case f.started <- struct{}{}:
+		default:
+		}
 	}
 	return nil
 }
@@ -1038,7 +1041,7 @@ func TestRunAgoraStartsSessionWithWorkerContext(t *testing.T) {
 		appNewAgoraChannelClient = oldNewAgoraChannelClient
 	})
 
-	assistant := &fakeAppSessionAssistant{started: make(chan struct{})}
+	assistant := &fakeAppSessionAssistant{started: make(chan struct{}, 1)}
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 	session.Assistant = assistant
 	session.LLM = &fakeAppLLM{}
@@ -5616,12 +5619,14 @@ func TestTelnyxSTTFallbackPassesReferenceOptions(t *testing.T) {
 	defer server.Close()
 
 	sampleRate := 8000
+	interimResults := false
 	provider, err := fallbackSTTFromProvider(AppConfig{
-		TelnyxAPIKey:  "test-telnyx-key",
-		STTBaseURL:    "ws" + strings.TrimPrefix(server.URL, "http"),
-		STTLanguage:   "es",
-		STTModel:      "google",
-		STTSampleRate: &sampleRate,
+		TelnyxAPIKey:      "test-telnyx-key",
+		STTBaseURL:        "ws" + strings.TrimPrefix(server.URL, "http"),
+		STTLanguage:       "es",
+		STTModel:          "google",
+		STTSampleRate:     &sampleRate,
+		STTInterimResults: &interimResults,
 	}, providerTelnyx)
 	if err != nil {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
@@ -5639,8 +5644,8 @@ func TestTelnyxSTTFallbackPassesReferenceOptions(t *testing.T) {
 	if got, want := stt.Provider(provider), "telnyx"; got != want {
 		t.Fatalf("stt.Provider() = %q, want %q", got, want)
 	}
-	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.Diarization || caps.AlignedTranscript != "" || !caps.OfflineRecognize {
-		t.Fatalf("Capabilities() = %+v, want streaming interim offline without diarization", caps)
+	if caps := provider.Capabilities(); !caps.Streaming || caps.InterimResults || caps.Diarization || caps.AlignedTranscript != "" || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want streaming offline without interim or diarization", caps)
 	}
 
 	stream, err := provider.Stream(context.Background(), "")

@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
@@ -326,6 +327,7 @@ type elevenLabsSTTStream struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	sampleRate int
+	audioBuf   *audio.AudioByteStream
 	state      *elevenLabsSTTStreamState
 }
 
@@ -338,7 +340,15 @@ func (s *elevenLabsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	return s.writeMessageLocked(buildElevenLabsSTTAudioChunkMessage(frame.Data, s.sampleRate, false))
+	if s.audioBuf == nil {
+		s.audioBuf = audio.NewAudioByteStream(uint32(s.sampleRate), 1, uint32(s.sampleRate/20))
+	}
+	for _, chunk := range s.audioBuf.Push(frame.Data) {
+		if err := s.writeMessageLocked(buildElevenLabsSTTAudioChunkMessage(chunk.Data, s.sampleRate, false)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *elevenLabsSTTStream) Flush() error {
@@ -347,7 +357,15 @@ func (s *elevenLabsSTTStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	return s.writeMessageLocked(buildElevenLabsSTTAudioChunkMessage(nil, s.sampleRate, true))
+	if s.audioBuf == nil {
+		return nil
+	}
+	for _, chunk := range s.audioBuf.Flush() {
+		if err := s.writeMessageLocked(buildElevenLabsSTTAudioChunkMessage(chunk.Data, s.sampleRate, false)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *elevenLabsSTTStream) Close() error {

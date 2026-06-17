@@ -196,6 +196,80 @@ func TestElevenLabsSTTStreamURLAndMessagesMatchReference(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTStreamChunksAndFlushesReferenceAudio(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	messages := make(chan map[string]any, 2)
+	serverErr := make(chan error, 1)
+	upgrader := websocket.Upgrader{}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		for range 2 {
+			var msg map[string]any
+			if err := conn.ReadJSON(&msg); err != nil {
+				serverErr <- err
+				return
+			}
+			messages <- msg
+		}
+		serverErr <- nil
+	})}
+	go server.Serve(&singleElevenLabsConnListener{conn: serverConn})
+	defer server.Close()
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTModel("scribe_v2_realtime"),
+		WithElevenLabsSTTBaseURL("ws://eleven.test/v1"),
+	)
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	frame := &model.AudioFrame{
+		Data:              bytes.Repeat([]byte{0x11}, 2000),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1000,
+	}
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	first := readElevenLabsSTTStreamMessage(t, messages)
+	assertElevenLabsSTTAudioMessage(t, first, 1600, false)
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	second := readElevenLabsSTTStreamMessage(t, messages)
+	assertElevenLabsSTTAudioMessage(t, second, 400, false)
+
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test websocket server")
+	}
+}
+
 func TestElevenLabsSTTUpdateOptionsMatchesReference(t *testing.T) {
 	provider := NewElevenLabsSTT("test-key",
 		WithElevenLabsSTTModel("scribe_v2_realtime"),
@@ -434,10 +508,10 @@ func TestElevenLabsSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	var writeErr error
 	for range 3 {
 		writeErr = stream.PushFrame(&model.AudioFrame{
-			Data:              []byte{0x01, 0x02},
+			Data:              bytes.Repeat([]byte{0x01}, 1600),
 			SampleRate:        16000,
 			NumChannels:       1,
-			SamplesPerChannel: 1,
+			SamplesPerChannel: 800,
 		})
 		if writeErr != nil {
 			break
@@ -487,6 +561,28 @@ func runElevenLabsClosingWebsocketServer(conn net.Conn, closeAfterHandshake <-ch
 	close(closed)
 	errCh <- nil
 }
+
+type singleElevenLabsConnListener struct {
+	conn net.Conn
+	used bool
+}
+
+func (l *singleElevenLabsConnListener) Accept() (net.Conn, error) {
+	if l.used {
+		return nil, io.EOF
+	}
+	l.used = true
+	return l.conn, nil
+}
+
+func (l *singleElevenLabsConnListener) Close() error { return nil }
+
+func (l *singleElevenLabsConnListener) Addr() net.Addr { return dummyElevenLabsAddr("pipe") }
+
+type dummyElevenLabsAddr string
+
+func (a dummyElevenLabsAddr) Network() string { return string(a) }
+func (a dummyElevenLabsAddr) String() string  { return string(a) }
 
 func elevenLabsTestAcceptKey(key string) string {
 	sum := sha1.Sum([]byte(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
@@ -544,6 +640,38 @@ func assertElevenLabsQuery(t *testing.T, query url.Values, key string, want stri
 	t.Helper()
 	if got := query.Get(key); got != want {
 		t.Fatalf("%s = %q, want %q", key, got, want)
+	}
+}
+
+func readElevenLabsSTTStreamMessage(t *testing.T, messages <-chan map[string]any) map[string]any {
+	t.Helper()
+	select {
+	case msg := <-messages:
+		return msg
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for ElevenLabs STT websocket message")
+	}
+	return nil
+}
+
+func assertElevenLabsSTTAudioMessage(t *testing.T, msg map[string]any, wantBytes int, wantCommit bool) {
+	t.Helper()
+	if got := msg["message_type"]; got != "input_audio_chunk" {
+		t.Fatalf("message_type = %v, want input_audio_chunk in %#v", got, msg)
+	}
+	if got := msg["commit"]; got != wantCommit {
+		t.Fatalf("commit = %v, want %v in %#v", got, wantCommit, msg)
+	}
+	if got := msg["sample_rate"]; got != float64(16000) {
+		t.Fatalf("sample_rate = %v, want 16000 in %#v", got, msg)
+	}
+	audioBase64, _ := msg["audio_base_64"].(string)
+	audio, err := base64.StdEncoding.DecodeString(audioBase64)
+	if err != nil {
+		t.Fatalf("decode audio_base_64: %v", err)
+	}
+	if len(audio) != wantBytes {
+		t.Fatalf("audio bytes = %d, want %d", len(audio), wantBytes)
 	}
 }
 

@@ -3,10 +3,14 @@ package telnyx
 import (
 	"context"
 	"encoding/binary"
+	"errors"
+	"io"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
@@ -34,6 +38,15 @@ func TestTelnyxSTTDefaultsMatchReference(t *testing.T) {
 	caps := provider.Capabilities()
 	if !caps.Streaming || !caps.InterimResults || !caps.OfflineRecognize {
 		t.Fatalf("capabilities = %+v, want streaming interim offline recognize", caps)
+	}
+}
+
+func TestTelnyxSTTInterimResultsOptionMatchesReference(t *testing.T) {
+	provider := NewTelnyxSTT("test-key", WithTelnyxSTTInterimResults(false))
+
+	caps := provider.Capabilities()
+	if !caps.Streaming || caps.InterimResults || !caps.OfflineRecognize {
+		t.Fatalf("capabilities = %+v, want streaming without interim and with offline recognize", caps)
 	}
 }
 
@@ -108,6 +121,161 @@ func TestTelnyxSTTWAVHeaderMatchesReference(t *testing.T) {
 	}
 }
 
+func TestTelnyxSTTStreamChunksAndFlushesReferenceAudio(t *testing.T) {
+	var writes [][]byte
+	stream := &telnyxSTTStream{
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 800),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 400,
+	}); err != nil {
+		t.Fatalf("PushFrame half chunk error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes = %d, want no write before 50ms chunk", len(writes))
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 800),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 400,
+	}); err != nil {
+		t.Fatalf("PushFrame full chunk error = %v", err)
+	}
+	if len(writes) != 1 || len(writes[0]) != 1600 {
+		t.Fatalf("writes = %s, want one 50ms 1600-byte chunk", telnyxWriteSizes(writes))
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 400),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 200,
+	}); err != nil {
+		t.Fatalf("PushFrame remainder error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if len(writes) != 2 || len(writes[1]) != 400 {
+		t.Fatalf("writes after flush = %s, want flushed 400-byte remainder", telnyxWriteSizes(writes))
+	}
+}
+
+func TestTelnyxSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
+	writeErr := errors.New("write failed")
+	cancelled := false
+	closeCalls := 0
+	stream := &telnyxSTTStream{
+		cancel: func() { cancelled = true },
+		writeBinary: func([]byte) error {
+			return writeErr
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+
+	err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	})
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("PushFrame error = %v, want write error", err)
+	}
+	if !cancelled {
+		t.Fatal("cancel not called after write failure")
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+	err = stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	})
+	if err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushFrame after write failure error = %v, want closed stream error", err)
+	}
+	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("Flush after write failure error = %v, want closed stream error", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after write failure error = %v, want nil", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls after idempotent Close = %d, want 1", closeCalls)
+	}
+}
+
+func TestTelnyxSTTStreamCloseFlushesBufferedAudioBeforeClose(t *testing.T) {
+	var writes [][]byte
+	closeCalls := 0
+	stream := &telnyxSTTStream{
+		cancel: func() {},
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 800),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 400,
+	}); err != nil {
+		t.Fatalf("PushFrame error = %v, want nil", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes before close = %s, want none", telnyxWriteSizes(writes))
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil", err)
+	}
+	if len(writes) != 1 || len(writes[0]) != 800 {
+		t.Fatalf("writes after close = %s, want buffered 800-byte audio", telnyxWriteSizes(writes))
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+}
+
+func TestTelnyxSTTFinalTranscriptCollectsAllReferenceFinals(t *testing.T) {
+	stream := &fakeTelnyxRecognizeStream{events: []*stt.SpeechEvent{
+		{Type: stt.SpeechEventInterimTranscript, Alternatives: []stt.SpeechData{{Text: "ignored"}}},
+		{Type: stt.SpeechEventFinalTranscript, Alternatives: []stt.SpeechData{{Text: "hello "}}},
+		{Type: stt.SpeechEventFinalTranscript, Alternatives: []stt.SpeechData{{Text: "world"}}},
+	}}
+
+	event, err := collectTelnyxFinalTranscript(stream, "en")
+	if err != nil {
+		t.Fatalf("collect final transcript error = %v, want nil", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event type = %v, want final transcript", event.Type)
+	}
+	if len(event.Alternatives) != 1 || event.Alternatives[0].Text != "hello world" {
+		t.Fatalf("alternatives = %+v, want concatenated final text", event.Alternatives)
+	}
+}
+
 func TestTelnyxSTTEventsMatchReferenceLifecycle(t *testing.T) {
 	state := &telnyxSTTStreamState{language: "en"}
 
@@ -148,4 +316,30 @@ func assertTelnyxSTTEvent(t *testing.T, events []*stt.SpeechEvent, index int, ev
 	if len(events[index].Alternatives) != 1 || events[index].Alternatives[0].Text != text {
 		t.Fatalf("alternatives = %+v, want text %q", events[index].Alternatives, text)
 	}
+}
+
+func telnyxWriteSizes(writes [][]byte) string {
+	sizes := make([]string, 0, len(writes))
+	for _, write := range writes {
+		sizes = append(sizes, strconv.Itoa(len(write)))
+	}
+	return strings.Join(sizes, ",")
+}
+
+type fakeTelnyxRecognizeStream struct {
+	events []*stt.SpeechEvent
+	index  int
+}
+
+func (f *fakeTelnyxRecognizeStream) PushFrame(*model.AudioFrame) error { return nil }
+func (f *fakeTelnyxRecognizeStream) Flush() error                      { return nil }
+func (f *fakeTelnyxRecognizeStream) Close() error                      { return nil }
+
+func (f *fakeTelnyxRecognizeStream) Next() (*stt.SpeechEvent, error) {
+	if f.index >= len(f.events) {
+		return nil, io.EOF
+	}
+	event := f.events[f.index]
+	f.index++
+	return event, nil
 }
