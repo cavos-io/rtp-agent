@@ -1481,10 +1481,12 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 	transcript := ""
 	language := ""
 	speakerID := ""
+	confidence := 0.0
 	if ev != nil && len(ev.Alternatives) > 0 {
 		transcript = ev.Alternatives[0].Text
 		language = ev.Alternatives[0].Language
 		speakerID = ev.Alternatives[0].SpeakerID
+		confidence = ev.Alternatives[0].Confidence
 	}
 	if a.shouldDropInterimTranscriptBeforeAgentSpeechEnd(ev) {
 		logger.Logger.Debugw("dropping stale interim transcript before agent speech end", "transcript", transcript)
@@ -1510,6 +1512,9 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 				a.startFalseInterruptionTimer()
 			}
 		}
+	}
+	if ev != nil && ev.Type == stt.SpeechEventPreflightTranscript && transcript != "" {
+		a.maybeStartPreemptiveGeneration(transcript, confidence)
 	}
 }
 

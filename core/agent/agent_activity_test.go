@@ -3902,6 +3902,63 @@ func TestAgentActivityPreemptiveGenerationStartsLLMBeforeScheduling(t *testing.T
 	}
 }
 
+func TestAgentActivityPreflightTranscriptStartsPreemptiveGeneration(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	countingLLM := &preemptiveCountingLLM{
+		calls: make(chan struct{}, 2),
+		stream: &fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{
+			Delta: &llm.ChoiceDelta{Content: "preflight reply"},
+		}}},
+	}
+	agent.LLM = countingLLM
+	agent.TTS = &fakePipelineTTS{stream: &fakePipelineTTSStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	pipeline := NewPipelineAgent(nil, nil, agent.LLM, agent.TTS, agent.ChatCtx)
+	pipeline.session = session
+	session.Assistant = pipeline
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	defer activity.Stop()
+
+	speechEvents := session.SpeechCreatedEvents()
+	activity.OnStartOfSpeech(&vad.VADEvent{})
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Type: stt.SpeechEventPreflightTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text:       "preflight start",
+			Confidence: 0.83,
+		}},
+	})
+
+	var preemptive *SpeechHandle
+	select {
+	case ev := <-speechEvents:
+		preemptive = ev.SpeechHandle
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive preflight preemptive generation")
+	}
+	if preemptive == nil || preemptive.IsScheduled() {
+		t.Fatalf("preemptive speech = %#v, want unscheduled handle", preemptive)
+	}
+	select {
+	case <-countingLLM.calls:
+	case <-time.After(time.Second):
+		t.Fatal("LLM was not started for preflight preemptive generation")
+	}
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "preflight start" {
+		t.Fatalf("CommitUserTurn transcript = %q, want preflight start", transcript)
+	}
+	if !preemptive.IsScheduled() {
+		t.Fatal("preflight preemptive speech was not scheduled after matching turn completion")
+	}
+}
+
 func TestAgentActivityPreemptiveGenerationStartsTTSBeforeSchedulingWhenEnabled(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeVAD
