@@ -1199,9 +1199,13 @@ func (s *AgentSession) EmitAgentOutputTranscribed(ev AgentOutputTranscribedEvent
 	}
 	s.recordEvent(&ev)
 	for _, ch := range s.agentOutputTranscribedSubscribers() {
-		select {
-		case ch <- ev:
-		default:
+		if ev.IsFinal {
+			ch <- ev
+		} else {
+			select {
+			case ch <- ev:
+			default:
+			}
 		}
 	}
 }

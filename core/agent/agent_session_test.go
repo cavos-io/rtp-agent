@@ -301,6 +301,69 @@ func TestAgentSessionAgentOutputTranscribedEventsFanOutToSubscribers(t *testing.
 	assertAgentTranscriptEvent(t, second, "second")
 }
 
+func TestAgentSessionFinalAgentOutputTranscribedDeliveredWhenChannelFull(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	ch := session.AgentOutputTranscribedEvents()
+
+	// Fill the channel buffer with delta events so it's full.
+	for range cap(ch) {
+		session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{Transcript: "delta", IsFinal: false})
+	}
+
+	// Final event must block and be delivered even though channel was full.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{Transcript: "final", IsFinal: true})
+	}()
+
+	// Drain one slot then verify final event arrives.
+	<-ch
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("final AgentOutputTranscribed event was not delivered when channel became available")
+	}
+
+	var finalReceived bool
+	for {
+		select {
+		case ev := <-ch:
+			if ev.IsFinal {
+				finalReceived = true
+			}
+		default:
+			if !finalReceived {
+				t.Fatal("final AgentOutputTranscribed event not found in channel after delivery")
+			}
+			return
+		}
+	}
+}
+
+func TestAgentSessionDeltaAgentOutputTranscribedDroppedWhenChannelFull(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	ch := session.AgentOutputTranscribedEvents()
+
+	// Fill the channel buffer.
+	for range cap(ch) {
+		session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{Transcript: "delta", IsFinal: false})
+	}
+
+	// Emitting another delta must not block (dropped silently).
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{Transcript: "overflow delta", IsFinal: false})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("delta AgentOutputTranscribed emit blocked when channel was full, want non-blocking drop")
+	}
+}
+
 func TestAgentSessionUserStateChangedEventsFanOutToSubscribers(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	first := session.UserStateChangedEvents()
