@@ -436,7 +436,6 @@ func (s *AgentSession) ClaimUserTurn(ctx context.Context, fn func(context.Contex
 	}
 
 	s.mu.Lock()
-	previous := s.userState
 	s.userTurnClaims++
 	first := s.userTurnClaims == 1
 	if first {
@@ -447,17 +446,18 @@ func (s *AgentSession) ClaimUserTurn(ctx context.Context, fn func(context.Contex
 	if first {
 		s.UpdateUserState(UserStateSpeaking)
 	}
-	defer s.releaseUserTurnClaim(previous)
+	defer s.releaseUserTurnClaim()
 
 	return fn(ctx)
 }
 
-func (s *AgentSession) releaseUserTurnClaim(previous UserState) {
+func (s *AgentSession) releaseUserTurnClaim() {
 	s.mu.Lock()
 	if s.userTurnClaims > 0 {
 		s.userTurnClaims--
 	}
 	remaining := s.userTurnClaims
+	activity := s.activity
 	done := s.userTurnDone
 	if remaining == 0 && done != nil {
 		close(done)
@@ -469,7 +469,7 @@ func (s *AgentSession) releaseUserTurnClaim(previous UserState) {
 		return
 	}
 
-	if previous == UserStateSpeaking {
+	if activity != nil && activity.isUserSpeaking() {
 		s.UpdateUserState(UserStateSpeaking)
 		return
 	}

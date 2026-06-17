@@ -4903,6 +4903,23 @@ func TestAgentSessionClaimUserTurnPinsUserStateUntilRelease(t *testing.T) {
 	}
 }
 
+func TestAgentSessionClaimUserTurnReleaseDerivesStateFromActivity(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.UpdateUserState(UserStateSpeaking)
+
+	err := session.ClaimUserTurn(context.Background(), func(context.Context) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ClaimUserTurn error = %v", err)
+	}
+	if got := session.UserState(); got != UserStateListening {
+		t.Fatalf("UserState() after claim release = %q, want %q when activity is silent", got, UserStateListening)
+	}
+}
+
 func TestAgentSessionCanDisableUserAwayTimeout(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{

@@ -2271,6 +2271,10 @@ func (a *AgentActivity) ClearUserTurn() {
 	a.cancelPreemptiveGeneration()
 }
 
+func (a *AgentActivity) isUserSpeaking() bool {
+	return a != nil && a.speaking
+}
+
 func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnOptions) (string, error) {
 	a.eouMu.Lock()
 	if a.eouCancel != nil {
