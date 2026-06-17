@@ -234,51 +234,7 @@ type participantEntrypointTaskKey struct {
 	entrypoint uintptr
 }
 
-type JobRequest struct {
-	Job *livekit.Job
-
-	acceptFnc func(JobAcceptArguments) error
-	rejectFnc func(JobRejectArguments) error
-}
-
-func (r *JobRequest) ID() string {
-	return workerlivekit.JobID(r.Job)
-}
-
-func (r *JobRequest) Room() *livekit.Room {
-	return workerlivekit.JobRoom(r.Job)
-}
-
-func (r *JobRequest) Publisher() *livekit.ParticipantInfo {
-	return workerlivekit.JobPublisher(r.Job)
-}
-
-func (r *JobRequest) AgentName() string {
-	return workerlivekit.JobAgentName(r.Job)
-}
-
-func (r *JobRequest) Accept(args ...JobAcceptArguments) error {
-	acceptArgs := JobAcceptArguments{}
-	if len(args) > 0 {
-		acceptArgs = args[0]
-	}
-	acceptArgs = workerlivekit.JobAcceptArgumentsForJob(r.Job, acceptArgs)
-	if r.acceptFnc != nil {
-		return r.acceptFnc(acceptArgs)
-	}
-	return nil
-}
-
-func (r *JobRequest) Reject(args ...JobRejectArguments) error {
-	rejectArgs := workerlivekit.DefaultJobRejectArguments()
-	if len(args) > 0 {
-		rejectArgs = args[0]
-	}
-	if r.rejectFnc != nil {
-		return r.rejectFnc(rejectArgs)
-	}
-	return nil
-}
+type JobRequest = workerlivekit.JobRequest
 
 type JobContext struct {
 	Job                    *livekit.Job

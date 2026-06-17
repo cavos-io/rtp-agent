@@ -35,6 +35,36 @@ func TestJobRequestAccessorsExposeJobFields(t *testing.T) {
 	}
 }
 
+func TestJobRequestAcceptInvokesCallbackWithDefaultIdentity(t *testing.T) {
+	var got workerlivekit.JobAcceptArguments
+	req := workerlivekit.NewJobRequest(&lkprotocol.Job{Id: "job_accept"}, func(args workerlivekit.JobAcceptArguments) error {
+		got = args
+		return nil
+	}, nil)
+
+	if err := req.Accept(); err != nil {
+		t.Fatalf("Accept() error = %v", err)
+	}
+	if got.Identity != "agent-job_accept" {
+		t.Fatalf("Accept() Identity = %q, want agent-job_accept", got.Identity)
+	}
+}
+
+func TestJobRequestRejectInvokesCallbackWithDefaultTerminate(t *testing.T) {
+	var got workerlivekit.JobRejectArguments
+	req := workerlivekit.NewJobRequest(nil, nil, func(args workerlivekit.JobRejectArguments) error {
+		got = args
+		return nil
+	})
+
+	if err := req.Reject(); err != nil {
+		t.Fatalf("Reject() error = %v", err)
+	}
+	if !got.Terminate {
+		t.Fatal("Reject() Terminate = false, want true")
+	}
+}
+
 func TestJobRequestAccessorsHandleNilJob(t *testing.T) {
 	if got := workerlivekit.JobID(nil); got != "" {
 		t.Fatalf("JobID(nil) = %q, want empty", got)

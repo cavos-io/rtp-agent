@@ -1728,19 +1728,14 @@ func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.Avail
 	defer s.releaseAvailabilitySlot()
 
 	answered := false
-	jobReq := &JobRequest{
-		Job: availability.Job,
-		acceptFnc: func(args JobAcceptArguments) error {
+	jobReq := workerlivekit.NewJobRequest(
+		availability.Job,
+		func(args JobAcceptArguments) error {
 			answered = true
 			s.storePendingAccept(jobID, args)
 			msg := workerlivekit.AvailabilityResponseForAccept(
 				req,
-				workerlivekit.AvailabilityAcceptOptions{
-					Name:       args.Name,
-					Identity:   args.Identity,
-					Metadata:   args.Metadata,
-					Attributes: args.Attributes,
-				},
+				workerlivekit.AvailabilityAcceptOptions(args),
 				s.Options.AgentName,
 			)
 			if err := s.sendWorkerMessage(msg); err != nil {
@@ -1748,15 +1743,15 @@ func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.Avail
 			}
 			return nil
 		},
-		rejectFnc: func(args JobRejectArguments) error {
+		func(args JobRejectArguments) error {
 			answered = true
 			msg := workerlivekit.AvailabilityResponseForReject(
 				req,
-				workerlivekit.AvailabilityRejectOptions{Terminate: args.Terminate},
+				workerlivekit.AvailabilityRejectOptions(args),
 			)
 			return s.sendWorkerMessage(msg)
 		},
-	}
+	)
 
 	if s.requestFnc != nil {
 		if err := s.requestFnc(jobReq); err != nil {

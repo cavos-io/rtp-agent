@@ -3418,12 +3418,10 @@ func TestAssignmentPreservesAssignmentToken(t *testing.T) {
 
 func TestJobRequestRejectDefaultsToTerminate(t *testing.T) {
 	var got JobRejectArguments
-	req := &JobRequest{
-		rejectFnc: func(args JobRejectArguments) error {
-			got = args
-			return nil
-		},
-	}
+	req := workerlivekit.NewJobRequest(nil, nil, func(args JobRejectArguments) error {
+		got = args
+		return nil
+	})
 
 	if err := req.Reject(); err != nil {
 		t.Fatalf("Reject() error = %v", err)
@@ -3435,13 +3433,10 @@ func TestJobRequestRejectDefaultsToTerminate(t *testing.T) {
 
 func TestJobRequestAcceptDefaultsIdentityBeforeCallback(t *testing.T) {
 	var got JobAcceptArguments
-	req := &JobRequest{
-		Job: &livekit.Job{Id: "job_identity"},
-		acceptFnc: func(args JobAcceptArguments) error {
-			got = args
-			return nil
-		},
-	}
+	req := workerlivekit.NewJobRequest(&livekit.Job{Id: "job_identity"}, func(args JobAcceptArguments) error {
+		got = args
+		return nil
+	}, nil)
 
 	if err := req.Accept(JobAcceptArguments{}); err != nil {
 		t.Fatalf("Accept() error = %v", err)
@@ -3453,13 +3448,10 @@ func TestJobRequestAcceptDefaultsIdentityBeforeCallback(t *testing.T) {
 
 func TestJobRequestAcceptCanUseDefaultArguments(t *testing.T) {
 	var got JobAcceptArguments
-	req := &JobRequest{
-		Job: &livekit.Job{Id: "job_default_accept"},
-		acceptFnc: func(args JobAcceptArguments) error {
-			got = args
-			return nil
-		},
-	}
+	req := workerlivekit.NewJobRequest(&livekit.Job{Id: "job_default_accept"}, func(args JobAcceptArguments) error {
+		got = args
+		return nil
+	}, nil)
 
 	if err := req.Accept(); err != nil {
 		t.Fatalf("Accept() error = %v", err)
@@ -3475,6 +3467,35 @@ func TestJobRequestAcceptCanUseDefaultArguments(t *testing.T) {
 	}
 	if got.Attributes != nil {
 		t.Fatalf("Accept() Attributes = %#v, want nil", got.Attributes)
+	}
+}
+
+func TestJobRequestConstructorAcceptsRootCallbackTypes(t *testing.T) {
+	var accepted JobAcceptArguments
+	var rejected JobRejectArguments
+	req := workerlivekit.NewJobRequest(
+		&livekit.Job{Id: "job_root_callbacks"},
+		func(args JobAcceptArguments) error {
+			accepted = args
+			return nil
+		},
+		func(args JobRejectArguments) error {
+			rejected = args
+			return nil
+		},
+	)
+
+	if err := req.Accept(JobAcceptArguments{Name: "Agent Root"}); err != nil {
+		t.Fatalf("Accept() error = %v", err)
+	}
+	if accepted.Name != "Agent Root" {
+		t.Fatalf("accepted name = %q, want Agent Root", accepted.Name)
+	}
+	if err := req.Reject(JobRejectArguments{Terminate: false}); err != nil {
+		t.Fatalf("Reject() error = %v", err)
+	}
+	if rejected.Terminate {
+		t.Fatal("rejected terminate = true, want false")
 	}
 }
 
