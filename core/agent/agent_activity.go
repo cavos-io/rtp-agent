@@ -3017,10 +3017,18 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			a.clearPendingUserTurn()
 			if strings.TrimSpace(info.NewTranscript) == "" {
+				a.clearPendingUserTurn()
 				return
 			}
+			a.queueMu.Lock()
+			currentSpeech := a.currentSpeech
+			a.queueMu.Unlock()
+			if a.shouldSkipShortInterruption(currentSpeech, info.NewTranscript) {
+				a.cancelPreemptiveGeneration()
+				return
+			}
+			a.clearPendingUserTurn()
 			if _, err := a.completeUserTurn(a.ctx, info); err != nil {
 				logger.Logger.Errorw("user turn completion failed", err)
 				return

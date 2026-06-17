@@ -4843,6 +4843,42 @@ func TestAgentActivityAutomaticTurnRejectsZeroConfidenceTranscript(t *testing.T)
 	}
 }
 
+func TestAgentActivityAutomaticShortInterruptionRetainsPendingTranscript(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		MinEndpointingDelay:  0.01,
+		MinInterruptionWords: 2,
+	})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "hi", Confidence: 0.9}},
+	})
+
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called for short false interruption with %q", msg.TextContent())
+	case <-time.After(50 * time.Millisecond):
+	}
+	current.MarkDone()
+	activity.currentSpeech = nil
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{
+		SkipReply: true,
+	})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "hi" {
+		t.Fatalf("CommitUserTurn transcript = %q, want retained short transcript", transcript)
+	}
+}
+
 func TestAgentActivityCommitUserTurnSkipReplyAddsUserMessageWithoutCallback(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
