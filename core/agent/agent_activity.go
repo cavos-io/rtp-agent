@@ -20,7 +20,10 @@ import (
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 )
 
-var ErrSpeechSchedulingPaused = errors.New("speech scheduling is paused")
+var (
+	ErrSpeechSchedulingPaused = errors.New("speech scheduling is paused")
+	errAgentActivityClosed    = errors.New("agent activity closed")
+)
 
 const agentInstructionsMessageID = "lk.agent_task.instructions"
 const audioTurnDetectorWindowSeconds = 8.0
@@ -544,11 +547,25 @@ func (a *AgentActivity) WaitForInactive(ctx context.Context) error {
 		a.processQueue()
 		active := a.activeSpeechHandles()
 		if len(active) == 0 {
-			return nil
+			if !a.isUserSpeaking() {
+				return nil
+			}
+			select {
+			case <-a.userTurnUpdated():
+			case <-a.ctx.Done():
+				return errAgentActivityClosed
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			continue
 		}
 		for _, speech := range active {
-			if err := speech.Wait(ctx); err != nil {
-				return err
+			select {
+			case <-speech.doneCh:
+			case <-a.ctx.Done():
+				return errAgentActivityClosed
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 			a.processQueue()
 		}
@@ -569,6 +586,17 @@ func (a *AgentActivity) activeSpeechHandles() []*SpeechHandle {
 		}
 	}
 	return active
+}
+
+func (a *AgentActivity) userTurnUpdated() <-chan struct{} {
+	if a == nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	a.userTurnMu.Lock()
+	defer a.userTurnMu.Unlock()
+	return a.userTurnUpdatedCh
 }
 
 func (a *AgentActivity) OnUserTurnExceeded(ev UserTurnExceededEvent) {
@@ -1444,6 +1472,7 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 	if a.Session != nil {
 		a.Session.UpdateUserState(UserStateSpeaking)
 	}
+	a.notifyUserTurnUpdated()
 	if endpointing := a.endpointing(); endpointing != nil {
 		startedAt := vadSpeechStartTimestamp(ev)
 		if sttStartedAt != nil {
@@ -1478,6 +1507,7 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 	if a.Session != nil {
 		a.Session.UpdateUserState(UserStateListening)
 	}
+	a.notifyUserTurnUpdated()
 	if endpointing := a.endpointing(); endpointing != nil && wasSpeaking {
 		shouldIgnore := a.overlapSpeechEnded && !a.interruptionDetected
 		endpointing.OnEndOfSpeech(vadSpeechEndTimestamp(ev), shouldIgnore)
@@ -2264,6 +2294,7 @@ func (a *AgentActivity) ClearUserTurn() {
 
 	a.sttEOSReceived = false
 	a.speaking = false
+	a.notifyUserTurnUpdated()
 	a.manualTurnCommitted = false
 	a.userSpeechStartedAt = time.Time{}
 	a.userSpeechStoppedAt = time.Time{}
@@ -2311,7 +2342,9 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 		assistant := a.Session.Assistant
 		activity := a.Session.activity
 		a.Session.mu.Unlock()
-		if committer, ok := assistant.(realtimeAudioCommitter); ok {
+		if realtimeTurnDetectionEnabled(assistant) {
+			opts.SkipReply = true
+		} else if committer, ok := assistant.(realtimeAudioCommitter); ok {
 			if err := committer.CommitAudio(); err != nil {
 				return "", err
 			}
@@ -2474,6 +2507,11 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		TranscriptConfidence: &confidence,
 		CreatedAt:            time.Now(),
 	}
+	if a.realtimeServerTurnDetectionEnabled() {
+		a.cancelPreemptiveGeneration()
+		a.resetPreemptiveGenerationCount()
+		return nil, nil
+	}
 	if info.SkipReply {
 		a.cancelPreemptiveGeneration()
 		a.resetPreemptiveGenerationCount()
@@ -2598,6 +2636,16 @@ func (a *AgentActivity) shortInterruptionTranscript(transcript string) bool {
 		wordCount = len(tokenize.SplitWords(transcript, true, true, false))
 	}
 	return wordCount < a.Session.Options.MinInterruptionWords
+}
+
+func (a *AgentActivity) realtimeServerTurnDetectionEnabled() bool {
+	if a == nil || a.Session == nil {
+		return false
+	}
+	a.Session.mu.Lock()
+	assistant := a.Session.Assistant
+	a.Session.mu.Unlock()
+	return realtimeTurnDetectionEnabled(assistant)
 }
 
 func (a *AgentActivity) currentInterruptionTranscript() string {

@@ -3282,6 +3282,85 @@ func TestAgentSessionWaitForInactiveWaitsForCurrentSpeech(t *testing.T) {
 	}
 }
 
+func TestAgentSessionWaitForInactiveRetargetsDuringAgentHandoff(t *testing.T) {
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	next := &onEnterSayAgent{Agent: NewAgent("next")}
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+	next.session = session
+	session.activity = NewAgentActivity(initial, session)
+	session.Assistant = &fakeSessionAssistant{}
+	session.started = true
+	oldSpeech := NewSpeechHandle(true, DefaultInputDetails())
+	session.activity.currentSpeech = oldSpeech
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.WaitForInactive(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("WaitForInactive returned before previous activity speech completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	session.UpdateAgent(next)
+	oldSpeech.MarkDone()
+
+	select {
+	case err := <-done:
+		t.Fatalf("WaitForInactive returned while replacement activity speech was still active: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	current := session.CurrentSpeech()
+	if current == nil {
+		t.Fatal("replacement activity did not schedule speech")
+	}
+	current.MarkDone()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("WaitForInactive error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("WaitForInactive did not return after replacement speech completed")
+	}
+}
+
+func TestAgentSessionWaitForInactiveRetargetsStoppedActivityDuringHandoff(t *testing.T) {
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(initial, session)
+	session.Assistant = &fakeSessionAssistant{}
+	session.started = true
+	session.activity.currentSpeech = NewSpeechHandle(true, DefaultInputDetails())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.WaitForInactive(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("WaitForInactive returned before handoff stopped previous activity: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	session.UpdateAgent(next)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("WaitForInactive error = %v, want nil after handoff retargets to idle activity", err)
+		}
+	case <-testTimeout():
+		t.Fatal("WaitForInactive did not retarget after previous activity stopped")
+	}
+}
+
 func TestAgentSessionWaitForInactiveWaitsForClaimedUserTurn(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -3326,6 +3405,36 @@ func TestAgentSessionWaitForInactiveWaitsForClaimedUserTurn(t *testing.T) {
 		}
 	case <-testTimeout():
 		t.Fatal("WaitForInactive did not return after claimed user turn released")
+	}
+}
+
+func TestAgentSessionWaitForInactiveWaitsForUserSpeech(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	activity.speaking = true
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.WaitForInactive(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("WaitForInactive returned while user speech was active: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	activity.OnEndOfSpeech(nil)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("WaitForInactive error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("WaitForInactive did not return after user speech ended")
 	}
 }
 
@@ -4607,6 +4716,57 @@ func TestAgentSessionUpdateAgentBlocksRealtimeGenerationOnPreviousActivity(t *te
 	case ev := <-session.SpeechCreatedEvents():
 		t.Fatalf("unexpected SpeechCreated event from previous activity: %#v", ev)
 	default:
+	}
+}
+
+func TestAgentSessionUpdateAgentBlocksPreviousActivityDuringReplacementStart(t *testing.T) {
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	initial.VAD = &fakePipelineVAD{}
+	initial.STT = &fakePipelineSTT{}
+	initial.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	initial.TTS = &fakePipelineTTS{}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	sessionStarted := make(chan struct{})
+	releaseSession := make(chan struct{})
+	next.RealtimeModel = &fakeRealtimeModel{
+		session:        &fakeRealtimeSession{},
+		sessionStarted: sessionStarted,
+		sessionRelease: releaseSession,
+	}
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+	oldActivity := NewAgentActivity(initial, session)
+	session.activity = oldActivity
+	session.Assistant = &PipelineAgent{}
+	session.started = true
+
+	done := make(chan struct{})
+	go func() {
+		session.UpdateAgent(next)
+		close(done)
+	}()
+	<-sessionStarted
+
+	handle, err := oldActivity.OnGenerationCreated(llm.GenerationCreatedEvent{
+		ResponseID:    "response_1",
+		UserInitiated: false,
+	})
+	if !errors.Is(err, ErrSpeechSchedulingPaused) {
+		t.Fatalf("OnGenerationCreated during replacement start error = %v, want ErrSpeechSchedulingPaused", err)
+	}
+	if handle != nil {
+		t.Fatalf("OnGenerationCreated handle = %#v, want nil while replacement starts", handle)
+	}
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("unexpected SpeechCreated event from previous activity during replacement start: %#v", ev)
+	default:
+	}
+
+	close(releaseSession)
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("UpdateAgent did not finish after releasing replacement session")
 	}
 }
 
