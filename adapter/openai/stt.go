@@ -610,10 +610,23 @@ func (s *openAIRealtimeSTTStream) UpdateOptions(language string) {
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.state == nil {
 		s.state = &openAIRealtimeSTTMessageState{}
 	}
 	s.state.language = language
+	if s.closed || s.conn == nil || s.owner == nil {
+		return
+	}
+	sessionUpdate, err := buildOpenAIRealtimeSTTSessionUpdate(s.owner)
+	if err != nil {
+		s.sendErrorLocked(err)
+		return
+	}
+	if err := s.conn.WriteMessage(websocket.TextMessage, sessionUpdate); err != nil {
+		s.closeAfterWriteFailureLocked()
+	}
 }
 
 func (s *openAIRealtimeSTTStream) Close() error {
@@ -641,6 +654,16 @@ func (s *openAIRealtimeSTTStream) closeAfterWriteFailureLocked() {
 	}
 	s.cancel()
 	_ = s.conn.Close()
+}
+
+func (s *openAIRealtimeSTTStream) sendErrorLocked(err error) {
+	if err == nil || s.errCh == nil {
+		return
+	}
+	select {
+	case s.errCh <- err:
+	default:
+	}
 }
 
 func (s *openAIRealtimeSTTStream) Next() (*stt.SpeechEvent, error) {

@@ -1235,6 +1235,7 @@ func TestOpenAISTTUpdateOptionsPropagatesLanguageToActiveStream(t *testing.T) {
 		WithOpenAISTTBaseURL("http://openai.test/v1"),
 	)
 	started := make(chan struct{})
+	updated := make(chan map[string]any, 1)
 	sendDelta := make(chan struct{})
 	releaseServer := make(chan struct{})
 	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
@@ -1244,6 +1245,17 @@ func TestOpenAISTTUpdateOptionsPropagatesLanguageToActiveStream(t *testing.T) {
 				return
 			}
 			close(started)
+			_, updatePayload, err := conn.ReadMessage()
+			if err != nil {
+				t.Errorf("language update read error = %v", err)
+				return
+			}
+			var update map[string]any
+			if err := json.Unmarshal(updatePayload, &update); err != nil {
+				t.Errorf("decode language update: %v", err)
+				return
+			}
+			updated <- update
 			<-sendDelta
 			if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
 				"type":"conversation.item.input_audio_transcription.delta",
@@ -1271,6 +1283,18 @@ func TestOpenAISTTUpdateOptionsPropagatesLanguageToActiveStream(t *testing.T) {
 	}
 
 	provider.UpdateOptions(WithOpenAISTTLanguage("id"))
+	select {
+	case update := <-updated:
+		session := update["session"].(map[string]any)
+		audio := session["audio"].(map[string]any)
+		input := audio["input"].(map[string]any)
+		transcription := input["transcription"].(map[string]any)
+		if got := transcription["language"]; got != "id" {
+			t.Fatalf("updated session language = %#v, want id", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stream did not send provider language session update")
+	}
 	close(sendDelta)
 
 	event, err := stream.Next()
