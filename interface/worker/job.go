@@ -283,7 +283,7 @@ func (r *JobRequest) Accept(args ...JobAcceptArguments) error {
 		acceptArgs = args[0]
 	}
 	if acceptArgs.Identity == "" && r.Job != nil {
-		acceptArgs.Identity = agentIdentityForJobID(r.Job.Id)
+		acceptArgs.Identity = workerlivekit.AgentIdentityForJobID(r.Job.Id)
 	}
 	if r.acceptFnc != nil {
 		return r.acceptFnc(acceptArgs)
@@ -412,7 +412,7 @@ func (c *JobContext) ParticipantIdentity() string {
 	if c.Job == nil {
 		return ""
 	}
-	return agentIdentityForJobID(c.Job.Id)
+	return workerlivekit.AgentIdentityForJobID(c.Job.Id)
 }
 
 func (c *JobContext) LocalParticipantIdentity() string {

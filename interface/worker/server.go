@@ -1127,10 +1127,6 @@ func resolveWorkerPermissions(permissions *WorkerPermissions) WorkerPermissions 
 	return workerlivekit.ResolveWorkerPermissions(permissions)
 }
 
-func agentIdentityForJobID(jobID string) string {
-	return workerlivekit.AgentIdentityForJobID(jobID)
-}
-
 func availabilityResponseForAccept(req *livekit.AvailabilityRequest, args JobAcceptArguments, agentName string) *livekit.WorkerMessage {
 	return workerlivekit.AvailabilityResponseForAccept(req, workerlivekit.AvailabilityAcceptOptions{
 		Name:       args.Name,

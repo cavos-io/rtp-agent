@@ -2401,8 +2401,8 @@ func TestAgentIdentityForJobIDUsesFullJobID(t *testing.T) {
 	jobID := "job_123456789"
 	want := "agent-" + jobID
 
-	if got := agentIdentityForJobID(jobID); got != want {
-		t.Fatalf("agentIdentityForJobID(%q) = %q, want %q", jobID, got, want)
+	if got := workerlivekit.AgentIdentityForJobID(jobID); got != want {
+		t.Fatalf("AgentIdentityForJobID(%q) = %q, want %q", jobID, got, want)
 	}
 }
 
@@ -2410,8 +2410,14 @@ func TestAgentIdentityForJobIDHandlesShortJobID(t *testing.T) {
 	jobID := "abc"
 	want := "agent-abc"
 
-	if got := agentIdentityForJobID(jobID); got != want {
-		t.Fatalf("agentIdentityForJobID(%q) = %q, want %q", jobID, got, want)
+	if got := workerlivekit.AgentIdentityForJobID(jobID); got != want {
+		t.Fatalf("AgentIdentityForJobID(%q) = %q, want %q", jobID, got, want)
+	}
+}
+
+func TestAgentIdentityForJobIDHandlesEmptyJobID(t *testing.T) {
+	if got, want := workerlivekit.AgentIdentityForJobID(""), "agent-"; got != want {
+		t.Fatalf("AgentIdentityForJobID(empty) = %q, want %q", got, want)
 	}
 }
 
