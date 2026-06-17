@@ -1709,8 +1709,8 @@ func workerRetryDelay(retryCount int) time.Duration {
 }
 
 func (s *AgentServer) handleInitialRegisterMessage(ctx context.Context, msg *livekit.ServerMessage) error {
-	if msg.GetRegister() == nil {
-		return fmt.Errorf("expected register response as first message")
+	if _, err := workerlivekit.InitialRegisterResponse(msg); err != nil {
+		return err
 	}
 	s.handleMessage(ctx, msg)
 	return nil

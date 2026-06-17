@@ -134,3 +134,33 @@ func TestResolveWorkerPermissionsUsesConfiguredPermissions(t *testing.T) {
 		t.Fatalf("permissions.CanPublishSources[0] = %v, want CAMERA", permissions.CanPublishSources[0])
 	}
 }
+
+func TestInitialRegisterResponseReturnsRegisterMessage(t *testing.T) {
+	register := &lkprotocol.RegisterWorkerResponse{WorkerId: "worker-a"}
+	got, err := workerlivekit.InitialRegisterResponse(&lkprotocol.ServerMessage{
+		Message: &lkprotocol.ServerMessage_Register{
+			Register: register,
+		},
+	})
+	if err != nil {
+		t.Fatalf("InitialRegisterResponse() error = %v", err)
+	}
+	if got != register {
+		t.Fatalf("InitialRegisterResponse() = %p, want %p", got, register)
+	}
+}
+
+func TestInitialRegisterResponseRejectsNonRegisterMessage(t *testing.T) {
+	_, err := workerlivekit.InitialRegisterResponse(&lkprotocol.ServerMessage{
+		Message: &lkprotocol.ServerMessage_Availability{
+			Availability: &lkprotocol.AvailabilityRequest{},
+		},
+	})
+	if err == nil {
+		t.Fatal("InitialRegisterResponse() error = nil, want expected register response error")
+	}
+	const want = "expected register response as first message"
+	if got := err.Error(); got != want {
+		t.Fatalf("InitialRegisterResponse() error = %q, want %q", got, want)
+	}
+}

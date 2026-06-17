@@ -1,6 +1,10 @@
 package livekit
 
-import lkprotocol "github.com/livekit/protocol/livekit"
+import (
+	"fmt"
+
+	lkprotocol "github.com/livekit/protocol/livekit"
+)
 
 type WorkerPermissions struct {
 	CanPublish        bool
@@ -49,4 +53,12 @@ func RegisterWorkerRequest(opts RegisterWorkerOptions) *lkprotocol.WorkerMessage
 			},
 		},
 	}
+}
+
+func InitialRegisterResponse(msg *lkprotocol.ServerMessage) (*lkprotocol.RegisterWorkerResponse, error) {
+	register := msg.GetRegister()
+	if register == nil {
+		return nil, fmt.Errorf("expected register response as first message")
+	}
+	return register, nil
 }
