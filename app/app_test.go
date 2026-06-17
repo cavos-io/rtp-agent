@@ -173,6 +173,29 @@ func (f *fakeAppAgoraDataPublisher) isClosed() bool {
 	return f.closed
 }
 
+type recordingAppTextResponder struct {
+	calls []string
+}
+
+func (r *recordingAppTextResponder) Interrupt(force bool) error {
+	if force {
+		r.calls = append(r.calls, "interrupt:true")
+		return nil
+	}
+	r.calls = append(r.calls, "interrupt:false")
+	return nil
+}
+
+func (r *recordingAppTextResponder) GenerateReply(_ context.Context, text string) (*agent.SpeechHandle, error) {
+	r.calls = append(r.calls, "generate:"+text)
+	return nil, nil
+}
+
+func (r *recordingAppTextResponder) ClaimUserTurn(ctx context.Context, fn func(context.Context) error) error {
+	r.calls = append(r.calls, "claim")
+	return fn(ctx)
+}
+
 type fakeAppSessionAssistant struct {
 	audioCh   chan *model.AudioFrame
 	started   chan struct{}
@@ -1570,6 +1593,29 @@ func TestRunAgoraLogsRTMDataMessageErrors(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("runAgora() did not return after cancellation")
+	}
+}
+
+func TestInstallAgoraRTMDataMessageHandlerDispatchesInputText(t *testing.T) {
+	dataPublisher := &fakeAppAgoraDataPublisher{}
+	responder := &recordingAppTextResponder{}
+
+	installAgoraRTMDataMessageHandler(dataPublisher, responder, "agent-rtm")
+
+	handler := dataPublisher.dataHandler()
+	if handler == nil {
+		t.Fatal("installAgoraRTMDataMessageHandler() did not install handler")
+	}
+	err := handler(context.Background(), workeragora.DataMessage{
+		Channel:   "support",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"type":"input_text","text":"hello from chat","stream_id":"caller-7"}`),
+	})
+	if err != nil {
+		t.Fatalf("RTM data handler error = %v, want nil", err)
+	}
+	if got := strings.Join(responder.calls, ","); got != "claim,interrupt:false,generate:hello from chat" {
+		t.Fatalf("responder calls = %q, want input_text turn dispatch", got)
 	}
 }
 

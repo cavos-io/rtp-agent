@@ -1210,23 +1210,7 @@ func (a *App) runAgora(ctx context.Context) error {
 			UserStreamID: agoraOpts.RemoteStreamID,
 		})
 		if subscriber, ok := dataPublisher.(workeragora.DataMessageSubscriber); ok {
-			router := workeragora.RTMMessageRouter{
-				AgentUserID: agoraOpts.RTMUserID,
-				TextInput: func(ctx context.Context, ev workeragora.TextInputEvent) error {
-					if err := workeragora.HandleTextInput(ctx, a.Session, ev.Text); err != nil {
-						logutil.Logger.Warnw("failed to handle Agora RTM text input", err, "channel", ev.Channel, "publisher", ev.Publisher)
-						return err
-					}
-					return nil
-				},
-			}
-			subscriber.SetDataMessageHandler(func(ctx context.Context, msg workeragora.DataMessage) error {
-				if err := router.HandleDataMessage(ctx, msg); err != nil {
-					logutil.Logger.Warnw("failed to handle Agora RTM data message", err, "channel", msg.Channel, "publisher", msg.Publisher)
-					return err
-				}
-				return nil
-			})
+			installAgoraRTMDataMessageHandler(subscriber, a.Session, agoraOpts.RTMUserID)
 		}
 		transcriptForwarder.Start(runCtx)
 		defer func() {
@@ -1256,6 +1240,29 @@ func runContextErr(ctx context.Context) error {
 		return cause
 	}
 	return ctx.Err()
+}
+
+func installAgoraRTMDataMessageHandler(subscriber workeragora.DataMessageSubscriber, responder workeragora.TextResponder, agentUserID string) {
+	if subscriber == nil {
+		return
+	}
+	router := workeragora.RTMMessageRouter{
+		AgentUserID: agentUserID,
+		TextInput: func(ctx context.Context, ev workeragora.TextInputEvent) error {
+			if err := workeragora.HandleTextInput(ctx, responder, ev.Text); err != nil {
+				logutil.Logger.Warnw("failed to handle Agora RTM text input", err, "channel", ev.Channel, "publisher", ev.Publisher)
+				return err
+			}
+			return nil
+		},
+	}
+	subscriber.SetDataMessageHandler(func(ctx context.Context, msg workeragora.DataMessage) error {
+		if err := router.HandleDataMessage(ctx, msg); err != nil {
+			logutil.Logger.Warnw("failed to handle Agora RTM data message", err, "channel", msg.Channel, "publisher", msg.Publisher)
+			return err
+		}
+		return nil
+	})
 }
 
 type agoraRuntimeEventHandler struct {
