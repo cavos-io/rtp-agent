@@ -309,6 +309,25 @@ func TestMistralAITTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestMistralAITTSStreamDecodeFailureReturnsAPIConnectionError(t *testing.T) {
+	stream := &mistralAITTSChunkedStream{
+		reader:         strings.NewReader(`data: {"event":"speech.audio.delta","data":{"audio_data":"not-base64"}}`),
+		responseFormat: "wav",
+	}
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message == "" {
+		t.Fatal("connection error message empty, want decode failure")
+	}
+}
+
 type mistralAITTSRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f mistralAITTSRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {

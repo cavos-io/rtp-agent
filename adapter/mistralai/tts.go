@@ -192,7 +192,7 @@ func (s *mistralAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if strings.HasPrefix(line, "data:") {
 			audio, done, err := mistralAITTSAudioFromStreamEvent(strings.TrimSpace(strings.TrimPrefix(line, "data:")), s.responseFormat)
 			if err != nil {
-				return nil, err
+				return nil, llm.NewAPIConnectionError(err.Error())
 			}
 			if done {
 				s.done = true
@@ -207,7 +207,7 @@ func (s *mistralAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			s.jsonRead = true
 			audio, err := mistralAITTSAudioFromJSONResponse(line, s.responseFormat)
 			if err != nil {
-				return nil, err
+				return nil, llm.NewAPIConnectionError(err.Error())
 			}
 			if audio != nil {
 				return audio, nil
@@ -215,7 +215,7 @@ func (s *mistralAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 	}
 	if err := s.scanner.Err(); err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	s.done = true
 	return nil, io.EOF
