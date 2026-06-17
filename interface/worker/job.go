@@ -912,12 +912,7 @@ func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*livekit.
 		logger.Logger.Warnw("job context DeleteRoom is skipped for fake jobs", nil)
 		return &livekit.DeleteRoomResponse{}, nil
 	}
-	if roomName == "" {
-		roomName = c.Job.Room.Name
-	}
-	resp, err := c.API().RoomService.DeleteRoom(ctx, &livekit.DeleteRoomRequest{
-		Room: roomName,
-	})
+	resp, err := c.API().RoomService.DeleteRoom(ctx, workerlivekit.DeleteRoomRequest(c.Job, roomName))
 	if err != nil {
 		if workerlivekit.RoomDeleteNotFound(err) {
 			return &livekit.DeleteRoomResponse{}, nil
