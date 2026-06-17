@@ -131,16 +131,9 @@ func currentGoroutineID() (uint64, bool) {
 	return id, true
 }
 
-type JobAcceptArguments struct {
-	Name       string
-	Identity   string
-	Metadata   string
-	Attributes map[string]string
-}
+type JobAcceptArguments = workerlivekit.JobAcceptArguments
 
-type JobRejectArguments struct {
-	Terminate bool
-}
+type JobRejectArguments = workerlivekit.JobRejectArguments
 
 type JobExecutorType = workeripc.ExecutorType
 

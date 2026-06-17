@@ -49,6 +49,26 @@ func TestJobRequestAccessorsHandleNilJob(t *testing.T) {
 	}
 }
 
+func TestJobRequestArgumentsOwnLiveKitAcceptRejectShape(t *testing.T) {
+	accept := workerlivekit.JobAcceptArguments{
+		Name:       "Agent A",
+		Identity:   "agent-a",
+		Metadata:   "metadata-a",
+		Attributes: map[string]string{"tier": "gold"},
+	}
+	reject := workerlivekit.JobRejectArguments{Terminate: true}
+
+	if accept.Identity != "agent-a" {
+		t.Fatalf("accept identity = %q, want agent-a", accept.Identity)
+	}
+	if accept.Attributes["tier"] != "gold" {
+		t.Fatalf("accept tier = %q, want gold", accept.Attributes["tier"])
+	}
+	if !reject.Terminate {
+		t.Fatal("reject terminate = false, want true")
+	}
+}
+
 func TestJobRuntimeInfoExposesJobIDAndRecordingFlag(t *testing.T) {
 	info := workerlivekit.JobRuntimeInfo(&lkprotocol.Job{
 		Id:              "job-runtime",

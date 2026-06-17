@@ -8,6 +8,17 @@ import (
 	lkprotocol "github.com/livekit/protocol/livekit"
 )
 
+type JobAcceptArguments struct {
+	Name       string
+	Identity   string
+	Metadata   string
+	Attributes map[string]string
+}
+
+type JobRejectArguments struct {
+	Terminate bool
+}
+
 func JobID(job *lkprotocol.Job) string {
 	if job == nil {
 		return ""
