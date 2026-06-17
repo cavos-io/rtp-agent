@@ -914,7 +914,7 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 		body := workerMetadataResponse{
 			AgentName:       s.Options.AgentName,
 			AgentNameIsEnv:  s.Options.AgentNameIsEnv,
-			WorkerType:      livekit.JobType_name[int32(workerTypeToJobType(s.Options.WorkerType))],
+			WorkerType:      livekit.JobType_name[int32(workerlivekit.JobTypeForWorkerType(string(s.Options.WorkerType)))],
 			WorkerLoad:      s.currentLoad(),
 			ActiveJobs:      s.activeJobCount(),
 			SDKVersion:      s.Options.Version,
@@ -1127,10 +1127,6 @@ func resolveWorkerPermissions(permissions *WorkerPermissions) WorkerPermissions 
 	return workerlivekit.ResolveWorkerPermissions(permissions)
 }
 
-func workerTypeToJobType(workerType WorkerType) livekit.JobType {
-	return workerlivekit.JobTypeForWorkerType(string(workerType))
-}
-
 func agentWebSocketURL(rawURL string, workerToken string) (string, error) {
 	return workerlivekit.AgentWebSocketURL(rawURL, workerToken)
 }
@@ -1157,7 +1153,7 @@ func availabilityResponseForReject(req *livekit.AvailabilityRequest, args JobRej
 func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
 	permissions := resolveWorkerPermissions(s.Options.Permissions)
 	return workerlivekit.RegisterWorkerRequest(workerlivekit.RegisterWorkerOptions{
-		JobType:     workerTypeToJobType(s.Options.WorkerType),
+		JobType:     workerlivekit.JobTypeForWorkerType(string(s.Options.WorkerType)),
 		AgentName:   s.Options.AgentName,
 		Version:     s.Options.Version,
 		Permissions: permissions,

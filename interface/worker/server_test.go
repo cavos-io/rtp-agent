@@ -959,7 +959,7 @@ func TestAgentWebSocketURLAddsWorkerToken(t *testing.T) {
 func TestWorkerTypeMapsToLiveKitJobType(t *testing.T) {
 	tests := []struct {
 		name       string
-		workerType WorkerType
+		workerType string
 		want       livekit.JobType
 	}{
 		{
@@ -969,20 +969,25 @@ func TestWorkerTypeMapsToLiveKitJobType(t *testing.T) {
 		},
 		{
 			name:       "room",
-			workerType: WorkerTypeRoom,
+			workerType: string(WorkerTypeRoom),
 			want:       livekit.JobType_JT_ROOM,
 		},
 		{
 			name:       "publisher",
-			workerType: WorkerTypePublisher,
+			workerType: string(WorkerTypePublisher),
 			want:       livekit.JobType_JT_PUBLISHER,
+		},
+		{
+			name:       "unknown defaults to room",
+			workerType: "background",
+			want:       livekit.JobType_JT_ROOM,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := workerTypeToJobType(tt.workerType); got != tt.want {
-				t.Fatalf("workerTypeToJobType(%q) = %v, want %v", tt.workerType, got, tt.want)
+			if got := workerlivekit.JobTypeForWorkerType(tt.workerType); got != tt.want {
+				t.Fatalf("JobTypeForWorkerType(%q) = %v, want %v", tt.workerType, got, tt.want)
 			}
 		})
 	}
