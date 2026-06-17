@@ -122,14 +122,7 @@ var workerListen = net.Listen
 var workerPrometheusListen = net.Listen
 var workerReloadIPCDial = net.Dial
 
-type WorkerPermissions struct {
-	CanPublish        bool
-	CanSubscribe      bool
-	CanPublishData    bool
-	CanUpdateMetadata bool
-	CanPublishSources []livekit.TrackSource
-	Hidden            bool
-}
+type WorkerPermissions = workerlivekit.WorkerPermissions
 
 type WorkerStartedHandler func()
 
@@ -1172,24 +1165,12 @@ func availabilityResponseForReject(req *livekit.AvailabilityRequest, args JobRej
 
 func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
 	permissions := resolveWorkerPermissions(s.Options.Permissions)
-	return &livekit.WorkerMessage{
-		Message: &livekit.WorkerMessage_Register{
-			Register: &livekit.RegisterWorkerRequest{
-				Type:      workerTypeToJobType(s.Options.WorkerType),
-				AgentName: s.Options.AgentName,
-				Version:   s.Options.Version,
-				AllowedPermissions: &livekit.ParticipantPermission{
-					CanPublish:        permissions.CanPublish,
-					CanSubscribe:      permissions.CanSubscribe,
-					CanPublishData:    permissions.CanPublishData,
-					CanUpdateMetadata: permissions.CanUpdateMetadata,
-					CanPublishSources: permissions.CanPublishSources,
-					Hidden:            permissions.Hidden,
-					Agent:             true,
-				},
-			},
-		},
-	}
+	return workerlivekit.RegisterWorkerRequest(workerlivekit.RegisterWorkerOptions{
+		JobType:     workerTypeToJobType(s.Options.WorkerType),
+		AgentName:   s.Options.AgentName,
+		Version:     s.Options.Version,
+		Permissions: permissions,
+	})
 }
 
 func (s *AgentServer) workerStatusMessage(status livekit.WorkerStatus) *livekit.WorkerMessage {
