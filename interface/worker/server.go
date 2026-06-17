@@ -32,7 +32,6 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
-	"google.golang.org/protobuf/proto"
 )
 
 type WorkerType string
@@ -530,7 +529,7 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 			case <-ctx.Done():
 				logger.Logger.Debugw("reload job status skipped after context cancellation", "jobId", jobCtx.JobID())
 			default:
-				if err := s.sendWorkerMessage(jobStatusMessage(jobCtx.JobID(), status)); err != nil {
+				if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(jobCtx.JobID(), status)); err != nil {
 					logger.Logger.Errorw("failed to update reloaded job status", err, "jobId", jobCtx.JobID())
 				}
 			}
@@ -844,7 +843,7 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 		opts.LoadFunc = defaultWorkerLoadFunc
 	}
 	if opts.Permissions == nil {
-		permissions := resolveWorkerPermissions(nil)
+		permissions := workerlivekit.ResolveWorkerPermissions(nil)
 		opts.Permissions = &permissions
 	}
 	if opts.WSURL == "" {
@@ -915,7 +914,7 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 		body := workerMetadataResponse{
 			AgentName:       s.Options.AgentName,
 			AgentNameIsEnv:  s.Options.AgentNameIsEnv,
-			WorkerType:      livekit.JobType_name[int32(workerTypeToJobType(s.Options.WorkerType))],
+			WorkerType:      livekit.JobType_name[int32(workerlivekit.JobTypeForWorkerType(string(s.Options.WorkerType)))],
 			WorkerLoad:      s.currentLoad(),
 			ActiveJobs:      s.activeJobCount(),
 			SDKVersion:      s.Options.Version,
@@ -1124,41 +1123,10 @@ func readSystemCPUTimes() (idle uint64, total uint64, err error) {
 	return idle, total, nil
 }
 
-func resolveWorkerPermissions(permissions *WorkerPermissions) WorkerPermissions {
-	return workerlivekit.ResolveWorkerPermissions(permissions)
-}
-
-func workerTypeToJobType(workerType WorkerType) livekit.JobType {
-	return workerlivekit.JobTypeForWorkerType(string(workerType))
-}
-
-func agentWebSocketURL(rawURL string, workerToken string) (string, error) {
-	return workerlivekit.AgentWebSocketURL(rawURL, workerToken)
-}
-
-func agentIdentityForJobID(jobID string) string {
-	return workerlivekit.AgentIdentityForJobID(jobID)
-}
-
-func availabilityResponseForAccept(req *livekit.AvailabilityRequest, args JobAcceptArguments, agentName string) *livekit.WorkerMessage {
-	return workerlivekit.AvailabilityResponseForAccept(req, workerlivekit.AvailabilityAcceptOptions{
-		Name:       args.Name,
-		Identity:   args.Identity,
-		Metadata:   args.Metadata,
-		Attributes: args.Attributes,
-	}, agentName)
-}
-
-func availabilityResponseForReject(req *livekit.AvailabilityRequest, args JobRejectArguments) *livekit.WorkerMessage {
-	return workerlivekit.AvailabilityResponseForReject(req, workerlivekit.AvailabilityRejectOptions{
-		Terminate: args.Terminate,
-	})
-}
-
 func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
-	permissions := resolveWorkerPermissions(s.Options.Permissions)
+	permissions := workerlivekit.ResolveWorkerPermissions(s.Options.Permissions)
 	return workerlivekit.RegisterWorkerRequest(workerlivekit.RegisterWorkerOptions{
-		JobType:     workerTypeToJobType(s.Options.WorkerType),
+		JobType:     workerlivekit.JobTypeForWorkerType(string(s.Options.WorkerType)),
 		AgentName:   s.Options.AgentName,
 		Version:     s.Options.Version,
 		Permissions: permissions,
@@ -1176,14 +1144,6 @@ func (s *AgentServer) workerStatusMessage(status livekit.WorkerStatus) *livekit.
 
 func (s *AgentServer) drainingWorkerStatusMessage() *livekit.WorkerMessage {
 	return workerlivekit.DrainingWorkerStatusMessage(uint32(s.activeJobCount()))
-}
-
-func jobStatusMessage(jobID string, status livekit.JobStatus) *livekit.WorkerMessage {
-	return workerlivekit.JobStatusMessage(jobID, status)
-}
-
-func migrateJobMessage(jobIDs []string) *livekit.WorkerMessage {
-	return workerlivekit.MigrateJobMessage(jobIDs)
 }
 
 func (s *AgentServer) RTCSession(
@@ -1461,15 +1421,12 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		}()
 	}
 
-	agentURL, err := agentWebSocketURL(s.Options.WSRL, s.Options.WorkerToken)
+	agentURL, err := workerlivekit.AgentWebSocketURL(s.Options.WSRL, s.Options.WorkerToken)
 	if err != nil {
 		return err
 	}
 
-	// Create JWT token
-	at := auth.NewAccessToken(s.Options.APIKey, s.Options.APISecret)
-	at.SetVideoGrant(&auth.VideoGrant{Agent: true}).SetValidFor(time.Hour)
-	token, err := at.ToJWT()
+	token, err := workerlivekit.WorkerAuthToken(s.Options.APIKey, s.Options.APISecret, time.Hour)
 	if err != nil {
 		return err
 	}
@@ -1508,7 +1465,7 @@ func (s *AgentServer) Run(ctx context.Context) error {
 
 	// Send Register request
 	req := s.registerWorkerRequest()
-	b, err := proto.Marshal(req)
+	b, err := workerlivekit.MarshalWorkerMessage(req)
 	if err != nil {
 		return err
 	}
@@ -1521,17 +1478,11 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if msgType != websocket.BinaryMessage {
-		return fmt.Errorf("expected register response as first message")
-	}
-
-	msg := &livekit.ServerMessage{}
-	if err := proto.Unmarshal(data, msg); err != nil {
+	msg, err := workerlivekit.InitialRegisterMessage(msgType == websocket.BinaryMessage, data)
+	if err != nil {
 		return err
 	}
-	if err := s.handleInitialRegisterMessage(ctx, msg); err != nil {
-		return err
-	}
+	s.handleMessage(ctx, msg)
 
 	statusCtx, stopStatusUpdates := context.WithCancel(ctx)
 	defer stopStatusUpdates()
@@ -1704,14 +1655,6 @@ func workerRetryDelay(retryCount int) time.Duration {
 	return workerlivekit.RetryDelay(retryCount)
 }
 
-func (s *AgentServer) handleInitialRegisterMessage(ctx context.Context, msg *livekit.ServerMessage) error {
-	if _, err := workerlivekit.InitialRegisterResponse(msg); err != nil {
-		return err
-	}
-	s.handleMessage(ctx, msg)
-	return nil
-}
-
 func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMessage) {
 	switch m := msg.Message.(type) {
 	case *livekit.ServerMessage_Register:
@@ -1767,7 +1710,7 @@ func (s *AgentServer) reportActiveJobs() {
 	}
 
 	sort.Strings(jobIDs)
-	if err := s.sendWorkerMessage(migrateJobMessage(jobIDs)); err != nil {
+	if err := s.sendWorkerMessage(workerlivekit.MigrateJobMessage(jobIDs)); err != nil {
 		logger.Logger.Errorw("failed to report active jobs", err, "jobIds", jobIDs)
 	}
 }
@@ -1780,7 +1723,11 @@ func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.Avail
 	logger.Logger.Infow("Received availability request", "jobId", req.Job.Id)
 
 	if !s.availableForJob() {
-		if err := s.sendWorkerMessage(availabilityResponseForReject(req, JobRejectArguments{Terminate: false})); err != nil {
+		msg := workerlivekit.AvailabilityResponseForReject(
+			req,
+			workerlivekit.AvailabilityRejectOptions{Terminate: false},
+		)
+		if err := s.sendWorkerMessage(msg); err != nil {
 			logger.Logger.Errorw("failed to reject availability while unavailable", err, "jobId", req.Job.Id)
 		}
 		return
@@ -1795,14 +1742,28 @@ func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.Avail
 		acceptFnc: func(args JobAcceptArguments) error {
 			answered = true
 			s.storePendingAccept(req.Job.Id, args)
-			if err := s.sendWorkerMessage(availabilityResponseForAccept(req, args, s.Options.AgentName)); err != nil {
+			msg := workerlivekit.AvailabilityResponseForAccept(
+				req,
+				workerlivekit.AvailabilityAcceptOptions{
+					Name:       args.Name,
+					Identity:   args.Identity,
+					Metadata:   args.Metadata,
+					Attributes: args.Attributes,
+				},
+				s.Options.AgentName,
+			)
+			if err := s.sendWorkerMessage(msg); err != nil {
 				return err
 			}
 			return nil
 		},
 		rejectFnc: func(args JobRejectArguments) error {
 			answered = true
-			return s.sendWorkerMessage(availabilityResponseForReject(req, args))
+			msg := workerlivekit.AvailabilityResponseForReject(
+				req,
+				workerlivekit.AvailabilityRejectOptions{Terminate: args.Terminate},
+			)
+			return s.sendWorkerMessage(msg)
 		},
 	}
 
@@ -1907,7 +1868,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 	s.activeJobs[req.Job.Id] = jobCtx
 	s.mu.Unlock()
 
-	if err := s.sendWorkerMessage(jobStatusMessage(req.Job.Id, livekit.JobStatus_JS_RUNNING)); err != nil {
+	if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(req.Job.Id, livekit.JobStatus_JS_RUNNING)); err != nil {
 		logger.Logger.Errorw("failed to update job status", err, "jobId", req.Job.Id)
 	}
 
@@ -1934,13 +1895,13 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 						return
 					}
 				} else {
-					if err := s.sendWorkerMessage(jobStatusMessage(req.Job.Id, status)); err != nil {
+					if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(req.Job.Id, status)); err != nil {
 						logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", req.Job.Id)...)
 					}
 					s.finishJob(jobCtx)
 					return
 				}
-				if err := s.sendWorkerMessage(jobStatusMessage(req.Job.Id, status)); err != nil {
+				if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(req.Job.Id, status)); err != nil {
 					logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", req.Job.Id)...)
 				}
 			}()

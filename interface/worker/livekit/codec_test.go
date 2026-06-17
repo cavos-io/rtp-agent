@@ -47,3 +47,34 @@ func TestUnmarshalServerMessageReadsLiveKitProtobuf(t *testing.T) {
 		t.Fatalf("decoded worker id = %q, want worker-a", decoded.GetRegister().GetWorkerId())
 	}
 }
+
+func TestInitialRegisterMessageDecodesBinaryRegisterFrame(t *testing.T) {
+	msg := &lkprotocol.ServerMessage{
+		Message: &lkprotocol.ServerMessage_Register{
+			Register: &lkprotocol.RegisterWorkerResponse{WorkerId: "worker-a"},
+		},
+	}
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		t.Fatalf("proto.Marshal() error = %v", err)
+	}
+
+	decoded, err := workerlivekit.InitialRegisterMessage(true, data)
+	if err != nil {
+		t.Fatalf("InitialRegisterMessage() error = %v", err)
+	}
+	if decoded.GetRegister().GetWorkerId() != "worker-a" {
+		t.Fatalf("decoded worker id = %q, want worker-a", decoded.GetRegister().GetWorkerId())
+	}
+}
+
+func TestInitialRegisterMessageRejectsNonBinaryFrame(t *testing.T) {
+	_, err := workerlivekit.InitialRegisterMessage(false, nil)
+	if err == nil {
+		t.Fatal("InitialRegisterMessage() error = nil, want expected register response error")
+	}
+	const want = "expected register response as first message"
+	if got := err.Error(); got != want {
+		t.Fatalf("InitialRegisterMessage() error = %q, want %q", got, want)
+	}
+}

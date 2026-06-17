@@ -21,6 +21,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/interface/worker/ipc"
+	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/gorilla/websocket"
 	"github.com/livekit/protocol/auth"
@@ -932,33 +933,41 @@ func TestUpdateOptionsRejectsAfterHTTPServerStarted(t *testing.T) {
 }
 
 func TestAgentWebSocketURLPreservesBasePath(t *testing.T) {
-	got, err := agentWebSocketURL("https://livekit.example/project-a", "")
+	got, err := workerlivekit.AgentWebSocketURL("https://livekit.example/project-a", "")
 	if err != nil {
-		t.Fatalf("agentWebSocketURL() error = %v", err)
+		t.Fatalf("AgentWebSocketURL() error = %v", err)
 	}
 
 	want := "wss://livekit.example/project-a/agent"
 	if got != want {
-		t.Fatalf("agentWebSocketURL() = %q, want %q", got, want)
+		t.Fatalf("AgentWebSocketURL() = %q, want %q", got, want)
+	}
+
+	got, err = workerlivekit.AgentWebSocketURL("http://livekit.example/project-a", "")
+	if err != nil {
+		t.Fatalf("AgentWebSocketURL(http) error = %v", err)
+	}
+	if want := "ws://livekit.example/project-a/agent"; got != want {
+		t.Fatalf("AgentWebSocketURL(http) = %q, want %q", got, want)
 	}
 }
 
 func TestAgentWebSocketURLAddsWorkerToken(t *testing.T) {
-	got, err := agentWebSocketURL("wss://livekit.example/project-a/", "cloud token")
+	got, err := workerlivekit.AgentWebSocketURL("wss://livekit.example/project-a/", "cloud token")
 	if err != nil {
-		t.Fatalf("agentWebSocketURL() error = %v", err)
+		t.Fatalf("AgentWebSocketURL() error = %v", err)
 	}
 
 	want := "wss://livekit.example/project-a/agent?worker_token=cloud+token"
 	if got != want {
-		t.Fatalf("agentWebSocketURL() = %q, want %q", got, want)
+		t.Fatalf("AgentWebSocketURL() = %q, want %q", got, want)
 	}
 }
 
 func TestWorkerTypeMapsToLiveKitJobType(t *testing.T) {
 	tests := []struct {
 		name       string
-		workerType WorkerType
+		workerType string
 		want       livekit.JobType
 	}{
 		{
@@ -968,20 +977,25 @@ func TestWorkerTypeMapsToLiveKitJobType(t *testing.T) {
 		},
 		{
 			name:       "room",
-			workerType: WorkerTypeRoom,
+			workerType: string(WorkerTypeRoom),
 			want:       livekit.JobType_JT_ROOM,
 		},
 		{
 			name:       "publisher",
-			workerType: WorkerTypePublisher,
+			workerType: string(WorkerTypePublisher),
 			want:       livekit.JobType_JT_PUBLISHER,
+		},
+		{
+			name:       "unknown defaults to room",
+			workerType: "background",
+			want:       livekit.JobType_JT_ROOM,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := workerTypeToJobType(tt.workerType); got != tt.want {
-				t.Fatalf("workerTypeToJobType(%q) = %v, want %v", tt.workerType, got, tt.want)
+			if got := workerlivekit.JobTypeForWorkerType(tt.workerType); got != tt.want {
+				t.Fatalf("JobTypeForWorkerType(%q) = %v, want %v", tt.workerType, got, tt.want)
 			}
 		})
 	}
@@ -2387,8 +2401,8 @@ func TestAgentIdentityForJobIDUsesFullJobID(t *testing.T) {
 	jobID := "job_123456789"
 	want := "agent-" + jobID
 
-	if got := agentIdentityForJobID(jobID); got != want {
-		t.Fatalf("agentIdentityForJobID(%q) = %q, want %q", jobID, got, want)
+	if got := workerlivekit.AgentIdentityForJobID(jobID); got != want {
+		t.Fatalf("AgentIdentityForJobID(%q) = %q, want %q", jobID, got, want)
 	}
 }
 
@@ -2396,8 +2410,14 @@ func TestAgentIdentityForJobIDHandlesShortJobID(t *testing.T) {
 	jobID := "abc"
 	want := "agent-abc"
 
-	if got := agentIdentityForJobID(jobID); got != want {
-		t.Fatalf("agentIdentityForJobID(%q) = %q, want %q", jobID, got, want)
+	if got := workerlivekit.AgentIdentityForJobID(jobID); got != want {
+		t.Fatalf("AgentIdentityForJobID(%q) = %q, want %q", jobID, got, want)
+	}
+}
+
+func TestAgentIdentityForJobIDHandlesEmptyJobID(t *testing.T) {
+	if got, want := workerlivekit.AgentIdentityForJobID(""), "agent-"; got != want {
+		t.Fatalf("AgentIdentityForJobID(empty) = %q, want %q", got, want)
 	}
 }
 
@@ -2406,7 +2426,7 @@ func TestAvailabilityResponseAcceptsWithDefaultIdentity(t *testing.T) {
 		Job: &livekit.Job{Id: "job_abc123"},
 	}
 
-	resp := availabilityResponseForAccept(req, JobAcceptArguments{}, "")
+	resp := workerlivekit.AvailabilityResponseForAccept(req, workerlivekit.AvailabilityAcceptOptions{}, "")
 	availability := resp.GetAvailability()
 	if availability == nil {
 		t.Fatal("availability response is nil")
@@ -2434,7 +2454,7 @@ func TestAvailabilityResponseAcceptUsesCustomArguments(t *testing.T) {
 		Job: &livekit.Job{Id: "job_custom"},
 	}
 
-	resp := availabilityResponseForAccept(req, JobAcceptArguments{
+	resp := workerlivekit.AvailabilityResponseForAccept(req, workerlivekit.AvailabilityAcceptOptions{
 		Name:     "Agent Name",
 		Identity: "custom-agent",
 		Metadata: "custom-metadata",
@@ -2444,6 +2464,12 @@ func TestAvailabilityResponseAcceptUsesCustomArguments(t *testing.T) {
 	}, "sales-agent")
 
 	availability := resp.GetAvailability()
+	if !availability.Available {
+		t.Fatal("availability.Available = false, want true")
+	}
+	if availability.JobId != "job_custom" {
+		t.Fatalf("availability.JobId = %q, want job_custom", availability.JobId)
+	}
 	if availability.ParticipantIdentity != "custom-agent" {
 		t.Fatalf("availability.ParticipantIdentity = %q, want custom identity", availability.ParticipantIdentity)
 	}
@@ -2466,7 +2492,7 @@ func TestAvailabilityResponseRejectsJob(t *testing.T) {
 		Job: &livekit.Job{Id: "job_reject"},
 	}
 
-	resp := availabilityResponseForReject(req, JobRejectArguments{Terminate: true})
+	resp := workerlivekit.AvailabilityResponseForReject(req, workerlivekit.AvailabilityRejectOptions{Terminate: true})
 	availability := resp.GetAvailability()
 	if availability == nil {
 		t.Fatal("availability response is nil")
@@ -2487,7 +2513,7 @@ func TestAvailabilityResponseRejectCanAvoidTermination(t *testing.T) {
 		Job: &livekit.Job{Id: "job_requeue"},
 	}
 
-	resp := availabilityResponseForReject(req, JobRejectArguments{Terminate: false})
+	resp := workerlivekit.AvailabilityResponseForReject(req, workerlivekit.AvailabilityRejectOptions{Terminate: false})
 	availability := resp.GetAvailability()
 	if availability.Terminate {
 		t.Fatal("availability.Terminate = true, want false")
@@ -2799,21 +2825,29 @@ func TestHandleRegisterReportsActiveJobs(t *testing.T) {
 }
 
 func TestInitialRegisterMessageRejectsNonRegisterMessage(t *testing.T) {
-	server := NewAgentServer(WorkerOptions{})
+	register := &livekit.RegisterWorkerResponse{WorkerId: "worker-ok"}
+	gotRegister, err := workerlivekit.InitialRegisterResponse(&livekit.ServerMessage{
+		Message: &livekit.ServerMessage_Register{
+			Register: register,
+		},
+	})
+	if err != nil {
+		t.Fatalf("InitialRegisterResponse(register) error = %v", err)
+	}
+	if gotRegister != register {
+		t.Fatalf("InitialRegisterResponse(register) = %p, want %p", gotRegister, register)
+	}
 
-	err := server.handleInitialRegisterMessage(context.Background(), &livekit.ServerMessage{
+	_, err = workerlivekit.InitialRegisterResponse(&livekit.ServerMessage{
 		Message: &livekit.ServerMessage_Availability{
 			Availability: &livekit.AvailabilityRequest{Job: &livekit.Job{Id: "job_early"}},
 		},
 	})
 	if err == nil {
-		t.Fatal("handleInitialRegisterMessage() error = nil, want expected register response error")
+		t.Fatal("InitialRegisterResponse() error = nil, want expected register response error")
 	}
 	if got, want := err.Error(), "expected register response as first message"; got != want {
-		t.Fatalf("handleInitialRegisterMessage() error = %q, want %q", got, want)
-	}
-	if len(server.activeJobs) != 0 {
-		t.Fatalf("activeJobs = %#v, want no availability handling before register response", server.activeJobs)
+		t.Fatalf("InitialRegisterResponse() error = %q, want %q", got, want)
 	}
 }
 

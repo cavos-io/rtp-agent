@@ -2,6 +2,7 @@ package livekit_test
 
 import (
 	"testing"
+	"time"
 
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"github.com/livekit/protocol/auth"
@@ -64,5 +65,26 @@ func TestLocalParticipantIdentityFallsBackWhenTokenInvalidOrEmpty(t *testing.T) 
 	}
 	if got := workerlivekit.LocalParticipantIdentity("not-a-jwt", "accepted-agent"); got != "accepted-agent" {
 		t.Fatalf("LocalParticipantIdentity(invalid token) = %q, want accepted-agent", got)
+	}
+}
+
+func TestWorkerAuthTokenCarriesAgentGrant(t *testing.T) {
+	token, err := workerlivekit.WorkerAuthToken("api-key", "api-secret", time.Hour)
+	if err != nil {
+		t.Fatalf("WorkerAuthToken() error = %v", err)
+	}
+
+	claims, err := workerlivekit.TokenClaims(token)
+	if err != nil {
+		t.Fatalf("TokenClaims() error = %v", err)
+	}
+	if claims.Video == nil {
+		t.Fatal("TokenClaims().Video = nil, want video grant")
+	}
+	if !claims.Video.Agent {
+		t.Fatal("TokenClaims().Video.Agent = false, want true")
+	}
+	if claims.Video.RoomJoin {
+		t.Fatal("TokenClaims().Video.RoomJoin = true, want false")
 	}
 }

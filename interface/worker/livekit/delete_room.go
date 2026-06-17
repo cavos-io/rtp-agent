@@ -1,4 +1,4 @@
-package livekiterr
+package livekit
 
 import (
 	"errors"
