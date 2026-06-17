@@ -3,6 +3,8 @@ package cartesia
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/url"
 	"strings"
 	"testing"
@@ -244,6 +246,28 @@ func TestCartesiaTTSStreamFlushUsesReferenceEndPacket(t *testing.T) {
 	}
 	if writes[0]["continue"] != false {
 		t.Fatalf("continue = %#v, want false", writes[0]["continue"])
+	}
+}
+
+func TestCartesiaTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
+	writeErr := errors.New("write failed")
+	stream := &cartesiaTTSStream{
+		writeJSON: func(any) error {
+			return writeErr
+		},
+	}
+
+	err := stream.PushText("hello")
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("PushText error = %v, want write failure", err)
+	}
+	if !stream.closed {
+		t.Fatal("closed = false after write failure, want true")
+	}
+
+	err = stream.PushText("again")
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("second PushText error = %v, want io.ErrClosedPipe", err)
 	}
 }
 

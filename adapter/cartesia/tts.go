@@ -400,7 +400,11 @@ func (s *cartesiaTTSStream) PushText(text string) error {
 		"transcript": text,
 		"continue":   true,
 	}
-	return s.writeJSONData(msg)
+	if err := s.writeJSONData(msg); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *cartesiaTTSStream) Flush() error {
@@ -414,7 +418,18 @@ func (s *cartesiaTTSStream) Flush() error {
 		"transcript": " ",
 		"continue":   false,
 	}
-	return s.writeJSONData(msg)
+	if err := s.writeJSONData(msg); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
+}
+
+func (s *cartesiaTTSStream) closeAfterWriteFailureLocked() {
+	s.closed = true
+	if s.conn != nil {
+		_ = s.conn.Close()
+	}
 }
 
 func (s *cartesiaTTSStream) writeJSONData(msg any) error {
