@@ -1694,14 +1694,6 @@ func workerRetryDelay(retryCount int) time.Duration {
 	return workerlivekit.RetryDelay(retryCount)
 }
 
-func (s *AgentServer) handleInitialRegisterMessage(ctx context.Context, msg *livekit.ServerMessage) error {
-	if _, err := workerlivekit.InitialRegisterResponse(msg); err != nil {
-		return err
-	}
-	s.handleMessage(ctx, msg)
-	return nil
-}
-
 func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMessage) {
 	switch m := msg.Message.(type) {
 	case *livekit.ServerMessage_Register:

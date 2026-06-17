@@ -21,6 +21,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/interface/worker/ipc"
+	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/gorilla/websocket"
 	"github.com/livekit/protocol/auth"
@@ -2799,21 +2800,29 @@ func TestHandleRegisterReportsActiveJobs(t *testing.T) {
 }
 
 func TestInitialRegisterMessageRejectsNonRegisterMessage(t *testing.T) {
-	server := NewAgentServer(WorkerOptions{})
+	register := &livekit.RegisterWorkerResponse{WorkerId: "worker-ok"}
+	gotRegister, err := workerlivekit.InitialRegisterResponse(&livekit.ServerMessage{
+		Message: &livekit.ServerMessage_Register{
+			Register: register,
+		},
+	})
+	if err != nil {
+		t.Fatalf("InitialRegisterResponse(register) error = %v", err)
+	}
+	if gotRegister != register {
+		t.Fatalf("InitialRegisterResponse(register) = %p, want %p", gotRegister, register)
+	}
 
-	err := server.handleInitialRegisterMessage(context.Background(), &livekit.ServerMessage{
+	_, err = workerlivekit.InitialRegisterResponse(&livekit.ServerMessage{
 		Message: &livekit.ServerMessage_Availability{
 			Availability: &livekit.AvailabilityRequest{Job: &livekit.Job{Id: "job_early"}},
 		},
 	})
 	if err == nil {
-		t.Fatal("handleInitialRegisterMessage() error = nil, want expected register response error")
+		t.Fatal("InitialRegisterResponse() error = nil, want expected register response error")
 	}
 	if got, want := err.Error(), "expected register response as first message"; got != want {
-		t.Fatalf("handleInitialRegisterMessage() error = %q, want %q", got, want)
-	}
-	if len(server.activeJobs) != 0 {
-		t.Fatalf("activeJobs = %#v, want no availability handling before register response", server.activeJobs)
+		t.Fatalf("InitialRegisterResponse() error = %q, want %q", got, want)
 	}
 }
 
