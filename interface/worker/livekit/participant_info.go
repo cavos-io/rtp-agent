@@ -16,6 +16,16 @@ type RemoteParticipantView interface {
 	Attributes() map[string]string
 }
 
+func RemoteParticipantViews(participants []*lksdk.RemoteParticipant) []RemoteParticipantView {
+	views := make([]RemoteParticipantView, 0, len(participants))
+	for _, participant := range participants {
+		if participant != nil {
+			views = append(views, participant)
+		}
+	}
+	return views
+}
+
 func ParticipantInfoFromRemoteParticipant(participant RemoteParticipantView) *lkprotocol.ParticipantInfo {
 	if participant == nil {
 		return nil

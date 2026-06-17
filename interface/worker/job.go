@@ -539,7 +539,7 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *lksdk.Room, 
 			return err
 		}
 		c.Room = room
-		c.participantsAvailable(remoteParticipantsAsViews(room.GetRemoteParticipants()))
+		c.participantsAvailable(workerlivekit.RemoteParticipantViews(room.GetRemoteParticipants()))
 		c.applyAutoSubscribeOptions(opts.AutoSubscribe)
 		logger.Logger.Infow("Connected to room", "room", workerlivekit.JobRoomName(c.Job))
 		return nil
@@ -557,7 +557,7 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *lksdk.Room, 
 		return err
 	}
 	c.Room = room
-	c.participantsAvailable(remoteParticipantsAsViews(room.GetRemoteParticipants()))
+	c.participantsAvailable(workerlivekit.RemoteParticipantViews(room.GetRemoteParticipants()))
 	c.applyAutoSubscribeOptions(opts.AutoSubscribe)
 	logger.Logger.Infow("Connected to room", "room", workerlivekit.JobRoomName(c.Job))
 	return nil
@@ -639,16 +639,6 @@ func (c *JobContext) participantsAvailable(participants []workerlivekit.RemotePa
 	for _, participant := range participants {
 		c.participantAvailable(participant)
 	}
-}
-
-func remoteParticipantsAsViews(participants []*lksdk.RemoteParticipant) []workerlivekit.RemoteParticipantView {
-	views := make([]workerlivekit.RemoteParticipantView, 0, len(participants))
-	for _, participant := range participants {
-		if participant != nil {
-			views = append(views, participant)
-		}
-	}
-	return views
 }
 
 func (c *JobContext) AddShutdownCallback(callback any) error {

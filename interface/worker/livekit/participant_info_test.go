@@ -78,6 +78,14 @@ func TestParticipantInfoFromRemoteParticipantNil(t *testing.T) {
 	}
 }
 
+func TestRemoteParticipantViewsFiltersNilParticipants(t *testing.T) {
+	views := workerlivekit.RemoteParticipantViews([]*lksdk.RemoteParticipant{nil})
+
+	if len(views) != 0 {
+		t.Fatalf("RemoteParticipantViews(nil participant) len = %d, want 0", len(views))
+	}
+}
+
 func TestParticipantInfoDetailsExposeIdentityAndKind(t *testing.T) {
 	details := workerlivekit.ParticipantInfoDetails(&lkprotocol.ParticipantInfo{
 		Identity: "caller-a",
