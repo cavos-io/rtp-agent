@@ -3,6 +3,7 @@ package mistralai
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -108,11 +109,8 @@ func (s *MistralAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame
 	if mistralAISTTIsRealtime(s.model) {
 		return nil, fmt.Errorf("mistralai realtime models do not support offline recognize")
 	}
-	var audio bytes.Buffer
-	for _, frame := range frames {
-		audio.Write(frame.Data)
-	}
-	req, err := buildMistralAISTTRecognizeRequest(ctx, s, audio.Bytes(), language)
+	audio := mistralAISTTWAVBytes(frames, uint32(s.sampleRate), 1)
+	req, err := buildMistralAISTTRecognizeRequest(ctx, s, audio, language)
 	if err != nil {
 		return nil, err
 	}
@@ -130,6 +128,50 @@ func (s *MistralAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame
 		return nil, err
 	}
 	return mistralAISTTSpeechEvent(resolveMistralAISTTLanguage(s, language), result), nil
+}
+
+func mistralAISTTWAVBytes(frames []*model.AudioFrame, defaultSampleRate uint32, defaultNumChannels uint32) []byte {
+	sampleRate := defaultSampleRate
+	numChannels := defaultNumChannels
+	var pcm bytes.Buffer
+	for _, frame := range frames {
+		if frame == nil {
+			continue
+		}
+		if frame.SampleRate != 0 {
+			sampleRate = frame.SampleRate
+		}
+		if frame.NumChannels != 0 {
+			numChannels = frame.NumChannels
+		}
+		pcm.Write(frame.Data)
+	}
+	if sampleRate == 0 {
+		sampleRate = defaultMistralAISTTSampleRate
+	}
+	if numChannels == 0 {
+		numChannels = 1
+	}
+	data := pcm.Bytes()
+	dataSize := uint32(len(data))
+	byteRate := sampleRate * numChannels * 2
+	blockAlign := numChannels * 2
+	var wav bytes.Buffer
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36)+dataSize)
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(numChannels))
+	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
+	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(blockAlign))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	wav.WriteString("data")
+	_ = binary.Write(&wav, binary.LittleEndian, dataSize)
+	wav.Write(data)
+	return wav.Bytes()
 }
 
 func buildMistralAISTTRecognizeRequest(ctx context.Context, s *MistralAISTT, audio []byte, language string) (*http.Request, error) {

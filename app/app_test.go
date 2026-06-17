@@ -6724,8 +6724,17 @@ func TestMistralAISTTFallbackPassesReferenceOptions(t *testing.T) {
 		if got, want := record.contentType, "audio/wav"; got != want {
 			t.Fatalf("file content type = %q, want %q", got, want)
 		}
-		if got, want := fmt.Sprintf("%x", record.audio), "0102"; got != want {
-			t.Fatalf("audio bytes = %s, want %s", got, want)
+		if len(record.audio) < 46 {
+			t.Fatalf("audio bytes length = %d, want WAV header plus PCM", len(record.audio))
+		}
+		if string(record.audio[0:4]) != "RIFF" || string(record.audio[8:12]) != "WAVE" {
+			t.Fatalf("audio header = %q/%q, want RIFF/WAVE", record.audio[0:4], record.audio[8:12])
+		}
+		if got := binary.LittleEndian.Uint32(record.audio[24:28]); got != 16000 {
+			t.Fatalf("audio sample rate = %d, want default 16000", got)
+		}
+		if got, want := fmt.Sprintf("%x", record.audio[len(record.audio)-2:]), "0102"; got != want {
+			t.Fatalf("audio PCM tail = %s, want %s", got, want)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for MistralAI STT recognize request")

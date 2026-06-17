@@ -53,6 +53,8 @@ type OpenAISTT struct {
 	turnDetection   map[string]interface{}
 	noiseReduction  string
 	useRealtime     bool
+	connect         llm.APIConnectOptions
+	maxSession      time.Duration
 	dialWebsocket   openAIRealtimeSTTWebsocketDialer
 	streamsMu       sync.Mutex
 	streams         map[*openAIRealtimeSTTStream]struct{}
@@ -119,6 +121,12 @@ func WithOpenAISTTRealtime(useRealtime bool) OpenAISTTOption {
 	}
 }
 
+func WithOpenAISTTConnectOptions(connectOptions llm.APIConnectOptions) OpenAISTTOption {
+	return func(s *OpenAISTT) {
+		s.connect = connectOptions
+	}
+}
+
 func WithOpenAISTTBaseURL(baseURL string) OpenAISTTOption {
 	return func(s *OpenAISTT) {
 		if baseURL != "" {
@@ -150,6 +158,8 @@ func NewOpenAISTT(apiKey string, model string, opts ...OpenAISTTOption) (*OpenAI
 		baseURL:       defaultOpenAIBaseURL,
 		model:         model,
 		language:      "en",
+		connect:       llm.DefaultAPIConnectOptions(),
+		maxSession:    10 * time.Minute,
 		dialWebsocket: defaultOpenAIRealtimeSTTWebsocketDialer,
 	}
 	for _, opt := range opts {
@@ -195,6 +205,8 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 		baseURL:       azureEndpoint,
 		model:         model,
 		language:      "en",
+		connect:       llm.DefaultAPIConnectOptions(),
+		maxSession:    10 * time.Minute,
 		dialWebsocket: defaultOpenAIRealtimeSTTWebsocketDialer,
 	}
 	for _, opt := range opts {
@@ -308,7 +320,7 @@ func (s *OpenAISTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	if !s.useRealtime {
 		return nil, fmt.Errorf("openai realtime stt is not enabled")
 	}
-	conn, _, err := s.dialWebsocket(ctx, buildOpenAIRealtimeSTTWebsocketURL(s).String(), buildOpenAIRealtimeSTTHeaders(s))
+	conn, _, err := s.dialRealtimeSTTWebsocket(ctx)
 	if err != nil {
 		return nil, mapOpenAIError(err)
 	}
@@ -345,6 +357,44 @@ func (s *OpenAISTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 
 func defaultOpenAIRealtimeSTTWebsocketDialer(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
 	return websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
+}
+
+func (s *OpenAISTT) dialRealtimeSTTWebsocket(ctx context.Context) (*websocket.Conn, *http.Response, error) {
+	var (
+		conn *websocket.Conn
+		resp *http.Response
+		err  error
+	)
+	for attempt := 0; attempt <= s.connect.MaxRetry; attempt++ {
+		conn, resp, err = s.dialRealtimeSTTWebsocketAttempt(ctx)
+		if err == nil {
+			return conn, resp, nil
+		}
+		if attempt == s.connect.MaxRetry {
+			return nil, nil, err
+		}
+		retryInterval := s.connect.IntervalForRetry(attempt)
+		if retryInterval <= 0 {
+			continue
+		}
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil, nil, err
+}
+
+func (s *OpenAISTT) dialRealtimeSTTWebsocketAttempt(ctx context.Context) (*websocket.Conn, *http.Response, error) {
+	if s.connect.Timeout <= 0 {
+		return s.dialWebsocket(ctx, buildOpenAIRealtimeSTTWebsocketURL(s).String(), buildOpenAIRealtimeSTTHeaders(s))
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, s.connect.Timeout)
+	defer cancel()
+	return s.dialWebsocket(dialCtx, buildOpenAIRealtimeSTTWebsocketURL(s).String(), buildOpenAIRealtimeSTTHeaders(s))
 }
 
 func buildOpenAIRealtimeSTTWebsocketURL(s *OpenAISTT) *url.URL {
@@ -701,6 +751,7 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 		}
 		close(s.events)
 	}()
+	connectedAt := time.Now()
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
@@ -730,7 +781,32 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 		for _, event := range events {
 			s.events <- event
 		}
+		if s.shouldRecycleAfterEvents(events, connectedAt) {
+			if reconnectErr := s.reconnectAfterUnexpectedClose(); reconnectErr != nil {
+				if s.isClosed() || s.ctx.Err() != nil {
+					return
+				}
+				s.errCh <- reconnectErr
+				return
+			}
+			connectedAt = time.Now()
+		}
 	}
+}
+
+func (s *openAIRealtimeSTTStream) shouldRecycleAfterEvents(events []*stt.SpeechEvent, connectedAt time.Time) bool {
+	if s == nil || s.owner == nil || s.owner.maxSession <= 0 {
+		return false
+	}
+	if time.Since(connectedAt) <= s.owner.maxSession {
+		return false
+	}
+	for _, event := range events {
+		if event != nil && event.Type == stt.SpeechEventRecognitionUsage {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *openAIRealtimeSTTStream) isClosed() bool {
@@ -749,7 +825,7 @@ func (s *openAIRealtimeSTTStream) reconnectAfterUnexpectedClose() error {
 		return io.ErrClosedPipe
 	}
 	_ = s.conn.Close()
-	conn, _, err := s.owner.dialWebsocket(s.ctx, buildOpenAIRealtimeSTTWebsocketURL(s.owner).String(), buildOpenAIRealtimeSTTHeaders(s.owner))
+	conn, _, err := s.owner.dialRealtimeSTTWebsocket(s.ctx)
 	if err != nil {
 		return mapOpenAIError(err)
 	}

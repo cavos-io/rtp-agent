@@ -3,6 +3,7 @@ package mistralai
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
@@ -90,7 +92,13 @@ func TestMistralAISTTRecognizeRequestUsesReferenceMultipartFields(t *testing.T) 
 		WithMistralAISTTContextBias([]string{"Chicago", "Joplin"}),
 	)
 
-	req, err := buildMistralAISTTRecognizeRequest(context.Background(), provider, []byte{0x01, 0x02}, "")
+	audio := mistralAISTTWAVBytes([]*model.AudioFrame{{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        8000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}, uint32(provider.sampleRate), 1)
+	req, err := buildMistralAISTTRecognizeRequest(context.Background(), provider, audio, "")
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
@@ -121,8 +129,17 @@ func TestMistralAISTTRecognizeRequestUsesReferenceMultipartFields(t *testing.T) 
 	if file.contentType != "audio/wav" {
 		t.Fatalf("file content type = %q, want audio/wav", file.contentType)
 	}
-	if !bytes.Equal(file.data, []byte{0x01, 0x02}) {
-		t.Fatalf("file data = %#v, want audio bytes", file.data)
+	if len(file.data) < 46 {
+		t.Fatalf("file data length = %d, want WAV header plus PCM", len(file.data))
+	}
+	if string(file.data[0:4]) != "RIFF" || string(file.data[8:12]) != "WAVE" {
+		t.Fatalf("file header = %q/%q, want RIFF/WAVE", file.data[0:4], file.data[8:12])
+	}
+	if got := binary.LittleEndian.Uint32(file.data[24:28]); got != 8000 {
+		t.Fatalf("wav sample rate = %d, want frame sample rate 8000", got)
+	}
+	if !bytes.Equal(file.data[len(file.data)-2:], []byte{0x01, 0x02}) {
+		t.Fatalf("file PCM tail = %#v, want audio bytes", file.data[len(file.data)-2:])
 	}
 }
 

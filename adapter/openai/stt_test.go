@@ -672,6 +672,74 @@ func TestOpenAISTTStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTStreamHonorsRealtimeConnectTimeout(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTConnectOptions(llm.APIConnectOptions{MaxRetry: 0, Timeout: 5 * time.Millisecond}),
+	)
+	provider.dialWebsocket = func(ctx context.Context, _ string, _ http.Header) (*websocket.Conn, *http.Response, error) {
+		<-ctx.Done()
+		return nil, nil, ctx.Err()
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := provider.Stream(context.Background(), "en")
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		var timeoutErr *llm.APITimeoutError
+		if !errors.As(err, &timeoutErr) {
+			t.Fatalf("Stream error = %T %v, want APITimeoutError", err, err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Stream did not honor realtime connect timeout")
+	}
+}
+
+func TestOpenAISTTStreamRetriesRealtimeConnectFailure(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+		WithOpenAISTTConnectOptions(llm.APIConnectOptions{MaxRetry: 1, RetryInterval: time.Millisecond, Timeout: time.Second}),
+	)
+	var dialCount atomic.Int32
+	started := make(chan struct{})
+	releaseServer := make(chan struct{})
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		if dialCount.Add(1) == 1 {
+			return nil, nil, errors.New("temporary dial failure")
+		}
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			close(started)
+			<-releaseServer
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream error = %v, want retry success", err)
+	}
+	defer stream.Close()
+	defer close(releaseServer)
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not connect after retry")
+	}
+	if got := dialCount.Load(); got != 2 {
+		t.Fatalf("dial count = %d, want failed dial plus retry", got)
+	}
+}
+
 func TestOpenAISTTStreamReturnsAPIConnectionErrorWhenReconnectFails(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
@@ -781,6 +849,62 @@ func TestOpenAISTTStreamReconnectsAfterUnexpectedClose(t *testing.T) {
 	}
 	if got := dialCount.Load(); got != 2 {
 		t.Fatalf("dial count = %d, want 2", got)
+	}
+}
+
+func TestOpenAISTTStreamRecyclesAfterMaxSessionDuration(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	provider.maxSession = time.Nanosecond
+	var dialCount atomic.Int32
+	secondConnected := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		attempt := dialCount.Add(1)
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			if attempt == 1 {
+				if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
+					"type":"conversation.item.input_audio_transcription.completed",
+					"item_id":"item-1",
+					"transcript":"before recycle"
+				}`)); err != nil {
+					t.Errorf("write final transcript: %v", err)
+				}
+				return
+			}
+			close(secondConnected)
+			<-releaseSecond
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+	defer close(releaseSecond)
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error before recycle = %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event type = %v, want FINAL_TRANSCRIPT", event.Type)
+	}
+	select {
+	case <-secondConnected:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not recycle after max session duration")
+	}
+	if got := dialCount.Load(); got != 2 {
+		t.Fatalf("dial count = %d, want recycled connection", got)
 	}
 }
 

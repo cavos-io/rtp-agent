@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"io"
 	"net/http"
@@ -605,6 +606,53 @@ func TestOpenAITTSAudioModelsUseAudioStreamFormat(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {
+	pcm := []byte{0x01, 0x02, 0x03, 0x04}
+	wav := openAITTSTestWAV(pcm, 16000, 1)
+	cases := []struct {
+		name         string
+		resp         io.ReadCloser
+		streamFormat string
+	}{
+		{
+			name:         "audio",
+			resp:         io.NopCloser(bytes.NewReader(wav)),
+			streamFormat: openAITTSStreamFormatAudio,
+		},
+		{
+			name: "sse",
+			resp: io.NopCloser(strings.NewReader(
+				`data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(wav) + `"}` + "\n\n",
+			)),
+			streamFormat: openAITTSStreamFormatSSE,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stream := &openaiTTSChunkedStream{
+				resp:           tc.resp,
+				responseFormat: goopenai.SpeechResponseFormatWav,
+				streamFormat:   tc.streamFormat,
+			}
+			defer stream.Close()
+
+			audio, err := stream.Next()
+			if err != nil {
+				t.Fatalf("Next error = %v", err)
+			}
+			if audio.Frame.SampleRate != 16000 {
+				t.Fatalf("sample rate = %d, want WAV metadata", audio.Frame.SampleRate)
+			}
+			if audio.Frame.NumChannels != 1 {
+				t.Fatalf("channels = %d, want WAV metadata", audio.Frame.NumChannels)
+			}
+			if !bytes.Equal(audio.Frame.Data, pcm) {
+				t.Fatalf("audio data = %#v, want decoded WAV PCM", audio.Frame.Data)
+			}
+		})
+	}
+}
+
 func TestOpenAITTSAudioMP3StreamsBeforeResponseEOF(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
@@ -776,4 +824,25 @@ func mustNewOpenAITTS(t *testing.T, apiKey string, model goopenai.SpeechModel, v
 		t.Fatalf("NewOpenAITTS error = %v", err)
 	}
 	return provider
+}
+
+func openAITTSTestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
+	var wav bytes.Buffer
+	byteRate := sampleRate * uint32(channels) * 2
+	blockAlign := channels * 2
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36+len(pcm)))
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, channels)
+	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
+	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
+	_ = binary.Write(&wav, binary.LittleEndian, blockAlign)
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	wav.WriteString("data")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(len(pcm)))
+	wav.Write(pcm)
+	return wav.Bytes()
 }

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -119,7 +120,13 @@ func TestElevenLabsSTTRecognizeRequestUsesReferenceMultipartFields(t *testing.T)
 		WithElevenLabsSTTKeyterms([]string{"LiveKit", "Cavos"}),
 	)
 
-	req, err := buildElevenLabsSTTRecognizeRequest(context.Background(), provider, []byte{0x01, 0x02}, "fr")
+	audio := elevenLabsSTTWAVBytes([]*model.AudioFrame{{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        8000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}, uint32(provider.sampleRate), 1)
+	req, err := buildElevenLabsSTTRecognizeRequest(context.Background(), provider, audio, "fr")
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
@@ -150,8 +157,17 @@ func TestElevenLabsSTTRecognizeRequestUsesReferenceMultipartFields(t *testing.T)
 	if file.contentType != "audio/x-wav" {
 		t.Fatalf("file content type = %q, want audio/x-wav", file.contentType)
 	}
-	if !bytes.Equal(file.data, []byte{0x01, 0x02}) {
-		t.Fatalf("file data = %#v, want audio bytes", file.data)
+	if len(file.data) < 46 {
+		t.Fatalf("file data length = %d, want WAV header plus PCM", len(file.data))
+	}
+	if string(file.data[0:4]) != "RIFF" || string(file.data[8:12]) != "WAVE" {
+		t.Fatalf("file header = %q/%q, want RIFF/WAVE", file.data[0:4], file.data[8:12])
+	}
+	if got := uint32(file.data[24]) | uint32(file.data[25])<<8 | uint32(file.data[26])<<16 | uint32(file.data[27])<<24; got != 8000 {
+		t.Fatalf("wav sample rate = %d, want frame sample rate 8000", got)
+	}
+	if !bytes.Equal(file.data[len(file.data)-2:], []byte{0x01, 0x02}) {
+		t.Fatalf("file PCM tail = %#v, want audio bytes", file.data[len(file.data)-2:])
 	}
 }
 
@@ -596,6 +612,59 @@ func TestElevenLabsSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("second Close after write failure error = %v", err)
+	}
+}
+
+func TestElevenLabsSTTStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
+	closed := make(chan struct{})
+	closeAfterHandshake := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runElevenLabsClosingWebsocketServer(serverConn, closeAfterHandshake, closed, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTModel("scribe_v2_realtime"),
+		WithElevenLabsSTTBaseURL("ws://eleven.test/v1"),
+	)
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	close(closeAfterHandshake)
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test websocket close")
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test websocket server")
+	}
+
+	_, err = stream.Next()
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != websocket.CloseAbnormalClosure {
+		t.Fatalf("StatusCode = %d, want websocket close code", statusErr.StatusCode)
 	}
 }
 
