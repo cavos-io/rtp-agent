@@ -249,8 +249,6 @@ type participantEntrypointTaskKey struct {
 	entrypoint uintptr
 }
 
-type remoteParticipantView = workerlivekit.RemoteParticipantView
-
 type JobRequest struct {
 	Job *livekit.Job
 
@@ -657,7 +655,7 @@ func (c *JobContext) roomCallbackWithEntrypoints(cb *lksdk.RoomCallback, autoSub
 	return wrapped
 }
 
-func (c *JobContext) participantAvailable(participant remoteParticipantView) {
+func (c *JobContext) participantAvailable(participant workerlivekit.RemoteParticipantView) {
 	info := workerlivekit.ParticipantInfoFromRemoteParticipant(participant)
 	if info == nil {
 		return
@@ -676,14 +674,14 @@ func (c *JobContext) rememberAvailableParticipant(info *livekit.ParticipantInfo)
 	c.availableParticipants = append(c.availableParticipants, info)
 }
 
-func (c *JobContext) participantsAvailable(participants []remoteParticipantView) {
+func (c *JobContext) participantsAvailable(participants []workerlivekit.RemoteParticipantView) {
 	for _, participant := range participants {
 		c.participantAvailable(participant)
 	}
 }
 
-func remoteParticipantsAsViews(participants []*lksdk.RemoteParticipant) []remoteParticipantView {
-	views := make([]remoteParticipantView, 0, len(participants))
+func remoteParticipantsAsViews(participants []*lksdk.RemoteParticipant) []workerlivekit.RemoteParticipantView {
+	views := make([]workerlivekit.RemoteParticipantView, 0, len(participants))
 	for _, participant := range participants {
 		if participant != nil {
 			views = append(views, participant)
