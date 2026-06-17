@@ -1537,6 +1537,40 @@ func TestPipelineAgentSTTTurnDetectionWaitsForEndOfSpeechBeforeCommit(t *testing
 	}
 }
 
+func TestPipelineAgentSTTEndOfSpeechFlushesActiveVADSegment(t *testing.T) {
+	baseAgent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	baseAgent.TurnDetection = TurnDetectionModeSTT
+	baseAgent.STT = &fakePipelineSTT{}
+	baseAgent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(baseAgent, session)
+	baseAgent.activity = activity
+	session.activity = activity
+	defer activity.Stop()
+
+	vadStream := &fakePipelineVADStream{}
+	pipeline := NewPipelineAgent(baseAgent.VAD, baseAgent.STT, nil, nil, baseAgent.ChatCtx)
+	pipeline.session = session
+	pipeline.ctx = context.Background()
+	pipeline.vadStream = vadStream
+	pipeline.vadSpeechStarted = true
+
+	pipeline.sttLoop(&fakePipelineRecognizeStream{
+		events: []*stt.SpeechEvent{
+			{Type: stt.SpeechEventStartOfSpeech},
+			{
+				Type:         stt.SpeechEventFinalTranscript,
+				Alternatives: []stt.SpeechData{{Text: "stt eos flushes vad", Confidence: 0.9}},
+			},
+			{Type: stt.SpeechEventEndOfSpeech},
+		},
+	})
+
+	if vadStream.flushCount != 1 {
+		t.Fatalf("VAD Flush calls = %d, want 1 after STT end-of-speech during active VAD segment", vadStream.flushCount)
+	}
+}
+
 func TestPipelineAgentSTTStartSpeechUsesProviderSpeechStartTime(t *testing.T) {
 	endpointing := &recordingPipelineEndpointing{}
 	baseAgent := NewAgent("test")
@@ -3385,14 +3419,15 @@ func (f *fakePipelineVAD) Stream(context.Context) (vad.VADStream, error) {
 }
 
 type fakePipelineVADStream struct {
-	events    []*vad.VADEvent
-	index     int
-	err       error
-	pushErr   error
-	frames    []*model.AudioFrame
-	pushedCh  chan *model.AudioFrame
-	closedCh  chan struct{}
-	closeOnce sync.Once
+	events     []*vad.VADEvent
+	index      int
+	err        error
+	pushErr    error
+	frames     []*model.AudioFrame
+	pushedCh   chan *model.AudioFrame
+	closedCh   chan struct{}
+	closeOnce  sync.Once
+	flushCount int
 }
 
 func (f *fakePipelineVADStream) PushFrame(frame *model.AudioFrame) error {
@@ -3403,7 +3438,10 @@ func (f *fakePipelineVADStream) PushFrame(frame *model.AudioFrame) error {
 	return f.pushErr
 }
 
-func (f *fakePipelineVADStream) Flush() error { return nil }
+func (f *fakePipelineVADStream) Flush() error {
+	f.flushCount++
+	return nil
+}
 
 func (f *fakePipelineVADStream) EndInput() error { return nil }
 
