@@ -86,6 +86,22 @@ func TestRemoteParticipantViewsFiltersNilParticipants(t *testing.T) {
 	}
 }
 
+func TestRoomRemoteParticipantViewsHandlesNilRoom(t *testing.T) {
+	views := workerlivekit.RoomRemoteParticipantViews(nil)
+
+	if len(views) != 0 {
+		t.Fatalf("RoomRemoteParticipantViews(nil) len = %d, want 0", len(views))
+	}
+}
+
+func TestRoomRemoteParticipantViewsHandlesRoomWithoutParticipants(t *testing.T) {
+	views := workerlivekit.RoomRemoteParticipantViews(lksdk.NewRoom(nil))
+
+	if len(views) != 0 {
+		t.Fatalf("RoomRemoteParticipantViews(empty room) len = %d, want 0", len(views))
+	}
+}
+
 func TestRoomLocalParticipantReturnsLocalParticipant(t *testing.T) {
 	room := lksdk.NewRoom(nil)
 

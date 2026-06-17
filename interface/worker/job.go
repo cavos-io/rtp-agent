@@ -537,7 +537,7 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *lksdk.Room, 
 			return err
 		}
 		c.Room = room
-		c.participantsAvailable(workerlivekit.RemoteParticipantViews(room.GetRemoteParticipants()))
+		c.participantsAvailable(workerlivekit.RoomRemoteParticipantViews(room))
 		c.applyAutoSubscribeOptions(opts.AutoSubscribe)
 		logger.Logger.Infow("Connected to room", "room", workerlivekit.JobRoomName(c.Job))
 		return nil
@@ -555,7 +555,7 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *lksdk.Room, 
 		return err
 	}
 	c.Room = room
-	c.participantsAvailable(workerlivekit.RemoteParticipantViews(room.GetRemoteParticipants()))
+	c.participantsAvailable(workerlivekit.RoomRemoteParticipantViews(room))
 	c.applyAutoSubscribeOptions(opts.AutoSubscribe)
 	logger.Logger.Infow("Connected to room", "room", workerlivekit.JobRoomName(c.Job))
 	return nil
