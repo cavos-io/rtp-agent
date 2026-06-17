@@ -388,7 +388,7 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 		return io.ErrClosedPipe
 	}
 	for {
-		if err := s.conn.WriteMessage(websocket.BinaryMessage, buildAzureSTTBinaryMessage("audio", s.connectionID, "audio/x-wav", frame.Data)); err != nil {
+		if err := s.conn.WriteMessage(websocket.BinaryMessage, buildAzureSTTBinaryMessage("audio", s.connectionID, azureSTTStreamAudioContentType(frame), frame.Data)); err != nil {
 			if reconnectErr := s.reconnectLocked(); reconnectErr == nil {
 				continue
 			}
@@ -399,6 +399,14 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	s.audioWritten = true
 	return nil
+}
+
+func azureSTTStreamAudioContentType(frame *model.AudioFrame) string {
+	sampleRate := uint32(16000)
+	if frame != nil && frame.SampleRate > 0 {
+		sampleRate = frame.SampleRate
+	}
+	return fmt.Sprintf("audio/x-wav;codec=audio/pcm;samplerate=%d", sampleRate)
 }
 
 func (s *azureSTTStream) Flush() error {

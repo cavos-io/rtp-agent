@@ -373,8 +373,11 @@ func TestAzureSTTStreamUsesWebsocketProtocol(t *testing.T) {
 	if audioHeaders["Path"] != "audio" {
 		t.Fatalf("audio Path = %q, want audio", audioHeaders["Path"])
 	}
-	if audioHeaders["Content-Type"] != "audio/x-wav" {
-		t.Fatalf("audio Content-Type = %q, want audio/x-wav", audioHeaders["Content-Type"])
+	if audioHeaders["Content-Type"] != "audio/x-wav;codec=audio/pcm;samplerate=16000" {
+		t.Fatalf("audio Content-Type = %q, want Azure raw PCM stream format", audioHeaders["Content-Type"])
+	}
+	if !strings.Contains(audioHeaders["Content-Type"], "codec=audio/pcm") {
+		t.Fatalf("audio Content-Type = %q, want explicit PCM codec", audioHeaders["Content-Type"])
 	}
 	if !bytes.Equal(audioPayload, []byte{0x01, 0x02, 0x03, 0x04}) {
 		t.Fatalf("audio payload = %v, want pushed PCM", audioPayload)
