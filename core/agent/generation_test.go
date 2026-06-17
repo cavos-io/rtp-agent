@@ -285,6 +285,37 @@ func TestPerformTTSInferenceTTFBStartsAtFirstInputText(t *testing.T) {
 	}
 }
 
+func TestPerformTTSInferenceNonStreamingTTFBStartsAtFirstInputText(t *testing.T) {
+	provider := &fakeGenerationChunkedTTS{
+		stream: &fakeGenerationChunkedStream{
+			frames: []*model.AudioFrame{{
+				Data:              []byte("audio"),
+				SampleRate:        24000,
+				NumChannels:       1,
+				SamplesPerChannel: 2,
+			}},
+			nextDelay: 20 * time.Millisecond,
+		},
+	}
+	textCh := make(chan string)
+
+	data, err := PerformTTSInference(context.Background(), provider, textCh, WithTTSPreserveTimedTranscript())
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+
+	textCh <- "hello"
+	time.Sleep(150 * time.Millisecond)
+	close(textCh)
+
+	if _, ok := <-data.AudioCh; !ok {
+		t.Fatal("AudioCh closed before audio, want synthesized frame")
+	}
+	if data.TTFB < 100*time.Millisecond {
+		t.Fatalf("TTFB = %v, want measured from first text input, including text collection delay", data.TTFB)
+	}
+}
+
 func TestLLMToolSpanAttributesIncludeToolContextGroups(t *testing.T) {
 	lookup := &fakeGenerationTool{name: "lookup"}
 	search := &fakeGenerationTool{name: "search"}
@@ -2108,11 +2139,15 @@ type fakeGenerationChunkedStream struct {
 	timedTranscripts [][]tts.TimedString
 	index            int
 	closed           bool
+	nextDelay        time.Duration
 }
 
 func (s *fakeGenerationChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.index >= len(s.frames) {
 		return nil, io.EOF
+	}
+	if s.nextDelay > 0 {
+		time.Sleep(s.nextDelay)
 	}
 	frame := s.frames[s.index]
 	var timedTranscript []tts.TimedString

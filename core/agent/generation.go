@@ -301,7 +301,13 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			defer span.End()
 
 			var text strings.Builder
+			var startTime time.Time
+			var startTimeSet bool
 			for chunk := range textCh {
+				if !startTimeSet {
+					startTime = time.Now()
+					startTimeSet = true
+				}
 				text.WriteString(chunk)
 			}
 			ttsText := text.String()
@@ -318,7 +324,9 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 				return
 			}
 
-			startTime := time.Now()
+			if !startTimeSet {
+				startTime = time.Now()
+			}
 			stream, err := t.Synthesize(ctx, transformedText)
 			if err != nil {
 				data.StreamErr = err
