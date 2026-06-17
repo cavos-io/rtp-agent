@@ -53,8 +53,6 @@ const (
 	defaultProdHTTPPort   = 8081
 	defaultDevHTTPPort    = 0
 
-	participantAttributeAgentName = "lk.agent.name"
-
 	rtcSessionRequiredMessage = "No RTC session entrypoint has been registered.\n" +
 		"Define one using the @server.rtc_session() decorator, for example:\n" +
 		"    @server.rtc_session(agent_name=\"my_agent\")\n" +
@@ -1158,39 +1156,18 @@ func agentIdentityForJobID(jobID string) string {
 }
 
 func availabilityResponseForAccept(req *livekit.AvailabilityRequest, args JobAcceptArguments, agentName string) *livekit.WorkerMessage {
-	if args.Identity == "" {
-		args.Identity = agentIdentityForJobID(req.Job.Id)
-	}
-	attributes := make(map[string]string, len(args.Attributes)+1)
-	attributes[participantAttributeAgentName] = agentName
-	for key, value := range args.Attributes {
-		attributes[key] = value
-	}
-
-	return &livekit.WorkerMessage{
-		Message: &livekit.WorkerMessage_Availability{
-			Availability: &livekit.AvailabilityResponse{
-				JobId:                 req.Job.Id,
-				Available:             true,
-				ParticipantIdentity:   args.Identity,
-				ParticipantName:       args.Name,
-				ParticipantMetadata:   args.Metadata,
-				ParticipantAttributes: attributes,
-			},
-		},
-	}
+	return workerlivekit.AvailabilityResponseForAccept(req, workerlivekit.AvailabilityAcceptOptions{
+		Name:       args.Name,
+		Identity:   args.Identity,
+		Metadata:   args.Metadata,
+		Attributes: args.Attributes,
+	}, agentName)
 }
 
 func availabilityResponseForReject(req *livekit.AvailabilityRequest, args JobRejectArguments) *livekit.WorkerMessage {
-	return &livekit.WorkerMessage{
-		Message: &livekit.WorkerMessage_Availability{
-			Availability: &livekit.AvailabilityResponse{
-				JobId:     req.Job.Id,
-				Available: false,
-				Terminate: args.Terminate,
-			},
-		},
-	}
+	return workerlivekit.AvailabilityResponseForReject(req, workerlivekit.AvailabilityRejectOptions{
+		Terminate: args.Terminate,
+	})
 }
 
 func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
