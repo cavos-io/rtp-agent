@@ -2590,6 +2590,7 @@ func (a *AgentActivity) maybeStartPreemptiveGeneration(transcript string, confid
 	if schedulingPaused || (currentSpeech != nil && !currentSpeech.IsInterrupted()) {
 		return
 	}
+	a.cancelPreemptiveGeneration()
 	if opts.PreemptiveGenerationMaxSpeechDuration > 0 && !a.userSpeechStartedAt.IsZero() &&
 		time.Since(a.userSpeechStartedAt).Seconds() > opts.PreemptiveGenerationMaxSpeechDuration {
 		return
@@ -2602,8 +2603,6 @@ func (a *AgentActivity) maybeStartPreemptiveGeneration(transcript string, confid
 	}
 	a.preemptiveGenerationCount++
 	a.preemptiveMu.Unlock()
-
-	a.cancelPreemptiveGeneration()
 
 	msg := &llm.ChatMessage{
 		Role:                 llm.ChatRoleUser,

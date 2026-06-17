@@ -4269,6 +4269,50 @@ func TestAgentActivityMatchingFinalTranscriptKeepsPreflightGeneration(t *testing
 	}
 }
 
+func TestAgentActivityPreemptiveGenerationCancelsStaleBeforeRetryGuard(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	agent.LLM = &fakeGenerationLLM{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		PreemptiveGenerationMaxRetries:    1,
+		PreemptiveGenerationMaxRetriesSet: true,
+	})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	defer activity.Stop()
+
+	speechEvents := session.SpeechCreatedEvents()
+	activity.OnStartOfSpeech(&vad.VADEvent{})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "first partial", Confidence: 0.91}},
+	})
+
+	var preemptive *SpeechHandle
+	select {
+	case ev := <-speechEvents:
+		preemptive = ev.SpeechHandle
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive first preemptive generation")
+	}
+	if preemptive == nil || preemptive.IsInterrupted() {
+		t.Fatalf("first preemptive speech = %#v, want active unscheduled handle", preemptive)
+	}
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Type:         stt.SpeechEventPreflightTranscript,
+		Alternatives: []stt.SpeechData{{Text: "second partial", Confidence: 0.92}},
+	})
+
+	if !preemptive.IsInterrupted() {
+		t.Fatal("stale preemptive speech was not interrupted before retry guard blocked replacement")
+	}
+	select {
+	case ev := <-speechEvents:
+		t.Fatalf("SpeechCreatedEvents received retry %#v, want retry guard to block replacement", ev)
+	default:
+	}
+}
+
 func TestAgentActivityPreemptiveGenerationStartsTTSBeforeSchedulingWhenEnabled(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeVAD
