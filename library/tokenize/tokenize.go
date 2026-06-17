@@ -209,40 +209,47 @@ func SplitWords(text string, ignorePunctuation bool, splitCharacter bool, retain
 		charBasedCodes = regexp.MustCompile(`[\x{4e00}-\x{9fff}\x{3040}-\x{30ff}\x{3400}-\x{4dbf}\x{0E00}-\x{0E7F}]`)
 	}
 
-	wordStart := 0
+	wordStartByte := 0
+	wordStartRune := 0
 
-	addCurrentWord := func(start, end int) {
-		word := text[start:end]
+	addCurrentWord := func(startByte, endByte, startRune, endRune int) {
+		word := text[startByte:endByte]
 		if ignorePunctuation {
 			word = stripPunctuation(word)
 		}
 		if word != "" {
-			words = append(words, TokenData{Token: word, Start: start, End: end})
+			words = append(words, TokenData{Token: word, Start: startRune, End: endRune})
 		}
 	}
 
-	for pos, char := range text {
+	runePos := 0
+	for bytePos, char := range text {
 		if unicode.IsSpace(char) {
-			if retainFormat && strings.TrimSpace(text[wordStart:pos]) == "" {
+			if retainFormat && strings.TrimSpace(text[wordStartByte:bytePos]) == "" {
+				runePos++
 				continue
 			}
-			addCurrentWord(wordStart, pos)
+			addCurrentWord(wordStartByte, bytePos, wordStartRune, runePos)
 			if retainFormat {
-				wordStart = pos
+				wordStartByte = bytePos
+				wordStartRune = runePos
 			} else {
-				wordStart = pos + 1
+				wordStartByte = bytePos + len(string(char))
+				wordStartRune = runePos + 1
 			}
 		} else if charBasedCodes != nil && charBasedCodes.MatchString(string(char)) {
-			if wordStart < pos {
-				addCurrentWord(wordStart, pos)
+			if wordStartByte < bytePos {
+				addCurrentWord(wordStartByte, bytePos, wordStartRune, runePos)
 			}
-			nextPos := pos + len(string(char))
-			addCurrentWord(pos, nextPos)
-			wordStart = nextPos
+			nextBytePos := bytePos + len(string(char))
+			addCurrentWord(bytePos, nextBytePos, runePos, runePos+1)
+			wordStartByte = nextBytePos
+			wordStartRune = runePos + 1
 		}
+		runePos++
 	}
 
-	addCurrentWord(wordStart, len(text))
+	addCurrentWord(wordStartByte, len(text), wordStartRune, runePos)
 
 	return words
 }
@@ -268,10 +275,12 @@ func ReplaceWords(text string, replacements map[string]string) string {
 		}
 
 		punctuationOffset := len(word.Token) - len(noPunctuation)
-		builder.WriteString(text[lastIndex:word.Start])
+		wordStart := runeOffsetToByteOffset(text, word.Start)
+		wordEnd := runeOffsetToByteOffset(text, word.End)
+		builder.WriteString(text[lastIndex:wordStart])
 		builder.WriteString(replacement)
-		builder.WriteString(text[word.End-punctuationOffset : word.End])
-		lastIndex = word.End
+		builder.WriteString(text[wordEnd-punctuationOffset : wordEnd])
+		lastIndex = wordEnd
 	}
 
 	if lastIndex == 0 {
@@ -279,6 +288,20 @@ func ReplaceWords(text string, replacements map[string]string) string {
 	}
 	builder.WriteString(text[lastIndex:])
 	return builder.String()
+}
+
+func runeOffsetToByteOffset(text string, offset int) int {
+	if offset <= 0 {
+		return 0
+	}
+	runePos := 0
+	for bytePos := range text {
+		if runePos == offset {
+			return bytePos
+		}
+		runePos++
+	}
+	return len(text)
 }
 
 func SplitParagraphs(text string) []TokenData {

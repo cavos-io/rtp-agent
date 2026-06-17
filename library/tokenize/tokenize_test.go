@@ -194,6 +194,24 @@ func TestSplitWordsSplitsCharacterBasedUnicode(t *testing.T) {
 	}
 }
 
+func TestSplitWordsUsesReferenceCharacterOffsets(t *testing.T) {
+	tokens := SplitWords("你好 world", true, true, false)
+
+	want := []TokenData{
+		{Token: "你", Start: 0, End: 1},
+		{Token: "好", Start: 1, End: 2},
+		{Token: "world", Start: 3, End: 8},
+	}
+	if len(tokens) != len(want) {
+		t.Fatalf("tokens = %#v, want %#v", tokens, want)
+	}
+	for i := range want {
+		if tokens[i] != want[i] {
+			t.Fatalf("tokens[%d] = %#v, want %#v", i, tokens[i], want[i])
+		}
+	}
+}
+
 func TestSplitWordsStripsReferencePunctuationList(t *testing.T) {
 	tokens := SplitWords("±value… kept", true, false, false)
 
@@ -210,6 +228,13 @@ func TestSplitWordsStripsReferencePunctuationList(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("tokens = %#v, want %#v", got, want)
 		}
+	}
+}
+
+func TestReplaceWordsHandlesReferenceCharacterOffsets(t *testing.T) {
+	got := ReplaceWords("Halo 你好 customer.", map[string]string{"customer": "agent"})
+	if got != "Halo 你好 agent." {
+		t.Fatalf("ReplaceWords() = %q, want unicode prefix preserved", got)
 	}
 }
 
