@@ -1,5 +1,7 @@
 package livekit
 
+import "github.com/cavos-io/rtp-agent/library/utils"
+
 type WorkerMetadataOptions struct {
 	AgentName       string
 	AgentNameIsEnv  bool
@@ -10,6 +12,18 @@ type WorkerMetadataOptions struct {
 	ProtocolVersion int
 	NodeName        string
 	Hosted          bool
+}
+
+type WorkerRuntimeMetadataOptions struct {
+	AgentName       string
+	AgentNameIsEnv  bool
+	WorkerType      string
+	WorkerLoad      float64
+	ActiveJobs      int
+	SDKVersion      string
+	ProtocolVersion int
+	NodeName        func() string
+	IsHosted        func() bool
 }
 
 type WorkerMetadataResponse struct {
@@ -38,4 +52,26 @@ func WorkerMetadata(opts WorkerMetadataOptions) WorkerMetadataResponse {
 		NodeName:        opts.NodeName,
 		Hosted:          opts.Hosted,
 	}
+}
+
+func WorkerRuntimeMetadata(opts WorkerRuntimeMetadataOptions) WorkerMetadataResponse {
+	nodeName := opts.NodeName
+	if nodeName == nil {
+		nodeName = utils.NodeName
+	}
+	isHosted := opts.IsHosted
+	if isHosted == nil {
+		isHosted = utils.IsHosted
+	}
+	return WorkerMetadata(WorkerMetadataOptions{
+		AgentName:       opts.AgentName,
+		AgentNameIsEnv:  opts.AgentNameIsEnv,
+		WorkerType:      opts.WorkerType,
+		WorkerLoad:      opts.WorkerLoad,
+		ActiveJobs:      opts.ActiveJobs,
+		SDKVersion:      opts.SDKVersion,
+		ProtocolVersion: opts.ProtocolVersion,
+		NodeName:        nodeName(),
+		Hosted:          isHosted(),
+	})
 }

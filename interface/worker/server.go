@@ -830,7 +830,7 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		body := workerlivekit.WorkerMetadata(workerlivekit.WorkerMetadataOptions{
+		body := workerlivekit.WorkerRuntimeMetadata(workerlivekit.WorkerRuntimeMetadataOptions{
 			AgentName:       s.Options.AgentName,
 			AgentNameIsEnv:  s.Options.AgentNameIsEnv,
 			WorkerType:      string(s.Options.WorkerType),
@@ -838,8 +838,6 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 			ActiveJobs:      s.activeJobCount(),
 			SDKVersion:      s.Options.Version,
 			ProtocolVersion: WorkerProtocolVersion,
-			NodeName:        utils.NodeName(),
-			Hosted:          utils.IsHosted(),
 		})
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(body); err != nil {

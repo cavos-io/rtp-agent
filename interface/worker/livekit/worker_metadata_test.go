@@ -90,3 +90,27 @@ func TestWorkerMetadataJSONContract(t *testing.T) {
 		t.Fatalf("project_type = %v, want go", decoded["project_type"])
 	}
 }
+
+func TestWorkerRuntimeMetadataUsesRuntimeNodeAndHostedState(t *testing.T) {
+	metadata := workerlivekit.WorkerRuntimeMetadata(workerlivekit.WorkerRuntimeMetadataOptions{
+		AgentName:       "support-agent",
+		AgentNameIsEnv:  true,
+		WorkerType:      string(workerlivekit.WorkerTypeRoom),
+		WorkerLoad:      0.5,
+		ActiveJobs:      3,
+		SDKVersion:      "1.2.3",
+		ProtocolVersion: 1,
+		NodeName:        func() string { return "node-a" },
+		IsHosted:        func() bool { return true },
+	})
+
+	if metadata.NodeName != "node-a" {
+		t.Fatalf("NodeName = %q, want node-a", metadata.NodeName)
+	}
+	if !metadata.Hosted {
+		t.Fatal("Hosted = false, want true")
+	}
+	if metadata.WorkerType != "JT_ROOM" {
+		t.Fatalf("WorkerType = %q, want JT_ROOM", metadata.WorkerType)
+	}
+}
