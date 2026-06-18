@@ -576,6 +576,21 @@ func TestElevenLabsStreamURLUsesReferenceInactivityTimeoutOverride(t *testing.T)
 	}
 }
 
+func TestElevenLabsStreamURLUsesReferenceEnableLoggingOverride(t *testing.T) {
+	provider, err := NewElevenLabsTTS("test-key", "", "", WithElevenLabsEnableLogging(false))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	parsed, err := url.Parse(buildElevenLabsStreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	if parsed.Query().Get("enable_logging") != "false" {
+		t.Fatalf("enable_logging = %q, want false", parsed.Query().Get("enable_logging"))
+	}
+}
+
 func TestElevenLabsTTSAutoModeDefaultMatchesReference(t *testing.T) {
 	provider, err := NewElevenLabsTTS("test-key", "", "")
 	if err != nil {
