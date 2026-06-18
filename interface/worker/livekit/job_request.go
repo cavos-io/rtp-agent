@@ -369,6 +369,13 @@ type TerminationInfo struct {
 	JobID string
 }
 
+type JobTerminationPlan struct {
+	MarkTerminated bool
+	Shutdown       bool
+	WaitEntrypoint bool
+	Finish         bool
+}
+
 type JobTermination = lkprotocol.JobTermination
 
 func JobTerminationInfo(req *JobTermination) TerminationInfo {
@@ -376,6 +383,18 @@ func JobTerminationInfo(req *JobTermination) TerminationInfo {
 		return TerminationInfo{}
 	}
 	return TerminationInfo{JobID: req.JobId}
+}
+
+func JobTerminationPlanForActiveJob(exists bool) JobTerminationPlan {
+	if !exists {
+		return JobTerminationPlan{}
+	}
+	return JobTerminationPlan{
+		MarkTerminated: true,
+		Shutdown:       true,
+		WaitEntrypoint: true,
+		Finish:         true,
+	}
 }
 
 type LocalRoomJobOptions struct {

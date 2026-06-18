@@ -672,6 +672,40 @@ func TestJobTerminationInfoExposesJobID(t *testing.T) {
 	}
 }
 
+func TestJobTerminationPlanForActiveJobTerminatesAndFinishes(t *testing.T) {
+	plan := workerlivekit.JobTerminationPlanForActiveJob(true)
+
+	if !plan.MarkTerminated {
+		t.Fatal("MarkTerminated = false, want true")
+	}
+	if !plan.Shutdown {
+		t.Fatal("Shutdown = false, want true")
+	}
+	if !plan.WaitEntrypoint {
+		t.Fatal("WaitEntrypoint = false, want true")
+	}
+	if !plan.Finish {
+		t.Fatal("Finish = false, want true")
+	}
+}
+
+func TestJobTerminationPlanForMissingJobDoesNothing(t *testing.T) {
+	plan := workerlivekit.JobTerminationPlanForActiveJob(false)
+
+	if plan.MarkTerminated {
+		t.Fatal("MarkTerminated = true, want false")
+	}
+	if plan.Shutdown {
+		t.Fatal("Shutdown = true, want false")
+	}
+	if plan.WaitEntrypoint {
+		t.Fatal("WaitEntrypoint = true, want false")
+	}
+	if plan.Finish {
+		t.Fatal("Finish = true, want false")
+	}
+}
+
 func TestJobTerminationAliasUsesLiveKitProtocolTermination(t *testing.T) {
 	termination := &workerlivekit.JobTermination{JobId: "job-stop"}
 	protocolTermination := (*lkprotocol.JobTermination)(termination)

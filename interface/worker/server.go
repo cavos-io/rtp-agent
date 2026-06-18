@@ -1750,12 +1750,19 @@ func (s *AgentServer) handleTermination(req *workerlivekit.JobTermination) {
 	}
 	s.mu.Unlock()
 
-	if exists {
+	plan := workerlivekit.JobTerminationPlanForActiveJob(exists)
+	if plan.MarkTerminated {
 		jobCtx.markTerminated()
+	}
+	if plan.Shutdown {
 		jobCtx.Shutdown("")
+	}
+	if plan.WaitEntrypoint {
 		if !jobCtx.waitForEntrypointDone(localEntrypointCloseWait) {
 			logger.Logger.Warnw("job entrypoint did not exit before termination finalized", nil, "jobId", jobID)
 		}
+	}
+	if plan.Finish {
 		s.finishJob(jobCtx)
 	}
 }
