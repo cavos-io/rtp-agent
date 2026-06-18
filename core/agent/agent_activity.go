@@ -1584,7 +1584,7 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 		a.sttEOSReceived = true
 	}
 	if a.Session != nil {
-		a.Session.UpdateUserState(UserStateListening)
+		a.Session.updateUserStateAt(UserStateListening, a.userSpeechStoppedAt)
 	}
 	a.notifyUserTurnUpdated()
 	if endpointing := a.endpointing(); endpointing != nil && wasSpeaking {

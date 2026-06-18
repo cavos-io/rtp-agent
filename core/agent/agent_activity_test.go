@@ -574,6 +574,12 @@ func TestAgentActivityOnEndOfSpeechReportsActualSpeechEndTime(t *testing.T) {
 	activity := NewAgentActivity(agent, session)
 
 	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech, Timestamp: 1.0})
+	select {
+	case <-session.UserStateChangedCh:
+	case <-testTimeout():
+		t.Fatal("UserStateChangedCh did not receive start-of-speech event")
+	}
+	beforeEnd := time.Now()
 	activity.OnEndOfSpeech(&vad.VADEvent{
 		Type:              vad.VADEventEndOfSpeech,
 		Timestamp:         3.0,
@@ -586,6 +592,21 @@ func TestAgentActivityOnEndOfSpeechReportsActualSpeechEndTime(t *testing.T) {
 	}
 	if endpointing.lastEnd != 2.5 {
 		t.Fatalf("OnEndOfSpeech endedAt = %v, want 2.5", endpointing.lastEnd)
+	}
+	var ev UserStateChangedEvent
+	select {
+	case ev = <-session.UserStateChangedCh:
+	case <-testTimeout():
+		t.Fatal("UserStateChangedCh did not receive end-of-speech event")
+	}
+	if ev.NewState != UserStateListening {
+		t.Fatalf("user state = %q, want listening", ev.NewState)
+	}
+	if ev.CreatedAt.After(beforeEnd.Add(-450 * time.Millisecond)) {
+		t.Fatalf("user state CreatedAt = %v, want VAD-adjusted speech end before callback", ev.CreatedAt.Sub(beforeEnd))
+	}
+	if ev.CreatedAt.Before(beforeEnd.Add(-700 * time.Millisecond)) {
+		t.Fatalf("user state CreatedAt = %v, want close to VAD-adjusted end", ev.CreatedAt.Sub(beforeEnd))
 	}
 }
 
