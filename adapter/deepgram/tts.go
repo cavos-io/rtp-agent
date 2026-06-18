@@ -253,7 +253,7 @@ func (s *deepgramTTSStream) readLoop() {
 	for {
 		msgType, message, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+			if !s.isClosed() {
 				s.errCh <- deepgramTTSUnexpectedCloseError(err)
 			}
 			return
@@ -386,6 +386,12 @@ func (s *deepgramTTSStream) closeAfterWriteFailureLocked() {
 	}
 	s.closed = true
 	_ = s.closeConnection()
+}
+
+func (s *deepgramTTSStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func (s *deepgramTTSStream) Next() (*tts.SynthesizedAudio, error) {
