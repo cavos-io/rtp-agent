@@ -169,7 +169,7 @@ func (t *Transport) Join(ctx context.Context) error {
 	t.mu.Unlock()
 	if closed {
 		if err := t.client.Leave(context.Background()); err != nil {
-			return err
+			return fmt.Errorf("agora transport is closed after late join success; cleanup leave failed: %w", err)
 		}
 		return fmt.Errorf("agora transport is closed")
 	}
