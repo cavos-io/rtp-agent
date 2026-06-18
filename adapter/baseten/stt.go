@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -302,8 +303,14 @@ func (s *basetenSTTStream) readLoop() {
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- err
+			if !s.isClosed() {
+				if closeErr, ok := err.(*websocket.CloseError); ok {
+					s.errCh <- llm.NewAPIStatusError("Baseten connection closed unexpectedly", closeErr.Code, "", err.Error())
+				} else if err == io.EOF {
+					s.errCh <- llm.NewAPIStatusError("Baseten connection closed unexpectedly", -1, "", err.Error())
+				} else {
+					s.errCh <- err
+				}
 			}
 			return
 		}
@@ -319,6 +326,12 @@ func (s *basetenSTTStream) readLoop() {
 			s.events <- event
 		}
 	}
+}
+
+func (s *basetenSTTStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 type basetenSTTStreamState struct {
