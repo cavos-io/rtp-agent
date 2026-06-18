@@ -1378,7 +1378,8 @@ func TestRefreshRunningJobTokenForReloadPreservesAssignmentAndExtendsToken(t *te
 	}
 	now := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
 
-	refreshed, err := workerlivekit.RefreshRunningJobTokenForReload(info, "api-secret", now)
+	livekitInfo := ipc.ToLiveKitRunningJobInfo(info)
+	refreshed, err := workerlivekit.RefreshRunningJobTokenForReload(livekitInfo, "api-secret", now)
 	if err != nil {
 		t.Fatalf("refreshRunningJobTokenForReload() error = %v", err)
 	}
@@ -1487,7 +1488,8 @@ func TestRefreshRunningJobsForReloadRefreshesEveryJob(t *testing.T) {
 	}
 	now := time.Date(2026, 5, 31, 13, 0, 0, 0, time.UTC)
 
-	refreshed, err := workerlivekit.RefreshRunningJobsForReload(jobs, "api-secret", now)
+	livekitJobs := ipc.ToLiveKitRunningJobInfos(jobs)
+	refreshed, err := workerlivekit.RefreshRunningJobsForReload(livekitJobs, "api-secret", now)
 	if err != nil {
 		t.Fatalf("refreshRunningJobsForReload() error = %v", err)
 	}

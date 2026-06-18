@@ -308,11 +308,15 @@ func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJ
 }
 
 func RunningJobInfoFromEnv(env map[string]string) (RunningJobInfo, error) {
-	return workerlivekit.RunningJobInfoFromEnv(env)
+	info, err := workerlivekit.RunningJobInfoFromEnv(env)
+	if err != nil {
+		return RunningJobInfo{}, err
+	}
+	return FromLiveKitRunningJobInfo(info), nil
 }
 
 func ProcessJobEnv(baseEnv []string, processID string, info RunningJobInfo) ([]string, error) {
-	return workerlivekit.ProcessJobEnv(baseEnv, processID, info)
+	return workerlivekit.ProcessJobEnv(baseEnv, processID, ToLiveKitRunningJobInfo(info))
 }
 
 func (e *ProcessJobExecutor) pingTask(ctx context.Context) {
