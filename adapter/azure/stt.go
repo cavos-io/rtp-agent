@@ -777,9 +777,9 @@ func parseAzureSTTMessageWithOffset(language string, payload []byte, startTimeOf
 			return nil
 		}
 		return azureSTTSpeechEventWithTiming(stt.SpeechEventFinalTranscript, language, text, confidence, message.Offset, message.Duration, startTimeOffset)
-	case "turn.start":
+	case "turn.start", "speech.startDetected":
 		return &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech}
-	case "turn.end":
+	case "turn.end", "speech.endDetected":
 		return &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
 	default:
 		return nil
