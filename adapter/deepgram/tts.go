@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
 )
@@ -106,13 +108,16 @@ func (t *DeepgramTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("deepgram tts error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("Deepgram TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 
 	return &deepgramTTSChunkedStream{
@@ -144,7 +149,10 @@ func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildDeepgramTTSStreamURL(t), header)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 
 	stream := &deepgramTTSStream{
@@ -276,12 +284,12 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 		s.audio <- &tts.SynthesizedAudio{IsFinal: true}
 	case "Error", "error":
 		if msg, ok := metadata["message"].(string); ok && msg != "" {
-			return fmt.Errorf("deepgram tts error: %s", msg)
+			return llm.NewAPIError("Deepgram TTS returned error", msg, true)
 		}
 		if msg, ok := metadata["error"].(string); ok && msg != "" {
-			return fmt.Errorf("deepgram tts error: %s", msg)
+			return llm.NewAPIError("Deepgram TTS returned error", msg, true)
 		}
-		return fmt.Errorf("deepgram tts error: %v", metadata)
+		return llm.NewAPIError("Deepgram TTS returned error", metadata, true)
 	}
 	return nil
 }
