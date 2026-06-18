@@ -334,10 +334,11 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 			logger.Logger.Errorw("failed to say text with realtime session", err)
 			if session != nil {
 				session.EmitError(ErrorEvent{
-					Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
+					Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, true),
 					Source: ma.model,
 				})
 			}
+			return
 		}
 		if session != nil && speech.Generation.AssistantMessage != nil {
 			session.EmitConversationItemAdded(speech.Generation.AssistantMessage)

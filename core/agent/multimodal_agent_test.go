@@ -771,6 +771,67 @@ func TestMultimodalAgentSayUsesRealtimeSessionWhenSupported(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentRealtimeSayErrorSkipsAssistantChatCommit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rtSession := &fakeRealtimeSession{
+		sayCh:  make(chan string, 1),
+		sayErr: errors.New("realtime say failed"),
+	}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{
+		session:      rtSession,
+		capabilities: llm.RealtimeCapabilities{SupportsSay: true},
+	}, llm.NewChatContext())
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Assistant = ma
+	conversationEvents := session.ConversationItemAddedEvents()
+	errorEvents := session.ErrorEvents()
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	handle, err := session.Say(ctx, "failed realtime say")
+	if err != nil {
+		t.Fatalf("Say returned error: %v", err)
+	}
+
+	select {
+	case text := <-rtSession.sayCh:
+		if text != "failed realtime say" {
+			t.Fatalf("Say text = %q, want failed realtime say", text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("realtime session did not receive Say")
+	}
+	waitCtx, waitCancel := context.WithTimeout(ctx, time.Second)
+	defer waitCancel()
+	if err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("speech handle did not finish after realtime Say error: %v", err)
+	}
+	caseError := false
+	select {
+	case ev := <-errorEvents:
+		caseError = ev.Error != nil && strings.Contains(ev.Error.Error(), "realtime say failed")
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive realtime Say error")
+	}
+	if !caseError {
+		t.Fatalf("ErrorEvents did not include realtime Say error")
+	}
+	if msg := findChatMessage(session.ChatCtx, llm.ChatRoleAssistant, "failed realtime say"); msg != nil {
+		t.Fatalf("session chat context contains failed realtime Say message = %#v", msg)
+	}
+	if len(handle.ChatItems()) != 0 {
+		t.Fatalf("handle chat items = %#v, want none after realtime Say error", handle.ChatItems())
+	}
+	select {
+	case ev := <-conversationEvents:
+		t.Fatalf("ConversationItemAdded event = %#v, want none after realtime Say error", ev)
+	default:
+	}
+}
+
 func TestMultimodalAgentSayIgnoresFalseAllowInterruptionsWithTurnDetection(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -2729,6 +2790,7 @@ type fakeRealtimeSession struct {
 	interrupted           int
 	cleared               int
 	truncates             []llm.RealtimeTruncateOptions
+	sayErr                error
 }
 
 func (f *fakeRealtimeSession) UpdateInstructions(instructions string) error {
@@ -2775,6 +2837,9 @@ func (f *fakeRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOpt
 func (f *fakeRealtimeSession) Say(text string) error {
 	if f.sayCh != nil {
 		f.sayCh <- text
+	}
+	if f.sayErr != nil {
+		return f.sayErr
 	}
 	return nil
 }
