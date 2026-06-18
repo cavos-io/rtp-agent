@@ -1642,6 +1642,75 @@ func TestMultimodalAgentRealtimeMessageAudioMarksSpeakingAfterPublish(t *testing
 	}
 }
 
+func TestMultimodalAgentRealtimeMessageReturnsListeningAfterPlayout(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	waitStarted := make(chan struct{})
+	releaseWait := make(chan struct{})
+	session.SetAudioPlaybackController(&fakePipelinePlaybackController{
+		waitStarted: waitStarted,
+		releaseWait: releaseWait,
+		result: AudioPlaybackResult{
+			PlaybackPosition: 200 * time.Millisecond,
+		},
+	})
+	ma := &MultimodalAgent{
+		session: session,
+		PublishAudio: func(context.Context, *model.AudioFrame) error {
+			return nil
+		},
+	}
+	audioCh := make(chan *model.AudioFrame, 1)
+	audioCh <- &model.AudioFrame{
+		Data:              []byte{0, 1},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+	close(audioCh)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ma.consumeRealtimeMessage(context.Background(), NewSpeechHandle(false, DefaultInputDetails()), llm.MessageGeneration{
+			AudioCh: audioCh,
+		})
+	}()
+
+	select {
+	case ev := <-session.AgentStateChangedCh:
+		if ev.NewState != AgentStateSpeaking {
+			t.Fatalf("first agent state event = %#v, want speaking", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("agent did not enter speaking for realtime message audio")
+	}
+	select {
+	case <-waitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("playback wait did not start")
+	}
+	select {
+	case ev := <-session.AgentStateChangedCh:
+		t.Fatalf("agent returned to listening before realtime playback completed: %#v", ev)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releaseWait)
+	select {
+	case ev := <-session.AgentStateChangedCh:
+		if ev.NewState != AgentStateListening {
+			t.Fatalf("agent state event = %#v, want listening after realtime playback", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("agent did not return to listening after realtime playback")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("consumeRealtimeMessage did not finish")
+	}
+}
+
 func TestMultimodalAgentRealtimeMessageWaitsForPlayoutBeforeCommit(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	waitStarted := make(chan struct{})

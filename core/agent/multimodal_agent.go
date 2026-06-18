@@ -788,6 +788,9 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 		}
 		interrupted = speech != nil && speech.IsInterrupted()
 	}
+	if publishedAudio && ma.session != nil {
+		ma.session.UpdateAgentState(AgentStateListening)
+	}
 	if interrupted {
 		var playback AudioPlaybackResult
 		text, playback = ma.forwardedRealtimeTextAfterInterruption(ctx, text)
