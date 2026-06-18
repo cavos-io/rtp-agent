@@ -483,6 +483,35 @@ func TestRoomIOPublishAudioWaitForSubscriptionHonorsContext(t *testing.T) {
 	}
 }
 
+func TestRoomIOPublishAudioSubscriptionWaitFallsBackAfterTimeout(t *testing.T) {
+	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
+	rio := &RoomIO{
+		Options: RoomOptions{
+			AudioSubscriptionTimeout: 20 * time.Millisecond,
+		},
+		audioTrack:      newRoomIOTestAudioTrack(t),
+		encoder:         encoder,
+		audioSubscribed: make(chan struct{}),
+	}
+
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+	started := time.Now()
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio error = %v, want nil fallback after timeout", err)
+	}
+	if elapsed := time.Since(started); elapsed < 20*time.Millisecond {
+		t.Fatalf("PublishAudio returned after %v, want bounded subscription wait", elapsed)
+	}
+	if len(encoder.calls) == 0 {
+		t.Fatal("encoder was not called after subscription timeout fallback")
+	}
+}
+
 func TestRoomIOPlaybackEventsFollowCaptureAndFlush(t *testing.T) {
 	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
 	var started []PlaybackStartedEvent

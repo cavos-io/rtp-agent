@@ -1767,8 +1767,14 @@ func (rio *RoomIO) waitForAudioSubscriptionReady(ctx context.Context) error {
 	if ch == nil {
 		return nil
 	}
+	timeout := rio.audioSubscriptionTimeout()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case <-ch:
+		return nil
+	case <-timer.C:
+		logger.Logger.Warnw("room audio output publish subscription wait timed out", nil, "timeout", timeout)
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
