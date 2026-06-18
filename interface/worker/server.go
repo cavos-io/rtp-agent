@@ -1702,31 +1702,13 @@ func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.Avail
 	s.reserveAvailabilitySlot()
 	defer s.releaseAvailabilitySlot()
 
-	answered := false
-	jobReq := workerlivekit.NewJobRequest(
-		availability.Job,
-		func(args JobAcceptArguments) error {
-			answered = true
-			s.storePendingAccept(jobID, args)
-			msg := workerlivekit.AvailabilityResponseForAccept(
-				req,
-				args,
-				s.Options.AgentName,
-			)
-			if err := s.sendWorkerMessage(msg); err != nil {
-				return err
-			}
-			return nil
-		},
-		func(args JobRejectArguments) error {
-			answered = true
-			msg := workerlivekit.AvailabilityResponseForReject(
-				req,
-				args,
-			)
-			return s.sendWorkerMessage(msg)
-		},
-	)
+	responder := workerlivekit.NewAvailabilityResponder(workerlivekit.AvailabilityResponderOptions{
+		Request:     req,
+		AgentName:   s.Options.AgentName,
+		StoreAccept: s.storePendingAccept,
+		Send:        s.sendWorkerMessage,
+	})
+	jobReq := responder.JobRequest()
 
 	if s.requestFnc != nil {
 		if err := s.requestFnc(jobReq); err != nil {
@@ -1736,9 +1718,7 @@ func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.Avail
 		_ = jobReq.Accept(JobAcceptArguments{})
 	}
 
-	if !answered {
-		_ = jobReq.Reject(JobRejectArguments{Terminate: false})
-	}
+	_ = responder.RejectIfUnanswered(JobRejectArguments{Terminate: false})
 }
 
 func (s *AgentServer) reserveAvailabilitySlot() {

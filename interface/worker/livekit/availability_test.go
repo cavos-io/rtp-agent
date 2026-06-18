@@ -119,3 +119,81 @@ func TestAvailabilityResponseRejectCanAvoidTermination(t *testing.T) {
 		t.Fatal("availability.Terminate = true, want false")
 	}
 }
+
+func TestAvailabilityResponderAcceptStoresAndSendsResponse(t *testing.T) {
+	req := &lkprotocol.AvailabilityRequest{Job: &lkprotocol.Job{Id: "job_accept"}}
+	var storedJobID string
+	var storedArgs workerlivekit.JobAcceptArguments
+	var sent *lkprotocol.WorkerMessage
+	responder := workerlivekit.NewAvailabilityResponder(workerlivekit.AvailabilityResponderOptions{
+		Request:   req,
+		AgentName: "sales-agent",
+		StoreAccept: func(jobID string, args workerlivekit.JobAcceptArguments) {
+			storedJobID = jobID
+			storedArgs = args
+		},
+		Send: func(msg *lkprotocol.WorkerMessage) error {
+			sent = msg
+			return nil
+		},
+	})
+
+	err := responder.JobRequest().Accept(workerlivekit.JobAcceptArguments{
+		Name:     "Agent Name",
+		Identity: "custom-agent",
+		Metadata: "metadata",
+		Attributes: map[string]string{
+			"tier": "gold",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Accept() error = %v", err)
+	}
+	if !responder.Answered() {
+		t.Fatal("Answered() = false, want true")
+	}
+	if storedJobID != "job_accept" {
+		t.Fatalf("stored jobID = %q, want job_accept", storedJobID)
+	}
+	if storedArgs.Identity != "custom-agent" {
+		t.Fatalf("stored identity = %q, want custom-agent", storedArgs.Identity)
+	}
+	availability := sent.GetAvailability()
+	if availability.GetParticipantAttributes()[workerlivekit.ParticipantAttributeAgentName] != "sales-agent" {
+		t.Fatalf("agent attribute = %q, want sales-agent", availability.GetParticipantAttributes()[workerlivekit.ParticipantAttributeAgentName])
+	}
+	if availability.GetParticipantAttributes()["tier"] != "gold" {
+		t.Fatalf("tier attribute = %q, want gold", availability.GetParticipantAttributes()["tier"])
+	}
+}
+
+func TestAvailabilityResponderRejectIfUnansweredSendsOnlyOnce(t *testing.T) {
+	req := &lkprotocol.AvailabilityRequest{Job: &lkprotocol.Job{Id: "job_reject"}}
+	var sent []*lkprotocol.WorkerMessage
+	responder := workerlivekit.NewAvailabilityResponder(workerlivekit.AvailabilityResponderOptions{
+		Request: req,
+		Send: func(msg *lkprotocol.WorkerMessage) error {
+			sent = append(sent, msg)
+			return nil
+		},
+	})
+
+	err := responder.RejectIfUnanswered(workerlivekit.JobRejectArguments{Terminate: false})
+	if err != nil {
+		t.Fatalf("RejectIfUnanswered() error = %v", err)
+	}
+	err = responder.RejectIfUnanswered(workerlivekit.JobRejectArguments{Terminate: true})
+	if err != nil {
+		t.Fatalf("second RejectIfUnanswered() error = %v", err)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("sent responses = %d, want 1", len(sent))
+	}
+	availability := sent[0].GetAvailability()
+	if availability.GetJobId() != "job_reject" {
+		t.Fatalf("JobId = %q, want job_reject", availability.GetJobId())
+	}
+	if availability.GetTerminate() {
+		t.Fatal("Terminate = true, want false")
+	}
+}
