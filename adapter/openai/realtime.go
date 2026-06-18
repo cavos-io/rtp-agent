@@ -35,6 +35,8 @@ type RealtimeModel struct {
 	toolFormatter               OpenAIRealtimeToolFormatter
 	inputTranscriptionFinalHook OpenAIRealtimeInputTranscriptionFinalHook
 	remoteItemAddedHook         OpenAIRealtimeRemoteItemAddedHook
+	functionCallFilter          OpenAIRealtimeFunctionCallFilter
+	sessionCloseMetricsHook     OpenAIRealtimeSessionCloseMetricsHook
 	mu                          sync.Mutex
 	options                     llm.RealtimeSessionOptions
 	modalities                  []string
@@ -53,6 +55,10 @@ type OpenAIRealtimeInputTranscriptionFinalHook func(*llm.ChatMessage, *llm.Input
 
 type OpenAIRealtimeRemoteItemAddedHook func(*llm.RemoteChatContext, *llm.RemoteItemAddedEvent)
 
+type OpenAIRealtimeFunctionCallFilter func([]llm.Tool, string) bool
+
+type OpenAIRealtimeSessionCloseMetricsHook func(time.Duration) *telemetry.RealtimeModelMetrics
+
 type openAIRealtimeDialResult struct {
 	conn *websocket.Conn
 	err  error
@@ -68,6 +74,8 @@ type openAIRealtimeModelOptions struct {
 	toolFormatter               OpenAIRealtimeToolFormatter
 	inputTranscriptionFinalHook OpenAIRealtimeInputTranscriptionFinalHook
 	remoteItemAddedHook         OpenAIRealtimeRemoteItemAddedHook
+	functionCallFilter          OpenAIRealtimeFunctionCallFilter
+	sessionCloseMetricsHook     OpenAIRealtimeSessionCloseMetricsHook
 }
 
 type OpenAIRealtimeOption func(*openAIRealtimeModelOptions)
@@ -189,6 +197,18 @@ func WithOpenAIRealtimeRemoteItemAddedHook(hook OpenAIRealtimeRemoteItemAddedHoo
 	}
 }
 
+func WithOpenAIRealtimeFunctionCallFilter(filter OpenAIRealtimeFunctionCallFilter) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.functionCallFilter = filter
+	}
+}
+
+func WithOpenAIRealtimeSessionCloseMetricsHook(hook OpenAIRealtimeSessionCloseMetricsHook) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.sessionCloseMetricsHook = hook
+	}
+}
+
 func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *RealtimeModel {
 	if model == "" {
 		model = "gpt-realtime"
@@ -223,6 +243,8 @@ func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *Realt
 		toolFormatter:               options.toolFormatter,
 		inputTranscriptionFinalHook: options.inputTranscriptionFinalHook,
 		remoteItemAddedHook:         options.remoteItemAddedHook,
+		functionCallFilter:          options.functionCallFilter,
+		sessionCloseMetricsHook:     options.sessionCloseMetricsHook,
 		options:                     options.sessionOptions,
 		modalities:                  options.modalities,
 		maxSession:                  options.maxSession,
@@ -294,6 +316,7 @@ type realtimeSession struct {
 	audioBStream     *audio.AudioByteStream
 	pushedDuration   float64
 	optionsState     map[string]any
+	connectedAt      time.Time
 }
 
 const maxRealtimeInputTranscripts = 1024
@@ -363,6 +386,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		eventCh:      make(chan llm.RealtimeEvent, 100),
 		remote:       llm.NewRemoteChatContext(),
 		audioBStream: newOpenAIRealtimeAudioByteStream(),
+		connectedAt:  time.Now(),
 	}
 
 	go s.eventLoop()
@@ -1434,11 +1458,27 @@ func (s *realtimeSession) Close() error {
 	if s.model != nil {
 		s.model.unregisterSession(s)
 	}
+	s.emitSessionCloseMetrics()
 	s.closeRealtimeGeneration()
 	s.cancel()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.conn.Close()
+}
+
+func (s *realtimeSession) emitSessionCloseMetrics() {
+	if s == nil || s.model == nil || s.model.sessionCloseMetricsHook == nil || s.connectedAt.IsZero() {
+		return
+	}
+	metrics := s.model.sessionCloseMetricsHook(time.Since(s.connectedAt))
+	if metrics == nil {
+		return
+	}
+	select {
+	case s.eventCh <- llm.RealtimeEvent{Type: llm.RealtimeEventTypeMetricsCollected, Metrics: metrics}:
+	default:
+		logger.Logger.Warnw("dropping OpenAI realtime close metrics for full event channel", nil)
+	}
 }
 
 func (s *realtimeSession) sendMsg(msg any) error {
@@ -1495,6 +1535,9 @@ func (s *realtimeSession) eventLoop() {
 			}
 			if realtimeEvent.Type == llm.RealtimeEventTypeSpeechStopped && realtimeEvent.SpeechStopped != nil {
 				realtimeEvent.SpeechStopped.UserTranscriptionEnabled = s.inputAudioTranscriptionEnabled()
+			}
+			if realtimeEvent.Type == llm.RealtimeEventTypeFunctionCall && realtimeEvent.Function != nil && !s.acceptRealtimeFunctionCall(realtimeEvent.Function.Name) {
+				continue
 			}
 			realtimeEvent = s.trackRealtimeEvent(realtimeEvent)
 			s.eventCh <- realtimeEvent
@@ -1590,6 +1633,16 @@ func (s *realtimeSession) inputAudioTranscriptionEnabled() bool {
 	return ok && value != nil
 }
 
+func (s *realtimeSession) acceptRealtimeFunctionCall(name string) bool {
+	if s == nil || s.model == nil || s.model.functionCallFilter == nil {
+		return true
+	}
+	s.mu.Lock()
+	tools := append([]llm.Tool(nil), s.tools...)
+	s.mu.Unlock()
+	return s.model.functionCallFilter(tools, name)
+}
+
 func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 	evType, _ := ev["type"].(string)
 	switch evType {
@@ -1647,6 +1700,9 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 		case "function_call":
 			call, err := openAIRealtimeFunctionCall(item)
 			if err != nil {
+				return llm.RealtimeEvent{}, false
+			}
+			if !s.acceptRealtimeFunctionCall(call.Name) {
 				return llm.RealtimeEvent{}, false
 			}
 			select {
