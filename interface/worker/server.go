@@ -1833,11 +1833,8 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	case <-shutdownCh:
 	}
 	s.finishJob(jobCtx)
-	if options.SessionReportPath != "" {
-		return saveSessionReport(options.SessionReportPath, jobCtx.Report)
-	}
-	if jobCtx.SessionDirectory() != "" {
-		return saveSessionReport(filepath.Join(jobCtx.SessionDirectory(), "session_report.json"), jobCtx.Report)
+	if reportPath := workerlivekit.LocalJobSessionReportPath(options, jobCtx.SessionDirectory()); reportPath != "" {
+		return saveSessionReport(reportPath, jobCtx.Report)
 	}
 	return nil
 }

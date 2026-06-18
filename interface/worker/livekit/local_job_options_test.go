@@ -1,6 +1,7 @@
 package livekit_test
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -114,5 +115,32 @@ func TestPrepareLocalJobRunOptionsChecksReferenceValidationAfterIdentity(t *test
 	}
 	if got, want := err.Error(), "agent_identity is None but fake_job is False"; got != want {
 		t.Fatalf("PrepareLocalJobRunOptions() error = %q, want %q", got, want)
+	}
+}
+
+func TestLocalJobSessionReportPathPrefersExplicitPath(t *testing.T) {
+	got := workerlivekit.LocalJobSessionReportPath(workerlivekit.LocalJobOptions{
+		SessionReportPath: "reports/explicit.json",
+	}, "sessions/job-a")
+
+	if got != "reports/explicit.json" {
+		t.Fatalf("LocalJobSessionReportPath() = %q, want explicit path", got)
+	}
+}
+
+func TestLocalJobSessionReportPathUsesSessionDirectory(t *testing.T) {
+	got := workerlivekit.LocalJobSessionReportPath(workerlivekit.LocalJobOptions{}, "sessions/job-a")
+	want := filepath.Join("sessions/job-a", "session_report.json")
+
+	if got != want {
+		t.Fatalf("LocalJobSessionReportPath() = %q, want %q", got, want)
+	}
+}
+
+func TestLocalJobSessionReportPathEmptyWithoutOutput(t *testing.T) {
+	got := workerlivekit.LocalJobSessionReportPath(workerlivekit.LocalJobOptions{}, "")
+
+	if got != "" {
+		t.Fatalf("LocalJobSessionReportPath() = %q, want empty", got)
 	}
 }
