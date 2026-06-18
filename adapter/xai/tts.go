@@ -11,12 +11,15 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
 )
 
@@ -129,9 +132,10 @@ func (t *XaiTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &xaiTTSSynthesizeStream{
-		conn:   conn,
-		ctx:    streamCtx,
-		cancel: cancel,
+		conn:          conn,
+		ctx:           streamCtx,
+		cancel:        cancel,
+		tokenLanguage: t.language,
 	}
 	stream.writeMessage = stream.writeTTSMessage
 	stream.closeConn = stream.closeWebsocketConn
@@ -213,13 +217,15 @@ func (s *xaiTTSWebsocketChunkedStream) Close() error {
 }
 
 type xaiTTSSynthesizeStream struct {
-	conn         *websocket.Conn
-	ctx          context.Context
-	cancel       context.CancelFunc
-	mu           sync.Mutex
-	closed       bool
-	writeMessage func(map[string]any) error
-	closeConn    func() error
+	conn          *websocket.Conn
+	ctx           context.Context
+	cancel        context.CancelFunc
+	mu            sync.Mutex
+	closed        bool
+	writeMessage  func(map[string]any) error
+	closeConn     func() error
+	tokenBuffer   string
+	tokenLanguage string
 }
 
 func (s *xaiTTSSynthesizeStream) PushText(text string) error {
@@ -231,9 +237,11 @@ func (s *xaiTTSSynthesizeStream) PushText(text string) error {
 	if s.closed {
 		return fmt.Errorf("xai tts stream is closed")
 	}
-	if err := s.writeMessageData(buildXaiTTSTextDeltaMessage(text)); err != nil {
-		s.closeAfterWriteFailureLocked()
-		return err
+	for _, token := range s.pushTextTokensLocked(text) {
+		if err := s.writeMessageData(buildXaiTTSTextDeltaMessage(token)); err != nil {
+			s.closeAfterWriteFailureLocked()
+			return err
+		}
 	}
 	return nil
 }
@@ -243,6 +251,12 @@ func (s *xaiTTSSynthesizeStream) Flush() error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return fmt.Errorf("xai tts stream is closed")
+	}
+	for _, token := range s.flushTextTokensLocked() {
+		if err := s.writeMessageData(buildXaiTTSTextDeltaMessage(token)); err != nil {
+			s.closeAfterWriteFailureLocked()
+			return err
+		}
 	}
 	if err := s.writeMessageData(buildXaiTTSTextDoneMessage()); err != nil {
 		s.closeAfterWriteFailureLocked()
@@ -290,8 +304,40 @@ func (s *xaiTTSSynthesizeStream) closeAfterWriteFailureLocked() {
 		return
 	}
 	s.closed = true
+	s.tokenBuffer = ""
 	s.cancel()
 	_ = s.closeConnection()
+}
+
+func (s *xaiTTSSynthesizeStream) pushTextTokensLocked(text string) []string {
+	s.tokenBuffer += text
+	if len(s.tokenBuffer) == 0 {
+		return nil
+	}
+	var ready []string
+	for {
+		tokens := xaiTTSTokenizeWords(s.tokenBuffer, s.tokenLanguage)
+		if len(tokens) <= 1 {
+			return ready
+		}
+		token := tokens[0]
+		ready = append(ready, token)
+		tokenIdx := strings.Index(s.tokenBuffer, token)
+		if tokenIdx < 0 {
+			s.tokenBuffer = ""
+			return ready
+		}
+		s.tokenBuffer = strings.TrimLeftFunc(s.tokenBuffer[tokenIdx+len(token):], unicode.IsSpace)
+	}
+}
+
+func (s *xaiTTSSynthesizeStream) flushTextTokensLocked() []string {
+	if s.tokenBuffer == "" {
+		return nil
+	}
+	tokens := xaiTTSTokenizeWords(s.tokenBuffer, s.tokenLanguage)
+	s.tokenBuffer = ""
+	return tokens
 }
 
 func (s *xaiTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
@@ -340,4 +386,15 @@ func xaiTTSAudioFrame(audio []byte) *tts.SynthesizedAudio {
 			SamplesPerChannel: uint32(len(audio) / 2),
 		},
 	}
+}
+
+func xaiTTSTokenizeWords(text string, language string) []string {
+	parts := tokenize.SplitWords(text, false, false, false)
+	tokens := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part.Token != "" {
+			tokens = append(tokens, part.Token)
+		}
+	}
+	return tokens
 }

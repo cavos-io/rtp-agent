@@ -190,6 +190,32 @@ func TestXaiTTSTextMessagesMatchReference(t *testing.T) {
 	}
 }
 
+func TestXaiTTSStreamTokenizesTextBeforeFlush(t *testing.T) {
+	var messages []map[string]any
+	stream := &xaiTTSSynthesizeStream{
+		cancel: func() {},
+		writeMessage: func(message map[string]any) error {
+			messages = append(messages, message)
+			return nil
+		},
+		closeConn: func() error { return nil },
+	}
+
+	if err := stream.PushText("hello world"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	if len(messages) != 3 {
+		t.Fatalf("messages = %#v, want two token deltas and done", messages)
+	}
+	assertXaiTTSMessage(t, messages[0], "text.delta", "hello")
+	assertXaiTTSMessage(t, messages[1], "text.delta", "world")
+	assertXaiTTSMessage(t, messages[2], "text.done", "")
+}
+
 func TestXaiTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	cancelled := false
@@ -205,7 +231,7 @@ func TestXaiTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 		},
 	}
 
-	if err := stream.PushText("hello"); !errors.Is(err, writeErr) {
+	if err := stream.PushText("hello world"); !errors.Is(err, writeErr) {
 		t.Fatalf("PushText error = %v, want write error", err)
 	}
 	if !cancelled {
@@ -308,5 +334,21 @@ func assertXaiTTSAudio(t *testing.T, audio *tts.SynthesizedAudio, want []byte) {
 	}
 	if audio.Frame.SamplesPerChannel != 2 {
 		t.Fatalf("samples = %d, want 2", audio.Frame.SamplesPerChannel)
+	}
+}
+
+func assertXaiTTSMessage(t *testing.T, message map[string]any, messageType string, delta string) {
+	t.Helper()
+	if message["type"] != messageType {
+		t.Fatalf("message type = %q, want %q in %#v", message["type"], messageType, message)
+	}
+	if delta == "" {
+		if _, ok := message["delta"]; ok {
+			t.Fatalf("message delta = %q, want no delta in %#v", message["delta"], message)
+		}
+		return
+	}
+	if message["delta"] != delta {
+		t.Fatalf("message delta = %q, want %q in %#v", message["delta"], delta, message)
 	}
 }
