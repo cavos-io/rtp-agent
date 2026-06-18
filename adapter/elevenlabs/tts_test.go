@@ -900,6 +900,45 @@ func TestElevenLabsTTSStreamStartsContextOnFirstText(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSStreamIgnoresReferenceEmptyText(t *testing.T) {
+	messages := make(chan map[string]any, 2)
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runElevenLabsTTSWebsocketServer(messages, serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5", WithElevenLabsBaseURL("ws://eleven.test/v1"))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText(""); err != nil {
+		t.Fatalf("PushText(empty) error = %v", err)
+	}
+	select {
+	case msg := <-messages:
+		t.Fatalf("PushText(empty) sent websocket packet: %#v", msg)
+	case err := <-serverErr:
+		t.Fatalf("test websocket server error: %v", err)
+	case <-time.After(75 * time.Millisecond):
+	}
+}
+
 func runElevenLabsTTSWebsocketServer(messages chan<- map[string]any, conn net.Conn, errCh chan<- error) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)

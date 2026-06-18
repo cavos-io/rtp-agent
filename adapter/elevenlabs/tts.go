@@ -932,6 +932,9 @@ func (s *elevenLabsStream) PushText(text string) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if text == "" {
+		return nil
+	}
 	if err := s.sendInitLocked(); err != nil {
 		return err
 	}
