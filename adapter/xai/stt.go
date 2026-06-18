@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -355,6 +356,8 @@ type xaiSTTStream struct {
 	language           string
 	endpointing        int
 	conn               *websocket.Conn
+	audioBuf           *audio.AudioByteStream
+	writeBinary        func([]byte) error
 	events             chan *stt.SpeechEvent
 	errCh              chan error
 	mu                 sync.Mutex
@@ -428,10 +431,63 @@ func (s *xaiSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	return s.currentConn().WriteMessage(websocket.BinaryMessage, frame.Data)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.audioBuf == nil {
+		s.audioBuf = newXaiSTTAudioByteStream(s, frame)
+	}
+	for _, chunk := range s.audioBuf.Push(frame.Data) {
+		if err := s.writeBinaryDataLocked(chunk.Data); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func (s *xaiSTTStream) Flush() error { return nil }
+func (s *xaiSTTStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.audioBuf == nil {
+		return nil
+	}
+	for _, chunk := range s.audioBuf.Flush() {
+		if err := s.writeBinaryDataLocked(chunk.Data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func newXaiSTTAudioByteStream(s *xaiSTTStream, frame *model.AudioFrame) *audio.AudioByteStream {
+	sampleRate := uint32(s.sampleRate)
+	if frame.SampleRate > 0 {
+		sampleRate = frame.SampleRate
+	}
+	if sampleRate == 0 {
+		sampleRate = defaultXaiSTTSampleRate
+	}
+	numChannels := frame.NumChannels
+	if numChannels == 0 {
+		numChannels = 1
+	}
+	return audio.NewAudioByteStream(sampleRate, numChannels, sampleRate/20)
+}
+
+func (s *xaiSTTStream) writeBinaryDataLocked(data []byte) error {
+	if s.writeBinary != nil {
+		return s.writeBinary(data)
+	}
+	if s.conn == nil {
+		return io.ErrClosedPipe
+	}
+	return s.conn.WriteMessage(websocket.BinaryMessage, data)
+}
 
 func (s *xaiSTTStream) Close() error {
 	s.mu.Lock()

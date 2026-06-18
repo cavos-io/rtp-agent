@@ -603,6 +603,45 @@ func TestXaiSTTStreamEventsMapReferenceLifecycle(t *testing.T) {
 	}
 }
 
+func TestXaiSTTStreamChunksAndFlushesReferenceAudio(t *testing.T) {
+	var writes [][]byte
+	stream := &xaiSTTStream{
+		sampleRate: 16000,
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+	}
+	audioData := make([]byte, 2000)
+	for i := range audioData {
+		audioData[i] = byte(i)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              audioData,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1000,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("binary writes after PushFrame = %d, want one 50ms chunk", len(writes))
+	}
+	if got := len(writes[0]); got != 1600 {
+		t.Fatalf("first chunk length = %d, want 1600", got)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if len(writes) != 2 {
+		t.Fatalf("binary writes after Flush = %d, want remainder chunk", len(writes))
+	}
+	if got := len(writes[1]); got != 400 {
+		t.Fatalf("flush chunk length = %d, want 400", got)
+	}
+}
+
 type multipartFile struct {
 	filename    string
 	contentType string
