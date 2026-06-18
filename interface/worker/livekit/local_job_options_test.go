@@ -31,6 +31,20 @@ func TestLocalJobOptionsOwnsLiveKitRoomAndRecordingFields(t *testing.T) {
 	}
 }
 
+func TestDefaultFakeLocalJobOptionsUsesReferenceFakeJobMode(t *testing.T) {
+	opts := workerlivekit.DefaultFakeLocalJobOptions()
+
+	if !opts.FakeJob {
+		t.Fatal("DefaultFakeLocalJobOptions().FakeJob = false, want true")
+	}
+	if opts.RoomInfo != nil {
+		t.Fatalf("DefaultFakeLocalJobOptions().RoomInfo = %#v, want nil", opts.RoomInfo)
+	}
+	if opts.Token != "" {
+		t.Fatalf("DefaultFakeLocalJobOptions().Token = %q, want empty", opts.Token)
+	}
+}
+
 func TestLocalJobContextValuesBuildsLiveKitJobIdentityAndToken(t *testing.T) {
 	values := workerlivekit.LocalJobContextValues(workerlivekit.LocalJobContextValueOptions{
 		RoomName:            "room-a",

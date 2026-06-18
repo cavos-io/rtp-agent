@@ -1812,7 +1812,7 @@ func (s *AgentServer) handleTermination(req *workerlivekit.JobTermination) {
 
 // ExecuteLocalJob runs a job locally without connecting to the worker service, useful for the CLI console
 func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, participantIdentity string) error {
-	return s.ExecuteLocalJobWithOptions(ctx, roomName, participantIdentity, LocalJobOptions{FakeJob: true})
+	return s.ExecuteLocalJobWithOptions(ctx, roomName, participantIdentity, workerlivekit.DefaultFakeLocalJobOptions())
 }
 
 func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName string, participantIdentity string, options LocalJobOptions) error {
@@ -1828,7 +1828,7 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 		return workerReferenceError(rtcSessionRequiredMessage)
 	}
 	jobCtx := newLocalJobContextWithOptions(roomName, participantIdentity, s.Options, options)
-	if options == (LocalJobOptions{FakeJob: true}) {
+	if options == workerlivekit.DefaultFakeLocalJobOptions() {
 		jobCtx = newLocalJobContext(roomName, participantIdentity, s.Options)
 	}
 	localJob := workerlivekit.LocalJobInfo(jobCtx.Job)
@@ -2065,7 +2065,7 @@ func allRecordingOptions() agent.RecordingOptions {
 }
 
 func newLocalJobContext(roomName string, participantIdentity string, opts WorkerOptions) *JobContext {
-	return newLocalJobContextWithOptions(roomName, participantIdentity, opts, LocalJobOptions{FakeJob: true})
+	return newLocalJobContextWithOptions(roomName, participantIdentity, opts, workerlivekit.DefaultFakeLocalJobOptions())
 }
 
 func newLocalJobContextWithOptions(roomName string, participantIdentity string, opts WorkerOptions, options LocalJobOptions) *JobContext {
