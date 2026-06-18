@@ -2686,10 +2686,12 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		if a.Session == nil {
 			return nil, nil
 		}
+		userInitiated := false
 		handle, err := a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
 			UserMessage:   newMsg,
 			ChatCtx:       chatCtx,
 			InputModality: "audio",
+			UserInitiated: &userInitiated,
 		})
 		if err != nil {
 			return nil, err
@@ -2718,10 +2720,12 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		return nil, err
 	}
 	if handle == nil {
+		userInitiated := false
 		handle, err = a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
 			UserMessage:   newMsg,
 			ChatCtx:       chatCtx,
 			InputModality: "audio",
+			UserInitiated: &userInitiated,
 		})
 		if err != nil {
 			return nil, err
@@ -2916,11 +2920,13 @@ func (a *AgentActivity) maybeStartPreemptiveGeneration(transcript string, confid
 	}
 	chatCtx := a.RetrieveChatCtx().Copy()
 	scheduleSpeech := false
+	userInitiated := false
 	handle, err := a.Session.GenerateReplyWithOptions(a.ctx, GenerateReplyOptions{
 		UserMessage:    msg,
 		ChatCtx:        chatCtx,
 		InputModality:  "audio",
 		ScheduleSpeech: &scheduleSpeech,
+		UserInitiated:  &userInitiated,
 	})
 	if err != nil {
 		logger.Logger.Warnw("failed to start preemptive generation", err, "transcript", transcript)

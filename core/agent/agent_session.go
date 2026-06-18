@@ -155,6 +155,7 @@ type GenerateReplyOptions struct {
 	AllowInterruptions  *bool
 	InputModality       string
 	ScheduleSpeech      *bool
+	UserInitiated       *bool
 }
 
 type SayOptions struct {
@@ -2350,8 +2351,12 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	if opts.UserMessage != nil {
 		handle.Generation.UserMessage = opts.UserMessage
 	}
+	userInitiated := true
+	if opts.UserInitiated != nil {
+		userInitiated = *opts.UserInitiated
+	}
 	s.EmitSpeechCreated(SpeechCreatedEvent{
-		UserInitiated: true,
+		UserInitiated: userInitiated,
 		Source:        "generate_reply",
 		SpeechHandle:  handle,
 	})

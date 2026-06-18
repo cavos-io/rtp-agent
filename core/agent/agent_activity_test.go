@@ -4182,6 +4182,9 @@ func TestAgentActivityCommitUserTurnGeneratesReplyWhenLLMConfigured(t *testing.T
 		if ev.Source != "generate_reply" {
 			t.Fatalf("SpeechCreated source = %q, want generate_reply", ev.Source)
 		}
+		if ev.UserInitiated {
+			t.Fatal("SpeechCreated UserInitiated = true, want false for automatic audio reply")
+		}
 		if ev.SpeechHandle.Generation.UserMessage == nil || ev.SpeechHandle.Generation.UserMessage.TextContent() != "reply to me" {
 			t.Fatalf("generation user message = %#v, want committed transcript", ev.SpeechHandle.Generation.UserMessage)
 		}
