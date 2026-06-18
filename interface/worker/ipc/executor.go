@@ -269,7 +269,7 @@ func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJ
 		return err
 	}
 
-	env, err := workerlivekit.ProcessJobEnv(os.Environ(), e.id, info)
+	env, err := ProcessJobEnv(os.Environ(), e.id, info)
 	if err != nil {
 		e.mu.Lock()
 		e.status = JobStatusFailed
@@ -309,6 +309,10 @@ func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJ
 
 func RunningJobInfoFromEnv(env map[string]string) (RunningJobInfo, error) {
 	return workerlivekit.RunningJobInfoFromEnv(env)
+}
+
+func ProcessJobEnv(baseEnv []string, processID string, info RunningJobInfo) ([]string, error) {
+	return workerlivekit.ProcessJobEnv(baseEnv, processID, info)
 }
 
 func (e *ProcessJobExecutor) pingTask(ctx context.Context) {
