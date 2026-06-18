@@ -790,6 +790,10 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			ttsGen, err = va.synthesizeSpeech(ctx, session, genData.TextCh, opts.SpeechHandle)
 		}
 		if err != nil {
+			if suppressReplyContextCanceledError(ctx, opts.SpeechHandle, err) {
+				session.UpdateAgentState(AgentStateListening)
+				return
+			}
 			if !suppressContextCanceledError(ctx, opts.SpeechHandle, err) {
 				logger.Logger.Errorw("TTS inference failed", err)
 				va.emitTTSError(session, err)
@@ -948,6 +952,13 @@ func suppressContextCanceledError(ctx context.Context, speech *SpeechHandle, err
 		return true
 	}
 	return ctx != nil && errors.Is(ctx.Err(), context.Canceled)
+}
+
+func suppressReplyContextCanceledError(ctx context.Context, speech *SpeechHandle, err error) bool {
+	return errors.Is(err, context.Canceled) &&
+		ctx != nil &&
+		errors.Is(ctx.Err(), context.Canceled) &&
+		(speech == nil || !speech.IsInterrupted())
 }
 
 func (va *PipelineAgent) flushAssistantPlayback(session *AgentSession) {

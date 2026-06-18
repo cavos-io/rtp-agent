@@ -3558,6 +3558,12 @@ func TestPipelineAgentGeneratedReplyContextCancelSuppressesTTSError(t *testing.T
 		t.Fatalf("ErrorEvents received unexpected error = %v, want no TTS error on context cancellation", ev.Error)
 	default:
 	}
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chatCtx.Items = %#v, want no assistant message for canceled unplayed speech", chatCtx.Items)
+	}
+	if len(speech.ChatItems()) != 0 {
+		t.Fatalf("speech.ChatItems = %#v, want no committed assistant message", speech.ChatItems())
+	}
 }
 
 func TestPipelineAgentScheduledReplyInterruptCancelsProviderContexts(t *testing.T) {
