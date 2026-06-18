@@ -2791,6 +2791,84 @@ func TestRealtimeSessionMaxSessionDurationReconnectsIdleSession(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionMaxSessionDurationWaitsForActiveGeneration(t *testing.T) {
+	var dialCount atomic.Int32
+	firstResponseCreate := make(chan struct{})
+	allowResponseDone := make(chan struct{})
+	secondConnected := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		attempt := dialCount.Add(1)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		if attempt == 1 {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("Read response.create error = %v", err)
+				return
+			}
+			close(firstResponseCreate)
+			if err := conn.WriteJSON(map[string]any{
+				"type": "response.created",
+				"response": map[string]any{
+					"id":       "resp_active",
+					"metadata": map[string]any{"client_event_id": "response_create_active"},
+				},
+			}); err != nil {
+				t.Errorf("Write response.created error = %v", err)
+				return
+			}
+			<-allowResponseDone
+			if err := conn.WriteJSON(map[string]any{
+				"type": "response.done",
+				"response": map[string]any{
+					"id":     "resp_active",
+					"status": "completed",
+					"usage":  map[string]any{"total_tokens": 1.0},
+				},
+			}); err != nil {
+				t.Errorf("Write response.done error = %v", err)
+			}
+			return
+		}
+		close(secondConnected)
+		<-releaseSecond
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeMaxSessionDuration(10*time.Millisecond))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "keep talking"}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	select {
+	case <-firstResponseCreate:
+	case <-time.After(time.Second):
+		t.Fatal("server did not receive response.create")
+	}
+	assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	select {
+	case <-secondConnected:
+		t.Fatal("max session duration reconnected before active generation finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(allowResponseDone)
+	select {
+	case <-secondConnected:
+	case <-time.After(time.Second):
+		t.Fatal("session did not reconnect after active generation finished")
+	}
+}
+
 func TestRealtimeSessionReconnectRetriesDialFailure(t *testing.T) {
 	var dialCount atomic.Int32
 	secondConnected := make(chan struct{})

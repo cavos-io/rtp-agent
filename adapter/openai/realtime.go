@@ -390,6 +390,7 @@ const openAIRealtimeDefaultVoice = "marin"
 const openAIRealtimeDefaultSpeed = 1.0
 const openAIRealtimeDefaultMaxOutputTokens = "inf"
 const openAIRealtimeDefaultMaxSessionDuration = 20 * time.Minute
+const openAIRealtimeActiveGenerationRecyclePoll = 100 * time.Millisecond
 
 type inputTranscriptKey struct {
 	itemID       string
@@ -453,6 +454,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	}
 
 	go s.eventLoop()
+	s.startMaxSessionRecycle(conn)
 	s.optionsState = openAIRealtimeOptionEntries(initialSession)
 	if err := s.sendMsg(openAIRealtimeInitialSessionUpdateMessage(initialSession)); err != nil {
 		_ = s.Close()
@@ -509,7 +511,6 @@ func (m *RealtimeModel) dialRealtimeWebsocket(ctx context.Context, wsURL string,
 	for attempt := 0; attempt <= m.connect.MaxRetry; attempt++ {
 		conn, err = m.dialRealtimeWebsocketAttempt(ctx, wsURL, header)
 		if err == nil {
-			openAIRealtimeApplySessionDeadline(conn, m.maxSession)
 			return conn, nil
 		}
 		if attempt == m.connect.MaxRetry {
@@ -562,13 +563,6 @@ func (m *RealtimeModel) dialRealtimeWebsocketAttempt(ctx context.Context, wsURL 
 		}
 		return nil, attemptCtx.Err()
 	}
-}
-
-func openAIRealtimeApplySessionDeadline(conn *websocket.Conn, duration time.Duration) {
-	if conn == nil || duration <= 0 {
-		return
-	}
-	_ = conn.SetReadDeadline(time.Now().Add(duration))
 }
 
 func openAIRealtimeBaseURL(rawURL string) string {
@@ -1830,6 +1824,42 @@ func (s *realtimeSession) eventLoop() {
 	}
 }
 
+func (s *realtimeSession) startMaxSessionRecycle(conn *websocket.Conn) {
+	if s == nil || s.model == nil || s.model.maxSession <= 0 || conn == nil {
+		return
+	}
+	duration := s.model.maxSession
+	go func() {
+		timer := time.NewTimer(duration)
+		defer timer.Stop()
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-timer.C:
+		}
+		ticker := time.NewTicker(openAIRealtimeActiveGenerationRecyclePoll)
+		defer ticker.Stop()
+		for {
+			s.mu.Lock()
+			current := s.conn == conn
+			active := s.generation != nil
+			s.mu.Unlock()
+			if !current {
+				return
+			}
+			if !active {
+				_ = conn.Close()
+				return
+			}
+			select {
+			case <-s.ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}
+
 func (s *realtimeSession) reconnectAfterDisconnect() error {
 	if s.model == nil {
 		return fmt.Errorf("OpenAI realtime disconnected")
@@ -1896,6 +1926,7 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 	}
 	s.conn = conn
 	s.pendingResponses = 0
+	s.startMaxSessionRecycle(conn)
 	s.mu.Unlock()
 
 	_ = oldConn.Close()
