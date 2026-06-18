@@ -437,6 +437,51 @@ func TestJobAssignmentInfoDefaultsURLWhenAssignmentURLMissing(t *testing.T) {
 	}
 }
 
+func TestAssignmentContextValuesPreservesAssignmentFieldsAndAcceptArgs(t *testing.T) {
+	job := &lkprotocol.Job{Id: "job-assigned", EnableRecording: true}
+	values := workerlivekit.AssignmentContextValues(workerlivekit.AssignmentContextValueOptions{
+		Assignment: workerlivekit.AssignmentInfo{
+			Job:             job,
+			JobID:           "job-assigned",
+			URL:             "wss://assignment.example",
+			Token:           "assignment-token",
+			EnableRecording: true,
+		},
+		AcceptArguments: workerlivekit.JobAcceptArguments{
+			Name:       "Agent Name",
+			Identity:   "agent-a",
+			Metadata:   "metadata",
+			Attributes: map[string]string{"tier": "gold"},
+		},
+		WorkerID: "worker-a",
+	})
+
+	if values.Job != job {
+		t.Fatal("AssignmentContextValues().Job did not preserve job")
+	}
+	if values.JobID != "job-assigned" {
+		t.Fatalf("JobID = %q, want job-assigned", values.JobID)
+	}
+	if values.URL != "wss://assignment.example" {
+		t.Fatalf("URL = %q, want assignment URL", values.URL)
+	}
+	if values.Token != "assignment-token" {
+		t.Fatalf("Token = %q, want assignment token", values.Token)
+	}
+	if values.WorkerID != "worker-a" {
+		t.Fatalf("WorkerID = %q, want worker-a", values.WorkerID)
+	}
+	if values.AcceptArguments.Identity != "agent-a" {
+		t.Fatalf("AcceptArguments.Identity = %q, want agent-a", values.AcceptArguments.Identity)
+	}
+	if values.AcceptArguments.Attributes["tier"] != "gold" {
+		t.Fatalf("AcceptArguments.Attributes[tier] = %q, want gold", values.AcceptArguments.Attributes["tier"])
+	}
+	if !values.EnableRecording {
+		t.Fatal("EnableRecording = false, want true")
+	}
+}
+
 func TestJobAssignmentAliasUsesLiveKitProtocolAssignment(t *testing.T) {
 	job := &lkprotocol.Job{Id: "job-a"}
 	assignment := &workerlivekit.JobAssignment{Job: job}

@@ -1656,13 +1656,6 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.J
 	assignment := workerlivekit.JobAssignmentInfo(req, s.Options.WSRL)
 	jobID := assignment.JobID
 	logger.Logger.Infow("Received job assignment", "jobId", jobID)
-	jobCtx := NewJobContext(assignment.Job, assignment.URL, s.Options.APIKey, s.Options.APISecret)
-	jobCtx.process = s.newJobProcess()
-	if assignment.EnableRecording {
-		jobCtx.InitRecording(workerlivekit.AllRecordingOptions())
-	}
-	jobCtx.token = assignment.Token
-
 	s.mu.Lock()
 	args, accepted := workerlivekit.AcceptPendingAssignment(s.pendingAccepts, s.pendingTimers, jobID)
 	if !accepted {
@@ -1671,10 +1664,21 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.J
 		return
 	}
 
-	jobCtx.workerID = s.workerID
-	jobCtx.AcceptArguments = args
+	assignedJob := workerlivekit.AssignmentContextValues(workerlivekit.AssignmentContextValueOptions{
+		Assignment:      assignment,
+		AcceptArguments: args,
+		WorkerID:        s.workerID,
+	})
+	jobCtx := NewJobContext(assignedJob.Job, assignedJob.URL, s.Options.APIKey, s.Options.APISecret)
+	jobCtx.process = s.newJobProcess()
+	if assignedJob.EnableRecording {
+		jobCtx.InitRecording(workerlivekit.AllRecordingOptions())
+	}
+	jobCtx.token = assignedJob.Token
+	jobCtx.workerID = assignedJob.WorkerID
+	jobCtx.AcceptArguments = assignedJob.AcceptArguments
 	jobCtx.LogContextFields()["worker_id"] = jobCtx.WorkerID()
-	s.activeJobs[jobID] = jobCtx
+	s.activeJobs[assignedJob.JobID] = jobCtx
 	s.mu.Unlock()
 
 	if err := s.sendWorkerMessage(workerlivekit.JobRunningMessage(jobID)); err != nil {

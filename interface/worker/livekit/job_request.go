@@ -253,6 +253,22 @@ type AssignmentInfo struct {
 	EnableRecording bool
 }
 
+type AssignmentContextValueOptions struct {
+	Assignment      AssignmentInfo
+	AcceptArguments JobAcceptArguments
+	WorkerID        string
+}
+
+type AssignmentContextValuesResult struct {
+	Job             *lkprotocol.Job
+	JobID           string
+	URL             string
+	Token           string
+	WorkerID        string
+	AcceptArguments JobAcceptArguments
+	EnableRecording bool
+}
+
 type JobAssignment = lkprotocol.JobAssignment
 
 type RunningJobInfo struct {
@@ -295,8 +311,13 @@ func RunningJobInfoSnapshot(opts RunningJobInfoOptions) RunningJobInfo {
 }
 
 func CloneRunningJobInfo(info RunningJobInfo) RunningJobInfo {
-	info.AcceptArguments.Attributes = maps.Clone(info.AcceptArguments.Attributes)
+	info.AcceptArguments = CloneJobAcceptArguments(info.AcceptArguments)
 	return info
+}
+
+func CloneJobAcceptArguments(args JobAcceptArguments) JobAcceptArguments {
+	args.Attributes = maps.Clone(args.Attributes)
+	return args
 }
 
 func RunningJobContextValues(opts RunningJobContextValueOptions) RunningJobContextValuesResult {
@@ -319,6 +340,18 @@ func RunningJobContextValues(opts RunningJobContextValueOptions) RunningJobConte
 		AcceptArguments: info.AcceptArguments,
 		FakeJob:         info.FakeJob,
 		EnableRecording: runtime.EnableRecording,
+	}
+}
+
+func AssignmentContextValues(opts AssignmentContextValueOptions) AssignmentContextValuesResult {
+	return AssignmentContextValuesResult{
+		Job:             opts.Assignment.Job,
+		JobID:           opts.Assignment.JobID,
+		URL:             opts.Assignment.URL,
+		Token:           opts.Assignment.Token,
+		WorkerID:        opts.WorkerID,
+		AcceptArguments: CloneJobAcceptArguments(opts.AcceptArguments),
+		EnableRecording: opts.Assignment.EnableRecording,
 	}
 }
 
