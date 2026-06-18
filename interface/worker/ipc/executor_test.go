@@ -341,6 +341,84 @@ func TestProcessJobExecutorCloseWaitsForShutdownExitBeforeKill(t *testing.T) {
 	}
 }
 
+func TestProcessJobExecutorCloseExtendsExitWaitAfterShutdownAck(t *testing.T) {
+	oldKill := processKill
+	oldGraceTimeout := processShutdownGraceTimeout
+	processShutdownGraceTimeout = 20 * time.Millisecond
+	defer func() {
+		processKill = oldKill
+		processShutdownGraceTimeout = oldGraceTimeout
+	}()
+
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+
+	done := make(chan struct{})
+	shutdownSeen := make(chan struct{})
+	var closeDone sync.Once
+	closeProcessDone := func() {
+		closeDone.Do(func() {
+			close(done)
+		})
+	}
+
+	go func() {
+		msg, err := ReadMessage(reader)
+		if err == nil && msg.Type == MessageTypeShutdownRequest {
+			close(shutdownSeen)
+		}
+	}()
+
+	killCalled := make(chan struct{}, 1)
+	processKill = func(*os.Process) error {
+		killCalled <- struct{}{}
+		closeProcessDone()
+		return nil
+	}
+
+	executor := NewProcessJobExecutor("exec-process-close-ack-extends-exit")
+	executor.mu.Lock()
+	executor.started = true
+	executor.status = JobStatusRunning
+	executor.done = done
+	executor.cmd = &exec.Cmd{Process: &os.Process{Pid: 12345}}
+	executor.pingWriter = writer
+	executor.mu.Unlock()
+
+	closeResult := make(chan error, 1)
+	go func() {
+		closeResult <- executor.Close(context.Background())
+	}()
+
+	select {
+	case <-shutdownSeen:
+	case <-time.After(time.Second):
+		t.Fatal("Close() did not send ShutdownRequest")
+	}
+
+	time.Sleep(15 * time.Millisecond)
+	executor.HandleShutdownRequestAck(ShutdownRequestAck{})
+	executor.HandleShuttingDown(ShuttingDown{})
+
+	time.Sleep(10 * time.Millisecond)
+	select {
+	case <-killCalled:
+		t.Fatal("Close() killed process at original grace deadline after shutdown ack")
+	default:
+	}
+
+	closeProcessDone()
+	select {
+	case err := <-closeResult:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close() did not return after process exit")
+	}
+}
+
 func TestProcessJobExecutorCloseRespectsContextWhenKillBlocks(t *testing.T) {
 	oldCommandContext := processCommandContext
 	oldKill := processKill
