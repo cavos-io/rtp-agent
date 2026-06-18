@@ -58,6 +58,22 @@ func TestCartesiaSTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestCartesiaSTTExposesReferenceInputSampleRate(t *testing.T) {
+	provider := NewCartesiaSTT("test-key")
+
+	if got := provider.InputSampleRate(); got != 16000 {
+		t.Fatalf("InputSampleRate = %d, want reference sample rate 16000", got)
+	}
+}
+
+func TestCartesiaSTTExposesConfiguredInputSampleRate(t *testing.T) {
+	provider := NewCartesiaSTT("test-key", WithCartesiaSTTSampleRate(48000))
+
+	if got := provider.InputSampleRate(); got != 48000 {
+		t.Fatalf("InputSampleRate = %d, want configured sample rate 48000", got)
+	}
+}
+
 func TestCartesiaSTTConstructorOptionsMatchReference(t *testing.T) {
 	t.Setenv("CARTESIA_API_KEY", "env-key")
 
@@ -98,6 +114,35 @@ func TestCartesiaSTTNonEnglishDefaultsToWhisperReference(t *testing.T) {
 	}
 	if caps.AlignedTranscript != "word" {
 		t.Fatalf("aligned transcript = %q, want word", caps.AlignedTranscript)
+	}
+}
+
+func TestCartesiaSTTUpdateOptionsMatchesReferenceFutureStreams(t *testing.T) {
+	provider := NewCartesiaSTT("test-key", WithCartesiaSTTLanguage("es"))
+
+	provider.UpdateOptions("fr-FR")
+
+	if provider.language != "fr-FR" {
+		t.Fatalf("language = %q, want updated language fr-FR", provider.language)
+	}
+	parsed, err := url.Parse(buildCartesiaSTTStreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	assertCartesiaQuery(t, parsed.Query(), "language", "fr")
+}
+
+func TestCartesiaSTTUpdateOptionsPropagatesLanguageToActiveStream(t *testing.T) {
+	provider := NewCartesiaSTT("test-key", WithCartesiaSTTLanguage("en"))
+	stream := &cartesiaSTTStream{
+		state: &cartesiaSTTStreamState{language: "en", mode: "auto"},
+	}
+	provider.registerStream(stream)
+
+	provider.UpdateOptions("fr-FR")
+
+	if got := stream.state.language; got != "fr" {
+		t.Fatalf("active stream language = %q, want base language fr", got)
 	}
 }
 
@@ -221,6 +266,37 @@ func TestCartesiaSTTLegacyEventsMapTranscriptLifecycle(t *testing.T) {
 	assertCartesiaEvent(t, events, 2, stt.SpeechEventEndOfSpeech, "")
 	if state.requestID != "req-2" {
 		t.Fatalf("request id = %q, want req-2", state.requestID)
+	}
+}
+
+func TestCartesiaSTTUnexpectedCloseFinalizesPartialAutoTranscript(t *testing.T) {
+	state := &cartesiaSTTStreamState{
+		language:          "en",
+		requestID:         "req-1",
+		mode:              "auto",
+		speaking:          true,
+		currentTranscript: "partial words",
+		speechDuration:    1.25,
+	}
+
+	events := cartesiaSTTUnexpectedCloseEvents(state)
+
+	if len(events) != 3 {
+		t.Fatalf("events = %d, want usage, final transcript, end of speech", len(events))
+	}
+	if events[0].Type != stt.SpeechEventRecognitionUsage || events[0].RecognitionUsage.AudioDuration != 1.25 {
+		t.Fatalf("usage event = %+v, want 1.25s usage", events[0])
+	}
+	assertCartesiaEvent(t, events, 1, stt.SpeechEventFinalTranscript, "partial words")
+	assertCartesiaEvent(t, events, 2, stt.SpeechEventEndOfSpeech, "")
+	if state.speaking {
+		t.Fatal("speaking = true after unexpected close finalization, want false")
+	}
+	if state.currentTranscript != "" {
+		t.Fatalf("current transcript = %q, want cleared", state.currentTranscript)
+	}
+	if state.speechDuration != 0 {
+		t.Fatalf("speech duration = %v, want reset", state.speechDuration)
 	}
 }
 

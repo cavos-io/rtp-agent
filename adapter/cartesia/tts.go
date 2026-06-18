@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -169,13 +170,16 @@ func (t *CartesiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("cartesia tts error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("Cartesia TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 
 	return &cartesiaTTSChunkedStream{
@@ -246,7 +250,7 @@ func (s *cartesiaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if err == io.EOF {
 			return nil, io.EOF
 		}
-		return nil, err
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 
 	return &tts.SynthesizedAudio{
@@ -369,7 +373,7 @@ func (s *cartesiaTTSStream) readLoop() {
 		}
 
 		if resp.Type == "error" {
-			s.errCh <- fmt.Errorf("cartesia error: %s", resp.Error)
+			s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("cartesia error: %s", resp.Error))
 			return
 		}
 

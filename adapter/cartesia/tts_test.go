@@ -17,6 +17,12 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type cartesiaRoundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f cartesiaRoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
 func TestCartesiaTTSDefaultsMatchReference(t *testing.T) {
 	provider := NewCartesiaTTS("test-key", "", "")
 
@@ -186,6 +192,95 @@ func TestCartesiaTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: cartesiaRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/tts/bytes" {
+			t.Fatalf("path = %q, want /tts/bytes", req.URL.Path)
+		}
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+	defer func() {
+		http.DefaultClient = oldClient
+	}()
+
+	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("https://cartesia.test"))
+
+	_, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("Synthesize error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	body, ok := statusErr.Body.(string)
+	if !ok || !strings.Contains(body, "rate limited") {
+		t.Fatalf("body = %#v, want provider error body", statusErr.Body)
+	}
+}
+
+func TestCartesiaTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: cartesiaRoundTripperFunc(func(*http.Request) (*http.Response, error) {
+		return nil, context.DeadlineExceeded
+	})}
+	defer func() {
+		http.DefaultClient = oldClient
+	}()
+
+	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("https://cartesia.test"))
+
+	_, err := provider.Synthesize(context.Background(), "hello")
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Synthesize error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestCartesiaTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
+	transportErr := errors.New("dial failed")
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: cartesiaRoundTripperFunc(func(*http.Request) (*http.Response, error) {
+		return nil, transportErr
+	})}
+	defer func() {
+		http.DefaultClient = oldClient
+	}()
+
+	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("https://cartesia.test"))
+
+	_, err := provider.Synthesize(context.Background(), "hello")
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestCartesiaTTSChunkedStreamReadErrorReturnsAPIConnectionError(t *testing.T) {
+	readErr := errors.New("read failed")
+	stream := &cartesiaTTSChunkedStream{
+		resp: &http.Response{
+			Body: cartesiaErrorReadCloser{err: readErr},
+		},
+		sampleRate: 24000,
+	}
+
+	_, err := stream.Next()
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestCartesiaSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
 	provider := NewCartesiaTTS("test-key", "", "",
 		WithCartesiaBaseURL("https://cartesia.example"),
@@ -221,6 +316,18 @@ func TestCartesiaStreamInitMessageUsesReferenceOptions(t *testing.T) {
 	if msg["add_timestamps"] != true {
 		t.Fatalf("add_timestamps = %#v, want true", msg["add_timestamps"])
 	}
+}
+
+type cartesiaErrorReadCloser struct {
+	err error
+}
+
+func (r cartesiaErrorReadCloser) Read([]byte) (int, error) {
+	return 0, r.err
+}
+
+func (r cartesiaErrorReadCloser) Close() error {
+	return nil
 }
 
 func TestCartesiaTTSStreamFlushUsesReferenceEndPacket(t *testing.T) {
@@ -323,6 +430,45 @@ func TestCartesiaTTSUnexpectedNormalCloseReturnsAPIConnectionError(t *testing.T)
 	}
 }
 
+func TestCartesiaTTSStreamProviderErrorReturnsAPIConnectionError(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runCartesiaReadThenErrorWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("http://cartesia.test"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for provider error server")
+	}
+}
+
 func runCartesiaReadThenNormalCloseWebsocketServer(conn net.Conn, closeAfterRead <-chan struct{}, closed chan<- struct{}, errCh chan<- error) {
 	upgrader := websocket.Upgrader{}
 	listener := &singleCartesiaConnListener{conn: conn}
@@ -342,6 +488,29 @@ func runCartesiaReadThenNormalCloseWebsocketServer(conn net.Conn, closeAfterRead
 			err = ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 			close(closed)
 			errCh <- err
+		}),
+	}
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		errCh <- err
+	}
+}
+
+func runCartesiaReadThenErrorWebsocketServer(conn net.Conn, errCh chan<- error) {
+	upgrader := websocket.Upgrader{}
+	listener := &singleCartesiaConnListener{conn: conn}
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ws, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer ws.Close()
+			if _, _, err := ws.ReadMessage(); err != nil {
+				errCh <- err
+				return
+			}
+			errCh <- ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","error":"bad stream"}`))
 		}),
 	}
 	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {

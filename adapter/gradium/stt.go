@@ -130,6 +130,9 @@ func (s *GradiumSTT) Model() string { return "unknown" }
 func (s *GradiumSTT) Provider() string {
 	return "Gradium"
 }
+func (s *GradiumSTT) InputSampleRate() uint32 {
+	return defaultSTTSampleRate
+}
 func (s *GradiumSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, OfflineRecognize: false}
 }

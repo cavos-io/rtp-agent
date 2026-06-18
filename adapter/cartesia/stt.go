@@ -38,6 +38,8 @@ type CartesiaSTT struct {
 	sampleRate           int
 	audioChunkDurationMS int
 	finalTranscriptMode  string
+	mu                   sync.Mutex
+	streams              map[*cartesiaSTTStream]struct{}
 }
 
 type CartesiaSTTOption func(*CartesiaSTT)
@@ -101,6 +103,7 @@ func NewCartesiaSTT(apiKey string, opts ...CartesiaSTTOption) *CartesiaSTT {
 		sampleRate:           defaultCartesiaSTTSampleRate,
 		audioChunkDurationMS: defaultCartesiaSTTAudioChunkDurationMS,
 		finalTranscriptMode:  "auto",
+		streams:              make(map[*cartesiaSTTStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -116,6 +119,27 @@ func (s *CartesiaSTT) Label() string { return "cartesia.STT" }
 func (s *CartesiaSTT) Model() string { return s.model }
 func (s *CartesiaSTT) Provider() string {
 	return "Cartesia"
+}
+func (s *CartesiaSTT) InputSampleRate() uint32 {
+	if s == nil || s.sampleRate <= 0 {
+		return defaultCartesiaSTTSampleRate
+	}
+	return uint32(s.sampleRate)
+}
+func (s *CartesiaSTT) UpdateOptions(language string) {
+	if s == nil || language == "" {
+		return
+	}
+	var streams []*cartesiaSTTStream
+	s.mu.Lock()
+	s.language = language
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.mu.Unlock()
+	for _, stream := range streams {
+		stream.updateOptions(language)
+	}
 }
 func (s *CartesiaSTT) Capabilities() stt.STTCapabilities {
 	legacy := s.finalTranscriptMode == "legacy"
@@ -146,6 +170,7 @@ func (s *CartesiaSTT) Stream(ctx context.Context, language string) (stt.Recogniz
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &cartesiaSTTStream{
+		provider:     s,
 		conn:         conn,
 		events:       make(chan *stt.SpeechEvent, 100),
 		errCh:        make(chan error, 1),
@@ -160,8 +185,30 @@ func (s *CartesiaSTT) Stream(ctx context.Context, language string) (stt.Recogniz
 	stream.writeBinary = stream.writeBinaryMessage
 	stream.writeText = stream.writeTextMessage
 	stream.closeConn = stream.closeWebsocketConn
+	s.registerStream(stream)
 	go stream.readLoop()
 	return stream, nil
+}
+
+func (s *CartesiaSTT) registerStream(stream *cartesiaSTTStream) {
+	if s == nil || stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.streams == nil {
+		s.streams = make(map[*cartesiaSTTStream]struct{})
+	}
+	s.streams[stream] = struct{}{}
+}
+
+func (s *CartesiaSTT) unregisterStream(stream *cartesiaSTTStream) {
+	if s == nil || stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.streams, stream)
 }
 
 func (s *CartesiaSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
@@ -176,14 +223,15 @@ func validateCartesiaSTTAPIKey(apiKey string) error {
 }
 
 type cartesiaSTTStream struct {
-	conn   *websocket.Conn
-	events chan *stt.SpeechEvent
-	errCh  chan error
-	mu     sync.Mutex
-	closed bool
-	ctx    context.Context
-	cancel context.CancelFunc
-	state  *cartesiaSTTStreamState
+	provider *CartesiaSTT
+	conn     *websocket.Conn
+	events   chan *stt.SpeechEvent
+	errCh    chan error
+	mu       sync.Mutex
+	closed   bool
+	ctx      context.Context
+	cancel   context.CancelFunc
+	state    *cartesiaSTTStreamState
 
 	audioBStream *audio.AudioByteStream
 	writeBinary  func([]byte) error
@@ -235,6 +283,9 @@ func (s *cartesiaSTTStream) Close() error {
 		closeMessage = "close"
 	}
 	_ = s.writeTextData([]byte(closeMessage))
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
 	return s.closeConnection()
 }
 
@@ -297,6 +348,9 @@ func (s *cartesiaSTTStream) readLoop() {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			if !s.isClosed() {
+				for _, event := range cartesiaSTTUnexpectedCloseEvents(s.state) {
+					s.events <- event
+				}
 				s.errCh <- cartesiaSTTUnexpectedCloseError(err)
 			}
 			return
@@ -325,12 +379,39 @@ func (s *cartesiaSTTStream) isClosed() bool {
 	return s.closed
 }
 
+func (s *cartesiaSTTStream) updateOptions(language string) {
+	if s == nil || language == "" || s.state == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state.language = cartesiaLanguageBase(language)
+}
+
 func cartesiaSTTUnexpectedCloseError(err error) error {
 	message := "Cartesia STT connection closed unexpectedly"
 	if err != nil && err != io.EOF {
 		message += ": " + err.Error()
 	}
 	return llm.NewAPIConnectionError(message)
+}
+
+func cartesiaSTTUnexpectedCloseEvents(state *cartesiaSTTStreamState) []*stt.SpeechEvent {
+	if state == nil || state.mode != "auto" || !state.speaking {
+		return nil
+	}
+	events := []*stt.SpeechEvent{}
+	if state.speechDuration > 0 {
+		events = append(events, cartesiaUsageEvent(state))
+		state.speechDuration = 0
+	}
+	if state.currentTranscript != "" {
+		events = append(events, cartesiaTranscriptEvent(stt.SpeechEventFinalTranscript, state, state.currentTranscript))
+	}
+	events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech, RequestID: state.requestID})
+	state.speaking = false
+	state.currentTranscript = ""
+	return events
 }
 
 type cartesiaSTTStreamState struct {

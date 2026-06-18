@@ -488,6 +488,23 @@ func TestAzureSTTExposesConfiguredInputSampleRate(t *testing.T) {
 	}
 }
 
+func TestAzureSTTStreamAudioContentTypeUsesConfiguredSampleRate(t *testing.T) {
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTSampleRate(16000))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+
+	got := azureSTTStreamAudioContentType(provider, &model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	})
+	if got != "audio/x-wav;codec=audio/pcm;samplerate=16000" {
+		t.Fatalf("audio content type = %q, want configured Azure sample rate", got)
+	}
+}
+
 func TestAzureSTTStreamUsesWebsocketProtocol(t *testing.T) {
 	requests := make(chan *http.Request, 1)
 	configMessages := make(chan string, 1)
@@ -723,6 +740,30 @@ func TestAzureSTTStreamInterimConfidenceMatchesReference(t *testing.T) {
 	}
 	if got := event.Alternatives[0].Confidence; got != 0 {
 		t.Fatalf("confidence = %v, want Azure reference interim confidence 0", got)
+	}
+}
+
+func TestAzureSTTStreamUsesDetectedLanguageWhenPresent(t *testing.T) {
+	interim := parseAzureSTTMessage(
+		resolveAzureSTTLanguage("en-US"),
+		[]byte("Path: speech.hypothesis\r\nContent-Type: application/json\r\n\r\n{\"Text\":\"bonjour\",\"PrimaryLanguage\":{\"Language\":\"fr-FR\",\"Confidence\":\"High\"}}"),
+	)
+	if interim == nil {
+		t.Fatal("interim event = nil, want transcript")
+	}
+	if got := interim.Alternatives[0].Language; got != "fr-FR" {
+		t.Fatalf("interim language = %q, want Azure detected language fr-FR", got)
+	}
+
+	final := parseAzureSTTMessage(
+		resolveAzureSTTLanguage("en-US"),
+		[]byte("Path: speech.phrase\r\nContent-Type: application/json\r\n\r\n{\"RecognitionStatus\":\"Success\",\"DisplayText\":\"hola\",\"PrimaryLanguage\":{\"Language\":\"es-ES\",\"Confidence\":\"High\"}}"),
+	)
+	if final == nil {
+		t.Fatal("final event = nil, want transcript")
+	}
+	if got := final.Alternatives[0].Language; got != "es-ES" {
+		t.Fatalf("final language = %q, want Azure detected language es-ES", got)
 	}
 }
 

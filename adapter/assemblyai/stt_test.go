@@ -24,6 +24,9 @@ func TestAssemblyAISTTDefaultsMatchReference(t *testing.T) {
 	if provider.sampleRate != 16000 {
 		t.Fatalf("sample rate = %d, want 16000", provider.sampleRate)
 	}
+	if got := provider.InputSampleRate(); got != 16000 {
+		t.Fatalf("InputSampleRate() = %d, want reference sample rate 16000", got)
+	}
 	if provider.encoding != "pcm_s16le" {
 		t.Fatalf("encoding = %q, want pcm_s16le", provider.encoding)
 	}
@@ -44,6 +47,14 @@ func TestAssemblyAISTTDefaultsMatchReference(t *testing.T) {
 	}
 	if got := stt.Provider(provider); got != "AssemblyAI" {
 		t.Fatalf("provider metadata = %q, want AssemblyAI", got)
+	}
+}
+
+func TestAssemblyAISTTExposesConfiguredInputSampleRate(t *testing.T) {
+	provider := NewAssemblyAISTT("test-key", WithAssemblyAISTTSampleRate(8000))
+
+	if got := provider.InputSampleRate(); got != 8000 {
+		t.Fatalf("InputSampleRate() = %d, want configured sample rate 8000", got)
 	}
 }
 

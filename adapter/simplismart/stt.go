@@ -171,6 +171,12 @@ func (s *SimplismartSTT) Model() string { return s.model }
 func (s *SimplismartSTT) Provider() string {
 	return "Simplismart"
 }
+func (s *SimplismartSTT) InputSampleRate() uint32 {
+	if s == nil || s.sampleRate <= 0 {
+		return defaultSimplismartSTTSampleRate
+	}
+	return uint32(s.sampleRate)
+}
 
 func (s *SimplismartSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{

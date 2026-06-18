@@ -202,6 +202,12 @@ func newAWSSTTWithClient(client awsSTTClient, opts ...AWSSTTOption) (*AWSSTT, er
 }
 
 func (s *AWSSTT) Label() string { return "aws.STT" }
+func (s *AWSSTT) InputSampleRate() uint32 {
+	if s == nil || s.sampleRate <= 0 {
+		return 24000
+	}
+	return uint32(s.sampleRate)
+}
 func (s *AWSSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "word", OfflineRecognize: false}
 }
