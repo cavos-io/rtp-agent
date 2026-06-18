@@ -1042,6 +1042,16 @@ func TestAzureTTSRejectsInvalidReferenceVoiceControls(t *testing.T) {
 			opts: []AzureTTSOption{WithAzureTTSProsody(AzureTTSProsody{Pitch: "sideways"})},
 			want: "prosody pitch",
 		},
+		{
+			name: "numeric prosody rate range",
+			opts: []AzureTTSOption{WithAzureTTSProsody(AzureTTSProsody{Rate: "2.5"})},
+			want: "prosody rate must be between 0.5 and 2",
+		},
+		{
+			name: "numeric prosody volume range",
+			opts: []AzureTTSOption{WithAzureTTSProsody(AzureTTSProsody{Volume: "101"})},
+			want: "prosody volume must be between 0 and 100",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1051,6 +1061,30 @@ func TestAzureTTSRejectsInvalidReferenceVoiceControls(t *testing.T) {
 				t.Fatalf("NewAzureTTSWithOptions error = %v, want %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestAzureTTSAcceptsReferenceNumericProsody(t *testing.T) {
+	provider, err := NewAzureTTSWithOptions(
+		"key",
+		"eastus",
+		"en-US-AvaNeural",
+		WithAzureTTSProsody(AzureTTSProsody{Rate: "1.5", Volume: "80"}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureTTSWithOptions error = %v, want nil", err)
+	}
+
+	req, err := buildAzureTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if !strings.Contains(string(body), `<prosody rate="1.5" volume="80">hello</prosody>`) {
+		t.Fatalf("SSML = %q, want numeric prosody attrs", string(body))
 	}
 }
 

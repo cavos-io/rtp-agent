@@ -260,10 +260,22 @@ func validateAzureTTSVoiceControls(t *AzureTTS) error {
 		return fmt.Errorf("style degree must be between 0.1 and 2.0")
 	}
 	if t.prosody.Rate != "" && !azureTTSAllowed(t.prosody.Rate, "x-slow", "slow", "medium", "fast", "x-fast") {
-		return fmt.Errorf("prosody rate must be one of 'x-slow', 'slow', 'medium', 'fast', 'x-fast'")
+		rate, err := strconv.ParseFloat(t.prosody.Rate, 64)
+		if err != nil {
+			return fmt.Errorf("prosody rate must be one of 'x-slow', 'slow', 'medium', 'fast', 'x-fast'")
+		}
+		if rate < 0.5 || rate > 2 {
+			return fmt.Errorf("prosody rate must be between 0.5 and 2")
+		}
 	}
 	if t.prosody.Volume != "" && !azureTTSAllowed(t.prosody.Volume, "silent", "x-soft", "soft", "medium", "loud", "x-loud") {
-		return fmt.Errorf("prosody volume must be one of 'silent', 'x-soft', 'soft', 'medium', 'loud', 'x-loud'")
+		volume, err := strconv.ParseFloat(t.prosody.Volume, 64)
+		if err != nil {
+			return fmt.Errorf("prosody volume must be one of 'silent', 'x-soft', 'soft', 'medium', 'loud', 'x-loud'")
+		}
+		if volume < 0 || volume > 100 {
+			return fmt.Errorf("prosody volume must be between 0 and 100")
+		}
 	}
 	if t.prosody.Pitch != "" && !azureTTSAllowed(t.prosody.Pitch, "x-low", "low", "medium", "high", "x-high") {
 		return fmt.Errorf("prosody pitch must be one of 'x-low', 'low', 'medium', 'high', 'x-high'")
