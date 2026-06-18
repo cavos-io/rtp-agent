@@ -1444,14 +1444,9 @@ func (s *AgentServer) Run(ctx context.Context) error {
 
 	// Send Register request
 	req := s.registerWorkerRequest()
-	binary, b, err := workerlivekit.WorkerMessageFrame(req)
+	msgType, b, err := workerlivekit.WorkerMessageWebSocketFrame(req)
 	if err != nil {
 		return err
-	}
-
-	msgType := websocket.TextMessage
-	if binary {
-		msgType = websocket.BinaryMessage
 	}
 	if err := conn.WriteMessage(msgType, b); err != nil {
 		return err
@@ -1461,7 +1456,7 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	msg, err := workerlivekit.InitialRegisterMessage(msgType == websocket.BinaryMessage, data)
+	msg, err := workerlivekit.InitialRegisterWebSocketMessage(msgType, data)
 	if err != nil {
 		return err
 	}

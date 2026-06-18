@@ -3,6 +3,7 @@ package livekit
 import (
 	"fmt"
 
+	"github.com/gorilla/websocket"
 	lkprotocol "github.com/livekit/protocol/livekit"
 	"google.golang.org/protobuf/proto"
 )
@@ -102,4 +103,8 @@ func InitialRegisterMessage(binary bool, data []byte) (*lkprotocol.ServerMessage
 		return nil, err
 	}
 	return msg, nil
+}
+
+func InitialRegisterWebSocketMessage(msgType int, data []byte) (*lkprotocol.ServerMessage, error) {
+	return InitialRegisterMessage(msgType == websocket.BinaryMessage, data)
 }

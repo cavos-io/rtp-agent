@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
+	"github.com/gorilla/websocket"
 	lkprotocol "github.com/livekit/protocol/livekit"
 	"google.golang.org/protobuf/proto"
 )
@@ -201,6 +202,26 @@ func TestInitialRegisterMessageDecodesBinaryRegisterFrame(t *testing.T) {
 	}
 	if decoded.GetRegister().GetWorkerId() != "worker-a" {
 		t.Fatalf("decoded worker id = %q, want worker-a", decoded.GetRegister().GetWorkerId())
+	}
+}
+
+func TestInitialRegisterWebSocketMessageDecodesBinaryRegisterFrame(t *testing.T) {
+	msg := &lkprotocol.ServerMessage{
+		Message: &lkprotocol.ServerMessage_Register{
+			Register: &lkprotocol.RegisterWorkerResponse{WorkerId: "worker-ws"},
+		},
+	}
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		t.Fatalf("proto.Marshal() error = %v", err)
+	}
+
+	decoded, err := workerlivekit.InitialRegisterWebSocketMessage(websocket.BinaryMessage, data)
+	if err != nil {
+		t.Fatalf("InitialRegisterWebSocketMessage() error = %v", err)
+	}
+	if decoded.GetRegister().GetWorkerId() != "worker-ws" {
+		t.Fatalf("decoded worker id = %q, want worker-ws", decoded.GetRegister().GetWorkerId())
 	}
 }
 
