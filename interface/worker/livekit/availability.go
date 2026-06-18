@@ -22,6 +22,19 @@ type AvailabilityResponderOptions struct {
 	Send        func(*lkprotocol.WorkerMessage) error
 }
 
+type AvailabilityAnswerOptions struct {
+	Request                  *AvailabilityRequest
+	AgentName                string
+	AvailableForJob          func() bool
+	ReserveSlot              func()
+	ReleaseSlot              func()
+	StoreAccept              func(jobID string, args JobAcceptArguments)
+	Send                     func(*lkprotocol.WorkerMessage) error
+	HandleRequest            func(*JobRequest) error
+	OnRequestError           func(error, string)
+	OnUnavailableRejectError func(error, string)
+}
+
 type AvailabilityResponder struct {
 	request     *AvailabilityRequest
 	agentName   string
@@ -37,6 +50,52 @@ func NewAvailabilityResponder(opts AvailabilityResponderOptions) *AvailabilityRe
 		storeAccept: opts.StoreAccept,
 		send:        opts.Send,
 	}
+}
+
+func AnswerAvailabilityRequest(opts AvailabilityAnswerOptions) {
+	info := AvailabilityInfo(opts.Request)
+	if opts.AvailableForJob != nil && !opts.AvailableForJob() {
+		err := sendAvailabilityMessage(opts.Send, AvailabilityResponseForReject(
+			opts.Request,
+			AvailabilityRejectOptions{Terminate: false},
+		))
+		if err != nil && opts.OnUnavailableRejectError != nil {
+			opts.OnUnavailableRejectError(err, info.JobID)
+		}
+		return
+	}
+
+	if opts.ReserveSlot != nil {
+		opts.ReserveSlot()
+	}
+	if opts.ReleaseSlot != nil {
+		defer opts.ReleaseSlot()
+	}
+
+	responder := NewAvailabilityResponder(AvailabilityResponderOptions{
+		Request:     opts.Request,
+		AgentName:   opts.AgentName,
+		StoreAccept: opts.StoreAccept,
+		Send:        opts.Send,
+	})
+	jobReq := responder.JobRequest()
+
+	if opts.HandleRequest != nil {
+		if err := opts.HandleRequest(jobReq); err != nil && opts.OnRequestError != nil {
+			opts.OnRequestError(err, info.JobID)
+		}
+	} else {
+		_ = jobReq.Accept(JobAcceptArguments{})
+	}
+
+	_ = responder.RejectIfUnanswered(JobRejectArguments{Terminate: false})
+}
+
+func sendAvailabilityMessage(send func(*lkprotocol.WorkerMessage) error, msg *lkprotocol.WorkerMessage) error {
+	if send == nil {
+		return nil
+	}
+	return send(msg)
 }
 
 func (r *AvailabilityResponder) JobRequest() *JobRequest {

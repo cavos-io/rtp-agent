@@ -1590,37 +1590,22 @@ func (s *AgentServer) answerAvailability(ctx context.Context, req *workerlivekit
 	jobID := availability.JobID
 	logger.Logger.Infow("Received availability request", "jobId", jobID)
 
-	if !s.availableForJob() {
-		msg := workerlivekit.AvailabilityResponseForReject(
-			req,
-			workerlivekit.AvailabilityRejectOptions{Terminate: false},
-		)
-		if err := s.sendWorkerMessage(msg); err != nil {
-			logger.Logger.Errorw("failed to reject availability while unavailable", err, "jobId", jobID)
-		}
-		return
-	}
-
-	s.reserveAvailabilitySlot()
-	defer s.releaseAvailabilitySlot()
-
-	responder := workerlivekit.NewAvailabilityResponder(workerlivekit.AvailabilityResponderOptions{
-		Request:     req,
-		AgentName:   s.Options.AgentName,
-		StoreAccept: s.storePendingAccept,
-		Send:        s.sendWorkerMessage,
-	})
-	jobReq := responder.JobRequest()
-
-	if s.requestFnc != nil {
-		if err := s.requestFnc(jobReq); err != nil {
+	workerlivekit.AnswerAvailabilityRequest(workerlivekit.AvailabilityAnswerOptions{
+		Request:         req,
+		AgentName:       s.Options.AgentName,
+		AvailableForJob: s.availableForJob,
+		ReserveSlot:     s.reserveAvailabilitySlot,
+		ReleaseSlot:     s.releaseAvailabilitySlot,
+		StoreAccept:     s.storePendingAccept,
+		Send:            s.sendWorkerMessage,
+		HandleRequest:   s.requestFnc,
+		OnRequestError: func(err error, jobID string) {
 			logger.Logger.Errorw("availability request callback failed", err, "jobId", jobID)
-		}
-	} else {
-		_ = jobReq.Accept(JobAcceptArguments{})
-	}
-
-	_ = responder.RejectIfUnanswered(JobRejectArguments{Terminate: false})
+		},
+		OnUnavailableRejectError: func(err error, jobID string) {
+			logger.Logger.Errorw("failed to reject availability while unavailable", err, "jobId", jobID)
+		},
+	})
 }
 
 func (s *AgentServer) reserveAvailabilitySlot() {

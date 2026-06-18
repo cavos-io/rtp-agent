@@ -207,3 +207,86 @@ func TestAvailabilityResponderRejectIfUnansweredSendsOnlyOnce(t *testing.T) {
 		t.Fatal("Terminate = true, want false")
 	}
 }
+
+func TestAnswerAvailabilityRequestRejectsWhenUnavailable(t *testing.T) {
+	req := &lkprotocol.AvailabilityRequest{Job: &lkprotocol.Job{Id: "job_busy"}}
+	var reserveCalls int
+	var sent []*lkprotocol.WorkerMessage
+
+	workerlivekit.AnswerAvailabilityRequest(workerlivekit.AvailabilityAnswerOptions{
+		Request: req,
+		AvailableForJob: func() bool {
+			return false
+		},
+		ReserveSlot: func() {
+			reserveCalls++
+		},
+		Send: func(msg *lkprotocol.WorkerMessage) error {
+			sent = append(sent, msg)
+			return nil
+		},
+	})
+
+	if reserveCalls != 0 {
+		t.Fatalf("ReserveSlot calls = %d, want 0", reserveCalls)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("sent responses = %d, want 1", len(sent))
+	}
+	availability := sent[0].GetAvailability()
+	if availability.GetAvailable() {
+		t.Fatal("availability.Available = true, want false")
+	}
+	if availability.GetTerminate() {
+		t.Fatal("availability.Terminate = true, want false")
+	}
+}
+
+func TestAnswerAvailabilityRequestDefaultsToAcceptAndReleasesReservedSlot(t *testing.T) {
+	req := &lkprotocol.AvailabilityRequest{Job: &lkprotocol.Job{Id: "job_default"}}
+	var reserveCalls int
+	var releaseCalls int
+	var storedJobID string
+	var sent []*lkprotocol.WorkerMessage
+
+	workerlivekit.AnswerAvailabilityRequest(workerlivekit.AvailabilityAnswerOptions{
+		Request:   req,
+		AgentName: "sales-agent",
+		AvailableForJob: func() bool {
+			return true
+		},
+		ReserveSlot: func() {
+			reserveCalls++
+		},
+		ReleaseSlot: func() {
+			releaseCalls++
+		},
+		StoreAccept: func(jobID string, _ workerlivekit.JobAcceptArguments) {
+			storedJobID = jobID
+		},
+		Send: func(msg *lkprotocol.WorkerMessage) error {
+			sent = append(sent, msg)
+			return nil
+		},
+	})
+
+	if reserveCalls != 1 {
+		t.Fatalf("ReserveSlot calls = %d, want 1", reserveCalls)
+	}
+	if releaseCalls != 1 {
+		t.Fatalf("ReleaseSlot calls = %d, want 1", releaseCalls)
+	}
+	if storedJobID != "job_default" {
+		t.Fatalf("stored jobID = %q, want job_default", storedJobID)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("sent responses = %d, want 1", len(sent))
+	}
+	availability := sent[0].GetAvailability()
+	if !availability.GetAvailable() {
+		t.Fatal("availability.Available = false, want true")
+	}
+	if availability.GetParticipantAttributes()[workerlivekit.ParticipantAttributeAgentName] != "sales-agent" {
+		t.Fatalf("agent attribute = %q, want sales-agent", availability.GetParticipantAttributes()[workerlivekit.ParticipantAttributeAgentName])
+	}
+}
