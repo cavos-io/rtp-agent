@@ -26,7 +26,7 @@ func TestResolveDataOptionsUsesRTMIdentityAndToken(t *testing.T) {
 	}
 }
 
-func TestResolveDataOptionsDoesNotGenerateTokenWithoutCertificate(t *testing.T) {
+func TestResolveDataOptionsUsesAppIDTokenWithoutCertificate(t *testing.T) {
 	opts, err := ResolveDataOptions(Options{
 		AppID:   "app",
 		Channel: "support",
@@ -35,8 +35,11 @@ func TestResolveDataOptionsDoesNotGenerateTokenWithoutCertificate(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ResolveDataOptions() error = %v, want nil", err)
 	}
-	if opts.Token != "" {
-		t.Fatalf("Token = %q, want empty token without RTM token or app certificate", opts.Token)
+	if opts.Token != "app" {
+		t.Fatalf("Token = %q, want AppID token without app certificate", opts.Token)
+	}
+	if opts.UID != "agent" {
+		t.Fatalf("UID = %q, want RTC UID fallback", opts.UID)
 	}
 }
 

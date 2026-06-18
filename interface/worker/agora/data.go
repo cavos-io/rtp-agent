@@ -34,6 +34,9 @@ func ResolveDataOptions(opts Options) (Options, error) {
 	if opts.UID == "" {
 		opts.UID = "0"
 	}
+	if opts.Token == "" && opts.AppCertificate == "" {
+		opts.Token = opts.AppID
+	}
 	if opts.Token == "" && opts.AppCertificate != "" {
 		tokenTTL := uint32(defaultTokenTTL / time.Second)
 		token, err := rtctokenbuilder.BuildTokenWithRtm(
