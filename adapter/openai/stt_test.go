@@ -1633,6 +1633,37 @@ func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTSpeechStartedClearsStaleCurrentItemID(t *testing.T) {
+	now := time.Unix(100, 0)
+	state := &openAIRealtimeSTTMessageState{
+		now: func() time.Time {
+			return now
+		},
+	}
+
+	if _, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"item-1","audio_start_ms":100}`), state); err != nil {
+		t.Fatalf("first speech started: %v", err)
+	}
+	if _, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.delta","item_id":"item-1","delta":"old"}`), state); err != nil {
+		t.Fatalf("first delta: %v", err)
+	}
+
+	now = now.Add(openAIRealtimeSTTDeltaInterval + time.Millisecond)
+	if _, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","audio_start_ms":200}`), state); err != nil {
+		t.Fatalf("empty-id speech started: %v", err)
+	}
+	events, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.delta","delta":"new"}`), state)
+	if err != nil {
+		t.Fatalf("missing-id delta: %v", err)
+	}
+	if len(events) != 1 || events[0].Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("events = %+v, want interim transcript", events)
+	}
+	if events[0].RequestID != "" {
+		t.Fatalf("RequestID = %q, want empty after empty-id speech_started clears stale item", events[0].RequestID)
+	}
+}
+
 func TestOpenAIRealtimeSTTErrorMessageReturnsAPIError(t *testing.T) {
 	_, err := openAIRealtimeSTTEventsFromMessage([]byte(`{
 		"type":"error",
