@@ -1053,10 +1053,10 @@ func (va *PipelineAgent) precomputeLLMGeneration(ctx context.Context, session *A
 		if inferenceCtx == replyCtx {
 			inferenceCtx = replyCtx.Copy()
 		}
-		inferenceCtx.Items = append([]llm.ChatItem{&llm.ChatMessage{
+		inferenceCtx.Items = append(inferenceCtx.Items, &llm.ChatMessage{
 			Role:    llm.ChatRoleSystem,
 			Content: []llm.ChatContent{{Text: opts.Instructions}},
-		}}, inferenceCtx.Items...)
+		})
 	}
 	if inputModality != "" {
 		if inferenceCtx == replyCtx {

@@ -169,6 +169,56 @@ func TestPipelineAgentGenerateReplyWithInstructionsUsesTemporaryChatContext(t *t
 	}
 }
 
+func TestPipelineAgentPrecomputeReplyAppendsInstructionsLikeReference(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.Append(&llm.ChatMessage{
+		ID:      "user_1",
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: "hello"}},
+	})
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "precomputed answer"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+
+	_, err := agent.precomputeLLMGeneration(context.Background(), session, pipelineReplyOptions{
+		Instructions: "answer in one sentence",
+	})
+	if err != nil {
+		t.Fatalf("precomputeLLMGeneration error = %v", err)
+	}
+
+	if len(l.chatContexts) != 1 {
+		t.Fatalf("LLM chat contexts = %d, want 1", len(l.chatContexts))
+	}
+	inferenceCtx := l.chatContexts[0]
+	if len(inferenceCtx.Items) != 2 {
+		t.Fatalf("inference chat item count = %d, want original user and appended instruction", len(inferenceCtx.Items))
+	}
+	first, ok := inferenceCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("first inference item = %T, want *llm.ChatMessage", inferenceCtx.Items[0])
+	}
+	if first.GetID() != "user_1" || first.Role != llm.ChatRoleUser || first.TextContent() != "hello" {
+		t.Fatalf("first inference item = %#v, want original user before temporary instructions", first)
+	}
+	instruction, ok := inferenceCtx.Items[1].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("second inference item = %T, want *llm.ChatMessage", inferenceCtx.Items[1])
+	}
+	if instruction.Role != llm.ChatRoleSystem || instruction.TextContent() != "answer in one sentence" {
+		t.Fatalf("instruction message = %#v, want appended temporary system instructions", instruction)
+	}
+	if len(chatCtx.Items) != 1 || chatCtx.Items[0].GetID() != "user_1" {
+		t.Fatalf("persistent chat items = %#v, want only original user", chatCtx.Items)
+	}
+}
+
 func TestPipelineAgentGenerateReplyAppliesInstructionInputModality(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
