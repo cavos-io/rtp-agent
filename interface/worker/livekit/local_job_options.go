@@ -1,6 +1,7 @@
 package livekit
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -50,4 +51,14 @@ func LocalJobContextValues(opts LocalJobContextValueOptions) LocalJobContextValu
 		ParticipantIdentity: participantIdentity,
 		Token:               token,
 	}
+}
+
+func ValidateLocalJobRunOptions(participantIdentity string, opts LocalJobOptions) error {
+	if !opts.FakeJob && participantIdentity == "" && opts.Token == "" {
+		return fmt.Errorf("agent_identity is None but fake_job is False")
+	}
+	if !opts.FakeJob && opts.RoomInfo == nil {
+		return fmt.Errorf("room_info is None but fake_job is False")
+	}
+	return nil
 }

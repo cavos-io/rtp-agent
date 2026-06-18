@@ -1899,11 +1899,8 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	if err != nil {
 		return err
 	}
-	if !options.FakeJob && participantIdentity == "" && options.Token == "" {
-		return fmt.Errorf("agent_identity is None but fake_job is False")
-	}
-	if !options.FakeJob && options.RoomInfo == nil {
-		return fmt.Errorf("room_info is None but fake_job is False")
+	if err := workerlivekit.ValidateLocalJobRunOptions(participantIdentity, options); err != nil {
+		return err
 	}
 	if s.entrypointFnc == nil {
 		return workerReferenceError(rtcSessionRequiredMessage)

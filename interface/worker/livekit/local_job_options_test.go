@@ -59,3 +59,13 @@ func TestLocalJobContextValuesBuildsLiveKitJobIdentityAndToken(t *testing.T) {
 		t.Fatal("Token = empty, want generated participant token")
 	}
 }
+
+func TestValidateLocalJobRunOptionsChecksIdentityBeforeRoomInfo(t *testing.T) {
+	err := workerlivekit.ValidateLocalJobRunOptions("", workerlivekit.LocalJobOptions{FakeJob: false})
+	if err == nil {
+		t.Fatal("ValidateLocalJobRunOptions() error = nil, want missing identity")
+	}
+	if got, want := err.Error(), "agent_identity is None but fake_job is False"; got != want {
+		t.Fatalf("ValidateLocalJobRunOptions() error = %q, want %q", got, want)
+	}
+}
