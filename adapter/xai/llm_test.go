@@ -259,6 +259,49 @@ func TestXaiLLMChatMapsReferenceProviderToolOptions(t *testing.T) {
 	}
 }
 
+func TestXaiLLMChatMapsReferenceToolChoice(t *testing.T) {
+	var body map[string]any
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: xaiRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader("data: [DONE]\n")),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewXaiLLM("test-key", "")
+	stream, err := provider.Chat(context.Background(), xaiTestChatContext(),
+		llm.WithToolChoice(map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name": "lookup",
+			},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	choice, ok := body["tool_choice"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_choice = %#v, want named function choice", body["tool_choice"])
+	}
+	if choice["type"] != "function" {
+		t.Fatalf("tool_choice type = %#v, want function", choice["type"])
+	}
+	function, ok := choice["function"].(map[string]any)
+	if !ok || function["name"] != "lookup" {
+		t.Fatalf("tool_choice function = %#v, want lookup", choice["function"])
+	}
+}
+
 func TestBuildXAIMessagesIncludesImageContent(t *testing.T) {
 	imageData := base64.StdEncoding.EncodeToString([]byte("png-bytes"))
 	ctx := llm.NewChatContext()
