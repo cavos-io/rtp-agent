@@ -2808,6 +2808,57 @@ func TestPipelineAgentStopsPublishingTTSAfterSpeechInterrupted(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentScheduledSayInterruptUsesSynchronizedTranscript(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	playback := &fakePipelinePlaybackController{
+		result: AudioPlaybackResult{
+			PlaybackPosition:       200 * time.Millisecond,
+			Interrupted:            true,
+			SynchronizedTranscript: "heard words",
+		},
+	}
+	session.SetAudioPlaybackController(playback)
+	ttsSource := &fakePipelineTTS{stream: &fakePipelineTTSStream{
+		frames: []*model.AudioFrame{{
+			Data:              []byte{1},
+			SampleRate:        24000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		}},
+	}}
+	agent := NewPipelineAgent(nil, nil, nil, ttsSource, chatCtx)
+	agent.session = session
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	speech.Generation.Text = "full words never heard"
+	speech.Generation.AssistantMessage = &llm.ChatMessage{
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{{Text: "full words never heard"}},
+	}
+	agent.PublishAudio = func(context.Context, *model.AudioFrame) error {
+		if err := speech.Interrupt(false); err != nil {
+			t.Fatalf("Interrupt error = %v, want nil", err)
+		}
+		return nil
+	}
+
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	if playback.clearCalls != 1 {
+		t.Fatalf("ClearBuffer calls = %d, want 1 after interrupted say", playback.clearCalls)
+	}
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx.Items = %#v, want committed synchronized assistant text", chatCtx.Items)
+	}
+	msg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("chatCtx item = %T, want *llm.ChatMessage", chatCtx.Items[0])
+	}
+	if msg.TextContent() != "heard words" || !msg.Interrupted {
+		t.Fatalf("chatCtx message = %#v, want interrupted synchronized transcript", msg)
+	}
+}
+
 func TestPipelineAgentEmitsTTSErrorEventForChunkedSpeechSynthesisFailure(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	cause := errors.New("tts synthesize failed")

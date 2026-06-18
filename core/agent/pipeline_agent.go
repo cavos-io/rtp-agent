@@ -643,9 +643,17 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 			logger.Logger.Errorw("TTS inference failed", err)
 			va.emitTTSError(session, err)
 		}
-		if !speech.IsInterrupted() || (ttsGen != nil && ttsGen.ForwardedAudio) {
+		forwardedText := speech.Generation.Text
+		if speech.IsInterrupted() {
+			forwardedText = ""
+			if ttsGen != nil && ttsGen.ForwardedAudio {
+				forwardedText = va.forwardedAssistantTextAfterInterruption(ctx, session, speech, speech.Generation.Text)
+			}
+		}
+		if forwardedText != "" {
 			if speech.Generation.AssistantMessage != nil {
 				speech.Generation.AssistantMessage.Interrupted = speech.IsInterrupted()
+				speech.Generation.AssistantMessage.Content = []llm.ChatContent{{Text: forwardedText}}
 			}
 			insertChatItemIfMissing(va.chatCtx, speech.Generation.AssistantMessage)
 			addSpeechChatItemIfMissing(speech, speech.Generation.AssistantMessage)
