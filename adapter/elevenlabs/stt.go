@@ -134,6 +134,12 @@ func (s *ElevenLabsSTT) Model() string { return s.modelID }
 func (s *ElevenLabsSTT) Provider() string {
 	return "ElevenLabs"
 }
+func (s *ElevenLabsSTT) InputSampleRate() uint32 {
+	if s == nil || s.sampleRate <= 0 {
+		return defaultElevenLabsSTTSampleRate
+	}
+	return uint32(s.sampleRate)
+}
 func (s *ElevenLabsSTT) Capabilities() stt.STTCapabilities {
 	realtime := elevenLabsSTTIsRealtime(s.modelID)
 	aligned := ""
