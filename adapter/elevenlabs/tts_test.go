@@ -211,6 +211,40 @@ func TestElevenLabsSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSListVoicesMatchesReference(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: elevenLabsRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("method = %q, want GET", r.Method)
+		}
+		if r.URL.String() != "https://eleven.example/v1/voices" {
+			t.Fatalf("url = %q, want voices endpoint", r.URL.String())
+		}
+		if r.Header.Get("xi-api-key") != "test-key" {
+			t.Fatalf("xi-api-key = %q, want API key", r.Header.Get("xi-api-key"))
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"voices":[{"voice_id":"voice-1","name":"Rachel","category":"premade"}]}`)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider, err := NewElevenLabsTTS("test-key", "", "", WithElevenLabsBaseURL("https://eleven.example/v1"))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	voices, err := provider.ListVoices(context.Background())
+	if err != nil {
+		t.Fatalf("ListVoices() error = %v", err)
+	}
+	if len(voices) != 1 || voices[0].ID != "voice-1" || voices[0].Name != "Rachel" || voices[0].Category != "premade" {
+		t.Fatalf("voices = %#v, want reference voice fields", voices)
+	}
+}
+
 func TestElevenLabsTTSRejectsNonAudioResponse(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })

@@ -69,6 +69,12 @@ type ElevenLabsPronunciationDictionaryLocator struct {
 	VersionID                 string
 }
 
+type ElevenLabsVoice struct {
+	ID       string
+	Name     string
+	Category string
+}
+
 func WithElevenLabsVoiceID(voiceID string) ElevenLabsTTSOption {
 	return func(t *ElevenLabsTTS) {
 		if voiceID != "" {
@@ -230,6 +236,48 @@ func (t *ElevenLabsTTS) UpdateOptions(opts ...ElevenLabsTTSOption) {
 	for _, opt := range opts {
 		opt(t)
 	}
+}
+
+func (t *ElevenLabsTTS) ListVoices(ctx context.Context) ([]ElevenLabsVoice, error) {
+	if err := validateElevenLabsAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(t.baseURL, "/")+"/voices", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("xi-api-key", t.apiKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(err.Error())
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, llm.NewAPIStatusError("ElevenLabs voices request failed", resp.StatusCode, "", string(respBody))
+	}
+	var payload struct {
+		Voices []struct {
+			ID       string `json:"voice_id"`
+			Name     string `json:"name"`
+			Category string `json:"category"`
+		} `json:"voices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, llm.NewAPIConnectionError(err.Error())
+	}
+	voices := make([]ElevenLabsVoice, 0, len(payload.Voices))
+	for _, voice := range payload.Voices {
+		voices = append(voices, ElevenLabsVoice{
+			ID:       voice.ID,
+			Name:     voice.Name,
+			Category: voice.Category,
+		})
+	}
+	return voices, nil
 }
 
 // Synthesize performs a full HTTP POST for non-streaming scenarios.
