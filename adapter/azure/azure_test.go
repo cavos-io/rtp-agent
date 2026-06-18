@@ -1170,6 +1170,22 @@ func TestAzureTTSChunkedStreamKeepsFinalReadBytes(t *testing.T) {
 	}
 }
 
+func TestAzureTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T) {
+	stream := &azureTTSChunkedStream{
+		body:       errorReadCloser{err: errors.New("socket closed")},
+		sampleRate: 24000,
+	}
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestAzureTTSSynthesizeUsesConfiguredClient(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {
@@ -1296,6 +1312,18 @@ func (r *finalReadBytesCloser) Read(p []byte) (int, error) {
 }
 
 func (r *finalReadBytesCloser) Close() error {
+	return nil
+}
+
+type errorReadCloser struct {
+	err error
+}
+
+func (r errorReadCloser) Read([]byte) (int, error) {
+	return 0, r.err
+}
+
+func (r errorReadCloser) Close() error {
 	return nil
 }
 

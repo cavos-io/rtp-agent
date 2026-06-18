@@ -372,7 +372,7 @@ func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			if err == io.EOF {
 				return nil, io.EOF
 			}
-			return nil, err
+			return nil, llm.NewAPIConnectionError(err.Error())
 		}
 
 		total := start + n
@@ -399,7 +399,7 @@ func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			if err == io.EOF {
 				return nil, io.EOF
 			}
-			return nil, err
+			return nil, llm.NewAPIConnectionError(err.Error())
 		}
 	}
 }
