@@ -273,10 +273,7 @@ func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string
 	report := agent.NewSessionReport()
 	tagger := agent.NewTagger()
 	report.Tagger = tagger
-	reportInfo := workerlivekit.JobSessionReportInfo(job)
-	report.JobID = reportInfo.JobID
-	report.RoomID = reportInfo.RoomID
-	report.Room = reportInfo.Room
+	workerlivekit.PopulateSessionReportWithJobMetadata(report, job)
 	return &JobContext{
 		Job:            job,
 		url:            url,
@@ -410,10 +407,7 @@ func (c *JobContext) MakeSessionReport(sessions ...*agent.AgentSession) (*agent.
 	}
 
 	report := agent.NewSessionReport(session)
-	reportInfo := workerlivekit.JobSessionReportInfo(c.Job)
-	report.JobID = reportInfo.JobID
-	report.RoomID = reportInfo.RoomID
-	report.Room = reportInfo.Room
+	workerlivekit.PopulateSessionReportWithJobMetadata(report, c.Job)
 	if c.Report != nil {
 		report.RecordingOptions = c.Report.RecordingOptions
 		report.AudioRecordingPath = c.Report.AudioRecordingPath
