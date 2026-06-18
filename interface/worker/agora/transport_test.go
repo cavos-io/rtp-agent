@@ -42,6 +42,7 @@ func (f *fakeChannelClient) Join(ctx context.Context, opts Options, handler Even
 	if f.blockJoin {
 		<-ctx.Done()
 		if f.joinAfterCancelSucceeds {
+			f.joined = true
 			return nil
 		}
 		return ctx.Err()
@@ -675,8 +676,11 @@ func TestTransportJoinReportsClosedWhenCloseWinsJoinRace(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Join() did not return after Close canceled the transport")
 	}
-	if client.leaveCount != 0 {
-		t.Fatalf("leave count = %d, want 0", client.leaveCount)
+	if client.leaveCount != 1 {
+		t.Fatalf("leave count = %d, want 1 cleanup leave after late join success", client.leaveCount)
+	}
+	if !client.left {
+		t.Fatal("client left = false, want cleanup leave after late join success")
 	}
 }
 
