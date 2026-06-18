@@ -995,6 +995,35 @@ func TestPipelineAgentGenerateReplyReturnsToListeningWithoutIdle(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentGenerateReplyErrorReturnsToListeningWithoutIdle(t *testing.T) {
+	baseAgent := NewAgent("test")
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(baseAgent, session)
+	session.activity = activity
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = speech
+	speech.AddDoneCallback(activity.OnPipelineReplyDone)
+	agent := NewPipelineAgent(nil, nil, erroringPipelineLLM{err: errors.New("llm failed")}, &fakePipelineTTS{}, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	var got []AgentState
+	for {
+		select {
+		case ev := <-session.AgentStateChangedCh:
+			got = append(got, ev.NewState)
+		default:
+			want := []AgentState{AgentStateThinking, AgentStateListening}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("agent states = %#v, want %#v without transient idle after LLM error", got, want)
+			}
+			return
+		}
+	}
+}
+
 func TestPipelineAgentSendsSilenceToSTTDuringAECWarmup(t *testing.T) {
 	vadStream := &fakePipelineVADStream{pushedCh: make(chan *model.AudioFrame, 1)}
 	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1)}
@@ -3852,6 +3881,14 @@ func receivePipelineClosed(t *testing.T, ch <-chan struct{}, name string) {
 	case <-time.After(time.Second):
 		t.Fatalf("%s stream was not closed", name)
 	}
+}
+
+type erroringPipelineLLM struct {
+	err error
+}
+
+func (e erroringPipelineLLM) Chat(context.Context, *llm.ChatContext, ...llm.ChatOption) (llm.LLMStream, error) {
+	return nil, e.err
 }
 
 type fakePipelineRecognizeStream struct {
