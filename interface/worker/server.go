@@ -1996,7 +1996,7 @@ func newLocalJobContext(roomName string, participantIdentity string, opts Worker
 
 func newLocalJobContextWithOptions(roomName string, participantIdentity string, opts WorkerOptions, options LocalJobOptions) *JobContext {
 	opts = resolveWorkerOptions(opts)
-	localValues := workerlivekit.LocalJobContextValues(workerlivekit.LocalJobContextValueOptions{
+	localPlan := workerlivekit.LocalJobContextSetupPlan(workerlivekit.LocalJobContextSetupPlanOptions{
 		RoomName:            roomName,
 		ParticipantIdentity: participantIdentity,
 		APIKey:              opts.APIKey,
@@ -2006,14 +2006,14 @@ func newLocalJobContextWithOptions(roomName string, participantIdentity string, 
 		NewIdentity:         mathutil.ShortUUID,
 	})
 
-	jobCtx := NewJobContext(localValues.Job, opts.WSRL, opts.APIKey, opts.APISecret)
-	jobCtx.AcceptArguments = JobAcceptArguments{Identity: localValues.ParticipantIdentity}
-	jobCtx.fakeJob = options.FakeJob
-	if workerlivekit.HasSessionRecordingOption(options.RecordingOptions) {
-		jobCtx.InitRecording(options.RecordingOptions)
+	jobCtx := NewJobContext(localPlan.Job, opts.WSRL, opts.APIKey, opts.APISecret)
+	jobCtx.AcceptArguments = JobAcceptArguments{Identity: localPlan.AcceptIdentity}
+	jobCtx.fakeJob = localPlan.FakeJob
+	if localPlan.InitRecording {
+		jobCtx.InitRecording(localPlan.RecordingOptions)
 	}
-	jobCtx.SetSessionDirectory(options.SessionDirectory)
+	jobCtx.SetSessionDirectory(localPlan.SessionDirectory)
 	jobCtx.process = NewJobProcess(JobExecutorTypeThread, opts.UserArguments, opts.HTTPProxy)
-	jobCtx.token = localValues.Token
+	jobCtx.token = localPlan.Token
 	return jobCtx
 }
