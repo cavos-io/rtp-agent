@@ -31,12 +31,23 @@ func TestGladiaSTTDefaultsMatchReferenceV2(t *testing.T) {
 	if provider.sampleRate != 16000 || provider.bitDepth != 16 || provider.channels != 1 {
 		t.Fatalf("audio config = %d/%d/%d, want 16000/16/1", provider.sampleRate, provider.bitDepth, provider.channels)
 	}
+	if got := provider.InputSampleRate(); got != 16000 {
+		t.Fatalf("InputSampleRate() = %d, want reference sample rate 16000", got)
+	}
 	if provider.region != "eu-west" || provider.encoding != "wav/pcm" {
 		t.Fatalf("region/encoding = %q/%q, want eu-west/wav/pcm", provider.region, provider.encoding)
 	}
 	caps := provider.Capabilities()
 	if !caps.Streaming || !caps.InterimResults || caps.AlignedTranscript != "word" || caps.OfflineRecognize {
 		t.Fatalf("capabilities = %+v, want streaming interim word-aligned only", caps)
+	}
+}
+
+func TestGladiaSTTExposesConfiguredInputSampleRate(t *testing.T) {
+	provider := NewGladiaSTT("test-key", WithGladiaAudioFormat(48000, 16, 1, "wav/pcm"))
+
+	if got := provider.InputSampleRate(); got != 48000 {
+		t.Fatalf("InputSampleRate() = %d, want configured sample rate 48000", got)
 	}
 }
 

@@ -238,6 +238,13 @@ func (s *GladiaSTT) Provider() string {
 	return "Gladia"
 }
 
+func (s *GladiaSTT) InputSampleRate() uint32 {
+	if s == nil || s.sampleRate <= 0 {
+		return defaultGladiaSampleRate
+	}
+	return uint32(s.sampleRate)
+}
+
 func (s *GladiaSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:         true,
