@@ -35,6 +35,10 @@ func ServerMessageFrame(binary bool, data []byte) (*lkprotocol.ServerMessage, er
 	return UnmarshalServerMessage(data)
 }
 
+func ServerMessageWebSocketFrame(msgType int, data []byte) (*lkprotocol.ServerMessage, error) {
+	return ServerMessageFrame(msgType == websocket.BinaryMessage, data)
+}
+
 type ServerMessageKind string
 
 const (

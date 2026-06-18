@@ -101,6 +101,26 @@ func TestServerMessageFrameDecodesBinaryFrame(t *testing.T) {
 	}
 }
 
+func TestServerMessageWebSocketFrameDecodesBinaryFrame(t *testing.T) {
+	msg := &lkprotocol.ServerMessage{
+		Message: &lkprotocol.ServerMessage_Register{
+			Register: &lkprotocol.RegisterWorkerResponse{WorkerId: "worker-ws"},
+		},
+	}
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		t.Fatalf("proto.Marshal() error = %v", err)
+	}
+
+	decoded, err := workerlivekit.ServerMessageWebSocketFrame(websocket.BinaryMessage, data)
+	if err != nil {
+		t.Fatalf("ServerMessageWebSocketFrame() error = %v", err)
+	}
+	if decoded.GetRegister().GetWorkerId() != "worker-ws" {
+		t.Fatalf("decoded worker id = %q, want worker-ws", decoded.GetRegister().GetWorkerId())
+	}
+}
+
 func TestServerMessageDispatchClassifiesRegisterMessage(t *testing.T) {
 	serverInfo := &lkprotocol.ServerInfo{Region: "iad"}
 	dispatch := workerlivekit.ServerMessageDispatch(&lkprotocol.ServerMessage{
