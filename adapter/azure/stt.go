@@ -33,23 +33,24 @@ const (
 type azureSTTWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 
 type AzureSTT struct {
-	apiKey               string
-	region               string
-	speechHost           string
-	speechEndpoint       string
-	authToken            string
-	language             string
-	sampleRate           int
-	segmentationSilence  int
-	segmentationMaxTime  int
-	segmentationStrategy string
-	explicitPunctuation  bool
-	profanity            string
-	httpClient           *http.Client
-	websocketURL         string
-	dialWebsocket        azureSTTWebsocketDialer
-	mu                   sync.Mutex
-	streams              map[*azureSTTStream]struct{}
+	apiKey                 string
+	region                 string
+	speechHost             string
+	speechEndpoint         string
+	authToken              string
+	language               string
+	sampleRate             int
+	segmentationSilence    int
+	segmentationMaxTime    int
+	segmentationStrategy   string
+	trueTextPostProcessing bool
+	explicitPunctuation    bool
+	profanity              string
+	httpClient             *http.Client
+	websocketURL           string
+	dialWebsocket          azureSTTWebsocketDialer
+	mu                     sync.Mutex
+	streams                map[*azureSTTStream]struct{}
 }
 
 type AzureSTTOption func(*AzureSTT)
@@ -123,6 +124,12 @@ func WithAzureSTTSegmentationStrategy(strategy string) AzureSTTOption {
 		if strategy != "" {
 			s.segmentationStrategy = strategy
 		}
+	}
+}
+
+func WithAzureSTTTrueTextPostProcessing(enabled bool) AzureSTTOption {
+	return func(s *AzureSTT) {
+		s.trueTextPostProcessing = enabled
 	}
 }
 
@@ -487,6 +494,9 @@ func azureSTTSpeechConfigProperties(s *AzureSTT) map[string]string {
 	}
 	if s.segmentationStrategy != "" {
 		properties["Speech_SegmentationStrategy"] = s.segmentationStrategy
+	}
+	if s.trueTextPostProcessing {
+		properties["SpeechServiceResponse_PostProcessingOption"] = "TrueText"
 	}
 	return properties
 }

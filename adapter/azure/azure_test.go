@@ -645,6 +645,49 @@ func TestAzureSTTStreamSpeechConfigUsesReferenceSegmentationOptions(t *testing.T
 	receiveAzureTestValue(t, audioMessages, "audio")
 }
 
+func TestAzureSTTStreamSpeechConfigUsesReferenceTrueTextOption(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	configMessages := make(chan string, 1)
+	audioMessages := make(chan []byte, 1)
+
+	provider, err := NewAzureSTT("key", "eastus",
+		WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"),
+		WithAzureSTTTrueTextPostProcessing(true),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = azureTestDialer(t, requests, configMessages, audioMessages)
+
+	stream, err := provider.Stream(context.Background(), "id-ID")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	receiveAzureTestValue(t, requests, "request")
+	configMessage := receiveAzureTestValue(t, configMessages, "speech config")
+	_, configBody := splitAzureTestMessage(t, []byte(configMessage))
+	var configPayload struct {
+		Properties map[string]string `json:"properties"`
+	}
+	if err := json.Unmarshal(configBody, &configPayload); err != nil {
+		t.Fatalf("speech config JSON: %v", err)
+	}
+	if got := configPayload.Properties["SpeechServiceResponse_PostProcessingOption"]; got != "TrueText" {
+		t.Fatalf("post-processing option = %q, want TrueText", got)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	receiveAzureTestValue(t, audioMessages, "audio")
+}
+
 func TestAzureSTTStreamPreservesExplicitZeroConfidence(t *testing.T) {
 	event := parseAzureSTTMessage(
 		resolveAzureSTTLanguage("id-ID"),
