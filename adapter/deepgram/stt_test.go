@@ -128,6 +128,58 @@ func TestDeepgramSpeechEventSetsReferenceLanguage(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	closeServer := make(chan struct{})
+	go runDeepgramTimingOffsetWebsocketServer(serverConn, closeServer, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"))
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	defer close(closeServer)
+
+	timing, ok := stream.(stt.StreamTiming)
+	if !ok {
+		t.Fatal("stream does not implement stt.StreamTiming")
+	}
+	timing.SetStartTimeOffset(2.5)
+
+	event := nextDeepgramTestSpeechEvent(t, stream)
+	if event.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event type = %s, want start_of_speech", event.Type)
+	}
+	event = nextDeepgramTestSpeechEvent(t, stream)
+	if event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("second event type = %s, want final_transcript", event.Type)
+	}
+	alt := event.Alternatives[0]
+	if alt.StartTime != 2.6 || alt.EndTime != 2.8 {
+		t.Fatalf("alternative timing = %v-%v, want 2.6-2.8", alt.StartTime, alt.EndTime)
+	}
+	if len(alt.Words) != 1 {
+		t.Fatalf("words = %d, want 1", len(alt.Words))
+	}
+	word := alt.Words[0]
+	if word.StartTime != 2.6 || word.EndTime != 2.8 || word.StartTimeOffset != 2.5 {
+		t.Fatalf("word timing = %+v, want offset-adjusted timing", word)
+	}
+}
+
 func TestDeepgramRecognizeSpeechEventPreservesAlternativeWords(t *testing.T) {
 	speaker := 0
 	resp := dgRecognitionResponse{}
@@ -991,6 +1043,27 @@ func runDeepgramSpeechStateWebsocketServer(conn net.Conn, closeServer <-chan str
 			errCh <- err
 			return
 		}
+	}
+	<-closeServer
+	errCh <- nil
+}
+
+func runDeepgramTimingOffsetWebsocketServer(conn net.Conn, closeServer <-chan struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	message := `{"type":"Results","is_final":true,"speech_final":true,"metadata":{"request_id":"req-offset"},"channel":{"alternatives":[{"transcript":"hello","confidence":0.9,"words":[{"word":"hello","start":0.1,"end":0.3,"confidence":0.9}]}]}}`
+	if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(message)); err != nil {
+		errCh <- err
+		return
 	}
 	<-closeServer
 	errCh <- nil
