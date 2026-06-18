@@ -1789,6 +1789,124 @@ func TestMultimodalAgentInterruptedRealtimeMessageSkipsTextWhenPlayoutWaitCancel
 	}
 }
 
+func TestMultimodalAgentInterruptedRealtimeMessageSkipsTruncateWhenPlayoutWaitCanceled(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(&fakePipelinePlaybackController{
+		err: context.Canceled,
+	})
+	rtSession := &fakeRealtimeSession{}
+	ma := &MultimodalAgent{
+		model: &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{
+			AudioOutput:       true,
+			MessageTruncation: true,
+		}},
+		session:   session,
+		chatCtx:   llm.NewChatContext(),
+		rtSession: rtSession,
+		ctx:       context.Background(),
+	}
+	textCh := make(chan string, 1)
+	textCh <- "unconfirmed realtime text"
+	close(textCh)
+	modalitiesCh := make(chan []string, 1)
+	modalitiesCh <- []string{"audio"}
+	close(modalitiesCh)
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	if err := speech.Interrupt(true); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+
+	ma.consumeRealtimeMessage(context.Background(), speech, llm.MessageGeneration{
+		MessageID:    "msg_realtime_wait_cancel_truncate",
+		TextCh:       textCh,
+		ModalitiesCh: modalitiesCh,
+	})
+
+	if len(rtSession.truncates) != 0 {
+		t.Fatalf("Truncate calls = %#v, want no truncate without confirmed played audio", rtSession.truncates)
+	}
+}
+
+func TestMultimodalAgentPartialRealtimeMessageDoesNotSyncChatContext(t *testing.T) {
+	playback := &fakePipelinePlaybackController{
+		result: AudioPlaybackResult{
+			PlaybackPosition:       420 * time.Millisecond,
+			Interrupted:            true,
+			SynchronizedTranscript: "heard words",
+		},
+		waitStarted: make(chan struct{}),
+		releaseWait: make(chan struct{}),
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(playback)
+	chatCtx := llm.NewChatContext()
+	rtSession := &fakeRealtimeSession{}
+	ma := &MultimodalAgent{
+		model: &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{
+			AudioOutput:        true,
+			MessageTruncation:  true,
+			MutableChatContext: true,
+		}},
+		session:   session,
+		chatCtx:   chatCtx,
+		rtSession: rtSession,
+		PublishAudio: func(context.Context, *model.AudioFrame) error {
+			return nil
+		},
+		ctx: context.Background(),
+	}
+	textCh := make(chan string, 1)
+	textCh <- "heard words unheard words"
+	close(textCh)
+	modalitiesCh := make(chan []string, 1)
+	modalitiesCh <- []string{"audio"}
+	close(modalitiesCh)
+	audioCh := make(chan *model.AudioFrame, 1)
+	audioCh <- &model.AudioFrame{Data: []byte("audio")}
+	close(audioCh)
+	messageCh := make(chan llm.MessageGeneration, 1)
+	messageCh <- llm.MessageGeneration{
+		MessageID:    "msg_realtime_partial",
+		TextCh:       textCh,
+		AudioCh:      audioCh,
+		ModalitiesCh: modalitiesCh,
+	}
+	close(messageCh)
+	functionCh := make(chan *llm.FunctionCall)
+	close(functionCh)
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ma.consumeRealtimeGeneration(context.Background(), speech, &llm.GenerationCreatedEvent{
+			MessageCh:  messageCh,
+			FunctionCh: functionCh,
+		})
+	}()
+
+	select {
+	case <-playback.waitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("consumeRealtimeGeneration did not wait for realtime playout")
+	}
+	if err := speech.Interrupt(true); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	close(playback.releaseWait)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("consumeRealtimeGeneration did not finish after interrupted playout")
+	}
+
+	if rtSession.updated != nil {
+		t.Fatalf("updated chat context = %#v, want no sync for partial played message", rtSession.updated)
+	}
+	if len(rtSession.truncates) != 1 {
+		t.Fatalf("Truncate calls = %#v, want one truncate for partial played message", rtSession.truncates)
+	}
+}
+
 func TestMultimodalAgentSkipsRealtimeMessagesAfterSpeechInterrupted(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	rtSession := &fakeRealtimeSession{}

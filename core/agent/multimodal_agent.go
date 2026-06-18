@@ -682,9 +682,11 @@ func (ma *MultimodalAgent) consumeRealtimeGeneration(ctx context.Context, speech
 				ma.syncRealtimeChatContextAfterSkippedMessages()
 				return
 			}
-			ma.consumeRealtimeMessage(ctx, speech, message)
+			skipped := ma.consumeRealtimeMessage(ctx, speech, message)
 			if speech != nil && speech.IsInterrupted() {
-				ma.syncRealtimeChatContextAfterSkippedMessages()
+				if skipped {
+					ma.syncRealtimeChatContextAfterSkippedMessages()
+				}
 				return
 			}
 		case call, ok := <-functionCh:
@@ -701,7 +703,7 @@ func (ma *MultimodalAgent) consumeRealtimeGeneration(ctx context.Context, speech
 	}
 }
 
-func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *SpeechHandle, message llm.MessageGeneration) {
+func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *SpeechHandle, message llm.MessageGeneration) bool {
 	var text string
 	var modalities []string
 	startedSpeaking := false
@@ -710,7 +712,7 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 	for message.TextCh != nil || message.AudioCh != nil || modalitiesCh != nil {
 		select {
 		case <-ctx.Done():
-			return
+			return false
 		case values, ok := <-modalitiesCh:
 			if !ok {
 				modalitiesCh = nil
@@ -740,7 +742,7 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 							Source: ma,
 						})
 					}
-					return
+					return false
 				}
 				if !startedSpeaking && session != nil {
 					session.UpdateAgentState(AgentStateSpeaking)
@@ -761,7 +763,7 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 					Source: ma,
 				})
 			}
-			return
+			return false
 		}
 		publishedAudio = publishedAudio || fallbackPublishedAudio
 	}
@@ -776,10 +778,16 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 	if interrupted {
 		var playback AudioPlaybackResult
 		text, playback = ma.forwardedRealtimeTextAfterInterruption(ctx, text)
-		ma.truncateInterruptedRealtimeMessage(message.MessageID, modalities, text, playback)
+		skipped := text == "" && playback.PlaybackPosition <= 0
+		if text != "" || playback.PlaybackPosition > 0 {
+			ma.truncateInterruptedRealtimeMessage(message.MessageID, modalities, text, playback)
+		}
+		if skipped {
+			return true
+		}
 	}
 	if text == "" {
-		return
+		return false
 	}
 	msg := &llm.ChatMessage{
 		ID:          message.MessageID,
@@ -797,6 +805,7 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 		ma.session.EmitConversationItemAdded(msg)
 	}
 	speech.AddChatItems(msg)
+	return false
 }
 
 func (ma *MultimodalAgent) publishTTSFallbackForRealtimeText(ctx context.Context, speech *SpeechHandle, text string) (bool, error) {
