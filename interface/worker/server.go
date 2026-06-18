@@ -1608,11 +1608,12 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 	dispatch := workerlivekit.ServerMessageDispatch(msg)
 	switch dispatch.Kind {
 	case workerlivekit.ServerMessageKindRegister:
-		logger.Logger.Infow("Worker Registered", "workerId", dispatch.Register.WorkerID, "serverInfo", dispatch.Register.ServerInfo)
+		event := workerlivekit.WorkerRegisteredEventFromRegisterDispatch(dispatch.Register)
+		logger.Logger.Infow("Worker Registered", "workerId", event.WorkerID, "serverInfo", event.ServerInfo)
 		s.mu.Lock()
-		s.workerID = dispatch.Register.WorkerID
+		s.workerID = event.WorkerID
 		s.mu.Unlock()
-		s.emitWorkerRegistered(dispatch.Register.WorkerID, dispatch.Register.ServerInfo)
+		s.emitWorkerRegistered(event.WorkerID, event.ServerInfo)
 		s.reportActiveJobs()
 	case workerlivekit.ServerMessageKindAvailability:
 		s.handleAvailability(ctx, dispatch.Availability)
