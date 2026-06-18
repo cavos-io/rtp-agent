@@ -20,6 +20,8 @@ type JobRejectArguments struct {
 	Terminate bool
 }
 
+type Job = lkprotocol.Job
+
 func JobAcceptArgumentsForJob(job *lkprotocol.Job, args JobAcceptArguments) JobAcceptArguments {
 	args.Identity = JobAcceptIdentity(job, args.Identity)
 	return args

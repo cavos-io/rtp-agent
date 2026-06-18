@@ -36,6 +36,14 @@ func TestJobRequestAccessorsExposeJobFields(t *testing.T) {
 	}
 }
 
+func TestJobAliasUsesLiveKitProtocolJob(t *testing.T) {
+	job := &workerlivekit.Job{Id: "job-alias"}
+
+	if job.GetId() != "job-alias" {
+		t.Fatalf("Job.GetId() = %q, want job-alias", job.GetId())
+	}
+}
+
 func TestJobRequestAcceptInvokesCallbackWithDefaultIdentity(t *testing.T) {
 	var got workerlivekit.JobAcceptArguments
 	req := workerlivekit.NewJobRequest(&lkprotocol.Job{Id: "job_accept"}, func(args workerlivekit.JobAcceptArguments) error {

@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
+	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/google/uuid"
-	"github.com/livekit/protocol/livekit"
 )
 
 type ExecutorType string
@@ -81,7 +81,7 @@ func (p *ProcPool) validateExecutorType() error {
 	}
 }
 
-func (p *ProcPool) LaunchJob(ctx context.Context, job *livekit.Job) error {
+func (p *ProcPool) LaunchJob(ctx context.Context, job *workerlivekit.Job) error {
 	return p.LaunchRunningJob(ctx, RunningJobInfo{Job: job})
 }
 

@@ -12,9 +12,9 @@ import (
 	"syscall"
 	"time"
 
+	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	mathutil "github.com/cavos-io/rtp-agent/library/math"
-	"github.com/livekit/protocol/livekit"
 )
 
 type JobStatus string
@@ -29,9 +29,9 @@ type JobExecutor interface {
 	ID() string
 	Status() JobStatus
 	Started() bool
-	Job() *livekit.Job
+	Job() *workerlivekit.Job
 	RunningJob() *RunningJobInfo
-	LaunchJob(ctx context.Context, job *livekit.Job) error
+	LaunchJob(ctx context.Context, job *workerlivekit.Job) error
 	LaunchRunningJob(ctx context.Context, info RunningJobInfo) error
 	Close(ctx context.Context) error
 }
@@ -56,7 +56,7 @@ type ThreadJobExecutor struct {
 	mu     sync.Mutex
 
 	entrypoint func() error
-	job        *livekit.Job
+	job        *workerlivekit.Job
 	runningJob *RunningJobInfo
 	started    bool
 	done       chan struct{}
@@ -86,7 +86,7 @@ func (e *ThreadJobExecutor) Started() bool {
 	return e.started
 }
 
-func (e *ThreadJobExecutor) Job() *livekit.Job {
+func (e *ThreadJobExecutor) Job() *workerlivekit.Job {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.job
@@ -98,7 +98,7 @@ func (e *ThreadJobExecutor) RunningJob() *RunningJobInfo {
 	return e.runningJob
 }
 
-func (e *ThreadJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) error {
+func (e *ThreadJobExecutor) LaunchJob(ctx context.Context, job *workerlivekit.Job) error {
 	return e.LaunchRunningJob(ctx, RunningJobInfo{Job: job})
 }
 
@@ -160,7 +160,7 @@ type ProcessJobExecutor struct {
 	mu         sync.Mutex
 	started    bool
 	cmd        *exec.Cmd
-	job        *livekit.Job
+	job        *workerlivekit.Job
 	runningJob *RunningJobInfo
 	done       chan struct{}
 
@@ -190,7 +190,7 @@ func (e *ProcessJobExecutor) Started() bool {
 	return e.started
 }
 
-func (e *ProcessJobExecutor) Job() *livekit.Job {
+func (e *ProcessJobExecutor) Job() *workerlivekit.Job {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.job
@@ -202,7 +202,7 @@ func (e *ProcessJobExecutor) RunningJob() *RunningJobInfo {
 	return e.runningJob
 }
 
-func (e *ProcessJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) error {
+func (e *ProcessJobExecutor) LaunchJob(ctx context.Context, job *workerlivekit.Job) error {
 	return e.LaunchRunningJob(ctx, RunningJobInfo{Job: job})
 }
 
@@ -312,7 +312,7 @@ func RunningJobInfoFromEnv(env map[string]string) (RunningJobInfo, error) {
 	}
 
 	rawJob := env["LIVEKIT_AGENT_JOB_JSON"]
-	var job livekit.Job
+	var job workerlivekit.Job
 	if err := json.Unmarshal([]byte(rawJob), &job); err != nil {
 		return RunningJobInfo{}, err
 	}
