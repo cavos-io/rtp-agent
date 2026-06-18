@@ -2326,6 +2326,46 @@ func TestMultimodalAgentGeneratesToolReplyWhenRealtimeDoesNotAutoReply(t *testin
 	}
 }
 
+func TestMultimodalAgentToolReplyGenerateErrorIsRecoverable(t *testing.T) {
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	chatCtx := llm.NewChatContext()
+	rtSession := &fakeRealtimeSession{
+		generateCh:  make(chan llm.RealtimeGenerateReplyOptions, 1),
+		generateErr: errors.New("tool reply generate failed"),
+	}
+	ma := &MultimodalAgent{
+		model:     &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{AutoToolReplyGeneration: false}},
+		session:   session,
+		chatCtx:   chatCtx,
+		rtSession: rtSession,
+		ctx:       context.Background(),
+	}
+	session.Assistant = ma
+	errorEvents := session.ErrorEvents()
+
+	ma.executeRealtimeFunctionCall(&llm.FunctionCall{Name: "lookup", CallID: "call_lookup", Arguments: `{}`})
+
+	select {
+	case <-rtSession.generateCh:
+	case <-time.After(time.Second):
+		t.Fatal("realtime session did not receive explicit tool reply GenerateReply")
+	}
+	select {
+	case ev := <-errorEvents:
+		rtErr, ok := ev.Error.(*llm.RealtimeModelError)
+		if !ok {
+			t.Fatalf("ErrorEvents error = %T, want *llm.RealtimeModelError", ev.Error)
+		}
+		if !rtErr.Recoverable || !strings.Contains(rtErr.Error(), "tool reply generate failed") {
+			t.Fatalf("RealtimeModelError = %#v, want recoverable tool reply failure", rtErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive realtime tool reply GenerateReply error")
+	}
+}
+
 func TestMultimodalAgentSkipsSpeechCreatedForUserInitiatedGeneration(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	ma := &MultimodalAgent{session: session}

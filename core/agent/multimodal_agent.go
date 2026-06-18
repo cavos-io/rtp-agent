@@ -1146,7 +1146,7 @@ func (ma *MultimodalAgent) generateRealtimeToolReply() {
 		logger.Logger.Errorw("failed to generate realtime tool reply", err)
 		if ma.session != nil {
 			ma.session.EmitError(ErrorEvent{
-				Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
+				Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, true),
 				Source: ma.model,
 			})
 		}
