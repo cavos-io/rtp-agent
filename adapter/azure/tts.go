@@ -129,26 +129,57 @@ func (t *AzureTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 type azureTTSChunkedStream struct {
 	body       io.ReadCloser
 	sampleRate int
+	carry      byte
+	hasCarry   bool
 }
 
 func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
-	n, err := s.body.Read(buf)
-	if err != nil && n == 0 {
-		if err == io.EOF {
-			return nil, io.EOF
-		}
-		return nil, err
-	}
+	var start int
 
-	return &tts.SynthesizedAudio{
-		Frame: &model.AudioFrame{
-			Data:              buf[:n],
-			SampleRate:        uint32(s.sampleRate),
-			NumChannels:       1,
-			SamplesPerChannel: uint32(n / 2),
-		},
-	}, nil
+	for {
+		if s.hasCarry {
+			buf[0] = s.carry
+			start = 1
+		} else {
+			start = 0
+		}
+
+		n, err := s.body.Read(buf[start:])
+		if err != nil && n == 0 {
+			if err == io.EOF {
+				return nil, io.EOF
+			}
+			return nil, err
+		}
+
+		total := start + n
+		if total%2 != 0 {
+			s.carry = buf[total-1]
+			s.hasCarry = true
+			total--
+		} else {
+			s.hasCarry = false
+		}
+
+		if total > 0 {
+			return &tts.SynthesizedAudio{
+				Frame: &model.AudioFrame{
+					Data:              buf[:total],
+					SampleRate:        uint32(s.sampleRate),
+					NumChannels:       1,
+					SamplesPerChannel: uint32(total / 2),
+				},
+			}, nil
+		}
+
+		if err != nil {
+			if err == io.EOF {
+				return nil, io.EOF
+			}
+			return nil, err
+		}
+	}
 }
 
 func (s *azureTTSChunkedStream) Close() error {
