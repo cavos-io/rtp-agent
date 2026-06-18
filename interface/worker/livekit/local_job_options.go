@@ -2,6 +2,7 @@ package livekit
 
 import (
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -35,6 +36,27 @@ type LocalJobContextValuesResult struct {
 	Job                 *lkprotocol.Job
 	ParticipantIdentity string
 	Token               string
+}
+
+func PrepareLocalJobRunOptions(participantIdentity string, opts LocalJobOptions) (string, error) {
+	identity, err := LocalJobParticipantIdentityForRun(opts.Token, participantIdentity)
+	if err != nil {
+		return "", err
+	}
+	if err := ValidateLocalJobRunOptions(identity, opts); err != nil {
+		return "", err
+	}
+	return identity, nil
+}
+
+func LocalJobSessionReportPath(opts LocalJobOptions, sessionDirectory string) string {
+	if opts.SessionReportPath != "" {
+		return opts.SessionReportPath
+	}
+	if sessionDirectory == "" {
+		return ""
+	}
+	return filepath.Join(sessionDirectory, "session_report.json")
 }
 
 func LocalJobContextValues(opts LocalJobContextValueOptions) LocalJobContextValuesResult {

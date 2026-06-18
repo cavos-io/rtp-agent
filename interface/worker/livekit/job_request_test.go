@@ -287,6 +287,59 @@ func TestNewJobSessionReportInitializesReportTaggerAndMetadata(t *testing.T) {
 	}
 }
 
+func TestAllRecordingOptionsEnablesReferenceReportCapture(t *testing.T) {
+	options := workerlivekit.AllRecordingOptions()
+
+	if options != (agent.RecordingOptions{Audio: true, Traces: true, Logs: true, Transcript: true}) {
+		t.Fatalf("AllRecordingOptions() = %#v, want all recording options enabled", options)
+	}
+}
+
+func TestShouldUploadJobSessionReportUsesRecordingOptions(t *testing.T) {
+	report := agent.NewSessionReport()
+	report.RecordingOptions = agent.RecordingOptions{Logs: true}
+
+	if !workerlivekit.ShouldUploadJobSessionReport(&lkprotocol.Job{Id: "job-report"}, false, report) {
+		t.Fatal("ShouldUploadJobSessionReport(logs-only) = false, want true")
+	}
+}
+
+func TestShouldUploadJobSessionReportSkipsNilFakeOrEmptyReport(t *testing.T) {
+	report := agent.NewSessionReport()
+	report.RecordingOptions = agent.RecordingOptions{Logs: true}
+
+	if workerlivekit.ShouldUploadJobSessionReport(nil, false, report) {
+		t.Fatal("ShouldUploadJobSessionReport(nil job) = true, want false")
+	}
+	if workerlivekit.ShouldUploadJobSessionReport(&lkprotocol.Job{Id: "job-fake"}, true, report) {
+		t.Fatal("ShouldUploadJobSessionReport(fake job) = true, want false")
+	}
+	if workerlivekit.ShouldUploadJobSessionReport(&lkprotocol.Job{Id: "job-empty"}, false, nil) {
+		t.Fatal("ShouldUploadJobSessionReport(nil report) = true, want false")
+	}
+	if workerlivekit.ShouldUploadJobSessionReport(&lkprotocol.Job{Id: "job-empty"}, false, agent.NewSessionReport()) {
+		t.Fatal("ShouldUploadJobSessionReport(empty report) = true, want false")
+	}
+}
+
+func TestShouldUploadJobSessionReportUsesEvaluationOrOutcome(t *testing.T) {
+	report := agent.NewSessionReport()
+	report.Tagger = agent.NewTagger()
+	report.Tagger.Evaluation(&agent.EvaluationResult{Judgments: map[string]string{"helpfulness": "pass"}})
+
+	if !workerlivekit.ShouldUploadJobSessionReport(&lkprotocol.Job{Id: "job-eval"}, false, report) {
+		t.Fatal("ShouldUploadJobSessionReport(evaluation-only) = false, want true")
+	}
+
+	report = agent.NewSessionReport()
+	report.Tagger = agent.NewTagger()
+	report.Tagger.Success("completed")
+
+	if !workerlivekit.ShouldUploadJobSessionReport(&lkprotocol.Job{Id: "job-outcome"}, false, report) {
+		t.Fatal("ShouldUploadJobSessionReport(outcome-only) = false, want true")
+	}
+}
+
 func TestJobLogContextFieldsExposeLiveKitJobMetadata(t *testing.T) {
 	fields := workerlivekit.JobLogContextFields(&lkprotocol.Job{
 		Id:   "job-log",
@@ -616,6 +669,40 @@ func TestJobTerminationInfoExposesJobID(t *testing.T) {
 
 	if info.JobID != "job-stop" {
 		t.Fatalf("JobTerminationInfo().JobID = %q, want job-stop", info.JobID)
+	}
+}
+
+func TestJobTerminationPlanForActiveJobTerminatesAndFinishes(t *testing.T) {
+	plan := workerlivekit.JobTerminationPlanForActiveJob(true)
+
+	if !plan.MarkTerminated {
+		t.Fatal("MarkTerminated = false, want true")
+	}
+	if !plan.Shutdown {
+		t.Fatal("Shutdown = false, want true")
+	}
+	if !plan.WaitEntrypoint {
+		t.Fatal("WaitEntrypoint = false, want true")
+	}
+	if !plan.Finish {
+		t.Fatal("Finish = false, want true")
+	}
+}
+
+func TestJobTerminationPlanForMissingJobDoesNothing(t *testing.T) {
+	plan := workerlivekit.JobTerminationPlanForActiveJob(false)
+
+	if plan.MarkTerminated {
+		t.Fatal("MarkTerminated = true, want false")
+	}
+	if plan.Shutdown {
+		t.Fatal("Shutdown = true, want false")
+	}
+	if plan.WaitEntrypoint {
+		t.Fatal("WaitEntrypoint = true, want false")
+	}
+	if plan.Finish {
+		t.Fatal("Finish = true, want false")
 	}
 }
 

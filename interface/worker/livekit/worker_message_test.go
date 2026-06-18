@@ -81,6 +81,57 @@ func TestJobStatusSucceededIdentifiesSuccessOnly(t *testing.T) {
 	}
 }
 
+func TestJobCompletionPlanForEntrypointWaitsThenSendsSuccess(t *testing.T) {
+	plan := workerlivekit.JobCompletionPlanForEntrypoint(lkprotocol.JobStatus_JS_SUCCESS, false)
+
+	if !plan.Finish {
+		t.Fatal("Finish = false, want true")
+	}
+	if !plan.WaitForShutdown {
+		t.Fatal("WaitForShutdown = false, want true")
+	}
+	if !plan.SendStatus {
+		t.Fatal("SendStatus = false, want true")
+	}
+	if !plan.SendAfterFinish {
+		t.Fatal("SendAfterFinish = false, want true")
+	}
+}
+
+func TestJobCompletionPlanForEntrypointSendsFailureBeforeFinish(t *testing.T) {
+	plan := workerlivekit.JobCompletionPlanForEntrypoint(lkprotocol.JobStatus_JS_FAILED, false)
+
+	if !plan.Finish {
+		t.Fatal("Finish = false, want true")
+	}
+	if plan.WaitForShutdown {
+		t.Fatal("WaitForShutdown = true, want false")
+	}
+	if !plan.SendStatus {
+		t.Fatal("SendStatus = false, want true")
+	}
+	if plan.SendAfterFinish {
+		t.Fatal("SendAfterFinish = true, want false")
+	}
+}
+
+func TestJobCompletionPlanForEntrypointSkipsStatusWhenTerminated(t *testing.T) {
+	plan := workerlivekit.JobCompletionPlanForEntrypoint(lkprotocol.JobStatus_JS_SUCCESS, true)
+
+	if !plan.Finish {
+		t.Fatal("Finish = false, want true")
+	}
+	if plan.WaitForShutdown {
+		t.Fatal("WaitForShutdown = true, want false")
+	}
+	if plan.SendStatus {
+		t.Fatal("SendStatus = true, want false")
+	}
+	if plan.SendAfterFinish {
+		t.Fatal("SendAfterFinish = true, want false")
+	}
+}
+
 func TestRunEntrypointReportsSuccess(t *testing.T) {
 	result := workerlivekit.RunEntrypoint(func() error {
 		return nil

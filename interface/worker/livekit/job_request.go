@@ -178,6 +178,33 @@ func NewJobSessionReport(job *lkprotocol.Job) (*agent.SessionReport, *agent.Tagg
 	return report, tagger
 }
 
+func AllRecordingOptions() agent.RecordingOptions {
+	return agent.RecordingOptions{
+		Audio:      true,
+		Traces:     true,
+		Logs:       true,
+		Transcript: true,
+	}
+}
+
+func ShouldUploadJobSessionReport(job *lkprotocol.Job, fakeJob bool, report *agent.SessionReport) bool {
+	if job == nil || fakeJob || report == nil {
+		return false
+	}
+	return HasSessionRecordingOption(report.RecordingOptions) || HasSessionEvaluationReport(report)
+}
+
+func HasSessionRecordingOption(options agent.RecordingOptions) bool {
+	return options.Audio || options.Traces || options.Logs || options.Transcript
+}
+
+func HasSessionEvaluationReport(report *agent.SessionReport) bool {
+	if report == nil || report.Tagger == nil {
+		return false
+	}
+	return report.Tagger.Outcome() != "" || len(report.Tagger.Evaluations()) > 0
+}
+
 func JobLogContextFields(job *lkprotocol.Job) map[string]any {
 	info := JobSessionReportInfo(job)
 	return map[string]any{
@@ -342,6 +369,13 @@ type TerminationInfo struct {
 	JobID string
 }
 
+type JobTerminationPlan struct {
+	MarkTerminated bool
+	Shutdown       bool
+	WaitEntrypoint bool
+	Finish         bool
+}
+
 type JobTermination = lkprotocol.JobTermination
 
 func JobTerminationInfo(req *JobTermination) TerminationInfo {
@@ -349,6 +383,18 @@ func JobTerminationInfo(req *JobTermination) TerminationInfo {
 		return TerminationInfo{}
 	}
 	return TerminationInfo{JobID: req.JobId}
+}
+
+func JobTerminationPlanForActiveJob(exists bool) JobTerminationPlan {
+	if !exists {
+		return JobTerminationPlan{}
+	}
+	return JobTerminationPlan{
+		MarkTerminated: true,
+		Shutdown:       true,
+		WaitEntrypoint: true,
+		Finish:         true,
+	}
 }
 
 type LocalRoomJobOptions struct {

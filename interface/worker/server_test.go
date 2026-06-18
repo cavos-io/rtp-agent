@@ -3985,9 +3985,15 @@ func TestConnectWorkerWebSocketRetriesDialFailures(t *testing.T) {
 	}
 
 	server := NewAgentServer(WorkerOptions{MaxRetry: 3})
-	_, _, err := server.connectWorkerWebSocket(context.Background(), &websocket.Dialer{}, "wss://livekit.example/agent", nil)
+	_, err := server.openWorkerWebSocket(context.Background(), workerlivekit.WorkerWebSocketOpenOptions{
+		WSURL:     "wss://livekit.example",
+		APIKey:    "api-key",
+		APISecret: "api-secret",
+		TTL:       time.Hour,
+		MaxRetry:  3,
+	})
 	if err != nil {
-		t.Fatalf("connectWorkerWebSocket() error = %v", err)
+		t.Fatalf("openWorkerWebSocket() error = %v", err)
 	}
 	if attempts != 3 {
 		t.Fatalf("dial attempts = %d, want 3", attempts)
