@@ -299,6 +299,47 @@ func TestPopPendingAcceptMissingJobLeavesPendingAccepts(t *testing.T) {
 	}
 }
 
+type fakePendingAssignmentTimer struct {
+	stopped bool
+}
+
+func (f *fakePendingAssignmentTimer) Stop() bool {
+	f.stopped = true
+	return true
+}
+
+func TestStopPendingAssignmentTimerStopsAndDeletesTimer(t *testing.T) {
+	timer := &fakePendingAssignmentTimer{}
+	pending := map[string]*fakePendingAssignmentTimer{
+		"job-a": timer,
+		"job-b": {},
+	}
+
+	workerlivekit.StopPendingAssignmentTimer(pending, "job-a")
+
+	if !timer.stopped {
+		t.Fatal("timer stopped = false, want true")
+	}
+	if _, exists := pending["job-a"]; exists {
+		t.Fatal("job-a timer remained pending")
+	}
+	if _, exists := pending["job-b"]; !exists {
+		t.Fatal("job-b timer was removed")
+	}
+}
+
+func TestStopPendingAssignmentTimerMissingJobLeavesTimers(t *testing.T) {
+	pending := map[string]*fakePendingAssignmentTimer{
+		"job-b": {},
+	}
+
+	workerlivekit.StopPendingAssignmentTimer(pending, "job-a")
+
+	if _, exists := pending["job-b"]; !exists {
+		t.Fatal("job-b timer was removed")
+	}
+}
+
 func TestJobTerminationInfoExposesJobID(t *testing.T) {
 	info := workerlivekit.JobTerminationInfo(&lkprotocol.JobTermination{JobId: "job-stop"})
 

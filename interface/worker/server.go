@@ -1750,9 +1750,7 @@ func (s *AgentServer) sendWorkerMessage(msg *livekit.WorkerMessage) error {
 
 func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) {
 	s.mu.Lock()
-	if timer, ok := s.pendingTimers[jobID]; ok {
-		timer.Stop()
-	}
+	workerlivekit.StopPendingAssignmentTimer(s.pendingTimers, jobID)
 	s.pendingAccepts[jobID] = args
 	var timer *time.Timer
 	timer = time.AfterFunc(assignmentTimeout, func() {
@@ -1792,10 +1790,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 	jobCtx.workerID = s.workerID
 	jobCtx.AcceptArguments = args
 	jobCtx.LogContextFields()["worker_id"] = jobCtx.WorkerID()
-	if timer, ok := s.pendingTimers[jobID]; ok {
-		timer.Stop()
-		delete(s.pendingTimers, jobID)
-	}
+	workerlivekit.StopPendingAssignmentTimer(s.pendingTimers, jobID)
 	s.activeJobs[jobID] = jobCtx
 	s.mu.Unlock()
 
