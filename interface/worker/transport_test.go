@@ -80,12 +80,11 @@ func TestResolveWorkerOptionsDoesNotReadLiveKitEnvForAgora(t *testing.T) {
 
 	opts := resolveWorkerOptions(WorkerOptions{
 		Transport: WorkerTransportAgora,
-		Agora: AgoraOptions{
-			AppID:   "agora-app",
-			Channel: "support",
-		},
 	})
 
+	if opts.Transport != WorkerTransportAgora {
+		t.Fatalf("Transport = %q, want %q", opts.Transport, WorkerTransportAgora)
+	}
 	if opts.WSRL != "" || opts.WSURL != "" {
 		t.Fatalf("LiveKit URL fields = WSRL %q WSURL %q, want empty for Agora", opts.WSRL, opts.WSURL)
 	}
@@ -103,12 +102,11 @@ func TestResolveWorkerOptionsDoesNotReadLiveKitLogLevelEnvForAgora(t *testing.T)
 
 	opts := resolveWorkerOptions(WorkerOptions{
 		Transport: WorkerTransportAgora,
-		Agora: AgoraOptions{
-			AppID:   "agora-app",
-			Channel: "support",
-		},
 	})
 
+	if opts.Transport != WorkerTransportAgora {
+		t.Fatalf("Transport = %q, want %q", opts.Transport, WorkerTransportAgora)
+	}
 	if opts.LogLevel != defaultProdLogLevel {
 		t.Fatalf("LogLevel = %q, want default prod log level for Agora", opts.LogLevel)
 	}
@@ -119,12 +117,11 @@ func TestResolveWorkerOptionsDoesNotReadLiveKitDevModeEnvForAgora(t *testing.T) 
 
 	opts := resolveWorkerOptions(WorkerOptions{
 		Transport: WorkerTransportAgora,
-		Agora: AgoraOptions{
-			AppID:   "agora-app",
-			Channel: "support",
-		},
 	})
 
+	if opts.Transport != WorkerTransportAgora {
+		t.Fatalf("Transport = %q, want %q", opts.Transport, WorkerTransportAgora)
+	}
 	if opts.DevMode {
 		t.Fatal("DevMode = true, want false for Agora")
 	}
@@ -136,13 +133,20 @@ func TestResolveWorkerOptionsDoesNotReadLiveKitDevModeEnvForAgora(t *testing.T) 
 func TestResolveWorkerOptionsDoesNotDefaultLiveKitWorkerTypeForAgora(t *testing.T) {
 	opts := resolveWorkerOptions(WorkerOptions{
 		Transport: WorkerTransportAgora,
-		Agora: AgoraOptions{
-			AppID:   "agora-app",
-			Channel: "support",
-		},
 	})
 
+	if opts.Transport != WorkerTransportAgora {
+		t.Fatalf("Transport = %q, want %q", opts.Transport, WorkerTransportAgora)
+	}
 	if opts.WorkerType != "" {
 		t.Fatalf("WorkerType = %q, want empty for Agora", opts.WorkerType)
+	}
+}
+
+func TestResolveWorkerOptionsPreservesAgoraWithoutProviderOptions(t *testing.T) {
+	opts := resolveWorkerOptions(WorkerOptions{Transport: WorkerTransportAgora})
+
+	if opts.Transport != WorkerTransportAgora {
+		t.Fatalf("Transport = %q, want %q", opts.Transport, WorkerTransportAgora)
 	}
 }

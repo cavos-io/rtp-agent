@@ -23,6 +23,7 @@ type LLMGenerationData struct {
 	TextCh             chan string
 	TextEventCh        chan LLMTextEvent
 	FunctionCh         chan *llm.FunctionToolCall
+	Done               chan struct{}
 	GeneratedText      string
 	GeneratedFunctions []llm.FunctionToolCall
 	GeneratedExtra     map[string]any
@@ -70,6 +71,7 @@ func performLLMInference(
 	data := &LLMGenerationData{
 		TextCh:         make(chan string, 100),
 		FunctionCh:     make(chan *llm.FunctionToolCall, 10),
+		Done:           make(chan struct{}),
 		GeneratedExtra: make(map[string]any),
 		ID:             cavosmath.ShortUUID("item_"),
 	}
@@ -100,6 +102,7 @@ func performLLMInference(
 			defer close(data.TextEventCh)
 		}
 		defer close(data.FunctionCh)
+		defer close(data.Done)
 		defer stream.Close()
 		defer span.End()
 

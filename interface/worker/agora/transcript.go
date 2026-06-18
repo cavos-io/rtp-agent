@@ -27,6 +27,8 @@ type TranscriptForwarder struct {
 
 	cancel  context.CancelFunc
 	stopErr error
+	stopped bool
+	mu      sync.Mutex
 	wg      sync.WaitGroup
 	start   sync.Once
 	once    sync.Once
@@ -47,7 +49,19 @@ func (f *TranscriptForwarder) Start(ctx context.Context) {
 	if f == nil || f.session == nil || f.publisher == nil {
 		return
 	}
+	f.mu.Lock()
+	stopped := f.stopped
+	f.mu.Unlock()
+	if stopped {
+		return
+	}
 	f.start.Do(func() {
+		f.mu.Lock()
+		stopped := f.stopped
+		f.mu.Unlock()
+		if stopped {
+			return
+		}
 		ctx, cancel := context.WithCancel(normalizeContext(ctx))
 		f.cancel = cancel
 		userEvents := f.session.UserInputTranscribedEvents()
@@ -65,6 +79,9 @@ func (f *TranscriptForwarder) Stop(ctx context.Context) error {
 		return nil
 	}
 	f.once.Do(func() {
+		f.mu.Lock()
+		f.stopped = true
+		f.mu.Unlock()
 		if f.cancel != nil {
 			f.cancel()
 		}

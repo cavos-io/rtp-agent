@@ -1534,6 +1534,27 @@ func TestAgentSessionSayReturnsScheduledSpeechHandle(t *testing.T) {
 	}
 }
 
+func TestAgentSessionSayRequiresTTSWhenAudioOutputEnabled(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.SetAudioOutputController(&recordingAudioOutputController{canPause: true})
+
+	handle, err := session.Say(context.Background(), "hello")
+
+	if !errors.Is(err, errSayMissingTTSWithAudioOutput) {
+		t.Fatalf("Say error = %v, want missing TTS audio-output error", err)
+	}
+	if handle != nil {
+		t.Fatalf("Say handle = %#v, want nil", handle)
+	}
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("SpeechCreatedEvents received %#v, want no scheduled silent speech", ev)
+	default:
+	}
+}
+
 func TestAgentSessionSayUsesAgentAllowInterruptionsDefault(t *testing.T) {
 	agent := NewAgent("test")
 	agent.AllowInterruptions = true

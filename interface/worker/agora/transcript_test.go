@@ -290,6 +290,29 @@ func TestTranscriptForwarderStopIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestTranscriptForwarderStopBeforeStartPreventsLaterPublish(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	publisher := &recordingDataPublisher{}
+	forwarder := NewTranscriptForwarder(session, publisher, TranscriptForwarderOptions{
+		AssistantStreamID: "100",
+	})
+
+	if err := forwarder.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop() error = %v, want nil", err)
+	}
+	forwarder.Start(context.Background())
+	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "late hello",
+		IsFinal:    true,
+		CreatedAt:  time.UnixMilli(1710000001222),
+	})
+
+	assertPublishedPayloadCount(t, publisher, 0)
+	if publisher.closes != 1 {
+		t.Fatalf("publisher closes = %d, want 1", publisher.closes)
+	}
+}
+
 func waitForPublishedTranscript(t *testing.T, publisher *recordingDataPublisher) map[string]any {
 	t.Helper()
 	deadline := time.After(time.Second)
