@@ -102,3 +102,15 @@ func ParticipantInfoDetails(participant *lkprotocol.ParticipantInfo) Participant
 		Kind:     participant.Kind,
 	}
 }
+
+func UpsertParticipantInfo(participants []*lkprotocol.ParticipantInfo, info *lkprotocol.ParticipantInfo) []*lkprotocol.ParticipantInfo {
+	infoDetails := ParticipantInfoDetails(info)
+	for i, participant := range participants {
+		participantDetails := ParticipantInfoDetails(participant)
+		if participantDetails.Identity == infoDetails.Identity {
+			participants[i] = info
+			return participants
+		}
+	}
+	return append(participants, info)
+}

@@ -525,15 +525,7 @@ func (c *JobContext) participantAvailable(participant workerlivekit.RemotePartic
 }
 
 func (c *JobContext) rememberAvailableParticipant(info *livekit.ParticipantInfo) {
-	infoDetails := workerlivekit.ParticipantInfoDetails(info)
-	for i, participant := range c.availableParticipants {
-		participantDetails := workerlivekit.ParticipantInfoDetails(participant)
-		if participantDetails.Identity == infoDetails.Identity {
-			c.availableParticipants[i] = info
-			return
-		}
-	}
-	c.availableParticipants = append(c.availableParticipants, info)
+	c.availableParticipants = workerlivekit.UpsertParticipantInfo(c.availableParticipants, info)
 }
 
 func (c *JobContext) participantsAvailable(participants []workerlivekit.RemoteParticipantView) {
