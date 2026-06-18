@@ -313,13 +313,23 @@ func TestAgentSessionUserStateChangedEventsFanOutToSubscribers(t *testing.T) {
 }
 
 func TestAgentSessionAudioDisabledEndsSpeakingState(t *testing.T) {
-	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	activity.speaking = true
 	session.UpdateUserState(UserStateSpeaking)
 
 	session.OnAudioEnabledChanged(false)
 
 	if got := session.UserState(); got != UserStateListening {
 		t.Fatalf("UserState() = %q, want listening after audio disabled", got)
+	}
+	if activity.speaking {
+		t.Fatal("activity speaking = true, want audio disabled to end active speech")
+	}
+	if !activity.sttEOSReceived {
+		t.Fatal("sttEOSReceived = false, want audio disabled to route through OnEndOfSpeech")
 	}
 }
 
