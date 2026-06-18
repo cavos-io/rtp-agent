@@ -60,7 +60,7 @@ type ServerMessageDispatchInfo struct {
 	Kind         ServerMessageKind
 	Register     RegisterMessageInfo
 	Availability *lkprotocol.AvailabilityRequest
-	Assignment   *lkprotocol.JobAssignment
+	Assignment   *JobAssignment
 	Termination  *lkprotocol.JobTermination
 }
 

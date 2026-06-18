@@ -204,6 +204,8 @@ type AssignmentInfo struct {
 	EnableRecording bool
 }
 
+type JobAssignment = lkprotocol.JobAssignment
+
 type RunningJobInfo struct {
 	AcceptArguments JobAcceptArguments `json:"accept_arguments"`
 	Job             *lkprotocol.Job    `json:"job"`
@@ -213,7 +215,7 @@ type RunningJobInfo struct {
 	FakeJob         bool               `json:"fake_job"`
 }
 
-func JobAssignmentInfo(req *lkprotocol.JobAssignment, defaultURL string) AssignmentInfo {
+func JobAssignmentInfo(req *JobAssignment, defaultURL string) AssignmentInfo {
 	if req == nil {
 		return AssignmentInfo{URL: defaultURL}
 	}

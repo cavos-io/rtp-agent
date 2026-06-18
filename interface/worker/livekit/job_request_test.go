@@ -270,6 +270,16 @@ func TestJobAssignmentInfoDefaultsURLWhenAssignmentURLMissing(t *testing.T) {
 	}
 }
 
+func TestJobAssignmentAliasUsesLiveKitProtocolAssignment(t *testing.T) {
+	job := &lkprotocol.Job{Id: "job-a"}
+	assignment := &workerlivekit.JobAssignment{Job: job}
+	protocolAssignment := (*lkprotocol.JobAssignment)(assignment)
+
+	if protocolAssignment.GetJob() != job {
+		t.Fatal("JobAssignment alias did not preserve protocol job")
+	}
+}
+
 func TestRunningJobInfoCarriesLiveKitJobAndReloadFields(t *testing.T) {
 	info := workerlivekit.RunningJobInfo{
 		AcceptArguments: workerlivekit.JobAcceptArguments{

@@ -1768,7 +1768,7 @@ func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) 
 	s.mu.Unlock()
 }
 
-func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssignment) {
+func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.JobAssignment) {
 	assignment := workerlivekit.JobAssignmentInfo(req, s.Options.WSRL)
 	jobID := assignment.JobID
 	logger.Logger.Infow("Received job assignment", "jobId", jobID)
