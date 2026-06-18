@@ -4058,6 +4058,24 @@ func TestAgentSessionSpeakingResetsUnrecoverableProviderErrorCounts(t *testing.T
 	}
 }
 
+func TestAgentSessionRepeatedSpeakingDoesNotResetProviderErrorCounts(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	session.UpdateAgentState(AgentStateSpeaking)
+	session.llmErrorCount = 2
+	session.ttsErrorCount = 3
+
+	session.UpdateAgentState(AgentStateSpeaking)
+
+	if session.llmErrorCount != 2 {
+		t.Fatalf("llmErrorCount = %d, want unchanged repeated speaking state", session.llmErrorCount)
+	}
+	if session.ttsErrorCount != 3 {
+		t.Fatalf("ttsErrorCount = %d, want unchanged repeated speaking state", session.ttsErrorCount)
+	}
+}
+
 func TestAgentSessionPreservesExplicitZeroMaxUnrecoverableErrors(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{

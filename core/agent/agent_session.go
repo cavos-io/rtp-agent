@@ -2107,6 +2107,10 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 	var flushHeldSTTActivity *AgentActivity
 	s.mu.Lock()
 	oldState := s.agentState
+	if oldState == state {
+		s.mu.Unlock()
+		return
+	}
 	s.agentState = state
 	backgroundAudio := s.Options.BackgroundAudio
 	endpointing := s.Options.Endpointing
@@ -2116,24 +2120,22 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 		s.ttsErrorCount = 0
 		s.startAECWarmupLocked()
 	}
-	if oldState != state {
-		nowTime := time.Now()
-		now := float64(nowTime.UnixNano()) / float64(time.Second)
-		if state == AgentStateSpeaking {
-			if endpointing != nil {
-				endpointing.OnStartOfAgentSpeech(now)
-			}
-			if activity != nil {
-				activity.armBackchannelBoundary(nowTime)
-			}
-		} else if oldState == AgentStateSpeaking {
-			if endpointing != nil {
-				endpointing.OnEndOfAgentSpeech(now)
-			}
-			if activity != nil {
-				activity.onAgentSpeechEnded(nowTime)
-				flushHeldSTTActivity = activity
-			}
+	nowTime := time.Now()
+	now := float64(nowTime.UnixNano()) / float64(time.Second)
+	if state == AgentStateSpeaking {
+		if endpointing != nil {
+			endpointing.OnStartOfAgentSpeech(now)
+		}
+		if activity != nil {
+			activity.armBackchannelBoundary(nowTime)
+		}
+	} else if oldState == AgentStateSpeaking {
+		if endpointing != nil {
+			endpointing.OnEndOfAgentSpeech(now)
+		}
+		if activity != nil {
+			activity.onAgentSpeechEnded(nowTime)
+			flushHeldSTTActivity = activity
 		}
 	}
 	s.mu.Unlock()
@@ -2142,26 +2144,22 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 		flushHeldSTTActivity.flushHeldSTTEvents()
 	}
 
-	if oldState != state {
-		if backgroundAudio != nil {
-			backgroundAudio.AgentStateChanged(state)
-		}
-		s.updateUserAwayTimer()
+	if backgroundAudio != nil {
+		backgroundAudio.AgentStateChanged(state)
 	}
+	s.updateUserAwayTimer()
 
-	if oldState != state {
-		logger.Logger.Debugw("Agent state changed", "old", oldState, "new", state)
-		ev := AgentStateChangedEvent{
-			OldState:  oldState,
-			NewState:  state,
-			CreatedAt: time.Now(),
-		}
-		s.recordEvent(&ev)
-		for _, ch := range s.agentStateChangedSubscribers() {
-			select {
-			case ch <- ev:
-			default:
-			}
+	logger.Logger.Debugw("Agent state changed", "old", oldState, "new", state)
+	ev := AgentStateChangedEvent{
+		OldState:  oldState,
+		NewState:  state,
+		CreatedAt: time.Now(),
+	}
+	s.recordEvent(&ev)
+	for _, ch := range s.agentStateChangedSubscribers() {
+		select {
+		case ch <- ev:
+		default:
 		}
 	}
 }
