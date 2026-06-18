@@ -773,7 +773,7 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 		opts.InitializeProcessTimeoutSeconds = defaultProcessTimeout
 	}
 	if opts.LogLevel == "" {
-		opts.LogLevel = os.Getenv("LIVEKIT_LOG_LEVEL")
+		opts.LogLevel = workerlivekit.WorkerLogLevelFromEnv(nil)
 	}
 	if opts.LogLevel == "" {
 		if opts.DevMode {
