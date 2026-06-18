@@ -643,21 +643,24 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 			logger.Logger.Errorw("TTS inference failed", err)
 			va.emitTTSError(session, err)
 		}
-		forwardedText := speech.Generation.Text
-		if speech.IsInterrupted() {
-			forwardedText = ""
-			if ttsGen != nil && ttsGen.ForwardedAudio {
+		if err == nil && !speech.IsInterrupted() {
+			va.waitForAssistantPlayout(ctx, session, speech)
+		}
+		canCommit := (!speech.IsInterrupted() && err == nil) || (speech.IsInterrupted() && ttsGen != nil && ttsGen.ForwardedAudio)
+		if canCommit {
+			forwardedText := speech.Generation.Text
+			if speech.IsInterrupted() {
 				forwardedText = va.forwardedAssistantTextAfterInterruption(ctx, session, speech, speech.Generation.Text)
 			}
-		}
-		if forwardedText != "" {
-			if speech.Generation.AssistantMessage != nil {
-				speech.Generation.AssistantMessage.Interrupted = speech.IsInterrupted()
-				speech.Generation.AssistantMessage.Content = []llm.ChatContent{{Text: forwardedText}}
+			if forwardedText != "" {
+				if speech.Generation.AssistantMessage != nil {
+					speech.Generation.AssistantMessage.Interrupted = speech.IsInterrupted()
+					speech.Generation.AssistantMessage.Content = []llm.ChatContent{{Text: forwardedText}}
+				}
+				insertChatItemIfMissing(va.chatCtx, speech.Generation.AssistantMessage)
+				addSpeechChatItemIfMissing(speech, speech.Generation.AssistantMessage)
+				session.EmitConversationItemAdded(speech.Generation.AssistantMessage)
 			}
-			insertChatItemIfMissing(va.chatCtx, speech.Generation.AssistantMessage)
-			addSpeechChatItemIfMissing(speech, speech.Generation.AssistantMessage)
-			session.EmitConversationItemAdded(speech.Generation.AssistantMessage)
 		}
 		_ = speech.MarkGenerationDone()
 		session.UpdateAgentState(AgentStateListening)

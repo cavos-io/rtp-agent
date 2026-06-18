@@ -3595,10 +3595,11 @@ func TestPipelineAgentScheduledSayInterruptDuringSynthesisSuppressesTTSError(t *
 }
 
 func TestPipelineAgentScheduledSayRealTTSErrorStillEmittedAfterInterruptSuppression(t *testing.T) {
+	chatCtx := llm.NewChatContext()
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	cause := errors.New("real tts failure")
 	ttsSource := &fakePipelineTTS{streamErr: cause}
-	agent := NewPipelineAgent(nil, nil, nil, ttsSource, llm.NewChatContext())
+	agent := NewPipelineAgent(nil, nil, nil, ttsSource, chatCtx)
 	agent.session = session
 	agent.ctx = context.Background()
 	speech := NewSpeechHandle(false, DefaultInputDetails())
@@ -3617,6 +3618,12 @@ func TestPipelineAgentScheduledSayRealTTSErrorStillEmittedAfterInterruptSuppress
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive TTS error for real failure")
+	}
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chatCtx.Items = %#v, want no assistant commit for failed say TTS", chatCtx.Items)
+	}
+	if len(speech.ChatItems()) != 0 {
+		t.Fatalf("speech.ChatItems = %#v, want no committed chat items for failed say TTS", speech.ChatItems())
 	}
 }
 
@@ -3805,6 +3812,63 @@ func TestPipelineAgentScheduledSayPersistsAssistantTextInAgentChatContext(t *tes
 	}
 	if assistantMessages != 1 {
 		t.Fatalf("pipeline chat context items = %#v, want one scheduled say assistant message", pipelineCtx.Items)
+	}
+}
+
+func TestPipelineAgentScheduledSayWaitsForPlayoutBeforeCommit(t *testing.T) {
+	pipelineCtx := llm.NewChatContext()
+	ttsStream := &fakePipelineTTSStream{
+		frames: []*model.AudioFrame{{
+			Data:              []byte{0, 1},
+			SampleRate:        24000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		}},
+	}
+	playback := &fakePipelinePlaybackController{
+		waitStarted: make(chan struct{}),
+		releaseWait: make(chan struct{}),
+		result:      AudioPlaybackResult{PlaybackPosition: 42 * time.Millisecond},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(playback)
+	agent := NewPipelineAgent(nil, nil, &fakeGenerationLLM{}, &fakePipelineTTS{stream: ttsStream}, pipelineCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	session.Assistant = agent
+	activity := NewAgentActivity(NewAgent("test"), session)
+	session.activity = activity
+	go activity.schedulingTask()
+	defer activity.Stop()
+	agent.PublishAudio = func(context.Context, *model.AudioFrame) error { return nil }
+
+	handle, err := session.Say(context.Background(), "wait for playout")
+	if err != nil {
+		t.Fatalf("Say error = %v, want nil", err)
+	}
+
+	select {
+	case <-playback.waitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("WaitForPlayout did not start for scheduled say")
+	}
+	if len(pipelineCtx.Items) != 0 {
+		t.Fatalf("pipeline chat context items = %#v, want no commit before playout finishes", pipelineCtx.Items)
+	}
+	if len(handle.ChatItems()) != 0 {
+		t.Fatalf("handle chat items = %#v, want no committed item before playout finishes", handle.ChatItems())
+	}
+	close(playback.releaseWait)
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("scheduled say did not finish after playout release: %v", err)
+	}
+	if !playback.waitSawFlush {
+		t.Fatal("WaitForPlayout observed unflushed playback, want flush before wait like reference audio_output.flush")
+	}
+	if len(pipelineCtx.Items) != 1 {
+		t.Fatalf("pipeline chat context items = %#v, want committed say assistant message after playout", pipelineCtx.Items)
 	}
 }
 
