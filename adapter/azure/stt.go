@@ -423,21 +423,23 @@ func buildAzureSTTMessageHeaders(path string, requestID string, contentType stri
 }
 
 type azureSTTStream struct {
-	provider      *AzureSTT
-	conn          *websocket.Conn
-	connectionID  string
-	streamURL     string
-	language      string
-	events        chan *stt.SpeechEvent
-	errCh         chan error
-	mu            sync.Mutex
-	closed        bool
-	audioWritten  bool
-	reconnectNext bool
-	reconnects    int
-	maxReconnects int
-	ctx           context.Context
-	cancel        context.CancelFunc
+	provider        *AzureSTT
+	conn            *websocket.Conn
+	connectionID    string
+	streamURL       string
+	language        string
+	events          chan *stt.SpeechEvent
+	errCh           chan error
+	mu              sync.Mutex
+	closed          bool
+	audioWritten    bool
+	reconnectNext   bool
+	reconnects      int
+	maxReconnects   int
+	startTimeOffset float64
+	startTime       float64
+	ctx             context.Context
+	cancel          context.CancelFunc
 }
 
 func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -613,27 +615,75 @@ func (s *azureSTTStream) readLoop(conn *websocket.Conn) {
 		if msgType != websocket.TextMessage {
 			continue
 		}
-		if event := parseAzureSTTMessage(s.language, payload); event != nil {
+		if event := s.parseMessage(payload); event != nil {
 			s.events <- event
 		}
 	}
 }
 
 func parseAzureSTTMessage(language string, payload []byte) *stt.SpeechEvent {
+	return parseAzureSTTMessageWithOffset(language, payload, 0)
+}
+
+func (s *azureSTTStream) parseMessage(payload []byte) *stt.SpeechEvent {
+	return parseAzureSTTMessageWithOffset(s.language, payload, s.StartTimeOffset())
+}
+
+func (s *azureSTTStream) StartTimeOffset() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.startTimeOffset < 0 {
+		return 0
+	}
+	return s.startTimeOffset
+}
+
+func (s *azureSTTStream) SetStartTimeOffset(offset float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if offset < 0 {
+		offset = 0
+	}
+	s.startTimeOffset = offset
+}
+
+func (s *azureSTTStream) StartTime() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.startTime < 0 {
+		return 0
+	}
+	return s.startTime
+}
+
+func (s *azureSTTStream) SetStartTime(startTime float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if startTime < 0 {
+		startTime = 0
+	}
+	s.startTime = startTime
+}
+
+func parseAzureSTTMessageWithOffset(language string, payload []byte, startTimeOffset float64) *stt.SpeechEvent {
 	headers, body := splitAzureSTTMessage(payload)
 	switch headers["Path"] {
 	case "speech.hypothesis":
 		var message struct {
-			Text string `json:"Text"`
+			Text     string `json:"Text"`
+			Offset   *int64 `json:"Offset"`
+			Duration *int64 `json:"Duration"`
 		}
 		if err := json.Unmarshal(body, &message); err != nil || strings.TrimSpace(message.Text) == "" {
 			return nil
 		}
-		return azureSTTSpeechEvent(stt.SpeechEventInterimTranscript, language, message.Text, 0)
+		return azureSTTSpeechEventWithTiming(stt.SpeechEventInterimTranscript, language, message.Text, 0, message.Offset, message.Duration, startTimeOffset)
 	case "speech.phrase":
 		var message struct {
 			RecognitionStatus string `json:"RecognitionStatus"`
 			DisplayText       string `json:"DisplayText"`
+			Offset            *int64 `json:"Offset"`
+			Duration          *int64 `json:"Duration"`
 			NBest             []struct {
 				Display    string   `json:"Display"`
 				Confidence *float64 `json:"Confidence"`
@@ -655,7 +705,7 @@ func parseAzureSTTMessage(language string, payload []byte) *stt.SpeechEvent {
 		if strings.TrimSpace(text) == "" {
 			return nil
 		}
-		return azureSTTSpeechEvent(stt.SpeechEventFinalTranscript, language, text, confidence)
+		return azureSTTSpeechEventWithTiming(stt.SpeechEventFinalTranscript, language, text, confidence, message.Offset, message.Duration, startTimeOffset)
 	case "turn.start":
 		return &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech}
 	case "turn.end":
@@ -666,13 +716,27 @@ func parseAzureSTTMessage(language string, payload []byte) *stt.SpeechEvent {
 }
 
 func azureSTTSpeechEvent(eventType stt.SpeechEventType, language string, text string, confidence float64) *stt.SpeechEvent {
+	return azureSTTSpeechEventWithTiming(eventType, language, text, confidence, nil, nil, 0)
+}
+
+func azureSTTSpeechEventWithTiming(eventType stt.SpeechEventType, language string, text string, confidence float64, offset *int64, duration *int64, startTimeOffset float64) *stt.SpeechEvent {
+	data := stt.SpeechData{
+		Language:   language,
+		Text:       text,
+		Confidence: confidence,
+	}
+	if offset != nil {
+		startTime := float64(*offset)/10_000_000 + startTimeOffset
+		data.StartTime = startTime
+		endTicks := *offset
+		if duration != nil {
+			endTicks += *duration
+		}
+		data.EndTime = float64(endTicks)/10_000_000 + startTimeOffset
+	}
 	return &stt.SpeechEvent{
-		Type: eventType,
-		Alternatives: []stt.SpeechData{{
-			Language:   language,
-			Text:       text,
-			Confidence: confidence,
-		}},
+		Type:         eventType,
+		Alternatives: []stt.SpeechData{data},
 	}
 }
 

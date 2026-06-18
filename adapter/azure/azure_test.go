@@ -547,6 +547,24 @@ func TestAzureSTTStreamInterimConfidenceMatchesReference(t *testing.T) {
 	}
 }
 
+func TestAzureSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
+	stream := &azureSTTStream{language: "id-ID"}
+	timing, ok := any(stream).(stt.StreamTiming)
+	if !ok {
+		t.Fatal("stream does not implement stt.StreamTiming")
+	}
+	timing.SetStartTimeOffset(2.5)
+
+	event := stream.parseMessage([]byte("Path: speech.phrase\r\nContent-Type: application/json\r\n\r\n{\"RecognitionStatus\":\"Success\",\"DisplayText\":\"fallback text\",\"Offset\":1000000,\"Duration\":3000000,\"NBest\":[{\"Display\":\"halo final\",\"Confidence\":0.87}]}"))
+	if event == nil {
+		t.Fatal("event = nil, want final transcript")
+	}
+	alt := event.Alternatives[0]
+	if alt.StartTime != 2.6 || alt.EndTime != 2.9 {
+		t.Fatalf("time range = %v-%v, want 2.6-2.9", alt.StartTime, alt.EndTime)
+	}
+}
+
 func TestAzureSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	requests := make(chan *http.Request, defaultAzureSTTRetries+1)
 	configMessages := make(chan string, defaultAzureSTTRetries+1)
@@ -1204,12 +1222,16 @@ func azureTestDialer(
 			}
 		}
 		go func() {
-			if serverErr := <-errCh; serverErr != nil {
+			if serverErr := <-errCh; serverErr != nil && !isAzureTestWebsocketCleanupError(serverErr) {
 				t.Errorf("test websocket server: %v", serverErr)
 			}
 		}()
 		return conn, resp, nil
 	}
+}
+
+func isAzureTestWebsocketCleanupError(err error) bool {
+	return errors.Is(err, io.ErrClosedPipe) || errors.Is(err, net.ErrClosed)
 }
 
 func runAzureTestWebsocketServer(
