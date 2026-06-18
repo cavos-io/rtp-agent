@@ -1,6 +1,8 @@
 package livekit
 
 import (
+	"context"
+	"fmt"
 	"sort"
 
 	"github.com/gorilla/websocket"
@@ -8,6 +10,23 @@ import (
 )
 
 type WorkerMessage = lkprotocol.WorkerMessage
+
+type WorkerWebSocketReader interface {
+	ReadMessage() (int, []byte, error)
+}
+
+type WorkerWebSocketReadFunc func() (int, []byte, error)
+
+func (fn WorkerWebSocketReadFunc) ReadMessage() (int, []byte, error) {
+	return fn()
+}
+
+type WorkerMessageLoopOptions struct {
+	Reader        WorkerWebSocketReader
+	Close         func() error
+	Handle        func(*lkprotocol.ServerMessage)
+	OnDecodeError func(error)
+}
 
 func WorkerStatusMessage(status lkprotocol.WorkerStatus, load float64, jobCount uint32) *lkprotocol.WorkerMessage {
 	return &lkprotocol.WorkerMessage{
@@ -59,6 +78,54 @@ func ExchangeInitialRegisterWebSocket(conn WorkerRegisterWebSocket, msg *lkproto
 		return nil, err
 	}
 	return InitialRegisterWebSocketMessage(msgType, data)
+}
+
+func RunWorkerMessageLoop(ctx context.Context, opts WorkerMessageLoopOptions) error {
+	if opts.Reader == nil {
+		return fmt.Errorf("worker websocket reader is required")
+	}
+
+	for {
+		readDone := make(chan struct {
+			msgType int
+			data    []byte
+			err     error
+		}, 1)
+		go func() {
+			msgType, data, err := opts.Reader.ReadMessage()
+			readDone <- struct {
+				msgType int
+				data    []byte
+				err     error
+			}{msgType: msgType, data: data, err: err}
+		}()
+
+		select {
+		case <-ctx.Done():
+			if opts.Close != nil {
+				_ = opts.Close()
+			}
+			return ctx.Err()
+		case result := <-readDone:
+			if result.err != nil {
+				return result.err
+			}
+
+			msg, err := ServerMessageWebSocketFrame(result.msgType, result.data)
+			if err != nil {
+				if opts.OnDecodeError != nil {
+					opts.OnDecodeError(err)
+				}
+				continue
+			}
+			if msg == nil {
+				continue
+			}
+			if opts.Handle != nil {
+				opts.Handle(msg)
+			}
+		}
+	}
 }
 
 func AvailableWorkerStatusMessage(load float64, jobCount uint32, canAcceptJob bool) *lkprotocol.WorkerMessage {

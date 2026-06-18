@@ -1458,44 +1458,16 @@ func (s *AgentServer) RunUnregistered(ctx context.Context) error {
 }
 
 func (s *AgentServer) runWorkerMessageLoop(ctx context.Context, readMessage func() (int, []byte, error), closeConn func() error) error {
-	for {
-		readDone := make(chan struct {
-			msgType int
-			data    []byte
-			err     error
-		}, 1)
-		go func() {
-			msgType, data, err := readMessage()
-			readDone <- struct {
-				msgType int
-				data    []byte
-				err     error
-			}{msgType: msgType, data: data, err: err}
-		}()
-
-		select {
-		case <-ctx.Done():
-			if closeConn != nil {
-				_ = closeConn()
-			}
-			return ctx.Err()
-		case result := <-readDone:
-			if result.err != nil {
-				return result.err
-			}
-
-			msg, err := workerlivekit.ServerMessageWebSocketFrame(result.msgType, result.data)
-			if err != nil {
-				logger.Logger.Errorw("Failed to unmarshal server message", err)
-				continue
-			}
-			if msg == nil {
-				continue
-			}
-
+	return workerlivekit.RunWorkerMessageLoop(ctx, workerlivekit.WorkerMessageLoopOptions{
+		Reader: workerlivekit.WorkerWebSocketReadFunc(readMessage),
+		Close:  closeConn,
+		Handle: func(msg *workerlivekit.ServerMessage) {
 			s.handleMessage(ctx, msg)
-		}
-	}
+		},
+		OnDecodeError: func(err error) {
+			logger.Logger.Errorw("Failed to unmarshal server message", err)
+		},
+	})
 }
 
 func (s *AgentServer) emitWorkerStarted() {

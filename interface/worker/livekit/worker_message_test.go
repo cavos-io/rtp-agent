@@ -1,9 +1,12 @@
 package livekit_test
 
 import (
+	"context"
 	"errors"
+	"io"
 	"reflect"
 	"testing"
+	"time"
 
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"github.com/gorilla/websocket"
@@ -291,6 +294,139 @@ func TestExchangeInitialRegisterWebSocketWritesRegisterAndReadsResponse(t *testi
 	}
 	if msg.GetRegister().GetWorkerId() != "worker-a" {
 		t.Fatalf("register worker id = %q, want worker-a", msg.GetRegister().GetWorkerId())
+	}
+}
+
+type workerMessageLoopReader struct {
+	frames []workerMessageLoopFrame
+	closed chan struct{}
+}
+
+type workerMessageLoopFrame struct {
+	msgType int
+	data    []byte
+	err     error
+}
+
+func (r *workerMessageLoopReader) ReadMessage() (int, []byte, error) {
+	if len(r.frames) == 0 {
+		<-r.closed
+		return 0, nil, io.EOF
+	}
+	frame := r.frames[0]
+	r.frames = r.frames[1:]
+	return frame.msgType, frame.data, frame.err
+}
+
+func encodeServerMessage(t *testing.T, msg *lkprotocol.ServerMessage) []byte {
+	t.Helper()
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		t.Fatalf("proto.Marshal() error = %v", err)
+	}
+	return data
+}
+
+func TestRunWorkerMessageLoopDispatchesDecodedServerMessages(t *testing.T) {
+	reader := &workerMessageLoopReader{
+		frames: []workerMessageLoopFrame{
+			{
+				msgType: websocket.BinaryMessage,
+				data: encodeServerMessage(t, &lkprotocol.ServerMessage{
+					Message: &lkprotocol.ServerMessage_Register{
+						Register: &lkprotocol.RegisterWorkerResponse{WorkerId: "worker-a"},
+					},
+				}),
+			},
+			{err: io.EOF},
+		},
+		closed: make(chan struct{}),
+	}
+	var got []*workerlivekit.ServerMessage
+
+	err := workerlivekit.RunWorkerMessageLoop(context.Background(), workerlivekit.WorkerMessageLoopOptions{
+		Reader: reader,
+		Handle: func(msg *workerlivekit.ServerMessage) {
+			got = append(got, msg)
+		},
+	})
+
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("RunWorkerMessageLoop() error = %v, want EOF", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("handled messages = %d, want 1", len(got))
+	}
+	if got[0].GetRegister().GetWorkerId() != "worker-a" {
+		t.Fatalf("worker id = %q, want worker-a", got[0].GetRegister().GetWorkerId())
+	}
+}
+
+func TestRunWorkerMessageLoopSkipsDecodeErrorsAndContinues(t *testing.T) {
+	reader := &workerMessageLoopReader{
+		frames: []workerMessageLoopFrame{
+			{msgType: websocket.BinaryMessage, data: []byte("not-protobuf")},
+			{
+				msgType: websocket.BinaryMessage,
+				data: encodeServerMessage(t, &lkprotocol.ServerMessage{
+					Message: &lkprotocol.ServerMessage_Availability{
+						Availability: &lkprotocol.AvailabilityRequest{Job: &lkprotocol.Job{Id: "job-a"}},
+					},
+				}),
+			},
+			{err: io.EOF},
+		},
+		closed: make(chan struct{}),
+	}
+	decodeErrors := 0
+	handled := 0
+
+	err := workerlivekit.RunWorkerMessageLoop(context.Background(), workerlivekit.WorkerMessageLoopOptions{
+		Reader: reader,
+		Handle: func(msg *workerlivekit.ServerMessage) {
+			handled++
+		},
+		OnDecodeError: func(error) {
+			decodeErrors++
+		},
+	})
+
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("RunWorkerMessageLoop() error = %v, want EOF", err)
+	}
+	if decodeErrors != 1 {
+		t.Fatalf("decode errors = %d, want 1", decodeErrors)
+	}
+	if handled != 1 {
+		t.Fatalf("handled messages = %d, want 1", handled)
+	}
+}
+
+func TestRunWorkerMessageLoopClosesReaderOnContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	closed := make(chan struct{})
+	reader := &workerMessageLoopReader{closed: closed}
+
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- workerlivekit.RunWorkerMessageLoop(ctx, workerlivekit.WorkerMessageLoopOptions{
+			Reader: reader,
+			Close: func() error {
+				close(closed)
+				return nil
+			},
+		})
+	}()
+
+	cancel()
+
+	select {
+	case err := <-doneCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("RunWorkerMessageLoop() error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunWorkerMessageLoop() did not return after context cancellation")
 	}
 }
 
