@@ -262,6 +262,38 @@ func TestJobAssignmentInfoDefaultsURLWhenAssignmentURLMissing(t *testing.T) {
 	}
 }
 
+func TestRunningJobInfoCarriesLiveKitJobAndReloadFields(t *testing.T) {
+	info := workerlivekit.RunningJobInfo{
+		AcceptArguments: workerlivekit.JobAcceptArguments{
+			Identity: "agent-job-a",
+		},
+		Job:      &lkprotocol.Job{Id: "job-a"},
+		URL:      "wss://livekit.example",
+		Token:    "room-token",
+		WorkerID: "worker-a",
+		FakeJob:  true,
+	}
+
+	if info.Job.GetId() != "job-a" {
+		t.Fatalf("Job.Id = %q, want job-a", info.Job.GetId())
+	}
+	if info.AcceptArguments.Identity != "agent-job-a" {
+		t.Fatalf("AcceptArguments.Identity = %q, want agent-job-a", info.AcceptArguments.Identity)
+	}
+	if info.URL != "wss://livekit.example" {
+		t.Fatalf("URL = %q, want wss://livekit.example", info.URL)
+	}
+	if info.Token != "room-token" {
+		t.Fatalf("Token = %q, want room-token", info.Token)
+	}
+	if info.WorkerID != "worker-a" {
+		t.Fatalf("WorkerID = %q, want worker-a", info.WorkerID)
+	}
+	if !info.FakeJob {
+		t.Fatal("FakeJob = false, want true")
+	}
+}
+
 func TestPopPendingAcceptReturnsAndDeletesAcceptedArgs(t *testing.T) {
 	pending := map[string]workerlivekit.JobAcceptArguments{
 		"job-a": {Identity: "agent-a"},
