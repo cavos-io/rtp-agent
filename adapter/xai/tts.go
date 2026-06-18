@@ -110,11 +110,9 @@ func (t *XaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream
 	if err != nil {
 		return nil, llm.NewAPIConnectionError("failed to connect to xAI")
 	}
-	if err := writeXaiTTSMessage(conn, buildXaiTTSTextDeltaMessage(text)); err != nil {
-		conn.Close()
-		return nil, err
-	}
-	if err := writeXaiTTSMessage(conn, buildXaiTTSTextDoneMessage()); err != nil {
+	if err := writeXaiTTSTokenizedText(func(message map[string]any) error {
+		return writeXaiTTSMessage(conn, message)
+	}, text, t.language); err != nil {
 		conn.Close()
 		return nil, err
 	}
@@ -180,6 +178,15 @@ func writeXaiTTSMessage(conn *websocket.Conn, message map[string]any) error {
 		return err
 	}
 	return conn.WriteMessage(websocket.TextMessage, payload)
+}
+
+func writeXaiTTSTokenizedText(write func(map[string]any) error, text string, language string) error {
+	for _, token := range xaiTTSTokenizeWords(text, language) {
+		if err := write(buildXaiTTSTextDeltaMessage(token)); err != nil {
+			return err
+		}
+	}
+	return write(buildXaiTTSTextDoneMessage())
 }
 
 type xaiTTSWebsocketChunkedStream struct {

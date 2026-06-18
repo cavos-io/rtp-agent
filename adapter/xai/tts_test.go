@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"net/http"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -216,6 +218,39 @@ func TestXaiTTSStreamTokenizesTextBeforeFlush(t *testing.T) {
 	assertXaiTTSMessage(t, messages[2], "text.done", "")
 }
 
+func TestXaiTTSSynthesizeTokenizesTextBeforeDone(t *testing.T) {
+	messages := make(chan map[string]any, 3)
+	handlerErr := make(chan error, 1)
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = newXaiSTTTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for i := 0; i < 3; i++ {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				handlerErr <- err
+				return
+			}
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				handlerErr <- err
+				return
+			}
+			messages <- message
+		}
+	}, handlerErr)
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewXaiTTS("test-key", "ara", WithXaiTTSWebsocketURL("ws://xai.test/v1/tts"))
+	stream, err := provider.Synthesize(context.Background(), "hello world")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+
+	assertXaiTTSMessage(t, readXaiTTSMessage(t, messages, handlerErr), "text.delta", "hello")
+	assertXaiTTSMessage(t, readXaiTTSMessage(t, messages, handlerErr), "text.delta", "world")
+	assertXaiTTSMessage(t, readXaiTTSMessage(t, messages, handlerErr), "text.done", "")
+}
+
 func TestXaiTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	cancelled := false
@@ -351,4 +386,17 @@ func assertXaiTTSMessage(t *testing.T, message map[string]any, messageType strin
 	if message["delta"] != delta {
 		t.Fatalf("message delta = %q, want %q in %#v", message["delta"], delta, message)
 	}
+}
+
+func readXaiTTSMessage(t *testing.T, messages <-chan map[string]any, handlerErr <-chan error) map[string]any {
+	t.Helper()
+	select {
+	case message := <-messages:
+		return message
+	case err := <-handlerErr:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for xAI TTS message")
+	}
+	return nil
 }

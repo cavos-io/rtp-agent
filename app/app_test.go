@@ -8350,7 +8350,7 @@ func TestXaiTTSFallbackPassesReferenceOptions(t *testing.T) {
 			sampleRate:    r.URL.Query().Get("sample_rate"),
 			authorization: r.Header.Get("Authorization"),
 		}
-		for i := 0; i < 2; i++ {
+		for i := 0; i < 3; i++ {
 			_, payload, err := conn.ReadMessage()
 			if err != nil {
 				t.Errorf("read xai tts message: %v", err)
@@ -8428,17 +8428,23 @@ func TestXaiTTSFallbackPassesReferenceOptions(t *testing.T) {
 		if got, want := record.authorization, "Bearer test-xai-key"; got != want {
 			t.Fatalf("Authorization = %q, want %q", got, want)
 		}
-		if len(record.messages) != 2 {
-			t.Fatalf("messages = %#v, want text.delta and text.done", record.messages)
+		if len(record.messages) != 3 {
+			t.Fatalf("messages = %#v, want tokenized text.delta messages and text.done", record.messages)
 		}
 		if got, want := record.messages[0]["type"], "text.delta"; got != want {
 			t.Fatalf("first message type = %#v, want %#v", got, want)
 		}
-		if got, want := record.messages[0]["delta"], "hello xai"; got != want {
+		if got, want := record.messages[0]["delta"], "hello"; got != want {
 			t.Fatalf("first message delta = %#v, want %#v", got, want)
 		}
-		if got, want := record.messages[1]["type"], "text.done"; got != want {
+		if got, want := record.messages[1]["type"], "text.delta"; got != want {
 			t.Fatalf("second message type = %#v, want %#v", got, want)
+		}
+		if got, want := record.messages[1]["delta"], "xai"; got != want {
+			t.Fatalf("second message delta = %#v, want %#v", got, want)
+		}
+		if got, want := record.messages[2]["type"], "text.done"; got != want {
+			t.Fatalf("third message type = %#v, want %#v", got, want)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for xai websocket request")
