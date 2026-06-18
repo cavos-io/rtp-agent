@@ -89,6 +89,28 @@ func TestAWSSTTStreamInputDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestAWSSTTExposesReferenceInputSampleRate(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	if got := provider.InputSampleRate(); got != 24000 {
+		t.Fatalf("InputSampleRate = %d, want reference sample rate 24000", got)
+	}
+}
+
+func TestAWSSTTExposesConfiguredInputSampleRate(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil, WithAWSSTTSampleRate(8000))
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	if got := provider.InputSampleRate(); got != 8000 {
+		t.Fatalf("InputSampleRate = %d, want configured sample rate 8000", got)
+	}
+}
+
 func TestAWSSTTStreamInputUsesProviderOptions(t *testing.T) {
 	provider, err := newAWSSTTWithClient(nil,
 		WithAWSSTTSampleRate(8000),
