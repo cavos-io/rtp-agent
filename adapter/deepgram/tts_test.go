@@ -197,6 +197,38 @@ func TestDeepgramTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSChunkedStreamReturnsAPITimeoutErrorOnReadFailure(t *testing.T) {
+	stream := &deepgramTTSChunkedStream{
+		resp:       &http.Response{Body: deepgramTTSReadCloser{err: context.DeadlineExceeded}},
+		sampleRate: 24000,
+	}
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestDeepgramTTSChunkedStreamReturnsAPIConnectionErrorOnReadFailure(t *testing.T) {
+	stream := &deepgramTTSChunkedStream{
+		resp:       &http.Response{Body: deepgramTTSReadCloser{err: errors.New("read failed")}},
+		sampleRate: 24000,
+	}
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestDeepgramTTSStreamURLUsesReferenceOptions(t *testing.T) {
 	provider := NewDeepgramTTS("test-key", "")
 
@@ -459,4 +491,16 @@ func assertDeepgramTTSQuery(t *testing.T, query url.Values, key string, want str
 	if got := query.Get(key); got != want {
 		t.Fatalf("%s = %q, want %q", key, got, want)
 	}
+}
+
+type deepgramTTSReadCloser struct {
+	err error
+}
+
+func (r deepgramTTSReadCloser) Read([]byte) (int, error) {
+	return 0, r.err
+}
+
+func (r deepgramTTSReadCloser) Close() error {
+	return nil
 }
