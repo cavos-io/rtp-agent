@@ -306,6 +306,42 @@ func TestInworldTTSAudioFromReferenceResponses(t *testing.T) {
 	}
 }
 
+func TestInworldTTSAudioFromWebsocketMessageIncludesReferenceWordAlignment(t *testing.T) {
+	audio, done, err := inworldTTSAudioFromWebsocketMessage([]byte(`{
+		"result": {
+			"contextId": "ctx-1",
+			"audioChunk": {
+				"audioContent": "AQIDBA==",
+				"timestampInfo": {
+					"wordAlignment": {
+						"words": ["hello", "world"],
+						"wordStartTimeSeconds": [0.1, 0.3],
+						"wordEndTimeSeconds": [0.2, 0.5]
+					}
+				}
+			}
+		}
+	}`), "ctx-1", 24000)
+	if err != nil {
+		t.Fatalf("audio from websocket message: %v", err)
+	}
+	if done {
+		t.Fatal("done = true, want audio")
+	}
+	if audio == nil {
+		t.Fatal("audio = nil, want decoded audio")
+	}
+	if len(audio.TimedTranscript) != 2 {
+		t.Fatalf("timed transcript = %#v, want two aligned words", audio.TimedTranscript)
+	}
+	if audio.TimedTranscript[0].Text != "hello" || audio.TimedTranscript[0].StartTime != 0.1 || audio.TimedTranscript[0].EndTime != 0.2 {
+		t.Fatalf("first timed word = %#v, want hello 0.1-0.2", audio.TimedTranscript[0])
+	}
+	if audio.TimedTranscript[1].Text != "world" || audio.TimedTranscript[1].StartTime != 0.3 || audio.TimedTranscript[1].EndTime != 0.5 {
+		t.Fatalf("second timed word = %#v, want world 0.3-0.5", audio.TimedTranscript[1])
+	}
+}
+
 func TestInworldTTSChunkedStreamDecodesReferenceJSONLines(t *testing.T) {
 	stream := &inworldTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte("{\"result\":{\"audioContent\":\"AQI=\"}}\n")))},

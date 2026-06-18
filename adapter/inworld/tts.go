@@ -594,7 +594,14 @@ func inworldTTSAudioFromWebsocketMessage(payload []byte, contextID string, sampl
 		Result struct {
 			ContextID  string `json:"contextId"`
 			AudioChunk *struct {
-				AudioContent string `json:"audioContent"`
+				AudioContent  string `json:"audioContent"`
+				TimestampInfo struct {
+					WordAlignment struct {
+						Words                []string  `json:"words"`
+						WordStartTimeSeconds []float64 `json:"wordStartTimeSeconds"`
+						WordEndTimeSeconds   []float64 `json:"wordEndTimeSeconds"`
+					} `json:"wordAlignment"`
+				} `json:"timestampInfo"`
 			} `json:"audioChunk"`
 			ContextClosed map[string]interface{} `json:"contextClosed"`
 			Status        *struct {
@@ -631,6 +638,7 @@ func inworldTTSAudioFromWebsocketMessage(payload []byte, contextID string, sampl
 	}
 	frame := inworldTTSAudioFrame(audio, sampleRate)
 	frame.SegmentID = message.Result.ContextID
+	frame.TimedTranscript = inworldTTSTimedTranscript(message.Result.AudioChunk.TimestampInfo.WordAlignment.Words, message.Result.AudioChunk.TimestampInfo.WordAlignment.WordStartTimeSeconds, message.Result.AudioChunk.TimestampInfo.WordAlignment.WordEndTimeSeconds)
 	return frame, false, nil
 }
 
@@ -643,6 +651,31 @@ func inworldTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {
 			SamplesPerChannel: uint32(len(audio) / 2),
 		},
 	}
+}
+
+func inworldTTSTimedTranscript(words []string, starts []float64, ends []float64) []tts.TimedString {
+	limit := len(words)
+	if len(starts) < limit {
+		limit = len(starts)
+	}
+	if len(ends) < limit {
+		limit = len(ends)
+	}
+	if limit == 0 {
+		return nil
+	}
+	timed := make([]tts.TimedString, 0, limit)
+	for i := 0; i < limit; i++ {
+		if words[i] == "" {
+			continue
+		}
+		timed = append(timed, tts.TimedString{
+			Text:      words[i],
+			StartTime: starts[i],
+			EndTime:   ends[i],
+		})
+	}
+	return timed
 }
 
 func ensureTrailingSlash(value string) string {
