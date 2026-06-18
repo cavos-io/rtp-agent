@@ -770,6 +770,9 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 		fallbackPublishedAudio, err := ma.publishTTSFallbackForRealtimeText(ctx, speech, text)
 		if err != nil {
 			logger.Logger.Errorw("failed to synthesize text-only realtime response", err)
+			if fallbackPublishedAudio && ma.session != nil {
+				ma.session.UpdateAgentState(AgentStateListening)
+			}
 			if ma.session != nil {
 				ma.session.EmitError(ErrorEvent{
 					Error:  err,

@@ -2397,6 +2397,58 @@ func TestMultimodalAgentTTSFallbackWaitsForPlayoutBeforeCommit(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentTTSFallbackStreamErrorReturnsListening(t *testing.T) {
+	cause := errors.New("fallback tts stream failed")
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.TTS = &fakeGenerationTTS{stream: &failingAfterAudioRealtimeFallbackTTSStream{err: cause}}
+	ma := &MultimodalAgent{
+		model: &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{
+			AudioOutput: true,
+		}},
+		session: session,
+		PublishAudio: func(context.Context, *model.AudioFrame) error {
+			return nil
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "spoken fallback"
+	close(textCh)
+	modalitiesCh := make(chan []string, 1)
+	modalitiesCh <- []string{"text"}
+	close(modalitiesCh)
+
+	ma.consumeRealtimeMessage(context.Background(), NewSpeechHandle(true, DefaultInputDetails()), llm.MessageGeneration{
+		MessageID:    "msg_text_only_error",
+		TextCh:       textCh,
+		ModalitiesCh: modalitiesCh,
+	})
+
+	select {
+	case ev := <-session.AgentStateChangedCh:
+		if ev.NewState != AgentStateSpeaking {
+			t.Fatalf("first agent state event = %#v, want speaking", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("agent did not enter speaking for fallback audio")
+	}
+	select {
+	case ev := <-session.AgentStateChangedCh:
+		if ev.NewState != AgentStateListening {
+			t.Fatalf("second agent state event = %#v, want listening after fallback stream error", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("agent did not return to listening after fallback stream error")
+	}
+	select {
+	case ev := <-session.ErrorEvents():
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("ErrorEvents error = %v, want %v", ev.Error, cause)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive fallback stream error")
+	}
+}
+
 func TestMultimodalAgentGeneratesToolReplyWhenRealtimeDoesNotAutoReply(t *testing.T) {
 	agent := NewAgent("test")
 	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}
@@ -2922,6 +2974,30 @@ func (s *blockingRealtimeFallbackTTSStream) Next() (*tts.SynthesizedAudio, error
 		SampleRate:        24000,
 		NumChannels:       1,
 		SamplesPerChannel: 1,
+	}}, nil
+}
+
+type failingAfterAudioRealtimeFallbackTTSStream struct {
+	sent bool
+	err  error
+}
+
+func (s *failingAfterAudioRealtimeFallbackTTSStream) PushText(string) error { return nil }
+
+func (s *failingAfterAudioRealtimeFallbackTTSStream) Flush() error { return nil }
+
+func (s *failingAfterAudioRealtimeFallbackTTSStream) Close() error { return nil }
+
+func (s *failingAfterAudioRealtimeFallbackTTSStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.sent {
+		return nil, s.err
+	}
+	s.sent = true
+	return &tts.SynthesizedAudio{Frame: &model.AudioFrame{
+		Data:              []byte("audio"),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
 	}}, nil
 }
 
