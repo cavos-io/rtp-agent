@@ -467,38 +467,38 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 
 	jobCtx.markEntrypointStarted()
 	go func() {
-		result := workerlivekit.RunEntrypoint(func() error {
-			return s.runJobEntrypoint(jobCtx)
+		workerlivekit.RunReloadedJobEntrypointLifecycle(workerlivekit.ReloadedJobEntrypointLifecycleOptions{
+			Context: ctx,
+			Entrypoint: func() error {
+				return s.runJobEntrypoint(jobCtx)
+			},
+			MarkDone: jobCtx.markEntrypointDone,
+			OnResult: func(result workerlivekit.EntrypointResult) {
+				if result.Recovered != nil {
+					logger.Logger.Errorw("Reloaded job entrypoint panicked", fmt.Errorf("%v", result.Recovered), "jobId", jobCtx.JobID())
+				}
+				if result.Err != nil {
+					logger.Logger.Errorw("Reloaded job entrypoint failed", result.Err, "jobId", jobCtx.JobID())
+				}
+			},
+			ShutdownDone: jobCtx.ShutdownDone(),
+			Shutdown: func(reason string) {
+				jobCtx.Shutdown(reason)
+			},
+			Finish: func() bool {
+				return s.finishJob(jobCtx)
+			},
+			SendStatus: func(status workerlivekit.JobStatus) error {
+				if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(jobCtx.JobID(), status)); err != nil {
+					logger.Logger.Errorw("failed to update reloaded job status", err, "jobId", jobCtx.JobID())
+					return err
+				}
+				return nil
+			},
+			OnStatusSkipped: func() {
+				logger.Logger.Debugw("reload job status skipped after context cancellation", "jobId", jobCtx.JobID())
+			},
 		})
-		jobCtx.markEntrypointDone()
-		if result.Recovered != nil {
-			logger.Logger.Errorw("Reloaded job entrypoint panicked", fmt.Errorf("%v", result.Recovered), "jobId", jobCtx.JobID())
-		}
-		if result.Err != nil {
-			logger.Logger.Errorw("Reloaded job entrypoint failed", result.Err, "jobId", jobCtx.JobID())
-		}
-		status := result.Status
-		if workerlivekit.JobStatusSucceeded(status) {
-			select {
-			case <-jobCtx.ShutdownDone():
-			case <-ctx.Done():
-				jobCtx.Shutdown("")
-			}
-			if !s.finishJob(jobCtx) {
-				return
-			}
-		} else {
-			s.finishJob(jobCtx)
-		}
-		select {
-		case <-ctx.Done():
-			logger.Logger.Debugw("reload job status skipped after context cancellation", "jobId", jobCtx.JobID())
-		default:
-			if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(jobCtx.JobID(), status)); err != nil {
-				logger.Logger.Errorw("failed to update reloaded job status", err, "jobId", jobCtx.JobID())
-			}
-		}
-		s.finishJob(jobCtx)
 	}()
 }
 

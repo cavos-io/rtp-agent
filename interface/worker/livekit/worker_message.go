@@ -204,6 +204,18 @@ type JobEntrypointLifecycleOptions struct {
 	SendStatus   func(lkprotocol.JobStatus) error
 }
 
+type ReloadedJobEntrypointLifecycleOptions struct {
+	Context         context.Context
+	Entrypoint      func() error
+	MarkDone        func()
+	OnResult        func(EntrypointResult)
+	ShutdownDone    <-chan struct{}
+	Shutdown        func(string)
+	Finish          func() bool
+	SendStatus      func(lkprotocol.JobStatus) error
+	OnStatusSkipped func()
+}
+
 func RunEntrypoint(entrypoint func() error) (result EntrypointResult) {
 	result.Status = JobStatusForEntrypointResult(nil, nil)
 	defer func() {
@@ -216,6 +228,40 @@ func RunEntrypoint(entrypoint func() error) (result EntrypointResult) {
 		result.Err = err
 		result.Status = JobStatusForEntrypointResult(err, nil)
 	}
+	return result
+}
+
+func RunReloadedJobEntrypointLifecycle(opts ReloadedJobEntrypointLifecycleOptions) EntrypointResult {
+	result := RunEntrypoint(opts.Entrypoint)
+	if opts.MarkDone != nil {
+		opts.MarkDone()
+	}
+	if opts.OnResult != nil {
+		opts.OnResult(result)
+	}
+
+	if JobStatusSucceeded(result.Status) {
+		waitForReloadedJobShutdown(opts)
+		if !finishJobEntrypoint(opts.Finish) {
+			return result
+		}
+	} else {
+		finishJobEntrypoint(opts.Finish)
+	}
+
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-ctx.Done():
+		if opts.OnStatusSkipped != nil {
+			opts.OnStatusSkipped()
+		}
+	default:
+		_ = sendJobEntrypointStatus(opts.SendStatus, result.Status)
+	}
+	finishJobEntrypoint(opts.Finish)
 	return result
 }
 
@@ -248,6 +294,23 @@ func RunJobEntrypointLifecycle(opts JobEntrypointLifecycleOptions) EntrypointRes
 		finishJobEntrypoint(opts.Finish)
 	}
 	return result
+}
+
+func waitForReloadedJobShutdown(opts ReloadedJobEntrypointLifecycleOptions) {
+	if opts.ShutdownDone == nil {
+		return
+	}
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-opts.ShutdownDone:
+	case <-ctx.Done():
+		if opts.Shutdown != nil {
+			opts.Shutdown("")
+		}
+	}
 }
 
 func waitForJobShutdown(opts JobEntrypointLifecycleOptions) {
