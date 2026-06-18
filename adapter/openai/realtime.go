@@ -638,7 +638,7 @@ func openAIRealtimeInitialSession(model string, modalities ...[]string) map[stri
 		"rate": openAIRealtimeInputSampleRate,
 	}
 	outputModality := "audio"
-	if len(modalities) > 0 && !realtimeModalitiesInclude(modalities[0], "audio") {
+	if len(modalities) > 0 && len(modalities[0]) > 0 && !realtimeModalitiesInclude(modalities[0], "audio") {
 		outputModality = "text"
 	}
 	return map[string]any{
@@ -1593,11 +1593,103 @@ func (s *realtimeSession) emitSessionCloseMetrics() {
 func (s *realtimeSession) sendMsg(msg any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	msg = s.prepareClientMessage(msg)
 	b, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
 	return s.conn.WriteMessage(websocket.TextMessage, b)
+}
+
+func (s *realtimeSession) prepareClientMessage(msg any) any {
+	if s == nil || s.model == nil || !s.model.isLegacyAzureRealtime() {
+		return msg
+	}
+	payload, ok := msg.(map[string]any)
+	if !ok {
+		return msg
+	}
+	return openAIRealtimeLegacyAzureClientMessage(payload)
+}
+
+func (m *RealtimeModel) isLegacyAzureRealtime() bool {
+	return m != nil && m.isAzure && m.apiVersion != ""
+}
+
+func openAIRealtimeLegacyAzureClientMessage(msg map[string]any) map[string]any {
+	if openAIRealtimeString(msg["type"]) != "session.update" {
+		return msg
+	}
+	session, ok := msg["session"].(map[string]any)
+	if !ok {
+		return msg
+	}
+	converted := make(map[string]any, len(msg))
+	for key, value := range msg {
+		if key == "session" {
+			converted[key] = openAIRealtimeLegacyAzureSession(session)
+			continue
+		}
+		converted[key] = value
+	}
+	return converted
+}
+
+func openAIRealtimeLegacyAzureSession(session map[string]any) map[string]any {
+	mapped := make(map[string]any)
+	for key, value := range session {
+		if key != "audio" && key != "output_modalities" && key != "max_output_tokens" {
+			mapped[key] = value
+		}
+	}
+	if modalities, ok := session["output_modalities"]; ok {
+		mapped["modalities"] = openAIRealtimeLegacyAzureModalities(modalities)
+		mapped["input_audio_format"] = "pcm16"
+		mapped["output_audio_format"] = "pcm16"
+	}
+	if maxTokens, ok := session["max_output_tokens"]; ok {
+		mapped["max_response_output_tokens"] = maxTokens
+	}
+	audio, _ := session["audio"].(map[string]any)
+	input, _ := audio["input"].(map[string]any)
+	if value, ok := input["noise_reduction"]; ok {
+		mapped["input_audio_noise_reduction"] = value
+	}
+	if value, ok := input["transcription"]; ok {
+		mapped["input_audio_transcription"] = value
+	}
+	if value, ok := input["turn_detection"]; ok {
+		mapped["turn_detection"] = value
+	}
+	output, _ := audio["output"].(map[string]any)
+	if value, ok := output["voice"]; ok {
+		mapped["voice"] = value
+	}
+	if value, ok := output["speed"]; ok {
+		mapped["speed"] = value
+	}
+	return mapped
+}
+
+func openAIRealtimeLegacyAzureModalities(value any) []string {
+	raw, ok := value.([]string)
+	if ok && realtimeModalitiesInclude(raw, "audio") {
+		return []string{"audio", "text"}
+	}
+	if ok {
+		return append([]string(nil), raw...)
+	}
+	values, _ := value.([]any)
+	modalities := make([]string, 0, len(values))
+	for _, item := range values {
+		if modality, ok := item.(string); ok {
+			modalities = append(modalities, modality)
+		}
+	}
+	if realtimeModalitiesInclude(modalities, "audio") {
+		return []string{"audio", "text"}
+	}
+	return modalities
 }
 
 func (s *realtimeSession) eventLoop() {
@@ -1677,6 +1769,9 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 		initialSession["instructions"] = s.instructions
 	}
 	msg := openAIRealtimeInitialSessionUpdateMessage(initialSession)
+	if s.model.isLegacyAzureRealtime() {
+		msg = openAIRealtimeLegacyAzureClientMessage(msg)
+	}
 	b, err := json.Marshal(msg)
 	if err == nil {
 		err = conn.WriteMessage(websocket.TextMessage, b)
@@ -1688,6 +1783,9 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 			"session": map[string]any{
 				"tools": s.model.realtimeTools(s.tools),
 			},
+		}
+		if s.model.isLegacyAzureRealtime() {
+			toolsMsg = openAIRealtimeLegacyAzureClientMessage(toolsMsg)
 		}
 		b, err = json.Marshal(toolsMsg)
 		if err == nil {

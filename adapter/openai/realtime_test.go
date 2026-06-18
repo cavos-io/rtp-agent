@@ -231,6 +231,26 @@ func TestNewAzureOpenAIRealtimeRoutesDeploymentAndUsesAPIKey(t *testing.T) {
 	if sessionPayload["model"] != "gpt-realtime" {
 		t.Fatalf("session model = %#v, want default gpt-realtime", sessionPayload["model"])
 	}
+	if _, ok := sessionPayload["audio"]; ok {
+		t.Fatalf("session audio = %#v, want flattened Azure legacy session", sessionPayload["audio"])
+	}
+	modalities := sessionPayload["modalities"].([]any)
+	if len(modalities) != 2 || modalities[0] != "audio" || modalities[1] != "text" {
+		t.Fatalf("modalities = %#v, want Azure legacy audio and text", modalities)
+	}
+	if sessionPayload["input_audio_format"] != "pcm16" || sessionPayload["output_audio_format"] != "pcm16" {
+		t.Fatalf("audio formats = %#v/%#v, want pcm16", sessionPayload["input_audio_format"], sessionPayload["output_audio_format"])
+	}
+	if sessionPayload["max_response_output_tokens"] != "inf" {
+		t.Fatalf("max_response_output_tokens = %#v, want inf", sessionPayload["max_response_output_tokens"])
+	}
+	turnDetection := sessionPayload["turn_detection"].(map[string]any)
+	if turnDetection["type"] != "semantic_vad" {
+		t.Fatalf("turn_detection = %#v, want flattened semantic_vad", turnDetection)
+	}
+	if sessionPayload["voice"] != "marin" {
+		t.Fatalf("voice = %#v, want marin", sessionPayload["voice"])
+	}
 }
 
 func TestRealtimeModelUpdateOptionsForwardsToActiveSession(t *testing.T) {
