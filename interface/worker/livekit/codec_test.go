@@ -217,6 +217,84 @@ func TestServerMessageDispatchClassifiesUnknownMessage(t *testing.T) {
 	}
 }
 
+func TestRouteServerMessageRoutesRegisterEvent(t *testing.T) {
+	serverInfo := &lkprotocol.ServerInfo{Region: "iad"}
+	var got workerlivekit.WorkerRegisteredEvent
+
+	kind := workerlivekit.RouteServerMessage(workerlivekit.ServerMessageRouteOptions{
+		Message: &lkprotocol.ServerMessage{
+			Message: &lkprotocol.ServerMessage_Register{
+				Register: &lkprotocol.RegisterWorkerResponse{
+					WorkerId:   "worker-a",
+					ServerInfo: serverInfo,
+				},
+			},
+		},
+		OnRegister: func(event workerlivekit.WorkerRegisteredEvent) {
+			got = event
+		},
+	})
+
+	if kind != workerlivekit.ServerMessageKindRegister {
+		t.Fatalf("RouteServerMessage() kind = %q, want register", kind)
+	}
+	if got.WorkerID != "worker-a" {
+		t.Fatalf("registered WorkerID = %q, want worker-a", got.WorkerID)
+	}
+	if got.ServerInfo != serverInfo {
+		t.Fatal("registered ServerInfo did not preserve server info")
+	}
+}
+
+func TestRouteServerMessageRoutesJobMessages(t *testing.T) {
+	availability := &lkprotocol.AvailabilityRequest{Job: &lkprotocol.Job{Id: "job-available"}}
+	assignment := &lkprotocol.JobAssignment{Job: &lkprotocol.Job{Id: "job-assigned"}}
+	termination := &lkprotocol.JobTermination{JobId: "job-stop"}
+
+	var gotAvailability *lkprotocol.AvailabilityRequest
+	var gotAssignment *workerlivekit.JobAssignment
+	var gotTermination *workerlivekit.JobTermination
+
+	workerlivekit.RouteServerMessage(workerlivekit.ServerMessageRouteOptions{
+		Message:        &lkprotocol.ServerMessage{Message: &lkprotocol.ServerMessage_Availability{Availability: availability}},
+		OnAvailability: func(req *lkprotocol.AvailabilityRequest) { gotAvailability = req },
+	})
+	workerlivekit.RouteServerMessage(workerlivekit.ServerMessageRouteOptions{
+		Message:      &lkprotocol.ServerMessage{Message: &lkprotocol.ServerMessage_Assignment{Assignment: assignment}},
+		OnAssignment: func(req *workerlivekit.JobAssignment) { gotAssignment = req },
+	})
+	workerlivekit.RouteServerMessage(workerlivekit.ServerMessageRouteOptions{
+		Message:       &lkprotocol.ServerMessage{Message: &lkprotocol.ServerMessage_Termination{Termination: termination}},
+		OnTermination: func(req *workerlivekit.JobTermination) { gotTermination = req },
+	})
+
+	if gotAvailability != availability {
+		t.Fatal("availability route did not preserve request")
+	}
+	if gotAssignment != assignment {
+		t.Fatal("assignment route did not preserve request")
+	}
+	if gotTermination != termination {
+		t.Fatal("termination route did not preserve request")
+	}
+}
+
+func TestRouteServerMessageRoutesUnknownMessage(t *testing.T) {
+	unknownCalls := 0
+
+	kind := workerlivekit.RouteServerMessage(workerlivekit.ServerMessageRouteOptions{
+		Message:   &lkprotocol.ServerMessage{},
+		OnUnknown: func() { unknownCalls++ },
+	})
+
+	if kind != workerlivekit.ServerMessageKindUnknown {
+		t.Fatalf("RouteServerMessage() kind = %q, want unknown", kind)
+	}
+	if unknownCalls != 1 {
+		t.Fatalf("unknown calls = %d, want 1", unknownCalls)
+	}
+}
+
 func TestInitialRegisterMessageDecodesBinaryRegisterFrame(t *testing.T) {
 	msg := &lkprotocol.ServerMessage{
 		Message: &lkprotocol.ServerMessage_Register{

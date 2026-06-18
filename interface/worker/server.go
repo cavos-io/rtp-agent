@@ -773,7 +773,7 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 		opts.InitializeProcessTimeoutSeconds = defaultProcessTimeout
 	}
 	if opts.LogLevel == "" {
-		opts.LogLevel = os.Getenv("LIVEKIT_LOG_LEVEL")
+		opts.LogLevel = workerlivekit.WorkerLogLevelFromEnv(nil)
 	}
 	if opts.LogLevel == "" {
 		if opts.DevMode {
@@ -1525,25 +1525,27 @@ func (s *AgentServer) connectWorkerWebSocket(ctx context.Context, dialer *websoc
 }
 
 func (s *AgentServer) handleMessage(ctx context.Context, msg *workerlivekit.ServerMessage) {
-	dispatch := workerlivekit.ServerMessageDispatch(msg)
-	switch dispatch.Kind {
-	case workerlivekit.ServerMessageKindRegister:
-		event := workerlivekit.WorkerRegisteredEventFromRegisterDispatch(dispatch.Register)
-		logger.Logger.Infow("Worker Registered", "workerId", event.WorkerID, "serverInfo", event.ServerInfo)
-		s.mu.Lock()
-		s.workerID = event.WorkerID
-		s.mu.Unlock()
-		s.emitWorkerRegistered(event.WorkerID, event.ServerInfo)
-		s.reportActiveJobs()
-	case workerlivekit.ServerMessageKindAvailability:
-		s.handleAvailability(ctx, dispatch.Availability)
-	case workerlivekit.ServerMessageKindAssignment:
-		s.handleAssignment(ctx, dispatch.Assignment)
-	case workerlivekit.ServerMessageKindTermination:
-		s.handleTermination(dispatch.Termination)
-	default:
-		logger.Logger.Warnw("Unhandled message type received", nil)
-	}
+	workerlivekit.RouteServerMessage(workerlivekit.ServerMessageRouteOptions{
+		Message: msg,
+		OnRegister: func(event workerlivekit.WorkerRegisteredEvent) {
+			logger.Logger.Infow("Worker Registered", "workerId", event.WorkerID, "serverInfo", event.ServerInfo)
+			s.mu.Lock()
+			s.workerID = event.WorkerID
+			s.mu.Unlock()
+			s.emitWorkerRegistered(event.WorkerID, event.ServerInfo)
+			s.reportActiveJobs()
+		},
+		OnAvailability: func(req *workerlivekit.AvailabilityRequest) {
+			s.handleAvailability(ctx, req)
+		},
+		OnAssignment: func(req *workerlivekit.JobAssignment) {
+			s.handleAssignment(ctx, req)
+		},
+		OnTermination: s.handleTermination,
+		OnUnknown: func() {
+			logger.Logger.Warnw("Unhandled message type received", nil)
+		},
+	})
 }
 
 func (s *AgentServer) emitWorkerRegistered(workerID string, serverInfo *workerlivekit.ServerInfo) {
@@ -1663,21 +1665,21 @@ func (s *AgentServer) sendWorkerMessage(msg *workerlivekit.WorkerMessage) error 
 
 func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) {
 	s.mu.Lock()
-	workerlivekit.StopPendingAssignmentTimer(s.pendingTimers, jobID)
-	s.pendingAccepts[jobID] = args
-	var timer *time.Timer
-	timer = time.AfterFunc(assignmentTimeout, func() {
-		s.mu.Lock()
-		if s.pendingTimers[jobID] != timer {
+	workerlivekit.StorePendingAccept(workerlivekit.PendingAcceptStoreOptions{
+		Pending: s.pendingAccepts,
+		Timers:  s.pendingTimers,
+		JobID:   jobID,
+		Args:    args,
+		Timeout: assignmentTimeout,
+		OnTimeout: func(jobID string, timer *time.Timer) {
+			s.mu.Lock()
+			expired := workerlivekit.ExpirePendingAccept(s.pendingAccepts, s.pendingTimers, jobID, timer)
 			s.mu.Unlock()
-			return
-		}
-		delete(s.pendingAccepts, jobID)
-		delete(s.pendingTimers, jobID)
-		s.mu.Unlock()
-		logger.Logger.Warnw("assignment timed out after availability accept", nil, "jobId", jobID)
+			if expired {
+				logger.Logger.Warnw("assignment timed out after availability accept", nil, "jobId", jobID)
+			}
+		},
 	})
-	s.pendingTimers[jobID] = timer
 	s.mu.Unlock()
 }
 
@@ -1693,7 +1695,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.J
 	jobCtx.token = assignment.Token
 
 	s.mu.Lock()
-	args, accepted := workerlivekit.PopPendingAccept(s.pendingAccepts, jobID)
+	args, accepted := workerlivekit.AcceptPendingAssignment(s.pendingAccepts, s.pendingTimers, jobID)
 	if !accepted {
 		s.mu.Unlock()
 		logger.Logger.Warnw("received assignment for unknown job", nil, "jobId", jobID)
@@ -1703,7 +1705,6 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.J
 	jobCtx.workerID = s.workerID
 	jobCtx.AcceptArguments = args
 	jobCtx.LogContextFields()["worker_id"] = jobCtx.WorkerID()
-	workerlivekit.StopPendingAssignmentTimer(s.pendingTimers, jobID)
 	s.activeJobs[jobID] = jobCtx
 	s.mu.Unlock()
 

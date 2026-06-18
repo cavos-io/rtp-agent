@@ -87,6 +87,19 @@ func TestResolveWorkerConnectionOptionsFallsBackToLegacyWSURL(t *testing.T) {
 	}
 }
 
+func TestWorkerLogLevelFromEnvUsesLiveKitLogLevelEnv(t *testing.T) {
+	got := workerlivekit.WorkerLogLevelFromEnv(func(key string) string {
+		if key == workerlivekit.WorkerLogLevelEnvVar {
+			return "warn"
+		}
+		return ""
+	})
+
+	if got != "warn" {
+		t.Fatalf("WorkerLogLevelFromEnv() = %q, want warn", got)
+	}
+}
+
 func TestValidateWorkerConnectionOptionsRequiresURLKeyAndSecret(t *testing.T) {
 	tests := []struct {
 		name string

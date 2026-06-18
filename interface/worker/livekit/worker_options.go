@@ -16,6 +16,8 @@ type WorkerConnectionOptions struct {
 	Getenv         func(string) string
 }
 
+const WorkerLogLevelEnvVar = "LIVEKIT_LOG_LEVEL"
+
 func ResolveWorkerConnectionOptions(opts WorkerConnectionOptions) WorkerConnectionOptions {
 	getenv := opts.Getenv
 	if getenv == nil {
@@ -41,6 +43,13 @@ func ResolveWorkerConnectionOptions(opts WorkerConnectionOptions) WorkerConnecti
 		opts.AgentNameIsEnv = opts.AgentName != ""
 	}
 	return opts
+}
+
+func WorkerLogLevelFromEnv(getenv func(string) string) string {
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	return getenv(WorkerLogLevelEnvVar)
 }
 
 func ValidateWorkerConnectionOptions(opts WorkerConnectionOptions) error {
