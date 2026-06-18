@@ -145,7 +145,7 @@ func TestHandleTextInputInterruptsBeforeGenerateReply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleTextInput() error = %v, want nil", err)
 	}
-	if got := responder.calls; len(got) != 2 || got[0] != "interrupt:false" || got[1] != "generate:hello" {
+	if got := responder.calls; len(got) < 2 || got[0] != "interrupt:false" || got[1] != "generate:hello" {
 		t.Fatalf("calls = %#v, want interrupt before generate reply", got)
 	}
 }
@@ -159,6 +159,21 @@ func TestHandleTextInputUsesTurnClaimWhenAvailable(t *testing.T) {
 	}
 	if !responder.claimed {
 		t.Fatal("HandleTextInput() did not claim user turn")
+	}
+}
+
+func TestHandleTextInputEventEmitsTranscriptAfterGenerateReply(t *testing.T) {
+	responder := &recordingTextResponder{}
+
+	err := HandleTextInputEvent(context.Background(), responder, TextInputEvent{
+		Text:     "hello",
+		StreamID: "caller-7",
+	})
+	if err != nil {
+		t.Fatalf("HandleTextInputEvent() error = %v, want nil", err)
+	}
+	if got := responder.calls; len(got) != 3 || got[0] != "interrupt:false" || got[1] != "generate:hello" || got[2] != "transcript:hello:caller-7" {
+		t.Fatalf("calls = %#v, want interrupt, generate, transcript", got)
 	}
 }
 
@@ -187,4 +202,8 @@ func (r *recordingTextResponder) ClaimUserTurn(ctx context.Context, fn func(cont
 		return errors.New("nil claim function")
 	}
 	return fn(ctx)
+}
+
+func (r *recordingTextResponder) EmitUserInputTranscribed(ev agent.UserInputTranscribedEvent) {
+	r.calls = append(r.calls, "transcript:"+ev.Transcript+":"+ev.SpeakerID)
 }

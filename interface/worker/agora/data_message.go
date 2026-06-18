@@ -105,6 +105,10 @@ func HandleTextInputEvent(ctx context.Context, responder TextResponder, ev TextI
 		if err := responder.Interrupt(false); err != nil {
 			return err
 		}
+		_, err := responder.GenerateReply(ctx, ev.Text)
+		if err != nil {
+			return err
+		}
 		if transcriber, ok := responder.(TextInputTranscriber); ok {
 			transcriber.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{
 				Transcript: ev.Text,
@@ -112,8 +116,7 @@ func HandleTextInputEvent(ctx context.Context, responder TextResponder, ev TextI
 				SpeakerID:  ev.StreamID,
 			})
 		}
-		_, err := responder.GenerateReply(ctx, ev.Text)
-		return err
+		return nil
 	}
 	if claimer, ok := responder.(TextTurnClaimer); ok {
 		return claimer.ClaimUserTurn(normalizeContext(ctx), run)
