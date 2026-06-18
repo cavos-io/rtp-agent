@@ -141,11 +141,18 @@ func TestPipelineAgentGenerateReplyWithInstructionsUsesTemporaryChatContext(t *t
 	}
 	inferenceCtx := l.chatContexts[0]
 	if len(inferenceCtx.Items) != 2 {
-		t.Fatalf("inference chat item count = %d, want instruction and original user", len(inferenceCtx.Items))
+		t.Fatalf("inference chat item count = %d, want original user and appended instruction", len(inferenceCtx.Items))
 	}
-	instruction, ok := inferenceCtx.Items[0].(*llm.ChatMessage)
+	first, ok := inferenceCtx.Items[0].(*llm.ChatMessage)
 	if !ok {
 		t.Fatalf("first inference item = %T, want *llm.ChatMessage", inferenceCtx.Items[0])
+	}
+	if first.GetID() != "user_1" || first.Role != llm.ChatRoleUser || first.TextContent() != "hello" {
+		t.Fatalf("first inference item = %#v, want original user before temporary instructions", first)
+	}
+	instruction, ok := inferenceCtx.Items[1].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("second inference item = %T, want *llm.ChatMessage", inferenceCtx.Items[1])
 	}
 	if instruction.Role != llm.ChatRoleSystem || instruction.TextContent() != "answer in one sentence" {
 		t.Fatalf("instruction message = %#v, want temporary system instructions", instruction)
