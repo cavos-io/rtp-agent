@@ -31,6 +31,7 @@ const (
 )
 
 type XaiSTT struct {
+	mu                   sync.Mutex
 	apiKey               string
 	restURL              string
 	websocketURL         string
@@ -39,6 +40,7 @@ type XaiSTT struct {
 	enableInterimResults bool
 	enableDiarization    bool
 	endpointing          int
+	streams              map[*xaiSTTStream]struct{}
 }
 
 type XaiSTTOption func(*XaiSTT)
@@ -130,8 +132,20 @@ func (s *XaiSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *XaiSTT) UpdateOptions(opts ...XaiSTTOption) {
+	s.mu.Lock()
 	for _, opt := range opts {
 		opt(s)
+	}
+	streams := make([]*xaiSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	interimResults := s.enableInterimResults
+	diarization := s.enableDiarization
+	s.mu.Unlock()
+
+	for _, stream := range streams {
+		stream.updateOptions(interimResults, diarization)
 	}
 }
 
@@ -146,6 +160,7 @@ func (s *XaiSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &xaiSTTStream{
+		owner:  s,
 		conn:   conn,
 		events: make(chan *stt.SpeechEvent, 100),
 		errCh:  make(chan error, 1),
@@ -156,8 +171,27 @@ func (s *XaiSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 			diarization:    s.enableDiarization,
 		},
 	}
+	s.registerStream(stream)
 	go stream.readLoop()
 	return stream, nil
+}
+
+func (s *XaiSTT) registerStream(stream *xaiSTTStream) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.streams == nil {
+		s.streams = make(map[*xaiSTTStream]struct{})
+	}
+	s.streams[stream] = struct{}{}
+}
+
+func (s *XaiSTT) unregisterStream(stream *xaiSTTStream) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.streams, stream)
 }
 
 func (s *XaiSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
@@ -251,6 +285,7 @@ func resolveXaiSTTLanguage(s *XaiSTT, language string) string {
 }
 
 type xaiSTTStream struct {
+	owner  *XaiSTT
 	conn   *websocket.Conn
 	events chan *stt.SpeechEvent
 	errCh  chan error
@@ -264,6 +299,7 @@ type xaiSTTStream struct {
 
 func (s *xaiSTTStream) readLoop() {
 	defer close(s.events)
+	defer s.owner.unregisterStream(s)
 	for {
 		msgType, message, err := s.conn.ReadMessage()
 		if err != nil {
@@ -279,10 +315,20 @@ func (s *xaiSTTStream) readLoop() {
 		if err := json.Unmarshal(message, &payload); err != nil {
 			continue
 		}
-		for _, event := range processXaiSTTStreamEvent(s.state, payload) {
+		s.mu.Lock()
+		events := processXaiSTTStreamEvent(s.state, payload)
+		s.mu.Unlock()
+		for _, event := range events {
 			s.events <- event
 		}
 	}
+}
+
+func (s *xaiSTTStream) updateOptions(interimResults bool, diarization bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state.interimResults = interimResults
+	s.state.diarization = diarization
 }
 
 func (s *xaiSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -302,6 +348,7 @@ func (s *xaiSTTStream) Close() error {
 	}
 	s.closed = true
 	s.cancel()
+	s.owner.unregisterStream(s)
 	_ = s.conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"audio.done"}`))
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()

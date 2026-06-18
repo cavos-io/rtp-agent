@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -192,6 +193,56 @@ func TestXaiSTTUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
 	fields, _ := readMultipartRequest(t, req)
 	if fields["language"] != "id" {
 		t.Fatalf("language field = %q, want updated default", fields["language"])
+	}
+}
+
+func TestXaiSTTUpdateOptionsPropagatesToActiveStreams(t *testing.T) {
+	releaseServer := make(chan struct{})
+	handlerDone := make(chan struct{})
+	handlerErr := make(chan error, 1)
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = newXaiSTTTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		defer close(handlerDone)
+		<-releaseServer
+		_ = conn.Close()
+	}, handlerErr)
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewXaiSTT("test-key", WithXaiSTTWebsocketURL("ws://xai.test/v1/stt"))
+	streamIface, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	t.Cleanup(func() {
+		close(releaseServer)
+		_ = streamIface.Close()
+		select {
+		case <-handlerDone:
+		case err := <-handlerErr:
+			t.Fatal(err)
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for websocket handler")
+		}
+	})
+	stream, ok := streamIface.(*xaiSTTStream)
+	if !ok {
+		t.Fatalf("stream = %T, want *xaiSTTStream", streamIface)
+	}
+
+	provider.UpdateOptions(
+		WithXaiSTTInterimResults(false),
+		WithXaiSTTDiarization(true),
+	)
+
+	stream.mu.Lock()
+	interimResults := stream.state.interimResults
+	diarization := stream.state.diarization
+	stream.mu.Unlock()
+	if interimResults {
+		t.Fatal("active stream interim results = true, want updated false")
+	}
+	if !diarization {
+		t.Fatal("active stream diarization = false, want updated true")
 	}
 }
 
@@ -417,6 +468,41 @@ type multipartFile struct {
 	filename    string
 	contentType string
 	data        []byte
+}
+
+func newXaiSTTTestWebsocketDialer(t *testing.T, handler func(*websocket.Conn, *http.Request), serverErrCh chan<- error) *websocket.Dialer {
+	t.Helper()
+	upgrader := websocket.Upgrader{}
+	return &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			clientConn, serverConn := net.Pipe()
+			listener := newXaiSingleConnListener(serverConn)
+			server := &http.Server{
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					conn, err := upgrader.Upgrade(w, r, nil)
+					if err != nil {
+						serverErrCh <- err
+						return
+					}
+					defer conn.Close()
+					handler(conn, r)
+				}),
+			}
+			go func() {
+				if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+					serverErrCh <- err
+				}
+			}()
+			t.Cleanup(func() {
+				_ = server.Close()
+				_ = listener.Close()
+				_ = clientConn.Close()
+				_ = serverConn.Close()
+			})
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
 }
 
 func readMultipartRequest(t *testing.T, req *http.Request) (map[string]string, map[string]multipartFile) {
