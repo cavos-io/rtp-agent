@@ -178,6 +178,24 @@ func NewJobSessionReport(job *lkprotocol.Job) (*agent.SessionReport, *agent.Tagg
 	return report, tagger
 }
 
+func ShouldUploadJobSessionReport(job *lkprotocol.Job, fakeJob bool, report *agent.SessionReport) bool {
+	if job == nil || fakeJob || report == nil {
+		return false
+	}
+	return HasSessionRecordingOption(report.RecordingOptions) || HasSessionEvaluationReport(report)
+}
+
+func HasSessionRecordingOption(options agent.RecordingOptions) bool {
+	return options.Audio || options.Traces || options.Logs || options.Transcript
+}
+
+func HasSessionEvaluationReport(report *agent.SessionReport) bool {
+	if report == nil || report.Tagger == nil {
+		return false
+	}
+	return report.Tagger.Outcome() != "" || len(report.Tagger.Evaluations()) > 0
+}
+
 func JobLogContextFields(job *lkprotocol.Job) map[string]any {
 	info := JobSessionReportInfo(job)
 	return map[string]any{

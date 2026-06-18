@@ -1950,21 +1950,10 @@ func (s *AgentServer) uploadJobSessionReport(jobCtx *JobContext) {
 }
 
 func shouldUploadJobSessionReport(jobCtx *JobContext) bool {
-	if jobCtx == nil || jobCtx.Job == nil || jobCtx.IsFakeJob() || jobCtx.Report == nil {
+	if jobCtx == nil {
 		return false
 	}
-	return hasSessionRecordingOption(jobCtx.Report.RecordingOptions) || hasSessionEvaluationReport(jobCtx.Report)
-}
-
-func hasSessionRecordingOption(options agent.RecordingOptions) bool {
-	return options.Audio || options.Traces || options.Logs || options.Transcript
-}
-
-func hasSessionEvaluationReport(report *agent.SessionReport) bool {
-	if report == nil || report.Tagger == nil {
-		return false
-	}
-	return report.Tagger.Outcome() != "" || len(report.Tagger.Evaluations()) > 0
+	return workerlivekit.ShouldUploadJobSessionReport(jobCtx.Job, jobCtx.IsFakeJob(), jobCtx.Report)
 }
 
 func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
@@ -2041,7 +2030,7 @@ func newLocalJobContextWithOptions(roomName string, participantIdentity string, 
 	jobCtx := NewJobContext(localValues.Job, opts.WSRL, opts.APIKey, opts.APISecret)
 	jobCtx.AcceptArguments = JobAcceptArguments{Identity: localValues.ParticipantIdentity}
 	jobCtx.fakeJob = options.FakeJob
-	if hasSessionRecordingOption(options.RecordingOptions) {
+	if workerlivekit.HasSessionRecordingOption(options.RecordingOptions) {
 		jobCtx.InitRecording(options.RecordingOptions)
 	}
 	jobCtx.SetSessionDirectory(options.SessionDirectory)
