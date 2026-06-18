@@ -153,11 +153,14 @@ func TestElevenLabsSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	if _, ok := payload["voice_settings"]; !ok {
 		t.Fatalf("voice_settings missing from payload %#v, want explicit null/object field", payload)
 	}
-	if payload["language_code"] != "en" {
-		t.Fatalf("language_code = %#v, want en", payload["language_code"])
+	if _, ok := payload["language_code"]; ok {
+		t.Fatalf("language_code = %#v, want omitted for reference chunked synthesize request", payload["language_code"])
 	}
-	if payload["enable_ssml_parsing"] != true {
-		t.Fatalf("enable_ssml_parsing = %#v, want true", payload["enable_ssml_parsing"])
+	if _, ok := payload["enable_ssml_parsing"]; ok {
+		t.Fatalf("enable_ssml_parsing = %#v, want omitted for reference chunked synthesize request", payload["enable_ssml_parsing"])
+	}
+	if _, ok := payload["generation_config"]; ok {
+		t.Fatalf("generation_config = %#v, want omitted for reference chunked synthesize request", payload["generation_config"])
 	}
 }
 
