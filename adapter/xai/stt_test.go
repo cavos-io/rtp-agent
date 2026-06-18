@@ -150,6 +150,51 @@ func TestXaiSTTOptionsBuildReferenceStreamURLAndHeaders(t *testing.T) {
 	}
 }
 
+func TestXaiSTTUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
+	provider := NewXaiSTT("test-key",
+		WithXaiSTTWebsocketURL("ws://xai.example/v1/stt"),
+	)
+
+	provider.UpdateOptions(
+		WithXaiSTTSampleRate(48000),
+		WithXaiSTTLanguage("id"),
+		WithXaiSTTInterimResults(false),
+		WithXaiSTTDiarization(true),
+		WithXaiSTTEndpointing(250),
+	)
+
+	if got := provider.InputSampleRate(); got != 48000 {
+		t.Fatalf("InputSampleRate() = %d, want 48000", got)
+	}
+	caps := provider.Capabilities()
+	if caps.InterimResults {
+		t.Fatal("interim results = true, want updated false")
+	}
+	if !caps.Diarization {
+		t.Fatal("diarization = false, want updated true")
+	}
+
+	streamURL, err := url.Parse(buildXaiSTTStreamURL(provider, ""))
+	if err != nil {
+		t.Fatalf("parse stream URL: %v", err)
+	}
+	query := streamURL.Query()
+	assertXaiQuery(t, query, "sample_rate", "48000")
+	assertXaiQuery(t, query, "interim_results", "false")
+	assertXaiQuery(t, query, "diarize", "true")
+	assertXaiQuery(t, query, "language", "id")
+	assertXaiQuery(t, query, "endpointing", "250")
+
+	req, err := buildXaiSTTRecognizeRequest(context.Background(), provider, []byte{0x01}, "")
+	if err != nil {
+		t.Fatalf("build recognize request: %v", err)
+	}
+	fields, _ := readMultipartRequest(t, req)
+	if fields["language"] != "id" {
+		t.Fatalf("language field = %q, want updated default", fields["language"])
+	}
+}
+
 func TestXaiSTTRequiresAPIKeyBeforeRequest(t *testing.T) {
 	t.Setenv("XAI_API_KEY", "")
 	provider := NewXaiSTT("",

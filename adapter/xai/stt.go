@@ -116,6 +116,9 @@ func NewXaiSTT(apiKey string, opts ...XaiSTTOption) *XaiSTT {
 }
 
 func (s *XaiSTT) Label() string { return "xai.STT" }
+func (s *XaiSTT) InputSampleRate() uint32 {
+	return uint32(s.sampleRate)
+}
 func (s *XaiSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:         true,
@@ -123,6 +126,12 @@ func (s *XaiSTT) Capabilities() stt.STTCapabilities {
 		Diarization:       s.enableDiarization,
 		AlignedTranscript: "word",
 		OfflineRecognize:  true,
+	}
+}
+
+func (s *XaiSTT) UpdateOptions(opts ...XaiSTTOption) {
+	for _, opt := range opts {
+		opt(s)
 	}
 }
 
