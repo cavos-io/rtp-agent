@@ -544,6 +544,85 @@ type activeToolCall struct {
 	cancel       context.CancelFunc
 	cancellable  bool
 	speechHandle *SpeechHandle
+	done         <-chan struct{}
+}
+
+type activeToolRegistry struct {
+	mu        sync.Mutex
+	callsByID map[string]activeToolCall
+}
+
+func (r *activeToolRegistry) set(callID string, call activeToolCall) {
+	if r == nil || callID == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.callsByID == nil {
+		r.callsByID = make(map[string]activeToolCall)
+	}
+	r.callsByID[callID] = call
+}
+
+func (r *activeToolRegistry) get(callID string) (activeToolCall, bool) {
+	if r == nil || callID == "" {
+		return activeToolCall{}, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	call, ok := r.callsByID[callID]
+	return call, ok
+}
+
+func (r *activeToolRegistry) delete(callID string) {
+	if r == nil || callID == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.callsByID, callID)
+}
+
+func (r *activeToolRegistry) snapshot() map[string]activeToolCall {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	calls := make(map[string]activeToolCall, len(r.callsByID))
+	for callID, call := range r.callsByID {
+		calls[callID] = call
+	}
+	return calls
+}
+
+func (r *activeToolRegistry) drain(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	calls := r.snapshot()
+	for _, call := range calls {
+		if call.cancellable && call.cancel != nil {
+			call.cancel()
+		}
+	}
+	for callID, call := range calls {
+		if call.done == nil {
+			if call.cancellable {
+				r.delete(callID)
+			}
+			continue
+		}
+		select {
+		case <-call.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
 }
 
 type ToolExecutionOptions struct {
@@ -629,7 +708,7 @@ func PerformToolExecutions(
 			functionCall := makeExecutionFunctionCall(fncCall, executionArgs)
 			callCtx, callCancel := context.WithCancel(ctx)
 			if isToolExecutorSystemTool(fncCall.Name) {
-				output, cancel := executeToolExecutorSystemTool(fncCall, functionCall, &activeMu, activeCallIDs, activeFunctionCalls, activeCallsByID)
+				output, cancel := executeToolExecutorSystemTool(fncCall, functionCall, options.Session, &activeMu, activeCallIDs, activeFunctionCalls, activeCallsByID)
 				if cancel != nil {
 					cancel()
 				}
@@ -667,6 +746,9 @@ func PerformToolExecutions(
 							}
 							delete(activeCallIDs, callID)
 							delete(activeCallsByID, callID)
+							if options.Session != nil {
+								options.Session.toolExecutionRegistry.delete(callID)
+							}
 						}
 						delete(activeFunctionCalls, fncCall.Name)
 						duplicateNameCalls = nil
@@ -679,15 +761,21 @@ func PerformToolExecutions(
 					activeCallIDs[fncCall.CallID] = struct{}{}
 				}
 			}
+			var activeDone chan struct{}
 			if len(duplicateNameCalls) == 0 && !duplicateCallID {
+				activeDone = make(chan struct{})
 				activeCall := activeToolCall{
 					call:         functionCall,
 					cancel:       callCancel,
 					cancellable:  llm.ToolHasFlag(tool, llm.ToolFlagCancellable),
 					speechHandle: options.SpeechHandle,
+					done:         activeDone,
 				}
 				if fncCall.CallID != "" {
 					activeCallsByID[fncCall.CallID] = activeCall
+					if options.Session != nil {
+						options.Session.toolExecutionRegistry.set(fncCall.CallID, activeCall)
+					}
 				}
 				if tracksDuplicateFunctionName(duplicateMode) {
 					if activeFunctionCalls[fncCall.Name] == nil {
@@ -726,14 +814,20 @@ func PerformToolExecutions(
 			}
 			trackFunctionName := tracksDuplicateFunctionName(duplicateMode)
 			wg.Add(1)
-			go func(fc *llm.FunctionToolCall, trackFunctionName bool, callCtx context.Context, callCancel context.CancelFunc) {
+			go func(fc *llm.FunctionToolCall, trackFunctionName bool, callCtx context.Context, callCancel context.CancelFunc, session *AgentSession, activeDone chan struct{}) {
 				defer wg.Done()
 				defer callCancel()
+				if activeDone != nil {
+					defer close(activeDone)
+				}
 				if fc.CallID != "" || trackFunctionName {
 					defer func() {
 						activeMu.Lock()
 						delete(activeCallIDs, fc.CallID)
 						delete(activeCallsByID, fc.CallID)
+						if session != nil {
+							session.toolExecutionRegistry.delete(fc.CallID)
+						}
 						if calls := activeFunctionCalls[fc.Name]; calls != nil {
 							delete(calls, fc.CallID)
 							if len(calls) == 0 {
@@ -795,7 +889,7 @@ func PerformToolExecutions(
 					RawOutput:  result.RawOutput,
 					RawError:   result.RawError,
 				}
-			}(fncCall, trackFunctionName, callCtx, callCancel)
+			}(fncCall, trackFunctionName, callCtx, callCancel, options.Session, activeDone)
 		}
 
 		wg.Wait()
@@ -916,6 +1010,7 @@ func isToolExecutorSystemTool(name string) bool {
 func executeToolExecutorSystemTool(
 	fc *llm.FunctionToolCall,
 	functionCall llm.FunctionCall,
+	session *AgentSession,
 	activeMu *sync.Mutex,
 	activeCallIDs map[string]struct{},
 	activeFunctionCalls map[string]map[string]activeToolCall,
@@ -927,9 +1022,9 @@ func executeToolExecutorSystemTool(
 
 	switch fc.Name {
 	case getRunningTasksToolName:
-		output = runningTasksOutput(activeMu, activeCallsByID)
+		output = runningTasksOutput(activeToolCallsForHelpers(session, activeMu, activeCallsByID))
 	case cancelTaskToolName:
-		output, cancel, err = cancelRunningTask(fc.Arguments, activeMu, activeCallIDs, activeFunctionCalls, activeCallsByID)
+		output, cancel, err = cancelRunningTask(fc.Arguments, session, activeMu, activeCallIDs, activeFunctionCalls, activeCallsByID)
 	default:
 		err = llm.NewToolError(fmt.Sprintf("Unknown function: %s", fc.Name))
 	}
@@ -943,15 +1038,26 @@ func executeToolExecutorSystemTool(
 	}, cancel
 }
 
-func runningTasksOutput(activeMu *sync.Mutex, activeCallsByID map[string]activeToolCall) []map[string]any {
+func activeToolCallsForHelpers(session *AgentSession, activeMu *sync.Mutex, activeCallsByID map[string]activeToolCall) map[string]activeToolCall {
+	if session != nil {
+		return session.toolExecutionRegistry.snapshot()
+	}
 	activeMu.Lock()
+	defer activeMu.Unlock()
+	calls := make(map[string]activeToolCall, len(activeCallsByID))
+	for callID, active := range activeCallsByID {
+		calls[callID] = active
+	}
+	return calls
+}
+
+func runningTasksOutput(activeCallsByID map[string]activeToolCall) []map[string]any {
 	calls := make([]llm.FunctionCall, 0, len(activeCallsByID))
 	for _, active := range activeCallsByID {
 		if active.cancellable {
 			calls = append(calls, active.call)
 		}
 	}
-	activeMu.Unlock()
 
 	sort.Slice(calls, func(i, j int) bool {
 		return calls[i].CallID < calls[j].CallID
@@ -971,7 +1077,11 @@ func runningTasksOutput(activeMu *sync.Mutex, activeCallsByID map[string]activeT
 		}
 		item["type"] = "function_call"
 		item["created_at"] = float64(call.CreatedAt.UnixNano()) / float64(time.Second)
-		item["group_id"] = call.GroupID
+		if call.GroupID != nil {
+			item["group_id"] = *call.GroupID
+		} else {
+			item["group_id"] = nil
+		}
 		items = append(items, item)
 	}
 	return items
@@ -979,6 +1089,7 @@ func runningTasksOutput(activeMu *sync.Mutex, activeCallsByID map[string]activeT
 
 func cancelRunningTask(
 	arguments string,
+	session *AgentSession,
 	activeMu *sync.Mutex,
 	activeCallIDs map[string]struct{},
 	activeFunctionCalls map[string]map[string]activeToolCall,
@@ -997,9 +1108,16 @@ func cancelRunningTask(
 		return "", nil, llm.NewToolError("Task  not found")
 	}
 
-	activeMu.Lock()
-	active, ok := activeCallsByID[callID]
-	activeMu.Unlock()
+	var active activeToolCall
+	var ok bool
+	if session != nil {
+		active, ok = session.toolExecutionRegistry.get(callID)
+	}
+	if !ok {
+		activeMu.Lock()
+		active, ok = activeCallsByID[callID]
+		activeMu.Unlock()
+	}
 	if !ok {
 		return "", nil, llm.NewToolError(fmt.Sprintf("Task %s not found", callID))
 	}
@@ -1019,5 +1137,8 @@ func cancelRunningTask(
 		}
 	}
 	activeMu.Unlock()
+	if session != nil {
+		session.toolExecutionRegistry.delete(callID)
+	}
 	return fmt.Sprintf("Task %s cancelled successfully.", callID), active.cancel, nil
 }

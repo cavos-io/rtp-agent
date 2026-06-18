@@ -483,6 +483,35 @@ func TestRoomIOPublishAudioWaitForSubscriptionHonorsContext(t *testing.T) {
 	}
 }
 
+func TestRoomIOPublishAudioSubscriptionWaitFallsBackAfterTimeout(t *testing.T) {
+	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
+	rio := &RoomIO{
+		Options: RoomOptions{
+			AudioSubscriptionTimeout: 20 * time.Millisecond,
+		},
+		audioTrack:      newRoomIOTestAudioTrack(t),
+		encoder:         encoder,
+		audioSubscribed: make(chan struct{}),
+	}
+
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+	started := time.Now()
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio error = %v, want nil fallback after timeout", err)
+	}
+	if elapsed := time.Since(started); elapsed < 20*time.Millisecond {
+		t.Fatalf("PublishAudio returned after %v, want bounded subscription wait", elapsed)
+	}
+	if len(encoder.calls) == 0 {
+		t.Fatal("encoder was not called after subscription timeout fallback")
+	}
+}
+
 func TestRoomIOPlaybackEventsFollowCaptureAndFlush(t *testing.T) {
 	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
 	var started []PlaybackStartedEvent
@@ -1524,6 +1553,53 @@ func TestRoomIOReusesAgentTranscriptionSegmentUntilFinal(t *testing.T) {
 	}
 	if final.text != "Halo, ada yang bisa saya bantu?" {
 		t.Fatalf("final text = %q, want full utterance", final.text)
+	}
+}
+
+func TestRoomIOSpeechCreatedResetsAgentTranscriptionSegment(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	published := make(chan roomIOPublishedText, 4)
+	rio := &RoomIO{
+		AgentSession: session,
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+	rio.startAgentTranscriptionListener()
+	defer rio.agentTranscriptionCancel()
+
+	// First speech: emit a delta (not final) to establish a segment ID.
+	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "hello",
+		IsFinal:    false,
+	})
+	first := receivePublishedText(t, published, "first delta")
+	firstSegmentID := first.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if firstSegmentID == "" {
+		t.Fatal("first segment id must not be empty")
+	}
+
+	// New speech created before the first segment ends.
+	session.EmitSpeechCreated(agent.SpeechCreatedEvent{
+		SpeechHandle: agent.NewSpeechHandle(false, agent.DefaultInputDetails()),
+		Source:       "say",
+	})
+
+	// Give the goroutine time to process SpeechCreated and reset state.
+	time.Sleep(20 * time.Millisecond)
+
+	// Second speech delta must use a new segment ID.
+	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "world",
+		IsFinal:    false,
+	})
+	second := receivePublishedText(t, published, "second delta after new speech")
+	secondSegmentID := second.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if secondSegmentID == "" {
+		t.Fatal("second segment id must not be empty")
+	}
+	if firstSegmentID == secondSegmentID {
+		t.Fatalf("segment id must reset on SpeechCreated: both = %q", firstSegmentID)
 	}
 }
 

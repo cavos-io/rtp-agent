@@ -984,6 +984,32 @@ func (ma *MultimodalAgent) executeRealtimeFunctionCall(functionCall *llm.Functio
 		})
 		return
 	}
+	if isToolExecutorSystemTool(functionCall.Name) {
+		args, parseErr := canonicalFunctionCallArguments(functionCall.Arguments)
+		if parseErr != nil {
+			toolErr := llm.NewToolError(fmt.Sprintf("Error parsing arguments for `%s`: %s", functionCall.Name, parseErr.Error()))
+			result := llm.MakeToolOutput(*functionCall, nil, toolErr)
+			ma.appendRealtimeToolResult(&result.FncCall, result.FncCallOut)
+			return
+		}
+		functionCall.Arguments = args
+		var activeMu sync.Mutex
+		activeCallIDs := make(map[string]struct{})
+		activeFunctionCalls := make(map[string]map[string]activeToolCall)
+		activeCallsByID := make(map[string]activeToolCall)
+		output, cancel := executeToolExecutorSystemTool(&llm.FunctionToolCall{
+			ID:        functionCall.ID,
+			CallID:    functionCall.CallID,
+			Name:      functionCall.Name,
+			Arguments: functionCall.Arguments,
+			Extra:     functionCall.Extra,
+		}, *functionCall, ma.session, &activeMu, activeCallIDs, activeFunctionCalls, activeCallsByID)
+		if cancel != nil {
+			cancel()
+		}
+		ma.appendRealtimeToolResult(&output.FncCall, output.FncCallOut)
+		return
+	}
 
 	callCtx := ma.ctx
 	if callCtx == nil {

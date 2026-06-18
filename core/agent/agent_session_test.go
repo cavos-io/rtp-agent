@@ -301,6 +301,69 @@ func TestAgentSessionAgentOutputTranscribedEventsFanOutToSubscribers(t *testing.
 	assertAgentTranscriptEvent(t, second, "second")
 }
 
+func TestAgentSessionFinalAgentOutputTranscribedDeliveredWhenChannelFull(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	ch := session.AgentOutputTranscribedEvents()
+
+	// Fill the channel buffer with delta events so it's full.
+	for range cap(ch) {
+		session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{Transcript: "delta", IsFinal: false})
+	}
+
+	// Final event must block and be delivered even though channel was full.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{Transcript: "final", IsFinal: true})
+	}()
+
+	// Drain one slot then verify final event arrives.
+	<-ch
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("final AgentOutputTranscribed event was not delivered when channel became available")
+	}
+
+	var finalReceived bool
+	for {
+		select {
+		case ev := <-ch:
+			if ev.IsFinal {
+				finalReceived = true
+			}
+		default:
+			if !finalReceived {
+				t.Fatal("final AgentOutputTranscribed event not found in channel after delivery")
+			}
+			return
+		}
+	}
+}
+
+func TestAgentSessionDeltaAgentOutputTranscribedDroppedWhenChannelFull(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	ch := session.AgentOutputTranscribedEvents()
+
+	// Fill the channel buffer.
+	for range cap(ch) {
+		session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{Transcript: "delta", IsFinal: false})
+	}
+
+	// Emitting another delta must not block (dropped silently).
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{Transcript: "overflow delta", IsFinal: false})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("delta AgentOutputTranscribed emit blocked when channel was full, want non-blocking drop")
+	}
+}
+
 func TestAgentSessionUserStateChangedEventsFanOutToSubscribers(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	first := session.UserStateChangedEvents()
@@ -3123,6 +3186,46 @@ func TestAgentSessionShutdownCanSkipDrain(t *testing.T) {
 	}
 }
 
+func TestAgentSessionShutdownSkipDrainCancelsCancellableRunningTools(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	tool := &blockingGenerationTool{
+		flags:   llm.ToolFlagCancellable,
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	toolCtx := llm.NewToolContext([]interface{}{tool})
+	functionCh := make(chan *llm.FunctionToolCall)
+	outputs := PerformToolExecutions(context.Background(), functionCh, toolCtx, WithToolExecutionSession(session))
+
+	functionCh <- &llm.FunctionToolCall{Name: tool.Name(), CallID: "call_lookup", Arguments: `{}`}
+	select {
+	case <-tool.started:
+	case <-testTimeout():
+		t.Fatal("tool did not start")
+	}
+
+	session.Shutdown(false)
+
+	if _, ok := session.toolExecutionRegistry.get("call_lookup"); ok {
+		close(tool.release)
+		close(functionCh)
+		t.Fatal("running tool registry still contains call after shutdown without drain")
+	}
+	close(functionCh)
+	var sawCancellation bool
+	for output := range outputs {
+		if output.FncCall.CallID == "call_lookup" && output.RawError != nil {
+			sawCancellation = true
+		}
+	}
+	if !sawCancellation {
+		t.Fatal("tool execution did not surface cancellation output")
+	}
+}
+
 func TestAgentSessionShutdownSkipDrainInterruptsRealtimeOnce(t *testing.T) {
 	agent := NewAgent("test")
 	assistant := &fakeInterruptingSessionAssistant{}
@@ -3637,6 +3740,104 @@ func TestAgentSessionDrainDelegatesToActivity(t *testing.T) {
 	}
 	if !session.activity.schedulingPaused {
 		t.Fatal("schedulingPaused = false after Drain, want true")
+	}
+}
+
+func TestAgentSessionDrainCancelsCancellableRunningTools(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	tool := &blockingGenerationTool{
+		flags:   llm.ToolFlagCancellable,
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	toolCtx := llm.NewToolContext([]interface{}{tool})
+	functionCh := make(chan *llm.FunctionToolCall)
+	outputs := PerformToolExecutions(context.Background(), functionCh, toolCtx, WithToolExecutionSession(session))
+
+	functionCh <- &llm.FunctionToolCall{Name: tool.Name(), CallID: "call_lookup", Arguments: `{}`}
+	select {
+	case <-tool.started:
+	case <-testTimeout():
+		t.Fatal("tool did not start")
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Drain(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Drain error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("Drain did not return after cancelling cancellable tool")
+	}
+	if _, ok := session.toolExecutionRegistry.get("call_lookup"); ok {
+		t.Fatal("running tool registry still contains cancelled call")
+	}
+	close(functionCh)
+	var sawCancellation bool
+	for output := range outputs {
+		if output.FncCall.CallID == "call_lookup" && output.RawError != nil {
+			sawCancellation = true
+		}
+	}
+	if !sawCancellation {
+		t.Fatal("tool execution did not surface cancellation output")
+	}
+}
+
+func TestAgentSessionDrainWaitsForNonCancellableRunningTools(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	tool := &blockingGenerationTool{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	toolCtx := llm.NewToolContext([]interface{}{tool})
+	functionCh := make(chan *llm.FunctionToolCall)
+	outputs := PerformToolExecutions(context.Background(), functionCh, toolCtx, WithToolExecutionSession(session))
+
+	functionCh <- &llm.FunctionToolCall{Name: tool.Name(), CallID: "call_lookup", Arguments: `{}`}
+	close(functionCh)
+	select {
+	case <-tool.started:
+	case <-testTimeout():
+		t.Fatal("tool did not start")
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Drain(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Drain returned before non-cancellable tool completed: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+	close(tool.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Drain error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("Drain did not return after non-cancellable tool completed")
+	}
+	var sawOutput bool
+	for output := range outputs {
+		if output.FncCall.CallID == "call_lookup" && output.RawOutput == "ok" {
+			sawOutput = true
+		}
+	}
+	if !sawOutput {
+		t.Fatal("tool execution did not surface final output")
 	}
 }
 

@@ -238,7 +238,10 @@ func TestGoogleTTSUpdateOptionsMatchesReference(t *testing.T) {
 }
 
 func TestGoogleTTSUpdateOptionsPreservesExistingVoiceFields(t *testing.T) {
-	provider := newGoogleTTSWithClient(nil,
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client,
 		WithGoogleTTSLanguage("id-ID"),
 		WithGoogleTTSModel("gemini-custom"),
 	)
@@ -247,6 +250,17 @@ func TestGoogleTTSUpdateOptionsPreservesExistingVoiceFields(t *testing.T) {
 
 	if provider.voice.GetLanguageCode() != "id-ID" || provider.voice.GetName() != "id-ID-Standard-B" || provider.voice.GetModelName() != "gemini-custom" {
 		t.Fatalf("voice = %+v, want updated voice with existing language and model", provider.voice)
+	}
+	if got := provider.Model(); got != "gemini-custom" {
+		t.Fatalf("Model() = %q, want existing reference model metadata", got)
+	}
+	stream, err := provider.Synthesize(context.Background(), "halo")
+	if err != nil {
+		t.Fatalf("Synthesize after voice update error = %v", err)
+	}
+	defer stream.Close()
+	if voice := client.request.GetVoice(); voice.GetLanguageCode() != "id-ID" || voice.GetModelName() != "gemini-custom" {
+		t.Fatalf("request voice = %+v, want complete language and model after voice-only update", voice)
 	}
 }
 

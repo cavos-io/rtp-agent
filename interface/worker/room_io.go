@@ -432,6 +432,25 @@ func (rio *RoomIO) startAgentTranscriptionListener() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	rio.agentTranscriptionCancel = cancel
+
+	speechEvents := rio.AgentSession.SpeechCreatedEvents()
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case _, ok := <-speechEvents:
+				if !ok {
+					return
+				}
+				rio.mu.Lock()
+				rio.agentTranscriptionSegmentID = ""
+				rio.agentTranscriptionText = ""
+				rio.mu.Unlock()
+			}
+		}
+	}()
+
 	events := rio.AgentSession.AgentOutputTranscribedEvents()
 	go func() {
 		for {
@@ -1748,8 +1767,14 @@ func (rio *RoomIO) waitForAudioSubscriptionReady(ctx context.Context) error {
 	if ch == nil {
 		return nil
 	}
+	timeout := rio.audioSubscriptionTimeout()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case <-ch:
+		return nil
+	case <-timer.C:
+		logger.Logger.Warnw("room audio output publish subscription wait timed out", nil, "timeout", timeout)
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()

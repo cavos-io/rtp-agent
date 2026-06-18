@@ -1123,6 +1123,60 @@ func TestMultimodalToolExecutionRepairsArgumentsBeforeToolCall(t *testing.T) {
 	}
 }
 
+func TestMultimodalToolExecutionRunsCancellationHelpers(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", flags: llm.ToolFlagCancellable}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	cancelled := make(chan struct{}, 1)
+	session.toolExecutionRegistry.set("call_lookup_a", activeToolCall{
+		call: llm.FunctionCall{
+			ID:        "item_lookup",
+			CallID:    "call_lookup_a",
+			Name:      "lookup",
+			Arguments: `{"city":"Paris"}`,
+			CreatedAt: time.Now(),
+		},
+		cancel: func() {
+			cancelled <- struct{}{}
+		},
+		cancellable:  true,
+		speechHandle: NewSpeechHandle(true, DefaultInputDetails()),
+	})
+	ma := &MultimodalAgent{
+		session:   session,
+		chatCtx:   chatCtx,
+		rtSession: &fakeRealtimeSession{},
+		ctx:       context.Background(),
+	}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type:     llm.RealtimeEventTypeFunctionCall,
+		Function: &llm.FunctionToolCall{Name: getRunningTasksToolName, CallID: "call_get_running", Arguments: `{}`},
+	})
+	runningOutput := lastFunctionOutput(t, chatCtx)
+	if runningOutput.IsError || !strings.Contains(runningOutput.Output, "call_lookup_a") {
+		t.Fatalf("get running output = %#v, want visible active call", runningOutput)
+	}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type:     llm.RealtimeEventTypeFunctionCall,
+		Function: &llm.FunctionToolCall{Name: cancelTaskToolName, CallID: "call_cancel", Arguments: `{"call_id":"call_lookup_a"}`},
+	})
+	cancelOutput := lastFunctionOutput(t, chatCtx)
+	if cancelOutput.IsError || cancelOutput.Output != "Task call_lookup_a cancelled successfully." {
+		t.Fatalf("cancel output = %#v, want successful cancellation", cancelOutput)
+	}
+	select {
+	case <-cancelled:
+	case <-testTimeout():
+		t.Fatal("cancel helper did not invoke active tool cancellation")
+	}
+	if _, ok := session.toolExecutionRegistry.get("call_lookup_a"); ok {
+		t.Fatal("cancel helper left active call in session registry")
+	}
+}
+
 func TestMultimodalToolExecutionReportsUnknownFunction(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	ma := &MultimodalAgent{

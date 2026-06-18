@@ -16,6 +16,7 @@ import (
 type GoogleTTS struct {
 	client googleTTSClient
 	voice  *texttospeechpb.VoiceSelectionParams
+	model  string
 	prompt *string
 	audio  *texttospeechpb.AudioConfig
 }
@@ -29,19 +30,28 @@ type GoogleTTSOption func(*googleTTSConfig)
 
 type googleTTSConfig struct {
 	language     string
+	languageSet  bool
 	voice        string
+	voiceSet     bool
 	model        string
+	modelSet     bool
 	prompt       *string
+	promptSet    bool
 	speakingRate float64
+	rateSet      bool
 	pitch        float64
+	pitchSet     bool
 	effects      []string
+	effectsSet   bool
 	volumeGainDB float64
+	volumeSet    bool
 }
 
 func WithGoogleTTSLanguage(language string) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
 		if language != "" {
 			cfg.language = language
+			cfg.languageSet = true
 		}
 	}
 }
@@ -50,6 +60,7 @@ func WithGoogleTTSVoice(voice string) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
 		if voice != "" {
 			cfg.voice = voice
+			cfg.voiceSet = true
 		}
 	}
 }
@@ -58,6 +69,7 @@ func WithGoogleTTSModel(model string) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
 		if model != "" {
 			cfg.model = model
+			cfg.modelSet = true
 		}
 	}
 }
@@ -65,18 +77,21 @@ func WithGoogleTTSModel(model string) GoogleTTSOption {
 func WithGoogleTTSPrompt(prompt string) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
 		cfg.prompt = &prompt
+		cfg.promptSet = true
 	}
 }
 
 func WithGoogleTTSSpeakingRate(rate float64) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
 		cfg.speakingRate = rate
+		cfg.rateSet = true
 	}
 }
 
 func WithGoogleTTSPitch(pitch float64) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
 		cfg.pitch = pitch
+		cfg.pitchSet = true
 	}
 }
 
@@ -84,6 +99,7 @@ func WithGoogleTTSEffectsProfileID(profileID string) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
 		if profileID != "" {
 			cfg.effects = []string{profileID}
+			cfg.effectsSet = true
 		}
 	}
 }
@@ -91,6 +107,7 @@ func WithGoogleTTSEffectsProfileID(profileID string) GoogleTTSOption {
 func WithGoogleTTSVolumeGainDB(volumeGainDB float64) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
 		cfg.volumeGainDB = volumeGainDB
+		cfg.volumeSet = true
 	}
 }
 
@@ -125,6 +142,7 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 	return &GoogleTTS{
 		client: client,
 		voice:  googleTTSVoiceParams(cfg),
+		model:  cfg.model,
 		prompt: cfg.prompt,
 		audio: &texttospeechpb.AudioConfig{
 			AudioEncoding:    texttospeechpb.AudioEncoding_PCM,
@@ -144,8 +162,8 @@ func (t *GoogleTTS) Capabilities() tts.TTSCapabilities {
 func (t *GoogleTTS) SampleRate() int  { return 24000 }
 func (t *GoogleTTS) NumChannels() int { return 1 }
 func (t *GoogleTTS) Model() string {
-	if model := t.voice.GetModelName(); model != "" {
-		return model
+	if t.model != "" {
+		return t.model
 	}
 	return "Chirp3"
 }
@@ -165,12 +183,27 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	t.voice = googleTTSVoiceParams(cfg)
-	t.prompt = cfg.prompt
-	t.audio.SpeakingRate = cfg.speakingRate
-	t.audio.Pitch = cfg.pitch
-	t.audio.EffectsProfileId = append([]string(nil), cfg.effects...)
-	t.audio.VolumeGainDb = cfg.volumeGainDB
+	if cfg.languageSet || cfg.voiceSet || cfg.modelSet {
+		t.voice = googleTTSVoiceParams(cfg)
+	}
+	if cfg.modelSet {
+		t.model = cfg.model
+	}
+	if cfg.promptSet {
+		t.prompt = cfg.prompt
+	}
+	if cfg.rateSet {
+		t.audio.SpeakingRate = cfg.speakingRate
+	}
+	if cfg.pitchSet {
+		t.audio.Pitch = cfg.pitch
+	}
+	if cfg.effectsSet {
+		t.audio.EffectsProfileId = append([]string(nil), cfg.effects...)
+	}
+	if cfg.volumeSet {
+		t.audio.VolumeGainDb = cfg.volumeGainDB
+	}
 }
 
 func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {

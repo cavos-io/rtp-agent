@@ -292,6 +292,7 @@ type AgentSession struct {
 	videoSampler            *VoiceActivityVideoSampler
 	audioOutputController   AudioOutputController
 	audioPlaybackController AudioPlaybackController
+	toolExecutionRegistry   activeToolRegistry
 
 	// Event channels
 	AgentStateChangedCh  chan AgentStateChangedEvent
@@ -847,7 +848,10 @@ func (s *AgentSession) Drain(ctx context.Context) error {
 	if activity == nil {
 		return ErrAgentSessionNotRunning
 	}
-	return activity.Drain(ctx)
+	if err := activity.Drain(ctx); err != nil {
+		return err
+	}
+	return s.toolExecutionRegistry.drain(ctx)
 }
 
 type AgentStateChangedEvent struct {
@@ -1198,9 +1202,13 @@ func (s *AgentSession) EmitAgentOutputTranscribed(ev AgentOutputTranscribedEvent
 	}
 	s.recordEvent(&ev)
 	for _, ch := range s.agentOutputTranscribedSubscribers() {
-		select {
-		case ch <- ev:
-		default:
+		if ev.IsFinal {
+			ch <- ev
+		} else {
+			select {
+			case ch <- ev:
+			default:
+			}
 		}
 	}
 }
@@ -2767,6 +2775,9 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 		}
 		if task, ok := activity.AgentIntf.(interface{ Cancel() }); ok {
 			task.Cancel()
+		}
+		if err := s.toolExecutionRegistry.drain(ctx); err != nil && stopErr == nil {
+			stopErr = err
 		}
 		activity.Stop()
 	}
