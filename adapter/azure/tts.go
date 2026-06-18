@@ -156,6 +156,9 @@ func NewAzureTTSWithOptions(apiKey string, region string, voice string, opts ...
 	if _, ok := azureTTSSampleFormats[provider.sampleRate]; !ok {
 		return nil, fmt.Errorf("azure tts unsupported sample rate: %d", provider.sampleRate)
 	}
+	if err := validateAzureTTSVoiceControls(provider); err != nil {
+		return nil, err
+	}
 	return provider, nil
 }
 
@@ -250,6 +253,31 @@ func azureTTSEndpointURL(t *AzureTTS) (string, error) {
 	query.Set("deploymentId", t.deploymentID)
 	parsed.RawQuery = query.Encode()
 	return parsed.String(), nil
+}
+
+func validateAzureTTSVoiceControls(t *AzureTTS) error {
+	if t.style.Degree != 0 && (t.style.Degree < 0.1 || t.style.Degree > 2.0) {
+		return fmt.Errorf("style degree must be between 0.1 and 2.0")
+	}
+	if t.prosody.Rate != "" && !azureTTSAllowed(t.prosody.Rate, "x-slow", "slow", "medium", "fast", "x-fast") {
+		return fmt.Errorf("prosody rate must be one of 'x-slow', 'slow', 'medium', 'fast', 'x-fast'")
+	}
+	if t.prosody.Volume != "" && !azureTTSAllowed(t.prosody.Volume, "silent", "x-soft", "soft", "medium", "loud", "x-loud") {
+		return fmt.Errorf("prosody volume must be one of 'silent', 'x-soft', 'soft', 'medium', 'loud', 'x-loud'")
+	}
+	if t.prosody.Pitch != "" && !azureTTSAllowed(t.prosody.Pitch, "x-low", "low", "medium", "high", "x-high") {
+		return fmt.Errorf("prosody pitch must be one of 'x-low', 'low', 'medium', 'high', 'x-high'")
+	}
+	return nil
+}
+
+func azureTTSAllowed(value string, allowed ...string) bool {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func buildAzureTTSSSML(t *AzureTTS, language string, text string) string {

@@ -1016,6 +1016,44 @@ func TestAzureTTSBuildsRequestWithReferenceSSMLOptions(t *testing.T) {
 	}
 }
 
+func TestAzureTTSRejectsInvalidReferenceVoiceControls(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []AzureTTSOption
+		want string
+	}{
+		{
+			name: "style degree",
+			opts: []AzureTTSOption{WithAzureTTSStyle(AzureTTSStyle{Style: "cheerful", Degree: 2.5})},
+			want: "style degree",
+		},
+		{
+			name: "prosody rate",
+			opts: []AzureTTSOption{WithAzureTTSProsody(AzureTTSProsody{Rate: "warp"})},
+			want: "prosody rate",
+		},
+		{
+			name: "prosody volume",
+			opts: []AzureTTSOption{WithAzureTTSProsody(AzureTTSProsody{Volume: "blast"})},
+			want: "prosody volume",
+		},
+		{
+			name: "prosody pitch",
+			opts: []AzureTTSOption{WithAzureTTSProsody(AzureTTSProsody{Pitch: "sideways"})},
+			want: "prosody pitch",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewAzureTTSWithOptions("key", "eastus", "en-US-AvaNeural", tt.opts...)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("NewAzureTTSWithOptions error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestAzureTTSUpdateOptionsMatchesReference(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {
