@@ -168,6 +168,71 @@ func TestOpenAIRealtimeSessionUsesReferenceWebsocketHeaders(t *testing.T) {
 	}
 }
 
+func TestNewAzureOpenAIRealtimeRoutesDeploymentAndUsesAPIKey(t *testing.T) {
+	connected := make(chan *http.Request, 1)
+	messages := make(chan string, 1)
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		connected <- r
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		messages <- string(msg)
+		<-releaseServer
+	})
+
+	realtimeModel, err := NewAzureOpenAIRealtimeModel(
+		"",
+		"http://azure.openai.test",
+		"voice-deployment",
+		"2024-10-01-preview",
+		"azure-key",
+		"",
+		WithOpenAIRealtimeWebsocketDialer(dialer),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAIRealtimeModel error = %v", err)
+	}
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	req := <-connected
+	if req.Host != "azure.openai.test" || req.URL.Path != "/openai/realtime" {
+		t.Fatalf("url = %s, want Azure legacy realtime route", req.URL.String())
+	}
+	if req.URL.Query().Get("api-version") != "2024-10-01-preview" {
+		t.Fatalf("api-version query = %q, want 2024-10-01-preview", req.URL.Query().Get("api-version"))
+	}
+	if req.URL.Query().Get("deployment") != "voice-deployment" {
+		t.Fatalf("deployment query = %q, want voice-deployment", req.URL.Query().Get("deployment"))
+	}
+	if req.Header.Get("api-key") != "azure-key" {
+		t.Fatalf("api-key header = %q, want Azure API key", req.Header.Get("api-key"))
+	}
+	if req.Header.Get("Authorization") != "" {
+		t.Fatalf("Authorization = %q, want empty for Azure API key auth", req.Header.Get("Authorization"))
+	}
+	if req.Header.Get("User-Agent") != "LiveKit Agents" {
+		t.Fatalf("User-Agent = %q, want LiveKit Agents", req.Header.Get("User-Agent"))
+	}
+
+	initialUpdate := <-messages
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(initialUpdate), &payload); err != nil {
+		t.Fatalf("decode initial session update: %v", err)
+	}
+	sessionPayload := payload["session"].(map[string]any)
+	if sessionPayload["model"] != "gpt-realtime" {
+		t.Fatalf("session model = %#v, want default gpt-realtime", sessionPayload["model"])
+	}
+}
+
 func TestRealtimeModelUpdateOptionsForwardsToActiveSession(t *testing.T) {
 	messages := make(chan string, 8)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {

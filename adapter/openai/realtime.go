@@ -29,8 +29,12 @@ import (
 
 type RealtimeModel struct {
 	apiKey                      string
+	azureADToken                string
 	model                       string
 	baseURL                     string
+	azureDeployment             string
+	apiVersion                  string
+	isAzure                     bool
 	dialWebsocket               OpenAIRealtimeWebsocketDialer
 	toolFormatter               OpenAIRealtimeToolFormatter
 	inputTranscriptionFinalHook OpenAIRealtimeInputTranscriptionFinalHook
@@ -252,6 +256,41 @@ func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *Realt
 	}
 }
 
+func NewAzureOpenAIRealtimeModel(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...OpenAIRealtimeOption) (*RealtimeModel, error) {
+	if model == "" {
+		model = "gpt-realtime"
+	}
+	if azureEndpoint == "" {
+		azureEndpoint = os.Getenv(azureOpenAIEndpointEnv)
+	}
+	if apiVersion == "" {
+		apiVersion = os.Getenv(openAIAPIVersionEnv)
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(azureOpenAIAPIKeyEnv)
+	}
+	if azureADToken == "" {
+		azureADToken = os.Getenv(azureOpenAIADTokenEnv)
+	}
+	if azureEndpoint == "" {
+		return nil, fmt.Errorf("%s is required for Azure OpenAI realtime", azureOpenAIEndpointEnv)
+	}
+	if apiKey == "" && azureADToken == "" {
+		return nil, fmt.Errorf("%s or %s is required for Azure OpenAI realtime", azureOpenAIAPIKeyEnv, azureOpenAIADTokenEnv)
+	}
+	if azureDeployment == "" {
+		azureDeployment = model
+	}
+	provider := NewRealtimeModel(apiKey, model, opts...)
+	provider.apiKey = apiKey
+	provider.baseURL = openAIRealtimeAzureBaseURL(azureEndpoint)
+	provider.azureADToken = azureADToken
+	provider.azureDeployment = azureDeployment
+	provider.apiVersion = apiVersion
+	provider.isAzure = true
+	return provider, nil
+}
+
 func (m *RealtimeModel) Model() string {
 	return m.model
 }
@@ -354,14 +393,12 @@ type realtimeMessageGeneration struct {
 }
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
-	if m.apiKey == "" {
+	if m.apiKey == "" && (!m.isAzure || m.azureADToken == "") {
 		return nil, fmt.Errorf("%s", "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable")
 	}
-	wsURL := openAIRealtimeSessionURL(m.baseURL, m.model)
+	wsURL := m.realtimeSessionURL()
 
-	header := http.Header{}
-	header.Add("Authorization", "Bearer "+m.apiKey)
-	header.Add("User-Agent", "LiveKit Agents")
+	header := m.realtimeHeaders()
 
 	conn, err := m.dialRealtimeWebsocket(context.Background(), wsURL, header)
 	if err != nil {
@@ -398,6 +435,29 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	m.registerSession(s)
 
 	return s, nil
+}
+
+func (m *RealtimeModel) realtimeHeaders() http.Header {
+	header := http.Header{}
+	header.Add("User-Agent", "LiveKit Agents")
+	if m.isAzure {
+		if m.azureADToken != "" {
+			header.Add("Authorization", "Bearer "+m.azureADToken)
+		}
+		if m.apiKey != "" {
+			header.Add("api-key", m.apiKey)
+		}
+		return header
+	}
+	header.Add("Authorization", "Bearer "+m.apiKey)
+	return header
+}
+
+func (m *RealtimeModel) realtimeSessionURL() string {
+	if m.isAzure {
+		return openAIRealtimeAzureSessionURL(m.baseURL, m.model, m.azureDeployment, m.apiVersion)
+	}
+	return openAIRealtimeSessionURL(m.baseURL, m.model)
 }
 
 func (m *RealtimeModel) registerSession(session *realtimeSession) {
@@ -506,6 +566,20 @@ func openAIRealtimeBaseURL(rawURL string) string {
 	return u.String()
 }
 
+func openAIRealtimeAzureBaseURL(rawURL string) string {
+	u, err := url.Parse(strings.TrimRight(rawURL, "/") + "/openai")
+	if err != nil {
+		return rawURL
+	}
+	switch u.Scheme {
+	case "http":
+		u.Scheme = "ws"
+	case "https":
+		u.Scheme = "wss"
+	}
+	return u.String()
+}
+
 func openAIRealtimeSessionURL(baseURL, model string) string {
 	u, err := url.Parse(baseURL)
 	if err != nil {
@@ -514,6 +588,41 @@ func openAIRealtimeSessionURL(baseURL, model string) string {
 	query := u.Query()
 	if query.Get("model") == "" {
 		query.Set("model", model)
+	}
+	u.RawQuery = query.Encode()
+	return u.String()
+}
+
+func openAIRealtimeAzureSessionURL(baseURL, model, deployment, apiVersion string) string {
+	if deployment == "" {
+		deployment = model
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return baseURL
+	}
+	path := strings.TrimRight(u.Path, "/")
+	switch path {
+	case "", "/openai":
+		if apiVersion != "" {
+			u.Path = path + "/realtime"
+		} else {
+			u.Path = path + "/v1/realtime"
+		}
+	case "/openai/v1":
+		u.Path = "/openai/v1/realtime"
+	default:
+		u.Path = strings.TrimRight(u.Path, "/")
+	}
+	query := u.Query()
+	query.Del("api-version")
+	if apiVersion != "" {
+		query.Set("api-version", apiVersion)
+		if deployment != "" {
+			query.Set("deployment", deployment)
+		}
+	} else if query.Get("model") == "" && deployment != "" {
+		query.Set("model", deployment)
 	}
 	u.RawQuery = query.Encode()
 	return u.String()
@@ -1552,10 +1661,8 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 	if s.model == nil {
 		return fmt.Errorf("OpenAI realtime disconnected")
 	}
-	wsURL := openAIRealtimeSessionURL(s.model.baseURL, s.model.model)
-	header := http.Header{}
-	header.Add("Authorization", "Bearer "+s.model.apiKey)
-	header.Add("User-Agent", "LiveKit Agents")
+	wsURL := s.model.realtimeSessionURL()
+	header := s.model.realtimeHeaders()
 
 	conn, err := s.model.dialRealtimeWebsocket(s.ctx, wsURL, header)
 	if err != nil {
