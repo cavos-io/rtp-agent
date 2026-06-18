@@ -52,6 +52,22 @@ func TestSonioxSTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestSonioxSTTExposesReferenceInputSampleRate(t *testing.T) {
+	provider := NewSonioxSTT("test-key")
+
+	if got := provider.InputSampleRate(); got != 16000 {
+		t.Fatalf("InputSampleRate = %d, want reference default 16000", got)
+	}
+}
+
+func TestSonioxSTTExposesConfiguredInputSampleRate(t *testing.T) {
+	provider := NewSonioxSTT("test-key", WithSonioxSampleRate(8000))
+
+	if got := provider.InputSampleRate(); got != 8000 {
+		t.Fatalf("InputSampleRate = %d, want configured sample rate 8000", got)
+	}
+}
+
 func TestNewSonioxSTTUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("SONIOX_API_KEY", "env-key")
 
