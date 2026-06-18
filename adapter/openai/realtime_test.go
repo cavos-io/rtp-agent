@@ -39,6 +39,26 @@ func TestRealtimeModelCapabilitiesMatchReference(t *testing.T) {
 	}
 }
 
+func TestRealtimeModelCapabilitiesDisableExplicitNilInputAudioTranscription(t *testing.T) {
+	model := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeInputAudioTranscription(nil))
+
+	capabilities := model.Capabilities()
+
+	if capabilities.UserTranscription {
+		t.Fatal("UserTranscription = true, want false when input_audio_transcription is explicitly nil")
+	}
+}
+
+func TestRealtimeModelCapabilitiesDisableExplicitNilTurnDetection(t *testing.T) {
+	model := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeTurnDetection(nil))
+
+	capabilities := model.Capabilities()
+
+	if capabilities.TurnDetection {
+		t.Fatal("TurnDetection = true, want false when turn_detection is explicitly nil")
+	}
+}
+
 func TestNewOpenAIRealtimeModelUsesEnvAPIKey(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "env-key")
 

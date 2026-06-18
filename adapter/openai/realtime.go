@@ -345,12 +345,17 @@ func (m *RealtimeModel) UpdateOptions(options llm.RealtimeSessionOptions) error 
 }
 
 func (m *RealtimeModel) Capabilities() llm.RealtimeCapabilities {
+	m.mu.Lock()
+	options := m.options
+	modalities := append([]string(nil), m.modalities...)
+	m.mu.Unlock()
+
 	return llm.RealtimeCapabilities{
 		MessageTruncation:       true,
-		TurnDetection:           true,
-		UserTranscription:       true,
+		TurnDetection:           !(options.TurnDetectionSet && options.TurnDetection == nil),
+		UserTranscription:       !(options.InputAudioTranscriptionSet && options.InputAudioTranscription == nil),
 		AutoToolReplyGeneration: false,
-		AudioOutput:             len(m.modalities) == 0 || realtimeModalitiesInclude(m.modalities, "audio"),
+		AudioOutput:             len(modalities) == 0 || realtimeModalitiesInclude(modalities, "audio"),
 		ManualFunctionCalls:     true,
 		MutableChatContext:      true,
 		MutableInstructions:     true,
