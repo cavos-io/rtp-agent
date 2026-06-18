@@ -740,6 +740,9 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			genData, err = PerformLLMInference(ctx, va.LLM, inferenceCtx, selectedTools, chatOptions...)
 			if err != nil {
 				logger.Logger.Errorw("LLM inference failed", err)
+				if opts.SpeechHandle != nil {
+					opts.SpeechHandle.SetRunFinalOutput(err)
+				}
 				va.emitLLMError(session, err)
 				session.UpdateAgentState(AgentStateListening)
 				return
@@ -761,6 +764,9 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		}
 		if genData.StreamErr != nil {
 			logger.Logger.Errorw("LLM stream failed", genData.StreamErr)
+			if opts.SpeechHandle != nil {
+				opts.SpeechHandle.SetRunFinalOutput(genData.StreamErr)
+			}
 			va.emitLLMError(session, genData.StreamErr)
 			session.UpdateAgentState(AgentStateListening)
 			return
