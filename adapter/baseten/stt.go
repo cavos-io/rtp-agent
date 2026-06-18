@@ -1,6 +1,7 @@
 package baseten
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -27,6 +28,7 @@ const (
 	defaultBasetenSTTVADThreshold            = 0.5
 	defaultBasetenSTTVADMinSilenceMS         = 300
 	defaultBasetenSTTVADSpeechPadMS          = 30
+	basetenSTTAudioChunkBytes                = 1024
 	basetenModelEndpointEnv                  = "BASETEN_MODEL_ENDPOINT"
 )
 
@@ -253,16 +255,47 @@ type basetenSTTStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	state  *basetenSTTStreamState
+	audio  bytes.Buffer
 }
 
 func (s *basetenSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	return s.conn.WriteMessage(websocket.BinaryMessage, frame.Data)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("baseten stt stream is closed")
+	}
+	if _, err := s.audio.Write(frame.Data); err != nil {
+		return err
+	}
+	for s.audio.Len() >= basetenSTTAudioChunkBytes {
+		chunk := make([]byte, basetenSTTAudioChunkBytes)
+		if _, err := s.audio.Read(chunk); err != nil {
+			return err
+		}
+		if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *basetenSTTStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("baseten stt stream is closed")
+	}
+	if s.audio.Len() == 0 {
+		return nil
+	}
+	chunk := bytes.Clone(s.audio.Bytes())
+	s.audio.Reset()
+	if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
+		return err
+	}
 	return nil
 }
 

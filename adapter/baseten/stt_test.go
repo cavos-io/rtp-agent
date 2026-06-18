@@ -1,6 +1,7 @@
 package baseten
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -253,6 +254,62 @@ func TestBasetenSTTStreamSendsReferenceMetadataAndAudio(t *testing.T) {
 	assertBasetenPayload(t, streaming, "sample_rate", float64(8000))
 	if got := readBasetenTestChan(t, audioCh, errCh); string(got) != "pcm" {
 		t.Fatalf("audio payload = %q, want pcm", string(got))
+	}
+	if got := readBasetenTestChan(t, terminateCh, errCh); got != `{"terminate_session":true}` {
+		t.Fatalf("terminate payload = %q, want terminate_session", got)
+	}
+}
+
+func TestBasetenSTTPushFrameBuffersReferenceAudioChunks(t *testing.T) {
+	audioCh := make(chan []byte, 2)
+	terminateCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+	dialer := newBasetenSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			errCh <- err
+			return
+		}
+		for i := 0; i < 2; i++ {
+			msgType, audioPayload, err := conn.ReadMessage()
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if msgType != websocket.BinaryMessage {
+				t.Errorf("audio message type = %d, want binary", msgType)
+			}
+			audioCh <- append([]byte(nil), audioPayload...)
+		}
+		_, terminatePayload, err := conn.ReadMessage()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		terminateCh <- string(terminatePayload)
+	})
+
+	provider := mustNewBasetenSTT(t, "test-key", "",
+		WithBasetenSTTModelEndpoint("ws://baseten.test/websocket"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: bytes.Repeat([]byte{1}, 1536)}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	if got := readBasetenTestChan(t, audioCh, errCh); len(got) != 1024 {
+		t.Fatalf("first audio chunk len = %d, want 1024", len(got))
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if got := readBasetenTestChan(t, audioCh, errCh); len(got) != 512 {
+		t.Fatalf("flush audio chunk len = %d, want 512", len(got))
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
 	}
 	if got := readBasetenTestChan(t, terminateCh, errCh); got != `{"terminate_session":true}` {
 		t.Fatalf("terminate payload = %q, want terminate_session", got)
