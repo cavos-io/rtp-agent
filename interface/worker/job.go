@@ -19,7 +19,6 @@ import (
 	"github.com/cavos-io/rtp-agent/library/inference"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/livekit/protocol/auth"
-	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -761,10 +760,10 @@ func (c *JobContext) Terminated() bool {
 }
 
 // DeleteRoom deletes the room and disconnects all participants.
-func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*livekit.DeleteRoomResponse, error) {
+func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*workerlivekit.DeleteRoomResponse, error) {
 	if c.IsFakeJob() {
 		logger.Logger.Warnw("job context DeleteRoom is skipped for fake jobs", nil)
-		return &livekit.DeleteRoomResponse{}, nil
+		return &workerlivekit.DeleteRoomResponse{}, nil
 	}
 	resp, warnErr := workerlivekit.DeleteRoomBestEffort(ctx, c.API().RoomService, c.Job, roomName)
 	if warnErr != nil {
@@ -782,18 +781,18 @@ func (c *JobContext) MoveParticipant(ctx context.Context, room string, identity 
 }
 
 // AddSIPParticipant adds a SIP participant to the room.
-func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunkID string, identity string, names ...string) (*livekit.SIPParticipantInfo, error) {
+func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunkID string, identity string, names ...string) (*workerlivekit.SIPParticipantInfo, error) {
 	if c.IsFakeJob() {
 		logger.Logger.Warnw("job context AddSIPParticipant is skipped for fake jobs", nil)
-		return &livekit.SIPParticipantInfo{}, nil
+		return &workerlivekit.SIPParticipantInfo{}, nil
 	}
 	return workerlivekit.CreateSIPParticipantWithNames(ctx, c.API().SIP, c.Job, callTo, trunkID, identity, names...)
 }
 
-func (c *JobContext) CreateSIPParticipant(ctx context.Context, req *livekit.CreateSIPParticipantRequest) (*livekit.SIPParticipantInfo, error) {
+func (c *JobContext) CreateSIPParticipant(ctx context.Context, req *workerlivekit.SIPCreateParticipantRequest) (*workerlivekit.SIPParticipantInfo, error) {
 	if c.IsFakeJob() {
 		logger.Logger.Warnw("job context CreateSIPParticipant is skipped for fake jobs", nil)
-		return &livekit.SIPParticipantInfo{}, nil
+		return &workerlivekit.SIPParticipantInfo{}, nil
 	}
 	return workerlivekit.CreateSIPParticipantWithRequest(ctx, c.API().SIP, req)
 }
