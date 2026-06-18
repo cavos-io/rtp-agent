@@ -141,6 +141,16 @@ type JobFinishPlanResult struct {
 	JobID  string
 }
 
+type JobSessionEndPlanOptions struct {
+	Job            *lkprotocol.Job
+	TimeoutSeconds float64
+}
+
+type JobSessionEndPlanResult struct {
+	JobID   string
+	Timeout time.Duration
+}
+
 func JobRuntimeInfo(job *lkprotocol.Job) RuntimeJobInfo {
 	if job == nil {
 		return RuntimeJobInfo{}
@@ -159,6 +169,14 @@ func JobFinishPlan(job *lkprotocol.Job) JobFinishPlanResult {
 	return JobFinishPlanResult{
 		Finish: true,
 		JobID:  runtimeJob.JobID,
+	}
+}
+
+func JobSessionEndPlan(opts JobSessionEndPlanOptions) JobSessionEndPlanResult {
+	runtimeJob := JobRuntimeInfo(opts.Job)
+	return JobSessionEndPlanResult{
+		JobID:   runtimeJob.JobID,
+		Timeout: time.Duration(opts.TimeoutSeconds * float64(time.Second)),
 	}
 }
 

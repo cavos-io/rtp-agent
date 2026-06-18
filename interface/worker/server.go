@@ -1955,16 +1955,18 @@ func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
 		return
 	}
 
-	runtimeJob := workerlivekit.JobRuntimeInfo(jobCtx.Job)
-	timeout := time.Duration(s.Options.SessionEndTimeoutSeconds * float64(time.Second))
+	plan := workerlivekit.JobSessionEndPlan(workerlivekit.JobSessionEndPlanOptions{
+		Job:            jobCtx.Job,
+		TimeoutSeconds: s.Options.SessionEndTimeoutSeconds,
+	})
 	doneCh := make(chan error, 1)
 	go func() {
 		doneCh <- s.sessionEndFnc(jobCtx)
 	}()
 
-	if timeout <= 0 {
+	if plan.Timeout <= 0 {
 		if err := <-doneCh; err != nil {
-			logger.Logger.Errorw("Session end callback failed", err, jobLogValues(jobCtx, "jobId", runtimeJob.JobID)...)
+			logger.Logger.Errorw("Session end callback failed", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
 		}
 		return
 	}
@@ -1972,10 +1974,10 @@ func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
 	select {
 	case err := <-doneCh:
 		if err != nil {
-			logger.Logger.Errorw("Session end callback failed", err, jobLogValues(jobCtx, "jobId", runtimeJob.JobID)...)
+			logger.Logger.Errorw("Session end callback failed", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
 		}
-	case <-time.After(timeout):
-		logger.Logger.Errorw("Session end callback timed out", nil, jobLogValues(jobCtx, "jobId", runtimeJob.JobID, "timeout", timeout)...)
+	case <-time.After(plan.Timeout):
+		logger.Logger.Errorw("Session end callback timed out", nil, jobLogValues(jobCtx, "jobId", plan.JobID, "timeout", plan.Timeout)...)
 	}
 }
 

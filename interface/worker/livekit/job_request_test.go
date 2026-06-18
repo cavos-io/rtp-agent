@@ -409,6 +409,20 @@ func TestJobFinishPlanRequiresLiveKitJobAndExposesActiveJobKey(t *testing.T) {
 	}
 }
 
+func TestJobSessionEndPlanExposesJobIDAndTimeout(t *testing.T) {
+	plan := workerlivekit.JobSessionEndPlan(workerlivekit.JobSessionEndPlanOptions{
+		Job:            &lkprotocol.Job{Id: "job-session-end"},
+		TimeoutSeconds: 1.5,
+	})
+
+	if plan.JobID != "job-session-end" {
+		t.Fatalf("JobID = %q, want job-session-end", plan.JobID)
+	}
+	if plan.Timeout != 1500*time.Millisecond {
+		t.Fatalf("Timeout = %v, want 1.5s", plan.Timeout)
+	}
+}
+
 func TestJobLogContextFieldsExposeLiveKitJobMetadata(t *testing.T) {
 	fields := workerlivekit.JobLogContextFields(&lkprotocol.Job{
 		Id:   "job-log",
