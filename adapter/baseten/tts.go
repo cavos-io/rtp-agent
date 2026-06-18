@@ -168,7 +168,7 @@ func (t *BasetenTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 	}
 	resp, err := t.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)

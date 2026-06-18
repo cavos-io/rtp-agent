@@ -204,6 +204,27 @@ func TestBasetenTTSSynthesizeReturnsHTTPErrorBody(t *testing.T) {
 	}
 }
 
+func TestBasetenTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
+	client := basetenTTSRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, errors.New("dial refused")
+	})
+
+	provider := mustNewBasetenTTS(t, "test-key", "",
+		WithBasetenTTSModelEndpoint("https://baseten.test/predict"),
+		withBasetenTTSHTTPClient(client),
+	)
+
+	_, err := provider.Synthesize(context.Background(), "hello")
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Message, "dial refused") {
+		t.Fatalf("message = %q, want transport context", connectionErr.Message)
+	}
+}
+
 func TestBasetenTTSChunkedStreamReturnsRawAudioChunks(t *testing.T) {
 	body := &recordingReadCloser{Reader: strings.NewReader("abcdef")}
 	stream := &basetenTTSChunkedStream{
