@@ -628,6 +628,28 @@ func TestAzureSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
 	}
 }
 
+func TestAzureSTTStreamSuppressesDuplicateSpeechBoundaries(t *testing.T) {
+	stream := &azureSTTStream{language: "id-ID"}
+	startPayload := []byte("Path: turn.start\r\nContent-Type: application/json\r\n\r\n{}")
+	endPayload := []byte("Path: turn.end\r\nContent-Type: application/json\r\n\r\n{}")
+
+	start := stream.parseMessage(startPayload)
+	if start == nil || start.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first start = %#v, want start_of_speech", start)
+	}
+	if duplicateStart := stream.parseMessage(startPayload); duplicateStart != nil {
+		t.Fatalf("duplicate start = %#v, want nil", duplicateStart)
+	}
+
+	end := stream.parseMessage(endPayload)
+	if end == nil || end.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("first end = %#v, want end_of_speech", end)
+	}
+	if duplicateEnd := stream.parseMessage(endPayload); duplicateEnd != nil {
+		t.Fatalf("duplicate end = %#v, want nil", duplicateEnd)
+	}
+}
+
 func TestAzureSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	requests := make(chan *http.Request, defaultAzureSTTRetries+1)
 	configMessages := make(chan string, defaultAzureSTTRetries+1)

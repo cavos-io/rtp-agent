@@ -473,6 +473,7 @@ type azureSTTStream struct {
 	maxReconnects   int
 	startTimeOffset float64
 	startTime       float64
+	speaking        bool
 	ctx             context.Context
 	cancel          context.CancelFunc
 }
@@ -661,7 +662,27 @@ func parseAzureSTTMessage(language string, payload []byte) *stt.SpeechEvent {
 }
 
 func (s *azureSTTStream) parseMessage(payload []byte) *stt.SpeechEvent {
-	return parseAzureSTTMessageWithOffset(s.language, payload, s.StartTimeOffset())
+	event := parseAzureSTTMessageWithOffset(s.language, payload, s.StartTimeOffset())
+	if event == nil {
+		return nil
+	}
+	switch event.Type {
+	case stt.SpeechEventStartOfSpeech:
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.speaking {
+			return nil
+		}
+		s.speaking = true
+	case stt.SpeechEventEndOfSpeech:
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if !s.speaking {
+			return nil
+		}
+		s.speaking = false
+	}
+	return event
 }
 
 func (s *azureSTTStream) StartTimeOffset() float64 {
