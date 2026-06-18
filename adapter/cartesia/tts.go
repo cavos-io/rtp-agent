@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -169,7 +170,10 @@ func (t *CartesiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 
 	if resp.StatusCode != http.StatusOK {

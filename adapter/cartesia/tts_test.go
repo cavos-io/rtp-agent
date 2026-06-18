@@ -228,6 +228,43 @@ func TestCartesiaTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: cartesiaRoundTripperFunc(func(*http.Request) (*http.Response, error) {
+		return nil, context.DeadlineExceeded
+	})}
+	defer func() {
+		http.DefaultClient = oldClient
+	}()
+
+	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("https://cartesia.test"))
+
+	_, err := provider.Synthesize(context.Background(), "hello")
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Synthesize error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestCartesiaTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
+	transportErr := errors.New("dial failed")
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: cartesiaRoundTripperFunc(func(*http.Request) (*http.Response, error) {
+		return nil, transportErr
+	})}
+	defer func() {
+		http.DefaultClient = oldClient
+	}()
+
+	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("https://cartesia.test"))
+
+	_, err := provider.Synthesize(context.Background(), "hello")
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestCartesiaSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
 	provider := NewCartesiaTTS("test-key", "", "",
 		WithCartesiaBaseURL("https://cartesia.example"),
