@@ -94,6 +94,11 @@ func (p *sdkDataPublisher) PublishData(ctx context.Context, payload []byte) erro
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 	if p.closed {
 		return fmt.Errorf("agora data publisher is closed")
 	}
