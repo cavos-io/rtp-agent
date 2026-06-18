@@ -504,7 +504,7 @@ func TestDeepgramSTTRecognizeReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
-func TestDeepgramSTTStreamReturnsAPITimeoutErrorOnDialFailure(t *testing.T) {
+func TestDeepgramSTTStreamReturnsAPIConnectionErrorOnDialTimeout(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
 		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
@@ -518,11 +518,15 @@ func TestDeepgramSTTStreamReturnsAPITimeoutErrorOnDialFailure(t *testing.T) {
 
 	_, err := provider.Stream(context.Background(), "en-US")
 	if err == nil {
-		t.Fatal("Stream error = nil, want APITimeoutError")
+		t.Fatal("Stream error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
 	}
 	var timeoutErr *llm.APITimeoutError
-	if !errors.As(err, &timeoutErr) {
-		t.Fatalf("Stream error = %T %v, want APITimeoutError", err, err)
+	if errors.As(err, &timeoutErr) {
+		t.Fatalf("Stream error = %T %v, want plain APIConnectionError", err, err)
 	}
 }
 
