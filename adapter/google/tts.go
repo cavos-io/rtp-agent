@@ -170,7 +170,16 @@ func (t *GoogleTTS) Model() string {
 func (t *GoogleTTS) Provider() string { return "Google Cloud Platform" }
 
 func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
-	cfg := googleTTSConfig{}
+	cfg := googleTTSConfig{
+		language:     t.voice.GetLanguageCode(),
+		voice:        t.voice.GetName(),
+		model:        t.Model(),
+		prompt:       t.prompt,
+		speakingRate: t.audio.GetSpeakingRate(),
+		pitch:        t.audio.GetPitch(),
+		effects:      append([]string(nil), t.audio.GetEffectsProfileId()...),
+		volumeGainDB: t.audio.GetVolumeGainDb(),
+	}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
