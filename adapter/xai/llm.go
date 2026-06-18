@@ -96,6 +96,18 @@ func (l *XaiLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 		}
 		body["tools"] = tools
 	}
+	if toolChoice := xaiToolChoicePayload(options.ToolChoice); toolChoice != nil {
+		body["tool_choice"] = toolChoice
+	}
+	if options.ParallelToolCallsSet {
+		body["parallel_tool_calls"] = options.ParallelToolCalls
+	}
+	if len(options.ResponseFormat) > 0 {
+		body["response_format"] = options.ResponseFormat
+	}
+	for key, value := range options.ExtraParams {
+		body[key] = value
+	}
 
 	jsonBody, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.x.ai/v1/chat/completions", bytes.NewBuffer(jsonBody))
@@ -144,6 +156,36 @@ func xaiProviderToolPayload(tool llm.Tool) map[string]interface{} {
 			payload["max_num_results"] = t.MaxNumResults
 		}
 		return payload
+	default:
+		return nil
+	}
+}
+
+func xaiToolChoicePayload(choice llm.ToolChoice) any {
+	switch tc := choice.(type) {
+	case string:
+		if tc == "" {
+			return nil
+		}
+		return tc
+	case map[string]any:
+		if tc["type"] != "function" {
+			return nil
+		}
+		function, ok := tc["function"].(map[string]any)
+		if !ok {
+			return nil
+		}
+		name, ok := function["name"].(string)
+		if !ok || name == "" {
+			return nil
+		}
+		return map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name": name,
+			},
+		}
 	default:
 		return nil
 	}

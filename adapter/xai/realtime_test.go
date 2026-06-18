@@ -459,18 +459,19 @@ func newXaiRealtimeTestWebsocketDialer(t *testing.T, handler func(*websocket.Con
 	return func(endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
 		clientConn, serverConn := net.Pipe()
 		listener := newXaiSingleConnListener(serverConn)
+		// Upgrade and Serve can both report while the client side is closing.
+		serverErrCh := make(chan error, 2)
 		server := &http.Server{
 			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				conn, err := upgrader.Upgrade(w, r, nil)
 				if err != nil {
-					t.Errorf("Upgrade error = %v", err)
+					serverErrCh <- fmt.Errorf("upgrade websocket: %w", err)
 					return
 				}
 				defer conn.Close()
 				handler(conn, r)
 			}),
 		}
-		serverErrCh := make(chan error, 1)
 		go func() {
 			if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 				serverErrCh <- err
