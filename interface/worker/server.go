@@ -10,7 +10,6 @@ import (
 	"math"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -1412,18 +1411,12 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		return err
 	}
 
-	// Connect WS
-	// A robust implementation should include retries and proxy handling
-	dialer := *websocket.DefaultDialer
-	if s.Options.HTTPProxy != "" {
-		proxyURL, err := url.Parse(s.Options.HTTPProxy)
-		if err != nil {
-			return fmt.Errorf("invalid HTTP proxy URL: %w", err)
-		}
-		dialer.Proxy = http.ProxyURL(proxyURL)
+	dialer, err := workerlivekit.WorkerWebSocketDialer(s.Options.HTTPProxy)
+	if err != nil {
+		return err
 	}
 
-	conn, res, err := s.connectWorkerWebSocket(ctx, &dialer, connectInfo.URL, connectInfo.Header)
+	conn, res, err := s.connectWorkerWebSocket(ctx, dialer, connectInfo.URL, connectInfo.Header)
 	if err != nil {
 		return err
 	}
