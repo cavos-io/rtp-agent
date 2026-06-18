@@ -301,6 +301,23 @@ func TestAzureSTTBuildsReferenceStreamURL(t *testing.T) {
 	}
 }
 
+func TestAzureSTTStreamURLUsesExplicitPunctuationOption(t *testing.T) {
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTExplicitPunctuation(true))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+
+	streamURL := buildAzureSTTStreamURL(provider, "id-ID")
+	parsed, err := url.Parse(streamURL)
+	if err != nil {
+		t.Fatalf("parse stream URL: %v", err)
+	}
+
+	if got := parsed.Query().Get("punctuation"); got != "explicit" {
+		t.Fatalf("punctuation query = %q, want explicit", got)
+	}
+}
+
 func TestAzureSTTBuildsReferenceHostStreamURL(t *testing.T) {
 	provider, err := NewAzureSTT("", "", WithAzureSTTSpeechHost("https://speech.container.test"))
 	if err != nil {

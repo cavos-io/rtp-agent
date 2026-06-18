@@ -32,16 +32,17 @@ const (
 type azureSTTWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 
 type AzureSTT struct {
-	apiKey        string
-	region        string
-	speechHost    string
-	language      string
-	sampleRate    int
-	httpClient    *http.Client
-	websocketURL  string
-	dialWebsocket azureSTTWebsocketDialer
-	mu            sync.Mutex
-	streams       map[*azureSTTStream]struct{}
+	apiKey              string
+	region              string
+	speechHost          string
+	language            string
+	sampleRate          int
+	explicitPunctuation bool
+	httpClient          *http.Client
+	websocketURL        string
+	dialWebsocket       azureSTTWebsocketDialer
+	mu                  sync.Mutex
+	streams             map[*azureSTTStream]struct{}
 }
 
 type AzureSTTOption func(*AzureSTT)
@@ -75,6 +76,12 @@ func WithAzureSTTSampleRate(sampleRate int) AzureSTTOption {
 		if sampleRate > 0 {
 			s.sampleRate = sampleRate
 		}
+	}
+}
+
+func WithAzureSTTExplicitPunctuation(explicit bool) AzureSTTOption {
+	return func(s *AzureSTT) {
+		s.explicitPunctuation = explicit
 	}
 }
 
@@ -343,6 +350,9 @@ func buildAzureSTTStreamURL(s *AzureSTT, language string) string {
 	query := u.Query()
 	query.Set("language", resolveAzureSTTLanguage(language))
 	query.Set("format", "detailed")
+	if s != nil && s.explicitPunctuation {
+		query.Set("punctuation", "explicit")
+	}
 	u.RawQuery = query.Encode()
 	return u.String()
 }
