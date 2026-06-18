@@ -4,13 +4,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/gorilla/websocket"
 )
 
 func TestSmallestAISTTDefaultsMatchReference(t *testing.T) {
@@ -181,6 +187,58 @@ func TestSmallestAISTTOptionsBuildReferenceStreamURLAndHeaders(t *testing.T) {
 	}
 }
 
+func TestSmallestAISTTPushFrameBuffersReferenceAudioChunks(t *testing.T) {
+	audioCh := make(chan []byte, 2)
+	closeCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+	dialer := newSmallestAISTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		for i := 0; i < 2; i++ {
+			msgType, payload, err := conn.ReadMessage()
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if msgType != websocket.BinaryMessage {
+				t.Errorf("message type = %d, want binary", msgType)
+			}
+			audioCh <- append([]byte(nil), payload...)
+		}
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		closeCh <- string(payload)
+	})
+
+	provider := NewSmallestAISTT("test-key",
+		WithSmallestAISTTBaseURL("ws://smallest.test/waves/v1"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: bytes.Repeat([]byte{1}, 2400)}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	if got := readSmallestAITestChan(t, audioCh, errCh); len(got) != 1600 {
+		t.Fatalf("first audio chunk len = %d, want 1600", len(got))
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if got := readSmallestAITestChan(t, audioCh, errCh); len(got) != 800 {
+		t.Fatalf("flush audio chunk len = %d, want 800", len(got))
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if got := readSmallestAITestChan(t, closeCh, errCh); got != `{"type":"close_stream"}` {
+		t.Fatalf("close payload = %q, want close_stream", got)
+	}
+}
+
 func TestSmallestAISTTBatchResponseMapsSpeechEvent(t *testing.T) {
 	event := smallestAIBatchSpeechEvent("en", smallestAIBatchResponse{
 		Transcription: "hello world",
@@ -280,6 +338,117 @@ func assertSmallestAIEvent(t *testing.T, events []*stt.SpeechEvent, index int, e
 
 func intPtr(v int) *int {
 	return &v
+}
+
+func newSmallestAISTTTestWebsocketDialer(t *testing.T, handler func(*websocket.Conn, *http.Request)) SmallestAISTTOption {
+	t.Helper()
+	upgrader := websocket.Upgrader{}
+	return withSmallestAISTTWebsocketDialer(func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		clientConn, serverConn := net.Pipe()
+		listener := newSmallestAISingleConnListener(serverConn)
+		server := &http.Server{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					t.Errorf("upgrade: %v", err)
+					return
+				}
+				defer conn.Close()
+				handler(conn, r)
+			}),
+		}
+		serverErrCh := make(chan error, 1)
+		go func() {
+			if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+				serverErrCh <- err
+			}
+		}()
+		t.Cleanup(func() {
+			_ = server.Close()
+			_ = listener.Close()
+			_ = clientConn.Close()
+			_ = serverConn.Close()
+		})
+
+		dialer := websocket.Dialer{
+			NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+				return clientConn, nil
+			},
+		}
+		conn, response, err := dialer.DialContext(ctx, endpoint, headers)
+		select {
+		case serverErr := <-serverErrCh:
+			if err == nil {
+				err = serverErr
+			}
+		default:
+		}
+		return conn, response, err
+	})
+}
+
+type smallestAISingleConnListener struct {
+	mu     sync.Mutex
+	once   sync.Once
+	conn   net.Conn
+	closed chan struct{}
+}
+
+func newSmallestAISingleConnListener(conn net.Conn) *smallestAISingleConnListener {
+	return &smallestAISingleConnListener{
+		conn:   conn,
+		closed: make(chan struct{}),
+	}
+}
+
+func (l *smallestAISingleConnListener) Accept() (net.Conn, error) {
+	l.mu.Lock()
+	if l.conn != nil {
+		conn := l.conn
+		l.conn = nil
+		l.mu.Unlock()
+		return conn, nil
+	}
+	l.mu.Unlock()
+
+	<-l.closed
+	return nil, net.ErrClosed
+}
+
+func (l *smallestAISingleConnListener) Close() error {
+	l.once.Do(func() {
+		close(l.closed)
+		l.mu.Lock()
+		if l.conn != nil {
+			_ = l.conn.Close()
+			l.conn = nil
+		}
+		l.mu.Unlock()
+	})
+	return nil
+}
+
+func (l *smallestAISingleConnListener) Addr() net.Addr {
+	return smallestAIDummyAddr("pipe")
+}
+
+type smallestAIDummyAddr string
+
+func (a smallestAIDummyAddr) Network() string { return string(a) }
+func (a smallestAIDummyAddr) String() string  { return string(a) }
+
+func readSmallestAITestChan[T any](t *testing.T, ch <-chan T, errCh <-chan error) T {
+	t.Helper()
+	var zero T
+	select {
+	case got := <-ch:
+		return got
+	case err := <-errCh:
+		t.Fatalf("websocket server: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for websocket server")
+	}
+	return zero
 }
 
 func TestSmallestAISTTRecognizeResponseDecode(t *testing.T) {
