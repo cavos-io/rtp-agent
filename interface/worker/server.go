@@ -418,43 +418,32 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 	s.activeJobs[runtimeJob.JobID] = jobCtx
 	s.mu.Unlock()
 
-	doneCh := make(chan error, 1)
-	jobCtx.markEntrypointStarted()
-	go func() {
-		defer jobCtx.markEntrypointDone()
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				logger.Logger.Errorw("Running job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", runtimeJob.JobID)
-				doneCh <- fmt.Errorf("running job entrypoint panicked: %v", recovered)
-			}
-		}()
-		doneCh <- s.runJobEntrypoint(jobCtx)
-	}()
-
-	select {
-	case err := <-doneCh:
-		if err != nil {
+	return workerlivekit.RunRunningJobEntrypointLifecycle(workerlivekit.RunningJobEntrypointLifecycleOptions{
+		Context:     ctx,
+		MarkStarted: jobCtx.markEntrypointStarted,
+		Entrypoint: func() error {
+			return s.runJobEntrypoint(jobCtx)
+		},
+		MarkDone:     jobCtx.markEntrypointDone,
+		ShutdownDone: jobCtx.ShutdownDone(),
+		Shutdown: func(reason string) {
+			jobCtx.Shutdown(reason)
+		},
+		WaitEntrypointDone: jobCtx.waitForEntrypointDone,
+		CloseWait:          localEntrypointCloseWait,
+		Finish: func() bool {
+			return s.finishJob(jobCtx)
+		},
+		OnPanic: func(recovered any) {
+			logger.Logger.Errorw("Running job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", runtimeJob.JobID)
+		},
+		OnError: func(err error) {
 			logger.Logger.Errorw("Running job entrypoint failed", err, "jobId", runtimeJob.JobID)
-			s.finishJob(jobCtx)
-			return err
-		}
-		select {
-		case <-jobCtx.ShutdownDone():
-		case <-ctx.Done():
-			jobCtx.Shutdown("")
-			s.finishJob(jobCtx)
-			return ctx.Err()
-		}
-		s.finishJob(jobCtx)
-		return nil
-	case <-ctx.Done():
-		jobCtx.Shutdown("")
-		if !jobCtx.waitForEntrypointDone(localEntrypointCloseWait) {
+		},
+		OnCancelTimeout: func() {
 			logger.Logger.Warnw("running job entrypoint did not exit before context cancellation finalized", nil, "jobId", runtimeJob.JobID)
-		}
-		s.finishJob(jobCtx)
-		return ctx.Err()
-	}
+		},
+	})
 }
 
 func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext) {

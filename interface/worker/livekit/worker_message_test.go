@@ -390,6 +390,151 @@ func TestRunReloadedJobEntrypointLifecycleSkipsStatusAfterContextCancel(t *testi
 	}
 }
 
+func TestRunRunningJobEntrypointLifecycleWaitsForShutdown(t *testing.T) {
+	var events []string
+	shutdown := make(chan struct{})
+	done := make(chan error, 1)
+
+	go func() {
+		done <- workerlivekit.RunRunningJobEntrypointLifecycle(workerlivekit.RunningJobEntrypointLifecycleOptions{
+			Context: context.Background(),
+			MarkStarted: func() {
+				events = append(events, "started")
+			},
+			Entrypoint: func() error {
+				events = append(events, "entrypoint")
+				return nil
+			},
+			MarkDone: func() {
+				events = append(events, "done")
+			},
+			ShutdownDone: shutdown,
+			Finish: func() bool {
+				events = append(events, "finish")
+				return true
+			},
+		})
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("RunRunningJobEntrypointLifecycle returned before shutdown with %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(shutdown)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunRunningJobEntrypointLifecycle error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunRunningJobEntrypointLifecycle did not return after shutdown")
+	}
+
+	want := []string{"started", "entrypoint", "done", "finish"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %#v, want %#v", events, want)
+	}
+}
+
+func TestRunRunningJobEntrypointLifecycleCancelsAndWaitsForEntrypoint(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	entrypointDone := make(chan struct{})
+	var events []string
+	var waitDuration time.Duration
+
+	done := make(chan error, 1)
+	go func() {
+		done <- workerlivekit.RunRunningJobEntrypointLifecycle(workerlivekit.RunningJobEntrypointLifecycleOptions{
+			Context: ctx,
+			Entrypoint: func() error {
+				<-entrypointDone
+				return nil
+			},
+			Shutdown: func(reason string) {
+				events = append(events, "shutdown:"+reason)
+			},
+			WaitEntrypointDone: func(timeout time.Duration) bool {
+				waitDuration = timeout
+				events = append(events, "wait")
+				return false
+			},
+			CloseWait: 7 * time.Millisecond,
+			OnCancelTimeout: func() {
+				events = append(events, "timeout")
+			},
+			Finish: func() bool {
+				events = append(events, "finish")
+				return true
+			},
+		})
+	}()
+
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("RunRunningJobEntrypointLifecycle error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunRunningJobEntrypointLifecycle did not return after context cancel")
+	}
+	close(entrypointDone)
+
+	if waitDuration != 7*time.Millisecond {
+		t.Fatalf("waitDuration = %v, want 7ms", waitDuration)
+	}
+	want := []string{"shutdown:", "wait", "timeout", "finish"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %#v, want %#v", events, want)
+	}
+}
+
+func TestRunRunningJobEntrypointLifecycleReportsPanicAsError(t *testing.T) {
+	var events []string
+
+	err := workerlivekit.RunRunningJobEntrypointLifecycle(workerlivekit.RunningJobEntrypointLifecycleOptions{
+		Context: context.Background(),
+		Entrypoint: func() error {
+			panic("boom")
+		},
+		MarkDone: func() {
+			events = append(events, "done")
+		},
+		OnPanic: func(recovered any) {
+			events = append(events, "panic:"+recovered.(string))
+		},
+		OnError: func(err error) {
+			events = append(events, "error:"+err.Error())
+		},
+		Finish: func() bool {
+			events = append(events, "finish")
+			return true
+		},
+	})
+
+	if err == nil || err.Error() != "running job entrypoint panicked: boom" {
+		t.Fatalf("RunRunningJobEntrypointLifecycle error = %v, want panic error", err)
+	}
+	wantEvents := map[string]bool{
+		"panic:boom": false,
+		"done":       false,
+		"error:running job entrypoint panicked: boom": false,
+		"finish": false,
+	}
+	for _, event := range events {
+		if _, ok := wantEvents[event]; ok {
+			wantEvents[event] = true
+		}
+	}
+	for event, seen := range wantEvents {
+		if !seen {
+			t.Fatalf("events = %#v, missing %q", events, event)
+		}
+	}
+}
+
 func TestMigrateJobMessageCarriesJobIDs(t *testing.T) {
 	jobIDs := []string{"job-a", "job-b"}
 	msg := workerlivekit.MigrateJobMessage(jobIDs)
