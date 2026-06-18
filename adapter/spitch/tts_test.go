@@ -6,11 +6,14 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	corestt "github.com/cavos-io/rtp-agent/core/stt"
 	coretts "github.com/cavos-io/rtp-agent/core/tts"
 )
@@ -56,6 +59,71 @@ func TestNewSpitchSTTUsesEnvironmentAPIKey(t *testing.T) {
 	explicit := NewSpitchSTT("explicit-key")
 	if explicit.apiKey != "explicit-key" {
 		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	}
+}
+
+func TestSpitchSTTRecognizeRequestUploadsReferenceWAV(t *testing.T) {
+	provider := NewSpitchSTT("test-key")
+
+	req, err := buildSpitchSTTRecognizeRequest(context.Background(), provider, []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x02, 0x03, 0x04},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}}, "en")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if req.Method != http.MethodPost {
+		t.Fatalf("method = %q, want POST", req.Method)
+	}
+	if req.URL.String() != "https://api.spitch.ai/stt/v1/recognize" {
+		t.Fatalf("url = %q, want Spitch STT endpoint", req.URL.String())
+	}
+	if got := req.Header.Get("Authorization"); got != "Bearer test-key" {
+		t.Fatalf("authorization = %q, want bearer key", got)
+	}
+
+	mediaType, params, err := mime.ParseMediaType(req.Header.Get("Content-Type"))
+	if err != nil {
+		t.Fatalf("parse content type: %v", err)
+	}
+	if mediaType != "multipart/form-data" {
+		t.Fatalf("content type = %q, want multipart/form-data", mediaType)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	reader := multipart.NewReader(bytes.NewReader(body), params["boundary"])
+	var wav []byte
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("read multipart: %v", err)
+		}
+		if part.FormName() != "file" {
+			continue
+		}
+		wav, err = io.ReadAll(part)
+		if err != nil {
+			t.Fatalf("read wav part: %v", err)
+		}
+	}
+	if len(wav) < 44 {
+		t.Fatalf("wav bytes = %d, want RIFF header", len(wav))
+	}
+	if string(wav[:4]) != "RIFF" || string(wav[8:12]) != "WAVE" {
+		t.Fatalf("wav header = %q/%q, want RIFF/WAVE", wav[:4], wav[8:12])
+	}
+	if got := binary.LittleEndian.Uint32(wav[24:28]); got != 16000 {
+		t.Fatalf("wav sample rate = %d, want frame sample rate 16000", got)
+	}
+	if got := binary.LittleEndian.Uint32(wav[40:44]); got != 4 {
+		t.Fatalf("wav data size = %d, want pcm byte size 4", got)
 	}
 }
 
