@@ -101,6 +101,13 @@ func (s *TelnyxSTT) Provider() string {
 	return "telnyx"
 }
 
+func (s *TelnyxSTT) InputSampleRate() uint32 {
+	if s == nil || s.sampleRate <= 0 {
+		return defaultTelnyxSTTSampleRate
+	}
+	return uint32(s.sampleRate)
+}
+
 func (s *TelnyxSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:        true,

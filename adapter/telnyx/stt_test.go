@@ -29,6 +29,9 @@ func TestTelnyxSTTDefaultsMatchReference(t *testing.T) {
 	if provider.sampleRate != 16000 {
 		t.Fatalf("sample rate = %d, want 16000", provider.sampleRate)
 	}
+	if got := provider.InputSampleRate(); got != 16000 {
+		t.Fatalf("InputSampleRate() = %d, want reference sample rate 16000", got)
+	}
 	if got := stt.Model(provider); got != "telnyx" {
 		t.Fatalf("model metadata = %q, want telnyx", got)
 	}
@@ -38,6 +41,14 @@ func TestTelnyxSTTDefaultsMatchReference(t *testing.T) {
 	caps := provider.Capabilities()
 	if !caps.Streaming || !caps.InterimResults || !caps.OfflineRecognize {
 		t.Fatalf("capabilities = %+v, want streaming interim offline recognize", caps)
+	}
+}
+
+func TestTelnyxSTTExposesConfiguredInputSampleRate(t *testing.T) {
+	provider := NewTelnyxSTT("test-key", WithTelnyxSTTSampleRate(8000))
+
+	if got := provider.InputSampleRate(); got != 8000 {
+		t.Fatalf("InputSampleRate() = %d, want configured sample rate 8000", got)
 	}
 }
 
