@@ -1679,11 +1679,11 @@ func (s *AgentServer) reportActiveJobs() {
 	}
 }
 
-func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.AvailabilityRequest) {
+func (s *AgentServer) handleAvailability(ctx context.Context, req *workerlivekit.AvailabilityRequest) {
 	go s.answerAvailability(ctx, req)
 }
 
-func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.AvailabilityRequest) {
+func (s *AgentServer) answerAvailability(ctx context.Context, req *workerlivekit.AvailabilityRequest) {
 	availability := workerlivekit.AvailabilityInfo(req)
 	jobID := availability.JobID
 	logger.Logger.Infow("Received availability request", "jobId", jobID)

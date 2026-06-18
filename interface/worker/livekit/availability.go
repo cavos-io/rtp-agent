@@ -8,20 +8,22 @@ type AvailabilityAcceptOptions = JobAcceptArguments
 
 type AvailabilityRejectOptions = JobRejectArguments
 
+type AvailabilityRequest = lkprotocol.AvailabilityRequest
+
 type AvailabilityRequestInfo struct {
 	Job   *lkprotocol.Job
 	JobID string
 }
 
 type AvailabilityResponderOptions struct {
-	Request     *lkprotocol.AvailabilityRequest
+	Request     *AvailabilityRequest
 	AgentName   string
 	StoreAccept func(jobID string, args JobAcceptArguments)
 	Send        func(*lkprotocol.WorkerMessage) error
 }
 
 type AvailabilityResponder struct {
-	request     *lkprotocol.AvailabilityRequest
+	request     *AvailabilityRequest
 	agentName   string
 	storeAccept func(jobID string, args JobAcceptArguments)
 	send        func(*lkprotocol.WorkerMessage) error
@@ -83,7 +85,7 @@ func (r *AvailabilityResponder) sendMessage(msg *lkprotocol.WorkerMessage) error
 	return r.send(msg)
 }
 
-func AvailabilityInfo(req *lkprotocol.AvailabilityRequest) AvailabilityRequestInfo {
+func AvailabilityInfo(req *AvailabilityRequest) AvailabilityRequestInfo {
 	if req == nil {
 		return AvailabilityRequestInfo{}
 	}
@@ -94,7 +96,7 @@ func AvailabilityInfo(req *lkprotocol.AvailabilityRequest) AvailabilityRequestIn
 }
 
 func AvailabilityResponseForAccept(
-	req *lkprotocol.AvailabilityRequest,
+	req *AvailabilityRequest,
 	args AvailabilityAcceptOptions,
 	agentName string,
 ) *lkprotocol.WorkerMessage {
@@ -122,7 +124,7 @@ func AvailabilityResponseForAccept(
 }
 
 func AvailabilityResponseForReject(
-	req *lkprotocol.AvailabilityRequest,
+	req *AvailabilityRequest,
 	args AvailabilityRejectOptions,
 ) *lkprotocol.WorkerMessage {
 	return &lkprotocol.WorkerMessage{

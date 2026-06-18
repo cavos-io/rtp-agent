@@ -42,6 +42,16 @@ func TestAvailabilityInfoExposesJobAndJobID(t *testing.T) {
 	}
 }
 
+func TestAvailabilityRequestAliasUsesLiveKitProtocolRequest(t *testing.T) {
+	job := &lkprotocol.Job{Id: "job_available"}
+	req := &workerlivekit.AvailabilityRequest{Job: job}
+	protocolReq := (*lkprotocol.AvailabilityRequest)(req)
+
+	if protocolReq.GetJob() != job {
+		t.Fatal("AvailabilityRequest alias did not preserve protocol job")
+	}
+}
+
 func TestAvailabilityOptionsShareJobRequestArgumentTypes(t *testing.T) {
 	accept := workerlivekit.JobAcceptArguments{Identity: "agent-a"}
 	reject := workerlivekit.JobRejectArguments{Terminate: true}
