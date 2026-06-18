@@ -150,6 +150,9 @@ func TestElevenLabsSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	if payload["model_id"] != "eleven_turbo_v2_5" {
 		t.Fatalf("model_id = %#v, want eleven_turbo_v2_5", payload["model_id"])
 	}
+	if _, ok := payload["voice_settings"]; !ok {
+		t.Fatalf("voice_settings missing from payload %#v, want explicit null/object field", payload)
+	}
 	if payload["language_code"] != "en" {
 		t.Fatalf("language_code = %#v, want en", payload["language_code"])
 	}

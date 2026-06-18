@@ -280,8 +280,9 @@ func buildElevenLabsSynthesizeRequest(t *ElevenLabsTTS, text string) (string, []
 		apiURL += "&optimize_streaming_latency=" + strconv.Itoa(*t.streamingLatency)
 	}
 	body := map[string]interface{}{
-		"text":     text,
-		"model_id": t.modelID,
+		"text":           text,
+		"model_id":       t.modelID,
+		"voice_settings": nil,
 	}
 	if t.language != "" && elevenLabsSupportsLanguageCode(t.modelID) {
 		body["language_code"] = t.language
