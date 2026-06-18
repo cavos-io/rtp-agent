@@ -17,6 +17,7 @@ import (
 
 	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/gorilla/websocket"
 )
 
@@ -39,6 +40,26 @@ func TestRealtimeModelCapabilitiesMatchReference(t *testing.T) {
 	}
 }
 
+func TestRealtimeModelCapabilitiesDisableExplicitNilInputAudioTranscription(t *testing.T) {
+	model := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeInputAudioTranscription(nil))
+
+	capabilities := model.Capabilities()
+
+	if capabilities.UserTranscription {
+		t.Fatal("UserTranscription = true, want false when input_audio_transcription is explicitly nil")
+	}
+}
+
+func TestRealtimeModelCapabilitiesDisableExplicitNilTurnDetection(t *testing.T) {
+	model := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeTurnDetection(nil))
+
+	capabilities := model.Capabilities()
+
+	if capabilities.TurnDetection {
+		t.Fatal("TurnDetection = true, want false when turn_detection is explicitly nil")
+	}
+}
+
 func TestNewOpenAIRealtimeModelUsesEnvAPIKey(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "env-key")
 
@@ -54,6 +75,22 @@ func TestNewOpenAIRealtimeModelUsesReferenceDefaultModel(t *testing.T) {
 
 	if model.Model() != "gpt-realtime" {
 		t.Fatalf("Model() = %q, want gpt-realtime", model.Model())
+	}
+}
+
+func TestNewOpenAIRealtimeModelUsesReferenceDefaultMaxSessionDuration(t *testing.T) {
+	model := NewRealtimeModel("test-key", "gpt-realtime")
+
+	if model.maxSession != 20*time.Minute {
+		t.Fatalf("maxSession = %v, want 20m reference default", model.maxSession)
+	}
+}
+
+func TestNewOpenAIRealtimeModelCanDisableReferenceDefaultMaxSessionDuration(t *testing.T) {
+	model := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeMaxSessionDuration(0))
+
+	if model.maxSession != 0 {
+		t.Fatalf("maxSession = %v, want disabled", model.maxSession)
 	}
 }
 
@@ -165,6 +202,155 @@ func TestOpenAIRealtimeSessionUsesReferenceWebsocketHeaders(t *testing.T) {
 	}
 	if req.Header.Get("OpenAI-Beta") != "" {
 		t.Fatalf("OpenAI-Beta = %q, want empty", req.Header.Get("OpenAI-Beta"))
+	}
+}
+
+func TestNewAzureOpenAIRealtimeRoutesDeploymentAndUsesAPIKey(t *testing.T) {
+	connected := make(chan *http.Request, 1)
+	messages := make(chan string, 1)
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		connected <- r
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		messages <- string(msg)
+		<-releaseServer
+	})
+
+	realtimeModel, err := NewAzureOpenAIRealtimeModel(
+		"",
+		"http://azure.openai.test",
+		"voice-deployment",
+		"2024-10-01-preview",
+		"azure-key",
+		"",
+		WithOpenAIRealtimeWebsocketDialer(dialer),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAIRealtimeModel error = %v", err)
+	}
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	req := <-connected
+	if req.Host != "azure.openai.test" || req.URL.Path != "/openai/realtime" {
+		t.Fatalf("url = %s, want Azure legacy realtime route", req.URL.String())
+	}
+	if req.URL.Query().Get("api-version") != "2024-10-01-preview" {
+		t.Fatalf("api-version query = %q, want 2024-10-01-preview", req.URL.Query().Get("api-version"))
+	}
+	if req.URL.Query().Get("deployment") != "voice-deployment" {
+		t.Fatalf("deployment query = %q, want voice-deployment", req.URL.Query().Get("deployment"))
+	}
+	if req.Header.Get("api-key") != "azure-key" {
+		t.Fatalf("api-key header = %q, want Azure API key", req.Header.Get("api-key"))
+	}
+	if req.Header.Get("Authorization") != "" {
+		t.Fatalf("Authorization = %q, want empty for Azure API key auth", req.Header.Get("Authorization"))
+	}
+	if req.Header.Get("User-Agent") != "LiveKit Agents" {
+		t.Fatalf("User-Agent = %q, want LiveKit Agents", req.Header.Get("User-Agent"))
+	}
+
+	initialUpdate := <-messages
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(initialUpdate), &payload); err != nil {
+		t.Fatalf("decode initial session update: %v", err)
+	}
+	sessionPayload := payload["session"].(map[string]any)
+	if sessionPayload["model"] != "gpt-realtime" {
+		t.Fatalf("session model = %#v, want default gpt-realtime", sessionPayload["model"])
+	}
+	if _, ok := sessionPayload["audio"]; ok {
+		t.Fatalf("session audio = %#v, want flattened Azure legacy session", sessionPayload["audio"])
+	}
+	modalities := sessionPayload["modalities"].([]any)
+	if len(modalities) != 2 || modalities[0] != "audio" || modalities[1] != "text" {
+		t.Fatalf("modalities = %#v, want Azure legacy audio and text", modalities)
+	}
+	if sessionPayload["input_audio_format"] != "pcm16" || sessionPayload["output_audio_format"] != "pcm16" {
+		t.Fatalf("audio formats = %#v/%#v, want pcm16", sessionPayload["input_audio_format"], sessionPayload["output_audio_format"])
+	}
+	if sessionPayload["max_response_output_tokens"] != "inf" {
+		t.Fatalf("max_response_output_tokens = %#v, want inf", sessionPayload["max_response_output_tokens"])
+	}
+	transcription := sessionPayload["input_audio_transcription"].(map[string]any)
+	if transcription["model"] != "whisper-1" {
+		t.Fatalf("input_audio_transcription = %#v, want Azure whisper-1 default", transcription)
+	}
+	turnDetection := sessionPayload["turn_detection"].(map[string]any)
+	if turnDetection["type"] != "server_vad" {
+		t.Fatalf("turn_detection = %#v, want Azure server_vad default", turnDetection)
+	}
+	if turnDetection["threshold"] != 0.5 ||
+		turnDetection["prefix_padding_ms"] != float64(300) ||
+		turnDetection["silence_duration_ms"] != float64(200) ||
+		turnDetection["create_response"] != true {
+		t.Fatalf("turn_detection = %#v, want Azure default server_vad settings", turnDetection)
+	}
+	if sessionPayload["voice"] != "marin" {
+		t.Fatalf("voice = %#v, want marin", sessionPayload["voice"])
+	}
+}
+
+func TestAzureOpenAIRealtimeNormalizesAssistantTextForLegacyAPI(t *testing.T) {
+	messages := make(chan string, 2)
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for i := 0; i < 2; i++ {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				t.Errorf("Read client message error = %v", err)
+				return
+			}
+			messages <- string(msg)
+		}
+		<-releaseServer
+	})
+	realtimeModel, err := NewAzureOpenAIRealtimeModel(
+		"gpt-realtime",
+		"http://azure.openai.test",
+		"voice-deployment",
+		"2024-10-01-preview",
+		"azure-key",
+		"",
+		WithOpenAIRealtimeWebsocketDialer(dialer),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAIRealtimeModel error = %v", err)
+	}
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	<-messages
+
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "assistant-1", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+	if err := session.UpdateChatContext(chatCtx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(<-messages), &payload); err != nil {
+		t.Fatalf("decode chat message: %v", err)
+	}
+	item := payload["item"].(map[string]any)
+	content := item["content"].([]any)
+	part := content[0].(map[string]any)
+	if part["type"] != "text" {
+		t.Fatalf("assistant content type = %#v, want legacy Azure text", part["type"])
 	}
 }
 
@@ -879,6 +1065,43 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
+}
+
+func TestRealtimeGenerateReplyTimeoutClearsPendingResponse(t *testing.T) {
+	messages := make(chan string, 8)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	rtSession := session.(*realtimeSession)
+	rtSession.responseCreateTimeout = 5 * time.Millisecond
+
+	assertRealtimeMessage(t, <-messages, "session.update", "gpt-realtime")
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "timeout"}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "response.create", "timeout")
+	time.Sleep(20 * time.Millisecond)
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "timed-out response.create should not leave stale pending response")
 }
 
 func TestRealtimeSessionSpeechStoppedReflectsDisabledInputAudioTranscription(t *testing.T) {
@@ -2606,6 +2829,84 @@ func TestRealtimeSessionMaxSessionDurationReconnectsIdleSession(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionMaxSessionDurationWaitsForActiveGeneration(t *testing.T) {
+	var dialCount atomic.Int32
+	firstResponseCreate := make(chan struct{})
+	allowResponseDone := make(chan struct{})
+	secondConnected := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		attempt := dialCount.Add(1)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		if attempt == 1 {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("Read response.create error = %v", err)
+				return
+			}
+			close(firstResponseCreate)
+			if err := conn.WriteJSON(map[string]any{
+				"type": "response.created",
+				"response": map[string]any{
+					"id":       "resp_active",
+					"metadata": map[string]any{"client_event_id": "response_create_active"},
+				},
+			}); err != nil {
+				t.Errorf("Write response.created error = %v", err)
+				return
+			}
+			<-allowResponseDone
+			if err := conn.WriteJSON(map[string]any{
+				"type": "response.done",
+				"response": map[string]any{
+					"id":     "resp_active",
+					"status": "completed",
+					"usage":  map[string]any{"total_tokens": 1.0},
+				},
+			}); err != nil {
+				t.Errorf("Write response.done error = %v", err)
+			}
+			return
+		}
+		close(secondConnected)
+		<-releaseSecond
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeMaxSessionDuration(10*time.Millisecond))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "keep talking"}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	select {
+	case <-firstResponseCreate:
+	case <-time.After(time.Second):
+		t.Fatal("server did not receive response.create")
+	}
+	assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	select {
+	case <-secondConnected:
+		t.Fatal("max session duration reconnected before active generation finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(allowResponseDone)
+	select {
+	case <-secondConnected:
+	case <-time.After(time.Second):
+		t.Fatal("session did not reconnect after active generation finished")
+	}
+}
+
 func TestRealtimeSessionReconnectRetriesDialFailure(t *testing.T) {
 	var dialCount atomic.Int32
 	secondConnected := make(chan struct{})
@@ -4328,6 +4629,49 @@ func TestRealtimeEventMapsResponseDoneMetrics(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionAddsReferenceTimingToResponseMetrics(t *testing.T) {
+	session := &realtimeSession{}
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.generation.messages["item_123"] = &realtimeMessageGeneration{
+		textCh:       make(chan string, 1),
+		audioCh:      make(chan *audiomodel.AudioFrame, 1),
+		modalitiesCh: make(chan []string, 1),
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:   llm.RealtimeEventTypeAudio,
+		ItemID: "item_123",
+		Data:   []byte{0, 0},
+	})
+	time.Sleep(2 * time.Millisecond)
+
+	ev := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeMetricsCollected,
+		Metrics: &telemetry.RealtimeModelMetrics{
+			RequestID:    "resp_123",
+			OutputTokens: 8,
+			TotalTokens:  8,
+		},
+	})
+
+	if ev.Metrics.Timestamp.IsZero() {
+		t.Fatal("metrics timestamp is zero, want generation creation timestamp")
+	}
+	if ev.Metrics.TTFT <= 0 {
+		t.Fatalf("metrics TTFT = %f, want first audio latency", ev.Metrics.TTFT)
+	}
+	if ev.Metrics.Duration <= ev.Metrics.TTFT {
+		t.Fatalf("metrics duration/TTFT = %f/%f, want duration after first token", ev.Metrics.Duration, ev.Metrics.TTFT)
+	}
+	if ev.Metrics.TokensPerSecond <= 0 {
+		t.Fatalf("metrics tokens_per_second = %f, want output tokens divided by duration", ev.Metrics.TokensPerSecond)
+	}
+}
+
 func TestRealtimeResponseDoneFailedReportsRecoverableError(t *testing.T) {
 	responseDone := map[string]any{
 		"type": "response.done",
@@ -4412,6 +4756,45 @@ func TestRealtimeResponseDoneFailedReportsRecoverableError(t *testing.T) {
 	var liveAPIErr *llm.APIError
 	if !errors.As(liveErrorEvent.Error, &liveAPIErr) || !liveAPIErr.Retryable {
 		t.Fatalf("live error = %T %v, want retryable APIError", liveErrorEvent.Error, liveErrorEvent.Error)
+	}
+}
+
+func TestRealtimeResponseDoneIncompleteReportsRecoverableError(t *testing.T) {
+	responseDone := map[string]any{
+		"type": "response.done",
+		"response": map[string]any{
+			"id":     "resp_incomplete",
+			"status": "incomplete",
+			"status_details": map[string]any{
+				"reason": "max_output_tokens",
+			},
+			"usage": map[string]any{"total_tokens": 3.0},
+		},
+	}
+
+	session := &realtimeSession{
+		generation: &realtimeGeneration{
+			messages:   map[string]*realtimeMessageGeneration{},
+			messageCh:  make(chan llm.MessageGeneration),
+			functionCh: make(chan *llm.FunctionCall),
+		},
+	}
+	errorEvent, ok := session.trackOpenAIRealtimeEvent(responseDone)
+	if !ok {
+		t.Fatal("trackOpenAIRealtimeEvent returned ok=false, want incomplete response error event")
+	}
+	if errorEvent.Type != llm.RealtimeEventTypeError {
+		t.Fatalf("event type = %q, want error", errorEvent.Type)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(errorEvent.Error, &apiErr) {
+		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
+	}
+	if apiErr.Message != "OpenAI Realtime API response incomplete: max_output_tokens" {
+		t.Fatalf("APIError message = %q", apiErr.Message)
+	}
+	if !apiErr.Retryable {
+		t.Fatal("APIError Retryable = false, want true")
 	}
 }
 

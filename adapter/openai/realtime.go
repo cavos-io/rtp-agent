@@ -29,8 +29,12 @@ import (
 
 type RealtimeModel struct {
 	apiKey                      string
+	azureADToken                string
 	model                       string
 	baseURL                     string
+	azureDeployment             string
+	apiVersion                  string
+	isAzure                     bool
 	dialWebsocket               OpenAIRealtimeWebsocketDialer
 	toolFormatter               OpenAIRealtimeToolFormatter
 	inputTranscriptionFinalHook OpenAIRealtimeInputTranscriptionFinalHook
@@ -69,6 +73,7 @@ type openAIRealtimeModelOptions struct {
 	modalities                  []string
 	baseURL                     string
 	maxSession                  time.Duration
+	maxSessionSet               bool
 	connect                     *llm.APIConnectOptions
 	dialWebsocket               OpenAIRealtimeWebsocketDialer
 	toolFormatter               OpenAIRealtimeToolFormatter
@@ -158,6 +163,7 @@ func WithOpenAIRealtimeMaxResponseOutputTokens(tokens any) OpenAIRealtimeOption 
 func WithOpenAIRealtimeMaxSessionDuration(duration time.Duration) OpenAIRealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.maxSession = duration
+		options.maxSessionSet = true
 	}
 }
 
@@ -235,6 +241,10 @@ func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *Realt
 	if options.dialWebsocket != nil {
 		dialWebsocket = options.dialWebsocket
 	}
+	maxSession := options.maxSession
+	if !options.maxSessionSet {
+		maxSession = openAIRealtimeDefaultMaxSessionDuration
+	}
 	return &RealtimeModel{
 		apiKey:                      apiKey,
 		model:                       model,
@@ -247,9 +257,58 @@ func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *Realt
 		sessionCloseMetricsHook:     options.sessionCloseMetricsHook,
 		options:                     options.sessionOptions,
 		modalities:                  options.modalities,
-		maxSession:                  options.maxSession,
+		maxSession:                  maxSession,
 		connect:                     connectOptions,
 	}
+}
+
+func NewAzureOpenAIRealtimeModel(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...OpenAIRealtimeOption) (*RealtimeModel, error) {
+	if model == "" {
+		model = "gpt-realtime"
+	}
+	if azureEndpoint == "" {
+		azureEndpoint = os.Getenv(azureOpenAIEndpointEnv)
+	}
+	if apiVersion == "" {
+		apiVersion = os.Getenv(openAIAPIVersionEnv)
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(azureOpenAIAPIKeyEnv)
+	}
+	if azureADToken == "" {
+		azureADToken = os.Getenv(azureOpenAIADTokenEnv)
+	}
+	if azureEndpoint == "" {
+		return nil, fmt.Errorf("%s is required for Azure OpenAI realtime", azureOpenAIEndpointEnv)
+	}
+	if apiKey == "" && azureADToken == "" {
+		return nil, fmt.Errorf("%s or %s is required for Azure OpenAI realtime", azureOpenAIAPIKeyEnv, azureOpenAIADTokenEnv)
+	}
+	if azureDeployment == "" {
+		azureDeployment = model
+	}
+	provider := NewRealtimeModel(apiKey, model, opts...)
+	provider.apiKey = apiKey
+	provider.baseURL = openAIRealtimeAzureBaseURL(azureEndpoint)
+	provider.azureADToken = azureADToken
+	provider.azureDeployment = azureDeployment
+	provider.apiVersion = apiVersion
+	provider.isAzure = true
+	if !provider.options.InputAudioTranscriptionSet && provider.options.InputAudioTranscription == nil {
+		provider.options.InputAudioTranscription = map[string]any{"model": "whisper-1"}
+		provider.options.InputAudioTranscriptionSet = true
+	}
+	if !provider.options.TurnDetectionSet && provider.options.TurnDetection == nil {
+		provider.options.TurnDetection = map[string]any{
+			"type":                "server_vad",
+			"threshold":           0.5,
+			"prefix_padding_ms":   300,
+			"silence_duration_ms": 200,
+			"create_response":     true,
+		}
+		provider.options.TurnDetectionSet = true
+	}
+	return provider, nil
 }
 
 func (m *RealtimeModel) Model() string {
@@ -286,12 +345,17 @@ func (m *RealtimeModel) UpdateOptions(options llm.RealtimeSessionOptions) error 
 }
 
 func (m *RealtimeModel) Capabilities() llm.RealtimeCapabilities {
+	m.mu.Lock()
+	options := m.options
+	modalities := append([]string(nil), m.modalities...)
+	m.mu.Unlock()
+
 	return llm.RealtimeCapabilities{
 		MessageTruncation:       true,
-		TurnDetection:           true,
-		UserTranscription:       true,
+		TurnDetection:           !(options.TurnDetectionSet && options.TurnDetection == nil),
+		UserTranscription:       !(options.InputAudioTranscriptionSet && options.InputAudioTranscription == nil),
 		AutoToolReplyGeneration: false,
-		AudioOutput:             len(m.modalities) == 0 || realtimeModalitiesInclude(m.modalities, "audio"),
+		AudioOutput:             len(modalities) == 0 || realtimeModalitiesInclude(modalities, "audio"),
 		ManualFunctionCalls:     true,
 		MutableChatContext:      true,
 		MutableInstructions:     true,
@@ -301,22 +365,29 @@ func (m *RealtimeModel) Capabilities() llm.RealtimeCapabilities {
 }
 
 type realtimeSession struct {
-	model            *RealtimeModel
-	conn             *websocket.Conn
-	ctx              context.Context
-	cancel           context.CancelFunc
-	mu               sync.Mutex
-	eventCh          chan llm.RealtimeEvent
-	remote           *llm.RemoteChatContext
-	inputTranscripts *utils.BoundedDict[inputTranscriptKey, realtimeInputTranscript]
-	generation       *realtimeGeneration
-	pendingResponses int
-	instructions     string
-	tools            []llm.Tool
-	audioBStream     *audio.AudioByteStream
-	pushedDuration   float64
-	optionsState     map[string]any
-	connectedAt      time.Time
+	model                 *RealtimeModel
+	conn                  *websocket.Conn
+	ctx                   context.Context
+	cancel                context.CancelFunc
+	mu                    sync.Mutex
+	eventCh               chan llm.RealtimeEvent
+	remote                *llm.RemoteChatContext
+	inputTranscripts      *utils.BoundedDict[inputTranscriptKey, realtimeInputTranscript]
+	generation            *realtimeGeneration
+	pendingResponses      int
+	instructions          string
+	tools                 []llm.Tool
+	audioBStream          *audio.AudioByteStream
+	pushedDuration        float64
+	optionsState          map[string]any
+	connectedAt           time.Time
+	lastGeneration        realtimeGenerationTiming
+	responseCreateTimeout time.Duration
+}
+
+type realtimeGenerationTiming struct {
+	createdAt    time.Time
+	firstTokenAt time.Time
 }
 
 const maxRealtimeInputTranscripts = 1024
@@ -325,6 +396,9 @@ const openAIRealtimeInputNumChannels = 1
 const openAIRealtimeDefaultVoice = "marin"
 const openAIRealtimeDefaultSpeed = 1.0
 const openAIRealtimeDefaultMaxOutputTokens = "inf"
+const openAIRealtimeDefaultMaxSessionDuration = 20 * time.Minute
+const openAIRealtimeActiveGenerationRecyclePoll = 100 * time.Millisecond
+const openAIRealtimeResponseCreateTimeout = 10 * time.Second
 
 type inputTranscriptKey struct {
 	itemID       string
@@ -341,6 +415,7 @@ type realtimeGeneration struct {
 	messageCh  chan llm.MessageGeneration
 	functionCh chan *llm.FunctionCall
 	messages   map[string]*realtimeMessageGeneration
+	timing     realtimeGenerationTiming
 }
 
 type realtimeMessageGeneration struct {
@@ -354,14 +429,12 @@ type realtimeMessageGeneration struct {
 }
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
-	if m.apiKey == "" {
+	if m.apiKey == "" && (!m.isAzure || m.azureADToken == "") {
 		return nil, fmt.Errorf("%s", "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable")
 	}
-	wsURL := openAIRealtimeSessionURL(m.baseURL, m.model)
+	wsURL := m.realtimeSessionURL()
 
-	header := http.Header{}
-	header.Add("Authorization", "Bearer "+m.apiKey)
-	header.Add("User-Agent", "LiveKit Agents")
+	header := m.realtimeHeaders()
 
 	conn, err := m.dialRealtimeWebsocket(context.Background(), wsURL, header)
 	if err != nil {
@@ -390,6 +463,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	}
 
 	go s.eventLoop()
+	s.startMaxSessionRecycle(conn)
 	s.optionsState = openAIRealtimeOptionEntries(initialSession)
 	if err := s.sendMsg(openAIRealtimeInitialSessionUpdateMessage(initialSession)); err != nil {
 		_ = s.Close()
@@ -398,6 +472,29 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	m.registerSession(s)
 
 	return s, nil
+}
+
+func (m *RealtimeModel) realtimeHeaders() http.Header {
+	header := http.Header{}
+	header.Add("User-Agent", "LiveKit Agents")
+	if m.isAzure {
+		if m.azureADToken != "" {
+			header.Add("Authorization", "Bearer "+m.azureADToken)
+		}
+		if m.apiKey != "" {
+			header.Add("api-key", m.apiKey)
+		}
+		return header
+	}
+	header.Add("Authorization", "Bearer "+m.apiKey)
+	return header
+}
+
+func (m *RealtimeModel) realtimeSessionURL() string {
+	if m.isAzure {
+		return openAIRealtimeAzureSessionURL(m.baseURL, m.model, m.azureDeployment, m.apiVersion)
+	}
+	return openAIRealtimeSessionURL(m.baseURL, m.model)
 }
 
 func (m *RealtimeModel) registerSession(session *realtimeSession) {
@@ -423,7 +520,6 @@ func (m *RealtimeModel) dialRealtimeWebsocket(ctx context.Context, wsURL string,
 	for attempt := 0; attempt <= m.connect.MaxRetry; attempt++ {
 		conn, err = m.dialRealtimeWebsocketAttempt(ctx, wsURL, header)
 		if err == nil {
-			openAIRealtimeApplySessionDeadline(conn, m.maxSession)
 			return conn, nil
 		}
 		if attempt == m.connect.MaxRetry {
@@ -478,13 +574,6 @@ func (m *RealtimeModel) dialRealtimeWebsocketAttempt(ctx context.Context, wsURL 
 	}
 }
 
-func openAIRealtimeApplySessionDeadline(conn *websocket.Conn, duration time.Duration) {
-	if conn == nil || duration <= 0 {
-		return
-	}
-	_ = conn.SetReadDeadline(time.Now().Add(duration))
-}
-
 func openAIRealtimeBaseURL(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -506,6 +595,20 @@ func openAIRealtimeBaseURL(rawURL string) string {
 	return u.String()
 }
 
+func openAIRealtimeAzureBaseURL(rawURL string) string {
+	u, err := url.Parse(strings.TrimRight(rawURL, "/") + "/openai")
+	if err != nil {
+		return rawURL
+	}
+	switch u.Scheme {
+	case "http":
+		u.Scheme = "ws"
+	case "https":
+		u.Scheme = "wss"
+	}
+	return u.String()
+}
+
 func openAIRealtimeSessionURL(baseURL, model string) string {
 	u, err := url.Parse(baseURL)
 	if err != nil {
@@ -514,6 +617,41 @@ func openAIRealtimeSessionURL(baseURL, model string) string {
 	query := u.Query()
 	if query.Get("model") == "" {
 		query.Set("model", model)
+	}
+	u.RawQuery = query.Encode()
+	return u.String()
+}
+
+func openAIRealtimeAzureSessionURL(baseURL, model, deployment, apiVersion string) string {
+	if deployment == "" {
+		deployment = model
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return baseURL
+	}
+	path := strings.TrimRight(u.Path, "/")
+	switch path {
+	case "", "/openai":
+		if apiVersion != "" {
+			u.Path = path + "/realtime"
+		} else {
+			u.Path = path + "/v1/realtime"
+		}
+	case "/openai/v1":
+		u.Path = "/openai/v1/realtime"
+	default:
+		u.Path = strings.TrimRight(u.Path, "/")
+	}
+	query := u.Query()
+	query.Del("api-version")
+	if apiVersion != "" {
+		query.Set("api-version", apiVersion)
+		if deployment != "" {
+			query.Set("deployment", deployment)
+		}
+	} else if query.Get("model") == "" && deployment != "" {
+		query.Set("model", deployment)
 	}
 	u.RawQuery = query.Encode()
 	return u.String()
@@ -529,7 +667,7 @@ func openAIRealtimeInitialSession(model string, modalities ...[]string) map[stri
 		"rate": openAIRealtimeInputSampleRate,
 	}
 	outputModality := "audio"
-	if len(modalities) > 0 && !realtimeModalitiesInclude(modalities[0], "audio") {
+	if len(modalities) > 0 && len(modalities[0]) > 0 && !realtimeModalitiesInclude(modalities[0], "audio") {
 		outputModality = "text"
 	}
 	return map[string]any{
@@ -1320,14 +1458,38 @@ func openAIRealtimeVideoMessage(image *llm.ImageContent) (map[string]any, error)
 func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
 	s.mu.Lock()
 	instructions := s.instructions
-	s.mu.Unlock()
-	if err := s.sendMsg(openAIRealtimeGenerateReplyMessageWithSessionInstructions(options, instructions)); err != nil {
-		return err
-	}
-	s.mu.Lock()
 	s.pendingResponses++
 	s.mu.Unlock()
+	if err := s.sendMsg(openAIRealtimeGenerateReplyMessageWithSessionInstructions(options, instructions)); err != nil {
+		s.mu.Lock()
+		if s.pendingResponses > 0 {
+			s.pendingResponses--
+		}
+		s.mu.Unlock()
+		return err
+	}
+	s.startResponseCreateTimeout()
 	return nil
+}
+
+func (s *realtimeSession) startResponseCreateTimeout() {
+	timeout := s.responseCreateTimeout
+	if timeout == 0 {
+		timeout = openAIRealtimeResponseCreateTimeout
+	}
+	timer := time.NewTimer(timeout)
+	go func() {
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			s.mu.Lock()
+			if s.pendingResponses > 0 {
+				s.pendingResponses--
+			}
+			s.mu.Unlock()
+		case <-s.ctx.Done():
+		}
+	}()
 }
 
 func (s *realtimeSession) Say(text string) error {
@@ -1484,11 +1646,158 @@ func (s *realtimeSession) emitSessionCloseMetrics() {
 func (s *realtimeSession) sendMsg(msg any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	msg = s.prepareClientMessage(msg)
 	b, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
 	return s.conn.WriteMessage(websocket.TextMessage, b)
+}
+
+func (s *realtimeSession) prepareClientMessage(msg any) any {
+	if s == nil || s.model == nil || !s.model.isLegacyAzureRealtime() {
+		return msg
+	}
+	payload, ok := msg.(map[string]any)
+	if !ok {
+		return msg
+	}
+	return openAIRealtimeLegacyAzureClientMessage(payload)
+}
+
+func (m *RealtimeModel) isLegacyAzureRealtime() bool {
+	return m != nil && m.isAzure && m.apiVersion != ""
+}
+
+func openAIRealtimeLegacyAzureClientMessage(msg map[string]any) map[string]any {
+	if openAIRealtimeString(msg["type"]) != "session.update" {
+		if openAIRealtimeString(msg["type"]) == "conversation.item.create" {
+			return openAIRealtimeLegacyAzureConversationItemMessage(msg)
+		}
+		return msg
+	}
+	session, ok := msg["session"].(map[string]any)
+	if !ok {
+		return msg
+	}
+	converted := make(map[string]any, len(msg))
+	for key, value := range msg {
+		if key == "session" {
+			converted[key] = openAIRealtimeLegacyAzureSession(session)
+			continue
+		}
+		converted[key] = value
+	}
+	return converted
+}
+
+func openAIRealtimeLegacyAzureConversationItemMessage(msg map[string]any) map[string]any {
+	item, ok := msg["item"].(map[string]any)
+	if !ok {
+		return msg
+	}
+	converted := make(map[string]any, len(msg))
+	for key, value := range msg {
+		converted[key] = value
+	}
+	converted["item"] = openAIRealtimeLegacyAzureConversationItem(item)
+	return converted
+}
+
+func openAIRealtimeLegacyAzureConversationItem(item map[string]any) map[string]any {
+	converted := make(map[string]any, len(item))
+	for key, value := range item {
+		converted[key] = value
+	}
+	content, ok := item["content"].([]map[string]any)
+	if ok {
+		converted["content"] = openAIRealtimeLegacyAzureContent(content)
+		return converted
+	}
+	contentAny, ok := item["content"].([]any)
+	if !ok {
+		return converted
+	}
+	parts := make([]map[string]any, 0, len(contentAny))
+	for _, part := range contentAny {
+		if typed, ok := part.(map[string]any); ok {
+			parts = append(parts, typed)
+		}
+	}
+	converted["content"] = openAIRealtimeLegacyAzureContent(parts)
+	return converted
+}
+
+func openAIRealtimeLegacyAzureContent(content []map[string]any) []map[string]any {
+	converted := make([]map[string]any, 0, len(content))
+	for _, part := range content {
+		next := make(map[string]any, len(part))
+		for key, value := range part {
+			next[key] = value
+		}
+		if next["type"] == "output_text" {
+			next["type"] = "text"
+		}
+		converted = append(converted, next)
+	}
+	return converted
+}
+
+func openAIRealtimeLegacyAzureSession(session map[string]any) map[string]any {
+	mapped := make(map[string]any)
+	for key, value := range session {
+		if key != "audio" && key != "output_modalities" && key != "max_output_tokens" {
+			mapped[key] = value
+		}
+	}
+	if modalities, ok := session["output_modalities"]; ok {
+		mapped["modalities"] = openAIRealtimeLegacyAzureModalities(modalities)
+		mapped["input_audio_format"] = "pcm16"
+		mapped["output_audio_format"] = "pcm16"
+	}
+	if maxTokens, ok := session["max_output_tokens"]; ok {
+		mapped["max_response_output_tokens"] = maxTokens
+	}
+	audio, _ := session["audio"].(map[string]any)
+	input, _ := audio["input"].(map[string]any)
+	if value, ok := input["noise_reduction"]; ok {
+		mapped["input_audio_noise_reduction"] = value
+	}
+	if value, ok := input["transcription"]; ok {
+		mapped["input_audio_transcription"] = value
+	}
+	if value, ok := input["turn_detection"]; ok {
+		mapped["turn_detection"] = value
+	}
+	output, _ := audio["output"].(map[string]any)
+	if value, ok := output["voice"]; ok {
+		mapped["voice"] = value
+	}
+	if value, ok := output["speed"]; ok {
+		mapped["speed"] = value
+	}
+	return mapped
+}
+
+func openAIRealtimeLegacyAzureModalities(value any) []string {
+	raw, ok := value.([]string)
+	if ok && realtimeModalitiesInclude(raw, "audio") {
+		return []string{"audio", "text"}
+	}
+	if ok {
+		return append([]string(nil), raw...)
+	}
+	values, _ := value.([]any)
+	modalities := make([]string, 0, len(values))
+	for _, item := range values {
+		if modality, ok := item.(string); ok {
+			modalities = append(modalities, modality)
+		}
+	}
+	if realtimeModalitiesInclude(modalities, "audio") {
+		return []string{"audio", "text"}
+	}
+	return modalities
 }
 
 func (s *realtimeSession) eventLoop() {
@@ -1548,14 +1857,48 @@ func (s *realtimeSession) eventLoop() {
 	}
 }
 
+func (s *realtimeSession) startMaxSessionRecycle(conn *websocket.Conn) {
+	if s == nil || s.model == nil || s.model.maxSession <= 0 || conn == nil {
+		return
+	}
+	duration := s.model.maxSession
+	go func() {
+		timer := time.NewTimer(duration)
+		defer timer.Stop()
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-timer.C:
+		}
+		ticker := time.NewTicker(openAIRealtimeActiveGenerationRecyclePoll)
+		defer ticker.Stop()
+		for {
+			s.mu.Lock()
+			current := s.conn == conn
+			active := s.generation != nil
+			s.mu.Unlock()
+			if !current {
+				return
+			}
+			if !active {
+				_ = conn.Close()
+				return
+			}
+			select {
+			case <-s.ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}
+
 func (s *realtimeSession) reconnectAfterDisconnect() error {
 	if s.model == nil {
 		return fmt.Errorf("OpenAI realtime disconnected")
 	}
-	wsURL := openAIRealtimeSessionURL(s.model.baseURL, s.model.model)
-	header := http.Header{}
-	header.Add("Authorization", "Bearer "+s.model.apiKey)
-	header.Add("User-Agent", "LiveKit Agents")
+	wsURL := s.model.realtimeSessionURL()
+	header := s.model.realtimeHeaders()
 
 	conn, err := s.model.dialRealtimeWebsocket(s.ctx, wsURL, header)
 	if err != nil {
@@ -1570,6 +1913,9 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 		initialSession["instructions"] = s.instructions
 	}
 	msg := openAIRealtimeInitialSessionUpdateMessage(initialSession)
+	if s.model.isLegacyAzureRealtime() {
+		msg = openAIRealtimeLegacyAzureClientMessage(msg)
+	}
 	b, err := json.Marshal(msg)
 	if err == nil {
 		err = conn.WriteMessage(websocket.TextMessage, b)
@@ -1582,6 +1928,9 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 				"tools": s.model.realtimeTools(s.tools),
 			},
 		}
+		if s.model.isLegacyAzureRealtime() {
+			toolsMsg = openAIRealtimeLegacyAzureClientMessage(toolsMsg)
+		}
 		b, err = json.Marshal(toolsMsg)
 		if err == nil {
 			err = conn.WriteMessage(websocket.TextMessage, b)
@@ -1593,6 +1942,9 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 		for _, chatMsg := range chatMsgs {
 			if err != nil {
 				break
+			}
+			if s.model.isLegacyAzureRealtime() {
+				chatMsg = openAIRealtimeLegacyAzureClientMessage(chatMsg)
 			}
 			b, err = json.Marshal(chatMsg)
 			if err == nil {
@@ -1607,6 +1959,7 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 	}
 	s.conn = conn
 	s.pendingResponses = 0
+	s.startMaxSessionRecycle(conn)
 	s.mu.Unlock()
 
 	_ = oldConn.Close()
@@ -1784,10 +2137,24 @@ func (s *realtimeSession) persistRealtimeAudioTranscripts() {
 
 func openAIRealtimeResponseDoneError(response map[string]any) (llm.RealtimeEvent, bool) {
 	status, _ := response["status"].(string)
-	if status != "failed" {
+	if status != "failed" && status != "incomplete" {
 		return llm.RealtimeEvent{}, false
 	}
 	statusDetails, _ := response["status_details"].(map[string]any)
+	if status == "incomplete" {
+		reason := openAIRealtimeString(statusDetails["reason"])
+		if reason == "" {
+			reason = openAIRealtimeString(statusDetails["type"])
+		}
+		message := "OpenAI Realtime API response incomplete"
+		if reason != "" {
+			message = fmt.Sprintf("%s: %s", message, reason)
+		}
+		return llm.RealtimeEvent{
+			Type:  llm.RealtimeEventTypeError,
+			Error: llm.NewAPIError(message, statusDetails, true),
+		}, true
+	}
 	errorBody, hasError := statusDetails["error"].(map[string]any)
 	message := "OpenAI Realtime API response failed with unknown error"
 	var body any
@@ -1824,6 +2191,9 @@ func (s *realtimeSession) trackRealtimeEvent(ev llm.RealtimeEvent) llm.RealtimeE
 	if ev.Type == llm.RealtimeEventTypeInputAudioTranscriptionCompleted {
 		return s.trackRealtimeInputTranscription(ev)
 	}
+	if ev.Type == llm.RealtimeEventTypeMetricsCollected {
+		return s.trackRealtimeMetrics(ev)
+	}
 	return ev
 }
 
@@ -1838,6 +2208,9 @@ func (s *realtimeSession) trackRealtimeGenerationCreated(ev llm.RealtimeEvent) l
 		messageCh:  make(chan llm.MessageGeneration, 100),
 		functionCh: make(chan *llm.FunctionCall, 100),
 		messages:   make(map[string]*realtimeMessageGeneration),
+		timing: realtimeGenerationTiming{
+			createdAt: time.Now(),
+		},
 	}
 	s.closeRealtimeGeneration()
 	s.generation = generation
@@ -1854,6 +2227,9 @@ func (s *realtimeSession) trackRealtimeText(ev llm.RealtimeEvent) {
 	if msg == nil {
 		return
 	}
+	if msg.audioClosed && s.generation.timing.firstTokenAt.IsZero() {
+		s.generation.timing.firstTokenAt = time.Now()
+	}
 	select {
 	case msg.textCh <- ev.Text:
 	default:
@@ -1869,6 +2245,9 @@ func (s *realtimeSession) trackRealtimeAudio(ev llm.RealtimeEvent) {
 	if msg == nil {
 		return
 	}
+	if s.generation.timing.firstTokenAt.IsZero() {
+		s.generation.timing.firstTokenAt = time.Now()
+	}
 	frame := &model.AudioFrame{
 		Data:              ev.Data,
 		SampleRate:        24000,
@@ -1881,6 +2260,32 @@ func (s *realtimeSession) trackRealtimeAudio(ev llm.RealtimeEvent) {
 	default:
 		logger.Logger.Warnw("dropping OpenAI realtime audio delta for full message stream", nil, "item_id", ev.ItemID)
 	}
+}
+
+func (s *realtimeSession) trackRealtimeMetrics(ev llm.RealtimeEvent) llm.RealtimeEvent {
+	if ev.Metrics == nil {
+		return ev
+	}
+	timing := s.lastGeneration
+	if s.generation != nil && !s.generation.timing.createdAt.IsZero() {
+		timing = s.generation.timing
+	}
+	if timing.createdAt.IsZero() {
+		return ev
+	}
+	now := time.Now()
+	ev.Metrics.Timestamp = timing.createdAt
+	ev.Metrics.Duration = now.Sub(timing.createdAt).Seconds()
+	if timing.firstTokenAt.IsZero() {
+		ev.Metrics.TTFT = -1
+	} else {
+		ev.Metrics.TTFT = timing.firstTokenAt.Sub(timing.createdAt).Seconds()
+	}
+	if ev.Metrics.Duration > 0 {
+		ev.Metrics.TokensPerSecond = float64(ev.Metrics.OutputTokens) / ev.Metrics.Duration
+	}
+	s.lastGeneration = realtimeGenerationTiming{}
+	return ev
 }
 
 func (s *realtimeSession) setRealtimeMessageModalities(itemID string, modalities []string) {
@@ -1903,6 +2308,7 @@ func (s *realtimeSession) closeRealtimeGeneration() {
 	if s.generation == nil {
 		return
 	}
+	s.lastGeneration = s.generation.timing
 	for _, msg := range s.generation.messages {
 		if msg.modalities == nil {
 			msg.modalities = []string{"audio", "text"}
