@@ -1095,7 +1095,15 @@ func TestAzureTTSUpdateOptionsMatchesReference(t *testing.T) {
 		t.Fatalf("NewAzureTTS error = %v", err)
 	}
 
-	provider.UpdateOptions("id-ID-GadisNeural", "id-ID")
+	if err := provider.UpdateOptions(
+		"id-ID-GadisNeural",
+		"id-ID",
+		WithAzureTTSLexiconURI("https://example.com/runtime-lexicon.xml"),
+		WithAzureTTSStyle(AzureTTSStyle{Style: "customerservice", Degree: 1.2}),
+		WithAzureTTSProsody(AzureTTSProsody{Rate: "slow", Volume: "soft", Pitch: "low"}),
+	); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
 
 	req, err := buildAzureTTSRequest(context.Background(), provider, "halo")
 	if err != nil {
@@ -1114,6 +1122,15 @@ func TestAzureTTSUpdateOptionsMatchesReference(t *testing.T) {
 	}
 	if provider.Language() != "id-ID" {
 		t.Fatalf("Language() = %q, want id-ID", provider.Language())
+	}
+	if !strings.Contains(ssml, `<lexicon uri="https://example.com/runtime-lexicon.xml"/>`) {
+		t.Fatalf("SSML = %q, want updated lexicon", ssml)
+	}
+	if !strings.Contains(ssml, `<mstts:express-as style="customerservice" styledegree="1.2">`) {
+		t.Fatalf("SSML = %q, want updated style", ssml)
+	}
+	if !strings.Contains(ssml, `<prosody rate="slow" volume="soft" pitch="low">halo</prosody>`) {
+		t.Fatalf("SSML = %q, want updated prosody", ssml)
 	}
 }
 

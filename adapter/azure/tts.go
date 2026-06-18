@@ -176,13 +176,22 @@ func (t *AzureTTS) SampleRate() int  { return t.sampleRate }
 func (t *AzureTTS) NumChannels() int { return 1 }
 func (t *AzureTTS) Language() string { return t.language }
 
-func (t *AzureTTS) UpdateOptions(voice string, language string) {
+func (t *AzureTTS) UpdateOptions(voice string, language string, opts ...AzureTTSOption) error {
+	next := *t
 	if voice != "" {
-		t.voice = voice
+		next.voice = voice
 	}
 	if language != "" {
-		t.language = language
+		next.language = language
 	}
+	for _, opt := range opts {
+		opt(&next)
+	}
+	if err := validateAzureTTSVoiceControls(&next); err != nil {
+		return err
+	}
+	*t = next
+	return nil
 }
 
 func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
