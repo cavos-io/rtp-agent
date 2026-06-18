@@ -106,6 +106,25 @@ func TestCreateSIPParticipantCallsSIPAPI(t *testing.T) {
 	}
 }
 
+func TestCreateSIPParticipantWithNamesUsesFirstOptionalName(t *testing.T) {
+	api := &fakeSIPAPI{}
+	info, err := workerlivekit.CreateSIPParticipantWithNames(context.Background(), api, &lkprotocol.Job{
+		Room: &lkprotocol.Room{Name: "room-a"},
+	}, "+15551234567", "trunk-a", "caller-a", "SIP Caller", "ignored")
+	if err != nil {
+		t.Fatalf("CreateSIPParticipantWithNames() error = %v", err)
+	}
+	if info == nil {
+		t.Fatal("CreateSIPParticipantWithNames() info = nil")
+	}
+	if api.createRequest == nil {
+		t.Fatal("CreateSIPParticipantWithNames() did not call SIP API")
+	}
+	if api.createRequest.ParticipantName != "SIP Caller" {
+		t.Fatalf("ParticipantName = %q, want SIP Caller", api.createRequest.ParticipantName)
+	}
+}
+
 func TestCreateSIPParticipantWithRequestUsesProvidedRequest(t *testing.T) {
 	api := &fakeSIPAPI{}
 	req := &lkprotocol.CreateSIPParticipantRequest{RoomName: "room-a", ParticipantIdentity: "caller-a"}

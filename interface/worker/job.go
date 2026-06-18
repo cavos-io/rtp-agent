@@ -820,11 +820,7 @@ func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunk
 		logger.Logger.Warnw("job context AddSIPParticipant is skipped for fake jobs", nil)
 		return &livekit.SIPParticipantInfo{}, nil
 	}
-	name := ""
-	if len(names) > 0 {
-		name = names[0]
-	}
-	return workerlivekit.CreateSIPParticipant(ctx, c.API().SIP, c.Job, callTo, trunkID, identity, name)
+	return workerlivekit.CreateSIPParticipantWithNames(ctx, c.API().SIP, c.Job, callTo, trunkID, identity, names...)
 }
 
 func (c *JobContext) CreateSIPParticipant(ctx context.Context, req *livekit.CreateSIPParticipantRequest) (*livekit.SIPParticipantInfo, error) {
