@@ -1750,6 +1750,45 @@ func TestMultimodalAgentTruncatesInterruptedRealtimeMessageToPlayedTranscript(t 
 	}
 }
 
+func TestMultimodalAgentInterruptedRealtimeMessageSkipsTextWhenPlayoutWaitCanceled(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(&fakePipelinePlaybackController{
+		err: context.Canceled,
+	})
+	chatCtx := llm.NewChatContext()
+	ma := &MultimodalAgent{
+		model: &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{
+			AudioOutput: true,
+		}},
+		session: session,
+		chatCtx: chatCtx,
+		ctx:     context.Background(),
+	}
+	textCh := make(chan string, 1)
+	textCh <- "unconfirmed realtime text"
+	close(textCh)
+	modalitiesCh := make(chan []string, 1)
+	modalitiesCh <- []string{"audio"}
+	close(modalitiesCh)
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	if err := speech.Interrupt(true); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+
+	ma.consumeRealtimeMessage(context.Background(), speech, llm.MessageGeneration{
+		MessageID:    "msg_realtime_wait_cancel",
+		TextCh:       textCh,
+		ModalitiesCh: modalitiesCh,
+	})
+
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chat context items = %#v, want no assistant message when interrupted playout wait is canceled", chatCtx.Items)
+	}
+	if len(speech.ChatItems()) != 0 {
+		t.Fatalf("speech chat items = %#v, want no committed assistant message", speech.ChatItems())
+	}
+}
+
 func TestMultimodalAgentSkipsRealtimeMessagesAfterSpeechInterrupted(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	rtSession := &fakeRealtimeSession{}

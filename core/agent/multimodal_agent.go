@@ -880,7 +880,7 @@ func (ma *MultimodalAgent) forwardedRealtimeTextAfterInterruption(ctx context.Co
 	ev, err := playback.WaitForPlayout(ctx)
 	if err != nil {
 		logger.Logger.Warnw("failed to wait for interrupted realtime playback", err)
-		return generatedText, AudioPlaybackResult{}
+		return "", AudioPlaybackResult{}
 	}
 	if ev.SynchronizedTranscript != "" {
 		if session.activity != nil {
