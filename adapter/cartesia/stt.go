@@ -14,6 +14,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -295,8 +296,8 @@ func (s *cartesiaSTTStream) readLoop() {
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- err
+			if !s.isClosed() {
+				s.errCh <- cartesiaSTTUnexpectedCloseError(err)
 			}
 			return
 		}
@@ -316,6 +317,20 @@ func (s *cartesiaSTTStream) readLoop() {
 			s.events <- event
 		}
 	}
+}
+
+func (s *cartesiaSTTStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
+func cartesiaSTTUnexpectedCloseError(err error) error {
+	message := "Cartesia STT connection closed unexpectedly"
+	if err != nil && err != io.EOF {
+		message += ": " + err.Error()
+	}
+	return llm.NewAPIConnectionError(message)
 }
 
 type cartesiaSTTStreamState struct {
