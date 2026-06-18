@@ -58,7 +58,7 @@ func (r RTMMessageRouter) HandleDataMessage(ctx context.Context, msg DataMessage
 	if messageType == "" {
 		messageType = payload.Type
 	}
-	if messageType != "input_text" || payload.Text == "" {
+	if messageType != "input_text" {
 		return nil
 	}
 	return r.TextInput(normalizeContext(ctx), TextInputEvent{

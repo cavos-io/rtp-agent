@@ -30,6 +30,33 @@ func TestRTMMessageRouterDispatchesInputText(t *testing.T) {
 	}
 }
 
+func TestRTMMessageRouterDispatchesEmptyInputText(t *testing.T) {
+	called := false
+	var got TextInputEvent
+	router := RTMMessageRouter{
+		TextInput: func(_ context.Context, ev TextInputEvent) error {
+			called = true
+			got = ev
+			return nil
+		},
+	}
+
+	err := router.HandleDataMessage(context.Background(), DataMessage{
+		Channel:   "support",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"data_type":"input_text"}`),
+	})
+	if err != nil {
+		t.Fatalf("HandleDataMessage() error = %v, want nil", err)
+	}
+	if !called {
+		t.Fatal("empty TEN input_text message was not dispatched")
+	}
+	if got.Text != "" || got.Publisher != "caller-7" || got.Channel != "support" {
+		t.Fatalf("TextInputEvent = %#v, want empty TEN input_text event", got)
+	}
+}
+
 func TestRTMMessageRouterDispatchesTENInputTextType(t *testing.T) {
 	var got TextInputEvent
 	router := RTMMessageRouter{
