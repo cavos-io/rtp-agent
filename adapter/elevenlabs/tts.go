@@ -199,18 +199,21 @@ func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.Chunke
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("elevenlabs error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("ElevenLabs TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio/") {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("elevenlabs returned non-audio data: %s", string(respBody))
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("elevenlabs returned non-audio data: %s", string(respBody)))
 	}
 
 	return &elevenLabsChunkedStream{
@@ -347,7 +350,10 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildElevenLabsStreamURL(t), header)
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial elevenlabs websocket: %w", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("could not connect to ElevenLabs: %v", err))
 	}
 
 	contextID := "ctx_" + uuid.NewString()[:12]
