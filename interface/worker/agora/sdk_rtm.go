@@ -70,8 +70,9 @@ func (p *sdkDataPublisher) handleMessageEvent(event *agorartm.MessageEvent) {
 	}
 	p.mu.Lock()
 	handler := p.handler
+	closed := p.closed
 	p.mu.Unlock()
-	if handler == nil {
+	if handler == nil || closed {
 		return
 	}
 	_ = handler(context.Background(), DataMessage{
@@ -93,6 +94,11 @@ func (p *sdkDataPublisher) PublishData(ctx context.Context, payload []byte) erro
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 	if p.closed {
 		return fmt.Errorf("agora data publisher is closed")
 	}

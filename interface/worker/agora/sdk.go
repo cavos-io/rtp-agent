@@ -455,6 +455,11 @@ func (c *sdkChannelClient) PublishPCM(ctx context.Context, frame PCMFrame) error
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 	if c.connection == nil {
 		return fmt.Errorf("agora SDK channel is not joined")
 	}

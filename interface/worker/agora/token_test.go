@@ -79,6 +79,26 @@ func TestResolveJoinOptionsBuildsTokenFromCertificate(t *testing.T) {
 	}
 }
 
+func TestResolveJoinOptionsUsesAppIDTokenWithoutCertificate(t *testing.T) {
+	opts := Options{
+		AppID:   "app",
+		Channel: "support",
+		UID:     "agent",
+	}
+
+	resolved, err := ResolveJoinOptions(opts)
+	if err != nil {
+		t.Fatalf("ResolveJoinOptions() error = %v", err)
+	}
+
+	if resolved.Token != "app" {
+		t.Fatalf("resolved Token = %q, want AppID token without app certificate", resolved.Token)
+	}
+	if resolved.UID != "agent" {
+		t.Fatalf("resolved UID = %q, want explicit UID", resolved.UID)
+	}
+}
+
 func TestResolveJoinOptionsDefaultsEmptyUIDForTokenGeneration(t *testing.T) {
 	opts := Options{
 		AppID:          "970CA35de60c44645bbae8a215061b33",

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	awspollytypes "github.com/aws/aws-sdk-go-v2/service/polly/types"
@@ -1177,6 +1178,31 @@ func (a *App) runAgora(ctx context.Context) error {
 		session:  a.Session,
 		greeting: a.Config.AgoraGreeting,
 	}
+	if workeragora.PublishDataEnabled(agoraOpts.PublishData) || workeragora.PublishDataEnabled(agoraOpts.RTMEnabled) {
+		dataOpts, err := workeragora.ResolveDataOptions(agoraOpts)
+		if err != nil {
+			return err
+		}
+		dataPublisher, err := appNewAgoraDataPublisher(dataOpts)
+		if err != nil {
+			return err
+		}
+		agoraEvents.publishGreetingTranscript = func(ctx context.Context, text string) error {
+			return workeragora.PublishTranscript(ctx, dataPublisher, "assistant", text, true, "100", time.Now())
+		}
+		transcriptForwarder := workeragora.NewTranscriptForwarder(a.Session, dataPublisher, workeragora.TranscriptForwarderOptions{
+			UserStreamID: dataOpts.RemoteStreamID,
+		})
+		if subscriber, ok := dataPublisher.(workeragora.DataMessageSubscriber); ok {
+			installAgoraRTMDataMessageHandler(subscriber, a.Session, dataOpts.UID)
+		}
+		transcriptForwarder.Start(runCtx)
+		defer func() {
+			if err := transcriptForwarder.Stop(context.Background()); err != nil {
+				logutil.Logger.Errorw("failed to close Agora data publisher", err)
+			}
+		}()
+	}
 	eventsCtx, stopObservingEvents := context.WithCancel(context.Background())
 	eventsDone := make(chan struct{})
 	go func() {
@@ -1198,27 +1224,6 @@ func (a *App) runAgora(ctx context.Context) error {
 		<-eventsDone
 		stopObservingEvents()
 	}()
-	if workeragora.PublishDataEnabled(agoraOpts.PublishData) || workeragora.PublishDataEnabled(agoraOpts.RTMEnabled) {
-		dataPublisher, err := appNewAgoraDataPublisher(agoraOpts)
-		if err != nil {
-			return err
-		}
-		agoraEvents.publishGreetingTranscript = func(ctx context.Context, text string) error {
-			return workeragora.PublishTranscript(ctx, dataPublisher, "assistant", text, true, "100", time.Now())
-		}
-		transcriptForwarder := workeragora.NewTranscriptForwarder(a.Session, dataPublisher, workeragora.TranscriptForwarderOptions{
-			UserStreamID: agoraOpts.RemoteStreamID,
-		})
-		if subscriber, ok := dataPublisher.(workeragora.DataMessageSubscriber); ok {
-			installAgoraRTMDataMessageHandler(subscriber, a.Session, agoraOpts.RTMUserID)
-		}
-		transcriptForwarder.Start(runCtx)
-		defer func() {
-			if err := transcriptForwarder.Stop(context.Background()); err != nil {
-				logutil.Logger.Errorw("failed to close Agora data publisher", err)
-			}
-		}()
-	}
 	if workeragora.PublishAudioEnabled(agoraOpts.PublishAudio) {
 		audioOutput := workeragora.NewAudioOutput(transport)
 		a.Session.EnsureAssistant().SetPublishAudio(func(ctx context.Context, frame *model.AudioFrame) error {
@@ -1231,6 +1236,7 @@ func (a *App) runAgora(ctx context.Context) error {
 		}
 		return err
 	}
+	agoraEvents.FlushPendingGreeting(context.Background())
 	<-runCtx.Done()
 	return runContextErr(runCtx)
 }
@@ -1269,7 +1275,9 @@ type agoraRuntimeEventHandler struct {
 	session                   *agent.AgentSession
 	greeting                  string
 	publishGreetingTranscript func(context.Context, string) error
+	mu                        sync.Mutex
 	users                     int
+	pendingGreeting           bool
 }
 
 func (h *agoraRuntimeEventHandler) Handle(event workeragora.Event) {
@@ -1278,25 +1286,66 @@ func (h *agoraRuntimeEventHandler) Handle(event workeragora.Event) {
 	}
 	switch event.Kind {
 	case workeragora.EventUserJoined:
+		h.mu.Lock()
 		h.users++
-		if h.users == 1 && h.greeting != "" && h.session != nil {
-			if _, err := h.session.Say(context.Background(), h.greeting); err != nil {
-				logutil.Logger.Warnw("failed to say Agora greeting", err, "channel", event.Channel, "userID", event.UserID)
-				return
-			}
-			if h.publishGreetingTranscript != nil {
-				if err := h.publishGreetingTranscript(context.Background(), h.greeting); err != nil {
-					logutil.Logger.Warnw("failed to publish Agora greeting transcript", err, "channel", event.Channel, "userID", event.UserID)
-				}
-			}
+		shouldGreet := h.users == 1 && h.greeting != "" && h.session != nil
+		h.mu.Unlock()
+		if shouldGreet && !h.sayAndPublishGreeting(context.Background(), event) {
+			h.mu.Lock()
+			h.pendingGreeting = true
+			h.mu.Unlock()
 		}
 	case workeragora.EventUserLeft:
+		h.mu.Lock()
 		if h.users > 0 {
 			h.users--
 		}
+		if h.users == 0 {
+			h.pendingGreeting = false
+		}
+		h.mu.Unlock()
 	case workeragora.EventDisconnected, workeragora.EventError:
+		h.mu.Lock()
 		h.users = 0
+		h.pendingGreeting = false
+		h.mu.Unlock()
 	}
+}
+
+func (h *agoraRuntimeEventHandler) FlushPendingGreeting(ctx context.Context) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	pending := h.pendingGreeting
+	if pending {
+		h.pendingGreeting = false
+	}
+	h.mu.Unlock()
+	if pending && !h.sayAndPublishGreeting(ctx, workeragora.Event{}) {
+		h.mu.Lock()
+		h.pendingGreeting = true
+		h.mu.Unlock()
+	}
+}
+
+func (h *agoraRuntimeEventHandler) sayAndPublishGreeting(ctx context.Context, event workeragora.Event) bool {
+	if h == nil || h.greeting == "" || h.session == nil {
+		return true
+	}
+	if _, err := h.session.Say(ctx, h.greeting); err != nil {
+		if errors.Is(err, agent.ErrAgentSessionNotRunning) {
+			return false
+		}
+		logutil.Logger.Warnw("failed to say Agora greeting", err, "channel", event.Channel, "userID", event.UserID)
+		return true
+	}
+	if h.publishGreetingTranscript != nil {
+		if err := h.publishGreetingTranscript(ctx, h.greeting); err != nil {
+			logutil.Logger.Warnw("failed to publish Agora greeting transcript", err, "channel", event.Channel, "userID", event.UserID)
+		}
+	}
+	return true
 }
 
 func observeAgoraTransportEvents(ctx context.Context, events <-chan workeragora.Event, onFatal func(error), onEvent func(workeragora.Event)) {

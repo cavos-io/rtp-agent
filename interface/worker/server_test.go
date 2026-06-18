@@ -403,19 +403,13 @@ func TestWorkerHTTPHandlerReportsConnectionFailure(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("health status = %d, want 503", rec.Code)
 	}
-	if strings.TrimSpace(rec.Body.String()) != "failed to connect to livekit" {
+	if strings.TrimSpace(rec.Body.String()) != "failed to connect to worker transport" {
 		t.Fatalf("health body = %q, want failed connection message", rec.Body.String())
 	}
 }
 
-func TestWorkerHTTPHandlerReportsGenericConnectionFailureForAgora(t *testing.T) {
-	server := NewAgentServer(WorkerOptions{
-		Transport: WorkerTransportAgora,
-		Agora: AgoraOptions{
-			AppID:   "agora-app",
-			Channel: "support",
-		},
-	})
+func TestWorkerHTTPHandlerReportsAgoraConnectionFailureWithoutLiveKitLeak(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{Transport: WorkerTransportAgora})
 	server.setConnectionFailed(true)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
@@ -425,8 +419,12 @@ func TestWorkerHTTPHandlerReportsGenericConnectionFailureForAgora(t *testing.T) 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("health status = %d, want 503", rec.Code)
 	}
-	if strings.TrimSpace(rec.Body.String()) != "failed to connect" {
-		t.Fatalf("health body = %q, want generic failed connection message", rec.Body.String())
+	body := strings.TrimSpace(rec.Body.String())
+	if strings.Contains(strings.ToLower(body), "livekit") {
+		t.Fatalf("health body = %q, want provider-neutral failure", rec.Body.String())
+	}
+	if body != "failed to connect to worker transport" {
+		t.Fatalf("health body = %q, want provider-neutral failure", rec.Body.String())
 	}
 }
 

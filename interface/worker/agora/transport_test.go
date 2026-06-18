@@ -42,6 +42,7 @@ func (f *fakeChannelClient) Join(ctx context.Context, opts Options, handler Even
 	if f.blockJoin {
 		<-ctx.Done()
 		if f.joinAfterCancelSucceeds {
+			f.joined = true
 			return nil
 		}
 		return ctx.Err()
@@ -675,8 +676,50 @@ func TestTransportJoinReportsClosedWhenCloseWinsJoinRace(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Join() did not return after Close canceled the transport")
 	}
-	if client.leaveCount != 0 {
-		t.Fatalf("leave count = %d, want 0", client.leaveCount)
+	if client.leaveCount != 1 {
+		t.Fatalf("leave count = %d, want 1 cleanup leave after late join success", client.leaveCount)
+	}
+	if !client.left {
+		t.Fatal("client left = false, want cleanup leave after late join success")
+	}
+}
+
+func TestTransportJoinReportsCleanupErrorWhenCloseWinsJoinRace(t *testing.T) {
+	leaveErr := errors.New("leave failed")
+	client := &fakeChannelClient{blockJoin: true, joinAfterCancelSucceeds: true, leaveErr: leaveErr}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+	joinDone := make(chan error, 1)
+
+	go func() {
+		joinDone <- tr.Join(context.Background())
+	}()
+
+	deadline := time.After(time.Second)
+	for {
+		if client.joinCtx != nil {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for Join to reach channel client")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if err := tr.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	select {
+	case err := <-joinDone:
+		if !errors.Is(err, leaveErr) {
+			t.Fatalf("Join() error = %v, want cleanup leave error", err)
+		}
+		if !strings.Contains(err.Error(), "closed") {
+			t.Fatalf("Join() error = %v, want closed transport context", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Join() did not return after Close canceled the transport")
 	}
 }
 

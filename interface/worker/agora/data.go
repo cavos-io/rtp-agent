@@ -3,6 +3,9 @@ package agora
 import (
 	"context"
 	"strings"
+	"time"
+
+	rtctokenbuilder "github.com/AgoraIO/Tools/DynamicKey/AgoraDynamicKey/go/src/rtctokenbuilder2"
 )
 
 type DataPublisher interface {
@@ -30,6 +33,25 @@ func ResolveDataOptions(opts Options) (Options, error) {
 	}
 	if opts.UID == "" {
 		opts.UID = "0"
+	}
+	if opts.Token == "" && opts.AppCertificate == "" {
+		opts.Token = opts.AppID
+	}
+	if opts.Token == "" && opts.AppCertificate != "" {
+		tokenTTL := uint32(defaultTokenTTL / time.Second)
+		token, err := rtctokenbuilder.BuildTokenWithRtm(
+			opts.AppID,
+			opts.AppCertificate,
+			opts.Channel,
+			opts.UID,
+			rtctokenbuilder.RolePublisher,
+			tokenTTL,
+			tokenTTL,
+		)
+		if err != nil {
+			return Options{}, err
+		}
+		opts.Token = token
 	}
 	return opts, nil
 }

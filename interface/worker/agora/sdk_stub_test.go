@@ -92,6 +92,41 @@ func TestSDKDataPublisherCloseUsesLifecycleHelper(t *testing.T) {
 	}
 }
 
+func TestSDKDataPublisherIgnoresInboundMessagesAfterClose(t *testing.T) {
+	source, err := os.ReadFile("sdk_rtm.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk_rtm.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"closed := p.closed",
+		"if handler == nil || closed",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk_rtm.go missing %q", want)
+		}
+	}
+}
+
+func TestSDKDataPublisherRechecksPublishContextAfterLock(t *testing.T) {
+	source, err := os.ReadFile("sdk_rtm.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk_rtm.go) error = %v", err)
+	}
+	text := string(source)
+	publishIndex := strings.Index(text, "func (p *sdkDataPublisher) PublishData")
+	if publishIndex < 0 {
+		t.Fatal("sdk_rtm.go missing sdkDataPublisher.PublishData")
+	}
+	publishBody := text[publishIndex:]
+	if nextFunc := strings.Index(publishBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		publishBody = publishBody[:len("func ")+nextFunc]
+	}
+	if strings.Count(publishBody, "case <-ctx.Done():") < 2 {
+		t.Fatal("sdkDataPublisher.PublishData must recheck context after acquiring the publish lock")
+	}
+}
+
 func TestSDKClientImplementationRegistersInboundAudioObserver(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {
@@ -744,5 +779,24 @@ func TestSDKClientImplementationSerializesPublishPCMWithLeave(t *testing.T) {
 	}
 	if deferUnlockIndex < 0 {
 		t.Fatal("PublishPCM must defer unlock while using the SDK connection")
+	}
+}
+
+func TestSDKClientImplementationRechecksPublishPCMContextAfterLock(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	publishIndex := strings.Index(text, "func (c *sdkChannelClient) PublishPCM")
+	if publishIndex < 0 {
+		t.Fatal("sdk.go missing sdkChannelClient.PublishPCM")
+	}
+	publishBody := text[publishIndex:]
+	if nextFunc := strings.Index(publishBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		publishBody = publishBody[:len("func ")+nextFunc]
+	}
+	if strings.Count(publishBody, "case <-ctx.Done():") < 2 {
+		t.Fatal("PublishPCM must recheck context after acquiring the SDK publish lock")
 	}
 }

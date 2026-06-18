@@ -11,6 +11,7 @@ import (
 
 type recordingDataPublisher struct {
 	payloads [][]byte
+	closes   int
 }
 
 func (r *recordingDataPublisher) PublishData(_ context.Context, payload []byte) error {
@@ -19,6 +20,7 @@ func (r *recordingDataPublisher) PublishData(_ context.Context, payload []byte) 
 }
 
 func (r *recordingDataPublisher) Close(context.Context) error {
+	r.closes++
 	return nil
 }
 
@@ -120,6 +122,33 @@ func TestTranscriptForwarderPublishesTENUserTranscriptWithSpeakerID(t *testing.T
 	}
 }
 
+func TestTranscriptForwarderPublishesTENUserTranscriptWithDefaultStreamID(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	publisher := &recordingDataPublisher{}
+	forwarder := NewTranscriptForwarder(session, publisher, TranscriptForwarderOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	forwarder.Start(ctx)
+	defer forwarder.Stop(context.Background())
+
+	session.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "typed hello",
+		IsFinal:    true,
+		CreatedAt:  time.UnixMilli(1710000000666),
+	})
+
+	got := waitForPublishedTranscript(t, publisher)
+	if got["role"] != "user" {
+		t.Fatalf("role = %#v, want user", got["role"])
+	}
+	if got["text"] != "typed hello" {
+		t.Fatalf("text = %#v, want transcript", got["text"])
+	}
+	if got["stream_id"] != float64(0) {
+		t.Fatalf("stream_id = %#v, want TEN default user stream id 0", got["stream_id"])
+	}
+}
+
 func TestPublishReasoningSendsTENRawPayload(t *testing.T) {
 	publisher := &recordingDataPublisher{}
 
@@ -217,6 +246,50 @@ func TestTranscriptForwarderPublishesTENReasoningTranscript(t *testing.T) {
 	}
 }
 
+func TestTranscriptForwarderStartIsIdempotent(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	publisher := &recordingDataPublisher{}
+	forwarder := NewTranscriptForwarder(session, publisher, TranscriptForwarderOptions{
+		AssistantStreamID: "100",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	forwarder.Start(ctx)
+	forwarder.Start(ctx)
+	defer func() {
+		cancel()
+		_ = forwarder.Stop(context.Background())
+	}()
+
+	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "hello once",
+		IsFinal:    true,
+		CreatedAt:  time.UnixMilli(1710000001111),
+	})
+
+	got := waitForPublishedTranscript(t, publisher)
+	if got["text"] != "hello once" {
+		t.Fatalf("text = %#v, want transcript", got["text"])
+	}
+	assertPublishedPayloadCount(t, publisher, 1)
+}
+
+func TestTranscriptForwarderStopIsIdempotent(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	publisher := &recordingDataPublisher{}
+	forwarder := NewTranscriptForwarder(session, publisher, TranscriptForwarderOptions{})
+	forwarder.Start(context.Background())
+
+	if err := forwarder.Stop(context.Background()); err != nil {
+		t.Fatalf("first Stop() error = %v, want nil", err)
+	}
+	if err := forwarder.Stop(context.Background()); err != nil {
+		t.Fatalf("second Stop() error = %v, want nil", err)
+	}
+	if publisher.closes != 1 {
+		t.Fatalf("publisher closes = %d, want 1", publisher.closes)
+	}
+}
+
 func waitForPublishedTranscript(t *testing.T, publisher *recordingDataPublisher) map[string]any {
 	t.Helper()
 	deadline := time.After(time.Second)
@@ -244,4 +317,24 @@ func publishedJSON(t *testing.T, publisher *recordingDataPublisher, index int) m
 		t.Fatalf("published payload is not JSON: %v", err)
 	}
 	return got
+}
+
+func assertPublishedPayloadCount(t *testing.T, publisher *recordingDataPublisher, want int) {
+	t.Helper()
+	deadline := time.After(50 * time.Millisecond)
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for {
+		if len(publisher.payloads) > want {
+			t.Fatalf("published payload count = %d, want %d", len(publisher.payloads), want)
+		}
+		select {
+		case <-tick.C:
+		case <-deadline:
+			if len(publisher.payloads) != want {
+				t.Fatalf("published payload count = %d, want %d", len(publisher.payloads), want)
+			}
+			return
+		}
+	}
 }

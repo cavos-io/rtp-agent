@@ -30,6 +30,9 @@ func ResolveJoinOptions(opts Options) (Options, error) {
 	if strings.TrimSpace(opts.UID) == "" {
 		opts.UID = "0"
 	}
+	if opts.Token == "" && opts.AppCertificate == "" {
+		opts.Token = opts.AppID
+	}
 	if strings.TrimSpace(opts.Token) != "" || strings.TrimSpace(opts.AppCertificate) == "" {
 		return opts, nil
 	}

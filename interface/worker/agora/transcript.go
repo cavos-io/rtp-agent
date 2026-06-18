@@ -10,7 +10,10 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 )
 
-const defaultAssistantTranscriptStreamID = "100"
+const (
+	defaultUserTranscriptStreamID      = "0"
+	defaultAssistantTranscriptStreamID = "100"
+)
 
 type TranscriptForwarderOptions struct {
 	UserStreamID      string
@@ -22,9 +25,11 @@ type TranscriptForwarder struct {
 	publisher DataPublisher
 	opts      TranscriptForwarderOptions
 
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-	once   sync.Once
+	cancel  context.CancelFunc
+	stopErr error
+	wg      sync.WaitGroup
+	start   sync.Once
+	once    sync.Once
 }
 
 func NewTranscriptForwarder(session *agent.AgentSession, publisher DataPublisher, opts TranscriptForwarderOptions) *TranscriptForwarder {
@@ -42,31 +47,33 @@ func (f *TranscriptForwarder) Start(ctx context.Context) {
 	if f == nil || f.session == nil || f.publisher == nil {
 		return
 	}
-	ctx, cancel := context.WithCancel(normalizeContext(ctx))
-	f.cancel = cancel
-	userEvents := f.session.UserInputTranscribedEvents()
-	agentEvents := f.session.AgentOutputTranscribedEvents()
-	reasoningEvents := f.session.AgentReasoningTranscribedEvents()
-	f.wg.Add(3)
-	go f.forwardUserTranscripts(ctx, userEvents)
-	go f.forwardAgentTranscripts(ctx, agentEvents)
-	go f.forwardAgentReasoning(ctx, reasoningEvents)
+	f.start.Do(func() {
+		ctx, cancel := context.WithCancel(normalizeContext(ctx))
+		f.cancel = cancel
+		userEvents := f.session.UserInputTranscribedEvents()
+		agentEvents := f.session.AgentOutputTranscribedEvents()
+		reasoningEvents := f.session.AgentReasoningTranscribedEvents()
+		f.wg.Add(3)
+		go f.forwardUserTranscripts(ctx, userEvents)
+		go f.forwardAgentTranscripts(ctx, agentEvents)
+		go f.forwardAgentReasoning(ctx, reasoningEvents)
+	})
 }
 
 func (f *TranscriptForwarder) Stop(ctx context.Context) error {
 	if f == nil {
 		return nil
 	}
-	if f.cancel != nil {
-		f.cancel()
-	}
 	f.once.Do(func() {
+		if f.cancel != nil {
+			f.cancel()
+		}
 		f.wg.Wait()
+		if f.publisher != nil {
+			f.stopErr = f.publisher.Close(normalizeContext(ctx))
+		}
 	})
-	if f.publisher == nil {
-		return nil
-	}
-	return f.publisher.Close(normalizeContext(ctx))
+	return f.stopErr
 }
 
 func (f *TranscriptForwarder) forwardUserTranscripts(ctx context.Context, events <-chan agent.UserInputTranscribedEvent) {
@@ -123,7 +130,10 @@ func userTranscriptStreamID(ev agent.UserInputTranscribedEvent, fallback string)
 	if ev.SpeakerID != "" {
 		return ev.SpeakerID
 	}
-	return fallback
+	if fallback != "" {
+		return fallback
+	}
+	return defaultUserTranscriptStreamID
 }
 
 func PublishTranscript(ctx context.Context, publisher DataPublisher, role string, text string, final bool, streamID string, createdAt time.Time) error {

@@ -30,6 +30,33 @@ func TestRTMMessageRouterDispatchesInputText(t *testing.T) {
 	}
 }
 
+func TestRTMMessageRouterDispatchesEmptyInputText(t *testing.T) {
+	called := false
+	var got TextInputEvent
+	router := RTMMessageRouter{
+		TextInput: func(_ context.Context, ev TextInputEvent) error {
+			called = true
+			got = ev
+			return nil
+		},
+	}
+
+	err := router.HandleDataMessage(context.Background(), DataMessage{
+		Channel:   "support",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"data_type":"input_text"}`),
+	})
+	if err != nil {
+		t.Fatalf("HandleDataMessage() error = %v, want nil", err)
+	}
+	if !called {
+		t.Fatal("empty TEN input_text message was not dispatched")
+	}
+	if got.Text != "" || got.Publisher != "caller-7" || got.Channel != "support" {
+		t.Fatalf("TextInputEvent = %#v, want empty TEN input_text event", got)
+	}
+}
+
 func TestRTMMessageRouterDispatchesTENInputTextType(t *testing.T) {
 	var got TextInputEvent
 	router := RTMMessageRouter{
@@ -174,6 +201,21 @@ func TestHandleTextInputEventEmitsTranscriptAfterGenerateReply(t *testing.T) {
 	}
 	if got := responder.calls; len(got) != 3 || got[0] != "interrupt:false" || got[1] != "generate:hello" || got[2] != "transcript:hello:caller-7" {
 		t.Fatalf("calls = %#v, want interrupt, generate, transcript", got)
+	}
+}
+
+func TestHandleTextInputEventIgnoresEmptyText(t *testing.T) {
+	responder := &recordingTextResponder{}
+
+	err := HandleTextInputEvent(context.Background(), responder, TextInputEvent{
+		Text:     "",
+		StreamID: "caller-7",
+	})
+	if err != nil {
+		t.Fatalf("HandleTextInputEvent() error = %v, want nil", err)
+	}
+	if got := responder.calls; len(got) != 0 {
+		t.Fatalf("calls = %#v, want empty text ignored before interrupt/generate/transcript", got)
 	}
 }
 
