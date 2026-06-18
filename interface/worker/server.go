@@ -826,6 +826,10 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 		_, _ = w.Write([]byte("OK"))
 	})
 	mux.HandleFunc("/worker", func(w http.ResponseWriter, r *http.Request) {
+		if NormalizeWorkerTransport(string(s.Options.Transport)) != WorkerTransportLiveKit {
+			http.NotFound(w, r)
+			return
+		}
 		body := workerlivekit.WorkerMetadata(workerlivekit.WorkerMetadataOptions{
 			AgentName:       s.Options.AgentName,
 			AgentNameIsEnv:  s.Options.AgentNameIsEnv,

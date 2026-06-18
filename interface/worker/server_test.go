@@ -533,6 +533,25 @@ func TestWorkerHTTPHandlerReportsEnvAgentNameProvenance(t *testing.T) {
 	}
 }
 
+func TestWorkerHTTPHandlerDoesNotExposeLiveKitMetadataForAgora(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		Transport: WorkerTransportAgora,
+		Agora: AgoraOptions{
+			AppID:   "agora-app",
+			Channel: "support",
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/worker", nil)
+	rec := httptest.NewRecorder()
+
+	server.workerHTTPHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("worker status = %d, want 404 for Agora transport", rec.Code)
+	}
+}
+
 func TestWorkerInfoReportsStartedHTTPPort(t *testing.T) {
 	stubWorkerHTTPListener(t)
 	server := NewAgentServer(WorkerOptions{DevMode: true, Host: "127.0.0.1"})
