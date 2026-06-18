@@ -726,6 +726,35 @@ func TestElevenLabsSTTStreamServerVADEndsSpeechAfterFinalTranscript(t *testing.T
 	}
 }
 
+func TestElevenLabsSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
+	stream := &elevenLabsSTTStream{state: &elevenLabsSTTStreamState{language: "en", includeTimestamps: true}}
+	timing, ok := any(stream).(stt.StreamTiming)
+	if !ok {
+		t.Fatal("stream does not implement stt.StreamTiming")
+	}
+	timing.SetStartTimeOffset(2.5)
+
+	events, err := processElevenLabsSTTStreamEvent(stream.state, map[string]any{
+		"message_type": "committed_transcript_with_timestamps",
+		"text":         "hello",
+		"words": []any{
+			map[string]any{"text": "hello", "start": 0.1, "end": 0.4},
+		},
+	})
+	if err != nil {
+		t.Fatalf("process final: %v", err)
+	}
+
+	alt := events[1].Alternatives[0]
+	if alt.StartTime != 2.6 || alt.EndTime != 2.9 {
+		t.Fatalf("alt timing = %v-%v, want offset transcript timing", alt.StartTime, alt.EndTime)
+	}
+	word := alt.Words[0]
+	if word.StartTime != 2.6 || word.EndTime != 2.9 || word.StartTimeOffset != 2.5 {
+		t.Fatalf("word timing = %+v, want offset word timing", word)
+	}
+}
+
 func TestElevenLabsSTTStreamEventDefaultsLanguageToEnglish(t *testing.T) {
 	events, err := processElevenLabsSTTStreamEvent(&elevenLabsSTTStreamState{}, map[string]any{
 		"message_type": "committed_transcript",

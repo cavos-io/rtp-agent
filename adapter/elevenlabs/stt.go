@@ -480,6 +480,46 @@ func (s *elevenLabsSTTStream) setServerVAD(enabled bool) {
 	}
 }
 
+func (s *elevenLabsSTTStream) StartTimeOffset() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == nil {
+		return 0
+	}
+	return s.state.startTimeOffset
+}
+
+func (s *elevenLabsSTTStream) SetStartTimeOffset(offset float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if offset < 0 {
+		offset = 0
+	}
+	if s.state != nil {
+		s.state.startTimeOffset = offset
+	}
+}
+
+func (s *elevenLabsSTTStream) StartTime() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == nil {
+		return 0
+	}
+	return s.state.startTime
+}
+
+func (s *elevenLabsSTTStream) SetStartTime(startTime float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if startTime < 0 {
+		startTime = 0
+	}
+	if s.state != nil {
+		s.state.startTime = startTime
+	}
+}
+
 func (s *elevenLabsSTTStream) unregisterFromProvider() {
 	if s.unregister != nil {
 		s.unregOnce.Do(func() { s.unregister(s) })
@@ -604,6 +644,7 @@ type elevenLabsSTTStreamState struct {
 	serverVAD         bool
 	speaking          bool
 	startTimeOffset   float64
+	startTime         float64
 }
 
 type elevenLabsSTTResponse struct {
