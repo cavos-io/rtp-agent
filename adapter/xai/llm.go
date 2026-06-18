@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -117,13 +118,16 @@ func (l *XaiLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("xai error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("xAI LLM request failed", resp.StatusCode, "", string(respBody))
 	}
 
 	return &xaiStream{

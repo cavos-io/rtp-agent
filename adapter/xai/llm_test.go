@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -88,6 +89,78 @@ func TestXaiLLMRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "XAI_API_KEY") {
 		t.Fatalf("Chat error = %q, want XAI_API_KEY guidance", err)
+	}
+}
+
+func TestXaiLLMChatReturnsAPIStatusError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: xaiRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewXaiLLM("test-key", "")
+
+	_, err := provider.Chat(context.Background(), xaiTestChatContext())
+	if err == nil {
+		t.Fatal("Chat error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Chat error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	if statusErr.Body != `{"error":"rate limited"}` {
+		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	}
+}
+
+func TestXaiLLMChatReturnsAPITimeoutError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: xaiRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, context.DeadlineExceeded
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewXaiLLM("test-key", "")
+
+	_, err := provider.Chat(context.Background(), xaiTestChatContext())
+	if err == nil {
+		t.Fatal("Chat error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Chat error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestXaiLLMChatReturnsAPIConnectionError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: xaiRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, errors.New("dial refused")
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewXaiLLM("test-key", "")
+
+	_, err := provider.Chat(context.Background(), xaiTestChatContext())
+	if err == nil {
+		t.Fatal("Chat error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Chat error = %T %v, want APIConnectionError", err, err)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if errors.As(err, &timeoutErr) {
+		t.Fatalf("Chat error = %T %v, want APIConnectionError but not APITimeoutError", err, err)
 	}
 }
 
@@ -207,4 +280,12 @@ func xaiMessageContentAsList(t *testing.T, message xaiMessage) []map[string]any 
 		content = append(content, part)
 	}
 	return content
+}
+
+func xaiTestChatContext() *llm.ChatContext {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+	return ctx
 }
