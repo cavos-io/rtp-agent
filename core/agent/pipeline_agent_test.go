@@ -3627,6 +3627,40 @@ func TestPipelineAgentScheduledSayRealTTSErrorStillEmittedAfterInterruptSuppress
 	}
 }
 
+func TestPipelineAgentGeneratedReplyTTSErrorSkipsAssistantCommit(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	cause := errors.New("real generated reply tts failure")
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "unplayed answer"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{stream: &fakePipelineTTSStream{err: cause}}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want cause %v", ev.Error, cause)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive generated reply TTS error")
+	}
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chatCtx.Items = %#v, want no assistant commit for failed generated reply TTS", chatCtx.Items)
+	}
+	if len(speech.ChatItems()) != 0 {
+		t.Fatalf("speech.ChatItems = %#v, want no committed chat items for failed generated reply TTS", speech.ChatItems())
+	}
+}
+
 func TestPipelineAgentGeneratedReplyInterruptSuppressesCanceledTTSError(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

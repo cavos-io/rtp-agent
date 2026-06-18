@@ -815,6 +815,8 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			if !suppressContextCanceledError(ctx, opts.SpeechHandle, err) {
 				logger.Logger.Errorw("TTS inference failed", err)
 				va.emitTTSError(session, err)
+				session.UpdateAgentState(AgentStateListening)
+				return
 			}
 		}
 		if genData.StreamErr != nil {
