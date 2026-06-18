@@ -751,9 +751,9 @@ func (c *JobContext) Terminated() bool {
 
 // DeleteRoom deletes the room and disconnects all participants.
 func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*workerlivekit.DeleteRoomResponse, error) {
-	if workerlivekit.ShouldSkipExternalAPIForFakeJob(c.IsFakeJob()) {
+	if plan := workerlivekit.DeleteRoomPlan(c.IsFakeJob()); plan.Skip {
 		logger.Logger.Warnw("job context DeleteRoom is skipped for fake jobs", nil)
-		return &workerlivekit.DeleteRoomResponse{}, nil
+		return plan.Response, nil
 	}
 	resp, warnErr := workerlivekit.DeleteRoomBestEffort(ctx, c.API().RoomService, c.Job, roomName)
 	if warnErr != nil {
