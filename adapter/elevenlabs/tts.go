@@ -43,10 +43,15 @@ type ElevenLabsTTS struct {
 	chunkLengthSchedule            []int
 	voiceSettings                  *ElevenLabsVoiceSettings
 	streamingLatency               *int
+	inactivityTimeout              int
+	enableLogging                  bool
 	pronunciationDictionaries      []ElevenLabsPronunciationDictionaryLocator
 	autoMode                       *bool
 	autoModeExplicit               bool
+	syncAlignment                  bool
+	applyTextNormalization         string
 	applyLanguageTextNormalization *bool
+	preferredAlignment             string
 }
 
 type ElevenLabsTTSOption func(*ElevenLabsTTS)
@@ -62,6 +67,12 @@ type ElevenLabsVoiceSettings struct {
 type ElevenLabsPronunciationDictionaryLocator struct {
 	PronunciationDictionaryID string
 	VersionID                 string
+}
+
+type ElevenLabsVoice struct {
+	ID       string
+	Name     string
+	Category string
 }
 
 func WithElevenLabsVoiceID(voiceID string) ElevenLabsTTSOption {
@@ -128,6 +139,20 @@ func WithElevenLabsStreamingLatency(latency int) ElevenLabsTTSOption {
 	}
 }
 
+func WithElevenLabsInactivityTimeout(timeoutSeconds int) ElevenLabsTTSOption {
+	return func(t *ElevenLabsTTS) {
+		if timeoutSeconds > 0 {
+			t.inactivityTimeout = timeoutSeconds
+		}
+	}
+}
+
+func WithElevenLabsEnableLogging(enabled bool) ElevenLabsTTSOption {
+	return func(t *ElevenLabsTTS) {
+		t.enableLogging = enabled
+	}
+}
+
 func WithElevenLabsPronunciationDictionaries(locators []ElevenLabsPronunciationDictionaryLocator) ElevenLabsTTSOption {
 	return func(t *ElevenLabsTTS) {
 		t.pronunciationDictionaries = append([]ElevenLabsPronunciationDictionaryLocator(nil), locators...)
@@ -141,9 +166,31 @@ func WithElevenLabsAutoMode(enabled bool) ElevenLabsTTSOption {
 	}
 }
 
+func WithElevenLabsSyncAlignment(enabled bool) ElevenLabsTTSOption {
+	return func(t *ElevenLabsTTS) {
+		t.syncAlignment = enabled
+	}
+}
+
+func WithElevenLabsApplyTextNormalization(mode string) ElevenLabsTTSOption {
+	return func(t *ElevenLabsTTS) {
+		if mode == "auto" || mode == "on" || mode == "off" {
+			t.applyTextNormalization = mode
+		}
+	}
+}
+
 func WithElevenLabsApplyLanguageTextNormalization(enabled bool) ElevenLabsTTSOption {
 	return func(t *ElevenLabsTTS) {
 		t.applyLanguageTextNormalization = &enabled
+	}
+}
+
+func WithElevenLabsPreferredAlignment(alignment string) ElevenLabsTTSOption {
+	return func(t *ElevenLabsTTS) {
+		if alignment == "normalized" || alignment == "original" {
+			t.preferredAlignment = alignment
+		}
 	}
 }
 
@@ -155,12 +202,16 @@ func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...Ele
 		modelID = "eleven_turbo_v2_5"
 	}
 	provider := &ElevenLabsTTS{
-		apiKey:     resolveElevenLabsAPIKey(apiKey),
-		baseURL:    defaultElevenLabsBaseURL,
-		voiceID:    voiceID,
-		modelID:    modelID,
-		encoding:   "mp3_22050_32",
-		sampleRate: 22050,
+		apiKey:                 resolveElevenLabsAPIKey(apiKey),
+		baseURL:                defaultElevenLabsBaseURL,
+		voiceID:                voiceID,
+		modelID:                modelID,
+		encoding:               "mp3_22050_32",
+		sampleRate:             22050,
+		inactivityTimeout:      defaultElevenLabsInactivityTimeout,
+		enableLogging:          true,
+		syncAlignment:          true,
+		applyTextNormalization: "auto",
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -174,7 +225,7 @@ func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...Ele
 
 func (t *ElevenLabsTTS) Label() string { return "elevenlabs.TTS" }
 func (t *ElevenLabsTTS) Capabilities() tts.TTSCapabilities {
-	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: true}
+	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: t.syncAlignment}
 }
 func (t *ElevenLabsTTS) SampleRate() int  { return t.sampleRate }
 func (t *ElevenLabsTTS) NumChannels() int { return 1 }
@@ -185,6 +236,48 @@ func (t *ElevenLabsTTS) UpdateOptions(opts ...ElevenLabsTTSOption) {
 	for _, opt := range opts {
 		opt(t)
 	}
+}
+
+func (t *ElevenLabsTTS) ListVoices(ctx context.Context) ([]ElevenLabsVoice, error) {
+	if err := validateElevenLabsAPIKey(t.apiKey); err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(t.baseURL, "/")+"/voices", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("xi-api-key", t.apiKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(err.Error())
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, llm.NewAPIStatusError("ElevenLabs voices request failed", resp.StatusCode, "", string(respBody))
+	}
+	var payload struct {
+		Voices []struct {
+			ID       string `json:"voice_id"`
+			Name     string `json:"name"`
+			Category string `json:"category"`
+		} `json:"voices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, llm.NewAPIConnectionError(err.Error())
+	}
+	voices := make([]ElevenLabsVoice, 0, len(payload.Voices))
+	for _, voice := range payload.Voices {
+		voices = append(voices, ElevenLabsVoice{
+			ID:       voice.ID,
+			Name:     voice.Name,
+			Category: voice.Category,
+		})
+	}
+	return voices, nil
 }
 
 // Synthesize performs a full HTTP POST for non-streaming scenarios.
@@ -235,8 +328,9 @@ func buildElevenLabsSynthesizeRequest(t *ElevenLabsTTS, text string) (string, []
 		apiURL += "&optimize_streaming_latency=" + strconv.Itoa(*t.streamingLatency)
 	}
 	body := map[string]interface{}{
-		"text":     text,
-		"model_id": t.modelID,
+		"text":           text,
+		"model_id":       t.modelID,
+		"voice_settings": nil,
 	}
 	if t.language != "" && elevenLabsSupportsLanguageCode(t.modelID) {
 		body["language_code"] = t.language
@@ -376,7 +470,7 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 		chunkLengthSchedule:       append([]int(nil), t.chunkLengthSchedule...),
 		voiceSettings:             cloneElevenLabsVoiceSettings(t.voiceSettings),
 		pronunciationDictionaries: append([]ElevenLabsPronunciationDictionaryLocator(nil), t.pronunciationDictionaries...),
-		preferredAlignment:        elevenLabsDefaultPreferredAlignment(t.language),
+		preferredAlignment:        elevenLabsPreferredAlignment(t.language, t.preferredAlignment),
 	}
 
 	go stream.readLoop()
@@ -402,13 +496,15 @@ func buildElevenLabsStreamURL(t *ElevenLabsTTS) string {
 		q.Set("language_code", t.language)
 	}
 	q.Set("enable_ssml_parsing", strconv.FormatBool(t.enableSSMLParsing))
-	q.Set("enable_logging", "true")
-	q.Set("inactivity_timeout", strconv.Itoa(defaultElevenLabsInactivityTimeout))
-	q.Set("apply_text_normalization", "auto")
+	q.Set("enable_logging", strconv.FormatBool(t.enableLogging))
+	q.Set("inactivity_timeout", strconv.Itoa(t.inactivityTimeout))
+	q.Set("apply_text_normalization", t.applyTextNormalization)
 	if t.applyLanguageTextNormalization != nil {
 		q.Set("apply_language_text_normalization", strconv.FormatBool(*t.applyLanguageTextNormalization))
 	}
-	q.Set("sync_alignment", "true")
+	if t.syncAlignment {
+		q.Set("sync_alignment", "true")
+	}
 	if t.autoMode != nil {
 		q.Set("auto_mode", strconv.FormatBool(*t.autoMode))
 	}
@@ -673,6 +769,13 @@ func elevenLabsDefaultPreferredAlignment(language string) string {
 	}
 }
 
+func elevenLabsPreferredAlignment(language string, preferred string) string {
+	if preferred == "normalized" || preferred == "original" {
+		return preferred
+	}
+	return elevenLabsDefaultPreferredAlignment(language)
+}
+
 func appendElevenLabsAlignment(runes *[]rune, starts *[]int, durations *[]int, alignment *elevenLabsAlignment) {
 	if alignment == nil {
 		return
@@ -912,7 +1015,7 @@ func cloneElevenLabsVoiceSettings(settings *ElevenLabsVoiceSettings) *ElevenLabs
 
 func elevenLabsTextPayload(contextID string, text string) map[string]interface{} {
 	return map[string]interface{}{
-		"text":       text,
+		"text":       text + " ",
 		"context_id": contextID,
 	}
 }

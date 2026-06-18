@@ -150,6 +150,9 @@ func TestElevenLabsSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	if payload["model_id"] != "eleven_turbo_v2_5" {
 		t.Fatalf("model_id = %#v, want eleven_turbo_v2_5", payload["model_id"])
 	}
+	if _, ok := payload["voice_settings"]; !ok {
+		t.Fatalf("voice_settings missing from payload %#v, want explicit null/object field", payload)
+	}
 	if payload["language_code"] != "en" {
 		t.Fatalf("language_code = %#v, want en", payload["language_code"])
 	}
@@ -205,6 +208,40 @@ func TestElevenLabsSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
 	}
 	if parsed.Path != "/v1/text-to-speech/voice-1/stream" {
 		t.Fatalf("path = %q, want configured base URL with stream synthesize path", parsed.Path)
+	}
+}
+
+func TestElevenLabsTTSListVoicesMatchesReference(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: elevenLabsRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("method = %q, want GET", r.Method)
+		}
+		if r.URL.String() != "https://eleven.example/v1/voices" {
+			t.Fatalf("url = %q, want voices endpoint", r.URL.String())
+		}
+		if r.Header.Get("xi-api-key") != "test-key" {
+			t.Fatalf("xi-api-key = %q, want API key", r.Header.Get("xi-api-key"))
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"voices":[{"voice_id":"voice-1","name":"Rachel","category":"premade"}]}`)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider, err := NewElevenLabsTTS("test-key", "", "", WithElevenLabsBaseURL("https://eleven.example/v1"))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	voices, err := provider.ListVoices(context.Background())
+	if err != nil {
+		t.Fatalf("ListVoices() error = %v", err)
+	}
+	if len(voices) != 1 || voices[0].ID != "voice-1" || voices[0].Name != "Rachel" || voices[0].Category != "premade" {
+		t.Fatalf("voices = %#v, want reference voice fields", voices)
 	}
 }
 
@@ -528,6 +565,69 @@ func TestElevenLabsStreamURLUsesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestElevenLabsStreamURLUsesReferenceTextNormalizationOverride(t *testing.T) {
+	provider, err := NewElevenLabsTTS("test-key", "", "", WithElevenLabsApplyTextNormalization("off"))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	parsed, err := url.Parse(buildElevenLabsStreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	if parsed.Query().Get("apply_text_normalization") != "off" {
+		t.Fatalf("apply_text_normalization = %q, want off", parsed.Query().Get("apply_text_normalization"))
+	}
+}
+
+func TestElevenLabsStreamURLUsesReferenceSyncAlignmentOverride(t *testing.T) {
+	provider, err := NewElevenLabsTTS("test-key", "", "", WithElevenLabsSyncAlignment(false))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	if provider.Capabilities().AlignedTranscript {
+		t.Fatal("aligned transcript capability = true, want false when sync alignment is disabled")
+	}
+	parsed, err := url.Parse(buildElevenLabsStreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	if parsed.Query().Get("sync_alignment") != "" {
+		t.Fatalf("sync_alignment = %q, want omitted when disabled", parsed.Query().Get("sync_alignment"))
+	}
+}
+
+func TestElevenLabsStreamURLUsesReferenceInactivityTimeoutOverride(t *testing.T) {
+	provider, err := NewElevenLabsTTS("test-key", "", "", WithElevenLabsInactivityTimeout(300))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	parsed, err := url.Parse(buildElevenLabsStreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	if parsed.Query().Get("inactivity_timeout") != "300" {
+		t.Fatalf("inactivity_timeout = %q, want 300", parsed.Query().Get("inactivity_timeout"))
+	}
+}
+
+func TestElevenLabsStreamURLUsesReferenceEnableLoggingOverride(t *testing.T) {
+	provider, err := NewElevenLabsTTS("test-key", "", "", WithElevenLabsEnableLogging(false))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	parsed, err := url.Parse(buildElevenLabsStreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	if parsed.Query().Get("enable_logging") != "false" {
+		t.Fatalf("enable_logging = %q, want false", parsed.Query().Get("enable_logging"))
+	}
+}
+
 func TestElevenLabsTTSAutoModeDefaultMatchesReference(t *testing.T) {
 	provider, err := NewElevenLabsTTS("test-key", "", "")
 	if err != nil {
@@ -690,8 +790,8 @@ func TestElevenLabsStreamPayloadsUseReferenceContextProtocol(t *testing.T) {
 	}
 
 	text := elevenLabsTextPayload(contextID, "hello")
-	if text["text"] != "hello" || text["context_id"] != contextID {
-		t.Fatalf("text payload = %#v, want text with context_id", text)
+	if text["text"] != "hello " || text["context_id"] != contextID {
+		t.Fatalf("text payload = %#v, want text with trailing space and context_id", text)
 	}
 	if _, ok := text["try_trigger_generation"]; ok {
 		t.Fatalf("text payload = %#v, want no legacy try_trigger_generation flag", text)
@@ -708,6 +808,13 @@ func TestElevenLabsStreamPayloadsUseReferenceContextProtocol(t *testing.T) {
 	closeContext := elevenLabsCloseContextPayload(contextID)
 	if closeContext["context_id"] != contextID || closeContext["close_context"] != true {
 		t.Fatalf("close payload = %#v, want context_id and close_context=true", closeContext)
+	}
+}
+
+func TestElevenLabsTextPayloadAppendsReferenceTrailingSpace(t *testing.T) {
+	payload := elevenLabsTextPayload("ctx_test", "hello")
+	if payload["text"] != "hello " {
+		t.Fatalf("text payload = %#v, want reference trailing space", payload)
 	}
 }
 
@@ -785,8 +892,8 @@ func TestElevenLabsTTSStreamStartsContextOnFirstText(t *testing.T) {
 	}
 
 	text := readElevenLabsTTSStreamMessage(t, messages)
-	if text["text"] != "hello" || text["context_id"] != contextID {
-		t.Fatalf("text packet = %#v, want hello with context_id %q", text, contextID)
+	if text["text"] != "hello " || text["context_id"] != contextID {
+		t.Fatalf("text packet = %#v, want hello with trailing space and context_id %q", text, contextID)
 	}
 	if _, ok := text["flush"]; ok {
 		t.Fatalf("text packet = %#v, want no flush before Flush()", text)
@@ -1258,6 +1365,38 @@ func TestElevenLabsTTSUsesOriginalAlignmentForCJKReferenceDefault(t *testing.T) 
 		t.Fatalf("timed transcript = %#v, want original alignment for CJK", timed)
 	}
 	if got := stream.deltaText(resp); got != "あ" {
+		t.Fatalf("delta text = %q, want original alignment text", got)
+	}
+}
+
+func TestElevenLabsTTSPreferredAlignmentOverrideMatchesReference(t *testing.T) {
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5",
+		WithElevenLabsLanguage("en"),
+		WithElevenLabsPreferredAlignment("original"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	if got := elevenLabsPreferredAlignment(provider.language, provider.preferredAlignment); got != "original" {
+		t.Fatalf("preferred alignment = %q, want explicit original", got)
+	}
+
+	resp := elWSResponse{
+		Audio:   base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
+		IsFinal: true,
+		NormalizedAlignment: &elevenLabsAlignment{
+			Chars:            []string{"1"},
+			CharStartTimesMs: []int{0},
+			CharDurationsMs:  []int{10},
+		},
+		Alignment: &elevenLabsAlignment{
+			Chars:            []string{"a"},
+			CharStartTimesMs: []int{20},
+			CharDurationsMs:  []int{30},
+		},
+	}
+	stream := &elevenLabsStream{preferredAlignment: elevenLabsPreferredAlignment(provider.language, provider.preferredAlignment)}
+	if got := stream.deltaText(resp); got != "a" {
 		t.Fatalf("delta text = %q, want original alignment text", got)
 	}
 }

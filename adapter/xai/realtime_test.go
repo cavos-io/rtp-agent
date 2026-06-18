@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,6 +53,285 @@ func TestNewXaiRealtimeModelUsesEnvironmentAPIKey(t *testing.T) {
 
 	if model.apiKey != "env-key" {
 		t.Fatalf("apiKey = %q, want env-key", model.apiKey)
+	}
+}
+
+func TestXaiRealtimeCustomTurnDetectionMatchesReference(t *testing.T) {
+	messages := make(chan map[string]any, 1)
+	handlerDone := make(chan struct{})
+	handlerErr := make(chan error, 1)
+	dialer := newXaiRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		defer close(handlerDone)
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			handlerErr <- fmt.Errorf("read initial session update: %w", err)
+			return
+		}
+		var msg map[string]any
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			handlerErr <- fmt.Errorf("decode initial session update: %w", err)
+			return
+		}
+		messages <- msg
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})
+
+	model := NewXaiRealtimeModel("test-key",
+		WithXaiRealtimeBaseURL("ws://xai.test/v1/realtime"),
+		WithXaiRealtimeWebsocketDialer(dialer),
+		WithXaiRealtimeTurnDetection(map[string]any{
+			"type":                "server_vad",
+			"threshold":           0.35,
+			"prefix_padding_ms":   180,
+			"silence_duration_ms": 650,
+			"create_response":     false,
+			"interrupt_response":  false,
+		}),
+	)
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+
+	var msg map[string]any
+	select {
+	case msg = <-messages:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for initial session update")
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	audio := sessionPayload["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	turnDetection := input["turn_detection"].(map[string]any)
+	if turnDetection["type"] != "server_vad" ||
+		turnDetection["threshold"] != 0.35 ||
+		turnDetection["prefix_padding_ms"] != float64(180) ||
+		turnDetection["silence_duration_ms"] != float64(650) ||
+		turnDetection["create_response"] != false ||
+		turnDetection["interrupt_response"] != false {
+		t.Fatalf("turn_detection = %#v, want configured server_vad", turnDetection)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket handler")
+	}
+	select {
+	case err := <-handlerErr:
+		t.Fatal(err)
+	default:
+	}
+}
+
+func TestXaiRealtimeNilTurnDetectionDisablesReferenceVAD(t *testing.T) {
+	messages := make(chan map[string]any, 1)
+	handlerDone := make(chan struct{})
+	handlerErr := make(chan error, 1)
+	dialer := newXaiRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		defer close(handlerDone)
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			handlerErr <- fmt.Errorf("read initial session update: %w", err)
+			return
+		}
+		var msg map[string]any
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			handlerErr <- fmt.Errorf("decode initial session update: %w", err)
+			return
+		}
+		messages <- msg
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})
+
+	model := NewXaiRealtimeModel("test-key",
+		WithXaiRealtimeBaseURL("ws://xai.test/v1/realtime"),
+		WithXaiRealtimeWebsocketDialer(dialer),
+		WithXaiRealtimeTurnDetection(nil),
+	)
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+
+	var msg map[string]any
+	select {
+	case msg = <-messages:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for initial session update")
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	audio := sessionPayload["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	if value, ok := input["turn_detection"]; !ok || value != nil {
+		t.Fatalf("turn_detection = %#v (present %v), want explicit nil", value, ok)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket handler")
+	}
+	select {
+	case err := <-handlerErr:
+		t.Fatal(err)
+	default:
+	}
+}
+
+func TestXaiRealtimeCustomVoiceMatchesReference(t *testing.T) {
+	messages := make(chan map[string]any, 1)
+	handlerDone := make(chan struct{})
+	handlerErr := make(chan error, 1)
+	dialer := newXaiRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		defer close(handlerDone)
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			handlerErr <- fmt.Errorf("read initial session update: %w", err)
+			return
+		}
+		var msg map[string]any
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			handlerErr <- fmt.Errorf("decode initial session update: %w", err)
+			return
+		}
+		messages <- msg
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})
+
+	model := NewXaiRealtimeModel("test-key",
+		WithXaiRealtimeBaseURL("ws://xai.test/v1/realtime"),
+		WithXaiRealtimeWebsocketDialer(dialer),
+		WithXaiRealtimeVoice("Eve"),
+	)
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+
+	var msg map[string]any
+	select {
+	case msg = <-messages:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for initial session update")
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	audio := sessionPayload["audio"].(map[string]any)
+	output := audio["output"].(map[string]any)
+	if output["voice"] != "Eve" {
+		t.Fatalf("voice = %#v, want Eve", output["voice"])
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket handler")
+	}
+	select {
+	case err := <-handlerErr:
+		t.Fatal(err)
+	default:
+	}
+}
+
+func TestXaiRealtimeMaxSessionDurationMatchesReference(t *testing.T) {
+	var dialCount atomic.Int32
+	secondConnected := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	var secondOnce sync.Once
+	handlerErr := make(chan error, 1)
+	dialer := newXaiRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		attempt := dialCount.Add(1)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			handlerErr <- fmt.Errorf("read initial session update: %w", err)
+			return
+		}
+		if attempt == 2 {
+			secondOnce.Do(func() { close(secondConnected) })
+			<-releaseSecond
+			return
+		}
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})
+
+	model := NewXaiRealtimeModel("test-key",
+		WithXaiRealtimeBaseURL("ws://xai.test/v1/realtime"),
+		WithXaiRealtimeWebsocketDialer(dialer),
+		WithXaiRealtimeMaxSessionDuration(10*time.Millisecond),
+	)
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	select {
+	case <-secondConnected:
+	case err := <-handlerErr:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("session did not reconnect after max session duration")
+	}
+	reconnected := assertXaiRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if reconnected.Reconnect == nil {
+		t.Fatal("Reconnect payload = nil")
+	}
+	if got := dialCount.Load(); got != 2 {
+		t.Fatalf("dial count = %d, want 2", got)
+	}
+}
+
+func TestXaiRealtimeConnectOptionsMatchReference(t *testing.T) {
+	blockDial := make(chan struct{})
+	defer close(blockDial)
+	model := NewXaiRealtimeModel("test-key",
+		WithXaiRealtimeBaseURL("ws://xai.test/v1/realtime"),
+		WithXaiRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 0, Timeout: 5 * time.Millisecond}),
+		WithXaiRealtimeWebsocketDialer(func(string, http.Header) (*websocket.Conn, *http.Response, error) {
+			<-blockDial
+			return nil, nil, errors.New("late dial failure")
+		}),
+	)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := model.Session()
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Session() error = nil, want timeout")
+		}
+		if !strings.Contains(err.Error(), "connection timed out") {
+			t.Fatalf("Session() error = %v, want connection timed out", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Session() did not honor connect timeout")
 	}
 }
 

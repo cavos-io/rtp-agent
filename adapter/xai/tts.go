@@ -124,13 +124,8 @@ func (t *XaiTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		return nil, err
 	}
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildXaiTTSStreamURL(t), buildXaiTTSHeaders(t))
-	if err != nil {
-		return nil, llm.NewAPIConnectionError("failed to connect to xAI")
-	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &xaiTTSSynthesizeStream{
-		conn:          conn,
 		streamURL:     buildXaiTTSStreamURL(t),
 		headers:       buildXaiTTSHeaders(t),
 		ctx:           streamCtx,
@@ -263,7 +258,11 @@ func (s *xaiTTSSynthesizeStream) Flush() error {
 	if s.closed {
 		return fmt.Errorf("xai tts stream is closed")
 	}
-	for _, token := range s.flushTextTokensLocked() {
+	tokens := s.flushTextTokensLocked()
+	if len(tokens) == 0 && s.conn == nil {
+		return nil
+	}
+	for _, token := range tokens {
 		if err := s.writeMessageData(buildXaiTTSTextDeltaMessage(token)); err != nil {
 			s.closeAfterWriteFailureLocked()
 			return err

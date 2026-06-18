@@ -134,6 +134,40 @@ func TestOpenAIRealtimeSessionUsesConstructorBaseURL(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSessionUsesReferenceWebsocketHeaders(t *testing.T) {
+	connected := make(chan *http.Request, 1)
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		connected <- r
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		<-releaseServer
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	req := <-connected
+	if req.Header.Get("Authorization") != "Bearer test-key" {
+		t.Fatalf("Authorization = %q, want bearer key", req.Header.Get("Authorization"))
+	}
+	if req.Header.Get("User-Agent") != "LiveKit Agents" {
+		t.Fatalf("User-Agent = %q, want LiveKit Agents", req.Header.Get("User-Agent"))
+	}
+	if req.Header.Get("OpenAI-Beta") != "" {
+		t.Fatalf("OpenAI-Beta = %q, want empty", req.Header.Get("OpenAI-Beta"))
+	}
+}
+
 func TestRealtimeModelUpdateOptionsForwardsToActiveSession(t *testing.T) {
 	messages := make(chan string, 8)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
@@ -684,8 +718,11 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	if req.Header.Get("Authorization") != "Bearer test-key" {
 		t.Fatalf("Authorization = %q, want bearer key", req.Header.Get("Authorization"))
 	}
-	if req.Header.Get("OpenAI-Beta") != "realtime=v1" {
-		t.Fatalf("OpenAI-Beta = %q, want realtime=v1", req.Header.Get("OpenAI-Beta"))
+	if req.Header.Get("OpenAI-Beta") != "" {
+		t.Fatalf("OpenAI-Beta = %q, want empty", req.Header.Get("OpenAI-Beta"))
+	}
+	if req.Header.Get("User-Agent") != "LiveKit Agents" {
+		t.Fatalf("User-Agent = %q, want LiveKit Agents", req.Header.Get("User-Agent"))
 	}
 	initialUpdate := <-messages
 	assertRealtimeMessage(t, initialUpdate, "session.update", "gpt-realtime")

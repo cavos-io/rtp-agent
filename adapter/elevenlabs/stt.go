@@ -49,6 +49,8 @@ type ElevenLabsSTT struct {
 	sampleRate        int
 	serverVAD         *ElevenLabsVADOptions
 	keyterms          []string
+	mu                sync.Mutex
+	streams           map[*elevenLabsSTTStream]struct{}
 }
 
 type ElevenLabsSTTOption func(*ElevenLabsSTT)
@@ -101,6 +103,12 @@ func WithElevenLabsSTTServerVAD(serverVAD ElevenLabsVADOptions) ElevenLabsSTTOpt
 	}
 }
 
+func WithElevenLabsSTTServerVADDisabled() ElevenLabsSTTOption {
+	return func(s *ElevenLabsSTT) {
+		s.serverVAD = nil
+	}
+}
+
 func WithElevenLabsSTTKeyterms(keyterms []string) ElevenLabsSTTOption {
 	return func(s *ElevenLabsSTT) {
 		s.keyterms = keyterms
@@ -145,6 +153,16 @@ func (s *ElevenLabsSTT) UpdateOptions(opts ...ElevenLabsSTTOption) {
 	for _, opt := range opts {
 		opt(s)
 	}
+	s.mu.Lock()
+	streams := make([]*elevenLabsSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	serverVAD := s.serverVAD != nil
+	s.mu.Unlock()
+	for _, stream := range streams {
+		stream.setServerVAD(serverVAD)
+	}
 }
 
 func (s *ElevenLabsSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
@@ -176,9 +194,26 @@ func (s *ElevenLabsSTT) Stream(ctx context.Context, language string) (stt.Recogn
 			serverVAD:         s.serverVAD != nil,
 		},
 	}
+	s.registerStream(stream)
 	go stream.readLoop()
 	go stream.keepAliveLoop()
 	return stream, nil
+}
+
+func (s *ElevenLabsSTT) registerStream(stream *elevenLabsSTTStream) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.streams == nil {
+		s.streams = make(map[*elevenLabsSTTStream]struct{})
+	}
+	s.streams[stream] = struct{}{}
+	stream.unregister = s.unregisterStream
+}
+
+func (s *ElevenLabsSTT) unregisterStream(stream *elevenLabsSTTStream) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.streams, stream)
 }
 
 func (s *ElevenLabsSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
@@ -381,6 +416,8 @@ type elevenLabsSTTStream struct {
 	audioDur   float64
 	state      *elevenLabsSTTStreamState
 	writeJSON  func(map[string]any) error
+	unregister func(*elevenLabsSTTStream)
+	unregOnce  sync.Once
 }
 
 func (s *elevenLabsSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -425,14 +462,31 @@ func (s *elevenLabsSTTStream) Flush() error {
 
 func (s *elevenLabsSTTStream) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
 	s.cancel()
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.conn.Close()
+	err := s.conn.Close()
+	s.mu.Unlock()
+	s.unregisterFromProvider()
+	return err
+}
+
+func (s *elevenLabsSTTStream) setServerVAD(enabled bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state != nil {
+		s.state.serverVAD = enabled
+	}
+}
+
+func (s *elevenLabsSTTStream) unregisterFromProvider() {
+	if s.unregister != nil {
+		s.unregOnce.Do(func() { s.unregister(s) })
+	}
 }
 
 func (s *elevenLabsSTTStream) writeMessageLocked(message map[string]any) error {
@@ -480,6 +534,7 @@ func (s *elevenLabsSTTStream) Next() (*stt.SpeechEvent, error) {
 }
 
 func (s *elevenLabsSTTStream) readLoop() {
+	defer s.unregisterFromProvider()
 	defer close(s.events)
 	for {
 		msgType, payload, err := s.conn.ReadMessage()

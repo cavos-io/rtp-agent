@@ -361,7 +361,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 
 	header := http.Header{}
 	header.Add("Authorization", "Bearer "+m.apiKey)
-	header.Add("OpenAI-Beta", "realtime=v1")
+	header.Add("User-Agent", "LiveKit Agents")
 
 	conn, err := m.dialRealtimeWebsocket(context.Background(), wsURL, header)
 	if err != nil {
@@ -1555,7 +1555,7 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 	wsURL := openAIRealtimeSessionURL(s.model.baseURL, s.model.model)
 	header := http.Header{}
 	header.Add("Authorization", "Bearer "+s.model.apiKey)
-	header.Add("OpenAI-Beta", "realtime=v1")
+	header.Add("User-Agent", "LiveKit Agents")
 
 	conn, err := s.model.dialRealtimeWebsocket(s.ctx, wsURL, header)
 	if err != nil {
