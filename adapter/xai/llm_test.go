@@ -332,6 +332,45 @@ func TestXaiLLMChatMapsReferenceParallelToolCalls(t *testing.T) {
 	}
 }
 
+func TestXaiLLMChatForwardsReferenceExtraParams(t *testing.T) {
+	var body map[string]any
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: xaiRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader("data: [DONE]\n")),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewXaiLLM("test-key", "")
+	stream, err := provider.Chat(context.Background(), xaiTestChatContext(),
+		llm.WithExtraParams(map[string]any{
+			"max_output_tokens": 128,
+			"reasoning": map[string]any{
+				"effort": "low",
+			},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	if body["max_output_tokens"] != float64(128) {
+		t.Fatalf("max_output_tokens = %#v, want 128", body["max_output_tokens"])
+	}
+	reasoning, ok := body["reasoning"].(map[string]any)
+	if !ok || reasoning["effort"] != "low" {
+		t.Fatalf("reasoning = %#v, want low effort", body["reasoning"])
+	}
+}
+
 func TestBuildXAIMessagesIncludesImageContent(t *testing.T) {
 	imageData := base64.StdEncoding.EncodeToString([]byte("png-bytes"))
 	ctx := llm.NewChatContext()

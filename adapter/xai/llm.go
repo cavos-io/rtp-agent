@@ -102,6 +102,9 @@ func (l *XaiLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 	if options.ParallelToolCallsSet {
 		body["parallel_tool_calls"] = options.ParallelToolCalls
 	}
+	for key, value := range options.ExtraParams {
+		body[key] = value
+	}
 
 	jsonBody, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.x.ai/v1/chat/completions", bytes.NewBuffer(jsonBody))
