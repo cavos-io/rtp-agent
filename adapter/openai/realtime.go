@@ -35,6 +35,7 @@ type RealtimeModel struct {
 	toolFormatter               OpenAIRealtimeToolFormatter
 	inputTranscriptionFinalHook OpenAIRealtimeInputTranscriptionFinalHook
 	remoteItemAddedHook         OpenAIRealtimeRemoteItemAddedHook
+	functionCallFilter          OpenAIRealtimeFunctionCallFilter
 	mu                          sync.Mutex
 	options                     llm.RealtimeSessionOptions
 	modalities                  []string
@@ -53,6 +54,8 @@ type OpenAIRealtimeInputTranscriptionFinalHook func(*llm.ChatMessage, *llm.Input
 
 type OpenAIRealtimeRemoteItemAddedHook func(*llm.RemoteChatContext, *llm.RemoteItemAddedEvent)
 
+type OpenAIRealtimeFunctionCallFilter func([]llm.Tool, string) bool
+
 type openAIRealtimeDialResult struct {
 	conn *websocket.Conn
 	err  error
@@ -68,6 +71,7 @@ type openAIRealtimeModelOptions struct {
 	toolFormatter               OpenAIRealtimeToolFormatter
 	inputTranscriptionFinalHook OpenAIRealtimeInputTranscriptionFinalHook
 	remoteItemAddedHook         OpenAIRealtimeRemoteItemAddedHook
+	functionCallFilter          OpenAIRealtimeFunctionCallFilter
 }
 
 type OpenAIRealtimeOption func(*openAIRealtimeModelOptions)
@@ -189,6 +193,12 @@ func WithOpenAIRealtimeRemoteItemAddedHook(hook OpenAIRealtimeRemoteItemAddedHoo
 	}
 }
 
+func WithOpenAIRealtimeFunctionCallFilter(filter OpenAIRealtimeFunctionCallFilter) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.functionCallFilter = filter
+	}
+}
+
 func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *RealtimeModel {
 	if model == "" {
 		model = "gpt-realtime"
@@ -223,6 +233,7 @@ func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *Realt
 		toolFormatter:               options.toolFormatter,
 		inputTranscriptionFinalHook: options.inputTranscriptionFinalHook,
 		remoteItemAddedHook:         options.remoteItemAddedHook,
+		functionCallFilter:          options.functionCallFilter,
 		options:                     options.sessionOptions,
 		modalities:                  options.modalities,
 		maxSession:                  options.maxSession,
@@ -1496,6 +1507,9 @@ func (s *realtimeSession) eventLoop() {
 			if realtimeEvent.Type == llm.RealtimeEventTypeSpeechStopped && realtimeEvent.SpeechStopped != nil {
 				realtimeEvent.SpeechStopped.UserTranscriptionEnabled = s.inputAudioTranscriptionEnabled()
 			}
+			if realtimeEvent.Type == llm.RealtimeEventTypeFunctionCall && realtimeEvent.Function != nil && !s.acceptRealtimeFunctionCall(realtimeEvent.Function.Name) {
+				continue
+			}
 			realtimeEvent = s.trackRealtimeEvent(realtimeEvent)
 			s.eventCh <- realtimeEvent
 			if trackedOK {
@@ -1590,6 +1604,16 @@ func (s *realtimeSession) inputAudioTranscriptionEnabled() bool {
 	return ok && value != nil
 }
 
+func (s *realtimeSession) acceptRealtimeFunctionCall(name string) bool {
+	if s == nil || s.model == nil || s.model.functionCallFilter == nil {
+		return true
+	}
+	s.mu.Lock()
+	tools := append([]llm.Tool(nil), s.tools...)
+	s.mu.Unlock()
+	return s.model.functionCallFilter(tools, name)
+}
+
 func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 	evType, _ := ev["type"].(string)
 	switch evType {
@@ -1647,6 +1671,9 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 		case "function_call":
 			call, err := openAIRealtimeFunctionCall(item)
 			if err != nil {
+				return llm.RealtimeEvent{}, false
+			}
+			if !s.acceptRealtimeFunctionCall(call.Name) {
 				return llm.RealtimeEvent{}, false
 			}
 			select {

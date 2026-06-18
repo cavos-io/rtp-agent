@@ -329,6 +329,62 @@ func TestXaiRealtimeNilPreviousItemIDAppendsToRemoteTail(t *testing.T) {
 	}
 }
 
+func TestXaiRealtimeIgnoresUnknownFunctionCalls(t *testing.T) {
+	handlerDone := make(chan struct{})
+	handlerErr := make(chan error, 1)
+	releaseServer := make(chan struct{})
+	dialer := newXaiRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		defer close(handlerDone)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			handlerErr <- fmt.Errorf("read initial session update: %w", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]any{
+			"type": "response.output_item.done",
+			"item": map[string]any{
+				"id":        "item_unknown_tool",
+				"type":      "function_call",
+				"call_id":   "call_unknown",
+				"name":      "unknown_tool",
+				"arguments": "{}",
+			},
+		}); err != nil {
+			handlerErr <- fmt.Errorf("write unknown function call: %w", err)
+			return
+		}
+		<-releaseServer
+	})
+
+	model := NewXaiRealtimeModel("test-key",
+		WithXaiRealtimeBaseURL("ws://xai.test/v1/realtime"),
+		WithXaiRealtimeWebsocketDialer(dialer),
+	)
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+
+	select {
+	case ev := <-session.EventCh():
+		t.Fatalf("unexpected event for unknown function call: %#v", ev)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseServer)
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket handler")
+	}
+	select {
+	case err := <-handlerErr:
+		t.Fatal(err)
+	default:
+	}
+}
+
 func assertXaiRealtimeEventType(t *testing.T, eventCh <-chan llm.RealtimeEvent, want llm.RealtimeEventType) llm.RealtimeEvent {
 	t.Helper()
 	select {

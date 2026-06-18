@@ -74,6 +74,7 @@ func NewXaiRealtimeModel(apiKey string, opts ...XaiRealtimeOption) *XaiRealtimeM
 		adapteropenai.WithOpenAIRealtimeToolFormatter(xaiRealtimeTools),
 		adapteropenai.WithOpenAIRealtimeInputTranscriptionFinalHook(xaiRealtimeDeduplicateFinalInputTranscription),
 		adapteropenai.WithOpenAIRealtimeRemoteItemAddedHook(xaiRealtimeAppendNilPreviousItemID),
+		adapteropenai.WithOpenAIRealtimeFunctionCallFilter(xaiRealtimeKnownFunctionTool),
 		adapteropenai.WithOpenAIRealtimeVoice(defaultXaiRealtimeVoice),
 		adapteropenai.WithOpenAIRealtimeModalities([]string{"audio"}),
 		adapteropenai.WithOpenAIRealtimeInputAudioTranscription(map[string]any{}),
@@ -128,6 +129,19 @@ func xaiRealtimeAppendNilPreviousItemID(remote *llm.RemoteChatContext, event *ll
 		return
 	}
 	event.PreviousItemID = items[len(items)-1].GetID()
+}
+
+func xaiRealtimeKnownFunctionTool(tools []llm.Tool, name string) bool {
+	for _, tool := range tools {
+		switch tool.(type) {
+		case *WebSearchTool, *XSearchTool, *FileSearchTool:
+			continue
+		}
+		if tool.Name() == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *XaiRealtimeModel) Model() string { return m.model }
