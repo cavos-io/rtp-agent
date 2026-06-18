@@ -319,6 +319,28 @@ func TestAzureSTTStreamURLUsesExplicitPunctuationOption(t *testing.T) {
 	}
 }
 
+func TestAzureSTTUsesReferenceProfanityOption(t *testing.T) {
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTProfanity("raw"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	parsed, err := url.Parse(buildAzureSTTStreamURL(provider, "id-ID"))
+	if err != nil {
+		t.Fatalf("parse stream URL: %v", err)
+	}
+	if got := parsed.Query().Get("profanity"); got != "raw" {
+		t.Fatalf("stream profanity query = %q, want raw", got)
+	}
+
+	req, err := buildAzureSTTRecognizeRequest(context.Background(), provider, nil, "id-ID")
+	if err != nil {
+		t.Fatalf("build recognize request: %v", err)
+	}
+	if got := req.URL.Query().Get("profanity"); got != "raw" {
+		t.Fatalf("recognize profanity query = %q, want raw", got)
+	}
+}
+
 func TestAzureSTTBuildsReferenceHostStreamURL(t *testing.T) {
 	provider, err := NewAzureSTT("", "", WithAzureSTTSpeechHost("https://speech.container.test"))
 	if err != nil {
