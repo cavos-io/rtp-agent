@@ -8,6 +8,7 @@ import (
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"github.com/gorilla/websocket"
 	lkprotocol "github.com/livekit/protocol/livekit"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestJobStatusMessageCarriesJobStatus(t *testing.T) {
@@ -123,6 +124,35 @@ func TestWorkerMessageWebSocketFrameUsesBinaryMessage(t *testing.T) {
 	}
 	if len(data) == 0 {
 		t.Fatal("frame data is empty")
+	}
+}
+
+type recordingWorkerMessageWriter struct {
+	msgType int
+	data    []byte
+}
+
+func (w *recordingWorkerMessageWriter) WriteMessage(msgType int, data []byte) error {
+	w.msgType = msgType
+	w.data = append([]byte(nil), data...)
+	return nil
+}
+
+func TestWriteWorkerMessageWebSocketWritesBinaryFrame(t *testing.T) {
+	writer := &recordingWorkerMessageWriter{}
+
+	if err := workerlivekit.WriteWorkerMessageWebSocket(writer, workerlivekit.JobRunningMessage("job-a")); err != nil {
+		t.Fatalf("WriteWorkerMessageWebSocket() error = %v", err)
+	}
+	if writer.msgType != websocket.BinaryMessage {
+		t.Fatalf("message type = %d, want websocket.BinaryMessage", writer.msgType)
+	}
+	var decoded lkprotocol.WorkerMessage
+	if err := proto.Unmarshal(writer.data, &decoded); err != nil {
+		t.Fatalf("proto.Unmarshal() error = %v", err)
+	}
+	if decoded.GetUpdateJob().GetJobId() != "job-a" {
+		t.Fatalf("decoded job id = %q, want job-a", decoded.GetUpdateJob().GetJobId())
 	}
 }
 

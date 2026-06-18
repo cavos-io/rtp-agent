@@ -31,6 +31,18 @@ func WorkerMessageWebSocketFrame(msg *lkprotocol.WorkerMessage) (int, []byte, er
 	return msgType, data, nil
 }
 
+type WorkerMessageWebSocketWriter interface {
+	WriteMessage(int, []byte) error
+}
+
+func WriteWorkerMessageWebSocket(writer WorkerMessageWebSocketWriter, msg *lkprotocol.WorkerMessage) error {
+	msgType, data, err := WorkerMessageWebSocketFrame(msg)
+	if err != nil {
+		return err
+	}
+	return writer.WriteMessage(msgType, data)
+}
+
 func AvailableWorkerStatusMessage(load float64, jobCount uint32, canAcceptJob bool) *lkprotocol.WorkerMessage {
 	status := lkprotocol.WorkerStatus_WS_AVAILABLE
 	if !canAcceptJob {

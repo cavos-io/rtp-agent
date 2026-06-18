@@ -1773,17 +1773,12 @@ func (s *AgentServer) sendWorkerMessage(msg *livekit.WorkerMessage) error {
 		return s.workerMessageSink(msg)
 	}
 
-	msgType, b, err := workerlivekit.WorkerMessageWebSocketFrame(msg)
-	if err != nil {
-		return err
-	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.conn == nil {
 		return fmt.Errorf("worker websocket is not connected")
 	}
-	return s.conn.WriteMessage(msgType, b)
+	return workerlivekit.WriteWorkerMessageWebSocket(s.conn, msg)
 }
 
 func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) {
