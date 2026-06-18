@@ -1626,7 +1626,7 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *workerlivekit.Serv
 	}
 }
 
-func (s *AgentServer) emitWorkerRegistered(workerID string, serverInfo *livekit.ServerInfo) {
+func (s *AgentServer) emitWorkerRegistered(workerID string, serverInfo *workerlivekit.ServerInfo) {
 	s.mu.Lock()
 	infoHandlers := append([]WorkerRegisteredInfoHandler(nil), s.registeredInfoHandlers...)
 	handlers := append([]WorkerRegisteredHandler(nil), s.registeredHandlers...)
@@ -1650,7 +1650,7 @@ func callWorkerRegisteredInfoHandler(handler WorkerRegisteredInfoHandler, info W
 	handler(info)
 }
 
-func callWorkerRegisteredHandler(handler WorkerRegisteredHandler, workerID string, serverInfo *livekit.ServerInfo) {
+func callWorkerRegisteredHandler(handler WorkerRegisteredHandler, workerID string, serverInfo *workerlivekit.ServerInfo) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Logger.Errorw("Worker registered handler failed", fmt.Errorf("panic: %v", r), "workerId", workerID)

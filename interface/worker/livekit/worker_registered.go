@@ -2,11 +2,13 @@ package livekit
 
 import lkprotocol "github.com/livekit/protocol/livekit"
 
-type WorkerRegisteredHandler func(workerID string, serverInfo *lkprotocol.ServerInfo)
+type ServerInfo = lkprotocol.ServerInfo
+
+type WorkerRegisteredHandler func(workerID string, serverInfo *ServerInfo)
 
 type WorkerRegisteredEvent struct {
 	WorkerID   string
-	ServerInfo *lkprotocol.ServerInfo
+	ServerInfo *ServerInfo
 }
 
 func WorkerRegisteredEventFromRegisterDispatch(info RegisterMessageInfo) WorkerRegisteredEvent {

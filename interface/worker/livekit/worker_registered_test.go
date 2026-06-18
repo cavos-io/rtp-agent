@@ -8,11 +8,12 @@ import (
 )
 
 func TestWorkerRegisteredHandlerReceivesLiveKitServerInfo(t *testing.T) {
-	serverInfo := &lkprotocol.ServerInfo{}
+	serverInfo := &workerlivekit.ServerInfo{}
+	protocolInfo := (*lkprotocol.ServerInfo)(serverInfo)
 	var gotWorkerID string
-	var gotServerInfo *lkprotocol.ServerInfo
+	var gotServerInfo *workerlivekit.ServerInfo
 
-	var handler workerlivekit.WorkerRegisteredHandler = func(workerID string, info *lkprotocol.ServerInfo) {
+	var handler workerlivekit.WorkerRegisteredHandler = func(workerID string, info *workerlivekit.ServerInfo) {
 		gotWorkerID = workerID
 		gotServerInfo = info
 	}
@@ -24,6 +25,9 @@ func TestWorkerRegisteredHandlerReceivesLiveKitServerInfo(t *testing.T) {
 	}
 	if gotServerInfo != serverInfo {
 		t.Fatalf("serverInfo = %p, want %p", gotServerInfo, serverInfo)
+	}
+	if protocolInfo != serverInfo {
+		t.Fatalf("protocolInfo = %p, want %p", protocolInfo, serverInfo)
 	}
 }
 
