@@ -467,39 +467,38 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 
 	jobCtx.markEntrypointStarted()
 	go func() {
-		status := workerlivekit.JobStatusForEntrypointResult(nil, nil)
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				logger.Logger.Errorw("Reloaded job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", jobCtx.JobID())
-				status = workerlivekit.JobStatusForEntrypointResult(nil, recovered)
-			}
-			if workerlivekit.JobStatusSucceeded(status) {
-				select {
-				case <-jobCtx.ShutdownDone():
-				case <-ctx.Done():
-					jobCtx.Shutdown("")
-				}
-				if !s.finishJob(jobCtx) {
-					return
-				}
-			} else {
-				s.finishJob(jobCtx)
-			}
-			select {
-			case <-ctx.Done():
-				logger.Logger.Debugw("reload job status skipped after context cancellation", "jobId", jobCtx.JobID())
-			default:
-				if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(jobCtx.JobID(), status)); err != nil {
-					logger.Logger.Errorw("failed to update reloaded job status", err, "jobId", jobCtx.JobID())
-				}
-			}
-			s.finishJob(jobCtx)
-		}()
-		defer jobCtx.markEntrypointDone()
-		if err := s.runJobEntrypoint(jobCtx); err != nil {
-			logger.Logger.Errorw("Reloaded job entrypoint failed", err, "jobId", jobCtx.JobID())
-			status = workerlivekit.JobStatusForEntrypointResult(err, nil)
+		result := workerlivekit.RunEntrypoint(func() error {
+			return s.runJobEntrypoint(jobCtx)
+		})
+		jobCtx.markEntrypointDone()
+		if result.Recovered != nil {
+			logger.Logger.Errorw("Reloaded job entrypoint panicked", fmt.Errorf("%v", result.Recovered), "jobId", jobCtx.JobID())
 		}
+		if result.Err != nil {
+			logger.Logger.Errorw("Reloaded job entrypoint failed", result.Err, "jobId", jobCtx.JobID())
+		}
+		status := result.Status
+		if workerlivekit.JobStatusSucceeded(status) {
+			select {
+			case <-jobCtx.ShutdownDone():
+			case <-ctx.Done():
+				jobCtx.Shutdown("")
+			}
+			if !s.finishJob(jobCtx) {
+				return
+			}
+		} else {
+			s.finishJob(jobCtx)
+		}
+		select {
+		case <-ctx.Done():
+			logger.Logger.Debugw("reload job status skipped after context cancellation", "jobId", jobCtx.JobID())
+		default:
+			if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(jobCtx.JobID(), status)); err != nil {
+				logger.Logger.Errorw("failed to update reloaded job status", err, "jobId", jobCtx.JobID())
+			}
+		}
+		s.finishJob(jobCtx)
 	}()
 }
 
@@ -1758,41 +1757,39 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.J
 	if s.entrypointFnc != nil {
 		jobCtx.markEntrypointStarted()
 		go func() {
-			status := workerlivekit.JobStatusForEntrypointResult(nil, nil)
-			defer func() {
-				if recovered := recover(); recovered != nil {
-					logger.Logger.Errorw("Job entrypoint panicked", fmt.Errorf("%v", recovered), jobLogValues(jobCtx, "jobId", jobID)...)
-					status = workerlivekit.JobStatusForEntrypointResult(nil, recovered)
+			result := workerlivekit.RunEntrypoint(func() error {
+				return s.runJobEntrypoint(jobCtx)
+			})
+			jobCtx.markEntrypointDone()
+			if result.Recovered != nil {
+				logger.Logger.Errorw("Job entrypoint panicked", fmt.Errorf("%v", result.Recovered), jobLogValues(jobCtx, "jobId", jobID)...)
+			}
+			if result.Err != nil {
+				logger.Logger.Errorw("Job entrypoint failed", result.Err, jobLogValues(jobCtx, "jobId", jobID)...)
+			}
+			status := result.Status
+			if jobCtx.Terminated() {
+				s.finishJob(jobCtx)
+				return
+			}
+			if workerlivekit.JobStatusSucceeded(status) {
+				select {
+				case <-jobCtx.ShutdownDone():
+				case <-ctx.Done():
+					jobCtx.Shutdown("")
 				}
-				if jobCtx.Terminated() {
-					s.finishJob(jobCtx)
+				if !s.finishJob(jobCtx) {
 					return
 				}
-				if workerlivekit.JobStatusSucceeded(status) {
-					select {
-					case <-jobCtx.ShutdownDone():
-					case <-ctx.Done():
-						jobCtx.Shutdown("")
-					}
-					if !s.finishJob(jobCtx) {
-						return
-					}
-				} else {
-					if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(jobID, status)); err != nil {
-						logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", jobID)...)
-					}
-					s.finishJob(jobCtx)
-					return
-				}
+			} else {
 				if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(jobID, status)); err != nil {
 					logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", jobID)...)
 				}
-			}()
-			defer jobCtx.markEntrypointDone()
-
-			if err := s.runJobEntrypoint(jobCtx); err != nil {
-				logger.Logger.Errorw("Job entrypoint failed", err, jobLogValues(jobCtx, "jobId", jobID)...)
-				status = workerlivekit.JobStatusForEntrypointResult(err, nil)
+				s.finishJob(jobCtx)
+				return
+			}
+			if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(jobID, status)); err != nil {
+				logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", jobID)...)
 			}
 		}()
 	}

@@ -78,6 +78,56 @@ func TestJobStatusSucceededIdentifiesSuccessOnly(t *testing.T) {
 	}
 }
 
+func TestRunEntrypointReportsSuccess(t *testing.T) {
+	result := workerlivekit.RunEntrypoint(func() error {
+		return nil
+	})
+
+	if result.Status != lkprotocol.JobStatus_JS_SUCCESS {
+		t.Fatalf("RunEntrypoint().Status = %v, want JS_SUCCESS", result.Status)
+	}
+	if result.Err != nil {
+		t.Fatalf("RunEntrypoint().Err = %v, want nil", result.Err)
+	}
+	if result.Recovered != nil {
+		t.Fatalf("RunEntrypoint().Recovered = %v, want nil", result.Recovered)
+	}
+}
+
+func TestRunEntrypointReportsError(t *testing.T) {
+	errBoom := errors.New("boom")
+
+	result := workerlivekit.RunEntrypoint(func() error {
+		return errBoom
+	})
+
+	if result.Status != lkprotocol.JobStatus_JS_FAILED {
+		t.Fatalf("RunEntrypoint(error).Status = %v, want JS_FAILED", result.Status)
+	}
+	if result.Err != errBoom {
+		t.Fatalf("RunEntrypoint(error).Err = %v, want boom", result.Err)
+	}
+	if result.Recovered != nil {
+		t.Fatalf("RunEntrypoint(error).Recovered = %v, want nil", result.Recovered)
+	}
+}
+
+func TestRunEntrypointRecoversPanic(t *testing.T) {
+	result := workerlivekit.RunEntrypoint(func() error {
+		panic("panic boom")
+	})
+
+	if result.Status != lkprotocol.JobStatus_JS_FAILED {
+		t.Fatalf("RunEntrypoint(panic).Status = %v, want JS_FAILED", result.Status)
+	}
+	if result.Err != nil {
+		t.Fatalf("RunEntrypoint(panic).Err = %v, want nil", result.Err)
+	}
+	if result.Recovered != "panic boom" {
+		t.Fatalf("RunEntrypoint(panic).Recovered = %v, want panic boom", result.Recovered)
+	}
+}
+
 func TestMigrateJobMessageCarriesJobIDs(t *testing.T) {
 	jobIDs := []string{"job-a", "job-b"}
 	msg := workerlivekit.MigrateJobMessage(jobIDs)

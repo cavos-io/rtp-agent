@@ -92,6 +92,27 @@ func JobStatusSucceeded(status lkprotocol.JobStatus) bool {
 	return status == lkprotocol.JobStatus_JS_SUCCESS
 }
 
+type EntrypointResult struct {
+	Status    lkprotocol.JobStatus
+	Err       error
+	Recovered any
+}
+
+func RunEntrypoint(entrypoint func() error) (result EntrypointResult) {
+	result.Status = JobStatusForEntrypointResult(nil, nil)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result.Recovered = recovered
+			result.Status = JobStatusForEntrypointResult(nil, recovered)
+		}
+	}()
+	if err := entrypoint(); err != nil {
+		result.Err = err
+		result.Status = JobStatusForEntrypointResult(err, nil)
+	}
+	return result
+}
+
 func JobRunningMessage(jobID string) *lkprotocol.WorkerMessage {
 	return JobStatusMessage(jobID, lkprotocol.JobStatus_JS_RUNNING)
 }
