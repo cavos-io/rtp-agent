@@ -1684,6 +1684,9 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 	if err := rio.waitForAudioSubscriptionReady(ctx); err != nil {
 		return err
 	}
+	if rio.isClosed() {
+		return nil
+	}
 
 	rio.recordAudioOutputFrameReceived(frame)
 	if rio.Recorder != nil {
@@ -1838,6 +1841,9 @@ func (rio *RoomIO) waitForAudioSubscription(ctx context.Context) error {
 		return nil
 	case <-timer.C:
 		logger.Logger.Warnw("room audio output subscription wait timed out", nil, "timeout", timeout)
+		rio.mu.Lock()
+		rio.audioSubscribed = nil
+		rio.mu.Unlock()
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -1849,6 +1855,30 @@ func (rio *RoomIO) audioSubscriptionTimeout() time.Duration {
 		return rio.Options.AudioSubscriptionTimeout
 	}
 	return roomIOAudioSubscriptionTimeout
+}
+
+func (rio *RoomIO) isClosed() bool {
+	if rio == nil {
+		return true
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	return rio.closed
+}
+
+func (rio *RoomIO) releaseAudioSubscriptionWaiters() {
+	if rio == nil {
+		return
+	}
+	rio.mu.Lock()
+	ch := rio.audioSubscribed
+	rio.mu.Unlock()
+	if ch == nil {
+		return
+	}
+	rio.audioSubOnce.Do(func() {
+		close(ch)
+	})
 }
 
 func roomIOOpusEncodeFrames(frame *model.AudioFrame) ([]*model.AudioFrame, error) {
@@ -1966,6 +1996,7 @@ func (rio *RoomIO) Close() error {
 	}
 	deleteRoomDone := rio.deleteRoomDone
 	rio.mu.Unlock()
+	rio.releaseAudioSubscriptionWaiters()
 
 	if deleteRoomDone != nil {
 		select {
