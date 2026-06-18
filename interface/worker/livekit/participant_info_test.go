@@ -143,6 +143,19 @@ func TestParticipantInfoKindAllowedUsesParticipantKind(t *testing.T) {
 	}
 }
 
+func TestParticipantEntrypointTaskKeyUsesParticipantIdentity(t *testing.T) {
+	participant := &lkprotocol.ParticipantInfo{Identity: "caller-a"}
+
+	key := workerlivekit.ParticipantEntrypointTaskKey(participant, 42)
+
+	if key.Identity != "caller-a" {
+		t.Fatalf("Identity = %q, want caller-a", key.Identity)
+	}
+	if key.Entrypoint != 42 {
+		t.Fatalf("Entrypoint = %d, want 42", key.Entrypoint)
+	}
+}
+
 func TestUpsertParticipantInfoReplacesMatchingIdentity(t *testing.T) {
 	oldInfo := &lkprotocol.ParticipantInfo{Identity: "caller-a", Name: "Old"}
 	newInfo := &lkprotocol.ParticipantInfo{Identity: "caller-a", Name: "New"}

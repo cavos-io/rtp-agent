@@ -229,11 +229,6 @@ type participantEntrypointRegistration struct {
 	kinds      []livekit.ParticipantInfo_Kind
 }
 
-type participantEntrypointTaskKey struct {
-	identity   string
-	entrypoint uintptr
-}
-
 type JobRequest = workerlivekit.JobRequest
 
 type JobContext struct {
@@ -258,7 +253,7 @@ type JobContext struct {
 	finishOnce             sync.Once
 	participantEntrypoints []participantEntrypointRegistration
 	availableParticipants  []*livekit.ParticipantInfo
-	participantTasks       map[participantEntrypointTaskKey]struct{}
+	participantTasks       map[workerlivekit.ParticipantTaskKey]struct{}
 	participantTasksMu     sync.Mutex
 
 	api       *JobAPI
@@ -651,13 +646,10 @@ func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntry
 		return
 	}
 	participantDetails := workerlivekit.ParticipantInfoDetails(participant)
-	key := participantEntrypointTaskKey{
-		identity:   participantDetails.Identity,
-		entrypoint: reflect.ValueOf(registration.entrypoint).Pointer(),
-	}
+	key := workerlivekit.ParticipantEntrypointTaskKey(participant, reflect.ValueOf(registration.entrypoint).Pointer())
 	c.participantTasksMu.Lock()
 	if c.participantTasks == nil {
-		c.participantTasks = make(map[participantEntrypointTaskKey]struct{})
+		c.participantTasks = make(map[workerlivekit.ParticipantTaskKey]struct{})
 	}
 	if _, ok := c.participantTasks[key]; ok {
 		logger.Logger.Warnw("participant entrypoint already running for participant", nil, "participant", participantDetails.Identity)
