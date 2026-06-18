@@ -725,9 +725,7 @@ func (s *openAIRealtimeSTTStream) Close() error {
 		s.owner.unregisterRealtimeSTTStream(s)
 	}
 	s.cancel()
-	if s.vadStream != nil {
-		_ = s.vadStream.Close()
-	}
+	s.closeVADStreamLocked()
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
 }
@@ -741,10 +739,16 @@ func (s *openAIRealtimeSTTStream) closeAfterWriteFailureLocked() {
 		s.owner.unregisterRealtimeSTTStream(s)
 	}
 	s.cancel()
-	if s.vadStream != nil {
-		_ = s.vadStream.Close()
-	}
+	s.closeVADStreamLocked()
 	_ = s.conn.Close()
+}
+
+func (s *openAIRealtimeSTTStream) closeVADStreamLocked() {
+	if s.vadStream == nil {
+		return
+	}
+	_ = s.vadStream.EndInput()
+	_ = s.vadStream.Close()
 }
 
 func (s *openAIRealtimeSTTStream) sendErrorLocked(err error) {

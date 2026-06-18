@@ -11,6 +11,7 @@ import (
 	"math"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1034,6 +1035,47 @@ func TestOpenAIRealtimeSTTVADEndOfSpeechCommitsAudioBuffer(t *testing.T) {
 	assertRealtimeMessage(t, <-messages, "input_audio_buffer.commit", "")
 }
 
+func TestOpenAIRealtimeSTTCloseEndsVADInput(t *testing.T) {
+	vadStream := newFakeOpenAISTTVADStream()
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+		WithOpenAISTTVAD(&fakeOpenAISTTVAD{stream: vadStream}),
+	)
+	started := make(chan struct{})
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			close(started)
+			<-releaseServer
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not send initial session update")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case <-vadStream.endInputCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for VAD EndInput on close")
+	}
+}
+
 func openAIRealtimeSTTTestFrame(data []byte) *model.AudioFrame {
 	return &model.AudioFrame{
 		Data:              data,
@@ -1772,11 +1814,20 @@ func (f *fakeOpenAISTTVAD) Stream(context.Context) (vad.VADStream, error) {
 }
 
 type fakeOpenAISTTVADStream struct {
-	events chan *vad.VADEvent
+	events       chan *vad.VADEvent
+	endInputCh   chan struct{}
+	closeCh      chan struct{}
+	endInputOnce sync.Once
+	closeOnce    sync.Once
+	eventsOnce   sync.Once
 }
 
 func newFakeOpenAISTTVADStream() *fakeOpenAISTTVADStream {
-	return &fakeOpenAISTTVADStream{events: make(chan *vad.VADEvent, 1)}
+	return &fakeOpenAISTTVADStream{
+		events:     make(chan *vad.VADEvent, 1),
+		endInputCh: make(chan struct{}),
+		closeCh:    make(chan struct{}),
+	}
 }
 
 func (f *fakeOpenAISTTVADStream) PushFrame(*model.AudioFrame) error {
@@ -1789,13 +1840,19 @@ func (f *fakeOpenAISTTVADStream) Flush() error {
 }
 
 func (f *fakeOpenAISTTVADStream) EndInput() error {
-	close(f.events)
+	f.endInputOnce.Do(func() { close(f.endInputCh) })
+	f.closeEvents()
 	return nil
 }
 
 func (f *fakeOpenAISTTVADStream) Close() error {
-	close(f.events)
+	f.closeOnce.Do(func() { close(f.closeCh) })
+	f.closeEvents()
 	return nil
+}
+
+func (f *fakeOpenAISTTVADStream) closeEvents() {
+	f.eventsOnce.Do(func() { close(f.events) })
 }
 
 func (f *fakeOpenAISTTVADStream) Next() (*vad.VADEvent, error) {
