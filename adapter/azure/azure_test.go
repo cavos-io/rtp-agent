@@ -726,6 +726,47 @@ func TestAzureSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	}
 }
 
+func TestAzureSTTStreamSessionStopReturnsAPIConnectionError(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	configMessages := make(chan string, 1)
+	audioMessages := make(chan []byte, 1)
+	serverClosed := make(chan struct{}, 1)
+
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = azureTestCloseAfterAudioDialer(t, requests, configMessages, audioMessages, serverClosed)
+
+	stream, err := provider.Stream(context.Background(), "id-ID")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	receiveAzureTestValue(t, requests, "request")
+	receiveAzureTestValue(t, configMessages, "speech config")
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	receiveAzureTestValue(t, audioMessages, "audio")
+	receiveAzureTestSignal(t, serverClosed, "server close")
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestAzureSTTStreamReconnectsAfterAudioWriteFailure(t *testing.T) {
 	requests := make(chan *http.Request, 2)
 	configMessages := make(chan string, 2)
@@ -1495,6 +1536,98 @@ func runAzureTestClosingWebsocketServer(
 		return
 	}
 	configMessages <- string(payload)
+	serverClosed <- struct{}{}
+	errCh <- nil
+}
+
+func azureTestCloseAfterAudioDialer(
+	t *testing.T,
+	requests chan<- *http.Request,
+	configMessages chan<- string,
+	audioMessages chan<- []byte,
+	serverClosed chan<- struct{},
+) azureSTTWebsocketDialer {
+	t.Helper()
+	return func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		clientConn, serverConn := net.Pipe()
+		errCh := make(chan error, 1)
+		go runAzureTestCloseAfterAudioServer(serverConn, requests, configMessages, audioMessages, serverClosed, errCh)
+
+		parsed, err := url.Parse(endpoint)
+		if err != nil {
+			return nil, nil, err
+		}
+		dialer := websocket.Dialer{
+			ReadBufferSize:  1024,
+			WriteBufferSize: 1024,
+			NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+				return clientConn, nil
+			},
+			Proxy: nil,
+		}
+		conn, resp, err := dialer.DialContext(ctx, parsed.String(), headers)
+		if err != nil {
+			clientConn.Close()
+			select {
+			case serverErr := <-errCh:
+				return nil, resp, fmt.Errorf("%w; server: %v", err, serverErr)
+			default:
+				return nil, resp, err
+			}
+		}
+		go func() {
+			if serverErr := <-errCh; serverErr != nil && !isAzureTestWebsocketCleanupError(serverErr) {
+				t.Errorf("test close-after-audio websocket server: %v", serverErr)
+			}
+		}()
+		return conn, resp, nil
+	}
+}
+
+func runAzureTestCloseAfterAudioServer(
+	conn net.Conn,
+	requests chan<- *http.Request,
+	configMessages chan<- string,
+	audioMessages chan<- []byte,
+	serverClosed chan<- struct{},
+	errCh chan<- error,
+) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	requests <- req
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", azureTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	opcode, payload, err := readAzureTestWebsocketFrame(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if opcode != websocket.TextMessage {
+		errCh <- fmt.Errorf("speech config opcode = %d, want text", opcode)
+		return
+	}
+	configMessages <- string(payload)
+	opcode, payload, err = readAzureTestWebsocketFrame(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if opcode != websocket.BinaryMessage {
+		errCh <- fmt.Errorf("audio opcode = %d, want binary", opcode)
+		return
+	}
+	audioMessages <- payload
+	if err := writeAzureTestWebsocketFrame(conn, websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")); err != nil {
+		errCh <- err
+		return
+	}
 	serverClosed <- struct{}{}
 	errCh <- nil
 }

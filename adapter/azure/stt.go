@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -639,8 +640,7 @@ func (s *azureSTTStream) readLoop(conn *websocket.Conn) {
 				return
 			}
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				s.closed = true
-				s.cancel()
+				s.finishWithErrorLocked(llm.NewAPIConnectionError("SpeechRecognition session stopped"))
 				s.mu.Unlock()
 				return
 			}
