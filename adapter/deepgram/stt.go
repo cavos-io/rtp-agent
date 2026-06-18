@@ -497,6 +497,7 @@ type dgWord struct {
 type dgAlternative struct {
 	Transcript string   `json:"transcript"`
 	Confidence float64  `json:"confidence"`
+	Languages  []string `json:"languages"`
 	Words      []dgWord `json:"words"`
 }
 
@@ -577,7 +578,7 @@ func deepgramSpeechEventForLanguageOffset(resp dgResponse, languageStr string, s
 	for _, alt := range resp.Channel.Alternatives {
 		transcriptBuilder += alt.Transcript
 		event.Alternatives = append(event.Alternatives, stt.SpeechData{
-			Language:   languageStr,
+			Language:   deepgramLiveLanguage(languageStr, alt.Languages),
 			Text:       alt.Transcript,
 			Confidence: alt.Confidence,
 			StartTime:  deepgramFirstWordStart(alt.Words) + startTimeOffset,
@@ -592,6 +593,13 @@ func deepgramSpeechEventForLanguageOffset(resp dgResponse, languageStr string, s
 	}
 
 	return event
+}
+
+func deepgramLiveLanguage(languageStr string, detected []string) string {
+	if languageStr == "multi" && len(detected) > 0 {
+		return detected[0]
+	}
+	return languageStr
 }
 
 func deepgramFirstWordStart(words []dgWord) float64 {

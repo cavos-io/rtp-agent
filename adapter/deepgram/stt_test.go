@@ -7,6 +7,7 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -125,6 +126,21 @@ func TestDeepgramSpeechEventSetsReferenceLanguage(t *testing.T) {
 	}
 	if got := event.Alternatives[0].Language; got != "id-ID" {
 		t.Fatalf("language = %q, want id-ID", got)
+	}
+}
+
+func TestDeepgramSpeechEventUsesReferenceDetectedLanguageForMulti(t *testing.T) {
+	var resp dgResponse
+	if err := json.Unmarshal([]byte(`{"type":"Results","is_final":true,"metadata":{"request_id":"req-lang"},"channel":{"alternatives":[{"transcript":"hola","confidence":0.9,"languages":["es","en"],"words":[]}]}}`), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	event := deepgramSpeechEventForLanguage(resp, "multi")
+	if event == nil || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %+v, want one alternative", event)
+	}
+	if got := event.Alternatives[0].Language; got != "es" {
+		t.Fatalf("language = %q, want detected language es", got)
 	}
 }
 
