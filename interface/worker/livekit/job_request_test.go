@@ -257,6 +257,60 @@ func TestPopulateSessionReportWithJobMetadataCopiesLiveKitJobFields(t *testing.T
 	}
 }
 
+func TestNewJobSessionReportInitializesReportTaggerAndMetadata(t *testing.T) {
+	report, tagger := workerlivekit.NewJobSessionReport(&lkprotocol.Job{
+		Id: "job-report",
+		Room: &lkprotocol.Room{
+			Sid:  "RM_report",
+			Name: "room-report",
+		},
+	})
+
+	if report == nil {
+		t.Fatal("NewJobSessionReport() report = nil")
+	}
+	if tagger == nil {
+		t.Fatal("NewJobSessionReport() tagger = nil")
+	}
+	if report.Tagger != tagger {
+		t.Fatal("NewJobSessionReport() report.Tagger does not match returned tagger")
+	}
+	if report.JobID != "job-report" {
+		t.Fatalf("Report.JobID = %q, want job-report", report.JobID)
+	}
+	if report.RoomID != "RM_report" {
+		t.Fatalf("Report.RoomID = %q, want RM_report", report.RoomID)
+	}
+	if report.Room != "room-report" {
+		t.Fatalf("Report.Room = %q, want room-report", report.Room)
+	}
+}
+
+func TestJobLogContextFieldsExposeLiveKitJobMetadata(t *testing.T) {
+	fields := workerlivekit.JobLogContextFields(&lkprotocol.Job{
+		Id:   "job-log",
+		Room: &lkprotocol.Room{Name: "room-log"},
+	})
+
+	if fields["job_id"] != "job-log" {
+		t.Fatalf("job_id = %q, want job-log", fields["job_id"])
+	}
+	if fields["room"] != "room-log" {
+		t.Fatalf("room = %q, want room-log", fields["room"])
+	}
+}
+
+func TestJobLogContextFieldsReturnsStableKeysForNilJob(t *testing.T) {
+	fields := workerlivekit.JobLogContextFields(nil)
+
+	if fields["job_id"] != "" {
+		t.Fatalf("job_id = %q, want empty", fields["job_id"])
+	}
+	if fields["room"] != "" {
+		t.Fatalf("room = %q, want empty", fields["room"])
+	}
+}
+
 func TestJobMetricInfoExposesRoomName(t *testing.T) {
 	info := workerlivekit.JobMetricInfo(&lkprotocol.Job{
 		Room: &lkprotocol.Room{Name: "metrics-room"},

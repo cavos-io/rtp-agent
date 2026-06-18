@@ -1,6 +1,8 @@
 package livekit
 
 import (
+	"context"
+	"fmt"
 	"sort"
 
 	"github.com/gorilla/websocket"
@@ -8,6 +10,23 @@ import (
 )
 
 type WorkerMessage = lkprotocol.WorkerMessage
+
+type WorkerWebSocketReader interface {
+	ReadMessage() (int, []byte, error)
+}
+
+type WorkerWebSocketReadFunc func() (int, []byte, error)
+
+func (fn WorkerWebSocketReadFunc) ReadMessage() (int, []byte, error) {
+	return fn()
+}
+
+type WorkerMessageLoopOptions struct {
+	Reader        WorkerWebSocketReader
+	Close         func() error
+	Handle        func(*lkprotocol.ServerMessage)
+	OnDecodeError func(error)
+}
 
 func WorkerStatusMessage(status lkprotocol.WorkerStatus, load float64, jobCount uint32) *lkprotocol.WorkerMessage {
 	return &lkprotocol.WorkerMessage{
@@ -61,6 +80,54 @@ func ExchangeInitialRegisterWebSocket(conn WorkerRegisterWebSocket, msg *lkproto
 	return InitialRegisterWebSocketMessage(msgType, data)
 }
 
+func RunWorkerMessageLoop(ctx context.Context, opts WorkerMessageLoopOptions) error {
+	if opts.Reader == nil {
+		return fmt.Errorf("worker websocket reader is required")
+	}
+
+	for {
+		readDone := make(chan struct {
+			msgType int
+			data    []byte
+			err     error
+		}, 1)
+		go func() {
+			msgType, data, err := opts.Reader.ReadMessage()
+			readDone <- struct {
+				msgType int
+				data    []byte
+				err     error
+			}{msgType: msgType, data: data, err: err}
+		}()
+
+		select {
+		case <-ctx.Done():
+			if opts.Close != nil {
+				_ = opts.Close()
+			}
+			return ctx.Err()
+		case result := <-readDone:
+			if result.err != nil {
+				return result.err
+			}
+
+			msg, err := ServerMessageWebSocketFrame(result.msgType, result.data)
+			if err != nil {
+				if opts.OnDecodeError != nil {
+					opts.OnDecodeError(err)
+				}
+				continue
+			}
+			if msg == nil {
+				continue
+			}
+			if opts.Handle != nil {
+				opts.Handle(msg)
+			}
+		}
+	}
+}
+
 func AvailableWorkerStatusMessage(load float64, jobCount uint32, canAcceptJob bool) *lkprotocol.WorkerMessage {
 	status := lkprotocol.WorkerStatus_WS_AVAILABLE
 	if !canAcceptJob {
@@ -92,6 +159,27 @@ func JobStatusSucceeded(status lkprotocol.JobStatus) bool {
 	return status == lkprotocol.JobStatus_JS_SUCCESS
 }
 
+type EntrypointResult struct {
+	Status    lkprotocol.JobStatus
+	Err       error
+	Recovered any
+}
+
+func RunEntrypoint(entrypoint func() error) (result EntrypointResult) {
+	result.Status = JobStatusForEntrypointResult(nil, nil)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result.Recovered = recovered
+			result.Status = JobStatusForEntrypointResult(nil, recovered)
+		}
+	}()
+	if err := entrypoint(); err != nil {
+		result.Err = err
+		result.Status = JobStatusForEntrypointResult(err, nil)
+	}
+	return result
+}
+
 func JobRunningMessage(jobID string) *lkprotocol.WorkerMessage {
 	return JobStatusMessage(jobID, lkprotocol.JobStatus_JS_RUNNING)
 }
@@ -115,4 +203,24 @@ func MigrateJobMessage(jobIDs []string) *lkprotocol.WorkerMessage {
 			MigrateJob: &lkprotocol.MigrateJobRequest{JobIds: sortedJobIDs},
 		},
 	}
+}
+
+func MigratableRunningJobIDs(jobs []RunningJobInfo) []string {
+	jobIDs := make([]string, 0, len(jobs))
+	for _, job := range jobs {
+		if job.FakeJob {
+			continue
+		}
+		jobID := JobID(job.Job)
+		if jobID == "" {
+			continue
+		}
+		jobIDs = append(jobIDs, jobID)
+	}
+	sort.Strings(jobIDs)
+	return jobIDs
+}
+
+func MigrateRunningJobsMessage(jobs []RunningJobInfo) *lkprotocol.WorkerMessage {
+	return MigrateJobMessage(MigratableRunningJobIDs(jobs))
 }

@@ -17,6 +17,10 @@ type LocalJobOptions struct {
 	SessionDirectory  string
 }
 
+func DefaultFakeLocalJobOptions() LocalJobOptions {
+	return LocalJobOptions{FakeJob: true}
+}
+
 type LocalJobContextValueOptions struct {
 	RoomName            string
 	ParticipantIdentity string
