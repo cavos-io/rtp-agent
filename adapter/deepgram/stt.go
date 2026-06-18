@@ -616,7 +616,7 @@ func (s *deepgramStream) readLoop() {
 		if err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
 				logger.Logger.Errorw("Deepgram WebSocket read error", err)
-				s.sendError(err)
+				s.sendError(deepgramSTTUnexpectedCloseError(err))
 			}
 			return
 		}
@@ -649,6 +649,15 @@ func (s *deepgramStream) readLoop() {
 			}
 		}
 	}
+}
+
+func deepgramSTTUnexpectedCloseError(err error) error {
+	statusCode := -1
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) && closeErr.Code != 0 {
+		statusCode = closeErr.Code
+	}
+	return llm.NewAPIStatusError("deepgram connection closed unexpectedly", statusCode, "", err.Error())
 }
 
 // keepAliveLoop sends a native KeepAlive payload to prevent Deepgram from dropping idle streams.
