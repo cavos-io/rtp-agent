@@ -619,17 +619,18 @@ func openAITimedStrings(words []struct {
 }
 
 type openAIRealtimeSTTStream struct {
-	conn      *websocket.Conn
-	ctx       context.Context
-	cancel    context.CancelFunc
-	events    chan *stt.SpeechEvent
-	errCh     chan error
-	mu        sync.Mutex
-	closed    bool
-	audio     *audio.AudioByteStream
-	state     *openAIRealtimeSTTMessageState
-	owner     *OpenAISTT
-	vadStream vad.VADStream
+	conn       *websocket.Conn
+	ctx        context.Context
+	cancel     context.CancelFunc
+	events     chan *stt.SpeechEvent
+	errCh      chan error
+	mu         sync.Mutex
+	closed     bool
+	inputEnded bool
+	audio      *audio.AudioByteStream
+	state      *openAIRealtimeSTTMessageState
+	owner      *OpenAISTT
+	vadStream  vad.VADStream
 }
 
 func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -639,6 +640,9 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
 		return io.ErrClosedPipe
 	}
 	if s.audio == nil {
@@ -668,6 +672,40 @@ func (s *openAIRealtimeSTTStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.inputEnded {
+		return io.ErrClosedPipe
+	}
+	return s.flushAudioLocked()
+}
+
+func (s *openAIRealtimeSTTStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
+		return io.ErrClosedPipe
+	}
+	if err := s.flushAudioLocked(); err != nil {
+		return err
+	}
+	s.inputEnded = true
+	if s.vadStream != nil {
+		return s.vadStream.EndInput()
+	}
+	message, err := buildOpenAIRealtimeSTTCommitMessage()
+	if err != nil {
+		return err
+	}
+	if err := s.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
+}
+
+func (s *openAIRealtimeSTTStream) flushAudioLocked() error {
 	if s.audio != nil {
 		for _, chunk := range s.audio.Flush() {
 			message, err := buildOpenAIRealtimeSTTAudioAppendMessage(chunk)
@@ -679,14 +717,6 @@ func (s *openAIRealtimeSTTStream) Flush() error {
 				return err
 			}
 		}
-	}
-	message, err := buildOpenAIRealtimeSTTCommitMessage()
-	if err != nil {
-		return err
-	}
-	if err := s.conn.WriteMessage(websocket.TextMessage, message); err != nil {
-		s.closeAfterWriteFailureLocked()
-		return err
 	}
 	return nil
 }

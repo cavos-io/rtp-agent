@@ -979,7 +979,76 @@ func TestOpenAIRealtimeSTTStreamBuffersAndFlushesReferenceAudioChunks(t *testing
 	if len(remainder) != 480 {
 		t.Fatalf("remainder bytes = %d, want 480", len(remainder))
 	}
+	assertNoRealtimeMessage(t, messages, "Flush should not commit audio buffer")
+}
+
+func TestOpenAIRealtimeSTTEndInputFlushesAndCommitsAudioBuffer(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	started := make(chan struct{})
+	releaseServer := make(chan struct{})
+	messages := make(chan string, 10)
+	defer close(releaseServer)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			close(started)
+			for {
+				select {
+				case <-releaseServer:
+					return
+				default:
+				}
+				if _, payload, err := conn.ReadMessage(); err != nil {
+					return
+				} else {
+					messages <- string(payload)
+				}
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not send initial session update")
+	}
+
+	if err := stream.PushFrame(openAIRealtimeSTTTestFrame(bytes.Repeat([]byte{0x03}, 480))); err != nil {
+		t.Fatalf("PushFrame remainder error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "10ms remainder should wait for EndInput")
+
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement stt.InputEnding")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	remainder := assertOpenAIRealtimeSTTAudioAppend(t, <-messages)
+	if len(remainder) != 480 {
+		t.Fatalf("remainder bytes = %d, want 480", len(remainder))
+	}
 	assertRealtimeMessage(t, <-messages, "input_audio_buffer.commit", "")
+	if err := stream.PushFrame(openAIRealtimeSTTTestFrame([]byte{0x01, 0x02})); err == nil {
+		t.Fatal("PushFrame after EndInput returned nil, want error")
+	}
+	if err := stream.Flush(); err == nil {
+		t.Fatal("Flush after EndInput returned nil, want error")
+	}
 }
 
 func TestOpenAIRealtimeSTTVADEndOfSpeechCommitsAudioBuffer(t *testing.T) {
