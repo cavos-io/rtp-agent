@@ -198,6 +198,67 @@ func TestBuildXAIMessagesMapsDeveloperRoleToSystem(t *testing.T) {
 	}
 }
 
+func TestXaiLLMChatMapsReferenceProviderToolOptions(t *testing.T) {
+	var body map[string]any
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: xaiRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader("data: [DONE]\n")),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewXaiLLM("test-key", "")
+	stream, err := provider.Chat(context.Background(), xaiTestChatContext(),
+		llm.WithTools([]llm.Tool{
+			&WebSearchTool{},
+			&XSearchTool{AllowedHandles: []string{"livekit", "xai"}},
+			&FileSearchTool{VectorStoreIDs: []string{"vs_1", "vs_2"}, MaxNumResults: 3},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	tools, ok := body["tools"].([]any)
+	if !ok {
+		t.Fatalf("tools = %#v, want list", body["tools"])
+	}
+	if len(tools) != 3 {
+		t.Fatalf("len(tools) = %d, want 3: %#v", len(tools), tools)
+	}
+	webSearch := tools[0].(map[string]any)
+	if webSearch["type"] != "web_search" {
+		t.Fatalf("web search tool = %#v", webSearch)
+	}
+	xSearch := tools[1].(map[string]any)
+	if xSearch["type"] != "x_search" {
+		t.Fatalf("x search tool type = %#v", xSearch)
+	}
+	handles, ok := xSearch["allowed_x_handles"].([]any)
+	if !ok || len(handles) != 2 || handles[0] != "livekit" || handles[1] != "xai" {
+		t.Fatalf("allowed_x_handles = %#v, want reference handles", xSearch["allowed_x_handles"])
+	}
+	fileSearch := tools[2].(map[string]any)
+	if fileSearch["type"] != "file_search" {
+		t.Fatalf("file search tool type = %#v", fileSearch)
+	}
+	vectorStores, ok := fileSearch["vector_store_ids"].([]any)
+	if !ok || len(vectorStores) != 2 || vectorStores[0] != "vs_1" || vectorStores[1] != "vs_2" {
+		t.Fatalf("vector_store_ids = %#v, want reference vector stores", fileSearch["vector_store_ids"])
+	}
+	if fileSearch["max_num_results"] != float64(3) {
+		t.Fatalf("max_num_results = %#v, want 3", fileSearch["max_num_results"])
+	}
+}
+
 func TestBuildXAIMessagesIncludesImageContent(t *testing.T) {
 	imageData := base64.StdEncoding.EncodeToString([]byte("png-bytes"))
 	ctx := llm.NewChatContext()
@@ -254,6 +315,30 @@ func TestXAIStreamStripsThinkingChunks(t *testing.T) {
 	}
 	if chunk.Delta.Content != "visible" {
 		t.Fatalf("second visible content = %q, want visible", chunk.Delta.Content)
+	}
+}
+
+func TestXAIStreamMapsToolCallDeltas(t *testing.T) {
+	stream := &xaiStream{resp: &http.Response{
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`data: {"id":"chat","choices":[{"delta":{"role":"assistant","tool_calls":[{"id":"call_lookup","type":"function","function":{"name":"lookup","arguments":"{\"city\":\"Paris\"}"}}]}}]}`,
+			`data: [DONE]`,
+		}, "\n"))),
+	}}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if chunk.Delta == nil {
+		t.Fatal("Delta = nil, want tool-call delta")
+	}
+	if len(chunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("len(ToolCalls) = %d, want 1", len(chunk.Delta.ToolCalls))
+	}
+	toolCall := chunk.Delta.ToolCalls[0]
+	if toolCall.Type != "function" || toolCall.CallID != "call_lookup" || toolCall.Name != "lookup" || toolCall.Arguments != `{"city":"Paris"}` {
+		t.Fatalf("tool call = %#v, want lookup call delta", toolCall)
 	}
 }
 

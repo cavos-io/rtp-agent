@@ -31,7 +31,8 @@ type RealtimeModel struct {
 	apiKey        string
 	model         string
 	baseURL       string
-	dialWebsocket openAIRealtimeWebsocketDialer
+	dialWebsocket OpenAIRealtimeWebsocketDialer
+	toolFormatter OpenAIRealtimeToolFormatter
 	mu            sync.Mutex
 	options       llm.RealtimeSessionOptions
 	modalities    []string
@@ -40,7 +41,11 @@ type RealtimeModel struct {
 	sessions      map[*realtimeSession]struct{}
 }
 
-type openAIRealtimeWebsocketDialer func(string, http.Header) (*websocket.Conn, *http.Response, error)
+type OpenAIRealtimeWebsocketDialer func(string, http.Header) (*websocket.Conn, *http.Response, error)
+
+type openAIRealtimeWebsocketDialer = OpenAIRealtimeWebsocketDialer
+
+type OpenAIRealtimeToolFormatter func([]llm.Tool) []map[string]any
 
 type openAIRealtimeDialResult struct {
 	conn *websocket.Conn
@@ -53,6 +58,8 @@ type openAIRealtimeModelOptions struct {
 	baseURL        string
 	maxSession     time.Duration
 	connect        *llm.APIConnectOptions
+	dialWebsocket  OpenAIRealtimeWebsocketDialer
+	toolFormatter  OpenAIRealtimeToolFormatter
 }
 
 type OpenAIRealtimeOption func(*openAIRealtimeModelOptions)
@@ -150,6 +157,18 @@ func WithOpenAIRealtimeBaseURL(baseURL string) OpenAIRealtimeOption {
 	}
 }
 
+func WithOpenAIRealtimeWebsocketDialer(dialer OpenAIRealtimeWebsocketDialer) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.dialWebsocket = dialer
+	}
+}
+
+func WithOpenAIRealtimeToolFormatter(formatter OpenAIRealtimeToolFormatter) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.toolFormatter = formatter
+	}
+}
+
 func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *RealtimeModel {
 	if model == "" {
 		model = "gpt-realtime"
@@ -172,11 +191,16 @@ func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *Realt
 	if options.connect != nil {
 		connectOptions = *options.connect
 	}
+	dialWebsocket := OpenAIRealtimeWebsocketDialer(defaultOpenAIRealtimeWebsocketDialer)
+	if options.dialWebsocket != nil {
+		dialWebsocket = options.dialWebsocket
+	}
 	return &RealtimeModel{
 		apiKey:        apiKey,
 		model:         model,
 		baseURL:       openAIRealtimeBaseURL(baseURL),
-		dialWebsocket: defaultOpenAIRealtimeWebsocketDialer,
+		dialWebsocket: dialWebsocket,
+		toolFormatter: options.toolFormatter,
 		options:       options.sessionOptions,
 		modalities:    options.modalities,
 		maxSession:    options.maxSession,
@@ -547,7 +571,7 @@ func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
 		"type":     "session.update",
 		"event_id": cavosmath.ShortUUID("tools_update_"),
 		"session": map[string]any{
-			"tools": openAIRealtimeTools(tools),
+			"tools": s.model.realtimeTools(tools),
 		},
 	}
 	if err := s.sendMsg(msg); err != nil {
@@ -557,6 +581,13 @@ func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
 	s.tools = append([]llm.Tool(nil), tools...)
 	s.mu.Unlock()
 	return nil
+}
+
+func (m *RealtimeModel) realtimeTools(tools []llm.Tool) []map[string]any {
+	if m != nil && m.toolFormatter != nil {
+		return m.toolFormatter(tools)
+	}
+	return openAIRealtimeTools(tools)
 }
 
 func openAIRealtimeTools(tools []llm.Tool) []map[string]any {
@@ -1483,7 +1514,7 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 			"type":     "session.update",
 			"event_id": cavosmath.ShortUUID("tools_update_"),
 			"session": map[string]any{
-				"tools": openAIRealtimeTools(s.tools),
+				"tools": s.model.realtimeTools(s.tools),
 			},
 		}
 		b, err = json.Marshal(toolsMsg)

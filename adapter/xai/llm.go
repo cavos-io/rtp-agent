@@ -81,18 +81,8 @@ func (l *XaiLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 	if len(options.Tools) > 0 {
 		tools := make([]map[string]interface{}, 0)
 		for _, tool := range options.Tools {
-			if tool.Name() == "xai_web_search" {
-				tools = append(tools, map[string]interface{}{
-					"type": "web_search",
-				})
-			} else if tool.Name() == "xai_x_search" {
-				tools = append(tools, map[string]interface{}{
-					"type": "x_search",
-				}) // Expand allowed_x_handles if needed via parameters later
-			} else if tool.Name() == "xai_file_search" {
-				tools = append(tools, map[string]interface{}{
-					"type": "file_search",
-				}) // Expand vector_store_ids if needed
+			if payload := xaiProviderToolPayload(tool); payload != nil {
+				tools = append(tools, payload)
 			} else {
 				tools = append(tools, map[string]interface{}{
 					"type": "function",
@@ -133,6 +123,30 @@ func (l *XaiLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 	return &xaiStream{
 		resp: resp,
 	}, nil
+}
+
+func xaiProviderToolPayload(tool llm.Tool) map[string]interface{} {
+	switch t := tool.(type) {
+	case *WebSearchTool:
+		return map[string]interface{}{"type": "web_search"}
+	case *XSearchTool:
+		payload := map[string]interface{}{"type": "x_search"}
+		if len(t.AllowedHandles) > 0 {
+			payload["allowed_x_handles"] = append([]string(nil), t.AllowedHandles...)
+		}
+		return payload
+	case *FileSearchTool:
+		payload := map[string]interface{}{
+			"type":             "file_search",
+			"vector_store_ids": append([]string(nil), t.VectorStoreIDs...),
+		}
+		if t.MaxNumResults > 0 {
+			payload["max_num_results"] = t.MaxNumResults
+		}
+		return payload
+	default:
+		return nil
+	}
 }
 
 type xaiStream struct {
@@ -362,8 +376,9 @@ func (s *xaiStream) Next() (*llm.ChatChunk, error) {
 			ID      string `json:"id"`
 			Choices []struct {
 				Delta struct {
-					Role    string `json:"role"`
-					Content string `json:"content"`
+					Role      string        `json:"role"`
+					Content   string        `json:"content"`
+					ToolCalls []xaiToolCall `json:"tool_calls"`
 				} `json:"delta"`
 			} `json:"choices"`
 		}
@@ -380,8 +395,9 @@ func (s *xaiStream) Next() (*llm.ChatChunk, error) {
 			return &llm.ChatChunk{
 				ID: chunk.ID,
 				Delta: &llm.ChoiceDelta{
-					Role:    llm.ChatRole(chunk.Choices[0].Delta.Role),
-					Content: content,
+					Role:      llm.ChatRole(chunk.Choices[0].Delta.Role),
+					Content:   content,
+					ToolCalls: xaiFunctionToolCalls(chunk.Choices[0].Delta.ToolCalls),
 				},
 			}, nil
 		}
@@ -391,6 +407,22 @@ func (s *xaiStream) Next() (*llm.ChatChunk, error) {
 		return nil, err
 	}
 	return nil, io.EOF
+}
+
+func xaiFunctionToolCalls(toolCalls []xaiToolCall) []llm.FunctionToolCall {
+	if len(toolCalls) == 0 {
+		return nil
+	}
+	out := make([]llm.FunctionToolCall, 0, len(toolCalls))
+	for _, tc := range toolCalls {
+		out = append(out, llm.FunctionToolCall{
+			Type:      tc.Type,
+			Name:      tc.Function.Name,
+			Arguments: tc.Function.Arguments,
+			CallID:    tc.ID,
+		})
+	}
+	return out
 }
 
 func (s *xaiStream) Close() error {
