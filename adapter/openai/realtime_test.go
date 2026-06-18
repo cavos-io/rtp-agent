@@ -244,9 +244,19 @@ func TestNewAzureOpenAIRealtimeRoutesDeploymentAndUsesAPIKey(t *testing.T) {
 	if sessionPayload["max_response_output_tokens"] != "inf" {
 		t.Fatalf("max_response_output_tokens = %#v, want inf", sessionPayload["max_response_output_tokens"])
 	}
+	transcription := sessionPayload["input_audio_transcription"].(map[string]any)
+	if transcription["model"] != "whisper-1" {
+		t.Fatalf("input_audio_transcription = %#v, want Azure whisper-1 default", transcription)
+	}
 	turnDetection := sessionPayload["turn_detection"].(map[string]any)
-	if turnDetection["type"] != "semantic_vad" {
-		t.Fatalf("turn_detection = %#v, want flattened semantic_vad", turnDetection)
+	if turnDetection["type"] != "server_vad" {
+		t.Fatalf("turn_detection = %#v, want Azure server_vad default", turnDetection)
+	}
+	if turnDetection["threshold"] != 0.5 ||
+		turnDetection["prefix_padding_ms"] != float64(300) ||
+		turnDetection["silence_duration_ms"] != float64(200) ||
+		turnDetection["create_response"] != true {
+		t.Fatalf("turn_detection = %#v, want Azure default server_vad settings", turnDetection)
 	}
 	if sessionPayload["voice"] != "marin" {
 		t.Fatalf("voice = %#v, want marin", sessionPayload["voice"])

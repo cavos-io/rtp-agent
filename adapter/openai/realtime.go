@@ -288,6 +288,20 @@ func NewAzureOpenAIRealtimeModel(model, azureEndpoint, azureDeployment, apiVersi
 	provider.azureDeployment = azureDeployment
 	provider.apiVersion = apiVersion
 	provider.isAzure = true
+	if !provider.options.InputAudioTranscriptionSet && provider.options.InputAudioTranscription == nil {
+		provider.options.InputAudioTranscription = map[string]any{"model": "whisper-1"}
+		provider.options.InputAudioTranscriptionSet = true
+	}
+	if !provider.options.TurnDetectionSet && provider.options.TurnDetection == nil {
+		provider.options.TurnDetection = map[string]any{
+			"type":                "server_vad",
+			"threshold":           0.5,
+			"prefix_padding_ms":   300,
+			"silence_duration_ms": 200,
+			"create_response":     true,
+		}
+		provider.options.TurnDetectionSet = true
+	}
 	return provider, nil
 }
 
