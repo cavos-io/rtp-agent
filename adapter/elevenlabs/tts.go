@@ -43,6 +43,7 @@ type ElevenLabsTTS struct {
 	chunkLengthSchedule            []int
 	voiceSettings                  *ElevenLabsVoiceSettings
 	streamingLatency               *int
+	inactivityTimeout              int
 	pronunciationDictionaries      []ElevenLabsPronunciationDictionaryLocator
 	autoMode                       *bool
 	autoModeExplicit               bool
@@ -130,6 +131,14 @@ func WithElevenLabsStreamingLatency(latency int) ElevenLabsTTSOption {
 	}
 }
 
+func WithElevenLabsInactivityTimeout(timeoutSeconds int) ElevenLabsTTSOption {
+	return func(t *ElevenLabsTTS) {
+		if timeoutSeconds > 0 {
+			t.inactivityTimeout = timeoutSeconds
+		}
+	}
+}
+
 func WithElevenLabsPronunciationDictionaries(locators []ElevenLabsPronunciationDictionaryLocator) ElevenLabsTTSOption {
 	return func(t *ElevenLabsTTS) {
 		t.pronunciationDictionaries = append([]ElevenLabsPronunciationDictionaryLocator(nil), locators...)
@@ -177,6 +186,7 @@ func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...Ele
 		modelID:                modelID,
 		encoding:               "mp3_22050_32",
 		sampleRate:             22050,
+		inactivityTimeout:      defaultElevenLabsInactivityTimeout,
 		syncAlignment:          true,
 		applyTextNormalization: "auto",
 	}
@@ -421,7 +431,7 @@ func buildElevenLabsStreamURL(t *ElevenLabsTTS) string {
 	}
 	q.Set("enable_ssml_parsing", strconv.FormatBool(t.enableSSMLParsing))
 	q.Set("enable_logging", "true")
-	q.Set("inactivity_timeout", strconv.Itoa(defaultElevenLabsInactivityTimeout))
+	q.Set("inactivity_timeout", strconv.Itoa(t.inactivityTimeout))
 	q.Set("apply_text_normalization", t.applyTextNormalization)
 	if t.applyLanguageTextNormalization != nil {
 		q.Set("apply_language_text_normalization", strconv.FormatBool(*t.applyLanguageTextNormalization))

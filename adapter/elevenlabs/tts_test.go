@@ -561,6 +561,21 @@ func TestElevenLabsStreamURLUsesReferenceSyncAlignmentOverride(t *testing.T) {
 	}
 }
 
+func TestElevenLabsStreamURLUsesReferenceInactivityTimeoutOverride(t *testing.T) {
+	provider, err := NewElevenLabsTTS("test-key", "", "", WithElevenLabsInactivityTimeout(300))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	parsed, err := url.Parse(buildElevenLabsStreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	if parsed.Query().Get("inactivity_timeout") != "300" {
+		t.Fatalf("inactivity_timeout = %q, want 300", parsed.Query().Get("inactivity_timeout"))
+	}
+}
+
 func TestElevenLabsTTSAutoModeDefaultMatchesReference(t *testing.T) {
 	provider, err := NewElevenLabsTTS("test-key", "", "")
 	if err != nil {
