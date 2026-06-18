@@ -1435,21 +1435,7 @@ func (s *AgentServer) Run(ctx context.Context) error {
 
 	logger.Logger.Infow("Connected to LiveKit Server", "url", s.Options.WSRL)
 
-	// Send Register request
-	req := s.registerWorkerRequest()
-	msgType, b, err := workerlivekit.WorkerMessageWebSocketFrame(req)
-	if err != nil {
-		return err
-	}
-	if err := conn.WriteMessage(msgType, b); err != nil {
-		return err
-	}
-
-	msgType, data, err := conn.ReadMessage()
-	if err != nil {
-		return err
-	}
-	msg, err := workerlivekit.InitialRegisterWebSocketMessage(msgType, data)
+	msg, err := workerlivekit.ExchangeInitialRegisterWebSocket(conn, s.registerWorkerRequest())
 	if err != nil {
 		return err
 	}

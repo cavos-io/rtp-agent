@@ -130,9 +130,13 @@ func TestWorkerMessageWebSocketFrameUsesBinaryMessage(t *testing.T) {
 type recordingWorkerMessageWriter struct {
 	msgType int
 	data    []byte
+	err     error
 }
 
 func (w *recordingWorkerMessageWriter) WriteMessage(msgType int, data []byte) error {
+	if w.err != nil {
+		return w.err
+	}
 	w.msgType = msgType
 	w.data = append([]byte(nil), data...)
 	return nil
@@ -153,6 +157,46 @@ func TestWriteWorkerMessageWebSocketWritesBinaryFrame(t *testing.T) {
 	}
 	if decoded.GetUpdateJob().GetJobId() != "job-a" {
 		t.Fatalf("decoded job id = %q, want job-a", decoded.GetUpdateJob().GetJobId())
+	}
+}
+
+type initialRegisterWebSocket struct {
+	recordingWorkerMessageWriter
+	readType int
+	readData []byte
+	readErr  error
+}
+
+func (ws *initialRegisterWebSocket) ReadMessage() (int, []byte, error) {
+	return ws.readType, ws.readData, ws.readErr
+}
+
+func TestExchangeInitialRegisterWebSocketWritesRegisterAndReadsResponse(t *testing.T) {
+	response := &lkprotocol.ServerMessage{
+		Message: &lkprotocol.ServerMessage_Register{
+			Register: &lkprotocol.RegisterWorkerResponse{WorkerId: "worker-a"},
+		},
+	}
+	responseData, err := proto.Marshal(response)
+	if err != nil {
+		t.Fatalf("proto.Marshal() error = %v", err)
+	}
+	ws := &initialRegisterWebSocket{
+		readType: websocket.BinaryMessage,
+		readData: responseData,
+	}
+
+	msg, err := workerlivekit.ExchangeInitialRegisterWebSocket(ws, workerlivekit.RegisterWorkerMessage(workerlivekit.WorkerRegistrationOptions{
+		WorkerType: "room",
+	}))
+	if err != nil {
+		t.Fatalf("ExchangeInitialRegisterWebSocket() error = %v", err)
+	}
+	if ws.msgType != websocket.BinaryMessage {
+		t.Fatalf("written message type = %d, want websocket.BinaryMessage", ws.msgType)
+	}
+	if msg.GetRegister().GetWorkerId() != "worker-a" {
+		t.Fatalf("register worker id = %q, want worker-a", msg.GetRegister().GetWorkerId())
 	}
 }
 
