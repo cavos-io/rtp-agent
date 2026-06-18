@@ -1525,25 +1525,27 @@ func (s *AgentServer) connectWorkerWebSocket(ctx context.Context, dialer *websoc
 }
 
 func (s *AgentServer) handleMessage(ctx context.Context, msg *workerlivekit.ServerMessage) {
-	dispatch := workerlivekit.ServerMessageDispatch(msg)
-	switch dispatch.Kind {
-	case workerlivekit.ServerMessageKindRegister:
-		event := workerlivekit.WorkerRegisteredEventFromRegisterDispatch(dispatch.Register)
-		logger.Logger.Infow("Worker Registered", "workerId", event.WorkerID, "serverInfo", event.ServerInfo)
-		s.mu.Lock()
-		s.workerID = event.WorkerID
-		s.mu.Unlock()
-		s.emitWorkerRegistered(event.WorkerID, event.ServerInfo)
-		s.reportActiveJobs()
-	case workerlivekit.ServerMessageKindAvailability:
-		s.handleAvailability(ctx, dispatch.Availability)
-	case workerlivekit.ServerMessageKindAssignment:
-		s.handleAssignment(ctx, dispatch.Assignment)
-	case workerlivekit.ServerMessageKindTermination:
-		s.handleTermination(dispatch.Termination)
-	default:
-		logger.Logger.Warnw("Unhandled message type received", nil)
-	}
+	workerlivekit.RouteServerMessage(workerlivekit.ServerMessageRouteOptions{
+		Message: msg,
+		OnRegister: func(event workerlivekit.WorkerRegisteredEvent) {
+			logger.Logger.Infow("Worker Registered", "workerId", event.WorkerID, "serverInfo", event.ServerInfo)
+			s.mu.Lock()
+			s.workerID = event.WorkerID
+			s.mu.Unlock()
+			s.emitWorkerRegistered(event.WorkerID, event.ServerInfo)
+			s.reportActiveJobs()
+		},
+		OnAvailability: func(req *workerlivekit.AvailabilityRequest) {
+			s.handleAvailability(ctx, req)
+		},
+		OnAssignment: func(req *workerlivekit.JobAssignment) {
+			s.handleAssignment(ctx, req)
+		},
+		OnTermination: s.handleTermination,
+		OnUnknown: func() {
+			logger.Logger.Warnw("Unhandled message type received", nil)
+		},
+	})
 }
 
 func (s *AgentServer) emitWorkerRegistered(workerID string, serverInfo *workerlivekit.ServerInfo) {

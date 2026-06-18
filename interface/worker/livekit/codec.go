@@ -64,6 +64,15 @@ type ServerMessageDispatchInfo struct {
 	Termination  *JobTermination
 }
 
+type ServerMessageRouteOptions struct {
+	Message        *lkprotocol.ServerMessage
+	OnRegister     func(WorkerRegisteredEvent)
+	OnAvailability func(*lkprotocol.AvailabilityRequest)
+	OnAssignment   func(*JobAssignment)
+	OnTermination  func(*JobTermination)
+	OnUnknown      func()
+}
+
 func ServerMessageDispatch(msg *lkprotocol.ServerMessage) ServerMessageDispatchInfo {
 	if msg == nil {
 		return ServerMessageDispatchInfo{Kind: ServerMessageKindUnknown}
@@ -95,6 +104,33 @@ func ServerMessageDispatch(msg *lkprotocol.ServerMessage) ServerMessageDispatchI
 	default:
 		return ServerMessageDispatchInfo{Kind: ServerMessageKindUnknown}
 	}
+}
+
+func RouteServerMessage(opts ServerMessageRouteOptions) ServerMessageKind {
+	dispatch := ServerMessageDispatch(opts.Message)
+	switch dispatch.Kind {
+	case ServerMessageKindRegister:
+		if opts.OnRegister != nil {
+			opts.OnRegister(WorkerRegisteredEventFromRegisterDispatch(dispatch.Register))
+		}
+	case ServerMessageKindAvailability:
+		if opts.OnAvailability != nil {
+			opts.OnAvailability(dispatch.Availability)
+		}
+	case ServerMessageKindAssignment:
+		if opts.OnAssignment != nil {
+			opts.OnAssignment(dispatch.Assignment)
+		}
+	case ServerMessageKindTermination:
+		if opts.OnTermination != nil {
+			opts.OnTermination(dispatch.Termination)
+		}
+	default:
+		if opts.OnUnknown != nil {
+			opts.OnUnknown()
+		}
+	}
+	return dispatch.Kind
 }
 
 func InitialRegisterMessage(binary bool, data []byte) (*lkprotocol.ServerMessage, error) {
