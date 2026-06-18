@@ -58,6 +58,22 @@ func TestCartesiaSTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestCartesiaSTTExposesReferenceInputSampleRate(t *testing.T) {
+	provider := NewCartesiaSTT("test-key")
+
+	if got := provider.InputSampleRate(); got != 16000 {
+		t.Fatalf("InputSampleRate = %d, want reference sample rate 16000", got)
+	}
+}
+
+func TestCartesiaSTTExposesConfiguredInputSampleRate(t *testing.T) {
+	provider := NewCartesiaSTT("test-key", WithCartesiaSTTSampleRate(48000))
+
+	if got := provider.InputSampleRate(); got != 48000 {
+		t.Fatalf("InputSampleRate = %d, want configured sample rate 48000", got)
+	}
+}
+
 func TestCartesiaSTTConstructorOptionsMatchReference(t *testing.T) {
 	t.Setenv("CARTESIA_API_KEY", "env-key")
 

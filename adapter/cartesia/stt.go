@@ -117,6 +117,12 @@ func (s *CartesiaSTT) Model() string { return s.model }
 func (s *CartesiaSTT) Provider() string {
 	return "Cartesia"
 }
+func (s *CartesiaSTT) InputSampleRate() uint32 {
+	if s == nil || s.sampleRate <= 0 {
+		return defaultCartesiaSTTSampleRate
+	}
+	return uint32(s.sampleRate)
+}
 func (s *CartesiaSTT) Capabilities() stt.STTCapabilities {
 	legacy := s.finalTranscriptMode == "legacy"
 	aligned := ""
