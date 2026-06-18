@@ -150,6 +150,7 @@ func (s *ElevenLabsSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *ElevenLabsSTT) UpdateOptions(opts ...ElevenLabsSTTOption) {
+	oldServerVAD := s.serverVAD
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -161,6 +162,10 @@ func (s *ElevenLabsSTT) UpdateOptions(opts ...ElevenLabsSTTOption) {
 	serverVAD := s.serverVAD != nil
 	s.mu.Unlock()
 	for _, stream := range streams {
+		if !elevenLabsVADOptionsEqual(oldServerVAD, s.serverVAD) {
+			stream.reconnect(buildElevenLabsSTTStreamURL(s, stream.language()), buildElevenLabsSTTHeaders(s), serverVAD)
+			continue
+		}
 		stream.setServerVAD(serverVAD)
 	}
 }
@@ -400,21 +405,46 @@ func formatElevenLabsFloat(v float64) string {
 	return strconv.FormatFloat(v, 'f', -1, 64)
 }
 
+func elevenLabsVADOptionsEqual(a, b *ElevenLabsVADOptions) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return elevenLabsFloatPtrEqual(a.VADSilenceThresholdSecs, b.VADSilenceThresholdSecs) &&
+		elevenLabsFloatPtrEqual(a.VADThreshold, b.VADThreshold) &&
+		elevenLabsIntPtrEqual(a.MinSpeechDurationMS, b.MinSpeechDurationMS) &&
+		elevenLabsIntPtrEqual(a.MinSilenceDurationMS, b.MinSilenceDurationMS)
+}
+
+func elevenLabsFloatPtrEqual(a, b *float64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func elevenLabsIntPtrEqual(a, b *int) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
 type elevenLabsSTTStream struct {
-	conn       *websocket.Conn
-	events     chan *stt.SpeechEvent
-	errCh      chan error
-	mu         sync.Mutex
-	closed     bool
-	ctx        context.Context
-	cancel     context.CancelFunc
-	sampleRate int
-	audioBuf   *audio.AudioByteStream
-	audioDur   float64
-	state      *elevenLabsSTTStreamState
-	writeJSON  func(map[string]any) error
-	unregister func(*elevenLabsSTTStream)
-	unregOnce  sync.Once
+	conn        *websocket.Conn
+	connVersion int64
+	events      chan *stt.SpeechEvent
+	errCh       chan error
+	mu          sync.Mutex
+	closed      bool
+	ctx         context.Context
+	cancel      context.CancelFunc
+	sampleRate  int
+	audioBuf    *audio.AudioByteStream
+	audioDur    float64
+	state       *elevenLabsSTTStreamState
+	writeJSON   func(map[string]any) error
+	unregister  func(*elevenLabsSTTStream)
+	unregOnce   sync.Once
 }
 
 func (s *elevenLabsSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -477,6 +507,63 @@ func (s *elevenLabsSTTStream) setServerVAD(enabled bool) {
 	defer s.mu.Unlock()
 	if s.state != nil {
 		s.state.serverVAD = enabled
+	}
+}
+
+func (s *elevenLabsSTTStream) language() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == nil {
+		return ""
+	}
+	return s.state.language
+}
+
+func (s *elevenLabsSTTStream) reconnect(streamURL string, headers http.Header, serverVAD bool) {
+	if s.ctx == nil || s.conn == nil {
+		s.setServerVAD(serverVAD)
+		return
+	}
+	conn, _, err := websocket.DefaultDialer.DialContext(s.ctx, streamURL, headers)
+	if err != nil {
+		s.sendError(llm.NewAPIConnectionError("Failed to connect to ElevenLabs"))
+		return
+	}
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = conn.Close()
+		return
+	}
+	oldConn := s.conn
+	s.conn = conn
+	s.connVersion++
+	if s.state != nil {
+		s.state.serverVAD = serverVAD
+	}
+	s.mu.Unlock()
+	if oldConn != nil {
+		_ = oldConn.Close()
+	}
+}
+
+func (s *elevenLabsSTTStream) currentConn() (*websocket.Conn, int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.conn, s.connVersion
+}
+
+func (s *elevenLabsSTTStream) isStaleConn(version int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return version != s.connVersion && !s.closed
+}
+
+func (s *elevenLabsSTTStream) sendError(err error) {
+	select {
+	case s.errCh <- err:
+	default:
 	}
 }
 
@@ -574,8 +661,15 @@ func (s *elevenLabsSTTStream) readLoop() {
 	defer s.unregisterFromProvider()
 	defer close(s.events)
 	for {
-		msgType, payload, err := s.conn.ReadMessage()
+		conn, version := s.currentConn()
+		if conn == nil {
+			return
+		}
+		msgType, payload, err := conn.ReadMessage()
 		if err != nil {
+			if s.isStaleConn(version) {
+				continue
+			}
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
 				s.errCh <- elevenLabsSTTUnexpectedCloseError(err)
 			}

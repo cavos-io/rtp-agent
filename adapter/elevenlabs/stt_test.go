@@ -409,32 +409,52 @@ func TestElevenLabsSTTUpdateOptionsCanDisableServerVAD(t *testing.T) {
 }
 
 func TestElevenLabsSTTUpdateOptionsPropagatesServerVADToActiveStream(t *testing.T) {
-	clientConn, serverConn := net.Pipe()
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTModel("scribe_v2_realtime"),
+		WithElevenLabsSTTBaseURL("ws://eleven.test/v1"),
+	)
+	active := &elevenLabsSTTStream{state: &elevenLabsSTTStreamState{serverVAD: false}}
+	provider.registerStream(active)
+	defer provider.unregisterStream(active)
+
+	if active.state.serverVAD {
+		t.Fatal("active stream serverVAD = true before update, want false")
+	}
+
+	provider.UpdateOptions(WithElevenLabsSTTServerVAD(ElevenLabsVADOptions{
+		VADThreshold: floatPtr(0.5),
+	}))
+	if !active.state.serverVAD {
+		t.Fatal("active stream serverVAD = false after update, want true")
+	}
+}
+
+func TestElevenLabsSTTUpdateOptionsReconnectsActiveStreamForServerVAD(t *testing.T) {
+	clientOne, serverOne := net.Pipe()
+	clientTwo, serverTwo := net.Pipe()
+	queries := make(chan url.Values, 2)
+	serverErr := make(chan error, 2)
 	releaseServer := make(chan struct{})
-	serverErr := make(chan error, 1)
-	upgrader := websocket.Upgrader{}
-	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			serverErr <- err
-			return
-		}
-		defer conn.Close()
-		serverErr <- nil
-		<-releaseServer
-	})}
-	go server.Serve(&singleElevenLabsConnListener{conn: serverConn})
+	releaseClosed := false
 	defer func() {
-		if releaseServer != nil {
+		if !releaseClosed {
 			close(releaseServer)
 		}
-		server.Close()
 	}()
+	go runElevenLabsSTTHandshakeRecorder(serverOne, queries, releaseServer, serverErr)
+	go runElevenLabsSTTHandshakeRecorder(serverTwo, queries, releaseServer, serverErr)
 
 	oldDialer := websocket.DefaultDialer
+	dials := []net.Conn{clientOne, clientTwo}
+	dialCount := 0
 	websocket.DefaultDialer = &websocket.Dialer{
 		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
-			return clientConn, nil
+			if dialCount >= len(dials) {
+				return nil, errors.New("unexpected extra dial")
+			}
+			conn := dials[dialCount]
+			dialCount++
+			return conn, nil
 		},
 		Proxy: nil,
 	}
@@ -450,30 +470,35 @@ func TestElevenLabsSTTUpdateOptionsPropagatesServerVADToActiveStream(t *testing.
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
 	}
-	stream := active.(*elevenLabsSTTStream)
-	if stream.state.serverVAD {
-		t.Fatal("active stream serverVAD = true before update, want false")
-	}
+	defer active.Close()
+
+	first := readElevenLabsSTTHandshakeQuery(t, queries)
+	assertElevenLabsQuery(t, first, "commit_strategy", "manual")
 
 	provider.UpdateOptions(WithElevenLabsSTTServerVAD(ElevenLabsVADOptions{
 		VADThreshold: floatPtr(0.5),
 	}))
-	if !stream.state.serverVAD {
-		t.Fatal("active stream serverVAD = false after update, want true")
+
+	second := readElevenLabsSTTHandshakeQuery(t, queries)
+	assertElevenLabsQuery(t, second, "commit_strategy", "vad")
+	assertElevenLabsQuery(t, second, "vad_threshold", "0.5")
+	if dialCount != 2 {
+		t.Fatalf("dial count = %d, want reconnect dial", dialCount)
 	}
 
-	select {
-	case err := <-serverErr:
-		if err != nil {
-			t.Fatalf("test websocket server error: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for test websocket server")
-	}
 	close(releaseServer)
-	releaseServer = nil
+	releaseClosed = true
 	if err := active.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
+	}
+	for range 2 {
+		select {
+		case err := <-serverErr:
+			if err != nil {
+				t.Fatalf("test websocket server error: %v", err)
+			}
+		default:
+		}
 	}
 }
 
@@ -935,6 +960,34 @@ func runElevenLabsClosingWebsocketServer(conn net.Conn, closeAfterHandshake <-ch
 	<-closeAfterHandshake
 	close(closed)
 	errCh <- nil
+}
+
+func runElevenLabsSTTHandshakeRecorder(conn net.Conn, queries chan<- url.Values, release <-chan struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	queries <- req.URL.Query()
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", elevenLabsTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	<-release
+	errCh <- nil
+}
+
+func readElevenLabsSTTHandshakeQuery(t *testing.T, queries <-chan url.Values) url.Values {
+	t.Helper()
+	select {
+	case query := <-queries:
+		return query
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for ElevenLabs STT websocket handshake")
+		return nil
+	}
 }
 
 type singleElevenLabsConnListener struct {
