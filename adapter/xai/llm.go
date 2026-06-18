@@ -99,6 +99,9 @@ func (l *XaiLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 	if toolChoice := xaiToolChoicePayload(options.ToolChoice); toolChoice != nil {
 		body["tool_choice"] = toolChoice
 	}
+	if options.ParallelToolCallsSet {
+		body["parallel_tool_calls"] = options.ParallelToolCalls
+	}
 
 	jsonBody, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.x.ai/v1/chat/completions", bytes.NewBuffer(jsonBody))

@@ -302,6 +302,36 @@ func TestXaiLLMChatMapsReferenceToolChoice(t *testing.T) {
 	}
 }
 
+func TestXaiLLMChatMapsReferenceParallelToolCalls(t *testing.T) {
+	var body map[string]any
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: xaiRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader("data: [DONE]\n")),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewXaiLLM("test-key", "")
+	stream, err := provider.Chat(context.Background(), xaiTestChatContext(),
+		llm.WithParallelToolCalls(false),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	if got, ok := body["parallel_tool_calls"].(bool); !ok || got {
+		t.Fatalf("parallel_tool_calls = %#v, want explicit false", body["parallel_tool_calls"])
+	}
+}
+
 func TestBuildXAIMessagesIncludesImageContent(t *testing.T) {
 	imageData := base64.StdEncoding.EncodeToString([]byte("png-bytes"))
 	ctx := llm.NewChatContext()
