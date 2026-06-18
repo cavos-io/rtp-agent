@@ -1735,7 +1735,7 @@ func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.Avail
 			s.storePendingAccept(jobID, args)
 			msg := workerlivekit.AvailabilityResponseForAccept(
 				req,
-				workerlivekit.AvailabilityAcceptOptions(args),
+				args,
 				s.Options.AgentName,
 			)
 			if err := s.sendWorkerMessage(msg); err != nil {
@@ -1747,7 +1747,7 @@ func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.Avail
 			answered = true
 			msg := workerlivekit.AvailabilityResponseForReject(
 				req,
-				workerlivekit.AvailabilityRejectOptions(args),
+				args,
 			)
 			return s.sendWorkerMessage(msg)
 		},
