@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
 )
@@ -90,7 +91,7 @@ func (t *XaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildXaiTTSStreamURL(t), buildXaiTTSHeaders(t))
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial xai tts websocket: %w", err)
+		return nil, llm.NewAPIConnectionError("failed to connect to xAI")
 	}
 	if err := writeXaiTTSMessage(conn, buildXaiTTSTextDeltaMessage(text)); err != nil {
 		conn.Close()
@@ -110,7 +111,7 @@ func (t *XaiTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildXaiTTSStreamURL(t), buildXaiTTSHeaders(t))
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial xai tts websocket: %w", err)
+		return nil, llm.NewAPIConnectionError("failed to connect to xAI")
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &xaiTTSSynthesizeStream{
@@ -295,13 +296,13 @@ func xaiTTSAudioFromMessage(payload []byte) (*tts.SynthesizedAudio, bool, error)
 		Message string `json:"message"`
 	}
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return nil, false, err
+		return nil, false, llm.NewAPIConnectionError(err.Error())
 	}
 	switch message.Type {
 	case "audio.delta":
 		audio, err := base64.StdEncoding.DecodeString(message.Delta)
 		if err != nil {
-			return nil, false, err
+			return nil, false, llm.NewAPIConnectionError(err.Error())
 		}
 		return xaiTTSAudioFrame(audio), false, nil
 	case "audio.done":
@@ -310,7 +311,7 @@ func xaiTTSAudioFromMessage(payload []byte) (*tts.SynthesizedAudio, bool, error)
 		if message.Message == "" {
 			message.Message = "unknown xai tts error"
 		}
-		return nil, false, fmt.Errorf("xai tts error: %s", message.Message)
+		return nil, false, llm.NewAPIStatusError(message.Message, -1, "", string(payload))
 	default:
 		return nil, false, nil
 	}

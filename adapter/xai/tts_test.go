@@ -5,11 +5,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/gorilla/websocket"
 )
 
 func TestXaiTTSDefaultsMatchReference(t *testing.T) {
@@ -106,6 +109,54 @@ func TestXaiTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 }
 
+func TestXaiTTSSynthesizeReturnsAPIConnectionErrorOnDialTimeout(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, context.DeadlineExceeded
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewXaiTTS("test-key", "", WithXaiTTSWebsocketURL("ws://xai.test/v1/tts"))
+
+	_, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("Synthesize error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if errors.As(err, &timeoutErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError but not APITimeoutError", err, err)
+	}
+}
+
+func TestXaiTTSStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("dial refused")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewXaiTTS("test-key", "", WithXaiTTSWebsocketURL("ws://xai.test/v1/tts"))
+
+	_, err := provider.Stream(context.Background())
+	if err == nil {
+		t.Fatal("Stream error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestXaiTTSTextMessagesMatchReference(t *testing.T) {
 	delta := buildXaiTTSTextDeltaMessage("hello")
 	done := buildXaiTTSTextDoneMessage()
@@ -185,8 +236,38 @@ func TestXaiTTSAudioFromMessageDecodesAudioDeltaAndDone(t *testing.T) {
 
 func TestXaiTTSAudioFromMessageReportsReferenceError(t *testing.T) {
 	_, _, err := xaiTTSAudioFromMessage([]byte(`{"type":"error","message":"bad voice"}`))
-	if err == nil || !strings.Contains(err.Error(), "bad voice") {
+	if err == nil {
+		t.Fatal("error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != -1 {
+		t.Fatalf("status code = %d, want -1", statusErr.StatusCode)
+	}
+	if !strings.Contains(statusErr.Error(), "bad voice") {
 		t.Fatalf("error = %v, want provider message", err)
+	}
+}
+
+func TestXaiTTSAudioFromMessageReturnsAPIConnectionErrorOnInvalidPayload(t *testing.T) {
+	_, _, err := xaiTTSAudioFromMessage([]byte(`{`))
+	if err == nil {
+		t.Fatal("invalid JSON error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("invalid JSON error = %T %v, want APIConnectionError", err, err)
+	}
+
+	_, _, err = xaiTTSAudioFromMessage([]byte(`{"type":"audio.delta","delta":"not-base64"}`))
+	if err == nil {
+		t.Fatal("invalid audio error = nil, want APIConnectionError")
+	}
+	connectionErr = nil
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("invalid audio error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
