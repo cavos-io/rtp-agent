@@ -2437,6 +2437,38 @@ func TestPipelineAgentPreemptiveInterruptSuppressesCanceledLLMChatError(t *testi
 	}
 }
 
+func TestPipelineAgentPreemptiveContextCancelSuppressesCanceledLLMChatError(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	l := &blockingCanceledPipelineLLM{started: make(chan struct{})}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, llm.NewChatContext())
+	agent.session = session
+	ctx, cancel := context.WithCancel(context.Background())
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.OnSpeechPreemptive(ctx, speech)
+	}()
+
+	select {
+	case <-l.started:
+	case <-time.After(time.Second):
+		t.Fatal("preemptive LLM chat did not start")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("OnSpeechPreemptive did not return after context LLM cancel")
+	}
+	select {
+	case ev := <-session.ErrorEvents():
+		t.Fatalf("ErrorEvents received unexpected error = %v, want no preemptive LLM error on context cancellation", ev.Error)
+	default:
+	}
+}
+
 func TestPipelineAgentEmitsLLMErrorEventForStreamFailure(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	cause := errors.New("llm stream failed")
@@ -2559,6 +2591,48 @@ func TestPipelineAgentPreemptiveInterruptSuppressesCanceledTTSStartupError(t *te
 	select {
 	case ev := <-session.ErrorEvents():
 		t.Fatalf("ErrorEvents received unexpected error = %v, want no preemptive TTS error on interrupted cancellation", ev.Error)
+	default:
+	}
+}
+
+func TestPipelineAgentPreemptiveContextCancelSuppressesCanceledTTSStartupError(t *testing.T) {
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "cancel preemptive tts"}},
+			},
+		},
+	}
+	ttsSource := &blockingCanceledPipelineTTS{started: make(chan struct{})}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		PreemptiveGenerationPreemptiveTTS:    true,
+		PreemptiveGenerationPreemptiveTTSSet: true,
+	})
+	agent := NewPipelineAgent(nil, nil, l, ttsSource, llm.NewChatContext())
+	agent.session = session
+	ctx, cancel := context.WithCancel(context.Background())
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.OnSpeechPreemptive(ctx, speech)
+	}()
+
+	select {
+	case <-ttsSource.started:
+	case <-time.After(time.Second):
+		t.Fatal("preemptive TTS stream did not start")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("OnSpeechPreemptive did not return after context TTS cancel")
+	}
+	select {
+	case ev := <-session.ErrorEvents():
+		t.Fatalf("ErrorEvents received unexpected error = %v, want no preemptive TTS error on context cancellation", ev.Error)
 	default:
 	}
 }
