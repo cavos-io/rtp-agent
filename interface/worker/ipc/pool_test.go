@@ -145,6 +145,33 @@ func TestProcPoolActiveJobsReturnsRunningAssignments(t *testing.T) {
 	}
 }
 
+func TestCloneRunningJobInfoCopiesAcceptAttributes(t *testing.T) {
+	info := RunningJobInfo{
+		AcceptArguments: JobAcceptArguments{
+			Identity:   "agent-job-a",
+			Attributes: map[string]string{"tier": "gold"},
+		},
+		Job:      &livekit.Job{Id: "job-a"},
+		URL:      "wss://livekit.example",
+		Token:    "token-a",
+		WorkerID: "worker-a",
+		FakeJob:  true,
+	}
+
+	clone := CloneRunningJobInfo(info)
+	clone.AcceptArguments.Attributes["tier"] = "platinum"
+
+	if info.AcceptArguments.Attributes["tier"] != "gold" {
+		t.Fatalf("CloneRunningJobInfo mutated source attributes to %q, want gold", info.AcceptArguments.Attributes["tier"])
+	}
+	if clone.Job != info.Job {
+		t.Fatal("CloneRunningJobInfo changed job pointer, want shallow job copy")
+	}
+	if clone.Token != "token-a" || clone.WorkerID != "worker-a" || !clone.FakeJob {
+		t.Fatalf("CloneRunningJobInfo() = %#v, want running job fields preserved", clone)
+	}
+}
+
 func TestProcPoolActiveJobsSkipsCompletedExecutors(t *testing.T) {
 	completed := RunningJobInfo{Job: &livekit.Job{Id: "job-done"}}
 	running := RunningJobInfo{Job: &livekit.Job{Id: "job-running"}}
