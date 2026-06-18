@@ -1092,17 +1092,12 @@ func (s *AgentServer) RTCSession(
 	s.entrypointFnc = entrypoint
 	s.requestFnc = request
 	s.sessionEndFnc = sessionEnd
-	if agentName := os.Getenv("LIVEKIT_AGENT_NAME_OVERRIDE"); agentName != "" {
-		s.Options.AgentName = agentName
-		s.Options.AgentNameIsEnv = true
-	} else if s.Options.AgentName == "" {
-		if agentName := os.Getenv("LIVEKIT_AGENT_NAME"); agentName != "" {
-			s.Options.AgentName = agentName
-			s.Options.AgentNameIsEnv = true
-		} else {
-			s.Options.AgentNameIsEnv = false
-		}
-	}
+	agentName := workerlivekit.ResolveAgentNameFromEnv(workerlivekit.AgentNameEnvOptions{
+		AgentName:      s.Options.AgentName,
+		AgentNameIsEnv: s.Options.AgentNameIsEnv,
+	})
+	s.Options.AgentName = agentName.AgentName
+	s.Options.AgentNameIsEnv = agentName.AgentNameIsEnv
 	return nil
 }
 

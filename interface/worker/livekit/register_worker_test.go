@@ -149,6 +149,73 @@ func TestDefaultWorkerPermissionsReturnsLiveKitAgentPermissions(t *testing.T) {
 	}
 }
 
+func TestResolveAgentNameFromEnvUsesOverrideFirst(t *testing.T) {
+	result := workerlivekit.ResolveAgentNameFromEnv(workerlivekit.AgentNameEnvOptions{
+		AgentName: "explicit-agent",
+		LookupEnv: func(key string) string {
+			values := map[string]string{
+				"LIVEKIT_AGENT_NAME":          "env-agent",
+				"LIVEKIT_AGENT_NAME_OVERRIDE": "override-agent",
+			}
+			return values[key]
+		},
+	})
+
+	if result.AgentName != "override-agent" {
+		t.Fatalf("AgentName = %q, want override-agent", result.AgentName)
+	}
+	if !result.AgentNameIsEnv {
+		t.Fatal("AgentNameIsEnv = false, want true")
+	}
+}
+
+func TestResolveAgentNameFromEnvUsesEnvWhenAgentNameEmpty(t *testing.T) {
+	result := workerlivekit.ResolveAgentNameFromEnv(workerlivekit.AgentNameEnvOptions{
+		LookupEnv: func(key string) string {
+			if key == "LIVEKIT_AGENT_NAME" {
+				return "env-agent"
+			}
+			return ""
+		},
+	})
+
+	if result.AgentName != "env-agent" {
+		t.Fatalf("AgentName = %q, want env-agent", result.AgentName)
+	}
+	if !result.AgentNameIsEnv {
+		t.Fatal("AgentNameIsEnv = false, want true")
+	}
+}
+
+func TestResolveAgentNameFromEnvKeepsExplicitAgentNameEnvFlag(t *testing.T) {
+	result := workerlivekit.ResolveAgentNameFromEnv(workerlivekit.AgentNameEnvOptions{
+		AgentName:      "explicit-agent",
+		AgentNameIsEnv: true,
+		LookupEnv:      func(string) string { return "" },
+	})
+
+	if result.AgentName != "explicit-agent" {
+		t.Fatalf("AgentName = %q, want explicit-agent", result.AgentName)
+	}
+	if !result.AgentNameIsEnv {
+		t.Fatal("AgentNameIsEnv = false, want preserved true")
+	}
+}
+
+func TestResolveAgentNameFromEnvClearsEnvFlagWhenNoAgentName(t *testing.T) {
+	result := workerlivekit.ResolveAgentNameFromEnv(workerlivekit.AgentNameEnvOptions{
+		AgentNameIsEnv: true,
+		LookupEnv:      func(string) string { return "" },
+	})
+
+	if result.AgentName != "" {
+		t.Fatalf("AgentName = %q, want empty", result.AgentName)
+	}
+	if result.AgentNameIsEnv {
+		t.Fatal("AgentNameIsEnv = true, want false")
+	}
+}
+
 func TestResolveWorkerPermissionsUsesConfiguredPermissions(t *testing.T) {
 	configured := workerlivekit.WorkerPermissions{
 		CanSubscribe: true,

@@ -2,6 +2,7 @@ package livekit
 
 import (
 	"fmt"
+	"os"
 
 	lkprotocol "github.com/livekit/protocol/livekit"
 )
@@ -29,6 +30,17 @@ type WorkerRegistrationOptions struct {
 	Permissions *WorkerPermissions
 }
 
+type AgentNameEnvOptions struct {
+	AgentName      string
+	AgentNameIsEnv bool
+	LookupEnv      func(string) string
+}
+
+type AgentNameEnvResult struct {
+	AgentName      string
+	AgentNameIsEnv bool
+}
+
 func ResolveWorkerPermissions(permissions *WorkerPermissions) WorkerPermissions {
 	if permissions == nil {
 		return WorkerPermissions{
@@ -44,6 +56,31 @@ func ResolveWorkerPermissions(permissions *WorkerPermissions) WorkerPermissions 
 func DefaultWorkerPermissions() *WorkerPermissions {
 	permissions := ResolveWorkerPermissions(nil)
 	return &permissions
+}
+
+func ResolveAgentNameFromEnv(opts AgentNameEnvOptions) AgentNameEnvResult {
+	lookupEnv := opts.LookupEnv
+	if lookupEnv == nil {
+		lookupEnv = os.Getenv
+	}
+	result := AgentNameEnvResult{
+		AgentName:      opts.AgentName,
+		AgentNameIsEnv: opts.AgentNameIsEnv,
+	}
+	if agentName := lookupEnv("LIVEKIT_AGENT_NAME_OVERRIDE"); agentName != "" {
+		result.AgentName = agentName
+		result.AgentNameIsEnv = true
+		return result
+	}
+	if result.AgentName == "" {
+		if agentName := lookupEnv("LIVEKIT_AGENT_NAME"); agentName != "" {
+			result.AgentName = agentName
+			result.AgentNameIsEnv = true
+		} else {
+			result.AgentNameIsEnv = false
+		}
+	}
+	return result
 }
 
 func RegisterWorkerMessage(opts WorkerRegistrationOptions) *lkprotocol.WorkerMessage {
