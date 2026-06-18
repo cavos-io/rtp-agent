@@ -3287,6 +3287,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		return adapteraws.NewAWSTTS(context.Background(), cfg.AWSRegion, cfg.TTSVoice, ttsOpts...)
 	case providerAzure:
 		ttsOpts := []azure.AzureTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, azure.WithAzureTTSSpeechEndpoint(cfg.TTSBaseURL))
+		}
 		if cfg.TTSLanguage != "" {
 			ttsOpts = append(ttsOpts, azure.WithAzureTTSLanguage(cfg.TTSLanguage))
 		}
@@ -5112,6 +5115,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.TTS = provider
 	case providerAzure:
 		ttsOpts := []azure.AzureTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, azure.WithAzureTTSSpeechEndpoint(cfg.TTSBaseURL))
+		}
 		if cfg.TTSLanguage != "" {
 			ttsOpts = append(ttsOpts, azure.WithAzureTTSLanguage(cfg.TTSLanguage))
 		}

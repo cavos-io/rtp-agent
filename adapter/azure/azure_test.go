@@ -801,10 +801,11 @@ func TestAzureTTSDefaultsAndEnvironmentMatchReference(t *testing.T) {
 func TestAzureTTSRequiresSpeechConfig(t *testing.T) {
 	t.Setenv(azureSpeechKeyEnv, "")
 	t.Setenv(azureSpeechRegionEnv, "")
+	t.Setenv(azureSpeechEndpointEnv, "")
 
 	_, err := NewAzureTTS("", "", "")
 
-	if err == nil || !strings.Contains(err.Error(), "AZURE_SPEECH_KEY") {
+	if err == nil || !strings.Contains(err.Error(), "AZURE_SPEECH_ENDPOINT") {
 		t.Fatalf("NewAzureTTS error = %v, want speech config error", err)
 	}
 }
@@ -891,6 +892,37 @@ func TestAzureTTSBuildsRequestWithConfiguredSampleRate(t *testing.T) {
 	}
 	if got := req.Header.Get("X-Microsoft-OutputFormat"); got != "raw-16khz-16bit-mono-pcm" {
 		t.Fatalf("output format = %q, want raw-16khz-16bit-mono-pcm", got)
+	}
+}
+
+func TestAzureTTSBuildsRequestWithEndpointDeploymentAndAuthToken(t *testing.T) {
+	t.Setenv(azureSpeechKeyEnv, "")
+
+	provider, err := NewAzureTTSWithOptions(
+		"",
+		"eastus",
+		"en-US-AvaNeural",
+		WithAzureTTSSpeechEndpoint("https://speech.example.test/cognitiveservices/v1"),
+		WithAzureTTSDeploymentID("voice-deployment"),
+		WithAzureTTSAuthToken("token-123"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureTTSWithOptions error = %v", err)
+	}
+
+	req, err := buildAzureTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+
+	if got, want := req.URL.String(), "https://speech.example.test/cognitiveservices/v1?deploymentId=voice-deployment"; got != want {
+		t.Fatalf("URL = %q, want %q", got, want)
+	}
+	if got := req.Header.Get("Authorization"); got != "Bearer token-123" {
+		t.Fatalf("Authorization = %q, want bearer token", got)
+	}
+	if got := req.Header.Get("Ocp-Apim-Subscription-Key"); got != "" {
+		t.Fatalf("subscription header = %q, want omitted when auth token is configured", got)
 	}
 }
 

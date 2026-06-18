@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ const (
 	defaultAzureTTSLanguage     = "en-US"
 	defaultAzureTTSSampleRate   = 24000
 	defaultAzureTTSSampleFormat = "raw-24khz-16bit-mono-pcm"
+	azureSpeechEndpointEnv      = "AZURE_SPEECH_ENDPOINT"
 )
 
 var azureTTSSampleFormats = map[int]string{
@@ -31,15 +33,18 @@ var azureTTSSampleFormats = map[int]string{
 }
 
 type AzureTTS struct {
-	apiKey     string
-	region     string
-	voice      string
-	language   string
-	sampleRate int
-	prosody    AzureTTSProsody
-	style      AzureTTSStyle
-	lexiconURI string
-	httpClient *http.Client
+	apiKey         string
+	region         string
+	voice          string
+	language       string
+	sampleRate     int
+	speechEndpoint string
+	deploymentID   string
+	authToken      string
+	prosody        AzureTTSProsody
+	style          AzureTTSStyle
+	lexiconURI     string
+	httpClient     *http.Client
 }
 
 type AzureTTSProsody struct {
@@ -91,6 +96,30 @@ func WithAzureTTSLexiconURI(lexiconURI string) AzureTTSOption {
 	}
 }
 
+func WithAzureTTSSpeechEndpoint(speechEndpoint string) AzureTTSOption {
+	return func(t *AzureTTS) {
+		if speechEndpoint != "" {
+			t.speechEndpoint = speechEndpoint
+		}
+	}
+}
+
+func WithAzureTTSDeploymentID(deploymentID string) AzureTTSOption {
+	return func(t *AzureTTS) {
+		if deploymentID != "" {
+			t.deploymentID = deploymentID
+		}
+	}
+}
+
+func WithAzureTTSAuthToken(authToken string) AzureTTSOption {
+	return func(t *AzureTTS) {
+		if authToken != "" {
+			t.authToken = authToken
+		}
+	}
+}
+
 func NewAzureTTS(apiKey string, region string, voice string, languages ...string) (*AzureTTS, error) {
 	opts := []AzureTTSOption{}
 	if len(languages) > 0 {
@@ -106,22 +135,23 @@ func NewAzureTTSWithOptions(apiKey string, region string, voice string, opts ...
 	if region == "" {
 		region = os.Getenv(azureSpeechRegionEnv)
 	}
-	if apiKey == "" || region == "" {
-		return nil, fmt.Errorf("azure speech config requires AZURE_SPEECH_KEY and AZURE_SPEECH_REGION")
-	}
 	if voice == "" {
 		voice = defaultAzureTTSVoice
 	}
 	provider := &AzureTTS{
-		apiKey:     apiKey,
-		region:     region,
-		voice:      voice,
-		language:   defaultAzureTTSLanguage,
-		sampleRate: defaultAzureTTSSampleRate,
-		httpClient: http.DefaultClient,
+		apiKey:         apiKey,
+		region:         region,
+		voice:          voice,
+		language:       defaultAzureTTSLanguage,
+		sampleRate:     defaultAzureTTSSampleRate,
+		speechEndpoint: os.Getenv(azureSpeechEndpointEnv),
+		httpClient:     http.DefaultClient,
 	}
 	for _, opt := range opts {
 		opt(provider)
+	}
+	if provider.speechEndpoint == "" && !((provider.apiKey != "" && provider.region != "") || (provider.authToken != "" && provider.region != "")) {
+		return nil, fmt.Errorf("azure speech config requires AZURE_SPEECH_ENDPOINT or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or AZURE_SPEECH_AUTH_TOKEN and AZURE_SPEECH_REGION")
 	}
 	if _, ok := azureTTSSampleFormats[provider.sampleRate]; !ok {
 		return nil, fmt.Errorf("azure tts unsupported sample rate: %d", provider.sampleRate)
@@ -178,23 +208,48 @@ func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStre
 }
 
 func buildAzureTTSRequest(ctx context.Context, t *AzureTTS, text string) (*http.Request, error) {
-	url := fmt.Sprintf("https://%s.tts.speech.microsoft.com/cognitiveservices/v1", t.region)
+	endpointURL, err := azureTTSEndpointURL(t)
+	if err != nil {
+		return nil, err
+	}
 	language := t.language
 	if language == "" {
 		language = defaultAzureTTSLanguage
 	}
 	ssml := buildAzureTTSSSML(t, language, text)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBufferString(ssml))
+	req, err := http.NewRequestWithContext(ctx, "POST", endpointURL, bytes.NewBufferString(ssml))
 	if err != nil {
 		return nil, err
 	}
 
 	req.Header.Set("Content-Type", "application/ssml+xml")
 	req.Header.Set("X-Microsoft-OutputFormat", azureTTSSampleFormats[t.sampleRate])
-	req.Header.Set("Ocp-Apim-Subscription-Key", t.apiKey)
+	if t.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+t.authToken)
+	} else if t.apiKey != "" {
+		req.Header.Set("Ocp-Apim-Subscription-Key", t.apiKey)
+	}
 	req.Header.Set("User-Agent", "LiveKit Agents")
 	return req, nil
+}
+
+func azureTTSEndpointURL(t *AzureTTS) (string, error) {
+	endpointURL := t.speechEndpoint
+	if endpointURL == "" {
+		endpointURL = fmt.Sprintf("https://%s.tts.speech.microsoft.com/cognitiveservices/v1", t.region)
+	}
+	if t.deploymentID == "" {
+		return endpointURL, nil
+	}
+	parsed, err := url.Parse(endpointURL)
+	if err != nil {
+		return "", fmt.Errorf("azure tts endpoint url: %w", err)
+	}
+	query := parsed.Query()
+	query.Set("deploymentId", t.deploymentID)
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), nil
 }
 
 func buildAzureTTSSSML(t *AzureTTS, language string, text string) string {
