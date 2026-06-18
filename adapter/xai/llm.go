@@ -102,6 +102,9 @@ func (l *XaiLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 	if options.ParallelToolCallsSet {
 		body["parallel_tool_calls"] = options.ParallelToolCalls
 	}
+	if len(options.ResponseFormat) > 0 {
+		body["response_format"] = options.ResponseFormat
+	}
 	for key, value := range options.ExtraParams {
 		body[key] = value
 	}

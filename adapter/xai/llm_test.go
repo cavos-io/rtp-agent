@@ -371,6 +371,53 @@ func TestXaiLLMChatForwardsReferenceExtraParams(t *testing.T) {
 	}
 }
 
+func TestXaiLLMChatMapsReferenceResponseFormat(t *testing.T) {
+	var body map[string]any
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: xaiRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader("data: [DONE]\n")),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewXaiLLM("test-key", "")
+	stream, err := provider.Chat(context.Background(), xaiTestChatContext(),
+		llm.WithResponseFormat(map[string]any{
+			"type": "json_schema",
+			"json_schema": map[string]any{
+				"name":   "WeatherAnswer",
+				"strict": true,
+				"schema": map[string]any{
+					"type": "object",
+				},
+			},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	format, ok := body["response_format"].(map[string]any)
+	if !ok {
+		t.Fatalf("response_format = %#v, want map", body["response_format"])
+	}
+	if format["type"] != "json_schema" {
+		t.Fatalf("response_format type = %#v, want json_schema", format["type"])
+	}
+	schema, ok := format["json_schema"].(map[string]any)
+	if !ok || schema["name"] != "WeatherAnswer" || schema["strict"] != true {
+		t.Fatalf("response_format json_schema = %#v, want strict WeatherAnswer", format["json_schema"])
+	}
+}
+
 func TestBuildXAIMessagesIncludesImageContent(t *testing.T) {
 	imageData := base64.StdEncoding.EncodeToString([]byte("png-bytes"))
 	ctx := llm.NewChatContext()
