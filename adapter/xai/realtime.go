@@ -73,6 +73,7 @@ func NewXaiRealtimeModel(apiKey string, opts ...XaiRealtimeOption) *XaiRealtimeM
 		adapteropenai.WithOpenAIRealtimeWebsocketDialer(options.dialWebsocket),
 		adapteropenai.WithOpenAIRealtimeToolFormatter(xaiRealtimeTools),
 		adapteropenai.WithOpenAIRealtimeInputTranscriptionFinalHook(xaiRealtimeDeduplicateFinalInputTranscription),
+		adapteropenai.WithOpenAIRealtimeRemoteItemAddedHook(xaiRealtimeAppendNilPreviousItemID),
 		adapteropenai.WithOpenAIRealtimeVoice(defaultXaiRealtimeVoice),
 		adapteropenai.WithOpenAIRealtimeModalities([]string{"audio"}),
 		adapteropenai.WithOpenAIRealtimeInputAudioTranscription(map[string]any{}),
@@ -116,6 +117,17 @@ func xaiRealtimeDeduplicateFinalInputTranscription(msg *llm.ChatMessage, transcr
 	if msg.TextContent() == transcription.Transcript {
 		msg.Content = nil
 	}
+}
+
+func xaiRealtimeAppendNilPreviousItemID(remote *llm.RemoteChatContext, event *llm.RemoteItemAddedEvent) {
+	if remote == nil || event == nil || event.PreviousItemID != "" {
+		return
+	}
+	items := remote.ToChatCtx().Items
+	if len(items) == 0 {
+		return
+	}
+	event.PreviousItemID = items[len(items)-1].GetID()
 }
 
 func (m *XaiRealtimeModel) Model() string { return m.model }

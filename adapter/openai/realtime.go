@@ -34,6 +34,7 @@ type RealtimeModel struct {
 	dialWebsocket               OpenAIRealtimeWebsocketDialer
 	toolFormatter               OpenAIRealtimeToolFormatter
 	inputTranscriptionFinalHook OpenAIRealtimeInputTranscriptionFinalHook
+	remoteItemAddedHook         OpenAIRealtimeRemoteItemAddedHook
 	mu                          sync.Mutex
 	options                     llm.RealtimeSessionOptions
 	modalities                  []string
@@ -50,6 +51,8 @@ type OpenAIRealtimeToolFormatter func([]llm.Tool) []map[string]any
 
 type OpenAIRealtimeInputTranscriptionFinalHook func(*llm.ChatMessage, *llm.InputTranscriptionCompleted)
 
+type OpenAIRealtimeRemoteItemAddedHook func(*llm.RemoteChatContext, *llm.RemoteItemAddedEvent)
+
 type openAIRealtimeDialResult struct {
 	conn *websocket.Conn
 	err  error
@@ -64,6 +67,7 @@ type openAIRealtimeModelOptions struct {
 	dialWebsocket               OpenAIRealtimeWebsocketDialer
 	toolFormatter               OpenAIRealtimeToolFormatter
 	inputTranscriptionFinalHook OpenAIRealtimeInputTranscriptionFinalHook
+	remoteItemAddedHook         OpenAIRealtimeRemoteItemAddedHook
 }
 
 type OpenAIRealtimeOption func(*openAIRealtimeModelOptions)
@@ -179,6 +183,12 @@ func WithOpenAIRealtimeInputTranscriptionFinalHook(hook OpenAIRealtimeInputTrans
 	}
 }
 
+func WithOpenAIRealtimeRemoteItemAddedHook(hook OpenAIRealtimeRemoteItemAddedHook) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.remoteItemAddedHook = hook
+	}
+}
+
 func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *RealtimeModel {
 	if model == "" {
 		model = "gpt-realtime"
@@ -212,6 +222,7 @@ func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *Realt
 		dialWebsocket:               dialWebsocket,
 		toolFormatter:               options.toolFormatter,
 		inputTranscriptionFinalHook: options.inputTranscriptionFinalHook,
+		remoteItemAddedHook:         options.remoteItemAddedHook,
 		options:                     options.sessionOptions,
 		modalities:                  options.modalities,
 		maxSession:                  options.maxSession,
@@ -1875,6 +1886,9 @@ func (s *realtimeSession) trackRealtimeRemoteItemAdded(ev llm.RealtimeEvent) {
 	}
 	if s.remote == nil {
 		s.remote = llm.NewRemoteChatContext()
+	}
+	if s.model != nil && s.model.remoteItemAddedHook != nil {
+		s.model.remoteItemAddedHook(s.remote, ev.RemoteItem)
 	}
 	var previousItemID *string
 	if ev.RemoteItem.PreviousItemID != "" {

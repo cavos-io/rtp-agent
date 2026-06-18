@@ -243,6 +243,92 @@ func TestXaiRealtimeFinalInputTranscriptionDoesNotDuplicateAudioTranscript(t *te
 	}
 }
 
+func TestXaiRealtimeNilPreviousItemIDAppendsToRemoteTail(t *testing.T) {
+	handlerDone := make(chan struct{})
+	handlerErr := make(chan error, 1)
+	readyForSync := make(chan struct{})
+	unexpectedSync := make(chan string, 4)
+	dialer := newXaiRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		defer close(handlerDone)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			handlerErr <- fmt.Errorf("read initial session update: %w", err)
+			return
+		}
+		for _, item := range []struct {
+			id   string
+			text string
+		}{
+			{id: "item_first", text: "first"},
+			{id: "item_second", text: "second"},
+		} {
+			if err := conn.WriteJSON(map[string]any{
+				"type":             "conversation.item.added",
+				"previous_item_id": nil,
+				"item": map[string]any{
+					"id":      item.id,
+					"type":    "message",
+					"role":    "user",
+					"content": []map[string]any{{"type": "input_text", "text": item.text}},
+				},
+			}); err != nil {
+				handlerErr <- fmt.Errorf("write item added: %w", err)
+				return
+			}
+		}
+		<-readyForSync
+		for {
+			if err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+				handlerErr <- fmt.Errorf("set read deadline: %w", err)
+				return
+			}
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			unexpectedSync <- string(payload)
+		}
+	})
+
+	model := NewXaiRealtimeModel("test-key",
+		WithXaiRealtimeBaseURL("ws://xai.test/v1/realtime"),
+		WithXaiRealtimeWebsocketDialer(dialer),
+	)
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+
+	assertXaiRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeRemoteItemAdded)
+	assertXaiRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeRemoteItemAdded)
+	close(readyForSync)
+	if err := session.UpdateChatContext(&llm.ChatContext{
+		Items: []llm.ChatItem{
+			&llm.ChatMessage{ID: "item_first", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "first"}}},
+			&llm.ChatMessage{ID: "item_second", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "second"}}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateChatContext() error = %v", err)
+	}
+	select {
+	case msg := <-unexpectedSync:
+		t.Fatalf("unexpected chat context sync message after nil previous_item_id append: %s", msg)
+	case <-handlerDone:
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket handler")
+	}
+	select {
+	case err := <-handlerErr:
+		t.Fatal(err)
+	default:
+	}
+}
+
 func assertXaiRealtimeEventType(t *testing.T, eventCh <-chan llm.RealtimeEvent, want llm.RealtimeEventType) llm.RealtimeEvent {
 	t.Helper()
 	select {
