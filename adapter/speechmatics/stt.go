@@ -215,6 +215,12 @@ func (s *SpeechmaticsSTT) Model() string {
 func (s *SpeechmaticsSTT) Provider() string {
 	return "Speechmatics"
 }
+func (s *SpeechmaticsSTT) InputSampleRate() uint32 {
+	if s == nil || s.sampleRate <= 0 {
+		return 16000
+	}
+	return uint32(s.sampleRate)
+}
 func (s *SpeechmaticsSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: true, AlignedTranscript: "chunk", OfflineRecognize: false}
 }
