@@ -130,6 +130,19 @@ func TestParticipantInfoDetailsExposeIdentityAndKind(t *testing.T) {
 	}
 }
 
+func TestParticipantInfoKindAllowedUsesParticipantKind(t *testing.T) {
+	participant := &lkprotocol.ParticipantInfo{Kind: lkprotocol.ParticipantInfo_SIP}
+	allowed := []lkprotocol.ParticipantInfo_Kind{lkprotocol.ParticipantInfo_STANDARD}
+
+	if workerlivekit.ParticipantInfoKindAllowed(allowed, participant) {
+		t.Fatal("ParticipantInfoKindAllowed() = true, want false")
+	}
+	allowed = append(allowed, lkprotocol.ParticipantInfo_SIP)
+	if !workerlivekit.ParticipantInfoKindAllowed(allowed, participant) {
+		t.Fatal("ParticipantInfoKindAllowed() = false, want true")
+	}
+}
+
 func TestUpsertParticipantInfoReplacesMatchingIdentity(t *testing.T) {
 	oldInfo := &lkprotocol.ParticipantInfo{Identity: "caller-a", Name: "Old"}
 	newInfo := &lkprotocol.ParticipantInfo{Identity: "caller-a", Name: "New"}

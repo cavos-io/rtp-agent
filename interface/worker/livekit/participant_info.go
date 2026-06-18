@@ -103,6 +103,10 @@ func ParticipantInfoDetails(participant *lkprotocol.ParticipantInfo) Participant
 	}
 }
 
+func ParticipantInfoKindAllowed(kinds []lkprotocol.ParticipantInfo_Kind, participant *lkprotocol.ParticipantInfo) bool {
+	return ParticipantKindAllowed(kinds, ParticipantInfoDetails(participant).Kind)
+}
+
 func UpsertParticipantInfo(participants []*lkprotocol.ParticipantInfo, info *lkprotocol.ParticipantInfo) []*lkprotocol.ParticipantInfo {
 	infoDetails := ParticipantInfoDetails(info)
 	for i, participant := range participants {

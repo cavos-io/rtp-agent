@@ -566,8 +566,7 @@ func (c *JobContext) AddParticipantEntrypoint(entrypoint ParticipantEntrypoint, 
 
 func (c *JobContext) scheduleParticipantEntrypointForExistingParticipants(registration participantEntrypointRegistration) {
 	for _, participant := range c.availableParticipants {
-		participantDetails := workerlivekit.ParticipantInfoDetails(participant)
-		if !workerlivekit.ParticipantKindAllowed(registration.kinds, participantDetails.Kind) {
+		if !workerlivekit.ParticipantInfoKindAllowed(registration.kinds, participant) {
 			continue
 		}
 		c.scheduleParticipantEntrypoint(registration, participant)
@@ -639,9 +638,8 @@ func (c *JobContext) scheduleParticipantEntrypoints(participant *livekit.Partici
 	if participant == nil {
 		return
 	}
-	participantDetails := workerlivekit.ParticipantInfoDetails(participant)
 	for _, registered := range c.participantEntrypoints {
-		if !workerlivekit.ParticipantKindAllowed(registered.kinds, participantDetails.Kind) {
+		if !workerlivekit.ParticipantInfoKindAllowed(registered.kinds, participant) {
 			continue
 		}
 		c.scheduleParticipantEntrypoint(registered, participant)
