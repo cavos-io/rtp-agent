@@ -966,7 +966,7 @@ func cloneElevenLabsVoiceSettings(settings *ElevenLabsVoiceSettings) *ElevenLabs
 
 func elevenLabsTextPayload(contextID string, text string) map[string]interface{} {
 	return map[string]interface{}{
-		"text":       text,
+		"text":       text + " ",
 		"context_id": contextID,
 	}
 }

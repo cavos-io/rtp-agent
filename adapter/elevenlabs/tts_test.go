@@ -753,8 +753,8 @@ func TestElevenLabsStreamPayloadsUseReferenceContextProtocol(t *testing.T) {
 	}
 
 	text := elevenLabsTextPayload(contextID, "hello")
-	if text["text"] != "hello" || text["context_id"] != contextID {
-		t.Fatalf("text payload = %#v, want text with context_id", text)
+	if text["text"] != "hello " || text["context_id"] != contextID {
+		t.Fatalf("text payload = %#v, want text with trailing space and context_id", text)
 	}
 	if _, ok := text["try_trigger_generation"]; ok {
 		t.Fatalf("text payload = %#v, want no legacy try_trigger_generation flag", text)
@@ -771,6 +771,13 @@ func TestElevenLabsStreamPayloadsUseReferenceContextProtocol(t *testing.T) {
 	closeContext := elevenLabsCloseContextPayload(contextID)
 	if closeContext["context_id"] != contextID || closeContext["close_context"] != true {
 		t.Fatalf("close payload = %#v, want context_id and close_context=true", closeContext)
+	}
+}
+
+func TestElevenLabsTextPayloadAppendsReferenceTrailingSpace(t *testing.T) {
+	payload := elevenLabsTextPayload("ctx_test", "hello")
+	if payload["text"] != "hello " {
+		t.Fatalf("text payload = %#v, want reference trailing space", payload)
 	}
 }
 
@@ -848,8 +855,8 @@ func TestElevenLabsTTSStreamStartsContextOnFirstText(t *testing.T) {
 	}
 
 	text := readElevenLabsTTSStreamMessage(t, messages)
-	if text["text"] != "hello" || text["context_id"] != contextID {
-		t.Fatalf("text packet = %#v, want hello with context_id %q", text, contextID)
+	if text["text"] != "hello " || text["context_id"] != contextID {
+		t.Fatalf("text packet = %#v, want hello with trailing space and context_id %q", text, contextID)
 	}
 	if _, ok := text["flush"]; ok {
 		t.Fatalf("text packet = %#v, want no flush before Flush()", text)
