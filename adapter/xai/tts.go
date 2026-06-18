@@ -45,6 +45,14 @@ func WithXaiTTSWebsocketURL(websocketURL string) XaiTTSOption {
 	}
 }
 
+func WithXaiTTSVoice(voice string) XaiTTSOption {
+	return func(t *XaiTTS) {
+		if voice != "" {
+			t.voice = voice
+		}
+	}
+}
+
 func WithXaiTTSLanguage(language string) XaiTTSOption {
 	return func(t *XaiTTS) {
 		if language != "" {
@@ -83,6 +91,12 @@ func (t *XaiTTS) Capabilities() tts.TTSCapabilities {
 }
 func (t *XaiTTS) SampleRate() int  { return xaiTTSSampleRate }
 func (t *XaiTTS) NumChannels() int { return xaiTTSNumChannels }
+
+func (t *XaiTTS) UpdateOptions(opts ...XaiTTSOption) {
+	for _, opt := range opts {
+		opt(t)
+	}
+}
 
 func (t *XaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if err := validateXaiAPIKey(t.apiKey); err != nil {

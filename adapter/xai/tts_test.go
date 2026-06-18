@@ -88,6 +88,27 @@ func TestXaiTTSOptionsBuildReferenceStreamURLAndHeaders(t *testing.T) {
 	}
 }
 
+func TestXaiTTSUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
+	provider := NewXaiTTS("test-key", "ara",
+		WithXaiTTSWebsocketURL("ws://xai.example/v1/tts"),
+	)
+
+	provider.UpdateOptions(
+		WithXaiTTSVoice("eve"),
+		WithXaiTTSLanguage("ja"),
+	)
+
+	streamURL, err := url.Parse(buildXaiTTSStreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse stream URL: %v", err)
+	}
+	query := streamURL.Query()
+	assertXaiQuery(t, query, "voice", "eve")
+	assertXaiQuery(t, query, "language", "ja")
+	assertXaiQuery(t, query, "codec", "pcm")
+	assertXaiQuery(t, query, "sample_rate", "24000")
+}
+
 func TestXaiTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
 	t.Setenv("XAI_API_KEY", "")
 	provider := NewXaiTTS("", "", WithXaiTTSWebsocketURL("://bad-url"))
