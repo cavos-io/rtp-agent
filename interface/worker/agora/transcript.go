@@ -24,6 +24,7 @@ type TranscriptForwarder struct {
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+	start  sync.Once
 	once   sync.Once
 }
 
@@ -42,15 +43,17 @@ func (f *TranscriptForwarder) Start(ctx context.Context) {
 	if f == nil || f.session == nil || f.publisher == nil {
 		return
 	}
-	ctx, cancel := context.WithCancel(normalizeContext(ctx))
-	f.cancel = cancel
-	userEvents := f.session.UserInputTranscribedEvents()
-	agentEvents := f.session.AgentOutputTranscribedEvents()
-	reasoningEvents := f.session.AgentReasoningTranscribedEvents()
-	f.wg.Add(3)
-	go f.forwardUserTranscripts(ctx, userEvents)
-	go f.forwardAgentTranscripts(ctx, agentEvents)
-	go f.forwardAgentReasoning(ctx, reasoningEvents)
+	f.start.Do(func() {
+		ctx, cancel := context.WithCancel(normalizeContext(ctx))
+		f.cancel = cancel
+		userEvents := f.session.UserInputTranscribedEvents()
+		agentEvents := f.session.AgentOutputTranscribedEvents()
+		reasoningEvents := f.session.AgentReasoningTranscribedEvents()
+		f.wg.Add(3)
+		go f.forwardUserTranscripts(ctx, userEvents)
+		go f.forwardAgentTranscripts(ctx, agentEvents)
+		go f.forwardAgentReasoning(ctx, reasoningEvents)
+	})
 }
 
 func (f *TranscriptForwarder) Stop(ctx context.Context) error {

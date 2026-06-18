@@ -217,6 +217,33 @@ func TestTranscriptForwarderPublishesTENReasoningTranscript(t *testing.T) {
 	}
 }
 
+func TestTranscriptForwarderStartIsIdempotent(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	publisher := &recordingDataPublisher{}
+	forwarder := NewTranscriptForwarder(session, publisher, TranscriptForwarderOptions{
+		AssistantStreamID: "100",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	forwarder.Start(ctx)
+	forwarder.Start(ctx)
+	defer func() {
+		cancel()
+		_ = forwarder.Stop(context.Background())
+	}()
+
+	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "hello once",
+		IsFinal:    true,
+		CreatedAt:  time.UnixMilli(1710000001111),
+	})
+
+	got := waitForPublishedTranscript(t, publisher)
+	if got["text"] != "hello once" {
+		t.Fatalf("text = %#v, want transcript", got["text"])
+	}
+	assertPublishedPayloadCount(t, publisher, 1)
+}
+
 func waitForPublishedTranscript(t *testing.T, publisher *recordingDataPublisher) map[string]any {
 	t.Helper()
 	deadline := time.After(time.Second)
@@ -244,4 +271,24 @@ func publishedJSON(t *testing.T, publisher *recordingDataPublisher, index int) m
 		t.Fatalf("published payload is not JSON: %v", err)
 	}
 	return got
+}
+
+func assertPublishedPayloadCount(t *testing.T, publisher *recordingDataPublisher, want int) {
+	t.Helper()
+	deadline := time.After(50 * time.Millisecond)
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for {
+		if len(publisher.payloads) > want {
+			t.Fatalf("published payload count = %d, want %d", len(publisher.payloads), want)
+		}
+		select {
+		case <-tick.C:
+		case <-deadline:
+			if len(publisher.payloads) != want {
+				t.Fatalf("published payload count = %d, want %d", len(publisher.payloads), want)
+			}
+			return
+		}
+	}
 }
