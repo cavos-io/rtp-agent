@@ -32,6 +32,7 @@ type xaiRealtimeOptions struct {
 	baseURL          string
 	dialWebsocket    adapteropenai.OpenAIRealtimeWebsocketDialer
 	maxSession       time.Duration
+	connect          *llm.APIConnectOptions
 	turnDetection    any
 	turnDetectionSet bool
 }
@@ -79,6 +80,12 @@ func WithXaiRealtimeMaxSessionDuration(duration time.Duration) XaiRealtimeOption
 	}
 }
 
+func WithXaiRealtimeConnectOptions(connectOptions llm.APIConnectOptions) XaiRealtimeOption {
+	return func(options *xaiRealtimeOptions) {
+		options.connect = &connectOptions
+	}
+}
+
 func NewXaiRealtimeModel(apiKey string, opts ...XaiRealtimeOption) *XaiRealtimeModel {
 	if apiKey == "" {
 		apiKey = os.Getenv(xaiAPIKeyEnv)
@@ -110,7 +117,7 @@ func NewXaiRealtimeModel(apiKey string, opts ...XaiRealtimeOption) *XaiRealtimeM
 	if options.turnDetectionSet {
 		turnDetection = options.turnDetection
 	}
-	inner := adapteropenai.NewRealtimeModel(apiKey, model,
+	innerOptions := []adapteropenai.OpenAIRealtimeOption{
 		adapteropenai.WithOpenAIRealtimeBaseURL(baseURL),
 		adapteropenai.WithOpenAIRealtimeWebsocketDialer(options.dialWebsocket),
 		adapteropenai.WithOpenAIRealtimeToolFormatter(xaiRealtimeTools),
@@ -123,7 +130,11 @@ func NewXaiRealtimeModel(apiKey string, opts ...XaiRealtimeOption) *XaiRealtimeM
 		adapteropenai.WithOpenAIRealtimeInputAudioTranscription(map[string]any{}),
 		adapteropenai.WithOpenAIRealtimeTurnDetection(turnDetection),
 		adapteropenai.WithOpenAIRealtimeMaxSessionDuration(options.maxSession),
-	)
+	}
+	if options.connect != nil {
+		innerOptions = append(innerOptions, adapteropenai.WithOpenAIRealtimeConnectOptions(*options.connect))
+	}
+	inner := adapteropenai.NewRealtimeModel(apiKey, model, innerOptions...)
 	return &XaiRealtimeModel{
 		apiKey: apiKey,
 		model:  model,

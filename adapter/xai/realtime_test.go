@@ -304,6 +304,37 @@ func TestXaiRealtimeMaxSessionDurationMatchesReference(t *testing.T) {
 	}
 }
 
+func TestXaiRealtimeConnectOptionsMatchReference(t *testing.T) {
+	blockDial := make(chan struct{})
+	defer close(blockDial)
+	model := NewXaiRealtimeModel("test-key",
+		WithXaiRealtimeBaseURL("ws://xai.test/v1/realtime"),
+		WithXaiRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 0, Timeout: 5 * time.Millisecond}),
+		WithXaiRealtimeWebsocketDialer(func(string, http.Header) (*websocket.Conn, *http.Response, error) {
+			<-blockDial
+			return nil, nil, errors.New("late dial failure")
+		}),
+	)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := model.Session()
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Session() error = nil, want timeout")
+		}
+		if !strings.Contains(err.Error(), "connection timed out") {
+			t.Fatalf("Session() error = %v, want connection timed out", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Session() did not honor connect timeout")
+	}
+}
+
 func TestXaiRealtimeSessionRequiresXAIAPIKeyBeforeDial(t *testing.T) {
 	t.Setenv("XAI_API_KEY", "")
 	t.Setenv("OPENAI_API_KEY", "openai-key")
