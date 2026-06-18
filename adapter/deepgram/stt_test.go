@@ -62,8 +62,11 @@ func TestDeepgramSpeechEventPreservesAlternativeWords(t *testing.T) {
 	if alt.Text != "hello world" {
 		t.Fatalf("text = %q, want hello world", alt.Text)
 	}
-	if alt.StartTime != 1.5 || alt.EndTime != 2.4 {
-		t.Fatalf("time range = %v-%v, want 1.5-2.4", alt.StartTime, alt.EndTime)
+	if alt.StartTime != 1.5 || alt.EndTime != 1.8 {
+		t.Fatalf("time range = %v-%v, want first word range 1.5-1.8", alt.StartTime, alt.EndTime)
+	}
+	if alt.SpeakerID != "S2" {
+		t.Fatalf("speaker id = %q, want S2", alt.SpeakerID)
 	}
 	if len(alt.Words) != 2 {
 		t.Fatalf("words = %d, want 2", len(alt.Words))
@@ -73,6 +76,26 @@ func TestDeepgramSpeechEventPreservesAlternativeWords(t *testing.T) {
 	}
 	if got := alt.Words[1]; got.Text != "world" || got.StartTime != 1.9 || got.EndTime != 2.4 || got.Confidence != 0.97 || got.SpeakerID != "2" {
 		t.Fatalf("second word = %+v, want world timing with speaker 2", got)
+	}
+}
+
+func TestDeepgramSpeechEventOmitsInterimSpeakerID(t *testing.T) {
+	speaker := 2
+	resp := dgResponse{Type: "Results"}
+	resp.Channel.Alternatives = []dgAlternative{
+		{
+			Transcript: "hello",
+			Confidence: 0.98,
+			Words:      []dgWord{{Word: "hello", Start: 1.5, End: 1.8, Confidence: 0.99, Speaker: &speaker}},
+		},
+	}
+
+	event := deepgramSpeechEvent(resp)
+	if event == nil || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %+v, want one interim alternative", event)
+	}
+	if got := event.Alternatives[0].SpeakerID; got != "" {
+		t.Fatalf("interim speaker id = %q, want empty", got)
 	}
 }
 
@@ -134,6 +157,9 @@ func TestDeepgramRecognizeSpeechEventPreservesAlternativeWords(t *testing.T) {
 	alt := event.Alternatives[0]
 	if alt.Text != "hello offline" {
 		t.Fatalf("text = %q, want hello offline", alt.Text)
+	}
+	if alt.StartTime != 0.1 || alt.EndTime != 0.8 {
+		t.Fatalf("time range = %v-%v, want 0.1-0.8", alt.StartTime, alt.EndTime)
 	}
 	if len(alt.Words) != 2 {
 		t.Fatalf("words = %d, want 2", len(alt.Words))
