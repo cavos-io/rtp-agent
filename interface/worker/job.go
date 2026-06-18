@@ -772,17 +772,17 @@ func (c *JobContext) MoveParticipant(ctx context.Context, room string, identity 
 
 // AddSIPParticipant adds a SIP participant to the room.
 func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunkID string, identity string, names ...string) (*workerlivekit.SIPParticipantInfo, error) {
-	if workerlivekit.ShouldSkipExternalAPIForFakeJob(c.IsFakeJob()) {
+	if plan := workerlivekit.SIPCreateParticipantPlan(c.IsFakeJob()); plan.Skip {
 		logger.Logger.Warnw("job context AddSIPParticipant is skipped for fake jobs", nil)
-		return &workerlivekit.SIPParticipantInfo{}, nil
+		return plan.Info, nil
 	}
 	return workerlivekit.CreateSIPParticipantWithNames(ctx, c.API().SIP, c.Job, callTo, trunkID, identity, names...)
 }
 
 func (c *JobContext) CreateSIPParticipant(ctx context.Context, req *workerlivekit.SIPCreateParticipantRequest) (*workerlivekit.SIPParticipantInfo, error) {
-	if workerlivekit.ShouldSkipExternalAPIForFakeJob(c.IsFakeJob()) {
+	if plan := workerlivekit.SIPCreateParticipantPlan(c.IsFakeJob()); plan.Skip {
 		logger.Logger.Warnw("job context CreateSIPParticipant is skipped for fake jobs", nil)
-		return &workerlivekit.SIPParticipantInfo{}, nil
+		return plan.Info, nil
 	}
 	return workerlivekit.CreateSIPParticipantWithRequest(ctx, c.API().SIP, req)
 }

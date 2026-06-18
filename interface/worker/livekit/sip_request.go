@@ -12,6 +12,21 @@ const DefaultSIPParticipantName = "SIP-participant"
 type SIPCreateParticipantRequest = lkprotocol.CreateSIPParticipantRequest
 type SIPParticipantInfo = lkprotocol.SIPParticipantInfo
 
+type SIPCreateParticipantPlanResult struct {
+	Skip bool
+	Info *lkprotocol.SIPParticipantInfo
+}
+
+func SIPCreateParticipantPlan(fakeJob bool) SIPCreateParticipantPlanResult {
+	if !ShouldSkipExternalAPIForFakeJob(fakeJob) {
+		return SIPCreateParticipantPlanResult{}
+	}
+	return SIPCreateParticipantPlanResult{
+		Skip: true,
+		Info: &lkprotocol.SIPParticipantInfo{},
+	}
+}
+
 func CreateSIPParticipantRequest(
 	roomName string,
 	callTo string,
