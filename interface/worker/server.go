@@ -1695,7 +1695,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.J
 	jobCtx.token = assignment.Token
 
 	s.mu.Lock()
-	args, accepted := workerlivekit.PopPendingAccept(s.pendingAccepts, jobID)
+	args, accepted := workerlivekit.AcceptPendingAssignment(s.pendingAccepts, s.pendingTimers, jobID)
 	if !accepted {
 		s.mu.Unlock()
 		logger.Logger.Warnw("received assignment for unknown job", nil, "jobId", jobID)
@@ -1705,7 +1705,6 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.J
 	jobCtx.workerID = s.workerID
 	jobCtx.AcceptArguments = args
 	jobCtx.LogContextFields()["worker_id"] = jobCtx.WorkerID()
-	workerlivekit.StopPendingAssignmentTimer(s.pendingTimers, jobID)
 	s.activeJobs[jobID] = jobCtx
 	s.mu.Unlock()
 

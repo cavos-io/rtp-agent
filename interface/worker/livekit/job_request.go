@@ -289,6 +289,19 @@ func StopPendingAssignmentTimer[T PendingAssignmentTimer](pending map[string]T, 
 	delete(pending, jobID)
 }
 
+func AcceptPendingAssignment[T PendingAssignmentTimer](
+	pending map[string]JobAcceptArguments,
+	timers map[string]T,
+	jobID string,
+) (JobAcceptArguments, bool) {
+	args, ok := PopPendingAccept(pending, jobID)
+	if !ok {
+		return JobAcceptArguments{}, false
+	}
+	StopPendingAssignmentTimer(timers, jobID)
+	return args, true
+}
+
 type TerminationInfo struct {
 	JobID string
 }

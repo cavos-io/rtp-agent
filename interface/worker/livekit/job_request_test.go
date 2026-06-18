@@ -493,6 +493,63 @@ func TestStopPendingAssignmentTimerMissingJobLeavesTimers(t *testing.T) {
 	}
 }
 
+func TestAcceptPendingAssignmentReturnsArgsAndStopsTimer(t *testing.T) {
+	timer := &fakePendingAssignmentTimer{}
+	pending := map[string]workerlivekit.JobAcceptArguments{
+		"job-a": {Identity: "agent-a"},
+		"job-b": {Identity: "agent-b"},
+	}
+	timers := map[string]*fakePendingAssignmentTimer{
+		"job-a": timer,
+		"job-b": {},
+	}
+
+	args, ok := workerlivekit.AcceptPendingAssignment(pending, timers, "job-a")
+
+	if !ok {
+		t.Fatal("AcceptPendingAssignment() ok = false, want true")
+	}
+	if args.Identity != "agent-a" {
+		t.Fatalf("Identity = %q, want agent-a", args.Identity)
+	}
+	if _, exists := pending["job-a"]; exists {
+		t.Fatal("job-a remained in pending accepts")
+	}
+	if !timer.stopped {
+		t.Fatal("timer stopped = false, want true")
+	}
+	if _, exists := timers["job-a"]; exists {
+		t.Fatal("job-a timer remained pending")
+	}
+	if pending["job-b"].Identity != "agent-b" {
+		t.Fatalf("job-b identity = %q, want agent-b", pending["job-b"].Identity)
+	}
+	if _, exists := timers["job-b"]; !exists {
+		t.Fatal("job-b timer was removed")
+	}
+}
+
+func TestAcceptPendingAssignmentMissingJobLeavesState(t *testing.T) {
+	pending := map[string]workerlivekit.JobAcceptArguments{
+		"job-b": {Identity: "agent-b"},
+	}
+	timers := map[string]*fakePendingAssignmentTimer{
+		"job-b": {},
+	}
+
+	_, ok := workerlivekit.AcceptPendingAssignment(pending, timers, "job-a")
+
+	if ok {
+		t.Fatal("AcceptPendingAssignment() ok = true, want false")
+	}
+	if pending["job-b"].Identity != "agent-b" {
+		t.Fatalf("job-b identity = %q, want agent-b", pending["job-b"].Identity)
+	}
+	if _, exists := timers["job-b"]; !exists {
+		t.Fatal("job-b timer was removed")
+	}
+}
+
 func TestJobTerminationInfoExposesJobID(t *testing.T) {
 	info := workerlivekit.JobTerminationInfo(&lkprotocol.JobTermination{JobId: "job-stop"})
 
