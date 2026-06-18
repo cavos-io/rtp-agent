@@ -594,6 +594,100 @@ func TestAzureSTTStreamUsesWebsocketProtocol(t *testing.T) {
 	}
 }
 
+func TestAzureSTTStreamSpeechConfigUsesReferenceSegmentationOptions(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	configMessages := make(chan string, 1)
+	audioMessages := make(chan []byte, 1)
+
+	provider, err := NewAzureSTT("key", "eastus",
+		WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"),
+		WithAzureSTTSegmentationSilenceTimeout(450),
+		WithAzureSTTSegmentationMaxTime(4000),
+		WithAzureSTTSegmentationStrategy("Semantic"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = azureTestDialer(t, requests, configMessages, audioMessages)
+
+	stream, err := provider.Stream(context.Background(), "id-ID")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	receiveAzureTestValue(t, requests, "request")
+	configMessage := receiveAzureTestValue(t, configMessages, "speech config")
+	_, configBody := splitAzureTestMessage(t, []byte(configMessage))
+	var configPayload struct {
+		Properties map[string]string `json:"properties"`
+	}
+	if err := json.Unmarshal(configBody, &configPayload); err != nil {
+		t.Fatalf("speech config JSON: %v", err)
+	}
+	if got := configPayload.Properties["Speech_SegmentationSilenceTimeoutMs"]; got != "450" {
+		t.Fatalf("segmentation silence timeout = %q, want 450", got)
+	}
+	if got := configPayload.Properties["Speech_SegmentationMaximumTimeMs"]; got != "4000" {
+		t.Fatalf("segmentation max time = %q, want 4000", got)
+	}
+	if got := configPayload.Properties["Speech_SegmentationStrategy"]; got != "Semantic" {
+		t.Fatalf("segmentation strategy = %q, want Semantic", got)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	receiveAzureTestValue(t, audioMessages, "audio")
+}
+
+func TestAzureSTTStreamSpeechConfigUsesReferenceTrueTextOption(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	configMessages := make(chan string, 1)
+	audioMessages := make(chan []byte, 1)
+
+	provider, err := NewAzureSTT("key", "eastus",
+		WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"),
+		WithAzureSTTTrueTextPostProcessing(true),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = azureTestDialer(t, requests, configMessages, audioMessages)
+
+	stream, err := provider.Stream(context.Background(), "id-ID")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	receiveAzureTestValue(t, requests, "request")
+	configMessage := receiveAzureTestValue(t, configMessages, "speech config")
+	_, configBody := splitAzureTestMessage(t, []byte(configMessage))
+	var configPayload struct {
+		Properties map[string]string `json:"properties"`
+	}
+	if err := json.Unmarshal(configBody, &configPayload); err != nil {
+		t.Fatalf("speech config JSON: %v", err)
+	}
+	if got := configPayload.Properties["SpeechServiceResponse_PostProcessingOption"]; got != "TrueText" {
+		t.Fatalf("post-processing option = %q, want TrueText", got)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	receiveAzureTestValue(t, audioMessages, "audio")
+}
+
 func TestAzureSTTStreamPreservesExplicitZeroConfidence(t *testing.T) {
 	event := parseAzureSTTMessage(
 		resolveAzureSTTLanguage("id-ID"),
@@ -803,6 +897,44 @@ func TestAzureSTTStreamSessionStopReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestAzureSTTStreamSessionStopBeforeAudioReturnsAPIConnectionError(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	configMessages := make(chan string, 1)
+	serverClosed := make(chan struct{}, 1)
+
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = azureTestClosingDialer(t, requests, configMessages, serverClosed)
+
+	stream, err := provider.Stream(context.Background(), "id-ID")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	receiveAzureTestValue(t, requests, "request")
+	receiveAzureTestValue(t, configMessages, "speech config")
+	receiveAzureTestSignal(t, serverClosed, "server close")
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, nextErr := stream.Next()
+		errCh <- nextErr
+	}()
+
+	select {
+	case err := <-errCh:
+		var connectionErr *llm.APIConnectionError
+		if !errors.As(err, &connectionErr) {
+			t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Next timed out, want APIConnectionError after provider session stop")
+	}
+}
+
 func TestAzureSTTStreamReconnectsAfterAudioWriteFailure(t *testing.T) {
 	requests := make(chan *http.Request, 2)
 	configMessages := make(chan string, 2)
@@ -911,6 +1043,72 @@ func TestAzureSTTUpdateOptionsPropagatesLanguageToActiveStream(t *testing.T) {
 	if got := interim.Alternatives[0].Language; got != "id-ID" {
 		t.Fatalf("interim language = %q, want updated language id-ID", got)
 	}
+}
+
+func TestAzureSTTUpdateOptionsPropagatesSegmentationToActiveStream(t *testing.T) {
+	requests := make(chan *http.Request, 2)
+	configMessages := make(chan string, 2)
+	audioMessages := make(chan []byte, 1)
+	serverClosed := make(chan struct{}, 1)
+
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	closingDialer := azureTestClosingDialer(t, requests, configMessages, serverClosed)
+	okDialer := azureTestDialer(t, requests, configMessages, audioMessages)
+	var attempts int
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			return closingDialer(ctx, endpoint, headers)
+		}
+		return okDialer(ctx, endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	receiveAzureTestValue(t, requests, "first request")
+	receiveAzureTestValue(t, configMessages, "first speech config")
+	receiveAzureTestSignal(t, serverClosed, "server close")
+
+	provider.UpdateOptions("id-ID",
+		WithAzureSTTSegmentationSilenceTimeout(650),
+		WithAzureSTTSegmentationMaxTime(5000),
+		WithAzureSTTSegmentationStrategy("Time"),
+	)
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame after update error = %v", err)
+	}
+
+	receiveAzureTestValue(t, requests, "second request")
+	secondConfig := receiveAzureTestValue(t, configMessages, "second speech config")
+	_, configBody := splitAzureTestMessage(t, []byte(secondConfig))
+	var configPayload struct {
+		Properties map[string]string `json:"properties"`
+	}
+	if err := json.Unmarshal(configBody, &configPayload); err != nil {
+		t.Fatalf("speech config JSON: %v", err)
+	}
+	if got := configPayload.Properties["Speech_SegmentationSilenceTimeoutMs"]; got != "650" {
+		t.Fatalf("updated segmentation silence timeout = %q, want 650", got)
+	}
+	if got := configPayload.Properties["Speech_SegmentationMaximumTimeMs"]; got != "5000" {
+		t.Fatalf("updated segmentation max time = %q, want 5000", got)
+	}
+	if got := configPayload.Properties["Speech_SegmentationStrategy"]; got != "Time" {
+		t.Fatalf("updated segmentation strategy = %q, want Time", got)
+	}
+	receiveAzureTestValue(t, audioMessages, "audio after update reconnect")
 }
 
 func TestAzureTTSDefaultsAndEnvironmentMatchReference(t *testing.T) {

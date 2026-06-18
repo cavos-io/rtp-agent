@@ -28,6 +28,7 @@ const (
 	defaultSmallestAISTTEncoding     = "linear16"
 	defaultSmallestAISTTEOUTimeoutMS = 0
 	smallestAIAPIKeyEnv              = "SMALLEST_API_KEY"
+	smallestAIPCMBytesPerSample      = 2
 )
 
 type SmallestAISTT struct {
@@ -40,9 +41,11 @@ type SmallestAISTT struct {
 	wordTimestamps bool
 	diarize        bool
 	eouTimeoutMS   int
+	dialWebsocket  smallestAISTTWebsocketDialer
 }
 
 type SmallestAISTTOption func(*SmallestAISTT)
+type smallestAISTTWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 
 func WithSmallestAISTTBaseURL(baseURL string) SmallestAISTTOption {
 	return func(s *SmallestAISTT) {
@@ -104,6 +107,14 @@ func WithSmallestAISTTEOUTimeoutMS(timeoutMS int) SmallestAISTTOption {
 	}
 }
 
+func withSmallestAISTTWebsocketDialer(dialer smallestAISTTWebsocketDialer) SmallestAISTTOption {
+	return func(s *SmallestAISTT) {
+		if dialer != nil {
+			s.dialWebsocket = dialer
+		}
+	}
+}
+
 func NewSmallestAISTT(apiKey string, opts ...SmallestAISTTOption) *SmallestAISTT {
 	if apiKey == "" {
 		apiKey = os.Getenv(smallestAIAPIKeyEnv)
@@ -118,6 +129,7 @@ func NewSmallestAISTT(apiKey string, opts ...SmallestAISTTOption) *SmallestAISTT
 		wordTimestamps: true,
 		diarize:        false,
 		eouTimeoutMS:   defaultSmallestAISTTEOUTimeoutMS,
+		dialWebsocket:  defaultSmallestAISTTWebsocketDialer,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -153,21 +165,26 @@ func (s *SmallestAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 		return nil, err
 	}
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildSmallestAISTTStreamURL(s, language), buildSmallestAISTTHeaders(s))
+	conn, _, err := s.dialWebsocket(ctx, buildSmallestAISTTStreamURL(s, language), buildSmallestAISTTHeaders(s))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial smallestai stt websocket: %w", err)
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &smallestAISTTStream{
-		conn:   conn,
-		events: make(chan *stt.SpeechEvent, 100),
-		errCh:  make(chan error, 1),
-		ctx:    streamCtx,
-		cancel: cancel,
-		state:  &smallestAISTTStreamState{language: resolveSmallestAISTTLanguage(s, language), diarize: s.diarize},
+		conn:       conn,
+		events:     make(chan *stt.SpeechEvent, 100),
+		errCh:      make(chan error, 1),
+		ctx:        streamCtx,
+		cancel:     cancel,
+		state:      &smallestAISTTStreamState{language: resolveSmallestAISTTLanguage(s, language), diarize: s.diarize},
+		sampleRate: s.sampleRate,
 	}
 	go stream.readLoop()
 	return stream, nil
+}
+
+func defaultSmallestAISTTWebsocketDialer(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+	return websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
 }
 
 func (s *SmallestAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
@@ -271,9 +288,11 @@ type smallestAISTTStream struct {
 	mu     sync.Mutex
 	closed bool
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	state  *smallestAISTTStreamState
+	ctx        context.Context
+	cancel     context.CancelFunc
+	state      *smallestAISTTStreamState
+	audio      bytes.Buffer
+	sampleRate int
 }
 
 func (s *smallestAISTTStream) readLoop() {
@@ -306,10 +325,41 @@ func (s *smallestAISTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	return s.conn.WriteMessage(websocket.BinaryMessage, frame.Data)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("smallestai stt stream is closed")
+	}
+	if _, err := s.audio.Write(frame.Data); err != nil {
+		return err
+	}
+	chunkBytes := s.sampleRate / 20 * smallestAIPCMBytesPerSample
+	for s.audio.Len() >= chunkBytes {
+		chunk := make([]byte, chunkBytes)
+		if _, err := s.audio.Read(chunk); err != nil {
+			return err
+		}
+		if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *smallestAISTTStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("smallestai stt stream is closed")
+	}
+	if s.audio.Len() == 0 {
+		return nil
+	}
+	chunk := bytes.Clone(s.audio.Bytes())
+	s.audio.Reset()
+	if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
+		return err
+	}
 	return nil
 }
 

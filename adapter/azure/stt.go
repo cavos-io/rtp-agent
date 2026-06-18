@@ -33,20 +33,24 @@ const (
 type azureSTTWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 
 type AzureSTT struct {
-	apiKey              string
-	region              string
-	speechHost          string
-	speechEndpoint      string
-	authToken           string
-	language            string
-	sampleRate          int
-	explicitPunctuation bool
-	profanity           string
-	httpClient          *http.Client
-	websocketURL        string
-	dialWebsocket       azureSTTWebsocketDialer
-	mu                  sync.Mutex
-	streams             map[*azureSTTStream]struct{}
+	apiKey                 string
+	region                 string
+	speechHost             string
+	speechEndpoint         string
+	authToken              string
+	language               string
+	sampleRate             int
+	segmentationSilence    int
+	segmentationMaxTime    int
+	segmentationStrategy   string
+	trueTextPostProcessing bool
+	explicitPunctuation    bool
+	profanity              string
+	httpClient             *http.Client
+	websocketURL           string
+	dialWebsocket          azureSTTWebsocketDialer
+	mu                     sync.Mutex
+	streams                map[*azureSTTStream]struct{}
 }
 
 type AzureSTTOption func(*AzureSTT)
@@ -99,6 +103,36 @@ func WithAzureSTTSampleRate(sampleRate int) AzureSTTOption {
 	}
 }
 
+func WithAzureSTTSegmentationSilenceTimeout(timeoutMS int) AzureSTTOption {
+	return func(s *AzureSTT) {
+		if timeoutMS > 0 {
+			s.segmentationSilence = timeoutMS
+		}
+	}
+}
+
+func WithAzureSTTSegmentationMaxTime(maxTimeMS int) AzureSTTOption {
+	return func(s *AzureSTT) {
+		if maxTimeMS > 0 {
+			s.segmentationMaxTime = maxTimeMS
+		}
+	}
+}
+
+func WithAzureSTTSegmentationStrategy(strategy string) AzureSTTOption {
+	return func(s *AzureSTT) {
+		if strategy != "" {
+			s.segmentationStrategy = strategy
+		}
+	}
+}
+
+func WithAzureSTTTrueTextPostProcessing(enabled bool) AzureSTTOption {
+	return func(s *AzureSTT) {
+		s.trueTextPostProcessing = enabled
+	}
+}
+
 func WithAzureSTTExplicitPunctuation(explicit bool) AzureSTTOption {
 	return func(s *AzureSTT) {
 		s.explicitPunctuation = explicit
@@ -146,19 +180,26 @@ func (s *AzureSTT) Model() string { return "unknown" }
 func (s *AzureSTT) Provider() string {
 	return "Azure STT"
 }
-func (s *AzureSTT) UpdateOptions(language string) {
-	if language == "" {
+func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
+	if language == "" && len(opts) == 0 {
 		return
 	}
 	var streams []*azureSTTStream
 	s.mu.Lock()
-	s.language = language
+	if language != "" {
+		s.language = language
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
 	for stream := range s.streams {
 		streams = append(streams, stream)
 	}
 	s.mu.Unlock()
 	for _, stream := range streams {
-		stream.updateOptions(language)
+		stream.updateOptions(language, true)
 	}
 }
 func (s *AzureSTT) InputSampleRate() uint32 {
@@ -214,7 +255,7 @@ func openAzureSTTStreamConnection(ctx context.Context, provider *AzureSTT, strea
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to dial azure stt websocket: %w", err)
 	}
-	if err := conn.WriteMessage(websocket.TextMessage, buildAzureSTTMessage("speech.config", connectionID, "application/json", buildAzureSTTSpeechConfig())); err != nil {
+	if err := conn.WriteMessage(websocket.TextMessage, buildAzureSTTMessage("speech.config", connectionID, "application/json", buildAzureSTTSpeechConfig(provider))); err != nil {
 		_ = conn.Close()
 		return nil, "", fmt.Errorf("failed to initialize azure stt websocket: %w", err)
 	}
@@ -424,7 +465,7 @@ func buildAzureSTTHeaders(s *AzureSTT, connectionID string) http.Header {
 	return headers
 }
 
-func buildAzureSTTSpeechConfig() []byte {
+func buildAzureSTTSpeechConfig(s *AzureSTT) []byte {
 	payload := map[string]any{
 		"context": map[string]any{
 			"system": map[string]any{
@@ -432,8 +473,32 @@ func buildAzureSTTSpeechConfig() []byte {
 			},
 		},
 	}
+	properties := azureSTTSpeechConfigProperties(s)
+	if len(properties) > 0 {
+		payload["properties"] = properties
+	}
 	b, _ := json.Marshal(payload)
 	return b
+}
+
+func azureSTTSpeechConfigProperties(s *AzureSTT) map[string]string {
+	properties := make(map[string]string)
+	if s == nil {
+		return properties
+	}
+	if s.segmentationSilence > 0 {
+		properties["Speech_SegmentationSilenceTimeoutMs"] = fmt.Sprint(s.segmentationSilence)
+	}
+	if s.segmentationMaxTime > 0 {
+		properties["Speech_SegmentationMaximumTimeMs"] = fmt.Sprint(s.segmentationMaxTime)
+	}
+	if s.segmentationStrategy != "" {
+		properties["Speech_SegmentationStrategy"] = s.segmentationStrategy
+	}
+	if s.trueTextPostProcessing {
+		properties["SpeechServiceResponse_PostProcessingOption"] = "TrueText"
+	}
+	return properties
 }
 
 func buildAzureSTTMessage(path string, requestID string, contentType string, body []byte) []byte {
@@ -485,6 +550,7 @@ type azureSTTStream struct {
 	closed          bool
 	audioWritten    bool
 	reconnectNext   bool
+	sessionStopped  bool
 	reconnects      int
 	maxReconnects   int
 	startTimeOffset float64
@@ -561,9 +627,30 @@ func (s *azureSTTStream) Close() error {
 func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 	select {
 	case err := <-s.errCh:
+		s.mu.Lock()
+		if s.sessionStopped && !s.closed {
+			s.finishWithErrorLocked(err)
+			select {
+			case <-s.errCh:
+			default:
+			}
+		}
+		s.mu.Unlock()
 		return nil, err
 	default:
 	}
+	s.mu.Lock()
+	if s.sessionStopped && !s.closed {
+		err := llm.NewAPIConnectionError("SpeechRecognition session stopped")
+		s.finishWithErrorLocked(err)
+		s.mu.Unlock()
+		select {
+		case <-s.errCh:
+		default:
+		}
+		return nil, err
+	}
+	s.mu.Unlock()
 	select {
 	case event, ok := <-s.events:
 		if !ok {
@@ -582,8 +669,8 @@ func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 	}
 }
 
-func (s *azureSTTStream) updateOptions(language string) {
-	if language == "" {
+func (s *azureSTTStream) updateOptions(language string, reconnect bool) {
+	if language == "" && !reconnect {
 		return
 	}
 	s.mu.Lock()
@@ -591,9 +678,13 @@ func (s *azureSTTStream) updateOptions(language string) {
 	if s.closed {
 		return
 	}
-	s.language = language
-	s.streamURL = buildAzureSTTStreamURL(s.provider, language)
-	s.reconnectNext = true
+	if language != "" {
+		s.language = language
+	}
+	if reconnect {
+		s.streamURL = buildAzureSTTStreamURL(s.provider, s.language)
+		s.reconnectNext = true
+	}
 }
 
 func (s *azureSTTStream) reconnectLocked() error {
@@ -611,6 +702,7 @@ func (s *azureSTTStream) reconnectLocked() error {
 	}
 	s.conn = conn
 	s.connectionID = connectionID
+	s.sessionStopped = false
 	_ = oldConn.Close()
 	go s.readLoop(conn)
 	for {
@@ -651,6 +743,12 @@ func (s *azureSTTStream) readLoop(conn *websocket.Conn) {
 				return
 			}
 			if !s.audioWritten {
+				s.sessionStopped = true
+				s.reconnectNext = true
+				select {
+				case s.errCh <- llm.NewAPIConnectionError("SpeechRecognition session stopped"):
+				default:
+				}
 				s.mu.Unlock()
 				return
 			}

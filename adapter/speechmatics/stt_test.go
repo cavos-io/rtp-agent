@@ -198,6 +198,22 @@ func TestSpeechmaticsSTTCapabilitiesMatchReference(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTExposesReferenceInputSampleRate(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+
+	if got := provider.InputSampleRate(); got != 16000 {
+		t.Fatalf("InputSampleRate = %d, want reference default 16000", got)
+	}
+}
+
+func TestSpeechmaticsSTTExposesConfiguredInputSampleRate(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTSampleRate(48000))
+
+	if got := provider.InputSampleRate(); got != 48000 {
+		t.Fatalf("InputSampleRate = %d, want configured sample rate 48000", got)
+	}
+}
+
 func TestNewSpeechmaticsSTTUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("SPEECHMATICS_API_KEY", "env-key")
 

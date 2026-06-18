@@ -66,6 +66,22 @@ func TestElevenLabsSTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTExposesReferenceInputSampleRate(t *testing.T) {
+	provider := NewElevenLabsSTT("test-key")
+
+	if got := provider.InputSampleRate(); got != 16000 {
+		t.Fatalf("InputSampleRate = %d, want reference default 16000", got)
+	}
+}
+
+func TestElevenLabsSTTExposesConfiguredInputSampleRate(t *testing.T) {
+	provider := NewElevenLabsSTT("test-key", WithElevenLabsSTTSampleRate(8000))
+
+	if got := provider.InputSampleRate(); got != 8000 {
+		t.Fatalf("InputSampleRate = %d, want configured sample rate 8000", got)
+	}
+}
+
 func TestNewElevenLabsSTTUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("ELEVENLABS_API_KEY", "env-key")
 	t.Setenv("ELEVEN_API_KEY", "fallback-env-key")
