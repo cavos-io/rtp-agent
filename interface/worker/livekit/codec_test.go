@@ -121,6 +121,18 @@ func TestServerMessageWebSocketFrameDecodesBinaryFrame(t *testing.T) {
 	}
 }
 
+func TestServerMessageAliasUsesLiveKitProtocolMessage(t *testing.T) {
+	msg := &workerlivekit.ServerMessage{
+		Message: &lkprotocol.ServerMessage_Register{
+			Register: &lkprotocol.RegisterWorkerResponse{WorkerId: "worker-a"},
+		},
+	}
+
+	if msg.GetRegister().GetWorkerId() != "worker-a" {
+		t.Fatalf("ServerMessage.GetRegister().WorkerId = %q, want worker-a", msg.GetRegister().GetWorkerId())
+	}
+}
+
 func TestServerMessageDispatchClassifiesRegisterMessage(t *testing.T) {
 	serverInfo := &lkprotocol.ServerInfo{Region: "iad"}
 	dispatch := workerlivekit.ServerMessageDispatch(&lkprotocol.ServerMessage{

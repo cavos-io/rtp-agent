@@ -8,6 +8,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+type ServerMessage = lkprotocol.ServerMessage
+
 func MarshalWorkerMessage(msg *lkprotocol.WorkerMessage) ([]byte, error) {
 	return proto.Marshal(msg)
 }

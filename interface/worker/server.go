@@ -1604,7 +1604,7 @@ func (s *AgentServer) connectWorkerWebSocket(ctx context.Context, dialer *websoc
 	return conn, res, nil
 }
 
-func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMessage) {
+func (s *AgentServer) handleMessage(ctx context.Context, msg *workerlivekit.ServerMessage) {
 	dispatch := workerlivekit.ServerMessageDispatch(msg)
 	switch dispatch.Kind {
 	case workerlivekit.ServerMessageKindRegister:
