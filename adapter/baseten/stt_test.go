@@ -1,10 +1,10 @@
 package baseten
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -48,6 +49,22 @@ func TestBasetenSTTDefaultsMatchReferenceOptions(t *testing.T) {
 	caps := provider.Capabilities()
 	if !caps.Streaming || !caps.InterimResults || caps.OfflineRecognize || caps.AlignedTranscript != "word" {
 		t.Fatalf("capabilities = %+v, want streaming interim word-aligned only", caps)
+	}
+}
+
+func TestBasetenSTTExposesReferenceInputSampleRate(t *testing.T) {
+	provider := mustNewBasetenSTT(t, "test-key", "model-id")
+
+	if got := provider.InputSampleRate(); got != 16000 {
+		t.Fatalf("InputSampleRate = %d, want 16000", got)
+	}
+}
+
+func TestBasetenSTTExposesConfiguredInputSampleRate(t *testing.T) {
+	provider := mustNewBasetenSTT(t, "test-key", "model-id", WithBasetenSTTSampleRate(8000))
+
+	if got := provider.InputSampleRate(); got != 8000 {
+		t.Fatalf("InputSampleRate = %d, want 8000", got)
 	}
 }
 
@@ -259,6 +276,62 @@ func TestBasetenSTTStreamSendsReferenceMetadataAndAudio(t *testing.T) {
 	}
 }
 
+func TestBasetenSTTPushFrameBuffersReferenceAudioChunks(t *testing.T) {
+	audioCh := make(chan []byte, 2)
+	terminateCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+	dialer := newBasetenSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			errCh <- err
+			return
+		}
+		for i := 0; i < 2; i++ {
+			msgType, audioPayload, err := conn.ReadMessage()
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if msgType != websocket.BinaryMessage {
+				t.Errorf("audio message type = %d, want binary", msgType)
+			}
+			audioCh <- append([]byte(nil), audioPayload...)
+		}
+		_, terminatePayload, err := conn.ReadMessage()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		terminateCh <- string(terminatePayload)
+	})
+
+	provider := mustNewBasetenSTT(t, "test-key", "",
+		WithBasetenSTTModelEndpoint("ws://baseten.test/websocket"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: bytes.Repeat([]byte{1}, 1536)}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	if got := readBasetenTestChan(t, audioCh, errCh); len(got) != 1024 {
+		t.Fatalf("first audio chunk len = %d, want 1024", len(got))
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if got := readBasetenTestChan(t, audioCh, errCh); len(got) != 512 {
+		t.Fatalf("flush audio chunk len = %d, want 512", len(got))
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if got := readBasetenTestChan(t, terminateCh, errCh); got != `{"terminate_session":true}` {
+		t.Fatalf("terminate payload = %q, want terminate_session", got)
+	}
+}
+
 func TestBasetenSTTStreamMapsWebsocketTranscripts(t *testing.T) {
 	dialer := newBasetenSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
 		if _, _, err := conn.ReadMessage(); err != nil {
@@ -294,8 +367,47 @@ func TestBasetenSTTStreamMapsWebsocketTranscripts(t *testing.T) {
 	assertBasetenSTTEvent(t, []*stt.SpeechEvent{event}, 0, stt.SpeechEventFinalTranscript, "hello")
 
 	_, err = stream.Next()
-	if err != io.EOF {
-		t.Fatalf("second Next error = %v, want EOF", err)
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("second Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != websocket.CloseNormalClosure {
+		t.Fatalf("status code = %d, want normal close", statusErr.StatusCode)
+	}
+}
+
+func TestBasetenSTTUnexpectedNormalCloseReturnsAPIStatusError(t *testing.T) {
+	dialer := newBasetenSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read metadata: %v", err)
+			return
+		}
+		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "done"), time.Now().Add(time.Second))
+	})
+
+	provider := mustNewBasetenSTT(t, "test-key", "",
+		WithBasetenSTTModelEndpoint("ws://baseten.test/websocket"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != websocket.CloseNormalClosure {
+		t.Fatalf("status code = %d, want normal close", statusErr.StatusCode)
+	}
+	if !strings.Contains(statusErr.Message, "Baseten connection closed unexpectedly") {
+		t.Fatalf("message = %q, want unexpected close context", statusErr.Message)
 	}
 }
 

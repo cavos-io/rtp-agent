@@ -1,6 +1,7 @@
 package fireworksai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,17 +16,19 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
 
 const (
-	defaultBaseURL            = "wss://audio-streaming.us-virginia-1.direct.fireworks.ai/v1"
-	defaultSampleRate         = 16000
-	defaultTextTimeoutSeconds = 1.0
-	defaultResponseFormat     = "verbose_json"
-	streamingPath             = "/audio_streaming"
-	closeMessage              = `{"checkpoint_id":"final"}`
+	defaultBaseURL             = "wss://audio-streaming.us-virginia-1.direct.fireworks.ai/v1"
+	defaultSampleRate          = 16000
+	defaultTextTimeoutSeconds  = 1.0
+	defaultResponseFormat      = "verbose_json"
+	streamingPath              = "/audio/transcriptions/streaming"
+	closeMessage               = `{"checkpoint_id":"final"}`
+	fireworksPCMBytesPerSample = 2
 )
 
 type FireworksSTT struct {
@@ -41,9 +44,11 @@ type FireworksSTT struct {
 	textTimeoutSeconds     float64
 	responseFormat         string
 	timestampGranularities []string
+	dialWebsocket          fireworksSTTWebsocketDialer
 }
 
 type FireworksSTTOption func(*FireworksSTT)
+type fireworksSTTWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 
 func WithFireworksBaseURL(baseURL string) FireworksSTTOption {
 	return func(s *FireworksSTT) {
@@ -103,6 +108,14 @@ func WithFireworksTimestampGranularities(granularities []string) FireworksSTTOpt
 	}
 }
 
+func withFireworksSTTWebsocketDialer(dialer fireworksSTTWebsocketDialer) FireworksSTTOption {
+	return func(s *FireworksSTT) {
+		if dialer != nil {
+			s.dialWebsocket = dialer
+		}
+	}
+}
+
 func NewFireworksSTT(apiKey string, opts ...FireworksSTTOption) *FireworksSTT {
 	if apiKey == "" {
 		apiKey = os.Getenv("FIREWORKS_API_KEY")
@@ -113,6 +126,7 @@ func NewFireworksSTT(apiKey string, opts ...FireworksSTTOption) *FireworksSTT {
 		sampleRate:         defaultSampleRate,
 		textTimeoutSeconds: defaultTextTimeoutSeconds,
 		responseFormat:     defaultResponseFormat,
+		dialWebsocket:      defaultFireworksSTTWebsocketDialer,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -128,6 +142,9 @@ func (s *FireworksSTT) Model() string {
 	return s.model
 }
 func (s *FireworksSTT) Provider() string { return "FireworksAI" }
+func (s *FireworksSTT) InputSampleRate() uint32 {
+	return uint32(s.sampleRate)
+}
 
 func (s *FireworksSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, OfflineRecognize: false}
@@ -141,7 +158,7 @@ func (s *FireworksSTT) Stream(ctx context.Context, language string) (stt.Recogni
 	if language != "" {
 		s.language = language
 	}
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildFireworksStreamURL(s), buildFireworksStreamHeaders(s))
+	conn, _, err := s.dialWebsocket(ctx, buildFireworksStreamURL(s), buildFireworksStreamHeaders(s))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial fireworks stt websocket: %w", err)
 	}
@@ -162,6 +179,10 @@ func (s *FireworksSTT) Stream(ctx context.Context, language string) (stt.Recogni
 	}
 	go stream.readLoop()
 	return stream, nil
+}
+
+func defaultFireworksSTTWebsocketDialer(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+	return websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
 }
 
 func (s *FireworksSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
@@ -228,6 +249,7 @@ type fireworksStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	state  *fireworksStreamState
+	audio  bytes.Buffer
 }
 
 func (s *fireworksStream) readLoop() {
@@ -235,8 +257,14 @@ func (s *fireworksStream) readLoop() {
 	for {
 		msgType, message, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- err
+			if !s.isClosed() {
+				if closeErr, ok := err.(*websocket.CloseError); ok {
+					s.errCh <- llm.NewAPIStatusError("Fireworks connection closed unexpectedly", closeErr.Code, "", err.Error())
+				} else if err == io.EOF {
+					s.errCh <- llm.NewAPIStatusError("Fireworks connection closed unexpectedly", -1, "", err.Error())
+				} else {
+					s.errCh <- err
+				}
 			}
 			return
 		}
@@ -253,14 +281,51 @@ func (s *fireworksStream) readLoop() {
 	}
 }
 
+func (s *fireworksStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 func (s *fireworksStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	return s.conn.WriteMessage(websocket.BinaryMessage, frame.Data)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("fireworks stt stream is closed")
+	}
+	if _, err := s.audio.Write(frame.Data); err != nil {
+		return err
+	}
+	chunkBytes := defaultSampleRate / 20 * fireworksPCMBytesPerSample
+	for s.audio.Len() >= chunkBytes {
+		chunk := make([]byte, chunkBytes)
+		if _, err := s.audio.Read(chunk); err != nil {
+			return err
+		}
+		if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *fireworksStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("fireworks stt stream is closed")
+	}
+	if s.audio.Len() == 0 {
+		return nil
+	}
+	chunk := bytes.Clone(s.audio.Bytes())
+	s.audio.Reset()
+	if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
+		return err
+	}
 	return nil
 }
 

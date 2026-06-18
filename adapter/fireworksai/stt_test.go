@@ -1,13 +1,21 @@
 package fireworksai
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"net"
+	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/gorilla/websocket"
 )
 
 func TestFireworksSTTDefaultsMatchReference(t *testing.T) {
@@ -44,6 +52,14 @@ func TestFireworksSTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestFireworksSTTExposesReferenceInputSampleRate(t *testing.T) {
+	provider := NewFireworksSTT("test-key")
+
+	if got := provider.InputSampleRate(); got != 16000 {
+		t.Fatalf("InputSampleRate = %d, want 16000", got)
+	}
+}
+
 func TestNewFireworksSTTUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("FIREWORKS_API_KEY", "env-key")
 
@@ -77,8 +93,11 @@ func TestFireworksSTTOptionsBuildReferenceStreamURLAndHeaders(t *testing.T) {
 		t.Fatalf("parse stream url: %v", err)
 	}
 
-	if !strings.HasPrefix(streamURL.String(), "ws://fireworks.example/v1/audio_streaming") {
-		t.Fatalf("url = %q, want audio_streaming endpoint", streamURL.String())
+	if !strings.HasPrefix(streamURL.String(), "ws://fireworks.example/v1/audio/transcriptions/streaming") {
+		t.Fatalf("url = %q, want audio transcriptions streaming endpoint", streamURL.String())
+	}
+	if strings.Contains(streamURL.Path, "audio_streaming") {
+		t.Fatalf("path = %q, want reference route without legacy audio_streaming segment", streamURL.Path)
 	}
 	query := streamURL.Query()
 	assertFireworksQuery(t, query, "model", "whisper-v3")
@@ -113,6 +132,89 @@ func TestFireworksSTTRecognizeMatchesReferenceUnsupportedOffline(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "does not support batch recognition") {
 		t.Fatalf("Recognize error = %q, want reference unsupported error", err.Error())
+	}
+}
+
+func TestFireworksSTTPushFrameBuffersReferenceAudioChunks(t *testing.T) {
+	audioCh := make(chan []byte, 2)
+	closeCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+	dialer := newFireworksSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		for i := 0; i < 2; i++ {
+			msgType, payload, err := conn.ReadMessage()
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if msgType != websocket.BinaryMessage {
+				t.Errorf("message type = %d, want binary", msgType)
+			}
+			audioCh <- append([]byte(nil), payload...)
+		}
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		closeCh <- string(payload)
+	})
+
+	provider := NewFireworksSTT("test-key",
+		WithFireworksBaseURL("ws://fireworks.test/v1"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: bytes.Repeat([]byte{1}, 2400)}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	if got := readFireworksTestChan(t, audioCh, errCh); len(got) != 1600 {
+		t.Fatalf("first audio chunk len = %d, want 1600", len(got))
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if got := readFireworksTestChan(t, audioCh, errCh); len(got) != 800 {
+		t.Fatalf("flush audio chunk len = %d, want 800", len(got))
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if got := readFireworksTestChan(t, closeCh, errCh); got != `{"checkpoint_id":"final"}` {
+		t.Fatalf("close payload = %q, want checkpoint final", got)
+	}
+}
+
+func TestFireworksSTTUnexpectedNormalCloseReturnsAPIStatusError(t *testing.T) {
+	dialer := newFireworksSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "done"), time.Now().Add(time.Second))
+	})
+
+	provider := NewFireworksSTT("test-key",
+		WithFireworksBaseURL("ws://fireworks.test/v1"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != websocket.CloseNormalClosure {
+		t.Fatalf("status code = %d, want normal close", statusErr.StatusCode)
+	}
+	if !strings.Contains(statusErr.Message, "Fireworks connection closed unexpectedly") {
+		t.Fatalf("message = %q, want unexpected close context", statusErr.Message)
 	}
 }
 
@@ -203,4 +305,115 @@ func assertFireworksEvent(t *testing.T, events []*stt.SpeechEvent, index int, ev
 	if events[index].Alternatives[0].Language != "en" {
 		t.Fatalf("event %d language = %q, want en", index, events[index].Alternatives[0].Language)
 	}
+}
+
+func newFireworksSTTTestWebsocketDialer(t *testing.T, handler func(*websocket.Conn, *http.Request)) FireworksSTTOption {
+	t.Helper()
+	upgrader := websocket.Upgrader{}
+	return withFireworksSTTWebsocketDialer(func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		clientConn, serverConn := net.Pipe()
+		listener := newFireworksSingleConnListener(serverConn)
+		server := &http.Server{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					t.Errorf("upgrade: %v", err)
+					return
+				}
+				defer conn.Close()
+				handler(conn, r)
+			}),
+		}
+		serverErrCh := make(chan error, 1)
+		go func() {
+			if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+				serverErrCh <- err
+			}
+		}()
+		t.Cleanup(func() {
+			_ = server.Close()
+			_ = listener.Close()
+			_ = clientConn.Close()
+			_ = serverConn.Close()
+		})
+
+		dialer := websocket.Dialer{
+			NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+				return clientConn, nil
+			},
+		}
+		conn, response, err := dialer.DialContext(ctx, endpoint, headers)
+		select {
+		case serverErr := <-serverErrCh:
+			if err == nil {
+				err = serverErr
+			}
+		default:
+		}
+		return conn, response, err
+	})
+}
+
+type fireworksSingleConnListener struct {
+	mu     sync.Mutex
+	once   sync.Once
+	conn   net.Conn
+	closed chan struct{}
+}
+
+func newFireworksSingleConnListener(conn net.Conn) *fireworksSingleConnListener {
+	return &fireworksSingleConnListener{
+		conn:   conn,
+		closed: make(chan struct{}),
+	}
+}
+
+func (l *fireworksSingleConnListener) Accept() (net.Conn, error) {
+	l.mu.Lock()
+	if l.conn != nil {
+		conn := l.conn
+		l.conn = nil
+		l.mu.Unlock()
+		return conn, nil
+	}
+	l.mu.Unlock()
+
+	<-l.closed
+	return nil, net.ErrClosed
+}
+
+func (l *fireworksSingleConnListener) Close() error {
+	l.once.Do(func() {
+		close(l.closed)
+		l.mu.Lock()
+		if l.conn != nil {
+			_ = l.conn.Close()
+			l.conn = nil
+		}
+		l.mu.Unlock()
+	})
+	return nil
+}
+
+func (l *fireworksSingleConnListener) Addr() net.Addr {
+	return fireworksDummyAddr("pipe")
+}
+
+type fireworksDummyAddr string
+
+func (a fireworksDummyAddr) Network() string { return string(a) }
+func (a fireworksDummyAddr) String() string  { return string(a) }
+
+func readFireworksTestChan[T any](t *testing.T, ch <-chan T, errCh <-chan error) T {
+	t.Helper()
+	var zero T
+	select {
+	case got := <-ch:
+		return got
+	case err := <-errCh:
+		t.Fatalf("websocket server: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for websocket server")
+	}
+	return zero
 }

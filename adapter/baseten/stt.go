@@ -1,6 +1,7 @@
 package baseten
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -26,6 +28,7 @@ const (
 	defaultBasetenSTTVADThreshold            = 0.5
 	defaultBasetenSTTVADMinSilenceMS         = 300
 	defaultBasetenSTTVADSpeechPadMS          = 30
+	basetenSTTAudioChunkBytes                = 1024
 	basetenModelEndpointEnv                  = "BASETEN_MODEL_ENDPOINT"
 )
 
@@ -166,6 +169,7 @@ func (s *BasetenSTT) Model() string { return "unknown" }
 func (s *BasetenSTT) Provider() string {
 	return "Baseten"
 }
+func (s *BasetenSTT) InputSampleRate() uint32 { return uint32(s.sampleRate) }
 func (s *BasetenSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:         true,
@@ -252,16 +256,47 @@ type basetenSTTStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	state  *basetenSTTStreamState
+	audio  bytes.Buffer
 }
 
 func (s *basetenSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	return s.conn.WriteMessage(websocket.BinaryMessage, frame.Data)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("baseten stt stream is closed")
+	}
+	if _, err := s.audio.Write(frame.Data); err != nil {
+		return err
+	}
+	for s.audio.Len() >= basetenSTTAudioChunkBytes {
+		chunk := make([]byte, basetenSTTAudioChunkBytes)
+		if _, err := s.audio.Read(chunk); err != nil {
+			return err
+		}
+		if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *basetenSTTStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("baseten stt stream is closed")
+	}
+	if s.audio.Len() == 0 {
+		return nil
+	}
+	chunk := bytes.Clone(s.audio.Bytes())
+	s.audio.Reset()
+	if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -302,8 +337,14 @@ func (s *basetenSTTStream) readLoop() {
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- err
+			if !s.isClosed() {
+				if closeErr, ok := err.(*websocket.CloseError); ok {
+					s.errCh <- llm.NewAPIStatusError("Baseten connection closed unexpectedly", closeErr.Code, "", err.Error())
+				} else if err == io.EOF {
+					s.errCh <- llm.NewAPIStatusError("Baseten connection closed unexpectedly", -1, "", err.Error())
+				} else {
+					s.errCh <- err
+				}
 			}
 			return
 		}
@@ -319,6 +360,12 @@ func (s *basetenSTTStream) readLoop() {
 			s.events <- event
 		}
 	}
+}
+
+func (s *basetenSTTStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 type basetenSTTStreamState struct {

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
 )
@@ -191,8 +192,36 @@ func TestBasetenTTSSynthesizeReturnsHTTPErrorBody(t *testing.T) {
 
 	_, err := provider.Synthesize(context.Background(), "hello")
 
-	if err == nil || !strings.Contains(err.Error(), "bad request") {
-		t.Fatalf("Synthesize error = %v, want response body", err)
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status code = %d, want 400", statusErr.StatusCode)
+	}
+	if statusErr.Body != "bad request\n" {
+		t.Fatalf("body = %#v, want response body", statusErr.Body)
+	}
+}
+
+func TestBasetenTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
+	client := basetenTTSRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, errors.New("dial refused")
+	})
+
+	provider := mustNewBasetenTTS(t, "test-key", "",
+		WithBasetenTTSModelEndpoint("https://baseten.test/predict"),
+		withBasetenTTSHTTPClient(client),
+	)
+
+	_, err := provider.Synthesize(context.Background(), "hello")
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Message, "dial refused") {
+		t.Fatalf("message = %q, want transport context", connectionErr.Message)
 	}
 }
 

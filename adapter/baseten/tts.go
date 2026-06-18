@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
 )
@@ -167,12 +168,12 @@ func (t *BasetenTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 	}
 	resp, err := t.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("baseten tts error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("Baseten TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	return &basetenTTSChunkedStream{body: resp.Body, sampleRate: t.sampleRate}, nil
 }

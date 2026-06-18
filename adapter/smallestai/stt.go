@@ -130,6 +130,9 @@ func (s *SmallestAISTT) Model() string { return s.model }
 func (s *SmallestAISTT) Provider() string {
 	return "SmallestAI"
 }
+func (s *SmallestAISTT) InputSampleRate() uint32 {
+	return uint32(s.sampleRate)
+}
 
 func (s *SmallestAISTT) Capabilities() stt.STTCapabilities {
 	aligned := ""

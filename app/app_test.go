@@ -4803,8 +4803,11 @@ func TestFireworksSTTFallbackPassesReferenceOptions(t *testing.T) {
 	select {
 	case record := <-records:
 		query := record.query
-		if got, want := record.path, "/audio_streaming"; got != want {
+		if got, want := record.path, "/audio/transcriptions/streaming"; got != want {
 			t.Fatalf("path = %q, want %q", got, want)
+		}
+		if strings.Contains(record.path, "audio_streaming") {
+			t.Fatalf("path = %q, want reference route without legacy audio_streaming segment", record.path)
 		}
 		if got, want := record.authorization, "test-fireworks-key"; got != want {
 			t.Fatalf("Authorization = %q, want %q", got, want)
