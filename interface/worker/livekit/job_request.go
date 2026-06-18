@@ -169,6 +169,14 @@ func PopulateSessionReportWithJobMetadata(report *agent.SessionReport, job *lkpr
 	report.Room = info.Room
 }
 
+func NewJobSessionReport(job *lkprotocol.Job) (*agent.SessionReport, *agent.Tagger) {
+	report := agent.NewSessionReport()
+	tagger := agent.NewTagger()
+	report.Tagger = tagger
+	PopulateSessionReportWithJobMetadata(report, job)
+	return report, tagger
+}
+
 func JobLogContextFields(job *lkprotocol.Job) map[string]any {
 	info := JobSessionReportInfo(job)
 	return map[string]any{

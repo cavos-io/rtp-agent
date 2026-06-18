@@ -262,10 +262,7 @@ type JobContext struct {
 }
 
 func NewJobContext(job *workerlivekit.Job, url string, apiKey string, apiSecret string) *JobContext {
-	report := agent.NewSessionReport()
-	tagger := agent.NewTagger()
-	report.Tagger = tagger
-	workerlivekit.PopulateSessionReportWithJobMetadata(report, job)
+	report, tagger := workerlivekit.NewJobSessionReport(job)
 	return &JobContext{
 		Job:              job,
 		url:              url,
