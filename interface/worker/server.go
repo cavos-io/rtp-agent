@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"math"
 	"net"
 	"net/http"
@@ -305,19 +304,19 @@ func (s *AgentServer) ActiveRunningJobs() []workeripc.RunningJobInfo {
 }
 
 func runningJobInfoFromContext(jobCtx *JobContext) workeripc.RunningJobInfo {
-	return workeripc.RunningJobInfo{
-		AcceptArguments: workeripc.JobAcceptArguments{
+	return workerlivekit.RunningJobInfoSnapshot(workerlivekit.RunningJobInfoOptions{
+		AcceptArguments: workerlivekit.JobAcceptArguments{
 			Name:       jobCtx.AcceptArguments.Name,
 			Identity:   jobCtx.AcceptArguments.Identity,
 			Metadata:   jobCtx.AcceptArguments.Metadata,
-			Attributes: maps.Clone(jobCtx.AcceptArguments.Attributes),
+			Attributes: jobCtx.AcceptArguments.Attributes,
 		},
 		Job:      jobCtx.Job,
 		URL:      jobCtx.url,
 		Token:    jobCtx.token,
 		WorkerID: jobCtx.WorkerID(),
 		FakeJob:  jobCtx.fakeJob,
-	}
+	})
 }
 
 func jobLogValues(jobCtx *JobContext, values ...any) []any {

@@ -216,6 +216,19 @@ type RunningJobInfo struct {
 	FakeJob         bool               `json:"fake_job"`
 }
 
+type RunningJobInfoOptions struct {
+	AcceptArguments JobAcceptArguments
+	Job             *lkprotocol.Job
+	URL             string
+	Token           string
+	WorkerID        string
+	FakeJob         bool
+}
+
+func RunningJobInfoSnapshot(opts RunningJobInfoOptions) RunningJobInfo {
+	return CloneRunningJobInfo(RunningJobInfo(opts))
+}
+
 func CloneRunningJobInfo(info RunningJobInfo) RunningJobInfo {
 	info.AcceptArguments.Attributes = maps.Clone(info.AcceptArguments.Attributes)
 	return info
