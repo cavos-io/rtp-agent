@@ -255,6 +255,21 @@ func TestDeepgramRecognizeSpeechEventSetsReferenceLanguage(t *testing.T) {
 	}
 }
 
+func TestDeepgramRecognizeSpeechEventUsesReferenceDetectedLanguage(t *testing.T) {
+	var resp dgRecognitionResponse
+	if err := json.Unmarshal([]byte(`{"results":{"channels":[{"detected_language":"es","alternatives":[{"transcript":"hola","confidence":0.9,"words":[]}]}]}}`), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	event := deepgramRecognizeSpeechEventForLanguage(resp, "")
+	if len(event.Alternatives) != 1 {
+		t.Fatalf("alternatives = %d, want 1", len(event.Alternatives))
+	}
+	if got := event.Alternatives[0].Language; got != "es" {
+		t.Fatalf("language = %q, want detected language es", got)
+	}
+}
+
 func TestDeepgramSTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
 	provider := NewDeepgramSTT("test-key", "nova-2")
 

@@ -502,7 +502,8 @@ type dgAlternative struct {
 }
 
 type dgRecognitionChannel struct {
-	Alternatives []dgAlternative `json:"alternatives"`
+	Alternatives     []dgAlternative `json:"alternatives"`
+	DetectedLanguage string          `json:"detected_language"`
 }
 
 type dgRecognitionResponse struct {
@@ -543,7 +544,7 @@ func deepgramRecognizeSpeechEventForLanguage(resp dgRecognitionResponse, languag
 
 	alt := resp.Results.Channels[0].Alternatives[0]
 	event.Alternatives[0] = stt.SpeechData{
-		Language:   languageStr,
+		Language:   deepgramRecognizeLanguage(languageStr, resp.Results.Channels[0].DetectedLanguage),
 		Text:       alt.Transcript,
 		StartTime:  deepgramFirstWordStart(alt.Words),
 		EndTime:    deepgramLastWordEnd(alt.Words),
@@ -551,6 +552,13 @@ func deepgramRecognizeSpeechEventForLanguage(resp dgRecognitionResponse, languag
 		Words:      deepgramTimedStrings(alt.Words),
 	}
 	return event
+}
+
+func deepgramRecognizeLanguage(languageStr string, detectedLanguage string) string {
+	if languageStr == "" {
+		return detectedLanguage
+	}
+	return languageStr
 }
 
 func deepgramSpeechEvent(resp dgResponse) *stt.SpeechEvent {
