@@ -718,7 +718,7 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 
 func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	opts.Transport = NormalizeWorkerTransport(string(opts.Transport))
-	if !opts.DevMode {
+	if !opts.DevMode && opts.Transport == WorkerTransportLiveKit {
 		opts.DevMode = utils.IsDevMode()
 	}
 	if opts.Version == "" {
