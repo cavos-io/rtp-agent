@@ -173,19 +173,26 @@ func (s *AzureSTT) Model() string { return "unknown" }
 func (s *AzureSTT) Provider() string {
 	return "Azure STT"
 }
-func (s *AzureSTT) UpdateOptions(language string) {
-	if language == "" {
+func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
+	if language == "" && len(opts) == 0 {
 		return
 	}
 	var streams []*azureSTTStream
 	s.mu.Lock()
-	s.language = language
+	if language != "" {
+		s.language = language
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
 	for stream := range s.streams {
 		streams = append(streams, stream)
 	}
 	s.mu.Unlock()
 	for _, stream := range streams {
-		stream.updateOptions(language)
+		stream.updateOptions(language, true)
 	}
 }
 func (s *AzureSTT) InputSampleRate() uint32 {
@@ -652,8 +659,8 @@ func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 	}
 }
 
-func (s *azureSTTStream) updateOptions(language string) {
-	if language == "" {
+func (s *azureSTTStream) updateOptions(language string, reconnect bool) {
+	if language == "" && !reconnect {
 		return
 	}
 	s.mu.Lock()
@@ -661,9 +668,13 @@ func (s *azureSTTStream) updateOptions(language string) {
 	if s.closed {
 		return
 	}
-	s.language = language
-	s.streamURL = buildAzureSTTStreamURL(s.provider, language)
-	s.reconnectNext = true
+	if language != "" {
+		s.language = language
+	}
+	if reconnect {
+		s.streamURL = buildAzureSTTStreamURL(s.provider, s.language)
+		s.reconnectNext = true
+	}
 }
 
 func (s *azureSTTStream) reconnectLocked() error {
