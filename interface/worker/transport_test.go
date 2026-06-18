@@ -92,3 +92,17 @@ func TestResolveWorkerOptionsDoesNotReadLiveKitLogLevelEnvForAgora(t *testing.T)
 		t.Fatalf("LogLevel = %q, want default prod log level for Agora", opts.LogLevel)
 	}
 }
+
+func TestResolveWorkerOptionsDoesNotDefaultLiveKitWorkerTypeForAgora(t *testing.T) {
+	opts := resolveWorkerOptions(WorkerOptions{
+		Transport: WorkerTransportAgora,
+		Agora: AgoraOptions{
+			AppID:   "agora-app",
+			Channel: "support",
+		},
+	})
+
+	if opts.WorkerType != "" {
+		t.Fatalf("WorkerType = %q, want empty for Agora", opts.WorkerType)
+	}
+}

@@ -721,9 +721,6 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if !opts.DevMode {
 		opts.DevMode = utils.IsDevMode()
 	}
-	if opts.WorkerType == "" {
-		opts.WorkerType = WorkerTypeRoom
-	}
 	if opts.Version == "" {
 		opts.Version = defaultWorkerVersion
 	}
@@ -775,6 +772,9 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 		opts.LoadFunc = defaultWorkerLoadFunc
 	}
 	if opts.Transport == WorkerTransportLiveKit {
+		if opts.WorkerType == "" {
+			opts.WorkerType = WorkerTypeRoom
+		}
 		if opts.Permissions == nil {
 			opts.Permissions = workerlivekit.DefaultWorkerPermissions()
 		}
