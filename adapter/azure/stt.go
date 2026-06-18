@@ -595,9 +595,6 @@ func azureSTTStreamAudioContentType(provider *AzureSTT, frame *model.AudioFrame)
 	if provider != nil && provider.InputSampleRate() > 0 {
 		sampleRate = provider.InputSampleRate()
 	}
-	if frame != nil && frame.SampleRate > 0 {
-		sampleRate = frame.SampleRate
-	}
 	return fmt.Sprintf("audio/x-wav;codec=audio/pcm;samplerate=%d", sampleRate)
 }
 

@@ -488,6 +488,23 @@ func TestAzureSTTExposesConfiguredInputSampleRate(t *testing.T) {
 	}
 }
 
+func TestAzureSTTStreamAudioContentTypeUsesConfiguredSampleRate(t *testing.T) {
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTSampleRate(16000))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+
+	got := azureSTTStreamAudioContentType(provider, &model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	})
+	if got != "audio/x-wav;codec=audio/pcm;samplerate=16000" {
+		t.Fatalf("audio content type = %q, want configured Azure sample rate", got)
+	}
+}
+
 func TestAzureSTTStreamUsesWebsocketProtocol(t *testing.T) {
 	requests := make(chan *http.Request, 1)
 	configMessages := make(chan string, 1)
