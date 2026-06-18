@@ -23,6 +23,7 @@ require (
 	github.com/hajimehoshi/go-mp3 v0.3.4
 	github.com/hraban/opus v0.0.0-20251117090126-c76ea7e21bf3
 	github.com/jfreymuth/oggvorbis v1.0.5
+	github.com/joho/godotenv v1.5.1
 	github.com/livekit/protocol v1.46.7-0.20260605212020-c0615a2f6f84
 	github.com/livekit/server-sdk-go/v2 v2.16.6
 	github.com/neurosnap/sentences v1.1.2
