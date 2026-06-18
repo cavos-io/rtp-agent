@@ -1,6 +1,10 @@
 package agora
 
-import "testing"
+import (
+	"testing"
+
+	accesstoken "github.com/AgoraIO/Tools/DynamicKey/AgoraDynamicKey/go/src/accesstoken2"
+)
 
 func TestResolveDataOptionsUsesRTMIdentityAndToken(t *testing.T) {
 	opts, err := ResolveDataOptions(Options{
@@ -48,5 +52,34 @@ func TestResolveDataOptionsBuildsRTMTokenFromCertificate(t *testing.T) {
 	}
 	if opts.Token == "" {
 		t.Fatal("Token is empty, want generated RTM token")
+	}
+}
+
+func TestResolveDataOptionsBuildsRTMTokenForResolvedRTMUser(t *testing.T) {
+	opts, err := ResolveDataOptions(Options{
+		AppID:          "970CA35de60c44645bbae8a215061b33",
+		AppCertificate: "5CFd2fd1755d40ecb72977518be15d3b",
+		Channel:        "support",
+		UID:            "rtc-agent",
+		RTMUserID:      "rtm-agent",
+	})
+	if err != nil {
+		t.Fatalf("ResolveDataOptions() error = %v, want nil", err)
+	}
+
+	token := accesstoken.CreateAccessToken()
+	ok, err := token.Parse(opts.Token)
+	if err != nil {
+		t.Fatalf("parse generated RTM token: %v", err)
+	}
+	if !ok {
+		t.Fatal("generated RTM token did not parse")
+	}
+	rtmService, ok := token.Services[accesstoken.ServiceTypeRtm].(*accesstoken.ServiceRtm)
+	if !ok {
+		t.Fatalf("generated token RTM service = %#v, want RTM service", token.Services[accesstoken.ServiceTypeRtm])
+	}
+	if rtmService.UserId != "rtm-agent" {
+		t.Fatalf("RTM token user id = %q, want resolved RTM user id", rtmService.UserId)
 	}
 }
