@@ -1,12 +1,12 @@
 {
   "files.exclude": {
-    "{.claude,.codex,.gemini,.pi}": true
+    "{.claude,.codex,.gemini,.pi,.tmp}": true
   },
   "files.watcherExclude": {
-    "{.claude,.codex,.gemini,.pi}": true
+    "{.claude,.codex,.gemini,.pi,.tmp}": true
   },
   "search.exclude": {
-    "{.claude,.codex,.gemini,.pi}": true
+    "{.claude,.codex,.gemini,.pi,.tmp}": true
   },
   "[go]": {
     "editor.defaultFormatter": "golang.go",

@@ -315,6 +315,10 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 		return
 	}
 	defer speech.MarkDone()
+	speech.AuthorizeGeneration()
+	if speech.IsInterrupted() {
+		return
+	}
 
 	if speech.Generation.RealtimeGeneration != nil {
 		ma.consumeRealtimeGeneration(ctx, speech, speech.Generation.RealtimeGeneration)
@@ -334,10 +338,15 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 			logger.Logger.Errorw("failed to say text with realtime session", err)
 			if session != nil {
 				session.EmitError(ErrorEvent{
-					Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
+					Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, true),
 					Source: ma.model,
 				})
 			}
+			return
+		}
+		if session != nil && speech.Generation.AssistantMessage != nil {
+			session.EmitConversationItemAdded(speech.Generation.AssistantMessage)
+			addSpeechChatItemIfMissing(speech, speech.Generation.AssistantMessage)
 		}
 		return
 	}
@@ -449,7 +458,7 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 		logger.Logger.Errorw("failed to generate realtime reply", err)
 		if session != nil {
 			session.EmitError(ErrorEvent{
-				Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
+				Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, true),
 				Source: ma.model,
 			})
 		}
@@ -761,6 +770,9 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 		fallbackPublishedAudio, err := ma.publishTTSFallbackForRealtimeText(ctx, speech, text)
 		if err != nil {
 			logger.Logger.Errorw("failed to synthesize text-only realtime response", err)
+			if fallbackPublishedAudio && ma.session != nil {
+				ma.session.UpdateAgentState(AgentStateListening)
+			}
 			if ma.session != nil {
 				ma.session.EmitError(ErrorEvent{
 					Error:  err,
@@ -768,6 +780,10 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 				})
 			}
 			return false
+		}
+		interrupted = speech != nil && speech.IsInterrupted()
+		if interrupted && !fallbackPublishedAudio {
+			return true
 		}
 		publishedAudio = publishedAudio || fallbackPublishedAudio
 	}
@@ -778,6 +794,9 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 			}
 		}
 		interrupted = speech != nil && speech.IsInterrupted()
+	}
+	if publishedAudio && ma.session != nil {
+		ma.session.UpdateAgentState(AgentStateListening)
 	}
 	if interrupted {
 		var playback AudioPlaybackResult
@@ -1141,7 +1160,7 @@ func (ma *MultimodalAgent) generateRealtimeToolReply() {
 		logger.Logger.Errorw("failed to generate realtime tool reply", err)
 		if ma.session != nil {
 			ma.session.EmitError(ErrorEvent{
-				Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
+				Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, true),
 				Source: ma.model,
 			})
 		}

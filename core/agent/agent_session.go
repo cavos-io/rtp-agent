@@ -2473,10 +2473,6 @@ func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*Sp
 		return nil, err
 	}
 	s.watchActiveRunSpeechHandle(handle)
-	if assistantMessage != nil {
-		s.EmitConversationItemAdded(assistantMessage)
-		handle.AddChatItems(assistantMessage)
-	}
 	return handle, nil
 }
 

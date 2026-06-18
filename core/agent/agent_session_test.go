@@ -1038,6 +1038,9 @@ type doneScheduledSpeechAssistant struct {
 }
 
 func (d *doneScheduledSpeechAssistant) OnSpeechScheduled(ctx context.Context, speech *SpeechHandle) {
+	if speech.Generation.AssistantMessage != nil {
+		speech.AddChatItems(speech.Generation.AssistantMessage)
+	}
 	speech.MarkDone()
 }
 
@@ -1598,32 +1601,32 @@ func TestAgentSessionSayEmitsSpeechCreatedEvent(t *testing.T) {
 	}
 }
 
-func TestAgentSessionSayAddsAssistantTextToChatContextByDefault(t *testing.T) {
+func TestAgentSessionSayDefersAssistantTextUntilSpeechOutput(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
 	session.activity = NewAgentActivity(agent, session)
 
-	if _, err := session.Say(context.Background(), "hello from agent"); err != nil {
+	handle, err := session.Say(context.Background(), "hello from agent")
+	if err != nil {
 		t.Fatalf("Say error = %v, want nil", err)
 	}
 
-	if len(session.ChatCtx.Items) != 1 {
-		t.Fatalf("ChatCtx.Items length = %d, want 1", len(session.ChatCtx.Items))
+	if handle.Generation.AssistantMessage == nil {
+		t.Fatal("AssistantMessage = nil, want pending say assistant message")
 	}
-	msg, ok := session.ChatCtx.Items[0].(*llm.ChatMessage)
-	if !ok {
-		t.Fatalf("ChatCtx item type = %T, want *llm.ChatMessage", session.ChatCtx.Items[0])
+	if handle.Generation.AssistantMessage.TextContent() != "hello from agent" {
+		t.Fatalf("AssistantMessage text = %q, want pending say text", handle.Generation.AssistantMessage.TextContent())
 	}
-	if msg.Role != llm.ChatRoleAssistant || msg.TextContent() != "hello from agent" {
-		t.Fatalf("ChatCtx message = %#v, want assistant message with text", msg)
+	if len(session.ChatCtx.Items) != 0 {
+		t.Fatalf("ChatCtx.Items = %#v, want no assistant message before speech output", session.ChatCtx.Items)
+	}
+	if len(handle.ChatItems()) != 0 {
+		t.Fatalf("handle.ChatItems = %#v, want no committed item before speech output", handle.ChatItems())
 	}
 	select {
 	case ev := <-session.ConversationItemAddedEvents():
-		if ev.Item != msg {
-			t.Fatalf("ConversationItemAdded item = %#v, want committed assistant message", ev.Item)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("ConversationItemAddedEvents did not receive say text")
+		t.Fatalf("ConversationItemAdded event = %#v, want none before speech output", ev)
+	default:
 	}
 }
 

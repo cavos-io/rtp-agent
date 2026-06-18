@@ -637,14 +637,30 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 			case <-speechCtx.Done():
 			}
 		}()
-		_, err := va.synthesizeSpeech(speechCtx, session, singleTextChannel(speech.Generation.Text), speech)
+		ttsGen, err := va.synthesizeSpeech(speechCtx, session, singleTextChannel(speech.Generation.Text), speech)
 		speechCancel()
 		if err != nil && !errors.Is(err, context.Canceled) {
 			logger.Logger.Errorw("TTS inference failed", err)
 			va.emitTTSError(session, err)
 		}
-		if !speech.IsInterrupted() {
-			insertChatItemIfMissing(va.chatCtx, speech.Generation.AssistantMessage)
+		if err == nil && !speech.IsInterrupted() {
+			va.waitForAssistantPlayout(ctx, session, speech)
+		}
+		canCommit := (!speech.IsInterrupted() && err == nil) || (speech.IsInterrupted() && ttsGen != nil && ttsGen.ForwardedAudio)
+		if canCommit {
+			forwardedText := speech.Generation.Text
+			if speech.IsInterrupted() {
+				forwardedText = va.forwardedAssistantTextAfterInterruption(ctx, session, speech, speech.Generation.Text)
+			}
+			if forwardedText != "" {
+				if speech.Generation.AssistantMessage != nil {
+					speech.Generation.AssistantMessage.Interrupted = speech.IsInterrupted()
+					speech.Generation.AssistantMessage.Content = []llm.ChatContent{{Text: forwardedText}}
+				}
+				insertChatItemIfMissing(va.chatCtx, speech.Generation.AssistantMessage)
+				addSpeechChatItemIfMissing(speech, speech.Generation.AssistantMessage)
+				session.EmitConversationItemAdded(speech.Generation.AssistantMessage)
+			}
 		}
 		_ = speech.MarkGenerationDone()
 		session.UpdateAgentState(AgentStateListening)
@@ -731,10 +747,10 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			if inferenceCtx == replyCtx {
 				inferenceCtx = replyCtx.Copy()
 			}
-			inferenceCtx.Items = append([]llm.ChatItem{&llm.ChatMessage{
+			inferenceCtx.Items = append(inferenceCtx.Items, &llm.ChatMessage{
 				Role:    llm.ChatRoleSystem,
 				Content: []llm.ChatContent{{Text: opts.Instructions}},
-			}}, inferenceCtx.Items...)
+			})
 		}
 		if inputModality != "" {
 			if inferenceCtx == replyCtx {
@@ -783,13 +799,17 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		}
 
 		var ttsGen *TTSGenerationData
-		if opts.SpeechHandle != nil && toolSteps == 0 {
-			ttsGen = opts.SpeechHandle.takePrecomputedTTSGeneration()
-		}
-		if ttsGen != nil {
-			ttsGen, err = va.playTTSGeneration(ctx, session, ttsGen, opts.SpeechHandle)
+		if va.tts == nil {
+			err = drainLLMText(ctx, genData.TextCh, opts.SpeechHandle)
 		} else {
-			ttsGen, err = va.synthesizeSpeech(ctx, session, genData.TextCh, opts.SpeechHandle)
+			if opts.SpeechHandle != nil && toolSteps == 0 {
+				ttsGen = opts.SpeechHandle.takePrecomputedTTSGeneration()
+			}
+			if ttsGen != nil {
+				ttsGen, err = va.playTTSGeneration(ctx, session, ttsGen, opts.SpeechHandle)
+			} else {
+				ttsGen, err = va.synthesizeSpeech(ctx, session, genData.TextCh, opts.SpeechHandle)
+			}
 		}
 		if err != nil {
 			if suppressReplyContextCanceledError(ctx, opts.SpeechHandle, err) {
@@ -799,6 +819,8 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			if !suppressContextCanceledError(ctx, opts.SpeechHandle, err) {
 				logger.Logger.Errorw("TTS inference failed", err)
 				va.emitTTSError(session, err)
+				session.UpdateAgentState(AgentStateListening)
+				return
 			}
 		}
 		if genData.StreamErr != nil {
@@ -815,7 +837,14 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		va.emitLLMMetrics(session, genData)
 
 		va.waitForAssistantPlayout(ctx, session, opts.SpeechHandle)
-		forwardedText := va.forwardedAssistantTextAfterInterruption(ctx, session, opts.SpeechHandle, genData.GeneratedText)
+		forwardedText := genData.GeneratedText
+		if opts.SpeechHandle != nil && opts.SpeechHandle.IsInterrupted() {
+			if ttsGen == nil && session.AudioPlaybackController() == nil {
+				forwardedText = ""
+			} else {
+				forwardedText = va.forwardedAssistantTextAfterInterruption(ctx, session, opts.SpeechHandle, genData.GeneratedText)
+			}
+		}
 		if forwardedText != "" {
 			args := llm.ChatMessageArgs{
 				ID:          genData.ID,
@@ -838,6 +867,9 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			}
 			if genData.TTFT > 0 {
 				metrics["llm_node_ttft"] = genData.TTFT.Seconds()
+			}
+			if va.tts == nil {
+				delete(metrics, "tts_metadata")
 			}
 			if ttsGen != nil && ttsGen.TTFB > 0 {
 				metrics["tts_node_ttfb"] = ttsGen.TTFB.Seconds()
@@ -919,6 +951,25 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		}
 		toolSteps++
 		// Loop back to LLM with tool outputs
+	}
+}
+
+func drainLLMText(ctx context.Context, textCh <-chan string, speech *SpeechHandle) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		if speech != nil && speech.IsInterrupted() {
+			return nil
+		}
+		select {
+		case _, ok := <-textCh:
+			if !ok {
+				return nil
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 }
 
@@ -1035,10 +1086,10 @@ func (va *PipelineAgent) precomputeLLMGeneration(ctx context.Context, session *A
 		if inferenceCtx == replyCtx {
 			inferenceCtx = replyCtx.Copy()
 		}
-		inferenceCtx.Items = append([]llm.ChatItem{&llm.ChatMessage{
+		inferenceCtx.Items = append(inferenceCtx.Items, &llm.ChatMessage{
 			Role:    llm.ChatRoleSystem,
 			Content: []llm.ChatContent{{Text: opts.Instructions}},
-		}}, inferenceCtx.Items...)
+		})
 	}
 	if inputModality != "" {
 		if inferenceCtx == replyCtx {
@@ -1188,6 +1239,7 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 					return ttsGen, err
 				}
 			}
+			ttsGen.ForwardedAudio = true
 			if !startedSpeaking {
 				session.UpdateAgentState(AgentStateSpeaking)
 				startedSpeaking = true
@@ -1378,6 +1430,18 @@ func insertChatItemIfMissing(chatCtx *llm.ChatContext, item llm.ChatItem) {
 		}
 	}
 	chatCtx.Insert(item)
+}
+
+func addSpeechChatItemIfMissing(speech *SpeechHandle, item llm.ChatItem) {
+	if speech == nil || item == nil {
+		return
+	}
+	for _, existing := range speech.ChatItems() {
+		if existing == item {
+			return
+		}
+	}
+	speech.AddChatItems(item)
 }
 
 func resolveToolsByID(tools []llm.Tool, ids []string) ([]llm.Tool, error) {

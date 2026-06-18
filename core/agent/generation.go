@@ -219,10 +219,11 @@ func typeName(v any) string {
 }
 
 type TTSGenerationData struct {
-	AudioCh     chan *model.AudioFrame
-	TimedTextCh chan tts.TimedString
-	TTFB        time.Duration
-	StreamErr   error
+	AudioCh        chan *model.AudioFrame
+	TimedTextCh    chan tts.TimedString
+	TTFB           time.Duration
+	StreamErr      error
+	ForwardedAudio bool
 }
 
 type TTSInferenceOptions struct {
