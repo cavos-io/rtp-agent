@@ -1310,6 +1310,38 @@ func TestElevenLabsTTSUsesOriginalAlignmentForCJKReferenceDefault(t *testing.T) 
 	}
 }
 
+func TestElevenLabsTTSPreferredAlignmentOverrideMatchesReference(t *testing.T) {
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5",
+		WithElevenLabsLanguage("en"),
+		WithElevenLabsPreferredAlignment("original"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	if got := elevenLabsPreferredAlignment(provider.language, provider.preferredAlignment); got != "original" {
+		t.Fatalf("preferred alignment = %q, want explicit original", got)
+	}
+
+	resp := elWSResponse{
+		Audio:   base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
+		IsFinal: true,
+		NormalizedAlignment: &elevenLabsAlignment{
+			Chars:            []string{"1"},
+			CharStartTimesMs: []int{0},
+			CharDurationsMs:  []int{10},
+		},
+		Alignment: &elevenLabsAlignment{
+			Chars:            []string{"a"},
+			CharStartTimesMs: []int{20},
+			CharDurationsMs:  []int{30},
+		},
+	}
+	stream := &elevenLabsStream{preferredAlignment: elevenLabsPreferredAlignment(provider.language, provider.preferredAlignment)}
+	if got := stream.deltaText(resp); got != "a" {
+		t.Fatalf("delta text = %q, want original alignment text", got)
+	}
+}
+
 func TestElevenLabsSynthesizedAudioDecodesReferenceMP3WebsocketAudio(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {

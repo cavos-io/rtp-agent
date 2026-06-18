@@ -50,6 +50,7 @@ type ElevenLabsTTS struct {
 	syncAlignment                  bool
 	applyTextNormalization         string
 	applyLanguageTextNormalization *bool
+	preferredAlignment             string
 }
 
 type ElevenLabsTTSOption func(*ElevenLabsTTS)
@@ -169,6 +170,14 @@ func WithElevenLabsApplyTextNormalization(mode string) ElevenLabsTTSOption {
 func WithElevenLabsApplyLanguageTextNormalization(enabled bool) ElevenLabsTTSOption {
 	return func(t *ElevenLabsTTS) {
 		t.applyLanguageTextNormalization = &enabled
+	}
+}
+
+func WithElevenLabsPreferredAlignment(alignment string) ElevenLabsTTSOption {
+	return func(t *ElevenLabsTTS) {
+		if alignment == "normalized" || alignment == "original" {
+			t.preferredAlignment = alignment
+		}
 	}
 }
 
@@ -404,7 +413,7 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 		chunkLengthSchedule:       append([]int(nil), t.chunkLengthSchedule...),
 		voiceSettings:             cloneElevenLabsVoiceSettings(t.voiceSettings),
 		pronunciationDictionaries: append([]ElevenLabsPronunciationDictionaryLocator(nil), t.pronunciationDictionaries...),
-		preferredAlignment:        elevenLabsDefaultPreferredAlignment(t.language),
+		preferredAlignment:        elevenLabsPreferredAlignment(t.language, t.preferredAlignment),
 	}
 
 	go stream.readLoop()
@@ -701,6 +710,13 @@ func elevenLabsDefaultPreferredAlignment(language string) string {
 	default:
 		return "normalized"
 	}
+}
+
+func elevenLabsPreferredAlignment(language string, preferred string) string {
+	if preferred == "normalized" || preferred == "original" {
+		return preferred
+	}
+	return elevenLabsDefaultPreferredAlignment(language)
 }
 
 func appendElevenLabsAlignment(runes *[]rune, starts *[]int, durations *[]int, alignment *elevenLabsAlignment) {
