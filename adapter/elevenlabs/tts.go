@@ -332,12 +332,6 @@ func buildElevenLabsSynthesizeRequest(t *ElevenLabsTTS, text string) (string, []
 		"model_id":       t.modelID,
 		"voice_settings": nil,
 	}
-	if t.language != "" && elevenLabsSupportsLanguageCode(t.modelID) {
-		body["language_code"] = t.language
-	}
-	if t.enableSSMLParsing {
-		body["enable_ssml_parsing"] = true
-	}
 	if t.voiceSettings != nil {
 		body["voice_settings"] = elevenLabsVoiceSettingsPayload(t.voiceSettings)
 	}
@@ -931,6 +925,9 @@ func (s *elevenLabsStream) PushText(text string) error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
+	}
+	if text == "" {
+		return nil
 	}
 	if err := s.sendInitLocked(); err != nil {
 		return err

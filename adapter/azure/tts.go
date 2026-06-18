@@ -109,7 +109,7 @@ func buildAzureTTSRequest(ctx context.Context, t *AzureTTS, text string) (*http.
 	if language == "" {
 		language = defaultAzureTTSLanguage
 	}
-	ssml := fmt.Sprintf(`<speak version="1.0" xml:lang="%s"><voice name="%s">%s</voice></speak>`, language, t.voice, text)
+	ssml := fmt.Sprintf(`<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="%s"><voice name="%s">%s</voice></speak>`, language, t.voice, text)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBufferString(ssml))
 	if err != nil {
@@ -119,6 +119,7 @@ func buildAzureTTSRequest(ctx context.Context, t *AzureTTS, text string) (*http.
 	req.Header.Set("Content-Type", "application/ssml+xml")
 	req.Header.Set("X-Microsoft-OutputFormat", defaultAzureTTSSampleFormat)
 	req.Header.Set("Ocp-Apim-Subscription-Key", t.apiKey)
+	req.Header.Set("User-Agent", "LiveKit Agents")
 	return req, nil
 }
 
