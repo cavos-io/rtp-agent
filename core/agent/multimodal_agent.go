@@ -339,6 +339,10 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 				})
 			}
 		}
+		if session != nil && speech.Generation.AssistantMessage != nil {
+			session.EmitConversationItemAdded(speech.Generation.AssistantMessage)
+			addSpeechChatItemIfMissing(speech, speech.Generation.AssistantMessage)
+		}
 		return
 	}
 

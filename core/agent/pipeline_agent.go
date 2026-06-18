@@ -657,6 +657,7 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 			}
 			insertChatItemIfMissing(va.chatCtx, speech.Generation.AssistantMessage)
 			addSpeechChatItemIfMissing(speech, speech.Generation.AssistantMessage)
+			session.EmitConversationItemAdded(speech.Generation.AssistantMessage)
 		}
 		_ = speech.MarkGenerationDone()
 		session.UpdateAgentState(AgentStateListening)
