@@ -19,6 +19,15 @@ const (
 	defaultAzureTTSSampleFormat = "raw-24khz-16bit-mono-pcm"
 )
 
+var azureTTSSampleFormats = map[int]string{
+	8000:  "raw-8khz-16bit-mono-pcm",
+	16000: "raw-16khz-16bit-mono-pcm",
+	22050: "raw-22050hz-16bit-mono-pcm",
+	24000: defaultAzureTTSSampleFormat,
+	44100: "raw-44100hz-16bit-mono-pcm",
+	48000: "raw-48khz-16bit-mono-pcm",
+}
+
 type AzureTTS struct {
 	apiKey     string
 	region     string
@@ -28,7 +37,33 @@ type AzureTTS struct {
 	httpClient *http.Client
 }
 
+type AzureTTSOption func(*AzureTTS)
+
+func WithAzureTTSLanguage(language string) AzureTTSOption {
+	return func(t *AzureTTS) {
+		if language != "" {
+			t.language = language
+		}
+	}
+}
+
+func WithAzureTTSSampleRate(sampleRate int) AzureTTSOption {
+	return func(t *AzureTTS) {
+		if sampleRate > 0 {
+			t.sampleRate = sampleRate
+		}
+	}
+}
+
 func NewAzureTTS(apiKey string, region string, voice string, languages ...string) (*AzureTTS, error) {
+	opts := []AzureTTSOption{}
+	if len(languages) > 0 {
+		opts = append(opts, WithAzureTTSLanguage(languages[0]))
+	}
+	return NewAzureTTSWithOptions(apiKey, region, voice, opts...)
+}
+
+func NewAzureTTSWithOptions(apiKey string, region string, voice string, opts ...AzureTTSOption) (*AzureTTS, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(azureSpeechKeyEnv)
 	}
@@ -41,18 +76,21 @@ func NewAzureTTS(apiKey string, region string, voice string, languages ...string
 	if voice == "" {
 		voice = defaultAzureTTSVoice
 	}
-	language := defaultAzureTTSLanguage
-	if len(languages) > 0 && languages[0] != "" {
-		language = languages[0]
-	}
-	return &AzureTTS{
+	provider := &AzureTTS{
 		apiKey:     apiKey,
 		region:     region,
 		voice:      voice,
-		language:   language,
+		language:   defaultAzureTTSLanguage,
 		sampleRate: defaultAzureTTSSampleRate,
 		httpClient: http.DefaultClient,
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(provider)
+	}
+	if _, ok := azureTTSSampleFormats[provider.sampleRate]; !ok {
+		return nil, fmt.Errorf("azure tts unsupported sample rate: %d", provider.sampleRate)
+	}
+	return provider, nil
 }
 
 func (t *AzureTTS) Label() string { return "azure.TTS" }
@@ -117,7 +155,7 @@ func buildAzureTTSRequest(ctx context.Context, t *AzureTTS, text string) (*http.
 	}
 
 	req.Header.Set("Content-Type", "application/ssml+xml")
-	req.Header.Set("X-Microsoft-OutputFormat", defaultAzureTTSSampleFormat)
+	req.Header.Set("X-Microsoft-OutputFormat", azureTTSSampleFormats[t.sampleRate])
 	req.Header.Set("Ocp-Apim-Subscription-Key", t.apiKey)
 	req.Header.Set("User-Agent", "LiveKit Agents")
 	return req, nil

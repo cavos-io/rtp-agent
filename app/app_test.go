@@ -7429,10 +7429,12 @@ func TestAWSTTSFallbackPassesReferenceOptions(t *testing.T) {
 func TestAzureTTSFallbackPassesReferenceOptions(t *testing.T) {
 	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
 	t.Setenv("AZURE_SPEECH_REGION", "eastus")
+	sampleRate := 16000
 
 	provider, err := fallbackTTSFromProvider(AppConfig{
-		TTSVoice:    "id-ID-GadisNeural",
-		TTSLanguage: "id-ID",
+		TTSVoice:      "id-ID-GadisNeural",
+		TTSLanguage:   "id-ID",
+		TTSSampleRate: &sampleRate,
 	}, providerAzure)
 	if err != nil {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
@@ -7445,8 +7447,8 @@ func TestAzureTTSFallbackPassesReferenceOptions(t *testing.T) {
 	if got, want := azureProvider.Label(), "azure.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
 	}
-	if got, want := azureProvider.SampleRate(), 24000; got != want {
-		t.Fatalf("SampleRate() = %d, want reference default sample rate %d", got, want)
+	if got, want := azureProvider.SampleRate(), 16000; got != want {
+		t.Fatalf("SampleRate() = %d, want reference configured sample rate %d", got, want)
 	}
 	if got, want := tts.Model(azureProvider), "unknown"; got != want {
 		t.Fatalf("tts.Model() = %q, want %q", got, want)

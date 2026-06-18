@@ -852,6 +852,30 @@ func TestAzureTTSBuildsRequestWithConfiguredLanguage(t *testing.T) {
 	}
 }
 
+func TestAzureTTSBuildsRequestWithConfiguredSampleRate(t *testing.T) {
+	provider, err := NewAzureTTSWithOptions(
+		"key",
+		"eastus",
+		"en-US-AvaNeural",
+		WithAzureTTSSampleRate(16000),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureTTSWithOptions error = %v", err)
+	}
+
+	req, err := buildAzureTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+
+	if provider.SampleRate() != 16000 {
+		t.Fatalf("SampleRate() = %d, want 16000", provider.SampleRate())
+	}
+	if got := req.Header.Get("X-Microsoft-OutputFormat"); got != "raw-16khz-16bit-mono-pcm" {
+		t.Fatalf("output format = %q, want raw-16khz-16bit-mono-pcm", got)
+	}
+}
+
 func TestAzureTTSUpdateOptionsMatchesReference(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {
