@@ -3488,10 +3488,11 @@ func TestPipelineAgentScheduledSaySkipsInterruptedSpeechBeforeSynthesis(t *testi
 }
 
 func TestPipelineAgentScheduledSayInterruptDuringSynthesisSuppressesTTSError(t *testing.T) {
+	chatCtx := llm.NewChatContext()
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	blockStream := &blockingPipelineTTSStream{started: make(chan struct{}), unblock: make(chan struct{})}
 	ttsSource := &blockingPipelineTTS{stream: blockStream}
-	agent := NewPipelineAgent(nil, nil, nil, ttsSource, llm.NewChatContext())
+	agent := NewPipelineAgent(nil, nil, nil, ttsSource, chatCtx)
 	agent.session = session
 	agent.ctx = context.Background()
 	speech := NewSpeechHandle(true, DefaultInputDetails())
@@ -3518,6 +3519,12 @@ func TestPipelineAgentScheduledSayInterruptDuringSynthesisSuppressesTTSError(t *
 	case ev := <-session.ErrorEvents():
 		t.Fatalf("ErrorEvents received unexpected error = %v, want no TTS error on interrupt", ev.Error)
 	default:
+	}
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chatCtx.Items = %#v, want no assistant commit for interrupted unheard speech", chatCtx.Items)
+	}
+	if len(speech.ChatItems()) != 0 {
+		t.Fatalf("speech.ChatItems = %#v, want no committed chat items", speech.ChatItems())
 	}
 }
 

@@ -643,7 +643,9 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 			logger.Logger.Errorw("TTS inference failed", err)
 			va.emitTTSError(session, err)
 		}
-		insertChatItemIfMissing(va.chatCtx, speech.Generation.AssistantMessage)
+		if !speech.IsInterrupted() {
+			insertChatItemIfMissing(va.chatCtx, speech.Generation.AssistantMessage)
+		}
 		_ = speech.MarkGenerationDone()
 		session.UpdateAgentState(AgentStateListening)
 		return
