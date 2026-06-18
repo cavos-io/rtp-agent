@@ -92,6 +92,22 @@ func TestSDKDataPublisherCloseUsesLifecycleHelper(t *testing.T) {
 	}
 }
 
+func TestSDKDataPublisherIgnoresInboundMessagesAfterClose(t *testing.T) {
+	source, err := os.ReadFile("sdk_rtm.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk_rtm.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"closed := p.closed",
+		"if handler == nil || closed",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk_rtm.go missing %q", want)
+		}
+	}
+}
+
 func TestSDKClientImplementationRegistersInboundAudioObserver(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {

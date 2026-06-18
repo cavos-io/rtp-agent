@@ -70,8 +70,9 @@ func (p *sdkDataPublisher) handleMessageEvent(event *agorartm.MessageEvent) {
 	}
 	p.mu.Lock()
 	handler := p.handler
+	closed := p.closed
 	p.mu.Unlock()
-	if handler == nil {
+	if handler == nil || closed {
 		return
 	}
 	_ = handler(context.Background(), DataMessage{
