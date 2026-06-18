@@ -110,3 +110,72 @@ func TestConnectWorkerWebSocketReturnsSleepErrorWithoutConnectFailure(t *testing
 		t.Fatalf("ConnectWorkerWebSocket() marked sleep error as connect failure")
 	}
 }
+
+func TestOpenWorkerWebSocketBuildsConnectInfoAndDialer(t *testing.T) {
+	var gotURL string
+	var gotHeader http.Header
+	dial := func(_ context.Context, _ *websocket.Dialer, url string, header http.Header) (*websocket.Conn, *http.Response, error) {
+		gotURL = url
+		gotHeader = header.Clone()
+		return &websocket.Conn{}, &http.Response{StatusCode: http.StatusSwitchingProtocols}, nil
+	}
+
+	result, err := workerlivekit.OpenWorkerWebSocket(context.Background(), workerlivekit.WorkerWebSocketOpenOptions{
+		WSURL:       "https://livekit.example/base",
+		WorkerToken: "worker-token",
+		APIKey:      "api-key",
+		APISecret:   "api-secret",
+		TTL:         time.Hour,
+		Dial:        dial,
+	})
+	if err != nil {
+		t.Fatalf("OpenWorkerWebSocket() error = %v", err)
+	}
+	if result.Conn == nil {
+		t.Fatal("OpenWorkerWebSocket() conn = nil")
+	}
+	if result.Response == nil || result.Response.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("response = %#v, want switching protocols", result.Response)
+	}
+	if result.ConnectFailed {
+		t.Fatal("ConnectFailed = true, want false")
+	}
+	if gotURL != "wss://livekit.example/base/agent?worker_token=worker-token" {
+		t.Fatalf("dial URL = %q, want LiveKit worker URL", gotURL)
+	}
+	if gotHeader.Get("Authorization") == "" {
+		t.Fatal("Authorization header is empty")
+	}
+}
+
+func TestOpenWorkerWebSocketRejectsInvalidProxy(t *testing.T) {
+	_, err := workerlivekit.OpenWorkerWebSocket(context.Background(), workerlivekit.WorkerWebSocketOpenOptions{
+		WSURL:     "wss://livekit.example",
+		APIKey:    "api-key",
+		APISecret: "api-secret",
+		TTL:       time.Hour,
+		HTTPProxy: "://bad proxy",
+	})
+	if err == nil {
+		t.Fatal("OpenWorkerWebSocket() error = nil, want invalid proxy error")
+	}
+}
+
+func TestOpenWorkerWebSocketMarksConnectFailure(t *testing.T) {
+	_, err := workerlivekit.OpenWorkerWebSocket(context.Background(), workerlivekit.WorkerWebSocketOpenOptions{
+		WSURL:     "wss://livekit.example",
+		APIKey:    "api-key",
+		APISecret: "api-secret",
+		TTL:       time.Hour,
+		MaxRetry:  0,
+		Dial: func(context.Context, *websocket.Dialer, string, http.Header) (*websocket.Conn, *http.Response, error) {
+			return nil, nil, errors.New("dial failed")
+		},
+	})
+	if err == nil {
+		t.Fatal("OpenWorkerWebSocket() error = nil, want connect failure")
+	}
+	if !workerlivekit.IsConnectFailure(err) {
+		t.Fatalf("OpenWorkerWebSocket() error = %v, want connect failure", err)
+	}
+}

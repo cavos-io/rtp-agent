@@ -1348,27 +1348,19 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		}()
 	}
 
-	connectInfo, err := workerlivekit.WorkerConnectInfo(workerlivekit.WorkerConnectOptions{
+	openResult, err := s.openWorkerWebSocket(ctx, workerlivekit.WorkerWebSocketOpenOptions{
 		WSURL:       s.Options.WSRL,
 		WorkerToken: s.Options.WorkerToken,
 		APIKey:      s.Options.APIKey,
 		APISecret:   s.Options.APISecret,
 		TTL:         time.Hour,
+		HTTPProxy:   s.Options.HTTPProxy,
+		MaxRetry:    s.Options.MaxRetry,
 	})
 	if err != nil {
 		return err
 	}
-
-	dialer, err := workerlivekit.WorkerWebSocketDialer(s.Options.HTTPProxy)
-	if err != nil {
-		return err
-	}
-
-	conn, res, err := s.connectWorkerWebSocket(ctx, dialer, connectInfo.URL, connectInfo.Header)
-	if err != nil {
-		return err
-	}
-	_ = res
+	conn := openResult.Conn
 	s.mu.Lock()
 	s.conn = conn
 	s.mu.Unlock()
@@ -1505,23 +1497,18 @@ func (s *AgentServer) sendWorkerStatusUpdate() error {
 	return s.sendWorkerMessage(s.availableWorkerStatusMessage())
 }
 
-func (s *AgentServer) connectWorkerWebSocket(ctx context.Context, dialer *websocket.Dialer, agentURL string, headers http.Header) (*websocket.Conn, *http.Response, error) {
-	conn, res, err := workerlivekit.ConnectWorkerWebSocket(ctx, workerlivekit.WorkerWebSocketConnectOptions{
-		Dialer:   dialer,
-		URL:      agentURL,
-		Headers:  headers,
-		MaxRetry: s.Options.MaxRetry,
-		Dial:     workerDialContext,
-		Sleep:    workerRetrySleep,
-	})
+func (s *AgentServer) openWorkerWebSocket(ctx context.Context, opts workerlivekit.WorkerWebSocketOpenOptions) (workerlivekit.WorkerWebSocketOpenResult, error) {
+	opts.Dial = workerDialContext
+	opts.Sleep = workerRetrySleep
+	result, err := workerlivekit.OpenWorkerWebSocket(ctx, opts)
 	if err != nil {
-		if workerlivekit.IsConnectFailure(err) {
+		if result.ConnectFailed {
 			s.setConnectionFailed(true)
 		}
-		return nil, nil, err
+		return result, err
 	}
 	s.setConnectionFailed(false)
-	return conn, res, nil
+	return result, nil
 }
 
 func (s *AgentServer) handleMessage(ctx context.Context, msg *workerlivekit.ServerMessage) {

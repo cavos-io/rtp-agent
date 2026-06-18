@@ -58,6 +58,55 @@ type WorkerWebSocketConnectOptions struct {
 	Sleep    WorkerWebSocketSleepFunc
 }
 
+type WorkerWebSocketOpenOptions struct {
+	WSURL       string
+	WorkerToken string
+	APIKey      string
+	APISecret   string
+	TTL         time.Duration
+	HTTPProxy   string
+	MaxRetry    int
+	Dial        WorkerWebSocketDialFunc
+	Sleep       WorkerWebSocketSleepFunc
+}
+
+type WorkerWebSocketOpenResult struct {
+	Conn          *websocket.Conn
+	Response      *http.Response
+	ConnectFailed bool
+}
+
+func OpenWorkerWebSocket(ctx context.Context, opts WorkerWebSocketOpenOptions) (WorkerWebSocketOpenResult, error) {
+	connectInfo, err := WorkerConnectInfo(WorkerConnectOptions{
+		WSURL:       opts.WSURL,
+		WorkerToken: opts.WorkerToken,
+		APIKey:      opts.APIKey,
+		APISecret:   opts.APISecret,
+		TTL:         opts.TTL,
+	})
+	if err != nil {
+		return WorkerWebSocketOpenResult{}, err
+	}
+
+	dialer, err := WorkerWebSocketDialer(opts.HTTPProxy)
+	if err != nil {
+		return WorkerWebSocketOpenResult{}, err
+	}
+
+	conn, res, err := ConnectWorkerWebSocket(ctx, WorkerWebSocketConnectOptions{
+		Dialer:   dialer,
+		URL:      connectInfo.URL,
+		Headers:  connectInfo.Header,
+		MaxRetry: opts.MaxRetry,
+		Dial:     opts.Dial,
+		Sleep:    opts.Sleep,
+	})
+	if err != nil {
+		return WorkerWebSocketOpenResult{ConnectFailed: IsConnectFailure(err)}, err
+	}
+	return WorkerWebSocketOpenResult{Conn: conn, Response: res}, nil
+}
+
 func ConnectWorkerWebSocket(ctx context.Context, opts WorkerWebSocketConnectOptions) (*websocket.Conn, *http.Response, error) {
 	dial := opts.Dial
 	if dial == nil {
