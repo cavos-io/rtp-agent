@@ -44,6 +44,14 @@ func TestFireworksSTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestFireworksSTTExposesReferenceInputSampleRate(t *testing.T) {
+	provider := NewFireworksSTT("test-key")
+
+	if got := provider.InputSampleRate(); got != 16000 {
+		t.Fatalf("InputSampleRate = %d, want 16000", got)
+	}
+}
+
 func TestNewFireworksSTTUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("FIREWORKS_API_KEY", "env-key")
 

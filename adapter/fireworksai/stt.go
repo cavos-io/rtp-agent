@@ -128,6 +128,9 @@ func (s *FireworksSTT) Model() string {
 	return s.model
 }
 func (s *FireworksSTT) Provider() string { return "FireworksAI" }
+func (s *FireworksSTT) InputSampleRate() uint32 {
+	return uint32(s.sampleRate)
+}
 
 func (s *FireworksSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, OfflineRecognize: false}
