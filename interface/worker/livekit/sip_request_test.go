@@ -10,6 +10,18 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+func TestSIPProtocolAliasesUseLiveKitTypes(t *testing.T) {
+	req := &workerlivekit.SIPCreateParticipantRequest{RoomName: "room-a"}
+	info := &workerlivekit.SIPParticipantInfo{ParticipantId: "caller-a"}
+
+	if (*lkprotocol.CreateSIPParticipantRequest)(req).GetRoomName() != "room-a" {
+		t.Fatal("CreateSIPParticipantRequest alias did not preserve room name")
+	}
+	if (*lkprotocol.SIPParticipantInfo)(info).GetParticipantId() != "caller-a" {
+		t.Fatal("SIPParticipantInfo alias did not preserve participant id")
+	}
+}
+
 func TestCreateSIPParticipantRequestUsesReferenceDefaultName(t *testing.T) {
 	req := workerlivekit.CreateSIPParticipantRequest("room-a", "+15551234567", "trunk-a", "caller-a", "")
 

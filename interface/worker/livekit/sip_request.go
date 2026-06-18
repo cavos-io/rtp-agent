@@ -9,6 +9,9 @@ import (
 
 const DefaultSIPParticipantName = "SIP-participant"
 
+type SIPCreateParticipantRequest = lkprotocol.CreateSIPParticipantRequest
+type SIPParticipantInfo = lkprotocol.SIPParticipantInfo
+
 func CreateSIPParticipantRequest(
 	roomName string,
 	callTo string,

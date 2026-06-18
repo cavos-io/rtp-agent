@@ -24,6 +24,21 @@ func (p fakeRemoteParticipantView) Kind() lksdk.ParticipantKind   { return p.kin
 func (p fakeRemoteParticipantView) Metadata() string              { return p.metadata }
 func (p fakeRemoteParticipantView) Attributes() map[string]string { return p.attributes }
 
+func TestProtocolParticipantAliasesUseLiveKitTypes(t *testing.T) {
+	participant := &workerlivekit.ParticipantInfo{
+		Identity: "caller-a",
+		Kind:     workerlivekit.ParticipantInfoKind(lkprotocol.ParticipantInfo_SIP),
+	}
+	room := &workerlivekit.Room{Name: "room-a"}
+
+	if (*lkprotocol.ParticipantInfo)(participant).GetIdentity() != "caller-a" {
+		t.Fatal("ParticipantInfo alias did not preserve protocol identity")
+	}
+	if (*lkprotocol.Room)(room).GetName() != "room-a" {
+		t.Fatal("Room alias did not preserve protocol name")
+	}
+}
+
 func TestParticipantInfoFromRemoteParticipantCopiesJoinFields(t *testing.T) {
 	info := workerlivekit.ParticipantInfoFromRemoteParticipant(fakeRemoteParticipantView{
 		sid:      "participant-sid",

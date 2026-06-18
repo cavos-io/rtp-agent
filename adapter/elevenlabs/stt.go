@@ -166,6 +166,7 @@ func (s *ElevenLabsSTT) Stream(ctx context.Context, language string) (stt.Recogn
 		state: &elevenLabsSTTStreamState{
 			language:          resolveElevenLabsSTTLanguage(s, language),
 			includeTimestamps: s.includeTimestamps,
+			serverVAD:         s.serverVAD != nil,
 		},
 	}
 	go stream.readLoop()
@@ -451,6 +452,7 @@ func writeElevenLabsSTTMessage(conn *websocket.Conn, message map[string]any) err
 type elevenLabsSTTStreamState struct {
 	language          string
 	includeTimestamps bool
+	serverVAD         bool
 	speaking          bool
 	startTimeOffset   float64
 }
@@ -547,6 +549,10 @@ func elevenLabsSTTCommittedEvents(state *elevenLabsSTTStreamState, data map[stri
 		Type:         stt.SpeechEventFinalTranscript,
 		Alternatives: []stt.SpeechData{elevenLabsSTTSpeechDataFromStream(state, data)},
 	})
+	if state.serverVAD {
+		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
+		state.speaking = false
+	}
 	return events
 }
 

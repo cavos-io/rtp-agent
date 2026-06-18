@@ -36,6 +36,14 @@ func TestJobRequestAccessorsExposeJobFields(t *testing.T) {
 	}
 }
 
+func TestJobAliasUsesLiveKitProtocolJob(t *testing.T) {
+	job := &workerlivekit.Job{Id: "job-alias"}
+
+	if job.GetId() != "job-alias" {
+		t.Fatalf("Job.GetId() = %q, want job-alias", job.GetId())
+	}
+}
+
 func TestJobRequestAcceptInvokesCallbackWithDefaultIdentity(t *testing.T) {
 	var got workerlivekit.JobAcceptArguments
 	req := workerlivekit.NewJobRequest(&lkprotocol.Job{Id: "job_accept"}, func(args workerlivekit.JobAcceptArguments) error {
@@ -262,11 +270,140 @@ func TestJobAssignmentInfoDefaultsURLWhenAssignmentURLMissing(t *testing.T) {
 	}
 }
 
+func TestJobAssignmentAliasUsesLiveKitProtocolAssignment(t *testing.T) {
+	job := &lkprotocol.Job{Id: "job-a"}
+	assignment := &workerlivekit.JobAssignment{Job: job}
+	protocolAssignment := (*lkprotocol.JobAssignment)(assignment)
+
+	if protocolAssignment.GetJob() != job {
+		t.Fatal("JobAssignment alias did not preserve protocol job")
+	}
+}
+
+func TestRunningJobInfoCarriesLiveKitJobAndReloadFields(t *testing.T) {
+	info := workerlivekit.RunningJobInfo{
+		AcceptArguments: workerlivekit.JobAcceptArguments{
+			Identity: "agent-job-a",
+		},
+		Job:      &lkprotocol.Job{Id: "job-a"},
+		URL:      "wss://livekit.example",
+		Token:    "room-token",
+		WorkerID: "worker-a",
+		FakeJob:  true,
+	}
+
+	if info.Job.GetId() != "job-a" {
+		t.Fatalf("Job.Id = %q, want job-a", info.Job.GetId())
+	}
+	if info.AcceptArguments.Identity != "agent-job-a" {
+		t.Fatalf("AcceptArguments.Identity = %q, want agent-job-a", info.AcceptArguments.Identity)
+	}
+	if info.URL != "wss://livekit.example" {
+		t.Fatalf("URL = %q, want wss://livekit.example", info.URL)
+	}
+	if info.Token != "room-token" {
+		t.Fatalf("Token = %q, want room-token", info.Token)
+	}
+	if info.WorkerID != "worker-a" {
+		t.Fatalf("WorkerID = %q, want worker-a", info.WorkerID)
+	}
+	if !info.FakeJob {
+		t.Fatal("FakeJob = false, want true")
+	}
+}
+
+func TestPopPendingAcceptReturnsAndDeletesAcceptedArgs(t *testing.T) {
+	pending := map[string]workerlivekit.JobAcceptArguments{
+		"job-a": {Identity: "agent-a"},
+		"job-b": {Identity: "agent-b"},
+	}
+
+	args, ok := workerlivekit.PopPendingAccept(pending, "job-a")
+
+	if !ok {
+		t.Fatal("PopPendingAccept() ok = false, want true")
+	}
+	if args.Identity != "agent-a" {
+		t.Fatalf("Identity = %q, want agent-a", args.Identity)
+	}
+	if _, exists := pending["job-a"]; exists {
+		t.Fatal("job-a remained in pending accepts")
+	}
+	if pending["job-b"].Identity != "agent-b" {
+		t.Fatalf("job-b identity = %q, want agent-b", pending["job-b"].Identity)
+	}
+}
+
+func TestPopPendingAcceptMissingJobLeavesPendingAccepts(t *testing.T) {
+	pending := map[string]workerlivekit.JobAcceptArguments{
+		"job-b": {Identity: "agent-b"},
+	}
+
+	_, ok := workerlivekit.PopPendingAccept(pending, "job-a")
+
+	if ok {
+		t.Fatal("PopPendingAccept() ok = true, want false")
+	}
+	if pending["job-b"].Identity != "agent-b" {
+		t.Fatalf("job-b identity = %q, want agent-b", pending["job-b"].Identity)
+	}
+}
+
+type fakePendingAssignmentTimer struct {
+	stopped bool
+}
+
+func (f *fakePendingAssignmentTimer) Stop() bool {
+	f.stopped = true
+	return true
+}
+
+func TestStopPendingAssignmentTimerStopsAndDeletesTimer(t *testing.T) {
+	timer := &fakePendingAssignmentTimer{}
+	pending := map[string]*fakePendingAssignmentTimer{
+		"job-a": timer,
+		"job-b": {},
+	}
+
+	workerlivekit.StopPendingAssignmentTimer(pending, "job-a")
+
+	if !timer.stopped {
+		t.Fatal("timer stopped = false, want true")
+	}
+	if _, exists := pending["job-a"]; exists {
+		t.Fatal("job-a timer remained pending")
+	}
+	if _, exists := pending["job-b"]; !exists {
+		t.Fatal("job-b timer was removed")
+	}
+}
+
+func TestStopPendingAssignmentTimerMissingJobLeavesTimers(t *testing.T) {
+	pending := map[string]*fakePendingAssignmentTimer{
+		"job-b": {},
+	}
+
+	workerlivekit.StopPendingAssignmentTimer(pending, "job-a")
+
+	if _, exists := pending["job-b"]; !exists {
+		t.Fatal("job-b timer was removed")
+	}
+}
+
 func TestJobTerminationInfoExposesJobID(t *testing.T) {
 	info := workerlivekit.JobTerminationInfo(&lkprotocol.JobTermination{JobId: "job-stop"})
 
 	if info.JobID != "job-stop" {
 		t.Fatalf("JobTerminationInfo().JobID = %q, want job-stop", info.JobID)
+	}
+}
+
+func TestJobTerminationAliasUsesLiveKitProtocolTermination(t *testing.T) {
+	termination := &workerlivekit.JobTermination{JobId: "job-stop"}
+	protocolTermination := (*lkprotocol.JobTermination)(termination)
+
+	if protocolTermination.GetJobId() != "job-stop" {
+		t.Fatalf("JobTermination alias job id = %q, want job-stop", protocolTermination.GetJobId())
 	}
 }
 

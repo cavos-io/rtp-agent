@@ -20,6 +20,8 @@ type JobRejectArguments struct {
 	Terminate bool
 }
 
+type Job = lkprotocol.Job
+
 func JobAcceptArgumentsForJob(job *lkprotocol.Job, args JobAcceptArguments) JobAcceptArguments {
 	args.Identity = JobAcceptIdentity(job, args.Identity)
 	return args
@@ -202,7 +204,18 @@ type AssignmentInfo struct {
 	EnableRecording bool
 }
 
-func JobAssignmentInfo(req *lkprotocol.JobAssignment, defaultURL string) AssignmentInfo {
+type JobAssignment = lkprotocol.JobAssignment
+
+type RunningJobInfo struct {
+	AcceptArguments JobAcceptArguments `json:"accept_arguments"`
+	Job             *lkprotocol.Job    `json:"job"`
+	URL             string             `json:"url"`
+	Token           string             `json:"token"`
+	WorkerID        string             `json:"worker_id"`
+	FakeJob         bool               `json:"fake_job"`
+}
+
+func JobAssignmentInfo(req *JobAssignment, defaultURL string) AssignmentInfo {
 	if req == nil {
 		return AssignmentInfo{URL: defaultURL}
 	}
@@ -219,11 +232,35 @@ func JobAssignmentInfo(req *lkprotocol.JobAssignment, defaultURL string) Assignm
 	}
 }
 
+func PopPendingAccept(pending map[string]JobAcceptArguments, jobID string) (JobAcceptArguments, bool) {
+	args, ok := pending[jobID]
+	if !ok {
+		return JobAcceptArguments{}, false
+	}
+	delete(pending, jobID)
+	return args, true
+}
+
+type PendingAssignmentTimer interface {
+	Stop() bool
+}
+
+func StopPendingAssignmentTimer[T PendingAssignmentTimer](pending map[string]T, jobID string) {
+	timer, ok := pending[jobID]
+	if !ok {
+		return
+	}
+	timer.Stop()
+	delete(pending, jobID)
+}
+
 type TerminationInfo struct {
 	JobID string
 }
 
-func JobTerminationInfo(req *lkprotocol.JobTermination) TerminationInfo {
+type JobTermination = lkprotocol.JobTermination
+
+func JobTerminationInfo(req *JobTermination) TerminationInfo {
 	if req == nil {
 		return TerminationInfo{}
 	}

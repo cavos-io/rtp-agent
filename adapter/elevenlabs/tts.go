@@ -583,6 +583,7 @@ func (s *elevenLabsStream) PushText(text string) error {
 		"try_trigger_generation": true,
 	}
 	if err := s.conn.WriteJSON(msg); err != nil {
+		s.closeAfterWriteFailureLocked()
 		return fmt.Errorf("failed to write text to elevenlabs: %w", err)
 	}
 	return nil
@@ -594,11 +595,21 @@ func (s *elevenLabsStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	return s.conn.WriteJSON(elevenLabsFlushPayload())
+	if err := s.conn.WriteJSON(elevenLabsFlushPayload()); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func elevenLabsFlushPayload() map[string]interface{} {
 	return map[string]interface{}{"text": ""}
+}
+
+func (s *elevenLabsStream) closeAfterWriteFailureLocked() {
+	s.closed = true
+	s.cancel()
+	_ = s.conn.Close()
 }
 
 func (s *elevenLabsStream) Close() error {

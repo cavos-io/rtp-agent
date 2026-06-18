@@ -285,6 +285,7 @@ func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 		errCh:      make(chan error, 1),
 		sampleRate: t.sampleRate,
 	}
+	stream.writeJSON = stream.writeJSONMessage
 
 	go stream.readLoop()
 
@@ -336,6 +337,7 @@ type cartesiaTTSStream struct {
 	closed bool
 
 	sampleRate int
+	writeJSON  func(any) error
 }
 
 type cartesiaWSResponse struct {
@@ -398,7 +400,11 @@ func (s *cartesiaTTSStream) PushText(text string) error {
 		"transcript": text,
 		"continue":   true,
 	}
-	return s.conn.WriteJSON(msg)
+	if err := s.writeJSONData(msg); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *cartesiaTTSStream) Flush() error {
@@ -409,9 +415,31 @@ func (s *cartesiaTTSStream) Flush() error {
 	}
 	msg := map[string]interface{}{
 		"context_id": "default",
-		"transcript": "",
+		"transcript": " ",
 		"continue":   false,
 	}
+	if err := s.writeJSONData(msg); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
+}
+
+func (s *cartesiaTTSStream) closeAfterWriteFailureLocked() {
+	s.closed = true
+	if s.conn != nil {
+		_ = s.conn.Close()
+	}
+}
+
+func (s *cartesiaTTSStream) writeJSONData(msg any) error {
+	if s.writeJSON != nil {
+		return s.writeJSON(msg)
+	}
+	return s.writeJSONMessage(msg)
+}
+
+func (s *cartesiaTTSStream) writeJSONMessage(msg any) error {
 	return s.conn.WriteJSON(msg)
 }
 

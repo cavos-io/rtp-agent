@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
-	"github.com/livekit/protocol/livekit"
 )
 
 var ErrUnknownMessageType = errors.New("unknown IPC message type")
@@ -150,14 +149,7 @@ type PongResponse struct {
 
 type JobAcceptArguments = workerlivekit.JobAcceptArguments
 
-type RunningJobInfo struct {
-	AcceptArguments JobAcceptArguments `json:"accept_arguments"`
-	Job             *livekit.Job       `json:"job"`
-	URL             string             `json:"url"`
-	Token           string             `json:"token"`
-	WorkerID        string             `json:"worker_id"`
-	FakeJob         bool               `json:"fake_job"`
-}
+type RunningJobInfo = workerlivekit.RunningJobInfo
 
 type StartJobRequest struct {
 	RunningJob RunningJobInfo `json:"running_job"`

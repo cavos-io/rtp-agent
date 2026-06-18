@@ -8,6 +8,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+type ServerMessage = lkprotocol.ServerMessage
+
 func MarshalWorkerMessage(msg *lkprotocol.WorkerMessage) ([]byte, error) {
 	return proto.Marshal(msg)
 }
@@ -58,8 +60,8 @@ type ServerMessageDispatchInfo struct {
 	Kind         ServerMessageKind
 	Register     RegisterMessageInfo
 	Availability *lkprotocol.AvailabilityRequest
-	Assignment   *lkprotocol.JobAssignment
-	Termination  *lkprotocol.JobTermination
+	Assignment   *JobAssignment
+	Termination  *JobTermination
 }
 
 func ServerMessageDispatch(msg *lkprotocol.ServerMessage) ServerMessageDispatchInfo {

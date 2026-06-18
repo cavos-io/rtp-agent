@@ -10,6 +10,15 @@ import (
 	"github.com/twitchtv/twirp"
 )
 
+func TestDeleteRoomResponseAliasUsesLiveKitProtocolResponse(t *testing.T) {
+	resp := &workerlivekit.DeleteRoomResponse{}
+	var protocolResp *lkprotocol.DeleteRoomResponse = resp
+
+	if protocolResp != resp {
+		t.Fatal("DeleteRoomResponse alias did not preserve response pointer")
+	}
+}
+
 func TestDeleteRoomRequestUsesExplicitRoomName(t *testing.T) {
 	req := workerlivekit.DeleteRoomRequest(&lkprotocol.Job{
 		Room: &lkprotocol.Room{Name: "job-room"},

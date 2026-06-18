@@ -9,6 +9,8 @@ import (
 	"github.com/twitchtv/twirp"
 )
 
+type DeleteRoomResponse = lkprotocol.DeleteRoomResponse
+
 func DeleteRoomRequest(job *lkprotocol.Job, roomName string) *lkprotocol.DeleteRoomRequest {
 	if roomName == "" && job != nil && job.Room != nil {
 		roomName = job.Room.Name

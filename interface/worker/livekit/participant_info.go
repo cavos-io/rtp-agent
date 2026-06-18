@@ -7,6 +7,11 @@ import (
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
+type ParticipantInfo = lkprotocol.ParticipantInfo
+type ParticipantInfoKind = lkprotocol.ParticipantInfo_Kind
+type Room = lkprotocol.Room
+type TrackType = lkprotocol.TrackType
+
 type RemoteParticipantView interface {
 	SID() string
 	Identity() string

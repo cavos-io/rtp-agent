@@ -26,7 +26,6 @@ import (
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/gorilla/websocket"
-	"github.com/livekit/protocol/livekit"
 )
 
 type WorkerType = workerlivekit.WorkerType
@@ -201,7 +200,7 @@ type AgentServer struct {
 	httpServer             *http.Server
 	httpPort               int
 	prometheusServer       *telemetry.HttpServer
-	workerMessageSink      func(*livekit.WorkerMessage) error
+	workerMessageSink      func(*workerlivekit.WorkerMessage) error
 	workerID               string
 	connectionFailed       bool
 	startedHandlers        []WorkerStartedHandler
@@ -1106,7 +1105,7 @@ func readSystemCPUTimes() (idle uint64, total uint64, err error) {
 	return idle, total, nil
 }
 
-func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
+func (s *AgentServer) registerWorkerRequest() *workerlivekit.WorkerMessage {
 	return workerlivekit.RegisterWorkerMessage(workerlivekit.WorkerRegistrationOptions{
 		WorkerType:  string(s.Options.WorkerType),
 		AgentName:   s.Options.AgentName,
@@ -1115,13 +1114,13 @@ func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
 	})
 }
 
-func (s *AgentServer) availableWorkerStatusMessage() *livekit.WorkerMessage {
+func (s *AgentServer) availableWorkerStatusMessage() *workerlivekit.WorkerMessage {
 	jobCount := uint32(s.activeJobCount())
 	load := s.currentLoad()
 	return workerlivekit.AvailableWorkerStatusMessage(load, jobCount, s.availableForJobWithLoad(load))
 }
 
-func (s *AgentServer) drainingWorkerStatusMessage() *livekit.WorkerMessage {
+func (s *AgentServer) drainingWorkerStatusMessage() *workerlivekit.WorkerMessage {
 	return workerlivekit.DrainingWorkerStatusMessage(uint32(s.activeJobCount()))
 }
 
@@ -1604,7 +1603,7 @@ func (s *AgentServer) connectWorkerWebSocket(ctx context.Context, dialer *websoc
 	return conn, res, nil
 }
 
-func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMessage) {
+func (s *AgentServer) handleMessage(ctx context.Context, msg *workerlivekit.ServerMessage) {
 	dispatch := workerlivekit.ServerMessageDispatch(msg)
 	switch dispatch.Kind {
 	case workerlivekit.ServerMessageKindRegister:
@@ -1626,7 +1625,7 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 	}
 }
 
-func (s *AgentServer) emitWorkerRegistered(workerID string, serverInfo *livekit.ServerInfo) {
+func (s *AgentServer) emitWorkerRegistered(workerID string, serverInfo *workerlivekit.ServerInfo) {
 	s.mu.Lock()
 	infoHandlers := append([]WorkerRegisteredInfoHandler(nil), s.registeredInfoHandlers...)
 	handlers := append([]WorkerRegisteredHandler(nil), s.registeredHandlers...)
@@ -1650,7 +1649,7 @@ func callWorkerRegisteredInfoHandler(handler WorkerRegisteredInfoHandler, info W
 	handler(info)
 }
 
-func callWorkerRegisteredHandler(handler WorkerRegisteredHandler, workerID string, serverInfo *livekit.ServerInfo) {
+func callWorkerRegisteredHandler(handler WorkerRegisteredHandler, workerID string, serverInfo *workerlivekit.ServerInfo) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Logger.Errorw("Worker registered handler failed", fmt.Errorf("panic: %v", r), "workerId", workerID)
@@ -1679,11 +1678,11 @@ func (s *AgentServer) reportActiveJobs() {
 	}
 }
 
-func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.AvailabilityRequest) {
+func (s *AgentServer) handleAvailability(ctx context.Context, req *workerlivekit.AvailabilityRequest) {
 	go s.answerAvailability(ctx, req)
 }
 
-func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.AvailabilityRequest) {
+func (s *AgentServer) answerAvailability(ctx context.Context, req *workerlivekit.AvailabilityRequest) {
 	availability := workerlivekit.AvailabilityInfo(req)
 	jobID := availability.JobID
 	logger.Logger.Infow("Received availability request", "jobId", jobID)
@@ -1735,7 +1734,7 @@ func (s *AgentServer) releaseAvailabilitySlot() {
 	}
 }
 
-func (s *AgentServer) sendWorkerMessage(msg *livekit.WorkerMessage) error {
+func (s *AgentServer) sendWorkerMessage(msg *workerlivekit.WorkerMessage) error {
 	if s.workerMessageSink != nil {
 		return s.workerMessageSink(msg)
 	}
@@ -1750,9 +1749,7 @@ func (s *AgentServer) sendWorkerMessage(msg *livekit.WorkerMessage) error {
 
 func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) {
 	s.mu.Lock()
-	if timer, ok := s.pendingTimers[jobID]; ok {
-		timer.Stop()
-	}
+	workerlivekit.StopPendingAssignmentTimer(s.pendingTimers, jobID)
 	s.pendingAccepts[jobID] = args
 	var timer *time.Timer
 	timer = time.AfterFunc(assignmentTimeout, func() {
@@ -1770,7 +1767,7 @@ func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) 
 	s.mu.Unlock()
 }
 
-func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssignment) {
+func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.JobAssignment) {
 	assignment := workerlivekit.JobAssignmentInfo(req, s.Options.WSRL)
 	jobID := assignment.JobID
 	logger.Logger.Infow("Received job assignment", "jobId", jobID)
@@ -1782,7 +1779,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 	jobCtx.token = assignment.Token
 
 	s.mu.Lock()
-	args, accepted := s.pendingAccepts[jobID]
+	args, accepted := workerlivekit.PopPendingAccept(s.pendingAccepts, jobID)
 	if !accepted {
 		s.mu.Unlock()
 		logger.Logger.Warnw("received assignment for unknown job", nil, "jobId", jobID)
@@ -1792,11 +1789,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 	jobCtx.workerID = s.workerID
 	jobCtx.AcceptArguments = args
 	jobCtx.LogContextFields()["worker_id"] = jobCtx.WorkerID()
-	delete(s.pendingAccepts, jobID)
-	if timer, ok := s.pendingTimers[jobID]; ok {
-		timer.Stop()
-		delete(s.pendingTimers, jobID)
-	}
+	workerlivekit.StopPendingAssignmentTimer(s.pendingTimers, jobID)
 	s.activeJobs[jobID] = jobCtx
 	s.mu.Unlock()
 
@@ -1847,7 +1840,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 	}
 }
 
-func (s *AgentServer) handleTermination(req *livekit.JobTermination) {
+func (s *AgentServer) handleTermination(req *workerlivekit.JobTermination) {
 	termination := workerlivekit.JobTerminationInfo(req)
 	jobID := termination.JobID
 	logger.Logger.Infow("Received job termination", "jobId", jobID)

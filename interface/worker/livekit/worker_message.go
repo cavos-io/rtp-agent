@@ -7,6 +7,8 @@ import (
 	lkprotocol "github.com/livekit/protocol/livekit"
 )
 
+type WorkerMessage = lkprotocol.WorkerMessage
+
 func WorkerStatusMessage(status lkprotocol.WorkerStatus, load float64, jobCount uint32) *lkprotocol.WorkerMessage {
 	return &lkprotocol.WorkerMessage{
 		Message: &lkprotocol.WorkerMessage_UpdateWorker{
