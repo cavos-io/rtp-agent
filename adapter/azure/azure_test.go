@@ -525,6 +525,28 @@ func TestAzureSTTStreamPreservesExplicitZeroConfidence(t *testing.T) {
 	}
 }
 
+func TestAzureSTTStreamInterimConfidenceMatchesReference(t *testing.T) {
+	event := parseAzureSTTMessage(
+		resolveAzureSTTLanguage("id-ID"),
+		[]byte("Path: speech.hypothesis\r\nContent-Type: application/json\r\n\r\n{\"Text\":\"halo sementara\"}"),
+	)
+	if event == nil {
+		t.Fatal("event = nil, want interim transcript")
+	}
+	if event.Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("event Type = %s, want interim_transcript", event.Type)
+	}
+	if got := event.Alternatives[0].Text; got != "halo sementara" {
+		t.Fatalf("text = %q, want hypothesis text", got)
+	}
+	if got := event.Alternatives[0].Language; got != "id-ID" {
+		t.Fatalf("language = %q, want requested language", got)
+	}
+	if got := event.Alternatives[0].Confidence; got != 0 {
+		t.Fatalf("confidence = %v, want Azure reference interim confidence 0", got)
+	}
+}
+
 func TestAzureSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	requests := make(chan *http.Request, defaultAzureSTTRetries+1)
 	configMessages := make(chan string, defaultAzureSTTRetries+1)
