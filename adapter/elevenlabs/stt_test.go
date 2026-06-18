@@ -945,6 +945,59 @@ func TestElevenLabsSTTStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTStreamUnexpectedNormalCloseReturnsAPIStatusError(t *testing.T) {
+	closed := make(chan struct{})
+	closeAfterHandshake := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runElevenLabsNormalCloseWebsocketServer(serverConn, closeAfterHandshake, closed, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTModel("scribe_v2_realtime"),
+		WithElevenLabsSTTBaseURL("ws://eleven.test/v1"),
+	)
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	close(closeAfterHandshake)
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for normal websocket close")
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for normal close server")
+	}
+
+	_, err = stream.Next()
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != websocket.CloseNormalClosure {
+		t.Fatalf("StatusCode = %d, want normal close code", statusErr.StatusCode)
+	}
+}
+
 func runElevenLabsClosingWebsocketServer(conn net.Conn, closeAfterHandshake <-chan struct{}, closed chan<- struct{}, errCh chan<- error) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
@@ -960,6 +1013,24 @@ func runElevenLabsClosingWebsocketServer(conn net.Conn, closeAfterHandshake <-ch
 	<-closeAfterHandshake
 	close(closed)
 	errCh <- nil
+}
+
+func runElevenLabsNormalCloseWebsocketServer(conn net.Conn, closeAfterHandshake <-chan struct{}, closed chan<- struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", elevenLabsTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	<-closeAfterHandshake
+	_, err = conn.Write([]byte{0x88, 0x02, 0x03, 0xe8})
+	close(closed)
+	errCh <- err
 }
 
 func runElevenLabsSTTHandshakeRecorder(conn net.Conn, queries chan<- url.Values, release <-chan struct{}, errCh chan<- error) {
