@@ -182,6 +182,359 @@ func TestRunEntrypointRecoversPanic(t *testing.T) {
 	}
 }
 
+func TestRunJobEntrypointLifecycleWaitsForShutdownThenFinishesBeforeSuccessStatus(t *testing.T) {
+	var events []string
+	shutdown := make(chan struct{})
+	done := make(chan struct{})
+
+	go func() {
+		workerlivekit.RunJobEntrypointLifecycle(workerlivekit.JobEntrypointLifecycleOptions{
+			Context: context.Background(),
+			Entrypoint: func() error {
+				events = append(events, "entrypoint")
+				return nil
+			},
+			MarkDone: func() {
+				events = append(events, "done")
+			},
+			OnResult: func(result workerlivekit.EntrypointResult) {
+				events = append(events, "result:"+result.Status.String())
+			},
+			ShutdownDone: shutdown,
+			Finish: func() bool {
+				events = append(events, "finish")
+				return true
+			},
+			SendStatus: func(status lkprotocol.JobStatus) error {
+				events = append(events, "status:"+status.String())
+				return nil
+			},
+		})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("RunJobEntrypointLifecycle returned before shutdown")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(shutdown)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("RunJobEntrypointLifecycle did not return after shutdown")
+	}
+
+	want := []string{"entrypoint", "done", "result:JS_SUCCESS", "finish", "status:JS_SUCCESS"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %#v, want %#v", events, want)
+	}
+}
+
+func TestRunJobEntrypointLifecycleSendsFailureStatusBeforeFinish(t *testing.T) {
+	errBoom := errors.New("boom")
+	var events []string
+
+	workerlivekit.RunJobEntrypointLifecycle(workerlivekit.JobEntrypointLifecycleOptions{
+		Context: context.Background(),
+		Entrypoint: func() error {
+			return errBoom
+		},
+		OnResult: func(result workerlivekit.EntrypointResult) {
+			if result.Err != errBoom {
+				t.Fatalf("result.Err = %v, want boom", result.Err)
+			}
+			events = append(events, "result:"+result.Status.String())
+		},
+		Finish: func() bool {
+			events = append(events, "finish")
+			return true
+		},
+		SendStatus: func(status lkprotocol.JobStatus) error {
+			events = append(events, "status:"+status.String())
+			return nil
+		},
+	})
+
+	want := []string{"result:JS_FAILED", "status:JS_FAILED", "finish"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %#v, want %#v", events, want)
+	}
+}
+
+func TestRunJobEntrypointLifecycleSkipsStatusWhenTerminated(t *testing.T) {
+	var events []string
+
+	workerlivekit.RunJobEntrypointLifecycle(workerlivekit.JobEntrypointLifecycleOptions{
+		Context: context.Background(),
+		Entrypoint: func() error {
+			return nil
+		},
+		Terminated: func() bool {
+			return true
+		},
+		Finish: func() bool {
+			events = append(events, "finish")
+			return true
+		},
+		SendStatus: func(status lkprotocol.JobStatus) error {
+			events = append(events, "status:"+status.String())
+			return nil
+		},
+	})
+
+	want := []string{"finish"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %#v, want %#v", events, want)
+	}
+}
+
+func TestRunReloadedJobEntrypointLifecycleFinishesBeforeAndAfterSuccessStatus(t *testing.T) {
+	var events []string
+	shutdown := make(chan struct{})
+	done := make(chan struct{})
+
+	go func() {
+		workerlivekit.RunReloadedJobEntrypointLifecycle(workerlivekit.ReloadedJobEntrypointLifecycleOptions{
+			Context: context.Background(),
+			Entrypoint: func() error {
+				events = append(events, "entrypoint")
+				return nil
+			},
+			MarkDone: func() {
+				events = append(events, "done")
+			},
+			ShutdownDone: shutdown,
+			Finish: func() bool {
+				events = append(events, "finish")
+				return true
+			},
+			SendStatus: func(status lkprotocol.JobStatus) error {
+				events = append(events, "status:"+status.String())
+				return nil
+			},
+		})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("RunReloadedJobEntrypointLifecycle returned before shutdown")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(shutdown)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("RunReloadedJobEntrypointLifecycle did not return after shutdown")
+	}
+
+	want := []string{"entrypoint", "done", "finish", "status:JS_SUCCESS", "finish"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %#v, want %#v", events, want)
+	}
+}
+
+func TestRunReloadedJobEntrypointLifecycleFinishesFailureBeforeStatus(t *testing.T) {
+	var events []string
+
+	workerlivekit.RunReloadedJobEntrypointLifecycle(workerlivekit.ReloadedJobEntrypointLifecycleOptions{
+		Context: context.Background(),
+		Entrypoint: func() error {
+			return errors.New("boom")
+		},
+		Finish: func() bool {
+			events = append(events, "finish")
+			return true
+		},
+		SendStatus: func(status lkprotocol.JobStatus) error {
+			events = append(events, "status:"+status.String())
+			return nil
+		},
+	})
+
+	want := []string{"finish", "status:JS_FAILED", "finish"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %#v, want %#v", events, want)
+	}
+}
+
+func TestRunReloadedJobEntrypointLifecycleSkipsStatusAfterContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var events []string
+
+	workerlivekit.RunReloadedJobEntrypointLifecycle(workerlivekit.ReloadedJobEntrypointLifecycleOptions{
+		Context: ctx,
+		Entrypoint: func() error {
+			return errors.New("boom")
+		},
+		Finish: func() bool {
+			events = append(events, "finish")
+			return true
+		},
+		SendStatus: func(status lkprotocol.JobStatus) error {
+			events = append(events, "status:"+status.String())
+			return nil
+		},
+		OnStatusSkipped: func() {
+			events = append(events, "skip")
+		},
+	})
+
+	want := []string{"finish", "skip", "finish"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %#v, want %#v", events, want)
+	}
+}
+
+func TestRunRunningJobEntrypointLifecycleWaitsForShutdown(t *testing.T) {
+	var events []string
+	shutdown := make(chan struct{})
+	done := make(chan error, 1)
+
+	go func() {
+		done <- workerlivekit.RunRunningJobEntrypointLifecycle(workerlivekit.RunningJobEntrypointLifecycleOptions{
+			Context: context.Background(),
+			MarkStarted: func() {
+				events = append(events, "started")
+			},
+			Entrypoint: func() error {
+				events = append(events, "entrypoint")
+				return nil
+			},
+			MarkDone: func() {
+				events = append(events, "done")
+			},
+			ShutdownDone: shutdown,
+			Finish: func() bool {
+				events = append(events, "finish")
+				return true
+			},
+		})
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("RunRunningJobEntrypointLifecycle returned before shutdown with %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(shutdown)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunRunningJobEntrypointLifecycle error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunRunningJobEntrypointLifecycle did not return after shutdown")
+	}
+
+	want := []string{"started", "entrypoint", "done", "finish"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %#v, want %#v", events, want)
+	}
+}
+
+func TestRunRunningJobEntrypointLifecycleCancelsAndWaitsForEntrypoint(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	entrypointDone := make(chan struct{})
+	var events []string
+	var waitDuration time.Duration
+
+	done := make(chan error, 1)
+	go func() {
+		done <- workerlivekit.RunRunningJobEntrypointLifecycle(workerlivekit.RunningJobEntrypointLifecycleOptions{
+			Context: ctx,
+			Entrypoint: func() error {
+				<-entrypointDone
+				return nil
+			},
+			Shutdown: func(reason string) {
+				events = append(events, "shutdown:"+reason)
+			},
+			WaitEntrypointDone: func(timeout time.Duration) bool {
+				waitDuration = timeout
+				events = append(events, "wait")
+				return false
+			},
+			CloseWait: 7 * time.Millisecond,
+			OnCancelTimeout: func() {
+				events = append(events, "timeout")
+			},
+			Finish: func() bool {
+				events = append(events, "finish")
+				return true
+			},
+		})
+	}()
+
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("RunRunningJobEntrypointLifecycle error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunRunningJobEntrypointLifecycle did not return after context cancel")
+	}
+	close(entrypointDone)
+
+	if waitDuration != 7*time.Millisecond {
+		t.Fatalf("waitDuration = %v, want 7ms", waitDuration)
+	}
+	want := []string{"shutdown:", "wait", "timeout", "finish"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %#v, want %#v", events, want)
+	}
+}
+
+func TestRunRunningJobEntrypointLifecycleReportsPanicAsError(t *testing.T) {
+	var events []string
+
+	err := workerlivekit.RunRunningJobEntrypointLifecycle(workerlivekit.RunningJobEntrypointLifecycleOptions{
+		Context: context.Background(),
+		Entrypoint: func() error {
+			panic("boom")
+		},
+		MarkDone: func() {
+			events = append(events, "done")
+		},
+		OnPanic: func(recovered any) {
+			events = append(events, "panic:"+recovered.(string))
+		},
+		OnError: func(err error) {
+			events = append(events, "error:"+err.Error())
+		},
+		Finish: func() bool {
+			events = append(events, "finish")
+			return true
+		},
+	})
+
+	if err == nil || err.Error() != "running job entrypoint panicked: boom" {
+		t.Fatalf("RunRunningJobEntrypointLifecycle error = %v, want panic error", err)
+	}
+	wantEvents := map[string]bool{
+		"panic:boom": false,
+		"done":       false,
+		"error:running job entrypoint panicked: boom": false,
+		"finish": false,
+	}
+	for _, event := range events {
+		if _, ok := wantEvents[event]; ok {
+			wantEvents[event] = true
+		}
+	}
+	for event, seen := range wantEvents {
+		if !seen {
+			t.Fatalf("events = %#v, missing %q", events, event)
+		}
+	}
+}
+
 func TestMigrateJobMessageCarriesJobIDs(t *testing.T) {
 	jobIDs := []string{"job-a", "job-b"}
 	msg := workerlivekit.MigrateJobMessage(jobIDs)
@@ -532,5 +885,50 @@ func TestDrainingWorkerStatusMessageReportsFullWithoutLoad(t *testing.T) {
 	}
 	if update.JobCount != 3 {
 		t.Fatalf("UpdateWorker.JobCount = %d, want 3", update.JobCount)
+	}
+}
+
+func TestWorkerStatusUpdateMessageUsesDrainingStatusWhenDraining(t *testing.T) {
+	msg := workerlivekit.WorkerStatusUpdateMessage(workerlivekit.WorkerStatusUpdateOptions{
+		Draining:     true,
+		Load:         0.91,
+		JobCount:     4,
+		CanAcceptJob: true,
+	})
+
+	update := msg.GetUpdateWorker()
+	if update == nil {
+		t.Fatal("UpdateWorker message is nil")
+	}
+	if update.GetStatus() != lkprotocol.WorkerStatus_WS_FULL {
+		t.Fatalf("UpdateWorker.Status = %v, want WS_FULL", update.GetStatus())
+	}
+	if update.Load != 0 {
+		t.Fatalf("UpdateWorker.Load = %v, want 0 while draining", update.Load)
+	}
+	if update.JobCount != 4 {
+		t.Fatalf("UpdateWorker.JobCount = %d, want 4", update.JobCount)
+	}
+}
+
+func TestWorkerStatusUpdateMessageUsesAvailabilityWhenNotDraining(t *testing.T) {
+	msg := workerlivekit.WorkerStatusUpdateMessage(workerlivekit.WorkerStatusUpdateOptions{
+		Load:         0.51,
+		JobCount:     2,
+		CanAcceptJob: false,
+	})
+
+	update := msg.GetUpdateWorker()
+	if update == nil {
+		t.Fatal("UpdateWorker message is nil")
+	}
+	if update.GetStatus() != lkprotocol.WorkerStatus_WS_FULL {
+		t.Fatalf("UpdateWorker.Status = %v, want WS_FULL", update.GetStatus())
+	}
+	if update.Load != 0.51 {
+		t.Fatalf("UpdateWorker.Load = %v, want 0.51", update.Load)
+	}
+	if update.JobCount != 2 {
+		t.Fatalf("UpdateWorker.JobCount = %d, want 2", update.JobCount)
 	}
 }

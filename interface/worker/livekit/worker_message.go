@@ -4,12 +4,22 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/gorilla/websocket"
 	lkprotocol "github.com/livekit/protocol/livekit"
 )
 
 type WorkerMessage = lkprotocol.WorkerMessage
+
+type JobStatus = lkprotocol.JobStatus
+
+type WorkerStatusUpdateOptions struct {
+	Draining     bool
+	Load         float64
+	JobCount     uint32
+	CanAcceptJob bool
+}
 
 type WorkerWebSocketReader interface {
 	ReadMessage() (int, []byte, error)
@@ -136,6 +146,13 @@ func AvailableWorkerStatusMessage(load float64, jobCount uint32, canAcceptJob bo
 	return WorkerStatusMessage(status, load, jobCount)
 }
 
+func WorkerStatusUpdateMessage(opts WorkerStatusUpdateOptions) *lkprotocol.WorkerMessage {
+	if opts.Draining {
+		return DrainingWorkerStatusMessage(opts.JobCount)
+	}
+	return AvailableWorkerStatusMessage(opts.Load, opts.JobCount, opts.CanAcceptJob)
+}
+
 func DrainingWorkerStatusMessage(jobCount uint32) *lkprotocol.WorkerMessage {
 	status := lkprotocol.WorkerStatus_WS_FULL
 	return &lkprotocol.WorkerMessage{
@@ -190,6 +207,45 @@ type EntrypointResult struct {
 	Recovered any
 }
 
+type JobEntrypointLifecycleOptions struct {
+	Context      context.Context
+	Entrypoint   func() error
+	MarkDone     func()
+	OnResult     func(EntrypointResult)
+	Terminated   func() bool
+	ShutdownDone <-chan struct{}
+	Shutdown     func(string)
+	Finish       func() bool
+	SendStatus   func(lkprotocol.JobStatus) error
+}
+
+type ReloadedJobEntrypointLifecycleOptions struct {
+	Context         context.Context
+	Entrypoint      func() error
+	MarkDone        func()
+	OnResult        func(EntrypointResult)
+	ShutdownDone    <-chan struct{}
+	Shutdown        func(string)
+	Finish          func() bool
+	SendStatus      func(lkprotocol.JobStatus) error
+	OnStatusSkipped func()
+}
+
+type RunningJobEntrypointLifecycleOptions struct {
+	Context            context.Context
+	Entrypoint         func() error
+	MarkStarted        func()
+	MarkDone           func()
+	ShutdownDone       <-chan struct{}
+	Shutdown           func(string)
+	WaitEntrypointDone func(time.Duration) bool
+	CloseWait          time.Duration
+	Finish             func() bool
+	OnPanic            func(any)
+	OnError            func(error)
+	OnCancelTimeout    func()
+}
+
 func RunEntrypoint(entrypoint func() error) (result EntrypointResult) {
 	result.Status = JobStatusForEntrypointResult(nil, nil)
 	defer func() {
@@ -203,6 +259,184 @@ func RunEntrypoint(entrypoint func() error) (result EntrypointResult) {
 		result.Status = JobStatusForEntrypointResult(err, nil)
 	}
 	return result
+}
+
+func RunRunningJobEntrypointLifecycle(opts RunningJobEntrypointLifecycleOptions) error {
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	doneCh := make(chan error, 1)
+	if opts.MarkStarted != nil {
+		opts.MarkStarted()
+	}
+	go func() {
+		defer func() {
+			if opts.MarkDone != nil {
+				opts.MarkDone()
+			}
+		}()
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				if opts.OnPanic != nil {
+					opts.OnPanic(recovered)
+				}
+				doneCh <- fmt.Errorf("running job entrypoint panicked: %v", recovered)
+			}
+		}()
+		doneCh <- runJobEntrypointFunc(opts.Entrypoint)
+	}()
+
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			if opts.OnError != nil {
+				opts.OnError(err)
+			}
+			finishJobEntrypoint(opts.Finish)
+			return err
+		}
+		select {
+		case <-opts.ShutdownDone:
+		case <-ctx.Done():
+			if opts.Shutdown != nil {
+				opts.Shutdown("")
+			}
+			finishJobEntrypoint(opts.Finish)
+			return ctx.Err()
+		}
+		finishJobEntrypoint(opts.Finish)
+		return nil
+	case <-ctx.Done():
+		if opts.Shutdown != nil {
+			opts.Shutdown("")
+		}
+		if opts.WaitEntrypointDone != nil && !opts.WaitEntrypointDone(opts.CloseWait) && opts.OnCancelTimeout != nil {
+			opts.OnCancelTimeout()
+		}
+		finishJobEntrypoint(opts.Finish)
+		return ctx.Err()
+	}
+}
+
+func runJobEntrypointFunc(entrypoint func() error) error {
+	if entrypoint == nil {
+		return nil
+	}
+	return entrypoint()
+}
+
+func RunReloadedJobEntrypointLifecycle(opts ReloadedJobEntrypointLifecycleOptions) EntrypointResult {
+	result := RunEntrypoint(opts.Entrypoint)
+	if opts.MarkDone != nil {
+		opts.MarkDone()
+	}
+	if opts.OnResult != nil {
+		opts.OnResult(result)
+	}
+
+	if JobStatusSucceeded(result.Status) {
+		waitForReloadedJobShutdown(opts)
+		if !finishJobEntrypoint(opts.Finish) {
+			return result
+		}
+	} else {
+		finishJobEntrypoint(opts.Finish)
+	}
+
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-ctx.Done():
+		if opts.OnStatusSkipped != nil {
+			opts.OnStatusSkipped()
+		}
+	default:
+		_ = sendJobEntrypointStatus(opts.SendStatus, result.Status)
+	}
+	finishJobEntrypoint(opts.Finish)
+	return result
+}
+
+func RunJobEntrypointLifecycle(opts JobEntrypointLifecycleOptions) EntrypointResult {
+	result := RunEntrypoint(opts.Entrypoint)
+	if opts.MarkDone != nil {
+		opts.MarkDone()
+	}
+	if opts.OnResult != nil {
+		opts.OnResult(result)
+	}
+
+	terminated := false
+	if opts.Terminated != nil {
+		terminated = opts.Terminated()
+	}
+	plan := JobCompletionPlanForEntrypoint(result.Status, terminated)
+	if plan.WaitForShutdown {
+		waitForJobShutdown(opts)
+	}
+	if plan.Finish && plan.SendAfterFinish {
+		if !finishJobEntrypoint(opts.Finish) {
+			return result
+		}
+	}
+	if plan.SendStatus {
+		_ = sendJobEntrypointStatus(opts.SendStatus, result.Status)
+	}
+	if plan.Finish && !plan.SendAfterFinish {
+		finishJobEntrypoint(opts.Finish)
+	}
+	return result
+}
+
+func waitForReloadedJobShutdown(opts ReloadedJobEntrypointLifecycleOptions) {
+	if opts.ShutdownDone == nil {
+		return
+	}
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-opts.ShutdownDone:
+	case <-ctx.Done():
+		if opts.Shutdown != nil {
+			opts.Shutdown("")
+		}
+	}
+}
+
+func waitForJobShutdown(opts JobEntrypointLifecycleOptions) {
+	if opts.ShutdownDone == nil {
+		return
+	}
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-opts.ShutdownDone:
+	case <-ctx.Done():
+		if opts.Shutdown != nil {
+			opts.Shutdown("")
+		}
+	}
+}
+
+func finishJobEntrypoint(finish func() bool) bool {
+	if finish == nil {
+		return true
+	}
+	return finish()
+}
+
+func sendJobEntrypointStatus(sendStatus func(lkprotocol.JobStatus) error, status lkprotocol.JobStatus) error {
+	if sendStatus == nil {
+		return nil
+	}
+	return sendStatus(status)
 }
 
 func JobRunningMessage(jobID string) *lkprotocol.WorkerMessage {

@@ -322,6 +322,16 @@ func TestShouldUploadJobSessionReportSkipsNilFakeOrEmptyReport(t *testing.T) {
 	}
 }
 
+func TestShouldSkipExternalAPIForFakeJobSkipsFakeJobsOnly(t *testing.T) {
+	if !workerlivekit.ShouldSkipExternalAPIForFakeJob(true) {
+		t.Fatal("ShouldSkipExternalAPIForFakeJob(true) = false, want true")
+	}
+
+	if workerlivekit.ShouldSkipExternalAPIForFakeJob(false) {
+		t.Fatal("ShouldSkipExternalAPIForFakeJob(false) = true, want false")
+	}
+}
+
 func TestShouldUploadJobSessionReportUsesEvaluationOrOutcome(t *testing.T) {
 	report := agent.NewSessionReport()
 	report.Tagger = agent.NewTagger()

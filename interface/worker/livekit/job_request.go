@@ -24,6 +24,10 @@ type JobRejectArguments struct {
 
 type Job = lkprotocol.Job
 
+func ShouldSkipExternalAPIForFakeJob(fakeJob bool) bool {
+	return fakeJob
+}
+
 func JobAcceptArgumentsForJob(job *lkprotocol.Job, args JobAcceptArguments) JobAcceptArguments {
 	args.Identity = JobAcceptIdentity(job, args.Identity)
 	return args
