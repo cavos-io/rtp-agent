@@ -292,6 +292,7 @@ type AgentSession struct {
 	videoSampler            *VoiceActivityVideoSampler
 	audioOutputController   AudioOutputController
 	audioPlaybackController AudioPlaybackController
+	toolExecutionRegistry   activeToolRegistry
 
 	// Event channels
 	AgentStateChangedCh  chan AgentStateChangedEvent
