@@ -42,6 +42,9 @@ func TestRtzrSTTDefaultsMatchReference(t *testing.T) {
 	if provider.sampleRate != 8000 {
 		t.Fatalf("sample rate = %d, want 8000", provider.sampleRate)
 	}
+	if got := provider.InputSampleRate(); got != 8000 {
+		t.Fatalf("InputSampleRate() = %d, want reference sample rate 8000", got)
+	}
 	if provider.encoding != "LINEAR16" {
 		t.Fatalf("encoding = %q, want LINEAR16", provider.encoding)
 	}
@@ -76,6 +79,14 @@ func TestRtzrSTTDefaultsMatchReference(t *testing.T) {
 	}
 	if caps.OfflineRecognize {
 		t.Fatal("offline recognize = true, want false")
+	}
+}
+
+func TestRtzrSTTExposesConfiguredInputSampleRate(t *testing.T) {
+	provider := NewRtzrSTT("client-id", WithRtzrSampleRate(16000))
+
+	if got := provider.InputSampleRate(); got != 16000 {
+		t.Fatalf("InputSampleRate() = %d, want configured sample rate 16000", got)
 	}
 }
 
