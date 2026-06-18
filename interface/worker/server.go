@@ -358,7 +358,7 @@ func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.Ru
 		jobCtx := NewJobContext(info.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
 		jobCtx.process = s.newJobProcess()
 		if runtimeJob.EnableRecording {
-			jobCtx.InitRecording(allRecordingOptions())
+			jobCtx.InitRecording(workerlivekit.AllRecordingOptions())
 		}
 		jobCtx.token = info.Token
 		jobCtx.workerID = info.WorkerID
@@ -399,7 +399,7 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 	jobCtx := NewJobContext(info.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
 	jobCtx.process = s.newJobProcess()
 	if runtimeJob.EnableRecording {
-		jobCtx.InitRecording(allRecordingOptions())
+		jobCtx.InitRecording(workerlivekit.AllRecordingOptions())
 	}
 	jobCtx.token = info.Token
 	jobCtx.workerID = info.WorkerID
@@ -1677,7 +1677,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.J
 	jobCtx := NewJobContext(assignment.Job, assignment.URL, s.Options.APIKey, s.Options.APISecret)
 	jobCtx.process = s.newJobProcess()
 	if assignment.EnableRecording {
-		jobCtx.InitRecording(allRecordingOptions())
+		jobCtx.InitRecording(workerlivekit.AllRecordingOptions())
 	}
 	jobCtx.token = assignment.Token
 
@@ -1985,15 +1985,6 @@ func saveSessionReport(path string, report *agent.SessionReport) error {
 		return fmt.Errorf("write session report: %w", err)
 	}
 	return nil
-}
-
-func allRecordingOptions() agent.RecordingOptions {
-	return agent.RecordingOptions{
-		Audio:      true,
-		Traces:     true,
-		Logs:       true,
-		Transcript: true,
-	}
 }
 
 func newLocalJobContext(roomName string, participantIdentity string, opts WorkerOptions) *JobContext {

@@ -287,6 +287,14 @@ func TestNewJobSessionReportInitializesReportTaggerAndMetadata(t *testing.T) {
 	}
 }
 
+func TestAllRecordingOptionsEnablesReferenceReportCapture(t *testing.T) {
+	options := workerlivekit.AllRecordingOptions()
+
+	if options != (agent.RecordingOptions{Audio: true, Traces: true, Logs: true, Transcript: true}) {
+		t.Fatalf("AllRecordingOptions() = %#v, want all recording options enabled", options)
+	}
+}
+
 func TestShouldUploadJobSessionReportUsesRecordingOptions(t *testing.T) {
 	report := agent.NewSessionReport()
 	report.RecordingOptions = agent.RecordingOptions{Logs: true}

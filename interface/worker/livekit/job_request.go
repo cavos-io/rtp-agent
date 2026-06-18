@@ -178,6 +178,15 @@ func NewJobSessionReport(job *lkprotocol.Job) (*agent.SessionReport, *agent.Tagg
 	return report, tagger
 }
 
+func AllRecordingOptions() agent.RecordingOptions {
+	return agent.RecordingOptions{
+		Audio:      true,
+		Traces:     true,
+		Logs:       true,
+		Transcript: true,
+	}
+}
+
 func ShouldUploadJobSessionReport(job *lkprotocol.Job, fakeJob bool, report *agent.SessionReport) bool {
 	if job == nil || fakeJob || report == nil {
 		return false
