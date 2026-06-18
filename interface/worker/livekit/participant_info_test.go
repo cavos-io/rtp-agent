@@ -171,6 +171,80 @@ func TestParticipantEntrypointTaskKeyUsesParticipantIdentity(t *testing.T) {
 	}
 }
 
+func TestParticipantEntrypointTaskPlanFiltersKindAndBuildsTask(t *testing.T) {
+	participant := &lkprotocol.ParticipantInfo{
+		Identity: "caller-a",
+		Kind:     lkprotocol.ParticipantInfo_SIP,
+	}
+
+	rejected := workerlivekit.ParticipantEntrypointTaskPlan(
+		participant,
+		[]lkprotocol.ParticipantInfo_Kind{lkprotocol.ParticipantInfo_STANDARD},
+		42,
+	)
+	if rejected.Schedule {
+		t.Fatal("ParticipantEntrypointTaskPlan() scheduled disallowed participant kind")
+	}
+
+	allowed := workerlivekit.ParticipantEntrypointTaskPlan(
+		participant,
+		[]lkprotocol.ParticipantInfo_Kind{lkprotocol.ParticipantInfo_SIP},
+		42,
+	)
+	if !allowed.Schedule {
+		t.Fatal("ParticipantEntrypointTaskPlan() did not schedule allowed participant kind")
+	}
+	if allowed.Participant.Identity != "caller-a" {
+		t.Fatalf("Participant identity = %q, want caller-a", allowed.Participant.Identity)
+	}
+	if allowed.TaskKey.Identity != "caller-a" {
+		t.Fatalf("TaskKey identity = %q, want caller-a", allowed.TaskKey.Identity)
+	}
+	if allowed.TaskKey.Entrypoint != 42 {
+		t.Fatalf("TaskKey entrypoint = %d, want 42", allowed.TaskKey.Entrypoint)
+	}
+}
+
+func TestParticipantEntrypointRegistrationPlanDefaultsKindsAndRejectsDuplicate(t *testing.T) {
+	plan, err := workerlivekit.ParticipantEntrypointRegistrationPlan(workerlivekit.ParticipantEntrypointRegistrationOptions{
+		Entrypoint: 42,
+	})
+	if err != nil {
+		t.Fatalf("ParticipantEntrypointRegistrationPlan() error = %v", err)
+	}
+	wantKinds := []lkprotocol.ParticipantInfo_Kind{
+		lkprotocol.ParticipantInfo_CONNECTOR,
+		lkprotocol.ParticipantInfo_SIP,
+		lkprotocol.ParticipantInfo_STANDARD,
+	}
+	if len(plan.Kinds) != len(wantKinds) {
+		t.Fatalf("Kinds len = %d, want %d", len(plan.Kinds), len(wantKinds))
+	}
+	for i, want := range wantKinds {
+		if plan.Kinds[i] != want {
+			t.Fatalf("Kinds[%d] = %v, want %v", i, plan.Kinds[i], want)
+		}
+	}
+	plan.Kinds[0] = lkprotocol.ParticipantInfo_AGENT
+	again, err := workerlivekit.ParticipantEntrypointRegistrationPlan(workerlivekit.ParticipantEntrypointRegistrationOptions{
+		Entrypoint: 43,
+	})
+	if err != nil {
+		t.Fatalf("second ParticipantEntrypointRegistrationPlan() error = %v", err)
+	}
+	if again.Kinds[0] != lkprotocol.ParticipantInfo_CONNECTOR {
+		t.Fatal("ParticipantEntrypointRegistrationPlan() reused mutable default kinds")
+	}
+
+	_, err = workerlivekit.ParticipantEntrypointRegistrationPlan(workerlivekit.ParticipantEntrypointRegistrationOptions{
+		Entrypoint:            42,
+		RegisteredEntrypoints: []uintptr{41, 42},
+	})
+	if err == nil {
+		t.Fatal("ParticipantEntrypointRegistrationPlan() duplicate error = nil, want error")
+	}
+}
+
 func TestUpsertParticipantInfoReplacesMatchingIdentity(t *testing.T) {
 	oldInfo := &lkprotocol.ParticipantInfo{Identity: "caller-a", Name: "Old"}
 	newInfo := &lkprotocol.ParticipantInfo{Identity: "caller-a", Name: "New"}

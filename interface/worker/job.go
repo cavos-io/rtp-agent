@@ -529,17 +529,22 @@ func (c *JobContext) AddParticipantEntrypoint(entrypoint ParticipantEntrypoint, 
 	if entrypoint == nil {
 		return fmt.Errorf("participant entrypoint must not be nil")
 	}
+	entrypointPointer := reflect.ValueOf(entrypoint).Pointer()
+	registeredEntrypoints := make([]uintptr, 0, len(c.participantEntrypoints))
 	for _, registered := range c.participantEntrypoints {
-		if reflect.ValueOf(registered.entrypoint).Pointer() == reflect.ValueOf(entrypoint).Pointer() {
-			return fmt.Errorf("entrypoints cannot be added more than once")
-		}
+		registeredEntrypoints = append(registeredEntrypoints, reflect.ValueOf(registered.entrypoint).Pointer())
 	}
-	if len(kinds) == 0 {
-		kinds = workerlivekit.DefaultParticipantKinds()
+	plan, err := workerlivekit.ParticipantEntrypointRegistrationPlan(workerlivekit.ParticipantEntrypointRegistrationOptions{
+		Entrypoint:            entrypointPointer,
+		RegisteredEntrypoints: registeredEntrypoints,
+		Kinds:                 kinds,
+	})
+	if err != nil {
+		return err
 	}
 	registration := participantEntrypointRegistration{
 		entrypoint: entrypoint,
-		kinds:      append([]workerlivekit.ParticipantInfoKind(nil), kinds...),
+		kinds:      plan.Kinds,
 	}
 	c.participantEntrypoints = append(c.participantEntrypoints, registration)
 	c.scheduleParticipantEntrypointForExistingParticipants(registration)
@@ -548,9 +553,6 @@ func (c *JobContext) AddParticipantEntrypoint(entrypoint ParticipantEntrypoint, 
 
 func (c *JobContext) scheduleParticipantEntrypointForExistingParticipants(registration participantEntrypointRegistration) {
 	for _, participant := range c.availableParticipants {
-		if !workerlivekit.ParticipantInfoKindAllowed(registration.kinds, participant) {
-			continue
-		}
 		c.scheduleParticipantEntrypoint(registration, participant)
 	}
 }
@@ -621,36 +623,36 @@ func (c *JobContext) scheduleParticipantEntrypoints(participant *workerlivekit.P
 		return
 	}
 	for _, registered := range c.participantEntrypoints {
-		if !workerlivekit.ParticipantInfoKindAllowed(registered.kinds, participant) {
-			continue
-		}
 		c.scheduleParticipantEntrypoint(registered, participant)
 	}
 }
 
 func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntrypointRegistration, participant *workerlivekit.ParticipantInfo) {
-	if participant == nil {
+	plan := workerlivekit.ParticipantEntrypointTaskPlan(
+		participant,
+		registration.kinds,
+		reflect.ValueOf(registration.entrypoint).Pointer(),
+	)
+	if !plan.Schedule {
 		return
 	}
-	participantDetails := workerlivekit.ParticipantInfoDetails(participant)
-	key := workerlivekit.ParticipantEntrypointTaskKey(participant, reflect.ValueOf(registration.entrypoint).Pointer())
 	c.participantTasksMu.Lock()
 	if c.participantTasks == nil {
 		c.participantTasks = make(map[workerlivekit.ParticipantTaskKey]struct{})
 	}
-	if _, ok := c.participantTasks[key]; ok {
-		logger.Logger.Warnw("participant entrypoint already running for participant", nil, "participant", participantDetails.Identity)
+	if _, ok := c.participantTasks[plan.TaskKey]; ok {
+		logger.Logger.Warnw("participant entrypoint already running for participant", nil, "participant", plan.Participant.Identity)
 	}
-	c.participantTasks[key] = struct{}{}
+	c.participantTasks[plan.TaskKey] = struct{}{}
 	c.participantTasksMu.Unlock()
 
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				logger.Logger.Errorw("Participant entrypoint panicked", fmt.Errorf("%v", recovered), "participant", participantDetails.Identity)
+				logger.Logger.Errorw("Participant entrypoint panicked", fmt.Errorf("%v", recovered), "participant", plan.Participant.Identity)
 			}
 			c.participantTasksMu.Lock()
-			delete(c.participantTasks, key)
+			delete(c.participantTasks, plan.TaskKey)
 			c.participantTasksMu.Unlock()
 		}()
 		_ = runWithJobContext(c, func() error {

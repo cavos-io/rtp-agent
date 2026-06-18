@@ -350,6 +350,50 @@ func TestShouldUploadJobSessionReportUsesEvaluationOrOutcome(t *testing.T) {
 	}
 }
 
+func TestJobSessionReportUploadPlanIncludesUploadInputsAndSkipsFakeJobs(t *testing.T) {
+	report := agent.NewSessionReport()
+	report.RecordingOptions = agent.RecordingOptions{Logs: true}
+
+	plan := workerlivekit.JobSessionReportUploadPlan(workerlivekit.JobSessionReportUploadPlanOptions{
+		Job:       &lkprotocol.Job{Id: "job-report"},
+		Report:    report,
+		URL:       "wss://livekit.example",
+		APIKey:    "api-key",
+		APISecret: "api-secret",
+		AgentName: "agent-a",
+	})
+	if !plan.Upload {
+		t.Fatal("JobSessionReportUploadPlan().Upload = false, want true")
+	}
+	if plan.JobID != "job-report" {
+		t.Fatalf("JobID = %q, want job-report", plan.JobID)
+	}
+	if plan.URL != "wss://livekit.example" {
+		t.Fatalf("URL = %q, want livekit URL", plan.URL)
+	}
+	if plan.APIKey != "api-key" {
+		t.Fatalf("APIKey = %q, want api-key", plan.APIKey)
+	}
+	if plan.APISecret != "api-secret" {
+		t.Fatalf("APISecret = %q, want api-secret", plan.APISecret)
+	}
+	if plan.AgentName != "agent-a" {
+		t.Fatalf("AgentName = %q, want agent-a", plan.AgentName)
+	}
+	if plan.Report != report {
+		t.Fatal("Report did not preserve original session report")
+	}
+
+	fakePlan := workerlivekit.JobSessionReportUploadPlan(workerlivekit.JobSessionReportUploadPlanOptions{
+		Job:     &lkprotocol.Job{Id: "job-fake"},
+		FakeJob: true,
+		Report:  report,
+	})
+	if fakePlan.Upload {
+		t.Fatal("JobSessionReportUploadPlan(fake job).Upload = true, want false")
+	}
+}
+
 func TestJobLogContextFieldsExposeLiveKitJobMetadata(t *testing.T) {
 	fields := workerlivekit.JobLogContextFields(&lkprotocol.Job{
 		Id:   "job-log",
@@ -437,6 +481,51 @@ func TestJobAssignmentInfoDefaultsURLWhenAssignmentURLMissing(t *testing.T) {
 	}
 }
 
+func TestAssignmentContextValuesPreservesAssignmentFieldsAndAcceptArgs(t *testing.T) {
+	job := &lkprotocol.Job{Id: "job-assigned", EnableRecording: true}
+	values := workerlivekit.AssignmentContextValues(workerlivekit.AssignmentContextValueOptions{
+		Assignment: workerlivekit.AssignmentInfo{
+			Job:             job,
+			JobID:           "job-assigned",
+			URL:             "wss://assignment.example",
+			Token:           "assignment-token",
+			EnableRecording: true,
+		},
+		AcceptArguments: workerlivekit.JobAcceptArguments{
+			Name:       "Agent Name",
+			Identity:   "agent-a",
+			Metadata:   "metadata",
+			Attributes: map[string]string{"tier": "gold"},
+		},
+		WorkerID: "worker-a",
+	})
+
+	if values.Job != job {
+		t.Fatal("AssignmentContextValues().Job did not preserve job")
+	}
+	if values.JobID != "job-assigned" {
+		t.Fatalf("JobID = %q, want job-assigned", values.JobID)
+	}
+	if values.URL != "wss://assignment.example" {
+		t.Fatalf("URL = %q, want assignment URL", values.URL)
+	}
+	if values.Token != "assignment-token" {
+		t.Fatalf("Token = %q, want assignment token", values.Token)
+	}
+	if values.WorkerID != "worker-a" {
+		t.Fatalf("WorkerID = %q, want worker-a", values.WorkerID)
+	}
+	if values.AcceptArguments.Identity != "agent-a" {
+		t.Fatalf("AcceptArguments.Identity = %q, want agent-a", values.AcceptArguments.Identity)
+	}
+	if values.AcceptArguments.Attributes["tier"] != "gold" {
+		t.Fatalf("AcceptArguments.Attributes[tier] = %q, want gold", values.AcceptArguments.Attributes["tier"])
+	}
+	if !values.EnableRecording {
+		t.Fatal("EnableRecording = false, want true")
+	}
+}
+
 func TestJobAssignmentAliasUsesLiveKitProtocolAssignment(t *testing.T) {
 	job := &lkprotocol.Job{Id: "job-a"}
 	assignment := &workerlivekit.JobAssignment{Job: job}
@@ -476,6 +565,72 @@ func TestRunningJobInfoCarriesLiveKitJobAndReloadFields(t *testing.T) {
 	}
 	if !info.FakeJob {
 		t.Fatal("FakeJob = false, want true")
+	}
+}
+
+func TestRunningJobContextValuesResolveOverrideURLWorkerAndRecording(t *testing.T) {
+	job := &lkprotocol.Job{Id: "job-running", EnableRecording: true}
+	values := workerlivekit.RunningJobContextValues(workerlivekit.RunningJobContextValueOptions{
+		Info: workerlivekit.RunningJobInfo{
+			Job:     job,
+			URL:     "wss://info.example",
+			Token:   "room-token",
+			FakeJob: true,
+			AcceptArguments: workerlivekit.JobAcceptArguments{
+				Name:       "Agent Name",
+				Identity:   "agent-a",
+				Metadata:   "metadata",
+				Attributes: map[string]string{"tier": "gold"},
+			},
+		},
+		OverrideURL:     "wss://override.example",
+		DefaultWorkerID: "worker-default",
+	})
+
+	if values.Job != job {
+		t.Fatal("RunningJobContextValues().Job did not preserve job")
+	}
+	if values.JobID != "job-running" {
+		t.Fatalf("JobID = %q, want job-running", values.JobID)
+	}
+	if values.URL != "wss://override.example" {
+		t.Fatalf("URL = %q, want override URL", values.URL)
+	}
+	if values.Token != "room-token" {
+		t.Fatalf("Token = %q, want room-token", values.Token)
+	}
+	if values.WorkerID != "worker-default" {
+		t.Fatalf("WorkerID = %q, want default worker", values.WorkerID)
+	}
+	if values.AcceptArguments.Identity != "agent-a" {
+		t.Fatalf("AcceptArguments.Identity = %q, want agent-a", values.AcceptArguments.Identity)
+	}
+	if values.AcceptArguments.Attributes["tier"] != "gold" {
+		t.Fatalf("AcceptArguments.Attributes[tier] = %q, want gold", values.AcceptArguments.Attributes["tier"])
+	}
+	if !values.FakeJob {
+		t.Fatal("FakeJob = false, want true")
+	}
+	if !values.EnableRecording {
+		t.Fatal("EnableRecording = false, want true")
+	}
+}
+
+func TestRunningJobContextValuesPreservesInfoURLAndWorker(t *testing.T) {
+	values := workerlivekit.RunningJobContextValues(workerlivekit.RunningJobContextValueOptions{
+		Info: workerlivekit.RunningJobInfo{
+			Job:      &lkprotocol.Job{Id: "job-running"},
+			URL:      "wss://info.example",
+			WorkerID: "worker-info",
+		},
+		DefaultWorkerID: "worker-default",
+	})
+
+	if values.URL != "wss://info.example" {
+		t.Fatalf("URL = %q, want info URL", values.URL)
+	}
+	if values.WorkerID != "worker-info" {
+		t.Fatalf("WorkerID = %q, want info worker", values.WorkerID)
 	}
 }
 

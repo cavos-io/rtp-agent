@@ -1,6 +1,7 @@
 package livekit
 
 import (
+	"fmt"
 	"maps"
 
 	lkprotocol "github.com/livekit/protocol/livekit"
@@ -103,6 +104,22 @@ type ParticipantTaskKey struct {
 	Entrypoint uintptr
 }
 
+type ParticipantEntrypointTaskPlanResult struct {
+	Schedule    bool
+	Participant ParticipantDetails
+	TaskKey     ParticipantTaskKey
+}
+
+type ParticipantEntrypointRegistrationOptions struct {
+	Entrypoint            uintptr
+	RegisteredEntrypoints []uintptr
+	Kinds                 []lkprotocol.ParticipantInfo_Kind
+}
+
+type ParticipantEntrypointRegistrationPlanResult struct {
+	Kinds []lkprotocol.ParticipantInfo_Kind
+}
+
 func ParticipantInfoDetails(participant *lkprotocol.ParticipantInfo) ParticipantDetails {
 	if participant == nil {
 		return ParticipantDetails{}
@@ -121,6 +138,35 @@ func ParticipantEntrypointTaskKey(participant *lkprotocol.ParticipantInfo, entry
 	return ParticipantTaskKey{
 		Identity:   ParticipantInfoDetails(participant).Identity,
 		Entrypoint: entrypoint,
+	}
+}
+
+func ParticipantEntrypointRegistrationPlan(opts ParticipantEntrypointRegistrationOptions) (ParticipantEntrypointRegistrationPlanResult, error) {
+	for _, registered := range opts.RegisteredEntrypoints {
+		if registered == opts.Entrypoint {
+			return ParticipantEntrypointRegistrationPlanResult{}, fmt.Errorf("entrypoints cannot be added more than once")
+		}
+	}
+	return ParticipantEntrypointRegistrationPlanResult{
+		Kinds: DefaultParticipantKindsWhenUnset(opts.Kinds),
+	}, nil
+}
+
+func ParticipantEntrypointTaskPlan(participant *lkprotocol.ParticipantInfo, kinds []lkprotocol.ParticipantInfo_Kind, entrypoint uintptr) ParticipantEntrypointTaskPlanResult {
+	if participant == nil {
+		return ParticipantEntrypointTaskPlanResult{}
+	}
+	details := ParticipantInfoDetails(participant)
+	if !ParticipantKindAllowed(kinds, details.Kind) {
+		return ParticipantEntrypointTaskPlanResult{}
+	}
+	return ParticipantEntrypointTaskPlanResult{
+		Schedule:    true,
+		Participant: details,
+		TaskKey: ParticipantTaskKey{
+			Identity:   details.Identity,
+			Entrypoint: entrypoint,
+		},
 	}
 }
 

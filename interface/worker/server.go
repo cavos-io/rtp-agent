@@ -391,31 +391,23 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 		return workerReferenceError(rtcSessionRequiredMessage)
 	}
 
-	jobURL := info.URL
-	if s.Options.WSRL != "" {
-		jobURL = s.Options.WSRL
-	}
-	runtimeJob := workerlivekit.JobRuntimeInfo(info.Job)
-	jobCtx := NewJobContext(info.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
+	runningJob := workerlivekit.RunningJobContextValues(workerlivekit.RunningJobContextValueOptions{
+		Info:            info,
+		OverrideURL:     s.Options.WSRL,
+		DefaultWorkerID: s.workerID,
+	})
+	jobCtx := NewJobContext(runningJob.Job, runningJob.URL, s.Options.APIKey, s.Options.APISecret)
 	jobCtx.process = s.newJobProcess()
-	if runtimeJob.EnableRecording {
+	if runningJob.EnableRecording {
 		jobCtx.InitRecording(workerlivekit.AllRecordingOptions())
 	}
-	jobCtx.token = info.Token
-	jobCtx.workerID = info.WorkerID
-	jobCtx.AcceptArguments = JobAcceptArguments{
-		Name:       info.AcceptArguments.Name,
-		Identity:   info.AcceptArguments.Identity,
-		Metadata:   info.AcceptArguments.Metadata,
-		Attributes: info.AcceptArguments.Attributes,
-	}
-	jobCtx.fakeJob = info.FakeJob
-	if jobCtx.WorkerID() == "" {
-		jobCtx.workerID = s.workerID
-	}
+	jobCtx.token = runningJob.Token
+	jobCtx.workerID = runningJob.WorkerID
+	jobCtx.AcceptArguments = runningJob.AcceptArguments
+	jobCtx.fakeJob = runningJob.FakeJob
 
 	s.mu.Lock()
-	s.activeJobs[runtimeJob.JobID] = jobCtx
+	s.activeJobs[runningJob.JobID] = jobCtx
 	s.mu.Unlock()
 
 	return workerlivekit.RunRunningJobEntrypointLifecycle(workerlivekit.RunningJobEntrypointLifecycleOptions{
@@ -435,13 +427,13 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 			return s.finishJob(jobCtx)
 		},
 		OnPanic: func(recovered any) {
-			logger.Logger.Errorw("Running job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", runtimeJob.JobID)
+			logger.Logger.Errorw("Running job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", runningJob.JobID)
 		},
 		OnError: func(err error) {
-			logger.Logger.Errorw("Running job entrypoint failed", err, "jobId", runtimeJob.JobID)
+			logger.Logger.Errorw("Running job entrypoint failed", err, "jobId", runningJob.JobID)
 		},
 		OnCancelTimeout: func() {
-			logger.Logger.Warnw("running job entrypoint did not exit before context cancellation finalized", nil, "jobId", runtimeJob.JobID)
+			logger.Logger.Warnw("running job entrypoint did not exit before context cancellation finalized", nil, "jobId", runningJob.JobID)
 		},
 	})
 }
@@ -1664,13 +1656,6 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.J
 	assignment := workerlivekit.JobAssignmentInfo(req, s.Options.WSRL)
 	jobID := assignment.JobID
 	logger.Logger.Infow("Received job assignment", "jobId", jobID)
-	jobCtx := NewJobContext(assignment.Job, assignment.URL, s.Options.APIKey, s.Options.APISecret)
-	jobCtx.process = s.newJobProcess()
-	if assignment.EnableRecording {
-		jobCtx.InitRecording(workerlivekit.AllRecordingOptions())
-	}
-	jobCtx.token = assignment.Token
-
 	s.mu.Lock()
 	args, accepted := workerlivekit.AcceptPendingAssignment(s.pendingAccepts, s.pendingTimers, jobID)
 	if !accepted {
@@ -1679,10 +1664,21 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.J
 		return
 	}
 
-	jobCtx.workerID = s.workerID
-	jobCtx.AcceptArguments = args
+	assignedJob := workerlivekit.AssignmentContextValues(workerlivekit.AssignmentContextValueOptions{
+		Assignment:      assignment,
+		AcceptArguments: args,
+		WorkerID:        s.workerID,
+	})
+	jobCtx := NewJobContext(assignedJob.Job, assignedJob.URL, s.Options.APIKey, s.Options.APISecret)
+	jobCtx.process = s.newJobProcess()
+	if assignedJob.EnableRecording {
+		jobCtx.InitRecording(workerlivekit.AllRecordingOptions())
+	}
+	jobCtx.token = assignedJob.Token
+	jobCtx.workerID = assignedJob.WorkerID
+	jobCtx.AcceptArguments = assignedJob.AcceptArguments
 	jobCtx.LogContextFields()["worker_id"] = jobCtx.WorkerID()
-	s.activeJobs[jobID] = jobCtx
+	s.activeJobs[assignedJob.JobID] = jobCtx
 	s.mu.Unlock()
 
 	if err := s.sendWorkerMessage(workerlivekit.JobRunningMessage(jobID)); err != nil {
@@ -1911,20 +1907,20 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
 }
 
 func (s *AgentServer) uploadJobSessionReport(jobCtx *JobContext) {
-	if !shouldUploadJobSessionReport(jobCtx) {
+	plan := jobSessionReportUploadPlan(jobCtx, s.Options)
+	if !plan.Upload {
 		return
 	}
-	runtimeJob := workerlivekit.JobRuntimeInfo(jobCtx.Job)
 	go func() {
 		err := uploadSessionReport(
-			jobCtx.url,
-			s.Options.APIKey,
-			s.Options.APISecret,
-			s.Options.AgentName,
-			jobCtx.Report,
+			plan.URL,
+			plan.APIKey,
+			plan.APISecret,
+			plan.AgentName,
+			plan.Report,
 		)
 		if err != nil {
-			logger.Logger.Errorw("failed to upload session report", err, jobLogValues(jobCtx, "jobId", runtimeJob.JobID)...)
+			logger.Logger.Errorw("failed to upload session report", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
 		}
 	}()
 }
@@ -1933,7 +1929,22 @@ func shouldUploadJobSessionReport(jobCtx *JobContext) bool {
 	if jobCtx == nil {
 		return false
 	}
-	return workerlivekit.ShouldUploadJobSessionReport(jobCtx.Job, jobCtx.IsFakeJob(), jobCtx.Report)
+	return jobSessionReportUploadPlan(jobCtx, WorkerOptions{}).Upload
+}
+
+func jobSessionReportUploadPlan(jobCtx *JobContext, opts WorkerOptions) workerlivekit.JobSessionReportUploadPlanResult {
+	if jobCtx == nil {
+		return workerlivekit.JobSessionReportUploadPlanResult{}
+	}
+	return workerlivekit.JobSessionReportUploadPlan(workerlivekit.JobSessionReportUploadPlanOptions{
+		Job:       jobCtx.Job,
+		FakeJob:   jobCtx.IsFakeJob(),
+		Report:    jobCtx.Report,
+		URL:       jobCtx.url,
+		APIKey:    opts.APIKey,
+		APISecret: opts.APISecret,
+		AgentName: opts.AgentName,
+	})
 }
 
 func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
