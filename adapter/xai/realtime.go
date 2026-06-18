@@ -28,6 +28,7 @@ type XaiRealtimeOption func(*xaiRealtimeOptions)
 
 type xaiRealtimeOptions struct {
 	model            string
+	voice            string
 	baseURL          string
 	dialWebsocket    adapteropenai.OpenAIRealtimeWebsocketDialer
 	turnDetection    any
@@ -38,6 +39,14 @@ func WithXaiRealtimeModel(model string) XaiRealtimeOption {
 	return func(options *xaiRealtimeOptions) {
 		if model != "" {
 			options.model = model
+		}
+	}
+}
+
+func WithXaiRealtimeVoice(voice string) XaiRealtimeOption {
+	return func(options *xaiRealtimeOptions) {
+		if voice != "" {
+			options.voice = voice
 		}
 	}
 }
@@ -75,6 +84,10 @@ func NewXaiRealtimeModel(apiKey string, opts ...XaiRealtimeOption) *XaiRealtimeM
 	if options.model != "" {
 		model = options.model
 	}
+	voice := defaultXaiRealtimeVoice
+	if options.voice != "" {
+		voice = options.voice
+	}
 	baseURL := defaultXaiRealtimeBaseURL
 	if options.baseURL != "" {
 		baseURL = options.baseURL
@@ -98,7 +111,7 @@ func NewXaiRealtimeModel(apiKey string, opts ...XaiRealtimeOption) *XaiRealtimeM
 		adapteropenai.WithOpenAIRealtimeRemoteItemAddedHook(xaiRealtimeAppendNilPreviousItemID),
 		adapteropenai.WithOpenAIRealtimeFunctionCallFilter(xaiRealtimeKnownFunctionTool),
 		adapteropenai.WithOpenAIRealtimeSessionCloseMetricsHook(xaiRealtimeSessionCloseMetrics),
-		adapteropenai.WithOpenAIRealtimeVoice(defaultXaiRealtimeVoice),
+		adapteropenai.WithOpenAIRealtimeVoice(voice),
 		adapteropenai.WithOpenAIRealtimeModalities([]string{"audio"}),
 		adapteropenai.WithOpenAIRealtimeInputAudioTranscription(map[string]any{}),
 		adapteropenai.WithOpenAIRealtimeTurnDetection(turnDetection),

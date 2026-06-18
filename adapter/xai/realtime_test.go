@@ -72,6 +72,11 @@ func TestXaiRealtimeCustomTurnDetectionMatchesReference(t *testing.T) {
 			return
 		}
 		messages <- msg
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
 	})
 
 	model := NewXaiRealtimeModel("test-key",
@@ -141,6 +146,11 @@ func TestXaiRealtimeNilTurnDetectionDisablesReferenceVAD(t *testing.T) {
 			return
 		}
 		messages <- msg
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
 	})
 
 	model := NewXaiRealtimeModel("test-key",
@@ -164,6 +174,67 @@ func TestXaiRealtimeNilTurnDetectionDisablesReferenceVAD(t *testing.T) {
 	input := audio["input"].(map[string]any)
 	if value, ok := input["turn_detection"]; !ok || value != nil {
 		t.Fatalf("turn_detection = %#v (present %v), want explicit nil", value, ok)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket handler")
+	}
+	select {
+	case err := <-handlerErr:
+		t.Fatal(err)
+	default:
+	}
+}
+
+func TestXaiRealtimeCustomVoiceMatchesReference(t *testing.T) {
+	messages := make(chan map[string]any, 1)
+	handlerDone := make(chan struct{})
+	handlerErr := make(chan error, 1)
+	dialer := newXaiRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		defer close(handlerDone)
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			handlerErr <- fmt.Errorf("read initial session update: %w", err)
+			return
+		}
+		var msg map[string]any
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			handlerErr <- fmt.Errorf("decode initial session update: %w", err)
+			return
+		}
+		messages <- msg
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})
+
+	model := NewXaiRealtimeModel("test-key",
+		WithXaiRealtimeBaseURL("ws://xai.test/v1/realtime"),
+		WithXaiRealtimeWebsocketDialer(dialer),
+		WithXaiRealtimeVoice("Eve"),
+	)
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+
+	var msg map[string]any
+	select {
+	case msg = <-messages:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for initial session update")
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	audio := sessionPayload["audio"].(map[string]any)
+	output := audio["output"].(map[string]any)
+	if output["voice"] != "Eve" {
+		t.Fatalf("voice = %#v, want Eve", output["voice"])
 	}
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
