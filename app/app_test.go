@@ -1735,6 +1735,74 @@ func TestRunAgoraLogsRTMDataMessageErrors(t *testing.T) {
 	}
 }
 
+func TestRunAgoraIgnoresSelfRTMMessageWhenRTMUserIDUnset(t *testing.T) {
+	client := &fakeAppAgoraChannelClient{joinedCh: make(chan struct{}, 1)}
+	dataPublisher := &fakeAppAgoraDataPublisher{}
+	oldNewAgoraChannelClient := appNewAgoraChannelClient
+	appNewAgoraChannelClient = func() (workeragora.ChannelClient, error) {
+		return client, nil
+	}
+	oldNewAgoraDataPublisher := appNewAgoraDataPublisher
+	appNewAgoraDataPublisher = func(workeragora.Options) (workeragora.DataPublisher, error) {
+		return dataPublisher, nil
+	}
+	t.Cleanup(func() {
+		appNewAgoraChannelClient = oldNewAgoraChannelClient
+		appNewAgoraDataPublisher = oldNewAgoraDataPublisher
+	})
+
+	rtmEnabled := true
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	rtpApp := &App{
+		Session: session,
+		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
+		Config: AppConfig{
+			Agora: workeragora.Options{
+				AppID:      "app",
+				Channel:    "support",
+				UID:        "agent",
+				Token:      "token",
+				RTMEnabled: &rtmEnabled,
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- rtpApp.runAgora(ctx)
+	}()
+
+	select {
+	case <-client.joinedCh:
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not join Agora channel")
+	}
+	handler := dataPublisher.dataHandler()
+	if handler == nil {
+		t.Fatal("runAgora() did not subscribe to Agora RTM data messages")
+	}
+	err := handler(context.Background(), workeragora.DataMessage{
+		Channel:   "support",
+		Publisher: "agent",
+		Payload:   []byte(`{"data_type":"input_text","text":"loop"}`),
+	})
+	if err != nil {
+		t.Fatalf("self RTM data handler error = %v, want nil ignored self message", err)
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("runAgora() error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not return after cancellation")
+	}
+}
+
 func TestInstallAgoraRTMDataMessageHandlerDispatchesInputText(t *testing.T) {
 	dataPublisher := &fakeAppAgoraDataPublisher{}
 	responder := &recordingAppTextResponder{}

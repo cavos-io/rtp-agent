@@ -1179,6 +1179,10 @@ func (a *App) runAgora(ctx context.Context) error {
 		greeting: a.Config.AgoraGreeting,
 	}
 	if workeragora.PublishDataEnabled(agoraOpts.PublishData) || workeragora.PublishDataEnabled(agoraOpts.RTMEnabled) {
+		dataOpts, err := workeragora.ResolveDataOptions(agoraOpts)
+		if err != nil {
+			return err
+		}
 		dataPublisher, err := appNewAgoraDataPublisher(agoraOpts)
 		if err != nil {
 			return err
@@ -1190,7 +1194,7 @@ func (a *App) runAgora(ctx context.Context) error {
 			UserStreamID: agoraOpts.RemoteStreamID,
 		})
 		if subscriber, ok := dataPublisher.(workeragora.DataMessageSubscriber); ok {
-			installAgoraRTMDataMessageHandler(subscriber, a.Session, agoraOpts.RTMUserID)
+			installAgoraRTMDataMessageHandler(subscriber, a.Session, dataOpts.UID)
 		}
 		transcriptForwarder.Start(runCtx)
 		defer func() {
