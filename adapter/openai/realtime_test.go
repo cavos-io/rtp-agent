@@ -263,6 +263,60 @@ func TestNewAzureOpenAIRealtimeRoutesDeploymentAndUsesAPIKey(t *testing.T) {
 	}
 }
 
+func TestAzureOpenAIRealtimeNormalizesAssistantTextForLegacyAPI(t *testing.T) {
+	messages := make(chan string, 2)
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for i := 0; i < 2; i++ {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				t.Errorf("Read client message error = %v", err)
+				return
+			}
+			messages <- string(msg)
+		}
+		<-releaseServer
+	})
+	realtimeModel, err := NewAzureOpenAIRealtimeModel(
+		"gpt-realtime",
+		"http://azure.openai.test",
+		"voice-deployment",
+		"2024-10-01-preview",
+		"azure-key",
+		"",
+		WithOpenAIRealtimeWebsocketDialer(dialer),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAIRealtimeModel error = %v", err)
+	}
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	<-messages
+
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "assistant-1", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+	if err := session.UpdateChatContext(chatCtx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(<-messages), &payload); err != nil {
+		t.Fatalf("decode chat message: %v", err)
+	}
+	item := payload["item"].(map[string]any)
+	content := item["content"].([]any)
+	part := content[0].(map[string]any)
+	if part["type"] != "text" {
+		t.Fatalf("assistant content type = %#v, want legacy Azure text", part["type"])
+	}
+}
+
 func TestRealtimeModelUpdateOptionsForwardsToActiveSession(t *testing.T) {
 	messages := make(chan string, 8)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {

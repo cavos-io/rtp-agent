@@ -1632,6 +1632,9 @@ func (m *RealtimeModel) isLegacyAzureRealtime() bool {
 
 func openAIRealtimeLegacyAzureClientMessage(msg map[string]any) map[string]any {
 	if openAIRealtimeString(msg["type"]) != "session.update" {
+		if openAIRealtimeString(msg["type"]) == "conversation.item.create" {
+			return openAIRealtimeLegacyAzureConversationItemMessage(msg)
+		}
 		return msg
 	}
 	session, ok := msg["session"].(map[string]any)
@@ -1645,6 +1648,58 @@ func openAIRealtimeLegacyAzureClientMessage(msg map[string]any) map[string]any {
 			continue
 		}
 		converted[key] = value
+	}
+	return converted
+}
+
+func openAIRealtimeLegacyAzureConversationItemMessage(msg map[string]any) map[string]any {
+	item, ok := msg["item"].(map[string]any)
+	if !ok {
+		return msg
+	}
+	converted := make(map[string]any, len(msg))
+	for key, value := range msg {
+		converted[key] = value
+	}
+	converted["item"] = openAIRealtimeLegacyAzureConversationItem(item)
+	return converted
+}
+
+func openAIRealtimeLegacyAzureConversationItem(item map[string]any) map[string]any {
+	converted := make(map[string]any, len(item))
+	for key, value := range item {
+		converted[key] = value
+	}
+	content, ok := item["content"].([]map[string]any)
+	if ok {
+		converted["content"] = openAIRealtimeLegacyAzureContent(content)
+		return converted
+	}
+	contentAny, ok := item["content"].([]any)
+	if !ok {
+		return converted
+	}
+	parts := make([]map[string]any, 0, len(contentAny))
+	for _, part := range contentAny {
+		if typed, ok := part.(map[string]any); ok {
+			parts = append(parts, typed)
+		}
+	}
+	converted["content"] = openAIRealtimeLegacyAzureContent(parts)
+	return converted
+}
+
+func openAIRealtimeLegacyAzureContent(content []map[string]any) []map[string]any {
+	converted := make([]map[string]any, 0, len(content))
+	for _, part := range content {
+		next := make(map[string]any, len(part))
+		for key, value := range part {
+			next[key] = value
+		}
+		if next["type"] == "output_text" {
+			next["type"] = "text"
+		}
+		converted = append(converted, next)
 	}
 	return converted
 }
@@ -1812,6 +1867,9 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 		for _, chatMsg := range chatMsgs {
 			if err != nil {
 				break
+			}
+			if s.model.isLegacyAzureRealtime() {
+				chatMsg = openAIRealtimeLegacyAzureClientMessage(chatMsg)
 			}
 			b, err = json.Marshal(chatMsg)
 			if err == nil {
