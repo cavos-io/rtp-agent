@@ -92,6 +92,34 @@ func TestTranscriptForwarderPublishesTENUserTranscriptWithRemoteStreamID(t *test
 	}
 }
 
+func TestTranscriptForwarderPublishesTENUserTranscriptWithSpeakerID(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	publisher := &recordingDataPublisher{}
+	forwarder := NewTranscriptForwarder(session, publisher, TranscriptForwarderOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	forwarder.Start(ctx)
+	defer forwarder.Stop(context.Background())
+
+	session.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "typed hello",
+		IsFinal:    true,
+		SpeakerID:  "caller-9",
+		CreatedAt:  time.UnixMilli(1710000000555),
+	})
+
+	got := waitForPublishedTranscript(t, publisher)
+	if got["role"] != "user" {
+		t.Fatalf("role = %#v, want user", got["role"])
+	}
+	if got["text"] != "typed hello" {
+		t.Fatalf("text = %#v, want transcript", got["text"])
+	}
+	if got["stream_id"] != "caller-9" {
+		t.Fatalf("stream_id = %#v, want event speaker id", got["stream_id"])
+	}
+}
+
 func TestPublishReasoningSendsTENRawPayload(t *testing.T) {
 	publisher := &recordingDataPublisher{}
 

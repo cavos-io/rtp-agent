@@ -76,7 +76,7 @@ func (f *TranscriptForwarder) forwardUserTranscripts(ctx context.Context, events
 		case <-ctx.Done():
 			return
 		case ev := <-events:
-			f.publishTranscript(ctx, "user", ev.Transcript, ev.IsFinal, f.opts.UserStreamID, ev.CreatedAt)
+			f.publishTranscript(ctx, "user", ev.Transcript, ev.IsFinal, userTranscriptStreamID(ev, f.opts.UserStreamID), ev.CreatedAt)
 		}
 	}
 }
@@ -117,6 +117,13 @@ func (f *TranscriptForwarder) publishReasoning(ctx context.Context, text string,
 		return
 	}
 	_ = PublishReasoning(ctx, f.publisher, "assistant", text, final, streamID, createdAt)
+}
+
+func userTranscriptStreamID(ev agent.UserInputTranscribedEvent, fallback string) string {
+	if ev.SpeakerID != "" {
+		return ev.SpeakerID
+	}
+	return fallback
 }
 
 func PublishTranscript(ctx context.Context, publisher DataPublisher, role string, text string, final bool, streamID string, createdAt time.Time) error {
