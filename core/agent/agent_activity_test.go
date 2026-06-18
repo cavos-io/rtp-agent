@@ -5782,6 +5782,9 @@ func TestAgentActivityPreemptiveGenerationStartsLLMBeforeScheduling(t *testing.T
 	var preemptive *SpeechHandle
 	select {
 	case ev := <-speechEvents:
+		if ev.UserInitiated {
+			t.Fatal("preemptive SpeechCreated UserInitiated = true, want false for automatic audio reply")
+		}
 		preemptive = ev.SpeechHandle
 	case <-time.After(time.Second):
 		t.Fatal("SpeechCreatedEvents did not receive preemptive generation")
