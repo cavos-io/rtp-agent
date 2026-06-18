@@ -62,6 +62,22 @@ func TestSmallestAISTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestSmallestAISTTExposesReferenceInputSampleRate(t *testing.T) {
+	provider := NewSmallestAISTT("test-key")
+
+	if got := provider.InputSampleRate(); got != 16000 {
+		t.Fatalf("InputSampleRate = %d, want 16000", got)
+	}
+}
+
+func TestSmallestAISTTExposesConfiguredInputSampleRate(t *testing.T) {
+	provider := NewSmallestAISTT("test-key", WithSmallestAISTTSampleRate(48000))
+
+	if got := provider.InputSampleRate(); got != 48000 {
+		t.Fatalf("InputSampleRate = %d, want 48000", got)
+	}
+}
+
 func TestNewSmallestAISTTUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("SMALLEST_API_KEY", "env-key")
 
