@@ -17,6 +17,7 @@ import (
 
 	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/gorilla/websocket"
 )
 
@@ -4588,6 +4589,49 @@ func TestRealtimeEventMapsResponseDoneMetrics(t *testing.T) {
 	}
 	if ev.Metrics.OutputTokenDetails.TextTokens != 5 || ev.Metrics.OutputTokenDetails.AudioTokens != 2 {
 		t.Fatalf("output details = %#v, want text/audio output usage", ev.Metrics.OutputTokenDetails)
+	}
+}
+
+func TestRealtimeSessionAddsReferenceTimingToResponseMetrics(t *testing.T) {
+	session := &realtimeSession{}
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.generation.messages["item_123"] = &realtimeMessageGeneration{
+		textCh:       make(chan string, 1),
+		audioCh:      make(chan *audiomodel.AudioFrame, 1),
+		modalitiesCh: make(chan []string, 1),
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:   llm.RealtimeEventTypeAudio,
+		ItemID: "item_123",
+		Data:   []byte{0, 0},
+	})
+	time.Sleep(2 * time.Millisecond)
+
+	ev := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeMetricsCollected,
+		Metrics: &telemetry.RealtimeModelMetrics{
+			RequestID:    "resp_123",
+			OutputTokens: 8,
+			TotalTokens:  8,
+		},
+	})
+
+	if ev.Metrics.Timestamp.IsZero() {
+		t.Fatal("metrics timestamp is zero, want generation creation timestamp")
+	}
+	if ev.Metrics.TTFT <= 0 {
+		t.Fatalf("metrics TTFT = %f, want first audio latency", ev.Metrics.TTFT)
+	}
+	if ev.Metrics.Duration <= ev.Metrics.TTFT {
+		t.Fatalf("metrics duration/TTFT = %f/%f, want duration after first token", ev.Metrics.Duration, ev.Metrics.TTFT)
+	}
+	if ev.Metrics.TokensPerSecond <= 0 {
+		t.Fatalf("metrics tokens_per_second = %f, want output tokens divided by duration", ev.Metrics.TokensPerSecond)
 	}
 }
 

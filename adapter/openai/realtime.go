@@ -381,6 +381,12 @@ type realtimeSession struct {
 	pushedDuration   float64
 	optionsState     map[string]any
 	connectedAt      time.Time
+	lastGeneration   realtimeGenerationTiming
+}
+
+type realtimeGenerationTiming struct {
+	createdAt    time.Time
+	firstTokenAt time.Time
 }
 
 const maxRealtimeInputTranscripts = 1024
@@ -407,6 +413,7 @@ type realtimeGeneration struct {
 	messageCh  chan llm.MessageGeneration
 	functionCh chan *llm.FunctionCall
 	messages   map[string]*realtimeMessageGeneration
+	timing     realtimeGenerationTiming
 }
 
 type realtimeMessageGeneration struct {
@@ -2158,6 +2165,9 @@ func (s *realtimeSession) trackRealtimeEvent(ev llm.RealtimeEvent) llm.RealtimeE
 	if ev.Type == llm.RealtimeEventTypeInputAudioTranscriptionCompleted {
 		return s.trackRealtimeInputTranscription(ev)
 	}
+	if ev.Type == llm.RealtimeEventTypeMetricsCollected {
+		return s.trackRealtimeMetrics(ev)
+	}
 	return ev
 }
 
@@ -2172,6 +2182,9 @@ func (s *realtimeSession) trackRealtimeGenerationCreated(ev llm.RealtimeEvent) l
 		messageCh:  make(chan llm.MessageGeneration, 100),
 		functionCh: make(chan *llm.FunctionCall, 100),
 		messages:   make(map[string]*realtimeMessageGeneration),
+		timing: realtimeGenerationTiming{
+			createdAt: time.Now(),
+		},
 	}
 	s.closeRealtimeGeneration()
 	s.generation = generation
@@ -2188,6 +2201,9 @@ func (s *realtimeSession) trackRealtimeText(ev llm.RealtimeEvent) {
 	if msg == nil {
 		return
 	}
+	if msg.audioClosed && s.generation.timing.firstTokenAt.IsZero() {
+		s.generation.timing.firstTokenAt = time.Now()
+	}
 	select {
 	case msg.textCh <- ev.Text:
 	default:
@@ -2203,6 +2219,9 @@ func (s *realtimeSession) trackRealtimeAudio(ev llm.RealtimeEvent) {
 	if msg == nil {
 		return
 	}
+	if s.generation.timing.firstTokenAt.IsZero() {
+		s.generation.timing.firstTokenAt = time.Now()
+	}
 	frame := &model.AudioFrame{
 		Data:              ev.Data,
 		SampleRate:        24000,
@@ -2215,6 +2234,32 @@ func (s *realtimeSession) trackRealtimeAudio(ev llm.RealtimeEvent) {
 	default:
 		logger.Logger.Warnw("dropping OpenAI realtime audio delta for full message stream", nil, "item_id", ev.ItemID)
 	}
+}
+
+func (s *realtimeSession) trackRealtimeMetrics(ev llm.RealtimeEvent) llm.RealtimeEvent {
+	if ev.Metrics == nil {
+		return ev
+	}
+	timing := s.lastGeneration
+	if s.generation != nil && !s.generation.timing.createdAt.IsZero() {
+		timing = s.generation.timing
+	}
+	if timing.createdAt.IsZero() {
+		return ev
+	}
+	now := time.Now()
+	ev.Metrics.Timestamp = timing.createdAt
+	ev.Metrics.Duration = now.Sub(timing.createdAt).Seconds()
+	if timing.firstTokenAt.IsZero() {
+		ev.Metrics.TTFT = -1
+	} else {
+		ev.Metrics.TTFT = timing.firstTokenAt.Sub(timing.createdAt).Seconds()
+	}
+	if ev.Metrics.Duration > 0 {
+		ev.Metrics.TokensPerSecond = float64(ev.Metrics.OutputTokens) / ev.Metrics.Duration
+	}
+	s.lastGeneration = realtimeGenerationTiming{}
+	return ev
 }
 
 func (s *realtimeSession) setRealtimeMessageModalities(itemID string, modalities []string) {
@@ -2237,6 +2282,7 @@ func (s *realtimeSession) closeRealtimeGeneration() {
 	if s.generation == nil {
 		return
 	}
+	s.lastGeneration = s.generation.timing
 	for _, msg := range s.generation.messages {
 		if msg.modalities == nil {
 			msg.modalities = []string{"audio", "text"}
