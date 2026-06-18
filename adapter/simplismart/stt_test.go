@@ -47,6 +47,14 @@ func TestSimplismartSTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestSimplismartSTTExposesReferenceInputSampleRate(t *testing.T) {
+	provider := NewSimplismartSTT("test-key")
+
+	if got := provider.InputSampleRate(); got != 16000 {
+		t.Fatalf("InputSampleRate = %d, want reference sample rate 16000", got)
+	}
+}
+
 func TestNewSimplismartSTTUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("SIMPLISMART_API_KEY", "env-key")
 
