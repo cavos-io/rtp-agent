@@ -269,6 +269,8 @@ type openaiTTSChunkedStream struct {
 	decoder        codecs.AudioStreamDecoder
 	decodeStarted  bool
 	decodeErrCh    chan error
+	wavBuffer      []byte
+	wavDone        bool
 	wavSampleRate  uint32
 	wavChannels    uint32
 }
@@ -286,15 +288,24 @@ func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
 	}
 
 	buf := make([]byte, 4096)
-	n, err := s.resp.Read(buf)
-	if err != nil && n == 0 {
-		if err == io.EOF {
-			return nil, io.EOF
+	for {
+		n, err := s.resp.Read(buf)
+		if n > 0 {
+			audio, frameErr := s.audioFrameFromPCMChunk(buf[:n])
+			if frameErr != nil {
+				return nil, frameErr
+			}
+			if audio != nil {
+				return audio, nil
+			}
 		}
-		return nil, llm.NewAPIConnectionError(err.Error())
+		if err != nil {
+			if err == io.EOF {
+				return nil, io.EOF
+			}
+			return nil, llm.NewAPIConnectionError(err.Error())
+		}
 	}
-
-	return s.audioFrameFromPCMChunk(buf[:n])
 }
 
 func (s *openaiTTSChunkedStream) nextMP3Audio() (*tts.SynthesizedAudio, error) {
@@ -375,7 +386,14 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 			if err != nil {
 				return nil, llm.NewAPIConnectionError(err.Error())
 			}
-			return s.audioFrameFromPCMChunk(audioData)
+			audio, err := s.audioFrameFromPCMChunk(audioData)
+			if err != nil {
+				return nil, err
+			}
+			if audio == nil {
+				continue
+			}
+			return audio, nil
 		case "speech.audio.done":
 			s.emitSSEUsageMetrics(event)
 			return nil, io.EOF
@@ -425,15 +443,14 @@ func (s *openaiTTSChunkedStream) audioFrameFromPCMChunk(data []byte) (*tts.Synth
 		channels = s.wavChannels
 	}
 	if s.responseFormat == openai.SpeechResponseFormatWav {
-		frame, ok, err := openAITTSDecodeWAVPCM16(data)
+		frame, ok, err := s.nextWAVFrame(data)
 		if err != nil {
 			return nil, llm.NewAPIConnectionError(err.Error())
 		}
 		if ok {
-			s.wavSampleRate = frame.SampleRate
-			s.wavChannels = frame.NumChannels
 			return &tts.SynthesizedAudio{Frame: frame}, nil
 		}
+		return nil, nil
 	}
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
@@ -443,6 +460,37 @@ func (s *openaiTTSChunkedStream) audioFrameFromPCMChunk(data []byte) (*tts.Synth
 			SamplesPerChannel: uint32(len(data)) / max(channels*2, 1),
 		},
 	}, nil
+}
+
+func (s *openaiTTSChunkedStream) nextWAVFrame(data []byte) (*model.AudioFrame, bool, error) {
+	if s.wavDone {
+		return nil, false, nil
+	}
+	s.wavBuffer = append(s.wavBuffer, data...)
+	if len(s.wavBuffer) < 12 {
+		return nil, false, nil
+	}
+	if string(s.wavBuffer[:4]) != "RIFF" || string(s.wavBuffer[8:12]) != "WAVE" {
+		return openAITTSDecodeWAVPCM16(s.wavBuffer)
+	}
+	if len(s.wavBuffer) < 8 {
+		return nil, false, nil
+	}
+	wavLen := int(binary.LittleEndian.Uint32(s.wavBuffer[4:8])) + 8
+	if wavLen <= 8 {
+		return nil, true, fmt.Errorf("invalid openai wav chunk size")
+	}
+	if len(s.wavBuffer) < wavLen {
+		return nil, false, nil
+	}
+	frame, ok, err := openAITTSDecodeWAVPCM16(s.wavBuffer[:wavLen])
+	if err != nil || !ok {
+		return frame, ok, err
+	}
+	s.wavDone = true
+	s.wavSampleRate = frame.SampleRate
+	s.wavChannels = frame.NumChannels
+	return frame, true, nil
 }
 
 func openAITTSDecodeWAVPCM16(data []byte) (*model.AudioFrame, bool, error) {
