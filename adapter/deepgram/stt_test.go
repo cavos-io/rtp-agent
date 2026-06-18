@@ -519,6 +519,50 @@ func TestDeepgramSTTRecognizeUploadsReferenceWAV(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTRecognizeDetectLanguageMatchesReference(t *testing.T) {
+	var query url.Values
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		query = r.URL.Query()
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"results":{"channels":[{"detected_language":"es","alternatives":[{"transcript":"hola","confidence":0.9,"words":[]}]}]}}`)),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramSTT("test-key", "",
+		WithDeepgramSTTBaseURL("https://deepgram.example/v1/listen"),
+		WithDeepgramSTTDetectLanguage(true),
+	)
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "en-US")
+	if err != nil {
+		t.Fatalf("Recognize() error = %v", err)
+	}
+
+	assertDeepgramQuery(t, query, "detect_language", "true")
+	if got := query.Get("language"); got != "" {
+		t.Fatalf("language query = %q, want omitted when detect_language is enabled", got)
+	}
+	if got := event.Alternatives[0].Language; got != "es" {
+		t.Fatalf("language = %q, want detected language es", got)
+	}
+}
+
+func TestDeepgramSTTStreamRejectsDetectLanguage(t *testing.T) {
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTDetectLanguage(true))
+
+	_, err := provider.Stream(context.Background(), "en-US")
+	if err == nil {
+		t.Fatal("Stream error = nil, want detect-language streaming error")
+	}
+	if !strings.Contains(err.Error(), "language detection is not supported in streaming mode") {
+		t.Fatalf("Stream error = %q, want reference detect-language streaming error", err.Error())
+	}
+}
+
 func TestDeepgramSTTRecognizeReturnsAPIStatusError(t *testing.T) {
 	oldClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
