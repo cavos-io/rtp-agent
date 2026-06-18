@@ -201,7 +201,7 @@ type AgentServer struct {
 	httpServer             *http.Server
 	httpPort               int
 	prometheusServer       *telemetry.HttpServer
-	workerMessageSink      func(*livekit.WorkerMessage) error
+	workerMessageSink      func(*workerlivekit.WorkerMessage) error
 	workerID               string
 	connectionFailed       bool
 	startedHandlers        []WorkerStartedHandler
@@ -1106,7 +1106,7 @@ func readSystemCPUTimes() (idle uint64, total uint64, err error) {
 	return idle, total, nil
 }
 
-func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
+func (s *AgentServer) registerWorkerRequest() *workerlivekit.WorkerMessage {
 	return workerlivekit.RegisterWorkerMessage(workerlivekit.WorkerRegistrationOptions{
 		WorkerType:  string(s.Options.WorkerType),
 		AgentName:   s.Options.AgentName,
@@ -1115,13 +1115,13 @@ func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
 	})
 }
 
-func (s *AgentServer) availableWorkerStatusMessage() *livekit.WorkerMessage {
+func (s *AgentServer) availableWorkerStatusMessage() *workerlivekit.WorkerMessage {
 	jobCount := uint32(s.activeJobCount())
 	load := s.currentLoad()
 	return workerlivekit.AvailableWorkerStatusMessage(load, jobCount, s.availableForJobWithLoad(load))
 }
 
-func (s *AgentServer) drainingWorkerStatusMessage() *livekit.WorkerMessage {
+func (s *AgentServer) drainingWorkerStatusMessage() *workerlivekit.WorkerMessage {
 	return workerlivekit.DrainingWorkerStatusMessage(uint32(s.activeJobCount()))
 }
 
@@ -1735,7 +1735,7 @@ func (s *AgentServer) releaseAvailabilitySlot() {
 	}
 }
 
-func (s *AgentServer) sendWorkerMessage(msg *livekit.WorkerMessage) error {
+func (s *AgentServer) sendWorkerMessage(msg *workerlivekit.WorkerMessage) error {
 	if s.workerMessageSink != nil {
 		return s.workerMessageSink(msg)
 	}

@@ -26,6 +26,18 @@ func TestJobStatusMessageCarriesJobStatus(t *testing.T) {
 	}
 }
 
+func TestWorkerMessageAliasUsesLiveKitProtocolMessage(t *testing.T) {
+	msg := &workerlivekit.WorkerMessage{
+		Message: &lkprotocol.WorkerMessage_UpdateJob{
+			UpdateJob: &lkprotocol.UpdateJobStatus{JobId: "job-a"},
+		},
+	}
+
+	if msg.GetUpdateJob().GetJobId() != "job-a" {
+		t.Fatalf("JobId = %q, want job-a", msg.GetUpdateJob().GetJobId())
+	}
+}
+
 func TestJobRunningMessageReportsRunningStatus(t *testing.T) {
 	msg := workerlivekit.JobRunningMessage("job-a")
 
