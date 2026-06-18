@@ -265,6 +265,22 @@ func TestCartesiaTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSChunkedStreamReadErrorReturnsAPIConnectionError(t *testing.T) {
+	readErr := errors.New("read failed")
+	stream := &cartesiaTTSChunkedStream{
+		resp: &http.Response{
+			Body: cartesiaErrorReadCloser{err: readErr},
+		},
+		sampleRate: 24000,
+	}
+
+	_, err := stream.Next()
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestCartesiaSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
 	provider := NewCartesiaTTS("test-key", "", "",
 		WithCartesiaBaseURL("https://cartesia.example"),
@@ -300,6 +316,18 @@ func TestCartesiaStreamInitMessageUsesReferenceOptions(t *testing.T) {
 	if msg["add_timestamps"] != true {
 		t.Fatalf("add_timestamps = %#v, want true", msg["add_timestamps"])
 	}
+}
+
+type cartesiaErrorReadCloser struct {
+	err error
+}
+
+func (r cartesiaErrorReadCloser) Read([]byte) (int, error) {
+	return 0, r.err
+}
+
+func (r cartesiaErrorReadCloser) Close() error {
+	return nil
 }
 
 func TestCartesiaTTSStreamFlushUsesReferenceEndPacket(t *testing.T) {

@@ -250,7 +250,7 @@ func (s *cartesiaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if err == io.EOF {
 			return nil, io.EOF
 		}
-		return nil, err
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 
 	return &tts.SynthesizedAudio{
