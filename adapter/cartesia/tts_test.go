@@ -17,6 +17,12 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type cartesiaRoundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f cartesiaRoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
 func TestCartesiaTTSDefaultsMatchReference(t *testing.T) {
 	provider := NewCartesiaTTS("test-key", "", "")
 
@@ -183,6 +189,42 @@ func TestCartesiaTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "CARTESIA_API_KEY") {
 		t.Fatalf("Stream error = %q, want CARTESIA_API_KEY guidance", err)
+	}
+}
+
+func TestCartesiaTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: cartesiaRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/tts/bytes" {
+			t.Fatalf("path = %q, want /tts/bytes", req.URL.Path)
+		}
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+	defer func() {
+		http.DefaultClient = oldClient
+	}()
+
+	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("https://cartesia.test"))
+
+	_, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("Synthesize error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	body, ok := statusErr.Body.(string)
+	if !ok || !strings.Contains(body, "rate limited") {
+		t.Fatalf("body = %#v, want provider error body", statusErr.Body)
 	}
 }
 
