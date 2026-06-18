@@ -1573,9 +1573,18 @@ func TestPerformToolExecutionsCancelTaskToolCancelsCancellableTool(t *testing.T)
 	if runningOutput.RawError != nil {
 		t.Fatalf("get running RawError = %v, want nil", runningOutput.RawError)
 	}
-	runningRaw, ok := runningOutput.RawOutput.(string)
-	if !ok || !strings.Contains(runningRaw, "call_lookup_a") {
-		t.Fatalf("get running RawOutput = %#v, want active call id", runningOutput.RawOutput)
+	runningRaw, ok := runningOutput.RawOutput.([]map[string]any)
+	if !ok || len(runningRaw) != 1 || runningRaw[0]["call_id"] != "call_lookup_a" {
+		t.Fatalf("get running RawOutput = %#v, want structured active call list", runningOutput.RawOutput)
+	}
+	if got, want := runningRaw[0]["type"], "function_call"; got != want {
+		t.Fatalf("get running task type = %#v, want %q", got, want)
+	}
+	if got, want := runningRaw[0]["name"], "lookup"; got != want {
+		t.Fatalf("get running task name = %#v, want %q", got, want)
+	}
+	if got, ok := runningRaw[0]["created_at"].(float64); !ok || got <= 0 {
+		t.Fatalf("get running task created_at = %#v, want positive unix timestamp", runningRaw[0]["created_at"])
 	}
 
 	functionCh <- &llm.FunctionToolCall{
@@ -1648,16 +1657,15 @@ func TestPerformToolExecutionsRunningTasksUsesCanonicalArguments(t *testing.T) {
 	if runningOutput.RawError != nil {
 		t.Fatalf("get running RawError = %v, want nil", runningOutput.RawError)
 	}
-	runningRaw, ok := runningOutput.RawOutput.(string)
+	running, ok := runningOutput.RawOutput.([]map[string]any)
 	if !ok {
-		t.Fatalf("get running RawOutput = %#v, want JSON string", runningOutput.RawOutput)
-	}
-	var running []map[string]any
-	if err := json.Unmarshal([]byte(runningRaw), &running); err != nil {
-		t.Fatalf("get running RawOutput = %q, want JSON array: %v", runningRaw, err)
+		t.Fatalf("get running RawOutput = %#v, want structured reference list", runningOutput.RawOutput)
 	}
 	if len(running) != 1 {
 		t.Fatalf("running tasks = %#v, want one active call", running)
+	}
+	if got, want := running[0]["type"], "function_call"; got != want {
+		t.Fatalf("running task type = %#v, want %q", got, want)
 	}
 	if got, want := running[0]["arguments"], `{"city":"Paris"}`; got != want {
 		t.Fatalf("running task arguments = %#v, want canonical %q", got, want)
