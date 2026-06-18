@@ -3517,6 +3517,49 @@ func TestPipelineAgentGeneratedReplyInterruptSuppressesCanceledTTSError(t *testi
 	}
 }
 
+func TestPipelineAgentGeneratedReplyContextCancelSuppressesTTSError(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "cancel me"}},
+			},
+		},
+	}
+	blockStream := &blockingPipelineTTSStream{
+		started: make(chan struct{}),
+		unblock: make(chan struct{}),
+		err:     fmt.Errorf("Post %q: %w", "https://example.test/tts", context.Canceled),
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, &blockingPipelineTTS{stream: blockStream}, chatCtx)
+	agent.session = session
+	ctx, cancel := context.WithCancel(context.Background())
+	agent.ctx = ctx
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+	}()
+
+	<-blockStream.started
+	cancel()
+	close(blockStream.unblock)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("generateReplyWithOptions did not return after canceled context TTS stream")
+	}
+	select {
+	case ev := <-session.ErrorEvents():
+		t.Fatalf("ErrorEvents received unexpected error = %v, want no TTS error on context cancellation", ev.Error)
+	default:
+	}
+}
+
 func TestPipelineAgentScheduledReplyInterruptCancelsProviderContexts(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	l := &interruptAwarePipelineLLM{
