@@ -169,6 +169,14 @@ func PopulateSessionReportWithJobMetadata(report *agent.SessionReport, job *lkpr
 	report.Room = info.Room
 }
 
+func JobLogContextFields(job *lkprotocol.Job) map[string]any {
+	info := JobSessionReportInfo(job)
+	return map[string]any{
+		"job_id": info.JobID,
+		"room":   info.Room,
+	}
+}
+
 type MetricInfo struct {
 	RoomName string
 }

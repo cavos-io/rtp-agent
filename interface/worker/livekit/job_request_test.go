@@ -257,6 +257,31 @@ func TestPopulateSessionReportWithJobMetadataCopiesLiveKitJobFields(t *testing.T
 	}
 }
 
+func TestJobLogContextFieldsExposeLiveKitJobMetadata(t *testing.T) {
+	fields := workerlivekit.JobLogContextFields(&lkprotocol.Job{
+		Id:   "job-log",
+		Room: &lkprotocol.Room{Name: "room-log"},
+	})
+
+	if fields["job_id"] != "job-log" {
+		t.Fatalf("job_id = %q, want job-log", fields["job_id"])
+	}
+	if fields["room"] != "room-log" {
+		t.Fatalf("room = %q, want room-log", fields["room"])
+	}
+}
+
+func TestJobLogContextFieldsReturnsStableKeysForNilJob(t *testing.T) {
+	fields := workerlivekit.JobLogContextFields(nil)
+
+	if fields["job_id"] != "" {
+		t.Fatalf("job_id = %q, want empty", fields["job_id"])
+	}
+	if fields["room"] != "" {
+		t.Fatalf("room = %q, want empty", fields["room"])
+	}
+}
+
 func TestJobMetricInfoExposesRoomName(t *testing.T) {
 	info := workerlivekit.JobMetricInfo(&lkprotocol.Job{
 		Room: &lkprotocol.Room{Name: "metrics-room"},

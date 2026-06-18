@@ -267,19 +267,16 @@ func NewJobContext(job *workerlivekit.Job, url string, apiKey string, apiSecret 
 	report.Tagger = tagger
 	workerlivekit.PopulateSessionReportWithJobMetadata(report, job)
 	return &JobContext{
-		Job:            job,
-		url:            url,
-		apiKey:         apiKey,
-		apiSecret:      apiSecret,
-		Report:         report,
-		tagger:         tagger,
-		process:        NewJobProcess(JobExecutorTypeThread, nil, ""),
-		shutdownDone:   make(chan struct{}),
-		entrypointDone: make(chan struct{}),
-		logContextFields: map[string]any{
-			"job_id": report.JobID,
-			"room":   report.Room,
-		},
+		Job:              job,
+		url:              url,
+		apiKey:           apiKey,
+		apiSecret:        apiSecret,
+		Report:           report,
+		tagger:           tagger,
+		process:          NewJobProcess(JobExecutorTypeThread, nil, ""),
+		shutdownDone:     make(chan struct{}),
+		entrypointDone:   make(chan struct{}),
+		logContextFields: workerlivekit.JobLogContextFields(job),
 	}
 }
 
