@@ -169,6 +169,7 @@ func (s *BasetenSTT) Model() string { return "unknown" }
 func (s *BasetenSTT) Provider() string {
 	return "Baseten"
 }
+func (s *BasetenSTT) InputSampleRate() uint32 { return uint32(s.sampleRate) }
 func (s *BasetenSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:         true,

@@ -52,6 +52,22 @@ func TestBasetenSTTDefaultsMatchReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestBasetenSTTExposesReferenceInputSampleRate(t *testing.T) {
+	provider := mustNewBasetenSTT(t, "test-key", "model-id")
+
+	if got := provider.InputSampleRate(); got != 16000 {
+		t.Fatalf("InputSampleRate = %d, want 16000", got)
+	}
+}
+
+func TestBasetenSTTExposesConfiguredInputSampleRate(t *testing.T) {
+	provider := mustNewBasetenSTT(t, "test-key", "model-id", WithBasetenSTTSampleRate(8000))
+
+	if got := provider.InputSampleRate(); got != 8000 {
+		t.Fatalf("InputSampleRate = %d, want 8000", got)
+	}
+}
+
 func TestBasetenSTTEndpointOptionsMatchReferencePriority(t *testing.T) {
 	explicit := mustNewBasetenSTT(t, "test-key", "ignored",
 		WithBasetenSTTModelEndpoint("wss://explicit.example/websocket"),
