@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
 )
@@ -191,8 +192,15 @@ func TestBasetenTTSSynthesizeReturnsHTTPErrorBody(t *testing.T) {
 
 	_, err := provider.Synthesize(context.Background(), "hello")
 
-	if err == nil || !strings.Contains(err.Error(), "bad request") {
-		t.Fatalf("Synthesize error = %v, want response body", err)
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status code = %d, want 400", statusErr.StatusCode)
+	}
+	if statusErr.Body != "bad request\n" {
+		t.Fatalf("body = %#v, want response body", statusErr.Body)
 	}
 }
 
