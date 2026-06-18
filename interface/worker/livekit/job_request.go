@@ -2,6 +2,7 @@ package livekit
 
 import (
 	"context"
+	"maps"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/library/inference"
@@ -213,6 +214,11 @@ type RunningJobInfo struct {
 	Token           string             `json:"token"`
 	WorkerID        string             `json:"worker_id"`
 	FakeJob         bool               `json:"fake_job"`
+}
+
+func CloneRunningJobInfo(info RunningJobInfo) RunningJobInfo {
+	info.AcceptArguments.Attributes = maps.Clone(info.AcceptArguments.Attributes)
+	return info
 }
 
 func JobAssignmentInfo(req *JobAssignment, defaultURL string) AssignmentInfo {

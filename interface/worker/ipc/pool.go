@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"sync"
 	"time"
 
@@ -276,8 +275,7 @@ func (p *ProcPool) ActiveJobs() []RunningJobInfo {
 }
 
 func cloneRunningJobInfo(info RunningJobInfo) RunningJobInfo {
-	info.AcceptArguments.Attributes = maps.Clone(info.AcceptArguments.Attributes)
-	return info
+	return workerlivekit.CloneRunningJobInfo(info)
 }
 
 func (p *ProcPool) SetCloseTimeout(timeout time.Duration) {
