@@ -131,6 +131,8 @@ func (t *XaiTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &xaiTTSSynthesizeStream{
 		conn:          conn,
+		streamURL:     buildXaiTTSStreamURL(t),
+		headers:       buildXaiTTSHeaders(t),
 		ctx:           streamCtx,
 		cancel:        cancel,
 		tokenLanguage: t.language,
@@ -225,6 +227,8 @@ func (s *xaiTTSWebsocketChunkedStream) Close() error {
 
 type xaiTTSSynthesizeStream struct {
 	conn          *websocket.Conn
+	streamURL     string
+	headers       http.Header
 	ctx           context.Context
 	cancel        context.CancelFunc
 	mu            sync.Mutex
@@ -280,7 +284,9 @@ func (s *xaiTTSSynthesizeStream) Close() error {
 	}
 	s.closed = true
 	s.cancel()
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	if s.conn != nil {
+		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	}
 	return s.closeConnection()
 }
 
@@ -292,6 +298,9 @@ func (s *xaiTTSSynthesizeStream) writeMessageData(message map[string]any) error 
 }
 
 func (s *xaiTTSSynthesizeStream) writeTTSMessage(message map[string]any) error {
+	if err := s.ensureConnLocked(); err != nil {
+		return err
+	}
 	return writeXaiTTSMessage(s.conn, message)
 }
 
@@ -303,7 +312,24 @@ func (s *xaiTTSSynthesizeStream) closeConnection() error {
 }
 
 func (s *xaiTTSSynthesizeStream) closeWebsocketConn() error {
-	return s.conn.Close()
+	if s.conn == nil {
+		return nil
+	}
+	conn := s.conn
+	s.conn = nil
+	return conn.Close()
+}
+
+func (s *xaiTTSSynthesizeStream) ensureConnLocked() error {
+	if s.conn != nil {
+		return nil
+	}
+	conn, _, err := websocket.DefaultDialer.DialContext(s.ctx, s.streamURL, s.headers)
+	if err != nil {
+		return llm.NewAPIConnectionError("failed to connect to xAI")
+	}
+	s.conn = conn
+	return nil
 }
 
 func (s *xaiTTSSynthesizeStream) closeAfterWriteFailureLocked() {
@@ -353,7 +379,50 @@ func (s *xaiTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 		return nil, s.ctx.Err()
 	default:
 	}
-	return (&xaiTTSWebsocketChunkedStream{conn: s.conn}).Next()
+	for {
+		conn := s.currentConn()
+		if conn == nil {
+			return nil, io.EOF
+		}
+		msgType, payload, err := conn.ReadMessage()
+		if err != nil {
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
+				s.clearCurrentConn(conn)
+				return nil, io.EOF
+			}
+			return nil, err
+		}
+		if msgType != websocket.TextMessage {
+			continue
+		}
+		audio, done, err := xaiTTSAudioFromMessage(payload)
+		if err != nil {
+			return nil, err
+		}
+		if done {
+			s.clearCurrentConn(conn)
+			return nil, io.EOF
+		}
+		if audio != nil {
+			return audio, nil
+		}
+	}
+}
+
+func (s *xaiTTSSynthesizeStream) currentConn() *websocket.Conn {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.conn
+}
+
+func (s *xaiTTSSynthesizeStream) clearCurrentConn(conn *websocket.Conn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.conn != conn {
+		return
+	}
+	_ = s.conn.Close()
+	s.conn = nil
 }
 
 func xaiTTSAudioFromMessage(payload []byte) (*tts.SynthesizedAudio, bool, error) {

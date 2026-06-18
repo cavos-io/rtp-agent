@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -251,6 +252,60 @@ func TestXaiTTSSynthesizeTokenizesTextBeforeDone(t *testing.T) {
 	assertXaiTTSMessage(t, readXaiTTSMessage(t, messages, handlerErr), "text.done", "")
 }
 
+func TestXaiTTSStreamReconnectsBetweenFlushSegments(t *testing.T) {
+	requestURLs := make(chan string, 2)
+	handlerErr := make(chan error, 2)
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = newXaiSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		requestURLs <- r.URL.String()
+		for {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				handlerErr <- err
+				return
+			}
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				handlerErr <- err
+				return
+			}
+			if message["type"] == "text.done" {
+				if err := conn.WriteJSON(map[string]any{"type": "audio.done"}); err != nil {
+					handlerErr <- err
+				}
+				return
+			}
+		}
+	}, handlerErr)
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewXaiTTS("test-key", "ara", WithXaiTTSWebsocketURL("ws://xai.test/v1/tts"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+	readXaiTTSRequestURL(t, requestURLs, handlerErr)
+
+	if err := stream.PushText("first segment"); err != nil {
+		t.Fatalf("PushText(first) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(first) error = %v", err)
+	}
+	if audio, err := stream.Next(); err != io.EOF {
+		t.Fatalf("first Next() = (%#v, %v), want EOF after audio.done", audio, err)
+	}
+
+	if err := stream.PushText("second segment"); err != nil {
+		t.Fatalf("PushText(second) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(second) error = %v", err)
+	}
+	readXaiTTSRequestURL(t, requestURLs, handlerErr)
+}
+
 func TestXaiTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	cancelled := false
@@ -399,4 +454,17 @@ func readXaiTTSMessage(t *testing.T, messages <-chan map[string]any, handlerErr 
 		t.Fatal("timed out waiting for xAI TTS message")
 	}
 	return nil
+}
+
+func readXaiTTSRequestURL(t *testing.T, requestURLs <-chan string, handlerErr <-chan error) string {
+	t.Helper()
+	select {
+	case requestURL := <-requestURLs:
+		return requestURL
+	case err := <-handlerErr:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for xAI TTS websocket request")
+	}
+	return ""
 }
