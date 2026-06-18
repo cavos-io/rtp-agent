@@ -948,6 +948,52 @@ func TestMultimodalAgentEmitsErrorWhenRealtimeToolResultSyncFails(t *testing.T) 
 	}
 }
 
+func TestMultimodalAgentRealtimeToolResultSyncFailureStillEmitsEventAndReply(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	rtSession := &fakeRealtimeSession{
+		updateChatContextErr: errors.New("update chat context failed"),
+		generateCh:           make(chan llm.RealtimeGenerateReplyOptions, 1),
+	}
+	ma := &MultimodalAgent{
+		model:     &fakeRealtimeModel{},
+		session:   session,
+		chatCtx:   chatCtx,
+		rtSession: rtSession,
+		ctx:       context.Background(),
+	}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type:     llm.RealtimeEventTypeFunctionCall,
+		Function: &llm.FunctionToolCall{Name: "lookup", CallID: "call_lookup", Arguments: `{}`},
+	})
+
+	select {
+	case ev := <-session.FunctionToolsExecutedEvents():
+		if len(ev.FunctionCalls) != 1 || ev.FunctionCalls[0].CallID != "call_lookup" {
+			t.Fatalf("FunctionCalls = %#v, want emitted lookup call", ev.FunctionCalls)
+		}
+		if len(ev.FunctionCallOutputs) != 1 || ev.FunctionCallOutputs[0].Output != "agent result" {
+			t.Fatalf("FunctionCallOutputs = %#v, want emitted tool result", ev.FunctionCallOutputs)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("FunctionToolsExecutedEvents did not receive realtime tool result after sync failure")
+	}
+	select {
+	case opts := <-rtSession.generateCh:
+		if opts.ToolChoice != "auto" {
+			t.Fatalf("GenerateReply ToolChoice = %q, want auto", opts.ToolChoice)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("GenerateReply was not requested after realtime tool result sync failure")
+	}
+	if rtSession.interrupted != 1 {
+		t.Fatalf("realtime session interrupts = %d, want 1 before tool reply", rtSession.interrupted)
+	}
+}
+
 func TestMultimodalToolExecutionSuppressesStopResponse(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	ma := &MultimodalAgent{

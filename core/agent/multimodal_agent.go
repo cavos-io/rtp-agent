@@ -1080,6 +1080,17 @@ func (ma *MultimodalAgent) appendRealtimeToolResult(call *llm.FunctionCall, outp
 		}
 		ma.chatCtx.Append(output)
 	}
+	var ev *FunctionToolsExecutedEvent
+	if ma.session != nil && call != nil {
+		var err error
+		ev, err = NewFunctionToolsExecutedEvent([]*llm.FunctionCall{call}, []*llm.FunctionCallOutput{output})
+		if err != nil {
+			logger.Logger.Errorw("failed to create realtime function tools executed event", err)
+			return
+		}
+		ev.ReplyRequired = true
+		ma.session.EmitFunctionToolsExecuted(*ev)
+	}
 	if ma.rtSession != nil && ma.chatCtx != nil {
 		if err := ma.rtSession.UpdateChatContext(ma.chatCtx); err != nil {
 			logger.Logger.Errorw("failed to update realtime session chat context with tool result", err)
@@ -1089,19 +1100,11 @@ func (ma *MultimodalAgent) appendRealtimeToolResult(call *llm.FunctionCall, outp
 					Source: ma.model,
 				})
 			}
-			return
 		}
 	}
-	if ma.session == nil || call == nil {
+	if ev == nil {
 		return
 	}
-	ev, err := NewFunctionToolsExecutedEvent([]*llm.FunctionCall{call}, []*llm.FunctionCallOutput{output})
-	if err != nil {
-		logger.Logger.Errorw("failed to create realtime function tools executed event", err)
-		return
-	}
-	ev.ReplyRequired = true
-	ma.session.EmitFunctionToolsExecuted(*ev)
 	if !ev.HasToolReply() {
 		return
 	}
