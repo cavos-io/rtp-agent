@@ -667,7 +667,9 @@ func (ma *MultimodalAgent) consumeRealtimeGeneration(ctx context.Context, speech
 	functionCh := generation.FunctionCh
 	for messageCh != nil || functionCh != nil {
 		if speech != nil && speech.IsInterrupted() {
-			ma.syncRealtimeChatContextAfterSkippedMessages()
+			if realtimeMessagePending(messageCh) {
+				ma.syncRealtimeChatContextAfterSkippedMessages()
+			}
 			return
 		}
 		select {
@@ -695,7 +697,9 @@ func (ma *MultimodalAgent) consumeRealtimeGeneration(ctx context.Context, speech
 				continue
 			}
 			if speech != nil && speech.IsInterrupted() {
-				ma.syncRealtimeChatContextAfterSkippedMessages()
+				if realtimeMessagePending(messageCh) {
+					ma.syncRealtimeChatContextAfterSkippedMessages()
+				}
 				return
 			}
 			ma.executeRealtimeFunctionCall(call)
@@ -806,6 +810,18 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 	}
 	speech.AddChatItems(msg)
 	return false
+}
+
+func realtimeMessagePending(messageCh <-chan llm.MessageGeneration) bool {
+	if messageCh == nil {
+		return false
+	}
+	select {
+	case _, ok := <-messageCh:
+		return ok
+	default:
+		return false
+	}
 }
 
 func (ma *MultimodalAgent) publishTTSFallbackForRealtimeText(ctx context.Context, speech *SpeechHandle, text string) (bool, error) {

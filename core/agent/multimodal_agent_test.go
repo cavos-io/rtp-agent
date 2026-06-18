@@ -1945,6 +1945,38 @@ func TestMultimodalAgentSkipsRealtimeMessagesAfterSpeechInterrupted(t *testing.T
 	}
 }
 
+func TestMultimodalAgentInterruptedFunctionOnlyGenerationDoesNotSyncChatContext(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	rtSession := &fakeRealtimeSession{}
+	ma := &MultimodalAgent{
+		model: &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{
+			MutableChatContext: true,
+		}},
+		session:   NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{}),
+		chatCtx:   chatCtx,
+		rtSession: rtSession,
+		ctx:       context.Background(),
+	}
+	messageCh := make(chan llm.MessageGeneration)
+	close(messageCh)
+	functionCh := make(chan *llm.FunctionCall, 1)
+	functionCh <- &llm.FunctionCall{CallID: "call_lookup", Name: "lookup"}
+	close(functionCh)
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	if err := speech.Interrupt(true); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+
+	ma.consumeRealtimeGeneration(context.Background(), speech, &llm.GenerationCreatedEvent{
+		MessageCh:  messageCh,
+		FunctionCh: functionCh,
+	})
+
+	if rtSession.updated != nil {
+		t.Fatalf("updated chat context = %#v, want no sync without skipped realtime messages", rtSession.updated)
+	}
+}
+
 func TestMultimodalAgentUsesTTSFallbackForTextOnlyRealtimeMessage(t *testing.T) {
 	ttsStream := newEndInputGenerationTTSStream()
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
