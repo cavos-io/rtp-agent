@@ -663,6 +663,45 @@ func TestRunningJobContextValuesPreservesInfoURLAndWorker(t *testing.T) {
 	}
 }
 
+func TestReloadedJobContextValuesResolveOverrideURLWorkerAndRecording(t *testing.T) {
+	job := &lkprotocol.Job{Id: "job-reload", EnableRecording: true}
+	values := workerlivekit.ReloadedJobContextValues(workerlivekit.ReloadedJobContextValueOptions{
+		Info: workerlivekit.RunningJobInfo{
+			Job:   job,
+			URL:   "wss://stored.example",
+			Token: "stored-token",
+			AcceptArguments: workerlivekit.JobAcceptArguments{
+				Identity:   "agent-reload",
+				Attributes: map[string]string{"scope": "reload"},
+			},
+		},
+		OverrideURL:     "wss://override.example",
+		DefaultWorkerID: "worker-default",
+	})
+
+	if values.Job != job {
+		t.Fatal("ReloadedJobContextValues().Job did not preserve job")
+	}
+	if values.JobID != "job-reload" {
+		t.Fatalf("JobID = %q, want job-reload", values.JobID)
+	}
+	if values.URL != "wss://override.example" {
+		t.Fatalf("URL = %q, want override URL", values.URL)
+	}
+	if values.Token != "stored-token" {
+		t.Fatalf("Token = %q, want stored-token", values.Token)
+	}
+	if values.WorkerID != "worker-default" {
+		t.Fatalf("WorkerID = %q, want default worker", values.WorkerID)
+	}
+	if values.AcceptArguments.Attributes["scope"] != "reload" {
+		t.Fatalf("AcceptArguments.Attributes[scope] = %q, want reload", values.AcceptArguments.Attributes["scope"])
+	}
+	if !values.EnableRecording {
+		t.Fatal("EnableRecording = false, want true")
+	}
+}
+
 func TestPopPendingAcceptReturnsAndDeletesAcceptedArgs(t *testing.T) {
 	pending := map[string]workerlivekit.JobAcceptArguments{
 		"job-a": {Identity: "agent-a"},

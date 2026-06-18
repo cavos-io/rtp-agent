@@ -350,31 +350,23 @@ func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.Ru
 			continue
 		}
 
-		jobURL := s.Options.WSRL
-		if jobURL == "" {
-			jobURL = info.URL
-		}
-		runtimeJob := workerlivekit.JobRuntimeInfo(info.Job)
-		jobCtx := NewJobContext(info.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
+		reloadedJob := workerlivekit.ReloadedJobContextValues(workerlivekit.ReloadedJobContextValueOptions{
+			Info:            info,
+			OverrideURL:     s.Options.WSRL,
+			DefaultWorkerID: s.workerID,
+		})
+		jobCtx := NewJobContext(reloadedJob.Job, reloadedJob.URL, s.Options.APIKey, s.Options.APISecret)
 		jobCtx.process = s.newJobProcess()
-		if runtimeJob.EnableRecording {
+		if reloadedJob.EnableRecording {
 			jobCtx.InitRecording(workerlivekit.AllRecordingOptions())
 		}
-		jobCtx.token = info.Token
-		jobCtx.workerID = info.WorkerID
-		jobCtx.AcceptArguments = JobAcceptArguments{
-			Name:       info.AcceptArguments.Name,
-			Identity:   info.AcceptArguments.Identity,
-			Metadata:   info.AcceptArguments.Metadata,
-			Attributes: info.AcceptArguments.Attributes,
-		}
-		jobCtx.fakeJob = info.FakeJob
+		jobCtx.token = reloadedJob.Token
+		jobCtx.workerID = reloadedJob.WorkerID
+		jobCtx.AcceptArguments = reloadedJob.AcceptArguments
+		jobCtx.fakeJob = reloadedJob.FakeJob
 
 		s.mu.Lock()
-		if jobCtx.WorkerID() == "" {
-			jobCtx.workerID = s.workerID
-		}
-		s.activeJobs[runtimeJob.JobID] = jobCtx
+		s.activeJobs[reloadedJob.JobID] = jobCtx
 		s.mu.Unlock()
 
 		s.launchReloadedJob(ctx, jobCtx)

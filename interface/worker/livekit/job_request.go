@@ -365,6 +365,8 @@ type RunningJobContextValueOptions struct {
 	DefaultWorkerID string
 }
 
+type ReloadedJobContextValueOptions = RunningJobContextValueOptions
+
 type RunningJobContextValuesResult struct {
 	Job             *lkprotocol.Job
 	JobID           string
@@ -411,6 +413,10 @@ func RunningJobContextValues(opts RunningJobContextValueOptions) RunningJobConte
 		FakeJob:         info.FakeJob,
 		EnableRecording: runtime.EnableRecording,
 	}
+}
+
+func ReloadedJobContextValues(opts ReloadedJobContextValueOptions) RunningJobContextValuesResult {
+	return RunningJobContextValues(RunningJobContextValueOptions(opts))
 }
 
 func AssignmentContextValues(opts AssignmentContextValueOptions) AssignmentContextValuesResult {
