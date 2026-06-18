@@ -839,21 +839,29 @@ func parseAzureSTTMessageWithOffset(language string, payload []byte, startTimeOf
 	switch headers["Path"] {
 	case "speech.hypothesis":
 		var message struct {
-			Text     string `json:"Text"`
+			Text            string `json:"Text"`
+			Language        string `json:"Language"`
+			PrimaryLanguage struct {
+				Language string `json:"Language"`
+			} `json:"PrimaryLanguage"`
 			Offset   *int64 `json:"Offset"`
 			Duration *int64 `json:"Duration"`
 		}
 		if err := json.Unmarshal(body, &message); err != nil || strings.TrimSpace(message.Text) == "" {
 			return nil
 		}
-		return azureSTTSpeechEventWithTiming(stt.SpeechEventInterimTranscript, language, message.Text, 0, message.Offset, message.Duration, startTimeOffset)
+		return azureSTTSpeechEventWithTiming(stt.SpeechEventInterimTranscript, azureSTTDetectedLanguage(language, message.Language, message.PrimaryLanguage.Language), message.Text, 0, message.Offset, message.Duration, startTimeOffset)
 	case "speech.phrase":
 		var message struct {
 			RecognitionStatus string `json:"RecognitionStatus"`
 			DisplayText       string `json:"DisplayText"`
-			Offset            *int64 `json:"Offset"`
-			Duration          *int64 `json:"Duration"`
-			NBest             []struct {
+			Language          string `json:"Language"`
+			PrimaryLanguage   struct {
+				Language string `json:"Language"`
+			} `json:"PrimaryLanguage"`
+			Offset   *int64 `json:"Offset"`
+			Duration *int64 `json:"Duration"`
+			NBest    []struct {
 				Display    string   `json:"Display"`
 				Confidence *float64 `json:"Confidence"`
 			} `json:"NBest"`
@@ -874,7 +882,7 @@ func parseAzureSTTMessageWithOffset(language string, payload []byte, startTimeOf
 		if strings.TrimSpace(text) == "" {
 			return nil
 		}
-		return azureSTTSpeechEventWithTiming(stt.SpeechEventFinalTranscript, language, text, confidence, message.Offset, message.Duration, startTimeOffset)
+		return azureSTTSpeechEventWithTiming(stt.SpeechEventFinalTranscript, azureSTTDetectedLanguage(language, message.Language, message.PrimaryLanguage.Language), text, confidence, message.Offset, message.Duration, startTimeOffset)
 	case "turn.start", "speech.startDetected":
 		return &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech}
 	case "turn.end", "speech.endDetected":
@@ -882,6 +890,15 @@ func parseAzureSTTMessageWithOffset(language string, payload []byte, startTimeOf
 	default:
 		return nil
 	}
+}
+
+func azureSTTDetectedLanguage(fallback string, detected ...string) string {
+	for _, language := range detected {
+		if strings.TrimSpace(language) != "" {
+			return language
+		}
+	}
+	return fallback
 }
 
 func azureSTTSpeechEvent(eventType stt.SpeechEventType, language string, text string, confidence float64) *stt.SpeechEvent {

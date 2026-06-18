@@ -726,6 +726,30 @@ func TestAzureSTTStreamInterimConfidenceMatchesReference(t *testing.T) {
 	}
 }
 
+func TestAzureSTTStreamUsesDetectedLanguageWhenPresent(t *testing.T) {
+	interim := parseAzureSTTMessage(
+		resolveAzureSTTLanguage("en-US"),
+		[]byte("Path: speech.hypothesis\r\nContent-Type: application/json\r\n\r\n{\"Text\":\"bonjour\",\"PrimaryLanguage\":{\"Language\":\"fr-FR\",\"Confidence\":\"High\"}}"),
+	)
+	if interim == nil {
+		t.Fatal("interim event = nil, want transcript")
+	}
+	if got := interim.Alternatives[0].Language; got != "fr-FR" {
+		t.Fatalf("interim language = %q, want Azure detected language fr-FR", got)
+	}
+
+	final := parseAzureSTTMessage(
+		resolveAzureSTTLanguage("en-US"),
+		[]byte("Path: speech.phrase\r\nContent-Type: application/json\r\n\r\n{\"RecognitionStatus\":\"Success\",\"DisplayText\":\"hola\",\"PrimaryLanguage\":{\"Language\":\"es-ES\",\"Confidence\":\"High\"}}"),
+	)
+	if final == nil {
+		t.Fatal("final event = nil, want transcript")
+	}
+	if got := final.Alternatives[0].Language; got != "es-ES" {
+		t.Fatalf("final language = %q, want Azure detected language es-ES", got)
+	}
+}
+
 func TestAzureSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
 	stream := &azureSTTStream{language: "id-ID"}
 	timing, ok := any(stream).(stt.StreamTiming)
