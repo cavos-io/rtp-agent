@@ -1687,38 +1687,36 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.J
 	if s.entrypointFnc != nil {
 		jobCtx.markEntrypointStarted()
 		go func() {
-			result := workerlivekit.RunEntrypoint(func() error {
-				return s.runJobEntrypoint(jobCtx)
+			workerlivekit.RunJobEntrypointLifecycle(workerlivekit.JobEntrypointLifecycleOptions{
+				Context: ctx,
+				Entrypoint: func() error {
+					return s.runJobEntrypoint(jobCtx)
+				},
+				MarkDone: jobCtx.markEntrypointDone,
+				OnResult: func(result workerlivekit.EntrypointResult) {
+					if result.Recovered != nil {
+						logger.Logger.Errorw("Job entrypoint panicked", fmt.Errorf("%v", result.Recovered), jobLogValues(jobCtx, "jobId", jobID)...)
+					}
+					if result.Err != nil {
+						logger.Logger.Errorw("Job entrypoint failed", result.Err, jobLogValues(jobCtx, "jobId", jobID)...)
+					}
+				},
+				Terminated:   jobCtx.Terminated,
+				ShutdownDone: jobCtx.ShutdownDone(),
+				Shutdown: func(reason string) {
+					jobCtx.Shutdown(reason)
+				},
+				Finish: func() bool {
+					return s.finishJob(jobCtx)
+				},
+				SendStatus: func(status workerlivekit.JobStatus) error {
+					err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(jobID, status))
+					if err != nil {
+						logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", jobID)...)
+					}
+					return err
+				},
 			})
-			jobCtx.markEntrypointDone()
-			if result.Recovered != nil {
-				logger.Logger.Errorw("Job entrypoint panicked", fmt.Errorf("%v", result.Recovered), jobLogValues(jobCtx, "jobId", jobID)...)
-			}
-			if result.Err != nil {
-				logger.Logger.Errorw("Job entrypoint failed", result.Err, jobLogValues(jobCtx, "jobId", jobID)...)
-			}
-			status := result.Status
-			plan := workerlivekit.JobCompletionPlanForEntrypoint(status, jobCtx.Terminated())
-			if plan.WaitForShutdown {
-				select {
-				case <-jobCtx.ShutdownDone():
-				case <-ctx.Done():
-					jobCtx.Shutdown("")
-				}
-			}
-			if plan.Finish && plan.SendAfterFinish {
-				if !s.finishJob(jobCtx) {
-					return
-				}
-			}
-			if plan.SendStatus {
-				if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(jobID, status)); err != nil {
-					logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", jobID)...)
-				}
-			}
-			if plan.Finish && !plan.SendAfterFinish {
-				s.finishJob(jobCtx)
-			}
 		}()
 	}
 }

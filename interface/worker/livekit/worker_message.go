@@ -11,6 +11,8 @@ import (
 
 type WorkerMessage = lkprotocol.WorkerMessage
 
+type JobStatus = lkprotocol.JobStatus
+
 type WorkerWebSocketReader interface {
 	ReadMessage() (int, []byte, error)
 }
@@ -190,6 +192,18 @@ type EntrypointResult struct {
 	Recovered any
 }
 
+type JobEntrypointLifecycleOptions struct {
+	Context      context.Context
+	Entrypoint   func() error
+	MarkDone     func()
+	OnResult     func(EntrypointResult)
+	Terminated   func() bool
+	ShutdownDone <-chan struct{}
+	Shutdown     func(string)
+	Finish       func() bool
+	SendStatus   func(lkprotocol.JobStatus) error
+}
+
 func RunEntrypoint(entrypoint func() error) (result EntrypointResult) {
 	result.Status = JobStatusForEntrypointResult(nil, nil)
 	defer func() {
@@ -203,6 +217,68 @@ func RunEntrypoint(entrypoint func() error) (result EntrypointResult) {
 		result.Status = JobStatusForEntrypointResult(err, nil)
 	}
 	return result
+}
+
+func RunJobEntrypointLifecycle(opts JobEntrypointLifecycleOptions) EntrypointResult {
+	result := RunEntrypoint(opts.Entrypoint)
+	if opts.MarkDone != nil {
+		opts.MarkDone()
+	}
+	if opts.OnResult != nil {
+		opts.OnResult(result)
+	}
+
+	terminated := false
+	if opts.Terminated != nil {
+		terminated = opts.Terminated()
+	}
+	plan := JobCompletionPlanForEntrypoint(result.Status, terminated)
+	if plan.WaitForShutdown {
+		waitForJobShutdown(opts)
+	}
+	if plan.Finish && plan.SendAfterFinish {
+		if !finishJobEntrypoint(opts.Finish) {
+			return result
+		}
+	}
+	if plan.SendStatus {
+		_ = sendJobEntrypointStatus(opts.SendStatus, result.Status)
+	}
+	if plan.Finish && !plan.SendAfterFinish {
+		finishJobEntrypoint(opts.Finish)
+	}
+	return result
+}
+
+func waitForJobShutdown(opts JobEntrypointLifecycleOptions) {
+	if opts.ShutdownDone == nil {
+		return
+	}
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-opts.ShutdownDone:
+	case <-ctx.Done():
+		if opts.Shutdown != nil {
+			opts.Shutdown("")
+		}
+	}
+}
+
+func finishJobEntrypoint(finish func() bool) bool {
+	if finish == nil {
+		return true
+	}
+	return finish()
+}
+
+func sendJobEntrypointStatus(sendStatus func(lkprotocol.JobStatus) error, status lkprotocol.JobStatus) error {
+	if sendStatus == nil {
+		return nil
+	}
+	return sendStatus(status)
 }
 
 func JobRunningMessage(jobID string) *lkprotocol.WorkerMessage {
