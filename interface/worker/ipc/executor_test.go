@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"github.com/livekit/protocol/livekit"
 )
 
@@ -114,9 +115,9 @@ func TestProcessJobEnvCarriesRunningJobInfo(t *testing.T) {
 		FakeJob:  true,
 	}
 
-	env, err := processJobEnv([]string{"PATH=/bin"}, "exec-a", info)
+	env, err := workerlivekit.ProcessJobEnv([]string{"PATH=/bin"}, "exec-a", info)
 	if err != nil {
-		t.Fatalf("processJobEnv: %v", err)
+		t.Fatalf("workerlivekit.ProcessJobEnv: %v", err)
 	}
 
 	values := envMap(env)
@@ -162,14 +163,14 @@ func TestProcessJobEnvReplacesStaleAssignmentValues(t *testing.T) {
 		WorkerID: "worker-new",
 	}
 
-	env, err := processJobEnv([]string{
+	env, err := workerlivekit.ProcessJobEnv([]string{
 		"LIVEKIT_AGENT_PROCESS_ID=old-exec",
 		"LIVEKIT_AGENT_JOB_JSON={\"id\":\"old-job\"}",
 		"LIVEKIT_AGENT_RUNNING_JOB_JSON={\"worker_id\":\"old-worker\"}",
 		"PATH=/bin",
 	}, "exec-new", info)
 	if err != nil {
-		t.Fatalf("processJobEnv: %v", err)
+		t.Fatalf("workerlivekit.ProcessJobEnv: %v", err)
 	}
 
 	values := envMap(env)
@@ -207,14 +208,14 @@ func TestRunningJobInfoFromEnvPrefersFullAssignment(t *testing.T) {
 		WorkerID:        "worker-a",
 		FakeJob:         true,
 	}
-	env, err := processJobEnv(nil, "exec-a", info)
+	env, err := workerlivekit.ProcessJobEnv(nil, "exec-a", info)
 	if err != nil {
-		t.Fatalf("processJobEnv: %v", err)
+		t.Fatalf("workerlivekit.ProcessJobEnv: %v", err)
 	}
 
-	running, err := RunningJobInfoFromEnv(envMap(env))
+	running, err := workerlivekit.RunningJobInfoFromEnv(envMap(env))
 	if err != nil {
-		t.Fatalf("RunningJobInfoFromEnv: %v", err)
+		t.Fatalf("workerlivekit.RunningJobInfoFromEnv: %v", err)
 	}
 	if running.Job.GetId() != "job-a" {
 		t.Fatalf("job id = %q, want job-a", running.Job.GetId())
