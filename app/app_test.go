@@ -118,6 +118,7 @@ type fakeAppAgoraChannelClient struct {
 	joinedCh    chan struct{}
 	publishedCh chan workeragora.PCMFrame
 	joinEvent   *workeragora.Event
+	joinBlock   <-chan struct{}
 	leaveEvent  *workeragora.Event
 	joinErr     error
 	leaveErr    error
@@ -247,6 +248,13 @@ func (f *fakeAppAgoraChannelClient) Join(ctx context.Context, opts workeragora.O
 	f.audio = audio
 	if f.joinEvent != nil && f.handler != nil {
 		f.handler(*f.joinEvent)
+	}
+	if f.joinBlock != nil {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-f.joinBlock:
+		}
 	}
 	if f.joinErr != nil {
 		return f.joinErr
@@ -881,6 +889,7 @@ func TestRunAgoraSaysGreetingWhenFirstParticipantJoins(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 	session.Assistant = assistant
 	session.TTS = &fakeAppTTS{}
+	speechEvents := session.SpeechCreatedEvents()
 	rtpApp := &App{
 		Session: session,
 		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
@@ -915,7 +924,7 @@ func TestRunAgoraSaysGreetingWhenFirstParticipantJoins(t *testing.T) {
 	client.emit(workeragora.Event{Kind: workeragora.EventUserJoined, Channel: "support", UserID: "caller-1"})
 
 	select {
-	case ev := <-session.SpeechCreatedEvents():
+	case ev := <-speechEvents:
 		if ev.Source != "say" {
 			t.Fatalf("speech source = %q, want say", ev.Source)
 		}
@@ -1011,6 +1020,96 @@ func TestRunAgoraPublishesGreetingTranscriptWhenFirstParticipantJoins(t *testing
 		}
 	case <-time.After(time.Second):
 		t.Fatal("runAgora() did not publish greeting transcript data")
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("runAgora() error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not return after cancellation")
+	}
+}
+
+func TestRunAgoraPublishesGreetingTranscriptWhenFirstParticipantJoinsDuringJoin(t *testing.T) {
+	joinBlock := make(chan struct{})
+	client := &fakeAppAgoraChannelClient{
+		joinedCh:  make(chan struct{}, 1),
+		joinEvent: &workeragora.Event{Kind: workeragora.EventUserJoined, Channel: "support", UserID: "caller-1"},
+		joinBlock: joinBlock,
+	}
+	dataPublisher := &fakeAppAgoraDataPublisher{published: make(chan []byte, 1)}
+	dataPublisherReady := make(chan struct{})
+	oldNewAgoraChannelClient := appNewAgoraChannelClient
+	appNewAgoraChannelClient = func() (workeragora.ChannelClient, error) {
+		return client, nil
+	}
+	oldNewAgoraDataPublisher := appNewAgoraDataPublisher
+	appNewAgoraDataPublisher = func(workeragora.Options) (workeragora.DataPublisher, error) {
+		close(dataPublisherReady)
+		return dataPublisher, nil
+	}
+	t.Cleanup(func() {
+		appNewAgoraChannelClient = oldNewAgoraChannelClient
+		appNewAgoraDataPublisher = oldNewAgoraDataPublisher
+	})
+
+	publishData := true
+	assistant := &fakeAppSessionAssistant{startedCh: make(chan struct{}, 1)}
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	session.Assistant = assistant
+	session.TTS = &fakeAppTTS{}
+	rtpApp := &App{
+		Session: session,
+		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
+		Config: AppConfig{
+			Agora: workeragora.Options{
+				AppID:       "app",
+				Channel:     "support",
+				UID:         "agent",
+				Token:       "token",
+				PublishData: &publishData,
+			},
+			AgoraGreeting: "TEN Agent connected. How can I help you today?",
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- rtpApp.runAgora(ctx)
+	}()
+
+	select {
+	case <-dataPublisherReady:
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not wire Agora data publisher before joining channel")
+	}
+	close(joinBlock)
+	select {
+	case <-client.joinedCh:
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not join Agora channel after join-time participant event")
+	}
+	select {
+	case <-assistant.startedCh:
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not start session after join-time participant event")
+	}
+	select {
+	case payload := <-dataPublisher.published:
+		var got map[string]any
+		if err := json.Unmarshal(payload, &got); err != nil {
+			t.Fatalf("published greeting payload is not JSON: %v", err)
+		}
+		if got["role"] != "assistant" || got["text"] != "TEN Agent connected. How can I help you today?" || got["is_final"] != true || got["stream_id"] != float64(100) {
+			t.Fatalf("published greeting transcript = %#v, want TEN assistant greeting transcript from join-time event", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not publish greeting transcript data for join-time participant")
 	}
 
 	cancel()
