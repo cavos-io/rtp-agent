@@ -61,7 +61,7 @@ type ServerMessageDispatchInfo struct {
 	Register     RegisterMessageInfo
 	Availability *lkprotocol.AvailabilityRequest
 	Assignment   *JobAssignment
-	Termination  *lkprotocol.JobTermination
+	Termination  *JobTermination
 }
 
 func ServerMessageDispatch(msg *lkprotocol.ServerMessage) ServerMessageDispatchInfo {

@@ -398,6 +398,15 @@ func TestJobTerminationInfoExposesJobID(t *testing.T) {
 	}
 }
 
+func TestJobTerminationAliasUsesLiveKitProtocolTermination(t *testing.T) {
+	termination := &workerlivekit.JobTermination{JobId: "job-stop"}
+	protocolTermination := (*lkprotocol.JobTermination)(termination)
+
+	if protocolTermination.GetJobId() != "job-stop" {
+		t.Fatalf("JobTermination alias job id = %q, want job-stop", protocolTermination.GetJobId())
+	}
+}
+
 func TestLocalRoomJobUsesFakeJobPrefixAndRoomInfo(t *testing.T) {
 	room := &lkprotocol.Room{Name: "configured-room", Sid: "SRM_configured"}
 	job := workerlivekit.LocalRoomJob(workerlivekit.LocalRoomJobOptions{

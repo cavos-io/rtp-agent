@@ -26,7 +26,6 @@ import (
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/gorilla/websocket"
-	"github.com/livekit/protocol/livekit"
 )
 
 type WorkerType = workerlivekit.WorkerType
@@ -1841,7 +1840,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.J
 	}
 }
 
-func (s *AgentServer) handleTermination(req *livekit.JobTermination) {
+func (s *AgentServer) handleTermination(req *workerlivekit.JobTermination) {
 	termination := workerlivekit.JobTerminationInfo(req)
 	jobID := termination.JobID
 	logger.Logger.Infow("Received job termination", "jobId", jobID)

@@ -258,7 +258,9 @@ type TerminationInfo struct {
 	JobID string
 }
 
-func JobTerminationInfo(req *lkprotocol.JobTermination) TerminationInfo {
+type JobTermination = lkprotocol.JobTermination
+
+func JobTerminationInfo(req *JobTermination) TerminationInfo {
 	if req == nil {
 		return TerminationInfo{}
 	}
