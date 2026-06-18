@@ -362,8 +362,9 @@ func (s *xaiStream) Next() (*llm.ChatChunk, error) {
 			ID      string `json:"id"`
 			Choices []struct {
 				Delta struct {
-					Role    string `json:"role"`
-					Content string `json:"content"`
+					Role      string        `json:"role"`
+					Content   string        `json:"content"`
+					ToolCalls []xaiToolCall `json:"tool_calls"`
 				} `json:"delta"`
 			} `json:"choices"`
 		}
@@ -380,8 +381,9 @@ func (s *xaiStream) Next() (*llm.ChatChunk, error) {
 			return &llm.ChatChunk{
 				ID: chunk.ID,
 				Delta: &llm.ChoiceDelta{
-					Role:    llm.ChatRole(chunk.Choices[0].Delta.Role),
-					Content: content,
+					Role:      llm.ChatRole(chunk.Choices[0].Delta.Role),
+					Content:   content,
+					ToolCalls: xaiFunctionToolCalls(chunk.Choices[0].Delta.ToolCalls),
 				},
 			}, nil
 		}
@@ -391,6 +393,22 @@ func (s *xaiStream) Next() (*llm.ChatChunk, error) {
 		return nil, err
 	}
 	return nil, io.EOF
+}
+
+func xaiFunctionToolCalls(toolCalls []xaiToolCall) []llm.FunctionToolCall {
+	if len(toolCalls) == 0 {
+		return nil
+	}
+	out := make([]llm.FunctionToolCall, 0, len(toolCalls))
+	for _, tc := range toolCalls {
+		out = append(out, llm.FunctionToolCall{
+			Type:      tc.Type,
+			Name:      tc.Function.Name,
+			Arguments: tc.Function.Arguments,
+			CallID:    tc.ID,
+		})
+	}
+	return out
 }
 
 func (s *xaiStream) Close() error {

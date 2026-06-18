@@ -257,6 +257,30 @@ func TestXAIStreamStripsThinkingChunks(t *testing.T) {
 	}
 }
 
+func TestXAIStreamMapsToolCallDeltas(t *testing.T) {
+	stream := &xaiStream{resp: &http.Response{
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`data: {"id":"chat","choices":[{"delta":{"role":"assistant","tool_calls":[{"id":"call_lookup","type":"function","function":{"name":"lookup","arguments":"{\"city\":\"Paris\"}"}}]}}]}`,
+			`data: [DONE]`,
+		}, "\n"))),
+	}}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if chunk.Delta == nil {
+		t.Fatal("Delta = nil, want tool-call delta")
+	}
+	if len(chunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("len(ToolCalls) = %d, want 1", len(chunk.Delta.ToolCalls))
+	}
+	toolCall := chunk.Delta.ToolCalls[0]
+	if toolCall.Type != "function" || toolCall.CallID != "call_lookup" || toolCall.Name != "lookup" || toolCall.Arguments != `{"city":"Paris"}` {
+		t.Fatalf("tool call = %#v, want lookup call delta", toolCall)
+	}
+}
+
 func xaiMessageContentAsList(t *testing.T, message xaiMessage) []map[string]any {
 	t.Helper()
 	data, err := json.Marshal(message)
