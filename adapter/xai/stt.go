@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -115,6 +116,9 @@ func NewXaiSTT(apiKey string, opts ...XaiSTTOption) *XaiSTT {
 }
 
 func (s *XaiSTT) Label() string { return "xai.STT" }
+func (s *XaiSTT) InputSampleRate() uint32 {
+	return uint32(s.sampleRate)
+}
 func (s *XaiSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:         true,
@@ -125,6 +129,12 @@ func (s *XaiSTT) Capabilities() stt.STTCapabilities {
 	}
 }
 
+func (s *XaiSTT) UpdateOptions(opts ...XaiSTTOption) {
+	for _, opt := range opts {
+		opt(s)
+	}
+}
+
 func (s *XaiSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if err := validateXaiAPIKey(s.apiKey); err != nil {
 		return nil, err
@@ -132,7 +142,7 @@ func (s *XaiSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildXaiSTTStreamURL(s, language), buildXaiSTTHeaders(s))
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial xai stt websocket: %w", err)
+		return nil, llm.NewAPIConnectionError("failed to connect to xAI")
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &xaiSTTStream{
@@ -165,16 +175,19 @@ func (s *XaiSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("xai stt error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("xAI STT request failed", resp.StatusCode, "", string(respBody))
 	}
 	var result xaiSTTResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	return xaiSTTBatchSpeechEvent(s.enableDiarization, result), nil
 }

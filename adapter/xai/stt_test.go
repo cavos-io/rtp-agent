@@ -3,15 +3,20 @@ package xai
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"mime"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/gorilla/websocket"
 )
 
 func TestXaiSTTDefaultsMatchReference(t *testing.T) {
@@ -145,6 +150,51 @@ func TestXaiSTTOptionsBuildReferenceStreamURLAndHeaders(t *testing.T) {
 	}
 }
 
+func TestXaiSTTUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
+	provider := NewXaiSTT("test-key",
+		WithXaiSTTWebsocketURL("ws://xai.example/v1/stt"),
+	)
+
+	provider.UpdateOptions(
+		WithXaiSTTSampleRate(48000),
+		WithXaiSTTLanguage("id"),
+		WithXaiSTTInterimResults(false),
+		WithXaiSTTDiarization(true),
+		WithXaiSTTEndpointing(250),
+	)
+
+	if got := provider.InputSampleRate(); got != 48000 {
+		t.Fatalf("InputSampleRate() = %d, want 48000", got)
+	}
+	caps := provider.Capabilities()
+	if caps.InterimResults {
+		t.Fatal("interim results = true, want updated false")
+	}
+	if !caps.Diarization {
+		t.Fatal("diarization = false, want updated true")
+	}
+
+	streamURL, err := url.Parse(buildXaiSTTStreamURL(provider, ""))
+	if err != nil {
+		t.Fatalf("parse stream URL: %v", err)
+	}
+	query := streamURL.Query()
+	assertXaiQuery(t, query, "sample_rate", "48000")
+	assertXaiQuery(t, query, "interim_results", "false")
+	assertXaiQuery(t, query, "diarize", "true")
+	assertXaiQuery(t, query, "language", "id")
+	assertXaiQuery(t, query, "endpointing", "250")
+
+	req, err := buildXaiSTTRecognizeRequest(context.Background(), provider, []byte{0x01}, "")
+	if err != nil {
+		t.Fatalf("build recognize request: %v", err)
+	}
+	fields, _ := readMultipartRequest(t, req)
+	if fields["language"] != "id" {
+		t.Fatalf("language field = %q, want updated default", fields["language"])
+	}
+}
+
 func TestXaiSTTRequiresAPIKeyBeforeRequest(t *testing.T) {
 	t.Setenv("XAI_API_KEY", "")
 	provider := NewXaiSTT("",
@@ -166,6 +216,122 @@ func TestXaiSTTRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "XAI_API_KEY") {
 		t.Fatalf("Stream error = %q, want XAI_API_KEY guidance", err)
+	}
+}
+
+func TestXaiSTTRecognizeReturnsAPIStatusError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: xaiRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewXaiSTT("test-key", WithXaiSTTRestURL("https://xai.example/v1/stt"))
+
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "en")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Recognize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	if statusErr.Body != `{"error":"rate limited"}` {
+		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	}
+}
+
+func TestXaiSTTRecognizeReturnsAPITimeoutError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: xaiRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, context.DeadlineExceeded
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewXaiSTT("test-key", WithXaiSTTRestURL("https://xai.example/v1/stt"))
+
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "en")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Recognize error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestXaiSTTRecognizeReturnsAPIConnectionError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: xaiRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, errors.New("dial refused")
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewXaiSTT("test-key", WithXaiSTTRestURL("https://xai.example/v1/stt"))
+
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "en")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestXaiSTTStreamReturnsAPIConnectionErrorOnDialTimeout(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, context.DeadlineExceeded
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewXaiSTT("test-key", WithXaiSTTWebsocketURL("ws://xai.test/v1/stt"))
+
+	_, err := provider.Stream(context.Background(), "en")
+	if err == nil {
+		t.Fatal("Stream error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if errors.As(err, &timeoutErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError but not APITimeoutError", err, err)
+	}
+}
+
+func TestXaiSTTStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("dial refused")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewXaiSTT("test-key", WithXaiSTTWebsocketURL("ws://xai.test/v1/stt"))
+
+	_, err := provider.Stream(context.Background(), "en")
+	if err == nil {
+		t.Fatal("Stream error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
@@ -315,4 +481,10 @@ func assertXaiEvent(t *testing.T, events []*stt.SpeechEvent, index int, eventTyp
 
 func intPtr(v int) *int {
 	return &v
+}
+
+type xaiRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f xaiRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
 }

@@ -216,7 +216,10 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if err == io.EOF {
 			return nil, io.EOF
 		}
-		return nil, err
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 
 	return &tts.SynthesizedAudio{
@@ -251,7 +254,7 @@ func (s *deepgramTTSStream) readLoop() {
 		msgType, message, err := s.conn.ReadMessage()
 		if err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-				s.errCh <- err
+				s.errCh <- deepgramTTSUnexpectedCloseError(err)
 			}
 			return
 		}
@@ -272,6 +275,15 @@ func (s *deepgramTTSStream) readLoop() {
 			}
 		}
 	}
+}
+
+func deepgramTTSUnexpectedCloseError(err error) error {
+	statusCode := -1
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) && closeErr.Code != 0 {
+		statusCode = closeErr.Code
+	}
+	return llm.NewAPIStatusError("Deepgram websocket connection closed unexpectedly", statusCode, "", err.Error())
 }
 
 func (s *deepgramTTSStream) handleTextMessage(message []byte) error {

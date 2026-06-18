@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -193,6 +194,38 @@ func TestDeepgramTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
 		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestDeepgramTTSChunkedStreamReturnsAPITimeoutErrorOnReadFailure(t *testing.T) {
+	stream := &deepgramTTSChunkedStream{
+		resp:       &http.Response{Body: deepgramTTSReadCloser{err: context.DeadlineExceeded}},
+		sampleRate: 24000,
+	}
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestDeepgramTTSChunkedStreamReturnsAPIConnectionErrorOnReadFailure(t *testing.T) {
+	stream := &deepgramTTSChunkedStream{
+		resp:       &http.Response{Body: deepgramTTSReadCloser{err: errors.New("read failed")}},
+		sampleRate: 24000,
+	}
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
@@ -401,9 +434,73 @@ func TestDeepgramTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
+	closed := make(chan struct{})
+	closeAfterHandshake := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramClosingWebsocketServer(serverConn, closeAfterHandshake, closed, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	close(closeAfterHandshake)
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test websocket close")
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	default:
+	}
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next() error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next() error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode == 0 {
+		t.Fatalf("status code = %d, want close status or -1", statusErr.StatusCode)
+	}
+}
+
 func assertDeepgramTTSQuery(t *testing.T, query url.Values, key string, want string) {
 	t.Helper()
 	if got := query.Get(key); got != want {
 		t.Fatalf("%s = %q, want %q", key, got, want)
 	}
+}
+
+type deepgramTTSReadCloser struct {
+	err error
+}
+
+func (r deepgramTTSReadCloser) Read([]byte) (int, error) {
+	return 0, r.err
+}
+
+func (r deepgramTTSReadCloser) Close() error {
+	return nil
 }

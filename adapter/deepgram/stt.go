@@ -208,6 +208,12 @@ func (s *DeepgramSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: s.interimResults, Diarization: s.enableDiarization, AlignedTranscript: "word", OfflineRecognize: true}
 }
 
+func (s *DeepgramSTT) UpdateOptions(opts ...DeepgramSTTOption) {
+	for _, opt := range opts {
+		opt(s)
+	}
+}
+
 func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.RecognizeStream, error) {
 	if err := validateDeepgramSTTAPIKey(s.apiKey); err != nil {
 		return nil, err
@@ -539,6 +545,8 @@ func deepgramRecognizeSpeechEventForLanguage(resp dgRecognitionResponse, languag
 	event.Alternatives[0] = stt.SpeechData{
 		Language:   languageStr,
 		Text:       alt.Transcript,
+		StartTime:  deepgramFirstWordStart(alt.Words),
+		EndTime:    deepgramLastWordEnd(alt.Words),
 		Confidence: alt.Confidence,
 		Words:      deepgramTimedStrings(alt.Words),
 	}
@@ -569,8 +577,9 @@ func deepgramSpeechEventForLanguage(resp dgResponse, languageStr string) *stt.Sp
 			Language:   languageStr,
 			Text:       alt.Transcript,
 			Confidence: alt.Confidence,
-			StartTime:  resp.Start,
-			EndTime:    resp.Start + resp.Duration,
+			StartTime:  deepgramFirstWordStart(alt.Words),
+			EndTime:    deepgramFirstWordEnd(alt.Words),
+			SpeakerID:  deepgramLiveSpeakerID(alt.Words, resp.IsFinal),
 			Words:      deepgramTimedStrings(alt.Words),
 		})
 	}
@@ -580,6 +589,50 @@ func deepgramSpeechEventForLanguage(resp dgResponse, languageStr string) *stt.Sp
 	}
 
 	return event
+}
+
+func deepgramFirstWordStart(words []dgWord) float64 {
+	if len(words) == 0 {
+		return 0
+	}
+	return words[0].Start
+}
+
+func deepgramFirstWordEnd(words []dgWord) float64 {
+	if len(words) == 0 {
+		return 0
+	}
+	return words[0].End
+}
+
+func deepgramLastWordEnd(words []dgWord) float64 {
+	if len(words) == 0 {
+		return 0
+	}
+	return words[len(words)-1].End
+}
+
+func deepgramLiveSpeakerID(words []dgWord, final bool) string {
+	if !final {
+		return ""
+	}
+	counts := map[int]int{}
+	bestSpeaker := 0
+	bestCount := 0
+	for _, word := range words {
+		if word.Speaker == nil {
+			continue
+		}
+		counts[*word.Speaker]++
+		if counts[*word.Speaker] > bestCount {
+			bestSpeaker = *word.Speaker
+			bestCount = counts[*word.Speaker]
+		}
+	}
+	if bestCount == 0 {
+		return ""
+	}
+	return "S" + strconv.Itoa(bestSpeaker)
 }
 
 func deepgramTimedStrings(words []dgWord) []stt.TimedString {
@@ -616,7 +669,7 @@ func (s *deepgramStream) readLoop() {
 		if err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
 				logger.Logger.Errorw("Deepgram WebSocket read error", err)
-				s.sendError(err)
+				s.sendError(deepgramSTTUnexpectedCloseError(err))
 			}
 			return
 		}
@@ -649,6 +702,15 @@ func (s *deepgramStream) readLoop() {
 			}
 		}
 	}
+}
+
+func deepgramSTTUnexpectedCloseError(err error) error {
+	statusCode := -1
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) && closeErr.Code != 0 {
+		statusCode = closeErr.Code
+	}
+	return llm.NewAPIStatusError("deepgram connection closed unexpectedly", statusCode, "", err.Error())
 }
 
 // keepAliveLoop sends a native KeepAlive payload to prevent Deepgram from dropping idle streams.
