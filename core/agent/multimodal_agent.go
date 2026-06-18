@@ -454,7 +454,7 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 		logger.Logger.Errorw("failed to generate realtime reply", err)
 		if session != nil {
 			session.EmitError(ErrorEvent{
-				Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
+				Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, true),
 				Source: ma.model,
 			})
 		}

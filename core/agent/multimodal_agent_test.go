@@ -721,6 +721,55 @@ func TestMultimodalAgentGenerateReplyIgnoresFalseAllowInterruptionsWithTurnDetec
 	}
 }
 
+func TestMultimodalAgentRealtimeGenerateReplyErrorIsRecoverable(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rtSession := &fakeRealtimeSession{
+		generateCh:  make(chan llm.RealtimeGenerateReplyOptions, 1),
+		generateErr: errors.New("realtime generate failed"),
+	}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Assistant = ma
+	errorEvents := session.ErrorEvents()
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	handle, err := session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+		UserInput:     "hello",
+		InputModality: "text",
+	})
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions returned error: %v", err)
+	}
+
+	select {
+	case <-rtSession.generateCh:
+	case <-time.After(time.Second):
+		t.Fatal("realtime session did not receive GenerateReply")
+	}
+	waitCtx, waitCancel := context.WithTimeout(ctx, time.Second)
+	defer waitCancel()
+	if err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("speech handle did not finish after realtime GenerateReply error: %v", err)
+	}
+
+	select {
+	case ev := <-errorEvents:
+		rtErr, ok := ev.Error.(*llm.RealtimeModelError)
+		if !ok {
+			t.Fatalf("ErrorEvents error = %T, want *llm.RealtimeModelError", ev.Error)
+		}
+		if !rtErr.Recoverable || !strings.Contains(rtErr.Error(), "realtime generate failed") {
+			t.Fatalf("RealtimeModelError = %#v, want recoverable generate failure", rtErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive realtime GenerateReply error")
+	}
+}
+
 func TestMultimodalAgentSayUsesRealtimeSessionWhenSupported(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -2775,6 +2824,7 @@ type fakeRealtimeSession struct {
 	options               llm.RealtimeSessionOptions
 	optionUpdates         []llm.RealtimeSessionOptions
 	generateCh            chan llm.RealtimeGenerateReplyOptions
+	generateErr           error
 	sayCh                 chan string
 	eventCh               chan llm.RealtimeEvent
 	audioCh               chan *model.AudioFrame
@@ -2830,6 +2880,9 @@ func (f *fakeRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOpt
 	}
 	if f.generateCh != nil {
 		f.generateCh <- options
+	}
+	if f.generateErr != nil {
+		return f.generateErr
 	}
 	return nil
 }
