@@ -262,6 +262,43 @@ func TestJobAssignmentInfoDefaultsURLWhenAssignmentURLMissing(t *testing.T) {
 	}
 }
 
+func TestPopPendingAcceptReturnsAndDeletesAcceptedArgs(t *testing.T) {
+	pending := map[string]workerlivekit.JobAcceptArguments{
+		"job-a": {Identity: "agent-a"},
+		"job-b": {Identity: "agent-b"},
+	}
+
+	args, ok := workerlivekit.PopPendingAccept(pending, "job-a")
+
+	if !ok {
+		t.Fatal("PopPendingAccept() ok = false, want true")
+	}
+	if args.Identity != "agent-a" {
+		t.Fatalf("Identity = %q, want agent-a", args.Identity)
+	}
+	if _, exists := pending["job-a"]; exists {
+		t.Fatal("job-a remained in pending accepts")
+	}
+	if pending["job-b"].Identity != "agent-b" {
+		t.Fatalf("job-b identity = %q, want agent-b", pending["job-b"].Identity)
+	}
+}
+
+func TestPopPendingAcceptMissingJobLeavesPendingAccepts(t *testing.T) {
+	pending := map[string]workerlivekit.JobAcceptArguments{
+		"job-b": {Identity: "agent-b"},
+	}
+
+	_, ok := workerlivekit.PopPendingAccept(pending, "job-a")
+
+	if ok {
+		t.Fatal("PopPendingAccept() ok = true, want false")
+	}
+	if pending["job-b"].Identity != "agent-b" {
+		t.Fatalf("job-b identity = %q, want agent-b", pending["job-b"].Identity)
+	}
+}
+
 func TestJobTerminationInfoExposesJobID(t *testing.T) {
 	info := workerlivekit.JobTerminationInfo(&lkprotocol.JobTermination{JobId: "job-stop"})
 

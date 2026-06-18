@@ -219,6 +219,15 @@ func JobAssignmentInfo(req *lkprotocol.JobAssignment, defaultURL string) Assignm
 	}
 }
 
+func PopPendingAccept(pending map[string]JobAcceptArguments, jobID string) (JobAcceptArguments, bool) {
+	args, ok := pending[jobID]
+	if !ok {
+		return JobAcceptArguments{}, false
+	}
+	delete(pending, jobID)
+	return args, true
+}
+
 type TerminationInfo struct {
 	JobID string
 }
