@@ -365,23 +365,24 @@ func (m *RealtimeModel) Capabilities() llm.RealtimeCapabilities {
 }
 
 type realtimeSession struct {
-	model            *RealtimeModel
-	conn             *websocket.Conn
-	ctx              context.Context
-	cancel           context.CancelFunc
-	mu               sync.Mutex
-	eventCh          chan llm.RealtimeEvent
-	remote           *llm.RemoteChatContext
-	inputTranscripts *utils.BoundedDict[inputTranscriptKey, realtimeInputTranscript]
-	generation       *realtimeGeneration
-	pendingResponses int
-	instructions     string
-	tools            []llm.Tool
-	audioBStream     *audio.AudioByteStream
-	pushedDuration   float64
-	optionsState     map[string]any
-	connectedAt      time.Time
-	lastGeneration   realtimeGenerationTiming
+	model                 *RealtimeModel
+	conn                  *websocket.Conn
+	ctx                   context.Context
+	cancel                context.CancelFunc
+	mu                    sync.Mutex
+	eventCh               chan llm.RealtimeEvent
+	remote                *llm.RemoteChatContext
+	inputTranscripts      *utils.BoundedDict[inputTranscriptKey, realtimeInputTranscript]
+	generation            *realtimeGeneration
+	pendingResponses      int
+	instructions          string
+	tools                 []llm.Tool
+	audioBStream          *audio.AudioByteStream
+	pushedDuration        float64
+	optionsState          map[string]any
+	connectedAt           time.Time
+	lastGeneration        realtimeGenerationTiming
+	responseCreateTimeout time.Duration
 }
 
 type realtimeGenerationTiming struct {
@@ -397,6 +398,7 @@ const openAIRealtimeDefaultSpeed = 1.0
 const openAIRealtimeDefaultMaxOutputTokens = "inf"
 const openAIRealtimeDefaultMaxSessionDuration = 20 * time.Minute
 const openAIRealtimeActiveGenerationRecyclePoll = 100 * time.Millisecond
+const openAIRealtimeResponseCreateTimeout = 10 * time.Second
 
 type inputTranscriptKey struct {
 	itemID       string
@@ -1456,14 +1458,38 @@ func openAIRealtimeVideoMessage(image *llm.ImageContent) (map[string]any, error)
 func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
 	s.mu.Lock()
 	instructions := s.instructions
-	s.mu.Unlock()
-	if err := s.sendMsg(openAIRealtimeGenerateReplyMessageWithSessionInstructions(options, instructions)); err != nil {
-		return err
-	}
-	s.mu.Lock()
 	s.pendingResponses++
 	s.mu.Unlock()
+	if err := s.sendMsg(openAIRealtimeGenerateReplyMessageWithSessionInstructions(options, instructions)); err != nil {
+		s.mu.Lock()
+		if s.pendingResponses > 0 {
+			s.pendingResponses--
+		}
+		s.mu.Unlock()
+		return err
+	}
+	s.startResponseCreateTimeout()
 	return nil
+}
+
+func (s *realtimeSession) startResponseCreateTimeout() {
+	timeout := s.responseCreateTimeout
+	if timeout == 0 {
+		timeout = openAIRealtimeResponseCreateTimeout
+	}
+	timer := time.NewTimer(timeout)
+	go func() {
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			s.mu.Lock()
+			if s.pendingResponses > 0 {
+				s.pendingResponses--
+			}
+			s.mu.Unlock()
+		case <-s.ctx.Done():
+		}
+	}()
 }
 
 func (s *realtimeSession) Say(text string) error {
