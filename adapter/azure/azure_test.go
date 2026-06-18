@@ -811,6 +811,9 @@ func TestAzureTTSBuildsReferenceRequest(t *testing.T) {
 	if got := req.Header.Get("Ocp-Apim-Subscription-Key"); got != "key" {
 		t.Fatalf("subscription header = %q, want key", got)
 	}
+	if got := req.Header.Get("User-Agent"); got != "LiveKit Agents" {
+		t.Fatalf("User-Agent = %q, want LiveKit Agents", got)
+	}
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
 		t.Fatalf("read body: %v", err)

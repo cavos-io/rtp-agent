@@ -119,6 +119,7 @@ func buildAzureTTSRequest(ctx context.Context, t *AzureTTS, text string) (*http.
 	req.Header.Set("Content-Type", "application/ssml+xml")
 	req.Header.Set("X-Microsoft-OutputFormat", defaultAzureTTSSampleFormat)
 	req.Header.Set("Ocp-Apim-Subscription-Key", t.apiKey)
+	req.Header.Set("User-Agent", "LiveKit Agents")
 	return req, nil
 }
 
