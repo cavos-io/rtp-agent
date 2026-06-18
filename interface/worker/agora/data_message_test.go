@@ -204,6 +204,21 @@ func TestHandleTextInputEventEmitsTranscriptAfterGenerateReply(t *testing.T) {
 	}
 }
 
+func TestHandleTextInputEventIgnoresEmptyText(t *testing.T) {
+	responder := &recordingTextResponder{}
+
+	err := HandleTextInputEvent(context.Background(), responder, TextInputEvent{
+		Text:     "",
+		StreamID: "caller-7",
+	})
+	if err != nil {
+		t.Fatalf("HandleTextInputEvent() error = %v, want nil", err)
+	}
+	if got := responder.calls; len(got) != 0 {
+		t.Fatalf("calls = %#v, want empty text ignored before interrupt/generate/transcript", got)
+	}
+}
+
 type recordingTextResponder struct {
 	calls   []string
 	claimed bool

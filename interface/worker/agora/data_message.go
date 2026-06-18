@@ -101,6 +101,9 @@ func HandleTextInputEvent(ctx context.Context, responder TextResponder, ev TextI
 	if responder == nil {
 		return nil
 	}
+	if ev.Text == "" {
+		return nil
+	}
 	run := func(ctx context.Context) error {
 		if err := responder.Interrupt(false); err != nil {
 			return err
