@@ -235,6 +235,150 @@ func TestElevenLabsTTSRejectsNonAudioResponse(t *testing.T) {
 	if !strings.Contains(err.Error(), "non-audio") {
 		t.Fatalf("Synthesize error = %q, want non-audio guidance", err)
 	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestElevenLabsTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: elevenLabsRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"detail":"rate limited"}`)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "",
+		WithElevenLabsBaseURL("https://eleven.example/v1"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	if statusErr.Body != `{"detail":"rate limited"}` {
+		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	}
+}
+
+func TestElevenLabsTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: elevenLabsRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, context.DeadlineExceeded
+	})}
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "",
+		WithElevenLabsBaseURL("https://eleven.example/v1"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Synthesize error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestElevenLabsTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: elevenLabsRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, errors.New("dial refused")
+	})}
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "",
+		WithElevenLabsBaseURL("https://eleven.example/v1"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestElevenLabsTTSStreamReturnsAPITimeoutErrorOnDialFailure(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, context.DeadlineExceeded
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "",
+		WithElevenLabsBaseURL("ws://eleven.test/v1"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	_, err = provider.Stream(context.Background())
+	if err == nil {
+		t.Fatal("Stream error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Stream error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestElevenLabsTTSStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("dial refused")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "",
+		WithElevenLabsBaseURL("ws://eleven.test/v1"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	_, err = provider.Stream(context.Background())
+	if err == nil {
+		t.Fatal("Stream error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
 }
 
 func TestElevenLabsTTSDecodesReferenceMP3Response(t *testing.T) {
@@ -381,6 +525,50 @@ func TestElevenLabsStreamURLUsesReferenceOptions(t *testing.T) {
 	}
 	if parsed.Query().Get("apply_language_text_normalization") != "true" {
 		t.Fatalf("apply_language_text_normalization = %q, want true", parsed.Query().Get("apply_language_text_normalization"))
+	}
+}
+
+func TestElevenLabsTTSAutoModeDefaultMatchesReference(t *testing.T) {
+	provider, err := NewElevenLabsTTS("test-key", "", "")
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	defaultURL := buildElevenLabsStreamURL(provider)
+	defaultParsed, err := url.Parse(defaultURL)
+	if err != nil {
+		t.Fatalf("parse default stream url: %v", err)
+	}
+	if defaultParsed.Query().Get("auto_mode") != "true" {
+		t.Fatalf("default auto_mode = %q, want true when chunk schedule is unset", defaultParsed.Query().Get("auto_mode"))
+	}
+
+	scheduled, err := NewElevenLabsTTS("test-key", "", "", WithElevenLabsChunkLengthSchedule([]int{120, 160, 250, 290}))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() with schedule error = %v", err)
+	}
+	scheduledURL := buildElevenLabsStreamURL(scheduled)
+	scheduledParsed, err := url.Parse(scheduledURL)
+	if err != nil {
+		t.Fatalf("parse scheduled stream url: %v", err)
+	}
+	if scheduledParsed.Query().Get("auto_mode") != "false" {
+		t.Fatalf("scheduled auto_mode = %q, want false when chunk schedule is set", scheduledParsed.Query().Get("auto_mode"))
+	}
+
+	explicit, err := NewElevenLabsTTS("test-key", "", "",
+		WithElevenLabsChunkLengthSchedule([]int{120, 160}),
+		WithElevenLabsAutoMode(true),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() with explicit auto mode error = %v", err)
+	}
+	explicitURL := buildElevenLabsStreamURL(explicit)
+	explicitParsed, err := url.Parse(explicitURL)
+	if err != nil {
+		t.Fatalf("parse explicit stream url: %v", err)
+	}
+	if explicitParsed.Query().Get("auto_mode") != "true" {
+		t.Fatalf("explicit auto_mode = %q, want explicit true to win", explicitParsed.Query().Get("auto_mode"))
 	}
 }
 
@@ -762,6 +950,53 @@ func TestElevenLabsTTSStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSStreamProviderErrorReturnsAPIStatusError(t *testing.T) {
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runElevenLabsTTSProviderErrorWebsocketServer(serverConn, "quota exceeded", serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5", WithElevenLabsBaseURL("ws://eleven.test/v1"))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+
+	_, err = stream.Next()
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if !strings.Contains(statusErr.Error(), "quota exceeded") {
+		t.Fatalf("Next error = %v, want provider error detail", statusErr)
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test websocket server")
+	}
+}
+
 func readElevenLabsTTSStreamMessage(t *testing.T, messages <-chan map[string]any) map[string]any {
 	t.Helper()
 	select {
@@ -829,6 +1064,67 @@ func runElevenLabsClosingWebsocketServerAfterFrames(conn net.Conn, frames int, c
 	}
 	close(closed)
 	errCh <- nil
+}
+
+func runElevenLabsTTSProviderErrorWebsocketServer(conn net.Conn, providerError string, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", elevenLabsTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	init, err := readElevenLabsClientWebsocketJSONFrame(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	text, err := readElevenLabsClientWebsocketJSONFrame(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	contextID, _ := init["context_id"].(string)
+	if textContextID, _ := text["context_id"].(string); textContextID != "" {
+		contextID = textContextID
+	}
+	if contextID == "" {
+		errCh <- errors.New("missing context_id in client packets")
+		return
+	}
+	if err := writeElevenLabsServerWebsocketJSONFrame(conn, map[string]any{
+		"context_id": contextID,
+		"error":      providerError,
+	}); err != nil {
+		errCh <- err
+		return
+	}
+	errCh <- nil
+}
+
+func writeElevenLabsServerWebsocketJSONFrame(w io.Writer, msg map[string]any) error {
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	header := []byte{0x81}
+	switch length := len(payload); {
+	case length < 126:
+		header = append(header, byte(length))
+	case length <= 65535:
+		header = append(header, 126, byte(length>>8), byte(length))
+	default:
+		header = append(header, 127, byte(length>>56), byte(length>>48), byte(length>>40), byte(length>>32), byte(length>>24), byte(length>>16), byte(length>>8), byte(length))
+	}
+	if _, err := w.Write(header); err != nil {
+		return err
+	}
+	_, err = w.Write(payload)
+	return err
 }
 
 func readElevenLabsClientWebsocketFrame(reader *bufio.Reader) error {

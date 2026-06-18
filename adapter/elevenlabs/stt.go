@@ -622,7 +622,7 @@ func processElevenLabsSTTStreamEvent(state *elevenLabsSTTStreamState, data map[s
 		if details != "" {
 			msg += " - " + details
 		}
-		return nil, fmt.Errorf("%s: %s", messageType, msg)
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("%s: %s", messageType, msg))
 	default:
 		return nil, nil
 	}

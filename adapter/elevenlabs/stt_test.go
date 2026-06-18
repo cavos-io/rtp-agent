@@ -624,6 +624,10 @@ func TestElevenLabsSTTStreamEventReportsErrors(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "quota_exceeded") || !strings.Contains(err.Error(), "upgrade") {
 		t.Fatalf("error = %v, want provider error", err)
 	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("error = %T %v, want APIConnectionError", err, err)
+	}
 }
 
 func TestElevenLabsSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
