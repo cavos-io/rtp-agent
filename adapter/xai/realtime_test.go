@@ -1,10 +1,19 @@
 package xai
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/gorilla/websocket"
 )
 
 func TestXaiRealtimeDefaultsMatchReference(t *testing.T) {
@@ -59,3 +68,182 @@ func TestXaiRealtimeSessionRequiresXAIAPIKeyBeforeDial(t *testing.T) {
 		t.Fatalf("Session() error = %q, want XAI_API_KEY guidance", err)
 	}
 }
+
+func TestXaiRealtimeUpdateToolsUsesReferenceProviderToolPayloads(t *testing.T) {
+	messages := make(chan map[string]any, 2)
+	handlerDone := make(chan struct{})
+	handlerErr := make(chan error, 1)
+	dialer := newXaiRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		defer close(handlerDone)
+		for i := 0; i < 2; i++ {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				handlerErr <- fmt.Errorf("read websocket message: %w", err)
+				return
+			}
+			var msg map[string]any
+			if err := json.Unmarshal(payload, &msg); err != nil {
+				handlerErr <- fmt.Errorf("decode websocket message: %w", err)
+				return
+			}
+			messages <- msg
+		}
+	})
+
+	model := NewXaiRealtimeModel("test-key",
+		WithXaiRealtimeBaseURL("ws://xai.test/v1/realtime"),
+		WithXaiRealtimeWebsocketDialer(dialer),
+	)
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+
+	<-messages
+	if err := session.UpdateTools([]llm.Tool{
+		&WebSearchTool{},
+		&XSearchTool{AllowedHandles: []string{"livekit"}},
+		&FileSearchTool{VectorStoreIDs: []string{"vs_1"}, MaxNumResults: 4},
+	}); err != nil {
+		t.Fatalf("UpdateTools() error = %v", err)
+	}
+
+	var update map[string]any
+	select {
+	case update = <-messages:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for tools update")
+	}
+	if update["type"] != "session.update" {
+		t.Fatalf("update type = %#v, want session.update", update["type"])
+	}
+	sessionPayload := update["session"].(map[string]any)
+	tools := sessionPayload["tools"].([]any)
+	if len(tools) != 3 {
+		t.Fatalf("len(tools) = %d, want 3: %#v", len(tools), tools)
+	}
+	webSearch := tools[0].(map[string]any)
+	if webSearch["type"] != "web_search" {
+		t.Fatalf("web search tool = %#v", webSearch)
+	}
+	xSearch := tools[1].(map[string]any)
+	handles := xSearch["allowed_x_handles"].([]any)
+	if xSearch["type"] != "x_search" || len(handles) != 1 || handles[0] != "livekit" {
+		t.Fatalf("x search tool = %#v", xSearch)
+	}
+	fileSearch := tools[2].(map[string]any)
+	vectorStores := fileSearch["vector_store_ids"].([]any)
+	if fileSearch["type"] != "file_search" || len(vectorStores) != 1 || vectorStores[0] != "vs_1" || fileSearch["max_num_results"] != float64(4) {
+		t.Fatalf("file search tool = %#v", fileSearch)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket handler")
+	}
+	select {
+	case err := <-handlerErr:
+		t.Fatal(err)
+	default:
+	}
+}
+
+func newXaiRealtimeTestWebsocketDialer(t *testing.T, handler func(*websocket.Conn, *http.Request)) func(string, http.Header) (*websocket.Conn, *http.Response, error) {
+	t.Helper()
+	upgrader := websocket.Upgrader{}
+	return func(endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		clientConn, serverConn := net.Pipe()
+		listener := newXaiSingleConnListener(serverConn)
+		server := &http.Server{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					t.Errorf("Upgrade error = %v", err)
+					return
+				}
+				defer conn.Close()
+				handler(conn, r)
+			}),
+		}
+		serverErrCh := make(chan error, 1)
+		go func() {
+			if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+				serverErrCh <- err
+			}
+		}()
+		t.Cleanup(func() {
+			_ = server.Close()
+			_ = listener.Close()
+			_ = clientConn.Close()
+			_ = serverConn.Close()
+		})
+
+		dialer := websocket.Dialer{
+			NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+				return clientConn, nil
+			},
+		}
+		conn, response, err := dialer.Dial(endpoint, headers)
+		select {
+		case serverErr := <-serverErrCh:
+			if err == nil {
+				err = serverErr
+			}
+		default:
+		}
+		return conn, response, err
+	}
+}
+
+type xaiSingleConnListener struct {
+	mu     sync.Mutex
+	once   sync.Once
+	conn   net.Conn
+	closed chan struct{}
+}
+
+func newXaiSingleConnListener(conn net.Conn) *xaiSingleConnListener {
+	return &xaiSingleConnListener{
+		conn:   conn,
+		closed: make(chan struct{}),
+	}
+}
+
+func (l *xaiSingleConnListener) Accept() (net.Conn, error) {
+	l.mu.Lock()
+	if l.conn != nil {
+		conn := l.conn
+		l.conn = nil
+		l.mu.Unlock()
+		return conn, nil
+	}
+	l.mu.Unlock()
+
+	<-l.closed
+	return nil, net.ErrClosed
+}
+
+func (l *xaiSingleConnListener) Close() error {
+	l.once.Do(func() {
+		close(l.closed)
+		l.mu.Lock()
+		if l.conn != nil {
+			_ = l.conn.Close()
+			l.conn = nil
+		}
+		l.mu.Unlock()
+	})
+	return nil
+}
+
+func (l *xaiSingleConnListener) Addr() net.Addr {
+	return xaiDummyAddr("pipe")
+}
+
+type xaiDummyAddr string
+
+func (a xaiDummyAddr) Network() string { return string(a) }
+func (a xaiDummyAddr) String() string  { return string(a) }

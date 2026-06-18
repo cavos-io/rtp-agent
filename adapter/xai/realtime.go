@@ -2,10 +2,12 @@ package xai
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 
 	adapteropenai "github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/gorilla/websocket"
 )
 
 const (
@@ -23,7 +25,9 @@ type XaiRealtimeModel struct {
 type XaiRealtimeOption func(*xaiRealtimeOptions)
 
 type xaiRealtimeOptions struct {
-	model string
+	model         string
+	baseURL       string
+	dialWebsocket adapteropenai.OpenAIRealtimeWebsocketDialer
 }
 
 func WithXaiRealtimeModel(model string) XaiRealtimeOption {
@@ -31,6 +35,20 @@ func WithXaiRealtimeModel(model string) XaiRealtimeOption {
 		if model != "" {
 			options.model = model
 		}
+	}
+}
+
+func WithXaiRealtimeBaseURL(baseURL string) XaiRealtimeOption {
+	return func(options *xaiRealtimeOptions) {
+		if baseURL != "" {
+			options.baseURL = baseURL
+		}
+	}
+}
+
+func WithXaiRealtimeWebsocketDialer(dialer func(string, http.Header) (*websocket.Conn, *http.Response, error)) XaiRealtimeOption {
+	return func(options *xaiRealtimeOptions) {
+		options.dialWebsocket = dialer
 	}
 }
 
@@ -46,8 +64,14 @@ func NewXaiRealtimeModel(apiKey string, opts ...XaiRealtimeOption) *XaiRealtimeM
 	if options.model != "" {
 		model = options.model
 	}
+	baseURL := defaultXaiRealtimeBaseURL
+	if options.baseURL != "" {
+		baseURL = options.baseURL
+	}
 	inner := adapteropenai.NewRealtimeModel(apiKey, model,
-		adapteropenai.WithOpenAIRealtimeBaseURL(defaultXaiRealtimeBaseURL),
+		adapteropenai.WithOpenAIRealtimeBaseURL(baseURL),
+		adapteropenai.WithOpenAIRealtimeWebsocketDialer(options.dialWebsocket),
+		adapteropenai.WithOpenAIRealtimeToolFormatter(xaiRealtimeTools),
 		adapteropenai.WithOpenAIRealtimeVoice(defaultXaiRealtimeVoice),
 		adapteropenai.WithOpenAIRealtimeModalities([]string{"audio"}),
 		adapteropenai.WithOpenAIRealtimeInputAudioTranscription(map[string]any{}),
@@ -65,6 +89,23 @@ func NewXaiRealtimeModel(apiKey string, opts ...XaiRealtimeOption) *XaiRealtimeM
 		model:  model,
 		inner:  inner,
 	}
+}
+
+func xaiRealtimeTools(tools []llm.Tool) []map[string]any {
+	formatted := make([]map[string]any, 0, len(tools))
+	for _, tool := range tools {
+		if providerTool := xaiProviderToolPayload(tool); providerTool != nil {
+			formatted = append(formatted, providerTool)
+			continue
+		}
+		formatted = append(formatted, map[string]any{
+			"type":        "function",
+			"name":        tool.Name(),
+			"description": tool.Description(),
+			"parameters":  llm.ToolParameters(tool),
+		})
+	}
+	return formatted
 }
 
 func (m *XaiRealtimeModel) Model() string { return m.model }
