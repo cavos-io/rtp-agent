@@ -11,6 +11,15 @@ import (
 	lkprotocol "github.com/livekit/protocol/livekit"
 )
 
+func TestClaimGrantsAliasUsesLiveKitAuthType(t *testing.T) {
+	claims := &workerlivekit.ClaimGrants{Identity: "agent-a"}
+	var authClaims *auth.ClaimGrants = claims
+
+	if authClaims.Identity != "agent-a" {
+		t.Fatalf("ClaimGrants alias identity = %q, want agent-a", authClaims.Identity)
+	}
+}
+
 func TestTokenClaimsReturnsUnverifiedTokenClaims(t *testing.T) {
 	token, err := auth.NewAccessToken("key", "secret").
 		SetIdentity("token-agent").
