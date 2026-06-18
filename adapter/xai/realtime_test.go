@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -248,6 +249,58 @@ func TestXaiRealtimeCustomVoiceMatchesReference(t *testing.T) {
 	case err := <-handlerErr:
 		t.Fatal(err)
 	default:
+	}
+}
+
+func TestXaiRealtimeMaxSessionDurationMatchesReference(t *testing.T) {
+	var dialCount atomic.Int32
+	secondConnected := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	var secondOnce sync.Once
+	handlerErr := make(chan error, 1)
+	dialer := newXaiRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		attempt := dialCount.Add(1)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			handlerErr <- fmt.Errorf("read initial session update: %w", err)
+			return
+		}
+		if attempt == 2 {
+			secondOnce.Do(func() { close(secondConnected) })
+			<-releaseSecond
+			return
+		}
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})
+
+	model := NewXaiRealtimeModel("test-key",
+		WithXaiRealtimeBaseURL("ws://xai.test/v1/realtime"),
+		WithXaiRealtimeWebsocketDialer(dialer),
+		WithXaiRealtimeMaxSessionDuration(10*time.Millisecond),
+	)
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	select {
+	case <-secondConnected:
+	case err := <-handlerErr:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("session did not reconnect after max session duration")
+	}
+	reconnected := assertXaiRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if reconnected.Reconnect == nil {
+		t.Fatal("Reconnect payload = nil")
+	}
+	if got := dialCount.Load(); got != 2 {
+		t.Fatalf("dial count = %d, want 2", got)
 	}
 }
 
