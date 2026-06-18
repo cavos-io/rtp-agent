@@ -238,7 +238,9 @@ func TestElevenLabsSTTStreamChunksAndFlushesReferenceAudio(t *testing.T) {
 	})}
 	go server.Serve(&singleElevenLabsConnListener{conn: serverConn})
 	defer func() {
-		close(releaseServer)
+		if releaseServer != nil {
+			close(releaseServer)
+		}
 		server.Close()
 	}()
 
@@ -377,6 +379,75 @@ func TestElevenLabsSTTUpdateOptionsMatchesReference(t *testing.T) {
 	assertElevenLabsQuery(t, query, "vad_threshold", "0.35")
 	assertElevenLabsQuery(t, query, "min_speech_duration_ms", "150")
 	assertElevenLabsQuery(t, query, "min_silence_duration_ms", "700")
+}
+
+func TestElevenLabsSTTUpdateOptionsPropagatesServerVADToActiveStream(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	releaseServer := make(chan struct{})
+	serverErr := make(chan error, 1)
+	upgrader := websocket.Upgrader{}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		serverErr <- nil
+		<-releaseServer
+	})}
+	go server.Serve(&singleElevenLabsConnListener{conn: serverConn})
+	defer func() {
+		if releaseServer != nil {
+			close(releaseServer)
+		}
+		server.Close()
+	}()
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTModel("scribe_v2_realtime"),
+		WithElevenLabsSTTBaseURL("ws://eleven.test/v1"),
+	)
+	active, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	stream := active.(*elevenLabsSTTStream)
+	if stream.state.serverVAD {
+		t.Fatal("active stream serverVAD = true before update, want false")
+	}
+
+	provider.UpdateOptions(WithElevenLabsSTTServerVAD(ElevenLabsVADOptions{
+		VADThreshold: floatPtr(0.5),
+	}))
+	if !stream.state.serverVAD {
+		t.Fatal("active stream serverVAD = false after update, want true")
+	}
+
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test websocket server")
+	}
+	close(releaseServer)
+	releaseServer = nil
+	if err := active.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
 }
 
 func TestElevenLabsSTTStreamURLConvertsHTTPBaseURLToWebsocket(t *testing.T) {
