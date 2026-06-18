@@ -574,6 +574,12 @@ func TestAgentActivityOnEndOfSpeechReportsActualSpeechEndTime(t *testing.T) {
 	activity := NewAgentActivity(agent, session)
 
 	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech, Timestamp: 1.0})
+	select {
+	case <-session.UserStateChangedCh:
+	case <-testTimeout():
+		t.Fatal("UserStateChangedCh did not receive start-of-speech event")
+	}
+	beforeEnd := time.Now()
 	activity.OnEndOfSpeech(&vad.VADEvent{
 		Type:              vad.VADEventEndOfSpeech,
 		Timestamp:         3.0,
@@ -586,6 +592,21 @@ func TestAgentActivityOnEndOfSpeechReportsActualSpeechEndTime(t *testing.T) {
 	}
 	if endpointing.lastEnd != 2.5 {
 		t.Fatalf("OnEndOfSpeech endedAt = %v, want 2.5", endpointing.lastEnd)
+	}
+	var ev UserStateChangedEvent
+	select {
+	case ev = <-session.UserStateChangedCh:
+	case <-testTimeout():
+		t.Fatal("UserStateChangedCh did not receive end-of-speech event")
+	}
+	if ev.NewState != UserStateListening {
+		t.Fatalf("user state = %q, want listening", ev.NewState)
+	}
+	if ev.CreatedAt.After(beforeEnd.Add(-450 * time.Millisecond)) {
+		t.Fatalf("user state CreatedAt = %v, want VAD-adjusted speech end before callback", ev.CreatedAt.Sub(beforeEnd))
+	}
+	if ev.CreatedAt.Before(beforeEnd.Add(-700 * time.Millisecond)) {
+		t.Fatalf("user state CreatedAt = %v, want close to VAD-adjusted end", ev.CreatedAt.Sub(beforeEnd))
 	}
 }
 
@@ -614,6 +635,17 @@ func TestAgentActivityOnStartOfSpeechReportsActualSpeechStartTime(t *testing.T) 
 	}
 	if activity.userSpeechStartedAt.Before(beforeStart.Add(-700 * time.Millisecond)) {
 		t.Fatalf("userSpeechStartedAt = %v, want close to VAD-adjusted start", activity.userSpeechStartedAt.Sub(beforeStart))
+	}
+	select {
+	case ev := <-session.UserStateChangedCh:
+		if ev.CreatedAt.After(beforeStart.Add(-450 * time.Millisecond)) {
+			t.Fatalf("user state CreatedAt = %v, want VAD-adjusted speech start before callback", ev.CreatedAt.Sub(beforeStart))
+		}
+		if ev.CreatedAt.Before(beforeStart.Add(-700 * time.Millisecond)) {
+			t.Fatalf("user state CreatedAt = %v, want close to VAD-adjusted start", ev.CreatedAt.Sub(beforeStart))
+		}
+	case <-testTimeout():
+		t.Fatal("UserStateChangedCh did not receive start-of-speech event")
 	}
 }
 
@@ -4182,6 +4214,9 @@ func TestAgentActivityCommitUserTurnGeneratesReplyWhenLLMConfigured(t *testing.T
 		if ev.Source != "generate_reply" {
 			t.Fatalf("SpeechCreated source = %q, want generate_reply", ev.Source)
 		}
+		if ev.UserInitiated {
+			t.Fatal("SpeechCreated UserInitiated = true, want false for automatic audio reply")
+		}
 		if ev.SpeechHandle.Generation.UserMessage == nil || ev.SpeechHandle.Generation.UserMessage.TextContent() != "reply to me" {
 			t.Fatalf("generation user message = %#v, want committed transcript", ev.SpeechHandle.Generation.UserMessage)
 		}
@@ -5602,6 +5637,39 @@ func TestAgentActivityAutomaticTurnCompletionConsumesPendingTranscript(t *testin
 	}
 }
 
+func TestAgentActivityVADEndOfSpeechWithoutFinalKeepsInterimTranscript(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	agent.VAD = &fakePipelineVAD{}
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	activity.speaking = true
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "interim only"}},
+	})
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called before final transcript with %q", msg.TextContent())
+	case <-time.After(40 * time.Millisecond):
+	}
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{
+		SkipReply:         true,
+		TranscriptTimeout: 1 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "interim only" {
+		t.Fatalf("CommitUserTurn transcript = %q, want interim only after VAD EOU without final", transcript)
+	}
+}
+
 func TestAgentActivityAutomaticTurnRejectsZeroConfidenceTranscript(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeSTT
@@ -5779,6 +5847,9 @@ func TestAgentActivityPreemptiveGenerationStartsLLMBeforeScheduling(t *testing.T
 	var preemptive *SpeechHandle
 	select {
 	case ev := <-speechEvents:
+		if ev.UserInitiated {
+			t.Fatal("preemptive SpeechCreated UserInitiated = true, want false for automatic audio reply")
+		}
 		preemptive = ev.SpeechHandle
 	case <-time.After(time.Second):
 		t.Fatal("SpeechCreatedEvents did not receive preemptive generation")

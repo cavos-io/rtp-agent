@@ -313,13 +313,23 @@ func TestAgentSessionUserStateChangedEventsFanOutToSubscribers(t *testing.T) {
 }
 
 func TestAgentSessionAudioDisabledEndsSpeakingState(t *testing.T) {
-	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	activity.speaking = true
 	session.UpdateUserState(UserStateSpeaking)
 
 	session.OnAudioEnabledChanged(false)
 
 	if got := session.UserState(); got != UserStateListening {
 		t.Fatalf("UserState() = %q, want listening after audio disabled", got)
+	}
+	if activity.speaking {
+		t.Fatal("activity speaking = true, want audio disabled to end active speech")
+	}
+	if !activity.sttEOSReceived {
+		t.Fatal("sttEOSReceived = false, want audio disabled to route through OnEndOfSpeech")
 	}
 }
 
@@ -4048,6 +4058,24 @@ func TestAgentSessionSpeakingResetsUnrecoverableProviderErrorCounts(t *testing.T
 	}
 }
 
+func TestAgentSessionRepeatedSpeakingDoesNotResetProviderErrorCounts(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	session.UpdateAgentState(AgentStateSpeaking)
+	session.llmErrorCount = 2
+	session.ttsErrorCount = 3
+
+	session.UpdateAgentState(AgentStateSpeaking)
+
+	if session.llmErrorCount != 2 {
+		t.Fatalf("llmErrorCount = %d, want unchanged repeated speaking state", session.llmErrorCount)
+	}
+	if session.ttsErrorCount != 3 {
+		t.Fatalf("ttsErrorCount = %d, want unchanged repeated speaking state", session.ttsErrorCount)
+	}
+}
+
 func TestAgentSessionPreservesExplicitZeroMaxUnrecoverableErrors(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{
@@ -5121,6 +5149,23 @@ func TestAgentSessionCancelsUserAwayTimerWhenUserSpeaks(t *testing.T) {
 	}
 	if got := session.UserState(); got != UserStateSpeaking {
 		t.Fatalf("UserState() = %q, want speaking", got)
+	}
+}
+
+func TestAgentSessionStaleUserAwayTimerDoesNotMarkAwayWhenAgentSpeaking(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{UserAwayTimeout: 0.01})
+
+	session.UpdateAgentState(AgentStateSpeaking)
+	session.markUserAwayIfStillIdle()
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		t.Fatalf("unexpected user state event from stale away timer = %q -> %q", ev.OldState, ev.NewState)
+	default:
+	}
+	if got := session.UserState(); got != UserStateListening {
+		t.Fatalf("UserState() = %q, want listening after stale away timer", got)
 	}
 }
 

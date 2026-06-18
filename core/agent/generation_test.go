@@ -1573,9 +1573,18 @@ func TestPerformToolExecutionsCancelTaskToolCancelsCancellableTool(t *testing.T)
 	if runningOutput.RawError != nil {
 		t.Fatalf("get running RawError = %v, want nil", runningOutput.RawError)
 	}
-	runningRaw, ok := runningOutput.RawOutput.(string)
-	if !ok || !strings.Contains(runningRaw, "call_lookup_a") {
-		t.Fatalf("get running RawOutput = %#v, want active call id", runningOutput.RawOutput)
+	runningRaw, ok := runningOutput.RawOutput.([]map[string]any)
+	if !ok || len(runningRaw) != 1 || runningRaw[0]["call_id"] != "call_lookup_a" {
+		t.Fatalf("get running RawOutput = %#v, want structured active call list", runningOutput.RawOutput)
+	}
+	if got, want := runningRaw[0]["type"], "function_call"; got != want {
+		t.Fatalf("get running task type = %#v, want %q", got, want)
+	}
+	if got, want := runningRaw[0]["name"], "lookup"; got != want {
+		t.Fatalf("get running task name = %#v, want %q", got, want)
+	}
+	if got, ok := runningRaw[0]["created_at"].(float64); !ok || got <= 0 {
+		t.Fatalf("get running task created_at = %#v, want positive unix timestamp", runningRaw[0]["created_at"])
 	}
 
 	functionCh <- &llm.FunctionToolCall{
@@ -1610,6 +1619,67 @@ func TestPerformToolExecutionsCancelTaskToolCancelsCancellableTool(t *testing.T)
 	}
 	if !lookupCanceled {
 		t.Fatal("lookup output did not report context cancellation")
+	}
+}
+
+func TestPerformToolExecutionsRunningTasksUsesCanonicalArguments(t *testing.T) {
+	tool := &blockingGenerationTool{
+		flags:   llm.ToolFlagCancellable,
+		started: make(chan struct{}, 1),
+		args:    make(chan string, 1),
+		release: make(chan struct{}),
+	}
+	toolCtx := llm.NewToolContext([]interface{}{tool, getRunningTasksTool{}, cancelTaskTool{}})
+	functionCh := make(chan *llm.FunctionToolCall)
+	outputs := PerformToolExecutions(context.Background(), functionCh, toolCtx)
+
+	functionCh <- &llm.FunctionToolCall{
+		ID:        "item_lookup",
+		Type:      "function",
+		Name:      "lookup",
+		CallID:    "call_lookup_a",
+		Arguments: `{city:Paris}`,
+	}
+	select {
+	case <-tool.started:
+	case <-testTimeout():
+		t.Fatal("cancellable lookup did not start")
+	}
+
+	functionCh <- &llm.FunctionToolCall{
+		ID:        "item_get_running",
+		Type:      "function",
+		Name:      getRunningTasksToolName,
+		CallID:    "call_get_running",
+		Arguments: `{}`,
+	}
+	runningOutput := mustReceiveToolOutput(t, outputs)
+	if runningOutput.RawError != nil {
+		t.Fatalf("get running RawError = %v, want nil", runningOutput.RawError)
+	}
+	running, ok := runningOutput.RawOutput.([]map[string]any)
+	if !ok {
+		t.Fatalf("get running RawOutput = %#v, want structured reference list", runningOutput.RawOutput)
+	}
+	if len(running) != 1 {
+		t.Fatalf("running tasks = %#v, want one active call", running)
+	}
+	if got, want := running[0]["type"], "function_call"; got != want {
+		t.Fatalf("running task type = %#v, want %q", got, want)
+	}
+	if got, want := running[0]["arguments"], `{"city":"Paris"}`; got != want {
+		t.Fatalf("running task arguments = %#v, want canonical %q", got, want)
+	}
+
+	functionCh <- &llm.FunctionToolCall{
+		ID:        "item_cancel",
+		Type:      "function",
+		Name:      cancelTaskToolName,
+		CallID:    "call_cancel",
+		Arguments: `{"call_id":"call_lookup_a"}`,
+	}
+	close(functionCh)
+	for range outputs {
 	}
 }
 

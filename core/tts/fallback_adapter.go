@@ -1103,7 +1103,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 
 		ev, err := stream.Next()
 		if err != nil {
-			if errors.Is(err, io.EOF) || outputSent {
+			if errors.Is(err, io.EOF) {
 				_ = stream.Close()
 				if errors.Is(err, io.EOF) && !outputSent && pending == nil && strings.TrimSpace(s.pushedText()) != "" {
 					err := fmt.Errorf("no audio frames were pushed for text: %s", s.pushedText())
@@ -1125,6 +1125,14 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 				}
 				s.markDone(nil)
 				s.errCh <- io.EOF
+				return
+			}
+			if outputSent {
+				_ = stream.Close()
+				s.adapter.markUnavailable(s.activeIndex)
+				s.markDone(err)
+				emitTTSError(s.adapter, err, false)
+				s.errCh <- err
 				return
 			}
 
@@ -1164,18 +1172,10 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 		if err != nil {
 			if outputSent {
 				_ = stream.Close()
-				if pending != nil {
-					pending = cloneSynthesizedAudio(pending)
-					pending.IsFinal = true
-					s.emitMetrics(pending)
-					select {
-					case s.eventCh <- pending:
-					case <-s.closeCh:
-						return
-					}
-				}
-				s.markDone(nil)
-				s.errCh <- io.EOF
+				s.adapter.markUnavailable(s.activeIndex)
+				s.markDone(err)
+				emitTTSError(s.adapter, err, false)
+				s.errCh <- err
 				return
 			}
 			s.mu.Lock()

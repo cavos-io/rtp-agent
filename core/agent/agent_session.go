@@ -155,6 +155,7 @@ type GenerateReplyOptions struct {
 	AllowInterruptions  *bool
 	InputModality       string
 	ScheduleSpeech      *bool
+	UserInitiated       *bool
 }
 
 type SayOptions struct {
@@ -2106,6 +2107,10 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 	var flushHeldSTTActivity *AgentActivity
 	s.mu.Lock()
 	oldState := s.agentState
+	if oldState == state {
+		s.mu.Unlock()
+		return
+	}
 	s.agentState = state
 	backgroundAudio := s.Options.BackgroundAudio
 	endpointing := s.Options.Endpointing
@@ -2115,24 +2120,22 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 		s.ttsErrorCount = 0
 		s.startAECWarmupLocked()
 	}
-	if oldState != state {
-		nowTime := time.Now()
-		now := float64(nowTime.UnixNano()) / float64(time.Second)
-		if state == AgentStateSpeaking {
-			if endpointing != nil {
-				endpointing.OnStartOfAgentSpeech(now)
-			}
-			if activity != nil {
-				activity.armBackchannelBoundary(nowTime)
-			}
-		} else if oldState == AgentStateSpeaking {
-			if endpointing != nil {
-				endpointing.OnEndOfAgentSpeech(now)
-			}
-			if activity != nil {
-				activity.onAgentSpeechEnded(nowTime)
-				flushHeldSTTActivity = activity
-			}
+	nowTime := time.Now()
+	now := float64(nowTime.UnixNano()) / float64(time.Second)
+	if state == AgentStateSpeaking {
+		if endpointing != nil {
+			endpointing.OnStartOfAgentSpeech(now)
+		}
+		if activity != nil {
+			activity.armBackchannelBoundary(nowTime)
+		}
+	} else if oldState == AgentStateSpeaking {
+		if endpointing != nil {
+			endpointing.OnEndOfAgentSpeech(now)
+		}
+		if activity != nil {
+			activity.onAgentSpeechEnded(nowTime)
+			flushHeldSTTActivity = activity
 		}
 	}
 	s.mu.Unlock()
@@ -2141,31 +2144,31 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 		flushHeldSTTActivity.flushHeldSTTEvents()
 	}
 
-	if oldState != state {
-		if backgroundAudio != nil {
-			backgroundAudio.AgentStateChanged(state)
-		}
-		s.updateUserAwayTimer()
+	if backgroundAudio != nil {
+		backgroundAudio.AgentStateChanged(state)
 	}
+	s.updateUserAwayTimer()
 
-	if oldState != state {
-		logger.Logger.Debugw("Agent state changed", "old", oldState, "new", state)
-		ev := AgentStateChangedEvent{
-			OldState:  oldState,
-			NewState:  state,
-			CreatedAt: time.Now(),
-		}
-		s.recordEvent(&ev)
-		for _, ch := range s.agentStateChangedSubscribers() {
-			select {
-			case ch <- ev:
-			default:
-			}
+	logger.Logger.Debugw("Agent state changed", "old", oldState, "new", state)
+	ev := AgentStateChangedEvent{
+		OldState:  oldState,
+		NewState:  state,
+		CreatedAt: time.Now(),
+	}
+	s.recordEvent(&ev)
+	for _, ch := range s.agentStateChangedSubscribers() {
+		select {
+		case ch <- ev:
+		default:
 		}
 	}
 }
 
 func (s *AgentSession) UpdateUserState(state UserState) {
+	s.updateUserStateAt(state, time.Time{})
+}
+
+func (s *AgentSession) updateUserStateAt(state UserState, createdAt time.Time) {
 	s.mu.Lock()
 	if s.userTurnClaims > 0 && state != UserStateSpeaking {
 		s.mu.Unlock()
@@ -2185,11 +2188,14 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 	}
 
 	if oldState != state {
+		if createdAt.IsZero() {
+			createdAt = time.Now()
+		}
 		logger.Logger.Debugw("User state changed", "old", oldState, "new", state)
 		ev := UserStateChangedEvent{
 			OldState:  oldState,
 			NewState:  state,
-			CreatedAt: time.Now(),
+			CreatedAt: createdAt,
 		}
 		s.recordEvent(&ev)
 		for _, ch := range s.userStateChangedSubscribers() {
@@ -2223,7 +2229,7 @@ func (s *AgentSession) updateUserAwayTimer() {
 	}
 
 	timer := time.AfterFunc(time.Duration(timeout*float64(time.Second)), func() {
-		s.UpdateUserState(UserStateAway)
+		s.markUserAwayIfStillIdle()
 	})
 
 	s.mu.Lock()
@@ -2234,6 +2240,15 @@ func (s *AgentSession) updateUserAwayTimer() {
 	}
 	s.mu.Unlock()
 	timer.Stop()
+}
+
+func (s *AgentSession) markUserAwayIfStillIdle() {
+	s.mu.Lock()
+	shouldMarkAway := s.agentState == AgentStateListening && s.userState == UserStateListening
+	s.mu.Unlock()
+	if shouldMarkAway {
+		s.UpdateUserState(UserStateAway)
+	}
 }
 
 func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) (*SpeechHandle, error) {
@@ -2350,8 +2365,12 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	if opts.UserMessage != nil {
 		handle.Generation.UserMessage = opts.UserMessage
 	}
+	userInitiated := true
+	if opts.UserInitiated != nil {
+		userInitiated = *opts.UserInitiated
+	}
 	s.EmitSpeechCreated(SpeechCreatedEvent{
-		UserInitiated: true,
+		UserInitiated: userInitiated,
 		Source:        "generate_reply",
 		SpeechHandle:  handle,
 	})

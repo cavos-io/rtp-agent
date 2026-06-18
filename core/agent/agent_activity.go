@@ -1554,7 +1554,7 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 	a.userSpeechStoppedAt = time.Time{}
 	a.clearHeldUserTranscriptWindow()
 	if a.Session != nil {
-		a.Session.UpdateUserState(UserStateSpeaking)
+		a.Session.updateUserStateAt(UserStateSpeaking, a.userSpeechStartedAt)
 	}
 	a.notifyUserTurnUpdated()
 	if endpointing := a.endpointing(); endpointing != nil {
@@ -1584,7 +1584,7 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 		a.sttEOSReceived = true
 	}
 	if a.Session != nil {
-		a.Session.UpdateUserState(UserStateListening)
+		a.Session.updateUserStateAt(UserStateListening, a.userSpeechStoppedAt)
 	}
 	a.notifyUserTurnUpdated()
 	if endpointing := a.endpointing(); endpointing != nil && wasSpeaking {
@@ -2686,10 +2686,12 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		if a.Session == nil {
 			return nil, nil
 		}
+		userInitiated := false
 		handle, err := a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
 			UserMessage:   newMsg,
 			ChatCtx:       chatCtx,
 			InputModality: "audio",
+			UserInitiated: &userInitiated,
 		})
 		if err != nil {
 			return nil, err
@@ -2718,10 +2720,12 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		return nil, err
 	}
 	if handle == nil {
+		userInitiated := false
 		handle, err = a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
 			UserMessage:   newMsg,
 			ChatCtx:       chatCtx,
 			InputModality: "audio",
+			UserInitiated: &userInitiated,
 		})
 		if err != nil {
 			return nil, err
@@ -2916,11 +2920,13 @@ func (a *AgentActivity) maybeStartPreemptiveGeneration(transcript string, confid
 	}
 	chatCtx := a.RetrieveChatCtx().Copy()
 	scheduleSpeech := false
+	userInitiated := false
 	handle, err := a.Session.GenerateReplyWithOptions(a.ctx, GenerateReplyOptions{
 		UserMessage:    msg,
 		ChatCtx:        chatCtx,
 		InputModality:  "audio",
 		ScheduleSpeech: &scheduleSpeech,
+		UserInitiated:  &userInitiated,
 	})
 	if err != nil {
 		logger.Logger.Warnw("failed to start preemptive generation", err, "transcript", transcript)
@@ -3173,6 +3179,10 @@ func (a *AgentActivity) hasVADModel() bool {
 	return a != nil && ((a.Agent != nil && a.Agent.VAD != nil) || (a.Session != nil && a.Session.VAD != nil))
 }
 
+func (a *AgentActivity) hasSTTModel() bool {
+	return a != nil && ((a.Agent != nil && a.Agent.STT != nil) || (a.Session != nil && a.Session.STT != nil))
+}
+
 func (a *AgentActivity) realtimeTurnDetectionCapabilities() (bool, bool) {
 	if a == nil {
 		return false, false
@@ -3206,6 +3216,10 @@ func referenceTranscriptLanguage(current, language, transcript string) string {
 }
 
 func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
+	if a.hasSTTModel() && strings.TrimSpace(info.NewTranscript) == "" && a.turnDetectionMode() != TurnDetectionModeManual {
+		return
+	}
+
 	a.eouMu.Lock()
 	if a.eouCancel != nil {
 		a.eouCancel()

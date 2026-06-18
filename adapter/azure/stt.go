@@ -629,7 +629,7 @@ func parseAzureSTTMessage(language string, payload []byte) *stt.SpeechEvent {
 		if err := json.Unmarshal(body, &message); err != nil || strings.TrimSpace(message.Text) == "" {
 			return nil
 		}
-		return azureSTTSpeechEvent(stt.SpeechEventInterimTranscript, language, message.Text, stt.DefaultTranscriptConfidence(message.Text))
+		return azureSTTSpeechEvent(stt.SpeechEventInterimTranscript, language, message.Text, 0)
 	case "speech.phrase":
 		var message struct {
 			RecognitionStatus string `json:"RecognitionStatus"`

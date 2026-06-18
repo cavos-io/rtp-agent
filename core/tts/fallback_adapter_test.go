@@ -1394,7 +1394,7 @@ func TestFallbackSynthesizeStreamFallsBackWhenNormalizationFailsBeforeAudio(t *t
 	}
 }
 
-func TestFallbackSynthesizeStreamFinishesWhenNormalizationFailsAfterAudio(t *testing.T) {
+func TestFallbackSynthesizeStreamErrorsWhenNormalizationFailsAfterAudio(t *testing.T) {
 	primary := &metadataTTS{
 		label:        "primary",
 		sampleRate:   16000,
@@ -1425,6 +1425,10 @@ func TestFallbackSynthesizeStreamFinishesWhenNormalizationFailsAfterAudio(t *tes
 		DisableRetries: true,
 		SampleRate:     32000,
 	})
+	errCh := make(chan TTSError, 2)
+	adapter.OnError(func(err TTSError) {
+		errCh <- err
+	})
 
 	stream, err := adapter.Stream(context.Background())
 	if err != nil {
@@ -1442,18 +1446,21 @@ func TestFallbackSynthesizeStreamFinishesWhenNormalizationFailsAfterAudio(t *tes
 	if first.IsFinal {
 		t.Fatal("first audio IsFinal = true, want non-final head")
 	}
-	second, err := stream.Next()
-	if err != nil {
-		t.Fatalf("second Next returned error: %v", err)
-	}
-	if !second.IsFinal {
-		t.Fatal("second audio IsFinal = false, want final pending tail")
-	}
-	if _, err = stream.Next(); !errors.Is(err, io.EOF) {
-		t.Fatalf("third Next error = %v, want io.EOF", err)
+	if _, err = stream.Next(); err == nil || !strings.Contains(err.Error(), "audio frame data is shorter than declared sample count") {
+		t.Fatalf("second Next error = %v, want normalization error after partial output", err)
 	}
 	if fallback.streamCalls != 0 {
 		t.Fatalf("fallback stream calls = %d, want 0 after partial output", fallback.streamCalls)
+	}
+	if adapter.status[0].available {
+		t.Fatal("primary availability = true, want false after post-output normalization error")
+	}
+	got := receiveTerminalTTSError(t, errCh)
+	if got.Err == nil || !strings.Contains(got.Err.Error(), "audio frame data is shorter than declared sample count") {
+		t.Fatalf("emitted error = %v, want normalization error", got.Err)
+	}
+	if got.Recoverable {
+		t.Fatal("Recoverable = true, want false after partial audio")
 	}
 }
 
@@ -2596,6 +2603,10 @@ func TestFallbackSynthesizeStreamDoesNotFallbackAfterAudio(t *testing.T) {
 		},
 		second,
 	})
+	errCh := make(chan TTSError, 2)
+	adapter.OnError(func(err TTSError) {
+		errCh <- err
+	})
 
 	stream, err := adapter.Stream(context.Background())
 	if err != nil {
@@ -2609,19 +2620,22 @@ func TestFallbackSynthesizeStreamDoesNotFallbackAfterAudio(t *testing.T) {
 	if _, err := stream.Next(); err != nil {
 		t.Fatalf("first Next returned error: %v", err)
 	}
-	secondAudio, err := stream.Next()
-	if err != nil {
-		t.Fatalf("second Next returned error: %v", err)
-	}
-	if !secondAudio.IsFinal {
-		t.Fatal("second audio IsFinal = false, want final tail before EOF")
-	}
 	_, err = stream.Next()
-	if !errors.Is(err, io.EOF) {
-		t.Fatalf("third Next error = %v, want io.EOF", err)
+	if !errors.Is(err, streamErr) {
+		t.Fatalf("second Next error = %v, want provider error after partial audio", err)
 	}
 	if second.streamCalls != 0 {
 		t.Fatalf("fallback stream calls = %d, want 0", second.streamCalls)
+	}
+	if adapter.status[0].available {
+		t.Fatal("first availability = true, want false after post-output stream error")
+	}
+	got := receiveTerminalTTSError(t, errCh)
+	if !errors.Is(got.Err, streamErr) {
+		t.Fatalf("emitted error = %v, want %v", got.Err, streamErr)
+	}
+	if got.Recoverable {
+		t.Fatal("Recoverable = true, want false after partial audio")
 	}
 }
 

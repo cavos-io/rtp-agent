@@ -2359,6 +2359,29 @@ func TestPipelineAgentEmitsLLMErrorEventForChatFailure(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentLLMChatFailurePropagatesToRunResult(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("llm chat failed")
+	l := &failingPipelineLLM{
+		label: "test.LLM",
+		err:   cause,
+	}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+	session.activity = NewAgentActivity(NewAgent("test"), session)
+
+	result := NewRunResult(session.ChatCtx)
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	result.WatchSpeechHandle(speech)
+
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	if err := result.Wait(context.Background()); !errors.Is(err, cause) {
+		t.Fatalf("RunResult Wait error = %v, want LLM chat error %v", err, cause)
+	}
+}
+
 func TestPipelineAgentEmitsLLMErrorEventForStreamFailure(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	cause := errors.New("llm stream failed")
@@ -2387,6 +2410,30 @@ func TestPipelineAgentEmitsLLMErrorEventForStreamFailure(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive LLM stream error")
+	}
+}
+
+func TestPipelineAgentLLMStreamFailurePropagatesToRunResult(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("llm stream failed")
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			err: cause,
+		},
+	}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+	session.activity = NewAgentActivity(NewAgent("test"), session)
+
+	result := NewRunResult(session.ChatCtx)
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	result.WatchSpeechHandle(speech)
+
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	if err := result.Wait(context.Background()); !errors.Is(err, cause) {
+		t.Fatalf("RunResult Wait error = %v, want LLM stream error %v", err, cause)
 	}
 }
 
