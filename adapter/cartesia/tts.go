@@ -373,7 +373,7 @@ func (s *cartesiaTTSStream) readLoop() {
 		}
 
 		if resp.Type == "error" {
-			s.errCh <- fmt.Errorf("cartesia error: %s", resp.Error)
+			s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("cartesia error: %s", resp.Error))
 			return
 		}
 
