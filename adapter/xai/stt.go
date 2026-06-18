@@ -140,12 +140,15 @@ func (s *XaiSTT) UpdateOptions(opts ...XaiSTTOption) {
 	for stream := range s.streams {
 		streams = append(streams, stream)
 	}
+	sampleRate := s.sampleRate
+	language := s.language
 	interimResults := s.enableInterimResults
 	diarization := s.enableDiarization
+	endpointing := s.endpointing
 	s.mu.Unlock()
 
 	for _, stream := range streams {
-		stream.updateOptions(interimResults, diarization)
+		stream.updateOptions(sampleRate, language, interimResults, diarization, endpointing)
 	}
 }
 
@@ -154,18 +157,24 @@ func (s *XaiSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 		return nil, err
 	}
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildXaiSTTStreamURL(s, language), buildXaiSTTHeaders(s))
+	streamLanguage := resolveXaiSTTLanguage(s, language)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildXaiSTTStreamURL(s, streamLanguage), buildXaiSTTHeaders(s))
 	if err != nil {
 		return nil, llm.NewAPIConnectionError("failed to connect to xAI")
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &xaiSTTStream{
-		owner:  s,
-		conn:   conn,
-		events: make(chan *stt.SpeechEvent, 100),
-		errCh:  make(chan error, 1),
-		ctx:    streamCtx,
-		cancel: cancel,
+		owner:        s,
+		apiKey:       s.apiKey,
+		websocketURL: s.websocketURL,
+		sampleRate:   s.sampleRate,
+		language:     streamLanguage,
+		endpointing:  s.endpointing,
+		conn:         conn,
+		events:       make(chan *stt.SpeechEvent, 100),
+		errCh:        make(chan error, 1),
+		ctx:          streamCtx,
+		cancel:       cancel,
 		state: &xaiSTTStreamState{
 			interimResults: s.enableInterimResults,
 			diarization:    s.enableDiarization,
@@ -259,21 +268,36 @@ func buildXaiSTTRecognizeRequest(ctx context.Context, s *XaiSTT, audio []byte, l
 }
 
 func buildXaiSTTStreamURL(s *XaiSTT, language string) string {
-	u, _ := url.Parse(s.websocketURL)
+	return buildXaiSTTStreamURLWithOptions(
+		s.websocketURL,
+		s.sampleRate,
+		s.enableInterimResults,
+		s.enableDiarization,
+		resolveXaiSTTLanguage(s, language),
+		s.endpointing,
+	)
+}
+
+func buildXaiSTTStreamURLWithOptions(websocketURL string, sampleRate int, interimResults bool, diarization bool, language string, endpointing int) string {
+	u, _ := url.Parse(websocketURL)
 	q := u.Query()
 	q.Set("encoding", "pcm")
-	q.Set("sample_rate", strconv.Itoa(s.sampleRate))
-	q.Set("interim_results", strconv.FormatBool(s.enableInterimResults))
-	q.Set("diarize", strconv.FormatBool(s.enableDiarization))
-	q.Set("language", resolveXaiSTTLanguage(s, language))
-	q.Set("endpointing", strconv.Itoa(s.endpointing))
+	q.Set("sample_rate", strconv.Itoa(sampleRate))
+	q.Set("interim_results", strconv.FormatBool(interimResults))
+	q.Set("diarize", strconv.FormatBool(diarization))
+	q.Set("language", language)
+	q.Set("endpointing", strconv.Itoa(endpointing))
 	u.RawQuery = q.Encode()
 	return u.String()
 }
 
 func buildXaiSTTHeaders(s *XaiSTT) http.Header {
+	return buildXaiSTTHeadersWithAPIKey(s.apiKey)
+}
+
+func buildXaiSTTHeadersWithAPIKey(apiKey string) http.Header {
 	headers := make(http.Header)
-	headers.Set("Authorization", "Bearer "+s.apiKey)
+	headers.Set("Authorization", "Bearer "+apiKey)
 	return headers
 }
 
@@ -285,12 +309,18 @@ func resolveXaiSTTLanguage(s *XaiSTT, language string) string {
 }
 
 type xaiSTTStream struct {
-	owner  *XaiSTT
-	conn   *websocket.Conn
-	events chan *stt.SpeechEvent
-	errCh  chan error
-	mu     sync.Mutex
-	closed bool
+	owner              *XaiSTT
+	apiKey             string
+	websocketURL       string
+	sampleRate         int
+	language           string
+	endpointing        int
+	conn               *websocket.Conn
+	events             chan *stt.SpeechEvent
+	errCh              chan error
+	mu                 sync.Mutex
+	closed             bool
+	reconnectRequested bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -301,8 +331,18 @@ func (s *xaiSTTStream) readLoop() {
 	defer close(s.events)
 	defer s.owner.unregisterStream(s)
 	for {
-		msgType, message, err := s.conn.ReadMessage()
+		conn := s.currentConn()
+		msgType, message, err := conn.ReadMessage()
 		if err != nil {
+			if s.shouldReconnect() {
+				if err := s.reconnect(); err != nil {
+					if !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
+						s.errCh <- err
+					}
+					return
+				}
+				continue
+			}
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
 				s.errCh <- err
 			}
@@ -324,34 +364,54 @@ func (s *xaiSTTStream) readLoop() {
 	}
 }
 
-func (s *xaiSTTStream) updateOptions(interimResults bool, diarization bool) {
+func (s *xaiSTTStream) updateOptions(sampleRate int, language string, interimResults bool, diarization bool, endpointing int) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.sampleRate = sampleRate
+	s.language = language
+	s.endpointing = endpointing
 	s.state.interimResults = interimResults
 	s.state.diarization = diarization
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.reconnectRequested = true
+	conn := s.conn
+	s.mu.Unlock()
+
+	if conn != nil {
+		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+		_ = conn.Close()
+	}
 }
 
 func (s *xaiSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	return s.conn.WriteMessage(websocket.BinaryMessage, frame.Data)
+	return s.currentConn().WriteMessage(websocket.BinaryMessage, frame.Data)
 }
 
 func (s *xaiSTTStream) Flush() error { return nil }
 
 func (s *xaiSTTStream) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
+	conn := s.conn
+	s.mu.Unlock()
+
 	s.cancel()
 	s.owner.unregisterStream(s)
-	_ = s.conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"audio.done"}`))
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.conn.Close()
+	if conn == nil {
+		return nil
+	}
+	_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"audio.done"}`))
+	_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	return conn.Close()
 }
 
 func (s *xaiSTTStream) Next() (*stt.SpeechEvent, error) {
@@ -371,6 +431,52 @@ func (s *xaiSTTStream) Next() (*stt.SpeechEvent, error) {
 	case <-s.ctx.Done():
 		return nil, s.ctx.Err()
 	}
+}
+
+func (s *xaiSTTStream) currentConn() *websocket.Conn {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.conn
+}
+
+func (s *xaiSTTStream) shouldReconnect() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.closed && s.reconnectRequested
+}
+
+func (s *xaiSTTStream) reconnect() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return io.EOF
+	}
+	streamURL := buildXaiSTTStreamURLWithOptions(
+		s.websocketURL,
+		s.sampleRate,
+		s.state.interimResults,
+		s.state.diarization,
+		s.language,
+		s.endpointing,
+	)
+	headers := buildXaiSTTHeadersWithAPIKey(s.apiKey)
+	s.mu.Unlock()
+
+	conn, _, err := websocket.DefaultDialer.DialContext(s.ctx, streamURL, headers)
+	if err != nil {
+		return llm.NewAPIConnectionError("failed to connect to xAI")
+	}
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = conn.Close()
+		return io.EOF
+	}
+	s.conn = conn
+	s.reconnectRequested = false
+	s.mu.Unlock()
+	return nil
 }
 
 type xaiSTTStreamState struct {
