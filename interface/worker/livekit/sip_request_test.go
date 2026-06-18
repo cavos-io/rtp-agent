@@ -210,6 +210,19 @@ func TestTransferSIPParticipantByParticipantDefaultsDialtone(t *testing.T) {
 	}
 }
 
+func TestSIPTransferParticipantPlanSkipsFakeJobs(t *testing.T) {
+	plan := workerlivekit.SIPTransferParticipantPlan(true)
+
+	if !plan.Skip {
+		t.Fatal("SIPTransferParticipantPlan(true).Skip = false, want true")
+	}
+
+	realPlan := workerlivekit.SIPTransferParticipantPlan(false)
+	if realPlan.Skip {
+		t.Fatal("SIPTransferParticipantPlan(false).Skip = true, want false")
+	}
+}
+
 func TestTransferSIPParticipantReturnsSIPAPIError(t *testing.T) {
 	wantErr := errors.New("transfer failed")
 	api := &fakeSIPAPI{err: wantErr}

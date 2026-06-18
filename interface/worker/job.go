@@ -793,7 +793,7 @@ func (c *JobContext) TransferSIPParticipant(ctx context.Context, identity string
 }
 
 func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, participant any, transferTo string, playDialtones ...bool) error {
-	if workerlivekit.ShouldSkipExternalAPIForFakeJob(c.IsFakeJob()) {
+	if plan := workerlivekit.SIPTransferParticipantPlan(c.IsFakeJob()); plan.Skip {
 		logger.Logger.Warnw("job context TransferSIPParticipant is skipped for fake jobs", nil)
 		return nil
 	}

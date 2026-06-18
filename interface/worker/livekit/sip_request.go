@@ -27,6 +27,16 @@ func SIPCreateParticipantPlan(fakeJob bool) SIPCreateParticipantPlanResult {
 	}
 }
 
+type SIPTransferParticipantPlanResult struct {
+	Skip bool
+}
+
+func SIPTransferParticipantPlan(fakeJob bool) SIPTransferParticipantPlanResult {
+	return SIPTransferParticipantPlanResult{
+		Skip: ShouldSkipExternalAPIForFakeJob(fakeJob),
+	}
+}
+
 func CreateSIPParticipantRequest(
 	roomName string,
 	callTo string,
