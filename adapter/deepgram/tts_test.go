@@ -407,6 +407,23 @@ func TestDeepgramTTSStreamSpeakTextKeepsReferenceTrailingSeparator(t *testing.T)
 	}
 }
 
+func TestDeepgramTTSStreamIgnoresReferenceEmptyText(t *testing.T) {
+	writes := 0
+	stream := &deepgramTTSStream{
+		writeJSON: func(any) error {
+			writes++
+			return nil
+		},
+	}
+
+	if err := stream.PushText(""); err != nil {
+		t.Fatalf("PushText(empty) error = %v", err)
+	}
+	if writes != 0 {
+		t.Fatalf("writes after empty PushText = %d, want 0", writes)
+	}
+}
+
 func TestDeepgramTTSStreamMarksFinalAudioOnReferenceFlushed(t *testing.T) {
 	stream := &deepgramTTSStream{
 		audio: make(chan *tts.SynthesizedAudio, 1),

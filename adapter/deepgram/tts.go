@@ -301,6 +301,9 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 }
 
 func (s *deepgramTTSStream) PushText(text string) error {
+	if text == "" {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
