@@ -467,7 +467,7 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *lksdk.Room, 
 		ctx = context.Background()
 	}
 	opts := normalizeConnectOptions(options...)
-	if err := workerlivekit.JoinPreparedRoom(ctx, workerlivekit.PreparedRoomConnectOptions{
+	if err := workerlivekit.JoinPreparedRoom(ctx, workerlivekit.PreparedRoomConnectOptionsFromAcceptedJob(workerlivekit.AcceptedJobRoomConnectOptions{
 		Room:          room,
 		URL:           c.url,
 		Token:         c.token,
@@ -476,13 +476,9 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *lksdk.Room, 
 		APISecret:     c.apiSecret,
 		AutoSubscribe: string(opts.AutoSubscribe),
 		Connector:     jobContextRoomConnector,
-		Accept: workerlivekit.ConnectInfoOptions{
-			ParticipantName:       c.AcceptArguments.Name,
-			ParticipantIdentity:   c.ParticipantIdentity(),
-			ParticipantMetadata:   c.AcceptArguments.Metadata,
-			ParticipantAttributes: c.AcceptArguments.Attributes,
-		},
-	}); err != nil {
+		Accept:        c.AcceptArguments,
+		Identity:      c.ParticipantIdentity(),
+	})); err != nil {
 		return err
 	}
 	c.Room = room

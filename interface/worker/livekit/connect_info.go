@@ -89,6 +89,38 @@ type PreparedRoomConnectOptions struct {
 	Connector     RoomConnector
 }
 
+type AcceptedJobRoomConnectOptions struct {
+	Room          *lksdk.Room
+	URL           string
+	Token         string
+	Job           *lkprotocol.Job
+	APIKey        string
+	APISecret     string
+	Accept        JobAcceptArguments
+	Identity      string
+	AutoSubscribe string
+	Connector     RoomConnector
+}
+
+func PreparedRoomConnectOptionsFromAcceptedJob(opts AcceptedJobRoomConnectOptions) PreparedRoomConnectOptions {
+	return PreparedRoomConnectOptions{
+		Room:          opts.Room,
+		URL:           opts.URL,
+		Token:         opts.Token,
+		Job:           opts.Job,
+		APIKey:        opts.APIKey,
+		APISecret:     opts.APISecret,
+		AutoSubscribe: opts.AutoSubscribe,
+		Connector:     opts.Connector,
+		Accept: ConnectInfoOptions{
+			ParticipantName:       opts.Accept.Name,
+			ParticipantIdentity:   opts.Identity,
+			ParticipantMetadata:   opts.Accept.Metadata,
+			ParticipantAttributes: opts.Accept.Attributes,
+		},
+	}
+}
+
 func JoinPreparedRoom(ctx context.Context, opts PreparedRoomConnectOptions) error {
 	connector := opts.Connector
 	if connector.JoinWithToken == nil {

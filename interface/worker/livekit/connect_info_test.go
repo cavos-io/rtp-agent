@@ -231,3 +231,48 @@ func TestJoinPreparedRoomUsesExistingRoomWithJobConnectInfo(t *testing.T) {
 		t.Fatal("prepared room was not joined")
 	}
 }
+
+func TestPreparedRoomConnectOptionsFromAcceptedJobCopiesAcceptArgs(t *testing.T) {
+	room := lksdk.NewRoom(nil)
+	job := &lkprotocol.Job{Room: &lkprotocol.Room{Name: "room-a"}}
+	connector := workerlivekit.RoomConnector{}
+
+	opts := workerlivekit.PreparedRoomConnectOptionsFromAcceptedJob(workerlivekit.AcceptedJobRoomConnectOptions{
+		Room:          room,
+		URL:           "wss://livekit.example",
+		Token:         "room-token",
+		Job:           job,
+		APIKey:        "key",
+		APISecret:     "secret",
+		AutoSubscribe: "audio_only",
+		Connector:     connector,
+		Identity:      "resolved-agent",
+		Accept: workerlivekit.JobAcceptArguments{
+			Name:     "Agent Name",
+			Identity: "raw-agent",
+			Metadata: "meta",
+			Attributes: map[string]string{
+				"tier": "gold",
+			},
+		},
+	})
+
+	if opts.Room != room {
+		t.Fatal("Room did not preserve prepared room")
+	}
+	if opts.Job != job {
+		t.Fatal("Job did not preserve LiveKit job")
+	}
+	if opts.Accept.ParticipantName != "Agent Name" {
+		t.Fatalf("ParticipantName = %q, want Agent Name", opts.Accept.ParticipantName)
+	}
+	if opts.Accept.ParticipantIdentity != "resolved-agent" {
+		t.Fatalf("ParticipantIdentity = %q, want resolved-agent", opts.Accept.ParticipantIdentity)
+	}
+	if opts.Accept.ParticipantMetadata != "meta" {
+		t.Fatalf("ParticipantMetadata = %q, want meta", opts.Accept.ParticipantMetadata)
+	}
+	if opts.Accept.ParticipantAttributes["tier"] != "gold" {
+		t.Fatalf("ParticipantAttributes[tier] = %q, want gold", opts.Accept.ParticipantAttributes["tier"])
+	}
+}
