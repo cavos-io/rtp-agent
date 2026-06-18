@@ -1729,6 +1729,46 @@ func TestMultimodalAgentKeepsRunOpenForRealtimeAutoToolReply(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentAutoToolReplySyncFailureDoesNotKeepRunOpen(t *testing.T) {
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	go activity.schedulingTask()
+	defer activity.Stop()
+
+	result := NewRunResult(session.ChatCtx)
+	session.runState = result
+	currentSpeech := NewSpeechHandle(true, DefaultInputDetails())
+	result.WatchSpeechHandle(currentSpeech)
+
+	ma := &MultimodalAgent{
+		model: &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{
+			AutoToolReplyGeneration: true,
+		}},
+		session: session,
+		chatCtx: llm.NewChatContext(),
+		rtSession: &fakeRealtimeSession{
+			updateChatContextErr: errors.New("update chat context failed"),
+		},
+		ctx: context.Background(),
+	}
+	session.Assistant = ma
+
+	ma.executeRealtimeFunctionCall(&llm.FunctionCall{Name: "lookup", CallID: "call_lookup", Arguments: `{}`})
+	select {
+	case <-session.FunctionToolsExecutedEvents():
+	case <-time.After(time.Second):
+		t.Fatal("FunctionToolsExecutedEvents did not receive realtime function execution")
+	}
+
+	currentSpeech.MarkDone()
+	if !result.Done() {
+		t.Fatal("RunResult kept waiting for auto tool reply after realtime chat context sync failed")
+	}
+}
+
 func TestMultimodalAgentTruncatesInterruptedRealtimeMessageToPlayedTranscript(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	playback := &fakePipelinePlaybackController{

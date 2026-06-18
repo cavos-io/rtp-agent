@@ -1091,8 +1091,10 @@ func (ma *MultimodalAgent) appendRealtimeToolResult(call *llm.FunctionCall, outp
 		ev.ReplyRequired = true
 		ma.session.EmitFunctionToolsExecuted(*ev)
 	}
+	syncFailed := false
 	if ma.rtSession != nil && ma.chatCtx != nil {
 		if err := ma.rtSession.UpdateChatContext(ma.chatCtx); err != nil {
+			syncFailed = true
 			logger.Logger.Errorw("failed to update realtime session chat context with tool result", err)
 			if ma.session != nil {
 				ma.session.EmitError(ErrorEvent{
@@ -1109,6 +1111,9 @@ func (ma *MultimodalAgent) appendRealtimeToolResult(call *llm.FunctionCall, outp
 		return
 	}
 	if ma.realtimeCapabilities().AutoToolReplyGeneration {
+		if syncFailed {
+			return
+		}
 		ma.installPendingRealtimeAutoToolReply()
 		return
 	}
