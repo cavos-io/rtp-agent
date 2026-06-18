@@ -1883,7 +1883,11 @@ func (s *AgentServer) runJobEntrypoint(jobCtx *JobContext) error {
 }
 
 func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
-	if jobCtx == nil || jobCtx.Job == nil {
+	if jobCtx == nil {
+		return false
+	}
+	plan := workerlivekit.JobFinishPlan(jobCtx.Job)
+	if !plan.Finish {
 		return false
 	}
 	finalized := false
@@ -1893,10 +1897,9 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
 	if !finalized {
 		return false
 	}
-	runtimeJob := workerlivekit.JobRuntimeInfo(jobCtx.Job)
 
 	s.mu.Lock()
-	delete(s.activeJobs, runtimeJob.JobID)
+	delete(s.activeJobs, plan.JobID)
 	s.mu.Unlock()
 
 	s.runSessionEnd(jobCtx)

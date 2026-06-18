@@ -394,6 +394,21 @@ func TestJobSessionReportUploadPlanIncludesUploadInputsAndSkipsFakeJobs(t *testi
 	}
 }
 
+func TestJobFinishPlanRequiresLiveKitJobAndExposesActiveJobKey(t *testing.T) {
+	nilPlan := workerlivekit.JobFinishPlan(nil)
+	if nilPlan.Finish {
+		t.Fatal("JobFinishPlan(nil).Finish = true, want false")
+	}
+
+	plan := workerlivekit.JobFinishPlan(&lkprotocol.Job{Id: "job-finish"})
+	if !plan.Finish {
+		t.Fatal("JobFinishPlan(job).Finish = false, want true")
+	}
+	if plan.JobID != "job-finish" {
+		t.Fatalf("JobID = %q, want job-finish", plan.JobID)
+	}
+}
+
 func TestJobLogContextFieldsExposeLiveKitJobMetadata(t *testing.T) {
 	fields := workerlivekit.JobLogContextFields(&lkprotocol.Job{
 		Id:   "job-log",

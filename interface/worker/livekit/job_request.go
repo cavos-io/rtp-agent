@@ -136,6 +136,11 @@ type RuntimeJobInfo struct {
 	EnableRecording bool
 }
 
+type JobFinishPlanResult struct {
+	Finish bool
+	JobID  string
+}
+
 func JobRuntimeInfo(job *lkprotocol.Job) RuntimeJobInfo {
 	if job == nil {
 		return RuntimeJobInfo{}
@@ -143,6 +148,17 @@ func JobRuntimeInfo(job *lkprotocol.Job) RuntimeJobInfo {
 	return RuntimeJobInfo{
 		JobID:           job.Id,
 		EnableRecording: job.GetEnableRecording(),
+	}
+}
+
+func JobFinishPlan(job *lkprotocol.Job) JobFinishPlanResult {
+	runtimeJob := JobRuntimeInfo(job)
+	if runtimeJob.JobID == "" {
+		return JobFinishPlanResult{}
+	}
+	return JobFinishPlanResult{
+		Finish: true,
+		JobID:  runtimeJob.JobID,
 	}
 }
 
