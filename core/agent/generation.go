@@ -610,6 +610,22 @@ func PerformToolExecutions(
 				executionArgs, confirmDuplicate = stripConfirmDuplicateArgument(fncCall.Arguments)
 				fncCall = copyFunctionToolCallWithArguments(fncCall, executionArgs)
 			}
+			if tool != nil {
+				canonicalArgs, parseErr := canonicalFunctionCallArguments(executionArgs)
+				if parseErr != nil {
+					toolErr := llm.NewToolError(fmt.Sprintf("Error parsing arguments for `%s`: %s", fncCall.Name, parseErr.Error()))
+					result := llm.MakeToolOutput(makeExecutionFunctionCall(fncCall, executionArgs), nil, toolErr)
+					outCh <- ToolExecutionOutput{
+						FncCall:    result.FncCall,
+						FncCallOut: result.FncCallOut,
+						RawOutput:  result.RawOutput,
+						RawError:   result.RawError,
+					}
+					continue
+				}
+				executionArgs = canonicalArgs
+				fncCall = copyFunctionToolCallWithArguments(fncCall, executionArgs)
+			}
 			functionCall := makeExecutionFunctionCall(fncCall, executionArgs)
 			callCtx, callCancel := context.WithCancel(ctx)
 			if isToolExecutorSystemTool(fncCall.Name) {
@@ -832,6 +848,25 @@ func makeExecutionFunctionCall(fc *llm.FunctionToolCall, arguments string) llm.F
 		Extra:     fc.Extra,
 		CreatedAt: time.Now(),
 	}
+}
+
+func canonicalFunctionCallArguments(arguments string) (string, error) {
+	args := arguments
+	if args == "" {
+		args = "{}"
+	}
+	parsed, err := llm.ParseFunctionArguments(args)
+	if err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(parsed)
+	if err != nil {
+		return "", err
+	}
+	if arguments == "" {
+		return arguments, nil
+	}
+	return string(encoded), nil
 }
 
 func stripConfirmDuplicateArgument(arguments string) (string, bool) {

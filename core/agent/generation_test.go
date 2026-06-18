@@ -1613,6 +1613,68 @@ func TestPerformToolExecutionsCancelTaskToolCancelsCancellableTool(t *testing.T)
 	}
 }
 
+func TestPerformToolExecutionsRunningTasksUsesCanonicalArguments(t *testing.T) {
+	tool := &blockingGenerationTool{
+		flags:   llm.ToolFlagCancellable,
+		started: make(chan struct{}, 1),
+		args:    make(chan string, 1),
+		release: make(chan struct{}),
+	}
+	toolCtx := llm.NewToolContext([]interface{}{tool, getRunningTasksTool{}, cancelTaskTool{}})
+	functionCh := make(chan *llm.FunctionToolCall)
+	outputs := PerformToolExecutions(context.Background(), functionCh, toolCtx)
+
+	functionCh <- &llm.FunctionToolCall{
+		ID:        "item_lookup",
+		Type:      "function",
+		Name:      "lookup",
+		CallID:    "call_lookup_a",
+		Arguments: `{city:Paris}`,
+	}
+	select {
+	case <-tool.started:
+	case <-testTimeout():
+		t.Fatal("cancellable lookup did not start")
+	}
+
+	functionCh <- &llm.FunctionToolCall{
+		ID:        "item_get_running",
+		Type:      "function",
+		Name:      getRunningTasksToolName,
+		CallID:    "call_get_running",
+		Arguments: `{}`,
+	}
+	runningOutput := mustReceiveToolOutput(t, outputs)
+	if runningOutput.RawError != nil {
+		t.Fatalf("get running RawError = %v, want nil", runningOutput.RawError)
+	}
+	runningRaw, ok := runningOutput.RawOutput.(string)
+	if !ok {
+		t.Fatalf("get running RawOutput = %#v, want JSON string", runningOutput.RawOutput)
+	}
+	var running []map[string]any
+	if err := json.Unmarshal([]byte(runningRaw), &running); err != nil {
+		t.Fatalf("get running RawOutput = %q, want JSON array: %v", runningRaw, err)
+	}
+	if len(running) != 1 {
+		t.Fatalf("running tasks = %#v, want one active call", running)
+	}
+	if got, want := running[0]["arguments"], `{"city":"Paris"}`; got != want {
+		t.Fatalf("running task arguments = %#v, want canonical %q", got, want)
+	}
+
+	functionCh <- &llm.FunctionToolCall{
+		ID:        "item_cancel",
+		Type:      "function",
+		Name:      cancelTaskToolName,
+		CallID:    "call_cancel",
+		Arguments: `{"call_id":"call_lookup_a"}`,
+	}
+	close(functionCh)
+	for range outputs {
+	}
+}
+
 func TestPerformToolExecutionsCancelTaskHonorsCurrentSpeechInterruptions(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	speech := NewSpeechHandle(true, DefaultInputDetails())
