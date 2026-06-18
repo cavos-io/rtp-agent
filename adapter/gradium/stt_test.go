@@ -69,6 +69,14 @@ func TestGradiumSTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestGradiumSTTExposesReferenceInputSampleRate(t *testing.T) {
+	provider := NewGradiumSTT("test-key")
+
+	if got := provider.InputSampleRate(); got != 24000 {
+		t.Fatalf("InputSampleRate = %d, want reference sample rate 24000", got)
+	}
+}
+
 func TestNewGradiumSTTUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("GRADIUM_API_KEY", "env-key")
 
