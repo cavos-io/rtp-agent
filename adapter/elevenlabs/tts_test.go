@@ -528,6 +528,50 @@ func TestElevenLabsStreamURLUsesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSAutoModeDefaultMatchesReference(t *testing.T) {
+	provider, err := NewElevenLabsTTS("test-key", "", "")
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	defaultURL := buildElevenLabsStreamURL(provider)
+	defaultParsed, err := url.Parse(defaultURL)
+	if err != nil {
+		t.Fatalf("parse default stream url: %v", err)
+	}
+	if defaultParsed.Query().Get("auto_mode") != "true" {
+		t.Fatalf("default auto_mode = %q, want true when chunk schedule is unset", defaultParsed.Query().Get("auto_mode"))
+	}
+
+	scheduled, err := NewElevenLabsTTS("test-key", "", "", WithElevenLabsChunkLengthSchedule([]int{120, 160, 250, 290}))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() with schedule error = %v", err)
+	}
+	scheduledURL := buildElevenLabsStreamURL(scheduled)
+	scheduledParsed, err := url.Parse(scheduledURL)
+	if err != nil {
+		t.Fatalf("parse scheduled stream url: %v", err)
+	}
+	if scheduledParsed.Query().Get("auto_mode") != "false" {
+		t.Fatalf("scheduled auto_mode = %q, want false when chunk schedule is set", scheduledParsed.Query().Get("auto_mode"))
+	}
+
+	explicit, err := NewElevenLabsTTS("test-key", "", "",
+		WithElevenLabsChunkLengthSchedule([]int{120, 160}),
+		WithElevenLabsAutoMode(true),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() with explicit auto mode error = %v", err)
+	}
+	explicitURL := buildElevenLabsStreamURL(explicit)
+	explicitParsed, err := url.Parse(explicitURL)
+	if err != nil {
+		t.Fatalf("parse explicit stream url: %v", err)
+	}
+	if explicitParsed.Query().Get("auto_mode") != "true" {
+		t.Fatalf("explicit auto_mode = %q, want explicit true to win", explicitParsed.Query().Get("auto_mode"))
+	}
+}
+
 func TestElevenLabsStreamURLUsesConfiguredBaseURL(t *testing.T) {
 	provider, err := NewElevenLabsTTS("test-key", "voice-1", "",
 		WithElevenLabsBaseURL("https://eleven.example/v1/"),

@@ -45,6 +45,7 @@ type ElevenLabsTTS struct {
 	streamingLatency               *int
 	pronunciationDictionaries      []ElevenLabsPronunciationDictionaryLocator
 	autoMode                       *bool
+	autoModeExplicit               bool
 	applyLanguageTextNormalization *bool
 }
 
@@ -136,6 +137,7 @@ func WithElevenLabsPronunciationDictionaries(locators []ElevenLabsPronunciationD
 func WithElevenLabsAutoMode(enabled bool) ElevenLabsTTSOption {
 	return func(t *ElevenLabsTTS) {
 		t.autoMode = &enabled
+		t.autoModeExplicit = true
 	}
 }
 
@@ -162,6 +164,10 @@ func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...Ele
 	}
 	for _, opt := range opts {
 		opt(provider)
+	}
+	if !provider.autoModeExplicit {
+		autoMode := len(provider.chunkLengthSchedule) == 0
+		provider.autoMode = &autoMode
 	}
 	return provider, nil
 }
