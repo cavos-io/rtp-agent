@@ -745,7 +745,7 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.InitializeProcessTimeoutSeconds == 0 && !opts.InitializeProcessTimeoutSecondsSet {
 		opts.InitializeProcessTimeoutSeconds = defaultProcessTimeout
 	}
-	if opts.LogLevel == "" {
+	if opts.LogLevel == "" && opts.Transport == WorkerTransportLiveKit {
 		opts.LogLevel = workerlivekit.WorkerLogLevelFromEnv(nil)
 	}
 	if opts.LogLevel == "" {
