@@ -16,6 +16,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -485,8 +486,14 @@ func (s *assemblyAISTTStream) readLoop() {
 	for {
 		_, message, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-				s.errCh <- err
+			if !s.isClosed() {
+				if closeErr, ok := err.(*websocket.CloseError); ok {
+					s.errCh <- llm.NewAPIStatusError("AssemblyAI connection closed unexpectedly", closeErr.Code, "", err.Error())
+				} else if err == io.EOF {
+					s.errCh <- llm.NewAPIStatusError("AssemblyAI connection closed unexpectedly", -1, "", err.Error())
+				} else {
+					s.errCh <- err
+				}
 			}
 			return
 		}
@@ -513,6 +520,12 @@ func (s *assemblyAISTTStream) readLoop() {
 			s.events <- event
 		}
 	}
+}
+
+func (s *assemblyAISTTStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func assemblyAIRealtimeEvents(resp aaiResponse, state *assemblyAIStreamState) []*stt.SpeechEvent {

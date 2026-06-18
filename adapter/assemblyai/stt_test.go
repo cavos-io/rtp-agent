@@ -4,13 +4,18 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
+	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/gorilla/websocket"
 )
 
 func TestAssemblyAISTTDefaultsMatchReference(t *testing.T) {
@@ -628,6 +633,53 @@ func TestAssemblyAISTTStreamCloseSendsReferenceTerminate(t *testing.T) {
 	}
 }
 
+func TestAssemblyAISTTUnexpectedNormalCloseReturnsAPIStatusError(t *testing.T) {
+	closed := make(chan struct{})
+	closeAfterHandshake := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runAssemblyAINormalCloseWebsocketServer(serverConn, closeAfterHandshake, closed, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewAssemblyAISTT("test-key", WithAssemblyAISTTBaseURL("ws://assemblyai.test"))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+	close(closeAfterHandshake)
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for normal websocket close")
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for normal close server")
+	}
+
+	_, err = stream.Next()
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+}
+
 func TestAssemblyAISTTStreamForceEndpointSendsReferenceMessage(t *testing.T) {
 	var messages []map[string]string
 	stream := &assemblyAISTTStream{
@@ -693,6 +745,48 @@ func TestAssemblyAISTTRecognizeMatchesReferenceUnsupportedOffline(t *testing.T) 
 	if !strings.Contains(err.Error(), "not implemented") {
 		t.Fatalf("Recognize error = %q, want not implemented", err.Error())
 	}
+}
+
+func runAssemblyAINormalCloseWebsocketServer(conn net.Conn, closeAfterHandshake <-chan struct{}, closed chan<- struct{}, errCh chan<- error) {
+	upgrader := websocket.Upgrader{}
+	listener := &singleAssemblyAIConnListener{conn: conn}
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ws, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer ws.Close()
+			<-closeAfterHandshake
+			err = ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+			close(closed)
+			errCh <- err
+		}),
+	}
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		errCh <- err
+	}
+}
+
+type singleAssemblyAIConnListener struct {
+	conn net.Conn
+	once sync.Once
+}
+
+func (l *singleAssemblyAIConnListener) Accept() (net.Conn, error) {
+	var conn net.Conn
+	l.once.Do(func() { conn = l.conn })
+	if conn == nil {
+		return nil, net.ErrClosed
+	}
+	return conn, nil
+}
+
+func (l *singleAssemblyAIConnListener) Close() error { return nil }
+
+func (l *singleAssemblyAIConnListener) Addr() net.Addr {
+	return l.conn.LocalAddr()
 }
 
 func assertAssemblyAIQuery(t *testing.T, query url.Values, key string, want string) {
