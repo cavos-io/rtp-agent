@@ -637,14 +637,18 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 			case <-speechCtx.Done():
 			}
 		}()
-		_, err := va.synthesizeSpeech(speechCtx, session, singleTextChannel(speech.Generation.Text), speech)
+		ttsGen, err := va.synthesizeSpeech(speechCtx, session, singleTextChannel(speech.Generation.Text), speech)
 		speechCancel()
 		if err != nil && !errors.Is(err, context.Canceled) {
 			logger.Logger.Errorw("TTS inference failed", err)
 			va.emitTTSError(session, err)
 		}
-		if !speech.IsInterrupted() {
+		if !speech.IsInterrupted() || (ttsGen != nil && ttsGen.ForwardedAudio) {
+			if speech.Generation.AssistantMessage != nil {
+				speech.Generation.AssistantMessage.Interrupted = speech.IsInterrupted()
+			}
 			insertChatItemIfMissing(va.chatCtx, speech.Generation.AssistantMessage)
+			addSpeechChatItemIfMissing(speech, speech.Generation.AssistantMessage)
 		}
 		_ = speech.MarkGenerationDone()
 		session.UpdateAgentState(AgentStateListening)
@@ -1188,6 +1192,7 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 					return ttsGen, err
 				}
 			}
+			ttsGen.ForwardedAudio = true
 			if !startedSpeaking {
 				session.UpdateAgentState(AgentStateSpeaking)
 				startedSpeaking = true
@@ -1378,6 +1383,18 @@ func insertChatItemIfMissing(chatCtx *llm.ChatContext, item llm.ChatItem) {
 		}
 	}
 	chatCtx.Insert(item)
+}
+
+func addSpeechChatItemIfMissing(speech *SpeechHandle, item llm.ChatItem) {
+	if speech == nil || item == nil {
+		return
+	}
+	for _, existing := range speech.ChatItems() {
+		if existing == item {
+			return
+		}
+	}
+	speech.AddChatItems(item)
 }
 
 func resolveToolsByID(tools []llm.Tool, ids []string) ([]llm.Tool, error) {

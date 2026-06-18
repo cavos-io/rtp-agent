@@ -2747,6 +2747,7 @@ func TestPipelineAgentEmitsTTSErrorEventForPublishAudioFailure(t *testing.T) {
 }
 
 func TestPipelineAgentStopsPublishingTTSAfterSpeechInterrupted(t *testing.T) {
+	chatCtx := llm.NewChatContext()
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	ttsSource := &fakePipelineTTS{stream: &fakePipelineTTSStream{
 		frames: []*model.AudioFrame{
@@ -2764,7 +2765,7 @@ func TestPipelineAgentStopsPublishingTTSAfterSpeechInterrupted(t *testing.T) {
 			},
 		},
 	}}
-	agent := NewPipelineAgent(nil, nil, nil, ttsSource, llm.NewChatContext())
+	agent := NewPipelineAgent(nil, nil, nil, ttsSource, chatCtx)
 	agent.session = session
 	speech := NewSpeechHandle(true, DefaultInputDetails())
 	speech.Generation.Text = "hello"
@@ -2790,6 +2791,20 @@ func TestPipelineAgentStopsPublishingTTSAfterSpeechInterrupted(t *testing.T) {
 	}
 	if got := published[0]; len(got) != 1 || got[0] != 1 {
 		t.Fatalf("first published frame = %#v, want frame 1", got)
+	}
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx.Items = %#v, want committed assistant message after first audio frame", chatCtx.Items)
+	}
+	items := speech.ChatItems()
+	if len(items) != 1 {
+		t.Fatalf("speech.ChatItems = %#v, want committed assistant message after first audio frame", items)
+	}
+	msg, ok := items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("speech chat item = %T, want *llm.ChatMessage", items[0])
+	}
+	if msg.TextContent() != "hello" || !msg.Interrupted {
+		t.Fatalf("speech chat message = %#v, want interrupted assistant text", msg)
 	}
 }
 
