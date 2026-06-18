@@ -661,6 +661,21 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 	if session == nil {
 		return
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if opts.SpeechHandle != nil {
+		replyCtx, replyCancel := context.WithCancel(ctx)
+		go func() {
+			select {
+			case <-opts.SpeechHandle.interruptCh:
+				replyCancel()
+			case <-replyCtx.Done():
+			}
+		}()
+		defer replyCancel()
+		ctx = replyCtx
+	}
 
 	logger.Logger.Infow("Generating reply")
 	session.UpdateAgentState(AgentStateThinking)
