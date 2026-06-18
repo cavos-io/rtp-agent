@@ -2104,10 +2104,24 @@ func (s *realtimeSession) persistRealtimeAudioTranscripts() {
 
 func openAIRealtimeResponseDoneError(response map[string]any) (llm.RealtimeEvent, bool) {
 	status, _ := response["status"].(string)
-	if status != "failed" {
+	if status != "failed" && status != "incomplete" {
 		return llm.RealtimeEvent{}, false
 	}
 	statusDetails, _ := response["status_details"].(map[string]any)
+	if status == "incomplete" {
+		reason := openAIRealtimeString(statusDetails["reason"])
+		if reason == "" {
+			reason = openAIRealtimeString(statusDetails["type"])
+		}
+		message := "OpenAI Realtime API response incomplete"
+		if reason != "" {
+			message = fmt.Sprintf("%s: %s", message, reason)
+		}
+		return llm.RealtimeEvent{
+			Type:  llm.RealtimeEventTypeError,
+			Error: llm.NewAPIError(message, statusDetails, true),
+		}, true
+	}
 	errorBody, hasError := statusDetails["error"].(map[string]any)
 	message := "OpenAI Realtime API response failed with unknown error"
 	var body any
