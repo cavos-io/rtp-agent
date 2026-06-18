@@ -485,6 +485,7 @@ type azureSTTStream struct {
 	closed          bool
 	audioWritten    bool
 	reconnectNext   bool
+	sessionStopped  bool
 	reconnects      int
 	maxReconnects   int
 	startTimeOffset float64
@@ -561,9 +562,30 @@ func (s *azureSTTStream) Close() error {
 func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 	select {
 	case err := <-s.errCh:
+		s.mu.Lock()
+		if s.sessionStopped && !s.closed {
+			s.finishWithErrorLocked(err)
+			select {
+			case <-s.errCh:
+			default:
+			}
+		}
+		s.mu.Unlock()
 		return nil, err
 	default:
 	}
+	s.mu.Lock()
+	if s.sessionStopped && !s.closed {
+		err := llm.NewAPIConnectionError("SpeechRecognition session stopped")
+		s.finishWithErrorLocked(err)
+		s.mu.Unlock()
+		select {
+		case <-s.errCh:
+		default:
+		}
+		return nil, err
+	}
+	s.mu.Unlock()
 	select {
 	case event, ok := <-s.events:
 		if !ok {
@@ -611,6 +633,7 @@ func (s *azureSTTStream) reconnectLocked() error {
 	}
 	s.conn = conn
 	s.connectionID = connectionID
+	s.sessionStopped = false
 	_ = oldConn.Close()
 	go s.readLoop(conn)
 	for {
@@ -651,6 +674,12 @@ func (s *azureSTTStream) readLoop(conn *websocket.Conn) {
 				return
 			}
 			if !s.audioWritten {
+				s.sessionStopped = true
+				s.reconnectNext = true
+				select {
+				case s.errCh <- llm.NewAPIConnectionError("SpeechRecognition session stopped"):
+				default:
+				}
 				s.mu.Unlock()
 				return
 			}

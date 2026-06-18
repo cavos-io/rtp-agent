@@ -803,6 +803,44 @@ func TestAzureSTTStreamSessionStopReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestAzureSTTStreamSessionStopBeforeAudioReturnsAPIConnectionError(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	configMessages := make(chan string, 1)
+	serverClosed := make(chan struct{}, 1)
+
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = azureTestClosingDialer(t, requests, configMessages, serverClosed)
+
+	stream, err := provider.Stream(context.Background(), "id-ID")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	receiveAzureTestValue(t, requests, "request")
+	receiveAzureTestValue(t, configMessages, "speech config")
+	receiveAzureTestSignal(t, serverClosed, "server close")
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, nextErr := stream.Next()
+		errCh <- nextErr
+	}()
+
+	select {
+	case err := <-errCh:
+		var connectionErr *llm.APIConnectionError
+		if !errors.As(err, &connectionErr) {
+			t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Next timed out, want APIConnectionError after provider session stop")
+	}
+}
+
 func TestAzureSTTStreamReconnectsAfterAudioWriteFailure(t *testing.T) {
 	requests := make(chan *http.Request, 2)
 	configMessages := make(chan string, 2)
