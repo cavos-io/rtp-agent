@@ -4090,6 +4090,28 @@ func TestRTCSessionLoadsAgentNameFromEnvironmentAtRegistration(t *testing.T) {
 	}
 }
 
+func TestRTCSessionDoesNotLoadLiveKitAgentNameForAgora(t *testing.T) {
+	t.Setenv("LIVEKIT_AGENT_NAME", "livekit-agent")
+	server := NewAgentServer(WorkerOptions{
+		Transport: WorkerTransportAgora,
+		Agora: AgoraOptions{
+			AppID:   "agora-app",
+			Channel: "support",
+		},
+	})
+
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	if server.Options.AgentName != "" {
+		t.Fatalf("AgentName = %q, want empty for Agora", server.Options.AgentName)
+	}
+	if server.Options.AgentNameIsEnv {
+		t.Fatal("AgentNameIsEnv = true, want false for Agora")
+	}
+}
+
 func TestRTCSessionAgentNameOverrideTakesPrecedence(t *testing.T) {
 	t.Setenv("LIVEKIT_AGENT_NAME", "env-agent")
 	t.Setenv("LIVEKIT_AGENT_NAME_OVERRIDE", "override-agent")
