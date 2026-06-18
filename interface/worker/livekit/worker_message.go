@@ -3,6 +3,7 @@ package livekit
 import (
 	"sort"
 
+	"github.com/gorilla/websocket"
 	lkprotocol "github.com/livekit/protocol/livekit"
 )
 
@@ -16,6 +17,18 @@ func WorkerStatusMessage(status lkprotocol.WorkerStatus, load float64, jobCount 
 			},
 		},
 	}
+}
+
+func WorkerMessageWebSocketFrame(msg *lkprotocol.WorkerMessage) (int, []byte, error) {
+	binary, data, err := WorkerMessageFrame(msg)
+	if err != nil {
+		return 0, nil, err
+	}
+	msgType := websocket.TextMessage
+	if binary {
+		msgType = websocket.BinaryMessage
+	}
+	return msgType, data, nil
 }
 
 func AvailableWorkerStatusMessage(load float64, jobCount uint32, canAcceptJob bool) *lkprotocol.WorkerMessage {

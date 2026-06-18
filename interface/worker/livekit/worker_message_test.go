@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
+	"github.com/gorilla/websocket"
 	lkprotocol "github.com/livekit/protocol/livekit"
 )
 
@@ -109,6 +110,19 @@ func TestWorkerStatusMessageCarriesStatusLoadAndJobCount(t *testing.T) {
 	}
 	if update.JobCount != 2 {
 		t.Fatalf("UpdateWorker.JobCount = %d, want 2", update.JobCount)
+	}
+}
+
+func TestWorkerMessageWebSocketFrameUsesBinaryMessage(t *testing.T) {
+	msgType, data, err := workerlivekit.WorkerMessageWebSocketFrame(workerlivekit.JobRunningMessage("job-a"))
+	if err != nil {
+		t.Fatalf("WorkerMessageWebSocketFrame() error = %v", err)
+	}
+	if msgType != websocket.BinaryMessage {
+		t.Fatalf("message type = %d, want websocket.BinaryMessage", msgType)
+	}
+	if len(data) == 0 {
+		t.Fatal("frame data is empty")
 	}
 }
 

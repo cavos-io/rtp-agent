@@ -1785,7 +1785,7 @@ func (s *AgentServer) sendWorkerMessage(msg *livekit.WorkerMessage) error {
 		return s.workerMessageSink(msg)
 	}
 
-	binary, b, err := workerlivekit.WorkerMessageFrame(msg)
+	msgType, b, err := workerlivekit.WorkerMessageWebSocketFrame(msg)
 	if err != nil {
 		return err
 	}
@@ -1794,10 +1794,6 @@ func (s *AgentServer) sendWorkerMessage(msg *livekit.WorkerMessage) error {
 	defer s.mu.Unlock()
 	if s.conn == nil {
 		return fmt.Errorf("worker websocket is not connected")
-	}
-	msgType := websocket.TextMessage
-	if binary {
-		msgType = websocket.BinaryMessage
 	}
 	return s.conn.WriteMessage(msgType, b)
 }
