@@ -46,6 +46,7 @@ type ElevenLabsTTS struct {
 	pronunciationDictionaries      []ElevenLabsPronunciationDictionaryLocator
 	autoMode                       *bool
 	autoModeExplicit               bool
+	applyTextNormalization         string
 	applyLanguageTextNormalization *bool
 }
 
@@ -141,6 +142,14 @@ func WithElevenLabsAutoMode(enabled bool) ElevenLabsTTSOption {
 	}
 }
 
+func WithElevenLabsApplyTextNormalization(mode string) ElevenLabsTTSOption {
+	return func(t *ElevenLabsTTS) {
+		if mode == "auto" || mode == "on" || mode == "off" {
+			t.applyTextNormalization = mode
+		}
+	}
+}
+
 func WithElevenLabsApplyLanguageTextNormalization(enabled bool) ElevenLabsTTSOption {
 	return func(t *ElevenLabsTTS) {
 		t.applyLanguageTextNormalization = &enabled
@@ -155,12 +164,13 @@ func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...Ele
 		modelID = "eleven_turbo_v2_5"
 	}
 	provider := &ElevenLabsTTS{
-		apiKey:     resolveElevenLabsAPIKey(apiKey),
-		baseURL:    defaultElevenLabsBaseURL,
-		voiceID:    voiceID,
-		modelID:    modelID,
-		encoding:   "mp3_22050_32",
-		sampleRate: 22050,
+		apiKey:                 resolveElevenLabsAPIKey(apiKey),
+		baseURL:                defaultElevenLabsBaseURL,
+		voiceID:                voiceID,
+		modelID:                modelID,
+		encoding:               "mp3_22050_32",
+		sampleRate:             22050,
+		applyTextNormalization: "auto",
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -404,7 +414,7 @@ func buildElevenLabsStreamURL(t *ElevenLabsTTS) string {
 	q.Set("enable_ssml_parsing", strconv.FormatBool(t.enableSSMLParsing))
 	q.Set("enable_logging", "true")
 	q.Set("inactivity_timeout", strconv.Itoa(defaultElevenLabsInactivityTimeout))
-	q.Set("apply_text_normalization", "auto")
+	q.Set("apply_text_normalization", t.applyTextNormalization)
 	if t.applyLanguageTextNormalization != nil {
 		q.Set("apply_language_text_normalization", strconv.FormatBool(*t.applyLanguageTextNormalization))
 	}

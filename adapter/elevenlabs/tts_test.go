@@ -528,6 +528,21 @@ func TestElevenLabsStreamURLUsesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestElevenLabsStreamURLUsesReferenceTextNormalizationOverride(t *testing.T) {
+	provider, err := NewElevenLabsTTS("test-key", "", "", WithElevenLabsApplyTextNormalization("off"))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	parsed, err := url.Parse(buildElevenLabsStreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	if parsed.Query().Get("apply_text_normalization") != "off" {
+		t.Fatalf("apply_text_normalization = %q, want off", parsed.Query().Get("apply_text_normalization"))
+	}
+}
+
 func TestElevenLabsTTSAutoModeDefaultMatchesReference(t *testing.T) {
 	provider, err := NewElevenLabsTTS("test-key", "", "")
 	if err != nil {
