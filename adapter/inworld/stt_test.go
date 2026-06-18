@@ -4,7 +4,9 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
@@ -160,6 +162,51 @@ func TestInworldSTTOutboundMessagesMatchReference(t *testing.T) {
 	}
 	if _, ok := buildInworldSTTCloseStreamMessage()["closeStream"]; !ok {
 		t.Fatalf("closeStream message missing key")
+	}
+}
+
+func TestInworldSTTStreamFlushReportsReferenceUsage(t *testing.T) {
+	var sent []map[string]any
+	stream := &inworldSTTStream{
+		events: make(chan *stt.SpeechEvent, 10),
+		state:  &inworldSTTStreamState{language: "en-US", requestID: "req-usage"},
+		sendMessage: func(message map[string]any) error {
+			sent = append(sent, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 160*2),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if len(sent) != 2 {
+		t.Fatalf("sent messages = %d, want audioChunk and endTurn", len(sent))
+	}
+	if _, ok := sent[1]["endTurn"]; !ok {
+		t.Fatalf("second message = %#v, want endTurn", sent[1])
+	}
+
+	select {
+	case event := <-stream.events:
+		if event.Type != stt.SpeechEventRecognitionUsage {
+			t.Fatalf("event type = %s, want recognition_usage", event.Type)
+		}
+		if event.RecognitionUsage == nil {
+			t.Fatal("recognition usage = nil, want audio duration")
+		}
+		if event.RecognitionUsage.AudioDuration != 0.01 {
+			t.Fatalf("audio duration = %v, want 0.01", event.RecognitionUsage.AudioDuration)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for recognition_usage after Flush")
 	}
 }
 

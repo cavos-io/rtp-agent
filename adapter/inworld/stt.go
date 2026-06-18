@@ -171,11 +171,12 @@ func (s *InworldSTT) Stream(ctx context.Context, language string) (stt.Recognize
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &inworldSTTStream{
-		conn:   conn,
-		events: make(chan *stt.SpeechEvent, 100),
-		errCh:  make(chan error, 1),
-		ctx:    streamCtx,
-		cancel: cancel,
+		conn:        conn,
+		events:      make(chan *stt.SpeechEvent, 100),
+		errCh:       make(chan error, 1),
+		ctx:         streamCtx,
+		cancel:      cancel,
+		sendMessage: func(message map[string]any) error { return writeInworldSTTMessage(conn, message) },
 		state: &inworldSTTStreamState{
 			language:  requestLanguage,
 			requestID: shortInworldSTTRequestID(),
@@ -190,11 +191,13 @@ func (s *InworldSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, 
 }
 
 type inworldSTTStream struct {
-	conn   *websocket.Conn
-	events chan *stt.SpeechEvent
-	errCh  chan error
-	mu     sync.Mutex
-	closed bool
+	conn          *websocket.Conn
+	events        chan *stt.SpeechEvent
+	errCh         chan error
+	mu            sync.Mutex
+	closed        bool
+	audioDuration float64
+	sendMessage   func(map[string]any) error
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -205,11 +208,46 @@ func (s *inworldSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	return writeInworldSTTMessage(s.conn, buildInworldSTTAudioChunkMessage(frame.Data))
+	s.addAudioDuration(frame)
+	return s.writeMessage(buildInworldSTTAudioChunkMessage(frame.Data))
 }
 
 func (s *inworldSTTStream) Flush() error {
-	return writeInworldSTTMessage(s.conn, buildInworldSTTEndTurnMessage())
+	s.flushRecognitionUsage()
+	return s.writeMessage(buildInworldSTTEndTurnMessage())
+}
+
+func (s *inworldSTTStream) writeMessage(message map[string]any) error {
+	if s.sendMessage != nil {
+		return s.sendMessage(message)
+	}
+	return writeInworldSTTMessage(s.conn, message)
+}
+
+func (s *inworldSTTStream) addAudioDuration(frame *model.AudioFrame) {
+	if frame == nil || frame.SampleRate == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.audioDuration += float64(frame.SamplesPerChannel) / float64(frame.SampleRate)
+}
+
+func (s *inworldSTTStream) flushRecognitionUsage() {
+	s.mu.Lock()
+	duration := s.audioDuration
+	s.audioDuration = 0
+	s.mu.Unlock()
+	if duration == 0 {
+		return
+	}
+	s.events <- &stt.SpeechEvent{
+		Type:      stt.SpeechEventRecognitionUsage,
+		RequestID: s.state.requestID,
+		RecognitionUsage: &stt.RecognitionUsage{
+			AudioDuration: duration,
+		},
+	}
 }
 
 func (s *inworldSTTStream) Close() error {
@@ -220,7 +258,7 @@ func (s *inworldSTTStream) Close() error {
 	}
 	s.closed = true
 	s.cancel()
-	_ = writeInworldSTTMessage(s.conn, buildInworldSTTCloseStreamMessage())
+	_ = s.writeMessage(buildInworldSTTCloseStreamMessage())
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
 }
