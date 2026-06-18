@@ -271,6 +271,8 @@ type openaiTTSChunkedStream struct {
 	decodeErrCh    chan error
 	wavBuffer      []byte
 	wavDone        bool
+	wavHeaderDone  bool
+	wavDataLeft    int
 	wavSampleRate  uint32
 	wavChannels    uint32
 }
@@ -467,83 +469,89 @@ func (s *openaiTTSChunkedStream) nextWAVFrame(data []byte) (*model.AudioFrame, b
 		return nil, false, nil
 	}
 	s.wavBuffer = append(s.wavBuffer, data...)
-	if len(s.wavBuffer) < 12 {
+	if !s.wavHeaderDone {
+		ok, err := s.parseWAVHeader()
+		if err != nil || !ok {
+			return nil, ok, err
+		}
+	}
+	if len(s.wavBuffer) == 0 || s.wavDataLeft <= 0 {
 		return nil, false, nil
 	}
-	if string(s.wavBuffer[:4]) != "RIFF" || string(s.wavBuffer[8:12]) != "WAVE" {
-		return openAITTSDecodeWAVPCM16(s.wavBuffer)
+	emitLen := min(len(s.wavBuffer), s.wavDataLeft)
+	blockAlign := int(max(s.wavChannels*2, 1))
+	if emitLen < s.wavDataLeft {
+		emitLen -= emitLen % blockAlign
+		if emitLen == 0 {
+			return nil, false, nil
+		}
 	}
-	if len(s.wavBuffer) < 8 {
-		return nil, false, nil
+	pcm := s.wavBuffer[:emitLen]
+	s.wavBuffer = s.wavBuffer[emitLen:]
+	s.wavDataLeft -= emitLen
+	if s.wavDataLeft == 0 {
+		s.wavDone = true
 	}
-	wavLen := int(binary.LittleEndian.Uint32(s.wavBuffer[4:8])) + 8
-	if wavLen <= 8 {
-		return nil, true, fmt.Errorf("invalid openai wav chunk size")
-	}
-	if len(s.wavBuffer) < wavLen {
-		return nil, false, nil
-	}
-	frame, ok, err := openAITTSDecodeWAVPCM16(s.wavBuffer[:wavLen])
-	if err != nil || !ok {
-		return frame, ok, err
-	}
-	s.wavDone = true
-	s.wavSampleRate = frame.SampleRate
-	s.wavChannels = frame.NumChannels
-	return frame, true, nil
+	return &model.AudioFrame{
+		Data:              pcm,
+		SampleRate:        s.wavSampleRate,
+		NumChannels:       s.wavChannels,
+		SamplesPerChannel: uint32(len(pcm)) / max(s.wavChannels*2, 1),
+	}, true, nil
 }
 
-func openAITTSDecodeWAVPCM16(data []byte) (*model.AudioFrame, bool, error) {
-	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
-		return nil, false, nil
+func (s *openaiTTSChunkedStream) parseWAVHeader() (bool, error) {
+	if len(s.wavBuffer) < 12 {
+		return false, nil
 	}
-	var sampleRate uint32
-	var channels uint32
+	if string(s.wavBuffer[:4]) != "RIFF" || string(s.wavBuffer[8:12]) != "WAVE" {
+		return false, nil
+	}
 	pos := 12
-	for pos+8 <= len(data) {
-		chunkID := string(data[pos : pos+4])
-		chunkSize := int(binary.LittleEndian.Uint32(data[pos+4 : pos+8]))
-		pos += 8
+	for pos+8 <= len(s.wavBuffer) {
+		chunkID := string(s.wavBuffer[pos : pos+4])
+		chunkSize := int(binary.LittleEndian.Uint32(s.wavBuffer[pos+4 : pos+8]))
 		if chunkSize < 0 {
-			return nil, true, fmt.Errorf("invalid openai wav chunk size")
+			return true, fmt.Errorf("invalid openai wav chunk size")
 		}
-		chunkEnd := pos + chunkSize
+		chunkDataStart := pos + 8
+		chunkEnd := chunkDataStart + chunkSize
 		switch chunkID {
 		case "fmt ":
-			if chunkSize < 16 || chunkEnd > len(data) {
-				return nil, true, fmt.Errorf("invalid openai wav fmt chunk")
+			if chunkEnd > len(s.wavBuffer) {
+				return false, nil
 			}
-			audioFormat := binary.LittleEndian.Uint16(data[pos : pos+2])
-			channels = uint32(binary.LittleEndian.Uint16(data[pos+2 : pos+4]))
-			sampleRate = binary.LittleEndian.Uint32(data[pos+4 : pos+8])
-			bitsPerSample := binary.LittleEndian.Uint16(data[pos+14 : pos+16])
+			if chunkSize < 16 {
+				return true, fmt.Errorf("invalid openai wav fmt chunk")
+			}
+			audioFormat := binary.LittleEndian.Uint16(s.wavBuffer[chunkDataStart : chunkDataStart+2])
+			channels := uint32(binary.LittleEndian.Uint16(s.wavBuffer[chunkDataStart+2 : chunkDataStart+4]))
+			sampleRate := binary.LittleEndian.Uint32(s.wavBuffer[chunkDataStart+4 : chunkDataStart+8])
+			bitsPerSample := binary.LittleEndian.Uint16(s.wavBuffer[chunkDataStart+14 : chunkDataStart+16])
 			if audioFormat != 1 || bitsPerSample != 16 {
-				return nil, true, fmt.Errorf("unsupported openai wav format: audio_format=%d bits_per_sample=%d", audioFormat, bitsPerSample)
+				return true, fmt.Errorf("unsupported openai wav format: audio_format=%d bits_per_sample=%d", audioFormat, bitsPerSample)
 			}
+			s.wavSampleRate = sampleRate
+			s.wavChannels = channels
 		case "data":
-			if sampleRate == 0 || channels == 0 {
-				return nil, true, fmt.Errorf("missing openai wav format metadata")
+			if s.wavSampleRate == 0 || s.wavChannels == 0 {
+				return true, fmt.Errorf("missing openai wav format metadata")
 			}
-			if chunkEnd > len(data) {
-				chunkEnd = len(data)
+			s.wavHeaderDone = true
+			s.wavDataLeft = chunkSize
+			s.wavBuffer = s.wavBuffer[chunkDataStart:]
+			return true, nil
+		default:
+			if chunkEnd > len(s.wavBuffer) {
+				return false, nil
 			}
-			pcm := data[pos:chunkEnd]
-			return &model.AudioFrame{
-				Data:              pcm,
-				SampleRate:        sampleRate,
-				NumChannels:       channels,
-				SamplesPerChannel: uint32(len(pcm)) / max(channels*2, 1),
-			}, true, nil
-		}
-		if chunkEnd > len(data) {
-			return nil, true, fmt.Errorf("truncated openai wav chunk")
 		}
 		pos = chunkEnd
 		if chunkSize%2 == 1 {
 			pos++
 		}
 	}
-	return nil, true, fmt.Errorf("missing openai wav data chunk")
+	return false, nil
 }
 
 func (s *openaiTTSChunkedStream) feedSSEMP3Audio() {
