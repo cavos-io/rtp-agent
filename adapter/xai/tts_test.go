@@ -159,7 +159,7 @@ func TestXaiTTSSynthesizeReturnsAPIConnectionErrorOnDialTimeout(t *testing.T) {
 	}
 }
 
-func TestXaiTTSStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
+func TestXaiTTSStreamPushTextReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
 		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
@@ -171,13 +171,16 @@ func TestXaiTTSStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
 
 	provider := NewXaiTTS("test-key", "", WithXaiTTSWebsocketURL("ws://xai.test/v1/tts"))
 
-	_, err := provider.Stream(context.Background())
+	stream, err := provider.Stream(context.Background())
 	if err == nil {
-		t.Fatal("Stream error = nil, want APIConnectionError")
+		err = stream.PushText("hello world")
+	}
+	if err == nil {
+		t.Fatal("PushText error = nil, want APIConnectionError")
 	}
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
-		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("PushText error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
@@ -217,6 +220,32 @@ func TestXaiTTSStreamTokenizesTextBeforeFlush(t *testing.T) {
 	assertXaiTTSMessage(t, messages[0], "text.delta", "hello")
 	assertXaiTTSMessage(t, messages[1], "text.delta", "world")
 	assertXaiTTSMessage(t, messages[2], "text.done", "")
+}
+
+func TestXaiTTSStreamDoesNotDialBeforeInput(t *testing.T) {
+	requestURLs := make(chan string, 1)
+	handlerErr := make(chan error, 1)
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = newXaiSTTTestWebsocketDialer(t, func(_ *websocket.Conn, r *http.Request) {
+		requestURLs <- r.URL.String()
+	}, handlerErr)
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewXaiTTS("test-key", "ara", WithXaiTTSWebsocketURL("ws://xai.test/v1/tts"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case url := <-requestURLs:
+		t.Fatalf("unexpected websocket dial before input: %s", url)
+	case err := <-handlerErr:
+		t.Fatalf("unexpected handler error before input: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
 }
 
 func TestXaiTTSSynthesizeTokenizesTextBeforeDone(t *testing.T) {
@@ -285,11 +314,11 @@ func TestXaiTTSStreamReconnectsBetweenFlushSegments(t *testing.T) {
 		t.Fatalf("Stream() error = %v", err)
 	}
 	t.Cleanup(func() { _ = stream.Close() })
-	readXaiTTSRequestURL(t, requestURLs, handlerErr)
 
 	if err := stream.PushText("first segment"); err != nil {
 		t.Fatalf("PushText(first) error = %v", err)
 	}
+	readXaiTTSRequestURL(t, requestURLs, handlerErr)
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush(first) error = %v", err)
 	}
