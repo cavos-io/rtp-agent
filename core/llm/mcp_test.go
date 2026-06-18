@@ -884,8 +884,9 @@ func TestMCPServerStdioInitializedNotificationFailureLeavesUninitialized(t *test
 while IFS= read -r line; do
   case "$line" in
     *'"method":"initialize"'*)
-      printf '{"jsonrpc":"2.0","id":1,"result":{}}\n'
+      # Close the read end before responding so the initialized notification write fails deterministically.
       exec 0<&-
+      printf '{"jsonrpc":"2.0","id":1,"result":{}}\n'
       sleep 1
       exit 0
       ;;
