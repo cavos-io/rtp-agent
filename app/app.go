@@ -5943,6 +5943,12 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		return nil, nil
 	case providerOpenAI:
 		return openai.NewRealtimeModel(cfg.OpenAIAPIKey, cfg.RealtimeModel), nil
+	case providerXAI:
+		opts := []xai.XaiRealtimeOption{}
+		if cfg.RealtimeModel != "" {
+			opts = append(opts, xai.WithXaiRealtimeModel(cfg.RealtimeModel))
+		}
+		return xai.NewXaiRealtimeModel(cfg.XAIAPIKey, opts...), nil
 	case providerPhonic:
 		return phonic.NewRealtimeModel(cfg.PhonicAPIKey)
 	default:

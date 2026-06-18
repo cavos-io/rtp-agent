@@ -11374,6 +11374,28 @@ func TestDefaultConfigFromEnvSelectsPhonicRealtimeModel(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsXAIRealtimeModel(t *testing.T) {
+	t.Setenv("XAI_API_KEY", "test-xai-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "xai")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if got := llm.RealtimeModelName(app.RealtimeModel); got != "grok-voice-think-fast-1.0" {
+		t.Fatalf("Realtime model = %q, want xAI reference default", got)
+	}
+	if got := llm.RealtimeProvider(app.RealtimeModel); got != "xAI Realtime API" {
+		t.Fatalf("Realtime provider = %q, want xAI Realtime API", got)
+	}
+	if _, ok := app.Session.Assistant.(*agent.MultimodalAgent); !ok {
+		t.Fatalf("Session assistant = %T, want *agent.MultimodalAgent", app.Session.Assistant)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAnthropicLLM(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "anthropic")
