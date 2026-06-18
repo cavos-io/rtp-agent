@@ -813,7 +813,7 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 			return
 		}
 		if s.hasConnectionFailed() {
-			http.Error(w, "failed to connect to livekit", http.StatusServiceUnavailable)
+			http.Error(w, workerConnectionFailureMessage(s.Options.Transport), http.StatusServiceUnavailable)
 			return
 		}
 		if s.Options.HealthCheck != nil {
@@ -847,6 +847,13 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 		}
 	})
 	return mux
+}
+
+func workerConnectionFailureMessage(transport WorkerTransport) string {
+	if NormalizeWorkerTransport(string(transport)) == WorkerTransportLiveKit {
+		return "failed to connect to livekit"
+	}
+	return "failed to connect"
 }
 
 func (s *AgentServer) startWorkerHTTPServer() (*http.Server, error) {

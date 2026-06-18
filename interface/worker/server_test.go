@@ -408,6 +408,28 @@ func TestWorkerHTTPHandlerReportsConnectionFailure(t *testing.T) {
 	}
 }
 
+func TestWorkerHTTPHandlerReportsGenericConnectionFailureForAgora(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		Transport: WorkerTransportAgora,
+		Agora: AgoraOptions{
+			AppID:   "agora-app",
+			Channel: "support",
+		},
+	})
+	server.setConnectionFailed(true)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+
+	server.workerHTTPHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("health status = %d, want 503", rec.Code)
+	}
+	if strings.TrimSpace(rec.Body.String()) != "failed to connect" {
+		t.Fatalf("health body = %q, want generic failed connection message", rec.Body.String())
+	}
+}
+
 func TestWorkerHTTPHandlerUsesCustomHealthCheck(t *testing.T) {
 	called := false
 	server := NewAgentServer(WorkerOptions{
