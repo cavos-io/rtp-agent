@@ -1616,21 +1616,14 @@ func callWorkerRegisteredHandler(handler WorkerRegisteredHandler, workerID strin
 }
 
 func (s *AgentServer) reportActiveJobs() {
-	s.mu.Lock()
-	jobIDs := make([]string, 0, len(s.activeJobs))
-	for jobID, jobCtx := range s.activeJobs {
-		if jobCtx.IsFakeJob() {
-			continue
-		}
-		jobIDs = append(jobIDs, jobID)
-	}
-	s.mu.Unlock()
+	runningJobs := s.ActiveRunningJobs()
+	jobIDs := workerlivekit.MigratableRunningJobIDs(runningJobs)
 
 	if len(jobIDs) == 0 {
 		return
 	}
 
-	if err := s.sendWorkerMessage(workerlivekit.MigrateJobMessage(jobIDs)); err != nil {
+	if err := s.sendWorkerMessage(workerlivekit.MigrateRunningJobsMessage(runningJobs)); err != nil {
 		logger.Logger.Errorw("failed to report active jobs", err, "jobIds", jobIDs)
 	}
 }

@@ -137,3 +137,23 @@ func MigrateJobMessage(jobIDs []string) *lkprotocol.WorkerMessage {
 		},
 	}
 }
+
+func MigratableRunningJobIDs(jobs []RunningJobInfo) []string {
+	jobIDs := make([]string, 0, len(jobs))
+	for _, job := range jobs {
+		if job.FakeJob {
+			continue
+		}
+		jobID := JobID(job.Job)
+		if jobID == "" {
+			continue
+		}
+		jobIDs = append(jobIDs, jobID)
+	}
+	sort.Strings(jobIDs)
+	return jobIDs
+}
+
+func MigrateRunningJobsMessage(jobs []RunningJobInfo) *lkprotocol.WorkerMessage {
+	return MigrateJobMessage(MigratableRunningJobIDs(jobs))
+}

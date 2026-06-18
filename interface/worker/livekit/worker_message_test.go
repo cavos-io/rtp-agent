@@ -158,6 +158,38 @@ func TestMigrateJobMessageSortsJobIDsWithoutMutatingInput(t *testing.T) {
 	}
 }
 
+func TestMigratableRunningJobIDsSkipsFakeAndEmptyJobs(t *testing.T) {
+	jobs := []workerlivekit.RunningJobInfo{
+		{Job: &lkprotocol.Job{Id: "job-b"}},
+		{Job: &lkprotocol.Job{Id: "job-local"}, FakeJob: true},
+		{},
+		{Job: &lkprotocol.Job{Id: "job-a"}},
+	}
+
+	got := workerlivekit.MigratableRunningJobIDs(jobs)
+	want := []string{"job-a", "job-b"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("MigratableRunningJobIDs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestMigrateRunningJobsMessageUsesMigratableRunningJobs(t *testing.T) {
+	msg := workerlivekit.MigrateRunningJobsMessage([]workerlivekit.RunningJobInfo{
+		{Job: &lkprotocol.Job{Id: "job-b"}},
+		{Job: &lkprotocol.Job{Id: "job-local"}, FakeJob: true},
+		{Job: &lkprotocol.Job{Id: "job-a"}},
+	})
+
+	migrate := msg.GetMigrateJob()
+	if migrate == nil {
+		t.Fatal("MigrateJob message is nil")
+	}
+	want := []string{"job-a", "job-b"}
+	if !reflect.DeepEqual(migrate.JobIds, want) {
+		t.Fatalf("MigrateJob.JobIds = %#v, want %#v", migrate.JobIds, want)
+	}
+}
+
 func TestWorkerStatusMessageCarriesStatusLoadAndJobCount(t *testing.T) {
 	msg := workerlivekit.WorkerStatusMessage(lkprotocol.WorkerStatus_WS_AVAILABLE, 0.42, 2)
 
