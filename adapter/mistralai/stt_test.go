@@ -58,6 +58,14 @@ func TestMistralAISTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestMistralAISTTExposesReferenceInputSampleRate(t *testing.T) {
+	provider := NewMistralAISTT("test-key")
+
+	if got := provider.InputSampleRate(); got != 16000 {
+		t.Fatalf("InputSampleRate = %d, want reference sample rate 16000", got)
+	}
+}
+
 func TestNewMistralAISTTUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("MISTRAL_API_KEY", "env-key")
 
