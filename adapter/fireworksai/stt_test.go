@@ -77,8 +77,11 @@ func TestFireworksSTTOptionsBuildReferenceStreamURLAndHeaders(t *testing.T) {
 		t.Fatalf("parse stream url: %v", err)
 	}
 
-	if !strings.HasPrefix(streamURL.String(), "ws://fireworks.example/v1/audio_streaming") {
-		t.Fatalf("url = %q, want audio_streaming endpoint", streamURL.String())
+	if !strings.HasPrefix(streamURL.String(), "ws://fireworks.example/v1/audio/transcriptions/streaming") {
+		t.Fatalf("url = %q, want audio transcriptions streaming endpoint", streamURL.String())
+	}
+	if strings.Contains(streamURL.Path, "audio_streaming") {
+		t.Fatalf("path = %q, want reference route without legacy audio_streaming segment", streamURL.Path)
 	}
 	query := streamURL.Query()
 	assertFireworksQuery(t, query, "model", "whisper-v3")

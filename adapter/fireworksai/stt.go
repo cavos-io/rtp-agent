@@ -24,7 +24,7 @@ const (
 	defaultSampleRate         = 16000
 	defaultTextTimeoutSeconds = 1.0
 	defaultResponseFormat     = "verbose_json"
-	streamingPath             = "/audio_streaming"
+	streamingPath             = "/audio/transcriptions/streaming"
 	closeMessage              = `{"checkpoint_id":"final"}`
 )
 
