@@ -140,6 +140,26 @@ func TestTransferSIPParticipantCallsSIPAPI(t *testing.T) {
 	}
 }
 
+func TestTransferSIPParticipantByParticipantDefaultsDialtone(t *testing.T) {
+	api := &fakeSIPAPI{}
+
+	err := workerlivekit.TransferSIPParticipantByParticipant(context.Background(), api, &lkprotocol.Job{
+		Room: &lkprotocol.Room{Name: "room-a"},
+	}, "caller-a", "+15557654321")
+	if err != nil {
+		t.Fatalf("TransferSIPParticipantByParticipant() error = %v", err)
+	}
+	if api.transferRequest == nil {
+		t.Fatal("TransferSIPParticipantByParticipant() did not call SIP API")
+	}
+	if api.transferRequest.ParticipantIdentity != "caller-a" {
+		t.Fatalf("ParticipantIdentity = %q, want caller-a", api.transferRequest.ParticipantIdentity)
+	}
+	if api.transferRequest.PlayDialtone {
+		t.Fatal("PlayDialtone = true, want default false")
+	}
+}
+
 func TestTransferSIPParticipantReturnsSIPAPIError(t *testing.T) {
 	wantErr := errors.New("transfer failed")
 	api := &fakeSIPAPI{err: wantErr}

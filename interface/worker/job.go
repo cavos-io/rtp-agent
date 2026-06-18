@@ -845,13 +845,5 @@ func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, pa
 		logger.Logger.Warnw("job context TransferSIPParticipant is skipped for fake jobs", nil)
 		return nil
 	}
-	identity, err := workerlivekit.TransferSIPParticipantIdentity(participant)
-	if err != nil {
-		return err
-	}
-	playDialtone := false
-	if len(playDialtones) > 0 {
-		playDialtone = playDialtones[0]
-	}
-	return workerlivekit.TransferSIPParticipant(ctx, c.API().SIP, c.Job, identity, transferTo, playDialtone)
+	return workerlivekit.TransferSIPParticipantByParticipant(ctx, c.API().SIP, c.Job, participant, transferTo, playDialtones...)
 }

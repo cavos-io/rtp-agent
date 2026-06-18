@@ -104,3 +104,22 @@ func TransferSIPParticipant(
 	_, err := api.TransferSIPParticipant(ctx, req)
 	return err
 }
+
+func TransferSIPParticipantByParticipant(
+	ctx context.Context,
+	api SIPAPI,
+	job *lkprotocol.Job,
+	participant any,
+	transferTo string,
+	playDialtones ...bool,
+) error {
+	identity, err := TransferSIPParticipantIdentity(participant)
+	if err != nil {
+		return err
+	}
+	playDialtone := false
+	if len(playDialtones) > 0 {
+		playDialtone = playDialtones[0]
+	}
+	return TransferSIPParticipant(ctx, api, job, identity, transferTo, playDialtone)
+}
