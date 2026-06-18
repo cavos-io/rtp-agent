@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"strings"
@@ -2382,6 +2383,27 @@ func TestPipelineAgentLLMChatFailurePropagatesToRunResult(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentGeneratedReplyInterruptSuppressesCanceledLLMChatError(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := fmt.Errorf("chat request: %w", context.Canceled)
+	l := &failingPipelineLLM{err: cause}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		t.Fatalf("ErrorEvents received unexpected error = %v, want no LLM chat error on interrupted cancellation", ev.Error)
+	default:
+	}
+}
+
 func TestPipelineAgentEmitsLLMErrorEventForStreamFailure(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	cause := errors.New("llm stream failed")
@@ -2434,6 +2456,34 @@ func TestPipelineAgentLLMStreamFailurePropagatesToRunResult(t *testing.T) {
 
 	if err := result.Wait(context.Background()); !errors.Is(err, cause) {
 		t.Fatalf("RunResult Wait error = %v, want LLM stream error %v", err, cause)
+	}
+}
+
+func TestPipelineAgentGeneratedReplyInterruptSuppressesCanceledLLMStreamError(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := fmt.Errorf("stream read: %w", context.Canceled)
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "partial"}},
+			},
+			err: cause,
+		},
+	}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		t.Fatalf("ErrorEvents received unexpected error = %v, want no LLM error on interrupted cancellation", ev.Error)
+	default:
 	}
 }
 
@@ -3347,6 +3397,50 @@ func TestPipelineAgentScheduledSayRealTTSErrorStillEmittedAfterInterruptSuppress
 	}
 }
 
+func TestPipelineAgentGeneratedReplyInterruptSuppressesCanceledTTSError(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "cancel me"}},
+			},
+		},
+	}
+	blockStream := &blockingPipelineTTSStream{
+		started: make(chan struct{}),
+		unblock: make(chan struct{}),
+		err:     fmt.Errorf("Post %q: %w", "https://example.test/tts", context.Canceled),
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, &blockingPipelineTTS{stream: blockStream}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+	}()
+
+	<-blockStream.started
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+	close(blockStream.unblock)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("generateReplyWithOptions did not return after interrupted canceled TTS stream")
+	}
+	select {
+	case ev := <-session.ErrorEvents():
+		t.Fatalf("ErrorEvents received unexpected error = %v, want no TTS error on interrupted cancellation", ev.Error)
+	default:
+	}
+}
+
 func TestPipelineAgentScheduledSayPersistsAssistantTextInAgentChatContext(t *testing.T) {
 	pipelineCtx := llm.NewChatContext()
 	ttsStream := &fakePipelineTTSStream{}
@@ -3667,6 +3761,7 @@ type fakePipelineTTSStream struct {
 type blockingPipelineTTSStream struct {
 	started chan struct{}
 	unblock chan struct{}
+	err     error
 }
 
 func (b *blockingPipelineTTSStream) PushText(string) error { return nil }
@@ -3682,6 +3777,9 @@ func (b *blockingPipelineTTSStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 	}
 	<-b.unblock
+	if b.err != nil {
+		return nil, b.err
+	}
 	return nil, io.EOF
 }
 
