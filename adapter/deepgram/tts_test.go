@@ -362,6 +362,27 @@ func TestDeepgramTTSStreamCloseSendsReferenceFlushAndClose(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSStreamCloseIgnoresReferenceFlushWriteFailure(t *testing.T) {
+	writeErr := errors.New("flush write failed")
+	closed := false
+	stream := &deepgramTTSStream{
+		writeJSON: func(any) error {
+			return writeErr
+		},
+		closeConn: func() error {
+			closed = true
+			return nil
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v, want nil like reference close callback", err)
+	}
+	if !closed {
+		t.Fatal("connection not closed after close write failure")
+	}
+}
+
 func TestDeepgramTTSStreamSpeakTextKeepsReferenceTrailingSeparator(t *testing.T) {
 	var speakText string
 	stream := &deepgramTTSStream{

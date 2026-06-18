@@ -353,17 +353,12 @@ func (s *deepgramTTSStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	var firstErr error
-	if err := s.writeJSONData(map[string]interface{}{"type": "Flush"}); err != nil && firstErr == nil {
-		firstErr = err
-	}
-	if err := s.writeJSONData(map[string]interface{}{"type": "Close"}); err != nil && firstErr == nil {
-		firstErr = err
-	}
+	_ = s.writeJSONData(map[string]interface{}{"type": "Flush"})
+	_ = s.writeJSONData(map[string]interface{}{"type": "Close"})
 	if err := s.closeConnection(); err != nil {
 		return err
 	}
-	return firstErr
+	return nil
 }
 
 func (s *deepgramTTSStream) writeJSONData(v any) error {
