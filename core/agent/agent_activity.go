@@ -1448,6 +1448,9 @@ func (a *AgentActivity) OnError(err error, source any) {
 	if a == nil || a.Session == nil || err == nil {
 		return
 	}
+	if errors.Is(err, context.Canceled) {
+		return
+	}
 	a.Session.EmitError(ErrorEvent{Error: err, Source: source})
 }
 

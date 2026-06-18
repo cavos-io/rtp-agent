@@ -591,7 +591,7 @@ func (va *PipelineAgent) OnSpeechPreemptive(ctx context.Context, speech *SpeechH
 	genData, err := va.precomputeLLMGeneration(precomputeCtx, session, va.speechOptions(speech))
 	if err != nil {
 		cancel()
-		if !suppressInterruptedCanceledError(speech, err) {
+		if !suppressContextCanceledError(precomputeCtx, speech, err) {
 			logger.Logger.Errorw("preemptive LLM inference failed", err)
 			va.emitLLMError(session, err)
 		}
@@ -602,7 +602,7 @@ func (va *PipelineAgent) OnSpeechPreemptive(ctx context.Context, speech *SpeechH
 		ttsGen, err := va.startTTSGeneration(precomputeCtx, session, genData.TextCh)
 		if err != nil {
 			cancel()
-			if !suppressInterruptedCanceledError(speech, err) {
+			if !suppressContextCanceledError(precomputeCtx, speech, err) {
 				logger.Logger.Errorw("preemptive TTS inference failed", err)
 				va.emitTTSError(session, err)
 			}
@@ -643,7 +643,9 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 			logger.Logger.Errorw("TTS inference failed", err)
 			va.emitTTSError(session, err)
 		}
-		insertChatItemIfMissing(va.chatCtx, speech.Generation.AssistantMessage)
+		if !speech.IsInterrupted() {
+			insertChatItemIfMissing(va.chatCtx, speech.Generation.AssistantMessage)
+		}
 		_ = speech.MarkGenerationDone()
 		session.UpdateAgentState(AgentStateListening)
 		return
@@ -660,6 +662,21 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 
 	if session == nil {
 		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if opts.SpeechHandle != nil {
+		replyCtx, replyCancel := context.WithCancel(ctx)
+		go func() {
+			select {
+			case <-opts.SpeechHandle.interruptCh:
+				replyCancel()
+			case <-replyCtx.Done():
+			}
+		}()
+		defer replyCancel()
+		ctx = replyCtx
 	}
 
 	logger.Logger.Infow("Generating reply")
@@ -753,7 +770,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			var err error
 			genData, err = PerformLLMInference(ctx, va.LLM, inferenceCtx, selectedTools, chatOptions...)
 			if err != nil {
-				if !suppressInterruptedCanceledError(opts.SpeechHandle, err) {
+				if !suppressContextCanceledError(ctx, opts.SpeechHandle, err) {
 					logger.Logger.Errorw("LLM inference failed", err)
 					if opts.SpeechHandle != nil {
 						opts.SpeechHandle.SetRunFinalOutput(err)
@@ -775,13 +792,17 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			ttsGen, err = va.synthesizeSpeech(ctx, session, genData.TextCh, opts.SpeechHandle)
 		}
 		if err != nil {
-			if !suppressInterruptedCanceledError(opts.SpeechHandle, err) {
+			if suppressReplyContextCanceledError(ctx, opts.SpeechHandle, err) {
+				session.UpdateAgentState(AgentStateListening)
+				return
+			}
+			if !suppressContextCanceledError(ctx, opts.SpeechHandle, err) {
 				logger.Logger.Errorw("TTS inference failed", err)
 				va.emitTTSError(session, err)
 			}
 		}
 		if genData.StreamErr != nil {
-			if !suppressInterruptedCanceledError(opts.SpeechHandle, genData.StreamErr) {
+			if !suppressContextCanceledError(ctx, opts.SpeechHandle, genData.StreamErr) {
 				logger.Logger.Errorw("LLM stream failed", genData.StreamErr)
 				if opts.SpeechHandle != nil {
 					opts.SpeechHandle.SetRunFinalOutput(genData.StreamErr)
@@ -910,6 +931,9 @@ func (va *PipelineAgent) waitForAssistantPlayout(ctx context.Context, session *A
 		return
 	}
 	if _, err := playback.WaitForPlayout(ctx); err != nil {
+		if suppressContextCanceledError(ctx, speech, err) {
+			return
+		}
 		logger.Logger.Warnw("failed to wait for assistant playback", err)
 		return
 	}
@@ -920,6 +944,23 @@ func (va *PipelineAgent) waitForAssistantPlayout(ctx context.Context, session *A
 
 func suppressInterruptedCanceledError(speech *SpeechHandle, err error) bool {
 	return speech != nil && speech.IsInterrupted() && errors.Is(err, context.Canceled)
+}
+
+func suppressContextCanceledError(ctx context.Context, speech *SpeechHandle, err error) bool {
+	if !errors.Is(err, context.Canceled) {
+		return false
+	}
+	if suppressInterruptedCanceledError(speech, err) {
+		return true
+	}
+	return ctx != nil && errors.Is(ctx.Err(), context.Canceled)
+}
+
+func suppressReplyContextCanceledError(ctx context.Context, speech *SpeechHandle, err error) bool {
+	return errors.Is(err, context.Canceled) &&
+		ctx != nil &&
+		errors.Is(ctx.Err(), context.Canceled) &&
+		(speech == nil || !speech.IsInterrupted())
 }
 
 func (va *PipelineAgent) flushAssistantPlayback(session *AgentSession) {
@@ -947,7 +988,7 @@ func (va *PipelineAgent) forwardedAssistantTextAfterInterruption(ctx context.Con
 	ev, err := playback.WaitForPlayout(ctx)
 	if err != nil {
 		logger.Logger.Warnw("failed to wait for interrupted playback", err)
-		return generatedText
+		return ""
 	}
 	if session.activity != nil {
 		session.activity.holdUserTranscriptsUntil(time.Now())

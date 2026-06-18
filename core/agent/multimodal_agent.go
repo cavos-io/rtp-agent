@@ -667,7 +667,9 @@ func (ma *MultimodalAgent) consumeRealtimeGeneration(ctx context.Context, speech
 	functionCh := generation.FunctionCh
 	for messageCh != nil || functionCh != nil {
 		if speech != nil && speech.IsInterrupted() {
-			ma.syncRealtimeChatContextAfterSkippedMessages()
+			if realtimeMessagePending(messageCh) {
+				ma.syncRealtimeChatContextAfterSkippedMessages()
+			}
 			return
 		}
 		select {
@@ -682,9 +684,11 @@ func (ma *MultimodalAgent) consumeRealtimeGeneration(ctx context.Context, speech
 				ma.syncRealtimeChatContextAfterSkippedMessages()
 				return
 			}
-			ma.consumeRealtimeMessage(ctx, speech, message)
+			skipped := ma.consumeRealtimeMessage(ctx, speech, message)
 			if speech != nil && speech.IsInterrupted() {
-				ma.syncRealtimeChatContextAfterSkippedMessages()
+				if skipped {
+					ma.syncRealtimeChatContextAfterSkippedMessages()
+				}
 				return
 			}
 		case call, ok := <-functionCh:
@@ -693,7 +697,9 @@ func (ma *MultimodalAgent) consumeRealtimeGeneration(ctx context.Context, speech
 				continue
 			}
 			if speech != nil && speech.IsInterrupted() {
-				ma.syncRealtimeChatContextAfterSkippedMessages()
+				if realtimeMessagePending(messageCh) {
+					ma.syncRealtimeChatContextAfterSkippedMessages()
+				}
 				return
 			}
 			ma.executeRealtimeFunctionCall(call)
@@ -701,7 +707,7 @@ func (ma *MultimodalAgent) consumeRealtimeGeneration(ctx context.Context, speech
 	}
 }
 
-func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *SpeechHandle, message llm.MessageGeneration) {
+func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *SpeechHandle, message llm.MessageGeneration) bool {
 	var text string
 	var modalities []string
 	startedSpeaking := false
@@ -710,7 +716,7 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 	for message.TextCh != nil || message.AudioCh != nil || modalitiesCh != nil {
 		select {
 		case <-ctx.Done():
-			return
+			return false
 		case values, ok := <-modalitiesCh:
 			if !ok {
 				modalitiesCh = nil
@@ -740,7 +746,7 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 							Source: ma,
 						})
 					}
-					return
+					return false
 				}
 				if !startedSpeaking && session != nil {
 					session.UpdateAgentState(AgentStateSpeaking)
@@ -761,7 +767,7 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 					Source: ma,
 				})
 			}
-			return
+			return false
 		}
 		publishedAudio = publishedAudio || fallbackPublishedAudio
 	}
@@ -776,10 +782,16 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 	if interrupted {
 		var playback AudioPlaybackResult
 		text, playback = ma.forwardedRealtimeTextAfterInterruption(ctx, text)
-		ma.truncateInterruptedRealtimeMessage(message.MessageID, modalities, text, playback)
+		skipped := text == "" && playback.PlaybackPosition <= 0
+		if text != "" || playback.PlaybackPosition > 0 {
+			ma.truncateInterruptedRealtimeMessage(message.MessageID, modalities, text, playback)
+		}
+		if skipped {
+			return true
+		}
 	}
 	if text == "" {
-		return
+		return false
 	}
 	msg := &llm.ChatMessage{
 		ID:          message.MessageID,
@@ -797,6 +809,19 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 		ma.session.EmitConversationItemAdded(msg)
 	}
 	speech.AddChatItems(msg)
+	return false
+}
+
+func realtimeMessagePending(messageCh <-chan llm.MessageGeneration) bool {
+	if messageCh == nil {
+		return false
+	}
+	select {
+	case _, ok := <-messageCh:
+		return ok
+	default:
+		return false
+	}
 }
 
 func (ma *MultimodalAgent) publishTTSFallbackForRealtimeText(ctx context.Context, speech *SpeechHandle, text string) (bool, error) {
@@ -880,7 +905,7 @@ func (ma *MultimodalAgent) forwardedRealtimeTextAfterInterruption(ctx context.Co
 	ev, err := playback.WaitForPlayout(ctx)
 	if err != nil {
 		logger.Logger.Warnw("failed to wait for interrupted realtime playback", err)
-		return generatedText, AudioPlaybackResult{}
+		return "", AudioPlaybackResult{}
 	}
 	if ev.SynchronizedTranscript != "" {
 		if session.activity != nil {
@@ -1055,8 +1080,21 @@ func (ma *MultimodalAgent) appendRealtimeToolResult(call *llm.FunctionCall, outp
 		}
 		ma.chatCtx.Append(output)
 	}
+	var ev *FunctionToolsExecutedEvent
+	if ma.session != nil && call != nil {
+		var err error
+		ev, err = NewFunctionToolsExecutedEvent([]*llm.FunctionCall{call}, []*llm.FunctionCallOutput{output})
+		if err != nil {
+			logger.Logger.Errorw("failed to create realtime function tools executed event", err)
+			return
+		}
+		ev.ReplyRequired = true
+		ma.session.EmitFunctionToolsExecuted(*ev)
+	}
+	syncFailed := false
 	if ma.rtSession != nil && ma.chatCtx != nil {
 		if err := ma.rtSession.UpdateChatContext(ma.chatCtx); err != nil {
+			syncFailed = true
 			logger.Logger.Errorw("failed to update realtime session chat context with tool result", err)
 			if ma.session != nil {
 				ma.session.EmitError(ErrorEvent{
@@ -1064,23 +1102,18 @@ func (ma *MultimodalAgent) appendRealtimeToolResult(call *llm.FunctionCall, outp
 					Source: ma.model,
 				})
 			}
-			return
 		}
 	}
-	if ma.session == nil || call == nil {
+	if ev == nil {
 		return
 	}
-	ev, err := NewFunctionToolsExecutedEvent([]*llm.FunctionCall{call}, []*llm.FunctionCallOutput{output})
-	if err != nil {
-		logger.Logger.Errorw("failed to create realtime function tools executed event", err)
-		return
-	}
-	ev.ReplyRequired = true
-	ma.session.EmitFunctionToolsExecuted(*ev)
 	if !ev.HasToolReply() {
 		return
 	}
 	if ma.realtimeCapabilities().AutoToolReplyGeneration {
+		if syncFailed {
+			return
+		}
 		ma.installPendingRealtimeAutoToolReply()
 		return
 	}

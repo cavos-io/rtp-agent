@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -4105,6 +4106,30 @@ func TestAgentSessionStartForwardsTTSErrorsThroughActivity(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStartSuppressesCanceledTTSErrorsThroughActivity(t *testing.T) {
+	ttsSource := &fakePipelineTTS{}
+	agent := NewAgent("test")
+	agent.TTS = ttsSource
+	agent.LLM = &fakeGenerationLLM{}
+	agent.STT = &fakePipelineSTT{}
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = &fakeSessionAssistant{}
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+
+	cause := fmt.Errorf("Post %q: %w", "https://example.test/tts", context.Canceled)
+	ttsSource.EmitError(tts.TTSError{Label: "fake", Err: cause, Recoverable: true})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		t.Fatalf("ErrorEvents received %#v, want canceled TTS provider error suppressed", ev)
+	case <-time.After(25 * time.Millisecond):
+	}
+}
+
 func TestAgentSessionStartForwardsLLMErrorsThroughActivity(t *testing.T) {
 	llmSource := &fakeGenerationLLM{}
 	agent := NewAgent("test")
@@ -4139,6 +4164,30 @@ func TestAgentSessionStartForwardsLLMErrorsThroughActivity(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStartSuppressesCanceledLLMErrorsThroughActivity(t *testing.T) {
+	llmSource := &fakeGenerationLLM{}
+	agent := NewAgent("test")
+	agent.LLM = llmSource
+	agent.STT = &fakePipelineSTT{}
+	agent.VAD = &fakePipelineVAD{}
+	agent.TTS = &fakePipelineTTS{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = &fakeSessionAssistant{}
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+
+	cause := fmt.Errorf("read stream: %w", context.Canceled)
+	llmSource.EmitError(llm.NewLLMError("fake", cause, true))
+
+	select {
+	case ev := <-session.ErrorEvents():
+		t.Fatalf("ErrorEvents received %#v, want canceled LLM provider error suppressed", ev)
+	case <-time.After(25 * time.Millisecond):
+	}
+}
+
 func TestAgentSessionStartForwardsSTTErrorsThroughActivity(t *testing.T) {
 	sttSource := &fakePipelineSTT{}
 	agent := NewAgent("test")
@@ -4170,6 +4219,30 @@ func TestAgentSessionStartForwardsSTTErrorsThroughActivity(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive STT error")
+	}
+}
+
+func TestAgentSessionStartSuppressesCanceledSTTErrorsThroughActivity(t *testing.T) {
+	sttSource := &fakePipelineSTT{}
+	agent := NewAgent("test")
+	agent.STT = sttSource
+	agent.LLM = &fakeGenerationLLM{}
+	agent.VAD = &fakePipelineVAD{}
+	agent.TTS = &fakePipelineTTS{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = &fakeSessionAssistant{}
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+
+	cause := fmt.Errorf("read stream: %w", context.Canceled)
+	sttSource.EmitError(stt.NewSTTError("fake", cause, true))
+
+	select {
+	case ev := <-session.ErrorEvents():
+		t.Fatalf("ErrorEvents received %#v, want canceled STT provider error suppressed", ev)
+	case <-time.After(25 * time.Millisecond):
 	}
 }
 

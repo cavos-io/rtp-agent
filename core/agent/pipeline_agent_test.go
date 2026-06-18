@@ -2437,6 +2437,38 @@ func TestPipelineAgentPreemptiveInterruptSuppressesCanceledLLMChatError(t *testi
 	}
 }
 
+func TestPipelineAgentPreemptiveContextCancelSuppressesCanceledLLMChatError(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	l := &blockingCanceledPipelineLLM{started: make(chan struct{})}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, llm.NewChatContext())
+	agent.session = session
+	ctx, cancel := context.WithCancel(context.Background())
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.OnSpeechPreemptive(ctx, speech)
+	}()
+
+	select {
+	case <-l.started:
+	case <-time.After(time.Second):
+		t.Fatal("preemptive LLM chat did not start")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("OnSpeechPreemptive did not return after context LLM cancel")
+	}
+	select {
+	case ev := <-session.ErrorEvents():
+		t.Fatalf("ErrorEvents received unexpected error = %v, want no preemptive LLM error on context cancellation", ev.Error)
+	default:
+	}
+}
+
 func TestPipelineAgentEmitsLLMErrorEventForStreamFailure(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	cause := errors.New("llm stream failed")
@@ -2559,6 +2591,48 @@ func TestPipelineAgentPreemptiveInterruptSuppressesCanceledTTSStartupError(t *te
 	select {
 	case ev := <-session.ErrorEvents():
 		t.Fatalf("ErrorEvents received unexpected error = %v, want no preemptive TTS error on interrupted cancellation", ev.Error)
+	default:
+	}
+}
+
+func TestPipelineAgentPreemptiveContextCancelSuppressesCanceledTTSStartupError(t *testing.T) {
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "cancel preemptive tts"}},
+			},
+		},
+	}
+	ttsSource := &blockingCanceledPipelineTTS{started: make(chan struct{})}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		PreemptiveGenerationPreemptiveTTS:    true,
+		PreemptiveGenerationPreemptiveTTSSet: true,
+	})
+	agent := NewPipelineAgent(nil, nil, l, ttsSource, llm.NewChatContext())
+	agent.session = session
+	ctx, cancel := context.WithCancel(context.Background())
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.OnSpeechPreemptive(ctx, speech)
+	}()
+
+	select {
+	case <-ttsSource.started:
+	case <-time.After(time.Second):
+		t.Fatal("preemptive TTS stream did not start")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("OnSpeechPreemptive did not return after context TTS cancel")
+	}
+	select {
+	case ev := <-session.ErrorEvents():
+		t.Fatalf("ErrorEvents received unexpected error = %v, want no preemptive TTS error on context cancellation", ev.Error)
 	default:
 	}
 }
@@ -3414,10 +3488,11 @@ func TestPipelineAgentScheduledSaySkipsInterruptedSpeechBeforeSynthesis(t *testi
 }
 
 func TestPipelineAgentScheduledSayInterruptDuringSynthesisSuppressesTTSError(t *testing.T) {
+	chatCtx := llm.NewChatContext()
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	blockStream := &blockingPipelineTTSStream{started: make(chan struct{}), unblock: make(chan struct{})}
 	ttsSource := &blockingPipelineTTS{stream: blockStream}
-	agent := NewPipelineAgent(nil, nil, nil, ttsSource, llm.NewChatContext())
+	agent := NewPipelineAgent(nil, nil, nil, ttsSource, chatCtx)
 	agent.session = session
 	agent.ctx = context.Background()
 	speech := NewSpeechHandle(true, DefaultInputDetails())
@@ -3444,6 +3519,12 @@ func TestPipelineAgentScheduledSayInterruptDuringSynthesisSuppressesTTSError(t *
 	case ev := <-session.ErrorEvents():
 		t.Fatalf("ErrorEvents received unexpected error = %v, want no TTS error on interrupt", ev.Error)
 	default:
+	}
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chatCtx.Items = %#v, want no assistant commit for interrupted unheard speech", chatCtx.Items)
+	}
+	if len(speech.ChatItems()) != 0 {
+		t.Fatalf("speech.ChatItems = %#v, want no committed chat items", speech.ChatItems())
 	}
 }
 
@@ -3517,6 +3598,112 @@ func TestPipelineAgentGeneratedReplyInterruptSuppressesCanceledTTSError(t *testi
 	}
 }
 
+func TestPipelineAgentGeneratedReplyContextCancelSuppressesTTSError(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "cancel me"}},
+			},
+		},
+	}
+	blockStream := &blockingPipelineTTSStream{
+		started: make(chan struct{}),
+		unblock: make(chan struct{}),
+		err:     fmt.Errorf("Post %q: %w", "https://example.test/tts", context.Canceled),
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, &blockingPipelineTTS{stream: blockStream}, chatCtx)
+	agent.session = session
+	ctx, cancel := context.WithCancel(context.Background())
+	agent.ctx = ctx
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+	}()
+
+	<-blockStream.started
+	cancel()
+	close(blockStream.unblock)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("generateReplyWithOptions did not return after canceled context TTS stream")
+	}
+	select {
+	case ev := <-session.ErrorEvents():
+		t.Fatalf("ErrorEvents received unexpected error = %v, want no TTS error on context cancellation", ev.Error)
+	default:
+	}
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chatCtx.Items = %#v, want no assistant message for canceled unplayed speech", chatCtx.Items)
+	}
+	if len(speech.ChatItems()) != 0 {
+		t.Fatalf("speech.ChatItems = %#v, want no committed assistant message", speech.ChatItems())
+	}
+}
+
+func TestPipelineAgentScheduledReplyInterruptCancelsProviderContexts(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	l := &interruptAwarePipelineLLM{
+		blocked:  make(chan struct{}),
+		canceled: make(chan struct{}),
+	}
+	ttsSource := &interruptAwarePipelineTTS{
+		blocked:  make(chan struct{}),
+		canceled: make(chan struct{}),
+	}
+	agent := NewPipelineAgent(nil, nil, l, ttsSource, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.OnSpeechScheduled(context.Background(), speech)
+	}()
+
+	select {
+	case <-l.blocked:
+	case <-time.After(time.Second):
+		t.Fatal("LLM stream did not block waiting for cancellation")
+	}
+	select {
+	case <-ttsSource.blocked:
+	case <-time.After(time.Second):
+		t.Fatal("TTS stream did not block waiting for cancellation")
+	}
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+
+	select {
+	case <-l.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("LLM context was not canceled after speech interrupt")
+	}
+	select {
+	case <-ttsSource.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("TTS context was not canceled after speech interrupt")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("OnSpeechScheduled did not return after speech interrupt canceled providers")
+	}
+	select {
+	case ev := <-session.ErrorEvents():
+		t.Fatalf("ErrorEvents received unexpected error = %v, want no provider error on interrupted cancellation", ev.Error)
+	default:
+	}
+}
+
 func TestPipelineAgentScheduledSayPersistsAssistantTextInAgentChatContext(t *testing.T) {
 	pipelineCtx := llm.NewChatContext()
 	ttsStream := &fakePipelineTTSStream{}
@@ -3580,6 +3767,37 @@ func TestPipelineAgentInterruptedReplySkipsUnplayedAssistantText(t *testing.T) {
 
 	if len(chatCtx.Items) != 0 {
 		t.Fatalf("chatCtx.Items = %#v, want no assistant message for interrupted unplayed speech", chatCtx.Items)
+	}
+	if len(speech.ChatItems()) != 0 {
+		t.Fatalf("speech.ChatItems = %#v, want no committed assistant message", speech.ChatItems())
+	}
+}
+
+func TestPipelineAgentInterruptedReplySkipsGeneratedTextWhenPlayoutWaitCanceled(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "unconfirmed generated text"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(&fakePipelinePlaybackController{
+		err: context.Canceled,
+	})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chatCtx.Items = %#v, want no assistant message when interrupted playout wait is canceled", chatCtx.Items)
 	}
 	if len(speech.ChatItems()) != 0 {
 		t.Fatalf("speech.ChatItems = %#v, want no committed assistant message", speech.ChatItems())
@@ -3837,6 +4055,113 @@ func (b *blockingCanceledPipelineTTS) Stream(ctx context.Context) (tts.Synthesiz
 	close(b.started)
 	<-ctx.Done()
 	return nil, fmt.Errorf("Post %q: %w", "https://example.test/tts", ctx.Err())
+}
+
+type interruptAwarePipelineLLM struct {
+	blocked  chan struct{}
+	canceled chan struct{}
+}
+
+func (i *interruptAwarePipelineLLM) Chat(ctx context.Context, _ *llm.ChatContext, _ ...llm.ChatOption) (llm.LLMStream, error) {
+	return &interruptAwarePipelineLLMStream{
+		ctx:      ctx,
+		blocked:  i.blocked,
+		canceled: i.canceled,
+	}, nil
+}
+
+type interruptAwarePipelineLLMStream struct {
+	ctx      context.Context
+	blocked  chan struct{}
+	canceled chan struct{}
+	index    int
+}
+
+func (i *interruptAwarePipelineLLMStream) Next() (*llm.ChatChunk, error) {
+	if i.index == 0 {
+		i.index++
+		return &llm.ChatChunk{Delta: &llm.ChoiceDelta{Content: "cancel me"}}, nil
+	}
+	select {
+	case <-i.blocked:
+	default:
+		close(i.blocked)
+	}
+	<-i.ctx.Done()
+	select {
+	case <-i.canceled:
+	default:
+		close(i.canceled)
+	}
+	return nil, fmt.Errorf("llm stream: %w", i.ctx.Err())
+}
+
+func (i *interruptAwarePipelineLLMStream) Close() error { return nil }
+
+type interruptAwarePipelineTTS struct {
+	tts.MetricsEmitter
+	tts.ErrorEmitter
+	blocked  chan struct{}
+	canceled chan struct{}
+}
+
+func (i *interruptAwarePipelineTTS) Label() string { return "interrupt-aware-tts" }
+
+func (i *interruptAwarePipelineTTS) Capabilities() tts.TTSCapabilities {
+	return tts.TTSCapabilities{Streaming: true}
+}
+
+func (i *interruptAwarePipelineTTS) SampleRate() int { return 24000 }
+
+func (i *interruptAwarePipelineTTS) NumChannels() int { return 1 }
+
+func (i *interruptAwarePipelineTTS) Synthesize(context.Context, string) (tts.ChunkedStream, error) {
+	return nil, errors.New("Synthesize should not be called for streaming TTS")
+}
+
+func (i *interruptAwarePipelineTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	return &interruptAwarePipelineTTSStream{
+		ctx:      ctx,
+		blocked:  i.blocked,
+		canceled: i.canceled,
+	}, nil
+}
+
+type interruptAwarePipelineTTSStream struct {
+	ctx      context.Context
+	blocked  chan struct{}
+	canceled chan struct{}
+	index    int
+}
+
+func (i *interruptAwarePipelineTTSStream) PushText(string) error { return nil }
+
+func (i *interruptAwarePipelineTTSStream) Flush() error { return nil }
+
+func (i *interruptAwarePipelineTTSStream) Close() error { return nil }
+
+func (i *interruptAwarePipelineTTSStream) Next() (*tts.SynthesizedAudio, error) {
+	if i.index == 0 {
+		i.index++
+		return &tts.SynthesizedAudio{Frame: &model.AudioFrame{
+			SampleRate:        24000,
+			NumChannels:       1,
+			SamplesPerChannel: 240,
+			Data:              []byte{1, 2, 3, 4},
+		}}, nil
+	}
+	select {
+	case <-i.blocked:
+	default:
+		close(i.blocked)
+	}
+	<-i.ctx.Done()
+	select {
+	case <-i.canceled:
+	default:
+		close(i.canceled)
+	}
+	return nil, fmt.Errorf("tts stream: %w", i.ctx.Err())
 }
 
 type fakeProviderGenerationTool struct {

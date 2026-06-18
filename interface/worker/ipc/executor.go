@@ -165,11 +165,18 @@ type ProcessJobExecutor struct {
 
 	lastPong   time.Time
 	pingWriter io.Writer
+
+	shutdownAck      chan struct{}
+	shutdownAcked    bool
+	shuttingDown     chan struct{}
+	shuttingDownSeen bool
 }
 
 func NewProcessJobExecutor(id string) *ProcessJobExecutor {
 	return &ProcessJobExecutor{
-		id: id,
+		id:           id,
+		shutdownAck:  make(chan struct{}),
+		shuttingDown: make(chan struct{}),
 	}
 }
 
@@ -211,6 +218,30 @@ func (e *ProcessJobExecutor) HandlePong(PongResponse) {
 	e.mu.Unlock()
 }
 
+func (e *ProcessJobExecutor) HandleShutdownRequestAck(ShutdownRequestAck) {
+	e.mu.Lock()
+	if e.shutdownAck == nil {
+		e.shutdownAck = make(chan struct{})
+	}
+	if !e.shutdownAcked {
+		e.shutdownAcked = true
+		close(e.shutdownAck)
+	}
+	e.mu.Unlock()
+}
+
+func (e *ProcessJobExecutor) HandleShuttingDown(ShuttingDown) {
+	e.mu.Lock()
+	if e.shuttingDown == nil {
+		e.shuttingDown = make(chan struct{})
+	}
+	if !e.shuttingDownSeen {
+		e.shuttingDownSeen = true
+		close(e.shuttingDown)
+	}
+	e.mu.Unlock()
+}
+
 func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJobInfo) error {
 	e.mu.Lock()
 	if e.started {
@@ -223,6 +254,10 @@ func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJ
 	e.runningJob = &info
 	e.done = make(chan struct{})
 	e.lastPong = time.Now()
+	e.shutdownAck = make(chan struct{})
+	e.shutdownAcked = false
+	e.shuttingDown = make(chan struct{})
+	e.shuttingDownSeen = false
 	e.mu.Unlock()
 
 	exe, err := processExecutable()
@@ -360,6 +395,8 @@ func (e *ProcessJobExecutor) Close(ctx context.Context) error {
 	done := e.done
 	started := e.started
 	shutdownWriter := e.pingWriter
+	shutdownAck := e.shutdownAck
+	shuttingDown := e.shuttingDown
 	e.mu.Unlock()
 	if !started || done == nil {
 		return nil
@@ -386,15 +423,43 @@ func (e *ProcessJobExecutor) Close(ctx context.Context) error {
 		e.mu.Unlock()
 
 		if shutdownSent {
+			acked := false
 			if processShutdownGraceTimeout > 0 {
 				graceTimer := time.NewTimer(processShutdownGraceTimeout)
 				select {
 				case <-done:
 					graceTimer.Stop()
 					return nil
+				case <-shutdownAck:
+					acked = true
+					graceTimer.Stop()
 				case <-ctx.Done():
 					graceTimer.Stop()
 				case <-graceTimer.C:
+				}
+			}
+			if acked && processShutdownGraceTimeout > 0 {
+				shuttingDownTimer := time.NewTimer(processShutdownGraceTimeout)
+				select {
+				case <-done:
+					shuttingDownTimer.Stop()
+					return nil
+				case <-shuttingDown:
+					shuttingDownTimer.Stop()
+				case <-ctx.Done():
+					shuttingDownTimer.Stop()
+				case <-shuttingDownTimer.C:
+				}
+			}
+			if acked && processShutdownGraceTimeout > 0 {
+				exitTimer := time.NewTimer(processShutdownGraceTimeout)
+				select {
+				case <-done:
+					exitTimer.Stop()
+					return nil
+				case <-ctx.Done():
+					exitTimer.Stop()
+				case <-exitTimer.C:
 				}
 			}
 		}
