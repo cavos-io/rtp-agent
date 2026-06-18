@@ -328,6 +328,12 @@ func (c roomIOPlaybackController) ClearBuffer() {
 	}
 }
 
+func (c roomIOPlaybackController) Flush() {
+	if c.rio != nil {
+		c.rio.Flush()
+	}
+}
+
 func (c roomIOPlaybackController) WaitForPlayout(ctx context.Context) (agent.AudioPlaybackResult, error) {
 	if c.rio == nil {
 		return agent.AudioPlaybackResult{}, nil
