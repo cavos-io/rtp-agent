@@ -21,6 +21,16 @@ type ConnectOptions struct {
 	AutoSubscribe AutoSubscribe
 }
 
+type SDKRoom = lksdk.Room
+type RoomCallback = lksdk.RoomCallback
+type LocalParticipant = lksdk.LocalParticipant
+type RemoteParticipant = lksdk.RemoteParticipant
+type RemoteTrackPublication = lksdk.RemoteTrackPublication
+
+func NewRoom(cb *RoomCallback) *SDKRoom {
+	return lksdk.NewRoom(cb)
+}
+
 func NormalizeConnectOptions(options ...ConnectOptions) ConnectOptions {
 	opts := ConnectOptions{AutoSubscribe: AutoSubscribeSubscribeAll}
 	if len(options) > 0 {

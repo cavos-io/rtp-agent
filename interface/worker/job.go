@@ -18,8 +18,6 @@ import (
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"github.com/cavos-io/rtp-agent/library/inference"
 	"github.com/cavos-io/rtp-agent/library/logger"
-	"github.com/livekit/protocol/auth"
-	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
 var currentJobContexts sync.Map
@@ -232,7 +230,7 @@ type JobRequest = workerlivekit.JobRequest
 
 type JobContext struct {
 	Job                    *workerlivekit.Job
-	Room                   *lksdk.Room
+	Room                   *workerlivekit.SDKRoom
 	Report                 *agent.SessionReport
 	AcceptArguments        JobAcceptArguments
 	tagger                 *agent.Tagger
@@ -335,7 +333,7 @@ func (c *JobContext) LocalParticipantIdentity() string {
 	return workerlivekit.LocalParticipantIdentity(c.token, c.ParticipantIdentity())
 }
 
-func (c *JobContext) TokenClaims() (*auth.ClaimGrants, error) {
+func (c *JobContext) TokenClaims() (*workerlivekit.ClaimGrants, error) {
 	return workerlivekit.TokenClaims(c.token)
 }
 
@@ -425,23 +423,23 @@ func (c *JobContext) PublisherInfo() *workerlivekit.ParticipantInfo {
 	return workerlivekit.JobPublisher(c.Job)
 }
 
-func (c *JobContext) Agent() *lksdk.LocalParticipant {
+func (c *JobContext) Agent() *workerlivekit.LocalParticipant {
 	if c == nil {
 		return nil
 	}
 	return workerlivekit.RoomLocalParticipant(c.Room)
 }
 
-var jobContextNewRoom = lksdk.NewRoom
+var jobContextNewRoom = workerlivekit.NewRoom
 
 var jobContextRoomConnector workerlivekit.RoomConnector
 
-func (c *JobContext) NewRoom(cb *lksdk.RoomCallback, options ...ConnectOptions) *lksdk.Room {
+func (c *JobContext) NewRoom(cb *workerlivekit.RoomCallback, options ...ConnectOptions) *workerlivekit.SDKRoom {
 	opts := normalizeConnectOptions(options...)
 	return jobContextNewRoom(c.roomCallbackWithEntrypoints(cb, opts.AutoSubscribe))
 }
 
-func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback, options ...ConnectOptions) error {
+func (c *JobContext) Connect(ctx context.Context, cb *workerlivekit.RoomCallback, options ...ConnectOptions) error {
 	if c.Room != nil {
 		return nil
 	}
@@ -450,7 +448,7 @@ func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback, option
 	return c.ConnectPreparedRoom(ctx, room, opts)
 }
 
-func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *lksdk.Room, options ...ConnectOptions) error {
+func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *workerlivekit.SDKRoom, options ...ConnectOptions) error {
 	if c.Room != nil {
 		return nil
 	}
@@ -494,7 +492,7 @@ func (c *JobContext) applyAutoSubscribeOptions(mode AutoSubscribe) {
 	}
 }
 
-func (c *JobContext) roomCallbackWithEntrypoints(cb *lksdk.RoomCallback, autoSubscribe AutoSubscribe) *lksdk.RoomCallback {
+func (c *JobContext) roomCallbackWithEntrypoints(cb *workerlivekit.RoomCallback, autoSubscribe AutoSubscribe) *workerlivekit.RoomCallback {
 	return workerlivekit.RoomCallbackWithHandlers(cb, workerlivekit.RoomCallbackHandlers{
 		AutoSubscribe:          string(autoSubscribe),
 		OnParticipantConnected: c.participantAvailable,
@@ -571,7 +569,7 @@ func (c *JobContext) WaitForParticipant(
 	ctx context.Context,
 	identity string,
 	kinds ...workerlivekit.ParticipantInfoKind,
-) (*lksdk.RemoteParticipant, error) {
+) (*workerlivekit.RemoteParticipant, error) {
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
 	}
@@ -581,7 +579,7 @@ func (c *JobContext) WaitForParticipant(
 func (c *JobContext) WaitForAgent(
 	ctx context.Context,
 	agentName ...string,
-) (*lksdk.RemoteParticipant, error) {
+) (*workerlivekit.RemoteParticipant, error) {
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
 	}
@@ -592,7 +590,7 @@ func (c *JobContext) WaitForTrackPublication(
 	ctx context.Context,
 	identity string,
 	kinds ...workerlivekit.TrackType,
-) (*lksdk.RemoteTrackPublication, error) {
+) (*workerlivekit.RemoteTrackPublication, error) {
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
 	}
@@ -602,7 +600,7 @@ func (c *JobContext) WaitForTrackPublication(
 func (c *JobContext) WaitForTrackPublicationWithOptions(
 	ctx context.Context,
 	options TrackPublicationWaitOptions,
-) (*lksdk.RemoteTrackPublication, error) {
+) (*workerlivekit.RemoteTrackPublication, error) {
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
 	}

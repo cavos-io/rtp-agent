@@ -144,6 +144,25 @@ func TestJobAcceptArgumentsForJobPreservesProvidedIdentity(t *testing.T) {
 	}
 }
 
+func TestCloneRunningJobInfoCopiesAcceptAttributes(t *testing.T) {
+	info := workerlivekit.RunningJobInfo{
+		AcceptArguments: workerlivekit.JobAcceptArguments{
+			Attributes: map[string]string{"tier": "gold"},
+		},
+		Job: &lkprotocol.Job{Id: "job-a"},
+	}
+
+	clone := workerlivekit.CloneRunningJobInfo(info)
+	clone.AcceptArguments.Attributes["tier"] = "platinum"
+
+	if info.AcceptArguments.Attributes["tier"] != "gold" {
+		t.Fatalf("original tier = %q, want gold", info.AcceptArguments.Attributes["tier"])
+	}
+	if clone.Job != info.Job {
+		t.Fatal("CloneRunningJobInfo changed job pointer, want shallow job copy")
+	}
+}
+
 func TestJobRejectArgumentsDefaultTerminates(t *testing.T) {
 	got := workerlivekit.DefaultJobRejectArguments()
 

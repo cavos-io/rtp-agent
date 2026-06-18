@@ -11,6 +11,8 @@ import (
 	lkprotocol "github.com/livekit/protocol/livekit"
 )
 
+type ClaimGrants = auth.ClaimGrants
+
 func WorkerAuthToken(apiKey string, apiSecret string, ttl time.Duration) (string, error) {
 	return auth.NewAccessToken(apiKey, apiSecret).
 		SetVideoGrant(&auth.VideoGrant{Agent: true}).

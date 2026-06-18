@@ -88,6 +88,19 @@ func TestConnectOptionsOwnsAutoSubscribeMode(t *testing.T) {
 	}
 }
 
+func TestSDKRoomAliasesUseLiveKitSDKTypes(t *testing.T) {
+	callback := &workerlivekit.RoomCallback{}
+	room := workerlivekit.NewRoom(callback)
+	var sdkRoom *lksdk.Room = room
+
+	if sdkRoom == nil {
+		t.Fatal("NewRoom() = nil, want SDK room")
+	}
+	if (*lksdk.RoomCallback)(callback) != callback {
+		t.Fatal("RoomCallback alias did not preserve callback pointer")
+	}
+}
+
 func TestNormalizeConnectOptionsDefaultsAutoSubscribe(t *testing.T) {
 	opts := workerlivekit.NormalizeConnectOptions()
 

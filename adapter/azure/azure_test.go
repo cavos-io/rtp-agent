@@ -1287,6 +1287,59 @@ func TestAzureTTSStreamReportsUnsupported(t *testing.T) {
 	}
 }
 
+func TestAzureTTSChunkedStreamByteAlignment(t *testing.T) {
+	dataCh := [][]byte{
+		{0x01},
+		{0x02, 0x03},
+		{0x04, 0x05, 0x06},
+	}
+	closer := &testMultiChunkCloser{chunks: dataCh}
+	stream := &azureTTSChunkedStream{
+		body:       closer,
+		sampleRate: 24000,
+	}
+
+	audio1, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next (1) error = %v", err)
+	}
+	if !bytes.Equal(audio1.Frame.Data, []byte{0x01, 0x02}) {
+		t.Fatalf("audio1 data = %v, want [0x01, 0x02]", audio1.Frame.Data)
+	}
+
+	audio2, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next (2) error = %v", err)
+	}
+	if !bytes.Equal(audio2.Frame.Data, []byte{0x03, 0x04, 0x05, 0x06}) {
+		t.Fatalf("audio2 data = %v, want [0x03, 0x04, 0x05, 0x06]", audio2.Frame.Data)
+	}
+
+	_, err = stream.Next()
+	if err != io.EOF {
+		t.Fatalf("expected EOF, got %v", err)
+	}
+}
+
+type testMultiChunkCloser struct {
+	chunks [][]byte
+	idx    int
+}
+
+func (c *testMultiChunkCloser) Read(p []byte) (int, error) {
+	if c.idx >= len(c.chunks) {
+		return 0, io.EOF
+	}
+	chunk := c.chunks[c.idx]
+	c.idx++
+	n := copy(p, chunk)
+	return n, nil
+}
+
+func (c *testMultiChunkCloser) Close() error {
+	return nil
+}
+
 func TestAzureTTSImplementsInterface(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {
