@@ -906,6 +906,53 @@ func TestElevenLabsTTSStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSStreamProviderErrorReturnsAPIStatusError(t *testing.T) {
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runElevenLabsTTSProviderErrorWebsocketServer(serverConn, "quota exceeded", serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5", WithElevenLabsBaseURL("ws://eleven.test/v1"))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+
+	_, err = stream.Next()
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if !strings.Contains(statusErr.Error(), "quota exceeded") {
+		t.Fatalf("Next error = %v, want provider error detail", statusErr)
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test websocket server")
+	}
+}
+
 func readElevenLabsTTSStreamMessage(t *testing.T, messages <-chan map[string]any) map[string]any {
 	t.Helper()
 	select {
@@ -973,6 +1020,67 @@ func runElevenLabsClosingWebsocketServerAfterFrames(conn net.Conn, frames int, c
 	}
 	close(closed)
 	errCh <- nil
+}
+
+func runElevenLabsTTSProviderErrorWebsocketServer(conn net.Conn, providerError string, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", elevenLabsTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	init, err := readElevenLabsClientWebsocketJSONFrame(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	text, err := readElevenLabsClientWebsocketJSONFrame(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	contextID, _ := init["context_id"].(string)
+	if textContextID, _ := text["context_id"].(string); textContextID != "" {
+		contextID = textContextID
+	}
+	if contextID == "" {
+		errCh <- errors.New("missing context_id in client packets")
+		return
+	}
+	if err := writeElevenLabsServerWebsocketJSONFrame(conn, map[string]any{
+		"context_id": contextID,
+		"error":      providerError,
+	}); err != nil {
+		errCh <- err
+		return
+	}
+	errCh <- nil
+}
+
+func writeElevenLabsServerWebsocketJSONFrame(w io.Writer, msg map[string]any) error {
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	header := []byte{0x81}
+	switch length := len(payload); {
+	case length < 126:
+		header = append(header, byte(length))
+	case length <= 65535:
+		header = append(header, 126, byte(length>>8), byte(length))
+	default:
+		header = append(header, 127, byte(length>>56), byte(length>>48), byte(length>>40), byte(length>>32), byte(length>>24), byte(length>>16), byte(length>>8), byte(length))
+	}
+	if _, err := w.Write(header); err != nil {
+		return err
+	}
+	_, err = w.Write(payload)
+	return err
 }
 
 func readElevenLabsClientWebsocketFrame(reader *bufio.Reader) error {

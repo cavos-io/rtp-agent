@@ -512,7 +512,7 @@ func (s *elevenLabsStream) readLoop() {
 
 		if resp.Error != "" {
 			logger.Logger.Errorw("ElevenLabs WebSocket returned error", nil, "error", resp.Error)
-			s.sendError(fmt.Errorf("elevenlabs error: %s", resp.Error))
+			s.sendError(llm.NewAPIStatusError("Could not synthesize", -1, "", resp.Error))
 			return
 		}
 
