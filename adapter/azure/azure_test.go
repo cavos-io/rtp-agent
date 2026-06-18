@@ -818,6 +818,12 @@ func TestAzureTTSBuildsReferenceRequest(t *testing.T) {
 	if !strings.Contains(string(body), `voice name="en-US-AvaNeural"`) {
 		t.Fatalf("SSML = %q, want voice name", string(body))
 	}
+	if !strings.Contains(string(body), `xmlns="http://www.w3.org/2001/10/synthesis"`) {
+		t.Fatalf("SSML = %q, want reference synthesis namespace", string(body))
+	}
+	if !strings.Contains(string(body), `xmlns:mstts="http://www.w3.org/2001/mstts"`) {
+		t.Fatalf("SSML = %q, want reference mstts namespace", string(body))
+	}
 }
 
 func TestAzureTTSBuildsRequestWithConfiguredLanguage(t *testing.T) {
