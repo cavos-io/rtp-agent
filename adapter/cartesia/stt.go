@@ -303,6 +303,9 @@ func (s *cartesiaSTTStream) readLoop() {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			if !s.isClosed() {
+				for _, event := range cartesiaSTTUnexpectedCloseEvents(s.state) {
+					s.events <- event
+				}
 				s.errCh <- cartesiaSTTUnexpectedCloseError(err)
 			}
 			return
@@ -337,6 +340,24 @@ func cartesiaSTTUnexpectedCloseError(err error) error {
 		message += ": " + err.Error()
 	}
 	return llm.NewAPIConnectionError(message)
+}
+
+func cartesiaSTTUnexpectedCloseEvents(state *cartesiaSTTStreamState) []*stt.SpeechEvent {
+	if state == nil || state.mode != "auto" || !state.speaking {
+		return nil
+	}
+	events := []*stt.SpeechEvent{}
+	if state.speechDuration > 0 {
+		events = append(events, cartesiaUsageEvent(state))
+		state.speechDuration = 0
+	}
+	if state.currentTranscript != "" {
+		events = append(events, cartesiaTranscriptEvent(stt.SpeechEventFinalTranscript, state, state.currentTranscript))
+	}
+	events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech, RequestID: state.requestID})
+	state.speaking = false
+	state.currentTranscript = ""
+	return events
 }
 
 type cartesiaSTTStreamState struct {

@@ -240,6 +240,37 @@ func TestCartesiaSTTLegacyEventsMapTranscriptLifecycle(t *testing.T) {
 	}
 }
 
+func TestCartesiaSTTUnexpectedCloseFinalizesPartialAutoTranscript(t *testing.T) {
+	state := &cartesiaSTTStreamState{
+		language:          "en",
+		requestID:         "req-1",
+		mode:              "auto",
+		speaking:          true,
+		currentTranscript: "partial words",
+		speechDuration:    1.25,
+	}
+
+	events := cartesiaSTTUnexpectedCloseEvents(state)
+
+	if len(events) != 3 {
+		t.Fatalf("events = %d, want usage, final transcript, end of speech", len(events))
+	}
+	if events[0].Type != stt.SpeechEventRecognitionUsage || events[0].RecognitionUsage.AudioDuration != 1.25 {
+		t.Fatalf("usage event = %+v, want 1.25s usage", events[0])
+	}
+	assertCartesiaEvent(t, events, 1, stt.SpeechEventFinalTranscript, "partial words")
+	assertCartesiaEvent(t, events, 2, stt.SpeechEventEndOfSpeech, "")
+	if state.speaking {
+		t.Fatal("speaking = true after unexpected close finalization, want false")
+	}
+	if state.currentTranscript != "" {
+		t.Fatalf("current transcript = %q, want cleared", state.currentTranscript)
+	}
+	if state.speechDuration != 0 {
+		t.Fatalf("speech duration = %v, want reset", state.speechDuration)
+	}
+}
+
 func TestCartesiaSTTPushFrameBuffersReferenceAudioChunks(t *testing.T) {
 	var writes [][]byte
 	stream := &cartesiaSTTStream{
