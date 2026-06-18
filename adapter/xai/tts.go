@@ -194,10 +194,7 @@ func (s *xaiTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
-				return nil, io.EOF
-			}
-			return nil, err
+			return nil, xaiTTSUnexpectedCloseError(err)
 		}
 		if msgType != websocket.TextMessage {
 			continue
@@ -385,11 +382,8 @@ func (s *xaiTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 		msgType, payload, err := conn.ReadMessage()
 		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
-				s.clearCurrentConn(conn)
-				return nil, io.EOF
-			}
-			return nil, err
+			s.clearCurrentConn(conn)
+			return nil, xaiTTSUnexpectedCloseError(err)
 		}
 		if msgType != websocket.TextMessage {
 			continue
@@ -422,6 +416,14 @@ func (s *xaiTTSSynthesizeStream) clearCurrentConn(conn *websocket.Conn) {
 	}
 	_ = s.conn.Close()
 	s.conn = nil
+}
+
+func xaiTTSUnexpectedCloseError(err error) error {
+	message := "xAI connection closed unexpectedly"
+	if err != nil && err != io.EOF {
+		message = fmt.Sprintf("%s: %v", message, err)
+	}
+	return llm.NewAPIStatusError(message, -1, "", nil)
 }
 
 func xaiTTSAudioFromMessage(payload []byte) (*tts.SynthesizedAudio, bool, error) {

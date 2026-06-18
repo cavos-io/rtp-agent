@@ -591,8 +591,10 @@ func (va *PipelineAgent) OnSpeechPreemptive(ctx context.Context, speech *SpeechH
 	genData, err := va.precomputeLLMGeneration(precomputeCtx, session, va.speechOptions(speech))
 	if err != nil {
 		cancel()
-		logger.Logger.Errorw("preemptive LLM inference failed", err)
-		va.emitLLMError(session, err)
+		if !suppressInterruptedCanceledError(speech, err) {
+			logger.Logger.Errorw("preemptive LLM inference failed", err)
+			va.emitLLMError(session, err)
+		}
 		return
 	}
 	speech.setPrecomputedLLMGeneration(genData)
@@ -600,8 +602,10 @@ func (va *PipelineAgent) OnSpeechPreemptive(ctx context.Context, speech *SpeechH
 		ttsGen, err := va.startTTSGeneration(precomputeCtx, session, genData.TextCh)
 		if err != nil {
 			cancel()
-			logger.Logger.Errorw("preemptive TTS inference failed", err)
-			va.emitTTSError(session, err)
+			if !suppressInterruptedCanceledError(speech, err) {
+				logger.Logger.Errorw("preemptive TTS inference failed", err)
+				va.emitTTSError(session, err)
+			}
 			return
 		}
 		speech.setPrecomputedTTSGeneration(ttsGen)
@@ -749,11 +753,13 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			var err error
 			genData, err = PerformLLMInference(ctx, va.LLM, inferenceCtx, selectedTools, chatOptions...)
 			if err != nil {
-				logger.Logger.Errorw("LLM inference failed", err)
-				if opts.SpeechHandle != nil {
-					opts.SpeechHandle.SetRunFinalOutput(err)
+				if !suppressInterruptedCanceledError(opts.SpeechHandle, err) {
+					logger.Logger.Errorw("LLM inference failed", err)
+					if opts.SpeechHandle != nil {
+						opts.SpeechHandle.SetRunFinalOutput(err)
+					}
+					va.emitLLMError(session, err)
 				}
-				va.emitLLMError(session, err)
 				session.UpdateAgentState(AgentStateListening)
 				return
 			}
@@ -769,15 +775,19 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			ttsGen, err = va.synthesizeSpeech(ctx, session, genData.TextCh, opts.SpeechHandle)
 		}
 		if err != nil {
-			logger.Logger.Errorw("TTS inference failed", err)
-			va.emitTTSError(session, err)
+			if !suppressInterruptedCanceledError(opts.SpeechHandle, err) {
+				logger.Logger.Errorw("TTS inference failed", err)
+				va.emitTTSError(session, err)
+			}
 		}
 		if genData.StreamErr != nil {
-			logger.Logger.Errorw("LLM stream failed", genData.StreamErr)
-			if opts.SpeechHandle != nil {
-				opts.SpeechHandle.SetRunFinalOutput(genData.StreamErr)
+			if !suppressInterruptedCanceledError(opts.SpeechHandle, genData.StreamErr) {
+				logger.Logger.Errorw("LLM stream failed", genData.StreamErr)
+				if opts.SpeechHandle != nil {
+					opts.SpeechHandle.SetRunFinalOutput(genData.StreamErr)
+				}
+				va.emitLLMError(session, genData.StreamErr)
 			}
-			va.emitLLMError(session, genData.StreamErr)
 			session.UpdateAgentState(AgentStateListening)
 			return
 		}
@@ -906,6 +916,10 @@ func (va *PipelineAgent) waitForAssistantPlayout(ctx context.Context, session *A
 	if session.activity != nil {
 		session.activity.holdUserTranscriptsUntil(time.Now())
 	}
+}
+
+func suppressInterruptedCanceledError(speech *SpeechHandle, err error) bool {
+	return speech != nil && speech.IsInterrupted() && errors.Is(err, context.Canceled)
 }
 
 func (va *PipelineAgent) flushAssistantPlayback(session *AgentSession) {

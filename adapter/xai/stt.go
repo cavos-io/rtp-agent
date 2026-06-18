@@ -343,8 +343,8 @@ func (s *xaiSTTStream) readLoop() {
 				}
 				continue
 			}
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- err
+			if !s.isClosed() {
+				s.errCh <- xaiSTTUnexpectedCloseError(err)
 			}
 			return
 		}
@@ -433,6 +433,12 @@ func (s *xaiSTTStream) Next() (*stt.SpeechEvent, error) {
 	}
 }
 
+func (s *xaiSTTStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 func (s *xaiSTTStream) currentConn() *websocket.Conn {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -477,6 +483,14 @@ func (s *xaiSTTStream) reconnect() error {
 	s.reconnectRequested = false
 	s.mu.Unlock()
 	return nil
+}
+
+func xaiSTTUnexpectedCloseError(err error) error {
+	message := "xAI connection closed unexpectedly"
+	if err != nil && err != io.EOF {
+		message += ": " + err.Error()
+	}
+	return llm.NewAPIStatusError(message, -1, "", nil)
 }
 
 type xaiSTTStreamState struct {
