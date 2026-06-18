@@ -11,6 +11,7 @@ import (
 
 type recordingDataPublisher struct {
 	payloads [][]byte
+	closes   int
 }
 
 func (r *recordingDataPublisher) PublishData(_ context.Context, payload []byte) error {
@@ -19,6 +20,7 @@ func (r *recordingDataPublisher) PublishData(_ context.Context, payload []byte) 
 }
 
 func (r *recordingDataPublisher) Close(context.Context) error {
+	r.closes++
 	return nil
 }
 
@@ -242,6 +244,23 @@ func TestTranscriptForwarderStartIsIdempotent(t *testing.T) {
 		t.Fatalf("text = %#v, want transcript", got["text"])
 	}
 	assertPublishedPayloadCount(t, publisher, 1)
+}
+
+func TestTranscriptForwarderStopIsIdempotent(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	publisher := &recordingDataPublisher{}
+	forwarder := NewTranscriptForwarder(session, publisher, TranscriptForwarderOptions{})
+	forwarder.Start(context.Background())
+
+	if err := forwarder.Stop(context.Background()); err != nil {
+		t.Fatalf("first Stop() error = %v, want nil", err)
+	}
+	if err := forwarder.Stop(context.Background()); err != nil {
+		t.Fatalf("second Stop() error = %v, want nil", err)
+	}
+	if publisher.closes != 1 {
+		t.Fatalf("publisher closes = %d, want 1", publisher.closes)
+	}
 }
 
 func waitForPublishedTranscript(t *testing.T, publisher *recordingDataPublisher) map[string]any {

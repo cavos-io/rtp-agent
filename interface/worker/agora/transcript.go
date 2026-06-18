@@ -23,6 +23,7 @@ type TranscriptForwarder struct {
 	opts      TranscriptForwarderOptions
 
 	cancel context.CancelFunc
+	stopErr error
 	wg     sync.WaitGroup
 	start  sync.Once
 	once   sync.Once
@@ -60,16 +61,16 @@ func (f *TranscriptForwarder) Stop(ctx context.Context) error {
 	if f == nil {
 		return nil
 	}
-	if f.cancel != nil {
-		f.cancel()
-	}
 	f.once.Do(func() {
+		if f.cancel != nil {
+			f.cancel()
+		}
 		f.wg.Wait()
+		if f.publisher != nil {
+			f.stopErr = f.publisher.Close(normalizeContext(ctx))
+		}
 	})
-	if f.publisher == nil {
-		return nil
-	}
-	return f.publisher.Close(normalizeContext(ctx))
+	return f.stopErr
 }
 
 func (f *TranscriptForwarder) forwardUserTranscripts(ctx context.Context, events <-chan agent.UserInputTranscribedEvent) {
