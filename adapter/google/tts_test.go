@@ -237,7 +237,7 @@ func TestGoogleTTSUpdateOptionsMatchesReference(t *testing.T) {
 	}
 }
 
-func TestGoogleTTSUpdateOptionsPreservesExistingVoiceFields(t *testing.T) {
+func TestGoogleTTSUpdateOptionsReplacesVoiceFieldsLikeReference(t *testing.T) {
 	provider := newGoogleTTSWithClient(nil,
 		WithGoogleTTSLanguage("id-ID"),
 		WithGoogleTTSModel("gemini-custom"),
@@ -245,8 +245,11 @@ func TestGoogleTTSUpdateOptionsPreservesExistingVoiceFields(t *testing.T) {
 
 	provider.UpdateOptions(WithGoogleTTSVoice("id-ID-Standard-B"))
 
-	if provider.voice.GetLanguageCode() != "id-ID" || provider.voice.GetName() != "id-ID-Standard-B" || provider.voice.GetModelName() != "gemini-custom" {
-		t.Fatalf("voice = %+v, want updated voice with existing language and model", provider.voice)
+	if provider.voice.GetLanguageCode() != "" || provider.voice.GetName() != "id-ID-Standard-B" || provider.voice.GetModelName() != "" {
+		t.Fatalf("voice = %+v, want reference replacement with only updated voice name", provider.voice)
+	}
+	if got := provider.Model(); got != "gemini-custom" {
+		t.Fatalf("Model() = %q, want existing reference model metadata", got)
 	}
 }
 
