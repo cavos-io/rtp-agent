@@ -441,8 +441,12 @@ func TestDeepgramTTSStreamPropagatesReferenceErrorMessage(t *testing.T) {
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("error = %T %v, want APIError", err, err)
 	}
-	if apiErr.Body != "bad request" {
-		t.Fatalf("APIError body = %#v, want provider detail", apiErr.Body)
+	body, ok := apiErr.Body.(map[string]interface{})
+	if !ok {
+		t.Fatalf("APIError body = %T %#v, want provider response map", apiErr.Body, apiErr.Body)
+	}
+	if body["type"] != "Error" || body["message"] != "bad request" {
+		t.Fatalf("APIError body = %#v, want full provider response", apiErr.Body)
 	}
 }
 

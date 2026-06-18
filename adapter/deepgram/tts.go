@@ -295,12 +295,6 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 	case "Flushed":
 		s.audio <- &tts.SynthesizedAudio{IsFinal: true}
 	case "Error", "error":
-		if msg, ok := metadata["message"].(string); ok && msg != "" {
-			return llm.NewAPIError("Deepgram TTS returned error", msg, true)
-		}
-		if msg, ok := metadata["error"].(string); ok && msg != "" {
-			return llm.NewAPIError("Deepgram TTS returned error", msg, true)
-		}
 		return llm.NewAPIError("Deepgram TTS returned error", metadata, true)
 	}
 	return nil
