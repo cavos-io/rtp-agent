@@ -3,6 +3,7 @@ package livekit
 import (
 	"context"
 	"maps"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/library/inference"
@@ -287,6 +288,41 @@ func StopPendingAssignmentTimer[T PendingAssignmentTimer](pending map[string]T, 
 	}
 	timer.Stop()
 	delete(pending, jobID)
+}
+
+type PendingAcceptStoreOptions struct {
+	Pending   map[string]JobAcceptArguments
+	Timers    map[string]*time.Timer
+	JobID     string
+	Args      JobAcceptArguments
+	Timeout   time.Duration
+	OnTimeout func(jobID string, timer *time.Timer)
+}
+
+func StorePendingAccept(opts PendingAcceptStoreOptions) {
+	StopPendingAssignmentTimer(opts.Timers, opts.JobID)
+	opts.Pending[opts.JobID] = opts.Args
+	var timer *time.Timer
+	timer = time.AfterFunc(opts.Timeout, func() {
+		if opts.OnTimeout != nil {
+			opts.OnTimeout(opts.JobID, timer)
+		}
+	})
+	opts.Timers[opts.JobID] = timer
+}
+
+func ExpirePendingAccept(
+	pending map[string]JobAcceptArguments,
+	timers map[string]*time.Timer,
+	jobID string,
+	timer *time.Timer,
+) bool {
+	if timers[jobID] != timer {
+		return false
+	}
+	delete(pending, jobID)
+	delete(timers, jobID)
+	return true
 }
 
 func AcceptPendingAssignment[T PendingAssignmentTimer](

@@ -1665,21 +1665,21 @@ func (s *AgentServer) sendWorkerMessage(msg *workerlivekit.WorkerMessage) error 
 
 func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) {
 	s.mu.Lock()
-	workerlivekit.StopPendingAssignmentTimer(s.pendingTimers, jobID)
-	s.pendingAccepts[jobID] = args
-	var timer *time.Timer
-	timer = time.AfterFunc(assignmentTimeout, func() {
-		s.mu.Lock()
-		if s.pendingTimers[jobID] != timer {
+	workerlivekit.StorePendingAccept(workerlivekit.PendingAcceptStoreOptions{
+		Pending: s.pendingAccepts,
+		Timers:  s.pendingTimers,
+		JobID:   jobID,
+		Args:    args,
+		Timeout: assignmentTimeout,
+		OnTimeout: func(jobID string, timer *time.Timer) {
+			s.mu.Lock()
+			expired := workerlivekit.ExpirePendingAccept(s.pendingAccepts, s.pendingTimers, jobID, timer)
 			s.mu.Unlock()
-			return
-		}
-		delete(s.pendingAccepts, jobID)
-		delete(s.pendingTimers, jobID)
-		s.mu.Unlock()
-		logger.Logger.Warnw("assignment timed out after availability accept", nil, "jobId", jobID)
+			if expired {
+				logger.Logger.Warnw("assignment timed out after availability accept", nil, "jobId", jobID)
+			}
+		},
 	})
-	s.pendingTimers[jobID] = timer
 	s.mu.Unlock()
 }
 

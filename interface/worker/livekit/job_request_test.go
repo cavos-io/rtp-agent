@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
@@ -490,6 +491,66 @@ func TestStopPendingAssignmentTimerMissingJobLeavesTimers(t *testing.T) {
 
 	if _, exists := pending["job-b"]; !exists {
 		t.Fatal("job-b timer was removed")
+	}
+}
+
+func TestStorePendingAcceptStoresArgsAndReplacesTimer(t *testing.T) {
+	oldTimer := time.AfterFunc(time.Hour, func() {})
+	t.Cleanup(func() { oldTimer.Stop() })
+	pending := map[string]workerlivekit.JobAcceptArguments{}
+	timers := map[string]*time.Timer{"job-a": oldTimer}
+
+	workerlivekit.StorePendingAccept(workerlivekit.PendingAcceptStoreOptions{
+		Pending: pending,
+		Timers:  timers,
+		JobID:   "job-a",
+		Args:    workerlivekit.JobAcceptArguments{Identity: "agent-a"},
+		Timeout: time.Hour,
+	})
+	t.Cleanup(func() { timers["job-a"].Stop() })
+
+	if pending["job-a"].Identity != "agent-a" {
+		t.Fatalf("pending identity = %q, want agent-a", pending["job-a"].Identity)
+	}
+	if timers["job-a"] == nil {
+		t.Fatal("timer is nil, want pending assignment timer")
+	}
+	if timers["job-a"] == oldTimer {
+		t.Fatal("timer was not replaced")
+	}
+	if oldTimer.Stop() {
+		t.Fatal("old timer Stop() = true, want already stopped by replacement")
+	}
+}
+
+func TestExpirePendingAcceptDeletesOnlyMatchingTimer(t *testing.T) {
+	timer := time.AfterFunc(time.Hour, func() {})
+	otherTimer := time.AfterFunc(time.Hour, func() {})
+	t.Cleanup(func() {
+		timer.Stop()
+		otherTimer.Stop()
+	})
+	pending := map[string]workerlivekit.JobAcceptArguments{"job-a": {Identity: "agent-a"}}
+	timers := map[string]*time.Timer{"job-a": timer}
+
+	if workerlivekit.ExpirePendingAccept(pending, timers, "job-a", otherTimer) {
+		t.Fatal("ExpirePendingAccept(other timer) = true, want false")
+	}
+	if pending["job-a"].Identity != "agent-a" {
+		t.Fatalf("pending identity = %q, want agent-a", pending["job-a"].Identity)
+	}
+	if timers["job-a"] != timer {
+		t.Fatal("timer changed after non-matching expire")
+	}
+
+	if !workerlivekit.ExpirePendingAccept(pending, timers, "job-a", timer) {
+		t.Fatal("ExpirePendingAccept(matching timer) = false, want true")
+	}
+	if _, exists := pending["job-a"]; exists {
+		t.Fatal("job-a remained in pending accepts")
+	}
+	if _, exists := timers["job-a"]; exists {
+		t.Fatal("job-a timer remained pending")
 	}
 }
 
