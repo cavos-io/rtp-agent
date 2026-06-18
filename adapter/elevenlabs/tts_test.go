@@ -1099,6 +1099,59 @@ func TestElevenLabsTTSStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSStreamUnexpectedNormalCloseReturnsAPIStatusError(t *testing.T) {
+	closed := make(chan struct{})
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runElevenLabsNormalCloseWebsocketServerAfterFrames(serverConn, 2, closed, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5", WithElevenLabsBaseURL("ws://eleven.test/v1"))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for normal websocket close")
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for normal close server")
+	}
+
+	_, err = stream.Next()
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != websocket.CloseNormalClosure {
+		t.Fatalf("StatusCode = %d, want normal close code", statusErr.StatusCode)
+	}
+}
+
 func TestElevenLabsTTSStreamProviderErrorReturnsAPIStatusError(t *testing.T) {
 	serverErr := make(chan error, 1)
 	clientConn, serverConn := net.Pipe()
@@ -1213,6 +1266,29 @@ func runElevenLabsClosingWebsocketServerAfterFrames(conn net.Conn, frames int, c
 	}
 	close(closed)
 	errCh <- nil
+}
+
+func runElevenLabsNormalCloseWebsocketServerAfterFrames(conn net.Conn, frames int, closed chan<- struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", elevenLabsTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	for range frames {
+		if err := readElevenLabsClientWebsocketFrame(reader); err != nil {
+			errCh <- err
+			return
+		}
+	}
+	_, err = conn.Write([]byte{0x88, 0x02, 0x03, 0xe8})
+	close(closed)
+	errCh <- err
 }
 
 func runElevenLabsTTSProviderErrorWebsocketServer(conn net.Conn, providerError string, errCh chan<- error) {
