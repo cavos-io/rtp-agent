@@ -456,6 +456,29 @@ func TestXaiSTTStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
 	}
 }
 
+func TestXaiSTTStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
+	handlerErr := make(chan error, 1)
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = newXaiSTTTestWebsocketDialer(t, func(*websocket.Conn, *http.Request) {}, handlerErr)
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewXaiSTT("test-key", WithXaiSTTWebsocketURL("ws://xai.test/v1/stt"))
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+}
+
 func TestXaiSTTBatchResponseMapsSpeechEvent(t *testing.T) {
 	event := xaiSTTBatchSpeechEvent(true, xaiSTTResponse{
 		Text:     "hello world",
