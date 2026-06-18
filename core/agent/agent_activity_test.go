@@ -5637,6 +5637,39 @@ func TestAgentActivityAutomaticTurnCompletionConsumesPendingTranscript(t *testin
 	}
 }
 
+func TestAgentActivityVADEndOfSpeechWithoutFinalKeepsInterimTranscript(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	agent.VAD = &fakePipelineVAD{}
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	activity.speaking = true
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "interim only"}},
+	})
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called before final transcript with %q", msg.TextContent())
+	case <-time.After(40 * time.Millisecond):
+	}
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{
+		SkipReply:         true,
+		TranscriptTimeout: 1 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "interim only" {
+		t.Fatalf("CommitUserTurn transcript = %q, want interim only after VAD EOU without final", transcript)
+	}
+}
+
 func TestAgentActivityAutomaticTurnRejectsZeroConfidenceTranscript(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeSTT

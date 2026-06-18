@@ -3179,6 +3179,10 @@ func (a *AgentActivity) hasVADModel() bool {
 	return a != nil && ((a.Agent != nil && a.Agent.VAD != nil) || (a.Session != nil && a.Session.VAD != nil))
 }
 
+func (a *AgentActivity) hasSTTModel() bool {
+	return a != nil && ((a.Agent != nil && a.Agent.STT != nil) || (a.Session != nil && a.Session.STT != nil))
+}
+
 func (a *AgentActivity) realtimeTurnDetectionCapabilities() (bool, bool) {
 	if a == nil {
 		return false, false
@@ -3212,6 +3216,10 @@ func referenceTranscriptLanguage(current, language, transcript string) string {
 }
 
 func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
+	if a.hasSTTModel() && strings.TrimSpace(info.NewTranscript) == "" && a.turnDetectionMode() != TurnDetectionModeManual {
+		return
+	}
+
 	a.eouMu.Lock()
 	if a.eouCancel != nil {
 		a.eouCancel()
