@@ -763,7 +763,7 @@ func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*workerli
 }
 
 func (c *JobContext) MoveParticipant(ctx context.Context, room string, identity string, destinationRoom string) error {
-	if workerlivekit.ShouldSkipExternalAPIForFakeJob(c.IsFakeJob()) {
+	if plan := workerlivekit.MoveParticipantPlan(c.IsFakeJob()); plan.Skip {
 		logger.Logger.Warnw("job context MoveParticipant is skipped for fake jobs", nil)
 		return nil
 	}

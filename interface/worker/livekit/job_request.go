@@ -624,6 +624,14 @@ func MoveParticipantRequest(job *lkprotocol.Job, room string, identity string, d
 	}
 }
 
+type MoveParticipantPlanResult struct {
+	Skip bool
+}
+
+func MoveParticipantPlan(fakeJob bool) MoveParticipantPlanResult {
+	return MoveParticipantPlanResult{Skip: ShouldSkipExternalAPIForFakeJob(fakeJob)}
+}
+
 type MoveParticipantAPI interface {
 	MoveParticipant(context.Context, *lkprotocol.MoveParticipantRequest) (*lkprotocol.MoveParticipantResponse, error)
 }

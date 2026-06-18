@@ -1081,6 +1081,18 @@ func TestMoveParticipantRequestDefaultsDestinationRoomFromJob(t *testing.T) {
 	}
 }
 
+func TestMoveParticipantPlanSkipsFakeJobs(t *testing.T) {
+	plan := workerlivekit.MoveParticipantPlan(true)
+	if !plan.Skip {
+		t.Fatal("MoveParticipantPlan(fake).Skip = false, want true")
+	}
+
+	realPlan := workerlivekit.MoveParticipantPlan(false)
+	if realPlan.Skip {
+		t.Fatal("MoveParticipantPlan(real).Skip = true, want false")
+	}
+}
+
 func TestMoveParticipantCallsRoomAPI(t *testing.T) {
 	api := &fakeMoveParticipantAPI{}
 	err := workerlivekit.MoveParticipant(context.Background(), api, &lkprotocol.Job{
