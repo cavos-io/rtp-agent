@@ -3,6 +3,7 @@ package xai
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"mime"
@@ -117,6 +118,51 @@ func TestXaiSTTRecognizeRequestUsesReferenceMultipartFields(t *testing.T) {
 	}
 	if !bytes.Equal(file.data, []byte{0x01, 0x02}) {
 		t.Fatalf("file data = %#v, want audio bytes", file.data)
+	}
+}
+
+func TestXaiSTTRecognizeUploadsReferenceWAV(t *testing.T) {
+	var uploaded []byte
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: xaiRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		_, files := readMultipartRequest(t, r)
+		uploaded = files["file"].data
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"language":"en","segments":[{"text":"ok","start":0,"end":0.1}]}`)),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewXaiSTT("test-key", WithXaiSTTRestURL("https://xai.example/v1/stt"))
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{
+		{
+			Data:              []byte{0x01, 0x02, 0x03, 0x04},
+			SampleRate:        8000,
+			NumChannels:       1,
+			SamplesPerChannel: 2,
+		},
+	}, "en")
+	if err != nil {
+		t.Fatalf("Recognize() error = %v", err)
+	}
+
+	if len(uploaded) < 48 {
+		t.Fatalf("uploaded bytes = %d, want wav header plus pcm", len(uploaded))
+	}
+	if string(uploaded[0:4]) != "RIFF" || string(uploaded[8:12]) != "WAVE" || string(uploaded[36:40]) != "data" {
+		t.Fatalf("uploaded prefix = %q/%q/%q, want RIFF/WAVE/data", uploaded[0:4], uploaded[8:12], uploaded[36:40])
+	}
+	if got := binary.LittleEndian.Uint32(uploaded[24:28]); got != 8000 {
+		t.Fatalf("wav sample rate = %d, want 8000", got)
+	}
+	if got := binary.LittleEndian.Uint16(uploaded[22:24]); got != 1 {
+		t.Fatalf("wav channels = %d, want 1", got)
+	}
+	if got := uploaded[len(uploaded)-4:]; !bytes.Equal(got, []byte{0x01, 0x02, 0x03, 0x04}) {
+		t.Fatalf("wav payload tail = %#v, want original pcm", got)
 	}
 }
 

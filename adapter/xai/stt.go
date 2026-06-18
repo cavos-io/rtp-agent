@@ -3,6 +3,7 @@ package xai
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -208,11 +209,7 @@ func (s *XaiSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 		return nil, err
 	}
 
-	var audio bytes.Buffer
-	for _, frame := range frames {
-		audio.Write(frame.Data)
-	}
-	req, err := buildXaiSTTRecognizeRequest(ctx, s, audio.Bytes(), language)
+	req, err := buildXaiSTTRecognizeRequest(ctx, s, xaiSTTWAVBytes(frames, uint32(s.sampleRate)), language)
 	if err != nil {
 		return nil, err
 	}
@@ -233,6 +230,48 @@ func (s *XaiSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	return xaiSTTBatchSpeechEvent(s.enableDiarization, result), nil
+}
+
+func xaiSTTWAVBytes(frames []*model.AudioFrame, defaultSampleRate uint32) []byte {
+	sampleRate := defaultSampleRate
+	if sampleRate == 0 {
+		sampleRate = defaultXaiSTTSampleRate
+	}
+	numChannels := uint32(1)
+	var data bytes.Buffer
+	for _, frame := range frames {
+		if frame == nil {
+			continue
+		}
+		if frame.SampleRate > 0 && data.Len() == 0 {
+			sampleRate = frame.SampleRate
+		}
+		if frame.NumChannels > 0 && data.Len() == 0 {
+			numChannels = frame.NumChannels
+		}
+		data.Write(frame.Data)
+	}
+	pcm := data.Bytes()
+	dataSize := uint32(len(pcm))
+	blockAlign := numChannels * 2
+	byteRate := sampleRate * blockAlign
+
+	var wav bytes.Buffer
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36)+dataSize)
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(numChannels))
+	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
+	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(blockAlign))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	wav.WriteString("data")
+	_ = binary.Write(&wav, binary.LittleEndian, dataSize)
+	wav.Write(pcm)
+	return wav.Bytes()
 }
 
 func buildXaiSTTRecognizeRequest(ctx context.Context, s *XaiSTT, audio []byte, language string) (*http.Request, error) {
