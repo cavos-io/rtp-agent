@@ -432,7 +432,7 @@ var jobContextNewRoom = workerlivekit.NewRoom
 var jobContextRoomConnector workerlivekit.RoomConnector
 
 func (c *JobContext) NewRoom(cb *workerlivekit.RoomCallback, options ...ConnectOptions) *workerlivekit.SDKRoom {
-	opts := normalizeConnectOptions(options...)
+	opts := workerlivekit.NormalizeConnectOptions(options...)
 	return jobContextNewRoom(c.roomCallbackWithEntrypoints(cb, opts.AutoSubscribe))
 }
 
@@ -440,7 +440,7 @@ func (c *JobContext) Connect(ctx context.Context, cb *workerlivekit.RoomCallback
 	if c.Room != nil {
 		return nil
 	}
-	opts := normalizeConnectOptions(options...)
+	opts := workerlivekit.NormalizeConnectOptions(options...)
 	room := c.NewRoom(cb, opts)
 	return c.ConnectPreparedRoom(ctx, room, opts)
 }
@@ -455,7 +455,7 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *workerliveki
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	opts := normalizeConnectOptions(options...)
+	opts := workerlivekit.NormalizeConnectOptions(options...)
 	if err := workerlivekit.JoinPreparedRoom(ctx, workerlivekit.PreparedRoomConnectOptionsFromAcceptedJob(workerlivekit.AcceptedJobRoomConnectOptions{
 		Room:          room,
 		URL:           c.url,
@@ -475,10 +475,6 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *workerliveki
 	c.applyAutoSubscribeOptions(opts.AutoSubscribe)
 	logger.Logger.Infow("Connected to room", "room", workerlivekit.JobRoomName(c.Job))
 	return nil
-}
-
-func normalizeConnectOptions(options ...ConnectOptions) ConnectOptions {
-	return workerlivekit.NormalizeConnectOptions(options...)
 }
 
 func (c *JobContext) applyAutoSubscribeOptions(mode AutoSubscribe) {
