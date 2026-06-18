@@ -2772,6 +2772,9 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 		if task, ok := activity.AgentIntf.(interface{ Cancel() }); ok {
 			task.Cancel()
 		}
+		if err := s.toolExecutionRegistry.drain(ctx); err != nil && stopErr == nil {
+			stopErr = err
+		}
 		activity.Stop()
 	}
 	if closer, ok := assistant.(closeableSessionAssistant); ok {

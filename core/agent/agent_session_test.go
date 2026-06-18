@@ -3123,6 +3123,46 @@ func TestAgentSessionShutdownCanSkipDrain(t *testing.T) {
 	}
 }
 
+func TestAgentSessionShutdownSkipDrainCancelsCancellableRunningTools(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	tool := &blockingGenerationTool{
+		flags:   llm.ToolFlagCancellable,
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	toolCtx := llm.NewToolContext([]interface{}{tool})
+	functionCh := make(chan *llm.FunctionToolCall)
+	outputs := PerformToolExecutions(context.Background(), functionCh, toolCtx, WithToolExecutionSession(session))
+
+	functionCh <- &llm.FunctionToolCall{Name: tool.Name(), CallID: "call_lookup", Arguments: `{}`}
+	select {
+	case <-tool.started:
+	case <-testTimeout():
+		t.Fatal("tool did not start")
+	}
+
+	session.Shutdown(false)
+
+	if _, ok := session.toolExecutionRegistry.get("call_lookup"); ok {
+		close(tool.release)
+		close(functionCh)
+		t.Fatal("running tool registry still contains call after shutdown without drain")
+	}
+	close(functionCh)
+	var sawCancellation bool
+	for output := range outputs {
+		if output.FncCall.CallID == "call_lookup" && output.RawError != nil {
+			sawCancellation = true
+		}
+	}
+	if !sawCancellation {
+		t.Fatal("tool execution did not surface cancellation output")
+	}
+}
+
 func TestAgentSessionShutdownSkipDrainInterruptsRealtimeOnce(t *testing.T) {
 	agent := NewAgent("test")
 	assistant := &fakeInterruptingSessionAssistant{}
