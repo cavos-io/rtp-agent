@@ -1,6 +1,9 @@
 package livekit
 
-import "os"
+import (
+	"fmt"
+	"os"
+)
 
 type WorkerConnectionOptions struct {
 	WSURL          string
@@ -22,13 +25,13 @@ func ResolveWorkerConnectionOptions(opts WorkerConnectionOptions) WorkerConnecti
 		opts.WSURL = opts.LegacyWSURL
 	}
 	if opts.WSURL == "" {
-		opts.WSURL = getenv("LIVEKIT_URL")
+		opts.WSURL = getenv(WorkerURLEnvVar)
 	}
 	if opts.APIKey == "" {
-		opts.APIKey = getenv("LIVEKIT_API_KEY")
+		opts.APIKey = getenv(WorkerAPIKeyEnvVar)
 	}
 	if opts.APISecret == "" {
-		opts.APISecret = getenv("LIVEKIT_API_SECRET")
+		opts.APISecret = getenv(WorkerAPISecretEnvVar)
 	}
 	if opts.WorkerToken == "" {
 		opts.WorkerToken = getenv("LIVEKIT_WORKER_TOKEN")
@@ -38,4 +41,17 @@ func ResolveWorkerConnectionOptions(opts WorkerConnectionOptions) WorkerConnecti
 		opts.AgentNameIsEnv = opts.AgentName != ""
 	}
 	return opts
+}
+
+func ValidateWorkerConnectionOptions(opts WorkerConnectionOptions) error {
+	if opts.WSURL == "" {
+		return fmt.Errorf("ws_url is required, or set %s environment variable", WorkerURLEnvVar)
+	}
+	if opts.APIKey == "" {
+		return fmt.Errorf("api_key is required, or set %s environment variable", WorkerAPIKeyEnvVar)
+	}
+	if opts.APISecret == "" {
+		return fmt.Errorf("api_secret is required, or set %s environment variable", WorkerAPISecretEnvVar)
+	}
+	return nil
 }

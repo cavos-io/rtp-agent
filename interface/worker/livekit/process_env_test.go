@@ -2,6 +2,8 @@ package livekit_test
 
 import (
 	"encoding/json"
+	"errors"
+	"reflect"
 	"testing"
 
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
@@ -61,6 +63,44 @@ func TestProcessJobEnvCarriesRunningJobInfo(t *testing.T) {
 	}
 	if !running.FakeJob {
 		t.Fatal("FakeJob = false, want true")
+	}
+}
+
+func TestApplyWorkerEnvExportsLiveKitConnectionEnv(t *testing.T) {
+	values := map[string]string{}
+
+	workerlivekit.ApplyWorkerEnv(workerlivekit.WorkerEnvOptions{
+		URL:       "wss://livekit.example",
+		APIKey:    "api-key",
+		APISecret: "api-secret",
+		Setenv: func(key string, value string) error {
+			values[key] = value
+			return nil
+		},
+	})
+
+	want := map[string]string{
+		workerlivekit.WorkerURLEnvVar:       "wss://livekit.example",
+		workerlivekit.WorkerAPIKeyEnvVar:    "api-key",
+		workerlivekit.WorkerAPISecretEnvVar: "api-secret",
+	}
+	if !reflect.DeepEqual(values, want) {
+		t.Fatalf("env values = %#v, want %#v", values, want)
+	}
+}
+
+func TestApplyWorkerEnvPreservesBestEffortSetenvBehavior(t *testing.T) {
+	calls := 0
+
+	workerlivekit.ApplyWorkerEnv(workerlivekit.WorkerEnvOptions{
+		Setenv: func(string, string) error {
+			calls++
+			return errors.New("setenv failed")
+		},
+	})
+
+	if calls != 3 {
+		t.Fatalf("setenv calls = %d, want 3", calls)
 	}
 }
 

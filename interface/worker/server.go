@@ -1269,16 +1269,11 @@ func (s *AgentServer) validateRunPreconditions() error {
 	if transport == WorkerTransportAgora {
 		return s.Options.Agora.Validate()
 	}
-	if s.Options.WSRL == "" {
-		return fmt.Errorf("ws_url is required, or set LIVEKIT_URL environment variable")
-	}
-	if s.Options.APIKey == "" {
-		return fmt.Errorf("api_key is required, or set LIVEKIT_API_KEY environment variable")
-	}
-	if s.Options.APISecret == "" {
-		return fmt.Errorf("api_secret is required, or set LIVEKIT_API_SECRET environment variable")
-	}
-	return nil
+	return workerlivekit.ValidateWorkerConnectionOptions(workerlivekit.WorkerConnectionOptions{
+		WSURL:     s.Options.WSRL,
+		APIKey:    s.Options.APIKey,
+		APISecret: s.Options.APISecret,
+	})
 }
 
 func (s *AgentServer) validateUnregisteredRunPreconditions() error {
@@ -1311,9 +1306,11 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	if err := s.validateRunPreconditions(); err != nil {
 		return err
 	}
-	os.Setenv("LIVEKIT_URL", s.Options.WSRL)
-	os.Setenv("LIVEKIT_API_KEY", s.Options.APIKey)
-	os.Setenv("LIVEKIT_API_SECRET", s.Options.APISecret)
+	workerlivekit.ApplyWorkerEnv(workerlivekit.WorkerEnvOptions{
+		URL:       s.Options.WSRL,
+		APIKey:    s.Options.APIKey,
+		APISecret: s.Options.APISecret,
+	})
 
 	httpServer, err := s.startWorkerHTTPServer()
 	if err != nil {

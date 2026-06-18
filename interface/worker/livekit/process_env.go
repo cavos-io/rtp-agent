@@ -3,16 +3,37 @@ package livekit
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	lkprotocol "github.com/livekit/protocol/livekit"
 )
 
 const (
-	ProcessIDEnvVar      = "LIVEKIT_AGENT_PROCESS_ID"
-	JobJSONEnvVar        = "LIVEKIT_AGENT_JOB_JSON"
-	RunningJobJSONEnvVar = "LIVEKIT_AGENT_RUNNING_JOB_JSON"
+	WorkerURLEnvVar       = "LIVEKIT_URL"
+	WorkerAPIKeyEnvVar    = "LIVEKIT_API_KEY"
+	WorkerAPISecretEnvVar = "LIVEKIT_API_SECRET"
+	ProcessIDEnvVar       = "LIVEKIT_AGENT_PROCESS_ID"
+	JobJSONEnvVar         = "LIVEKIT_AGENT_JOB_JSON"
+	RunningJobJSONEnvVar  = "LIVEKIT_AGENT_RUNNING_JOB_JSON"
 )
+
+type WorkerEnvOptions struct {
+	URL       string
+	APIKey    string
+	APISecret string
+	Setenv    func(string, string) error
+}
+
+func ApplyWorkerEnv(opts WorkerEnvOptions) {
+	setenv := opts.Setenv
+	if setenv == nil {
+		setenv = os.Setenv
+	}
+	_ = setenv(WorkerURLEnvVar, opts.URL)
+	_ = setenv(WorkerAPIKeyEnvVar, opts.APIKey)
+	_ = setenv(WorkerAPISecretEnvVar, opts.APISecret)
+}
 
 func ProcessJobEnv(baseEnv []string, processID string, info RunningJobInfo) ([]string, error) {
 	jobJSON, err := json.Marshal(info.Job)
