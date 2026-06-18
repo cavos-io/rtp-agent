@@ -1894,12 +1894,10 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 }
 
 func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName string, participantIdentity string, options LocalJobOptions) error {
-	if options.Token != "" {
-		identity, err := workerlivekit.LocalJobTokenIdentity(options.Token)
-		if err != nil {
-			return fmt.Errorf("invalid local job token: %w", err)
-		}
-		participantIdentity = identity
+	var err error
+	participantIdentity, err = workerlivekit.LocalJobParticipantIdentityForRun(options.Token, participantIdentity)
+	if err != nil {
+		return err
 	}
 	if !options.FakeJob && participantIdentity == "" && options.Token == "" {
 		return fmt.Errorf("agent_identity is None but fake_job is False")
