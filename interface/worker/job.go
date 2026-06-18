@@ -489,12 +489,7 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *lksdk.Room, 
 }
 
 func normalizeConnectOptions(options ...ConnectOptions) ConnectOptions {
-	opts := ConnectOptions{AutoSubscribe: AutoSubscribeSubscribeAll}
-	if len(options) > 0 {
-		opts = options[0]
-	}
-	opts.AutoSubscribe = AutoSubscribe(workerlivekit.NormalizeAutoSubscribeMode(string(opts.AutoSubscribe)))
-	return opts
+	return workerlivekit.NormalizeConnectOptions(options...)
 }
 
 func (c *JobContext) applyAutoSubscribeOptions(mode AutoSubscribe) {

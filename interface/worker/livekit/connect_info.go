@@ -21,6 +21,15 @@ type ConnectOptions struct {
 	AutoSubscribe AutoSubscribe
 }
 
+func NormalizeConnectOptions(options ...ConnectOptions) ConnectOptions {
+	opts := ConnectOptions{AutoSubscribe: AutoSubscribeSubscribeAll}
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	opts.AutoSubscribe = AutoSubscribe(NormalizeAutoSubscribeMode(string(opts.AutoSubscribe)))
+	return opts
+}
+
 func ConnectInfo(opts ConnectInfoOptions) lksdk.ConnectInfo {
 	return lksdk.ConnectInfo{
 		APIKey:                opts.APIKey,

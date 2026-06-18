@@ -88,6 +88,24 @@ func TestConnectOptionsOwnsAutoSubscribeMode(t *testing.T) {
 	}
 }
 
+func TestNormalizeConnectOptionsDefaultsAutoSubscribe(t *testing.T) {
+	opts := workerlivekit.NormalizeConnectOptions()
+
+	if opts.AutoSubscribe != workerlivekit.AutoSubscribeSubscribeAll {
+		t.Fatalf("AutoSubscribe = %q, want %q", opts.AutoSubscribe, workerlivekit.AutoSubscribeSubscribeAll)
+	}
+}
+
+func TestNormalizeConnectOptionsPreservesConfiguredAutoSubscribe(t *testing.T) {
+	opts := workerlivekit.NormalizeConnectOptions(workerlivekit.ConnectOptions{
+		AutoSubscribe: workerlivekit.AutoSubscribeAudioOnly,
+	})
+
+	if opts.AutoSubscribe != workerlivekit.AutoSubscribeAudioOnly {
+		t.Fatalf("AutoSubscribe = %q, want %q", opts.AutoSubscribe, workerlivekit.AutoSubscribeAudioOnly)
+	}
+}
+
 func TestConnectRoomUsesTokenConnectorWhenTokenPresent(t *testing.T) {
 	wantRoom := lksdk.NewRoom(nil)
 	calledWithToken := false
