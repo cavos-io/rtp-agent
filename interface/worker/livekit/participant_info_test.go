@@ -130,6 +130,50 @@ func TestParticipantInfoDetailsExposeIdentityAndKind(t *testing.T) {
 	}
 }
 
+func TestParticipantInfoKindAllowedUsesParticipantKind(t *testing.T) {
+	participant := &lkprotocol.ParticipantInfo{Kind: lkprotocol.ParticipantInfo_SIP}
+	allowed := []lkprotocol.ParticipantInfo_Kind{lkprotocol.ParticipantInfo_STANDARD}
+
+	if workerlivekit.ParticipantInfoKindAllowed(allowed, participant) {
+		t.Fatal("ParticipantInfoKindAllowed() = true, want false")
+	}
+	allowed = append(allowed, lkprotocol.ParticipantInfo_SIP)
+	if !workerlivekit.ParticipantInfoKindAllowed(allowed, participant) {
+		t.Fatal("ParticipantInfoKindAllowed() = false, want true")
+	}
+}
+
+func TestParticipantEntrypointTaskKeyUsesParticipantIdentity(t *testing.T) {
+	participant := &lkprotocol.ParticipantInfo{Identity: "caller-a"}
+
+	key := workerlivekit.ParticipantEntrypointTaskKey(participant, 42)
+
+	if key.Identity != "caller-a" {
+		t.Fatalf("Identity = %q, want caller-a", key.Identity)
+	}
+	if key.Entrypoint != 42 {
+		t.Fatalf("Entrypoint = %d, want 42", key.Entrypoint)
+	}
+}
+
+func TestUpsertParticipantInfoReplacesMatchingIdentity(t *testing.T) {
+	oldInfo := &lkprotocol.ParticipantInfo{Identity: "caller-a", Name: "Old"}
+	newInfo := &lkprotocol.ParticipantInfo{Identity: "caller-a", Name: "New"}
+	otherInfo := &lkprotocol.ParticipantInfo{Identity: "caller-b", Name: "Other"}
+
+	got := workerlivekit.UpsertParticipantInfo([]*lkprotocol.ParticipantInfo{oldInfo, otherInfo}, newInfo)
+
+	if len(got) != 2 {
+		t.Fatalf("UpsertParticipantInfo() len = %d, want 2", len(got))
+	}
+	if got[0] != newInfo {
+		t.Fatal("UpsertParticipantInfo() did not replace matching participant")
+	}
+	if got[1] != otherInfo {
+		t.Fatal("UpsertParticipantInfo() changed unrelated participant")
+	}
+}
+
 func TestRoomCallbackWithHandlersPreservesParticipantCallback(t *testing.T) {
 	participant := &lksdk.RemoteParticipant{}
 	existingCalled := false

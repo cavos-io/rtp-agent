@@ -3,6 +3,7 @@ package livekit
 import (
 	"context"
 
+	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/library/inference"
 	"github.com/cavos-io/rtp-agent/library/math"
 	lkprotocol "github.com/livekit/protocol/livekit"
@@ -153,6 +154,16 @@ func JobSessionReportInfo(job *lkprotocol.Job) SessionReportInfo {
 		info.Room = room.GetName()
 	}
 	return info
+}
+
+func PopulateSessionReportWithJobMetadata(report *agent.SessionReport, job *lkprotocol.Job) {
+	if report == nil {
+		return
+	}
+	info := JobSessionReportInfo(job)
+	report.JobID = info.JobID
+	report.RoomID = info.RoomID
+	report.Room = info.Room
 }
 
 type MetricInfo struct {

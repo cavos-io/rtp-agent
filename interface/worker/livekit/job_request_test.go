@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/agent"
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"github.com/cavos-io/rtp-agent/library/inference"
 	lkprotocol "github.com/livekit/protocol/livekit"
@@ -174,6 +175,28 @@ func TestJobSessionReportInfoExposesJobAndRoomMetadata(t *testing.T) {
 	}
 	if info.Room != "room-report" {
 		t.Fatalf("JobSessionReportInfo().Room = %q, want room-report", info.Room)
+	}
+}
+
+func TestPopulateSessionReportWithJobMetadataCopiesLiveKitJobFields(t *testing.T) {
+	report := agent.NewSessionReport()
+
+	workerlivekit.PopulateSessionReportWithJobMetadata(report, &lkprotocol.Job{
+		Id: "job-report",
+		Room: &lkprotocol.Room{
+			Sid:  "RM_report",
+			Name: "room-report",
+		},
+	})
+
+	if report.JobID != "job-report" {
+		t.Fatalf("Report.JobID = %q, want job-report", report.JobID)
+	}
+	if report.RoomID != "RM_report" {
+		t.Fatalf("Report.RoomID = %q, want RM_report", report.RoomID)
+	}
+	if report.Room != "room-report" {
+		t.Fatalf("Report.Room = %q, want room-report", report.Room)
 	}
 }
 

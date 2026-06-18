@@ -1,6 +1,7 @@
 package livekit_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -130,6 +131,33 @@ func TestLocalJobTokenIdentityRejectsInvalidToken(t *testing.T) {
 	_, err := workerlivekit.LocalJobTokenIdentity("not-a-jwt")
 	if err == nil {
 		t.Fatal("LocalJobTokenIdentity(invalid token) error = nil, want error")
+	}
+}
+
+func TestLocalJobParticipantIdentityForRunPrefersToken(t *testing.T) {
+	token, err := auth.NewAccessToken("key", "secret").
+		SetIdentity("token-agent").
+		ToJWT()
+	if err != nil {
+		t.Fatalf("ToJWT() error = %v", err)
+	}
+
+	identity, err := workerlivekit.LocalJobParticipantIdentityForRun(token, "explicit-agent")
+	if err != nil {
+		t.Fatalf("LocalJobParticipantIdentityForRun() error = %v", err)
+	}
+	if identity != "token-agent" {
+		t.Fatalf("LocalJobParticipantIdentityForRun() = %q, want token-agent", identity)
+	}
+}
+
+func TestLocalJobParticipantIdentityForRunWrapsInvalidToken(t *testing.T) {
+	_, err := workerlivekit.LocalJobParticipantIdentityForRun("not-a-jwt", "explicit-agent")
+	if err == nil {
+		t.Fatal("LocalJobParticipantIdentityForRun(invalid token) error = nil, want error")
+	}
+	if got := err.Error(); !strings.Contains(got, "invalid local job token") {
+		t.Fatalf("LocalJobParticipantIdentityForRun(invalid token) error = %q, want invalid local job token", got)
 	}
 }
 

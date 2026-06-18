@@ -93,6 +93,11 @@ type ParticipantDetails struct {
 	Kind     lkprotocol.ParticipantInfo_Kind
 }
 
+type ParticipantTaskKey struct {
+	Identity   string
+	Entrypoint uintptr
+}
+
 func ParticipantInfoDetails(participant *lkprotocol.ParticipantInfo) ParticipantDetails {
 	if participant == nil {
 		return ParticipantDetails{}
@@ -101,4 +106,27 @@ func ParticipantInfoDetails(participant *lkprotocol.ParticipantInfo) Participant
 		Identity: participant.Identity,
 		Kind:     participant.Kind,
 	}
+}
+
+func ParticipantInfoKindAllowed(kinds []lkprotocol.ParticipantInfo_Kind, participant *lkprotocol.ParticipantInfo) bool {
+	return ParticipantKindAllowed(kinds, ParticipantInfoDetails(participant).Kind)
+}
+
+func ParticipantEntrypointTaskKey(participant *lkprotocol.ParticipantInfo, entrypoint uintptr) ParticipantTaskKey {
+	return ParticipantTaskKey{
+		Identity:   ParticipantInfoDetails(participant).Identity,
+		Entrypoint: entrypoint,
+	}
+}
+
+func UpsertParticipantInfo(participants []*lkprotocol.ParticipantInfo, info *lkprotocol.ParticipantInfo) []*lkprotocol.ParticipantInfo {
+	infoDetails := ParticipantInfoDetails(info)
+	for i, participant := range participants {
+		participantDetails := ParticipantInfoDetails(participant)
+		if participantDetails.Identity == infoDetails.Identity {
+			participants[i] = info
+			return participants
+		}
+	}
+	return append(participants, info)
 }

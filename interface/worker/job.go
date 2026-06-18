@@ -229,11 +229,6 @@ type participantEntrypointRegistration struct {
 	kinds      []livekit.ParticipantInfo_Kind
 }
 
-type participantEntrypointTaskKey struct {
-	identity   string
-	entrypoint uintptr
-}
-
 type JobRequest = workerlivekit.JobRequest
 
 type JobContext struct {
@@ -258,7 +253,7 @@ type JobContext struct {
 	finishOnce             sync.Once
 	participantEntrypoints []participantEntrypointRegistration
 	availableParticipants  []*livekit.ParticipantInfo
-	participantTasks       map[participantEntrypointTaskKey]struct{}
+	participantTasks       map[workerlivekit.ParticipantTaskKey]struct{}
 	participantTasksMu     sync.Mutex
 
 	api       *JobAPI
@@ -273,10 +268,7 @@ func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string
 	report := agent.NewSessionReport()
 	tagger := agent.NewTagger()
 	report.Tagger = tagger
-	reportInfo := workerlivekit.JobSessionReportInfo(job)
-	report.JobID = reportInfo.JobID
-	report.RoomID = reportInfo.RoomID
-	report.Room = reportInfo.Room
+	workerlivekit.PopulateSessionReportWithJobMetadata(report, job)
 	return &JobContext{
 		Job:            job,
 		url:            url,
@@ -410,10 +402,7 @@ func (c *JobContext) MakeSessionReport(sessions ...*agent.AgentSession) (*agent.
 	}
 
 	report := agent.NewSessionReport(session)
-	reportInfo := workerlivekit.JobSessionReportInfo(c.Job)
-	report.JobID = reportInfo.JobID
-	report.RoomID = reportInfo.RoomID
-	report.Room = reportInfo.Room
+	workerlivekit.PopulateSessionReportWithJobMetadata(report, c.Job)
 	if c.Report != nil {
 		report.RecordingOptions = c.Report.RecordingOptions
 		report.AudioRecordingPath = c.Report.AudioRecordingPath
@@ -473,7 +462,7 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *lksdk.Room, 
 		ctx = context.Background()
 	}
 	opts := normalizeConnectOptions(options...)
-	if err := workerlivekit.JoinPreparedRoom(ctx, workerlivekit.PreparedRoomConnectOptions{
+	if err := workerlivekit.JoinPreparedRoom(ctx, workerlivekit.PreparedRoomConnectOptionsFromAcceptedJob(workerlivekit.AcceptedJobRoomConnectOptions{
 		Room:          room,
 		URL:           c.url,
 		Token:         c.token,
@@ -482,13 +471,9 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *lksdk.Room, 
 		APISecret:     c.apiSecret,
 		AutoSubscribe: string(opts.AutoSubscribe),
 		Connector:     jobContextRoomConnector,
-		Accept: workerlivekit.ConnectInfoOptions{
-			ParticipantName:       c.AcceptArguments.Name,
-			ParticipantIdentity:   c.ParticipantIdentity(),
-			ParticipantMetadata:   c.AcceptArguments.Metadata,
-			ParticipantAttributes: c.AcceptArguments.Attributes,
-		},
-	}); err != nil {
+		Accept:        c.AcceptArguments,
+		Identity:      c.ParticipantIdentity(),
+	})); err != nil {
 		return err
 	}
 	c.Room = room
@@ -499,12 +484,7 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *lksdk.Room, 
 }
 
 func normalizeConnectOptions(options ...ConnectOptions) ConnectOptions {
-	opts := ConnectOptions{AutoSubscribe: AutoSubscribeSubscribeAll}
-	if len(options) > 0 {
-		opts = options[0]
-	}
-	opts.AutoSubscribe = AutoSubscribe(workerlivekit.NormalizeAutoSubscribeMode(string(opts.AutoSubscribe)))
-	return opts
+	return workerlivekit.NormalizeConnectOptions(options...)
 }
 
 func (c *JobContext) applyAutoSubscribeOptions(mode AutoSubscribe) {
@@ -535,15 +515,7 @@ func (c *JobContext) participantAvailable(participant workerlivekit.RemotePartic
 }
 
 func (c *JobContext) rememberAvailableParticipant(info *livekit.ParticipantInfo) {
-	infoDetails := workerlivekit.ParticipantInfoDetails(info)
-	for i, participant := range c.availableParticipants {
-		participantDetails := workerlivekit.ParticipantInfoDetails(participant)
-		if participantDetails.Identity == infoDetails.Identity {
-			c.availableParticipants[i] = info
-			return
-		}
-	}
-	c.availableParticipants = append(c.availableParticipants, info)
+	c.availableParticipants = workerlivekit.UpsertParticipantInfo(c.availableParticipants, info)
 }
 
 func (c *JobContext) participantsAvailable(participants []workerlivekit.RemoteParticipantView) {
@@ -589,8 +561,7 @@ func (c *JobContext) AddParticipantEntrypoint(entrypoint ParticipantEntrypoint, 
 
 func (c *JobContext) scheduleParticipantEntrypointForExistingParticipants(registration participantEntrypointRegistration) {
 	for _, participant := range c.availableParticipants {
-		participantDetails := workerlivekit.ParticipantInfoDetails(participant)
-		if !workerlivekit.ParticipantKindAllowed(registration.kinds, participantDetails.Kind) {
+		if !workerlivekit.ParticipantInfoKindAllowed(registration.kinds, participant) {
 			continue
 		}
 		c.scheduleParticipantEntrypoint(registration, participant)
@@ -662,9 +633,8 @@ func (c *JobContext) scheduleParticipantEntrypoints(participant *livekit.Partici
 	if participant == nil {
 		return
 	}
-	participantDetails := workerlivekit.ParticipantInfoDetails(participant)
 	for _, registered := range c.participantEntrypoints {
-		if !workerlivekit.ParticipantKindAllowed(registered.kinds, participantDetails.Kind) {
+		if !workerlivekit.ParticipantInfoKindAllowed(registered.kinds, participant) {
 			continue
 		}
 		c.scheduleParticipantEntrypoint(registered, participant)
@@ -676,13 +646,10 @@ func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntry
 		return
 	}
 	participantDetails := workerlivekit.ParticipantInfoDetails(participant)
-	key := participantEntrypointTaskKey{
-		identity:   participantDetails.Identity,
-		entrypoint: reflect.ValueOf(registration.entrypoint).Pointer(),
-	}
+	key := workerlivekit.ParticipantEntrypointTaskKey(participant, reflect.ValueOf(registration.entrypoint).Pointer())
 	c.participantTasksMu.Lock()
 	if c.participantTasks == nil {
-		c.participantTasks = make(map[participantEntrypointTaskKey]struct{})
+		c.participantTasks = make(map[workerlivekit.ParticipantTaskKey]struct{})
 	}
 	if _, ok := c.participantTasks[key]; ok {
 		logger.Logger.Warnw("participant entrypoint already running for participant", nil, "participant", participantDetails.Identity)

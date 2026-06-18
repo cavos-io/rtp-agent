@@ -1608,11 +1608,12 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 	dispatch := workerlivekit.ServerMessageDispatch(msg)
 	switch dispatch.Kind {
 	case workerlivekit.ServerMessageKindRegister:
-		logger.Logger.Infow("Worker Registered", "workerId", dispatch.Register.WorkerID, "serverInfo", dispatch.Register.ServerInfo)
+		event := workerlivekit.WorkerRegisteredEventFromRegisterDispatch(dispatch.Register)
+		logger.Logger.Infow("Worker Registered", "workerId", event.WorkerID, "serverInfo", event.ServerInfo)
 		s.mu.Lock()
-		s.workerID = dispatch.Register.WorkerID
+		s.workerID = event.WorkerID
 		s.mu.Unlock()
-		s.emitWorkerRegistered(dispatch.Register.WorkerID, dispatch.Register.ServerInfo)
+		s.emitWorkerRegistered(event.WorkerID, event.ServerInfo)
 		s.reportActiveJobs()
 	case workerlivekit.ServerMessageKindAvailability:
 		s.handleAvailability(ctx, dispatch.Availability)
@@ -1701,31 +1702,13 @@ func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.Avail
 	s.reserveAvailabilitySlot()
 	defer s.releaseAvailabilitySlot()
 
-	answered := false
-	jobReq := workerlivekit.NewJobRequest(
-		availability.Job,
-		func(args JobAcceptArguments) error {
-			answered = true
-			s.storePendingAccept(jobID, args)
-			msg := workerlivekit.AvailabilityResponseForAccept(
-				req,
-				args,
-				s.Options.AgentName,
-			)
-			if err := s.sendWorkerMessage(msg); err != nil {
-				return err
-			}
-			return nil
-		},
-		func(args JobRejectArguments) error {
-			answered = true
-			msg := workerlivekit.AvailabilityResponseForReject(
-				req,
-				args,
-			)
-			return s.sendWorkerMessage(msg)
-		},
-	)
+	responder := workerlivekit.NewAvailabilityResponder(workerlivekit.AvailabilityResponderOptions{
+		Request:     req,
+		AgentName:   s.Options.AgentName,
+		StoreAccept: s.storePendingAccept,
+		Send:        s.sendWorkerMessage,
+	})
+	jobReq := responder.JobRequest()
 
 	if s.requestFnc != nil {
 		if err := s.requestFnc(jobReq); err != nil {
@@ -1735,9 +1718,7 @@ func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.Avail
 		_ = jobReq.Accept(JobAcceptArguments{})
 	}
 
-	if !answered {
-		_ = jobReq.Reject(JobRejectArguments{Terminate: false})
-	}
+	_ = responder.RejectIfUnanswered(JobRejectArguments{Terminate: false})
 }
 
 func (s *AgentServer) reserveAvailabilitySlot() {
@@ -1894,18 +1875,13 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 }
 
 func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName string, participantIdentity string, options LocalJobOptions) error {
-	if options.Token != "" {
-		identity, err := workerlivekit.LocalJobTokenIdentity(options.Token)
-		if err != nil {
-			return fmt.Errorf("invalid local job token: %w", err)
-		}
-		participantIdentity = identity
+	var err error
+	participantIdentity, err = workerlivekit.LocalJobParticipantIdentityForRun(options.Token, participantIdentity)
+	if err != nil {
+		return err
 	}
-	if !options.FakeJob && participantIdentity == "" && options.Token == "" {
-		return fmt.Errorf("agent_identity is None but fake_job is False")
-	}
-	if !options.FakeJob && options.RoomInfo == nil {
-		return fmt.Errorf("room_info is None but fake_job is False")
+	if err := workerlivekit.ValidateLocalJobRunOptions(participantIdentity, options); err != nil {
+		return err
 	}
 	if s.entrypointFnc == nil {
 		return workerReferenceError(rtcSessionRequiredMessage)
@@ -2153,25 +2129,24 @@ func newLocalJobContext(roomName string, participantIdentity string, opts Worker
 
 func newLocalJobContextWithOptions(roomName string, participantIdentity string, opts WorkerOptions, options LocalJobOptions) *JobContext {
 	opts = resolveWorkerOptions(opts)
-	token := options.Token
-	participantIdentity = workerlivekit.LocalJobIdentity(token, participantIdentity, mathutil.ShortUUID)
-	job := workerlivekit.LocalRoomJob(workerlivekit.LocalRoomJobOptions{
-		RoomName: roomName,
-		RoomInfo: options.RoomInfo,
-		FakeJob:  options.FakeJob,
+	localValues := workerlivekit.LocalJobContextValues(workerlivekit.LocalJobContextValueOptions{
+		RoomName:            roomName,
+		ParticipantIdentity: participantIdentity,
+		APIKey:              opts.APIKey,
+		APISecret:           opts.APISecret,
+		TTL:                 time.Hour,
+		Options:             options,
+		NewIdentity:         mathutil.ShortUUID,
 	})
 
-	jobCtx := NewJobContext(job, opts.WSRL, opts.APIKey, opts.APISecret)
-	jobCtx.AcceptArguments = JobAcceptArguments{Identity: participantIdentity}
+	jobCtx := NewJobContext(localValues.Job, opts.WSRL, opts.APIKey, opts.APISecret)
+	jobCtx.AcceptArguments = JobAcceptArguments{Identity: localValues.ParticipantIdentity}
 	jobCtx.fakeJob = options.FakeJob
 	if hasSessionRecordingOption(options.RecordingOptions) {
 		jobCtx.InitRecording(options.RecordingOptions)
 	}
 	jobCtx.SetSessionDirectory(options.SessionDirectory)
 	jobCtx.process = NewJobProcess(JobExecutorTypeThread, opts.UserArguments, opts.HTTPProxy)
-	generatedToken, err := workerlivekit.LocalJobToken(token, opts.APIKey, opts.APISecret, participantIdentity, roomName, time.Hour)
-	if err == nil {
-		jobCtx.token = generatedToken
-	}
+	jobCtx.token = localValues.Token
 	return jobCtx
 }

@@ -26,3 +26,18 @@ func TestWorkerRegisteredHandlerReceivesLiveKitServerInfo(t *testing.T) {
 		t.Fatalf("serverInfo = %p, want %p", gotServerInfo, serverInfo)
 	}
 }
+
+func TestWorkerRegisteredEventFromRegisterDispatchPreservesServerInfo(t *testing.T) {
+	serverInfo := &lkprotocol.ServerInfo{Region: "iad"}
+	event := workerlivekit.WorkerRegisteredEventFromRegisterDispatch(workerlivekit.RegisterMessageInfo{
+		WorkerID:   "worker-a",
+		ServerInfo: serverInfo,
+	})
+
+	if event.WorkerID != "worker-a" {
+		t.Fatalf("WorkerID = %q, want worker-a", event.WorkerID)
+	}
+	if event.ServerInfo != serverInfo {
+		t.Fatalf("ServerInfo = %p, want %p", event.ServerInfo, serverInfo)
+	}
+}

@@ -1,6 +1,7 @@
 package livekit
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -98,6 +99,17 @@ func LocalJobIdentity(token string, explicitIdentity string, newIdentity func(st
 
 func LocalJobTokenIdentity(token string) (string, error) {
 	return TokenIdentity(token)
+}
+
+func LocalJobParticipantIdentityForRun(token string, participantIdentity string) (string, error) {
+	if token == "" {
+		return participantIdentity, nil
+	}
+	identity, err := LocalJobTokenIdentity(token)
+	if err != nil {
+		return "", fmt.Errorf("invalid local job token: %w", err)
+	}
+	return identity, nil
 }
 
 func LocalJobToken(existingToken string, apiKey string, apiSecret string, identity string, room string, ttl time.Duration) (string, error) {
