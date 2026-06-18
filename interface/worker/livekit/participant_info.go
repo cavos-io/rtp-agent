@@ -1,6 +1,7 @@
 package livekit
 
 import (
+	"fmt"
 	"maps"
 
 	lkprotocol "github.com/livekit/protocol/livekit"
@@ -109,6 +110,16 @@ type ParticipantEntrypointTaskPlanResult struct {
 	TaskKey     ParticipantTaskKey
 }
 
+type ParticipantEntrypointRegistrationOptions struct {
+	Entrypoint            uintptr
+	RegisteredEntrypoints []uintptr
+	Kinds                 []lkprotocol.ParticipantInfo_Kind
+}
+
+type ParticipantEntrypointRegistrationPlanResult struct {
+	Kinds []lkprotocol.ParticipantInfo_Kind
+}
+
 func ParticipantInfoDetails(participant *lkprotocol.ParticipantInfo) ParticipantDetails {
 	if participant == nil {
 		return ParticipantDetails{}
@@ -128,6 +139,17 @@ func ParticipantEntrypointTaskKey(participant *lkprotocol.ParticipantInfo, entry
 		Identity:   ParticipantInfoDetails(participant).Identity,
 		Entrypoint: entrypoint,
 	}
+}
+
+func ParticipantEntrypointRegistrationPlan(opts ParticipantEntrypointRegistrationOptions) (ParticipantEntrypointRegistrationPlanResult, error) {
+	for _, registered := range opts.RegisteredEntrypoints {
+		if registered == opts.Entrypoint {
+			return ParticipantEntrypointRegistrationPlanResult{}, fmt.Errorf("entrypoints cannot be added more than once")
+		}
+	}
+	return ParticipantEntrypointRegistrationPlanResult{
+		Kinds: DefaultParticipantKindsWhenUnset(opts.Kinds),
+	}, nil
 }
 
 func ParticipantEntrypointTaskPlan(participant *lkprotocol.ParticipantInfo, kinds []lkprotocol.ParticipantInfo_Kind, entrypoint uintptr) ParticipantEntrypointTaskPlanResult {

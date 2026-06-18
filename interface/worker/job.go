@@ -529,17 +529,22 @@ func (c *JobContext) AddParticipantEntrypoint(entrypoint ParticipantEntrypoint, 
 	if entrypoint == nil {
 		return fmt.Errorf("participant entrypoint must not be nil")
 	}
+	entrypointPointer := reflect.ValueOf(entrypoint).Pointer()
+	registeredEntrypoints := make([]uintptr, 0, len(c.participantEntrypoints))
 	for _, registered := range c.participantEntrypoints {
-		if reflect.ValueOf(registered.entrypoint).Pointer() == reflect.ValueOf(entrypoint).Pointer() {
-			return fmt.Errorf("entrypoints cannot be added more than once")
-		}
+		registeredEntrypoints = append(registeredEntrypoints, reflect.ValueOf(registered.entrypoint).Pointer())
 	}
-	if len(kinds) == 0 {
-		kinds = workerlivekit.DefaultParticipantKinds()
+	plan, err := workerlivekit.ParticipantEntrypointRegistrationPlan(workerlivekit.ParticipantEntrypointRegistrationOptions{
+		Entrypoint:            entrypointPointer,
+		RegisteredEntrypoints: registeredEntrypoints,
+		Kinds:                 kinds,
+	})
+	if err != nil {
+		return err
 	}
 	registration := participantEntrypointRegistration{
 		entrypoint: entrypoint,
-		kinds:      append([]workerlivekit.ParticipantInfoKind(nil), kinds...),
+		kinds:      plan.Kinds,
 	}
 	c.participantEntrypoints = append(c.participantEntrypoints, registration)
 	c.scheduleParticipantEntrypointForExistingParticipants(registration)
