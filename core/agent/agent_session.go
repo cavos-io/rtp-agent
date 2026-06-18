@@ -2224,7 +2224,7 @@ func (s *AgentSession) updateUserAwayTimer() {
 	}
 
 	timer := time.AfterFunc(time.Duration(timeout*float64(time.Second)), func() {
-		s.UpdateUserState(UserStateAway)
+		s.markUserAwayIfStillIdle()
 	})
 
 	s.mu.Lock()
@@ -2235,6 +2235,15 @@ func (s *AgentSession) updateUserAwayTimer() {
 	}
 	s.mu.Unlock()
 	timer.Stop()
+}
+
+func (s *AgentSession) markUserAwayIfStillIdle() {
+	s.mu.Lock()
+	shouldMarkAway := s.agentState == AgentStateListening && s.userState == UserStateListening
+	s.mu.Unlock()
+	if shouldMarkAway {
+		s.UpdateUserState(UserStateAway)
+	}
 }
 
 func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) (*SpeechHandle, error) {

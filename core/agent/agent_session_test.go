@@ -5134,6 +5134,23 @@ func TestAgentSessionCancelsUserAwayTimerWhenUserSpeaks(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStaleUserAwayTimerDoesNotMarkAwayWhenAgentSpeaking(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{UserAwayTimeout: 0.01})
+
+	session.UpdateAgentState(AgentStateSpeaking)
+	session.markUserAwayIfStillIdle()
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		t.Fatalf("unexpected user state event from stale away timer = %q -> %q", ev.OldState, ev.NewState)
+	default:
+	}
+	if got := session.UserState(); got != UserStateListening {
+		t.Fatalf("UserState() = %q, want listening after stale away timer", got)
+	}
+}
+
 func TestAgentSessionUserAwayTimerWaitsForGate(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{UserAwayTimeout: 0.01})
