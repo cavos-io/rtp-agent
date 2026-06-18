@@ -28,17 +28,18 @@ import (
 )
 
 type RealtimeModel struct {
-	apiKey        string
-	model         string
-	baseURL       string
-	dialWebsocket OpenAIRealtimeWebsocketDialer
-	toolFormatter OpenAIRealtimeToolFormatter
-	mu            sync.Mutex
-	options       llm.RealtimeSessionOptions
-	modalities    []string
-	maxSession    time.Duration
-	connect       llm.APIConnectOptions
-	sessions      map[*realtimeSession]struct{}
+	apiKey                      string
+	model                       string
+	baseURL                     string
+	dialWebsocket               OpenAIRealtimeWebsocketDialer
+	toolFormatter               OpenAIRealtimeToolFormatter
+	inputTranscriptionFinalHook OpenAIRealtimeInputTranscriptionFinalHook
+	mu                          sync.Mutex
+	options                     llm.RealtimeSessionOptions
+	modalities                  []string
+	maxSession                  time.Duration
+	connect                     llm.APIConnectOptions
+	sessions                    map[*realtimeSession]struct{}
 }
 
 type OpenAIRealtimeWebsocketDialer func(string, http.Header) (*websocket.Conn, *http.Response, error)
@@ -47,19 +48,22 @@ type openAIRealtimeWebsocketDialer = OpenAIRealtimeWebsocketDialer
 
 type OpenAIRealtimeToolFormatter func([]llm.Tool) []map[string]any
 
+type OpenAIRealtimeInputTranscriptionFinalHook func(*llm.ChatMessage, *llm.InputTranscriptionCompleted)
+
 type openAIRealtimeDialResult struct {
 	conn *websocket.Conn
 	err  error
 }
 
 type openAIRealtimeModelOptions struct {
-	sessionOptions llm.RealtimeSessionOptions
-	modalities     []string
-	baseURL        string
-	maxSession     time.Duration
-	connect        *llm.APIConnectOptions
-	dialWebsocket  OpenAIRealtimeWebsocketDialer
-	toolFormatter  OpenAIRealtimeToolFormatter
+	sessionOptions              llm.RealtimeSessionOptions
+	modalities                  []string
+	baseURL                     string
+	maxSession                  time.Duration
+	connect                     *llm.APIConnectOptions
+	dialWebsocket               OpenAIRealtimeWebsocketDialer
+	toolFormatter               OpenAIRealtimeToolFormatter
+	inputTranscriptionFinalHook OpenAIRealtimeInputTranscriptionFinalHook
 }
 
 type OpenAIRealtimeOption func(*openAIRealtimeModelOptions)
@@ -169,6 +173,12 @@ func WithOpenAIRealtimeToolFormatter(formatter OpenAIRealtimeToolFormatter) Open
 	}
 }
 
+func WithOpenAIRealtimeInputTranscriptionFinalHook(hook OpenAIRealtimeInputTranscriptionFinalHook) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.inputTranscriptionFinalHook = hook
+	}
+}
+
 func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *RealtimeModel {
 	if model == "" {
 		model = "gpt-realtime"
@@ -196,15 +206,16 @@ func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *Realt
 		dialWebsocket = options.dialWebsocket
 	}
 	return &RealtimeModel{
-		apiKey:        apiKey,
-		model:         model,
-		baseURL:       openAIRealtimeBaseURL(baseURL),
-		dialWebsocket: dialWebsocket,
-		toolFormatter: options.toolFormatter,
-		options:       options.sessionOptions,
-		modalities:    options.modalities,
-		maxSession:    options.maxSession,
-		connect:       connectOptions,
+		apiKey:                      apiKey,
+		model:                       model,
+		baseURL:                     openAIRealtimeBaseURL(baseURL),
+		dialWebsocket:               dialWebsocket,
+		toolFormatter:               options.toolFormatter,
+		inputTranscriptionFinalHook: options.inputTranscriptionFinalHook,
+		options:                     options.sessionOptions,
+		modalities:                  options.modalities,
+		maxSession:                  options.maxSession,
+		connect:                     connectOptions,
 	}
 }
 
@@ -1900,6 +1911,9 @@ func (s *realtimeSession) trackRealtimeInputTranscription(ev llm.RealtimeEvent) 
 	msg, ok := s.remote.Get(transcription.ItemID).(*llm.ChatMessage)
 	if !ok {
 		return ev
+	}
+	if s.model != nil && s.model.inputTranscriptionFinalHook != nil {
+		s.model.inputTranscriptionFinalHook(msg, transcription)
 	}
 	if transcription.Transcript != "" {
 		msg.Content = append(msg.Content, llm.ChatContent{Text: transcription.Transcript})

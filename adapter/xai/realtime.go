@@ -72,6 +72,7 @@ func NewXaiRealtimeModel(apiKey string, opts ...XaiRealtimeOption) *XaiRealtimeM
 		adapteropenai.WithOpenAIRealtimeBaseURL(baseURL),
 		adapteropenai.WithOpenAIRealtimeWebsocketDialer(options.dialWebsocket),
 		adapteropenai.WithOpenAIRealtimeToolFormatter(xaiRealtimeTools),
+		adapteropenai.WithOpenAIRealtimeInputTranscriptionFinalHook(xaiRealtimeDeduplicateFinalInputTranscription),
 		adapteropenai.WithOpenAIRealtimeVoice(defaultXaiRealtimeVoice),
 		adapteropenai.WithOpenAIRealtimeModalities([]string{"audio"}),
 		adapteropenai.WithOpenAIRealtimeInputAudioTranscription(map[string]any{}),
@@ -106,6 +107,15 @@ func xaiRealtimeTools(tools []llm.Tool) []map[string]any {
 		})
 	}
 	return formatted
+}
+
+func xaiRealtimeDeduplicateFinalInputTranscription(msg *llm.ChatMessage, transcription *llm.InputTranscriptionCompleted) {
+	if msg == nil || transcription == nil || !transcription.IsFinal || transcription.Transcript == "" {
+		return
+	}
+	if msg.TextContent() == transcription.Transcript {
+		msg.Content = nil
+	}
 }
 
 func (m *XaiRealtimeModel) Model() string { return m.model }

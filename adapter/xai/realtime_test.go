@@ -151,6 +151,112 @@ func TestXaiRealtimeUpdateToolsUsesReferenceProviderToolPayloads(t *testing.T) {
 	}
 }
 
+func TestXaiRealtimeFinalInputTranscriptionDoesNotDuplicateAudioTranscript(t *testing.T) {
+	handlerDone := make(chan struct{})
+	handlerErr := make(chan error, 1)
+	readyForSync := make(chan struct{})
+	unexpectedSync := make(chan string, 4)
+	dialer := newXaiRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		defer close(handlerDone)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			handlerErr <- fmt.Errorf("read initial session update: %w", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]any{
+			"type":             "conversation.item.added",
+			"previous_item_id": nil,
+			"item": map[string]any{
+				"id":   "item_123",
+				"type": "message",
+				"role": "user",
+				"content": []map[string]any{
+					{"type": "input_audio", "transcript": "hello"},
+				},
+			},
+		}); err != nil {
+			handlerErr <- fmt.Errorf("write item added: %w", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]any{
+			"type":          "conversation.item.input_audio_transcription.completed",
+			"item_id":       "item_123",
+			"content_index": 0,
+			"transcript":    "hello",
+		}); err != nil {
+			handlerErr <- fmt.Errorf("write final transcription: %w", err)
+			return
+		}
+		<-readyForSync
+		for {
+			if err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+				handlerErr <- fmt.Errorf("set read deadline: %w", err)
+				return
+			}
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			unexpectedSync <- string(payload)
+		}
+	})
+
+	model := NewXaiRealtimeModel("test-key",
+		WithXaiRealtimeBaseURL("ws://xai.test/v1/realtime"),
+		WithXaiRealtimeWebsocketDialer(dialer),
+	)
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+
+	assertXaiRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeRemoteItemAdded)
+	assertXaiRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
+	close(readyForSync)
+	if err := session.UpdateChatContext(&llm.ChatContext{
+		Items: []llm.ChatItem{
+			&llm.ChatMessage{
+				ID:      "item_123",
+				Role:    llm.ChatRoleUser,
+				Content: []llm.ChatContent{{Text: "hello"}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateChatContext() error = %v", err)
+	}
+	select {
+	case msg := <-unexpectedSync:
+		t.Fatalf("unexpected chat context sync message after duplicate transcription: %s", msg)
+	case <-handlerDone:
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket handler")
+	}
+	select {
+	case err := <-handlerErr:
+		t.Fatal(err)
+	default:
+	}
+}
+
+func assertXaiRealtimeEventType(t *testing.T, eventCh <-chan llm.RealtimeEvent, want llm.RealtimeEventType) llm.RealtimeEvent {
+	t.Helper()
+	select {
+	case ev := <-eventCh:
+		if ev.Type != want {
+			t.Fatalf("event type = %q, want %q", ev.Type, want)
+		}
+		return ev
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s event", want)
+		return llm.RealtimeEvent{}
+	}
+}
+
 func newXaiRealtimeTestWebsocketDialer(t *testing.T, handler func(*websocket.Conn, *http.Request)) func(string, http.Header) (*websocket.Conn, *http.Response, error) {
 	t.Helper()
 	upgrader := websocket.Upgrader{}
