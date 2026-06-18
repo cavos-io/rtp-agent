@@ -314,13 +314,20 @@ func (s *deepgramTTSStream) PushText(text string) error {
 	}
 	msg := map[string]interface{}{
 		"type": "Speak",
-		"text": text,
+		"text": deepgramTTSSpeakText(text),
 	}
 	if err := s.writeJSONData(msg); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
 	return nil
+}
+
+func deepgramTTSSpeakText(text string) string {
+	if text == "" || strings.HasSuffix(text, " ") || strings.HasSuffix(text, "\n") || strings.HasSuffix(text, "\t") || strings.HasSuffix(text, "\r") {
+		return text
+	}
+	return text + " "
 }
 
 func (s *deepgramTTSStream) Flush() error {

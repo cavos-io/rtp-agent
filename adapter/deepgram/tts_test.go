@@ -362,6 +362,30 @@ func TestDeepgramTTSStreamCloseSendsReferenceFlushAndClose(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSStreamSpeakTextKeepsReferenceTrailingSeparator(t *testing.T) {
+	var speakText string
+	stream := &deepgramTTSStream{
+		writeJSON: func(v any) error {
+			msg, ok := v.(map[string]interface{})
+			if !ok {
+				t.Fatalf("writeJSON payload = %#v, want map", v)
+			}
+			if msg["type"] != "Speak" {
+				t.Fatalf("message type = %#v, want Speak", msg["type"])
+			}
+			speakText, _ = msg["text"].(string)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if speakText != "hello " {
+		t.Fatalf("Speak text = %q, want reference trailing separator", speakText)
+	}
+}
+
 func TestDeepgramTTSStreamMarksFinalAudioOnReferenceFlushed(t *testing.T) {
 	stream := &deepgramTTSStream{
 		audio: make(chan *tts.SynthesizedAudio, 1),
