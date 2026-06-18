@@ -1123,6 +1123,41 @@ func TestRunAgoraPublishesGreetingTranscriptWhenFirstParticipantJoinsDuringJoin(
 	}
 }
 
+func TestAgoraRuntimeEventHandlerCancelsPendingGreetingWhenUserLeaves(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	session.Assistant = &fakeAppSessionAssistant{}
+	session.TTS = &fakeAppTTS{}
+	speechEvents := session.SpeechCreatedEvents()
+	published := make(chan string, 1)
+	handler := &agoraRuntimeEventHandler{
+		session:  session,
+		greeting: "TEN Agent connected. How can I help you today?",
+		publishGreetingTranscript: func(_ context.Context, text string) error {
+			published <- text
+			return nil
+		},
+	}
+
+	handler.Handle(workeragora.Event{Kind: workeragora.EventUserJoined, Channel: "support", UserID: "caller-1"})
+	handler.Handle(workeragora.Event{Kind: workeragora.EventUserLeft, Channel: "support", UserID: "caller-1"})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("session.Start() error = %v", err)
+	}
+	t.Cleanup(func() { session.Shutdown() })
+	handler.FlushPendingGreeting(context.Background())
+
+	select {
+	case ev := <-speechEvents:
+		t.Fatalf("FlushPendingGreeting() emitted stale greeting speech after user left: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+	select {
+	case text := <-published:
+		t.Fatalf("FlushPendingGreeting() published stale greeting transcript after user left: %q", text)
+	default:
+	}
+}
+
 func TestRunAgoraStopsSessionOnTransportDisconnect(t *testing.T) {
 	client := &fakeAppAgoraChannelClient{joinedCh: make(chan struct{}, 1)}
 	oldNewAgoraChannelClient := appNewAgoraChannelClient

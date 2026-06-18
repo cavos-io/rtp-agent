@@ -1296,6 +1296,9 @@ func (h *agoraRuntimeEventHandler) Handle(event workeragora.Event) {
 		if h.users > 0 {
 			h.users--
 		}
+		if h.users == 0 {
+			h.pendingGreeting = false
+		}
 		h.mu.Unlock()
 	case workeragora.EventDisconnected, workeragora.EventError:
 		h.mu.Lock()
