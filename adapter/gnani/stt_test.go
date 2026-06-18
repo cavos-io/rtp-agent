@@ -24,6 +24,9 @@ func TestGnaniSTTDefaultsMatchReference(t *testing.T) {
 	if provider.sampleRate != 16000 {
 		t.Fatalf("sample rate = %d, want 16000", provider.sampleRate)
 	}
+	if got := provider.InputSampleRate(); got != 16000 {
+		t.Fatalf("InputSampleRate() = %d, want reference sample rate 16000", got)
+	}
 	if got := stt.Model(provider); got != "vachana-stt-v3" {
 		t.Fatalf("model metadata = %q, want vachana-stt-v3", got)
 	}
@@ -36,6 +39,14 @@ func TestGnaniSTTDefaultsMatchReference(t *testing.T) {
 	}
 	if !caps.OfflineRecognize {
 		t.Fatal("offline recognize = false, want true for REST recognition")
+	}
+}
+
+func TestGnaniSTTExposesConfiguredInputSampleRate(t *testing.T) {
+	provider := NewSTT("test-key", WithSTTSampleRate(8000))
+
+	if got := provider.InputSampleRate(); got != 8000 {
+		t.Fatalf("InputSampleRate() = %d, want configured sample rate 8000", got)
 	}
 }
 

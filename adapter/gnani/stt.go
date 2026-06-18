@@ -91,6 +91,13 @@ func (s *STT) Provider() string {
 	return "Gnani"
 }
 
+func (s *STT) InputSampleRate() uint32 {
+	if s == nil || s.sampleRate <= 0 {
+		return defaultSTTSampleRate
+	}
+	return uint32(s.sampleRate)
+}
+
 func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: false, Diarization: false, OfflineRecognize: true}
 }
