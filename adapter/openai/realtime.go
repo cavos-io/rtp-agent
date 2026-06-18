@@ -73,6 +73,7 @@ type openAIRealtimeModelOptions struct {
 	modalities                  []string
 	baseURL                     string
 	maxSession                  time.Duration
+	maxSessionSet               bool
 	connect                     *llm.APIConnectOptions
 	dialWebsocket               OpenAIRealtimeWebsocketDialer
 	toolFormatter               OpenAIRealtimeToolFormatter
@@ -162,6 +163,7 @@ func WithOpenAIRealtimeMaxResponseOutputTokens(tokens any) OpenAIRealtimeOption 
 func WithOpenAIRealtimeMaxSessionDuration(duration time.Duration) OpenAIRealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.maxSession = duration
+		options.maxSessionSet = true
 	}
 }
 
@@ -239,6 +241,10 @@ func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *Realt
 	if options.dialWebsocket != nil {
 		dialWebsocket = options.dialWebsocket
 	}
+	maxSession := options.maxSession
+	if !options.maxSessionSet {
+		maxSession = openAIRealtimeDefaultMaxSessionDuration
+	}
 	return &RealtimeModel{
 		apiKey:                      apiKey,
 		model:                       model,
@@ -251,7 +257,7 @@ func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *Realt
 		sessionCloseMetricsHook:     options.sessionCloseMetricsHook,
 		options:                     options.sessionOptions,
 		modalities:                  options.modalities,
-		maxSession:                  options.maxSession,
+		maxSession:                  maxSession,
 		connect:                     connectOptions,
 	}
 }
@@ -378,6 +384,7 @@ const openAIRealtimeInputNumChannels = 1
 const openAIRealtimeDefaultVoice = "marin"
 const openAIRealtimeDefaultSpeed = 1.0
 const openAIRealtimeDefaultMaxOutputTokens = "inf"
+const openAIRealtimeDefaultMaxSessionDuration = 20 * time.Minute
 
 type inputTranscriptKey struct {
 	itemID       string

@@ -57,6 +57,22 @@ func TestNewOpenAIRealtimeModelUsesReferenceDefaultModel(t *testing.T) {
 	}
 }
 
+func TestNewOpenAIRealtimeModelUsesReferenceDefaultMaxSessionDuration(t *testing.T) {
+	model := NewRealtimeModel("test-key", "gpt-realtime")
+
+	if model.maxSession != 20*time.Minute {
+		t.Fatalf("maxSession = %v, want 20m reference default", model.maxSession)
+	}
+}
+
+func TestNewOpenAIRealtimeModelCanDisableReferenceDefaultMaxSessionDuration(t *testing.T) {
+	model := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeMaxSessionDuration(0))
+
+	if model.maxSession != 0 {
+		t.Fatalf("maxSession = %v, want disabled", model.maxSession)
+	}
+}
+
 func TestNewOpenAIRealtimeModelProviderUsesReferenceBaseURLHost(t *testing.T) {
 	t.Setenv("OPENAI_BASE_URL", "https://gateway.openai.test/openai/v1")
 	model := NewRealtimeModel("test-key", "")
