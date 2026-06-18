@@ -159,6 +159,31 @@ func JobStatusSucceeded(status lkprotocol.JobStatus) bool {
 	return status == lkprotocol.JobStatus_JS_SUCCESS
 }
 
+type JobCompletionPlan struct {
+	Finish          bool
+	WaitForShutdown bool
+	SendStatus      bool
+	SendAfterFinish bool
+}
+
+func JobCompletionPlanForEntrypoint(status lkprotocol.JobStatus, terminated bool) JobCompletionPlan {
+	if terminated {
+		return JobCompletionPlan{Finish: true}
+	}
+	if JobStatusSucceeded(status) {
+		return JobCompletionPlan{
+			Finish:          true,
+			WaitForShutdown: true,
+			SendStatus:      true,
+			SendAfterFinish: true,
+		}
+	}
+	return JobCompletionPlan{
+		Finish:     true,
+		SendStatus: true,
+	}
+}
+
 type EntrypointResult struct {
 	Status    lkprotocol.JobStatus
 	Err       error

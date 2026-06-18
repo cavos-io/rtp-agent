@@ -1713,28 +1713,26 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.J
 				logger.Logger.Errorw("Job entrypoint failed", result.Err, jobLogValues(jobCtx, "jobId", jobID)...)
 			}
 			status := result.Status
-			if jobCtx.Terminated() {
-				s.finishJob(jobCtx)
-				return
-			}
-			if workerlivekit.JobStatusSucceeded(status) {
+			plan := workerlivekit.JobCompletionPlanForEntrypoint(status, jobCtx.Terminated())
+			if plan.WaitForShutdown {
 				select {
 				case <-jobCtx.ShutdownDone():
 				case <-ctx.Done():
 					jobCtx.Shutdown("")
 				}
+			}
+			if plan.Finish && plan.SendAfterFinish {
 				if !s.finishJob(jobCtx) {
 					return
 				}
-			} else {
+			}
+			if plan.SendStatus {
 				if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(jobID, status)); err != nil {
 					logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", jobID)...)
 				}
-				s.finishJob(jobCtx)
-				return
 			}
-			if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(jobID, status)); err != nil {
-				logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", jobID)...)
+			if plan.Finish && !plan.SendAfterFinish {
+				s.finishJob(jobCtx)
 			}
 		}()
 	}
