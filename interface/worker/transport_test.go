@@ -75,3 +75,53 @@ func TestResolveWorkerOptionsDoesNotReadLiveKitEnvForAgora(t *testing.T) {
 		t.Fatal("Permissions = non-nil LiveKit permissions, want nil for Agora")
 	}
 }
+
+func TestResolveWorkerOptionsDoesNotReadLiveKitLogLevelEnvForAgora(t *testing.T) {
+	t.Setenv("LIVEKIT_DEV_MODE", "0")
+	t.Setenv("LIVEKIT_LOG_LEVEL", "debug")
+
+	opts := resolveWorkerOptions(WorkerOptions{
+		Transport: WorkerTransportAgora,
+		Agora: AgoraOptions{
+			AppID:   "agora-app",
+			Channel: "support",
+		},
+	})
+
+	if opts.LogLevel != defaultProdLogLevel {
+		t.Fatalf("LogLevel = %q, want default prod log level for Agora", opts.LogLevel)
+	}
+}
+
+func TestResolveWorkerOptionsDoesNotReadLiveKitDevModeEnvForAgora(t *testing.T) {
+	t.Setenv("LIVEKIT_DEV_MODE", "1")
+
+	opts := resolveWorkerOptions(WorkerOptions{
+		Transport: WorkerTransportAgora,
+		Agora: AgoraOptions{
+			AppID:   "agora-app",
+			Channel: "support",
+		},
+	})
+
+	if opts.DevMode {
+		t.Fatal("DevMode = true, want false for Agora")
+	}
+	if opts.LogLevel != defaultProdLogLevel {
+		t.Fatalf("LogLevel = %q, want prod default when Agora ignores LIVEKIT_DEV_MODE", opts.LogLevel)
+	}
+}
+
+func TestResolveWorkerOptionsDoesNotDefaultLiveKitWorkerTypeForAgora(t *testing.T) {
+	opts := resolveWorkerOptions(WorkerOptions{
+		Transport: WorkerTransportAgora,
+		Agora: AgoraOptions{
+			AppID:   "agora-app",
+			Channel: "support",
+		},
+	})
+
+	if opts.WorkerType != "" {
+		t.Fatalf("WorkerType = %q, want empty for Agora", opts.WorkerType)
+	}
+}

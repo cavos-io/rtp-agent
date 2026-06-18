@@ -718,11 +718,8 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 
 func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	opts.Transport = NormalizeWorkerTransport(string(opts.Transport))
-	if !opts.DevMode {
+	if !opts.DevMode && opts.Transport == WorkerTransportLiveKit {
 		opts.DevMode = utils.IsDevMode()
-	}
-	if opts.WorkerType == "" {
-		opts.WorkerType = WorkerTypeRoom
 	}
 	if opts.Version == "" {
 		opts.Version = defaultWorkerVersion
@@ -745,7 +742,7 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.InitializeProcessTimeoutSeconds == 0 && !opts.InitializeProcessTimeoutSecondsSet {
 		opts.InitializeProcessTimeoutSeconds = defaultProcessTimeout
 	}
-	if opts.LogLevel == "" {
+	if opts.LogLevel == "" && opts.Transport == WorkerTransportLiveKit {
 		opts.LogLevel = workerlivekit.WorkerLogLevelFromEnv(nil)
 	}
 	if opts.LogLevel == "" {
@@ -775,6 +772,9 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 		opts.LoadFunc = defaultWorkerLoadFunc
 	}
 	if opts.Transport == WorkerTransportLiveKit {
+		if opts.WorkerType == "" {
+			opts.WorkerType = WorkerTypeRoom
+		}
 		if opts.Permissions == nil {
 			opts.Permissions = workerlivekit.DefaultWorkerPermissions()
 		}
@@ -813,7 +813,7 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 			return
 		}
 		if s.hasConnectionFailed() {
-			http.Error(w, "failed to connect to livekit", http.StatusServiceUnavailable)
+			http.Error(w, workerConnectionFailureMessage(s.Options.Transport), http.StatusServiceUnavailable)
 			return
 		}
 		if s.Options.HealthCheck != nil {
@@ -826,7 +826,11 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 		_, _ = w.Write([]byte("OK"))
 	})
 	mux.HandleFunc("/worker", func(w http.ResponseWriter, r *http.Request) {
-		body := workerlivekit.WorkerMetadata(workerlivekit.WorkerMetadataOptions{
+		if NormalizeWorkerTransport(string(s.Options.Transport)) != WorkerTransportLiveKit {
+			http.NotFound(w, r)
+			return
+		}
+		body := workerlivekit.WorkerRuntimeMetadata(workerlivekit.WorkerRuntimeMetadataOptions{
 			AgentName:       s.Options.AgentName,
 			AgentNameIsEnv:  s.Options.AgentNameIsEnv,
 			WorkerType:      string(s.Options.WorkerType),
@@ -834,8 +838,6 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 			ActiveJobs:      s.activeJobCount(),
 			SDKVersion:      s.Options.Version,
 			ProtocolVersion: WorkerProtocolVersion,
-			NodeName:        utils.NodeName(),
-			Hosted:          utils.IsHosted(),
 		})
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(body); err != nil {
@@ -843,6 +845,13 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 		}
 	})
 	return mux
+}
+
+func workerConnectionFailureMessage(transport WorkerTransport) string {
+	if NormalizeWorkerTransport(string(transport)) == WorkerTransportLiveKit {
+		return workerlivekit.WorkerConnectionFailureMessage()
+	}
+	return "failed to connect"
 }
 
 func (s *AgentServer) startWorkerHTTPServer() (*http.Server, error) {
@@ -1038,8 +1047,8 @@ func readSystemCPUTimes() (idle uint64, total uint64, err error) {
 }
 
 func (s *AgentServer) registerWorkerRequest() *workerlivekit.WorkerMessage {
-	return workerlivekit.RegisterWorkerMessage(workerlivekit.WorkerRegistrationOptions{
-		WorkerType:  string(s.Options.WorkerType),
+	return workerlivekit.ServerRegisterWorkerMessage(workerlivekit.ServerRegisterWorkerMessageOptions{
+		WorkerType:  s.Options.WorkerType,
 		AgentName:   s.Options.AgentName,
 		Version:     s.Options.Version,
 		Permissions: s.Options.Permissions,
@@ -1049,7 +1058,7 @@ func (s *AgentServer) registerWorkerRequest() *workerlivekit.WorkerMessage {
 func (s *AgentServer) availableWorkerStatusMessage() *workerlivekit.WorkerMessage {
 	jobCount := uint32(s.activeJobCount())
 	load := s.currentLoad()
-	return workerlivekit.WorkerStatusUpdateMessage(workerlivekit.WorkerStatusUpdateOptions{
+	return workerlivekit.ServerAvailableWorkerStatusMessage(workerlivekit.ServerAvailableWorkerStatusMessageOptions{
 		Load:         load,
 		JobCount:     jobCount,
 		CanAcceptJob: s.availableForJobWithLoad(load),
@@ -1057,10 +1066,7 @@ func (s *AgentServer) availableWorkerStatusMessage() *workerlivekit.WorkerMessag
 }
 
 func (s *AgentServer) drainingWorkerStatusMessage() *workerlivekit.WorkerMessage {
-	return workerlivekit.WorkerStatusUpdateMessage(workerlivekit.WorkerStatusUpdateOptions{
-		Draining: true,
-		JobCount: uint32(s.activeJobCount()),
-	})
+	return workerlivekit.ServerDrainingWorkerStatusMessage(uint32(s.activeJobCount()))
 }
 
 func (s *AgentServer) RTCSession(
@@ -1074,12 +1080,14 @@ func (s *AgentServer) RTCSession(
 	s.entrypointFnc = entrypoint
 	s.requestFnc = request
 	s.sessionEndFnc = sessionEnd
-	agentName := workerlivekit.ResolveAgentNameFromEnv(workerlivekit.AgentNameEnvOptions{
-		AgentName:      s.Options.AgentName,
-		AgentNameIsEnv: s.Options.AgentNameIsEnv,
-	})
-	s.Options.AgentName = agentName.AgentName
-	s.Options.AgentNameIsEnv = agentName.AgentNameIsEnv
+	if NormalizeWorkerTransport(string(s.Options.Transport)) == WorkerTransportLiveKit {
+		agentName := workerlivekit.ResolveAgentNameFromEnv(workerlivekit.AgentNameEnvOptions{
+			AgentName:      s.Options.AgentName,
+			AgentNameIsEnv: s.Options.AgentNameIsEnv,
+		})
+		s.Options.AgentName = agentName.AgentName
+		s.Options.AgentNameIsEnv = agentName.AgentNameIsEnv
+	}
 	return nil
 }
 

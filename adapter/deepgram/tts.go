@@ -253,7 +253,7 @@ func (s *deepgramTTSStream) readLoop() {
 	for {
 		msgType, message, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+			if !s.isClosed() {
 				s.errCh <- deepgramTTSUnexpectedCloseError(err)
 			}
 			return
@@ -295,18 +295,15 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 	case "Flushed":
 		s.audio <- &tts.SynthesizedAudio{IsFinal: true}
 	case "Error", "error":
-		if msg, ok := metadata["message"].(string); ok && msg != "" {
-			return llm.NewAPIError("Deepgram TTS returned error", msg, true)
-		}
-		if msg, ok := metadata["error"].(string); ok && msg != "" {
-			return llm.NewAPIError("Deepgram TTS returned error", msg, true)
-		}
 		return llm.NewAPIError("Deepgram TTS returned error", metadata, true)
 	}
 	return nil
 }
 
 func (s *deepgramTTSStream) PushText(text string) error {
+	if text == "" {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -314,13 +311,20 @@ func (s *deepgramTTSStream) PushText(text string) error {
 	}
 	msg := map[string]interface{}{
 		"type": "Speak",
-		"text": text,
+		"text": deepgramTTSSpeakText(text),
 	}
 	if err := s.writeJSONData(msg); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
 	return nil
+}
+
+func deepgramTTSSpeakText(text string) string {
+	if text == "" || strings.HasSuffix(text, " ") || strings.HasSuffix(text, "\n") || strings.HasSuffix(text, "\t") || strings.HasSuffix(text, "\r") {
+		return text
+	}
+	return text + " "
 }
 
 func (s *deepgramTTSStream) Flush() error {
@@ -346,17 +350,12 @@ func (s *deepgramTTSStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	var firstErr error
-	if err := s.writeJSONData(map[string]interface{}{"type": "Flush"}); err != nil && firstErr == nil {
-		firstErr = err
-	}
-	if err := s.writeJSONData(map[string]interface{}{"type": "Close"}); err != nil && firstErr == nil {
-		firstErr = err
-	}
+	_ = s.writeJSONData(map[string]interface{}{"type": "Flush"})
+	_ = s.writeJSONData(map[string]interface{}{"type": "Close"})
 	if err := s.closeConnection(); err != nil {
 		return err
 	}
-	return firstErr
+	return nil
 }
 
 func (s *deepgramTTSStream) writeJSONData(v any) error {
@@ -387,6 +386,12 @@ func (s *deepgramTTSStream) closeAfterWriteFailureLocked() {
 	}
 	s.closed = true
 	_ = s.closeConnection()
+}
+
+func (s *deepgramTTSStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func (s *deepgramTTSStream) Next() (*tts.SynthesizedAudio, error) {

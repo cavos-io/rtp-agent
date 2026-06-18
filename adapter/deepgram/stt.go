@@ -229,10 +229,7 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildDeepgramStreamURL(s, languageStr), header)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
-		}
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, llm.NewAPIConnectionError("failed to connect to deepgram")
 	}
 
 	streamCtx, cancel := context.WithCancel(ctx)
@@ -475,6 +472,8 @@ type deepgramStream struct {
 	mu       sync.Mutex
 	closed   bool
 	speaking bool
+	start    float64
+	offset   float64
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -498,11 +497,13 @@ type dgWord struct {
 type dgAlternative struct {
 	Transcript string   `json:"transcript"`
 	Confidence float64  `json:"confidence"`
+	Languages  []string `json:"languages"`
 	Words      []dgWord `json:"words"`
 }
 
 type dgRecognitionChannel struct {
-	Alternatives []dgAlternative `json:"alternatives"`
+	Alternatives     []dgAlternative `json:"alternatives"`
+	DetectedLanguage string          `json:"detected_language"`
 }
 
 type dgRecognitionResponse struct {
@@ -543,7 +544,7 @@ func deepgramRecognizeSpeechEventForLanguage(resp dgRecognitionResponse, languag
 
 	alt := resp.Results.Channels[0].Alternatives[0]
 	event.Alternatives[0] = stt.SpeechData{
-		Language:   languageStr,
+		Language:   deepgramRecognizeLanguage(languageStr, resp.Results.Channels[0].DetectedLanguage),
 		Text:       alt.Transcript,
 		StartTime:  deepgramFirstWordStart(alt.Words),
 		EndTime:    deepgramLastWordEnd(alt.Words),
@@ -553,11 +554,22 @@ func deepgramRecognizeSpeechEventForLanguage(resp dgRecognitionResponse, languag
 	return event
 }
 
+func deepgramRecognizeLanguage(languageStr string, detectedLanguage string) string {
+	if languageStr == "" {
+		return detectedLanguage
+	}
+	return languageStr
+}
+
 func deepgramSpeechEvent(resp dgResponse) *stt.SpeechEvent {
 	return deepgramSpeechEventForLanguage(resp, "")
 }
 
 func deepgramSpeechEventForLanguage(resp dgResponse, languageStr string) *stt.SpeechEvent {
+	return deepgramSpeechEventForLanguageOffset(resp, languageStr, 0)
+}
+
+func deepgramSpeechEventForLanguageOffset(resp dgResponse, languageStr string, startTimeOffset float64) *stt.SpeechEvent {
 	if resp.Type != "Results" || len(resp.Channel.Alternatives) == 0 {
 		return nil
 	}
@@ -574,13 +586,13 @@ func deepgramSpeechEventForLanguage(resp dgResponse, languageStr string) *stt.Sp
 	for _, alt := range resp.Channel.Alternatives {
 		transcriptBuilder += alt.Transcript
 		event.Alternatives = append(event.Alternatives, stt.SpeechData{
-			Language:   languageStr,
+			Language:   deepgramLiveLanguage(languageStr, alt.Languages),
 			Text:       alt.Transcript,
 			Confidence: alt.Confidence,
-			StartTime:  deepgramFirstWordStart(alt.Words),
-			EndTime:    deepgramFirstWordEnd(alt.Words),
+			StartTime:  deepgramFirstWordStart(alt.Words) + startTimeOffset,
+			EndTime:    deepgramFirstWordEnd(alt.Words) + startTimeOffset,
 			SpeakerID:  deepgramLiveSpeakerID(alt.Words, resp.IsFinal),
-			Words:      deepgramTimedStrings(alt.Words),
+			Words:      deepgramTimedStringsOffset(alt.Words, startTimeOffset),
 		})
 	}
 
@@ -589,6 +601,13 @@ func deepgramSpeechEventForLanguage(resp dgResponse, languageStr string) *stt.Sp
 	}
 
 	return event
+}
+
+func deepgramLiveLanguage(languageStr string, detected []string) string {
+	if languageStr == "multi" && len(detected) > 0 {
+		return detected[0]
+	}
+	return languageStr
 }
 
 func deepgramFirstWordStart(words []dgWord) float64 {
@@ -636,6 +655,10 @@ func deepgramLiveSpeakerID(words []dgWord, final bool) string {
 }
 
 func deepgramTimedStrings(words []dgWord) []stt.TimedString {
+	return deepgramTimedStringsOffset(words, 0)
+}
+
+func deepgramTimedStringsOffset(words []dgWord, startTimeOffset float64) []stt.TimedString {
 	if len(words) == 0 {
 		return nil
 	}
@@ -643,11 +666,12 @@ func deepgramTimedStrings(words []dgWord) []stt.TimedString {
 	timed := make([]stt.TimedString, 0, len(words))
 	for _, word := range words {
 		timed = append(timed, stt.TimedString{
-			Text:       word.Word,
-			StartTime:  word.Start,
-			EndTime:    word.End,
-			Confidence: word.Confidence,
-			SpeakerID:  deepgramSpeakerID(word.Speaker),
+			Text:            word.Word,
+			StartTime:       word.Start + startTimeOffset,
+			EndTime:         word.End + startTimeOffset,
+			Confidence:      word.Confidence,
+			StartTimeOffset: startTimeOffset,
+			SpeakerID:       deepgramSpeakerID(word.Speaker),
 		})
 	}
 	return timed
@@ -688,7 +712,7 @@ func (s *deepgramStream) readLoop() {
 			s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
 
 		case "Results":
-			if event := deepgramSpeechEventForLanguage(resp, s.language); event != nil {
+			if event := deepgramSpeechEventForLanguageOffset(resp, s.language, s.StartTimeOffset()); event != nil {
 				if !s.speaking {
 					s.speaking = true
 					s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
@@ -744,6 +768,36 @@ func (s *deepgramStream) sendError(err error) {
 	case s.errCh <- err:
 	default:
 	}
+}
+
+func (s *deepgramStream) StartTimeOffset() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.offset
+}
+
+func (s *deepgramStream) SetStartTimeOffset(offset float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if offset < 0 {
+		offset = 0
+	}
+	s.offset = offset
+}
+
+func (s *deepgramStream) StartTime() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.start
+}
+
+func (s *deepgramStream) SetStartTime(startTime float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if startTime < 0 {
+		startTime = 0
+	}
+	s.start = startTime
 }
 
 func (s *deepgramStream) PushFrame(frame *model.AudioFrame) error {

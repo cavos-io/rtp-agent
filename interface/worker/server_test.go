@@ -408,6 +408,28 @@ func TestWorkerHTTPHandlerReportsConnectionFailure(t *testing.T) {
 	}
 }
 
+func TestWorkerHTTPHandlerReportsGenericConnectionFailureForAgora(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		Transport: WorkerTransportAgora,
+		Agora: AgoraOptions{
+			AppID:   "agora-app",
+			Channel: "support",
+		},
+	})
+	server.setConnectionFailed(true)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+
+	server.workerHTTPHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("health status = %d, want 503", rec.Code)
+	}
+	if strings.TrimSpace(rec.Body.String()) != "failed to connect" {
+		t.Fatalf("health body = %q, want generic failed connection message", rec.Body.String())
+	}
+}
+
 func TestWorkerHTTPHandlerUsesCustomHealthCheck(t *testing.T) {
 	called := false
 	server := NewAgentServer(WorkerOptions{
@@ -530,6 +552,25 @@ func TestWorkerHTTPHandlerReportsEnvAgentNameProvenance(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("/worker response missing %s in %s", want, body)
 		}
+	}
+}
+
+func TestWorkerHTTPHandlerDoesNotExposeLiveKitMetadataForAgora(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		Transport: WorkerTransportAgora,
+		Agora: AgoraOptions{
+			AppID:   "agora-app",
+			Channel: "support",
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/worker", nil)
+	rec := httptest.NewRecorder()
+
+	server.workerHTTPHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("worker status = %d, want 404 for Agora transport", rec.Code)
 	}
 }
 
@@ -4046,6 +4087,28 @@ func TestRTCSessionLoadsAgentNameFromEnvironmentAtRegistration(t *testing.T) {
 	register := server.registerWorkerRequest().GetRegister()
 	if register.GetAgentName() != "late-env-agent" {
 		t.Fatalf("register.AgentName = %q, want late env agent", register.GetAgentName())
+	}
+}
+
+func TestRTCSessionDoesNotLoadLiveKitAgentNameForAgora(t *testing.T) {
+	t.Setenv("LIVEKIT_AGENT_NAME", "livekit-agent")
+	server := NewAgentServer(WorkerOptions{
+		Transport: WorkerTransportAgora,
+		Agora: AgoraOptions{
+			AppID:   "agora-app",
+			Channel: "support",
+		},
+	})
+
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	if server.Options.AgentName != "" {
+		t.Fatalf("AgentName = %q, want empty for Agora", server.Options.AgentName)
+	}
+	if server.Options.AgentNameIsEnv {
+		t.Fatal("AgentNameIsEnv = true, want false for Agora")
 	}
 }
 

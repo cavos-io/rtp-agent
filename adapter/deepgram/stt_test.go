@@ -7,6 +7,7 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -128,6 +129,73 @@ func TestDeepgramSpeechEventSetsReferenceLanguage(t *testing.T) {
 	}
 }
 
+func TestDeepgramSpeechEventUsesReferenceDetectedLanguageForMulti(t *testing.T) {
+	var resp dgResponse
+	if err := json.Unmarshal([]byte(`{"type":"Results","is_final":true,"metadata":{"request_id":"req-lang"},"channel":{"alternatives":[{"transcript":"hola","confidence":0.9,"languages":["es","en"],"words":[]}]}}`), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	event := deepgramSpeechEventForLanguage(resp, "multi")
+	if event == nil || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %+v, want one alternative", event)
+	}
+	if got := event.Alternatives[0].Language; got != "es" {
+		t.Fatalf("language = %q, want detected language es", got)
+	}
+}
+
+func TestDeepgramSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	closeServer := make(chan struct{})
+	go runDeepgramTimingOffsetWebsocketServer(serverConn, closeServer, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"))
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	defer close(closeServer)
+
+	timing, ok := stream.(stt.StreamTiming)
+	if !ok {
+		t.Fatal("stream does not implement stt.StreamTiming")
+	}
+	timing.SetStartTimeOffset(2.5)
+
+	event := nextDeepgramTestSpeechEvent(t, stream)
+	if event.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event type = %s, want start_of_speech", event.Type)
+	}
+	event = nextDeepgramTestSpeechEvent(t, stream)
+	if event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("second event type = %s, want final_transcript", event.Type)
+	}
+	alt := event.Alternatives[0]
+	if alt.StartTime != 2.6 || alt.EndTime != 2.8 {
+		t.Fatalf("alternative timing = %v-%v, want 2.6-2.8", alt.StartTime, alt.EndTime)
+	}
+	if len(alt.Words) != 1 {
+		t.Fatalf("words = %d, want 1", len(alt.Words))
+	}
+	word := alt.Words[0]
+	if word.StartTime != 2.6 || word.EndTime != 2.8 || word.StartTimeOffset != 2.5 {
+		t.Fatalf("word timing = %+v, want offset-adjusted timing", word)
+	}
+}
+
 func TestDeepgramRecognizeSpeechEventPreservesAlternativeWords(t *testing.T) {
 	speaker := 0
 	resp := dgRecognitionResponse{}
@@ -184,6 +252,21 @@ func TestDeepgramRecognizeSpeechEventSetsReferenceLanguage(t *testing.T) {
 	}
 	if got := event.Alternatives[0].Language; got != "fr" {
 		t.Fatalf("language = %q, want fr", got)
+	}
+}
+
+func TestDeepgramRecognizeSpeechEventUsesReferenceDetectedLanguage(t *testing.T) {
+	var resp dgRecognitionResponse
+	if err := json.Unmarshal([]byte(`{"results":{"channels":[{"detected_language":"es","alternatives":[{"transcript":"hola","confidence":0.9,"words":[]}]}]}}`), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	event := deepgramRecognizeSpeechEventForLanguage(resp, "")
+	if len(event.Alternatives) != 1 {
+		t.Fatalf("alternatives = %d, want 1", len(event.Alternatives))
+	}
+	if got := event.Alternatives[0].Language; got != "es" {
+		t.Fatalf("language = %q, want detected language es", got)
 	}
 }
 
@@ -504,7 +587,7 @@ func TestDeepgramSTTRecognizeReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
-func TestDeepgramSTTStreamReturnsAPITimeoutErrorOnDialFailure(t *testing.T) {
+func TestDeepgramSTTStreamReturnsAPIConnectionErrorOnDialTimeout(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
 		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
@@ -518,11 +601,18 @@ func TestDeepgramSTTStreamReturnsAPITimeoutErrorOnDialFailure(t *testing.T) {
 
 	_, err := provider.Stream(context.Background(), "en-US")
 	if err == nil {
-		t.Fatal("Stream error = nil, want APITimeoutError")
+		t.Fatal("Stream error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
 	}
 	var timeoutErr *llm.APITimeoutError
-	if !errors.As(err, &timeoutErr) {
-		t.Fatalf("Stream error = %T %v, want APITimeoutError", err, err)
+	if errors.As(err, &timeoutErr) {
+		t.Fatalf("Stream error = %T %v, want plain APIConnectionError", err, err)
+	}
+	if connectionErr.Message != "failed to connect to deepgram" {
+		t.Fatalf("connection error message = %q, want reference message", connectionErr.Message)
 	}
 }
 
@@ -984,6 +1074,27 @@ func runDeepgramSpeechStateWebsocketServer(conn net.Conn, closeServer <-chan str
 			errCh <- err
 			return
 		}
+	}
+	<-closeServer
+	errCh <- nil
+}
+
+func runDeepgramTimingOffsetWebsocketServer(conn net.Conn, closeServer <-chan struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	message := `{"type":"Results","is_final":true,"speech_final":true,"metadata":{"request_id":"req-offset"},"channel":{"alternatives":[{"transcript":"hello","confidence":0.9,"words":[{"word":"hello","start":0.1,"end":0.3,"confidence":0.9}]}]}}`
+	if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(message)); err != nil {
+		errCh <- err
+		return
 	}
 	<-closeServer
 	errCh <- nil

@@ -1,9 +1,11 @@
 package deepgram
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -362,6 +364,68 @@ func TestDeepgramTTSStreamCloseSendsReferenceFlushAndClose(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSStreamCloseIgnoresReferenceFlushWriteFailure(t *testing.T) {
+	writeErr := errors.New("flush write failed")
+	closed := false
+	stream := &deepgramTTSStream{
+		writeJSON: func(any) error {
+			return writeErr
+		},
+		closeConn: func() error {
+			closed = true
+			return nil
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v, want nil like reference close callback", err)
+	}
+	if !closed {
+		t.Fatal("connection not closed after close write failure")
+	}
+}
+
+func TestDeepgramTTSStreamSpeakTextKeepsReferenceTrailingSeparator(t *testing.T) {
+	var speakText string
+	stream := &deepgramTTSStream{
+		writeJSON: func(v any) error {
+			msg, ok := v.(map[string]interface{})
+			if !ok {
+				t.Fatalf("writeJSON payload = %#v, want map", v)
+			}
+			if msg["type"] != "Speak" {
+				t.Fatalf("message type = %#v, want Speak", msg["type"])
+			}
+			speakText, _ = msg["text"].(string)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if speakText != "hello " {
+		t.Fatalf("Speak text = %q, want reference trailing separator", speakText)
+	}
+}
+
+func TestDeepgramTTSStreamIgnoresReferenceEmptyText(t *testing.T) {
+	writes := 0
+	stream := &deepgramTTSStream{
+		writeJSON: func(any) error {
+			writes++
+			return nil
+		},
+	}
+
+	if err := stream.PushText(""); err != nil {
+		t.Fatalf("PushText(empty) error = %v", err)
+	}
+	if writes != 0 {
+		t.Fatalf("writes after empty PushText = %d, want 0", writes)
+	}
+}
+
 func TestDeepgramTTSStreamMarksFinalAudioOnReferenceFlushed(t *testing.T) {
 	stream := &deepgramTTSStream{
 		audio: make(chan *tts.SynthesizedAudio, 1),
@@ -396,8 +460,12 @@ func TestDeepgramTTSStreamPropagatesReferenceErrorMessage(t *testing.T) {
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("error = %T %v, want APIError", err, err)
 	}
-	if apiErr.Body != "bad request" {
-		t.Fatalf("APIError body = %#v, want provider detail", apiErr.Body)
+	body, ok := apiErr.Body.(map[string]interface{})
+	if !ok {
+		t.Fatalf("APIError body = %T %#v, want provider response map", apiErr.Body, apiErr.Body)
+	}
+	if body["type"] != "Error" || body["message"] != "bad request" {
+		t.Fatalf("APIError body = %#v, want full provider response", apiErr.Body)
 	}
 }
 
@@ -486,6 +554,58 @@ func TestDeepgramTTSStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSStreamNormalCloseBeforeFlushedReturnsAPIStatusError(t *testing.T) {
+	closed := make(chan struct{})
+	closeAfterHandshake := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramNormalCloseWebsocketServer(serverConn, closeAfterHandshake, closed, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	close(closeAfterHandshake)
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test websocket close")
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	default:
+	}
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next() error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next() error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != websocket.CloseNormalClosure {
+		t.Fatalf("status code = %d, want normal close status", statusErr.StatusCode)
+	}
+}
+
 func assertDeepgramTTSQuery(t *testing.T, query url.Values, key string, want string) {
 	t.Helper()
 	if got := query.Get(key); got != want {
@@ -503,4 +623,26 @@ func (r deepgramTTSReadCloser) Read([]byte) (int, error) {
 
 func (r deepgramTTSReadCloser) Close() error {
 	return nil
+}
+
+func runDeepgramNormalCloseWebsocketServer(conn net.Conn, closeAfterHandshake <-chan struct{}, closed chan<- struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	<-closeAfterHandshake
+	payload := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "done")
+	if err := writeDeepgramTestWebsocketFrame(conn, websocket.CloseMessage, payload); err != nil {
+		errCh <- err
+		return
+	}
+	close(closed)
+	errCh <- nil
 }
