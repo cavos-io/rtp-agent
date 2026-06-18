@@ -831,19 +831,6 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	return opts
 }
 
-type workerMetadataResponse struct {
-	AgentName       string  `json:"agent_name"`
-	AgentNameIsEnv  bool    `json:"agent_name_is_env"`
-	WorkerType      string  `json:"worker_type"`
-	WorkerLoad      float64 `json:"worker_load"`
-	ActiveJobs      int     `json:"active_jobs"`
-	SDKVersion      string  `json:"sdk_version"`
-	ProtocolVersion int     `json:"protocol_version"`
-	ProjectType     string  `json:"project_type"`
-	NodeName        string  `json:"node_name"`
-	Hosted          bool    `json:"hosted"`
-}
-
 func (s *AgentServer) workerHTTPHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -865,18 +852,17 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 		_, _ = w.Write([]byte("OK"))
 	})
 	mux.HandleFunc("/worker", func(w http.ResponseWriter, r *http.Request) {
-		body := workerMetadataResponse{
+		body := workerlivekit.WorkerMetadata(workerlivekit.WorkerMetadataOptions{
 			AgentName:       s.Options.AgentName,
 			AgentNameIsEnv:  s.Options.AgentNameIsEnv,
-			WorkerType:      workerlivekit.JobTypeNameForWorkerType(string(s.Options.WorkerType)),
+			WorkerType:      string(s.Options.WorkerType),
 			WorkerLoad:      s.currentLoad(),
 			ActiveJobs:      s.activeJobCount(),
 			SDKVersion:      s.Options.Version,
 			ProtocolVersion: WorkerProtocolVersion,
-			ProjectType:     "go",
 			NodeName:        utils.NodeName(),
 			Hosted:          utils.IsHosted(),
-		}
+		})
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(body); err != nil {
 			logger.Logger.Errorw("failed to encode worker metadata", err)
