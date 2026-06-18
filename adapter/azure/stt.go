@@ -35,6 +35,8 @@ type AzureSTT struct {
 	apiKey              string
 	region              string
 	speechHost          string
+	speechEndpoint      string
+	authToken           string
 	language            string
 	sampleRate          int
 	explicitPunctuation bool
@@ -59,6 +61,22 @@ func WithAzureSTTSpeechHost(speechHost string) AzureSTTOption {
 	return func(s *AzureSTT) {
 		if speechHost != "" {
 			s.speechHost = speechHost
+		}
+	}
+}
+
+func WithAzureSTTSpeechEndpoint(speechEndpoint string) AzureSTTOption {
+	return func(s *AzureSTT) {
+		if speechEndpoint != "" {
+			s.speechEndpoint = speechEndpoint
+		}
+	}
+}
+
+func WithAzureSTTAuthToken(authToken string) AzureSTTOption {
+	return func(s *AzureSTT) {
+		if authToken != "" {
+			s.authToken = authToken
 		}
 	}
 }
@@ -104,8 +122,11 @@ func NewAzureSTT(apiKey string, region string, opts ...AzureSTTOption) (*AzureST
 	for _, opt := range opts {
 		opt(provider)
 	}
-	if provider.speechHost == "" && (provider.apiKey == "" || provider.region == "") {
-		return nil, fmt.Errorf("azure speech config requires AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION")
+	if provider.speechEndpoint != "" && provider.region != "" {
+		provider.region = ""
+	}
+	if provider.speechHost == "" && provider.speechEndpoint == "" && !((provider.apiKey != "" && provider.region != "") || (provider.authToken != "" && provider.region != "")) {
+		return nil, fmt.Errorf("azure speech config requires AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or AZURE_SPEECH_AUTH_TOKEN and AZURE_SPEECH_REGION or AZURE_SPEECH_KEY and AZURE_SPEECH_ENDPOINT")
 	}
 	return provider, nil
 }
@@ -326,7 +347,9 @@ func defaultAzureSTTWebsocketDialer(ctx context.Context, endpoint string, header
 func buildAzureSTTStreamURL(s *AzureSTT, language string) string {
 	base := s.websocketURL
 	if base == "" {
-		if s.speechHost != "" {
+		if s.speechEndpoint != "" {
+			base = s.speechEndpoint
+		} else if s.speechHost != "" {
 			base = s.speechHost
 		} else {
 			base = fmt.Sprintf("wss://%s.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1", s.region)
@@ -376,7 +399,9 @@ func (s *AzureSTT) streamLanguage(language string) string {
 
 func buildAzureSTTHeaders(s *AzureSTT, connectionID string) http.Header {
 	headers := make(http.Header)
-	if s.apiKey != "" {
+	if s.authToken != "" {
+		headers.Set("Authorization", "Bearer "+s.authToken)
+	} else if s.apiKey != "" {
 		headers.Set("Ocp-Apim-Subscription-Key", s.apiKey)
 	}
 	headers.Set("X-ConnectionId", connectionID)

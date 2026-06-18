@@ -347,6 +347,51 @@ func TestAzureSTTBuildsReferenceHostStreamURL(t *testing.T) {
 	}
 }
 
+func TestAzureSTTBuildsReferenceEndpointStreamURL(t *testing.T) {
+	provider, err := NewAzureSTT("key", "", WithAzureSTTSpeechEndpoint("https://speech.endpoint.test/custom/stt"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+
+	streamURL := buildAzureSTTStreamURL(provider, "id-ID")
+	parsed, err := url.Parse(streamURL)
+	if err != nil {
+		t.Fatalf("parse stream URL: %v", err)
+	}
+
+	if parsed.Scheme != "wss" {
+		t.Fatalf("stream URL scheme = %q, want wss", parsed.Scheme)
+	}
+	if parsed.Host != "speech.endpoint.test" {
+		t.Fatalf("stream URL host = %q, want speech endpoint host", parsed.Host)
+	}
+	if parsed.Path != "/custom/stt" {
+		t.Fatalf("stream URL path = %q, want speech endpoint path", parsed.Path)
+	}
+	if got := parsed.Query().Get("language"); got != "id-ID" {
+		t.Fatalf("language query = %q, want id-ID", got)
+	}
+}
+
+func TestAzureSTTHeadersUseAuthToken(t *testing.T) {
+	provider, err := NewAzureSTT("", "eastus", WithAzureSTTAuthToken("token-123"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+
+	headers := buildAzureSTTHeaders(provider, "connection-id")
+
+	if got := headers.Get("Authorization"); got != "Bearer token-123" {
+		t.Fatalf("Authorization = %q, want bearer token", got)
+	}
+	if got := headers.Get("Ocp-Apim-Subscription-Key"); got != "" {
+		t.Fatalf("subscription header = %q, want omitted for auth token", got)
+	}
+	if got := headers.Get("X-ConnectionId"); got != "connection-id" {
+		t.Fatalf("X-ConnectionId = %q, want connection-id", got)
+	}
+}
+
 func TestAzureSTTStreamUsesConfiguredDefaultLanguage(t *testing.T) {
 	provider, err := NewAzureSTT("", "", WithAzureSTTSpeechHost("https://speech.container.test"), WithAzureSTTLanguage("id-ID"))
 	if err != nil {
