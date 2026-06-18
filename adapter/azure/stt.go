@@ -33,20 +33,23 @@ const (
 type azureSTTWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 
 type AzureSTT struct {
-	apiKey              string
-	region              string
-	speechHost          string
-	speechEndpoint      string
-	authToken           string
-	language            string
-	sampleRate          int
-	explicitPunctuation bool
-	profanity           string
-	httpClient          *http.Client
-	websocketURL        string
-	dialWebsocket       azureSTTWebsocketDialer
-	mu                  sync.Mutex
-	streams             map[*azureSTTStream]struct{}
+	apiKey               string
+	region               string
+	speechHost           string
+	speechEndpoint       string
+	authToken            string
+	language             string
+	sampleRate           int
+	segmentationSilence  int
+	segmentationMaxTime  int
+	segmentationStrategy string
+	explicitPunctuation  bool
+	profanity            string
+	httpClient           *http.Client
+	websocketURL         string
+	dialWebsocket        azureSTTWebsocketDialer
+	mu                   sync.Mutex
+	streams              map[*azureSTTStream]struct{}
 }
 
 type AzureSTTOption func(*AzureSTT)
@@ -95,6 +98,30 @@ func WithAzureSTTSampleRate(sampleRate int) AzureSTTOption {
 	return func(s *AzureSTT) {
 		if sampleRate > 0 {
 			s.sampleRate = sampleRate
+		}
+	}
+}
+
+func WithAzureSTTSegmentationSilenceTimeout(timeoutMS int) AzureSTTOption {
+	return func(s *AzureSTT) {
+		if timeoutMS > 0 {
+			s.segmentationSilence = timeoutMS
+		}
+	}
+}
+
+func WithAzureSTTSegmentationMaxTime(maxTimeMS int) AzureSTTOption {
+	return func(s *AzureSTT) {
+		if maxTimeMS > 0 {
+			s.segmentationMaxTime = maxTimeMS
+		}
+	}
+}
+
+func WithAzureSTTSegmentationStrategy(strategy string) AzureSTTOption {
+	return func(s *AzureSTT) {
+		if strategy != "" {
+			s.segmentationStrategy = strategy
 		}
 	}
 }
@@ -214,7 +241,7 @@ func openAzureSTTStreamConnection(ctx context.Context, provider *AzureSTT, strea
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to dial azure stt websocket: %w", err)
 	}
-	if err := conn.WriteMessage(websocket.TextMessage, buildAzureSTTMessage("speech.config", connectionID, "application/json", buildAzureSTTSpeechConfig())); err != nil {
+	if err := conn.WriteMessage(websocket.TextMessage, buildAzureSTTMessage("speech.config", connectionID, "application/json", buildAzureSTTSpeechConfig(provider))); err != nil {
 		_ = conn.Close()
 		return nil, "", fmt.Errorf("failed to initialize azure stt websocket: %w", err)
 	}
@@ -424,7 +451,7 @@ func buildAzureSTTHeaders(s *AzureSTT, connectionID string) http.Header {
 	return headers
 }
 
-func buildAzureSTTSpeechConfig() []byte {
+func buildAzureSTTSpeechConfig(s *AzureSTT) []byte {
 	payload := map[string]any{
 		"context": map[string]any{
 			"system": map[string]any{
@@ -432,8 +459,29 @@ func buildAzureSTTSpeechConfig() []byte {
 			},
 		},
 	}
+	properties := azureSTTSpeechConfigProperties(s)
+	if len(properties) > 0 {
+		payload["properties"] = properties
+	}
 	b, _ := json.Marshal(payload)
 	return b
+}
+
+func azureSTTSpeechConfigProperties(s *AzureSTT) map[string]string {
+	properties := make(map[string]string)
+	if s == nil {
+		return properties
+	}
+	if s.segmentationSilence > 0 {
+		properties["Speech_SegmentationSilenceTimeoutMs"] = fmt.Sprint(s.segmentationSilence)
+	}
+	if s.segmentationMaxTime > 0 {
+		properties["Speech_SegmentationMaximumTimeMs"] = fmt.Sprint(s.segmentationMaxTime)
+	}
+	if s.segmentationStrategy != "" {
+		properties["Speech_SegmentationStrategy"] = s.segmentationStrategy
+	}
+	return properties
 }
 
 func buildAzureSTTMessage(path string, requestID string, contentType string, body []byte) []byte {
