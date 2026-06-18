@@ -615,6 +615,17 @@ func TestAgentActivityOnStartOfSpeechReportsActualSpeechStartTime(t *testing.T) 
 	if activity.userSpeechStartedAt.Before(beforeStart.Add(-700 * time.Millisecond)) {
 		t.Fatalf("userSpeechStartedAt = %v, want close to VAD-adjusted start", activity.userSpeechStartedAt.Sub(beforeStart))
 	}
+	select {
+	case ev := <-session.UserStateChangedCh:
+		if ev.CreatedAt.After(beforeStart.Add(-450 * time.Millisecond)) {
+			t.Fatalf("user state CreatedAt = %v, want VAD-adjusted speech start before callback", ev.CreatedAt.Sub(beforeStart))
+		}
+		if ev.CreatedAt.Before(beforeStart.Add(-700 * time.Millisecond)) {
+			t.Fatalf("user state CreatedAt = %v, want close to VAD-adjusted start", ev.CreatedAt.Sub(beforeStart))
+		}
+	case <-testTimeout():
+		t.Fatal("UserStateChangedCh did not receive start-of-speech event")
+	}
 }
 
 func TestAgentActivityOnStartOfSpeechPausesThinkingSpeech(t *testing.T) {

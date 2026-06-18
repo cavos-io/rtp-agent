@@ -1554,7 +1554,7 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 	a.userSpeechStoppedAt = time.Time{}
 	a.clearHeldUserTranscriptWindow()
 	if a.Session != nil {
-		a.Session.UpdateUserState(UserStateSpeaking)
+		a.Session.updateUserStateAt(UserStateSpeaking, a.userSpeechStartedAt)
 	}
 	a.notifyUserTurnUpdated()
 	if endpointing := a.endpointing(); endpointing != nil {

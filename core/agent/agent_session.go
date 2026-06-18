@@ -2165,6 +2165,10 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 }
 
 func (s *AgentSession) UpdateUserState(state UserState) {
+	s.updateUserStateAt(state, time.Time{})
+}
+
+func (s *AgentSession) updateUserStateAt(state UserState, createdAt time.Time) {
 	s.mu.Lock()
 	if s.userTurnClaims > 0 && state != UserStateSpeaking {
 		s.mu.Unlock()
@@ -2184,11 +2188,14 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 	}
 
 	if oldState != state {
+		if createdAt.IsZero() {
+			createdAt = time.Now()
+		}
 		logger.Logger.Debugw("User state changed", "old", oldState, "new", state)
 		ev := UserStateChangedEvent{
 			OldState:  oldState,
 			NewState:  state,
-			CreatedAt: time.Now(),
+			CreatedAt: createdAt,
 		}
 		s.recordEvent(&ev)
 		for _, ch := range s.userStateChangedSubscribers() {
