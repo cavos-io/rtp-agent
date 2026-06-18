@@ -37,6 +37,17 @@ type LocalJobContextValuesResult struct {
 	Token               string
 }
 
+func PrepareLocalJobRunOptions(participantIdentity string, opts LocalJobOptions) (string, error) {
+	identity, err := LocalJobParticipantIdentityForRun(opts.Token, participantIdentity)
+	if err != nil {
+		return "", err
+	}
+	if err := ValidateLocalJobRunOptions(identity, opts); err != nil {
+		return "", err
+	}
+	return identity, nil
+}
+
 func LocalJobContextValues(opts LocalJobContextValueOptions) LocalJobContextValuesResult {
 	localOptions := opts.Options
 	token := localOptions.Token

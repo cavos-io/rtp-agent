@@ -1781,12 +1781,8 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 }
 
 func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName string, participantIdentity string, options LocalJobOptions) error {
-	var err error
-	participantIdentity, err = workerlivekit.LocalJobParticipantIdentityForRun(options.Token, participantIdentity)
+	participantIdentity, err := workerlivekit.PrepareLocalJobRunOptions(participantIdentity, options)
 	if err != nil {
-		return err
-	}
-	if err := workerlivekit.ValidateLocalJobRunOptions(participantIdentity, options); err != nil {
 		return err
 	}
 	if s.entrypointFnc == nil {

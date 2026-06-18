@@ -83,3 +83,36 @@ func TestValidateLocalJobRunOptionsChecksIdentityBeforeRoomInfo(t *testing.T) {
 		t.Fatalf("ValidateLocalJobRunOptions() error = %q, want %q", got, want)
 	}
 }
+
+func TestPrepareLocalJobRunOptionsUsesExplicitIdentity(t *testing.T) {
+	identity, err := workerlivekit.PrepareLocalJobRunOptions("agent-local", workerlivekit.DefaultFakeLocalJobOptions())
+	if err != nil {
+		t.Fatalf("PrepareLocalJobRunOptions() error = %v", err)
+	}
+	if identity != "agent-local" {
+		t.Fatalf("identity = %q, want agent-local", identity)
+	}
+}
+
+func TestPrepareLocalJobRunOptionsRejectsInvalidTokenBeforeValidation(t *testing.T) {
+	_, err := workerlivekit.PrepareLocalJobRunOptions("agent-local", workerlivekit.LocalJobOptions{
+		FakeJob: false,
+		Token:   "not-a-jwt",
+	})
+	if err == nil {
+		t.Fatal("PrepareLocalJobRunOptions() error = nil, want invalid token")
+	}
+	if got, want := err.Error(), "invalid local job token: token is malformed: token contains an invalid number of segments"; got != want {
+		t.Fatalf("PrepareLocalJobRunOptions() error = %q, want %q", got, want)
+	}
+}
+
+func TestPrepareLocalJobRunOptionsChecksReferenceValidationAfterIdentity(t *testing.T) {
+	_, err := workerlivekit.PrepareLocalJobRunOptions("", workerlivekit.LocalJobOptions{FakeJob: false})
+	if err == nil {
+		t.Fatal("PrepareLocalJobRunOptions() error = nil, want missing identity")
+	}
+	if got, want := err.Error(), "agent_identity is None but fake_job is False"; got != want {
+		t.Fatalf("PrepareLocalJobRunOptions() error = %q, want %q", got, want)
+	}
+}
