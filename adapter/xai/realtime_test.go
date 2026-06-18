@@ -385,6 +385,60 @@ func TestXaiRealtimeIgnoresUnknownFunctionCalls(t *testing.T) {
 	}
 }
 
+func TestXaiRealtimeCloseEmitsSessionDurationMetrics(t *testing.T) {
+	handlerDone := make(chan struct{})
+	handlerErr := make(chan error, 1)
+	dialer := newXaiRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		defer close(handlerDone)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			handlerErr <- fmt.Errorf("read initial session update: %w", err)
+			return
+		}
+		_, _, _ = conn.ReadMessage()
+	})
+
+	model := NewXaiRealtimeModel("test-key",
+		WithXaiRealtimeBaseURL("ws://xai.test/v1/realtime"),
+		WithXaiRealtimeWebsocketDialer(dialer),
+	)
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	time.Sleep(time.Millisecond)
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	select {
+	case ev, ok := <-session.EventCh():
+		if !ok {
+			t.Fatal("EventCh closed before close metrics event")
+		}
+		if ev.Type != llm.RealtimeEventTypeMetricsCollected || ev.Metrics == nil {
+			t.Fatalf("close event = %#v, want metrics_collected", ev)
+		}
+		if ev.Metrics.RequestID != "session_close" {
+			t.Fatalf("metrics request id = %q, want session_close", ev.Metrics.RequestID)
+		}
+		if ev.Metrics.SessionDuration <= 0 {
+			t.Fatalf("session duration = %v, want positive", ev.Metrics.SessionDuration)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for close metrics event")
+	}
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket handler")
+	}
+	select {
+	case err := <-handlerErr:
+		t.Fatal(err)
+	default:
+	}
+}
+
 func assertXaiRealtimeEventType(t *testing.T, eventCh <-chan llm.RealtimeEvent, want llm.RealtimeEventType) llm.RealtimeEvent {
 	t.Helper()
 	select {

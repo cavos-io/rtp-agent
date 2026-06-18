@@ -36,6 +36,7 @@ type RealtimeModel struct {
 	inputTranscriptionFinalHook OpenAIRealtimeInputTranscriptionFinalHook
 	remoteItemAddedHook         OpenAIRealtimeRemoteItemAddedHook
 	functionCallFilter          OpenAIRealtimeFunctionCallFilter
+	sessionCloseMetricsHook     OpenAIRealtimeSessionCloseMetricsHook
 	mu                          sync.Mutex
 	options                     llm.RealtimeSessionOptions
 	modalities                  []string
@@ -56,6 +57,8 @@ type OpenAIRealtimeRemoteItemAddedHook func(*llm.RemoteChatContext, *llm.RemoteI
 
 type OpenAIRealtimeFunctionCallFilter func([]llm.Tool, string) bool
 
+type OpenAIRealtimeSessionCloseMetricsHook func(time.Duration) *telemetry.RealtimeModelMetrics
+
 type openAIRealtimeDialResult struct {
 	conn *websocket.Conn
 	err  error
@@ -72,6 +75,7 @@ type openAIRealtimeModelOptions struct {
 	inputTranscriptionFinalHook OpenAIRealtimeInputTranscriptionFinalHook
 	remoteItemAddedHook         OpenAIRealtimeRemoteItemAddedHook
 	functionCallFilter          OpenAIRealtimeFunctionCallFilter
+	sessionCloseMetricsHook     OpenAIRealtimeSessionCloseMetricsHook
 }
 
 type OpenAIRealtimeOption func(*openAIRealtimeModelOptions)
@@ -199,6 +203,12 @@ func WithOpenAIRealtimeFunctionCallFilter(filter OpenAIRealtimeFunctionCallFilte
 	}
 }
 
+func WithOpenAIRealtimeSessionCloseMetricsHook(hook OpenAIRealtimeSessionCloseMetricsHook) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.sessionCloseMetricsHook = hook
+	}
+}
+
 func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *RealtimeModel {
 	if model == "" {
 		model = "gpt-realtime"
@@ -234,6 +244,7 @@ func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *Realt
 		inputTranscriptionFinalHook: options.inputTranscriptionFinalHook,
 		remoteItemAddedHook:         options.remoteItemAddedHook,
 		functionCallFilter:          options.functionCallFilter,
+		sessionCloseMetricsHook:     options.sessionCloseMetricsHook,
 		options:                     options.sessionOptions,
 		modalities:                  options.modalities,
 		maxSession:                  options.maxSession,
@@ -305,6 +316,7 @@ type realtimeSession struct {
 	audioBStream     *audio.AudioByteStream
 	pushedDuration   float64
 	optionsState     map[string]any
+	connectedAt      time.Time
 }
 
 const maxRealtimeInputTranscripts = 1024
@@ -374,6 +386,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		eventCh:      make(chan llm.RealtimeEvent, 100),
 		remote:       llm.NewRemoteChatContext(),
 		audioBStream: newOpenAIRealtimeAudioByteStream(),
+		connectedAt:  time.Now(),
 	}
 
 	go s.eventLoop()
@@ -1445,11 +1458,27 @@ func (s *realtimeSession) Close() error {
 	if s.model != nil {
 		s.model.unregisterSession(s)
 	}
+	s.emitSessionCloseMetrics()
 	s.closeRealtimeGeneration()
 	s.cancel()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.conn.Close()
+}
+
+func (s *realtimeSession) emitSessionCloseMetrics() {
+	if s == nil || s.model == nil || s.model.sessionCloseMetricsHook == nil || s.connectedAt.IsZero() {
+		return
+	}
+	metrics := s.model.sessionCloseMetricsHook(time.Since(s.connectedAt))
+	if metrics == nil {
+		return
+	}
+	select {
+	case s.eventCh <- llm.RealtimeEvent{Type: llm.RealtimeEventTypeMetricsCollected, Metrics: metrics}:
+	default:
+		logger.Logger.Warnw("dropping OpenAI realtime close metrics for full event channel", nil)
+	}
 }
 
 func (s *realtimeSession) sendMsg(msg any) error {

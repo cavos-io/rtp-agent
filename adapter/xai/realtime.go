@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
 	adapteropenai "github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/gorilla/websocket"
 )
 
@@ -75,6 +77,7 @@ func NewXaiRealtimeModel(apiKey string, opts ...XaiRealtimeOption) *XaiRealtimeM
 		adapteropenai.WithOpenAIRealtimeInputTranscriptionFinalHook(xaiRealtimeDeduplicateFinalInputTranscription),
 		adapteropenai.WithOpenAIRealtimeRemoteItemAddedHook(xaiRealtimeAppendNilPreviousItemID),
 		adapteropenai.WithOpenAIRealtimeFunctionCallFilter(xaiRealtimeKnownFunctionTool),
+		adapteropenai.WithOpenAIRealtimeSessionCloseMetricsHook(xaiRealtimeSessionCloseMetrics),
 		adapteropenai.WithOpenAIRealtimeVoice(defaultXaiRealtimeVoice),
 		adapteropenai.WithOpenAIRealtimeModalities([]string{"audio"}),
 		adapteropenai.WithOpenAIRealtimeInputAudioTranscription(map[string]any{}),
@@ -142,6 +145,15 @@ func xaiRealtimeKnownFunctionTool(tools []llm.Tool, name string) bool {
 		}
 	}
 	return false
+}
+
+func xaiRealtimeSessionCloseMetrics(duration time.Duration) *telemetry.RealtimeModelMetrics {
+	return &telemetry.RealtimeModelMetrics{
+		Label:           "xAI Realtime API",
+		RequestID:       "session_close",
+		Timestamp:       time.Now(),
+		SessionDuration: duration.Seconds(),
+	}
 }
 
 func (m *XaiRealtimeModel) Model() string { return m.model }
