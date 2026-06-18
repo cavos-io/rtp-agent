@@ -1760,7 +1760,7 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	if options == workerlivekit.DefaultFakeLocalJobOptions() {
 		jobCtx = newLocalJobContext(roomName, participantIdentity, s.Options)
 	}
-	localJob := workerlivekit.LocalJobInfo(jobCtx.Job)
+	localJob := workerlivekit.LocalJobExecutorPlan(jobCtx.Job)
 	jobCtx.workerID = s.workerID
 	jobCtx.LogContextFields()["worker_id"] = jobCtx.WorkerID()
 	shutdownCh := make(chan struct{})
@@ -1809,7 +1809,7 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 
 func (s *AgentServer) launchLocalJobExecutor(ctx context.Context, jobCtx *JobContext, entrypoint func() error, entrypointDone chan<- struct{}) error {
 	info := runningJobInfoFromContext(jobCtx)
-	localJob := workerlivekit.LocalJobInfo(jobCtx.Job)
+	localJob := workerlivekit.LocalJobExecutorPlan(jobCtx.Job)
 	if s.Options.NumIdleProcessesSet && s.Options.NumIdleProcesses > 0 {
 		pool := newLocalProcPool(s.Options.NumIdleProcesses, workeripc.ExecutorTypeThread, entrypoint)
 		pool.SetTargetIdleProcesses(s.Options.NumIdleProcesses)

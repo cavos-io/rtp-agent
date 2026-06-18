@@ -1003,6 +1003,17 @@ func TestLocalJobInfoBuildsExecutorIDFromJobID(t *testing.T) {
 	}
 }
 
+func TestLocalJobExecutorPlanBuildsExecutorIDFromLiveKitJobID(t *testing.T) {
+	plan := workerlivekit.LocalJobExecutorPlan(&lkprotocol.Job{Id: "job-local"})
+
+	if plan.JobID != "job-local" {
+		t.Fatalf("LocalJobExecutorPlan().JobID = %q, want job-local", plan.JobID)
+	}
+	if plan.ExecutorID != "local_job-local" {
+		t.Fatalf("LocalJobExecutorPlan().ExecutorID = %q, want local_job-local", plan.ExecutorID)
+	}
+}
+
 func TestJobAcceptIdentityDefaultsFromJobID(t *testing.T) {
 	got := workerlivekit.JobAcceptIdentity(&lkprotocol.Job{Id: "job_accept"}, "")
 	if got != "agent-job_accept" {

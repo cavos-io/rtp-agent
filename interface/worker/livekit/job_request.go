@@ -585,12 +585,18 @@ type LocalJobRuntimeInfo struct {
 	ExecutorID string
 }
 
+type LocalJobExecutorPlanResult = LocalJobRuntimeInfo
+
 func LocalJobInfo(job *lkprotocol.Job) LocalJobRuntimeInfo {
 	jobID := JobID(job)
 	return LocalJobRuntimeInfo{
 		JobID:      jobID,
 		ExecutorID: "local_" + jobID,
 	}
+}
+
+func LocalJobExecutorPlan(job *lkprotocol.Job) LocalJobExecutorPlanResult {
+	return LocalJobExecutorPlanResult(LocalJobInfo(job))
 }
 
 func JobAcceptIdentity(job *lkprotocol.Job, identity string) string {
