@@ -10,7 +10,10 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 )
 
-const defaultAssistantTranscriptStreamID = "100"
+const (
+	defaultUserTranscriptStreamID      = "0"
+	defaultAssistantTranscriptStreamID = "100"
+)
 
 type TranscriptForwarderOptions struct {
 	UserStreamID      string
@@ -22,11 +25,11 @@ type TranscriptForwarder struct {
 	publisher DataPublisher
 	opts      TranscriptForwarderOptions
 
-	cancel context.CancelFunc
+	cancel  context.CancelFunc
 	stopErr error
-	wg     sync.WaitGroup
-	start  sync.Once
-	once   sync.Once
+	wg      sync.WaitGroup
+	start   sync.Once
+	once    sync.Once
 }
 
 func NewTranscriptForwarder(session *agent.AgentSession, publisher DataPublisher, opts TranscriptForwarderOptions) *TranscriptForwarder {
@@ -127,7 +130,10 @@ func userTranscriptStreamID(ev agent.UserInputTranscribedEvent, fallback string)
 	if ev.SpeakerID != "" {
 		return ev.SpeakerID
 	}
-	return fallback
+	if fallback != "" {
+		return fallback
+	}
+	return defaultUserTranscriptStreamID
 }
 
 func PublishTranscript(ctx context.Context, publisher DataPublisher, role string, text string, final bool, streamID string, createdAt time.Time) error {
