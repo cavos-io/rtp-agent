@@ -3286,7 +3286,17 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		return adapteraws.NewAWSTTS(context.Background(), cfg.AWSRegion, cfg.TTSVoice, ttsOpts...)
 	case providerAzure:
-		return azure.NewAzureTTS("", "", cfg.TTSVoice, cfg.TTSLanguage)
+		ttsOpts := []azure.AzureTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, azure.WithAzureTTSSpeechEndpoint(cfg.TTSBaseURL))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, azure.WithAzureTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, azure.WithAzureTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		return azure.NewAzureTTSWithOptions("", "", cfg.TTSVoice, ttsOpts...)
 	case providerBaseten:
 		ttsOpts := []baseten.BasetenTTSOption{}
 		if cfg.TTSBaseURL != "" {
@@ -5104,7 +5114,17 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = provider
 	case providerAzure:
-		provider, err := azure.NewAzureTTS("", "", cfg.TTSVoice, cfg.TTSLanguage)
+		ttsOpts := []azure.AzureTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, azure.WithAzureTTSSpeechEndpoint(cfg.TTSBaseURL))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, azure.WithAzureTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, azure.WithAzureTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		provider, err := azure.NewAzureTTSWithOptions("", "", cfg.TTSVoice, ttsOpts...)
 		if err != nil {
 			return nil, err
 		}

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
@@ -301,6 +302,23 @@ func TestAzureSTTBuildsReferenceStreamURL(t *testing.T) {
 	}
 }
 
+func TestAzureSTTStreamURLUsesExplicitPunctuationOption(t *testing.T) {
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTExplicitPunctuation(true))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+
+	streamURL := buildAzureSTTStreamURL(provider, "id-ID")
+	parsed, err := url.Parse(streamURL)
+	if err != nil {
+		t.Fatalf("parse stream URL: %v", err)
+	}
+
+	if got := parsed.Query().Get("punctuation"); got != "explicit" {
+		t.Fatalf("punctuation query = %q, want explicit", got)
+	}
+}
+
 func TestAzureSTTBuildsReferenceHostStreamURL(t *testing.T) {
 	provider, err := NewAzureSTT("", "", WithAzureSTTSpeechHost("https://speech.container.test"))
 	if err != nil {
@@ -327,6 +345,51 @@ func TestAzureSTTBuildsReferenceHostStreamURL(t *testing.T) {
 	}
 	if parsed.Query().Get("format") != "detailed" {
 		t.Fatalf("format query = %q, want detailed", parsed.Query().Get("format"))
+	}
+}
+
+func TestAzureSTTBuildsReferenceEndpointStreamURL(t *testing.T) {
+	provider, err := NewAzureSTT("key", "", WithAzureSTTSpeechEndpoint("https://speech.endpoint.test/custom/stt"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+
+	streamURL := buildAzureSTTStreamURL(provider, "id-ID")
+	parsed, err := url.Parse(streamURL)
+	if err != nil {
+		t.Fatalf("parse stream URL: %v", err)
+	}
+
+	if parsed.Scheme != "wss" {
+		t.Fatalf("stream URL scheme = %q, want wss", parsed.Scheme)
+	}
+	if parsed.Host != "speech.endpoint.test" {
+		t.Fatalf("stream URL host = %q, want speech endpoint host", parsed.Host)
+	}
+	if parsed.Path != "/custom/stt" {
+		t.Fatalf("stream URL path = %q, want speech endpoint path", parsed.Path)
+	}
+	if got := parsed.Query().Get("language"); got != "id-ID" {
+		t.Fatalf("language query = %q, want id-ID", got)
+	}
+}
+
+func TestAzureSTTHeadersUseAuthToken(t *testing.T) {
+	provider, err := NewAzureSTT("", "eastus", WithAzureSTTAuthToken("token-123"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+
+	headers := buildAzureSTTHeaders(provider, "connection-id")
+
+	if got := headers.Get("Authorization"); got != "Bearer token-123" {
+		t.Fatalf("Authorization = %q, want bearer token", got)
+	}
+	if got := headers.Get("Ocp-Apim-Subscription-Key"); got != "" {
+		t.Fatalf("subscription header = %q, want omitted for auth token", got)
+	}
+	if got := headers.Get("X-ConnectionId"); got != "connection-id" {
+		t.Fatalf("X-ConnectionId = %q, want connection-id", got)
 	}
 }
 
@@ -544,6 +607,24 @@ func TestAzureSTTStreamInterimConfidenceMatchesReference(t *testing.T) {
 	}
 	if got := event.Alternatives[0].Confidence; got != 0 {
 		t.Fatalf("confidence = %v, want Azure reference interim confidence 0", got)
+	}
+}
+
+func TestAzureSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
+	stream := &azureSTTStream{language: "id-ID"}
+	timing, ok := any(stream).(stt.StreamTiming)
+	if !ok {
+		t.Fatal("stream does not implement stt.StreamTiming")
+	}
+	timing.SetStartTimeOffset(2.5)
+
+	event := stream.parseMessage([]byte("Path: speech.phrase\r\nContent-Type: application/json\r\n\r\n{\"RecognitionStatus\":\"Success\",\"DisplayText\":\"fallback text\",\"Offset\":1000000,\"Duration\":3000000,\"NBest\":[{\"Display\":\"halo final\",\"Confidence\":0.87}]}"))
+	if event == nil {
+		t.Fatal("event = nil, want final transcript")
+	}
+	alt := event.Alternatives[0]
+	if alt.StartTime != 2.6 || alt.EndTime != 2.9 {
+		t.Fatalf("time range = %v-%v, want 2.6-2.9", alt.StartTime, alt.EndTime)
 	}
 }
 
@@ -783,10 +864,11 @@ func TestAzureTTSDefaultsAndEnvironmentMatchReference(t *testing.T) {
 func TestAzureTTSRequiresSpeechConfig(t *testing.T) {
 	t.Setenv(azureSpeechKeyEnv, "")
 	t.Setenv(azureSpeechRegionEnv, "")
+	t.Setenv(azureSpeechEndpointEnv, "")
 
 	_, err := NewAzureTTS("", "", "")
 
-	if err == nil || !strings.Contains(err.Error(), "AZURE_SPEECH_KEY") {
+	if err == nil || !strings.Contains(err.Error(), "AZURE_SPEECH_ENDPOINT") {
 		t.Fatalf("NewAzureTTS error = %v, want speech config error", err)
 	}
 }
@@ -852,13 +934,176 @@ func TestAzureTTSBuildsRequestWithConfiguredLanguage(t *testing.T) {
 	}
 }
 
+func TestAzureTTSBuildsRequestWithConfiguredSampleRate(t *testing.T) {
+	provider, err := NewAzureTTSWithOptions(
+		"key",
+		"eastus",
+		"en-US-AvaNeural",
+		WithAzureTTSSampleRate(16000),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureTTSWithOptions error = %v", err)
+	}
+
+	req, err := buildAzureTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+
+	if provider.SampleRate() != 16000 {
+		t.Fatalf("SampleRate() = %d, want 16000", provider.SampleRate())
+	}
+	if got := req.Header.Get("X-Microsoft-OutputFormat"); got != "raw-16khz-16bit-mono-pcm" {
+		t.Fatalf("output format = %q, want raw-16khz-16bit-mono-pcm", got)
+	}
+}
+
+func TestAzureTTSBuildsRequestWithEndpointDeploymentAndAuthToken(t *testing.T) {
+	t.Setenv(azureSpeechKeyEnv, "")
+
+	provider, err := NewAzureTTSWithOptions(
+		"",
+		"eastus",
+		"en-US-AvaNeural",
+		WithAzureTTSSpeechEndpoint("https://speech.example.test/cognitiveservices/v1"),
+		WithAzureTTSDeploymentID("voice-deployment"),
+		WithAzureTTSAuthToken("token-123"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureTTSWithOptions error = %v", err)
+	}
+
+	req, err := buildAzureTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+
+	if got, want := req.URL.String(), "https://speech.example.test/cognitiveservices/v1?deploymentId=voice-deployment"; got != want {
+		t.Fatalf("URL = %q, want %q", got, want)
+	}
+	if got := req.Header.Get("Authorization"); got != "Bearer token-123" {
+		t.Fatalf("Authorization = %q, want bearer token", got)
+	}
+	if got := req.Header.Get("Ocp-Apim-Subscription-Key"); got != "" {
+		t.Fatalf("subscription header = %q, want omitted when auth token is configured", got)
+	}
+}
+
+func TestAzureTTSBuildsRequestWithReferenceSSMLOptions(t *testing.T) {
+	provider, err := NewAzureTTSWithOptions(
+		"key",
+		"eastus",
+		"en-US-AvaNeural",
+		WithAzureTTSLexiconURI("https://example.com/lexicon.xml"),
+		WithAzureTTSStyle(AzureTTSStyle{Style: "cheerful", Degree: 1.5}),
+		WithAzureTTSProsody(AzureTTSProsody{Rate: "fast", Volume: "loud", Pitch: "high"}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureTTSWithOptions error = %v", err)
+	}
+
+	req, err := buildAzureTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	want := `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="en-US"><voice name="en-US-AvaNeural"><lexicon uri="https://example.com/lexicon.xml"/><mstts:express-as style="cheerful" styledegree="1.5"><prosody rate="fast" volume="loud" pitch="high">hello</prosody></mstts:express-as></voice></speak>`
+	if string(body) != want {
+		t.Fatalf("SSML = %q, want %q", string(body), want)
+	}
+}
+
+func TestAzureTTSRejectsInvalidReferenceVoiceControls(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []AzureTTSOption
+		want string
+	}{
+		{
+			name: "style degree",
+			opts: []AzureTTSOption{WithAzureTTSStyle(AzureTTSStyle{Style: "cheerful", Degree: 2.5})},
+			want: "style degree",
+		},
+		{
+			name: "prosody rate",
+			opts: []AzureTTSOption{WithAzureTTSProsody(AzureTTSProsody{Rate: "warp"})},
+			want: "prosody rate",
+		},
+		{
+			name: "prosody volume",
+			opts: []AzureTTSOption{WithAzureTTSProsody(AzureTTSProsody{Volume: "blast"})},
+			want: "prosody volume",
+		},
+		{
+			name: "prosody pitch",
+			opts: []AzureTTSOption{WithAzureTTSProsody(AzureTTSProsody{Pitch: "sideways"})},
+			want: "prosody pitch",
+		},
+		{
+			name: "numeric prosody rate range",
+			opts: []AzureTTSOption{WithAzureTTSProsody(AzureTTSProsody{Rate: "2.5"})},
+			want: "prosody rate must be between 0.5 and 2",
+		},
+		{
+			name: "numeric prosody volume range",
+			opts: []AzureTTSOption{WithAzureTTSProsody(AzureTTSProsody{Volume: "101"})},
+			want: "prosody volume must be between 0 and 100",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewAzureTTSWithOptions("key", "eastus", "en-US-AvaNeural", tt.opts...)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("NewAzureTTSWithOptions error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestAzureTTSAcceptsReferenceNumericProsody(t *testing.T) {
+	provider, err := NewAzureTTSWithOptions(
+		"key",
+		"eastus",
+		"en-US-AvaNeural",
+		WithAzureTTSProsody(AzureTTSProsody{Rate: "1.5", Volume: "80"}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureTTSWithOptions error = %v, want nil", err)
+	}
+
+	req, err := buildAzureTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if !strings.Contains(string(body), `<prosody rate="1.5" volume="80">hello</prosody>`) {
+		t.Fatalf("SSML = %q, want numeric prosody attrs", string(body))
+	}
+}
+
 func TestAzureTTSUpdateOptionsMatchesReference(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {
 		t.Fatalf("NewAzureTTS error = %v", err)
 	}
 
-	provider.UpdateOptions("id-ID-GadisNeural", "id-ID")
+	if err := provider.UpdateOptions(
+		"id-ID-GadisNeural",
+		"id-ID",
+		WithAzureTTSLexiconURI("https://example.com/runtime-lexicon.xml"),
+		WithAzureTTSStyle(AzureTTSStyle{Style: "customerservice", Degree: 1.2}),
+		WithAzureTTSProsody(AzureTTSProsody{Rate: "slow", Volume: "soft", Pitch: "low"}),
+	); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
 
 	req, err := buildAzureTTSRequest(context.Background(), provider, "halo")
 	if err != nil {
@@ -877,6 +1122,15 @@ func TestAzureTTSUpdateOptionsMatchesReference(t *testing.T) {
 	}
 	if provider.Language() != "id-ID" {
 		t.Fatalf("Language() = %q, want id-ID", provider.Language())
+	}
+	if !strings.Contains(ssml, `<lexicon uri="https://example.com/runtime-lexicon.xml"/>`) {
+		t.Fatalf("SSML = %q, want updated lexicon", ssml)
+	}
+	if !strings.Contains(ssml, `<mstts:express-as style="customerservice" styledegree="1.2">`) {
+		t.Fatalf("SSML = %q, want updated style", ssml)
+	}
+	if !strings.Contains(ssml, `<prosody rate="slow" volume="soft" pitch="low">halo</prosody>`) {
+		t.Fatalf("SSML = %q, want updated prosody", ssml)
 	}
 }
 
@@ -916,6 +1170,22 @@ func TestAzureTTSChunkedStreamKeepsFinalReadBytes(t *testing.T) {
 	}
 }
 
+func TestAzureTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T) {
+	stream := &azureTTSChunkedStream{
+		body:       errorReadCloser{err: errors.New("socket closed")},
+		sampleRate: 24000,
+	}
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestAzureTTSSynthesizeUsesConfiguredClient(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {
@@ -950,6 +1220,84 @@ func TestAzureTTSSynthesizeUsesConfiguredClient(t *testing.T) {
 	}
 }
 
+func TestAzureTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
+	provider, err := NewAzureTTS("key", "eastus", "")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusTooManyRequests,
+				Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+}
+
+func TestAzureTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
+	provider, err := NewAzureTTS("key", "eastus", "")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return nil, context.DeadlineExceeded
+		}),
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Synthesize error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestAzureTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
+	provider, err := NewAzureTTS("key", "eastus", "")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return nil, errors.New("dial refused")
+		}),
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if errors.As(err, &timeoutErr) {
+		t.Fatalf("Synthesize error = %T %v, want non-timeout APIConnectionError", err, err)
+	}
+}
+
 type finalReadBytesCloser struct {
 	data []byte
 	done bool
@@ -964,6 +1312,18 @@ func (r *finalReadBytesCloser) Read(p []byte) (int, error) {
 }
 
 func (r *finalReadBytesCloser) Close() error {
+	return nil
+}
+
+type errorReadCloser struct {
+	err error
+}
+
+func (r errorReadCloser) Read([]byte) (int, error) {
+	return 0, r.err
+}
+
+func (r errorReadCloser) Close() error {
 	return nil
 }
 
@@ -1152,12 +1512,16 @@ func azureTestDialer(
 			}
 		}
 		go func() {
-			if serverErr := <-errCh; serverErr != nil {
+			if serverErr := <-errCh; serverErr != nil && !isAzureTestWebsocketCleanupError(serverErr) {
 				t.Errorf("test websocket server: %v", serverErr)
 			}
 		}()
 		return conn, resp, nil
 	}
+}
+
+func isAzureTestWebsocketCleanupError(err error) bool {
+	return errors.Is(err, io.ErrClosedPipe) || errors.Is(err, net.ErrClosed)
 }
 
 func runAzureTestWebsocketServer(
