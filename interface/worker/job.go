@@ -220,19 +220,19 @@ const (
 
 type ConnectOptions = workerlivekit.ConnectOptions
 
-type ParticipantEntrypoint func(*JobContext, *livekit.ParticipantInfo)
+type ParticipantEntrypoint func(*JobContext, *workerlivekit.ParticipantInfo)
 
 type TrackPublicationWaitOptions = workerlivekit.TrackPublicationWaitOptions
 
 type participantEntrypointRegistration struct {
 	entrypoint ParticipantEntrypoint
-	kinds      []livekit.ParticipantInfo_Kind
+	kinds      []workerlivekit.ParticipantInfoKind
 }
 
 type JobRequest = workerlivekit.JobRequest
 
 type JobContext struct {
-	Job                    *livekit.Job
+	Job                    *workerlivekit.Job
 	Room                   *lksdk.Room
 	Report                 *agent.SessionReport
 	AcceptArguments        JobAcceptArguments
@@ -252,7 +252,7 @@ type JobContext struct {
 	terminated             atomic.Bool
 	finishOnce             sync.Once
 	participantEntrypoints []participantEntrypointRegistration
-	availableParticipants  []*livekit.ParticipantInfo
+	availableParticipants  []*workerlivekit.ParticipantInfo
 	participantTasks       map[workerlivekit.ParticipantTaskKey]struct{}
 	participantTasksMu     sync.Mutex
 
@@ -264,7 +264,7 @@ type JobContext struct {
 	fakeJob   bool
 }
 
-func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string) *JobContext {
+func NewJobContext(job *workerlivekit.Job, url string, apiKey string, apiSecret string) *JobContext {
 	report := agent.NewSessionReport()
 	tagger := agent.NewTagger()
 	report.Tagger = tagger
@@ -418,11 +418,11 @@ func (c *JobContext) AvatarStartInfo() agent.AvatarStartInfo {
 	return workerlivekit.JobAvatarStartInfo(c.Job, c.url, c.token, c.LocalParticipantIdentity())
 }
 
-func (c *JobContext) RoomInfo() *livekit.Room {
+func (c *JobContext) RoomInfo() *workerlivekit.Room {
 	return workerlivekit.JobRoom(c.Job)
 }
 
-func (c *JobContext) PublisherInfo() *livekit.ParticipantInfo {
+func (c *JobContext) PublisherInfo() *workerlivekit.ParticipantInfo {
 	return workerlivekit.JobPublisher(c.Job)
 }
 
@@ -514,7 +514,7 @@ func (c *JobContext) participantAvailable(participant workerlivekit.RemotePartic
 	c.scheduleParticipantEntrypoints(info)
 }
 
-func (c *JobContext) rememberAvailableParticipant(info *livekit.ParticipantInfo) {
+func (c *JobContext) rememberAvailableParticipant(info *workerlivekit.ParticipantInfo) {
 	c.availableParticipants = workerlivekit.UpsertParticipantInfo(c.availableParticipants, info)
 }
 
@@ -538,7 +538,7 @@ func (c *JobContext) AddShutdownCallback(callback any) error {
 	return nil
 }
 
-func (c *JobContext) AddParticipantEntrypoint(entrypoint ParticipantEntrypoint, kinds ...livekit.ParticipantInfo_Kind) error {
+func (c *JobContext) AddParticipantEntrypoint(entrypoint ParticipantEntrypoint, kinds ...workerlivekit.ParticipantInfoKind) error {
 	if entrypoint == nil {
 		return fmt.Errorf("participant entrypoint must not be nil")
 	}
@@ -552,7 +552,7 @@ func (c *JobContext) AddParticipantEntrypoint(entrypoint ParticipantEntrypoint, 
 	}
 	registration := participantEntrypointRegistration{
 		entrypoint: entrypoint,
-		kinds:      append([]livekit.ParticipantInfo_Kind(nil), kinds...),
+		kinds:      append([]workerlivekit.ParticipantInfoKind(nil), kinds...),
 	}
 	c.participantEntrypoints = append(c.participantEntrypoints, registration)
 	c.scheduleParticipantEntrypointForExistingParticipants(registration)
@@ -571,7 +571,7 @@ func (c *JobContext) scheduleParticipantEntrypointForExistingParticipants(regist
 func (c *JobContext) WaitForParticipant(
 	ctx context.Context,
 	identity string,
-	kinds ...livekit.ParticipantInfo_Kind,
+	kinds ...workerlivekit.ParticipantInfoKind,
 ) (*lksdk.RemoteParticipant, error) {
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
@@ -592,7 +592,7 @@ func (c *JobContext) WaitForAgent(
 func (c *JobContext) WaitForTrackPublication(
 	ctx context.Context,
 	identity string,
-	kinds ...livekit.TrackType,
+	kinds ...workerlivekit.TrackType,
 ) (*lksdk.RemoteTrackPublication, error) {
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
@@ -629,7 +629,7 @@ func (c *JobContext) ensureRoomConnected(ctx context.Context) error {
 	return c.Connect(ctx, nil)
 }
 
-func (c *JobContext) scheduleParticipantEntrypoints(participant *livekit.ParticipantInfo) {
+func (c *JobContext) scheduleParticipantEntrypoints(participant *workerlivekit.ParticipantInfo) {
 	if participant == nil {
 		return
 	}
@@ -641,7 +641,7 @@ func (c *JobContext) scheduleParticipantEntrypoints(participant *livekit.Partici
 	}
 }
 
-func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntrypointRegistration, participant *livekit.ParticipantInfo) {
+func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntrypointRegistration, participant *workerlivekit.ParticipantInfo) {
 	if participant == nil {
 		return
 	}
