@@ -543,6 +543,24 @@ func TestElevenLabsStreamURLUsesReferenceTextNormalizationOverride(t *testing.T)
 	}
 }
 
+func TestElevenLabsStreamURLUsesReferenceSyncAlignmentOverride(t *testing.T) {
+	provider, err := NewElevenLabsTTS("test-key", "", "", WithElevenLabsSyncAlignment(false))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	if provider.Capabilities().AlignedTranscript {
+		t.Fatal("aligned transcript capability = true, want false when sync alignment is disabled")
+	}
+	parsed, err := url.Parse(buildElevenLabsStreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	if parsed.Query().Get("sync_alignment") != "" {
+		t.Fatalf("sync_alignment = %q, want omitted when disabled", parsed.Query().Get("sync_alignment"))
+	}
+}
+
 func TestElevenLabsTTSAutoModeDefaultMatchesReference(t *testing.T) {
 	provider, err := NewElevenLabsTTS("test-key", "", "")
 	if err != nil {

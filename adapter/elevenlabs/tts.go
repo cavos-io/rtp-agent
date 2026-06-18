@@ -46,6 +46,7 @@ type ElevenLabsTTS struct {
 	pronunciationDictionaries      []ElevenLabsPronunciationDictionaryLocator
 	autoMode                       *bool
 	autoModeExplicit               bool
+	syncAlignment                  bool
 	applyTextNormalization         string
 	applyLanguageTextNormalization *bool
 }
@@ -142,6 +143,12 @@ func WithElevenLabsAutoMode(enabled bool) ElevenLabsTTSOption {
 	}
 }
 
+func WithElevenLabsSyncAlignment(enabled bool) ElevenLabsTTSOption {
+	return func(t *ElevenLabsTTS) {
+		t.syncAlignment = enabled
+	}
+}
+
 func WithElevenLabsApplyTextNormalization(mode string) ElevenLabsTTSOption {
 	return func(t *ElevenLabsTTS) {
 		if mode == "auto" || mode == "on" || mode == "off" {
@@ -170,6 +177,7 @@ func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...Ele
 		modelID:                modelID,
 		encoding:               "mp3_22050_32",
 		sampleRate:             22050,
+		syncAlignment:          true,
 		applyTextNormalization: "auto",
 	}
 	for _, opt := range opts {
@@ -184,7 +192,7 @@ func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...Ele
 
 func (t *ElevenLabsTTS) Label() string { return "elevenlabs.TTS" }
 func (t *ElevenLabsTTS) Capabilities() tts.TTSCapabilities {
-	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: true}
+	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: t.syncAlignment}
 }
 func (t *ElevenLabsTTS) SampleRate() int  { return t.sampleRate }
 func (t *ElevenLabsTTS) NumChannels() int { return 1 }
@@ -418,7 +426,9 @@ func buildElevenLabsStreamURL(t *ElevenLabsTTS) string {
 	if t.applyLanguageTextNormalization != nil {
 		q.Set("apply_language_text_normalization", strconv.FormatBool(*t.applyLanguageTextNormalization))
 	}
-	q.Set("sync_alignment", "true")
+	if t.syncAlignment {
+		q.Set("sync_alignment", "true")
+	}
 	if t.autoMode != nil {
 		q.Set("auto_mode", strconv.FormatBool(*t.autoMode))
 	}
