@@ -339,35 +339,8 @@ func jobLogValues(jobCtx *JobContext, values ...any) []any {
 	return logValues
 }
 
-func refreshRunningJobTokenForReload(info workeripc.RunningJobInfo, apiSecret string, now time.Time) (workeripc.RunningJobInfo, error) {
-	if apiSecret == "" {
-		return workeripc.RunningJobInfo{}, fmt.Errorf("api_secret is required to reload jobs")
-	}
-	token, err := workerlivekit.RefreshToken(info.Token, apiSecret, now, time.Hour)
-	if err != nil {
-		return workeripc.RunningJobInfo{}, err
-	}
-	info.Token = token
-	return info, nil
-}
-
-func refreshRunningJobsForReload(jobs []workeripc.RunningJobInfo, apiSecret string, now time.Time) ([]workeripc.RunningJobInfo, error) {
-	if apiSecret == "" {
-		return nil, fmt.Errorf("api_secret is required to reload jobs")
-	}
-	refreshed := make([]workeripc.RunningJobInfo, 0, len(jobs))
-	for _, job := range jobs {
-		info, err := refreshRunningJobTokenForReload(job, apiSecret, now)
-		if err != nil {
-			return nil, err
-		}
-		refreshed = append(refreshed, info)
-	}
-	return refreshed, nil
-}
-
 func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.RunningJobInfo, now time.Time) error {
-	refreshed, err := refreshRunningJobsForReload(jobs, s.Options.APISecret, now)
+	refreshed, err := workerlivekit.RefreshRunningJobsForReload(jobs, s.Options.APISecret, now)
 	if err != nil {
 		return err
 	}

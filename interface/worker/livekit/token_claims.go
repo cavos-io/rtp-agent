@@ -76,6 +76,33 @@ func RefreshToken(token string, apiSecret string, now time.Time, ttl time.Durati
 	return jwt.Signed(signer).Claims(standardClaims).Claims(grants).CompactSerialize()
 }
 
+func RefreshRunningJobTokenForReload(info RunningJobInfo, apiSecret string, now time.Time) (RunningJobInfo, error) {
+	if apiSecret == "" {
+		return RunningJobInfo{}, fmt.Errorf("api_secret is required to reload jobs")
+	}
+	token, err := RefreshToken(info.Token, apiSecret, now, time.Hour)
+	if err != nil {
+		return RunningJobInfo{}, err
+	}
+	info.Token = token
+	return info, nil
+}
+
+func RefreshRunningJobsForReload(jobs []RunningJobInfo, apiSecret string, now time.Time) ([]RunningJobInfo, error) {
+	if apiSecret == "" {
+		return nil, fmt.Errorf("api_secret is required to reload jobs")
+	}
+	refreshed := make([]RunningJobInfo, 0, len(jobs))
+	for _, job := range jobs {
+		info, err := RefreshRunningJobTokenForReload(job, apiSecret, now)
+		if err != nil {
+			return nil, err
+		}
+		refreshed = append(refreshed, info)
+	}
+	return refreshed, nil
+}
+
 func LocalParticipantIdentity(token string, fallbackIdentity string) string {
 	claims, err := TokenClaims(token)
 	if err == nil && claims.Identity != "" {
