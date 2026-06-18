@@ -391,31 +391,23 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 		return workerReferenceError(rtcSessionRequiredMessage)
 	}
 
-	jobURL := info.URL
-	if s.Options.WSRL != "" {
-		jobURL = s.Options.WSRL
-	}
-	runtimeJob := workerlivekit.JobRuntimeInfo(info.Job)
-	jobCtx := NewJobContext(info.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
+	runningJob := workerlivekit.RunningJobContextValues(workerlivekit.RunningJobContextValueOptions{
+		Info:            info,
+		OverrideURL:     s.Options.WSRL,
+		DefaultWorkerID: s.workerID,
+	})
+	jobCtx := NewJobContext(runningJob.Job, runningJob.URL, s.Options.APIKey, s.Options.APISecret)
 	jobCtx.process = s.newJobProcess()
-	if runtimeJob.EnableRecording {
+	if runningJob.EnableRecording {
 		jobCtx.InitRecording(workerlivekit.AllRecordingOptions())
 	}
-	jobCtx.token = info.Token
-	jobCtx.workerID = info.WorkerID
-	jobCtx.AcceptArguments = JobAcceptArguments{
-		Name:       info.AcceptArguments.Name,
-		Identity:   info.AcceptArguments.Identity,
-		Metadata:   info.AcceptArguments.Metadata,
-		Attributes: info.AcceptArguments.Attributes,
-	}
-	jobCtx.fakeJob = info.FakeJob
-	if jobCtx.WorkerID() == "" {
-		jobCtx.workerID = s.workerID
-	}
+	jobCtx.token = runningJob.Token
+	jobCtx.workerID = runningJob.WorkerID
+	jobCtx.AcceptArguments = runningJob.AcceptArguments
+	jobCtx.fakeJob = runningJob.FakeJob
 
 	s.mu.Lock()
-	s.activeJobs[runtimeJob.JobID] = jobCtx
+	s.activeJobs[runningJob.JobID] = jobCtx
 	s.mu.Unlock()
 
 	return workerlivekit.RunRunningJobEntrypointLifecycle(workerlivekit.RunningJobEntrypointLifecycleOptions{
@@ -435,13 +427,13 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 			return s.finishJob(jobCtx)
 		},
 		OnPanic: func(recovered any) {
-			logger.Logger.Errorw("Running job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", runtimeJob.JobID)
+			logger.Logger.Errorw("Running job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", runningJob.JobID)
 		},
 		OnError: func(err error) {
-			logger.Logger.Errorw("Running job entrypoint failed", err, "jobId", runtimeJob.JobID)
+			logger.Logger.Errorw("Running job entrypoint failed", err, "jobId", runningJob.JobID)
 		},
 		OnCancelTimeout: func() {
-			logger.Logger.Warnw("running job entrypoint did not exit before context cancellation finalized", nil, "jobId", runtimeJob.JobID)
+			logger.Logger.Warnw("running job entrypoint did not exit before context cancellation finalized", nil, "jobId", runningJob.JobID)
 		},
 	})
 }

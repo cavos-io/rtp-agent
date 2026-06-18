@@ -273,6 +273,23 @@ type RunningJobInfoOptions struct {
 	FakeJob         bool
 }
 
+type RunningJobContextValueOptions struct {
+	Info            RunningJobInfo
+	OverrideURL     string
+	DefaultWorkerID string
+}
+
+type RunningJobContextValuesResult struct {
+	Job             *lkprotocol.Job
+	JobID           string
+	URL             string
+	Token           string
+	WorkerID        string
+	AcceptArguments JobAcceptArguments
+	FakeJob         bool
+	EnableRecording bool
+}
+
 func RunningJobInfoSnapshot(opts RunningJobInfoOptions) RunningJobInfo {
 	return CloneRunningJobInfo(RunningJobInfo(opts))
 }
@@ -280,6 +297,29 @@ func RunningJobInfoSnapshot(opts RunningJobInfoOptions) RunningJobInfo {
 func CloneRunningJobInfo(info RunningJobInfo) RunningJobInfo {
 	info.AcceptArguments.Attributes = maps.Clone(info.AcceptArguments.Attributes)
 	return info
+}
+
+func RunningJobContextValues(opts RunningJobContextValueOptions) RunningJobContextValuesResult {
+	info := CloneRunningJobInfo(opts.Info)
+	url := info.URL
+	if opts.OverrideURL != "" {
+		url = opts.OverrideURL
+	}
+	workerID := info.WorkerID
+	if workerID == "" {
+		workerID = opts.DefaultWorkerID
+	}
+	runtime := JobRuntimeInfo(info.Job)
+	return RunningJobContextValuesResult{
+		Job:             info.Job,
+		JobID:           runtime.JobID,
+		URL:             url,
+		Token:           info.Token,
+		WorkerID:        workerID,
+		AcceptArguments: info.AcceptArguments,
+		FakeJob:         info.FakeJob,
+		EnableRecording: runtime.EnableRecording,
+	}
 }
 
 func JobAssignmentInfo(req *JobAssignment, defaultURL string) AssignmentInfo {

@@ -479,6 +479,72 @@ func TestRunningJobInfoCarriesLiveKitJobAndReloadFields(t *testing.T) {
 	}
 }
 
+func TestRunningJobContextValuesResolveOverrideURLWorkerAndRecording(t *testing.T) {
+	job := &lkprotocol.Job{Id: "job-running", EnableRecording: true}
+	values := workerlivekit.RunningJobContextValues(workerlivekit.RunningJobContextValueOptions{
+		Info: workerlivekit.RunningJobInfo{
+			Job:     job,
+			URL:     "wss://info.example",
+			Token:   "room-token",
+			FakeJob: true,
+			AcceptArguments: workerlivekit.JobAcceptArguments{
+				Name:       "Agent Name",
+				Identity:   "agent-a",
+				Metadata:   "metadata",
+				Attributes: map[string]string{"tier": "gold"},
+			},
+		},
+		OverrideURL:     "wss://override.example",
+		DefaultWorkerID: "worker-default",
+	})
+
+	if values.Job != job {
+		t.Fatal("RunningJobContextValues().Job did not preserve job")
+	}
+	if values.JobID != "job-running" {
+		t.Fatalf("JobID = %q, want job-running", values.JobID)
+	}
+	if values.URL != "wss://override.example" {
+		t.Fatalf("URL = %q, want override URL", values.URL)
+	}
+	if values.Token != "room-token" {
+		t.Fatalf("Token = %q, want room-token", values.Token)
+	}
+	if values.WorkerID != "worker-default" {
+		t.Fatalf("WorkerID = %q, want default worker", values.WorkerID)
+	}
+	if values.AcceptArguments.Identity != "agent-a" {
+		t.Fatalf("AcceptArguments.Identity = %q, want agent-a", values.AcceptArguments.Identity)
+	}
+	if values.AcceptArguments.Attributes["tier"] != "gold" {
+		t.Fatalf("AcceptArguments.Attributes[tier] = %q, want gold", values.AcceptArguments.Attributes["tier"])
+	}
+	if !values.FakeJob {
+		t.Fatal("FakeJob = false, want true")
+	}
+	if !values.EnableRecording {
+		t.Fatal("EnableRecording = false, want true")
+	}
+}
+
+func TestRunningJobContextValuesPreservesInfoURLAndWorker(t *testing.T) {
+	values := workerlivekit.RunningJobContextValues(workerlivekit.RunningJobContextValueOptions{
+		Info: workerlivekit.RunningJobInfo{
+			Job:      &lkprotocol.Job{Id: "job-running"},
+			URL:      "wss://info.example",
+			WorkerID: "worker-info",
+		},
+		DefaultWorkerID: "worker-default",
+	})
+
+	if values.URL != "wss://info.example" {
+		t.Fatalf("URL = %q, want info URL", values.URL)
+	}
+	if values.WorkerID != "worker-info" {
+		t.Fatalf("WorkerID = %q, want info worker", values.WorkerID)
+	}
+}
+
 func TestPopPendingAcceptReturnsAndDeletesAcceptedArgs(t *testing.T) {
 	pending := map[string]workerlivekit.JobAcceptArguments{
 		"job-a": {Identity: "agent-a"},
