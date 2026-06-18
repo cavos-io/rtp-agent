@@ -55,6 +55,131 @@ func TestNewXaiRealtimeModelUsesEnvironmentAPIKey(t *testing.T) {
 	}
 }
 
+func TestXaiRealtimeCustomTurnDetectionMatchesReference(t *testing.T) {
+	messages := make(chan map[string]any, 1)
+	handlerDone := make(chan struct{})
+	handlerErr := make(chan error, 1)
+	dialer := newXaiRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		defer close(handlerDone)
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			handlerErr <- fmt.Errorf("read initial session update: %w", err)
+			return
+		}
+		var msg map[string]any
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			handlerErr <- fmt.Errorf("decode initial session update: %w", err)
+			return
+		}
+		messages <- msg
+	})
+
+	model := NewXaiRealtimeModel("test-key",
+		WithXaiRealtimeBaseURL("ws://xai.test/v1/realtime"),
+		WithXaiRealtimeWebsocketDialer(dialer),
+		WithXaiRealtimeTurnDetection(map[string]any{
+			"type":                "server_vad",
+			"threshold":           0.35,
+			"prefix_padding_ms":   180,
+			"silence_duration_ms": 650,
+			"create_response":     false,
+			"interrupt_response":  false,
+		}),
+	)
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+
+	var msg map[string]any
+	select {
+	case msg = <-messages:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for initial session update")
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	audio := sessionPayload["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	turnDetection := input["turn_detection"].(map[string]any)
+	if turnDetection["type"] != "server_vad" ||
+		turnDetection["threshold"] != 0.35 ||
+		turnDetection["prefix_padding_ms"] != float64(180) ||
+		turnDetection["silence_duration_ms"] != float64(650) ||
+		turnDetection["create_response"] != false ||
+		turnDetection["interrupt_response"] != false {
+		t.Fatalf("turn_detection = %#v, want configured server_vad", turnDetection)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket handler")
+	}
+	select {
+	case err := <-handlerErr:
+		t.Fatal(err)
+	default:
+	}
+}
+
+func TestXaiRealtimeNilTurnDetectionDisablesReferenceVAD(t *testing.T) {
+	messages := make(chan map[string]any, 1)
+	handlerDone := make(chan struct{})
+	handlerErr := make(chan error, 1)
+	dialer := newXaiRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		defer close(handlerDone)
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			handlerErr <- fmt.Errorf("read initial session update: %w", err)
+			return
+		}
+		var msg map[string]any
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			handlerErr <- fmt.Errorf("decode initial session update: %w", err)
+			return
+		}
+		messages <- msg
+	})
+
+	model := NewXaiRealtimeModel("test-key",
+		WithXaiRealtimeBaseURL("ws://xai.test/v1/realtime"),
+		WithXaiRealtimeWebsocketDialer(dialer),
+		WithXaiRealtimeTurnDetection(nil),
+	)
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+
+	var msg map[string]any
+	select {
+	case msg = <-messages:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for initial session update")
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	audio := sessionPayload["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	if value, ok := input["turn_detection"]; !ok || value != nil {
+		t.Fatalf("turn_detection = %#v (present %v), want explicit nil", value, ok)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket handler")
+	}
+	select {
+	case err := <-handlerErr:
+		t.Fatal(err)
+	default:
+	}
+}
+
 func TestXaiRealtimeSessionRequiresXAIAPIKeyBeforeDial(t *testing.T) {
 	t.Setenv("XAI_API_KEY", "")
 	t.Setenv("OPENAI_API_KEY", "openai-key")

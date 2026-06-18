@@ -27,9 +27,11 @@ type XaiRealtimeModel struct {
 type XaiRealtimeOption func(*xaiRealtimeOptions)
 
 type xaiRealtimeOptions struct {
-	model         string
-	baseURL       string
-	dialWebsocket adapteropenai.OpenAIRealtimeWebsocketDialer
+	model            string
+	baseURL          string
+	dialWebsocket    adapteropenai.OpenAIRealtimeWebsocketDialer
+	turnDetection    any
+	turnDetectionSet bool
 }
 
 func WithXaiRealtimeModel(model string) XaiRealtimeOption {
@@ -54,6 +56,13 @@ func WithXaiRealtimeWebsocketDialer(dialer func(string, http.Header) (*websocket
 	}
 }
 
+func WithXaiRealtimeTurnDetection(turnDetection any) XaiRealtimeOption {
+	return func(options *xaiRealtimeOptions) {
+		options.turnDetection = turnDetection
+		options.turnDetectionSet = true
+	}
+}
+
 func NewXaiRealtimeModel(apiKey string, opts ...XaiRealtimeOption) *XaiRealtimeModel {
 	if apiKey == "" {
 		apiKey = os.Getenv(xaiAPIKeyEnv)
@@ -70,6 +79,17 @@ func NewXaiRealtimeModel(apiKey string, opts ...XaiRealtimeOption) *XaiRealtimeM
 	if options.baseURL != "" {
 		baseURL = options.baseURL
 	}
+	turnDetection := any(map[string]any{
+		"type":                "server_vad",
+		"threshold":           0.5,
+		"prefix_padding_ms":   300,
+		"silence_duration_ms": 200,
+		"create_response":     true,
+		"interrupt_response":  true,
+	})
+	if options.turnDetectionSet {
+		turnDetection = options.turnDetection
+	}
 	inner := adapteropenai.NewRealtimeModel(apiKey, model,
 		adapteropenai.WithOpenAIRealtimeBaseURL(baseURL),
 		adapteropenai.WithOpenAIRealtimeWebsocketDialer(options.dialWebsocket),
@@ -81,14 +101,7 @@ func NewXaiRealtimeModel(apiKey string, opts ...XaiRealtimeOption) *XaiRealtimeM
 		adapteropenai.WithOpenAIRealtimeVoice(defaultXaiRealtimeVoice),
 		adapteropenai.WithOpenAIRealtimeModalities([]string{"audio"}),
 		adapteropenai.WithOpenAIRealtimeInputAudioTranscription(map[string]any{}),
-		adapteropenai.WithOpenAIRealtimeTurnDetection(map[string]any{
-			"type":                "server_vad",
-			"threshold":           0.5,
-			"prefix_padding_ms":   300,
-			"silence_duration_ms": 200,
-			"create_response":     true,
-			"interrupt_response":  true,
-		}),
+		adapteropenai.WithOpenAIRealtimeTurnDetection(turnDetection),
 	)
 	return &XaiRealtimeModel{
 		apiKey: apiKey,
