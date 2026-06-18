@@ -611,6 +611,34 @@ func TestElevenLabsSTTStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T)
 	}
 }
 
+func TestElevenLabsSTTStreamReturnsAPIConnectionErrorOnDialTimeout(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, context.DeadlineExceeded
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTBaseURL("ws://eleven.test/v1"),
+		WithElevenLabsSTTModel("scribe_v2_realtime"),
+	)
+
+	_, err := provider.Stream(context.Background(), "")
+	if err == nil {
+		t.Fatal("Stream error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "Failed to connect to ElevenLabs") {
+		t.Fatalf("Stream error = %q, want reference connection message", err)
+	}
+}
+
 func TestElevenLabsSTTBatchResponseMapsSpeechEvent(t *testing.T) {
 	event := elevenLabsSTTSpeechEvent("en", elevenLabsSTTResponse{
 		Text:         "hello world",

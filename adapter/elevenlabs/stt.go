@@ -175,10 +175,7 @@ func (s *ElevenLabsSTT) Stream(ctx context.Context, language string) (stt.Recogn
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildElevenLabsSTTStreamURL(s, language), buildElevenLabsSTTHeaders(s))
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
-		}
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, llm.NewAPIConnectionError("Failed to connect to ElevenLabs")
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &elevenLabsSTTStream{
