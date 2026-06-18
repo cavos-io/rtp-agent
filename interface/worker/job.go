@@ -749,7 +749,7 @@ func (c *JobContext) Terminated() bool {
 
 // DeleteRoom deletes the room and disconnects all participants.
 func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*workerlivekit.DeleteRoomResponse, error) {
-	if c.IsFakeJob() {
+	if workerlivekit.ShouldSkipExternalAPIForFakeJob(c.IsFakeJob()) {
 		logger.Logger.Warnw("job context DeleteRoom is skipped for fake jobs", nil)
 		return &workerlivekit.DeleteRoomResponse{}, nil
 	}
@@ -761,7 +761,7 @@ func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*workerli
 }
 
 func (c *JobContext) MoveParticipant(ctx context.Context, room string, identity string, destinationRoom string) error {
-	if c.IsFakeJob() {
+	if workerlivekit.ShouldSkipExternalAPIForFakeJob(c.IsFakeJob()) {
 		logger.Logger.Warnw("job context MoveParticipant is skipped for fake jobs", nil)
 		return nil
 	}
@@ -770,7 +770,7 @@ func (c *JobContext) MoveParticipant(ctx context.Context, room string, identity 
 
 // AddSIPParticipant adds a SIP participant to the room.
 func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunkID string, identity string, names ...string) (*workerlivekit.SIPParticipantInfo, error) {
-	if c.IsFakeJob() {
+	if workerlivekit.ShouldSkipExternalAPIForFakeJob(c.IsFakeJob()) {
 		logger.Logger.Warnw("job context AddSIPParticipant is skipped for fake jobs", nil)
 		return &workerlivekit.SIPParticipantInfo{}, nil
 	}
@@ -778,7 +778,7 @@ func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunk
 }
 
 func (c *JobContext) CreateSIPParticipant(ctx context.Context, req *workerlivekit.SIPCreateParticipantRequest) (*workerlivekit.SIPParticipantInfo, error) {
-	if c.IsFakeJob() {
+	if workerlivekit.ShouldSkipExternalAPIForFakeJob(c.IsFakeJob()) {
 		logger.Logger.Warnw("job context CreateSIPParticipant is skipped for fake jobs", nil)
 		return &workerlivekit.SIPParticipantInfo{}, nil
 	}
@@ -791,7 +791,7 @@ func (c *JobContext) TransferSIPParticipant(ctx context.Context, identity string
 }
 
 func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, participant any, transferTo string, playDialtones ...bool) error {
-	if c.IsFakeJob() {
+	if workerlivekit.ShouldSkipExternalAPIForFakeJob(c.IsFakeJob()) {
 		logger.Logger.Warnw("job context TransferSIPParticipant is skipped for fake jobs", nil)
 		return nil
 	}
