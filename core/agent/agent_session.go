@@ -848,7 +848,10 @@ func (s *AgentSession) Drain(ctx context.Context) error {
 	if activity == nil {
 		return ErrAgentSessionNotRunning
 	}
-	return activity.Drain(ctx)
+	if err := activity.Drain(ctx); err != nil {
+		return err
+	}
+	return s.toolExecutionRegistry.drain(ctx)
 }
 
 type AgentStateChangedEvent struct {

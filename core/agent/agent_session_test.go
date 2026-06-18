@@ -3640,6 +3640,104 @@ func TestAgentSessionDrainDelegatesToActivity(t *testing.T) {
 	}
 }
 
+func TestAgentSessionDrainCancelsCancellableRunningTools(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	tool := &blockingGenerationTool{
+		flags:   llm.ToolFlagCancellable,
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	toolCtx := llm.NewToolContext([]interface{}{tool})
+	functionCh := make(chan *llm.FunctionToolCall)
+	outputs := PerformToolExecutions(context.Background(), functionCh, toolCtx, WithToolExecutionSession(session))
+
+	functionCh <- &llm.FunctionToolCall{Name: tool.Name(), CallID: "call_lookup", Arguments: `{}`}
+	select {
+	case <-tool.started:
+	case <-testTimeout():
+		t.Fatal("tool did not start")
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Drain(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Drain error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("Drain did not return after cancelling cancellable tool")
+	}
+	if _, ok := session.toolExecutionRegistry.get("call_lookup"); ok {
+		t.Fatal("running tool registry still contains cancelled call")
+	}
+	close(functionCh)
+	var sawCancellation bool
+	for output := range outputs {
+		if output.FncCall.CallID == "call_lookup" && output.RawError != nil {
+			sawCancellation = true
+		}
+	}
+	if !sawCancellation {
+		t.Fatal("tool execution did not surface cancellation output")
+	}
+}
+
+func TestAgentSessionDrainWaitsForNonCancellableRunningTools(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	tool := &blockingGenerationTool{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	toolCtx := llm.NewToolContext([]interface{}{tool})
+	functionCh := make(chan *llm.FunctionToolCall)
+	outputs := PerformToolExecutions(context.Background(), functionCh, toolCtx, WithToolExecutionSession(session))
+
+	functionCh <- &llm.FunctionToolCall{Name: tool.Name(), CallID: "call_lookup", Arguments: `{}`}
+	close(functionCh)
+	select {
+	case <-tool.started:
+	case <-testTimeout():
+		t.Fatal("tool did not start")
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Drain(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Drain returned before non-cancellable tool completed: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+	close(tool.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Drain error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("Drain did not return after non-cancellable tool completed")
+	}
+	var sawOutput bool
+	for output := range outputs {
+		if output.FncCall.CallID == "call_lookup" && output.RawOutput == "ok" {
+			sawOutput = true
+		}
+	}
+	if !sawOutput {
+		t.Fatal("tool execution did not surface final output")
+	}
+}
+
 func TestAgentSessionInterruptRequiresRunningActivity(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

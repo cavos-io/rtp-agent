@@ -544,6 +544,7 @@ type activeToolCall struct {
 	cancel       context.CancelFunc
 	cancellable  bool
 	speechHandle *SpeechHandle
+	done         <-chan struct{}
 }
 
 type activeToolRegistry struct {
@@ -593,6 +594,35 @@ func (r *activeToolRegistry) snapshot() map[string]activeToolCall {
 		calls[callID] = call
 	}
 	return calls
+}
+
+func (r *activeToolRegistry) drain(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	calls := r.snapshot()
+	for _, call := range calls {
+		if call.cancellable && call.cancel != nil {
+			call.cancel()
+		}
+	}
+	for callID, call := range calls {
+		if call.done == nil {
+			if call.cancellable {
+				r.delete(callID)
+			}
+			continue
+		}
+		select {
+		case <-call.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
 }
 
 type ToolExecutionOptions struct {
@@ -731,12 +761,15 @@ func PerformToolExecutions(
 					activeCallIDs[fncCall.CallID] = struct{}{}
 				}
 			}
+			var activeDone chan struct{}
 			if len(duplicateNameCalls) == 0 && !duplicateCallID {
+				activeDone = make(chan struct{})
 				activeCall := activeToolCall{
 					call:         functionCall,
 					cancel:       callCancel,
 					cancellable:  llm.ToolHasFlag(tool, llm.ToolFlagCancellable),
 					speechHandle: options.SpeechHandle,
+					done:         activeDone,
 				}
 				if fncCall.CallID != "" {
 					activeCallsByID[fncCall.CallID] = activeCall
@@ -781,9 +814,12 @@ func PerformToolExecutions(
 			}
 			trackFunctionName := tracksDuplicateFunctionName(duplicateMode)
 			wg.Add(1)
-			go func(fc *llm.FunctionToolCall, trackFunctionName bool, callCtx context.Context, callCancel context.CancelFunc, session *AgentSession) {
+			go func(fc *llm.FunctionToolCall, trackFunctionName bool, callCtx context.Context, callCancel context.CancelFunc, session *AgentSession, activeDone chan struct{}) {
 				defer wg.Done()
 				defer callCancel()
+				if activeDone != nil {
+					defer close(activeDone)
+				}
 				if fc.CallID != "" || trackFunctionName {
 					defer func() {
 						activeMu.Lock()
@@ -853,7 +889,7 @@ func PerformToolExecutions(
 					RawOutput:  result.RawOutput,
 					RawError:   result.RawError,
 				}
-			}(fncCall, trackFunctionName, callCtx, callCancel, options.Session)
+			}(fncCall, trackFunctionName, callCtx, callCancel, options.Session, activeDone)
 		}
 
 		wg.Wait()
