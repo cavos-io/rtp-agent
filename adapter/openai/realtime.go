@@ -1907,10 +1907,22 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 
 	s.mu.Lock()
 	oldConn := s.conn
+	instructions := s.instructions
+	tools := append([]llm.Tool(nil), s.tools...)
+	optionsState := make(map[string]any, len(s.optionsState))
+	for key, value := range s.optionsState {
+		optionsState[key] = value
+	}
+	var remoteCtx *llm.ChatContext
+	if s.remote != nil {
+		remoteCtx = s.remote.ToChatCtx()
+	}
+	s.mu.Unlock()
+
 	initialSession := openAIRealtimeInitialSession(s.model.model, s.model.modalities)
-	openAIRealtimeMergeSessionPayload(initialSession, openAIRealtimeSessionFromOptionEntries(s.optionsState))
-	if s.instructions != "" {
-		initialSession["instructions"] = s.instructions
+	openAIRealtimeMergeSessionPayload(initialSession, openAIRealtimeSessionFromOptionEntries(optionsState))
+	if instructions != "" {
+		initialSession["instructions"] = instructions
 	}
 	msg := openAIRealtimeInitialSessionUpdateMessage(initialSession)
 	if s.model.isLegacyAzureRealtime() {
@@ -1920,12 +1932,12 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 	if err == nil {
 		err = conn.WriteMessage(websocket.TextMessage, b)
 	}
-	if err == nil && len(s.tools) > 0 {
+	if err == nil && len(tools) > 0 {
 		toolsMsg := map[string]any{
 			"type":     "session.update",
 			"event_id": cavosmath.ShortUUID("tools_update_"),
 			"session": map[string]any{
-				"tools": s.model.realtimeTools(s.tools),
+				"tools": s.model.realtimeTools(tools),
 			},
 		}
 		if s.model.isLegacyAzureRealtime() {
@@ -1937,8 +1949,8 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 		}
 	}
 	var chatMsgs []map[string]any
-	if err == nil && s.remote != nil {
-		chatMsgs, err = openAIRealtimeChatContextCreateMessages(s.remote.ToChatCtx())
+	if err == nil && remoteCtx != nil {
+		chatMsgs, err = openAIRealtimeChatContextCreateMessages(remoteCtx)
 		for _, chatMsg := range chatMsgs {
 			if err != nil {
 				break
@@ -1953,9 +1965,14 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 		}
 	}
 	if err != nil {
-		s.mu.Unlock()
 		_ = conn.Close()
 		return err
+	}
+	s.mu.Lock()
+	if s.ctx.Err() != nil {
+		s.mu.Unlock()
+		_ = conn.Close()
+		return s.ctx.Err()
 	}
 	s.conn = conn
 	s.pendingResponses = 0
