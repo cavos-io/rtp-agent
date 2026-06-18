@@ -1041,7 +1041,11 @@ func runningTasksOutput(activeCallsByID map[string]activeToolCall) []map[string]
 		}
 		item["type"] = "function_call"
 		item["created_at"] = float64(call.CreatedAt.UnixNano()) / float64(time.Second)
-		item["group_id"] = call.GroupID
+		if call.GroupID != nil {
+			item["group_id"] = *call.GroupID
+		} else {
+			item["group_id"] = nil
+		}
 		items = append(items, item)
 	}
 	return items
