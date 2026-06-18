@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -256,8 +257,14 @@ func (s *fireworksStream) readLoop() {
 	for {
 		msgType, message, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- err
+			if !s.isClosed() {
+				if closeErr, ok := err.(*websocket.CloseError); ok {
+					s.errCh <- llm.NewAPIStatusError("Fireworks connection closed unexpectedly", closeErr.Code, "", err.Error())
+				} else if err == io.EOF {
+					s.errCh <- llm.NewAPIStatusError("Fireworks connection closed unexpectedly", -1, "", err.Error())
+				} else {
+					s.errCh <- err
+				}
 			}
 			return
 		}
@@ -272,6 +279,12 @@ func (s *fireworksStream) readLoop() {
 			s.events <- speechEvent
 		}
 	}
+}
+
+func (s *fireworksStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func (s *fireworksStream) PushFrame(frame *model.AudioFrame) error {
