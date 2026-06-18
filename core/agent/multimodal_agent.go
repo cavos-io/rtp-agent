@@ -315,6 +315,10 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 		return
 	}
 	defer speech.MarkDone()
+	speech.AuthorizeGeneration()
+	if speech.IsInterrupted() {
+		return
+	}
 
 	if speech.Generation.RealtimeGeneration != nil {
 		ma.consumeRealtimeGeneration(ctx, speech, speech.Generation.RealtimeGeneration)

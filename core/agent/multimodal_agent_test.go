@@ -1508,6 +1508,46 @@ func TestMultimodalAgentEmitsSpeechCreatedForServerGeneration(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentScheduledRealtimeGenerationAuthorizesSpeech(t *testing.T) {
+	messageCh := make(chan llm.MessageGeneration)
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	speech.Generation.RealtimeGeneration = &llm.GenerationCreatedEvent{
+		ResponseID: "response_authorized",
+		MessageCh:  messageCh,
+	}
+	ma := &MultimodalAgent{session: NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ma.OnSpeechScheduled(context.Background(), speech)
+	}()
+
+	authCtx, authCancel := context.WithTimeout(context.Background(), time.Second)
+	defer authCancel()
+	if err := speech.WaitForAuthorization(authCtx); err != nil {
+		t.Fatalf("scheduled realtime speech was not authorized: %v", err)
+	}
+
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer waitCancel()
+	if err := speech.WaitForGeneration(waitCtx, -1); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitForGeneration while realtime stream is open = %v, want deadline exceeded", err)
+	}
+
+	close(messageCh)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("scheduled realtime speech did not finish after generation stream closed")
+	}
+	doneCtx, doneCancel := context.WithTimeout(context.Background(), time.Second)
+	defer doneCancel()
+	if err := speech.WaitForGeneration(doneCtx, -1); err != nil {
+		t.Fatalf("WaitForGeneration after realtime stream close = %v, want nil", err)
+	}
+}
+
 func TestMultimodalAgentEmitsRealtimeErrorWhenMessageAudioPublishFails(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	cause := errors.New("publish generated audio failed")
