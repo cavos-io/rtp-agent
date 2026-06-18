@@ -381,6 +381,33 @@ func TestElevenLabsSTTUpdateOptionsMatchesReference(t *testing.T) {
 	assertElevenLabsQuery(t, query, "min_silence_duration_ms", "700")
 }
 
+func TestElevenLabsSTTUpdateOptionsCanDisableServerVAD(t *testing.T) {
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTModel("scribe_v2_realtime"),
+		WithElevenLabsSTTServerVAD(ElevenLabsVADOptions{VADThreshold: floatPtr(0.5)}),
+	)
+	active := &elevenLabsSTTStream{state: &elevenLabsSTTStreamState{serverVAD: true}}
+	provider.registerStream(active)
+	defer provider.unregisterStream(active)
+
+	provider.UpdateOptions(WithElevenLabsSTTServerVADDisabled())
+
+	if provider.serverVAD != nil {
+		t.Fatalf("provider serverVAD = %#v, want nil", provider.serverVAD)
+	}
+	if active.state.serverVAD {
+		t.Fatal("active stream serverVAD = true after disable, want false")
+	}
+	streamURL, err := url.Parse(buildElevenLabsSTTStreamURL(provider, ""))
+	if err != nil {
+		t.Fatalf("parse stream URL: %v", err)
+	}
+	assertElevenLabsQuery(t, streamURL.Query(), "commit_strategy", "manual")
+	if got := streamURL.Query().Get("vad_threshold"); got != "" {
+		t.Fatalf("vad_threshold = %q, want omitted after server VAD disable", got)
+	}
+}
+
 func TestElevenLabsSTTUpdateOptionsPropagatesServerVADToActiveStream(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	releaseServer := make(chan struct{})

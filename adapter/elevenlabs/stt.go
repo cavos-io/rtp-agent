@@ -103,6 +103,12 @@ func WithElevenLabsSTTServerVAD(serverVAD ElevenLabsVADOptions) ElevenLabsSTTOpt
 	}
 }
 
+func WithElevenLabsSTTServerVADDisabled() ElevenLabsSTTOption {
+	return func(s *ElevenLabsSTT) {
+		s.serverVAD = nil
+	}
+}
+
 func WithElevenLabsSTTKeyterms(keyterms []string) ElevenLabsSTTOption {
 	return func(s *ElevenLabsSTT) {
 		s.keyterms = keyterms
