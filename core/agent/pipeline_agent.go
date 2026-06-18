@@ -962,7 +962,7 @@ func (va *PipelineAgent) forwardedAssistantTextAfterInterruption(ctx context.Con
 	ev, err := playback.WaitForPlayout(ctx)
 	if err != nil {
 		logger.Logger.Warnw("failed to wait for interrupted playback", err)
-		return generatedText
+		return ""
 	}
 	if session.activity != nil {
 		session.activity.holdUserTranscriptsUntil(time.Now())

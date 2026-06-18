@@ -3643,6 +3643,37 @@ func TestPipelineAgentInterruptedReplySkipsUnplayedAssistantText(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentInterruptedReplySkipsGeneratedTextWhenPlayoutWaitCanceled(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "unconfirmed generated text"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(&fakePipelinePlaybackController{
+		err: context.Canceled,
+	})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chatCtx.Items = %#v, want no assistant message when interrupted playout wait is canceled", chatCtx.Items)
+	}
+	if len(speech.ChatItems()) != 0 {
+		t.Fatalf("speech.ChatItems = %#v, want no committed assistant message", speech.ChatItems())
+	}
+}
+
 func TestPipelineAgentInterruptedReplyCommitsSynchronizedTranscript(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
