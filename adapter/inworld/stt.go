@@ -149,6 +149,13 @@ func (s *InworldSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, OfflineRecognize: false}
 }
 
+func (s *InworldSTT) InputSampleRate() uint32 {
+	if s == nil || s.sampleRate <= 0 {
+		return defaultInworldSTTSampleRate
+	}
+	return uint32(s.sampleRate)
+}
+
 func (s *InworldSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildInworldSTTStreamURL(s), buildInworldSTTHeaders(s))
 	if err != nil {

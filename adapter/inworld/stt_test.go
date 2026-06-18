@@ -78,6 +78,22 @@ func TestNewInworldSTTUsesEnvironmentAPIKey(t *testing.T) {
 	}
 }
 
+func TestInworldSTTExposesReferenceInputSampleRate(t *testing.T) {
+	provider := NewInworldSTT("test-key")
+
+	if got := provider.InputSampleRate(); got != 16000 {
+		t.Fatalf("InputSampleRate = %d, want reference sample rate 16000", got)
+	}
+}
+
+func TestInworldSTTExposesConfiguredInputSampleRate(t *testing.T) {
+	provider := NewInworldSTT("test-key", WithInworldSTTSampleRate(48000))
+
+	if got := provider.InputSampleRate(); got != 48000 {
+		t.Fatalf("InputSampleRate = %d, want configured sample rate 48000", got)
+	}
+}
+
 func TestInworldSTTOptionsBuildReferenceConfigURLAndHeaders(t *testing.T) {
 	vad := 0.42
 	provider := NewInworldSTT("test-key",
