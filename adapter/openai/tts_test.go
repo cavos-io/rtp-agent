@@ -653,6 +653,50 @@ func TestOpenAITTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSChunkedStreamBuffersFragmentedWAVHeader(t *testing.T) {
+	pcm := []byte{0x05, 0x06, 0x07, 0x08}
+	wav := openAITTSTestWAV(pcm, 16000, 1)
+	stream := &openaiTTSChunkedStream{
+		resp:           &chunkedReadCloser{chunks: [][]byte{wav[:10], wav[10:]}},
+		responseFormat: goopenai.SpeechResponseFormatWav,
+		streamFormat:   openAITTSStreamFormatAudio,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio.Frame.SampleRate != 16000 {
+		t.Fatalf("sample rate = %d, want WAV metadata", audio.Frame.SampleRate)
+	}
+	if !bytes.Equal(audio.Frame.Data, pcm) {
+		t.Fatalf("audio data = %#v, want decoded WAV PCM without header bytes", audio.Frame.Data)
+	}
+}
+
+func TestOpenAITTSChunkedStreamStreamsWAVDataAfterHeader(t *testing.T) {
+	pcm := []byte{0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c}
+	wav := openAITTSTestWAV(pcm, 16000, 1)
+	stream := &openaiTTSChunkedStream{
+		resp:           &chunkedReadCloser{chunks: [][]byte{wav[:48], wav[48:]}},
+		responseFormat: goopenai.SpeechResponseFormatWav,
+		streamFormat:   openAITTSStreamFormatAudio,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio.Frame.SampleRate != 16000 {
+		t.Fatalf("sample rate = %d, want WAV metadata", audio.Frame.SampleRate)
+	}
+	if !bytes.Equal(audio.Frame.Data, pcm[:4]) {
+		t.Fatalf("first audio data = %#v, want first streamed PCM chunk only", audio.Frame.Data)
+	}
+}
+
 func TestOpenAITTSAudioMP3StreamsBeforeResponseEOF(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
@@ -780,6 +824,22 @@ func (r *eofWithDataReader) Read(p []byte) (int, error) {
 	copy(p, r.data)
 	r.done = true
 	return len(r.data), io.EOF
+}
+
+type chunkedReadCloser struct {
+	chunks [][]byte
+}
+
+func (r *chunkedReadCloser) Close() error { return nil }
+
+func (r *chunkedReadCloser) Read(p []byte) (int, error) {
+	if len(r.chunks) == 0 {
+		return 0, io.EOF
+	}
+	chunk := r.chunks[0]
+	r.chunks = r.chunks[1:]
+	copy(p, chunk)
+	return len(chunk), nil
 }
 
 type blockingEOFReadCloser struct {

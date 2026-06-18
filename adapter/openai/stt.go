@@ -19,6 +19,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/core/vad"
 	languageutil "github.com/cavos-io/rtp-agent/library/utils/language"
 	"github.com/gorilla/websocket"
 	"github.com/sashabaranov/go-openai"
@@ -56,6 +57,7 @@ type OpenAISTT struct {
 	connect         llm.APIConnectOptions
 	maxSession      time.Duration
 	dialWebsocket   openAIRealtimeSTTWebsocketDialer
+	vad             vad.VAD
 	streamsMu       sync.Mutex
 	streams         map[*openAIRealtimeSTTStream]struct{}
 }
@@ -118,6 +120,12 @@ func WithOpenAISTTTurnDetection(turnDetection map[string]interface{}) OpenAISTTO
 func WithOpenAISTTRealtime(useRealtime bool) OpenAISTTOption {
 	return func(s *OpenAISTT) {
 		s.useRealtime = useRealtime
+	}
+}
+
+func WithOpenAISTTVAD(v vad.VAD) OpenAISTTOption {
+	return func(s *OpenAISTT) {
+		s.vad = v
 	}
 }
 
@@ -337,13 +345,22 @@ func (s *OpenAISTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		conn.Close()
 		return nil, err
 	}
+	var vadStream vad.VADStream
+	if s.vad != nil {
+		vadStream, err = s.vad.Stream(ctx)
+		if err != nil {
+			conn.Close()
+			return nil, err
+		}
+	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &openAIRealtimeSTTStream{
-		conn:   conn,
-		ctx:    streamCtx,
-		cancel: cancel,
-		events: make(chan *stt.SpeechEvent, 100),
-		errCh:  make(chan error, 1),
+		conn:      conn,
+		ctx:       streamCtx,
+		cancel:    cancel,
+		events:    make(chan *stt.SpeechEvent, 100),
+		errCh:     make(chan error, 1),
+		vadStream: vadStream,
 		state: &openAIRealtimeSTTMessageState{
 			language: eventLanguage,
 			timing:   map[string]openAIRealtimeSTTTiming{},
@@ -352,6 +369,9 @@ func (s *OpenAISTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	}
 	s.registerRealtimeSTTStream(stream)
 	go stream.readLoop()
+	if vadStream != nil {
+		go stream.vadLoop()
+	}
 	return stream, nil
 }
 
@@ -599,16 +619,17 @@ func openAITimedStrings(words []struct {
 }
 
 type openAIRealtimeSTTStream struct {
-	conn   *websocket.Conn
-	ctx    context.Context
-	cancel context.CancelFunc
-	events chan *stt.SpeechEvent
-	errCh  chan error
-	mu     sync.Mutex
-	closed bool
-	audio  *audio.AudioByteStream
-	state  *openAIRealtimeSTTMessageState
-	owner  *OpenAISTT
+	conn      *websocket.Conn
+	ctx       context.Context
+	cancel    context.CancelFunc
+	events    chan *stt.SpeechEvent
+	errCh     chan error
+	mu        sync.Mutex
+	closed    bool
+	audio     *audio.AudioByteStream
+	state     *openAIRealtimeSTTMessageState
+	owner     *OpenAISTT
+	vadStream vad.VADStream
 }
 
 func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -630,6 +651,11 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 		}
 		if err := s.conn.WriteMessage(websocket.TextMessage, message); err != nil {
 			s.closeAfterWriteFailureLocked()
+			return err
+		}
+	}
+	if s.vadStream != nil {
+		if err := s.vadStream.PushFrame(frame); err != nil {
 			return err
 		}
 	}
@@ -699,6 +725,9 @@ func (s *openAIRealtimeSTTStream) Close() error {
 		s.owner.unregisterRealtimeSTTStream(s)
 	}
 	s.cancel()
+	if s.vadStream != nil {
+		_ = s.vadStream.Close()
+	}
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
 }
@@ -712,6 +741,9 @@ func (s *openAIRealtimeSTTStream) closeAfterWriteFailureLocked() {
 		s.owner.unregisterRealtimeSTTStream(s)
 	}
 	s.cancel()
+	if s.vadStream != nil {
+		_ = s.vadStream.Close()
+	}
 	_ = s.conn.Close()
 }
 
@@ -791,6 +823,33 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 			}
 			connectedAt = time.Now()
 		}
+	}
+}
+
+func (s *openAIRealtimeSTTStream) vadLoop() {
+	for {
+		ev, err := s.vadStream.Next()
+		if err != nil {
+			if err != io.EOF {
+				s.mu.Lock()
+				s.sendErrorLocked(err)
+				s.mu.Unlock()
+			}
+			return
+		}
+		if ev == nil || ev.Type != vad.VADEventEndOfSpeech {
+			continue
+		}
+		s.mu.Lock()
+		if !s.closed {
+			message, msgErr := buildOpenAIRealtimeSTTCommitMessage()
+			if msgErr != nil {
+				s.sendErrorLocked(msgErr)
+			} else if msgErr = s.conn.WriteMessage(websocket.TextMessage, message); msgErr != nil {
+				s.closeAfterWriteFailureLocked()
+			}
+		}
+		s.mu.Unlock()
 	}
 }
 

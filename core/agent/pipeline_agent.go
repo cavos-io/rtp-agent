@@ -908,6 +908,19 @@ func (va *PipelineAgent) waitForAssistantPlayout(ctx context.Context, session *A
 	}
 }
 
+func (va *PipelineAgent) flushAssistantPlayback(session *AgentSession) {
+	if session == nil {
+		return
+	}
+	playback := session.AudioPlaybackController()
+	if playback == nil {
+		return
+	}
+	if flusher, ok := playback.(interface{ Flush() }); ok {
+		flusher.Flush()
+	}
+}
+
 func (va *PipelineAgent) forwardedAssistantTextAfterInterruption(ctx context.Context, session *AgentSession, speech *SpeechHandle, generatedText string) string {
 	if generatedText == "" || speech == nil || !speech.IsInterrupted() || session == nil {
 		return generatedText
@@ -1133,6 +1146,7 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 	}
 	transcriptSync.Close()
 	<-transcriptionDone
+	va.flushAssistantPlayback(session)
 	if ttsGen.StreamErr != nil {
 		return ttsGen, ttsGen.StreamErr
 	}

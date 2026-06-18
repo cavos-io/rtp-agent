@@ -3518,6 +3518,50 @@ func TestPipelineAgentReplyWaitsForPlayoutBeforeCommit(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentReplyFlushesPlaybackAfterTTSEOFBeforeWaiting(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "played answer"}},
+			},
+		},
+	}
+	ttsStream := &fakePipelineTTSStream{
+		frames: []*model.AudioFrame{{
+			Data:              []byte{0, 1},
+			SampleRate:        24000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		}},
+	}
+	playback := &fakePipelinePlaybackController{
+		result: AudioPlaybackResult{PlaybackPosition: 42 * time.Millisecond},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(playback)
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{stream: ttsStream}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	var published int
+	agent.PublishAudio = func(context.Context, *model.AudioFrame) error {
+		published++
+		return nil
+	}
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: NewSpeechHandle(true, DefaultInputDetails())})
+
+	if published != 1 {
+		t.Fatalf("published audio frames = %d, want 1", published)
+	}
+	if playback.flushCalls != 1 {
+		t.Fatalf("Flush calls = %d, want 1 after TTS EOF", playback.flushCalls)
+	}
+	if !playback.waitSawFlush {
+		t.Fatal("WaitForPlayout observed unflushed playback, want flush before wait like reference audio_output.flush")
+	}
+}
+
 func toolCallStream(callID string) *fakeGenerationLLMStream {
 	return &fakeGenerationLLMStream{
 		chunks: []*llm.ChatChunk{
@@ -3647,12 +3691,14 @@ type blockingPipelineTTS struct {
 	stream *blockingPipelineTTSStream
 }
 
-func (b *blockingPipelineTTS) Label() string                               { return "fake-blocking" }
-func (b *blockingPipelineTTS) Model() string                               { return "" }
-func (b *blockingPipelineTTS) Provider() string                            { return "" }
-func (b *blockingPipelineTTS) Capabilities() tts.TTSCapabilities           { return tts.TTSCapabilities{Streaming: true} }
-func (b *blockingPipelineTTS) SampleRate() int                             { return 24000 }
-func (b *blockingPipelineTTS) NumChannels() int                            { return 1 }
+func (b *blockingPipelineTTS) Label() string    { return "fake-blocking" }
+func (b *blockingPipelineTTS) Model() string    { return "" }
+func (b *blockingPipelineTTS) Provider() string { return "" }
+func (b *blockingPipelineTTS) Capabilities() tts.TTSCapabilities {
+	return tts.TTSCapabilities{Streaming: true}
+}
+func (b *blockingPipelineTTS) SampleRate() int  { return 24000 }
+func (b *blockingPipelineTTS) NumChannels() int { return 1 }
 func (b *blockingPipelineTTS) Synthesize(context.Context, string) (tts.ChunkedStream, error) {
 	return nil, nil
 }
@@ -3662,18 +3708,25 @@ func (b *blockingPipelineTTS) Stream(context.Context) (tts.SynthesizeStream, err
 
 type fakePipelinePlaybackController struct {
 	clearCalls int
+	flushCalls int
 	result     AudioPlaybackResult
 	err        error
 
-	waitStarted chan struct{}
-	releaseWait chan struct{}
+	waitStarted  chan struct{}
+	releaseWait  chan struct{}
+	waitSawFlush bool
 }
 
 func (f *fakePipelinePlaybackController) ClearBuffer() {
 	f.clearCalls++
 }
 
+func (f *fakePipelinePlaybackController) Flush() {
+	f.flushCalls++
+}
+
 func (f *fakePipelinePlaybackController) WaitForPlayout(context.Context) (AudioPlaybackResult, error) {
+	f.waitSawFlush = f.flushCalls > 0
 	if f.waitStarted != nil {
 		close(f.waitStarted)
 		f.waitStarted = nil

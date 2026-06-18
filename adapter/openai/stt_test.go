@@ -18,6 +18,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/gorilla/websocket"
 	goopenai "github.com/sashabaranov/go-openai"
 )
@@ -980,6 +981,59 @@ func TestOpenAIRealtimeSTTStreamBuffersAndFlushesReferenceAudioChunks(t *testing
 	assertRealtimeMessage(t, <-messages, "input_audio_buffer.commit", "")
 }
 
+func TestOpenAIRealtimeSTTVADEndOfSpeechCommitsAudioBuffer(t *testing.T) {
+	vadStream := newFakeOpenAISTTVADStream()
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+		WithOpenAISTTVAD(&fakeOpenAISTTVAD{stream: vadStream}),
+	)
+	started := make(chan struct{})
+	releaseServer := make(chan struct{})
+	messages := make(chan string, 10)
+	defer close(releaseServer)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			close(started)
+			for {
+				select {
+				case <-releaseServer:
+					return
+				default:
+				}
+				if _, payload, err := conn.ReadMessage(); err != nil {
+					return
+				} else {
+					messages <- string(payload)
+				}
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not send initial session update")
+	}
+
+	if err := stream.PushFrame(openAIRealtimeSTTTestFrame(bytes.Repeat([]byte{0x04}, openAIRealtimeSTTChunkBytes()))); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	_ = assertOpenAIRealtimeSTTAudioAppend(t, <-messages)
+	assertRealtimeMessage(t, <-messages, "input_audio_buffer.commit", "")
+}
+
 func openAIRealtimeSTTTestFrame(data []byte) *model.AudioFrame {
 	return &model.AudioFrame{
 		Data:              data,
@@ -1698,4 +1752,56 @@ type openAITestHTTPDoer func(*http.Request) (*http.Response, error)
 
 func (f openAITestHTTPDoer) Do(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+type fakeOpenAISTTVAD struct {
+	stream *fakeOpenAISTTVADStream
+}
+
+func (f *fakeOpenAISTTVAD) Label() string { return "fake.VAD" }
+func (f *fakeOpenAISTTVAD) Model() string { return "fake" }
+func (f *fakeOpenAISTTVAD) Provider() string {
+	return "fake"
+}
+func (f *fakeOpenAISTTVAD) Capabilities() vad.VADCapabilities { return vad.VADCapabilities{} }
+func (f *fakeOpenAISTTVAD) OnMetricsCollected(vad.VADMetricsHandler) func() {
+	return func() {}
+}
+func (f *fakeOpenAISTTVAD) Stream(context.Context) (vad.VADStream, error) {
+	return f.stream, nil
+}
+
+type fakeOpenAISTTVADStream struct {
+	events chan *vad.VADEvent
+}
+
+func newFakeOpenAISTTVADStream() *fakeOpenAISTTVADStream {
+	return &fakeOpenAISTTVADStream{events: make(chan *vad.VADEvent, 1)}
+}
+
+func (f *fakeOpenAISTTVADStream) PushFrame(*model.AudioFrame) error {
+	f.events <- &vad.VADEvent{Type: vad.VADEventEndOfSpeech}
+	return nil
+}
+
+func (f *fakeOpenAISTTVADStream) Flush() error {
+	return nil
+}
+
+func (f *fakeOpenAISTTVADStream) EndInput() error {
+	close(f.events)
+	return nil
+}
+
+func (f *fakeOpenAISTTVADStream) Close() error {
+	close(f.events)
+	return nil
+}
+
+func (f *fakeOpenAISTTVADStream) Next() (*vad.VADEvent, error) {
+	ev, ok := <-f.events
+	if !ok {
+		return nil, io.EOF
+	}
+	return ev, nil
 }
