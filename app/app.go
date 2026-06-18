@@ -1183,7 +1183,7 @@ func (a *App) runAgora(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		dataPublisher, err := appNewAgoraDataPublisher(agoraOpts)
+		dataPublisher, err := appNewAgoraDataPublisher(dataOpts)
 		if err != nil {
 			return err
 		}
@@ -1191,7 +1191,7 @@ func (a *App) runAgora(ctx context.Context) error {
 			return workeragora.PublishTranscript(ctx, dataPublisher, "assistant", text, true, "100", time.Now())
 		}
 		transcriptForwarder := workeragora.NewTranscriptForwarder(a.Session, dataPublisher, workeragora.TranscriptForwarderOptions{
-			UserStreamID: agoraOpts.RemoteStreamID,
+			UserStreamID: dataOpts.RemoteStreamID,
 		})
 		if subscriber, ok := dataPublisher.(workeragora.DataMessageSubscriber); ok {
 			installAgoraRTMDataMessageHandler(subscriber, a.Session, dataOpts.UID)

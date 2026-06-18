@@ -1570,6 +1570,77 @@ func TestRunAgoraPublishesTranscriptDataWhenPublishDataEnabled(t *testing.T) {
 	}
 }
 
+func TestRunAgoraPassesResolvedRTMDataOptionsToPublisher(t *testing.T) {
+	client := &fakeAppAgoraChannelClient{joinedCh: make(chan struct{}, 1)}
+	dataPublisher := &fakeAppAgoraDataPublisher{}
+	optsCh := make(chan workeragora.Options, 1)
+	oldNewAgoraChannelClient := appNewAgoraChannelClient
+	appNewAgoraChannelClient = func() (workeragora.ChannelClient, error) {
+		return client, nil
+	}
+	oldNewAgoraDataPublisher := appNewAgoraDataPublisher
+	appNewAgoraDataPublisher = func(opts workeragora.Options) (workeragora.DataPublisher, error) {
+		optsCh <- opts
+		return dataPublisher, nil
+	}
+	t.Cleanup(func() {
+		appNewAgoraChannelClient = oldNewAgoraChannelClient
+		appNewAgoraDataPublisher = oldNewAgoraDataPublisher
+	})
+
+	rtmEnabled := true
+	rtpApp := &App{
+		Session: agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{}),
+		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
+		Config: AppConfig{
+			Agora: workeragora.Options{
+				AppID:      "app",
+				Channel:    "support",
+				UID:        "rtc-agent",
+				Token:      "rtc-token",
+				RTMUserID:  "rtm-agent",
+				RTMToken:   "rtm-token",
+				RTMEnabled: &rtmEnabled,
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- rtpApp.runAgora(ctx)
+	}()
+
+	select {
+	case opts := <-optsCh:
+		if opts.UID != "rtm-agent" {
+			t.Fatalf("data publisher UID = %q, want resolved RTM user id", opts.UID)
+		}
+		if opts.Token != "rtm-token" {
+			t.Fatalf("data publisher Token = %q, want resolved RTM token", opts.Token)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not create Agora data publisher")
+	}
+
+	select {
+	case <-client.joinedCh:
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not join Agora channel")
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("runAgora() error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not return after cancellation")
+	}
+}
+
 func TestRunAgoraPublishesTranscriptDataWhenRTMEnabled(t *testing.T) {
 	client := &fakeAppAgoraChannelClient{joinedCh: make(chan struct{}, 1)}
 	dataPublisher := &fakeAppAgoraDataPublisher{published: make(chan []byte, 1)}
