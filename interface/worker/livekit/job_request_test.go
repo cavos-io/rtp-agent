@@ -350,6 +350,50 @@ func TestShouldUploadJobSessionReportUsesEvaluationOrOutcome(t *testing.T) {
 	}
 }
 
+func TestJobSessionReportUploadPlanIncludesUploadInputsAndSkipsFakeJobs(t *testing.T) {
+	report := agent.NewSessionReport()
+	report.RecordingOptions = agent.RecordingOptions{Logs: true}
+
+	plan := workerlivekit.JobSessionReportUploadPlan(workerlivekit.JobSessionReportUploadPlanOptions{
+		Job:       &lkprotocol.Job{Id: "job-report"},
+		Report:    report,
+		URL:       "wss://livekit.example",
+		APIKey:    "api-key",
+		APISecret: "api-secret",
+		AgentName: "agent-a",
+	})
+	if !plan.Upload {
+		t.Fatal("JobSessionReportUploadPlan().Upload = false, want true")
+	}
+	if plan.JobID != "job-report" {
+		t.Fatalf("JobID = %q, want job-report", plan.JobID)
+	}
+	if plan.URL != "wss://livekit.example" {
+		t.Fatalf("URL = %q, want livekit URL", plan.URL)
+	}
+	if plan.APIKey != "api-key" {
+		t.Fatalf("APIKey = %q, want api-key", plan.APIKey)
+	}
+	if plan.APISecret != "api-secret" {
+		t.Fatalf("APISecret = %q, want api-secret", plan.APISecret)
+	}
+	if plan.AgentName != "agent-a" {
+		t.Fatalf("AgentName = %q, want agent-a", plan.AgentName)
+	}
+	if plan.Report != report {
+		t.Fatal("Report did not preserve original session report")
+	}
+
+	fakePlan := workerlivekit.JobSessionReportUploadPlan(workerlivekit.JobSessionReportUploadPlanOptions{
+		Job:     &lkprotocol.Job{Id: "job-fake"},
+		FakeJob: true,
+		Report:  report,
+	})
+	if fakePlan.Upload {
+		t.Fatal("JobSessionReportUploadPlan(fake job).Upload = true, want false")
+	}
+}
+
 func TestJobLogContextFieldsExposeLiveKitJobMetadata(t *testing.T) {
 	fields := workerlivekit.JobLogContextFields(&lkprotocol.Job{
 		Id:   "job-log",

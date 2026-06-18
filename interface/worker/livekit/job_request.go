@@ -198,6 +198,42 @@ func ShouldUploadJobSessionReport(job *lkprotocol.Job, fakeJob bool, report *age
 	return HasSessionRecordingOption(report.RecordingOptions) || HasSessionEvaluationReport(report)
 }
 
+type JobSessionReportUploadPlanOptions struct {
+	Job       *lkprotocol.Job
+	FakeJob   bool
+	Report    *agent.SessionReport
+	URL       string
+	APIKey    string
+	APISecret string
+	AgentName string
+}
+
+type JobSessionReportUploadPlanResult struct {
+	Upload    bool
+	JobID     string
+	Report    *agent.SessionReport
+	URL       string
+	APIKey    string
+	APISecret string
+	AgentName string
+}
+
+func JobSessionReportUploadPlan(opts JobSessionReportUploadPlanOptions) JobSessionReportUploadPlanResult {
+	if !ShouldUploadJobSessionReport(opts.Job, opts.FakeJob, opts.Report) {
+		return JobSessionReportUploadPlanResult{}
+	}
+	runtimeJob := JobRuntimeInfo(opts.Job)
+	return JobSessionReportUploadPlanResult{
+		Upload:    true,
+		JobID:     runtimeJob.JobID,
+		Report:    opts.Report,
+		URL:       opts.URL,
+		APIKey:    opts.APIKey,
+		APISecret: opts.APISecret,
+		AgentName: opts.AgentName,
+	}
+}
+
 func HasSessionRecordingOption(options agent.RecordingOptions) bool {
 	return options.Audio || options.Traces || options.Logs || options.Transcript
 }

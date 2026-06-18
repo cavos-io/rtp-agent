@@ -1907,20 +1907,20 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
 }
 
 func (s *AgentServer) uploadJobSessionReport(jobCtx *JobContext) {
-	if !shouldUploadJobSessionReport(jobCtx) {
+	plan := jobSessionReportUploadPlan(jobCtx, s.Options)
+	if !plan.Upload {
 		return
 	}
-	runtimeJob := workerlivekit.JobRuntimeInfo(jobCtx.Job)
 	go func() {
 		err := uploadSessionReport(
-			jobCtx.url,
-			s.Options.APIKey,
-			s.Options.APISecret,
-			s.Options.AgentName,
-			jobCtx.Report,
+			plan.URL,
+			plan.APIKey,
+			plan.APISecret,
+			plan.AgentName,
+			plan.Report,
 		)
 		if err != nil {
-			logger.Logger.Errorw("failed to upload session report", err, jobLogValues(jobCtx, "jobId", runtimeJob.JobID)...)
+			logger.Logger.Errorw("failed to upload session report", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
 		}
 	}()
 }
@@ -1929,7 +1929,22 @@ func shouldUploadJobSessionReport(jobCtx *JobContext) bool {
 	if jobCtx == nil {
 		return false
 	}
-	return workerlivekit.ShouldUploadJobSessionReport(jobCtx.Job, jobCtx.IsFakeJob(), jobCtx.Report)
+	return jobSessionReportUploadPlan(jobCtx, WorkerOptions{}).Upload
+}
+
+func jobSessionReportUploadPlan(jobCtx *JobContext, opts WorkerOptions) workerlivekit.JobSessionReportUploadPlanResult {
+	if jobCtx == nil {
+		return workerlivekit.JobSessionReportUploadPlanResult{}
+	}
+	return workerlivekit.JobSessionReportUploadPlan(workerlivekit.JobSessionReportUploadPlanOptions{
+		Job:       jobCtx.Job,
+		FakeJob:   jobCtx.IsFakeJob(),
+		Report:    jobCtx.Report,
+		URL:       jobCtx.url,
+		APIKey:    opts.APIKey,
+		APISecret: opts.APISecret,
+		AgentName: opts.AgentName,
+	})
 }
 
 func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
