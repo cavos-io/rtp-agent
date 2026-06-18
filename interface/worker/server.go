@@ -1063,11 +1063,18 @@ func (s *AgentServer) registerWorkerRequest() *workerlivekit.WorkerMessage {
 func (s *AgentServer) availableWorkerStatusMessage() *workerlivekit.WorkerMessage {
 	jobCount := uint32(s.activeJobCount())
 	load := s.currentLoad()
-	return workerlivekit.AvailableWorkerStatusMessage(load, jobCount, s.availableForJobWithLoad(load))
+	return workerlivekit.WorkerStatusUpdateMessage(workerlivekit.WorkerStatusUpdateOptions{
+		Load:         load,
+		JobCount:     jobCount,
+		CanAcceptJob: s.availableForJobWithLoad(load),
+	})
 }
 
 func (s *AgentServer) drainingWorkerStatusMessage() *workerlivekit.WorkerMessage {
-	return workerlivekit.DrainingWorkerStatusMessage(uint32(s.activeJobCount()))
+	return workerlivekit.WorkerStatusUpdateMessage(workerlivekit.WorkerStatusUpdateOptions{
+		Draining: true,
+		JobCount: uint32(s.activeJobCount()),
+	})
 }
 
 func (s *AgentServer) RTCSession(
@@ -1481,9 +1488,18 @@ func (s *AgentServer) runWorkerStatusUpdates(ctx context.Context, interval time.
 
 func (s *AgentServer) sendWorkerStatusUpdate() error {
 	if s.Draining() {
-		return s.sendWorkerMessage(s.drainingWorkerStatusMessage())
+		return s.sendWorkerMessage(workerlivekit.WorkerStatusUpdateMessage(workerlivekit.WorkerStatusUpdateOptions{
+			Draining: true,
+			JobCount: uint32(s.activeJobCount()),
+		}))
 	}
-	return s.sendWorkerMessage(s.availableWorkerStatusMessage())
+	jobCount := uint32(s.activeJobCount())
+	load := s.currentLoad()
+	return s.sendWorkerMessage(workerlivekit.WorkerStatusUpdateMessage(workerlivekit.WorkerStatusUpdateOptions{
+		Load:         load,
+		JobCount:     jobCount,
+		CanAcceptJob: s.availableForJobWithLoad(load),
+	}))
 }
 
 func (s *AgentServer) openWorkerWebSocket(ctx context.Context, opts workerlivekit.WorkerWebSocketOpenOptions) (workerlivekit.WorkerWebSocketOpenResult, error) {

@@ -14,6 +14,13 @@ type WorkerMessage = lkprotocol.WorkerMessage
 
 type JobStatus = lkprotocol.JobStatus
 
+type WorkerStatusUpdateOptions struct {
+	Draining     bool
+	Load         float64
+	JobCount     uint32
+	CanAcceptJob bool
+}
+
 type WorkerWebSocketReader interface {
 	ReadMessage() (int, []byte, error)
 }
@@ -137,6 +144,13 @@ func AvailableWorkerStatusMessage(load float64, jobCount uint32, canAcceptJob bo
 		status = lkprotocol.WorkerStatus_WS_FULL
 	}
 	return WorkerStatusMessage(status, load, jobCount)
+}
+
+func WorkerStatusUpdateMessage(opts WorkerStatusUpdateOptions) *lkprotocol.WorkerMessage {
+	if opts.Draining {
+		return DrainingWorkerStatusMessage(opts.JobCount)
+	}
+	return AvailableWorkerStatusMessage(opts.Load, opts.JobCount, opts.CanAcceptJob)
 }
 
 func DrainingWorkerStatusMessage(jobCount uint32) *lkprotocol.WorkerMessage {

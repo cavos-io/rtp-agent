@@ -887,3 +887,48 @@ func TestDrainingWorkerStatusMessageReportsFullWithoutLoad(t *testing.T) {
 		t.Fatalf("UpdateWorker.JobCount = %d, want 3", update.JobCount)
 	}
 }
+
+func TestWorkerStatusUpdateMessageUsesDrainingStatusWhenDraining(t *testing.T) {
+	msg := workerlivekit.WorkerStatusUpdateMessage(workerlivekit.WorkerStatusUpdateOptions{
+		Draining:     true,
+		Load:         0.91,
+		JobCount:     4,
+		CanAcceptJob: true,
+	})
+
+	update := msg.GetUpdateWorker()
+	if update == nil {
+		t.Fatal("UpdateWorker message is nil")
+	}
+	if update.GetStatus() != lkprotocol.WorkerStatus_WS_FULL {
+		t.Fatalf("UpdateWorker.Status = %v, want WS_FULL", update.GetStatus())
+	}
+	if update.Load != 0 {
+		t.Fatalf("UpdateWorker.Load = %v, want 0 while draining", update.Load)
+	}
+	if update.JobCount != 4 {
+		t.Fatalf("UpdateWorker.JobCount = %d, want 4", update.JobCount)
+	}
+}
+
+func TestWorkerStatusUpdateMessageUsesAvailabilityWhenNotDraining(t *testing.T) {
+	msg := workerlivekit.WorkerStatusUpdateMessage(workerlivekit.WorkerStatusUpdateOptions{
+		Load:         0.51,
+		JobCount:     2,
+		CanAcceptJob: false,
+	})
+
+	update := msg.GetUpdateWorker()
+	if update == nil {
+		t.Fatal("UpdateWorker message is nil")
+	}
+	if update.GetStatus() != lkprotocol.WorkerStatus_WS_FULL {
+		t.Fatalf("UpdateWorker.Status = %v, want WS_FULL", update.GetStatus())
+	}
+	if update.Load != 0.51 {
+		t.Fatalf("UpdateWorker.Load = %v, want 0.51", update.Load)
+	}
+	if update.JobCount != 2 {
+		t.Fatalf("UpdateWorker.JobCount = %d, want 2", update.JobCount)
+	}
+}
