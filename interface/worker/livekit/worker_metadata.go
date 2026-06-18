@@ -75,3 +75,7 @@ func WorkerRuntimeMetadata(opts WorkerRuntimeMetadataOptions) WorkerMetadataResp
 		Hosted:          isHosted(),
 	})
 }
+
+func WorkerConnectionFailureMessage() string {
+	return "failed to connect to livekit"
+}

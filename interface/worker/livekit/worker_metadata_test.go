@@ -114,3 +114,9 @@ func TestWorkerRuntimeMetadataUsesRuntimeNodeAndHostedState(t *testing.T) {
 		t.Fatalf("WorkerType = %q, want JT_ROOM", metadata.WorkerType)
 	}
 }
+
+func TestWorkerConnectionFailureMessageNamesLiveKit(t *testing.T) {
+	if got := workerlivekit.WorkerConnectionFailureMessage(); got != "failed to connect to livekit" {
+		t.Fatalf("WorkerConnectionFailureMessage() = %q, want LiveKit failure message", got)
+	}
+}

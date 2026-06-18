@@ -849,7 +849,7 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 
 func workerConnectionFailureMessage(transport WorkerTransport) string {
 	if NormalizeWorkerTransport(string(transport)) == WorkerTransportLiveKit {
-		return "failed to connect to livekit"
+		return workerlivekit.WorkerConnectionFailureMessage()
 	}
 	return "failed to connect"
 }
