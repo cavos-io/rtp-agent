@@ -208,6 +208,12 @@ func (s *DeepgramSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: s.interimResults, Diarization: s.enableDiarization, AlignedTranscript: "word", OfflineRecognize: true}
 }
 
+func (s *DeepgramSTT) UpdateOptions(opts ...DeepgramSTTOption) {
+	for _, opt := range opts {
+		opt(s)
+	}
+}
+
 func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.RecognizeStream, error) {
 	if err := validateDeepgramSTTAPIKey(s.apiKey); err != nil {
 		return nil, err

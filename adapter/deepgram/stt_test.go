@@ -627,6 +627,80 @@ func TestDeepgramSTTAdvancedOptionsUseReferenceQueryParams(t *testing.T) {
 	assertDeepgramQueryValues(t, query, "tag", []string{"agent", "test"})
 }
 
+func TestDeepgramSTTUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
+	provider := NewDeepgramSTT("test-key", "nova-2")
+
+	provider.UpdateOptions(
+		WithDeepgramSTTBaseURL("https://updated.deepgram.example/v1/listen"),
+		WithDeepgramSTTInterimResults(false),
+		WithDeepgramSTTPunctuate(false),
+		WithDeepgramSTTSmartFormat(true),
+		WithDeepgramSTTNoDelay(false),
+		WithDeepgramSTTEndpointing(0),
+		WithDeepgramSTTDiarization(true),
+		WithDeepgramSTTFillerWords(false),
+		WithDeepgramSTTSampleRate(48000),
+		WithDeepgramSTTNumChannels(2),
+		WithDeepgramSTTVADEvents(false),
+		WithDeepgramSTTProfanityFilter(true),
+		WithDeepgramSTTNumerals(true),
+		WithDeepgramSTTMipOptOut(true),
+		WithDeepgramSTTKeyterms([]string{"LiveKit"}),
+		WithDeepgramSTTRedact([]string{"pci"}),
+		WithDeepgramSTTTags([]string{"agent"}),
+	)
+
+	caps := provider.Capabilities()
+	if caps.InterimResults || !caps.Diarization {
+		t.Fatalf("capabilities = %+v, want interim false and diarization true", caps)
+	}
+	if provider.InputSampleRate() != 48000 {
+		t.Fatalf("InputSampleRate() = %d, want 48000", provider.InputSampleRate())
+	}
+
+	streamURL, err := url.Parse(buildDeepgramStreamURL(provider, "en-US"))
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	if streamURL.Scheme != "wss" || streamURL.Host != "updated.deepgram.example" || streamURL.Path != "/v1/listen" {
+		t.Fatalf("stream url = %q, want updated websocket URL", streamURL.String())
+	}
+	streamQuery := streamURL.Query()
+	assertDeepgramQuery(t, streamQuery, "interim_results", "false")
+	assertDeepgramQuery(t, streamQuery, "punctuate", "false")
+	assertDeepgramQuery(t, streamQuery, "smart_format", "true")
+	assertDeepgramQuery(t, streamQuery, "no_delay", "false")
+	assertDeepgramQuery(t, streamQuery, "endpointing", "false")
+	assertDeepgramQuery(t, streamQuery, "diarize", "true")
+	assertDeepgramQuery(t, streamQuery, "filler_words", "false")
+	assertDeepgramQuery(t, streamQuery, "sample_rate", "48000")
+	assertDeepgramQuery(t, streamQuery, "channels", "2")
+	assertDeepgramQuery(t, streamQuery, "vad_events", "false")
+	assertDeepgramQuery(t, streamQuery, "profanity_filter", "true")
+	assertDeepgramQuery(t, streamQuery, "numerals", "true")
+	assertDeepgramQuery(t, streamQuery, "mip_opt_out", "true")
+	assertDeepgramQueryValues(t, streamQuery, "keyterm", []string{"LiveKit"})
+	assertDeepgramQueryValues(t, streamQuery, "redact", []string{"pci"})
+	assertDeepgramQueryValues(t, streamQuery, "tag", []string{"agent"})
+
+	recognizeURL, err := url.Parse(buildDeepgramRecognizeURL(provider, "en-US"))
+	if err != nil {
+		t.Fatalf("parse recognize url: %v", err)
+	}
+	if recognizeURL.Scheme != "https" || recognizeURL.Host != "updated.deepgram.example" || recognizeURL.Path != "/v1/listen" {
+		t.Fatalf("recognize url = %q, want updated HTTPS URL", recognizeURL.String())
+	}
+	recognizeQuery := recognizeURL.Query()
+	assertDeepgramQuery(t, recognizeQuery, "punctuate", "false")
+	assertDeepgramQuery(t, recognizeQuery, "smart_format", "true")
+	assertDeepgramQuery(t, recognizeQuery, "profanity_filter", "true")
+	assertDeepgramQuery(t, recognizeQuery, "numerals", "true")
+	assertDeepgramQuery(t, recognizeQuery, "mip_opt_out", "true")
+	assertDeepgramQueryValues(t, recognizeQuery, "keyterm", []string{"LiveKit"})
+	assertDeepgramQueryValues(t, recognizeQuery, "redact", []string{"pci"})
+	assertDeepgramQueryValues(t, recognizeQuery, "tag", []string{"agent"})
+}
+
 func TestDeepgramSTTStreamPreservesReferenceSpeechState(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	serverErr := make(chan error, 1)
