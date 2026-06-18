@@ -75,6 +75,47 @@ func TestLocalJobContextValuesBuildsLiveKitJobIdentityAndToken(t *testing.T) {
 	}
 }
 
+func TestLocalJobContextSetupPlanIncludesRecordingAndSessionOptions(t *testing.T) {
+	plan := workerlivekit.LocalJobContextSetupPlan(workerlivekit.LocalJobContextSetupPlanOptions{
+		RoomName:            "room-a",
+		ParticipantIdentity: "agent-local",
+		APIKey:              "api-key",
+		APISecret:           "api-secret",
+		TTL:                 time.Hour,
+		Options: workerlivekit.LocalJobOptions{
+			FakeJob:          true,
+			RecordingOptions: agent.RecordingOptions{Logs: true},
+			SessionDirectory: "sessions/job-a",
+		},
+		NewIdentity: func(prefix string) string {
+			t.Fatalf("NewIdentity called with prefix %q, want explicit participant identity", prefix)
+			return ""
+		},
+	})
+
+	if plan.Job.GetRoom().GetName() != "room-a" {
+		t.Fatalf("Job.Room.Name = %q, want room-a", plan.Job.GetRoom().GetName())
+	}
+	if plan.AcceptIdentity != "agent-local" {
+		t.Fatalf("AcceptIdentity = %q, want agent-local", plan.AcceptIdentity)
+	}
+	if !plan.FakeJob {
+		t.Fatal("FakeJob = false, want true")
+	}
+	if !plan.InitRecording {
+		t.Fatal("InitRecording = false, want true")
+	}
+	if !plan.RecordingOptions.Logs {
+		t.Fatal("RecordingOptions.Logs = false, want true")
+	}
+	if plan.SessionDirectory != "sessions/job-a" {
+		t.Fatalf("SessionDirectory = %q, want sessions/job-a", plan.SessionDirectory)
+	}
+	if plan.Token == "" {
+		t.Fatal("Token = empty, want generated token")
+	}
+}
+
 func TestValidateLocalJobRunOptionsChecksIdentityBeforeRoomInfo(t *testing.T) {
 	err := workerlivekit.ValidateLocalJobRunOptions("", workerlivekit.LocalJobOptions{FakeJob: false})
 	if err == nil {

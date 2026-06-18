@@ -39,6 +39,25 @@ func TestDeleteRoomRequestFallsBackToJobRoomName(t *testing.T) {
 	}
 }
 
+func TestDeleteRoomPlanSkipsFakeJobsWithEmptyResponse(t *testing.T) {
+	plan := workerlivekit.DeleteRoomPlan(true)
+
+	if !plan.Skip {
+		t.Fatal("DeleteRoomPlan(fake).Skip = false, want true")
+	}
+	if plan.Response == nil {
+		t.Fatal("DeleteRoomPlan(fake).Response = nil, want empty response")
+	}
+
+	realPlan := workerlivekit.DeleteRoomPlan(false)
+	if realPlan.Skip {
+		t.Fatal("DeleteRoomPlan(real).Skip = true, want false")
+	}
+	if realPlan.Response != nil {
+		t.Fatalf("DeleteRoomPlan(real).Response = %#v, want nil", realPlan.Response)
+	}
+}
+
 func TestRoomDeleteNotFoundRecognizesLiveKitCleanupErrors(t *testing.T) {
 	cases := []struct {
 		name string

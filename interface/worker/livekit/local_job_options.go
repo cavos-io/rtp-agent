@@ -38,6 +38,18 @@ type LocalJobContextValuesResult struct {
 	Token               string
 }
 
+type LocalJobContextSetupPlanOptions = LocalJobContextValueOptions
+
+type LocalJobContextSetupPlanResult struct {
+	Job              *lkprotocol.Job
+	AcceptIdentity   string
+	Token            string
+	FakeJob          bool
+	InitRecording    bool
+	RecordingOptions agent.RecordingOptions
+	SessionDirectory string
+}
+
 func PrepareLocalJobRunOptions(participantIdentity string, opts LocalJobOptions) (string, error) {
 	identity, err := LocalJobParticipantIdentityForRun(opts.Token, participantIdentity)
 	if err != nil {
@@ -76,6 +88,20 @@ func LocalJobContextValues(opts LocalJobContextValueOptions) LocalJobContextValu
 		Job:                 job,
 		ParticipantIdentity: participantIdentity,
 		Token:               token,
+	}
+}
+
+func LocalJobContextSetupPlan(opts LocalJobContextSetupPlanOptions) LocalJobContextSetupPlanResult {
+	values := LocalJobContextValues(LocalJobContextValueOptions(opts))
+	localOptions := opts.Options
+	return LocalJobContextSetupPlanResult{
+		Job:              values.Job,
+		AcceptIdentity:   values.ParticipantIdentity,
+		Token:            values.Token,
+		FakeJob:          localOptions.FakeJob,
+		InitRecording:    HasSessionRecordingOption(localOptions.RecordingOptions),
+		RecordingOptions: localOptions.RecordingOptions,
+		SessionDirectory: localOptions.SessionDirectory,
 	}
 }
 

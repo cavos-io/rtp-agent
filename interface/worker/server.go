@@ -350,31 +350,23 @@ func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.Ru
 			continue
 		}
 
-		jobURL := s.Options.WSRL
-		if jobURL == "" {
-			jobURL = info.URL
-		}
-		runtimeJob := workerlivekit.JobRuntimeInfo(info.Job)
-		jobCtx := NewJobContext(info.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
+		reloadedJob := workerlivekit.ReloadedJobContextValues(workerlivekit.ReloadedJobContextValueOptions{
+			Info:            info,
+			OverrideURL:     s.Options.WSRL,
+			DefaultWorkerID: s.workerID,
+		})
+		jobCtx := NewJobContext(reloadedJob.Job, reloadedJob.URL, s.Options.APIKey, s.Options.APISecret)
 		jobCtx.process = s.newJobProcess()
-		if runtimeJob.EnableRecording {
+		if reloadedJob.EnableRecording {
 			jobCtx.InitRecording(workerlivekit.AllRecordingOptions())
 		}
-		jobCtx.token = info.Token
-		jobCtx.workerID = info.WorkerID
-		jobCtx.AcceptArguments = JobAcceptArguments{
-			Name:       info.AcceptArguments.Name,
-			Identity:   info.AcceptArguments.Identity,
-			Metadata:   info.AcceptArguments.Metadata,
-			Attributes: info.AcceptArguments.Attributes,
-		}
-		jobCtx.fakeJob = info.FakeJob
+		jobCtx.token = reloadedJob.Token
+		jobCtx.workerID = reloadedJob.WorkerID
+		jobCtx.AcceptArguments = reloadedJob.AcceptArguments
+		jobCtx.fakeJob = reloadedJob.FakeJob
 
 		s.mu.Lock()
-		if jobCtx.WorkerID() == "" {
-			jobCtx.workerID = s.workerID
-		}
-		s.activeJobs[runtimeJob.JobID] = jobCtx
+		s.activeJobs[reloadedJob.JobID] = jobCtx
 		s.mu.Unlock()
 
 		s.launchReloadedJob(ctx, jobCtx)
@@ -782,25 +774,27 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.LoadFunc == nil && !opts.DevMode {
 		opts.LoadFunc = defaultWorkerLoadFunc
 	}
-	if opts.Permissions == nil {
-		opts.Permissions = workerlivekit.DefaultWorkerPermissions()
+	if opts.Transport == WorkerTransportLiveKit {
+		if opts.Permissions == nil {
+			opts.Permissions = workerlivekit.DefaultWorkerPermissions()
+		}
+		livekitOptions := workerlivekit.ResolveWorkerConnectionOptions(workerlivekit.WorkerConnectionOptions{
+			WSURL:          opts.WSURL,
+			LegacyWSURL:    opts.WSRL,
+			APIKey:         opts.APIKey,
+			APISecret:      opts.APISecret,
+			WorkerToken:    opts.WorkerToken,
+			AgentName:      opts.AgentName,
+			AgentNameIsEnv: opts.AgentNameIsEnv,
+		})
+		opts.WSURL = livekitOptions.WSURL
+		opts.WSRL = livekitOptions.WSURL
+		opts.APIKey = livekitOptions.APIKey
+		opts.APISecret = livekitOptions.APISecret
+		opts.WorkerToken = livekitOptions.WorkerToken
+		opts.AgentName = livekitOptions.AgentName
+		opts.AgentNameIsEnv = livekitOptions.AgentNameIsEnv
 	}
-	livekitOptions := workerlivekit.ResolveWorkerConnectionOptions(workerlivekit.WorkerConnectionOptions{
-		WSURL:          opts.WSURL,
-		LegacyWSURL:    opts.WSRL,
-		APIKey:         opts.APIKey,
-		APISecret:      opts.APISecret,
-		WorkerToken:    opts.WorkerToken,
-		AgentName:      opts.AgentName,
-		AgentNameIsEnv: opts.AgentNameIsEnv,
-	})
-	opts.WSURL = livekitOptions.WSURL
-	opts.WSRL = livekitOptions.WSURL
-	opts.APIKey = livekitOptions.APIKey
-	opts.APISecret = livekitOptions.APISecret
-	opts.WorkerToken = livekitOptions.WorkerToken
-	opts.AgentName = livekitOptions.AgentName
-	opts.AgentNameIsEnv = livekitOptions.AgentNameIsEnv
 	if opts.HTTPProxy == "" && !opts.HTTPProxySet {
 		opts.HTTPProxy = os.Getenv("HTTPS_PROXY")
 		if opts.HTTPProxy == "" {
@@ -1768,7 +1762,7 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	if options == workerlivekit.DefaultFakeLocalJobOptions() {
 		jobCtx = newLocalJobContext(roomName, participantIdentity, s.Options)
 	}
-	localJob := workerlivekit.LocalJobInfo(jobCtx.Job)
+	localJob := workerlivekit.LocalJobExecutorPlan(jobCtx.Job)
 	jobCtx.workerID = s.workerID
 	jobCtx.LogContextFields()["worker_id"] = jobCtx.WorkerID()
 	shutdownCh := make(chan struct{})
@@ -1817,7 +1811,7 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 
 func (s *AgentServer) launchLocalJobExecutor(ctx context.Context, jobCtx *JobContext, entrypoint func() error, entrypointDone chan<- struct{}) error {
 	info := runningJobInfoFromContext(jobCtx)
-	localJob := workerlivekit.LocalJobInfo(jobCtx.Job)
+	localJob := workerlivekit.LocalJobExecutorPlan(jobCtx.Job)
 	if s.Options.NumIdleProcessesSet && s.Options.NumIdleProcesses > 0 {
 		pool := newLocalProcPool(s.Options.NumIdleProcesses, workeripc.ExecutorTypeThread, entrypoint)
 		pool.SetTargetIdleProcesses(s.Options.NumIdleProcesses)
@@ -1883,7 +1877,11 @@ func (s *AgentServer) runJobEntrypoint(jobCtx *JobContext) error {
 }
 
 func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
-	if jobCtx == nil || jobCtx.Job == nil {
+	if jobCtx == nil {
+		return false
+	}
+	plan := workerlivekit.JobFinishPlan(jobCtx.Job)
+	if !plan.Finish {
 		return false
 	}
 	finalized := false
@@ -1893,10 +1891,9 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
 	if !finalized {
 		return false
 	}
-	runtimeJob := workerlivekit.JobRuntimeInfo(jobCtx.Job)
 
 	s.mu.Lock()
-	delete(s.activeJobs, runtimeJob.JobID)
+	delete(s.activeJobs, plan.JobID)
 	s.mu.Unlock()
 
 	s.runSessionEnd(jobCtx)
@@ -1952,16 +1949,18 @@ func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
 		return
 	}
 
-	runtimeJob := workerlivekit.JobRuntimeInfo(jobCtx.Job)
-	timeout := time.Duration(s.Options.SessionEndTimeoutSeconds * float64(time.Second))
+	plan := workerlivekit.JobSessionEndPlan(workerlivekit.JobSessionEndPlanOptions{
+		Job:            jobCtx.Job,
+		TimeoutSeconds: s.Options.SessionEndTimeoutSeconds,
+	})
 	doneCh := make(chan error, 1)
 	go func() {
 		doneCh <- s.sessionEndFnc(jobCtx)
 	}()
 
-	if timeout <= 0 {
+	if plan.Timeout <= 0 {
 		if err := <-doneCh; err != nil {
-			logger.Logger.Errorw("Session end callback failed", err, jobLogValues(jobCtx, "jobId", runtimeJob.JobID)...)
+			logger.Logger.Errorw("Session end callback failed", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
 		}
 		return
 	}
@@ -1969,10 +1968,10 @@ func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
 	select {
 	case err := <-doneCh:
 		if err != nil {
-			logger.Logger.Errorw("Session end callback failed", err, jobLogValues(jobCtx, "jobId", runtimeJob.JobID)...)
+			logger.Logger.Errorw("Session end callback failed", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
 		}
-	case <-time.After(timeout):
-		logger.Logger.Errorw("Session end callback timed out", nil, jobLogValues(jobCtx, "jobId", runtimeJob.JobID, "timeout", timeout)...)
+	case <-time.After(plan.Timeout):
+		logger.Logger.Errorw("Session end callback timed out", nil, jobLogValues(jobCtx, "jobId", plan.JobID, "timeout", plan.Timeout)...)
 	}
 }
 
@@ -1999,7 +1998,7 @@ func newLocalJobContext(roomName string, participantIdentity string, opts Worker
 
 func newLocalJobContextWithOptions(roomName string, participantIdentity string, opts WorkerOptions, options LocalJobOptions) *JobContext {
 	opts = resolveWorkerOptions(opts)
-	localValues := workerlivekit.LocalJobContextValues(workerlivekit.LocalJobContextValueOptions{
+	localPlan := workerlivekit.LocalJobContextSetupPlan(workerlivekit.LocalJobContextSetupPlanOptions{
 		RoomName:            roomName,
 		ParticipantIdentity: participantIdentity,
 		APIKey:              opts.APIKey,
@@ -2009,14 +2008,14 @@ func newLocalJobContextWithOptions(roomName string, participantIdentity string, 
 		NewIdentity:         mathutil.ShortUUID,
 	})
 
-	jobCtx := NewJobContext(localValues.Job, opts.WSRL, opts.APIKey, opts.APISecret)
-	jobCtx.AcceptArguments = JobAcceptArguments{Identity: localValues.ParticipantIdentity}
-	jobCtx.fakeJob = options.FakeJob
-	if workerlivekit.HasSessionRecordingOption(options.RecordingOptions) {
-		jobCtx.InitRecording(options.RecordingOptions)
+	jobCtx := NewJobContext(localPlan.Job, opts.WSRL, opts.APIKey, opts.APISecret)
+	jobCtx.AcceptArguments = JobAcceptArguments{Identity: localPlan.AcceptIdentity}
+	jobCtx.fakeJob = localPlan.FakeJob
+	if localPlan.InitRecording {
+		jobCtx.InitRecording(localPlan.RecordingOptions)
 	}
-	jobCtx.SetSessionDirectory(options.SessionDirectory)
+	jobCtx.SetSessionDirectory(localPlan.SessionDirectory)
 	jobCtx.process = NewJobProcess(JobExecutorTypeThread, opts.UserArguments, opts.HTTPProxy)
-	jobCtx.token = localValues.Token
+	jobCtx.token = localPlan.Token
 	return jobCtx
 }

@@ -51,3 +51,27 @@ func TestResolveWorkerOptionsDefaultsTransportToLiveKit(t *testing.T) {
 		t.Fatalf("Transport = %q, want %q", opts.Transport, WorkerTransportLiveKit)
 	}
 }
+
+func TestResolveWorkerOptionsDoesNotReadLiveKitEnvForAgora(t *testing.T) {
+	t.Setenv("LIVEKIT_URL", "wss://livekit-env.example")
+	t.Setenv("LIVEKIT_API_KEY", "livekit-key")
+	t.Setenv("LIVEKIT_API_SECRET", "livekit-secret")
+
+	opts := resolveWorkerOptions(WorkerOptions{
+		Transport: WorkerTransportAgora,
+		Agora: AgoraOptions{
+			AppID:   "agora-app",
+			Channel: "support",
+		},
+	})
+
+	if opts.WSRL != "" || opts.WSURL != "" {
+		t.Fatalf("LiveKit URL fields = WSRL %q WSURL %q, want empty for Agora", opts.WSRL, opts.WSURL)
+	}
+	if opts.APIKey != "" || opts.APISecret != "" {
+		t.Fatalf("LiveKit credentials = key %q secret %q, want empty for Agora", opts.APIKey, opts.APISecret)
+	}
+	if opts.Permissions != nil {
+		t.Fatal("Permissions = non-nil LiveKit permissions, want nil for Agora")
+	}
+}

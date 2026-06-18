@@ -136,6 +136,21 @@ type RuntimeJobInfo struct {
 	EnableRecording bool
 }
 
+type JobFinishPlanResult struct {
+	Finish bool
+	JobID  string
+}
+
+type JobSessionEndPlanOptions struct {
+	Job            *lkprotocol.Job
+	TimeoutSeconds float64
+}
+
+type JobSessionEndPlanResult struct {
+	JobID   string
+	Timeout time.Duration
+}
+
 func JobRuntimeInfo(job *lkprotocol.Job) RuntimeJobInfo {
 	if job == nil {
 		return RuntimeJobInfo{}
@@ -143,6 +158,25 @@ func JobRuntimeInfo(job *lkprotocol.Job) RuntimeJobInfo {
 	return RuntimeJobInfo{
 		JobID:           job.Id,
 		EnableRecording: job.GetEnableRecording(),
+	}
+}
+
+func JobFinishPlan(job *lkprotocol.Job) JobFinishPlanResult {
+	runtimeJob := JobRuntimeInfo(job)
+	if runtimeJob.JobID == "" {
+		return JobFinishPlanResult{}
+	}
+	return JobFinishPlanResult{
+		Finish: true,
+		JobID:  runtimeJob.JobID,
+	}
+}
+
+func JobSessionEndPlan(opts JobSessionEndPlanOptions) JobSessionEndPlanResult {
+	runtimeJob := JobRuntimeInfo(opts.Job)
+	return JobSessionEndPlanResult{
+		JobID:   runtimeJob.JobID,
+		Timeout: time.Duration(opts.TimeoutSeconds * float64(time.Second)),
 	}
 }
 
@@ -331,6 +365,8 @@ type RunningJobContextValueOptions struct {
 	DefaultWorkerID string
 }
 
+type ReloadedJobContextValueOptions = RunningJobContextValueOptions
+
 type RunningJobContextValuesResult struct {
 	Job             *lkprotocol.Job
 	JobID           string
@@ -377,6 +413,10 @@ func RunningJobContextValues(opts RunningJobContextValueOptions) RunningJobConte
 		FakeJob:         info.FakeJob,
 		EnableRecording: runtime.EnableRecording,
 	}
+}
+
+func ReloadedJobContextValues(opts ReloadedJobContextValueOptions) RunningJobContextValuesResult {
+	return RunningJobContextValues(RunningJobContextValueOptions(opts))
 }
 
 func AssignmentContextValues(opts AssignmentContextValueOptions) AssignmentContextValuesResult {
@@ -545,12 +585,18 @@ type LocalJobRuntimeInfo struct {
 	ExecutorID string
 }
 
+type LocalJobExecutorPlanResult = LocalJobRuntimeInfo
+
 func LocalJobInfo(job *lkprotocol.Job) LocalJobRuntimeInfo {
 	jobID := JobID(job)
 	return LocalJobRuntimeInfo{
 		JobID:      jobID,
 		ExecutorID: "local_" + jobID,
 	}
+}
+
+func LocalJobExecutorPlan(job *lkprotocol.Job) LocalJobExecutorPlanResult {
+	return LocalJobExecutorPlanResult(LocalJobInfo(job))
 }
 
 func JobAcceptIdentity(job *lkprotocol.Job, identity string) string {
@@ -576,6 +622,14 @@ func MoveParticipantRequest(job *lkprotocol.Job, room string, identity string, d
 		Identity:        identity,
 		DestinationRoom: destinationRoom,
 	}
+}
+
+type MoveParticipantPlanResult struct {
+	Skip bool
+}
+
+func MoveParticipantPlan(fakeJob bool) MoveParticipantPlanResult {
+	return MoveParticipantPlanResult{Skip: ShouldSkipExternalAPIForFakeJob(fakeJob)}
 }
 
 type MoveParticipantAPI interface {

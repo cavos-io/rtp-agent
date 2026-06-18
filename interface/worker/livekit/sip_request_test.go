@@ -152,6 +152,25 @@ func TestCreateSIPParticipantWithRequestUsesProvidedRequest(t *testing.T) {
 	}
 }
 
+func TestSIPCreateParticipantPlanSkipsFakeJobsWithEmptyInfo(t *testing.T) {
+	plan := workerlivekit.SIPCreateParticipantPlan(true)
+
+	if !plan.Skip {
+		t.Fatal("SIPCreateParticipantPlan(true).Skip = false, want true")
+	}
+	if plan.Info == nil {
+		t.Fatal("SIPCreateParticipantPlan(true).Info = nil, want empty participant info")
+	}
+
+	realPlan := workerlivekit.SIPCreateParticipantPlan(false)
+	if realPlan.Skip {
+		t.Fatal("SIPCreateParticipantPlan(false).Skip = true, want false")
+	}
+	if realPlan.Info != nil {
+		t.Fatalf("SIPCreateParticipantPlan(false).Info = %#v, want nil", realPlan.Info)
+	}
+}
+
 func TestTransferSIPParticipantCallsSIPAPI(t *testing.T) {
 	api := &fakeSIPAPI{}
 	err := workerlivekit.TransferSIPParticipant(context.Background(), api, &lkprotocol.Job{
@@ -188,6 +207,19 @@ func TestTransferSIPParticipantByParticipantDefaultsDialtone(t *testing.T) {
 	}
 	if api.transferRequest.PlayDialtone {
 		t.Fatal("PlayDialtone = true, want default false")
+	}
+}
+
+func TestSIPTransferParticipantPlanSkipsFakeJobs(t *testing.T) {
+	plan := workerlivekit.SIPTransferParticipantPlan(true)
+
+	if !plan.Skip {
+		t.Fatal("SIPTransferParticipantPlan(true).Skip = false, want true")
+	}
+
+	realPlan := workerlivekit.SIPTransferParticipantPlan(false)
+	if realPlan.Skip {
+		t.Fatal("SIPTransferParticipantPlan(false).Skip = true, want false")
 	}
 }
 

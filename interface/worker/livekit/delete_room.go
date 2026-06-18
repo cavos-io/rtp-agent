@@ -11,6 +11,21 @@ import (
 
 type DeleteRoomResponse = lkprotocol.DeleteRoomResponse
 
+type DeleteRoomPlanResult struct {
+	Skip     bool
+	Response *lkprotocol.DeleteRoomResponse
+}
+
+func DeleteRoomPlan(fakeJob bool) DeleteRoomPlanResult {
+	if !ShouldSkipExternalAPIForFakeJob(fakeJob) {
+		return DeleteRoomPlanResult{}
+	}
+	return DeleteRoomPlanResult{
+		Skip:     true,
+		Response: &lkprotocol.DeleteRoomResponse{},
+	}
+}
+
 func DeleteRoomRequest(job *lkprotocol.Job, roomName string) *lkprotocol.DeleteRoomRequest {
 	if roomName == "" && job != nil && job.Room != nil {
 		roomName = job.Room.Name

@@ -394,6 +394,35 @@ func TestJobSessionReportUploadPlanIncludesUploadInputsAndSkipsFakeJobs(t *testi
 	}
 }
 
+func TestJobFinishPlanRequiresLiveKitJobAndExposesActiveJobKey(t *testing.T) {
+	nilPlan := workerlivekit.JobFinishPlan(nil)
+	if nilPlan.Finish {
+		t.Fatal("JobFinishPlan(nil).Finish = true, want false")
+	}
+
+	plan := workerlivekit.JobFinishPlan(&lkprotocol.Job{Id: "job-finish"})
+	if !plan.Finish {
+		t.Fatal("JobFinishPlan(job).Finish = false, want true")
+	}
+	if plan.JobID != "job-finish" {
+		t.Fatalf("JobID = %q, want job-finish", plan.JobID)
+	}
+}
+
+func TestJobSessionEndPlanExposesJobIDAndTimeout(t *testing.T) {
+	plan := workerlivekit.JobSessionEndPlan(workerlivekit.JobSessionEndPlanOptions{
+		Job:            &lkprotocol.Job{Id: "job-session-end"},
+		TimeoutSeconds: 1.5,
+	})
+
+	if plan.JobID != "job-session-end" {
+		t.Fatalf("JobID = %q, want job-session-end", plan.JobID)
+	}
+	if plan.Timeout != 1500*time.Millisecond {
+		t.Fatalf("Timeout = %v, want 1.5s", plan.Timeout)
+	}
+}
+
 func TestJobLogContextFieldsExposeLiveKitJobMetadata(t *testing.T) {
 	fields := workerlivekit.JobLogContextFields(&lkprotocol.Job{
 		Id:   "job-log",
@@ -631,6 +660,45 @@ func TestRunningJobContextValuesPreservesInfoURLAndWorker(t *testing.T) {
 	}
 	if values.WorkerID != "worker-info" {
 		t.Fatalf("WorkerID = %q, want info worker", values.WorkerID)
+	}
+}
+
+func TestReloadedJobContextValuesResolveOverrideURLWorkerAndRecording(t *testing.T) {
+	job := &lkprotocol.Job{Id: "job-reload", EnableRecording: true}
+	values := workerlivekit.ReloadedJobContextValues(workerlivekit.ReloadedJobContextValueOptions{
+		Info: workerlivekit.RunningJobInfo{
+			Job:   job,
+			URL:   "wss://stored.example",
+			Token: "stored-token",
+			AcceptArguments: workerlivekit.JobAcceptArguments{
+				Identity:   "agent-reload",
+				Attributes: map[string]string{"scope": "reload"},
+			},
+		},
+		OverrideURL:     "wss://override.example",
+		DefaultWorkerID: "worker-default",
+	})
+
+	if values.Job != job {
+		t.Fatal("ReloadedJobContextValues().Job did not preserve job")
+	}
+	if values.JobID != "job-reload" {
+		t.Fatalf("JobID = %q, want job-reload", values.JobID)
+	}
+	if values.URL != "wss://override.example" {
+		t.Fatalf("URL = %q, want override URL", values.URL)
+	}
+	if values.Token != "stored-token" {
+		t.Fatalf("Token = %q, want stored-token", values.Token)
+	}
+	if values.WorkerID != "worker-default" {
+		t.Fatalf("WorkerID = %q, want default worker", values.WorkerID)
+	}
+	if values.AcceptArguments.Attributes["scope"] != "reload" {
+		t.Fatalf("AcceptArguments.Attributes[scope] = %q, want reload", values.AcceptArguments.Attributes["scope"])
+	}
+	if !values.EnableRecording {
+		t.Fatal("EnableRecording = false, want true")
 	}
 }
 
@@ -935,6 +1003,17 @@ func TestLocalJobInfoBuildsExecutorIDFromJobID(t *testing.T) {
 	}
 }
 
+func TestLocalJobExecutorPlanBuildsExecutorIDFromLiveKitJobID(t *testing.T) {
+	plan := workerlivekit.LocalJobExecutorPlan(&lkprotocol.Job{Id: "job-local"})
+
+	if plan.JobID != "job-local" {
+		t.Fatalf("LocalJobExecutorPlan().JobID = %q, want job-local", plan.JobID)
+	}
+	if plan.ExecutorID != "local_job-local" {
+		t.Fatalf("LocalJobExecutorPlan().ExecutorID = %q, want local_job-local", plan.ExecutorID)
+	}
+}
+
 func TestJobAcceptIdentityDefaultsFromJobID(t *testing.T) {
 	got := workerlivekit.JobAcceptIdentity(&lkprotocol.Job{Id: "job_accept"}, "")
 	if got != "agent-job_accept" {
@@ -999,6 +1078,18 @@ func TestMoveParticipantRequestDefaultsDestinationRoomFromJob(t *testing.T) {
 
 	if req.DestinationRoom != "caller-room" {
 		t.Fatalf("MoveParticipantRequest.DestinationRoom = %q, want caller-room", req.DestinationRoom)
+	}
+}
+
+func TestMoveParticipantPlanSkipsFakeJobs(t *testing.T) {
+	plan := workerlivekit.MoveParticipantPlan(true)
+	if !plan.Skip {
+		t.Fatal("MoveParticipantPlan(fake).Skip = false, want true")
+	}
+
+	realPlan := workerlivekit.MoveParticipantPlan(false)
+	if realPlan.Skip {
+		t.Fatal("MoveParticipantPlan(real).Skip = true, want false")
 	}
 }
 

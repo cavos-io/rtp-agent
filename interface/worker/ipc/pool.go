@@ -274,8 +274,19 @@ func (p *ProcPool) ActiveJobs() []RunningJobInfo {
 	return jobs
 }
 
+func CloneRunningJobInfo(info RunningJobInfo) RunningJobInfo {
+	if info.AcceptArguments.Attributes != nil {
+		attributes := make(map[string]string, len(info.AcceptArguments.Attributes))
+		for k, v := range info.AcceptArguments.Attributes {
+			attributes[k] = v
+		}
+		info.AcceptArguments.Attributes = attributes
+	}
+	return info
+}
+
 func cloneRunningJobInfo(info RunningJobInfo) RunningJobInfo {
-	return workerlivekit.CloneRunningJobInfo(info)
+	return CloneRunningJobInfo(info)
 }
 
 func (p *ProcPool) SetCloseTimeout(timeout time.Duration) {
