@@ -171,6 +171,40 @@ func TestParticipantEntrypointTaskKeyUsesParticipantIdentity(t *testing.T) {
 	}
 }
 
+func TestParticipantEntrypointTaskPlanFiltersKindAndBuildsTask(t *testing.T) {
+	participant := &lkprotocol.ParticipantInfo{
+		Identity: "caller-a",
+		Kind:     lkprotocol.ParticipantInfo_SIP,
+	}
+
+	rejected := workerlivekit.ParticipantEntrypointTaskPlan(
+		participant,
+		[]lkprotocol.ParticipantInfo_Kind{lkprotocol.ParticipantInfo_STANDARD},
+		42,
+	)
+	if rejected.Schedule {
+		t.Fatal("ParticipantEntrypointTaskPlan() scheduled disallowed participant kind")
+	}
+
+	allowed := workerlivekit.ParticipantEntrypointTaskPlan(
+		participant,
+		[]lkprotocol.ParticipantInfo_Kind{lkprotocol.ParticipantInfo_SIP},
+		42,
+	)
+	if !allowed.Schedule {
+		t.Fatal("ParticipantEntrypointTaskPlan() did not schedule allowed participant kind")
+	}
+	if allowed.Participant.Identity != "caller-a" {
+		t.Fatalf("Participant identity = %q, want caller-a", allowed.Participant.Identity)
+	}
+	if allowed.TaskKey.Identity != "caller-a" {
+		t.Fatalf("TaskKey identity = %q, want caller-a", allowed.TaskKey.Identity)
+	}
+	if allowed.TaskKey.Entrypoint != 42 {
+		t.Fatalf("TaskKey entrypoint = %d, want 42", allowed.TaskKey.Entrypoint)
+	}
+}
+
 func TestUpsertParticipantInfoReplacesMatchingIdentity(t *testing.T) {
 	oldInfo := &lkprotocol.ParticipantInfo{Identity: "caller-a", Name: "Old"}
 	newInfo := &lkprotocol.ParticipantInfo{Identity: "caller-a", Name: "New"}

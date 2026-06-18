@@ -548,9 +548,6 @@ func (c *JobContext) AddParticipantEntrypoint(entrypoint ParticipantEntrypoint, 
 
 func (c *JobContext) scheduleParticipantEntrypointForExistingParticipants(registration participantEntrypointRegistration) {
 	for _, participant := range c.availableParticipants {
-		if !workerlivekit.ParticipantInfoKindAllowed(registration.kinds, participant) {
-			continue
-		}
 		c.scheduleParticipantEntrypoint(registration, participant)
 	}
 }
@@ -621,36 +618,36 @@ func (c *JobContext) scheduleParticipantEntrypoints(participant *workerlivekit.P
 		return
 	}
 	for _, registered := range c.participantEntrypoints {
-		if !workerlivekit.ParticipantInfoKindAllowed(registered.kinds, participant) {
-			continue
-		}
 		c.scheduleParticipantEntrypoint(registered, participant)
 	}
 }
 
 func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntrypointRegistration, participant *workerlivekit.ParticipantInfo) {
-	if participant == nil {
+	plan := workerlivekit.ParticipantEntrypointTaskPlan(
+		participant,
+		registration.kinds,
+		reflect.ValueOf(registration.entrypoint).Pointer(),
+	)
+	if !plan.Schedule {
 		return
 	}
-	participantDetails := workerlivekit.ParticipantInfoDetails(participant)
-	key := workerlivekit.ParticipantEntrypointTaskKey(participant, reflect.ValueOf(registration.entrypoint).Pointer())
 	c.participantTasksMu.Lock()
 	if c.participantTasks == nil {
 		c.participantTasks = make(map[workerlivekit.ParticipantTaskKey]struct{})
 	}
-	if _, ok := c.participantTasks[key]; ok {
-		logger.Logger.Warnw("participant entrypoint already running for participant", nil, "participant", participantDetails.Identity)
+	if _, ok := c.participantTasks[plan.TaskKey]; ok {
+		logger.Logger.Warnw("participant entrypoint already running for participant", nil, "participant", plan.Participant.Identity)
 	}
-	c.participantTasks[key] = struct{}{}
+	c.participantTasks[plan.TaskKey] = struct{}{}
 	c.participantTasksMu.Unlock()
 
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				logger.Logger.Errorw("Participant entrypoint panicked", fmt.Errorf("%v", recovered), "participant", participantDetails.Identity)
+				logger.Logger.Errorw("Participant entrypoint panicked", fmt.Errorf("%v", recovered), "participant", plan.Participant.Identity)
 			}
 			c.participantTasksMu.Lock()
-			delete(c.participantTasks, key)
+			delete(c.participantTasks, plan.TaskKey)
 			c.participantTasksMu.Unlock()
 		}()
 		_ = runWithJobContext(c, func() error {

@@ -103,6 +103,12 @@ type ParticipantTaskKey struct {
 	Entrypoint uintptr
 }
 
+type ParticipantEntrypointTaskPlanResult struct {
+	Schedule    bool
+	Participant ParticipantDetails
+	TaskKey     ParticipantTaskKey
+}
+
 func ParticipantInfoDetails(participant *lkprotocol.ParticipantInfo) ParticipantDetails {
 	if participant == nil {
 		return ParticipantDetails{}
@@ -121,6 +127,24 @@ func ParticipantEntrypointTaskKey(participant *lkprotocol.ParticipantInfo, entry
 	return ParticipantTaskKey{
 		Identity:   ParticipantInfoDetails(participant).Identity,
 		Entrypoint: entrypoint,
+	}
+}
+
+func ParticipantEntrypointTaskPlan(participant *lkprotocol.ParticipantInfo, kinds []lkprotocol.ParticipantInfo_Kind, entrypoint uintptr) ParticipantEntrypointTaskPlanResult {
+	if participant == nil {
+		return ParticipantEntrypointTaskPlanResult{}
+	}
+	details := ParticipantInfoDetails(participant)
+	if !ParticipantKindAllowed(kinds, details.Kind) {
+		return ParticipantEntrypointTaskPlanResult{}
+	}
+	return ParticipantEntrypointTaskPlanResult{
+		Schedule:    true,
+		Participant: details,
+		TaskKey: ParticipantTaskKey{
+			Identity:   details.Identity,
+			Entrypoint: entrypoint,
+		},
 	}
 }
 
