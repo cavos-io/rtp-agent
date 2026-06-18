@@ -2686,7 +2686,11 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		if a.Session == nil {
 			return nil, nil
 		}
-		handle, err := a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{})
+		handle, err := a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+			UserMessage:   newMsg,
+			ChatCtx:       chatCtx,
+			InputModality: "audio",
+		})
 		if err != nil {
 			return nil, err
 		}

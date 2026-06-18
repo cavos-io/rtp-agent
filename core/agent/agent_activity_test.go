@@ -4459,6 +4459,49 @@ func TestAgentActivityCommitUserTurnSkipsRealtimeCommitWithServerTurnDetection(t
 	}
 }
 
+func TestAgentActivityCommitUserTurnRealtimeCommitPreservesUserMessageAfterHook(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	assistant := &recordingRealtimeCommitAssistant{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "realtime pending final", Confidence: 0.9}},
+	})
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "realtime pending final" {
+		t.Fatalf("CommitUserTurn transcript = %q, want realtime pending final", transcript)
+	}
+	if assistant.commits != 1 {
+		t.Fatalf("CommitAudio calls = %d, want 1", assistant.commits)
+	}
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "realtime pending final" {
+			t.Fatalf("OnUserTurnCompleted message = %q, want realtime pending final", msg.TextContent())
+		}
+	default:
+		t.Fatal("OnUserTurnCompleted was not called")
+	}
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		msg := ev.SpeechHandle.Generation.UserMessage
+		if msg == nil || msg.TextContent() != "realtime pending final" {
+			t.Fatalf("reply user message = %#v, want committed realtime transcript", msg)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("CommitUserTurn did not generate reply after hook")
+	}
+}
+
 func TestAgentActivityCompleteUserTurnEmitsEOUMetricsForGeneratedReply(t *testing.T) {
 	agent := NewAgent("test")
 	agent.TurnDetection = TurnDetectionModeManual
