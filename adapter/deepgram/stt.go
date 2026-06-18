@@ -229,7 +229,7 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildDeepgramStreamURL(s, languageStr), header)
 	if err != nil {
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, llm.NewAPIConnectionError("failed to connect to deepgram")
 	}
 
 	streamCtx, cancel := context.WithCancel(ctx)

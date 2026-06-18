@@ -528,6 +528,9 @@ func TestDeepgramSTTStreamReturnsAPIConnectionErrorOnDialTimeout(t *testing.T) {
 	if errors.As(err, &timeoutErr) {
 		t.Fatalf("Stream error = %T %v, want plain APIConnectionError", err, err)
 	}
+	if connectionErr.Message != "failed to connect to deepgram" {
+		t.Fatalf("connection error message = %q, want reference message", connectionErr.Message)
+	}
 }
 
 func TestDeepgramSTTStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
