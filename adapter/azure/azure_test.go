@@ -876,6 +876,34 @@ func TestAzureTTSBuildsRequestWithConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestAzureTTSBuildsRequestWithReferenceSSMLOptions(t *testing.T) {
+	provider, err := NewAzureTTSWithOptions(
+		"key",
+		"eastus",
+		"en-US-AvaNeural",
+		WithAzureTTSLexiconURI("https://example.com/lexicon.xml"),
+		WithAzureTTSStyle(AzureTTSStyle{Style: "cheerful", Degree: 1.5}),
+		WithAzureTTSProsody(AzureTTSProsody{Rate: "fast", Volume: "loud", Pitch: "high"}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureTTSWithOptions error = %v", err)
+	}
+
+	req, err := buildAzureTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	want := `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="en-US"><voice name="en-US-AvaNeural"><lexicon uri="https://example.com/lexicon.xml"/><mstts:express-as style="cheerful" styledegree="1.5"><prosody rate="fast" volume="loud" pitch="high">hello</prosody></mstts:express-as></voice></speak>`
+	if string(body) != want {
+		t.Fatalf("SSML = %q, want %q", string(body), want)
+	}
+}
+
 func TestAzureTTSUpdateOptionsMatchesReference(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {

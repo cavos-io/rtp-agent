@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -34,7 +36,21 @@ type AzureTTS struct {
 	voice      string
 	language   string
 	sampleRate int
+	prosody    AzureTTSProsody
+	style      AzureTTSStyle
+	lexiconURI string
 	httpClient *http.Client
+}
+
+type AzureTTSProsody struct {
+	Rate   string
+	Volume string
+	Pitch  string
+}
+
+type AzureTTSStyle struct {
+	Style  string
+	Degree float64
 }
 
 type AzureTTSOption func(*AzureTTS)
@@ -51,6 +67,26 @@ func WithAzureTTSSampleRate(sampleRate int) AzureTTSOption {
 	return func(t *AzureTTS) {
 		if sampleRate > 0 {
 			t.sampleRate = sampleRate
+		}
+	}
+}
+
+func WithAzureTTSProsody(prosody AzureTTSProsody) AzureTTSOption {
+	return func(t *AzureTTS) {
+		t.prosody = prosody
+	}
+}
+
+func WithAzureTTSStyle(style AzureTTSStyle) AzureTTSOption {
+	return func(t *AzureTTS) {
+		t.style = style
+	}
+}
+
+func WithAzureTTSLexiconURI(lexiconURI string) AzureTTSOption {
+	return func(t *AzureTTS) {
+		if lexiconURI != "" {
+			t.lexiconURI = lexiconURI
 		}
 	}
 }
@@ -147,7 +183,7 @@ func buildAzureTTSRequest(ctx context.Context, t *AzureTTS, text string) (*http.
 	if language == "" {
 		language = defaultAzureTTSLanguage
 	}
-	ssml := fmt.Sprintf(`<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="%s"><voice name="%s">%s</voice></speak>`, language, t.voice, text)
+	ssml := buildAzureTTSSSML(t, language, text)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBufferString(ssml))
 	if err != nil {
@@ -159,6 +195,44 @@ func buildAzureTTSRequest(ctx context.Context, t *AzureTTS, text string) (*http.
 	req.Header.Set("Ocp-Apim-Subscription-Key", t.apiKey)
 	req.Header.Set("User-Agent", "LiveKit Agents")
 	return req, nil
+}
+
+func buildAzureTTSSSML(t *AzureTTS, language string, text string) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf(`<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="%s">`, language))
+	b.WriteString(fmt.Sprintf(`<voice name="%s">`, t.voice))
+	if t.lexiconURI != "" {
+		b.WriteString(fmt.Sprintf(`<lexicon uri="%s"/>`, t.lexiconURI))
+	}
+	if t.style.Style != "" {
+		b.WriteString(fmt.Sprintf(`<mstts:express-as style="%s"`, t.style.Style))
+		if t.style.Degree != 0 {
+			b.WriteString(fmt.Sprintf(` styledegree="%s"`, strconv.FormatFloat(t.style.Degree, 'f', -1, 64)))
+		}
+		b.WriteString(">")
+	}
+	if t.prosody.Rate != "" || t.prosody.Volume != "" || t.prosody.Pitch != "" {
+		b.WriteString("<prosody")
+		if t.prosody.Rate != "" {
+			b.WriteString(fmt.Sprintf(` rate="%s"`, t.prosody.Rate))
+		}
+		if t.prosody.Volume != "" {
+			b.WriteString(fmt.Sprintf(` volume="%s"`, t.prosody.Volume))
+		}
+		if t.prosody.Pitch != "" {
+			b.WriteString(fmt.Sprintf(` pitch="%s"`, t.prosody.Pitch))
+		}
+		b.WriteString(">")
+		b.WriteString(text)
+		b.WriteString("</prosody>")
+	} else {
+		b.WriteString(text)
+	}
+	if t.style.Style != "" {
+		b.WriteString("</mstts:express-as>")
+	}
+	b.WriteString("</voice></speak>")
+	return b.String()
 }
 
 func (t *AzureTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
