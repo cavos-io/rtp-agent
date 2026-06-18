@@ -117,6 +117,35 @@ func TestCartesiaSTTNonEnglishDefaultsToWhisperReference(t *testing.T) {
 	}
 }
 
+func TestCartesiaSTTUpdateOptionsMatchesReferenceFutureStreams(t *testing.T) {
+	provider := NewCartesiaSTT("test-key", WithCartesiaSTTLanguage("es"))
+
+	provider.UpdateOptions("fr-FR")
+
+	if provider.language != "fr-FR" {
+		t.Fatalf("language = %q, want updated language fr-FR", provider.language)
+	}
+	parsed, err := url.Parse(buildCartesiaSTTStreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	assertCartesiaQuery(t, parsed.Query(), "language", "fr")
+}
+
+func TestCartesiaSTTUpdateOptionsPropagatesLanguageToActiveStream(t *testing.T) {
+	provider := NewCartesiaSTT("test-key", WithCartesiaSTTLanguage("en"))
+	stream := &cartesiaSTTStream{
+		state: &cartesiaSTTStreamState{language: "en", mode: "auto"},
+	}
+	provider.registerStream(stream)
+
+	provider.UpdateOptions("fr-FR")
+
+	if got := stream.state.language; got != "fr" {
+		t.Fatalf("active stream language = %q, want base language fr", got)
+	}
+}
+
 func TestCartesiaSTTOptionsBuildReferenceURLsAndHeaders(t *testing.T) {
 	provider := NewCartesiaSTT("test-key",
 		WithCartesiaSTTBaseURL("http://cartesia.example"),
