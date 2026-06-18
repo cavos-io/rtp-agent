@@ -3,6 +3,7 @@ package xai
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -208,11 +210,7 @@ func (s *XaiSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 		return nil, err
 	}
 
-	var audio bytes.Buffer
-	for _, frame := range frames {
-		audio.Write(frame.Data)
-	}
-	req, err := buildXaiSTTRecognizeRequest(ctx, s, audio.Bytes(), language)
+	req, err := buildXaiSTTRecognizeRequest(ctx, s, xaiSTTWAVBytes(frames, uint32(s.sampleRate)), language)
 	if err != nil {
 		return nil, err
 	}
@@ -233,6 +231,48 @@ func (s *XaiSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	return xaiSTTBatchSpeechEvent(s.enableDiarization, result), nil
+}
+
+func xaiSTTWAVBytes(frames []*model.AudioFrame, defaultSampleRate uint32) []byte {
+	sampleRate := defaultSampleRate
+	if sampleRate == 0 {
+		sampleRate = defaultXaiSTTSampleRate
+	}
+	numChannels := uint32(1)
+	var data bytes.Buffer
+	for _, frame := range frames {
+		if frame == nil {
+			continue
+		}
+		if frame.SampleRate > 0 && data.Len() == 0 {
+			sampleRate = frame.SampleRate
+		}
+		if frame.NumChannels > 0 && data.Len() == 0 {
+			numChannels = frame.NumChannels
+		}
+		data.Write(frame.Data)
+	}
+	pcm := data.Bytes()
+	dataSize := uint32(len(pcm))
+	blockAlign := numChannels * 2
+	byteRate := sampleRate * blockAlign
+
+	var wav bytes.Buffer
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36)+dataSize)
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(numChannels))
+	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
+	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(blockAlign))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	wav.WriteString("data")
+	_ = binary.Write(&wav, binary.LittleEndian, dataSize)
+	wav.Write(pcm)
+	return wav.Bytes()
 }
 
 func buildXaiSTTRecognizeRequest(ctx context.Context, s *XaiSTT, audio []byte, language string) (*http.Request, error) {
@@ -316,6 +356,8 @@ type xaiSTTStream struct {
 	language           string
 	endpointing        int
 	conn               *websocket.Conn
+	audioBuf           *audio.AudioByteStream
+	writeBinary        func([]byte) error
 	events             chan *stt.SpeechEvent
 	errCh              chan error
 	mu                 sync.Mutex
@@ -389,10 +431,63 @@ func (s *xaiSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	return s.currentConn().WriteMessage(websocket.BinaryMessage, frame.Data)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.audioBuf == nil {
+		s.audioBuf = newXaiSTTAudioByteStream(s, frame)
+	}
+	for _, chunk := range s.audioBuf.Push(frame.Data) {
+		if err := s.writeBinaryDataLocked(chunk.Data); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func (s *xaiSTTStream) Flush() error { return nil }
+func (s *xaiSTTStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.audioBuf == nil {
+		return nil
+	}
+	for _, chunk := range s.audioBuf.Flush() {
+		if err := s.writeBinaryDataLocked(chunk.Data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func newXaiSTTAudioByteStream(s *xaiSTTStream, frame *model.AudioFrame) *audio.AudioByteStream {
+	sampleRate := uint32(s.sampleRate)
+	if frame.SampleRate > 0 {
+		sampleRate = frame.SampleRate
+	}
+	if sampleRate == 0 {
+		sampleRate = defaultXaiSTTSampleRate
+	}
+	numChannels := frame.NumChannels
+	if numChannels == 0 {
+		numChannels = 1
+	}
+	return audio.NewAudioByteStream(sampleRate, numChannels, sampleRate/20)
+}
+
+func (s *xaiSTTStream) writeBinaryDataLocked(data []byte) error {
+	if s.writeBinary != nil {
+		return s.writeBinary(data)
+	}
+	if s.conn == nil {
+		return io.ErrClosedPipe
+	}
+	return s.conn.WriteMessage(websocket.BinaryMessage, data)
+}
 
 func (s *xaiSTTStream) Close() error {
 	s.mu.Lock()

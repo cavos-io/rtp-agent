@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -40,6 +41,7 @@ type AzureSTT struct {
 	language            string
 	sampleRate          int
 	explicitPunctuation bool
+	profanity           string
 	httpClient          *http.Client
 	websocketURL        string
 	dialWebsocket       azureSTTWebsocketDialer
@@ -100,6 +102,14 @@ func WithAzureSTTSampleRate(sampleRate int) AzureSTTOption {
 func WithAzureSTTExplicitPunctuation(explicit bool) AzureSTTOption {
 	return func(s *AzureSTT) {
 		s.explicitPunctuation = explicit
+	}
+}
+
+func WithAzureSTTProfanity(profanity string) AzureSTTOption {
+	return func(s *AzureSTT) {
+		if profanity != "" {
+			s.profanity = profanity
+		}
 	}
 }
 
@@ -270,6 +280,9 @@ func buildAzureSTTRecognizeRequest(ctx context.Context, s *AzureSTT, frames []*m
 	query := u.Query()
 	query.Set("language", s.streamLanguage(language))
 	query.Set("format", "detailed")
+	if s.profanity != "" {
+		query.Set("profanity", s.profanity)
+	}
 	u.RawQuery = query.Encode()
 
 	wav, sampleRate := azureSTTWAVBytes(frames)
@@ -376,6 +389,9 @@ func buildAzureSTTStreamURL(s *AzureSTT, language string) string {
 	if s != nil && s.explicitPunctuation {
 		query.Set("punctuation", "explicit")
 	}
+	if s != nil && s.profanity != "" {
+		query.Set("profanity", s.profanity)
+	}
 	u.RawQuery = query.Encode()
 	return u.String()
 }
@@ -473,6 +489,7 @@ type azureSTTStream struct {
 	maxReconnects   int
 	startTimeOffset float64
 	startTime       float64
+	speaking        bool
 	ctx             context.Context
 	cancel          context.CancelFunc
 }
@@ -638,8 +655,7 @@ func (s *azureSTTStream) readLoop(conn *websocket.Conn) {
 				return
 			}
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				s.closed = true
-				s.cancel()
+				s.finishWithErrorLocked(llm.NewAPIConnectionError("SpeechRecognition session stopped"))
 				s.mu.Unlock()
 				return
 			}
@@ -661,7 +677,27 @@ func parseAzureSTTMessage(language string, payload []byte) *stt.SpeechEvent {
 }
 
 func (s *azureSTTStream) parseMessage(payload []byte) *stt.SpeechEvent {
-	return parseAzureSTTMessageWithOffset(s.language, payload, s.StartTimeOffset())
+	event := parseAzureSTTMessageWithOffset(s.language, payload, s.StartTimeOffset())
+	if event == nil {
+		return nil
+	}
+	switch event.Type {
+	case stt.SpeechEventStartOfSpeech:
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.speaking {
+			return nil
+		}
+		s.speaking = true
+	case stt.SpeechEventEndOfSpeech:
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if !s.speaking {
+			return nil
+		}
+		s.speaking = false
+	}
+	return event
 }
 
 func (s *azureSTTStream) StartTimeOffset() float64 {

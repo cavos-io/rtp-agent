@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
 )
@@ -352,8 +353,12 @@ func (s *cartesiaTTSStream) readLoop() {
 	for {
 		_, message, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-				s.errCh <- err
+			if !s.isClosed() {
+				if _, ok := err.(*websocket.CloseError); ok || err == io.EOF {
+					s.errCh <- llm.NewAPIConnectionError("Cartesia connection closed unexpectedly")
+				} else {
+					s.errCh <- err
+				}
 			}
 			return
 		}
@@ -387,6 +392,12 @@ func (s *cartesiaTTSStream) readLoop() {
 			// Context finished, but we might keep connection open for more text
 		}
 	}
+}
+
+func (s *cartesiaTTSStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func (s *cartesiaTTSStream) PushText(text string) error {

@@ -2,13 +2,20 @@ package cartesia
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/gorilla/websocket"
 )
 
 func TestCartesiaSTTDefaultsMatchReference(t *testing.T) {
@@ -306,6 +313,53 @@ func TestCartesiaSTTErrorEventReportsServerErrors(t *testing.T) {
 	}
 }
 
+func TestCartesiaSTTUnexpectedNormalCloseReturnsAPIConnectionError(t *testing.T) {
+	closed := make(chan struct{})
+	closeAfterHandshake := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runCartesiaNormalCloseWebsocketServer(serverConn, closeAfterHandshake, closed, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewCartesiaSTT("test-key", WithCartesiaSTTBaseURL("http://cartesia.test"))
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+	close(closeAfterHandshake)
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for normal websocket close")
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for normal close server")
+	}
+
+	_, err = stream.Next()
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func cartesiaWriteSizes(writes [][]byte) string {
 	sizes := make([]string, 0, len(writes))
 	for _, write := range writes {
@@ -335,4 +389,46 @@ func assertCartesiaEvent(t *testing.T, events []*stt.SpeechEvent, index int, eve
 	if len(events[index].Alternatives) != 1 || events[index].Alternatives[0].Text != text {
 		t.Fatalf("event %d alternatives = %+v, want text %q", index, events[index].Alternatives, text)
 	}
+}
+
+func runCartesiaNormalCloseWebsocketServer(conn net.Conn, closeAfterHandshake <-chan struct{}, closed chan<- struct{}, errCh chan<- error) {
+	upgrader := websocket.Upgrader{}
+	listener := &singleCartesiaConnListener{conn: conn}
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ws, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer ws.Close()
+			<-closeAfterHandshake
+			err = ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+			close(closed)
+			errCh <- err
+		}),
+	}
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		errCh <- err
+	}
+}
+
+type singleCartesiaConnListener struct {
+	conn net.Conn
+	once sync.Once
+}
+
+func (l *singleCartesiaConnListener) Accept() (net.Conn, error) {
+	var conn net.Conn
+	l.once.Do(func() { conn = l.conn })
+	if conn == nil {
+		return nil, net.ErrClosed
+	}
+	return conn, nil
+}
+
+func (l *singleCartesiaConnListener) Close() error { return nil }
+
+func (l *singleCartesiaConnListener) Addr() net.Addr {
+	return l.conn.LocalAddr()
 }

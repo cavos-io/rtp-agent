@@ -28,6 +28,7 @@ import (
 type DeepgramSTT struct {
 	apiKey            string
 	model             string
+	detectLanguage    bool
 	punctuate         bool
 	smartFormat       bool
 	noDelay           bool
@@ -68,6 +69,12 @@ func WithDeepgramSTTBaseURL(baseURL string) DeepgramSTTOption {
 func WithDeepgramSTTInterimResults(interimResults bool) DeepgramSTTOption {
 	return func(s *DeepgramSTT) {
 		s.interimResults = interimResults
+	}
+}
+
+func WithDeepgramSTTDetectLanguage(detectLanguage bool) DeepgramSTTOption {
+	return func(s *DeepgramSTT) {
+		s.detectLanguage = detectLanguage
 	}
 }
 
@@ -223,6 +230,9 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 	}
 
 	languageStr = language.NormalizeLanguage(languageStr)
+	if s.detectLanguage {
+		return nil, fmt.Errorf("language detection is not supported in streaming mode, please disable it and specify a language")
+	}
 
 	header := make(http.Header)
 	header.Set("Authorization", "Token "+s.apiKey)
@@ -259,6 +269,9 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 	}
 
 	languageStr = language.NormalizeLanguage(languageStr)
+	if s.detectLanguage {
+		languageStr = ""
+	}
 
 	wav := deepgramSTTWAVBytes(frames, uint32(s.sampleRate), uint32(s.numChannels))
 
@@ -403,6 +416,7 @@ func buildDeepgramRecognizeURL(s *DeepgramSTT, languageStr string) string {
 	u, q := deepgramBaseURL(s, false)
 	q.Set("model", deepgramSTTModelForLanguage(s.model, languageStr))
 	q.Set("punctuate", strconv.FormatBool(s.punctuate))
+	q.Set("detect_language", strconv.FormatBool(s.detectLanguage))
 	q.Set("smart_format", strconv.FormatBool(s.smartFormat))
 	q.Set("profanity_filter", strconv.FormatBool(s.profanityFilter))
 	q.Set("numerals", strconv.FormatBool(s.numerals))

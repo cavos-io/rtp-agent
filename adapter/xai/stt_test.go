@@ -3,6 +3,7 @@ package xai
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"mime"
@@ -117,6 +118,51 @@ func TestXaiSTTRecognizeRequestUsesReferenceMultipartFields(t *testing.T) {
 	}
 	if !bytes.Equal(file.data, []byte{0x01, 0x02}) {
 		t.Fatalf("file data = %#v, want audio bytes", file.data)
+	}
+}
+
+func TestXaiSTTRecognizeUploadsReferenceWAV(t *testing.T) {
+	var uploaded []byte
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: xaiRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		_, files := readMultipartRequest(t, r)
+		uploaded = files["file"].data
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"language":"en","segments":[{"text":"ok","start":0,"end":0.1}]}`)),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewXaiSTT("test-key", WithXaiSTTRestURL("https://xai.example/v1/stt"))
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{
+		{
+			Data:              []byte{0x01, 0x02, 0x03, 0x04},
+			SampleRate:        8000,
+			NumChannels:       1,
+			SamplesPerChannel: 2,
+		},
+	}, "en")
+	if err != nil {
+		t.Fatalf("Recognize() error = %v", err)
+	}
+
+	if len(uploaded) < 48 {
+		t.Fatalf("uploaded bytes = %d, want wav header plus pcm", len(uploaded))
+	}
+	if string(uploaded[0:4]) != "RIFF" || string(uploaded[8:12]) != "WAVE" || string(uploaded[36:40]) != "data" {
+		t.Fatalf("uploaded prefix = %q/%q/%q, want RIFF/WAVE/data", uploaded[0:4], uploaded[8:12], uploaded[36:40])
+	}
+	if got := binary.LittleEndian.Uint32(uploaded[24:28]); got != 8000 {
+		t.Fatalf("wav sample rate = %d, want 8000", got)
+	}
+	if got := binary.LittleEndian.Uint16(uploaded[22:24]); got != 1 {
+		t.Fatalf("wav channels = %d, want 1", got)
+	}
+	if got := uploaded[len(uploaded)-4:]; !bytes.Equal(got, []byte{0x01, 0x02, 0x03, 0x04}) {
+		t.Fatalf("wav payload tail = %#v, want original pcm", got)
 	}
 }
 
@@ -554,6 +600,45 @@ func TestXaiSTTStreamEventsMapReferenceLifecycle(t *testing.T) {
 	}
 	if state.emittedChunkFinal {
 		t.Fatal("emitted chunk final = true, want reset after speech-final event")
+	}
+}
+
+func TestXaiSTTStreamChunksAndFlushesReferenceAudio(t *testing.T) {
+	var writes [][]byte
+	stream := &xaiSTTStream{
+		sampleRate: 16000,
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+	}
+	audioData := make([]byte, 2000)
+	for i := range audioData {
+		audioData[i] = byte(i)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              audioData,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1000,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("binary writes after PushFrame = %d, want one 50ms chunk", len(writes))
+	}
+	if got := len(writes[0]); got != 1600 {
+		t.Fatalf("first chunk length = %d, want 1600", got)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if len(writes) != 2 {
+		t.Fatalf("binary writes after Flush = %d, want remainder chunk", len(writes))
+	}
+	if got := len(writes[1]); got != 400 {
+		t.Fatalf("flush chunk length = %d, want 400", got)
 	}
 }
 

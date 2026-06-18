@@ -670,7 +670,7 @@ func (s *elevenLabsSTTStream) readLoop() {
 			if s.isStaleConn(version) {
 				continue
 			}
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
+			if !s.isClosed() {
 				s.errCh <- elevenLabsSTTUnexpectedCloseError(err)
 			}
 			return
@@ -691,6 +691,12 @@ func (s *elevenLabsSTTStream) readLoop() {
 			s.events <- event
 		}
 	}
+}
+
+func (s *elevenLabsSTTStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func elevenLabsSTTUnexpectedCloseError(err error) error {

@@ -593,7 +593,7 @@ func (s *elevenLabsStream) readLoop() {
 	for {
 		_, message, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
+			if !s.isClosed() {
 				logger.Logger.Errorw("ElevenLabs WebSocket read error", err)
 				s.sendError(elevenLabsTTSUnexpectedCloseError(err))
 			}
@@ -645,6 +645,12 @@ func (s *elevenLabsStream) readLoop() {
 			return
 		}
 	}
+}
+
+func (s *elevenLabsStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func elevenLabsTTSUnexpectedCloseError(err error) error {
