@@ -2449,6 +2449,72 @@ func TestMultimodalAgentTTSFallbackStreamErrorReturnsListening(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentTTSFallbackInterruptedBeforeAudioSkipsText(t *testing.T) {
+	nextStarted := make(chan struct{})
+	releaseAudio := make(chan struct{})
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.TTS = &fakeGenerationTTS{stream: &interruptibleRealtimeFallbackTTSStream{
+		nextStarted: nextStarted,
+		release:     releaseAudio,
+	}}
+	chatCtx := llm.NewChatContext()
+	var published []*model.AudioFrame
+	ma := &MultimodalAgent{
+		session: session,
+		chatCtx: chatCtx,
+		PublishAudio: func(_ context.Context, frame *model.AudioFrame) error {
+			published = append(published, frame)
+			return nil
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "unheard fallback"
+	close(textCh)
+	modalitiesCh := make(chan []string, 1)
+	modalitiesCh <- []string{"text"}
+	close(modalitiesCh)
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- ma.consumeRealtimeMessage(context.Background(), speech, llm.MessageGeneration{
+			MessageID:    "msg_unheard_fallback",
+			TextCh:       textCh,
+			ModalitiesCh: modalitiesCh,
+		})
+	}()
+
+	select {
+	case <-nextStarted:
+	case <-time.After(time.Second):
+		t.Fatal("fallback TTS stream did not wait for first audio")
+	}
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt(false) error = %v", err)
+	}
+	close(releaseAudio)
+
+	select {
+	case skipped := <-done:
+		if !skipped {
+			t.Fatal("consumeRealtimeMessage skipped = false, want true for unheard interrupted fallback")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("consumeRealtimeMessage did not finish after interruption")
+	}
+	if len(published) != 0 {
+		t.Fatalf("published frames = %#v, want no fallback audio after interruption", published)
+	}
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chat context items = %#v, want no unheard assistant message", chatCtx.Items)
+	}
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		t.Fatalf("conversation item emitted for unheard fallback: %#v", ev)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestMultimodalAgentGeneratesToolReplyWhenRealtimeDoesNotAutoReply(t *testing.T) {
 	agent := NewAgent("test")
 	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}
@@ -2992,6 +3058,33 @@ func (s *failingAfterAudioRealtimeFallbackTTSStream) Next() (*tts.SynthesizedAud
 	if s.sent {
 		return nil, s.err
 	}
+	s.sent = true
+	return &tts.SynthesizedAudio{Frame: &model.AudioFrame{
+		Data:              []byte("audio"),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}}, nil
+}
+
+type interruptibleRealtimeFallbackTTSStream struct {
+	nextStarted chan<- struct{}
+	release     <-chan struct{}
+	sent        bool
+}
+
+func (s *interruptibleRealtimeFallbackTTSStream) PushText(string) error { return nil }
+
+func (s *interruptibleRealtimeFallbackTTSStream) Flush() error { return nil }
+
+func (s *interruptibleRealtimeFallbackTTSStream) Close() error { return nil }
+
+func (s *interruptibleRealtimeFallbackTTSStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.sent {
+		return nil, io.EOF
+	}
+	close(s.nextStarted)
+	<-s.release
 	s.sent = true
 	return &tts.SynthesizedAudio{Frame: &model.AudioFrame{
 		Data:              []byte("audio"),

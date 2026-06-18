@@ -781,6 +781,10 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 			}
 			return false
 		}
+		interrupted = speech != nil && speech.IsInterrupted()
+		if interrupted && !fallbackPublishedAudio {
+			return true
+		}
 		publishedAudio = publishedAudio || fallbackPublishedAudio
 	}
 	if publishedAudio && !interrupted && ma.session != nil {
