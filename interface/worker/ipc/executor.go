@@ -65,7 +65,6 @@ func NewThreadJobExecutor(id string, entrypoint func() error) *ThreadJobExecutor
 	return &ThreadJobExecutor{
 		id:         id,
 		entrypoint: entrypoint,
-		status:     JobStatusSuccess,
 	}
 }
 

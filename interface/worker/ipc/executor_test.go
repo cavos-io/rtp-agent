@@ -16,6 +16,24 @@ import (
 	"github.com/livekit/protocol/livekit"
 )
 
+func TestJobExecutorsReportUnavailableStatusBeforeLaunch(t *testing.T) {
+	tests := []struct {
+		name     string
+		executor JobExecutor
+	}{
+		{name: "thread", executor: NewThreadJobExecutor("exec-thread-idle", func() error { return nil })},
+		{name: "process", executor: NewProcessJobExecutor("exec-process-idle")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.executor.Status(); got != JobStatus("") {
+				t.Fatalf("Status() before launch = %q, want unavailable zero status", got)
+			}
+		})
+	}
+}
+
 func TestThreadJobExecutorMarksPanicFailed(t *testing.T) {
 	executor := NewThreadJobExecutor("exec-panic", func() error {
 		panic("entrypoint panic")
