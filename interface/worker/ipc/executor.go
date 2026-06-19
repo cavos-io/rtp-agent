@@ -37,7 +37,7 @@ type JobExecutor interface {
 
 var processExecutable = os.Executable
 var processCommandContext = exec.CommandContext
-var processPingInterval = 2 * time.Second
+var processPingInterval = 2500 * time.Millisecond
 var processPingTimeout = 60 * time.Second
 var processShutdownGraceTimeout = 5 * time.Second
 var processNow = time.Now

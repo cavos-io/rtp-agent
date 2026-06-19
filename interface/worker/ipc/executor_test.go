@@ -34,6 +34,15 @@ func TestJobExecutorsReportUnavailableStatusBeforeLaunch(t *testing.T) {
 	}
 }
 
+func TestProcessJobExecutorDefaultPingCadenceMatchesReference(t *testing.T) {
+	if got := processPingInterval; got != 2500*time.Millisecond {
+		t.Fatalf("processPingInterval = %v, want 2.5s reference job process heartbeat", got)
+	}
+	if got := processPingTimeout; got != 60*time.Second {
+		t.Fatalf("processPingTimeout = %v, want 60s reference job process heartbeat timeout", got)
+	}
+}
+
 func TestThreadJobExecutorMarksPanicFailed(t *testing.T) {
 	executor := NewThreadJobExecutor("exec-panic", func() error {
 		panic("entrypoint panic")
