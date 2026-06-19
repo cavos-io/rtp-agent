@@ -410,17 +410,19 @@ func (s *inworldTTSChunkedStream) Close() error {
 }
 
 type inworldTTSSynthesizeStream struct {
-	conn        *websocket.Conn
-	ctx         context.Context
-	cancel      context.CancelFunc
-	provider    *InworldTTS
-	contextID   string
-	events      chan *tts.SynthesizedAudio
-	errCh       chan error
-	sampleRate  int
-	pendingText bytes.Buffer
-	mu          sync.Mutex
-	closed      bool
+	conn              *websocket.Conn
+	ctx               context.Context
+	cancel            context.CancelFunc
+	provider          *InworldTTS
+	contextID         string
+	events            chan *tts.SynthesizedAudio
+	errCh             chan error
+	sampleRate        int
+	pendingText       bytes.Buffer
+	mu                sync.Mutex
+	closed            bool
+	cumulativeTime    float64
+	generationEndTime float64
 
 	writeMessage func(int, []byte) error
 	closeConn    func() error
@@ -549,7 +551,7 @@ func (s *inworldTTSSynthesizeStream) readLoop() {
 		if msgType != websocket.TextMessage {
 			continue
 		}
-		audio, done, err := inworldTTSAudioFromWebsocketMessage(payload, s.contextID, s.sampleRate)
+		audio, done, err := s.handleWebsocketMessage(payload)
 		if err != nil {
 			s.errCh <- err
 			return
@@ -561,6 +563,20 @@ func (s *inworldTTSSynthesizeStream) readLoop() {
 			return
 		}
 	}
+}
+
+func (s *inworldTTSSynthesizeStream) handleWebsocketMessage(payload []byte) (*tts.SynthesizedAudio, bool, error) {
+	audio, done, flushCompleted, generationEndTime, err := inworldTTSAudioFromWebsocketMessageWithOffset(payload, s.contextID, s.sampleRate, s.cumulativeTime)
+	if err != nil {
+		return nil, false, err
+	}
+	if generationEndTime > s.generationEndTime {
+		s.generationEndTime = generationEndTime
+	}
+	if flushCompleted && s.generationEndTime > 0 {
+		s.cumulativeTime = s.generationEndTime
+	}
+	return audio, done, nil
 }
 
 func inworldTTSAudioFromResponseLine(payload []byte, sampleRate int) (*tts.SynthesizedAudio, bool, error) {
@@ -590,6 +606,11 @@ func inworldTTSAudioFromResponseLine(payload []byte, sampleRate int) (*tts.Synth
 }
 
 func inworldTTSAudioFromWebsocketMessage(payload []byte, contextID string, sampleRate int) (*tts.SynthesizedAudio, bool, error) {
+	audio, done, _, _, err := inworldTTSAudioFromWebsocketMessageWithOffset(payload, contextID, sampleRate, 0)
+	return audio, done, err
+}
+
+func inworldTTSAudioFromWebsocketMessageWithOffset(payload []byte, contextID string, sampleRate int, cumulativeTime float64) (*tts.SynthesizedAudio, bool, bool, float64, error) {
 	var message struct {
 		Result struct {
 			ContextID  string `json:"contextId"`
@@ -608,6 +629,7 @@ func inworldTTSAudioFromWebsocketMessage(payload []byte, contextID string, sampl
 				Code    int    `json:"code"`
 				Message string `json:"message"`
 			} `json:"status"`
+			FlushCompleted map[string]interface{} `json:"flushCompleted"`
 		} `json:"result"`
 		Error *struct {
 			Code    int    `json:"code"`
@@ -615,31 +637,34 @@ func inworldTTSAudioFromWebsocketMessage(payload []byte, contextID string, sampl
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return nil, false, err
+		return nil, false, false, 0, err
 	}
 	if message.Error != nil {
-		return nil, false, fmt.Errorf("inworld tts error: %s", message.Error.Message)
+		return nil, false, false, 0, fmt.Errorf("inworld tts error: %s", message.Error.Message)
 	}
 	if message.Result.Status != nil && message.Result.Status.Code != 0 {
-		return nil, false, fmt.Errorf("inworld tts error: %s", message.Result.Status.Message)
+		return nil, false, false, 0, fmt.Errorf("inworld tts error: %s", message.Result.Status.Message)
 	}
 	if message.Result.ContextID != "" && message.Result.ContextID != contextID {
-		return nil, false, nil
+		return nil, false, false, 0, nil
+	}
+	if message.Result.FlushCompleted != nil {
+		return nil, false, true, 0, nil
 	}
 	if message.Result.ContextClosed != nil {
-		return nil, true, nil
+		return nil, true, false, 0, nil
 	}
 	if message.Result.AudioChunk == nil || message.Result.AudioChunk.AudioContent == "" {
-		return nil, false, nil
+		return nil, false, false, 0, nil
 	}
 	audio, err := base64.StdEncoding.DecodeString(message.Result.AudioChunk.AudioContent)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, 0, err
 	}
 	frame := inworldTTSAudioFrame(audio, sampleRate)
 	frame.SegmentID = message.Result.ContextID
-	frame.TimedTranscript = inworldTTSTimedTranscript(message.Result.AudioChunk.TimestampInfo.WordAlignment.Words, message.Result.AudioChunk.TimestampInfo.WordAlignment.WordStartTimeSeconds, message.Result.AudioChunk.TimestampInfo.WordAlignment.WordEndTimeSeconds)
-	return frame, false, nil
+	frame.TimedTranscript = inworldTTSTimedTranscript(message.Result.AudioChunk.TimestampInfo.WordAlignment.Words, message.Result.AudioChunk.TimestampInfo.WordAlignment.WordStartTimeSeconds, message.Result.AudioChunk.TimestampInfo.WordAlignment.WordEndTimeSeconds, cumulativeTime)
+	return frame, false, false, inworldTTSGenerationEndTime(frame.TimedTranscript), nil
 }
 
 func inworldTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {
@@ -653,7 +678,7 @@ func inworldTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {
 	}
 }
 
-func inworldTTSTimedTranscript(words []string, starts []float64, ends []float64) []tts.TimedString {
+func inworldTTSTimedTranscript(words []string, starts []float64, ends []float64, cumulativeTime float64) []tts.TimedString {
 	limit := len(words)
 	if len(starts) < limit {
 		limit = len(starts)
@@ -671,11 +696,21 @@ func inworldTTSTimedTranscript(words []string, starts []float64, ends []float64)
 		}
 		timed = append(timed, tts.TimedString{
 			Text:      words[i],
-			StartTime: starts[i],
-			EndTime:   ends[i],
+			StartTime: starts[i] + cumulativeTime,
+			EndTime:   ends[i] + cumulativeTime,
 		})
 	}
 	return timed
+}
+
+func inworldTTSGenerationEndTime(timed []tts.TimedString) float64 {
+	var endTime float64
+	for _, word := range timed {
+		if word.EndTime > endTime {
+			endTime = word.EndTime
+		}
+	}
+	return endTime
 }
 
 func ensureTrailingSlash(value string) string {

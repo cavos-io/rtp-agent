@@ -342,6 +342,64 @@ func TestInworldTTSAudioFromWebsocketMessageIncludesReferenceWordAlignment(t *te
 	}
 }
 
+func TestInworldTTSStreamOffsetsWordAlignmentAfterFlush(t *testing.T) {
+	stream := &inworldTTSSynthesizeStream{contextID: "ctx-1", sampleRate: 24000}
+
+	first, done, err := stream.handleWebsocketMessage([]byte(`{
+		"result": {
+			"contextId": "ctx-1",
+			"audioChunk": {
+				"audioContent": "AQIDBA==",
+				"timestampInfo": {
+					"wordAlignment": {
+						"words": ["first"],
+						"wordStartTimeSeconds": [0.1],
+						"wordEndTimeSeconds": [0.4]
+					}
+				}
+			}
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("first message error = %v", err)
+	}
+	if done || first == nil {
+		t.Fatalf("first audio = %#v done=%v, want audio", first, done)
+	}
+
+	if _, done, err := stream.handleWebsocketMessage([]byte(`{"result":{"contextId":"ctx-1","flushCompleted":{}}}`)); err != nil || done {
+		t.Fatalf("flushCompleted err=%v done=%v, want no audio and no done", err, done)
+	}
+
+	second, done, err := stream.handleWebsocketMessage([]byte(`{
+		"result": {
+			"contextId": "ctx-1",
+			"audioChunk": {
+				"audioContent": "BQYHCA==",
+				"timestampInfo": {
+					"wordAlignment": {
+						"words": ["second"],
+						"wordStartTimeSeconds": [0.0],
+						"wordEndTimeSeconds": [0.2]
+					}
+				}
+			}
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("second message error = %v", err)
+	}
+	if done || second == nil {
+		t.Fatalf("second audio = %#v done=%v, want audio", second, done)
+	}
+	if len(second.TimedTranscript) != 1 {
+		t.Fatalf("second timed transcript = %#v, want one word", second.TimedTranscript)
+	}
+	if second.TimedTranscript[0].StartTime < 0.399999 || second.TimedTranscript[0].StartTime > 0.400001 || second.TimedTranscript[0].EndTime < 0.599999 || second.TimedTranscript[0].EndTime > 0.600001 {
+		t.Fatalf("second timed word = %#v, want offset by previous generation end", second.TimedTranscript[0])
+	}
+}
+
 func TestInworldTTSChunkedStreamDecodesReferenceJSONLines(t *testing.T) {
 	stream := &inworldTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte("{\"result\":{\"audioContent\":\"AQI=\"}}\n")))},
