@@ -1482,14 +1482,11 @@ func (s *AgentServer) runWorkerStatusUpdates(ctx context.Context, interval time.
 
 func (s *AgentServer) sendWorkerStatusUpdate() error {
 	if s.Draining() {
-		return s.sendWorkerMessage(workerlivekit.WorkerStatusUpdateMessage(workerlivekit.WorkerStatusUpdateOptions{
-			Draining: true,
-			JobCount: uint32(s.activeJobCount()),
-		}))
+		return s.sendWorkerMessage(workerlivekit.ServerDrainingWorkerStatusMessage(uint32(s.activeJobCount())))
 	}
 	jobCount := uint32(s.activeJobCount())
 	load := s.currentLoad()
-	return s.sendWorkerMessage(workerlivekit.WorkerStatusUpdateMessage(workerlivekit.WorkerStatusUpdateOptions{
+	return s.sendWorkerMessage(workerlivekit.ServerAvailableWorkerStatusMessage(workerlivekit.ServerAvailableWorkerStatusMessageOptions{
 		Load:         load,
 		JobCount:     jobCount,
 		CanAcceptJob: s.availableForJobWithLoad(load),

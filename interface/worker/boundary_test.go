@@ -45,3 +45,38 @@ func TestWorkerProductionCodeUsesLiveKitSubpackageForLiveKitImports(t *testing.T
 		t.Fatalf("walk worker files: %v", err)
 	}
 }
+
+func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
+	forbiddenCalls := []string{
+		"workerlivekit.WorkerStatusUpdateMessage(",
+		"workerlivekit.RegisterWorkerMessage(",
+	}
+
+	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if path == "livekit" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, forbiddenCall := range forbiddenCalls {
+			if strings.Contains(string(data), forbiddenCall) {
+				t.Fatalf("%s calls %s; use the LiveKit server message facade", path, forbiddenCall)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk worker files: %v", err)
+	}
+}
