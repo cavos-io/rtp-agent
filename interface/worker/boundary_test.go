@@ -231,6 +231,7 @@ func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
 		"workerlivekit.DefaultServerWorkerPermissions(",
 		"workerlivekit.ResolveServerConnectionOptions(",
 		"workerlivekit.WorkerRuntimeMetadata(",
+		"workerlivekit.WriteWorkerRuntimeMetadataHTTPResponse(",
 		"workerlivekit.ResolveServerAgentNameFromEnv(",
 		"workerlivekit.ValidateServerConnectionOptions(",
 		"workerlivekit.ApplyServerConnectionEnv(",

@@ -1,6 +1,11 @@
 package livekit
 
-import "github.com/cavos-io/rtp-agent/library/utils"
+import (
+	"encoding/json"
+	"net/http"
+
+	"github.com/cavos-io/rtp-agent/library/utils"
+)
 
 type WorkerMetadataOptions struct {
 	AgentName       string
@@ -74,6 +79,11 @@ func WorkerRuntimeMetadata(opts WorkerRuntimeMetadataOptions) WorkerMetadataResp
 		NodeName:        nodeName(),
 		Hosted:          isHosted(),
 	})
+}
+
+func WriteWorkerRuntimeMetadataHTTPResponse(w http.ResponseWriter, opts WorkerRuntimeMetadataOptions) error {
+	w.Header().Set("Content-Type", "application/json")
+	return json.NewEncoder(w).Encode(WorkerRuntimeMetadata(opts))
 }
 
 func WorkerConnectionFailureMessage() string {

@@ -38,7 +38,7 @@ var livekitDefaultServerWorkerPermissions = workerlivekit.DefaultServerWorkerPer
 
 var livekitResolveServerConnectionOptions = workerlivekit.ResolveServerConnectionOptions
 
-var livekitWorkerRuntimeMetadata = workerlivekit.WorkerRuntimeMetadata
+var livekitWriteWorkerRuntimeMetadataHTTPResponse = workerlivekit.WriteWorkerRuntimeMetadataHTTPResponse
 
 var livekitResolveServerAgentNameFromEnv = workerlivekit.ResolveServerAgentNameFromEnv
 
