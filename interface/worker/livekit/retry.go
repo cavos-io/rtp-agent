@@ -33,7 +33,7 @@ type connectFailureError struct {
 }
 
 func (e *connectFailureError) Error() string {
-	return fmt.Sprintf("failed to connect to LiveKit after %d attempts %s: %v", e.attempts, e.agentURL, e.cause)
+	return fmt.Sprintf("failed to connect to livekit after %d attempts %s: %v", e.attempts, e.agentURL, e.cause)
 }
 
 func (e *connectFailureError) Unwrap() error {
