@@ -1164,6 +1164,64 @@ func TestAzureSTTUpdateOptionsPropagatesLanguageToActiveStream(t *testing.T) {
 	}
 }
 
+func TestAzureSTTUpdateOptionsPropagatesOptionLanguageToActiveStream(t *testing.T) {
+	requests := make(chan *http.Request, 2)
+	configMessages := make(chan string, 2)
+	audioMessages := make(chan []byte, 1)
+	serverClosed := make(chan struct{}, 1)
+
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	closingDialer := azureTestClosingDialer(t, requests, configMessages, serverClosed)
+	okDialer := azureTestDialer(t, requests, configMessages, audioMessages)
+	var attempts int
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			return closingDialer(ctx, endpoint, headers)
+		}
+		return okDialer(ctx, endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	firstReq := receiveAzureTestValue(t, requests, "first request")
+	if got := firstReq.URL.Query().Get("language"); got != "en-US" {
+		t.Fatalf("first stream language = %q, want en-US", got)
+	}
+	receiveAzureTestValue(t, configMessages, "first speech config")
+	receiveAzureTestSignal(t, serverClosed, "server close")
+
+	provider.UpdateOptions("", WithAzureSTTLanguage("id-ID"))
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame after option update error = %v", err)
+	}
+
+	secondReq := receiveAzureTestValue(t, requests, "second request")
+	if got := secondReq.URL.Query().Get("language"); got != "id-ID" {
+		t.Fatalf("second stream language = %q, want option language id-ID", got)
+	}
+	receiveAzureTestValue(t, configMessages, "second speech config")
+	receiveAzureTestValue(t, audioMessages, "audio after option update reconnect")
+
+	nextAzureTestEvent(t, stream)
+	interim := nextAzureTestEvent(t, stream)
+	if got := interim.Alternatives[0].Language; got != "id-ID" {
+		t.Fatalf("interim language = %q, want option language id-ID", got)
+	}
+}
+
 func TestAzureSTTUpdateOptionsPropagatesSegmentationToActiveStream(t *testing.T) {
 	requests := make(chan *http.Request, 2)
 	configMessages := make(chan string, 2)
