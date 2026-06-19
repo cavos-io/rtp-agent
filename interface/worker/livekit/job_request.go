@@ -443,6 +443,10 @@ func AssignmentContextValues(opts AssignmentContextValueOptions) AssignmentConte
 	}
 }
 
+func ServerAssignmentContextValues(opts AssignmentContextValueOptions) AssignmentContextValuesResult {
+	return AssignmentContextValues(opts)
+}
+
 func JobAssignmentInfo(req *JobAssignment, defaultURL string) AssignmentInfo {
 	if req == nil {
 		return AssignmentInfo{URL: defaultURL}
@@ -581,6 +585,10 @@ func JobTerminationPlanForActiveJob(exists bool) JobTerminationPlan {
 		WaitEntrypoint: true,
 		Finish:         true,
 	}
+}
+
+func ServerJobTerminationPlanForActiveJob(exists bool) JobTerminationPlan {
+	return JobTerminationPlanForActiveJob(exists)
 }
 
 type LocalRoomJobOptions struct {

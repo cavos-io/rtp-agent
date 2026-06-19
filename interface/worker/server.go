@@ -1661,7 +1661,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.J
 		return
 	}
 
-	assignedJob := workerlivekit.AssignmentContextValues(workerlivekit.AssignmentContextValueOptions{
+	assignedJob := workerlivekit.ServerAssignmentContextValues(workerlivekit.AssignmentContextValueOptions{
 		Assignment:      assignment,
 		AcceptArguments: args,
 		WorkerID:        s.workerID,
@@ -1731,7 +1731,7 @@ func (s *AgentServer) handleTermination(req *workerlivekit.JobTermination) {
 	}
 	s.mu.Unlock()
 
-	plan := workerlivekit.JobTerminationPlanForActiveJob(exists)
+	plan := workerlivekit.ServerJobTerminationPlanForActiveJob(exists)
 	if plan.MarkTerminated {
 		jobCtx.markTerminated()
 	}
