@@ -211,6 +211,26 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 		stream.updateOptions(streamLanguage, true)
 	}
 }
+func (s *AzureSTT) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	streams := make([]*azureSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.streams = make(map[*azureSTTStream]struct{})
+	s.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
 func (s *AzureSTT) InputSampleRate() uint32 {
 	if s == nil || s.sampleRate <= 0 {
 		return defaultAzureSTTSampleRate
