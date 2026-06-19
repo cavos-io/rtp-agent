@@ -805,6 +805,26 @@ func TestAppRunUsesAgoraTransportWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestNewAppKeepsAgoraWorkerTypeUnset(t *testing.T) {
+	rtpApp, err := NewApp(AppConfig{
+		WorkerOptions: worker.WorkerOptions{
+			Transport: worker.WorkerTransportAgora,
+		},
+		Agora: workeragora.Options{
+			AppID:   "app",
+			Channel: "support",
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	defer rtpApp.Close(context.Background())
+
+	if got := rtpApp.Server.Options.WorkerType; got != "" {
+		t.Fatalf("Agora WorkerType = %q, want empty provider-neutral worker type", got)
+	}
+}
+
 func TestRunAgoraLogsConnectedTransportEvent(t *testing.T) {
 	previousLogger := logutil.Logger
 	recorder := &appRecordingLogger{entriesCh: make(chan appLogEntry, 8)}
@@ -1344,6 +1364,26 @@ func TestRunAgoraLogsJoinErrorTransportEvent(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for Agora join error log")
+	}
+}
+
+func TestAgoraTransportFatalErrorPreservesSDKErrorMetadata(t *testing.T) {
+	sdkErr := errors.New("sdk denied")
+
+	err := agoraTransportFatalError(workeragora.Event{
+		Kind:    workeragora.EventError,
+		Channel: "support",
+		Reason:  110,
+		Err:     sdkErr,
+	})
+
+	if !errors.Is(err, sdkErr) {
+		t.Fatalf("agoraTransportFatalError() error = %v, want wrapped SDK error", err)
+	}
+	for _, want := range []string{"support", "110"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("agoraTransportFatalError() error = %q, want metadata %q", err.Error(), want)
+		}
 	}
 }
 

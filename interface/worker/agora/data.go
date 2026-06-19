@@ -25,11 +25,14 @@ func ResolveDataOptions(opts Options) (Options, error) {
 	opts.Token = strings.TrimSpace(opts.Token)
 	opts.RTMUserID = strings.TrimSpace(opts.RTMUserID)
 	opts.RTMToken = strings.TrimSpace(opts.RTMToken)
+	rtcUID := opts.UID
 	if opts.RTMUserID != "" {
 		opts.UID = opts.RTMUserID
 	}
 	if opts.RTMToken != "" {
 		opts.Token = opts.RTMToken
+	} else if opts.RTMUserID != "" && opts.RTMUserID != rtcUID && opts.AppCertificate != "" {
+		opts.Token = ""
 	}
 	if opts.UID == "" {
 		opts.UID = "0"

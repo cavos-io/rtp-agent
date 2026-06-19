@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 )
 
 type EventKind string
@@ -75,6 +77,7 @@ type Transport struct {
 	mu           sync.Mutex
 	joinCancel   context.CancelFunc
 	joinSeq      uint64
+	joinCanceled bool
 	joined       bool
 	disconnected bool
 	failed       bool
@@ -142,16 +145,20 @@ func (t *Transport) Join(ctx context.Context) error {
 	audio := t.audio
 	if !SubscribeAudioEnabled(opts.SubscribeAudio) {
 		audio = nil
+	} else if audio != nil {
+		audio = t.emitAudioFrame
 	}
 	t.joinSeq++
 	joinSeq := t.joinSeq
 	t.joinCancel = cancel
+	t.joinCanceled = false
 	t.publishAudio = PublishAudioEnabled(opts.PublishAudio)
 	t.mu.Unlock()
 	defer func() {
 		t.mu.Lock()
 		if t.joinSeq == joinSeq {
 			t.joinCancel = nil
+			t.joinCanceled = false
 		}
 		t.mu.Unlock()
 		cancel()
@@ -161,7 +168,8 @@ func (t *Transport) Join(ctx context.Context) error {
 	}
 	t.mu.Lock()
 	closed := t.closing || t.closed
-	if !closed {
+	left := t.joinCanceled
+	if !closed && !left {
 		t.joined = true
 		t.disconnected = false
 		t.failed = false
@@ -173,6 +181,12 @@ func (t *Transport) Join(ctx context.Context) error {
 		}
 		return fmt.Errorf("agora transport is closed")
 	}
+	if left {
+		if err := t.client.Leave(context.Background()); err != nil {
+			return fmt.Errorf("agora transport was left during late join success; cleanup leave failed: %w", err)
+		}
+		return fmt.Errorf("agora transport was left during join")
+	}
 	return nil
 }
 
@@ -182,8 +196,15 @@ func (t *Transport) Leave(ctx context.Context) error {
 	}
 	t.mu.Lock()
 	joined := t.joined
+	cancelJoin := t.joinCancel
+	if !joined && cancelJoin != nil {
+		t.joinCanceled = true
+	}
 	t.mu.Unlock()
 	if !joined {
+		if cancelJoin != nil {
+			cancelJoin()
+		}
 		return nil
 	}
 	if err := t.client.Leave(normalizeContext(ctx)); err != nil {
@@ -196,6 +217,23 @@ func (t *Transport) Leave(ctx context.Context) error {
 	t.users = nil
 	t.mu.Unlock()
 	return nil
+}
+
+func (t *Transport) emitAudioFrame(frame *model.AudioFrame) {
+	if t == nil || frame == nil {
+		return
+	}
+	t.mu.Lock()
+	handler := t.audio
+	joined := t.joined
+	closed := t.closing || t.closed
+	disconnected := t.disconnected
+	failed := t.failed
+	t.mu.Unlock()
+	if handler == nil || !joined || closed || disconnected || failed {
+		return
+	}
+	handler(frame)
 }
 
 func (t *Transport) PublishPCM(ctx context.Context, frame PCMFrame) error {
@@ -297,6 +335,9 @@ func eventNeedsPriority(event Event) bool {
 }
 
 func (t *Transport) acceptEventLocked(event Event) bool {
+	if t.joinCanceled {
+		return false
+	}
 	if !t.joined && t.joinCancel == nil {
 		return false
 	}

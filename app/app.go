@@ -1124,7 +1124,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		opts.AgentName = "example-agent"
 		server.Options.AgentName = opts.AgentName
 	}
-	if opts.WorkerType == "" {
+	if opts.WorkerType == "" && opts.Transport != worker.WorkerTransportAgora {
 		opts.WorkerType = worker.WorkerTypeRoom
 		server.Options.WorkerType = opts.WorkerType
 	}
@@ -1383,7 +1383,7 @@ func agoraTransportFatalError(event workeragora.Event) error {
 		return fmt.Errorf("agora transport disconnected: channel %s reason %d", event.Channel, event.Reason)
 	case workeragora.EventError:
 		if event.Err != nil {
-			return fmt.Errorf("agora transport event error: %w", event.Err)
+			return fmt.Errorf("agora transport event error: channel %s reason %d: %w", event.Channel, event.Reason, event.Err)
 		}
 		return fmt.Errorf("agora transport event error: channel %s reason %d", event.Channel, event.Reason)
 	default:

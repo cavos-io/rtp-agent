@@ -92,6 +92,31 @@ func TestSDKDataPublisherCloseUsesLifecycleHelper(t *testing.T) {
 	}
 }
 
+func TestSDKDataPublisherSubscribesWithMessages(t *testing.T) {
+	source, err := os.ReadFile("sdk_rtm.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk_rtm.go) error = %v", err)
+	}
+	text := string(source)
+	subscribeIndex := strings.Index(text, "func subscribeRTMMessages")
+	if subscribeIndex < 0 {
+		t.Fatal("sdk_rtm.go missing explicit RTM message subscription helper")
+	}
+	subscribeBody := text[subscribeIndex:]
+	if nextFunc := strings.Index(subscribeBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		subscribeBody = subscribeBody[:len("func ")+nextFunc]
+	}
+	for _, want := range []string{
+		"opts := agorartm.NewSubscribeOptions()",
+		"opts.WithMessage = true",
+		"client.Subscribe(channel, opts)",
+	} {
+		if !strings.Contains(subscribeBody, want) {
+			t.Fatalf("subscribeRTMMessages missing %q", want)
+		}
+	}
+}
+
 func TestSDKDataPublisherIgnoresInboundMessagesAfterClose(t *testing.T) {
 	source, err := os.ReadFile("sdk_rtm.go")
 	if err != nil {
@@ -105,6 +130,84 @@ func TestSDKDataPublisherIgnoresInboundMessagesAfterClose(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("sdk_rtm.go missing %q", want)
 		}
+	}
+}
+
+func TestSDKDataPublisherCloseClearsMessageHandler(t *testing.T) {
+	source, err := os.ReadFile("sdk_rtm.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk_rtm.go) error = %v", err)
+	}
+	text := string(source)
+	closeIndex := strings.Index(text, "func (p *sdkDataPublisher) Close")
+	if closeIndex < 0 {
+		t.Fatal("sdk_rtm.go missing sdkDataPublisher.Close")
+	}
+	closeBody := text[closeIndex:]
+	if nextFunc := strings.Index(closeBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		closeBody = closeBody[:len("func ")+nextFunc]
+	}
+	closedIndex := strings.Index(closeBody, "p.closed = true")
+	clearIndex := strings.Index(closeBody, "p.handler = nil")
+	cleanupIndex := strings.Index(closeBody, "closeRTMClient")
+	if closedIndex < 0 || clearIndex < 0 || cleanupIndex < 0 {
+		t.Fatal("Close must mark closed, clear message handler, then close native RTM client")
+	}
+	if !(closedIndex < clearIndex && clearIndex < cleanupIndex) {
+		t.Fatal("Close must clear message handler before native RTM cleanup starts")
+	}
+}
+
+func TestSDKDataPublisherDropsForeignChannelMessages(t *testing.T) {
+	source, err := os.ReadFile("sdk_rtm.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk_rtm.go) error = %v", err)
+	}
+	text := string(source)
+	handlerIndex := strings.Index(text, "func (p *sdkDataPublisher) handleMessageEvent")
+	if handlerIndex < 0 {
+		t.Fatal("sdk_rtm.go missing sdkDataPublisher.handleMessageEvent")
+	}
+	handlerBody := text[handlerIndex:]
+	if nextFunc := strings.Index(handlerBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		handlerBody = handlerBody[:len("func ")+nextFunc]
+	}
+	if !strings.Contains(handlerBody, "event.ChannelName != p.channel") {
+		t.Fatal("handleMessageEvent must drop SDK messages from channels other than the subscribed channel")
+	}
+}
+
+func TestSDKDataPublisherCloseReleasesLockBeforeNativeCleanup(t *testing.T) {
+	source, err := os.ReadFile("sdk_rtm.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk_rtm.go) error = %v", err)
+	}
+	text := string(source)
+	closeIndex := strings.Index(text, "func (p *sdkDataPublisher) Close")
+	if closeIndex < 0 {
+		t.Fatal("sdk_rtm.go missing sdkDataPublisher.Close")
+	}
+	closeBody := text[closeIndex:]
+	if nextFunc := strings.Index(closeBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		closeBody = closeBody[:len("func ")+nextFunc]
+	}
+	for _, want := range []string{
+		"client := p.client",
+		"channel := p.channel",
+		"p.mu.Unlock()",
+		"closeRTMClient(sdkRTMLifecycleClient{client: client}, channel)",
+	} {
+		if !strings.Contains(closeBody, want) {
+			t.Fatalf("Close missing %q", want)
+		}
+	}
+	unlockIndex := strings.Index(closeBody, "p.mu.Unlock()")
+	cleanupIndex := strings.Index(closeBody, "closeRTMClient")
+	if unlockIndex < 0 || cleanupIndex < 0 || unlockIndex > cleanupIndex {
+		t.Fatal("Close must release publisher lock before native RTM cleanup")
+	}
+	if strings.Contains(closeBody, "defer p.mu.Unlock()") {
+		t.Fatal("Close must not defer unlock across native RTM cleanup")
 	}
 }
 
@@ -142,6 +245,35 @@ func TestSDKClientImplementationRegistersInboundAudioObserver(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("sdk.go missing %q", want)
 		}
+	}
+}
+
+func TestSDKClientImplementationGuardsInboundAudioByActiveConnection(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	if !strings.Contains(text, "func (c *sdkChannelClient) forwardActiveAudioFrame") {
+		t.Fatal("sdk.go missing active-connection guarded inbound audio helper")
+	}
+	helperIndex := strings.Index(text, "func (c *sdkChannelClient) forwardActiveAudioFrame")
+	helperBody := text[helperIndex:]
+	if nextFunc := strings.Index(helperBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		helperBody = helperBody[:len("func ")+nextFunc]
+	}
+	for _, want := range []string{
+		"c.mu.Lock()",
+		"defer c.mu.Unlock()",
+		"if c.connection != connection",
+		"audioHandler(audioFrame)",
+	} {
+		if !strings.Contains(helperBody, want) {
+			t.Fatalf("forwardActiveAudioFrame missing %q", want)
+		}
+	}
+	if !strings.Contains(text, "c.forwardActiveAudioFrame(connection, audioHandler, frame)") {
+		t.Fatal("SDK inbound audio callback must use forwardActiveAudioFrame")
 	}
 }
 
@@ -200,6 +332,42 @@ func TestSDKClientImplementationRegistersLocalUserObserver(t *testing.T) {
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("sdk.go missing %q", want)
+		}
+	}
+}
+
+func TestSDKClientImplementationGuardsEventsByActiveConnection(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	if !strings.Contains(text, "func (c *sdkChannelClient) emitActiveSDKEvent") {
+		t.Fatal("sdk.go missing active-connection guarded event helper")
+	}
+	helperIndex := strings.Index(text, "func (c *sdkChannelClient) emitActiveSDKEvent")
+	helperBody := text[helperIndex:]
+	if nextFunc := strings.Index(helperBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		helperBody = helperBody[:len("func ")+nextFunc]
+	}
+	for _, want := range []string{
+		"c.mu.Lock()",
+		"defer c.mu.Unlock()",
+		"if c.connection != connection",
+		"emitSDKEvent(handler, event)",
+	} {
+		if !strings.Contains(helperBody, want) {
+			t.Fatalf("emitActiveSDKEvent missing %q", want)
+		}
+	}
+	for _, want := range []string{
+		"c.emitActiveSDKEvent(connection, handler, event)",
+		"c.emitActiveSDKEvent(connection, handler, Event{Kind: EventUserJoined",
+		"c.emitActiveSDKEvent(connection, handler, Event{Kind: EventUserLeft",
+		"c.emitActiveSDKEvent(connection, handler, Event{Kind: EventError",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("SDK callbacks missing %q", want)
 		}
 	}
 }

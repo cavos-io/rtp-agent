@@ -7,7 +7,7 @@ import (
 	rtctokenbuilder "github.com/AgoraIO/Tools/DynamicKey/AgoraDynamicKey/go/src/rtctokenbuilder2"
 )
 
-const defaultTokenTTL = time.Hour
+const defaultTokenTTL = 24 * time.Hour
 
 func ResolveJoinOptions(opts Options) (Options, error) {
 	if err := opts.Validate(); err != nil {

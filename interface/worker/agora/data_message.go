@@ -102,6 +102,13 @@ func HandleTextInputEvent(ctx context.Context, responder TextResponder, ev TextI
 		return nil
 	}
 	if ev.Text == "" {
+		if transcriber, ok := responder.(TextInputTranscriber); ok {
+			transcriber.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{
+				Transcript: ev.Text,
+				IsFinal:    true,
+				SpeakerID:  defaultRTMStreamID(ev.StreamID),
+			})
+		}
 		return nil
 	}
 	run := func(ctx context.Context) error {

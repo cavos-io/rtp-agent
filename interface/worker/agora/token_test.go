@@ -2,7 +2,14 @@ package agora
 
 import (
 	"testing"
+	"time"
 )
+
+func TestDefaultTokenTTLFollowsTENServerExpiration(t *testing.T) {
+	if defaultTokenTTL != 24*time.Hour {
+		t.Fatalf("defaultTokenTTL = %s, want TEN server default 24h", defaultTokenTTL)
+	}
+}
 
 func TestResolveJoinOptionsPreservesExplicitToken(t *testing.T) {
 	opts := Options{
