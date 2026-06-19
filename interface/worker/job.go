@@ -424,7 +424,7 @@ func (c *JobContext) Agent() *workerlivekit.LocalParticipant {
 	return workerlivekit.JobContextLocalParticipant(c.Room)
 }
 
-var jobContextNewRoom = workerlivekit.NewRoom
+var jobContextNewRoom = workerlivekit.NewJobContextRoom
 
 var jobContextRoomConnector workerlivekit.RoomConnector
 

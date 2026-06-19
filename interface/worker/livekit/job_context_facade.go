@@ -78,6 +78,10 @@ func JobContextRoomCallbackWithHandlers(cb *RoomCallback, handlers RoomCallbackH
 	return RoomCallbackWithHandlers(cb, handlers)
 }
 
+func NewJobContextRoom(cb *RoomCallback) *SDKRoom {
+	return NewRoom(cb)
+}
+
 func JobContextParticipantInfoFromRemoteParticipant(participant RemoteParticipantView) *ParticipantInfo {
 	return ParticipantInfoFromRemoteParticipant(participant)
 }

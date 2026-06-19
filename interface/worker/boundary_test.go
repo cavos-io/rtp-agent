@@ -139,6 +139,7 @@ func TestSharedJobContextDoesNotCallLiveKitInfoHelpersDirectly(t *testing.T) {
 		"workerlivekit.JobRoomName(",
 		"workerlivekit.ApplyAutoSubscribeToRoom(",
 		"workerlivekit.RoomCallbackWithHandlers(",
+		"workerlivekit.NewRoom",
 		"workerlivekit.ParticipantInfoFromRemoteParticipant(",
 		"workerlivekit.UpsertParticipantInfo(",
 		"workerlivekit.WaitForParticipant(",
