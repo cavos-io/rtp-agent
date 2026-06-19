@@ -371,6 +371,52 @@ func TestSmallestAISTTOptionsBuildReferenceStreamURLAndHeaders(t *testing.T) {
 	}
 }
 
+func TestSmallestAISTTStreamSendsReferenceHeartbeatPing(t *testing.T) {
+	oldInterval := smallestAISTTHeartbeatInterval
+	smallestAISTTHeartbeatInterval = 10 * time.Millisecond
+	t.Cleanup(func() { smallestAISTTHeartbeatInterval = oldInterval })
+
+	pingCh := make(chan struct{}, 1)
+	errCh := make(chan error, 1)
+	dialer := newSmallestAISTTTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		conn.SetPingHandler(func(string) error {
+			select {
+			case pingCh <- struct{}{}:
+			default:
+			}
+			return nil
+		})
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) &&
+					!errors.Is(err, net.ErrClosed) &&
+					!strings.Contains(err.Error(), "closed") {
+					errCh <- err
+				}
+				return
+			}
+		}
+	})
+
+	provider := NewSmallestAISTT("test-key",
+		WithSmallestAISTTBaseURL("ws://smallest.test/waves/v1"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+
+	select {
+	case <-pingCh:
+	case err := <-errCh:
+		t.Fatalf("websocket server: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for reference heartbeat ping")
+	}
+}
+
 func TestSmallestAISTTPushFrameBuffersReferenceAudioChunks(t *testing.T) {
 	audioCh := make(chan []byte, 2)
 	closeCh := make(chan string, 1)

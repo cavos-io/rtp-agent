@@ -32,6 +32,8 @@ const (
 	smallestAIPCMBytesPerSample      = 2
 )
 
+var smallestAISTTHeartbeatInterval = 5 * time.Second
+
 type SmallestAISTT struct {
 	apiKey         string
 	baseURL        string
@@ -208,11 +210,13 @@ func (s *SmallestAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 		errCh:         make(chan error, 1),
 		ctx:           streamCtx,
 		cancel:        cancel,
+		done:          make(chan struct{}),
 		state:         &smallestAISTTStreamState{language: streamOptions.language, diarize: streamOptions.diarize},
 	}
 	stream.applyOptions(streamOptions)
 	s.registerStream(stream)
 	go stream.readLoop()
+	go stream.heartbeatLoop()
 	return stream, nil
 }
 
@@ -442,6 +446,7 @@ type smallestAISTTStream struct {
 
 	ctx                context.Context
 	cancel             context.CancelFunc
+	done               chan struct{}
 	state              *smallestAISTTStreamState
 	audio              bytes.Buffer
 	sampleRate         int
@@ -451,6 +456,7 @@ type smallestAISTTStream struct {
 
 func (s *smallestAISTTStream) readLoop() {
 	defer close(s.events)
+	defer close(s.done)
 	defer s.owner.unregisterStream(s)
 	for {
 		conn := s.currentConn()
@@ -479,6 +485,31 @@ func (s *smallestAISTTStream) readLoop() {
 			s.events <- event
 		}
 		if resp.IsLast {
+			return
+		}
+	}
+}
+
+func (s *smallestAISTTStream) heartbeatLoop() {
+	interval := smallestAISTTHeartbeatInterval
+	if interval <= 0 {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			conn := s.currentConn()
+			if conn == nil {
+				continue
+			}
+			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second)); err != nil {
+				return
+			}
+		case <-s.done:
+			return
+		case <-s.ctx.Done():
 			return
 		}
 	}
