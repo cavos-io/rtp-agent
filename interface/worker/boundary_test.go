@@ -64,6 +64,10 @@ func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
 		"workerlivekit.StorePendingAccept(",
 		"workerlivekit.ExpirePendingAccept(",
 		"workerlivekit.AcceptPendingAssignment(",
+		"workerlivekit.RunningJobInfoSnapshot(",
+		"workerlivekit.RefreshRunningJobsForReload(",
+		"workerlivekit.RunningJobContextValues(",
+		"workerlivekit.ReloadedJobContextValues(",
 		"workerlivekit.ValidateWorkerConnectionOptions(",
 	}
 

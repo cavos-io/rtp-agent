@@ -382,6 +382,10 @@ func RunningJobInfoSnapshot(opts RunningJobInfoOptions) RunningJobInfo {
 	return CloneRunningJobInfo(RunningJobInfo(opts))
 }
 
+func ServerRunningJobInfoSnapshot(opts RunningJobInfoOptions) RunningJobInfo {
+	return RunningJobInfoSnapshot(opts)
+}
+
 func CloneRunningJobInfo(info RunningJobInfo) RunningJobInfo {
 	info.AcceptArguments = CloneJobAcceptArguments(info.AcceptArguments)
 	return info
@@ -413,6 +417,14 @@ func RunningJobContextValues(opts RunningJobContextValueOptions) RunningJobConte
 		FakeJob:         info.FakeJob,
 		EnableRecording: runtime.EnableRecording,
 	}
+}
+
+func ServerRunningJobContextValues(opts RunningJobContextValueOptions) RunningJobContextValuesResult {
+	return RunningJobContextValues(opts)
+}
+
+func ServerReloadedJobContextValues(opts ReloadedJobContextValueOptions) RunningJobContextValuesResult {
+	return ReloadedJobContextValues(opts)
 }
 
 func ReloadedJobContextValues(opts ReloadedJobContextValueOptions) RunningJobContextValuesResult {

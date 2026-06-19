@@ -303,7 +303,7 @@ func (s *AgentServer) ActiveRunningJobs() []workeripc.RunningJobInfo {
 }
 
 func runningJobInfoFromContext(jobCtx *JobContext) workeripc.RunningJobInfo {
-	return workeripc.FromLiveKitRunningJobInfo(workerlivekit.RunningJobInfoSnapshot(workerlivekit.RunningJobInfoOptions{
+	return workeripc.FromLiveKitRunningJobInfo(workerlivekit.ServerRunningJobInfoSnapshot(workerlivekit.RunningJobInfoOptions{
 		AcceptArguments: workerlivekit.JobAcceptArguments{
 			Name:       jobCtx.AcceptArguments.Name,
 			Identity:   jobCtx.AcceptArguments.Identity,
@@ -339,7 +339,7 @@ func jobLogValues(jobCtx *JobContext, values ...any) []any {
 }
 
 func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.RunningJobInfo, now time.Time) error {
-	refreshed, err := workerlivekit.RefreshRunningJobsForReload(workeripc.ToLiveKitRunningJobInfos(jobs), s.Options.APISecret, now)
+	refreshed, err := workerlivekit.RefreshServerRunningJobsForReload(workeripc.ToLiveKitRunningJobInfos(jobs), s.Options.APISecret, now)
 	if err != nil {
 		return err
 	}
@@ -349,7 +349,7 @@ func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.Ru
 			continue
 		}
 
-		reloadedJob := workerlivekit.ReloadedJobContextValues(workerlivekit.ReloadedJobContextValueOptions{
+		reloadedJob := workerlivekit.ServerReloadedJobContextValues(workerlivekit.ReloadedJobContextValueOptions{
 			Info:            info,
 			OverrideURL:     s.Options.WSRL,
 			DefaultWorkerID: s.workerID,
@@ -382,7 +382,7 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 		return workerReferenceError(rtcSessionRequiredMessage)
 	}
 
-	runningJob := workerlivekit.RunningJobContextValues(workerlivekit.RunningJobContextValueOptions{
+	runningJob := workerlivekit.ServerRunningJobContextValues(workerlivekit.RunningJobContextValueOptions{
 		Info:            workeripc.ToLiveKitRunningJobInfo(info),
 		OverrideURL:     s.Options.WSRL,
 		DefaultWorkerID: s.workerID,
