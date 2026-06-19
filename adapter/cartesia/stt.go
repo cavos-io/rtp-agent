@@ -141,6 +141,28 @@ func (s *CartesiaSTT) UpdateOptions(language string) {
 		stream.updateOptions(language)
 	}
 }
+
+func (s *CartesiaSTT) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	streams := make([]*cartesiaSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.streams = make(map[*cartesiaSTTStream]struct{})
+	s.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
 func (s *CartesiaSTT) Capabilities() stt.STTCapabilities {
 	legacy := s.finalTranscriptMode == "legacy"
 	aligned := ""
@@ -241,6 +263,9 @@ type cartesiaSTTStream struct {
 }
 
 func (s *cartesiaSTTStream) PushFrame(frame *model.AudioFrame) error {
+	if s.isClosed() {
+		return io.ErrClosedPipe
+	}
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
@@ -256,6 +281,9 @@ func (s *cartesiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 }
 
 func (s *cartesiaSTTStream) Flush() error {
+	if s.isClosed() {
+		return io.ErrClosedPipe
+	}
 	if s.state.mode == "legacy" {
 		if s.audioBStream != nil {
 			for _, chunk := range s.audioBStream.Flush() {
