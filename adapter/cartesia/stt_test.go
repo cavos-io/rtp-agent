@@ -522,6 +522,37 @@ func TestCartesiaSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestCartesiaSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
+	writeErr := errors.New("write failed")
+	stream := &cartesiaSTTStream{
+		state:        &cartesiaSTTStreamState{mode: "auto"},
+		audioBStream: newCartesiaSTTAudioByteStream(16000, 160),
+		writeBinary: func([]byte) error {
+			return writeErr
+		},
+		closeConn: func() error { return nil },
+	}
+
+	err := stream.PushFrame(&audiomodel.AudioFrame{
+		Data:              make([]byte, 2560*2),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 2560,
+	})
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("PushFrame write error = %v, want %v", err, writeErr)
+	}
+	err = stream.PushFrame(&audiomodel.AudioFrame{
+		Data:              make([]byte, 320),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	})
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after write failure = %v, want io.ErrClosedPipe", err)
+	}
+}
+
 func TestCartesiaSTTLegacyFlushFlushesBufferedAudioBeforeFinalize(t *testing.T) {
 	var writes [][]byte
 	var textMessages []string

@@ -281,6 +281,7 @@ func (s *cartesiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	for _, chunk := range s.audioBStream.Write(frame.Data) {
 		if err := s.writeBinaryData(chunk.Data); err != nil {
+			s.closeAfterWriteFailure()
 			return err
 		}
 	}
@@ -295,11 +296,16 @@ func (s *cartesiaSTTStream) Flush() error {
 		if s.audioBStream != nil {
 			for _, chunk := range s.audioBStream.Flush() {
 				if err := s.writeBinaryData(chunk.Data); err != nil {
+					s.closeAfterWriteFailure()
 					return err
 				}
 			}
 		}
-		return s.writeTextData([]byte("finalize"))
+		if err := s.writeTextData([]byte("finalize")); err != nil {
+			s.closeAfterWriteFailure()
+			return err
+		}
+		return nil
 	}
 	return nil
 }
@@ -330,6 +336,23 @@ func (s *cartesiaSTTStream) Close() error {
 		s.provider.unregisterStream(s)
 	}
 	return s.closeConnection()
+}
+
+func (s *cartesiaSTTStream) closeAfterWriteFailure() {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.mu.Unlock()
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
+	_ = s.closeConnection()
 }
 
 func (s *cartesiaSTTStream) writeBinaryData(data []byte) error {
