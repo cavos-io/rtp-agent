@@ -414,9 +414,9 @@ func (s *xaiSTTStream) readLoop() {
 
 func (s *xaiSTTStream) updateOptions(sampleRate int, language string, interimResults bool, diarization bool, endpointing int) {
 	s.mu.Lock()
-	if sampleRate != s.sampleRate {
-		s.audioBuf = nil
-	}
+	s.audioBuf = nil
+	s.pendingAudio = nil
+	s.serverReady = false
 	s.sampleRate = sampleRate
 	s.language = language
 	s.endpointing = endpointing

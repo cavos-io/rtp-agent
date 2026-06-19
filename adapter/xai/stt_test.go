@@ -400,6 +400,46 @@ func TestXaiSTTUpdateOptionsResetsActiveAudioChunker(t *testing.T) {
 	}
 }
 
+func TestXaiSTTUpdateOptionsDropsPendingAudioChunkOnReconnect(t *testing.T) {
+	var writes [][]byte
+	stream := &xaiSTTStream{
+		sampleRate: 16000,
+		language:   "en",
+		state:      &xaiSTTStreamState{interimResults: true},
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              bytes.Repeat([]byte{0xaa}, 400),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 200,
+	}); err != nil {
+		t.Fatalf("PushFrame(partial before reconnect) error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes before reconnect = %v, want none for partial chunk", chunkLengths(writes))
+	}
+
+	stream.updateOptions(16000, "id", true, false, 100)
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              bytes.Repeat([]byte{0xbb}, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("PushFrame(after reconnect) error = %v", err)
+	}
+	if len(writes) != 1 || len(writes[0]) != 1600 {
+		t.Fatalf("writes after reconnect = %v, want one fresh 1600-byte chunk", chunkLengths(writes))
+	}
+	if !allBytesEqual(writes[0], 0xbb) {
+		t.Fatalf("post-reconnect chunk includes stale pre-reconnect audio: first bytes %#v", writes[0][:4])
+	}
+}
+
 func TestXaiSTTStreamWaitsForTranscriptCreatedBeforeSendingAudio(t *testing.T) {
 	binaryWrites := make(chan []byte, 1)
 	readyToSend := make(chan struct{})
@@ -894,6 +934,15 @@ func chunkLengths(chunks [][]byte) []int {
 		lengths = append(lengths, len(chunk))
 	}
 	return lengths
+}
+
+func allBytesEqual(data []byte, want byte) bool {
+	for _, b := range data {
+		if b != want {
+			return false
+		}
+	}
+	return true
 }
 
 func assertXaiQuery(t *testing.T, query url.Values, key string, want string) {
