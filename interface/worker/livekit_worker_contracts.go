@@ -1,6 +1,10 @@
 package worker
 
-import workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
+import (
+	"time"
+
+	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
+)
 
 type WorkerType = workerlivekit.WorkerType
 
@@ -137,3 +141,183 @@ type ParticipantTaskKey = workerlivekit.ParticipantTaskKey
 type TrackPublicationWaitOptions = workerlivekit.TrackPublicationWaitOptions
 
 type JobRequest = workerlivekit.JobRequest
+
+type AcceptedJobRoomConnectOptions = workerlivekit.AcceptedJobRoomConnectOptions
+
+type RoomCallbackHandlers = workerlivekit.RoomCallbackHandlers
+
+type RemoteTrackSubscriptionResult = workerlivekit.RemoteTrackSubscriptionResult
+
+type RoomConnector = workerlivekit.RoomConnector
+
+type ParticipantEntrypointRegistrationOptions = workerlivekit.ParticipantEntrypointRegistrationOptions
+
+var livekitServerRegisterWorkerMessage = workerlivekit.ServerRegisterWorkerMessage
+
+var livekitServerAvailableWorkerStatusMessage = workerlivekit.ServerAvailableWorkerStatusMessage
+
+var livekitServerDrainingWorkerStatusMessage = workerlivekit.ServerDrainingWorkerStatusMessage
+
+var livekitServerJobStatusMessage = workerlivekit.ServerJobStatusMessage
+
+var livekitServerJobRunningMessage = workerlivekit.ServerJobRunningMessage
+
+var livekitServerMigrateRunningJobsMessage = workerlivekit.ServerMigrateRunningJobsMessage
+
+var livekitExchangeInitialServerRegisterWebSocket = workerlivekit.ExchangeInitialServerRegisterWebSocket
+
+var livekitRunServerMessageLoop = workerlivekit.RunServerMessageLoop
+
+var livekitOpenServerWorkerWebSocket = workerlivekit.OpenServerWorkerWebSocket
+
+var livekitRouteServerWorkerMessage = workerlivekit.RouteServerWorkerMessage
+
+var livekitWriteServerWorkerMessageWebSocket = workerlivekit.WriteServerWorkerMessageWebSocket
+
+var livekitAvailabilityInfo = workerlivekit.AvailabilityInfo
+
+var livekitAnswerServerAvailabilityRequest = workerlivekit.AnswerServerAvailabilityRequest
+
+var livekitStoreServerPendingAccept = workerlivekit.StoreServerPendingAccept
+
+var livekitExpireServerPendingAccept = workerlivekit.ExpireServerPendingAccept
+
+var livekitJobAssignmentInfo = workerlivekit.JobAssignmentInfo
+
+func livekitAcceptServerPendingAssignment(
+	pending map[string]JobAcceptArguments,
+	timers map[string]*time.Timer,
+	jobID string,
+) (JobAcceptArguments, bool) {
+	return workerlivekit.AcceptServerPendingAssignment(pending, timers, jobID)
+}
+
+var livekitJobTerminationInfo = workerlivekit.JobTerminationInfo
+
+var livekitServerJobTerminationPlanForActiveJob = workerlivekit.ServerJobTerminationPlanForActiveJob
+
+var livekitDefaultServerFakeLocalJobOptions = workerlivekit.DefaultServerFakeLocalJobOptions
+
+var livekitPrepareServerLocalJobRunOptions = workerlivekit.PrepareServerLocalJobRunOptions
+
+var livekitServerLocalJobExecutorPlan = workerlivekit.ServerLocalJobExecutorPlan
+
+var livekitServerLocalJobSessionReportPath = workerlivekit.ServerLocalJobSessionReportPath
+
+var livekitServerJobFinishPlan = workerlivekit.ServerJobFinishPlan
+
+var livekitServerJobSessionReportUploadPlan = workerlivekit.ServerJobSessionReportUploadPlan
+
+var livekitServerJobSessionEndPlan = workerlivekit.ServerJobSessionEndPlan
+
+var livekitServerLocalJobContextSetupPlan = workerlivekit.ServerLocalJobContextSetupPlan
+
+var livekitServerLogLevelFromEnv = workerlivekit.ServerLogLevelFromEnv
+
+var livekitDefaultServerWorkerPermissions = workerlivekit.DefaultServerWorkerPermissions
+
+var livekitResolveServerConnectionOptions = workerlivekit.ResolveServerConnectionOptions
+
+var livekitWorkerRuntimeMetadata = workerlivekit.WorkerRuntimeMetadata
+
+var livekitResolveServerAgentNameFromEnv = workerlivekit.ResolveServerAgentNameFromEnv
+
+var livekitValidateServerConnectionOptions = workerlivekit.ValidateServerConnectionOptions
+
+var livekitApplyServerConnectionEnv = workerlivekit.ApplyServerConnectionEnv
+
+var livekitServerRunningJobInfoSnapshot = workerlivekit.ServerRunningJobInfoSnapshot
+
+var livekitRefreshServerRunningJobsForReload = workerlivekit.RefreshServerRunningJobsForReload
+
+var livekitServerReloadedJobContextValues = workerlivekit.ServerReloadedJobContextValues
+
+var livekitServerRecordingOptions = workerlivekit.ServerRecordingOptions
+
+var livekitServerRunningJobContextValues = workerlivekit.ServerRunningJobContextValues
+
+var livekitRunServerRunningJobEntrypointLifecycle = workerlivekit.RunServerRunningJobEntrypointLifecycle
+
+var livekitRunServerReloadedJobEntrypointLifecycle = workerlivekit.RunServerReloadedJobEntrypointLifecycle
+
+var livekitServerMigratableRunningJobIDs = workerlivekit.ServerMigratableRunningJobIDs
+
+var livekitServerAssignmentContextValues = workerlivekit.ServerAssignmentContextValues
+
+var livekitRunServerJobEntrypointLifecycle = workerlivekit.RunServerJobEntrypointLifecycle
+
+var livekitJobContextInferenceHeaders = workerlivekit.JobContextInferenceHeaders
+
+var livekitNewJobContextAPI = workerlivekit.NewJobContextAPI
+
+var livekitNewJobContextSessionReport = workerlivekit.NewJobContextSessionReport
+
+var livekitJobContextLogFields = workerlivekit.JobContextLogFields
+
+var livekitJobContextParticipantIdentity = workerlivekit.JobContextParticipantIdentity
+
+var livekitJobContextLocalParticipantIdentity = workerlivekit.JobContextLocalParticipantIdentity
+
+var livekitJobContextTokenClaims = workerlivekit.JobContextTokenClaims
+
+var livekitJobContextJobID = workerlivekit.JobContextJobID
+
+var livekitPopulateJobContextSessionReport = workerlivekit.PopulateJobContextSessionReport
+
+var livekitJobContextAvatarStartInfo = workerlivekit.JobContextAvatarStartInfo
+
+var livekitJobContextRoom = workerlivekit.JobContextRoom
+
+var livekitJobContextPublisher = workerlivekit.JobContextPublisher
+
+var livekitJobContextLocalParticipant = workerlivekit.JobContextLocalParticipant
+
+var livekitNewJobContextRoom = workerlivekit.NewJobContextRoom
+
+var livekitJobContextNormalizeConnectOptions = workerlivekit.JobContextNormalizeConnectOptions
+
+var livekitJobContextJoinPreparedRoom = workerlivekit.JobContextJoinPreparedRoom
+
+var livekitJobContextRemoteParticipantViews = workerlivekit.JobContextRemoteParticipantViews
+
+var livekitJobContextRoomName = workerlivekit.JobContextRoomName
+
+var livekitJobContextApplyAutoSubscribeToRoom = workerlivekit.JobContextApplyAutoSubscribeToRoom
+
+var livekitJobContextRoomCallbackWithHandlers = workerlivekit.JobContextRoomCallbackWithHandlers
+
+var livekitJobContextParticipantInfoFromRemoteParticipant = workerlivekit.JobContextParticipantInfoFromRemoteParticipant
+
+var livekitJobContextUpsertParticipantInfo = workerlivekit.JobContextUpsertParticipantInfo
+
+var livekitJobContextParticipantEntrypointRegistrationPlan = workerlivekit.JobContextParticipantEntrypointRegistrationPlan
+
+var livekitJobContextWaitForParticipant = workerlivekit.JobContextWaitForParticipant
+
+var livekitJobContextWaitForAgent = workerlivekit.JobContextWaitForAgent
+
+var livekitJobContextWaitForTrackPublication = workerlivekit.JobContextWaitForTrackPublication
+
+var livekitJobContextWaitForTrackPublicationWithOptions = workerlivekit.JobContextWaitForTrackPublicationWithOptions
+
+var livekitJobContextWaitForParticipantAttribute = workerlivekit.JobContextWaitForParticipantAttribute
+
+var livekitJobContextParticipantEntrypointTaskPlan = workerlivekit.JobContextParticipantEntrypointTaskPlan
+
+var livekitJobContextDeleteRoomPlan = workerlivekit.JobContextDeleteRoomPlan
+
+var livekitJobContextDeleteRoomBestEffort = workerlivekit.JobContextDeleteRoomBestEffort
+
+var livekitJobContextMoveParticipantPlan = workerlivekit.JobContextMoveParticipantPlan
+
+var livekitJobContextMoveParticipant = workerlivekit.JobContextMoveParticipant
+
+var livekitJobContextSIPCreateParticipantPlan = workerlivekit.JobContextSIPCreateParticipantPlan
+
+var livekitJobContextCreateSIPParticipantWithNames = workerlivekit.JobContextCreateSIPParticipantWithNames
+
+var livekitJobContextCreateSIPParticipantWithRequest = workerlivekit.JobContextCreateSIPParticipantWithRequest
+
+var livekitJobContextSIPTransferParticipantPlan = workerlivekit.JobContextSIPTransferParticipantPlan
+
+var livekitJobContextTransferSIPParticipantByParticipant = workerlivekit.JobContextTransferSIPParticipantByParticipant
