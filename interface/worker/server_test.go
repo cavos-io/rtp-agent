@@ -556,11 +556,13 @@ func TestWorkerHTTPHandlerReportsEnvAgentNameProvenance(t *testing.T) {
 func TestWorkerHTTPHandlerDoesNotExposeLiveKitMetadataForAgora(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		Transport: WorkerTransportAgora,
-		Agora: AgoraOptions{
-			AppID:   "agora-app",
-			Channel: "support",
-		},
 	})
+	if server.Options.Transport != WorkerTransportAgora {
+		t.Fatalf("Transport = %q, want %q", server.Options.Transport, WorkerTransportAgora)
+	}
+	if server.Options.WSRL != "" || server.Options.APIKey != "" || server.Options.APISecret != "" {
+		t.Fatalf("LiveKit metadata set for Agora transport: url=%q key=%q secret=%q", server.Options.WSRL, server.Options.APIKey, server.Options.APISecret)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/worker", nil)
 	rec := httptest.NewRecorder()
@@ -4139,11 +4141,10 @@ func TestRTCSessionDoesNotLoadLiveKitAgentNameForAgora(t *testing.T) {
 	t.Setenv("LIVEKIT_AGENT_NAME", "livekit-agent")
 	server := NewAgentServer(WorkerOptions{
 		Transport: WorkerTransportAgora,
-		Agora: AgoraOptions{
-			AppID:   "agora-app",
-			Channel: "support",
-		},
 	})
+	if server.Options.Transport != WorkerTransportAgora {
+		t.Fatalf("Transport = %q, want %q", server.Options.Transport, WorkerTransportAgora)
+	}
 
 	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
 		t.Fatalf("RTCSession() error = %v", err)
