@@ -587,6 +587,29 @@ func TestSynthesizeWithStreamErrorsWhenNonEmptyTextProducesNoAudio(t *testing.T)
 	}
 }
 
+func TestSynthesizeWithStreamErrorsWhenOnlyNilAudioEventsProduced(t *testing.T) {
+	provider := &fakeStreamingTTS{
+		stream: &fakeSynthesizeStream{
+			events:   []*SynthesizedAudio{nil},
+			emptyErr: io.EOF,
+		},
+	}
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+	defer chunked.Close()
+
+	_, err = chunked.Next()
+	if err == nil {
+		t.Fatal("Next() error = nil, want no-audio error")
+	}
+	if !strings.Contains(err.Error(), "no audio frames") {
+		t.Fatalf("Next() error = %v, want no-audio error", err)
+	}
+}
+
 func TestSynthesizeWithStreamReturnsEOFWhenWhitespaceTextProducesNoAudio(t *testing.T) {
 	provider := &fakeStreamingTTS{
 		stream: &fakeSynthesizeStream{emptyErr: io.EOF},

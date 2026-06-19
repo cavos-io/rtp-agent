@@ -137,6 +137,9 @@ func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
 			}
 			return nil, err
 		}
+		if audio == nil {
+			continue
+		}
 		s.audioSeen = true
 		s.observeAudio(audio)
 		if s.pending != nil {
