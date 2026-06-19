@@ -1193,11 +1193,16 @@ func (a *App) runAgora(ctx context.Context) error {
 		transcriptForwarder := workeragora.NewTranscriptForwarder(a.Session, dataPublisher, workeragora.TranscriptForwarderOptions{
 			UserStreamID: dataOpts.RemoteStreamID,
 		})
+		var dataSubscriber workeragora.DataMessageSubscriber
 		if subscriber, ok := dataPublisher.(workeragora.DataMessageSubscriber); ok {
-			installAgoraRTMDataMessageHandler(subscriber, a.Session, dataOpts.UID)
+			dataSubscriber = subscriber
+			installAgoraRTMDataMessageHandler(dataSubscriber, a.Session, dataOpts.UID)
 		}
 		transcriptForwarder.Start(runCtx)
 		defer func() {
+			if dataSubscriber != nil {
+				dataSubscriber.SetDataMessageHandler(nil)
+			}
 			if err := transcriptForwarder.Stop(context.Background()); err != nil {
 				logutil.Logger.Errorw("failed to close Agora data publisher", err)
 			}
