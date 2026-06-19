@@ -374,7 +374,7 @@ type realtimeSession struct {
 	remote                *llm.RemoteChatContext
 	inputTranscripts      *utils.BoundedDict[inputTranscriptKey, realtimeInputTranscript]
 	generation            *realtimeGeneration
-	pendingResponses      int
+	pendingResponses      map[string]struct{}
 	pendingDeleteItemIDs  []string
 	instructions          string
 	tools                 []llm.Tool
@@ -453,14 +453,15 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		}
 	}
 	s := &realtimeSession{
-		model:        m,
-		conn:         conn,
-		ctx:          ctx,
-		cancel:       cancel,
-		eventCh:      make(chan llm.RealtimeEvent, 100),
-		remote:       llm.NewRemoteChatContext(),
-		audioBStream: newOpenAIRealtimeAudioByteStream(),
-		connectedAt:  time.Now(),
+		model:            m,
+		conn:             conn,
+		ctx:              ctx,
+		cancel:           cancel,
+		eventCh:          make(chan llm.RealtimeEvent, 100),
+		remote:           llm.NewRemoteChatContext(),
+		pendingResponses: make(map[string]struct{}),
+		audioBStream:     newOpenAIRealtimeAudioByteStream(),
+		connectedAt:      time.Now(),
 	}
 
 	go s.eventLoop()
@@ -1312,7 +1313,7 @@ func openAIRealtimeToolChoice(choice llm.ToolChoice) any {
 
 func (s *realtimeSession) Interrupt() error {
 	s.mu.Lock()
-	active := s.generation != nil || s.pendingResponses > 0
+	active := s.generation != nil || len(s.pendingResponses) > 0
 	s.mu.Unlock()
 	if !active {
 		return nil
@@ -1459,21 +1460,50 @@ func openAIRealtimeVideoMessage(image *llm.ImageContent) (map[string]any, error)
 func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
 	s.mu.Lock()
 	instructions := s.instructions
-	s.pendingResponses++
 	s.mu.Unlock()
-	if err := s.sendMsg(openAIRealtimeGenerateReplyMessageWithSessionInstructions(options, instructions)); err != nil {
-		s.mu.Lock()
-		if s.pendingResponses > 0 {
-			s.pendingResponses--
-		}
-		s.mu.Unlock()
+	msg := openAIRealtimeGenerateReplyMessageWithSessionInstructions(options, instructions)
+	eventID, _ := msg["event_id"].(string)
+	s.addPendingRealtimeResponse(eventID)
+	if err := s.sendMsg(msg); err != nil {
+		s.clearPendingRealtimeResponse(eventID)
 		return err
 	}
-	s.startResponseCreateTimeout()
+	s.startResponseCreateTimeout(eventID)
 	return nil
 }
 
-func (s *realtimeSession) startResponseCreateTimeout() {
+func (s *realtimeSession) addPendingRealtimeResponse(eventID string) {
+	if eventID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pendingResponses == nil {
+		s.pendingResponses = make(map[string]struct{})
+	}
+	s.pendingResponses[eventID] = struct{}{}
+}
+
+func (s *realtimeSession) clearPendingRealtimeResponse(eventID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.pendingResponses) == 0 {
+		return
+	}
+	if eventID != "" {
+		delete(s.pendingResponses, eventID)
+		return
+	}
+	for pendingID := range s.pendingResponses {
+		delete(s.pendingResponses, pendingID)
+		return
+	}
+}
+
+func (s *realtimeSession) startResponseCreateTimeout(eventID string) {
+	if eventID == "" {
+		return
+	}
 	timeout := s.responseCreateTimeout
 	if timeout == 0 {
 		timeout = openAIRealtimeResponseCreateTimeout
@@ -1483,11 +1513,7 @@ func (s *realtimeSession) startResponseCreateTimeout() {
 		defer timer.Stop()
 		select {
 		case <-timer.C:
-			s.mu.Lock()
-			if s.pendingResponses > 0 {
-				s.pendingResponses--
-			}
-			s.mu.Unlock()
+			s.clearPendingRealtimeResponse(eventID)
 		case <-s.ctx.Done():
 		}
 	}()
@@ -1840,8 +1866,24 @@ func (s *realtimeSession) eventLoop() {
 				continue
 			}
 
+			if openAIRealtimeString(ev["type"]) == "response.created" {
+				if response, _ := ev["response"].(map[string]any); response != nil {
+					if clientEventID, ok := openAIRealtimeResponseClientEventID(response); ok {
+						s.clearPendingRealtimeResponse(clientEventID)
+					}
+				}
+			}
+
 			if openAIRealtimeString(ev["type"]) == "response.done" && s.generation == nil {
-				s.clearPendingRealtimeResponse()
+				if response, _ := ev["response"].(map[string]any); response != nil {
+					if clientEventID, ok := openAIRealtimeResponseClientEventID(response); ok {
+						s.clearPendingRealtimeResponse(clientEventID)
+					} else {
+						s.clearPendingRealtimeResponse("")
+					}
+				} else {
+					s.clearPendingRealtimeResponse("")
+				}
 				continue
 			}
 
@@ -1989,7 +2031,7 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 		return s.ctx.Err()
 	}
 	s.conn = conn
-	s.pendingResponses = 0
+	s.pendingResponses = make(map[string]struct{})
 	s.startMaxSessionRecycle(conn)
 	s.mu.Unlock()
 
@@ -2000,14 +2042,6 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 		Reconnect: &llm.RealtimeSessionReconnectedEvent{},
 	}
 	return nil
-}
-
-func (s *realtimeSession) clearPendingRealtimeResponse() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.pendingResponses > 0 {
-		s.pendingResponses--
-	}
 }
 
 func (s *realtimeSession) inputAudioTranscriptionEnabled() bool {
@@ -2245,9 +2279,6 @@ func (s *realtimeSession) trackRealtimeEvent(ev llm.RealtimeEvent) llm.RealtimeE
 func (s *realtimeSession) trackRealtimeGenerationCreated(ev llm.RealtimeEvent) llm.RealtimeEvent {
 	if ev.Generation == nil {
 		return ev
-	}
-	if s.pendingResponses > 0 {
-		s.pendingResponses--
 	}
 	generation := &realtimeGeneration{
 		messageCh:  make(chan llm.MessageGeneration, 100),
