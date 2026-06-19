@@ -7,11 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/gorilla/websocket"
 )
 
 func TestSmallestAITTSDefaultsMatchReference(t *testing.T) {
@@ -278,6 +281,32 @@ func TestSmallestAITTSAudioFromWebsocketMessage(t *testing.T) {
 	}
 }
 
+func TestSmallestAITTSWebsocketCloseBeforeCompleteReturnsError(t *testing.T) {
+	conn := newSmallestAITTSClosingWebsocketConn(t, func(ws *websocket.Conn) {
+		_ = ws.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+			time.Now().Add(time.Second),
+		)
+	})
+	stream := &smallestaiTTSWebsocketChunkedStream{
+		conn:       conn,
+		sampleRate: 24000,
+		segmentID:  "seg-1",
+	}
+
+	audio, err := stream.Next()
+	if err == nil {
+		t.Fatalf("Next() error = nil, audio = %+v, want unexpected close error", audio)
+	}
+	if errors.Is(err, io.EOF) {
+		t.Fatal("Next() error = EOF, want unexpected close error")
+	}
+	if !strings.Contains(err.Error(), "closed unexpectedly") {
+		t.Fatalf("Next() error = %v, want closed unexpectedly", err)
+	}
+}
+
 func TestSmallestAITTSStreamBuffersTextUntilFlush(t *testing.T) {
 	stream := &smallestaiTTSSynthesizeStream{}
 	if err := stream.PushText("hello "); err != nil {
@@ -372,4 +401,48 @@ func (b *smallestAICloseCountBody) Close() error {
 	}
 	b.closed = true
 	return nil
+}
+
+func newSmallestAITTSClosingWebsocketConn(t *testing.T, handler func(*websocket.Conn)) *websocket.Conn {
+	t.Helper()
+	clientConn, serverConn := net.Pipe()
+	listener := newSmallestAISingleConnListener(serverConn)
+	upgrader := websocket.Upgrader{}
+	serverErr := make(chan error, 1)
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer ws.Close()
+		handler(ws)
+	})}
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			serverErr <- err
+		}
+	}()
+	t.Cleanup(func() {
+		_ = server.Close()
+		_ = listener.Close()
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+	})
+
+	dialer := websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+	}
+	conn, _, err := dialer.DialContext(context.Background(), "ws://smallest.test/tts/live", nil)
+	if err != nil {
+		t.Fatalf("dial test websocket: %v", err)
+	}
+	select {
+	case err := <-serverErr:
+		t.Fatalf("test websocket server error: %v", err)
+	default:
+	}
+	return conn
 }

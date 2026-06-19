@@ -318,7 +318,7 @@ func (s *smallestaiTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, err
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
-				return nil, io.EOF
+				return nil, fmt.Errorf("smallestai tts websocket closed unexpectedly: %w", err)
 			}
 			return nil, err
 		}
