@@ -651,10 +651,11 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 			logger.Logger.Errorw("TTS inference failed", err)
 			va.emitTTSError(session, err)
 		}
+		playoutOK := true
 		if err == nil && !speech.IsInterrupted() {
-			va.waitForAssistantPlayout(ctx, session, speech)
+			playoutOK = va.waitForAssistantPlayout(ctx, session, speech)
 		}
-		canCommit := (!speech.IsInterrupted() && err == nil) || (speech.IsInterrupted() && ttsGen != nil && ttsGen.ForwardedAudio)
+		canCommit := (!speech.IsInterrupted() && err == nil && playoutOK) || (speech.IsInterrupted() && ttsGen != nil && ttsGen.ForwardedAudio)
 		if canCommit {
 			forwardedText := speech.Generation.Text
 			if speech.IsInterrupted() {
@@ -859,7 +860,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		}
 		va.emitLLMMetrics(session, genData)
 
-		va.waitForAssistantPlayout(ctx, session, opts.SpeechHandle)
+		playoutOK := va.waitForAssistantPlayout(ctx, session, opts.SpeechHandle)
 		forwardedText := genData.GeneratedText
 		if opts.SpeechHandle != nil && opts.SpeechHandle.IsInterrupted() {
 			if ttsGen == nil && session.AudioPlaybackController() == nil {
@@ -867,6 +868,8 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			} else {
 				forwardedText = va.forwardedAssistantTextAfterInterruption(ctx, session, opts.SpeechHandle, genData.GeneratedText)
 			}
+		} else if !playoutOK {
+			forwardedText = ""
 		}
 		if forwardedText != "" {
 			args := llm.ChatMessageArgs{
@@ -1223,24 +1226,25 @@ func waitForLLMGenerationDone(genData *LLMGenerationData) {
 	<-genData.Done
 }
 
-func (va *PipelineAgent) waitForAssistantPlayout(ctx context.Context, session *AgentSession, speech *SpeechHandle) {
+func (va *PipelineAgent) waitForAssistantPlayout(ctx context.Context, session *AgentSession, speech *SpeechHandle) bool {
 	if session == nil || (speech != nil && speech.IsInterrupted()) {
-		return
+		return true
 	}
 	playback := session.AudioPlaybackController()
 	if playback == nil {
-		return
+		return true
 	}
 	if _, err := playback.WaitForPlayout(ctx); err != nil {
 		if suppressContextCanceledError(ctx, speech, err) {
-			return
+			return false
 		}
 		logger.Logger.Warnw("failed to wait for assistant playback", err)
-		return
+		return false
 	}
 	if session.activity != nil {
 		session.activity.holdUserTranscriptsUntil(time.Now())
 	}
+	return true
 }
 
 func suppressInterruptedCanceledError(speech *SpeechHandle, err error) bool {
