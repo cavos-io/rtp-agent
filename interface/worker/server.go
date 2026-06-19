@@ -154,6 +154,26 @@ type AvailabilityAnswerOptions = workerlivekit.AvailabilityAnswerOptions
 
 type PendingAcceptStoreOptions = workerlivekit.PendingAcceptStoreOptions
 
+type RunningJobInfoOptions = workerlivekit.RunningJobInfoOptions
+
+type ReloadedJobContextValueOptions = workerlivekit.ReloadedJobContextValueOptions
+
+type RunningJobContextValueOptions = workerlivekit.RunningJobContextValueOptions
+
+type RunningJobEntrypointLifecycleOptions = workerlivekit.RunningJobEntrypointLifecycleOptions
+
+type ReloadedJobEntrypointLifecycleOptions = workerlivekit.ReloadedJobEntrypointLifecycleOptions
+
+type AssignmentContextValueOptions = workerlivekit.AssignmentContextValueOptions
+
+type JobEntrypointLifecycleOptions = workerlivekit.JobEntrypointLifecycleOptions
+
+type JobSessionReportUploadPlanOptions = workerlivekit.JobSessionReportUploadPlanOptions
+
+type JobSessionEndPlanOptions = workerlivekit.JobSessionEndPlanOptions
+
+type LocalJobContextSetupPlanOptions = workerlivekit.LocalJobContextSetupPlanOptions
+
 type EntrypointResult = workerlivekit.EntrypointResult
 
 type JobStatus = workerlivekit.JobStatus
@@ -349,7 +369,7 @@ func (s *AgentServer) ActiveRunningJobs() []workeripc.RunningJobInfo {
 }
 
 func runningJobInfoFromContext(jobCtx *JobContext) workeripc.RunningJobInfo {
-	return workeripc.FromLiveKitRunningJobInfo(workerlivekit.ServerRunningJobInfoSnapshot(workerlivekit.RunningJobInfoOptions{
+	return workeripc.FromLiveKitRunningJobInfo(workerlivekit.ServerRunningJobInfoSnapshot(RunningJobInfoOptions{
 		AcceptArguments: JobAcceptArguments{
 			Name:       jobCtx.AcceptArguments.Name,
 			Identity:   jobCtx.AcceptArguments.Identity,
@@ -395,7 +415,7 @@ func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.Ru
 			continue
 		}
 
-		reloadedJob := workerlivekit.ServerReloadedJobContextValues(workerlivekit.ReloadedJobContextValueOptions{
+		reloadedJob := workerlivekit.ServerReloadedJobContextValues(ReloadedJobContextValueOptions{
 			Info:            info,
 			OverrideURL:     s.Options.WSRL,
 			DefaultWorkerID: s.workerID,
@@ -428,7 +448,7 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 		return workerReferenceError(rtcSessionRequiredMessage)
 	}
 
-	runningJob := workerlivekit.ServerRunningJobContextValues(workerlivekit.RunningJobContextValueOptions{
+	runningJob := workerlivekit.ServerRunningJobContextValues(RunningJobContextValueOptions{
 		Info:            workeripc.ToLiveKitRunningJobInfo(info),
 		OverrideURL:     s.Options.WSRL,
 		DefaultWorkerID: s.workerID,
@@ -447,7 +467,7 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 	s.activeJobs[runningJob.JobID] = jobCtx
 	s.mu.Unlock()
 
-	return workerlivekit.RunServerRunningJobEntrypointLifecycle(workerlivekit.RunningJobEntrypointLifecycleOptions{
+	return workerlivekit.RunServerRunningJobEntrypointLifecycle(RunningJobEntrypointLifecycleOptions{
 		Context:     ctx,
 		MarkStarted: jobCtx.markEntrypointStarted,
 		Entrypoint: func() error {
@@ -485,7 +505,7 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 
 	jobCtx.markEntrypointStarted()
 	go func() {
-		workerlivekit.RunServerReloadedJobEntrypointLifecycle(workerlivekit.ReloadedJobEntrypointLifecycleOptions{
+		workerlivekit.RunServerReloadedJobEntrypointLifecycle(ReloadedJobEntrypointLifecycleOptions{
 			Context: ctx,
 			Entrypoint: func() error {
 				return s.runJobEntrypoint(jobCtx)
@@ -1707,7 +1727,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *JobAssignment) 
 		return
 	}
 
-	assignedJob := workerlivekit.ServerAssignmentContextValues(workerlivekit.AssignmentContextValueOptions{
+	assignedJob := workerlivekit.ServerAssignmentContextValues(AssignmentContextValueOptions{
 		Assignment:      assignment,
 		AcceptArguments: args,
 		WorkerID:        s.workerID,
@@ -1731,7 +1751,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *JobAssignment) 
 	if s.entrypointFnc != nil {
 		jobCtx.markEntrypointStarted()
 		go func() {
-			workerlivekit.RunServerJobEntrypointLifecycle(workerlivekit.JobEntrypointLifecycleOptions{
+			workerlivekit.RunServerJobEntrypointLifecycle(JobEntrypointLifecycleOptions{
 				Context: ctx,
 				Entrypoint: func() error {
 					return s.runJobEntrypoint(jobCtx)
@@ -1982,7 +2002,7 @@ func jobSessionReportUploadPlan(jobCtx *JobContext, opts WorkerOptions) JobSessi
 	if jobCtx == nil {
 		return JobSessionReportUploadPlanResult{}
 	}
-	return workerlivekit.ServerJobSessionReportUploadPlan(workerlivekit.JobSessionReportUploadPlanOptions{
+	return workerlivekit.ServerJobSessionReportUploadPlan(JobSessionReportUploadPlanOptions{
 		Job:       jobCtx.Job,
 		FakeJob:   jobCtx.IsFakeJob(),
 		Report:    jobCtx.Report,
@@ -1998,7 +2018,7 @@ func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
 		return
 	}
 
-	plan := workerlivekit.ServerJobSessionEndPlan(workerlivekit.JobSessionEndPlanOptions{
+	plan := workerlivekit.ServerJobSessionEndPlan(JobSessionEndPlanOptions{
 		Job:            jobCtx.Job,
 		TimeoutSeconds: s.Options.SessionEndTimeoutSeconds,
 	})
@@ -2047,7 +2067,7 @@ func newLocalJobContext(roomName string, participantIdentity string, opts Worker
 
 func newLocalJobContextWithOptions(roomName string, participantIdentity string, opts WorkerOptions, options LocalJobOptions) *JobContext {
 	opts = resolveWorkerOptions(opts)
-	localPlan := workerlivekit.ServerLocalJobContextSetupPlan(workerlivekit.LocalJobContextSetupPlanOptions{
+	localPlan := workerlivekit.ServerLocalJobContextSetupPlan(LocalJobContextSetupPlanOptions{
 		RoomName:            roomName,
 		ParticipantIdentity: participantIdentity,
 		APIKey:              opts.APIKey,

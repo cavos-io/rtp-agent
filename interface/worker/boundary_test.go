@@ -148,6 +148,16 @@ func TestSharedWorkerDoesNotExposeLiveKitWorkerMessageDirectly(t *testing.T) {
 		"workerlivekit.ServerMessageRouteOptions{",
 		"workerlivekit.AvailabilityAnswerOptions{",
 		"workerlivekit.PendingAcceptStoreOptions{",
+		"workerlivekit.RunningJobInfoOptions{",
+		"workerlivekit.ReloadedJobContextValueOptions{",
+		"workerlivekit.RunningJobContextValueOptions{",
+		"workerlivekit.RunningJobEntrypointLifecycleOptions{",
+		"workerlivekit.ReloadedJobEntrypointLifecycleOptions{",
+		"workerlivekit.AssignmentContextValueOptions{",
+		"workerlivekit.JobEntrypointLifecycleOptions{",
+		"workerlivekit.JobSessionReportUploadPlanOptions{",
+		"workerlivekit.JobSessionEndPlanOptions{",
+		"workerlivekit.LocalJobContextSetupPlanOptions{",
 	}
 	for _, direct := range forbidden {
 		if strings.Contains(string(data), direct) {
