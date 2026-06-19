@@ -117,6 +117,10 @@ func LocalJobContextSetupPlan(opts LocalJobContextSetupPlanOptions) LocalJobCont
 	}
 }
 
+func ServerLocalJobContextSetupPlan(opts LocalJobContextSetupPlanOptions) LocalJobContextSetupPlanResult {
+	return LocalJobContextSetupPlan(opts)
+}
+
 func ValidateLocalJobRunOptions(participantIdentity string, opts LocalJobOptions) error {
 	if !opts.FakeJob && participantIdentity == "" && opts.Token == "" {
 		return fmt.Errorf("agent_identity is None but fake_job is False")

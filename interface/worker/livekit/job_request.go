@@ -172,12 +172,20 @@ func JobFinishPlan(job *lkprotocol.Job) JobFinishPlanResult {
 	}
 }
 
+func ServerJobFinishPlan(job *lkprotocol.Job) JobFinishPlanResult {
+	return JobFinishPlan(job)
+}
+
 func JobSessionEndPlan(opts JobSessionEndPlanOptions) JobSessionEndPlanResult {
 	runtimeJob := JobRuntimeInfo(opts.Job)
 	return JobSessionEndPlanResult{
 		JobID:   runtimeJob.JobID,
 		Timeout: time.Duration(opts.TimeoutSeconds * float64(time.Second)),
 	}
+}
+
+func ServerJobSessionEndPlan(opts JobSessionEndPlanOptions) JobSessionEndPlanResult {
+	return JobSessionEndPlan(opts)
 }
 
 type SessionReportInfo struct {
@@ -270,6 +278,10 @@ func JobSessionReportUploadPlan(opts JobSessionReportUploadPlanOptions) JobSessi
 		APISecret: opts.APISecret,
 		AgentName: opts.AgentName,
 	}
+}
+
+func ServerJobSessionReportUploadPlan(opts JobSessionReportUploadPlanOptions) JobSessionReportUploadPlanResult {
+	return JobSessionReportUploadPlan(opts)
 }
 
 func HasSessionRecordingOption(options agent.RecordingOptions) bool {

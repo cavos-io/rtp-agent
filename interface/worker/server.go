@@ -1883,7 +1883,7 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
 	if jobCtx == nil {
 		return false
 	}
-	plan := workerlivekit.JobFinishPlan(jobCtx.Job)
+	plan := workerlivekit.ServerJobFinishPlan(jobCtx.Job)
 	if !plan.Finish {
 		return false
 	}
@@ -1936,7 +1936,7 @@ func jobSessionReportUploadPlan(jobCtx *JobContext, opts WorkerOptions) workerli
 	if jobCtx == nil {
 		return workerlivekit.JobSessionReportUploadPlanResult{}
 	}
-	return workerlivekit.JobSessionReportUploadPlan(workerlivekit.JobSessionReportUploadPlanOptions{
+	return workerlivekit.ServerJobSessionReportUploadPlan(workerlivekit.JobSessionReportUploadPlanOptions{
 		Job:       jobCtx.Job,
 		FakeJob:   jobCtx.IsFakeJob(),
 		Report:    jobCtx.Report,
@@ -1952,7 +1952,7 @@ func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
 		return
 	}
 
-	plan := workerlivekit.JobSessionEndPlan(workerlivekit.JobSessionEndPlanOptions{
+	plan := workerlivekit.ServerJobSessionEndPlan(workerlivekit.JobSessionEndPlanOptions{
 		Job:            jobCtx.Job,
 		TimeoutSeconds: s.Options.SessionEndTimeoutSeconds,
 	})
@@ -2001,7 +2001,7 @@ func newLocalJobContext(roomName string, participantIdentity string, opts Worker
 
 func newLocalJobContextWithOptions(roomName string, participantIdentity string, opts WorkerOptions, options LocalJobOptions) *JobContext {
 	opts = resolveWorkerOptions(opts)
-	localPlan := workerlivekit.LocalJobContextSetupPlan(workerlivekit.LocalJobContextSetupPlanOptions{
+	localPlan := workerlivekit.ServerLocalJobContextSetupPlan(workerlivekit.LocalJobContextSetupPlanOptions{
 		RoomName:            roomName,
 		ParticipantIdentity: participantIdentity,
 		APIKey:              opts.APIKey,

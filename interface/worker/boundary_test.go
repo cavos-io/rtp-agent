@@ -81,6 +81,10 @@ func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
 		"workerlivekit.PrepareLocalJobRunOptions(",
 		"workerlivekit.LocalJobExecutorPlan(",
 		"workerlivekit.LocalJobSessionReportPath(",
+		"workerlivekit.JobFinishPlan(",
+		"workerlivekit.JobSessionReportUploadPlan(",
+		"workerlivekit.JobSessionEndPlan(",
+		"workerlivekit.LocalJobContextSetupPlan(",
 		"workerlivekit.ValidateWorkerConnectionOptions(",
 	}
 
