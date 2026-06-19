@@ -534,7 +534,7 @@ func (c *JobContext) AddParticipantEntrypoint(entrypoint ParticipantEntrypoint, 
 	for _, registered := range c.participantEntrypoints {
 		registeredEntrypoints = append(registeredEntrypoints, reflect.ValueOf(registered.entrypoint).Pointer())
 	}
-	plan, err := workerlivekit.ParticipantEntrypointRegistrationPlan(workerlivekit.ParticipantEntrypointRegistrationOptions{
+	plan, err := workerlivekit.JobContextParticipantEntrypointRegistrationPlan(workerlivekit.ParticipantEntrypointRegistrationOptions{
 		Entrypoint:            entrypointPointer,
 		RegisteredEntrypoints: registeredEntrypoints,
 		Kinds:                 kinds,
@@ -628,7 +628,7 @@ func (c *JobContext) scheduleParticipantEntrypoints(participant *workerlivekit.P
 }
 
 func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntrypointRegistration, participant *workerlivekit.ParticipantInfo) {
-	plan := workerlivekit.ParticipantEntrypointTaskPlan(
+	plan := workerlivekit.JobContextParticipantEntrypointTaskPlan(
 		participant,
 		registration.kinds,
 		reflect.ValueOf(registration.entrypoint).Pointer(),

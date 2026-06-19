@@ -105,3 +105,11 @@ func JobContextWaitForTrackPublicationWithOptions(ctx context.Context, room *SDK
 func JobContextWaitForParticipantAttribute(ctx context.Context, room *SDKRoom, identity string, attribute string, value string) error {
 	return WaitForParticipantAttribute(ctx, room, identity, attribute, value)
 }
+
+func JobContextParticipantEntrypointRegistrationPlan(opts ParticipantEntrypointRegistrationOptions) (ParticipantEntrypointRegistrationPlanResult, error) {
+	return ParticipantEntrypointRegistrationPlan(opts)
+}
+
+func JobContextParticipantEntrypointTaskPlan(participant *ParticipantInfo, kinds []ParticipantInfoKind, entrypoint uintptr) ParticipantEntrypointTaskPlanResult {
+	return ParticipantEntrypointTaskPlan(participant, kinds, entrypoint)
+}
