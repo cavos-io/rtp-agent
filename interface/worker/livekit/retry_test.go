@@ -36,11 +36,14 @@ func TestConnectFailureErrorIncludesReferenceMessageAndCause(t *testing.T) {
 	if err == nil {
 		t.Fatal("ConnectFailureError() = nil, want error")
 	}
-	if !strings.Contains(err.Error(), "failed to connect to LiveKit after 3 attempts wss://livekit.example/agent") {
-		t.Fatalf("ConnectFailureError() = %q, want LiveKit failure message", err.Error())
+	if !strings.Contains(err.Error(), "failed to connect to livekit after 3 attempts wss://livekit.example/agent") {
+		t.Fatalf("ConnectFailureError() = %q, want reference livekit failure message", err.Error())
 	}
 	if !errors.Is(err, cause) {
 		t.Fatalf("ConnectFailureError() does not wrap cause")
+	}
+	if !workerlivekit.IsConnectFailure(err) {
+		t.Fatalf("ConnectFailureError() is not classified as connect failure")
 	}
 }
 

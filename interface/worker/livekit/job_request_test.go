@@ -163,6 +163,36 @@ func TestCloneRunningJobInfoCopiesAcceptAttributes(t *testing.T) {
 	}
 }
 
+func TestRunningJobInfoSnapshotCopiesAcceptAttributes(t *testing.T) {
+	accept := workerlivekit.JobAcceptArguments{
+		Name:       "Agent A",
+		Identity:   "agent-a",
+		Metadata:   "metadata-a",
+		Attributes: map[string]string{"tier": "gold"},
+	}
+	job := &lkprotocol.Job{Id: "job-a"}
+
+	info := workerlivekit.RunningJobInfoSnapshot(workerlivekit.RunningJobInfoOptions{
+		AcceptArguments: accept,
+		Job:             job,
+		URL:             "wss://livekit.example",
+		Token:           "room-token",
+		WorkerID:        "worker-a",
+		FakeJob:         true,
+	})
+	info.AcceptArguments.Attributes["tier"] = "platinum"
+
+	if accept.Attributes["tier"] != "gold" {
+		t.Fatalf("original tier = %q, want gold", accept.Attributes["tier"])
+	}
+	if info.Job != job {
+		t.Fatal("RunningJobInfoSnapshot changed job pointer, want shallow job copy")
+	}
+	if info.URL != "wss://livekit.example" || info.Token != "room-token" || info.WorkerID != "worker-a" || !info.FakeJob {
+		t.Fatalf("RunningJobInfoSnapshot() = %#v, want assignment fields preserved", info)
+	}
+}
+
 func TestJobRejectArgumentsDefaultTerminates(t *testing.T) {
 	got := workerlivekit.DefaultJobRejectArguments()
 

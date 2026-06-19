@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"math"
 	"net"
 	"net/http"
@@ -305,19 +304,19 @@ func (s *AgentServer) ActiveRunningJobs() []workeripc.RunningJobInfo {
 }
 
 func runningJobInfoFromContext(jobCtx *JobContext) workeripc.RunningJobInfo {
-	return workeripc.RunningJobInfo{
-		AcceptArguments: workeripc.JobAcceptArguments{
+	return workerlivekit.RunningJobInfoSnapshot(workerlivekit.RunningJobInfoOptions{
+		AcceptArguments: workerlivekit.JobAcceptArguments{
 			Name:       jobCtx.AcceptArguments.Name,
 			Identity:   jobCtx.AcceptArguments.Identity,
 			Metadata:   jobCtx.AcceptArguments.Metadata,
-			Attributes: maps.Clone(jobCtx.AcceptArguments.Attributes),
+			Attributes: jobCtx.AcceptArguments.Attributes,
 		},
 		Job:      jobCtx.Job,
 		URL:      jobCtx.url,
 		Token:    jobCtx.token,
 		WorkerID: jobCtx.WorkerID(),
 		FakeJob:  jobCtx.fakeJob,
-	}
+	})
 }
 
 func jobLogValues(jobCtx *JobContext, values ...any) []any {
@@ -340,35 +339,8 @@ func jobLogValues(jobCtx *JobContext, values ...any) []any {
 	return logValues
 }
 
-func refreshRunningJobTokenForReload(info workeripc.RunningJobInfo, apiSecret string, now time.Time) (workeripc.RunningJobInfo, error) {
-	if apiSecret == "" {
-		return workeripc.RunningJobInfo{}, fmt.Errorf("api_secret is required to reload jobs")
-	}
-	token, err := workerlivekit.RefreshToken(info.Token, apiSecret, now, time.Hour)
-	if err != nil {
-		return workeripc.RunningJobInfo{}, err
-	}
-	info.Token = token
-	return info, nil
-}
-
-func refreshRunningJobsForReload(jobs []workeripc.RunningJobInfo, apiSecret string, now time.Time) ([]workeripc.RunningJobInfo, error) {
-	if apiSecret == "" {
-		return nil, fmt.Errorf("api_secret is required to reload jobs")
-	}
-	refreshed := make([]workeripc.RunningJobInfo, 0, len(jobs))
-	for _, job := range jobs {
-		info, err := refreshRunningJobTokenForReload(job, apiSecret, now)
-		if err != nil {
-			return nil, err
-		}
-		refreshed = append(refreshed, info)
-	}
-	return refreshed, nil
-}
-
 func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.RunningJobInfo, now time.Time) error {
-	refreshed, err := refreshRunningJobsForReload(jobs, s.Options.APISecret, now)
+	refreshed, err := workerlivekit.RefreshRunningJobsForReload(jobs, s.Options.APISecret, now)
 	if err != nil {
 		return err
 	}
@@ -859,19 +831,6 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	return opts
 }
 
-type workerMetadataResponse struct {
-	AgentName       string  `json:"agent_name"`
-	AgentNameIsEnv  bool    `json:"agent_name_is_env"`
-	WorkerType      string  `json:"worker_type"`
-	WorkerLoad      float64 `json:"worker_load"`
-	ActiveJobs      int     `json:"active_jobs"`
-	SDKVersion      string  `json:"sdk_version"`
-	ProtocolVersion int     `json:"protocol_version"`
-	ProjectType     string  `json:"project_type"`
-	NodeName        string  `json:"node_name"`
-	Hosted          bool    `json:"hosted"`
-}
-
 func (s *AgentServer) workerHTTPHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -893,18 +852,17 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 		_, _ = w.Write([]byte("OK"))
 	})
 	mux.HandleFunc("/worker", func(w http.ResponseWriter, r *http.Request) {
-		body := workerMetadataResponse{
+		body := workerlivekit.WorkerMetadata(workerlivekit.WorkerMetadataOptions{
 			AgentName:       s.Options.AgentName,
 			AgentNameIsEnv:  s.Options.AgentNameIsEnv,
-			WorkerType:      workerlivekit.JobTypeNameForWorkerType(string(s.Options.WorkerType)),
+			WorkerType:      string(s.Options.WorkerType),
 			WorkerLoad:      s.currentLoad(),
 			ActiveJobs:      s.activeJobCount(),
 			SDKVersion:      s.Options.Version,
 			ProtocolVersion: WorkerProtocolVersion,
-			ProjectType:     "go",
 			NodeName:        utils.NodeName(),
 			Hosted:          utils.IsHosted(),
-		}
+		})
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(body); err != nil {
 			logger.Logger.Errorw("failed to encode worker metadata", err)

@@ -1337,7 +1337,7 @@ func TestRefreshRunningJobTokenForReloadPreservesAssignmentAndExtendsToken(t *te
 	}
 	now := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
 
-	refreshed, err := refreshRunningJobTokenForReload(info, "api-secret", now)
+	refreshed, err := workerlivekit.RefreshRunningJobTokenForReload(info, "api-secret", now)
 	if err != nil {
 		t.Fatalf("refreshRunningJobTokenForReload() error = %v", err)
 	}
@@ -1359,6 +1359,9 @@ func TestRefreshRunningJobTokenForReloadPreservesAssignmentAndExtendsToken(t *te
 	}
 	if refreshed.Token == "" || refreshed.Token == originalToken {
 		t.Fatal("Token was not refreshed")
+	}
+	if _, err := workerlivekit.TokenClaims(refreshed.Token); err != nil {
+		t.Fatalf("TokenClaims(refreshed.Token) error = %v", err)
 	}
 
 	tok, err := jwt.ParseSigned(refreshed.Token)
@@ -1443,7 +1446,7 @@ func TestRefreshRunningJobsForReloadRefreshesEveryJob(t *testing.T) {
 	}
 	now := time.Date(2026, 5, 31, 13, 0, 0, 0, time.UTC)
 
-	refreshed, err := refreshRunningJobsForReload(jobs, "api-secret", now)
+	refreshed, err := workerlivekit.RefreshRunningJobsForReload(jobs, "api-secret", now)
 	if err != nil {
 		t.Fatalf("refreshRunningJobsForReload() error = %v", err)
 	}

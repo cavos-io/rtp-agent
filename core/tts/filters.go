@@ -86,7 +86,7 @@ func (e invalidTextTransformError) Error() string {
 func NewTextTransformBuffer() *TextTransformBuffer {
 	return &TextTransformBuffer{
 		bufferIsNewline: true,
-		transforms:      []string{"filter_markdown", "filter_emoji", "filter_tool_call_markers"},
+		transforms:      []string{"filter_markdown", "filter_emoji"},
 	}
 }
 
@@ -417,7 +417,7 @@ func ApplyTextTransformsWithTransforms(text string, transforms []string) (string
 }
 
 func applyTextTransforms(text string, applyLinePatterns bool, trim bool) string {
-	return applyNamedTextTransforms(text, []string{"filter_markdown", "filter_emoji", "filter_tool_call_markers"}, applyLinePatterns, trim)
+	return applyNamedTextTransforms(text, []string{"filter_markdown", "filter_emoji"}, applyLinePatterns, trim)
 }
 
 func (b *TextTransformBuffer) flush() []string {
