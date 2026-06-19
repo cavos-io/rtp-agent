@@ -520,6 +520,61 @@ func TestSmallestAISTTFlushEmitsReferenceRecognitionUsage(t *testing.T) {
 	}
 }
 
+func TestSmallestAISTTPushFrameEmitsReferencePeriodicRecognitionUsage(t *testing.T) {
+	oldInterval := smallestAISTTUsageReportInterval
+	smallestAISTTUsageReportInterval = 10 * time.Millisecond
+	t.Cleanup(func() { smallestAISTTUsageReportInterval = oldInterval })
+
+	audioCh := make(chan []byte, 2)
+	errCh := make(chan error, 1)
+	dialer := newSmallestAISTTTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			msgType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if msgType == websocket.BinaryMessage {
+				audioCh <- append([]byte(nil), payload...)
+			}
+		}
+	})
+
+	provider := NewSmallestAISTT("test-key",
+		WithSmallestAISTTBaseURL("ws://smallest.test/waves/v1"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: bytes.Repeat([]byte{1}, 1600)}); err != nil {
+		t.Fatalf("first PushFrame error = %v", err)
+	}
+	if got := readSmallestAITestChan(t, audioCh, errCh); len(got) != 1600 {
+		t.Fatalf("first audio chunk len = %d, want 1600", len(got))
+	}
+	time.Sleep(15 * time.Millisecond)
+	if err := stream.PushFrame(&model.AudioFrame{Data: bytes.Repeat([]byte{2}, 1600)}); err != nil {
+		t.Fatalf("second PushFrame error = %v", err)
+	}
+	if got := readSmallestAITestChan(t, audioCh, errCh); len(got) != 1600 {
+		t.Fatalf("second audio chunk len = %d, want 1600", len(got))
+	}
+
+	event := readSmallestAIStreamEvent(t, stream)
+	if event.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("event type = %s, want recognition_usage", event.Type)
+	}
+	if event.RecognitionUsage == nil {
+		t.Fatal("RecognitionUsage = nil, want audio duration")
+	}
+	if event.RecognitionUsage.AudioDuration != 0.1 {
+		t.Fatalf("audio duration = %v, want 0.1", event.RecognitionUsage.AudioDuration)
+	}
+}
+
 func TestSmallestAISTTBatchResponseMapsSpeechEvent(t *testing.T) {
 	event := smallestAIBatchSpeechEvent("en", smallestAIBatchResponse{
 		Transcription: "hello world",
