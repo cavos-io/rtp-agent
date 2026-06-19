@@ -622,6 +622,51 @@ func TestCartesiaTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSCloseClosesActiveStreams(t *testing.T) {
+	closed := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runCartesiaHoldOpenWebsocketServer(serverConn, closed, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("http://cartesia.test"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := stream.PushText("after close"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after provider Close = %v, want io.ErrClosedPipe", err)
+	}
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for active websocket close")
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for hold-open server")
+	}
+}
+
 func TestCartesiaTTSUnexpectedNormalCloseReturnsAPIConnectionError(t *testing.T) {
 	closed := make(chan struct{})
 	closeAfterHandshake := make(chan struct{})
@@ -760,6 +805,110 @@ func TestCartesiaTTSStreamDoneAfterFlushReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSStreamEmitsWordTimestamps(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runCartesiaReadFlushThenWordTimestampsServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("http://cartesia.test"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil {
+		t.Fatal("audio = nil, want timed transcript event")
+	}
+	if len(audio.TimedTranscript) != 2 {
+		t.Fatalf("TimedTranscript = %#v, want two words", audio.TimedTranscript)
+	}
+	if got := audio.TimedTranscript[0]; got.Text != "hello " || got.StartTime != 0.1 || got.EndTime != 0.2 {
+		t.Fatalf("TimedTranscript[0] = %#v, want hello with fallback space 0.1-0.2", got)
+	}
+	if got := audio.TimedTranscript[1]; got.Text != "world " || got.StartTime != 0.3 || got.EndTime != 0.5 {
+		t.Fatalf("TimedTranscript[1] = %#v, want world with fallback space 0.3-0.5", got)
+	}
+
+	_, err = stream.Next()
+	if err != io.EOF {
+		t.Fatalf("Next after done = %v, want io.EOF", err)
+	}
+
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for word timestamp server")
+	}
+}
+
+func TestCartesiaTTSStreamAlignsWordTimestampSpacing(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runCartesiaReadTextFlushThenWordTimestampsServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("http://cartesia.test"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello world"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if len(audio.TimedTranscript) != 2 {
+		t.Fatalf("TimedTranscript = %#v, want two words", audio.TimedTranscript)
+	}
+	if got := audio.TimedTranscript[0]; got.Text != "hello" {
+		t.Fatalf("TimedTranscript[0].Text = %q, want hello", got.Text)
+	}
+	if got := audio.TimedTranscript[1]; got.Text != " world" {
+		t.Fatalf("TimedTranscript[1].Text = %q, want leading-space world", got.Text)
+	}
+}
+
 func runCartesiaReadThenNormalCloseWebsocketServer(conn net.Conn, closeAfterRead <-chan struct{}, closed chan<- struct{}, errCh chan<- error) {
 	upgrader := websocket.Upgrader{}
 	listener := &singleCartesiaConnListener{conn: conn}
@@ -786,6 +935,35 @@ func runCartesiaReadThenNormalCloseWebsocketServer(conn net.Conn, closeAfterRead
 	}
 }
 
+func runCartesiaHoldOpenWebsocketServer(conn net.Conn, closed chan<- struct{}, errCh chan<- error) {
+	upgrader := websocket.Upgrader{}
+	listener := &singleCartesiaConnListener{conn: conn}
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ws, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer ws.Close()
+			if _, _, err := ws.ReadMessage(); err != nil {
+				errCh <- err
+				return
+			}
+			_, _, err = ws.ReadMessage()
+			close(closed)
+			if err == nil {
+				errCh <- errors.New("expected websocket close")
+				return
+			}
+			errCh <- nil
+		}),
+	}
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		errCh <- err
+	}
+}
+
 func runCartesiaReadFlushThenDoneWebsocketServer(conn net.Conn, errCh chan<- error) {
 	upgrader := websocket.Upgrader{}
 	listener := &singleCartesiaConnListener{conn: conn}
@@ -802,6 +980,66 @@ func runCartesiaReadFlushThenDoneWebsocketServer(conn net.Conn, errCh chan<- err
 				return
 			}
 			if _, _, err := ws.ReadMessage(); err != nil {
+				errCh <- err
+				return
+			}
+			errCh <- ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"done","done":true}`))
+		}),
+	}
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		errCh <- err
+	}
+}
+
+func runCartesiaReadFlushThenWordTimestampsServer(conn net.Conn, errCh chan<- error) {
+	upgrader := websocket.Upgrader{}
+	listener := &singleCartesiaConnListener{conn: conn}
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ws, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer ws.Close()
+			if _, _, err := ws.ReadMessage(); err != nil {
+				errCh <- err
+				return
+			}
+			if _, _, err := ws.ReadMessage(); err != nil {
+				errCh <- err
+				return
+			}
+			if err := ws.WriteMessage(websocket.TextMessage, []byte(`{"word_timestamps":{"words":["hello","world"],"start":[0.1,0.3],"end":[0.2,0.5]}}`)); err != nil {
+				errCh <- err
+				return
+			}
+			errCh <- ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"done","done":true}`))
+		}),
+	}
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		errCh <- err
+	}
+}
+
+func runCartesiaReadTextFlushThenWordTimestampsServer(conn net.Conn, errCh chan<- error) {
+	upgrader := websocket.Upgrader{}
+	listener := &singleCartesiaConnListener{conn: conn}
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ws, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer ws.Close()
+			for range 3 {
+				if _, _, err := ws.ReadMessage(); err != nil {
+					errCh <- err
+					return
+				}
+			}
+			if err := ws.WriteMessage(websocket.TextMessage, []byte(`{"word_timestamps":{"words":["hello","world"],"start":[0.1,0.3],"end":[0.2,0.5]}}`)); err != nil {
 				errCh <- err
 				return
 			}

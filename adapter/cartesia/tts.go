@@ -42,6 +42,8 @@ type CartesiaTTS struct {
 	volume              *float64
 	wordTimestamps      bool
 	pronunciationDictID string
+	mu                  sync.Mutex
+	streams             map[*cartesiaTTSStream]struct{}
 }
 
 type CartesiaTTSOption func(*CartesiaTTS)
@@ -152,6 +154,7 @@ func NewCartesiaTTS(apiKey string, voiceID string, model string, opts ...Cartesi
 		sampleRate:     24000,
 		apiVersion:     defaultCartesiaTTSAPIVersion,
 		wordTimestamps: true,
+		streams:        make(map[*cartesiaTTSStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -172,6 +175,26 @@ func (t *CartesiaTTS) UpdateOptions(opts ...CartesiaTTSOption) {
 	for _, opt := range opts {
 		opt(t)
 	}
+}
+
+func (t *CartesiaTTS) Close() error {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	streams := make([]*cartesiaTTSStream, 0, len(t.streams))
+	for stream := range t.streams {
+		streams = append(streams, stream)
+	}
+	t.streams = make(map[*cartesiaTTSStream]struct{})
+	t.mu.Unlock()
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
 }
 
 func (t *CartesiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
@@ -339,16 +362,39 @@ func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 	}
 
 	stream := &cartesiaTTSStream{
+		provider:   t,
 		conn:       conn,
 		audio:      make(chan *tts.SynthesizedAudio, 10),
 		errCh:      make(chan error, 1),
 		sampleRate: t.sampleRate,
 	}
 	stream.writeJSON = stream.writeJSONMessage
+	t.registerStream(stream)
 
 	go stream.readLoop()
 
 	return stream, nil
+}
+
+func (t *CartesiaTTS) registerStream(stream *cartesiaTTSStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.streams == nil {
+		t.streams = make(map[*cartesiaTTSStream]struct{})
+	}
+	t.streams[stream] = struct{}{}
+}
+
+func (t *CartesiaTTS) unregisterStream(stream *cartesiaTTSStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.streams, stream)
 }
 
 func validateCartesiaTTSAPIKey(apiKey string) error {
@@ -388,22 +434,32 @@ func buildCartesiaStreamInitMessage(t *CartesiaTTS) map[string]interface{} {
 }
 
 type cartesiaTTSStream struct {
-	conn    *websocket.Conn
-	audio   chan *tts.SynthesizedAudio
-	errCh   chan error
-	mu      sync.Mutex
-	closed  bool
-	flushed bool
+	provider *CartesiaTTS
+	conn     *websocket.Conn
+	audio    chan *tts.SynthesizedAudio
+	errCh    chan error
+	mu       sync.Mutex
+	closed   bool
+	flushed  bool
 
-	sampleRate int
-	writeJSON  func(any) error
+	sampleRate    int
+	writeJSON     func(any) error
+	sentTokens    []string
+	skipAlignment bool
 }
 
 type cartesiaWSResponse struct {
-	Type  string `json:"type"`
-	Error string `json:"error"`
-	Data  string `json:"data"` // base64 encoded audio
-	Done  bool   `json:"done"`
+	Type           string                    `json:"type"`
+	Error          string                    `json:"error"`
+	Data           string                    `json:"data"` // base64 encoded audio
+	Done           bool                      `json:"done"`
+	WordTimestamps cartesiaTTSWordTimestamps `json:"word_timestamps"`
+}
+
+type cartesiaTTSWordTimestamps struct {
+	Words []string  `json:"words"`
+	Start []float64 `json:"start"`
+	End   []float64 `json:"end"`
 }
 
 func (s *cartesiaTTSStream) readLoop() {
@@ -446,12 +502,61 @@ func (s *cartesiaTTSStream) readLoop() {
 			}
 		}
 
+		if len(resp.WordTimestamps.Words) > 0 {
+			s.audio <- &tts.SynthesizedAudio{
+				TimedTranscript: s.cartesiaTimedTranscript(resp.WordTimestamps),
+			}
+		}
+
 		if resp.Type == "done" || resp.Done {
 			if s.isFlushed() {
 				return
 			}
 		}
 	}
+}
+
+func (s *cartesiaTTSStream) cartesiaTimedTranscript(timestamps cartesiaTTSWordTimestamps) []tts.TimedString {
+	count := min(len(timestamps.Words), len(timestamps.Start), len(timestamps.End))
+	timed := make([]tts.TimedString, 0, count)
+	words := s.alignCartesiaTimestampWords(timestamps.Words[:count])
+	for i := 0; i < count; i++ {
+		timed = append(timed, tts.TimedString{
+			Text:      words[i],
+			StartTime: timestamps.Start[i],
+			EndTime:   timestamps.End[i],
+		})
+	}
+	return timed
+}
+
+func (s *cartesiaTTSStream) alignCartesiaTimestampWords(words []string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	aligned := make([]string, 0, len(words))
+	for _, word := range words {
+		if len(s.sentTokens) == 0 || s.skipAlignment {
+			aligned = append(aligned, word+" ")
+			s.skipAlignment = true
+			continue
+		}
+		sent := s.sentTokens[0]
+		s.sentTokens = s.sentTokens[1:]
+		if idx := strings.Index(sent, word); idx != -1 {
+			alignedWord := sent[:idx+len(word)]
+			remaining := sent[idx+len(word):]
+			if strings.TrimSpace(remaining) != "" {
+				s.sentTokens = append([]string{remaining}, s.sentTokens...)
+			} else if remaining != "" && len(s.sentTokens) > 0 {
+				s.sentTokens[0] = remaining + s.sentTokens[0]
+			}
+			aligned = append(aligned, alignedWord)
+			continue
+		}
+		aligned = append(aligned, word+" ")
+		s.skipAlignment = true
+	}
+	return aligned
 }
 
 func (s *cartesiaTTSStream) isClosed() bool {
@@ -477,6 +582,7 @@ func (s *cartesiaTTSStream) PushText(text string) error {
 		"transcript": text + " ",
 		"continue":   true,
 	}
+	s.sentTokens = append(s.sentTokens, text+" ")
 	if err := s.writeJSONData(msg); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
@@ -496,6 +602,7 @@ func (s *cartesiaTTSStream) Flush() error {
 		"continue":   false,
 	}
 	s.flushed = true
+	s.sentTokens = append(s.sentTokens, " ")
 	if err := s.writeJSONData(msg); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
@@ -528,6 +635,9 @@ func (s *cartesiaTTSStream) Close() error {
 		return nil
 	}
 	s.closed = true
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
 	return s.conn.Close()
 }
 
