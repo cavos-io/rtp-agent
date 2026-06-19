@@ -217,6 +217,24 @@ const (
 
 type ConnectOptions = workerlivekit.ConnectOptions
 
+type Job = workerlivekit.Job
+
+type SDKRoom = workerlivekit.SDKRoom
+
+type Room = workerlivekit.Room
+
+type LocalParticipant = workerlivekit.LocalParticipant
+
+type RoomCallback = workerlivekit.RoomCallback
+
+type RemoteParticipantView = workerlivekit.RemoteParticipantView
+
+type RemoteParticipant = workerlivekit.RemoteParticipant
+
+type TrackType = workerlivekit.TrackType
+
+type RemoteTrackPublication = workerlivekit.RemoteTrackPublication
+
 type ParticipantInfo = workerlivekit.ParticipantInfo
 
 type ParticipantInfoKind = workerlivekit.ParticipantInfoKind
@@ -235,8 +253,8 @@ type participantEntrypointRegistration struct {
 type JobRequest = workerlivekit.JobRequest
 
 type JobContext struct {
-	Job                    *workerlivekit.Job
-	Room                   *workerlivekit.SDKRoom
+	Job                    *Job
+	Room                   *SDKRoom
 	Report                 *agent.SessionReport
 	AcceptArguments        JobAcceptArguments
 	tagger                 *agent.Tagger
@@ -267,7 +285,7 @@ type JobContext struct {
 	fakeJob   bool
 }
 
-func NewJobContext(job *workerlivekit.Job, url string, apiKey string, apiSecret string) *JobContext {
+func NewJobContext(job *Job, url string, apiKey string, apiSecret string) *JobContext {
 	report, tagger := workerlivekit.NewJobContextSessionReport(job)
 	return &JobContext{
 		Job:              job,
@@ -415,7 +433,7 @@ func (c *JobContext) AvatarStartInfo() agent.AvatarStartInfo {
 	return workerlivekit.JobContextAvatarStartInfo(c.Job, c.url, c.token, c.LocalParticipantIdentity())
 }
 
-func (c *JobContext) RoomInfo() *workerlivekit.Room {
+func (c *JobContext) RoomInfo() *Room {
 	return workerlivekit.JobContextRoom(c.Job)
 }
 
@@ -423,7 +441,7 @@ func (c *JobContext) PublisherInfo() *ParticipantInfo {
 	return workerlivekit.JobContextPublisher(c.Job)
 }
 
-func (c *JobContext) Agent() *workerlivekit.LocalParticipant {
+func (c *JobContext) Agent() *LocalParticipant {
 	if c == nil {
 		return nil
 	}
@@ -434,12 +452,12 @@ var jobContextNewRoom = workerlivekit.NewJobContextRoom
 
 var jobContextRoomConnector workerlivekit.RoomConnector
 
-func (c *JobContext) NewRoom(cb *workerlivekit.RoomCallback, options ...ConnectOptions) *workerlivekit.SDKRoom {
+func (c *JobContext) NewRoom(cb *RoomCallback, options ...ConnectOptions) *SDKRoom {
 	opts := workerlivekit.JobContextNormalizeConnectOptions(options...)
 	return jobContextNewRoom(c.roomCallbackWithEntrypoints(cb, opts.AutoSubscribe))
 }
 
-func (c *JobContext) Connect(ctx context.Context, cb *workerlivekit.RoomCallback, options ...ConnectOptions) error {
+func (c *JobContext) Connect(ctx context.Context, cb *RoomCallback, options ...ConnectOptions) error {
 	if c.Room != nil {
 		return nil
 	}
@@ -448,7 +466,7 @@ func (c *JobContext) Connect(ctx context.Context, cb *workerlivekit.RoomCallback
 	return c.ConnectPreparedRoom(ctx, room, opts)
 }
 
-func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *workerlivekit.SDKRoom, options ...ConnectOptions) error {
+func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *SDKRoom, options ...ConnectOptions) error {
 	if c.Room != nil {
 		return nil
 	}
@@ -488,7 +506,7 @@ func (c *JobContext) applyAutoSubscribeOptions(mode AutoSubscribe) {
 	}
 }
 
-func (c *JobContext) roomCallbackWithEntrypoints(cb *workerlivekit.RoomCallback, autoSubscribe AutoSubscribe) *workerlivekit.RoomCallback {
+func (c *JobContext) roomCallbackWithEntrypoints(cb *RoomCallback, autoSubscribe AutoSubscribe) *RoomCallback {
 	return workerlivekit.JobContextRoomCallbackWithHandlers(cb, workerlivekit.RoomCallbackHandlers{
 		AutoSubscribe:          string(autoSubscribe),
 		OnParticipantConnected: c.participantAvailable,
@@ -498,7 +516,7 @@ func (c *JobContext) roomCallbackWithEntrypoints(cb *workerlivekit.RoomCallback,
 	})
 }
 
-func (c *JobContext) participantAvailable(participant workerlivekit.RemoteParticipantView) {
+func (c *JobContext) participantAvailable(participant RemoteParticipantView) {
 	info := workerlivekit.JobContextParticipantInfoFromRemoteParticipant(participant)
 	if info == nil {
 		return
@@ -511,7 +529,7 @@ func (c *JobContext) rememberAvailableParticipant(info *ParticipantInfo) {
 	c.availableParticipants = workerlivekit.JobContextUpsertParticipantInfo(c.availableParticipants, info)
 }
 
-func (c *JobContext) participantsAvailable(participants []workerlivekit.RemoteParticipantView) {
+func (c *JobContext) participantsAvailable(participants []RemoteParticipantView) {
 	for _, participant := range participants {
 		c.participantAvailable(participant)
 	}
@@ -567,7 +585,7 @@ func (c *JobContext) WaitForParticipant(
 	ctx context.Context,
 	identity string,
 	kinds ...ParticipantInfoKind,
-) (*workerlivekit.RemoteParticipant, error) {
+) (*RemoteParticipant, error) {
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
 	}
@@ -577,7 +595,7 @@ func (c *JobContext) WaitForParticipant(
 func (c *JobContext) WaitForAgent(
 	ctx context.Context,
 	agentName ...string,
-) (*workerlivekit.RemoteParticipant, error) {
+) (*RemoteParticipant, error) {
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
 	}
@@ -587,8 +605,8 @@ func (c *JobContext) WaitForAgent(
 func (c *JobContext) WaitForTrackPublication(
 	ctx context.Context,
 	identity string,
-	kinds ...workerlivekit.TrackType,
-) (*workerlivekit.RemoteTrackPublication, error) {
+	kinds ...TrackType,
+) (*RemoteTrackPublication, error) {
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
 	}
@@ -598,7 +616,7 @@ func (c *JobContext) WaitForTrackPublication(
 func (c *JobContext) WaitForTrackPublicationWithOptions(
 	ctx context.Context,
 	options TrackPublicationWaitOptions,
-) (*workerlivekit.RemoteTrackPublication, error) {
+) (*RemoteTrackPublication, error) {
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
 	}

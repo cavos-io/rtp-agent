@@ -214,3 +214,27 @@ func TestSharedJobContextDoesNotExposeParticipantInternalsDirectly(t *testing.T)
 		}
 	}
 }
+
+func TestSharedJobContextDoesNotExposeRoomInternalsDirectly(t *testing.T) {
+	data, err := os.ReadFile("job.go")
+	if err != nil {
+		t.Fatalf("read job.go: %v", err)
+	}
+	forbidden := []string{
+		"*workerlivekit.Job",
+		"*workerlivekit.SDKRoom",
+		"*workerlivekit.Room",
+		"*workerlivekit.LocalParticipant",
+		"*workerlivekit.RoomCallback",
+		"participant workerlivekit.RemoteParticipantView",
+		"[]workerlivekit.RemoteParticipantView",
+		"*workerlivekit.RemoteParticipant",
+		"kinds ...workerlivekit.TrackType",
+		"*workerlivekit.RemoteTrackPublication",
+	}
+	for _, direct := range forbidden {
+		if strings.Contains(string(data), direct) {
+			t.Fatalf("job.go exposes %s directly; use worker room contracts", direct)
+		}
+	}
+}
