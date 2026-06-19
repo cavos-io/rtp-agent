@@ -141,6 +141,11 @@ func TestSharedJobContextDoesNotCallLiveKitInfoHelpersDirectly(t *testing.T) {
 		"workerlivekit.RoomCallbackWithHandlers(",
 		"workerlivekit.ParticipantInfoFromRemoteParticipant(",
 		"workerlivekit.UpsertParticipantInfo(",
+		"workerlivekit.WaitForParticipant(",
+		"workerlivekit.WaitForAgent(",
+		"workerlivekit.WaitForTrackPublication(",
+		"workerlivekit.WaitForTrackPublicationWithOptions(",
+		"workerlivekit.WaitForParticipantAttribute(",
 	}
 
 	data, err := os.ReadFile("job.go")

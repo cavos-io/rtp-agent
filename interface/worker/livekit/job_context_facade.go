@@ -85,3 +85,23 @@ func JobContextParticipantInfoFromRemoteParticipant(participant RemoteParticipan
 func JobContextUpsertParticipantInfo(participants []*ParticipantInfo, participant *ParticipantInfo) []*ParticipantInfo {
 	return UpsertParticipantInfo(participants, participant)
 }
+
+func JobContextWaitForParticipant(ctx context.Context, room *SDKRoom, identity string, kinds ...ParticipantInfoKind) (*RemoteParticipant, error) {
+	return WaitForParticipant(ctx, room, identity, kinds...)
+}
+
+func JobContextWaitForAgent(ctx context.Context, room *SDKRoom, agentName ...string) (*RemoteParticipant, error) {
+	return WaitForAgent(ctx, room, agentName...)
+}
+
+func JobContextWaitForTrackPublication(ctx context.Context, room *SDKRoom, identity string, kinds ...TrackType) (*RemoteTrackPublication, error) {
+	return WaitForTrackPublication(ctx, room, identity, kinds...)
+}
+
+func JobContextWaitForTrackPublicationWithOptions(ctx context.Context, room *SDKRoom, options TrackPublicationWaitOptions) (*RemoteTrackPublication, error) {
+	return WaitForTrackPublicationWithOptions(ctx, room, options)
+}
+
+func JobContextWaitForParticipantAttribute(ctx context.Context, room *SDKRoom, identity string, attribute string, value string) error {
+	return WaitForParticipantAttribute(ctx, room, identity, attribute, value)
+}
