@@ -4068,6 +4068,37 @@ func TestPipelineAgentInterruptedReplyCommitsSynchronizedTranscript(t *testing.T
 	}
 }
 
+func TestPipelineAgentInterruptedReplyWaitsForPlaybackAfterReplyContextCanceled(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	playback := &fakePipelinePlaybackController{
+		result: AudioPlaybackResult{
+			PlaybackPosition:       200 * time.Millisecond,
+			Interrupted:            true,
+			SynchronizedTranscript: "heard words",
+		},
+		respectContext: true,
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(playback)
+	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+	replyCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	forwarded := agent.forwardedAssistantTextAfterInterruption(replyCtx, session, speech, "full answer")
+
+	if playback.clearCalls != 1 {
+		t.Fatalf("ClearBuffer calls = %d, want 1", playback.clearCalls)
+	}
+	if forwarded != "heard words" {
+		t.Fatalf("forwarded text = %q, want synchronized transcript after canceled reply context", forwarded)
+	}
+}
+
 func TestPipelineAgentReplyWaitsForPlayoutBeforeCommit(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -4607,9 +4638,10 @@ type fakePipelinePlaybackController struct {
 	result     AudioPlaybackResult
 	err        error
 
-	waitStarted  chan struct{}
-	releaseWait  chan struct{}
-	waitSawFlush bool
+	waitStarted    chan struct{}
+	releaseWait    chan struct{}
+	waitSawFlush   bool
+	respectContext bool
 }
 
 func (f *fakePipelinePlaybackController) ClearBuffer() {
@@ -4620,7 +4652,7 @@ func (f *fakePipelinePlaybackController) Flush() {
 	f.flushCalls++
 }
 
-func (f *fakePipelinePlaybackController) WaitForPlayout(context.Context) (AudioPlaybackResult, error) {
+func (f *fakePipelinePlaybackController) WaitForPlayout(ctx context.Context) (AudioPlaybackResult, error) {
 	f.waitSawFlush = f.flushCalls > 0
 	if f.waitStarted != nil {
 		close(f.waitStarted)
@@ -4628,6 +4660,13 @@ func (f *fakePipelinePlaybackController) WaitForPlayout(context.Context) (AudioP
 	}
 	if f.releaseWait != nil {
 		<-f.releaseWait
+	}
+	if f.respectContext && ctx != nil {
+		select {
+		case <-ctx.Done():
+			return AudioPlaybackResult{}, ctx.Err()
+		default:
+		}
 	}
 	return f.result, f.err
 }

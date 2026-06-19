@@ -1286,7 +1286,8 @@ func (va *PipelineAgent) forwardedAssistantTextAfterInterruption(ctx context.Con
 		return generatedText
 	}
 	playback.ClearBuffer()
-	ev, err := playback.WaitForPlayout(ctx)
+	playoutCtx := context.WithoutCancel(ctx)
+	ev, err := playback.WaitForPlayout(playoutCtx)
 	if err != nil {
 		logger.Logger.Warnw("failed to wait for interrupted playback", err)
 		return ""
