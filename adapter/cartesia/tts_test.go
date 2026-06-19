@@ -784,10 +784,31 @@ func TestCartesiaWebsocketURLAndHeadersMatchReference(t *testing.T) {
 	if headers.Get("X-API-Key") != "test-key" {
 		t.Fatalf("X-API-Key = %q, want test-key", headers.Get("X-API-Key"))
 	}
-	if headers.Get("Cartesia-Version") != "2025-04-16" {
-		t.Fatalf("Cartesia-Version = %q, want 2025-04-16", headers.Get("Cartesia-Version"))
+	if headers.Get("Cartesia-Version") != "" {
+		t.Fatalf("Cartesia-Version = %q, want omitted", headers.Get("Cartesia-Version"))
 	}
 	if headers.Get("User-Agent") == "" {
 		t.Fatal("User-Agent header missing")
+	}
+}
+
+func TestCartesiaWebsocketVersionIsQueryOnly(t *testing.T) {
+	provider := NewCartesiaTTS("test-key", "", "",
+		WithCartesiaAPIVersion("2024-11-13"),
+		WithCartesiaBaseURL("https://cartesia.example"),
+	)
+
+	streamURL := buildCartesiaStreamURL(provider)
+	parsed, err := url.Parse(streamURL)
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	if got, want := parsed.Query().Get("cartesia_version"), "2024-11-13"; got != want {
+		t.Fatalf("cartesia_version query = %q, want %q", got, want)
+	}
+
+	headers := buildCartesiaStreamHeaders(provider)
+	if got := headers.Get("Cartesia-Version"); got != "" {
+		t.Fatalf("Cartesia-Version header = %q, want omitted", got)
 	}
 }

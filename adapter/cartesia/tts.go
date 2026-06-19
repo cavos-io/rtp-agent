@@ -376,7 +376,6 @@ func buildCartesiaStreamURL(t *CartesiaTTS) string {
 func buildCartesiaStreamHeaders(t *CartesiaTTS) http.Header {
 	headers := make(http.Header)
 	headers.Set("X-API-Key", t.apiKey)
-	headers.Set("Cartesia-Version", t.apiVersion)
 	headers.Set("User-Agent", cartesiaTTSUserAgent)
 	return headers
 }
