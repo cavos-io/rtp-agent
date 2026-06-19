@@ -199,6 +199,26 @@ func TestTransportLeaveDelegatesOnlyAfterJoinedChannel(t *testing.T) {
 	}
 }
 
+func TestTransportDropsClientEventsAfterLeave(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	if err := tr.Leave(context.Background()); err != nil {
+		t.Fatalf("Leave() error = %v", err)
+	}
+	client.emit(Event{Kind: EventUserJoined, Channel: "support", UserID: "late-user"})
+	client.emit(Event{Kind: EventDisconnected, Channel: "support", Reason: 17})
+
+	select {
+	case event := <-tr.Events():
+		t.Fatalf("stale event forwarded after Leave(): %#v", event)
+	case <-time.After(10 * time.Millisecond):
+	}
+}
+
 func TestTransportPublishPCMRequiresJoinedChannel(t *testing.T) {
 	client := &fakeChannelClient{}
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)

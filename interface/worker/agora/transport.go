@@ -297,6 +297,9 @@ func eventNeedsPriority(event Event) bool {
 }
 
 func (t *Transport) acceptEventLocked(event Event) bool {
+	if !t.joined && t.joinCancel == nil {
+		return false
+	}
 	switch event.Kind {
 	case EventUserJoined:
 		if event.UserID == "" {
