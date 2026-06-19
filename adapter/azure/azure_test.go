@@ -1608,6 +1608,31 @@ func TestAzureTTSUpdateOptionsMatchesReference(t *testing.T) {
 	}
 }
 
+func TestAzureTTSUpdateOptionsRejectsUnsupportedSampleRate(t *testing.T) {
+	provider, err := NewAzureTTS("key", "eastus", "")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+
+	err = provider.UpdateOptions("", "", WithAzureTTSSampleRate(12345))
+	if err == nil {
+		t.Fatal("UpdateOptions error = nil, want unsupported sample rate error")
+	}
+	if !strings.Contains(err.Error(), "unsupported sample rate") {
+		t.Fatalf("UpdateOptions error = %q, want unsupported sample rate", err)
+	}
+	if got := provider.SampleRate(); got != 24000 {
+		t.Fatalf("sample rate mutated to %d, want original 24000", got)
+	}
+	req, buildErr := buildAzureTTSRequest(context.Background(), provider, "hello")
+	if buildErr != nil {
+		t.Fatalf("build request after rejected update: %v", buildErr)
+	}
+	if got := req.Header.Get("X-Microsoft-OutputFormat"); got != defaultAzureTTSSampleFormat {
+		t.Fatalf("output format = %q, want %q", got, defaultAzureTTSSampleFormat)
+	}
+}
+
 func TestAzureTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	stream := &azureTTSChunkedStream{
 		body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
