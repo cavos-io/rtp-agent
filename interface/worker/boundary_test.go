@@ -68,6 +68,9 @@ func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
 		"workerlivekit.RefreshRunningJobsForReload(",
 		"workerlivekit.RunningJobContextValues(",
 		"workerlivekit.ReloadedJobContextValues(",
+		"workerlivekit.RunRunningJobEntrypointLifecycle(",
+		"workerlivekit.RunReloadedJobEntrypointLifecycle(",
+		"workerlivekit.RunJobEntrypointLifecycle(",
 		"workerlivekit.ValidateWorkerConnectionOptions(",
 	}
 

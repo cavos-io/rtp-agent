@@ -82,3 +82,15 @@ func ServerJobStatusMessage(jobID string, status JobStatus) *WorkerMessage {
 func WriteServerWorkerMessageWebSocket(writer WorkerMessageWebSocketWriter, msg *WorkerMessage) error {
 	return WriteWorkerMessageWebSocket(writer, msg)
 }
+
+func RunServerRunningJobEntrypointLifecycle(opts RunningJobEntrypointLifecycleOptions) error {
+	return RunRunningJobEntrypointLifecycle(opts)
+}
+
+func RunServerReloadedJobEntrypointLifecycle(opts ReloadedJobEntrypointLifecycleOptions) EntrypointResult {
+	return RunReloadedJobEntrypointLifecycle(opts)
+}
+
+func RunServerJobEntrypointLifecycle(opts JobEntrypointLifecycleOptions) EntrypointResult {
+	return RunJobEntrypointLifecycle(opts)
+}

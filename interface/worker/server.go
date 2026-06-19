@@ -401,7 +401,7 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 	s.activeJobs[runningJob.JobID] = jobCtx
 	s.mu.Unlock()
 
-	return workerlivekit.RunRunningJobEntrypointLifecycle(workerlivekit.RunningJobEntrypointLifecycleOptions{
+	return workerlivekit.RunServerRunningJobEntrypointLifecycle(workerlivekit.RunningJobEntrypointLifecycleOptions{
 		Context:     ctx,
 		MarkStarted: jobCtx.markEntrypointStarted,
 		Entrypoint: func() error {
@@ -439,7 +439,7 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 
 	jobCtx.markEntrypointStarted()
 	go func() {
-		workerlivekit.RunReloadedJobEntrypointLifecycle(workerlivekit.ReloadedJobEntrypointLifecycleOptions{
+		workerlivekit.RunServerReloadedJobEntrypointLifecycle(workerlivekit.ReloadedJobEntrypointLifecycleOptions{
 			Context: ctx,
 			Entrypoint: func() error {
 				return s.runJobEntrypoint(jobCtx)
@@ -1685,7 +1685,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.J
 	if s.entrypointFnc != nil {
 		jobCtx.markEntrypointStarted()
 		go func() {
-			workerlivekit.RunJobEntrypointLifecycle(workerlivekit.JobEntrypointLifecycleOptions{
+			workerlivekit.RunServerJobEntrypointLifecycle(workerlivekit.JobEntrypointLifecycleOptions{
 				Context: ctx,
 				Entrypoint: func() error {
 					return s.runJobEntrypoint(jobCtx)
