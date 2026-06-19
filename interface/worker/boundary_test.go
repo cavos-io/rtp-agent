@@ -49,6 +49,34 @@ func TestWorkerProductionCodeUsesLiveKitSubpackageForLiveKitImports(t *testing.T
 	}
 }
 
+func TestIPCProductionCodeDoesNotDependOnLiveKitWorkerSubpackage(t *testing.T) {
+	root := "ipc"
+	forbiddenImport := `"github.com/cavos-io/rtp-agent/interface/worker/livekit"`
+
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(data), forbiddenImport) {
+			t.Fatalf("%s imports %s; LiveKit IPC conversion belongs outside shared IPC", path, forbiddenImport)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk IPC files: %v", err)
+	}
+}
+
 func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
 	forbiddenCalls := []string{
 		"workerlivekit.AnswerAvailabilityRequest(",

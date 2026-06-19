@@ -79,7 +79,7 @@ func (p *ProcPool) validateExecutorType() error {
 	}
 }
 
-func (p *ProcPool) LaunchJob(ctx context.Context, job *Job) error {
+func (p *ProcPool) LaunchJob(ctx context.Context, job Job) error {
 	return p.LaunchRunningJob(ctx, RunningJobInfo{Job: job})
 }
 
@@ -154,7 +154,7 @@ func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) er
 			p.emit(ProcPoolEventProcessStarted, executor)
 			p.emit(ProcPoolEventProcessReady, executor)
 		}
-		logger.Logger.Infow("Launched job", "executor_type", p.executorType, "executor_id", id, "job_id", info.Job.GetId())
+		logger.Logger.Infow("Launched job", "executor_type", p.executorType, "executor_id", id, "job_id", JobID(info.Job))
 		p.emit(ProcPoolEventJobLaunched, executor)
 		p.mu.Lock()
 		warmedExecutors, err := p.warmIdleExecutorsLocked()
@@ -321,7 +321,7 @@ func (p *ProcPool) GetByJobID(jobID string) JobExecutor {
 
 	for _, executor := range p.executors {
 		job := executor.Job()
-		if job != nil && job.Id == jobID {
+		if JobID(job) == jobID {
 			p.mu.Unlock()
 			p.emitMany(ProcPoolEventProcessClosed, closedExecutors)
 			return executor

@@ -11,7 +11,7 @@ import (
 
 type fakeJobExecutor struct {
 	id         string
-	job        *livekit.Job
+	job        Job
 	runningJob *RunningJobInfo
 	status     JobStatus
 	launchErr  error
@@ -31,11 +31,11 @@ func (e *fakeJobExecutor) Status() JobStatus {
 
 func (e *fakeJobExecutor) Started() bool { return e.job != nil }
 
-func (e *fakeJobExecutor) Job() *livekit.Job { return e.job }
+func (e *fakeJobExecutor) Job() Job { return e.job }
 
 func (e *fakeJobExecutor) RunningJob() *RunningJobInfo { return e.runningJob }
 
-func (e *fakeJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) error {
+func (e *fakeJobExecutor) LaunchJob(ctx context.Context, job Job) error {
 	return e.LaunchRunningJob(ctx, RunningJobInfo{Job: job})
 }
 
@@ -70,6 +70,9 @@ func TestProcPoolGetByJobIDFindsRunningExecutor(t *testing.T) {
 	}
 	if got.ID() != "exec-a" {
 		t.Fatalf("executor ID = %q, want exec-a", got.ID())
+	}
+	if JobID(got.Job()) != "job-a" {
+		t.Fatalf("executor job ID = %q, want job-a", JobID(got.Job()))
 	}
 	if pool.GetByJobID("missing") != nil {
 		t.Fatal("GetByJobID returned executor for missing job")

@@ -27,9 +27,9 @@ type JobExecutor interface {
 	ID() string
 	Status() JobStatus
 	Started() bool
-	Job() *Job
+	Job() Job
 	RunningJob() *RunningJobInfo
-	LaunchJob(ctx context.Context, job *Job) error
+	LaunchJob(ctx context.Context, job Job) error
 	LaunchRunningJob(ctx context.Context, info RunningJobInfo) error
 	Close(ctx context.Context) error
 }
@@ -54,7 +54,7 @@ type ThreadJobExecutor struct {
 	mu     sync.Mutex
 
 	entrypoint func() error
-	job        *Job
+	job        Job
 	runningJob *RunningJobInfo
 	started    bool
 	done       chan struct{}
@@ -83,7 +83,7 @@ func (e *ThreadJobExecutor) Started() bool {
 	return e.started
 }
 
-func (e *ThreadJobExecutor) Job() *Job {
+func (e *ThreadJobExecutor) Job() Job {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.job
@@ -95,7 +95,7 @@ func (e *ThreadJobExecutor) RunningJob() *RunningJobInfo {
 	return e.runningJob
 }
 
-func (e *ThreadJobExecutor) LaunchJob(ctx context.Context, job *Job) error {
+func (e *ThreadJobExecutor) LaunchJob(ctx context.Context, job Job) error {
 	return e.LaunchRunningJob(ctx, RunningJobInfo{Job: job})
 }
 
@@ -116,7 +116,7 @@ func (e *ThreadJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJo
 		status := JobStatusSuccess
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				logger.Logger.Errorw("Job entrypoint panicked", fmt.Errorf("%v", recovered), "job_id", info.Job.GetId())
+				logger.Logger.Errorw("Job entrypoint panicked", fmt.Errorf("%v", recovered), "job_id", JobID(info.Job))
 				status = JobStatusFailed
 			}
 			e.mu.Lock()
@@ -126,7 +126,7 @@ func (e *ThreadJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJo
 		}()
 
 		if err := e.entrypoint(); err != nil {
-			logger.Logger.Errorw("Job entrypoint failed", err, "job_id", info.Job.GetId())
+			logger.Logger.Errorw("Job entrypoint failed", err, "job_id", JobID(info.Job))
 			status = JobStatusFailed
 		}
 	}()
@@ -157,7 +157,7 @@ type ProcessJobExecutor struct {
 	mu         sync.Mutex
 	started    bool
 	cmd        *exec.Cmd
-	job        *Job
+	job        Job
 	runningJob *RunningJobInfo
 	done       chan struct{}
 
@@ -194,7 +194,7 @@ func (e *ProcessJobExecutor) Started() bool {
 	return e.started
 }
 
-func (e *ProcessJobExecutor) Job() *Job {
+func (e *ProcessJobExecutor) Job() Job {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.job
@@ -206,7 +206,7 @@ func (e *ProcessJobExecutor) RunningJob() *RunningJobInfo {
 	return e.runningJob
 }
 
-func (e *ProcessJobExecutor) LaunchJob(ctx context.Context, job *Job) error {
+func (e *ProcessJobExecutor) LaunchJob(ctx context.Context, job Job) error {
 	return e.LaunchRunningJob(ctx, RunningJobInfo{Job: job})
 }
 
@@ -296,7 +296,7 @@ func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJ
 		defer e.mu.Unlock()
 		defer close(e.done)
 		if err != nil {
-			logger.Logger.Errorw("Job process failed", err, "job_id", info.Job.GetId(), "exec_id", e.id)
+			logger.Logger.Errorw("Job process failed", err, "job_id", JobID(info.Job), "exec_id", e.id)
 			e.status = JobStatusFailed
 		} else if e.status == JobStatusRunning {
 			e.status = JobStatusSuccess
