@@ -15,7 +15,6 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
-	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"github.com/cavos-io/rtp-agent/library/inference"
 	"github.com/cavos-io/rtp-agent/library/logger"
 )
@@ -728,11 +727,11 @@ func (c *JobContext) Terminated() bool {
 
 // DeleteRoom deletes the room and disconnects all participants.
 func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*DeleteRoomResponse, error) {
-	if plan := workerlivekit.JobContextDeleteRoomPlan(c.IsFakeJob()); plan.Skip {
+	if plan := livekitJobContextDeleteRoomPlan(c.IsFakeJob()); plan.Skip {
 		logger.Logger.Warnw("job context DeleteRoom is skipped for fake jobs", nil)
 		return plan.Response, nil
 	}
-	resp, warnErr := workerlivekit.JobContextDeleteRoomBestEffort(ctx, c.API().RoomService, c.Job, roomName)
+	resp, warnErr := livekitJobContextDeleteRoomBestEffort(ctx, c.API().RoomService, c.Job, roomName)
 	if warnErr != nil {
 		logger.Logger.Warnw("error while deleting room", warnErr)
 	}
@@ -740,28 +739,28 @@ func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*DeleteRo
 }
 
 func (c *JobContext) MoveParticipant(ctx context.Context, room string, identity string, destinationRoom string) error {
-	if plan := workerlivekit.JobContextMoveParticipantPlan(c.IsFakeJob()); plan.Skip {
+	if plan := livekitJobContextMoveParticipantPlan(c.IsFakeJob()); plan.Skip {
 		logger.Logger.Warnw("job context MoveParticipant is skipped for fake jobs", nil)
 		return nil
 	}
-	return workerlivekit.JobContextMoveParticipant(ctx, c.API().RoomService, c.Job, room, identity, destinationRoom)
+	return livekitJobContextMoveParticipant(ctx, c.API().RoomService, c.Job, room, identity, destinationRoom)
 }
 
 // AddSIPParticipant adds a SIP participant to the room.
 func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunkID string, identity string, names ...string) (*SIPParticipantInfo, error) {
-	if plan := workerlivekit.JobContextSIPCreateParticipantPlan(c.IsFakeJob()); plan.Skip {
+	if plan := livekitJobContextSIPCreateParticipantPlan(c.IsFakeJob()); plan.Skip {
 		logger.Logger.Warnw("job context AddSIPParticipant is skipped for fake jobs", nil)
 		return plan.Info, nil
 	}
-	return workerlivekit.JobContextCreateSIPParticipantWithNames(ctx, c.API().SIP, c.Job, callTo, trunkID, identity, names...)
+	return livekitJobContextCreateSIPParticipantWithNames(ctx, c.API().SIP, c.Job, callTo, trunkID, identity, names...)
 }
 
 func (c *JobContext) CreateSIPParticipant(ctx context.Context, req *SIPCreateParticipantRequest) (*SIPParticipantInfo, error) {
-	if plan := workerlivekit.JobContextSIPCreateParticipantPlan(c.IsFakeJob()); plan.Skip {
+	if plan := livekitJobContextSIPCreateParticipantPlan(c.IsFakeJob()); plan.Skip {
 		logger.Logger.Warnw("job context CreateSIPParticipant is skipped for fake jobs", nil)
 		return plan.Info, nil
 	}
-	return workerlivekit.JobContextCreateSIPParticipantWithRequest(ctx, c.API().SIP, req)
+	return livekitJobContextCreateSIPParticipantWithRequest(ctx, c.API().SIP, req)
 }
 
 // TransferSIPParticipant transfers a SIP participant to another number.
@@ -770,9 +769,9 @@ func (c *JobContext) TransferSIPParticipant(ctx context.Context, identity string
 }
 
 func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, participant any, transferTo string, playDialtones ...bool) error {
-	if plan := workerlivekit.JobContextSIPTransferParticipantPlan(c.IsFakeJob()); plan.Skip {
+	if plan := livekitJobContextSIPTransferParticipantPlan(c.IsFakeJob()); plan.Skip {
 		logger.Logger.Warnw("job context TransferSIPParticipant is skipped for fake jobs", nil)
 		return nil
 	}
-	return workerlivekit.JobContextTransferSIPParticipantByParticipant(ctx, c.API().SIP, c.Job, participant, transferTo, playDialtones...)
+	return livekitJobContextTransferSIPParticipantByParticipant(ctx, c.API().SIP, c.Job, participant, transferTo, playDialtones...)
 }
