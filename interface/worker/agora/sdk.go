@@ -139,6 +139,15 @@ func (c *sdkChannelClient) forwardActiveAudioFrame(connection *agoraservice.RtcC
 	audioHandler(audioFrame)
 }
 
+func (c *sdkChannelClient) emitActiveSDKEvent(connection *agoraservice.RtcConnection, handler EventHandler, event Event) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.connection != connection {
+		return
+	}
+	emitSDKEvent(handler, event)
+}
+
 func emitSDKEvent(handler EventHandler, event Event) {
 	if handler != nil {
 		handler(event)
@@ -265,23 +274,23 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts Options, handler Event
 			if info != nil && info.ChannelId != "" {
 				event.Channel = info.ChannelId
 			}
-			emitSDKEvent(handler, event)
+			c.emitActiveSDKEvent(connection, handler, event)
 		},
 		OnUserJoined: func(_ *agoraservice.RtcConnection, uid string) {
 			if !acceptRemoteStream(opts.RemoteStreamID, uid) {
 				return
 			}
-			emitSDKEvent(handler, Event{Kind: EventUserJoined, Channel: opts.Channel, UserID: uid})
+			c.emitActiveSDKEvent(connection, handler, Event{Kind: EventUserJoined, Channel: opts.Channel, UserID: uid})
 		},
 		OnUserLeft: func(_ *agoraservice.RtcConnection, uid string, reason int) {
 			if !acceptRemoteStream(opts.RemoteStreamID, uid) {
 				return
 			}
-			emitSDKEvent(handler, Event{Kind: EventUserLeft, Channel: opts.Channel, UserID: uid, Reason: reason})
+			c.emitActiveSDKEvent(connection, handler, Event{Kind: EventUserLeft, Channel: opts.Channel, UserID: uid, Reason: reason})
 		},
 		OnError: func(_ *agoraservice.RtcConnection, errCode int, msg string) {
 			err := fmt.Errorf("agora SDK error %d: %s", errCode, msg)
-			emitSDKEvent(handler, Event{Kind: EventError, Channel: opts.Channel, Reason: errCode, Err: err})
+			c.emitActiveSDKEvent(connection, handler, Event{Kind: EventError, Channel: opts.Channel, Reason: errCode, Err: err})
 			select {
 			case joinErrCh <- err:
 			default:
@@ -289,7 +298,7 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts Options, handler Event
 		},
 		OnConnectionFailure: func(_ *agoraservice.RtcConnection, _ *agoraservice.RtcConnectionInfo, errCode int) {
 			err := fmt.Errorf("agora SDK connection failure: %d", errCode)
-			emitSDKEvent(handler, Event{Kind: EventError, Channel: opts.Channel, Reason: errCode, Err: err})
+			c.emitActiveSDKEvent(connection, handler, Event{Kind: EventError, Channel: opts.Channel, Reason: errCode, Err: err})
 			select {
 			case joinErrCh <- err:
 			default:
@@ -315,14 +324,14 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts Options, handler Event
 				if !acceptRemoteStream(opts.RemoteStreamID, uid) {
 					return
 				}
-				emitSDKEvent(handler, Event{Kind: EventUserJoined, Channel: opts.Channel, UserID: uid})
+				c.emitActiveSDKEvent(connection, handler, Event{Kind: EventUserJoined, Channel: opts.Channel, UserID: uid})
 			},
 			OnUserAudioTrackStateChanged: func(_ *agoraservice.LocalUser, uid string, _ *agoraservice.RemoteAudioTrack, state int, reason int, _ int) {
 				if !acceptRemoteStream(opts.RemoteStreamID, uid) {
 					return
 				}
 				if state == remoteAudioStateStopped && reason == remoteAudioReasonRemoteOffline {
-					emitSDKEvent(handler, Event{Kind: EventUserLeft, Channel: opts.Channel, UserID: uid, Reason: reason})
+					c.emitActiveSDKEvent(connection, handler, Event{Kind: EventUserLeft, Channel: opts.Channel, UserID: uid, Reason: reason})
 				}
 			},
 		}); ret != 0 {

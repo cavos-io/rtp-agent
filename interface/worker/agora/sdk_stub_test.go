@@ -233,6 +233,42 @@ func TestSDKClientImplementationRegistersLocalUserObserver(t *testing.T) {
 	}
 }
 
+func TestSDKClientImplementationGuardsEventsByActiveConnection(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	if !strings.Contains(text, "func (c *sdkChannelClient) emitActiveSDKEvent") {
+		t.Fatal("sdk.go missing active-connection guarded event helper")
+	}
+	helperIndex := strings.Index(text, "func (c *sdkChannelClient) emitActiveSDKEvent")
+	helperBody := text[helperIndex:]
+	if nextFunc := strings.Index(helperBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		helperBody = helperBody[:len("func ")+nextFunc]
+	}
+	for _, want := range []string{
+		"c.mu.Lock()",
+		"defer c.mu.Unlock()",
+		"if c.connection != connection",
+		"emitSDKEvent(handler, event)",
+	} {
+		if !strings.Contains(helperBody, want) {
+			t.Fatalf("emitActiveSDKEvent missing %q", want)
+		}
+	}
+	for _, want := range []string{
+		"c.emitActiveSDKEvent(connection, handler, event)",
+		"c.emitActiveSDKEvent(connection, handler, Event{Kind: EventUserJoined",
+		"c.emitActiveSDKEvent(connection, handler, Event{Kind: EventUserLeft",
+		"c.emitActiveSDKEvent(connection, handler, Event{Kind: EventError",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("SDK callbacks missing %q", want)
+		}
+	}
+}
+
 func TestSDKClientImplementationUsesCurrentConnectSignature(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {
