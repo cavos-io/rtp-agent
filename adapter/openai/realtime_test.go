@@ -3564,6 +3564,40 @@ func TestRealtimeSessionTracksRemoteItemDeletedWithEmptyID(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionUsesPendingDeleteForEmptyDeletedItemID(t *testing.T) {
+	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
+	keep := &llm.ChatMessage{ID: "keep", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "keep"}}}
+	removed := &llm.ChatMessage{ID: "removed", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "removed"}}}
+	emptyID := &llm.ChatMessage{ID: "", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "empty"}}}
+	if err := session.remote.Insert(nil, keep); err != nil {
+		t.Fatalf("insert keep remote item: %v", err)
+	}
+	previousID := keep.ID
+	if err := session.remote.Insert(&previousID, removed); err != nil {
+		t.Fatalf("insert removed remote item: %v", err)
+	}
+	previousID = removed.ID
+	if err := session.remote.Insert(&previousID, emptyID); err != nil {
+		t.Fatalf("insert empty-id remote item: %v", err)
+	}
+	session.trackPendingRealtimeDelete(openAIRealtimeDeleteChatItemMessage("removed"))
+
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "conversation.item.deleted",
+		"item_id": "",
+	})
+
+	if item := session.remote.Get("removed"); item != nil {
+		t.Fatalf("deleted pending item = %#v, want nil", item)
+	}
+	if item := session.remote.Get(""); item == nil {
+		t.Fatal("empty-id item missing, want pending delete to preserve it")
+	}
+	if len(session.pendingDeleteItemIDs) != 0 {
+		t.Fatalf("pendingDeleteItemIDs = %#v, want empty", session.pendingDeleteItemIDs)
+	}
+}
+
 func TestRealtimeSessionAccumulatesInputAudioTranscriptionDeltas(t *testing.T) {
 	session := &realtimeSession{}
 

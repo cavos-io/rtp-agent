@@ -375,6 +375,7 @@ type realtimeSession struct {
 	inputTranscripts      *utils.BoundedDict[inputTranscriptKey, realtimeInputTranscript]
 	generation            *realtimeGeneration
 	pendingResponses      int
+	pendingDeleteItemIDs  []string
 	instructions          string
 	tools                 []llm.Tool
 	audioBStream          *audio.AudioByteStream
@@ -1647,11 +1648,24 @@ func (s *realtimeSession) sendMsg(msg any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	msg = s.prepareClientMessage(msg)
+	s.trackPendingRealtimeDelete(msg)
 	b, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
 	return s.conn.WriteMessage(websocket.TextMessage, b)
+}
+
+func (s *realtimeSession) trackPendingRealtimeDelete(msg any) {
+	payload, ok := msg.(map[string]any)
+	if !ok || payload["type"] != "conversation.item.delete" {
+		return
+	}
+	itemID, ok := payload["item_id"].(string)
+	if !ok {
+		return
+	}
+	s.pendingDeleteItemIDs = append(s.pendingDeleteItemIDs, itemID)
 }
 
 func (s *realtimeSession) prepareClientMessage(msg any) any {
@@ -2102,6 +2116,7 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 		if !hasItemID {
 			return llm.RealtimeEvent{}, false
 		}
+		itemID = s.resolveRealtimeDeletedItemID(itemID)
 		if s.remote == nil {
 			s.remote = llm.NewRemoteChatContext()
 		}
@@ -2137,6 +2152,19 @@ func (s *realtimeSession) trackRealtimeOutputTranscript(itemID, delta string) {
 	if msg := s.generation.messages[itemID]; msg != nil {
 		msg.transcript += delta
 	}
+}
+
+func (s *realtimeSession) resolveRealtimeDeletedItemID(itemID string) string {
+	if itemID == "" && len(s.pendingDeleteItemIDs) > 0 {
+		itemID = s.pendingDeleteItemIDs[0]
+	}
+	for i, pendingItemID := range s.pendingDeleteItemIDs {
+		if pendingItemID == itemID {
+			s.pendingDeleteItemIDs = append(s.pendingDeleteItemIDs[:i], s.pendingDeleteItemIDs[i+1:]...)
+			break
+		}
+	}
+	return itemID
 }
 
 func (s *realtimeSession) persistRealtimeAudioTranscripts() {
