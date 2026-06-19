@@ -2,6 +2,7 @@ package soniox
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -241,6 +242,28 @@ func TestSonioxTokenAccumulatorBuildsSpeechData(t *testing.T) {
 	}
 	if data.Confidence != 0.9 {
 		t.Fatalf("confidence = %f, want 0.9", data.Confidence)
+	}
+}
+
+func TestSonioxProcessMessagePreservesReferenceLanguageSegments(t *testing.T) {
+	state := &sonioxMessageState{}
+
+	events, err := processSonioxMessage(state, []byte(`{"tokens":[{"text":"hi ","language":"en","is_final":true},{"text":"hola ","language":"es","is_final":true},{"text":"mundo ","language":"es","is_final":true},{"text":"ok","language":"en","is_final":true}]}`))
+	if err != nil {
+		t.Fatalf("process multilingual preflight: %v", err)
+	}
+	assertSonioxEvent(t, events, 0, stt.SpeechEventStartOfSpeech, "")
+	assertSonioxEvent(t, events, 1, stt.SpeechEventPreflightTranscript, "hi hola mundo ok")
+
+	data := events[1].Alternatives[0]
+	if data.Language != "es" {
+		t.Fatalf("language = %q, want dominant language es", data.Language)
+	}
+	if !reflect.DeepEqual(data.SourceLanguages, []string{"en", "es", "en"}) {
+		t.Fatalf("source languages = %#v, want en/es/en runs", data.SourceLanguages)
+	}
+	if !reflect.DeepEqual(data.SourceTexts, []string{"hi ", "hola mundo ", "ok"}) {
+		t.Fatalf("source texts = %#v, want merged adjacent language runs", data.SourceTexts)
 	}
 }
 
