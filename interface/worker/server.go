@@ -825,7 +825,7 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		body := livekitWorkerRuntimeMetadata(WorkerRuntimeMetadataOptions{
+		if err := livekitWriteWorkerRuntimeMetadataHTTPResponse(w, WorkerRuntimeMetadataOptions{
 			AgentName:       s.Options.AgentName,
 			AgentNameIsEnv:  s.Options.AgentNameIsEnv,
 			WorkerType:      string(s.Options.WorkerType),
@@ -833,9 +833,7 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 			ActiveJobs:      s.activeJobCount(),
 			SDKVersion:      s.Options.Version,
 			ProtocolVersion: WorkerProtocolVersion,
-		})
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(body); err != nil {
+		}); err != nil {
 			logger.Logger.Errorw("failed to encode worker metadata", err)
 		}
 	})

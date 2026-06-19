@@ -243,6 +243,315 @@ func TestRunContextUpdateRecordsStandaloneProgress(t *testing.T) {
 	}
 }
 
+func TestRunContextWithFillerSaysAfterIdleDwell(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	speechEvents := session.SpeechCreatedEvents()
+	runCtx := NewRunContext(session, NewSpeechHandle(true, DefaultInputDetails()), &llm.FunctionCall{Name: "lookup"})
+
+	workStarted := make(chan struct{})
+	releaseWork := make(chan struct{})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runCtx.WithFiller(context.Background(), FillerOptions{
+			Text:  "still working",
+			Delay: 10 * time.Millisecond,
+		}, func(context.Context) error {
+			close(workStarted)
+			<-releaseWork
+			return nil
+		})
+	}()
+	<-workStarted
+
+	var ev SpeechCreatedEvent
+	select {
+	case ev = <-speechEvents:
+	case <-time.After(time.Second):
+		t.Fatal("RunContext.WithFiller did not say filler after idle dwell")
+	}
+	if ev.Source != "say" || ev.SpeechHandle == nil || ev.SpeechHandle.Generation.Text != "still working" {
+		t.Fatalf("filler speech event = %#v, want say still working", ev)
+	}
+
+	close(releaseWork)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("WithFiller error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WithFiller did not return after work completed")
+	}
+}
+
+func TestRunContextWithFillerResetsDwellWhenUserStartsSpeaking(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	speechEvents := session.SpeechCreatedEvents()
+	runCtx := NewRunContext(session, NewSpeechHandle(true, DefaultInputDetails()), &llm.FunctionCall{Name: "lookup"})
+
+	workStarted := make(chan struct{})
+	releaseWork := make(chan struct{})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runCtx.WithFiller(context.Background(), FillerOptions{
+			Text:  "still working",
+			Delay: 60 * time.Millisecond,
+		}, func(context.Context) error {
+			close(workStarted)
+			<-releaseWork
+			return nil
+		})
+	}()
+	<-workStarted
+
+	time.Sleep(25 * time.Millisecond)
+	session.UpdateUserState(UserStateSpeaking)
+	session.UpdateUserState(UserStateListening)
+	select {
+	case ev := <-speechEvents:
+		t.Fatalf("filler fired before dwell reset completed: %#v", ev)
+	case <-time.After(35 * time.Millisecond):
+	}
+
+	select {
+	case ev := <-speechEvents:
+		if ev.SpeechHandle == nil || ev.SpeechHandle.Generation.Text != "still working" {
+			t.Fatalf("filler speech event = %#v, want still working", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunContext.WithFiller did not say filler after reset dwell")
+	}
+
+	close(releaseWork)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("WithFiller error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WithFiller did not return after work completed")
+	}
+}
+
+func TestRunContextWithFillerSourceSkipsWithoutAdvancingStep(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	speechEvents := session.SpeechCreatedEvents()
+	runCtx := NewRunContext(session, NewSpeechHandle(true, DefaultInputDetails()), &llm.FunctionCall{Name: "lookup"})
+
+	interval := 10 * time.Millisecond
+	maxSteps := 1
+	calls := make(chan int, 2)
+	workStarted := make(chan struct{})
+	releaseWork := make(chan struct{})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runCtx.WithFiller(context.Background(), FillerOptions{
+			Source: func(step int) (string, bool) {
+				calls <- step
+				if len(calls) == 1 {
+					return "", false
+				}
+				return "still checking", true
+			},
+			Delay:    10 * time.Millisecond,
+			Interval: &interval,
+			MaxSteps: &maxSteps,
+		}, func(context.Context) error {
+			close(workStarted)
+			<-releaseWork
+			return nil
+		})
+	}()
+	<-workStarted
+
+	var ev SpeechCreatedEvent
+	select {
+	case ev = <-speechEvents:
+	case <-time.After(time.Second):
+		t.Fatal("RunContext.WithFiller did not say filler after skipped source result")
+	}
+	if ev.SpeechHandle == nil || ev.SpeechHandle.Generation.Text != "still checking" {
+		t.Fatalf("filler speech event = %#v, want still checking", ev)
+	}
+
+	firstStep := <-calls
+	secondStep := <-calls
+	if firstStep != 0 || secondStep != 0 {
+		t.Fatalf("source steps = %d/%d, want skipped fire not to advance step", firstStep, secondStep)
+	}
+	select {
+	case step := <-calls:
+		t.Fatalf("source called again after max_steps reached: %d", step)
+	default:
+	}
+
+	close(releaseWork)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("WithFiller error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WithFiller did not return after work completed")
+	}
+}
+
+func TestRunContextUpdateResetsFillerDwell(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	speechEvents := session.SpeechCreatedEvents()
+	runCtx := NewRunContext(session, NewSpeechHandle(true, DefaultInputDetails()), &llm.FunctionCall{Name: "lookup"})
+
+	workStarted := make(chan struct{})
+	releaseWork := make(chan struct{})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runCtx.WithFiller(context.Background(), FillerOptions{
+			Text:  "still working",
+			Delay: 60 * time.Millisecond,
+		}, func(context.Context) error {
+			close(workStarted)
+			<-releaseWork
+			return nil
+		})
+	}()
+	<-workStarted
+
+	time.Sleep(25 * time.Millisecond)
+	if err := runCtx.Update("progress update"); err != nil {
+		t.Fatalf("Update error = %v, want nil", err)
+	}
+	select {
+	case ev := <-speechEvents:
+		t.Fatalf("filler fired before update reset completed: %#v", ev)
+	case <-time.After(35 * time.Millisecond):
+	}
+
+	select {
+	case ev := <-speechEvents:
+		if ev.SpeechHandle == nil || ev.SpeechHandle.Generation.Text != "still working" {
+			t.Fatalf("filler speech event = %#v, want still working", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunContext.WithFiller did not say filler after update reset dwell")
+	}
+
+	close(releaseWork)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("WithFiller error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WithFiller did not return after work completed")
+	}
+}
+
+func TestRunContextWithFillerIgnoresNonResetStateEvents(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	speechEvents := session.SpeechCreatedEvents()
+	runCtx := NewRunContext(session, NewSpeechHandle(true, DefaultInputDetails()), &llm.FunctionCall{Name: "lookup"})
+
+	workStarted := make(chan struct{})
+	releaseWork := make(chan struct{})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runCtx.WithFiller(context.Background(), FillerOptions{
+			Text:  "still working",
+			Delay: 80 * time.Millisecond,
+		}, func(context.Context) error {
+			close(workStarted)
+			<-releaseWork
+			return nil
+		})
+	}()
+	<-workStarted
+
+	time.Sleep(30 * time.Millisecond)
+	session.UpdateUserState(UserStateAway)
+	select {
+	case ev := <-speechEvents:
+		if ev.SpeechHandle == nil || ev.SpeechHandle.Generation.Text != "still working" {
+			t.Fatalf("filler speech event = %#v, want still working", ev)
+		}
+	case <-time.After(70 * time.Millisecond):
+		t.Fatal("non-reset user state event restarted filler dwell")
+	}
+
+	close(releaseWork)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("WithFiller error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WithFiller did not return after work completed")
+	}
+}
+
+func TestRunContextWithFillerSpeechSourceCountsReturnedHandle(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	runCtx := NewRunContext(session, NewSpeechHandle(true, DefaultInputDetails()), &llm.FunctionCall{Name: "lookup"})
+
+	interval := 10 * time.Millisecond
+	maxSteps := 1
+	calls := make(chan int, 2)
+	workStarted := make(chan struct{})
+	releaseWork := make(chan struct{})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runCtx.WithFiller(context.Background(), FillerOptions{
+			SpeechSource: func(step int) (*SpeechHandle, bool) {
+				calls <- step
+				return NewSpeechHandle(true, DefaultInputDetails()), true
+			},
+			Delay:    10 * time.Millisecond,
+			Interval: &interval,
+			MaxSteps: &maxSteps,
+		}, func(context.Context) error {
+			close(workStarted)
+			<-releaseWork
+			return nil
+		})
+	}()
+	<-workStarted
+
+	select {
+	case step := <-calls:
+		if step != 0 {
+			t.Fatalf("source step = %d, want 0", step)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunContext.WithFiller did not call SpeechSource")
+	}
+	select {
+	case step := <-calls:
+		t.Fatalf("SpeechSource called again after max_steps reached: %d", step)
+	case <-time.After(40 * time.Millisecond):
+	}
+
+	close(releaseWork)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("WithFiller error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WithFiller did not return after work completed")
+	}
+}
+
 func TestFunctionToolsExecutedEventPairsCallsAndOutputs(t *testing.T) {
 	callA := &llm.FunctionCall{CallID: "call_a", Name: "lookup"}
 	callB := &llm.FunctionCall{CallID: "call_b", Name: "notify"}

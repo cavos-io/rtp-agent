@@ -2,6 +2,7 @@ package livekit_test
 
 import (
 	"encoding/json"
+	"net/http/httptest"
 	"testing"
 
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
@@ -112,6 +113,42 @@ func TestWorkerRuntimeMetadataUsesRuntimeNodeAndHostedState(t *testing.T) {
 	}
 	if metadata.WorkerType != "JT_ROOM" {
 		t.Fatalf("WorkerType = %q, want JT_ROOM", metadata.WorkerType)
+	}
+}
+
+func TestWriteWorkerRuntimeMetadataHTTPResponseOwnsLiveKitMetadataEncoding(t *testing.T) {
+	rec := httptest.NewRecorder()
+
+	err := workerlivekit.WriteWorkerRuntimeMetadataHTTPResponse(rec, workerlivekit.WorkerRuntimeMetadataOptions{
+		AgentName:       "support-agent",
+		AgentNameIsEnv:  true,
+		WorkerType:      string(workerlivekit.WorkerTypeRoom),
+		WorkerLoad:      0.5,
+		ActiveJobs:      3,
+		SDKVersion:      "1.2.3",
+		ProtocolVersion: 1,
+		NodeName:        func() string { return "node-a" },
+		IsHosted:        func() bool { return true },
+	})
+	if err != nil {
+		t.Fatalf("WriteWorkerRuntimeMetadataHTTPResponse() error = %v", err)
+	}
+
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", got)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("metadata response is not JSON: %v", err)
+	}
+	if decoded["worker_type"] != "JT_ROOM" {
+		t.Fatalf("worker_type = %v, want JT_ROOM", decoded["worker_type"])
+	}
+	if decoded["node_name"] != "node-a" {
+		t.Fatalf("node_name = %v, want node-a", decoded["node_name"])
+	}
+	if decoded["hosted"] != true {
+		t.Fatalf("hosted = %v, want true", decoded["hosted"])
 	}
 }
 
