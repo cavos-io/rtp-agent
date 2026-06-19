@@ -302,6 +302,37 @@ func TestCartesiaTTSSynthesizeSendsReferenceHeaders(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSSynthesizeUsesReferenceVersionHeader(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: cartesiaRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("Cartesia-Version") != "2025-04-16" {
+			t.Fatalf("Cartesia-Version = %q, want reference default 2025-04-16", req.Header.Get("Cartesia-Version"))
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("audio")),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+	defer func() {
+		http.DefaultClient = oldClient
+	}()
+
+	provider := NewCartesiaTTS("test-key", "", "",
+		WithCartesiaBaseURL("https://cartesia.test"),
+		WithCartesiaAPIVersion("2024-11-13"),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+}
+
 func TestCartesiaTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
 	oldClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: cartesiaRoundTripperFunc(func(*http.Request) (*http.Response, error) {

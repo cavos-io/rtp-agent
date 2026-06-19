@@ -22,6 +22,7 @@ import (
 
 const (
 	defaultCartesiaTTSBaseURL         = "https://api.cartesia.ai"
+	defaultCartesiaTTSAPIVersion      = "2025-04-16"
 	cartesiaTTSUserAgent              = "LiveKit Agents Cartesia Plugin/Go"
 	cartesiaTTSExperimentalAPIVersion = "2024-11-13"
 )
@@ -132,7 +133,7 @@ func NewCartesiaTTS(apiKey string, voiceID string, model string, opts ...Cartesi
 		language:       "en",
 		encoding:       "pcm_s16le",
 		sampleRate:     24000,
-		apiVersion:     "2025-04-16",
+		apiVersion:     defaultCartesiaTTSAPIVersion,
 		wordTimestamps: true,
 	}
 	for _, opt := range opts {
@@ -167,7 +168,7 @@ func (t *CartesiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", t.apiKey)
-	req.Header.Set("Cartesia-Version", t.apiVersion)
+	req.Header.Set("Cartesia-Version", defaultCartesiaTTSAPIVersion)
 	req.Header.Set("User-Agent", cartesiaTTSUserAgent)
 
 	resp, err := http.DefaultClient.Do(req)
