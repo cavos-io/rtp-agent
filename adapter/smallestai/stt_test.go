@@ -3,6 +3,7 @@ package smallestai
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -84,6 +85,45 @@ func TestSmallestAISTTExposesConfiguredInputSampleRate(t *testing.T) {
 	}
 }
 
+func TestSmallestAISTTUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
+	provider := NewSmallestAISTT("test-key",
+		WithSmallestAISTTModel("pulse"),
+		WithSmallestAISTTLanguage("en"),
+		WithSmallestAISTTSampleRate(16000),
+		WithSmallestAISTTEncoding("linear16"),
+	)
+
+	provider.UpdateOptions(
+		WithSmallestAISTTModel("pulse-v2"),
+		WithSmallestAISTTLanguage("hi"),
+		WithSmallestAISTTSampleRate(48000),
+		WithSmallestAISTTEncoding("pcm_s16le"),
+		WithSmallestAISTTEOUTimeoutMS(250),
+	)
+
+	if provider.model != "pulse-v2" {
+		t.Fatalf("model = %q, want updated model", provider.model)
+	}
+	if provider.language != "hi" {
+		t.Fatalf("language = %q, want updated language", provider.language)
+	}
+	if got := provider.InputSampleRate(); got != 48000 {
+		t.Fatalf("InputSampleRate = %d, want updated sample rate", got)
+	}
+	streamURL, err := url.Parse(buildSmallestAISTTStreamURL(provider, ""))
+	if err != nil {
+		t.Fatalf("parse stream URL: %v", err)
+	}
+	if !strings.HasPrefix(streamURL.String(), "wss://api.smallest.ai/waves/v1/pulse-v2/get_text?") {
+		t.Fatalf("stream URL = %q, want updated model endpoint", streamURL.String())
+	}
+	query := streamURL.Query()
+	assertSmallestAIQuery(t, query, "language", "hi")
+	assertSmallestAIQuery(t, query, "encoding", "pcm_s16le")
+	assertSmallestAIQuery(t, query, "sample_rate", "48000")
+	assertSmallestAIQuery(t, query, "eou_timeout_ms", "250")
+}
+
 func TestNewSmallestAISTTUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("SMALLEST_API_KEY", "env-key")
 
@@ -148,6 +188,52 @@ func TestSmallestAISTTRecognizeRequestUsesReferenceParams(t *testing.T) {
 	}
 	if !bytes.Equal(body, []byte{0x01, 0x02}) {
 		t.Fatalf("body = %#v, want audio bytes", body)
+	}
+}
+
+func TestSmallestAISTTRecognizeUploadsReferenceWAV(t *testing.T) {
+	var uploaded []byte
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: smallestAIRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		uploaded = body
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"transcription":"ok","language":"en"}`)),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewSmallestAISTT("test-key")
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x02, 0x03, 0x04},
+		SampleRate:        8000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}}, "")
+	if err != nil {
+		t.Fatalf("Recognize() error = %v", err)
+	}
+
+	if len(uploaded) < 48 {
+		t.Fatalf("uploaded bytes = %d, want wav header plus pcm", len(uploaded))
+	}
+	if string(uploaded[0:4]) != "RIFF" || string(uploaded[8:12]) != "WAVE" || string(uploaded[36:40]) != "data" {
+		t.Fatalf("uploaded prefix = %q/%q/%q, want RIFF/WAVE/data", uploaded[0:4], uploaded[8:12], uploaded[36:40])
+	}
+	if got := binary.LittleEndian.Uint32(uploaded[24:28]); got != 8000 {
+		t.Fatalf("wav sample rate = %d, want 8000", got)
+	}
+	if got := binary.LittleEndian.Uint16(uploaded[22:24]); got != 1 {
+		t.Fatalf("wav channels = %d, want 1", got)
+	}
+	if got := uploaded[len(uploaded)-4:]; !bytes.Equal(got, []byte{0x01, 0x02, 0x03, 0x04}) {
+		t.Fatalf("wav payload tail = %#v, want original pcm", got)
 	}
 }
 
@@ -436,6 +522,12 @@ type smallestAIDummyAddr string
 
 func (a smallestAIDummyAddr) Network() string { return string(a) }
 func (a smallestAIDummyAddr) String() string  { return string(a) }
+
+type smallestAIRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f smallestAIRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
 
 func readSmallestAITestChan[T any](t *testing.T, ch <-chan T, errCh <-chan error) T {
 	t.Helper()

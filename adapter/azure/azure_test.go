@@ -1620,6 +1620,20 @@ func TestAzureTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestAzureTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	stream := &azureTTSChunkedStream{
+		body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+		sampleRate: 24000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if audio, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after Close = (%#v, %v), want io.EOF", audio, err)
+	}
+}
+
 func TestAzureTTSSynthesizeUsesConfiguredClient(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {

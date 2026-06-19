@@ -513,6 +513,25 @@ func TestElevenLabsTTSReadErrorIncludesProviderOperationContext(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
+	body := &elevenLabsCloseCountBody{Reader: strings.NewReader("audio")}
+	stream := &elevenLabsChunkedStream{
+		resp: &http.Response{
+			Body: body,
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("first Close() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close() error = %v, want nil", err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close() calls = %d, want 1", body.closeCount)
+	}
+}
+
 func TestElevenLabsStreamURLUsesReferenceOptions(t *testing.T) {
 	provider, err := NewElevenLabsTTS("test-key", "", "",
 		WithElevenLabsLanguage("en"),
@@ -1564,5 +1583,18 @@ func (r elevenLabsErrReader) Read([]byte) (int, error) {
 }
 
 func (r elevenLabsErrReader) Close() error {
+	return nil
+}
+
+type elevenLabsCloseCountBody struct {
+	*strings.Reader
+	closeCount int
+}
+
+func (b *elevenLabsCloseCountBody) Close() error {
+	b.closeCount++
+	if b.closeCount > 1 {
+		return errors.New("closed twice")
+	}
 	return nil
 }

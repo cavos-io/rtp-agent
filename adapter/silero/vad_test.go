@@ -148,6 +148,41 @@ func TestSileroVADWithONNXRuntimeUsesModelProbability(t *testing.T) {
 	}
 }
 
+func TestSileroVADONNXUpdateOptionsKeepsReferenceProbabilityThreshold(t *testing.T) {
+	originalFactory := newSileroProbabilityEstimatorFactory
+	defer func() { newSileroProbabilityEstimatorFactory = originalFactory }()
+
+	newSileroProbabilityEstimatorFactory = func(VADOptions) (vad.ProbabilityEstimatorFactory, error) {
+		return func() vad.ProbabilityEstimator {
+			return func(*model.AudioFrame) (float64, error) {
+				return 0.5, nil
+			}
+		}, nil
+	}
+
+	detector, err := NewSileroVADWithOptions(
+		WithONNXRuntime(),
+		WithActivationThreshold(0.8),
+		WithMinSpeechDuration(0.032),
+	)
+	if err != nil {
+		t.Fatalf("NewSileroVADWithOptions() error = %v", err)
+	}
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	detector.UpdateOptionsWith(WithActivationThreshold(0.6))
+	if err := stream.PushFrame(testAudioFrame(16000, 512, 0)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+
+	assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
+	assertNoSileroVADEvent(t, stream, "0.5 probability should stay below updated ONNX threshold 0.6")
+}
+
 func TestSileroVADMetricsHandlerPanicDoesNotStopOtherHandlers(t *testing.T) {
 	detector := NewSileroVAD()
 	metricsCh := make(chan *telemetry.VADMetrics, 1)
@@ -864,6 +899,20 @@ func nextSileroVADEvent(t *testing.T, stream vad.VADStream) *vad.VADEvent {
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("timed out waiting for VAD event")
 		return nil
+	}
+}
+
+func assertNoSileroVADEvent(t *testing.T, stream vad.VADStream, reason string) {
+	t.Helper()
+	done := make(chan *vad.VADEvent, 1)
+	go func() {
+		event, _ := stream.Next()
+		done <- event
+	}()
+	select {
+	case event := <-done:
+		t.Fatalf("unexpected VAD event = %+v: %s", event, reason)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

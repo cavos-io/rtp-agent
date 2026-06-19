@@ -1104,6 +1104,88 @@ func TestRealtimeGenerateReplyTimeoutClearsPendingResponse(t *testing.T) {
 	assertNoRealtimeMessage(t, messages, "timed-out response.create should not leave stale pending response")
 }
 
+func TestRealtimeGenerateReplyTimeoutKeepsLaterPendingResponse(t *testing.T) {
+	messages := make(chan string, 8)
+	var responseCreateCount atomic.Int32
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+			var payload map[string]any
+			if err := json.Unmarshal(msg, &payload); err != nil {
+				t.Errorf("decode realtime message: %v", err)
+				return
+			}
+			if payload["type"] != "response.create" || responseCreateCount.Add(1) != 1 {
+				continue
+			}
+			eventID, _ := payload["event_id"].(string)
+			if err := conn.WriteJSON(map[string]any{
+				"type": "response.created",
+				"response": map[string]any{
+					"id": "resp_first",
+					"metadata": map[string]any{
+						"client_event_id": eventID,
+					},
+				},
+			}); err != nil {
+				t.Errorf("Write response.created error = %v", err)
+				return
+			}
+			if err := conn.WriteJSON(map[string]any{
+				"type": "response.done",
+				"response": map[string]any{
+					"id":     "resp_first",
+					"status": "completed",
+				},
+			}); err != nil {
+				t.Errorf("Write response.done error = %v", err)
+				return
+			}
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	rtSession := session.(*realtimeSession)
+	rtSession.responseCreateTimeout = 40 * time.Millisecond
+
+	assertRealtimeMessage(t, <-messages, "session.update", "gpt-realtime")
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "first"}); err != nil {
+		t.Fatalf("GenerateReply first error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "response.create", "first")
+	assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeMetricsCollected)
+
+	time.Sleep(20 * time.Millisecond)
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "second"}); err != nil {
+		t.Fatalf("GenerateReply second error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "response.create", "second")
+	time.Sleep(30 * time.Millisecond)
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	select {
+	case msg := <-messages:
+		assertRealtimeMessage(t, msg, "response.cancel", "")
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for response.cancel for later pending response")
+	}
+}
+
 func TestRealtimeSessionSpeechStoppedReflectsDisabledInputAudioTranscription(t *testing.T) {
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
 		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"input_audio_buffer.speech_stopped"}`)); err != nil {

@@ -146,6 +146,76 @@ func TestCartesiaSTTUpdateOptionsPropagatesLanguageToActiveStream(t *testing.T) 
 	}
 }
 
+func TestCartesiaSTTStreamLanguageOverrideDoesNotPersistLikeReference(t *testing.T) {
+	closed := make(chan struct{})
+	closeAfterHandshake := make(chan struct{})
+	requests := make(chan *http.Request, 1)
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runCartesiaCaptureRequestWebsocketServer(serverConn, requests, closeAfterHandshake, closed, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewCartesiaSTT("test-key",
+		WithCartesiaSTTBaseURL("http://cartesia.test"),
+		WithCartesiaSTTLanguage("en"),
+	)
+	stream, err := provider.Stream(context.Background(), "fr-FR")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	req := receiveCartesiaTestValue(t, requests, "websocket request")
+	close(closeAfterHandshake)
+	if got := req.URL.Query().Get("language"); got != "" {
+		t.Fatalf("stream language query = %q, want omitted for auto endpoint", got)
+	}
+	providerStream, ok := stream.(*cartesiaSTTStream)
+	if !ok {
+		t.Fatalf("stream = %T, want *cartesiaSTTStream", stream)
+	}
+	if got := providerStream.state.language; got != "fr" {
+		t.Fatalf("stream state language = %q, want override fr", got)
+	}
+	if provider.language != "en" {
+		t.Fatalf("provider language = %q, want original en after stream override", provider.language)
+	}
+	parsed, err := url.Parse(buildCartesiaSTTStreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse provider URL: %v", err)
+	}
+	if got := parsed.Query().Get("language"); got != "" {
+		t.Fatalf("later provider language query = %q, want omitted for auto endpoint", got)
+	}
+	if got := provider.languageOrDefault(); got != "en" {
+		t.Fatalf("later provider default language = %q, want en", got)
+	}
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket close")
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket server")
+	}
+}
+
 func TestCartesiaSTTOptionsBuildReferenceURLsAndHeaders(t *testing.T) {
 	provider := NewCartesiaSTT("test-key",
 		WithCartesiaSTTBaseURL("http://cartesia.example"),
@@ -486,6 +556,41 @@ func runCartesiaNormalCloseWebsocketServer(conn net.Conn, closeAfterHandshake <-
 	}
 	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 		errCh <- err
+	}
+}
+
+func runCartesiaCaptureRequestWebsocketServer(conn net.Conn, requests chan<- *http.Request, closeAfterHandshake <-chan struct{}, closed chan<- struct{}, errCh chan<- error) {
+	upgrader := websocket.Upgrader{}
+	listener := &singleCartesiaConnListener{conn: conn}
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests <- r.Clone(r.Context())
+			ws, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer ws.Close()
+			<-closeAfterHandshake
+			err = ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+			close(closed)
+			errCh <- err
+		}),
+	}
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		errCh <- err
+	}
+}
+
+func receiveCartesiaTestValue[T any](t *testing.T, ch <-chan T, label string) T {
+	t.Helper()
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(time.Second):
+		var zero T
+		t.Fatalf("timed out waiting for %s", label)
+		return zero
 	}
 }
 

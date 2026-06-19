@@ -346,9 +346,15 @@ type elevenLabsChunkedStream struct {
 	decoder    codecs.AudioStreamDecoder
 	started    bool
 	emitted    bool
+	mu         sync.Mutex
 }
 
 func (s *elevenLabsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.resp == nil || s.resp.Body == nil {
+		return nil, io.EOF
+	}
 	if strings.HasPrefix(s.encoding, "mp3") {
 		return s.nextDecodedMP3()
 	}
@@ -398,9 +404,10 @@ func (s *elevenLabsChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error
 		if len(data) == 0 {
 			return nil, io.EOF
 		}
+		decoder := s.decoder
 		go func() {
-			s.decoder.Push(data)
-			s.decoder.EndInput()
+			decoder.Push(data)
+			decoder.EndInput()
 		}()
 	}
 
@@ -427,10 +434,21 @@ func (s *elevenLabsChunkedStream) audioByteState() string {
 }
 
 func (s *elevenLabsChunkedStream) Close() error {
-	if s.decoder != nil {
-		_ = s.decoder.Close()
+	s.mu.Lock()
+	if s.resp == nil || s.resp.Body == nil {
+		s.mu.Unlock()
+		return nil
 	}
-	return s.resp.Body.Close()
+	body := s.resp.Body
+	decoder := s.decoder
+	s.resp = nil
+	s.decoder = nil
+	s.mu.Unlock()
+
+	if decoder != nil {
+		_ = decoder.Close()
+	}
+	return body.Close()
 }
 
 // Stream establishes a high-performance WebSocket connection to ElevenLabs for low-latency streaming TTS.

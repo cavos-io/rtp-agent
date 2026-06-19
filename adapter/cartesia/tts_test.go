@@ -281,6 +281,37 @@ func TestCartesiaTTSChunkedStreamReadErrorReturnsAPIConnectionError(t *testing.T
 	}
 }
 
+func TestCartesiaTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
+	body := &cartesiaCloseCountBody{Reader: strings.NewReader("audio")}
+	stream := &cartesiaTTSChunkedStream{
+		resp: &http.Response{Body: body},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("first Close() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close() error = %v, want nil", err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close() calls = %d, want 1", body.closeCount)
+	}
+}
+
+func TestCartesiaTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	stream := &cartesiaTTSChunkedStream{
+		resp: &http.Response{Body: &cartesiaCloseCountBody{Reader: strings.NewReader("audio")}},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	audio, err := stream.Next()
+	if err != io.EOF {
+		t.Fatalf("Next after Close = (%#v, %v), want io.EOF", audio, err)
+	}
+}
+
 func TestCartesiaSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
 	provider := NewCartesiaTTS("test-key", "", "",
 		WithCartesiaBaseURL("https://cartesia.example"),
@@ -330,6 +361,19 @@ func (r cartesiaErrorReadCloser) Close() error {
 	return nil
 }
 
+type cartesiaCloseCountBody struct {
+	*strings.Reader
+	closeCount int
+}
+
+func (b *cartesiaCloseCountBody) Close() error {
+	b.closeCount++
+	if b.closeCount > 1 {
+		return errors.New("closed twice")
+	}
+	return nil
+}
+
 func TestCartesiaTTSStreamFlushUsesReferenceEndPacket(t *testing.T) {
 	var writes []map[string]any
 	stream := &cartesiaTTSStream{
@@ -358,6 +402,37 @@ func TestCartesiaTTSStreamFlushUsesReferenceEndPacket(t *testing.T) {
 	}
 	if writes[0]["continue"] != false {
 		t.Fatalf("continue = %#v, want false", writes[0]["continue"])
+	}
+}
+
+func TestCartesiaTTSStreamPushTextAppendsReferenceTrailingSpace(t *testing.T) {
+	var writes []map[string]any
+	stream := &cartesiaTTSStream{
+		writeJSON: func(msg any) error {
+			payload, ok := msg.(map[string]interface{})
+			if !ok {
+				t.Fatalf("message = %T, want map[string]interface{}", msg)
+			}
+			writes = append(writes, payload)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+
+	if len(writes) != 1 {
+		t.Fatalf("writes = %d, want 1", len(writes))
+	}
+	if writes[0]["context_id"] != "default" {
+		t.Fatalf("context_id = %#v, want default", writes[0]["context_id"])
+	}
+	if writes[0]["transcript"] != "hello " {
+		t.Fatalf("transcript = %#v, want reference trailing space", writes[0]["transcript"])
+	}
+	if writes[0]["continue"] != true {
+		t.Fatalf("continue = %#v, want true", writes[0]["continue"])
 	}
 }
 

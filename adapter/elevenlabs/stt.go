@@ -228,6 +228,11 @@ func (s *ElevenLabsSTT) Recognize(ctx context.Context, frames []*model.AudioFram
 	if err := validateElevenLabsAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}
+	if language != "" {
+		s.mu.Lock()
+		s.languageCode = language
+		s.mu.Unlock()
+	}
 
 	if elevenLabsSTTIsRealtime(s.modelID) {
 		return nil, fmt.Errorf("elevenlabs realtime models do not support offline recognize")

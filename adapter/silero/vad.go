@@ -48,10 +48,11 @@ func DefaultVADOptions() VADOptions {
 }
 
 type SileroVAD struct {
-	options  VADOptions
-	inner    *vad.SimpleVAD
-	mu       sync.RWMutex
-	handlers []vad.VADMetricsHandler
+	options        VADOptions
+	inner          *vad.SimpleVAD
+	scaleThreshold bool
+	mu             sync.RWMutex
+	handlers       []vad.VADMetricsHandler
 }
 
 type VADOption func(*VADOptions)
@@ -207,8 +208,9 @@ func newSileroVADFromSimpleOptions(simpleOptions vad.SimpleVADOptions, options V
 	}
 
 	detector := &SileroVAD{
-		options: options,
-		inner:   inner,
+		options:        options,
+		inner:          inner,
+		scaleThreshold: scaleThreshold,
 	}
 	inner.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
 		metrics.Label = detector.Label()
@@ -277,7 +279,7 @@ func (v *SileroVAD) UpdateOptions(options VADOptions) {
 	}
 	v.options = merged
 	v.mu.Unlock()
-	v.inner.UpdateOptionsWith(simpleUpdateOptionsFromSilero(merged)...)
+	v.inner.UpdateOptionsWith(simpleUpdateOptionsFromSilero(merged, v.scaleThreshold)...)
 }
 
 func (v *SileroVAD) UpdateOptionsWith(opts ...VADOption) {
@@ -298,7 +300,7 @@ func (v *SileroVAD) UpdateOptionsWith(opts ...VADOption) {
 	}
 	v.options = merged
 	v.mu.Unlock()
-	v.inner.UpdateOptionsWith(simpleUpdateOptionsFromSilero(merged)...)
+	v.inner.UpdateOptionsWith(simpleUpdateOptionsFromSilero(merged, v.scaleThreshold)...)
 }
 
 func (v *SileroVAD) Stream(ctx context.Context) (vad.VADStream, error) {
@@ -333,14 +335,20 @@ func simpleOptionsFromSileroONNX(options VADOptions) vad.SimpleVADOptions {
 	return simpleOptions
 }
 
-func simpleUpdateOptionsFromSilero(options VADOptions) []vad.SimpleVADOption {
+func simpleUpdateOptionsFromSilero(options VADOptions, scaleThreshold bool) []vad.SimpleVADOption {
+	threshold := options.ActivationThreshold
+	deactivationThreshold := options.DeactivationThreshold
+	if scaleThreshold {
+		threshold /= 10.0
+		deactivationThreshold /= 10.0
+	}
 	return []vad.SimpleVADOption{
-		vad.WithThreshold(options.ActivationThreshold / 10.0),
+		vad.WithThreshold(threshold),
 		vad.WithMinSpeechDuration(options.MinSpeechDuration),
 		vad.WithMinSilenceDuration(options.MinSilenceDuration),
 		vad.WithPrefixPaddingDuration(options.PrefixPaddingDuration),
 		vad.WithMaxBufferedSpeechDuration(options.MaxBufferedSpeech),
-		vad.WithDeactivationThreshold(options.DeactivationThreshold / 10.0),
+		vad.WithDeactivationThreshold(deactivationThreshold),
 		vad.WithUpdateInterval(options.UpdateInterval),
 		vad.WithSampleRate(uint32(options.SampleRate)),
 		vad.WithWindowDuration(options.UpdateInterval),

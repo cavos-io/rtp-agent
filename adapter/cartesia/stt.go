@@ -161,10 +161,11 @@ func (s *CartesiaSTT) Stream(ctx context.Context, language string) (stt.Recogniz
 		return nil, err
 	}
 
+	streamLanguage := s.language
 	if language != "" {
-		s.language = language
+		streamLanguage = language
 	}
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildCartesiaSTTStreamURL(s), buildCartesiaSTTHeaders(s))
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildCartesiaSTTStreamURLForLanguage(s, streamLanguage), buildCartesiaSTTHeaders(s))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial cartesia stt websocket: %w", err)
 	}
@@ -178,7 +179,7 @@ func (s *CartesiaSTT) Stream(ctx context.Context, language string) (stt.Recogniz
 		cancel:       cancel,
 		audioBStream: newCartesiaSTTAudioByteStream(s.sampleRate, s.audioChunkDurationMS),
 		state: &cartesiaSTTStreamState{
-			language: s.languageOrDefault(),
+			language: cartesiaLanguageOrDefault(streamLanguage),
 			mode:     s.finalTranscriptMode,
 		},
 	}
@@ -426,6 +427,10 @@ type cartesiaSTTStreamState struct {
 }
 
 func buildCartesiaSTTStreamURL(s *CartesiaSTT) string {
+	return buildCartesiaSTTStreamURLForLanguage(s, s.language)
+}
+
+func buildCartesiaSTTStreamURLForLanguage(s *CartesiaSTT, language string) string {
 	path := "/stt/turns/websocket"
 	if s.finalTranscriptMode == "legacy" {
 		path = "/stt/websocket"
@@ -435,8 +440,8 @@ func buildCartesiaSTTStreamURL(s *CartesiaSTT) string {
 	q.Set("model", s.model)
 	q.Set("sample_rate", fmt.Sprintf("%d", s.sampleRate))
 	q.Set("encoding", s.encoding)
-	if s.finalTranscriptMode == "legacy" && s.language != "" {
-		q.Set("language", cartesiaLanguageBase(s.language))
+	if s.finalTranscriptMode == "legacy" && language != "" {
+		q.Set("language", cartesiaLanguageBase(language))
 	}
 	u.RawQuery = q.Encode()
 	return u.String()
@@ -662,8 +667,12 @@ func cartesiaLanguageBase(language string) string {
 }
 
 func (s *CartesiaSTT) languageOrDefault() string {
-	if s.language != "" {
-		return cartesiaLanguageBase(s.language)
+	return cartesiaLanguageOrDefault(s.language)
+}
+
+func cartesiaLanguageOrDefault(language string) string {
+	if language != "" {
+		return cartesiaLanguageBase(language)
 	}
 	return "en"
 }
