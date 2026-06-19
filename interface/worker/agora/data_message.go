@@ -61,13 +61,9 @@ func (r RTMMessageRouter) HandleDataMessage(ctx context.Context, msg DataMessage
 	if messageType != "input_text" {
 		return nil
 	}
-	streamID := rtmStreamIDValue(payload.StreamID)
-	if streamID == "" {
-		streamID = "0"
-	}
 	return r.TextInput(normalizeContext(ctx), TextInputEvent{
 		Text:      payload.Text,
-		StreamID:  streamID,
+		StreamID:  defaultRTMStreamID(rtmStreamIDValue(payload.StreamID)),
 		Channel:   msg.Channel,
 		Publisher: msg.Publisher,
 	})
@@ -120,7 +116,7 @@ func HandleTextInputEvent(ctx context.Context, responder TextResponder, ev TextI
 			transcriber.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{
 				Transcript: ev.Text,
 				IsFinal:    true,
-				SpeakerID:  ev.StreamID,
+				SpeakerID:  defaultRTMStreamID(ev.StreamID),
 			})
 		}
 		return nil
@@ -129,4 +125,12 @@ func HandleTextInputEvent(ctx context.Context, responder TextResponder, ev TextI
 		return claimer.ClaimUserTurn(normalizeContext(ctx), run)
 	}
 	return run(normalizeContext(ctx))
+}
+
+func defaultRTMStreamID(streamID string) string {
+	streamID = strings.TrimSpace(streamID)
+	if streamID == "" {
+		return "0"
+	}
+	return streamID
 }

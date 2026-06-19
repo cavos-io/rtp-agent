@@ -226,6 +226,18 @@ func TestHandleTextInputEventEmitsTranscriptAfterGenerateReply(t *testing.T) {
 	}
 }
 
+func TestHandleTextInputDefaultsTranscriptStreamID(t *testing.T) {
+	responder := &recordingTextResponder{}
+
+	err := HandleTextInput(context.Background(), responder, "hello")
+	if err != nil {
+		t.Fatalf("HandleTextInput() error = %v, want nil", err)
+	}
+	if got := responder.calls; len(got) != 3 || got[2] != "transcript:hello:0" {
+		t.Fatalf("calls = %#v, want default TEN stream id 0 on user transcript", got)
+	}
+}
+
 func TestHandleTextInputEventIgnoresEmptyText(t *testing.T) {
 	responder := &recordingTextResponder{}
 
