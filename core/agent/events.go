@@ -410,6 +410,7 @@ type RunContextUpdate struct {
 
 type FillerOptions struct {
 	Text     string
+	Source   func(step int) (string, bool)
 	Delay    time.Duration
 	Interval *time.Duration
 	MaxSteps *int
@@ -619,12 +620,15 @@ func (s *runContextFillerScheduler) run(ctx context.Context) {
 		if !s.waitForDwell(ctx, agentEvents, userEvents) {
 			return
 		}
-		handle, err := s.runCtx.Session.Say(ctx, s.opts.Text)
-		if err != nil {
-			return
-		}
-		if handle != nil {
-			created++
+		text, ok := s.nextText(created)
+		if ok {
+			handle, err := s.runCtx.Session.Say(ctx, text)
+			if err != nil {
+				return
+			}
+			if handle != nil {
+				created++
+			}
 		}
 		if s.opts.Interval == nil || (s.opts.MaxSteps != nil && created >= *s.opts.MaxSteps) {
 			return
@@ -633,6 +637,13 @@ func (s *runContextFillerScheduler) run(ctx context.Context) {
 			return
 		}
 	}
+}
+
+func (s *runContextFillerScheduler) nextText(step int) (string, bool) {
+	if s.opts.Source != nil {
+		return s.opts.Source(step)
+	}
+	return s.opts.Text, true
 }
 
 func (s *runContextFillerScheduler) waitForDwell(ctx context.Context, agentEvents <-chan AgentStateChangedEvent, userEvents <-chan UserStateChangedEvent) bool {
