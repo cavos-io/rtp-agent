@@ -357,7 +357,7 @@ func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.Ru
 		jobCtx := NewJobContext(reloadedJob.Job, reloadedJob.URL, s.Options.APIKey, s.Options.APISecret)
 		jobCtx.process = s.newJobProcess()
 		if reloadedJob.EnableRecording {
-			jobCtx.InitRecording(workerlivekit.AllRecordingOptions())
+			jobCtx.InitRecording(workerlivekit.ServerRecordingOptions())
 		}
 		jobCtx.token = reloadedJob.Token
 		jobCtx.workerID = reloadedJob.WorkerID
@@ -390,7 +390,7 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 	jobCtx := NewJobContext(runningJob.Job, runningJob.URL, s.Options.APIKey, s.Options.APISecret)
 	jobCtx.process = s.newJobProcess()
 	if runningJob.EnableRecording {
-		jobCtx.InitRecording(workerlivekit.AllRecordingOptions())
+		jobCtx.InitRecording(workerlivekit.ServerRecordingOptions())
 	}
 	jobCtx.token = runningJob.Token
 	jobCtx.workerID = runningJob.WorkerID
@@ -1669,7 +1669,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.J
 	jobCtx := NewJobContext(assignedJob.Job, assignedJob.URL, s.Options.APIKey, s.Options.APISecret)
 	jobCtx.process = s.newJobProcess()
 	if assignedJob.EnableRecording {
-		jobCtx.InitRecording(workerlivekit.AllRecordingOptions())
+		jobCtx.InitRecording(workerlivekit.ServerRecordingOptions())
 	}
 	jobCtx.token = assignedJob.Token
 	jobCtx.workerID = assignedJob.WorkerID

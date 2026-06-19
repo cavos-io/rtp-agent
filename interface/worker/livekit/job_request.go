@@ -225,6 +225,10 @@ func AllRecordingOptions() agent.RecordingOptions {
 	}
 }
 
+func ServerRecordingOptions() agent.RecordingOptions {
+	return AllRecordingOptions()
+}
+
 func ShouldUploadJobSessionReport(job *lkprotocol.Job, fakeJob bool, report *agent.SessionReport) bool {
 	if job == nil || fakeJob || report == nil {
 		return false
