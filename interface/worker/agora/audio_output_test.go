@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 )
@@ -100,6 +102,46 @@ func TestAudioOutputPublishAudioRejectsCanceledContext(t *testing.T) {
 	}
 	if len(publisher.ctxs) != 0 {
 		t.Fatalf("publisher calls = %d, want 0", len(publisher.ctxs))
+	}
+}
+
+func TestAudioOutputPublishAudioRechecksContextAfterLock(t *testing.T) {
+	publisher := &fakePCMPublisher{}
+	output := NewAudioOutput(publisher)
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 320),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	}
+	baseCtx, cancel := context.WithCancel(context.Background())
+	ctx := &notifyingContext{
+		Context:    baseCtx,
+		doneCalled: make(chan struct{}),
+	}
+	output.mu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		done <- output.PublishAudio(ctx, frame)
+	}()
+	select {
+	case <-ctx.doneCalled:
+	case <-time.After(time.Second):
+		t.Fatal("PublishAudio() did not check context before waiting on lock")
+	}
+	cancel()
+	output.mu.Unlock()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("PublishAudio() error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("PublishAudio() did not finish")
+	}
+	if len(publisher.frames) != 0 {
+		t.Fatalf("published frames = %d, want 0", len(publisher.frames))
 	}
 }
 
@@ -236,4 +278,17 @@ func TestAudioOutputRejectsFormatChangeWithPendingAudio(t *testing.T) {
 	if len(publisher.frames) != 0 {
 		t.Fatalf("published frames = %d, want 0", len(publisher.frames))
 	}
+}
+
+type notifyingContext struct {
+	context.Context
+	once       sync.Once
+	doneCalled chan struct{}
+}
+
+func (c *notifyingContext) Done() <-chan struct{} {
+	c.once.Do(func() {
+		close(c.doneCalled)
+	})
+	return c.Context.Done()
 }

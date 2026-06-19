@@ -67,6 +67,11 @@ func (o *AudioOutput) PublishAudio(ctx context.Context, frame *model.AudioFrame)
 
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 
 	if len(o.buffer) > 0 && (sampleRate != o.sampleRate || channels != o.channels) {
 		return fmt.Errorf("agora audio frame format changed with pending audio")
