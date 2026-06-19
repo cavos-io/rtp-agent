@@ -129,3 +129,23 @@ func JobContextMoveParticipantPlan(fakeJob bool) MoveParticipantPlanResult {
 func JobContextMoveParticipant(ctx context.Context, api MoveParticipantAPI, job *Job, room string, identity string, destinationRoom string) error {
 	return MoveParticipant(ctx, api, job, room, identity, destinationRoom)
 }
+
+func JobContextSIPCreateParticipantPlan(fakeJob bool) SIPCreateParticipantPlanResult {
+	return SIPCreateParticipantPlan(fakeJob)
+}
+
+func JobContextCreateSIPParticipantWithNames(ctx context.Context, api SIPAPI, job *Job, callTo string, trunkID string, identity string, names ...string) (*SIPParticipantInfo, error) {
+	return CreateSIPParticipantWithNames(ctx, api, job, callTo, trunkID, identity, names...)
+}
+
+func JobContextCreateSIPParticipantWithRequest(ctx context.Context, api SIPAPI, req *SIPCreateParticipantRequest) (*SIPParticipantInfo, error) {
+	return CreateSIPParticipantWithRequest(ctx, api, req)
+}
+
+func JobContextSIPTransferParticipantPlan(fakeJob bool) SIPTransferParticipantPlanResult {
+	return SIPTransferParticipantPlan(fakeJob)
+}
+
+func JobContextTransferSIPParticipantByParticipant(ctx context.Context, api SIPAPI, job *Job, participant any, transferTo string, playDialtones ...bool) error {
+	return TransferSIPParticipantByParticipant(ctx, api, job, participant, transferTo, playDialtones...)
+}

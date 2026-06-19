@@ -152,6 +152,11 @@ func TestSharedJobContextDoesNotCallLiveKitInfoHelpersDirectly(t *testing.T) {
 		"workerlivekit.DeleteRoomBestEffort(",
 		"workerlivekit.MoveParticipantPlan(",
 		"workerlivekit.MoveParticipant(",
+		"workerlivekit.SIPCreateParticipantPlan(",
+		"workerlivekit.CreateSIPParticipantWithNames(",
+		"workerlivekit.CreateSIPParticipantWithRequest(",
+		"workerlivekit.SIPTransferParticipantPlan(",
+		"workerlivekit.TransferSIPParticipantByParticipant(",
 	}
 
 	data, err := os.ReadFile("job.go")
