@@ -356,10 +356,16 @@ type azureTTSChunkedStream struct {
 }
 
 func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.body == nil {
+		return nil, io.EOF
+	}
 	buf := make([]byte, 4096)
 	var start int
 
 	for {
+		if s.body == nil {
+			return nil, io.EOF
+		}
 		if s.hasCarry {
 			buf[0] = s.carry
 			start = 1
@@ -410,5 +416,7 @@ func (s *azureTTSChunkedStream) Close() error {
 	}
 	body := s.body
 	s.body = nil
+	s.carry = 0
+	s.hasCarry = false
 	return body.Close()
 }
