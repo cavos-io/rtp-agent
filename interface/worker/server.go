@@ -742,7 +742,7 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 		opts.InitializeProcessTimeoutSeconds = defaultProcessTimeout
 	}
 	if opts.LogLevel == "" && opts.Transport == WorkerTransportLiveKit {
-		opts.LogLevel = workerlivekit.WorkerLogLevelFromEnv(nil)
+		opts.LogLevel = workerlivekit.ServerLogLevelFromEnv(nil)
 	}
 	if opts.LogLevel == "" {
 		if opts.DevMode {
@@ -775,9 +775,9 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 			opts.WorkerType = WorkerTypeRoom
 		}
 		if opts.Permissions == nil {
-			opts.Permissions = workerlivekit.DefaultWorkerPermissions()
+			opts.Permissions = workerlivekit.DefaultServerWorkerPermissions()
 		}
-		livekitOptions := workerlivekit.ResolveWorkerConnectionOptions(workerlivekit.WorkerConnectionOptions{
+		livekitOptions := workerlivekit.ResolveServerConnectionOptions(workerlivekit.ServerConnectionResolveOptions{
 			WSURL:          opts.WSURL,
 			LegacyWSURL:    opts.WSRL,
 			APIKey:         opts.APIKey,

@@ -73,6 +73,9 @@ func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
 		"workerlivekit.RunJobEntrypointLifecycle(",
 		"workerlivekit.AssignmentContextValues(",
 		"workerlivekit.JobTerminationPlanForActiveJob(",
+		"workerlivekit.WorkerLogLevelFromEnv(",
+		"workerlivekit.DefaultWorkerPermissions(",
+		"workerlivekit.ResolveWorkerConnectionOptions(",
 		"workerlivekit.ValidateWorkerConnectionOptions(",
 	}
 
