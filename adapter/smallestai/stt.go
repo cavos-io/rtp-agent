@@ -3,6 +3,7 @@ package smallestai
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -192,11 +193,7 @@ func (s *SmallestAISTT) Recognize(ctx context.Context, frames []*model.AudioFram
 		return nil, err
 	}
 
-	var audio bytes.Buffer
-	for _, frame := range frames {
-		audio.Write(frame.Data)
-	}
-	req, err := buildSmallestAISTTRecognizeRequest(ctx, s, audio.Bytes(), language)
+	req, err := buildSmallestAISTTRecognizeRequest(ctx, s, smallestAISTTWAVBytes(frames, uint32(s.sampleRate)), language)
 	if err != nil {
 		return nil, err
 	}
@@ -221,6 +218,48 @@ func validateSmallestAISTTAPIKey(apiKey string) error {
 		return fmt.Errorf("smallestai API key is required, either as argument or set SMALLEST_API_KEY environment variable")
 	}
 	return nil
+}
+
+func smallestAISTTWAVBytes(frames []*model.AudioFrame, defaultSampleRate uint32) []byte {
+	sampleRate := defaultSampleRate
+	if sampleRate == 0 {
+		sampleRate = defaultSmallestAISTTSampleRate
+	}
+	numChannels := uint32(1)
+	var data bytes.Buffer
+	for _, frame := range frames {
+		if frame == nil {
+			continue
+		}
+		if frame.SampleRate > 0 && data.Len() == 0 {
+			sampleRate = frame.SampleRate
+		}
+		if frame.NumChannels > 0 && data.Len() == 0 {
+			numChannels = frame.NumChannels
+		}
+		data.Write(frame.Data)
+	}
+	pcm := data.Bytes()
+	dataSize := uint32(len(pcm))
+	blockAlign := numChannels * smallestAIPCMBytesPerSample
+	byteRate := sampleRate * blockAlign
+
+	var wav bytes.Buffer
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36)+dataSize)
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(numChannels))
+	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
+	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(blockAlign))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	wav.WriteString("data")
+	_ = binary.Write(&wav, binary.LittleEndian, dataSize)
+	wav.Write(pcm)
+	return wav.Bytes()
 }
 
 func buildSmallestAISTTRecognizeRequest(ctx context.Context, s *SmallestAISTT, audio []byte, language string) (*http.Request, error) {
