@@ -1498,7 +1498,7 @@ func (s *AgentServer) sendWorkerStatusUpdate() error {
 func (s *AgentServer) openWorkerWebSocket(ctx context.Context, opts workerlivekit.WorkerWebSocketOpenOptions) (workerlivekit.WorkerWebSocketOpenResult, error) {
 	opts.Dial = workerDialContext
 	opts.Sleep = workerRetrySleep
-	result, err := workerlivekit.OpenWorkerWebSocket(ctx, opts)
+	result, err := workerlivekit.OpenServerWorkerWebSocket(ctx, opts)
 	if err != nil {
 		if result.ConnectFailed {
 			s.setConnectionFailed(true)

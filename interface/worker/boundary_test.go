@@ -50,6 +50,7 @@ func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
 	forbiddenCalls := []string{
 		"workerlivekit.ApplyWorkerEnv(",
 		"workerlivekit.ExchangeInitialRegisterWebSocket(",
+		"workerlivekit.OpenWorkerWebSocket(",
 		"workerlivekit.WorkerStatusUpdateMessage(",
 		"workerlivekit.RegisterWorkerMessage(",
 		"workerlivekit.RunWorkerMessageLoop(",

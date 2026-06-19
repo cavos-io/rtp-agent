@@ -1,5 +1,7 @@
 package livekit
 
+import "context"
+
 type ServerConnectionOptions struct {
 	WSURL     string
 	APIKey    string
@@ -26,4 +28,8 @@ func ApplyServerConnectionEnv(opts ServerConnectionEnvOptions) {
 		APISecret: opts.APISecret,
 		Setenv:    opts.Setenv,
 	})
+}
+
+func OpenServerWorkerWebSocket(ctx context.Context, opts WorkerWebSocketOpenOptions) (WorkerWebSocketOpenResult, error) {
+	return OpenWorkerWebSocket(ctx, opts)
 }
