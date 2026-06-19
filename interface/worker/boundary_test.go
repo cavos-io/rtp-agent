@@ -117,3 +117,27 @@ func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
 		t.Fatalf("walk worker files: %v", err)
 	}
 }
+
+func TestSharedJobContextDoesNotCallLiveKitInfoHelpersDirectly(t *testing.T) {
+	forbiddenCalls := []string{
+		"workerlivekit.JobInferenceHeaders(",
+		"workerlivekit.JobParticipantIdentity(",
+		"workerlivekit.LocalParticipantIdentity(",
+		"workerlivekit.TokenClaims(",
+		"workerlivekit.JobID(",
+		"workerlivekit.JobAvatarStartInfo(",
+		"workerlivekit.JobRoom(",
+		"workerlivekit.JobPublisher(",
+		"workerlivekit.RoomLocalParticipant(",
+	}
+
+	data, err := os.ReadFile("job.go")
+	if err != nil {
+		t.Fatalf("read job.go: %v", err)
+	}
+	for _, forbiddenCall := range forbiddenCalls {
+		if strings.Contains(string(data), forbiddenCall) {
+			t.Fatalf("job.go calls %s; use the LiveKit job context facade", forbiddenCall)
+		}
+	}
+}

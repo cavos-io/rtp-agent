@@ -33,7 +33,7 @@ func currentInferenceContextHeaders() map[string]string {
 	if !ok || ctx == nil || ctx.Job == nil {
 		return nil
 	}
-	return workerlivekit.JobInferenceHeaders(ctx.Job)
+	return workerlivekit.JobContextInferenceHeaders(ctx.Job)
 }
 
 type jobContextStack struct {
@@ -320,19 +320,19 @@ func (c *JobContext) API() *JobAPI {
 }
 
 func (c *JobContext) ParticipantIdentity() string {
-	return workerlivekit.JobParticipantIdentity(c.Job, c.AcceptArguments.Identity)
+	return workerlivekit.JobContextParticipantIdentity(c.Job, c.AcceptArguments.Identity)
 }
 
 func (c *JobContext) LocalParticipantIdentity() string {
-	return workerlivekit.LocalParticipantIdentity(c.token, c.ParticipantIdentity())
+	return workerlivekit.JobContextLocalParticipantIdentity(c.token, c.ParticipantIdentity())
 }
 
 func (c *JobContext) TokenClaims() (*workerlivekit.ClaimGrants, error) {
-	return workerlivekit.TokenClaims(c.token)
+	return workerlivekit.JobContextTokenClaims(c.token)
 }
 
 func (c *JobContext) JobID() string {
-	return workerlivekit.JobID(c.Job)
+	return workerlivekit.JobContextJobID(c.Job)
 }
 
 func (c *JobContext) IsFakeJob() bool {
@@ -406,22 +406,22 @@ func (c *JobContext) MakeSessionReport(sessions ...*agent.AgentSession) (*agent.
 }
 
 func (c *JobContext) AvatarStartInfo() agent.AvatarStartInfo {
-	return workerlivekit.JobAvatarStartInfo(c.Job, c.url, c.token, c.LocalParticipantIdentity())
+	return workerlivekit.JobContextAvatarStartInfo(c.Job, c.url, c.token, c.LocalParticipantIdentity())
 }
 
 func (c *JobContext) RoomInfo() *workerlivekit.Room {
-	return workerlivekit.JobRoom(c.Job)
+	return workerlivekit.JobContextRoom(c.Job)
 }
 
 func (c *JobContext) PublisherInfo() *workerlivekit.ParticipantInfo {
-	return workerlivekit.JobPublisher(c.Job)
+	return workerlivekit.JobContextPublisher(c.Job)
 }
 
 func (c *JobContext) Agent() *workerlivekit.LocalParticipant {
 	if c == nil {
 		return nil
 	}
-	return workerlivekit.RoomLocalParticipant(c.Room)
+	return workerlivekit.JobContextLocalParticipant(c.Room)
 }
 
 var jobContextNewRoom = workerlivekit.NewRoom
