@@ -647,36 +647,38 @@ func (s *runContextFillerScheduler) nextText(step int) (string, bool) {
 }
 
 func (s *runContextFillerScheduler) waitForDwell(ctx context.Context, agentEvents <-chan AgentStateChangedEvent, userEvents <-chan UserStateChangedEvent) bool {
+	timer := time.NewTimer(s.opts.Delay)
+	defer timer.Stop()
 	for {
-		timer := time.NewTimer(s.opts.Delay)
-		reset := false
 		select {
 		case <-timer.C:
 			return true
 		case <-ctx.Done():
-			reset = false
+			return false
 		case <-s.interruptDone():
-			reset = false
+			return false
 		case <-s.reset:
-			reset = true
+			resetTimer(timer, s.opts.Delay)
 		case ev := <-agentEvents:
-			reset = ev.NewState == AgentStateSpeaking || ev.NewState == AgentStateThinking
+			if ev.NewState == AgentStateSpeaking || ev.NewState == AgentStateThinking {
+				resetTimer(timer, s.opts.Delay)
+			}
 		case ev := <-userEvents:
-			reset = ev.NewState == UserStateSpeaking
-		}
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
+			if ev.NewState == UserStateSpeaking {
+				resetTimer(timer, s.opts.Delay)
 			}
 		}
-		if !reset && ctx.Err() != nil {
-			return false
-		}
-		if !reset && s.isInterrupted() {
-			return false
+	}
+}
+
+func resetTimer(timer *time.Timer, duration time.Duration) {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
 		}
 	}
+	timer.Reset(duration)
 }
 
 func (s *runContextFillerScheduler) waitForInterval(ctx context.Context, interval time.Duration, agentEvents <-chan AgentStateChangedEvent, userEvents <-chan UserStateChangedEvent) bool {
@@ -702,13 +704,6 @@ func (s *runContextFillerScheduler) waitForInterval(ctx context.Context, interva
 			}
 		}
 	}
-}
-
-func (s *runContextFillerScheduler) isInterrupted() bool {
-	if s.runCtx == nil || s.runCtx.SpeechHandle == nil {
-		return false
-	}
-	return s.runCtx.SpeechHandle.IsInterrupted()
 }
 
 func (s *runContextFillerScheduler) interruptDone() <-chan struct{} {
