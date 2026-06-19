@@ -96,6 +96,40 @@ func TestStartJobRequestCarriesRunningJobInfo(t *testing.T) {
 	}
 }
 
+func TestRunningJobInfoConvertsToLiveKitAndBack(t *testing.T) {
+	info := RunningJobInfo{
+		AcceptArguments: JobAcceptArguments{
+			Name:       "support",
+			Identity:   "agent-job-a",
+			Metadata:   `{"tier":"gold"}`,
+			Attributes: map[string]string{"tier": "gold"},
+		},
+		Job:      &livekit.Job{Id: "job-a"},
+		URL:      "wss://livekit.example",
+		Token:    "token-a",
+		WorkerID: "worker-a",
+		FakeJob:  true,
+	}
+
+	livekitInfo := ToLiveKitRunningJobInfo(info)
+	livekitInfo.AcceptArguments.Attributes["tier"] = "platinum"
+	if info.AcceptArguments.Attributes["tier"] != "gold" {
+		t.Fatalf("ToLiveKitRunningJobInfo mutated source attributes to %q, want gold", info.AcceptArguments.Attributes["tier"])
+	}
+
+	roundTrip := FromLiveKitRunningJobInfo(livekitInfo)
+	roundTrip.AcceptArguments.Attributes["tier"] = "silver"
+	if livekitInfo.AcceptArguments.Attributes["tier"] != "platinum" {
+		t.Fatalf("FromLiveKitRunningJobInfo mutated source attributes to %q, want platinum", livekitInfo.AcceptArguments.Attributes["tier"])
+	}
+	if roundTrip.Job != info.Job {
+		t.Fatal("FromLiveKitRunningJobInfo changed job pointer, want shallow job copy")
+	}
+	if roundTrip.Token != "token-a" || roundTrip.WorkerID != "worker-a" || !roundTrip.FakeJob {
+		t.Fatalf("roundTrip = %#v, want running job fields preserved", roundTrip)
+	}
+}
+
 func TestReloadIPCMessagesRoundTripActiveJobs(t *testing.T) {
 	resp := ActiveJobsResponse{
 		Jobs: []RunningJobInfo{

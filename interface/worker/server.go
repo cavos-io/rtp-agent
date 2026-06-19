@@ -304,7 +304,7 @@ func (s *AgentServer) ActiveRunningJobs() []workeripc.RunningJobInfo {
 }
 
 func runningJobInfoFromContext(jobCtx *JobContext) workeripc.RunningJobInfo {
-	return workerlivekit.RunningJobInfoSnapshot(workerlivekit.RunningJobInfoOptions{
+	return workeripc.FromLiveKitRunningJobInfo(workerlivekit.RunningJobInfoSnapshot(workerlivekit.RunningJobInfoOptions{
 		AcceptArguments: workerlivekit.JobAcceptArguments{
 			Name:       jobCtx.AcceptArguments.Name,
 			Identity:   jobCtx.AcceptArguments.Identity,
@@ -316,7 +316,7 @@ func runningJobInfoFromContext(jobCtx *JobContext) workeripc.RunningJobInfo {
 		Token:    jobCtx.token,
 		WorkerID: jobCtx.WorkerID(),
 		FakeJob:  jobCtx.fakeJob,
-	})
+	}))
 }
 
 func jobLogValues(jobCtx *JobContext, values ...any) []any {
@@ -340,7 +340,7 @@ func jobLogValues(jobCtx *JobContext, values ...any) []any {
 }
 
 func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.RunningJobInfo, now time.Time) error {
-	refreshed, err := workerlivekit.RefreshRunningJobsForReload(jobs, s.Options.APISecret, now)
+	refreshed, err := workerlivekit.RefreshRunningJobsForReload(workeripc.ToLiveKitRunningJobInfos(jobs), s.Options.APISecret, now)
 	if err != nil {
 		return err
 	}
@@ -384,7 +384,7 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 	}
 
 	runningJob := workerlivekit.RunningJobContextValues(workerlivekit.RunningJobContextValueOptions{
-		Info:            info,
+		Info:            workeripc.ToLiveKitRunningJobInfo(info),
 		OverrideURL:     s.Options.WSRL,
 		DefaultWorkerID: s.workerID,
 	})
@@ -1569,13 +1569,14 @@ func callWorkerRegisteredHandler(handler WorkerRegisteredHandler, workerID strin
 
 func (s *AgentServer) reportActiveJobs() {
 	runningJobs := s.ActiveRunningJobs()
-	jobIDs := workerlivekit.MigratableRunningJobIDs(runningJobs)
+	livekitJobs := workeripc.ToLiveKitRunningJobInfos(runningJobs)
+	jobIDs := workerlivekit.MigratableRunningJobIDs(livekitJobs)
 
 	if len(jobIDs) == 0 {
 		return
 	}
 
-	if err := s.sendWorkerMessage(workerlivekit.MigrateRunningJobsMessage(runningJobs)); err != nil {
+	if err := s.sendWorkerMessage(workerlivekit.MigrateRunningJobsMessage(livekitJobs)); err != nil {
 		logger.Logger.Errorw("failed to report active jobs", err, "jobIds", jobIDs)
 	}
 }
