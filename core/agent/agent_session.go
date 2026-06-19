@@ -119,6 +119,7 @@ var (
 	ErrAgentSessionUserdataNotSet                 = errors.New("AgentSession userdata is not set")
 	ErrAgentSessionJobContextNotSet               = errors.New("agent session job context is not set")
 	errGenerateReplyMissingLLM                    = errors.New("trying to generate reply without an LLM model")
+	errSayMissingTTSWithAudioOutput               = errors.New("trying to generate speech from text without a TTS model or a RealtimeSession that supports say(); add a TTS model to AgentSession to enable say()")
 	errAgentSessionClosingSay                     = agentSessionClosingError("AgentSession is closing, cannot use say()")
 	errAgentSessionClosingReply                   = agentSessionClosingError("AgentSession is closing, cannot use generate_reply()")
 	errRealtimeTurnDetectionInterruptionsDisabled = errors.New("the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False, disable turn_detection in the RealtimeModel and use VAD on the AgentSession instead")
@@ -2464,6 +2465,12 @@ func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*Sp
 			return nil, errAgentSessionClosingSay
 		}
 		return nil, ErrAgentSessionNotRunning
+	}
+	if s.AudioOutputController() != nil && s.TTS == nil {
+		nativeSay, ok := assistant.(nativeSayAssistant)
+		if !ok || !nativeSay.SupportsNativeSay() {
+			return nil, errSayMissingTTSWithAudioOutput
+		}
 	}
 
 	logger.Logger.Infow("Saying text", "text", opts.Text)
