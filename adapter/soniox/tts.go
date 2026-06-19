@@ -160,6 +160,7 @@ func (t *SonioxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		sampleRate: t.sampleRate,
 		events:     make(chan *tts.SynthesizedAudio, 100),
 		errCh:      make(chan error, 1),
+		localDone:  make(chan struct{}),
 	}
 	stream.writeMessage = stream.writeWebsocketMessage
 	go stream.readLoop()
@@ -192,6 +193,7 @@ type sonioxTTSSynthesizeStream struct {
 	closed     bool
 	audioEnded bool
 	configSent bool
+	localDone  chan struct{}
 
 	writeMessage func(map[string]any) error
 }
@@ -223,6 +225,7 @@ func (s *sonioxTTSSynthesizeStream) Flush() error {
 		return io.ErrClosedPipe
 	}
 	if !s.configSent {
+		s.closeLocalDoneLocked()
 		return nil
 	}
 	if err := s.writeMessageData(buildSonioxTTSTextMessage(s.streamID, "", true)); err != nil {
@@ -278,6 +281,17 @@ func (s *sonioxTTSSynthesizeStream) writeWebsocketMessage(message map[string]any
 	return writeSonioxTTSMessage(s.conn, message)
 }
 
+func (s *sonioxTTSSynthesizeStream) closeLocalDoneLocked() {
+	if s.localDone == nil {
+		s.localDone = make(chan struct{})
+	}
+	select {
+	case <-s.localDone:
+	default:
+		close(s.localDone)
+	}
+}
+
 func (s *sonioxTTSSynthesizeStream) closeAfterWriteFailureLocked() {
 	s.closed = true
 	if s.cancel != nil {
@@ -289,6 +303,7 @@ func (s *sonioxTTSSynthesizeStream) closeAfterWriteFailureLocked() {
 }
 
 func (s *sonioxTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
+	localDone := s.localDone
 	select {
 	case audio, ok := <-s.events:
 		if !ok {
@@ -300,6 +315,8 @@ func (s *sonioxTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 			}
 		}
 		return audio, nil
+	case <-localDone:
+		return nil, io.EOF
 	case err := <-s.errCh:
 		return nil, err
 	case <-s.ctx.Done():

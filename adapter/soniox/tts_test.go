@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
@@ -139,9 +140,13 @@ func TestSonioxTTSOutboundMessagesMatchReference(t *testing.T) {
 func TestSonioxTTSStreamLazilySendsStartConfigLikeReference(t *testing.T) {
 	provider := NewSonioxTTS("test-key")
 	var sent []map[string]any
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	stream := &sonioxTTSSynthesizeStream{
 		provider: provider,
 		streamID: "stream-1",
+		ctx:      ctx,
+		events:   make(chan *tts.SynthesizedAudio, 1),
 		writeMessage: func(message map[string]any) error {
 			sent = append(sent, message)
 			return nil
@@ -154,7 +159,20 @@ func TestSonioxTTSStreamLazilySendsStartConfigLikeReference(t *testing.T) {
 	if len(sent) != 0 {
 		t.Fatalf("messages after empty flush = %#v, want none", sent)
 	}
+	if _, err := nextSonioxTTSAudioWithTimeout(t, stream); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after empty flush error = %v, want EOF", err)
+	}
 
+	stream = &sonioxTTSSynthesizeStream{
+		provider: provider,
+		streamID: "stream-1",
+		ctx:      ctx,
+		events:   make(chan *tts.SynthesizedAudio, 1),
+		writeMessage: func(message map[string]any) error {
+			sent = append(sent, message)
+			return nil
+		},
+	}
 	if err := stream.PushText("hello"); err != nil {
 		t.Fatalf("PushText error = %v", err)
 	}
@@ -335,5 +353,25 @@ func assertSonioxTTSAudio(t *testing.T, audio *tts.SynthesizedAudio, want []byte
 	}
 	if audio.Frame.SamplesPerChannel != 2 {
 		t.Fatalf("samples = %d, want 2", audio.Frame.SamplesPerChannel)
+	}
+}
+
+func nextSonioxTTSAudioWithTimeout(t *testing.T, stream *sonioxTTSSynthesizeStream) (*tts.SynthesizedAudio, error) {
+	t.Helper()
+	type nextResult struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	resultCh := make(chan nextResult, 1)
+	go func() {
+		audio, err := stream.Next()
+		resultCh <- nextResult{audio: audio, err: err}
+	}()
+	select {
+	case result := <-resultCh:
+		return result.audio, result.err
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for Soniox TTS Next")
+		return nil, nil
 	}
 }
