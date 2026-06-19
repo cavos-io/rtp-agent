@@ -72,11 +72,11 @@ func TestDeepgramSpeechEventPreservesAlternativeWords(t *testing.T) {
 	if len(alt.Words) != 2 {
 		t.Fatalf("words = %d, want 2", len(alt.Words))
 	}
-	if got := alt.Words[0]; got.Text != "hello" || got.StartTime != 1.5 || got.EndTime != 1.8 || got.Confidence != 0.99 || got.SpeakerID != "2" {
-		t.Fatalf("first word = %+v, want hello timing with speaker 2", got)
+	if got := alt.Words[0]; got.Text != "hello" || got.StartTime != 1.5 || got.EndTime != 1.8 || got.Confidence != 0.99 || got.SpeakerID != "" {
+		t.Fatalf("first word = %+v, want hello timing without word speaker ID", got)
 	}
-	if got := alt.Words[1]; got.Text != "world" || got.StartTime != 1.9 || got.EndTime != 2.4 || got.Confidence != 0.97 || got.SpeakerID != "2" {
-		t.Fatalf("second word = %+v, want world timing with speaker 2", got)
+	if got := alt.Words[1]; got.Text != "world" || got.StartTime != 1.9 || got.EndTime != 2.4 || got.Confidence != 0.97 || got.SpeakerID != "" {
+		t.Fatalf("second word = %+v, want world timing without word speaker ID", got)
 	}
 }
 
@@ -97,6 +97,29 @@ func TestDeepgramSpeechEventOmitsInterimSpeakerID(t *testing.T) {
 	}
 	if got := event.Alternatives[0].SpeakerID; got != "" {
 		t.Fatalf("interim speaker id = %q, want empty", got)
+	}
+}
+
+func TestDeepgramSpeechEventOmitsReferenceWordSpeakerIDs(t *testing.T) {
+	speaker := 2
+	resp := dgResponse{Type: "Results", IsFinal: true}
+	resp.Channel.Alternatives = []dgAlternative{
+		{
+			Transcript: "hello",
+			Confidence: 0.98,
+			Words:      []dgWord{{Word: "hello", Start: 1.5, End: 1.8, Confidence: 0.99, Speaker: &speaker}},
+		},
+	}
+
+	event := deepgramSpeechEvent(resp)
+	if event == nil || len(event.Alternatives) != 1 || len(event.Alternatives[0].Words) != 1 {
+		t.Fatalf("event = %+v, want one final alternative with one word", event)
+	}
+	if got := event.Alternatives[0].SpeakerID; got != "S2" {
+		t.Fatalf("alternative speaker id = %q, want S2", got)
+	}
+	if got := event.Alternatives[0].Words[0].SpeakerID; got != "" {
+		t.Fatalf("word speaker id = %q, want empty like reference TimedString", got)
 	}
 }
 
@@ -199,6 +222,7 @@ func TestDeepgramSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
 func TestDeepgramRecognizeSpeechEventPreservesAlternativeWords(t *testing.T) {
 	speaker := 0
 	resp := dgRecognitionResponse{}
+	resp.Metadata.RequestID = "recognize-1"
 	resp.Results.Channels = []dgRecognitionChannel{
 		{
 			Alternatives: []dgAlternative{
@@ -218,6 +242,9 @@ func TestDeepgramRecognizeSpeechEventPreservesAlternativeWords(t *testing.T) {
 	if event.Type != stt.SpeechEventFinalTranscript {
 		t.Fatalf("event type = %v, want %v", event.Type, stt.SpeechEventFinalTranscript)
 	}
+	if event.RequestID != "recognize-1" {
+		t.Fatalf("request id = %q, want recognize-1", event.RequestID)
+	}
 	if len(event.Alternatives) != 1 {
 		t.Fatalf("alternatives = %d, want 1", len(event.Alternatives))
 	}
@@ -232,11 +259,11 @@ func TestDeepgramRecognizeSpeechEventPreservesAlternativeWords(t *testing.T) {
 	if len(alt.Words) != 2 {
 		t.Fatalf("words = %d, want 2", len(alt.Words))
 	}
-	if got := alt.Words[0]; got.Text != "hello" || got.StartTime != 0.1 || got.EndTime != 0.3 || got.Confidence != 0.93 || got.SpeakerID != "0" {
-		t.Fatalf("first word = %+v, want hello timing with speaker 0", got)
+	if got := alt.Words[0]; got.Text != "hello" || got.StartTime != 0.1 || got.EndTime != 0.3 || got.Confidence != 0.93 || got.SpeakerID != "" {
+		t.Fatalf("first word = %+v, want hello timing without word speaker ID", got)
 	}
-	if got := alt.Words[1]; got.Text != "offline" || got.StartTime != 0.4 || got.EndTime != 0.8 || got.Confidence != 0.9 || got.SpeakerID != "0" {
-		t.Fatalf("second word = %+v, want offline timing with speaker 0", got)
+	if got := alt.Words[1]; got.Text != "offline" || got.StartTime != 0.4 || got.EndTime != 0.8 || got.Confidence != 0.9 || got.SpeakerID != "" {
+		t.Fatalf("second word = %+v, want offline timing without word speaker ID", got)
 	}
 }
 
@@ -1069,6 +1096,61 @@ func TestDeepgramSTTStreamChunksAndFinalizesReferenceAudio(t *testing.T) {
 	}
 	if got := finalize["type"]; got != "Finalize" {
 		t.Fatalf("Finalize type = %q, want Finalize", got)
+	}
+}
+
+func TestDeepgramSTTStreamCloseDrainsFinalTranscript(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	closeSent := make(chan struct{})
+	closeDone := make(chan error, 1)
+	stream := &deepgramStream{
+		ctx:    ctx,
+		cancel: cancel,
+		events: make(chan *stt.SpeechEvent, 1),
+		writeJSON: func(payload any) error {
+			msg, ok := payload.(map[string]string)
+			if ok && msg["type"] == "CloseStream" {
+				close(closeSent)
+			}
+			return nil
+		},
+	}
+
+	go func() {
+		closeDone <- stream.Close()
+	}()
+
+	select {
+	case <-closeSent:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CloseStream")
+	}
+
+	select {
+	case <-ctx.Done():
+		t.Fatal("stream context canceled before final transcript drain")
+	default:
+	}
+
+	want := &stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text: "final words",
+		}},
+	}
+	stream.sendEvent(want)
+
+	select {
+	case got := <-stream.events:
+		if got.Type != stt.SpeechEventFinalTranscript || got.Alternatives[0].Text != "final words" {
+			t.Fatalf("event = %#v, want drained final transcript", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for final transcript during close drain")
+	}
+
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close error = %v", err)
 	}
 }
 

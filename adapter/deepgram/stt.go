@@ -521,6 +521,9 @@ type dgRecognitionChannel struct {
 }
 
 type dgRecognitionResponse struct {
+	Metadata struct {
+		RequestID string `json:"request_id"`
+	} `json:"metadata"`
 	Results struct {
 		Channels []dgRecognitionChannel `json:"channels"`
 	} `json:"results"`
@@ -546,7 +549,8 @@ func deepgramRecognizeSpeechEvent(resp dgRecognitionResponse) *stt.SpeechEvent {
 
 func deepgramRecognizeSpeechEventForLanguage(resp dgRecognitionResponse, languageStr string) *stt.SpeechEvent {
 	event := &stt.SpeechEvent{
-		Type: stt.SpeechEventFinalTranscript,
+		Type:      stt.SpeechEventFinalTranscript,
+		RequestID: resp.Metadata.RequestID,
 		Alternatives: []stt.SpeechData{
 			{Language: languageStr},
 		},
@@ -685,17 +689,9 @@ func deepgramTimedStringsOffset(words []dgWord, startTimeOffset float64) []stt.T
 			EndTime:         word.End + startTimeOffset,
 			Confidence:      word.Confidence,
 			StartTimeOffset: startTimeOffset,
-			SpeakerID:       deepgramSpeakerID(word.Speaker),
 		})
 	}
 	return timed
-}
-
-func deepgramSpeakerID(speaker *int) string {
-	if speaker == nil {
-		return ""
-	}
-	return strconv.Itoa(*speaker)
 }
 
 func (s *deepgramStream) readLoop() {
@@ -863,12 +859,12 @@ func (s *deepgramStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	if s.cancel != nil {
-		s.cancel()
-	}
 	_ = s.writeJSONData(map[string]string{"type": "CloseStream"})
 	// Wait a tiny bit for the final transcript
 	time.Sleep(50 * time.Millisecond)
+	if s.cancel != nil {
+		s.cancel()
+	}
 	return s.closeConnection()
 }
 

@@ -408,5 +408,7 @@ func (s *azureTTSChunkedStream) Close() error {
 	if s.body == nil {
 		return nil
 	}
-	return s.body.Close()
+	body := s.body
+	s.body = nil
+	return body.Close()
 }
