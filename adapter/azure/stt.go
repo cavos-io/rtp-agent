@@ -169,7 +169,11 @@ func NewAzureSTT(apiKey string, region string, opts ...AzureSTTOption) (*AzureST
 	if provider.speechEndpoint != "" && provider.region != "" {
 		provider.region = ""
 	}
-	if provider.speechHost == "" && provider.speechEndpoint == "" && !((provider.apiKey != "" && provider.region != "") || (provider.authToken != "" && provider.region != "")) {
+	hasSpeechHost := provider.speechHost != ""
+	hasKeyAndRegion := provider.apiKey != "" && provider.region != ""
+	hasTokenAndRegion := provider.authToken != "" && provider.region != ""
+	hasKeyAndEndpoint := provider.apiKey != "" && provider.speechEndpoint != ""
+	if !(hasSpeechHost || hasKeyAndRegion || hasTokenAndRegion || hasKeyAndEndpoint) {
 		return nil, fmt.Errorf("azure speech config requires AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or AZURE_SPEECH_AUTH_TOKEN and AZURE_SPEECH_REGION or AZURE_SPEECH_KEY and AZURE_SPEECH_ENDPOINT")
 	}
 	return provider, nil

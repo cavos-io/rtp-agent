@@ -97,6 +97,18 @@ func TestAzureSTTRequiresSpeechConfig(t *testing.T) {
 	}
 }
 
+func TestAzureSTTRequiresKeyWithSpeechEndpoint(t *testing.T) {
+	t.Setenv(azureSpeechHostEnv, "")
+	t.Setenv(azureSpeechKeyEnv, "")
+	t.Setenv(azureSpeechRegionEnv, "")
+
+	_, err := NewAzureSTT("", "", WithAzureSTTSpeechEndpoint("https://speech.endpoint.test/custom/stt"))
+
+	if err == nil || !strings.Contains(err.Error(), "AZURE_SPEECH_KEY") {
+		t.Fatalf("NewAzureSTT error = %v, want endpoint auth config error", err)
+	}
+}
+
 func TestAzureSTTRecognizeUsesRESTRequestAndMapsDetailedResult(t *testing.T) {
 	provider, err := NewAzureSTT("key", "eastus")
 	if err != nil {
