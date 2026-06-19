@@ -231,6 +231,24 @@ func TestDeepgramTTSChunkedStreamReturnsAPIConnectionErrorOnReadFailure(t *testi
 	}
 }
 
+func TestDeepgramTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
+	body := &deepgramTTSCountingReadCloser{}
+	stream := &deepgramTTSChunkedStream{
+		resp:       &http.Response{Body: body},
+		sampleRate: 24000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("first Close() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	if body.closeCalls != 1 {
+		t.Fatalf("body close calls = %d, want 1", body.closeCalls)
+	}
+}
+
 func TestDeepgramTTSStreamURLUsesReferenceOptions(t *testing.T) {
 	provider := NewDeepgramTTS("test-key", "")
 
@@ -671,6 +689,19 @@ func (r deepgramTTSReadCloser) Read([]byte) (int, error) {
 }
 
 func (r deepgramTTSReadCloser) Close() error {
+	return nil
+}
+
+type deepgramTTSCountingReadCloser struct {
+	closeCalls int
+}
+
+func (r *deepgramTTSCountingReadCloser) Read([]byte) (int, error) {
+	return 0, io.EOF
+}
+
+func (r *deepgramTTSCountingReadCloser) Close() error {
+	r.closeCalls++
 	return nil
 }
 

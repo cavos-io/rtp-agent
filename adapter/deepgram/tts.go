@@ -210,9 +210,15 @@ func deepgramTTSBaseURL(t *DeepgramTTS, websocketURL bool) url.URL {
 type deepgramTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
+	mu         sync.Mutex
 }
 
 func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.resp == nil || s.resp.Body == nil {
+		return nil, io.EOF
+	}
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
 	if err != nil {
@@ -236,7 +242,15 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *deepgramTTSChunkedStream) Close() error {
-	return s.resp.Body.Close()
+	s.mu.Lock()
+	if s.resp == nil || s.resp.Body == nil {
+		s.mu.Unlock()
+		return nil
+	}
+	body := s.resp.Body
+	s.resp = nil
+	s.mu.Unlock()
+	return body.Close()
 }
 
 type deepgramTTSStream struct {
