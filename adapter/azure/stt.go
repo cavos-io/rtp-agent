@@ -553,6 +553,8 @@ type azureSTTStream struct {
 	mu              sync.Mutex
 	closed          bool
 	audioWritten    bool
+	sessionStarted  bool
+	pendingAudio    []azureSTTPendingAudio
 	reconnectNext   bool
 	sessionStopped  bool
 	reconnects      int
@@ -562,6 +564,11 @@ type azureSTTStream struct {
 	speaking        bool
 	ctx             context.Context
 	cancel          context.CancelFunc
+}
+
+type azureSTTPendingAudio struct {
+	contentType string
+	data        []byte
 }
 
 func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -580,18 +587,15 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 		}
 		s.reconnectNext = false
 	}
-	for {
-		if err := s.conn.WriteMessage(websocket.BinaryMessage, buildAzureSTTBinaryMessage("audio", s.connectionID, azureSTTStreamAudioContentType(s.provider, frame), frame.Data)); err != nil {
-			if reconnectErr := s.reconnectLocked(); reconnectErr == nil {
-				continue
-			}
-			s.finishWithErrorLocked(err)
-			return err
-		}
-		break
+	audio := azureSTTPendingAudio{
+		contentType: azureSTTStreamAudioContentType(s.provider, frame),
+		data:        append([]byte(nil), frame.Data...),
 	}
-	s.audioWritten = true
-	return nil
+	if !s.sessionStarted {
+		s.pendingAudio = append(s.pendingAudio, audio)
+		return nil
+	}
+	return s.writeAudioLocked(audio)
 }
 
 func azureSTTStreamAudioContentType(provider *AzureSTT, frame *model.AudioFrame) string {
@@ -628,16 +632,7 @@ func (s *azureSTTStream) Close() error {
 func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 	select {
 	case err := <-s.errCh:
-		s.mu.Lock()
-		if s.sessionStopped && !s.closed {
-			s.finishWithErrorLocked(err)
-			select {
-			case <-s.errCh:
-			default:
-			}
-		}
-		s.mu.Unlock()
-		return nil, err
+		return nil, s.finalizeSessionStopError(err)
 	default:
 	}
 	s.mu.Lock()
@@ -664,10 +659,23 @@ func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 		}
 		return event, nil
 	case err := <-s.errCh:
-		return nil, err
+		return nil, s.finalizeSessionStopError(err)
 	case <-s.ctx.Done():
 		return nil, s.ctx.Err()
 	}
+}
+
+func (s *azureSTTStream) finalizeSessionStopError(err error) error {
+	s.mu.Lock()
+	if s.sessionStopped && !s.closed {
+		s.finishWithErrorLocked(err)
+		select {
+		case <-s.errCh:
+		default:
+		}
+	}
+	s.mu.Unlock()
+	return err
 }
 
 func (s *azureSTTStream) updateOptions(language string, reconnect bool) {
@@ -703,6 +711,8 @@ func (s *azureSTTStream) reconnectLocked() error {
 	}
 	s.conn = conn
 	s.connectionID = connectionID
+	s.audioWritten = false
+	s.sessionStarted = false
 	s.sessionStopped = false
 	_ = oldConn.Close()
 	go s.readLoop(conn)
@@ -776,6 +786,14 @@ func parseAzureSTTMessage(language string, payload []byte) *stt.SpeechEvent {
 }
 
 func (s *azureSTTStream) parseMessage(payload []byte) *stt.SpeechEvent {
+	headers, _ := splitAzureSTTMessage(payload)
+	switch headers["Path"] {
+	case "turn.start":
+		s.markSessionStarted()
+		return nil
+	case "turn.end":
+		return nil
+	}
 	event := parseAzureSTTMessageWithOffset(s.language, payload, s.StartTimeOffset())
 	if event == nil {
 		return nil
@@ -797,6 +815,44 @@ func (s *azureSTTStream) parseMessage(payload []byte) *stt.SpeechEvent {
 		s.speaking = false
 	}
 	return event
+}
+
+func (s *azureSTTStream) markSessionStarted() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.sessionStarted {
+		return
+	}
+	s.sessionStarted = true
+	pending := s.pendingAudio
+	s.pendingAudio = nil
+	for i, audio := range pending {
+		if err := s.writeAudioLocked(audio); err != nil {
+			return
+		}
+		if !s.sessionStarted {
+			s.pendingAudio = append(s.pendingAudio, pending[i+1:]...)
+			return
+		}
+	}
+}
+
+func (s *azureSTTStream) writeAudioLocked(audio azureSTTPendingAudio) error {
+	for {
+		if err := s.conn.WriteMessage(websocket.BinaryMessage, buildAzureSTTBinaryMessage("audio", s.connectionID, audio.contentType, audio.data)); err != nil {
+			if reconnectErr := s.reconnectLocked(); reconnectErr == nil {
+				if !s.sessionStarted {
+					s.pendingAudio = append([]azureSTTPendingAudio{audio}, s.pendingAudio...)
+					return nil
+				}
+				continue
+			}
+			s.finishWithErrorLocked(err)
+			return err
+		}
+		s.audioWritten = true
+		return nil
+	}
 }
 
 func (s *azureSTTStream) StartTimeOffset() float64 {
