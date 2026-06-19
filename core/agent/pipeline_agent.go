@@ -1550,6 +1550,9 @@ func (va *PipelineAgent) ttsInferenceOptions(session *AgentSession) []TTSInferen
 	if va.useTTSAlignedTranscript(session) {
 		opts = append(opts, WithTTSPreserveTimedTranscript())
 	}
+	if session != nil && session.AudioOutputController() != nil {
+		opts = append(opts, WithTTSRequireAudio())
+	}
 	return opts
 }
 

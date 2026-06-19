@@ -897,6 +897,9 @@ func multimodalTTSInferenceOptions(session *AgentSession) []TTSInferenceOption {
 	} else if session.Options.TTSTextTransformsSet {
 		opts = append(opts, WithTTSTextTransforms(session.Options.TTSTextTransforms))
 	}
+	if session.AudioOutputController() != nil {
+		opts = append(opts, WithTTSRequireAudio())
+	}
 	return opts
 }
 
