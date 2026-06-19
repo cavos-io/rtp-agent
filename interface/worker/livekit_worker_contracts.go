@@ -142,6 +142,14 @@ type TrackPublicationWaitOptions = workerlivekit.TrackPublicationWaitOptions
 
 type JobRequest = workerlivekit.JobRequest
 
+type AcceptedJobRoomConnectOptions = workerlivekit.AcceptedJobRoomConnectOptions
+
+type RoomCallbackHandlers = workerlivekit.RoomCallbackHandlers
+
+type RemoteTrackSubscriptionResult = workerlivekit.RemoteTrackSubscriptionResult
+
+type RoomConnector = workerlivekit.RoomConnector
+
 var livekitServerRegisterWorkerMessage = workerlivekit.ServerRegisterWorkerMessage
 
 var livekitServerAvailableWorkerStatusMessage = workerlivekit.ServerAvailableWorkerStatusMessage
@@ -261,3 +269,21 @@ var livekitJobContextRoom = workerlivekit.JobContextRoom
 var livekitJobContextPublisher = workerlivekit.JobContextPublisher
 
 var livekitJobContextLocalParticipant = workerlivekit.JobContextLocalParticipant
+
+var livekitNewJobContextRoom = workerlivekit.NewJobContextRoom
+
+var livekitJobContextNormalizeConnectOptions = workerlivekit.JobContextNormalizeConnectOptions
+
+var livekitJobContextJoinPreparedRoom = workerlivekit.JobContextJoinPreparedRoom
+
+var livekitJobContextRemoteParticipantViews = workerlivekit.JobContextRemoteParticipantViews
+
+var livekitJobContextRoomName = workerlivekit.JobContextRoomName
+
+var livekitJobContextApplyAutoSubscribeToRoom = workerlivekit.JobContextApplyAutoSubscribeToRoom
+
+var livekitJobContextRoomCallbackWithHandlers = workerlivekit.JobContextRoomCallbackWithHandlers
+
+var livekitJobContextParticipantInfoFromRemoteParticipant = workerlivekit.JobContextParticipantInfoFromRemoteParticipant
+
+var livekitJobContextUpsertParticipantInfo = workerlivekit.JobContextUpsertParticipantInfo

@@ -401,12 +401,12 @@ func (c *JobContext) Agent() *LocalParticipant {
 	return livekitJobContextLocalParticipant(c.Room)
 }
 
-var jobContextNewRoom = workerlivekit.NewJobContextRoom
+var jobContextNewRoom = livekitNewJobContextRoom
 
-var jobContextRoomConnector workerlivekit.RoomConnector
+var jobContextRoomConnector RoomConnector
 
 func (c *JobContext) NewRoom(cb *RoomCallback, options ...ConnectOptions) *SDKRoom {
-	opts := workerlivekit.JobContextNormalizeConnectOptions(options...)
+	opts := livekitJobContextNormalizeConnectOptions(options...)
 	return jobContextNewRoom(c.roomCallbackWithEntrypoints(cb, opts.AutoSubscribe))
 }
 
@@ -414,7 +414,7 @@ func (c *JobContext) Connect(ctx context.Context, cb *RoomCallback, options ...C
 	if c.Room != nil {
 		return nil
 	}
-	opts := workerlivekit.JobContextNormalizeConnectOptions(options...)
+	opts := livekitJobContextNormalizeConnectOptions(options...)
 	room := c.NewRoom(cb, opts)
 	return c.ConnectPreparedRoom(ctx, room, opts)
 }
@@ -429,8 +429,8 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *SDKRoom, opt
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	opts := workerlivekit.JobContextNormalizeConnectOptions(options...)
-	if err := workerlivekit.JobContextJoinPreparedRoom(ctx, workerlivekit.AcceptedJobRoomConnectOptions{
+	opts := livekitJobContextNormalizeConnectOptions(options...)
+	if err := livekitJobContextJoinPreparedRoom(ctx, AcceptedJobRoomConnectOptions{
 		Room:          room,
 		URL:           c.url,
 		Token:         c.token,
@@ -445,14 +445,14 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *SDKRoom, opt
 		return err
 	}
 	c.Room = room
-	c.participantsAvailable(workerlivekit.JobContextRemoteParticipantViews(room))
+	c.participantsAvailable(livekitJobContextRemoteParticipantViews(room))
 	c.applyAutoSubscribeOptions(opts.AutoSubscribe)
-	logger.Logger.Infow("Connected to room", "room", workerlivekit.JobContextRoomName(c.Job))
+	logger.Logger.Infow("Connected to room", "room", livekitJobContextRoomName(c.Job))
 	return nil
 }
 
 func (c *JobContext) applyAutoSubscribeOptions(mode AutoSubscribe) {
-	for _, result := range workerlivekit.JobContextApplyAutoSubscribeToRoom(c.Room, string(mode)) {
+	for _, result := range livekitJobContextApplyAutoSubscribeToRoom(c.Room, string(mode)) {
 		if result.Err != nil {
 			logger.Logger.Warnw("failed to subscribe remote track", result.Err, "trackSid", result.TrackSID)
 		}
@@ -460,17 +460,17 @@ func (c *JobContext) applyAutoSubscribeOptions(mode AutoSubscribe) {
 }
 
 func (c *JobContext) roomCallbackWithEntrypoints(cb *RoomCallback, autoSubscribe AutoSubscribe) *RoomCallback {
-	return workerlivekit.JobContextRoomCallbackWithHandlers(cb, workerlivekit.RoomCallbackHandlers{
+	return livekitJobContextRoomCallbackWithHandlers(cb, RoomCallbackHandlers{
 		AutoSubscribe:          string(autoSubscribe),
 		OnParticipantConnected: c.participantAvailable,
-		OnTrackSubscribeError: func(result workerlivekit.RemoteTrackSubscriptionResult) {
+		OnTrackSubscribeError: func(result RemoteTrackSubscriptionResult) {
 			logger.Logger.Warnw("failed to subscribe published remote track", result.Err, "trackSid", result.TrackSID)
 		},
 	})
 }
 
 func (c *JobContext) participantAvailable(participant RemoteParticipantView) {
-	info := workerlivekit.JobContextParticipantInfoFromRemoteParticipant(participant)
+	info := livekitJobContextParticipantInfoFromRemoteParticipant(participant)
 	if info == nil {
 		return
 	}
@@ -479,7 +479,7 @@ func (c *JobContext) participantAvailable(participant RemoteParticipantView) {
 }
 
 func (c *JobContext) rememberAvailableParticipant(info *ParticipantInfo) {
-	c.availableParticipants = workerlivekit.JobContextUpsertParticipantInfo(c.availableParticipants, info)
+	c.availableParticipants = livekitJobContextUpsertParticipantInfo(c.availableParticipants, info)
 }
 
 func (c *JobContext) participantsAvailable(participants []RemoteParticipantView) {
