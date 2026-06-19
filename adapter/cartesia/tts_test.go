@@ -405,6 +405,37 @@ func TestCartesiaTTSStreamFlushUsesReferenceEndPacket(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSStreamPushTextAppendsReferenceTrailingSpace(t *testing.T) {
+	var writes []map[string]any
+	stream := &cartesiaTTSStream{
+		writeJSON: func(msg any) error {
+			payload, ok := msg.(map[string]interface{})
+			if !ok {
+				t.Fatalf("message = %T, want map[string]interface{}", msg)
+			}
+			writes = append(writes, payload)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+
+	if len(writes) != 1 {
+		t.Fatalf("writes = %d, want 1", len(writes))
+	}
+	if writes[0]["context_id"] != "default" {
+		t.Fatalf("context_id = %#v, want default", writes[0]["context_id"])
+	}
+	if writes[0]["transcript"] != "hello " {
+		t.Fatalf("transcript = %#v, want reference trailing space", writes[0]["transcript"])
+	}
+	if writes[0]["continue"] != true {
+		t.Fatalf("continue = %#v, want true", writes[0]["continue"])
+	}
+}
+
 func TestCartesiaTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	stream := &cartesiaTTSStream{

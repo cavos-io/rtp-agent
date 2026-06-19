@@ -426,7 +426,7 @@ func (s *cartesiaTTSStream) PushText(text string) error {
 	}
 	msg := map[string]interface{}{
 		"context_id": "default",
-		"transcript": text,
+		"transcript": text + " ",
 		"continue":   true,
 	}
 	if err := s.writeJSONData(msg); err != nil {
