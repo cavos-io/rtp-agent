@@ -511,7 +511,7 @@ func (c *JobContext) AddParticipantEntrypoint(entrypoint ParticipantEntrypoint, 
 	for _, registered := range c.participantEntrypoints {
 		registeredEntrypoints = append(registeredEntrypoints, reflect.ValueOf(registered.entrypoint).Pointer())
 	}
-	plan, err := workerlivekit.JobContextParticipantEntrypointRegistrationPlan(workerlivekit.ParticipantEntrypointRegistrationOptions{
+	plan, err := livekitJobContextParticipantEntrypointRegistrationPlan(ParticipantEntrypointRegistrationOptions{
 		Entrypoint:            entrypointPointer,
 		RegisteredEntrypoints: registeredEntrypoints,
 		Kinds:                 kinds,
@@ -542,7 +542,7 @@ func (c *JobContext) WaitForParticipant(
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
 	}
-	return workerlivekit.JobContextWaitForParticipant(ctx, c.Room, identity, kinds...)
+	return livekitJobContextWaitForParticipant(ctx, c.Room, identity, kinds...)
 }
 
 func (c *JobContext) WaitForAgent(
@@ -552,7 +552,7 @@ func (c *JobContext) WaitForAgent(
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
 	}
-	return workerlivekit.JobContextWaitForAgent(ctx, c.Room, agentName...)
+	return livekitJobContextWaitForAgent(ctx, c.Room, agentName...)
 }
 
 func (c *JobContext) WaitForTrackPublication(
@@ -563,7 +563,7 @@ func (c *JobContext) WaitForTrackPublication(
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
 	}
-	return workerlivekit.JobContextWaitForTrackPublication(ctx, c.Room, identity, kinds...)
+	return livekitJobContextWaitForTrackPublication(ctx, c.Room, identity, kinds...)
 }
 
 func (c *JobContext) WaitForTrackPublicationWithOptions(
@@ -573,7 +573,7 @@ func (c *JobContext) WaitForTrackPublicationWithOptions(
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
 	}
-	return workerlivekit.JobContextWaitForTrackPublicationWithOptions(ctx, c.Room, options)
+	return livekitJobContextWaitForTrackPublicationWithOptions(ctx, c.Room, options)
 }
 
 func (c *JobContext) WaitForParticipantAttribute(
@@ -585,7 +585,7 @@ func (c *JobContext) WaitForParticipantAttribute(
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return err
 	}
-	return workerlivekit.JobContextWaitForParticipantAttribute(ctx, c.Room, identity, attribute, value)
+	return livekitJobContextWaitForParticipantAttribute(ctx, c.Room, identity, attribute, value)
 }
 
 func (c *JobContext) ensureRoomConnected(ctx context.Context) error {
@@ -605,7 +605,7 @@ func (c *JobContext) scheduleParticipantEntrypoints(participant *ParticipantInfo
 }
 
 func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntrypointRegistration, participant *ParticipantInfo) {
-	plan := workerlivekit.JobContextParticipantEntrypointTaskPlan(
+	plan := livekitJobContextParticipantEntrypointTaskPlan(
 		participant,
 		registration.kinds,
 		reflect.ValueOf(registration.entrypoint).Pointer(),

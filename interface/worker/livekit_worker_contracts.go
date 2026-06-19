@@ -150,6 +150,8 @@ type RemoteTrackSubscriptionResult = workerlivekit.RemoteTrackSubscriptionResult
 
 type RoomConnector = workerlivekit.RoomConnector
 
+type ParticipantEntrypointRegistrationOptions = workerlivekit.ParticipantEntrypointRegistrationOptions
+
 var livekitServerRegisterWorkerMessage = workerlivekit.ServerRegisterWorkerMessage
 
 var livekitServerAvailableWorkerStatusMessage = workerlivekit.ServerAvailableWorkerStatusMessage
@@ -287,3 +289,17 @@ var livekitJobContextRoomCallbackWithHandlers = workerlivekit.JobContextRoomCall
 var livekitJobContextParticipantInfoFromRemoteParticipant = workerlivekit.JobContextParticipantInfoFromRemoteParticipant
 
 var livekitJobContextUpsertParticipantInfo = workerlivekit.JobContextUpsertParticipantInfo
+
+var livekitJobContextParticipantEntrypointRegistrationPlan = workerlivekit.JobContextParticipantEntrypointRegistrationPlan
+
+var livekitJobContextWaitForParticipant = workerlivekit.JobContextWaitForParticipant
+
+var livekitJobContextWaitForAgent = workerlivekit.JobContextWaitForAgent
+
+var livekitJobContextWaitForTrackPublication = workerlivekit.JobContextWaitForTrackPublication
+
+var livekitJobContextWaitForTrackPublicationWithOptions = workerlivekit.JobContextWaitForTrackPublicationWithOptions
+
+var livekitJobContextWaitForParticipantAttribute = workerlivekit.JobContextWaitForParticipantAttribute
+
+var livekitJobContextParticipantEntrypointTaskPlan = workerlivekit.JobContextParticipantEntrypointTaskPlan
