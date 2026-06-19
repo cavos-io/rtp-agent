@@ -169,7 +169,11 @@ func NewAzureSTT(apiKey string, region string, opts ...AzureSTTOption) (*AzureST
 	if provider.speechEndpoint != "" && provider.region != "" {
 		provider.region = ""
 	}
-	if provider.speechHost == "" && provider.speechEndpoint == "" && !((provider.apiKey != "" && provider.region != "") || (provider.authToken != "" && provider.region != "")) {
+	hasSpeechHost := provider.speechHost != ""
+	hasKeyAndRegion := provider.apiKey != "" && provider.region != ""
+	hasTokenAndRegion := provider.authToken != "" && provider.region != ""
+	hasKeyAndEndpoint := provider.apiKey != "" && provider.speechEndpoint != ""
+	if !(hasSpeechHost || hasKeyAndRegion || hasTokenAndRegion || hasKeyAndEndpoint) {
 		return nil, fmt.Errorf("azure speech config requires AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or AZURE_SPEECH_AUTH_TOKEN and AZURE_SPEECH_REGION or AZURE_SPEECH_KEY and AZURE_SPEECH_ENDPOINT")
 	}
 	return provider, nil
@@ -858,28 +862,15 @@ func parseAzureSTTMessageWithOffset(language string, payload []byte, startTimeOf
 			} `json:"PrimaryLanguage"`
 			Offset   *int64 `json:"Offset"`
 			Duration *int64 `json:"Duration"`
-			NBest    []struct {
-				Display    string   `json:"Display"`
-				Confidence *float64 `json:"Confidence"`
-			} `json:"NBest"`
 		}
 		if err := json.Unmarshal(body, &message); err != nil {
 			return nil
 		}
 		text := message.DisplayText
-		confidence := stt.DefaultTranscriptConfidence(text)
-		if len(message.NBest) > 0 {
-			if message.NBest[0].Display != "" {
-				text = message.NBest[0].Display
-			}
-			if message.NBest[0].Confidence != nil {
-				confidence = *message.NBest[0].Confidence
-			}
-		}
 		if strings.TrimSpace(text) == "" {
 			return nil
 		}
-		return azureSTTSpeechEventWithTiming(stt.SpeechEventFinalTranscript, azureSTTDetectedLanguage(language, message.Language, message.PrimaryLanguage.Language), text, confidence, message.Offset, message.Duration, startTimeOffset)
+		return azureSTTSpeechEventWithTiming(stt.SpeechEventFinalTranscript, azureSTTDetectedLanguage(language, message.Language, message.PrimaryLanguage.Language), text, 1.0, message.Offset, message.Duration, startTimeOffset)
 	case "turn.start", "speech.startDetected":
 		return &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech}
 	case "turn.end", "speech.endDetected":

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -208,6 +209,9 @@ func (s *SonioxSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	if err := validateSonioxAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}
+	if err := validateSonioxSTTOptions(s); err != nil {
+		return nil, err
+	}
 	payload, err := buildSonioxConfigJSON(s)
 	if err != nil {
 		return nil, err
@@ -243,6 +247,13 @@ func (s *SonioxSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 func validateSonioxAPIKey(apiKey string) error {
 	if apiKey == "" {
 		return fmt.Errorf("soniox API key is required. Set SONIOX_API_KEY or pass api_key")
+	}
+	return nil
+}
+
+func validateSonioxSTTOptions(s *SonioxSTT) error {
+	if s.maxEndpointDelayMS < 500 || s.maxEndpointDelayMS > 3000 {
+		return fmt.Errorf("max_endpoint_delay_ms must be between 500 and 3000")
 	}
 	return nil
 }
@@ -309,12 +320,12 @@ func (s *sonioxStream) readLoop() {
 			continue
 		}
 		events, err := processSonioxMessage(s.state, message)
+		for _, event := range events {
+			s.events <- event
+		}
 		if err != nil {
 			s.errCh <- err
 			return
-		}
-		for _, event := range events {
-			s.events <- event
 		}
 	}
 }
@@ -406,8 +417,9 @@ func processSonioxMessage(state *sonioxMessageState, payload []byte) ([]*stt.Spe
 	if err := json.Unmarshal(payload, &message); err != nil {
 		return nil, err
 	}
+	providerErr := sonioxProviderError(message)
 	if message.ErrorCode != nil || message.ErrorMessage != "" {
-		return nil, fmt.Errorf("soniox stt error: %v - %s", message.ErrorCode, message.ErrorMessage)
+		message.Finished = true
 	}
 
 	var events []*stt.SpeechEvent
@@ -489,7 +501,14 @@ func processSonioxMessage(state *sonioxMessageState, payload []byte) ([]*stt.Spe
 		events = append(events, sonioxUsageEvents(state, message.TotalAudioProcMS)...)
 	}
 
-	return events, nil
+	return events, providerErr
+}
+
+func sonioxProviderError(message sonioxMessage) error {
+	if message.ErrorCode == nil && message.ErrorMessage == "" {
+		return nil
+	}
+	return fmt.Errorf("soniox stt error: %v - %s", message.ErrorCode, message.ErrorMessage)
 }
 
 func sonioxUsageEvents(state *sonioxMessageState, totalAudioProcMS float64) []*stt.SpeechEvent {
@@ -512,11 +531,16 @@ func sonioxSourceTargetFields(acc *sonioxTokenAccumulator) ([]string, []string) 
 	if acc == nil || acc.text == "" {
 		return nil, nil
 	}
-	language := acc.language
-	if language == "" {
+	if len(acc.langSegments) == 0 {
 		return nil, []string{acc.text}
 	}
-	return []string{language}, []string{acc.text}
+	languages := make([]string, 0, len(acc.langSegments))
+	texts := make([]string, 0, len(acc.langSegments))
+	for _, segment := range acc.langSegments {
+		languages = append(languages, segment.language)
+		texts = append(texts, segment.text)
+	}
+	return languages, texts
 }
 
 func isSonioxEndToken(token sonioxToken) bool {
@@ -532,13 +556,24 @@ type sonioxTokenAccumulator struct {
 	confidenceSum   float64
 	confidenceCount int
 	hasStartMS      bool
+	langSegments    []sonioxLangSegment
+	langStats       map[string]sonioxLangStats
+	langUpdateSeq   int
+}
+
+type sonioxLangSegment struct {
+	language string
+	text     string
+}
+
+type sonioxLangStats struct {
+	numChars  int
+	updatedAt int
 }
 
 func (a *sonioxTokenAccumulator) update(token sonioxToken) {
 	a.text += token.Text
-	if token.Language != "" {
-		a.language = token.Language
-	}
+	a.updateLanguage(token.Language, token.Text)
 	if token.Speaker != nil && a.speakerID == "" {
 		a.speakerID = fmt.Sprintf("%.0f", *token.Speaker)
 	}
@@ -555,6 +590,42 @@ func (a *sonioxTokenAccumulator) update(token sonioxToken) {
 	}
 }
 
+func (a *sonioxTokenAccumulator) updateLanguage(language string, text string) {
+	if text == "" {
+		return
+	}
+	if language != "" {
+		if a.langStats == nil {
+			a.langStats = make(map[string]sonioxLangStats)
+		}
+		stats := a.langStats[language]
+		a.langUpdateSeq++
+		stats.numChars += utf8.RuneCountInString(text)
+		stats.updatedAt = a.langUpdateSeq
+		a.langStats[language] = stats
+		a.language = a.dominantLanguage()
+	}
+	if len(a.langSegments) > 0 && a.langSegments[len(a.langSegments)-1].language == language {
+		a.langSegments[len(a.langSegments)-1].text += text
+		return
+	}
+	a.langSegments = append(a.langSegments, sonioxLangSegment{language: language, text: text})
+}
+
+func (a *sonioxTokenAccumulator) dominantLanguage() string {
+	bestLanguage := ""
+	bestChars := -1
+	bestUpdatedAt := 0
+	for language, stats := range a.langStats {
+		if stats.numChars > bestChars || (stats.numChars == bestChars && stats.updatedAt < bestUpdatedAt) {
+			bestLanguage = language
+			bestChars = stats.numChars
+			bestUpdatedAt = stats.updatedAt
+		}
+	}
+	return bestLanguage
+}
+
 func (a *sonioxTokenAccumulator) reset() {
 	*a = sonioxTokenAccumulator{}
 }
@@ -568,13 +639,13 @@ func (a *sonioxTokenAccumulator) confidence() float64 {
 
 func (a *sonioxTokenAccumulator) mergedAccumulator(other *sonioxTokenAccumulator) *sonioxTokenAccumulator {
 	merged := *a
+	merged.langSegments = append([]sonioxLangSegment(nil), a.langSegments...)
+	merged.langStats = cloneSonioxLangStats(a.langStats)
 	if other == nil || other.text == "" {
 		return &merged
 	}
 	merged.text += other.text
-	if merged.language == "" {
-		merged.language = other.language
-	}
+	merged.mergeLanguageState(other)
 	if merged.speakerID == "" {
 		merged.speakerID = other.speakerID
 	}
@@ -588,6 +659,53 @@ func (a *sonioxTokenAccumulator) mergedAccumulator(other *sonioxTokenAccumulator
 	merged.confidenceSum += other.confidenceSum
 	merged.confidenceCount += other.confidenceCount
 	return &merged
+}
+
+func (a *sonioxTokenAccumulator) mergeLanguageState(other *sonioxTokenAccumulator) {
+	a.langSegments = mergeSonioxLangSegments(a.langSegments, other.langSegments)
+	if len(other.langStats) == 0 {
+		return
+	}
+	if a.langStats == nil {
+		a.langStats = make(map[string]sonioxLangStats, len(other.langStats))
+	}
+	baseSeq := a.langUpdateSeq
+	for language, otherStats := range other.langStats {
+		stats := a.langStats[language]
+		stats.numChars += otherStats.numChars
+		updatedAt := baseSeq + otherStats.updatedAt
+		if stats.updatedAt == 0 || updatedAt > stats.updatedAt {
+			stats.updatedAt = updatedAt
+		}
+		a.langStats[language] = stats
+		if updatedAt > a.langUpdateSeq {
+			a.langUpdateSeq = updatedAt
+		}
+	}
+	a.language = a.dominantLanguage()
+}
+
+func mergeSonioxLangSegments(a []sonioxLangSegment, b []sonioxLangSegment) []sonioxLangSegment {
+	result := append([]sonioxLangSegment(nil), a...)
+	for _, segment := range b {
+		if len(result) > 0 && result[len(result)-1].language == segment.language {
+			result[len(result)-1].text += segment.text
+			continue
+		}
+		result = append(result, segment)
+	}
+	return result
+}
+
+func cloneSonioxLangStats(stats map[string]sonioxLangStats) map[string]sonioxLangStats {
+	if len(stats) == 0 {
+		return nil
+	}
+	cloned := make(map[string]sonioxLangStats, len(stats))
+	for language, stat := range stats {
+		cloned[language] = stat
+	}
+	return cloned
 }
 
 func (a *sonioxTokenAccumulator) toSpeechData(startTimeOffset float64, sourceLanguages []string, sourceTexts []string, targetLanguages []string, targetTexts []string) stt.SpeechData {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -390,6 +391,10 @@ func (s *inworldTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 		audio, done, err := inworldTTSAudioFromResponseLine(line, s.sampleRate)
 		if err != nil {
+			var syntaxErr *json.SyntaxError
+			if errors.As(err, &syntaxErr) {
+				continue
+			}
 			return nil, err
 		}
 		if done {
@@ -582,7 +587,14 @@ func (s *inworldTTSSynthesizeStream) handleWebsocketMessage(payload []byte) (*tt
 func inworldTTSAudioFromResponseLine(payload []byte, sampleRate int) (*tts.SynthesizedAudio, bool, error) {
 	var message struct {
 		Result struct {
-			AudioContent string `json:"audioContent"`
+			AudioContent  string `json:"audioContent"`
+			TimestampInfo struct {
+				WordAlignment struct {
+					Words                []string  `json:"words"`
+					WordStartTimeSeconds []float64 `json:"wordStartTimeSeconds"`
+					WordEndTimeSeconds   []float64 `json:"wordEndTimeSeconds"`
+				} `json:"wordAlignment"`
+			} `json:"timestampInfo"`
 		} `json:"result"`
 		Error *struct {
 			Code    int    `json:"code"`
@@ -602,7 +614,9 @@ func inworldTTSAudioFromResponseLine(payload []byte, sampleRate int) (*tts.Synth
 	if err != nil {
 		return nil, false, err
 	}
-	return inworldTTSAudioFrame(audio, sampleRate), false, nil
+	frame := inworldTTSAudioFrame(audio, sampleRate)
+	frame.TimedTranscript = inworldTTSTimedTranscript(message.Result.TimestampInfo.WordAlignment.Words, message.Result.TimestampInfo.WordAlignment.WordStartTimeSeconds, message.Result.TimestampInfo.WordAlignment.WordEndTimeSeconds, 0)
+	return frame, false, nil
 }
 
 func inworldTTSAudioFromWebsocketMessage(payload []byte, contextID string, sampleRate int) (*tts.SynthesizedAudio, bool, error) {

@@ -97,6 +97,18 @@ func TestAzureSTTRequiresSpeechConfig(t *testing.T) {
 	}
 }
 
+func TestAzureSTTRequiresKeyWithSpeechEndpoint(t *testing.T) {
+	t.Setenv(azureSpeechHostEnv, "")
+	t.Setenv(azureSpeechKeyEnv, "")
+	t.Setenv(azureSpeechRegionEnv, "")
+
+	_, err := NewAzureSTT("", "", WithAzureSTTSpeechEndpoint("https://speech.endpoint.test/custom/stt"))
+
+	if err == nil || !strings.Contains(err.Error(), "AZURE_SPEECH_KEY") {
+		t.Fatalf("NewAzureSTT error = %v, want endpoint auth config error", err)
+	}
+}
+
 func TestAzureSTTRecognizeUsesRESTRequestAndMapsDetailedResult(t *testing.T) {
 	provider, err := NewAzureSTT("key", "eastus")
 	if err != nil {
@@ -598,8 +610,8 @@ func TestAzureSTTStreamUsesWebsocketProtocol(t *testing.T) {
 	if got := final.Alternatives[0].Text; got != "halo final" {
 		t.Fatalf("final text = %q, want halo final", got)
 	}
-	if got := final.Alternatives[0].Confidence; got != 0.87 {
-		t.Fatalf("final confidence = %v, want 0.87", got)
+	if got := final.Alternatives[0].Confidence; got != 1.0 {
+		t.Fatalf("final confidence = %v, want reference final confidence 1.0", got)
 	}
 	if got := final.Alternatives[0].Language; got != "id-ID" {
 		t.Fatalf("final language = %q, want id-ID", got)
@@ -705,19 +717,22 @@ func TestAzureSTTStreamSpeechConfigUsesReferenceTrueTextOption(t *testing.T) {
 	receiveAzureTestValue(t, audioMessages, "audio")
 }
 
-func TestAzureSTTStreamPreservesExplicitZeroConfidence(t *testing.T) {
+func TestAzureSTTStreamFinalTranscriptMatchesReferenceResultTextAndConfidence(t *testing.T) {
 	event := parseAzureSTTMessage(
 		resolveAzureSTTLanguage("id-ID"),
-		[]byte("Path: speech.phrase\r\nContent-Type: application/json\r\n\r\n{\"RecognitionStatus\":\"Success\",\"DisplayText\":\"fallback text\",\"NBest\":[{\"Display\":\"zero confidence\",\"Confidence\":0}]}"),
+		[]byte("Path: speech.phrase\r\nContent-Type: application/json\r\n\r\n{\"RecognitionStatus\":\"Success\",\"DisplayText\":\"display text\",\"NBest\":[{\"Display\":\"nbest text\",\"Confidence\":0.42}]}"),
 	)
 	if event == nil {
 		t.Fatal("event = nil, want final transcript")
 	}
-	if got := event.Alternatives[0].Text; got != "zero confidence" {
-		t.Fatalf("text = %q, want NBest display", got)
+	if event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event Type = %s, want final_transcript", event.Type)
 	}
-	if got := event.Alternatives[0].Confidence; got != 0 {
-		t.Fatalf("confidence = %v, want explicit Azure NBest zero confidence", got)
+	if got := event.Alternatives[0].Text; got != "display text" {
+		t.Fatalf("text = %q, want reference result text", got)
+	}
+	if got := event.Alternatives[0].Confidence; got != 1.0 {
+		t.Fatalf("confidence = %v, want reference final confidence 1.0", got)
 	}
 }
 

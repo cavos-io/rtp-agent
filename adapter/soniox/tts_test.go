@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
@@ -136,6 +137,89 @@ func TestSonioxTTSOutboundMessagesMatchReference(t *testing.T) {
 	}
 }
 
+func TestSonioxTTSStreamLazilySendsStartConfigLikeReference(t *testing.T) {
+	provider := NewSonioxTTS("test-key")
+	var sent []map[string]any
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &sonioxTTSSynthesizeStream{
+		provider: provider,
+		streamID: "stream-1",
+		ctx:      ctx,
+		events:   make(chan *tts.SynthesizedAudio, 1),
+		writeMessage: func(message map[string]any) error {
+			sent = append(sent, message)
+			return nil
+		},
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush before text error = %v", err)
+	}
+	if len(sent) != 0 {
+		t.Fatalf("messages after empty flush = %#v, want none", sent)
+	}
+	if _, err := nextSonioxTTSAudioWithTimeout(t, stream); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after empty flush error = %v, want EOF", err)
+	}
+
+	stream = &sonioxTTSSynthesizeStream{
+		provider: provider,
+		streamID: "stream-1",
+		ctx:      ctx,
+		events:   make(chan *tts.SynthesizedAudio, 1),
+		writeMessage: func(message map[string]any) error {
+			sent = append(sent, message)
+			return nil
+		},
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if len(sent) != 2 {
+		t.Fatalf("messages after first text = %#v, want start config then text", sent)
+	}
+	if sent[0]["api_key"] != "test-key" || sent[0]["stream_id"] != "stream-1" {
+		t.Fatalf("first message = %#v, want start config", sent[0])
+	}
+	if sent[1]["text"] != "hello" || sent[1]["stream_id"] != "stream-1" {
+		t.Fatalf("second message = %#v, want text delta", sent[1])
+	}
+}
+
+func TestSonioxTTSCloseBeforeTextSendsNoCancelLikeReference(t *testing.T) {
+	var sent []map[string]any
+	stream := &sonioxTTSSynthesizeStream{
+		streamID: "stream-1",
+		writeMessage: func(message map[string]any) error {
+			sent = append(sent, message)
+			return nil
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if len(sent) != 0 {
+		t.Fatalf("messages after close before text = %#v, want none", sent)
+	}
+
+	stream = &sonioxTTSSynthesizeStream{
+		streamID:   "stream-1",
+		configSent: true,
+		writeMessage: func(message map[string]any) error {
+			sent = append(sent, message)
+			return nil
+		},
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after config error = %v", err)
+	}
+	if len(sent) != 1 || sent[0]["cancel"] != true {
+		t.Fatalf("messages after close with config = %#v, want cancel", sent)
+	}
+}
+
 func TestSonioxTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	writeErr := errors.New("websocket closed")
 	stream := &sonioxTTSSynthesizeStream{
@@ -168,30 +252,64 @@ func TestSonioxTTSAudioFromMessageDecodesAudioAndTermination(t *testing.T) {
 		"terminated": true,
 	})
 
-	audio, done, err := sonioxTTSAudioFromMessage(payload, "stream-1", 24000)
+	audio, audioEnd, done, err := sonioxTTSAudioFromMessage(payload, "stream-1", 24000)
 	if err != nil {
 		t.Fatalf("audio from message: %v", err)
 	}
 	assertSonioxTTSAudio(t, audio, []byte{0x01, 0x02, 0x03, 0x04})
+	if !audioEnd {
+		t.Fatal("audioEnd = false, want true for audio_end response")
+	}
 	if !done {
 		t.Fatal("done = false, want true for terminated response")
 	}
 }
 
 func TestSonioxTTSAudioFromMessageIgnoresOtherStreams(t *testing.T) {
-	audio, done, err := sonioxTTSAudioFromMessage([]byte(`{"stream_id":"other","audio":"AQI="}`), "stream-1", 24000)
+	audio, audioEnd, done, err := sonioxTTSAudioFromMessage([]byte(`{"stream_id":"other","audio":"AQI="}`), "stream-1", 24000)
 	if err != nil {
 		t.Fatalf("audio from message: %v", err)
 	}
-	if audio != nil || done {
-		t.Fatalf("audio/done = %#v/%v, want ignored message", audio, done)
+	if audio != nil || audioEnd || done {
+		t.Fatalf("audio/audioEnd/done = %#v/%v/%v, want ignored message", audio, audioEnd, done)
 	}
 }
 
 func TestSonioxTTSAudioFromMessageReportsProviderError(t *testing.T) {
-	_, _, err := sonioxTTSAudioFromMessage([]byte(`{"stream_id":"stream-1","error_code":429,"error_message":"rate limited"}`), "stream-1", 24000)
+	_, _, _, err := sonioxTTSAudioFromMessage([]byte(`{"stream_id":"stream-1","error_code":429,"error_message":"rate limited"}`), "stream-1", 24000)
 	if err == nil || !strings.Contains(err.Error(), "429") || !strings.Contains(err.Error(), "rate limited") {
 		t.Fatalf("error = %v, want provider error", err)
+	}
+}
+
+func TestSonioxTTSStreamRejectsBareTerminationLikeReference(t *testing.T) {
+	stream := &sonioxTTSSynthesizeStream{
+		streamID:   "stream-1",
+		sampleRate: 24000,
+		events:     make(chan *tts.SynthesizedAudio, 1),
+	}
+
+	done, err := stream.handleSonioxTTSMessage([]byte(`{"stream_id":"stream-1","terminated":true}`))
+
+	if err == nil || !strings.Contains(err.Error(), "terminated without producing audio") {
+		t.Fatalf("handle message error = %v, want bare termination error", err)
+	}
+	if done {
+		t.Fatal("done = true, want false on bare termination error")
+	}
+
+	stream = &sonioxTTSSynthesizeStream{
+		streamID:   "stream-1",
+		sampleRate: 24000,
+		events:     make(chan *tts.SynthesizedAudio, 1),
+	}
+	done, err = stream.handleSonioxTTSMessage([]byte(`{"stream_id":"stream-1","audio_end":true}`))
+	if err != nil || done {
+		t.Fatalf("audio_end handling = done %v error %v, want open stream", done, err)
+	}
+	done, err = stream.handleSonioxTTSMessage([]byte(`{"stream_id":"stream-1","terminated":true}`))
+	if err != nil || !done {
+		t.Fatalf("terminated after audio_end = done %v error %v, want normal completion", done, err)
 	}
 }
 
@@ -235,5 +353,25 @@ func assertSonioxTTSAudio(t *testing.T, audio *tts.SynthesizedAudio, want []byte
 	}
 	if audio.Frame.SamplesPerChannel != 2 {
 		t.Fatalf("samples = %d, want 2", audio.Frame.SamplesPerChannel)
+	}
+}
+
+func nextSonioxTTSAudioWithTimeout(t *testing.T, stream *sonioxTTSSynthesizeStream) (*tts.SynthesizedAudio, error) {
+	t.Helper()
+	type nextResult struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	resultCh := make(chan nextResult, 1)
+	go func() {
+		audio, err := stream.Next()
+		resultCh <- nextResult{audio: audio, err: err}
+	}()
+	select {
+	case result := <-resultCh:
+		return result.audio, result.err
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for Soniox TTS Next")
+		return nil, nil
 	}
 }

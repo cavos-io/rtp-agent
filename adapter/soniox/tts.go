@@ -160,13 +160,9 @@ func (t *SonioxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		sampleRate: t.sampleRate,
 		events:     make(chan *tts.SynthesizedAudio, 100),
 		errCh:      make(chan error, 1),
+		localDone:  make(chan struct{}),
 	}
 	stream.writeMessage = stream.writeWebsocketMessage
-	if err := writeSonioxTTSMessage(conn, buildSonioxTTSStartConfig(t, streamID)); err != nil {
-		conn.Close()
-		cancel()
-		return nil, err
-	}
 	go stream.readLoop()
 	go stream.keepAliveLoop()
 	return stream, nil
@@ -195,6 +191,9 @@ type sonioxTTSSynthesizeStream struct {
 	errCh      chan error
 	mu         sync.Mutex
 	closed     bool
+	audioEnded bool
+	configSent bool
+	localDone  chan struct{}
 
 	writeMessage func(map[string]any) error
 }
@@ -207,6 +206,10 @@ func (s *sonioxTTSSynthesizeStream) PushText(text string) error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
+	}
+	if err := s.ensureStartConfigLocked(); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
 	}
 	if err := s.writeMessageData(buildSonioxTTSTextMessage(s.streamID, text, false)); err != nil {
 		s.closeAfterWriteFailureLocked()
@@ -221,10 +224,29 @@ func (s *sonioxTTSSynthesizeStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if !s.configSent {
+		s.closeLocalDoneLocked()
+		return nil
+	}
 	if err := s.writeMessageData(buildSonioxTTSTextMessage(s.streamID, "", true)); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
+	return nil
+}
+
+func (s *sonioxTTSSynthesizeStream) ensureStartConfigLocked() error {
+	if s.configSent {
+		return nil
+	}
+	if s.provider == nil {
+		s.configSent = true
+		return nil
+	}
+	if err := s.writeMessageData(buildSonioxTTSStartConfig(s.provider, s.streamID)); err != nil {
+		return err
+	}
+	s.configSent = true
 	return nil
 }
 
@@ -235,8 +257,15 @@ func (s *sonioxTTSSynthesizeStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	s.cancel()
-	_ = writeSonioxTTSMessage(s.conn, buildSonioxTTSCancelMessage(s.streamID))
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.configSent {
+		_ = s.writeMessageData(buildSonioxTTSCancelMessage(s.streamID))
+	}
+	if s.conn == nil {
+		return nil
+	}
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
 }
@@ -252,6 +281,17 @@ func (s *sonioxTTSSynthesizeStream) writeWebsocketMessage(message map[string]any
 	return writeSonioxTTSMessage(s.conn, message)
 }
 
+func (s *sonioxTTSSynthesizeStream) closeLocalDoneLocked() {
+	if s.localDone == nil {
+		s.localDone = make(chan struct{})
+	}
+	select {
+	case <-s.localDone:
+	default:
+		close(s.localDone)
+	}
+}
+
 func (s *sonioxTTSSynthesizeStream) closeAfterWriteFailureLocked() {
 	s.closed = true
 	if s.cancel != nil {
@@ -263,6 +303,7 @@ func (s *sonioxTTSSynthesizeStream) closeAfterWriteFailureLocked() {
 }
 
 func (s *sonioxTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
+	localDone := s.localDone
 	select {
 	case audio, ok := <-s.events:
 		if !ok {
@@ -274,6 +315,8 @@ func (s *sonioxTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 			}
 		}
 		return audio, nil
+	case <-localDone:
+		return nil, io.EOF
 	case err := <-s.errCh:
 		return nil, err
 	case <-s.ctx.Done():
@@ -294,18 +337,32 @@ func (s *sonioxTTSSynthesizeStream) readLoop() {
 		if msgType != websocket.TextMessage {
 			continue
 		}
-		audio, done, err := sonioxTTSAudioFromMessage(payload, s.streamID, s.sampleRate)
+		done, err := s.handleSonioxTTSMessage(payload)
 		if err != nil {
 			s.errCh <- err
 			return
-		}
-		if audio != nil {
-			s.events <- audio
 		}
 		if done {
 			return
 		}
 	}
+}
+
+func (s *sonioxTTSSynthesizeStream) handleSonioxTTSMessage(payload []byte) (bool, error) {
+	audio, audioEnd, terminated, err := sonioxTTSAudioFromMessage(payload, s.streamID, s.sampleRate)
+	if err != nil {
+		return false, err
+	}
+	if audio != nil {
+		s.events <- audio
+	}
+	if audioEnd {
+		s.audioEnded = true
+	}
+	if terminated && !s.audioEnded {
+		return false, fmt.Errorf("soniox tts stream terminated without producing audio")
+	}
+	return terminated, nil
 }
 
 func (s *sonioxTTSSynthesizeStream) keepAliveLoop() {
@@ -364,7 +421,7 @@ func writeSonioxTTSMessage(conn *websocket.Conn, message map[string]any) error {
 	return conn.WriteMessage(websocket.TextMessage, payload)
 }
 
-func sonioxTTSAudioFromMessage(payload []byte, streamID string, sampleRate int) (*tts.SynthesizedAudio, bool, error) {
+func sonioxTTSAudioFromMessage(payload []byte, streamID string, sampleRate int) (*tts.SynthesizedAudio, bool, bool, error) {
 	var message struct {
 		StreamID     string `json:"stream_id"`
 		Audio        string `json:"audio"`
@@ -374,23 +431,23 @@ func sonioxTTSAudioFromMessage(payload []byte, streamID string, sampleRate int) 
 		ErrorMessage string `json:"error_message"`
 	}
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	if message.StreamID == "" || message.StreamID != streamID {
-		return nil, false, nil
+		return nil, false, false, nil
 	}
 	if message.ErrorCode != nil {
-		return nil, false, fmt.Errorf("soniox tts error %v: %s", message.ErrorCode, message.ErrorMessage)
+		return nil, false, false, fmt.Errorf("soniox tts error %v: %s", message.ErrorCode, message.ErrorMessage)
 	}
 	var audio *tts.SynthesizedAudio
 	if message.Audio != "" {
 		data, err := base64.StdEncoding.DecodeString(message.Audio)
 		if err != nil {
-			return nil, false, err
+			return nil, false, false, err
 		}
 		audio = sonioxTTSAudioFrame(data, sampleRate)
 	}
-	return audio, message.Terminated, nil
+	return audio, message.AudioEnd, message.Terminated, nil
 }
 
 func sonioxTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {

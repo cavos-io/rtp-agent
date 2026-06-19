@@ -2,6 +2,7 @@ package soniox
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -90,6 +91,19 @@ func TestSonioxSTTStreamRequiresAPIKeyBeforeDial(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "SONIOX_API_KEY") {
 		t.Fatalf("Stream error = %v, want missing API key error", err)
+	}
+}
+
+func TestSonioxSTTStreamRejectsReferenceEndpointDelayRangeBeforeDial(t *testing.T) {
+	provider := NewSonioxSTT("test-key", WithSonioxBaseURL("://bad-url"), WithSonioxMaxEndpointDelayMS(499))
+
+	_, err := provider.Stream(context.Background(), "")
+
+	if err == nil || !strings.Contains(err.Error(), "max_endpoint_delay_ms") {
+		t.Fatalf("Stream error = %v, want endpoint delay range error", err)
+	}
+	if strings.Contains(err.Error(), "dial") {
+		t.Fatalf("Stream error = %v, want validation before websocket dial", err)
 	}
 }
 
@@ -244,6 +258,28 @@ func TestSonioxTokenAccumulatorBuildsSpeechData(t *testing.T) {
 	}
 }
 
+func TestSonioxProcessMessagePreservesReferenceLanguageSegments(t *testing.T) {
+	state := &sonioxMessageState{}
+
+	events, err := processSonioxMessage(state, []byte(`{"tokens":[{"text":"hi ","language":"en","is_final":true},{"text":"hola ","language":"es","is_final":true},{"text":"mundo ","language":"es","is_final":true},{"text":"ok","language":"en","is_final":true}]}`))
+	if err != nil {
+		t.Fatalf("process multilingual preflight: %v", err)
+	}
+	assertSonioxEvent(t, events, 0, stt.SpeechEventStartOfSpeech, "")
+	assertSonioxEvent(t, events, 1, stt.SpeechEventPreflightTranscript, "hi hola mundo ok")
+
+	data := events[1].Alternatives[0]
+	if data.Language != "es" {
+		t.Fatalf("language = %q, want dominant language es", data.Language)
+	}
+	if !reflect.DeepEqual(data.SourceLanguages, []string{"en", "es", "en"}) {
+		t.Fatalf("source languages = %#v, want en/es/en runs", data.SourceLanguages)
+	}
+	if !reflect.DeepEqual(data.SourceTexts, []string{"hi ", "hola mundo ", "ok"}) {
+		t.Fatalf("source texts = %#v, want merged adjacent language runs", data.SourceTexts)
+	}
+}
+
 func TestSonioxProcessMessageEmitsInterimPreflightFinalAndUsage(t *testing.T) {
 	state := &sonioxMessageState{}
 
@@ -270,6 +306,22 @@ func TestSonioxProcessMessageEmitsInterimPreflightFinalAndUsage(t *testing.T) {
 	assertSonioxEvent(t, events, 1, stt.SpeechEventEndOfSpeech, "")
 	if events[2].Type != stt.SpeechEventRecognitionUsage || events[2].RecognitionUsage.AudioDuration != 1.25 {
 		t.Fatalf("usage event = %+v, want 1.25s usage", events[2])
+	}
+}
+
+func TestSonioxProcessMessageFlushesTranscriptBeforeStatusError(t *testing.T) {
+	state := &sonioxMessageState{}
+
+	events, err := processSonioxMessage(state, []byte(`{"tokens":[{"text":"partial final","language":"en","is_final":true}],"total_audio_proc_ms":750,"error_code":"500","error_message":"server closed"}`))
+	if err == nil || !strings.Contains(err.Error(), "500") || !strings.Contains(err.Error(), "server closed") {
+		t.Fatalf("error = %v, want provider status error", err)
+	}
+	assertSonioxEvent(t, events, 0, stt.SpeechEventStartOfSpeech, "")
+	assertSonioxEvent(t, events, 1, stt.SpeechEventPreflightTranscript, "partial final")
+	assertSonioxEvent(t, events, 2, stt.SpeechEventFinalTranscript, "partial final")
+	assertSonioxEvent(t, events, 3, stt.SpeechEventEndOfSpeech, "")
+	if events[4].Type != stt.SpeechEventRecognitionUsage || events[4].RecognitionUsage.AudioDuration != 0.75 {
+		t.Fatalf("usage event = %+v, want 0.75s usage before error", events[4])
 	}
 }
 
