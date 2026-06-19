@@ -10,6 +10,10 @@ func JobContextInferenceHeaders(job *Job) map[string]string {
 	return JobInferenceHeaders(job)
 }
 
+func NewJobContextAPI(url string, apiKey string, apiSecret string) *JobAPI {
+	return NewJobAPI(url, apiKey, apiSecret)
+}
+
 func JobContextParticipantIdentity(job *Job, fallbackIdentity string) string {
 	return JobParticipantIdentity(job, fallbackIdentity)
 }

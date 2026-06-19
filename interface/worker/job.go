@@ -203,7 +203,7 @@ type JobSIPAPI = workerlivekit.JobSIPAPI
 type JobAPI = workerlivekit.JobAPI
 
 func NewJobAPI(url string, apiKey string, apiSecret string) *JobAPI {
-	return workerlivekit.NewJobAPI(url, apiKey, apiSecret)
+	return workerlivekit.NewJobContextAPI(url, apiKey, apiSecret)
 }
 
 type AutoSubscribe = workerlivekit.AutoSubscribe

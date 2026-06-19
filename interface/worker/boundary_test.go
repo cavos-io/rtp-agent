@@ -121,6 +121,7 @@ func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
 func TestSharedJobContextDoesNotCallLiveKitInfoHelpersDirectly(t *testing.T) {
 	forbiddenCalls := []string{
 		"workerlivekit.JobInferenceHeaders(",
+		"workerlivekit.NewJobAPI(",
 		"workerlivekit.JobParticipantIdentity(",
 		"workerlivekit.LocalParticipantIdentity(",
 		"workerlivekit.TokenClaims(",
