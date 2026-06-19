@@ -255,6 +255,7 @@ type cartesiaSTTStream struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	state    *cartesiaSTTStreamState
+	pushedSR uint32
 
 	audioBStream *audio.AudioByteStream
 	writeBinary  func([]byte) error
@@ -268,6 +269,12 @@ func (s *cartesiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
+	}
+	if frame.SampleRate != 0 {
+		if s.pushedSR != 0 && s.pushedSR != frame.SampleRate {
+			return fmt.Errorf("cartesia stt input sample rate changed from %d to %d", s.pushedSR, frame.SampleRate)
+		}
+		s.pushedSR = frame.SampleRate
 	}
 	if s.audioBStream == nil {
 		s.audioBStream = newCartesiaSTTAudioByteStream(int(frame.SampleRate), defaultCartesiaSTTAudioChunkDurationMS)

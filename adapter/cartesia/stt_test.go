@@ -410,6 +410,29 @@ func TestCartesiaSTTPushFrameBuffersReferenceAudioChunks(t *testing.T) {
 	}
 }
 
+func TestCartesiaSTTPushFrameRejectsReferenceSampleRateChange(t *testing.T) {
+	stream := &cartesiaSTTStream{
+		state: &cartesiaSTTStreamState{mode: "auto"},
+	}
+
+	if err := stream.PushFrame(&audiomodel.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame first rate error = %v", err)
+	}
+	if err := stream.PushFrame(&audiomodel.AudioFrame{
+		Data:              []byte{0x03, 0x04},
+		SampleRate:        8000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err == nil || !strings.Contains(err.Error(), "sample rate") {
+		t.Fatalf("PushFrame changed rate error = %v, want sample rate mismatch", err)
+	}
+}
+
 func TestCartesiaSTTCloseFlushesBufferedAudioBeforeClose(t *testing.T) {
 	var writes [][]byte
 	var textMessages []string
