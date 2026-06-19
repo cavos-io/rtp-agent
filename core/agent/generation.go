@@ -554,15 +554,16 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 					}
 					return
 				}
+				if audio == nil || audio.Frame == nil {
+					continue
+				}
 				if data.TTFB == 0 {
 					if ttfb, ok := timeSinceStart(); ok {
 						data.TTFB = ttfb
 						span.SetAttributes(attribute.Float64(telemetry.AttrResponseTTFB, data.TTFB.Seconds()))
 					}
 				}
-				if audio.Frame != nil {
-					recordAudioFrame()
-				}
+				recordAudioFrame()
 				for _, timedText := range audio.TimedTranscript {
 					select {
 					case data.TimedTextCh <- timedText:
