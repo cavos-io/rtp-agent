@@ -255,6 +255,7 @@ type cartesiaSTTStream struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	state    *cartesiaSTTStreamState
+	pushedSR uint32
 
 	audioBStream *audio.AudioByteStream
 	writeBinary  func([]byte) error
@@ -269,11 +270,18 @@ func (s *cartesiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
+	if frame.SampleRate != 0 {
+		if s.pushedSR != 0 && s.pushedSR != frame.SampleRate {
+			return fmt.Errorf("cartesia stt input sample rate changed from %d to %d", s.pushedSR, frame.SampleRate)
+		}
+		s.pushedSR = frame.SampleRate
+	}
 	if s.audioBStream == nil {
 		s.audioBStream = newCartesiaSTTAudioByteStream(int(frame.SampleRate), defaultCartesiaSTTAudioChunkDurationMS)
 	}
 	for _, chunk := range s.audioBStream.Write(frame.Data) {
 		if err := s.writeBinaryData(chunk.Data); err != nil {
+			s.closeAfterWriteFailure()
 			return err
 		}
 	}
@@ -284,15 +292,20 @@ func (s *cartesiaSTTStream) Flush() error {
 	if s.isClosed() {
 		return io.ErrClosedPipe
 	}
-	if s.state.mode == "legacy" {
-		if s.audioBStream != nil {
-			for _, chunk := range s.audioBStream.Flush() {
-				if err := s.writeBinaryData(chunk.Data); err != nil {
-					return err
-				}
+	if s.audioBStream != nil {
+		for _, chunk := range s.audioBStream.Flush() {
+			if err := s.writeBinaryData(chunk.Data); err != nil {
+				s.closeAfterWriteFailure()
+				return err
 			}
 		}
-		return s.writeTextData([]byte("finalize"))
+	}
+	if s.state.mode == "legacy" {
+		if err := s.writeTextData([]byte("finalize")); err != nil {
+			s.closeAfterWriteFailure()
+			return err
+		}
+		return nil
 	}
 	return nil
 }
@@ -323,6 +336,23 @@ func (s *cartesiaSTTStream) Close() error {
 		s.provider.unregisterStream(s)
 	}
 	return s.closeConnection()
+}
+
+func (s *cartesiaSTTStream) closeAfterWriteFailure() {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.mu.Unlock()
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
+	_ = s.closeConnection()
 }
 
 func (s *cartesiaSTTStream) writeBinaryData(data []byte) error {

@@ -269,6 +269,27 @@ func (s *OpenAISTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: s.useRealtime, InterimResults: s.useRealtime, Diarization: false, OfflineRecognize: true}
 }
 
+func (s *OpenAISTT) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.streamsMu.Lock()
+	streams := make([]*openAIRealtimeSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.streams = make(map[*openAIRealtimeSTTStream]struct{})
+	s.streamsMu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
 func (s *OpenAISTT) UpdateOptions(opts ...OpenAISTTOption) {
 	previousDetectOptionSet := s.detectOptionSet
 	s.languageSet = false
@@ -627,6 +648,7 @@ type openAIRealtimeSTTStream struct {
 	mu         sync.Mutex
 	closed     bool
 	inputEnded bool
+	pushedSR   uint32
 	audio      *audio.AudioByteStream
 	state      *openAIRealtimeSTTMessageState
 	owner      *OpenAISTT
@@ -646,11 +668,21 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
+	if frame.SampleRate != 0 {
+		if s.pushedSR != 0 && s.pushedSR != frame.SampleRate {
+			return fmt.Errorf("the sample rate of the input frames must be consistent")
+		}
+		s.pushedSR = frame.SampleRate
+	}
+	normalizedFrame, err := normalizeOpenAIRealtimeInputAudio(frame)
+	if err != nil {
+		return err
+	}
 	if s.audio == nil {
 		s.audio = newOpenAIRealtimeSTTAudioByteStream()
 	}
 	vadStream := s.vadStream
-	for _, chunk := range s.audio.Push(frame.Data) {
+	for _, chunk := range s.audio.Push(normalizedFrame.Data) {
 		message, err := buildOpenAIRealtimeSTTAudioAppendMessage(chunk)
 		if err != nil {
 			s.mu.Unlock()

@@ -982,6 +982,144 @@ func TestOpenAIRealtimeSTTStreamBuffersAndFlushesReferenceAudioChunks(t *testing
 	assertNoRealtimeMessage(t, messages, "Flush should not commit audio buffer")
 }
 
+func TestOpenAIRealtimeSTTStreamNormalizesInputAudio(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	started := make(chan struct{})
+	releaseServer := make(chan struct{})
+	messages := make(chan string, 10)
+	defer close(releaseServer)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			close(started)
+			for {
+				select {
+				case <-releaseServer:
+					return
+				default:
+				}
+				if _, payload, err := conn.ReadMessage(); err != nil {
+					return
+				} else {
+					messages <- string(payload)
+				}
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not send initial session update")
+	}
+
+	stereo48kChunk := make([]byte, 4800*2*2)
+	for i := 0; i < 4800; i++ {
+		sampleOffset := i * 4
+		binary.LittleEndian.PutUint16(stereo48kChunk[sampleOffset:sampleOffset+2], uint16(int16(i)))
+		binary.LittleEndian.PutUint16(stereo48kChunk[sampleOffset+2:sampleOffset+4], uint16(int16(i)))
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              stereo48kChunk,
+		SampleRate:        48000,
+		NumChannels:       2,
+		SamplesPerChannel: 4800,
+	}); err != nil {
+		t.Fatalf("PushFrame stereo 48k error = %v", err)
+	}
+
+	firstChunk := assertOpenAIRealtimeSTTAudioAppend(t, <-messages)
+	if len(firstChunk) != openAIRealtimeSTTChunkBytes() {
+		t.Fatalf("first normalized audio bytes = %d, want 50ms 24k mono chunk", len(firstChunk))
+	}
+	secondChunk := assertOpenAIRealtimeSTTAudioAppend(t, <-messages)
+	if len(secondChunk) != openAIRealtimeSTTChunkBytes() {
+		t.Fatalf("second normalized audio bytes = %d, want 50ms 24k mono chunk", len(secondChunk))
+	}
+	assertNoRealtimeMessage(t, messages, "normalized 48k stereo audio should emit two 50ms 24k mono chunks")
+}
+
+func TestOpenAIRealtimeSTTStreamRejectsSampleRateChange(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	started := make(chan struct{})
+	releaseServer := make(chan struct{})
+	messages := make(chan string, 10)
+	defer close(releaseServer)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			close(started)
+			for {
+				select {
+				case <-releaseServer:
+					return
+				default:
+				}
+				if _, payload, err := conn.ReadMessage(); err != nil {
+					return
+				} else {
+					messages <- string(payload)
+				}
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not send initial session update")
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              bytes.Repeat([]byte{0x01}, 960),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}); err != nil {
+		t.Fatalf("PushFrame initial sample rate error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "short initial frame should stay buffered")
+
+	err = stream.PushFrame(&model.AudioFrame{
+		Data:              bytes.Repeat([]byte{0x02}, 320),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	})
+	if err == nil {
+		t.Fatal("PushFrame changed sample rate error = nil, want sample rate consistency error")
+	}
+	if !strings.Contains(err.Error(), "sample rate") {
+		t.Fatalf("PushFrame changed sample rate error = %v, want sample rate consistency error", err)
+	}
+}
+
 func TestOpenAIRealtimeSTTEndInputFlushesAndCommitsAudioBuffer(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
@@ -1221,6 +1359,47 @@ func TestOpenAIRealtimeSTTCloseDoesNotWaitForBlockedVADPushFrame(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for PushFrame to finish")
+	}
+}
+
+func TestOpenAISTTProviderCloseClosesActiveStreams(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	closed := make(chan struct{})
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			_, _, err := conn.ReadMessage()
+			if err == nil {
+				t.Error("ReadMessage after provider close error = nil, want websocket close")
+			}
+			close(closed)
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Provider Close error = %v", err)
+	}
+
+	select {
+	case <-closed:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("provider Close did not close active realtime STT websocket")
+	}
+	if err := stream.PushFrame(openAIRealtimeSTTTestFrame([]byte{0x01, 0x02})); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after provider Close error = %v, want io.ErrClosedPipe", err)
 	}
 }
 

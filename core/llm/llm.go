@@ -464,7 +464,7 @@ func (d ChoiceDelta) MarshalJSON() ([]byte, error) {
 	type payload struct {
 		Role      *ChatRole          `json:"role"`
 		Content   *string            `json:"content"`
-		Flush     *bool              `json:"flush"`
+		Flush     *bool              `json:"flush,omitempty"`
 		ToolCalls []FunctionToolCall `json:"tool_calls"`
 		Extra     map[string]any     `json:"extra"`
 	}

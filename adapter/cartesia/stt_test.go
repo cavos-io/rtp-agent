@@ -410,6 +410,29 @@ func TestCartesiaSTTPushFrameBuffersReferenceAudioChunks(t *testing.T) {
 	}
 }
 
+func TestCartesiaSTTPushFrameRejectsReferenceSampleRateChange(t *testing.T) {
+	stream := &cartesiaSTTStream{
+		state: &cartesiaSTTStreamState{mode: "auto"},
+	}
+
+	if err := stream.PushFrame(&audiomodel.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame first rate error = %v", err)
+	}
+	if err := stream.PushFrame(&audiomodel.AudioFrame{
+		Data:              []byte{0x03, 0x04},
+		SampleRate:        8000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err == nil || !strings.Contains(err.Error(), "sample rate") {
+		t.Fatalf("PushFrame changed rate error = %v, want sample rate mismatch", err)
+	}
+}
+
 func TestCartesiaSTTCloseFlushesBufferedAudioBeforeClose(t *testing.T) {
 	var writes [][]byte
 	var textMessages []string
@@ -446,6 +469,44 @@ func TestCartesiaSTTCloseFlushesBufferedAudioBeforeClose(t *testing.T) {
 	}
 	if len(textMessages) != 1 || textMessages[0] != `{"type":"close"}` {
 		t.Fatalf("text messages = %#v, want close message after buffered audio", textMessages)
+	}
+}
+
+func TestCartesiaSTTAutoFlushFlushesBufferedAudio(t *testing.T) {
+	var writes [][]byte
+	var textMessages []string
+	stream := &cartesiaSTTStream{
+		state:        &cartesiaSTTStreamState{mode: "auto"},
+		audioBStream: newCartesiaSTTAudioByteStream(16000, 160),
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+		writeText: func(data []byte) error {
+			textMessages = append(textMessages, string(data))
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&audiomodel.AudioFrame{
+		Data:              make([]byte, 1280*2),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1280,
+	}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes before flush = %s, want none", cartesiaWriteSizes(writes))
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if len(writes) != 1 || len(writes[0]) != 2560 {
+		t.Fatalf("writes after flush = %s, want buffered 80ms chunk", cartesiaWriteSizes(writes))
+	}
+	if len(textMessages) != 0 {
+		t.Fatalf("text messages = %#v, want none for auto flush", textMessages)
 	}
 }
 
@@ -496,6 +557,37 @@ func TestCartesiaSTTProviderCloseClosesActiveStreams(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for websocket server")
+	}
+}
+
+func TestCartesiaSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
+	writeErr := errors.New("write failed")
+	stream := &cartesiaSTTStream{
+		state:        &cartesiaSTTStreamState{mode: "auto"},
+		audioBStream: newCartesiaSTTAudioByteStream(16000, 160),
+		writeBinary: func([]byte) error {
+			return writeErr
+		},
+		closeConn: func() error { return nil },
+	}
+
+	err := stream.PushFrame(&audiomodel.AudioFrame{
+		Data:              make([]byte, 2560*2),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 2560,
+	})
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("PushFrame write error = %v, want %v", err, writeErr)
+	}
+	err = stream.PushFrame(&audiomodel.AudioFrame{
+		Data:              make([]byte, 320),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	})
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after write failure = %v, want io.ErrClosedPipe", err)
 	}
 }
 

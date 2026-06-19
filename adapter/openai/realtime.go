@@ -324,7 +324,24 @@ func (m *RealtimeModel) Provider() string {
 }
 
 func (m *RealtimeModel) Close() error {
-	return nil
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	sessions := make([]*realtimeSession, 0, len(m.sessions))
+	for session := range m.sessions {
+		sessions = append(sessions, session)
+	}
+	m.sessions = make(map[*realtimeSession]struct{})
+	m.mu.Unlock()
+
+	var closeErr error
+	for _, session := range sessions {
+		if err := session.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
 }
 
 func (m *RealtimeModel) UpdateOptions(options llm.RealtimeSessionOptions) error {
@@ -779,6 +796,9 @@ func (m *RealtimeModel) realtimeTools(tools []llm.Tool) []map[string]any {
 func openAIRealtimeTools(tools []llm.Tool) []map[string]any {
 	var oaTools []map[string]any
 	for _, t := range tools {
+		if _, ok := t.(llm.ProviderTool); ok {
+			continue
+		}
 		oaTools = append(oaTools, map[string]any{
 			"type":        "function",
 			"name":        t.Name(),
@@ -2234,7 +2254,7 @@ func openAIRealtimeResponseDoneError(response map[string]any) (llm.RealtimeEvent
 	if status != "failed" && status != "incomplete" {
 		return llm.RealtimeEvent{}, false
 	}
-	statusDetails, _ := response["status_details"].(map[string]any)
+	statusDetails, statusDetailsBody := openAIRealtimeStatusDetails(response["status_details"])
 	if status == "incomplete" {
 		reason := openAIRealtimeString(statusDetails["reason"])
 		if reason == "" {
@@ -2246,7 +2266,7 @@ func openAIRealtimeResponseDoneError(response map[string]any) (llm.RealtimeEvent
 		}
 		return llm.RealtimeEvent{
 			Type:  llm.RealtimeEventTypeError,
-			Error: llm.NewAPIError(message, statusDetails, true),
+			Error: llm.NewAPIError(message, statusDetailsBody, true),
 		}, true
 	}
 	errorBody, hasError := statusDetails["error"].(map[string]any)
@@ -2264,6 +2284,16 @@ func openAIRealtimeResponseDoneError(response map[string]any) (llm.RealtimeEvent
 		Type:  llm.RealtimeEventTypeError,
 		Error: llm.NewAPIError(message, body, true),
 	}, true
+}
+
+func openAIRealtimeStatusDetails(value any) (map[string]any, any) {
+	if details, ok := value.(map[string]any); ok {
+		return details, details
+	}
+	if details := openAIRealtimeString(value); details != "" {
+		return map[string]any{"reason": details}, details
+	}
+	return map[string]any{}, nil
 }
 
 func (s *realtimeSession) trackRealtimeEvent(ev llm.RealtimeEvent) llm.RealtimeEvent {

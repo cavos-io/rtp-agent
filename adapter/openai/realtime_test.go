@@ -60,6 +60,99 @@ func TestRealtimeModelCapabilitiesDisableExplicitNilTurnDetection(t *testing.T) 
 	}
 }
 
+func TestRealtimeModelCloseClosesActiveSessions(t *testing.T) {
+	closed := make(chan struct{})
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		_, _, err := conn.ReadMessage()
+		if err == nil {
+			t.Error("ReadMessage after model close error = nil, want websocket close")
+		}
+		close(closed)
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := realtimeModel.Close(); err != nil {
+		t.Fatalf("Model Close error = %v", err)
+	}
+
+	select {
+	case <-closed:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("model Close did not close active realtime websocket")
+	}
+}
+
+func TestRealtimeSessionUpdateToolsSkipsProviderTools(t *testing.T) {
+	messages := make(chan string, 2)
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("Read tools update error = %v", err)
+			return
+		}
+		messages <- string(msg)
+		<-releaseServer
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateTools([]llm.Tool{requestTestTool{}, openAIRealtimeProviderTestTool{}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+
+	update := <-messages
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(update), &payload); err != nil {
+		t.Fatalf("Decode tools update error = %v", err)
+	}
+	sessionPayload := payload["session"].(map[string]any)
+	tools := sessionPayload["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("tools length = %d, want only function tools: %#v", len(tools), tools)
+	}
+	tool := tools[0].(map[string]any)
+	if tool["name"] != "lookup" {
+		t.Fatalf("tool name = %#v, want lookup", tool["name"])
+	}
+}
+
+type openAIRealtimeProviderTestTool struct {
+	requestTestTool
+}
+
+func (openAIRealtimeProviderTestTool) ID() string                 { return "web_search" }
+func (openAIRealtimeProviderTestTool) Name() string               { return "web_search" }
+func (openAIRealtimeProviderTestTool) Description() string        { return "provider web search" }
+func (openAIRealtimeProviderTestTool) IsProviderTool() bool       { return true }
+func (openAIRealtimeProviderTestTool) Parameters() map[string]any { return map[string]any{} }
+
 func TestNewOpenAIRealtimeModelUsesEnvAPIKey(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "env-key")
 
@@ -5436,6 +5529,39 @@ func TestRealtimeResponseDoneIncompleteReportsRecoverableError(t *testing.T) {
 	}
 	if !apiErr.Retryable {
 		t.Fatal("APIError Retryable = false, want true")
+	}
+}
+
+func TestRealtimeResponseDoneIncompletePreservesStringStatusDetails(t *testing.T) {
+	responseDone := map[string]any{
+		"type": "response.done",
+		"response": map[string]any{
+			"id":             "resp_incomplete",
+			"status":         "incomplete",
+			"status_details": "max_output_tokens",
+		},
+	}
+
+	session := &realtimeSession{
+		generation: &realtimeGeneration{
+			messages:   map[string]*realtimeMessageGeneration{},
+			messageCh:  make(chan llm.MessageGeneration),
+			functionCh: make(chan *llm.FunctionCall),
+		},
+	}
+	errorEvent, ok := session.trackOpenAIRealtimeEvent(responseDone)
+	if !ok {
+		t.Fatal("trackOpenAIRealtimeEvent returned ok=false, want incomplete response error event")
+	}
+	var apiErr *llm.APIError
+	if !errors.As(errorEvent.Error, &apiErr) {
+		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
+	}
+	if apiErr.Message != "OpenAI Realtime API response incomplete: max_output_tokens" {
+		t.Fatalf("APIError message = %q", apiErr.Message)
+	}
+	if apiErr.Body != "max_output_tokens" {
+		t.Fatalf("APIError Body = %#v, want string status_details", apiErr.Body)
 	}
 }
 

@@ -211,6 +211,26 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 		stream.updateOptions(streamLanguage, true)
 	}
 }
+func (s *AzureSTT) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	streams := make([]*azureSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.streams = make(map[*azureSTTStream]struct{})
+	s.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
 func (s *AzureSTT) InputSampleRate() uint32 {
 	if s == nil || s.sampleRate <= 0 {
 		return defaultAzureSTTSampleRate
@@ -562,6 +582,7 @@ type azureSTTStream struct {
 	pendingAudio    []azureSTTPendingAudio
 	reconnectNext   bool
 	sessionStopped  bool
+	pushedSR        uint32
 	reconnects      int
 	maxReconnects   int
 	startTimeOffset float64
@@ -584,6 +605,12 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
+	}
+	if frame.SampleRate != 0 {
+		if s.pushedSR != 0 && s.pushedSR != frame.SampleRate {
+			return fmt.Errorf("azure stt input sample rate changed from %d to %d", s.pushedSR, frame.SampleRate)
+		}
+		s.pushedSR = frame.SampleRate
 	}
 	if s.reconnectNext {
 		if err := s.reconnectLocked(); err != nil {
