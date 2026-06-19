@@ -784,7 +784,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		}
 		if genData == nil {
 			var err error
-			genData, err = PerformLLMInference(ctx, va.LLM, inferenceCtx, selectedTools, chatOptions...)
+			genData, err = PerformLLMInferenceWithTextEvents(ctx, va.LLM, inferenceCtx, selectedTools, chatOptions...)
 			if err != nil {
 				if !suppressContextCanceledError(ctx, opts.SpeechHandle, err) {
 					logger.Logger.Errorw("LLM inference failed", err)
@@ -800,13 +800,21 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 
 		var ttsGen *TTSGenerationData
 		if va.tts == nil {
-			err = drainLLMText(ctx, genData.TextCh, opts.SpeechHandle)
+			err = drainLLMGenerationText(ctx, genData, opts.SpeechHandle)
 		} else {
 			if opts.SpeechHandle != nil && toolSteps == 0 {
 				ttsGen = opts.SpeechHandle.takePrecomputedTTSGeneration()
 			}
 			if ttsGen != nil {
 				ttsGen, err = va.playTTSGeneration(ctx, session, ttsGen, opts.SpeechHandle)
+			} else if genData.TextEventCh != nil {
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					_ = drainLLMText(ctx, genData.TextCh, nil)
+				}()
+				ttsGen, err = va.synthesizeSegmentedSpeech(ctx, session, genData.TextEventCh, opts.SpeechHandle)
+				<-done
 			} else {
 				ttsGen, err = va.synthesizeSpeech(ctx, session, genData.TextCh, opts.SpeechHandle)
 			}
@@ -954,6 +962,42 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 	}
 }
 
+func drainLLMGenerationText(ctx context.Context, genData *LLMGenerationData, speech *SpeechHandle) error {
+	if genData == nil {
+		return nil
+	}
+	if genData.TextEventCh != nil {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_ = drainLLMText(ctx, genData.TextCh, nil)
+		}()
+		err := drainLLMTextEvents(ctx, genData.TextEventCh, speech)
+		<-done
+		return err
+	}
+	return drainLLMText(ctx, genData.TextCh, speech)
+}
+
+func drainLLMTextEvents(ctx context.Context, textCh <-chan LLMTextEvent, speech *SpeechHandle) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		if speech != nil && speech.IsInterrupted() {
+			return nil
+		}
+		select {
+		case _, ok := <-textCh:
+			if !ok {
+				return nil
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
 func drainLLMText(ctx context.Context, textCh <-chan string, speech *SpeechHandle) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -969,6 +1013,97 @@ func drainLLMText(ctx context.Context, textCh <-chan string, speech *SpeechHandl
 			}
 		case <-ctx.Done():
 			return ctx.Err()
+		}
+	}
+}
+
+func (va *PipelineAgent) synthesizeSegmentedSpeech(ctx context.Context, session *AgentSession, textCh <-chan LLMTextEvent, speech *SpeechHandle) (*TTSGenerationData, error) {
+	type activeSegment struct {
+		input             chan string
+		ttsGen            *TTSGenerationData
+		transcriptSync    *TranscriptSynchronizer
+		transcriptionDone <-chan struct{}
+	}
+
+	var segment *activeSegment
+	var firstGen *TTSGenerationData
+
+	startSegment := func() error {
+		if segment != nil {
+			return nil
+		}
+		input := make(chan string, 100)
+		transcriptSync := NewTranscriptSynchronizer(0)
+		useAlignedTranscript := va.useTTSAlignedTranscript(session)
+		var transcriptionDone <-chan struct{}
+		ttsTextCh := (<-chan string)(input)
+		if useAlignedTranscript {
+			transcriptionDone = closedChannel()
+		} else {
+			transcriptionDone = va.forwardAgentOutputTranscription(session, transcriptSync)
+			ttsTextCh = va.forwardTextToTranscriptSynchronizer(ctx, input, transcriptSync)
+		}
+		ttsGen, err := PerformTTSInference(ctx, va.tts, ttsTextCh, va.ttsInferenceOptions(session)...)
+		if err != nil {
+			close(input)
+			transcriptSync.Close()
+			<-transcriptionDone
+			return err
+		}
+		if useAlignedTranscript {
+			transcriptionDone = va.forwardAlignedAgentOutputTranscription(session, ttsGen.TimedTextCh)
+		}
+		segment = &activeSegment{
+			input:             input,
+			ttsGen:            ttsGen,
+			transcriptSync:    transcriptSync,
+			transcriptionDone: transcriptionDone,
+		}
+		if firstGen == nil {
+			firstGen = ttsGen
+		}
+		return nil
+	}
+
+	playSegment := func() error {
+		if segment == nil {
+			return nil
+		}
+		current := segment
+		segment = nil
+		close(current.input)
+		_, err := va.playTTSGenerationWithTranscript(ctx, session, current.ttsGen, current.transcriptSync, current.transcriptionDone, speech)
+		if firstGen != nil && current.ttsGen != nil && current.ttsGen.ForwardedAudio {
+			firstGen.ForwardedAudio = true
+		}
+		return err
+	}
+
+	for {
+		select {
+		case event, ok := <-textCh:
+			if !ok {
+				return firstGen, playSegment()
+			}
+			if event.Flush {
+				if err := playSegment(); err != nil {
+					return firstGen, err
+				}
+				continue
+			}
+			if event.Text == "" {
+				continue
+			}
+			if err := startSegment(); err != nil {
+				return firstGen, err
+			}
+			select {
+			case segment.input <- event.Text:
+			case <-ctx.Done():
+				return firstGen, ctx.Err()
+			}
+		case <-ctx.Done():
+			return firstGen, ctx.Err()
 		}
 	}
 }
@@ -1111,7 +1246,7 @@ func (va *PipelineAgent) precomputeLLMGeneration(ctx context.Context, session *A
 	if len(session.Options.LLMResponseFormat) > 0 {
 		chatOptions = append(chatOptions, llm.WithResponseFormat(session.Options.LLMResponseFormat))
 	}
-	return PerformLLMInference(ctx, va.LLM, inferenceCtx, selectedTools, chatOptions...)
+	return PerformLLMInferenceWithTextEvents(ctx, va.LLM, inferenceCtx, selectedTools, chatOptions...)
 }
 
 func (va *PipelineAgent) emitLLMMetrics(session *AgentSession, genData *LLMGenerationData) {

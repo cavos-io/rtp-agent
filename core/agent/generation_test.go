@@ -117,6 +117,37 @@ func TestPerformLLMInferenceTracksGeneratedExtra(t *testing.T) {
 	}
 }
 
+func TestPerformLLMInferenceWithTextEventsForwardsFlushSentinel(t *testing.T) {
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "first"}},
+				{Delta: &llm.ChoiceDelta{Flush: true}},
+				{Delta: &llm.ChoiceDelta{Content: "second"}},
+			},
+		},
+	}
+
+	data, err := PerformLLMInferenceWithTextEvents(context.Background(), l, llm.NewChatContext(), nil)
+	if err != nil {
+		t.Fatalf("PerformLLMInferenceWithTextEvents error = %v, want nil", err)
+	}
+
+	got := drainTextEvents(data.TextEventCh)
+	want := []LLMTextEvent{{Text: "first"}, {Flush: true}, {Text: "second"}}
+	if len(got) != len(want) {
+		t.Fatalf("TextEventCh = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("TextEventCh[%d] = %#v, want %#v", i, got[i], want[i])
+		}
+	}
+	if data.GeneratedText != "firstsecond" {
+		t.Fatalf("GeneratedText = %q, want firstsecond", data.GeneratedText)
+	}
+}
+
 func TestPerformLLMInferenceFlattensToolsBeforeChat(t *testing.T) {
 	l := &fakeGenerationLLM{
 		stream: &fakeGenerationLLMStream{},
@@ -2464,6 +2495,14 @@ func drainFunctionCalls(ch <-chan *llm.FunctionToolCall) []*llm.FunctionToolCall
 
 func drainStrings(ch <-chan string) []string {
 	values := make([]string, 0)
+	for value := range ch {
+		values = append(values, value)
+	}
+	return values
+}
+
+func drainTextEvents(ch <-chan LLMTextEvent) []LLMTextEvent {
+	values := make([]LLMTextEvent, 0)
 	for value := range ch {
 		values = append(values, value)
 	}
