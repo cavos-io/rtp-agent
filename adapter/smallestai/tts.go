@@ -140,6 +140,20 @@ func (t *SmallestAITTS) Provider() string {
 	return "SmallestAI"
 }
 
+func (t *SmallestAITTS) UpdateOptions(opts ...SmallestAITTSOption) {
+	if t == nil {
+		return
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(t)
+		}
+	}
+	if t.voice == "" {
+		t.voice = defaultSmallestAIVoice(t.model)
+	}
+}
+
 func (t *SmallestAITTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }

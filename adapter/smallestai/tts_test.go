@@ -166,6 +166,50 @@ func TestSmallestAITTSOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestSmallestAITTSUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
+	provider := NewSmallestAITTS("test-key", "")
+
+	provider.UpdateOptions(
+		WithSmallestAITTSModel("lightning_v3.1"),
+		WithSmallestAITTSVoice("sophia"),
+		WithSmallestAITTSSampleRate(44100),
+		WithSmallestAITTSSpeed(1.4),
+		WithSmallestAITTSLanguage("auto"),
+		WithSmallestAITTSOutputFormat("wav"),
+	)
+
+	req, err := buildSmallestAITTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	assertSmallestAIPayload(t, payload, "model", "lightning_v3.1")
+	assertSmallestAIPayload(t, payload, "voice_id", "sophia")
+	assertSmallestAIPayload(t, payload, "language", "auto")
+	assertSmallestAIPayload(t, payload, "output_format", "wav")
+	if payload["sample_rate"] != float64(44100) || payload["speed"] != float64(1.4) {
+		t.Fatalf("payload = %+v, want updated sample_rate and speed", payload)
+	}
+
+	streamPayload, err := buildSmallestAITTSStreamMessage(provider, "hello")
+	if err != nil {
+		t.Fatalf("build stream message: %v", err)
+	}
+	var streamMessage map[string]any
+	if err := json.Unmarshal(streamPayload, &streamMessage); err != nil {
+		t.Fatalf("decode stream message: %v", err)
+	}
+	assertSmallestAIPayload(t, streamMessage, "model", "lightning_v3.1")
+	assertSmallestAIPayload(t, streamMessage, "voice_id", "sophia")
+	assertSmallestAIPayload(t, streamMessage, "language", "auto")
+	if streamMessage["sample_rate"] != float64(44100) || streamMessage["speed"] != float64(1.4) {
+		t.Fatalf("stream message = %+v, want updated sample_rate and speed", streamMessage)
+	}
+}
+
 func TestSmallestAITTSStreamMessageMatchesReference(t *testing.T) {
 	provider := NewSmallestAITTS("test-key", "",
 		WithSmallestAITTSModel("lightning_v3.1"),
