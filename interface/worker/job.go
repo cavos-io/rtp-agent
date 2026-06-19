@@ -751,11 +751,11 @@ func (c *JobContext) Terminated() bool {
 
 // DeleteRoom deletes the room and disconnects all participants.
 func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*workerlivekit.DeleteRoomResponse, error) {
-	if plan := workerlivekit.DeleteRoomPlan(c.IsFakeJob()); plan.Skip {
+	if plan := workerlivekit.JobContextDeleteRoomPlan(c.IsFakeJob()); plan.Skip {
 		logger.Logger.Warnw("job context DeleteRoom is skipped for fake jobs", nil)
 		return plan.Response, nil
 	}
-	resp, warnErr := workerlivekit.DeleteRoomBestEffort(ctx, c.API().RoomService, c.Job, roomName)
+	resp, warnErr := workerlivekit.JobContextDeleteRoomBestEffort(ctx, c.API().RoomService, c.Job, roomName)
 	if warnErr != nil {
 		logger.Logger.Warnw("error while deleting room", warnErr)
 	}
@@ -763,11 +763,11 @@ func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*workerli
 }
 
 func (c *JobContext) MoveParticipant(ctx context.Context, room string, identity string, destinationRoom string) error {
-	if plan := workerlivekit.MoveParticipantPlan(c.IsFakeJob()); plan.Skip {
+	if plan := workerlivekit.JobContextMoveParticipantPlan(c.IsFakeJob()); plan.Skip {
 		logger.Logger.Warnw("job context MoveParticipant is skipped for fake jobs", nil)
 		return nil
 	}
-	return workerlivekit.MoveParticipant(ctx, c.API().RoomService, c.Job, room, identity, destinationRoom)
+	return workerlivekit.JobContextMoveParticipant(ctx, c.API().RoomService, c.Job, room, identity, destinationRoom)
 }
 
 // AddSIPParticipant adds a SIP participant to the room.

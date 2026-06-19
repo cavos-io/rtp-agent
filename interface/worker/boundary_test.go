@@ -148,6 +148,10 @@ func TestSharedJobContextDoesNotCallLiveKitInfoHelpersDirectly(t *testing.T) {
 		"workerlivekit.WaitForParticipantAttribute(",
 		"workerlivekit.ParticipantEntrypointRegistrationPlan(",
 		"workerlivekit.ParticipantEntrypointTaskPlan(",
+		"workerlivekit.DeleteRoomPlan(",
+		"workerlivekit.DeleteRoomBestEffort(",
+		"workerlivekit.MoveParticipantPlan(",
+		"workerlivekit.MoveParticipant(",
 	}
 
 	data, err := os.ReadFile("job.go")

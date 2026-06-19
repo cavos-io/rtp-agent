@@ -113,3 +113,19 @@ func JobContextParticipantEntrypointRegistrationPlan(opts ParticipantEntrypointR
 func JobContextParticipantEntrypointTaskPlan(participant *ParticipantInfo, kinds []ParticipantInfoKind, entrypoint uintptr) ParticipantEntrypointTaskPlanResult {
 	return ParticipantEntrypointTaskPlan(participant, kinds, entrypoint)
 }
+
+func JobContextDeleteRoomPlan(fakeJob bool) DeleteRoomPlanResult {
+	return DeleteRoomPlan(fakeJob)
+}
+
+func JobContextDeleteRoomBestEffort(ctx context.Context, api DeleteRoomAPI, job *Job, roomName string) (*DeleteRoomResponse, error) {
+	return DeleteRoomBestEffort(ctx, api, job, roomName)
+}
+
+func JobContextMoveParticipantPlan(fakeJob bool) MoveParticipantPlanResult {
+	return MoveParticipantPlan(fakeJob)
+}
+
+func JobContextMoveParticipant(ctx context.Context, api MoveParticipantAPI, job *Job, room string, identity string, destinationRoom string) error {
+	return MoveParticipant(ctx, api, job, room, identity, destinationRoom)
+}
