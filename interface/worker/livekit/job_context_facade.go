@@ -77,3 +77,11 @@ func JobContextApplyAutoSubscribeToRoom(room *SDKRoom, mode string) []RemoteTrac
 func JobContextRoomCallbackWithHandlers(cb *RoomCallback, handlers RoomCallbackHandlers) *RoomCallback {
 	return RoomCallbackWithHandlers(cb, handlers)
 }
+
+func JobContextParticipantInfoFromRemoteParticipant(participant RemoteParticipantView) *ParticipantInfo {
+	return ParticipantInfoFromRemoteParticipant(participant)
+}
+
+func JobContextUpsertParticipantInfo(participants []*ParticipantInfo, participant *ParticipantInfo) []*ParticipantInfo {
+	return UpsertParticipantInfo(participants, participant)
+}

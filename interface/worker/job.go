@@ -493,7 +493,7 @@ func (c *JobContext) roomCallbackWithEntrypoints(cb *workerlivekit.RoomCallback,
 }
 
 func (c *JobContext) participantAvailable(participant workerlivekit.RemoteParticipantView) {
-	info := workerlivekit.ParticipantInfoFromRemoteParticipant(participant)
+	info := workerlivekit.JobContextParticipantInfoFromRemoteParticipant(participant)
 	if info == nil {
 		return
 	}
@@ -502,7 +502,7 @@ func (c *JobContext) participantAvailable(participant workerlivekit.RemotePartic
 }
 
 func (c *JobContext) rememberAvailableParticipant(info *workerlivekit.ParticipantInfo) {
-	c.availableParticipants = workerlivekit.UpsertParticipantInfo(c.availableParticipants, info)
+	c.availableParticipants = workerlivekit.JobContextUpsertParticipantInfo(c.availableParticipants, info)
 }
 
 func (c *JobContext) participantsAvailable(participants []workerlivekit.RemoteParticipantView) {
