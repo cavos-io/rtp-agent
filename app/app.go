@@ -1226,9 +1226,11 @@ func (a *App) runAgora(ctx context.Context) error {
 	}()
 	if workeragora.PublishAudioEnabled(agoraOpts.PublishAudio) {
 		audioOutput := workeragora.NewAudioOutput(transport)
-		a.Session.EnsureAssistant().SetPublishAudio(func(ctx context.Context, frame *model.AudioFrame) error {
+		assistant := a.Session.EnsureAssistant()
+		assistant.SetPublishAudio(func(ctx context.Context, frame *model.AudioFrame) error {
 			return audioOutput.PublishAudio(ctx, frame)
 		})
+		defer assistant.SetPublishAudio(nil)
 	}
 	if err := a.runSessionWithContext(nil, runCtx); err != nil {
 		if cause := context.Cause(runCtx); cause != nil && !errors.Is(cause, context.Canceled) && !errors.Is(cause, context.DeadlineExceeded) {

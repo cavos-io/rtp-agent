@@ -1478,6 +1478,9 @@ func TestRunAgoraPublishesAssistantAudioToChannel(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("runAgora() did not return after cancellation")
 	}
+	if pipeline.PublishAudio != nil {
+		t.Fatal("session assistant PublishAudio still points at Agora transport after runAgora returned")
+	}
 }
 
 func TestRunAgoraPublishesTranscriptDataWhenPublishDataEnabled(t *testing.T) {
