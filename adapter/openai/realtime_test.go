@@ -60,6 +60,41 @@ func TestRealtimeModelCapabilitiesDisableExplicitNilTurnDetection(t *testing.T) 
 	}
 }
 
+func TestRealtimeModelCloseClosesActiveSessions(t *testing.T) {
+	closed := make(chan struct{})
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		_, _, err := conn.ReadMessage()
+		if err == nil {
+			t.Error("ReadMessage after model close error = nil, want websocket close")
+		}
+		close(closed)
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := realtimeModel.Close(); err != nil {
+		t.Fatalf("Model Close error = %v", err)
+	}
+
+	select {
+	case <-closed:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("model Close did not close active realtime websocket")
+	}
+}
+
 func TestNewOpenAIRealtimeModelUsesEnvAPIKey(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "env-key")
 

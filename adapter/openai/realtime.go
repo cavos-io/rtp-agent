@@ -324,7 +324,24 @@ func (m *RealtimeModel) Provider() string {
 }
 
 func (m *RealtimeModel) Close() error {
-	return nil
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	sessions := make([]*realtimeSession, 0, len(m.sessions))
+	for session := range m.sessions {
+		sessions = append(sessions, session)
+	}
+	m.sessions = make(map[*realtimeSession]struct{})
+	m.mu.Unlock()
+
+	var closeErr error
+	for _, session := range sessions {
+		if err := session.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
 }
 
 func (m *RealtimeModel) UpdateOptions(options llm.RealtimeSessionOptions) error {
