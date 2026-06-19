@@ -444,6 +444,7 @@ type smallestAISTTStream struct {
 	state              *smallestAISTTStreamState
 	audio              bytes.Buffer
 	sampleRate         int
+	usageAudioDuration float64
 	reconnectRequested bool
 }
 
@@ -594,6 +595,7 @@ func (s *smallestAISTTStream) PushFrame(frame *model.AudioFrame) error {
 		if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
 			return err
 		}
+		s.usageAudioDuration += smallestAISTTAudioDuration(len(chunk), s.sampleRate)
 	}
 	return nil
 }
@@ -605,6 +607,7 @@ func (s *smallestAISTTStream) Flush() error {
 		return fmt.Errorf("smallestai stt stream is closed")
 	}
 	if s.audio.Len() == 0 {
+		s.emitRecognitionUsageLocked()
 		return nil
 	}
 	chunk := bytes.Clone(s.audio.Bytes())
@@ -612,7 +615,31 @@ func (s *smallestAISTTStream) Flush() error {
 	if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
 		return err
 	}
+	s.usageAudioDuration += smallestAISTTAudioDuration(len(chunk), s.sampleRate)
+	s.emitRecognitionUsageLocked()
 	return nil
+}
+
+func (s *smallestAISTTStream) emitRecognitionUsageLocked() {
+	if s.usageAudioDuration <= 0 {
+		return
+	}
+	duration := s.usageAudioDuration
+	s.usageAudioDuration = 0
+	s.events <- &stt.SpeechEvent{
+		Type:      stt.SpeechEventRecognitionUsage,
+		RequestID: s.state.sessionID,
+		RecognitionUsage: &stt.RecognitionUsage{
+			AudioDuration: duration,
+		},
+	}
+}
+
+func smallestAISTTAudioDuration(byteCount int, sampleRate int) float64 {
+	if byteCount <= 0 || sampleRate <= 0 {
+		return 0
+	}
+	return float64(byteCount) / float64(sampleRate*smallestAIPCMBytesPerSample)
 }
 
 func (s *smallestAISTTStream) Close() error {

@@ -417,6 +417,57 @@ func TestSmallestAISTTPushFrameBuffersReferenceAudioChunks(t *testing.T) {
 	}
 }
 
+func TestSmallestAISTTFlushEmitsReferenceRecognitionUsage(t *testing.T) {
+	audioCh := make(chan []byte, 1)
+	errCh := make(chan error, 1)
+	dialer := newSmallestAISTTTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		msgType, payload, err := conn.ReadMessage()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if msgType != websocket.BinaryMessage {
+			t.Errorf("message type = %d, want binary", msgType)
+		}
+		audioCh <- append([]byte(nil), payload...)
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})
+
+	provider := NewSmallestAISTT("test-key",
+		WithSmallestAISTTBaseURL("ws://smallest.test/waves/v1"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+	if err := stream.PushFrame(&model.AudioFrame{Data: bytes.Repeat([]byte{1}, 1600)}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	if got := readSmallestAITestChan(t, audioCh, errCh); len(got) != 1600 {
+		t.Fatalf("audio chunk len = %d, want 1600", len(got))
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+
+	event := readSmallestAIStreamEvent(t, stream)
+	if event.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("event type = %s, want recognition_usage", event.Type)
+	}
+	if event.RecognitionUsage == nil {
+		t.Fatal("RecognitionUsage = nil, want audio duration")
+	}
+	if event.RecognitionUsage.AudioDuration != 0.05 {
+		t.Fatalf("audio duration = %v, want 0.05", event.RecognitionUsage.AudioDuration)
+	}
+}
+
 func TestSmallestAISTTBatchResponseMapsSpeechEvent(t *testing.T) {
 	event := smallestAIBatchSpeechEvent("en", smallestAIBatchResponse{
 		Transcription: "hello world",
@@ -646,6 +697,32 @@ func readSmallestAIRequestURL(t *testing.T, ch <-chan string, errCh <-chan error
 		t.Fatal("timed out waiting for websocket request")
 	}
 	return ""
+}
+
+func readSmallestAIStreamEvent(t *testing.T, stream stt.RecognizeStream) *stt.SpeechEvent {
+	t.Helper()
+	type result struct {
+		event *stt.SpeechEvent
+		err   error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		event, err := stream.Next()
+		ch <- result{event: event, err: err}
+	}()
+	select {
+	case got := <-ch:
+		if got.err != nil {
+			t.Fatalf("Next() error = %v", got.err)
+		}
+		if got.event == nil {
+			t.Fatal("Next() event = nil")
+		}
+		return got.event
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for stream event")
+	}
+	return nil
 }
 
 func TestSmallestAISTTRecognizeResponseDecode(t *testing.T) {
