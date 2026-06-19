@@ -517,6 +517,34 @@ func TestAzureSTTStreamAudioContentTypeUsesConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestAzureSTTStreamRejectsReferenceSampleRateChange(t *testing.T) {
+	provider, err := NewAzureSTT("key", "eastus")
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	stream := &azureSTTStream{
+		provider: provider,
+		ctx:      context.Background(),
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame first rate error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x03, 0x04},
+		SampleRate:        8000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err == nil || !strings.Contains(err.Error(), "sample rate") {
+		t.Fatalf("PushFrame changed rate error = %v, want sample rate mismatch", err)
+	}
+}
+
 func TestAzureSTTStreamUsesWebsocketProtocol(t *testing.T) {
 	requests := make(chan *http.Request, 1)
 	configMessages := make(chan string, 1)

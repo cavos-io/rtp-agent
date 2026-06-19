@@ -562,6 +562,7 @@ type azureSTTStream struct {
 	pendingAudio    []azureSTTPendingAudio
 	reconnectNext   bool
 	sessionStopped  bool
+	pushedSR        uint32
 	reconnects      int
 	maxReconnects   int
 	startTimeOffset float64
@@ -584,6 +585,12 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
+	}
+	if frame.SampleRate != 0 {
+		if s.pushedSR != 0 && s.pushedSR != frame.SampleRate {
+			return fmt.Errorf("azure stt input sample rate changed from %d to %d", s.pushedSR, frame.SampleRate)
+		}
+		s.pushedSR = frame.SampleRate
 	}
 	if s.reconnectNext {
 		if err := s.reconnectLocked(); err != nil {
