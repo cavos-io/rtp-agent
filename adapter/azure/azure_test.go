@@ -802,8 +802,8 @@ func TestAzureSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
 
 func TestAzureSTTStreamSuppressesDuplicateSpeechBoundaries(t *testing.T) {
 	stream := &azureSTTStream{language: "id-ID"}
-	startPayload := []byte("Path: turn.start\r\nContent-Type: application/json\r\n\r\n{}")
-	endPayload := []byte("Path: turn.end\r\nContent-Type: application/json\r\n\r\n{}")
+	startPayload := []byte("Path: speech.startDetected\r\nContent-Type: application/json\r\n\r\n{}")
+	endPayload := []byte("Path: speech.endDetected\r\nContent-Type: application/json\r\n\r\n{}")
 
 	start := stream.parseMessage(startPayload)
 	if start == nil || start.Type != stt.SpeechEventStartOfSpeech {
@@ -833,6 +833,17 @@ func TestAzureSTTStreamParsesReferenceSpeechBoundaryPaths(t *testing.T) {
 	end := stream.parseMessage([]byte("Path: speech.endDetected\r\nContent-Type: application/json\r\n\r\n{}"))
 	if end == nil || end.Type != stt.SpeechEventEndOfSpeech {
 		t.Fatalf("speech.endDetected event = %#v, want end_of_speech", end)
+	}
+}
+
+func TestAzureSTTStreamIgnoresReferenceSessionTurnEvents(t *testing.T) {
+	stream := &azureSTTStream{language: "id-ID"}
+
+	if event := stream.parseMessage([]byte("Path: turn.start\r\nContent-Type: application/json\r\n\r\n{}")); event != nil {
+		t.Fatalf("turn.start event = %#v, want nil session lifecycle event", event)
+	}
+	if event := stream.parseMessage([]byte("Path: turn.end\r\nContent-Type: application/json\r\n\r\n{}")); event != nil {
+		t.Fatalf("turn.end event = %#v, want nil session lifecycle event", event)
 	}
 }
 
@@ -2013,10 +2024,10 @@ func runAzureTestWebsocketServer(
 	audioMessages <- payload
 
 	for _, message := range []string{
-		"Path: turn.start\r\nContent-Type: application/json\r\n\r\n{}",
+		"Path: speech.startDetected\r\nContent-Type: application/json\r\n\r\n{}",
 		"Path: speech.hypothesis\r\nContent-Type: application/json\r\n\r\n{\"Text\":\"halo sementara\"}",
 		"Path: speech.phrase\r\nContent-Type: application/json\r\n\r\n{\"RecognitionStatus\":\"Success\",\"DisplayText\":\"halo final\",\"NBest\":[{\"Display\":\"halo final\",\"Confidence\":0.87}]}",
-		"Path: turn.end\r\nContent-Type: application/json\r\n\r\n{}",
+		"Path: speech.endDetected\r\nContent-Type: application/json\r\n\r\n{}",
 	} {
 		if err := writeAzureTestWebsocketFrame(conn, websocket.TextMessage, []byte(message)); err != nil {
 			errCh <- err
