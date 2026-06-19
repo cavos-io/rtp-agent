@@ -310,12 +310,12 @@ func (s *sonioxStream) readLoop() {
 			continue
 		}
 		events, err := processSonioxMessage(s.state, message)
+		for _, event := range events {
+			s.events <- event
+		}
 		if err != nil {
 			s.errCh <- err
 			return
-		}
-		for _, event := range events {
-			s.events <- event
 		}
 	}
 }
@@ -407,8 +407,9 @@ func processSonioxMessage(state *sonioxMessageState, payload []byte) ([]*stt.Spe
 	if err := json.Unmarshal(payload, &message); err != nil {
 		return nil, err
 	}
+	providerErr := sonioxProviderError(message)
 	if message.ErrorCode != nil || message.ErrorMessage != "" {
-		return nil, fmt.Errorf("soniox stt error: %v - %s", message.ErrorCode, message.ErrorMessage)
+		message.Finished = true
 	}
 
 	var events []*stt.SpeechEvent
@@ -490,7 +491,14 @@ func processSonioxMessage(state *sonioxMessageState, payload []byte) ([]*stt.Spe
 		events = append(events, sonioxUsageEvents(state, message.TotalAudioProcMS)...)
 	}
 
-	return events, nil
+	return events, providerErr
+}
+
+func sonioxProviderError(message sonioxMessage) error {
+	if message.ErrorCode == nil && message.ErrorMessage == "" {
+		return nil
+	}
+	return fmt.Errorf("soniox stt error: %v - %s", message.ErrorCode, message.ErrorMessage)
 }
 
 func sonioxUsageEvents(state *sonioxMessageState, totalAudioProcMS float64) []*stt.SpeechEvent {

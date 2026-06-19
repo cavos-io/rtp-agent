@@ -296,6 +296,22 @@ func TestSonioxProcessMessageEmitsInterimPreflightFinalAndUsage(t *testing.T) {
 	}
 }
 
+func TestSonioxProcessMessageFlushesTranscriptBeforeStatusError(t *testing.T) {
+	state := &sonioxMessageState{}
+
+	events, err := processSonioxMessage(state, []byte(`{"tokens":[{"text":"partial final","language":"en","is_final":true}],"total_audio_proc_ms":750,"error_code":"500","error_message":"server closed"}`))
+	if err == nil || !strings.Contains(err.Error(), "500") || !strings.Contains(err.Error(), "server closed") {
+		t.Fatalf("error = %v, want provider status error", err)
+	}
+	assertSonioxEvent(t, events, 0, stt.SpeechEventStartOfSpeech, "")
+	assertSonioxEvent(t, events, 1, stt.SpeechEventPreflightTranscript, "partial final")
+	assertSonioxEvent(t, events, 2, stt.SpeechEventFinalTranscript, "partial final")
+	assertSonioxEvent(t, events, 3, stt.SpeechEventEndOfSpeech, "")
+	if events[4].Type != stt.SpeechEventRecognitionUsage || events[4].RecognitionUsage.AudioDuration != 0.75 {
+		t.Fatalf("usage event = %+v, want 0.75s usage before error", events[4])
+	}
+}
+
 func TestSonioxProcessMessageRoutesTranslationTokensLikeReference(t *testing.T) {
 	state := &sonioxMessageState{translationMode: true}
 
