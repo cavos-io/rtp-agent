@@ -292,15 +292,15 @@ func (s *cartesiaSTTStream) Flush() error {
 	if s.isClosed() {
 		return io.ErrClosedPipe
 	}
-	if s.state.mode == "legacy" {
-		if s.audioBStream != nil {
-			for _, chunk := range s.audioBStream.Flush() {
-				if err := s.writeBinaryData(chunk.Data); err != nil {
-					s.closeAfterWriteFailure()
-					return err
-				}
+	if s.audioBStream != nil {
+		for _, chunk := range s.audioBStream.Flush() {
+			if err := s.writeBinaryData(chunk.Data); err != nil {
+				s.closeAfterWriteFailure()
+				return err
 			}
 		}
+	}
+	if s.state.mode == "legacy" {
 		if err := s.writeTextData([]byte("finalize")); err != nil {
 			s.closeAfterWriteFailure()
 			return err
