@@ -461,8 +461,8 @@ func (s *smallestAISTTStream) readLoop() {
 				}
 				continue
 			}
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- err
+			if !s.isClosed() {
+				s.errCh <- smallestAISTTUnexpectedCloseError(err)
 			}
 			return
 		}
@@ -524,6 +524,19 @@ func (s *smallestAISTTStream) shouldReconnect() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.reconnectRequested && !s.closed
+}
+
+func (s *smallestAISTTStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
+func smallestAISTTUnexpectedCloseError(err error) error {
+	if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
+		return fmt.Errorf("smallestai stt connection closed unexpectedly: %w", err)
+	}
+	return err
 }
 
 func (s *smallestAISTTStream) reconnect() error {

@@ -185,6 +185,37 @@ func TestSmallestAISTTUpdateOptionsReconnectsActiveStreams(t *testing.T) {
 	assertSmallestAIQuery(t, query, "eou_timeout_ms", "250")
 }
 
+func TestSmallestAISTTUnexpectedNormalCloseReturnsError(t *testing.T) {
+	dialer := newSmallestAISTTTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+			time.Now().Add(time.Second),
+		)
+	})
+
+	provider := NewSmallestAISTT("test-key",
+		WithSmallestAISTTBaseURL("ws://smallest.test/waves/v1"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+
+	event, err := stream.Next()
+	if err == nil {
+		t.Fatalf("Next() error = nil, event = %+v, want unexpected close error", event)
+	}
+	if errors.Is(err, io.EOF) {
+		t.Fatalf("Next() error = EOF, want unexpected close error")
+	}
+	if !strings.Contains(err.Error(), "closed unexpectedly") {
+		t.Fatalf("Next() error = %v, want closed unexpectedly", err)
+	}
+}
+
 func TestNewSmallestAISTTUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("SMALLEST_API_KEY", "env-key")
 
