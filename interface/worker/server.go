@@ -450,7 +450,7 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 				return s.finishJob(jobCtx)
 			},
 			SendStatus: func(status JobStatus) error {
-				if err := s.sendWorkerMessage(workerlivekit.ServerJobStatusMessage(jobCtx.JobID(), status)); err != nil {
+				if err := s.sendWorkerMessage(livekitServerJobStatusMessage(jobCtx.JobID(), status)); err != nil {
 					logger.Logger.Errorw("failed to update reloaded job status", err, "jobId", jobCtx.JobID())
 					return err
 				}
@@ -1028,7 +1028,7 @@ func readSystemCPUTimes() (idle uint64, total uint64, err error) {
 }
 
 func (s *AgentServer) registerWorkerRequest() *WorkerMessage {
-	return workerlivekit.ServerRegisterWorkerMessage(ServerRegisterWorkerMessageOptions{
+	return livekitServerRegisterWorkerMessage(ServerRegisterWorkerMessageOptions{
 		WorkerType:  s.Options.WorkerType,
 		AgentName:   s.Options.AgentName,
 		Version:     s.Options.Version,
@@ -1039,7 +1039,7 @@ func (s *AgentServer) registerWorkerRequest() *WorkerMessage {
 func (s *AgentServer) availableWorkerStatusMessage() *WorkerMessage {
 	jobCount := uint32(s.activeJobCount())
 	load := s.currentLoad()
-	return workerlivekit.ServerAvailableWorkerStatusMessage(ServerAvailableWorkerStatusMessageOptions{
+	return livekitServerAvailableWorkerStatusMessage(ServerAvailableWorkerStatusMessageOptions{
 		Load:         load,
 		JobCount:     jobCount,
 		CanAcceptJob: s.availableForJobWithLoad(load),
@@ -1047,7 +1047,7 @@ func (s *AgentServer) availableWorkerStatusMessage() *WorkerMessage {
 }
 
 func (s *AgentServer) drainingWorkerStatusMessage() *WorkerMessage {
-	return workerlivekit.ServerDrainingWorkerStatusMessage(uint32(s.activeJobCount()))
+	return livekitServerDrainingWorkerStatusMessage(uint32(s.activeJobCount()))
 }
 
 func (s *AgentServer) RTCSession(
@@ -1468,11 +1468,11 @@ func (s *AgentServer) runWorkerStatusUpdates(ctx context.Context, interval time.
 
 func (s *AgentServer) sendWorkerStatusUpdate() error {
 	if s.Draining() {
-		return s.sendWorkerMessage(workerlivekit.ServerDrainingWorkerStatusMessage(uint32(s.activeJobCount())))
+		return s.sendWorkerMessage(livekitServerDrainingWorkerStatusMessage(uint32(s.activeJobCount())))
 	}
 	jobCount := uint32(s.activeJobCount())
 	load := s.currentLoad()
-	return s.sendWorkerMessage(workerlivekit.ServerAvailableWorkerStatusMessage(ServerAvailableWorkerStatusMessageOptions{
+	return s.sendWorkerMessage(livekitServerAvailableWorkerStatusMessage(ServerAvailableWorkerStatusMessageOptions{
 		Load:         load,
 		JobCount:     jobCount,
 		CanAcceptJob: s.availableForJobWithLoad(load),
@@ -1559,7 +1559,7 @@ func (s *AgentServer) reportActiveJobs() {
 		return
 	}
 
-	if err := s.sendWorkerMessage(workerlivekit.ServerMigrateRunningJobsMessage(livekitJobs)); err != nil {
+	if err := s.sendWorkerMessage(livekitServerMigrateRunningJobsMessage(livekitJobs)); err != nil {
 		logger.Logger.Errorw("failed to report active jobs", err, "jobIds", jobIDs)
 	}
 }
@@ -1667,7 +1667,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *JobAssignment) 
 	s.activeJobs[assignedJob.JobID] = jobCtx
 	s.mu.Unlock()
 
-	if err := s.sendWorkerMessage(workerlivekit.ServerJobRunningMessage(jobID)); err != nil {
+	if err := s.sendWorkerMessage(livekitServerJobRunningMessage(jobID)); err != nil {
 		logger.Logger.Errorw("failed to update job status", err, "jobId", jobID)
 	}
 
@@ -1697,7 +1697,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *JobAssignment) 
 					return s.finishJob(jobCtx)
 				},
 				SendStatus: func(status JobStatus) error {
-					err := s.sendWorkerMessage(workerlivekit.ServerJobStatusMessage(jobID, status))
+					err := s.sendWorkerMessage(livekitServerJobStatusMessage(jobID, status))
 					if err != nil {
 						logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", jobID)...)
 					}

@@ -27,6 +27,9 @@ func TestWorkerProductionCodeUsesLiveKitSubpackageForLiveKitImports(t *testing.T
 			}
 			return nil
 		}
+		if path == "livekit_worker_contracts.go" {
+			return nil
+		}
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
@@ -56,6 +59,12 @@ func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
 		"workerlivekit.OpenWorkerWebSocket(",
 		"workerlivekit.JobRunningMessage(",
 		"workerlivekit.JobStatusMessage(",
+		"workerlivekit.ServerRegisterWorkerMessage(",
+		"workerlivekit.ServerAvailableWorkerStatusMessage(",
+		"workerlivekit.ServerDrainingWorkerStatusMessage(",
+		"workerlivekit.ServerJobStatusMessage(",
+		"workerlivekit.ServerJobRunningMessage(",
+		"workerlivekit.ServerMigrateRunningJobsMessage(",
 		"workerlivekit.WriteWorkerMessageWebSocket(",
 		"workerlivekit.WorkerStatusUpdateMessage(",
 		"workerlivekit.RegisterWorkerMessage(",
@@ -97,6 +106,9 @@ func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
 			if path == "livekit" {
 				return filepath.SkipDir
 			}
+			return nil
+		}
+		if path == "livekit_worker_contracts.go" {
 			return nil
 		}
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {

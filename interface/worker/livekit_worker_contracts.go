@@ -137,3 +137,15 @@ type ParticipantTaskKey = workerlivekit.ParticipantTaskKey
 type TrackPublicationWaitOptions = workerlivekit.TrackPublicationWaitOptions
 
 type JobRequest = workerlivekit.JobRequest
+
+var livekitServerRegisterWorkerMessage = workerlivekit.ServerRegisterWorkerMessage
+
+var livekitServerAvailableWorkerStatusMessage = workerlivekit.ServerAvailableWorkerStatusMessage
+
+var livekitServerDrainingWorkerStatusMessage = workerlivekit.ServerDrainingWorkerStatusMessage
+
+var livekitServerJobStatusMessage = workerlivekit.ServerJobStatusMessage
+
+var livekitServerJobRunningMessage = workerlivekit.ServerJobRunningMessage
+
+var livekitServerMigrateRunningJobsMessage = workerlivekit.ServerMigrateRunningJobsMessage
