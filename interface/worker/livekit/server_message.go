@@ -62,3 +62,11 @@ func RunServerMessageLoop(ctx context.Context, opts ServerMessageLoopOptions) er
 func RouteServerWorkerMessage(opts ServerMessageRouteOptions) ServerMessageKind {
 	return RouteServerMessage(opts)
 }
+
+func ServerMigratableRunningJobIDs(jobs []RunningJobInfo) []string {
+	return MigratableRunningJobIDs(jobs)
+}
+
+func ServerMigrateRunningJobsMessage(jobs []RunningJobInfo) *WorkerMessage {
+	return MigrateRunningJobsMessage(jobs)
+}

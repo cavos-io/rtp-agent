@@ -1569,13 +1569,13 @@ func callWorkerRegisteredHandler(handler WorkerRegisteredHandler, workerID strin
 func (s *AgentServer) reportActiveJobs() {
 	runningJobs := s.ActiveRunningJobs()
 	livekitJobs := workeripc.ToLiveKitRunningJobInfos(runningJobs)
-	jobIDs := workerlivekit.MigratableRunningJobIDs(livekitJobs)
+	jobIDs := workerlivekit.ServerMigratableRunningJobIDs(livekitJobs)
 
 	if len(jobIDs) == 0 {
 		return
 	}
 
-	if err := s.sendWorkerMessage(workerlivekit.MigrateRunningJobsMessage(livekitJobs)); err != nil {
+	if err := s.sendWorkerMessage(workerlivekit.ServerMigrateRunningJobsMessage(livekitJobs)); err != nil {
 		logger.Logger.Errorw("failed to report active jobs", err, "jobIds", jobIDs)
 	}
 }
