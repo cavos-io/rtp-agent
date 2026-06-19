@@ -1047,8 +1047,8 @@ func readSystemCPUTimes() (idle uint64, total uint64, err error) {
 }
 
 func (s *AgentServer) registerWorkerRequest() *workerlivekit.WorkerMessage {
-	return workerlivekit.RegisterWorkerMessage(workerlivekit.WorkerRegistrationOptions{
-		WorkerType:  string(s.Options.WorkerType),
+	return workerlivekit.ServerRegisterWorkerMessage(workerlivekit.ServerRegisterWorkerMessageOptions{
+		WorkerType:  s.Options.WorkerType,
 		AgentName:   s.Options.AgentName,
 		Version:     s.Options.Version,
 		Permissions: s.Options.Permissions,
@@ -1058,7 +1058,7 @@ func (s *AgentServer) registerWorkerRequest() *workerlivekit.WorkerMessage {
 func (s *AgentServer) availableWorkerStatusMessage() *workerlivekit.WorkerMessage {
 	jobCount := uint32(s.activeJobCount())
 	load := s.currentLoad()
-	return workerlivekit.WorkerStatusUpdateMessage(workerlivekit.WorkerStatusUpdateOptions{
+	return workerlivekit.ServerAvailableWorkerStatusMessage(workerlivekit.ServerAvailableWorkerStatusMessageOptions{
 		Load:         load,
 		JobCount:     jobCount,
 		CanAcceptJob: s.availableForJobWithLoad(load),
@@ -1066,10 +1066,7 @@ func (s *AgentServer) availableWorkerStatusMessage() *workerlivekit.WorkerMessag
 }
 
 func (s *AgentServer) drainingWorkerStatusMessage() *workerlivekit.WorkerMessage {
-	return workerlivekit.WorkerStatusUpdateMessage(workerlivekit.WorkerStatusUpdateOptions{
-		Draining: true,
-		JobCount: uint32(s.activeJobCount()),
-	})
+	return workerlivekit.ServerDrainingWorkerStatusMessage(uint32(s.activeJobCount()))
 }
 
 func (s *AgentServer) RTCSession(
