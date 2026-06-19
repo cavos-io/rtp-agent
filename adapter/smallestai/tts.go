@@ -140,6 +140,20 @@ func (t *SmallestAITTS) Provider() string {
 	return "SmallestAI"
 }
 
+func (t *SmallestAITTS) UpdateOptions(opts ...SmallestAITTSOption) {
+	if t == nil {
+		return
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(t)
+		}
+	}
+	if t.voice == "" {
+		t.voice = defaultSmallestAIVoice(t.model)
+	}
+}
+
 func (t *SmallestAITTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
@@ -250,11 +264,18 @@ func buildSmallestAITTSStreamMessage(t *SmallestAITTS, text string) ([]byte, err
 type smallestaiTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
+	mu         sync.Mutex
 }
 
 func (s *smallestaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	s.mu.Lock()
+	resp := s.resp
+	s.mu.Unlock()
+	if resp == nil || resp.Body == nil {
+		return nil, io.EOF
+	}
 	buf := make([]byte, 4096)
-	n, err := s.resp.Body.Read(buf)
+	n, err := resp.Body.Read(buf)
 	if err != nil {
 		if err == io.EOF {
 			return nil, io.EOF
@@ -273,7 +294,14 @@ func (s *smallestaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *smallestaiTTSChunkedStream) Close() error {
-	return s.resp.Body.Close()
+	s.mu.Lock()
+	resp := s.resp
+	s.resp = nil
+	s.mu.Unlock()
+	if resp == nil || resp.Body == nil {
+		return nil
+	}
+	return resp.Body.Close()
 }
 
 type smallestaiTTSWebsocketChunkedStream struct {
@@ -290,7 +318,7 @@ func (s *smallestaiTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, err
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
-				return nil, io.EOF
+				return nil, fmt.Errorf("smallestai tts websocket closed unexpectedly: %w", err)
 			}
 			return nil, err
 		}

@@ -1088,6 +1088,32 @@ func TestPerformTTSInferenceSkipsNilStreamingAudioFrame(t *testing.T) {
 	}
 }
 
+func TestPerformTTSInferenceCancelClosesStreamingOutputWhileInputOpen(t *testing.T) {
+	providerStream := newEndInputGenerationTTSStream()
+	provider := &fakeGenerationTTS{stream: providerStream}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	textCh := make(chan string)
+	data, err := PerformTTSInference(ctx, provider, textCh)
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+
+	cancel()
+
+	select {
+	case _, ok := <-data.AudioCh:
+		if ok {
+			t.Fatal("AudioCh yielded frame after cancellation, want closed")
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("AudioCh did not close after context cancellation with input still open")
+	}
+	if !providerStream.closed {
+		t.Fatal("provider stream was not closed after context cancellation")
+	}
+}
+
 func TestPerformTTSInferenceAllowsEmptyTransformedTextWithoutAudio(t *testing.T) {
 	provider := &fakeGenerationChunkedTTS{
 		stream: &fakeGenerationChunkedStream{},

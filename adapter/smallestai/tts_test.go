@@ -5,12 +5,16 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/gorilla/websocket"
 )
 
 func TestSmallestAITTSDefaultsMatchReference(t *testing.T) {
@@ -166,6 +170,50 @@ func TestSmallestAITTSOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestSmallestAITTSUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
+	provider := NewSmallestAITTS("test-key", "")
+
+	provider.UpdateOptions(
+		WithSmallestAITTSModel("lightning_v3.1"),
+		WithSmallestAITTSVoice("sophia"),
+		WithSmallestAITTSSampleRate(44100),
+		WithSmallestAITTSSpeed(1.4),
+		WithSmallestAITTSLanguage("auto"),
+		WithSmallestAITTSOutputFormat("wav"),
+	)
+
+	req, err := buildSmallestAITTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	assertSmallestAIPayload(t, payload, "model", "lightning_v3.1")
+	assertSmallestAIPayload(t, payload, "voice_id", "sophia")
+	assertSmallestAIPayload(t, payload, "language", "auto")
+	assertSmallestAIPayload(t, payload, "output_format", "wav")
+	if payload["sample_rate"] != float64(44100) || payload["speed"] != float64(1.4) {
+		t.Fatalf("payload = %+v, want updated sample_rate and speed", payload)
+	}
+
+	streamPayload, err := buildSmallestAITTSStreamMessage(provider, "hello")
+	if err != nil {
+		t.Fatalf("build stream message: %v", err)
+	}
+	var streamMessage map[string]any
+	if err := json.Unmarshal(streamPayload, &streamMessage); err != nil {
+		t.Fatalf("decode stream message: %v", err)
+	}
+	assertSmallestAIPayload(t, streamMessage, "model", "lightning_v3.1")
+	assertSmallestAIPayload(t, streamMessage, "voice_id", "sophia")
+	assertSmallestAIPayload(t, streamMessage, "language", "auto")
+	if streamMessage["sample_rate"] != float64(44100) || streamMessage["speed"] != float64(1.4) {
+		t.Fatalf("stream message = %+v, want updated sample_rate and speed", streamMessage)
+	}
+}
+
 func TestSmallestAITTSStreamMessageMatchesReference(t *testing.T) {
 	provider := NewSmallestAITTS("test-key", "",
 		WithSmallestAITTSModel("lightning_v3.1"),
@@ -233,6 +281,32 @@ func TestSmallestAITTSAudioFromWebsocketMessage(t *testing.T) {
 	}
 }
 
+func TestSmallestAITTSWebsocketCloseBeforeCompleteReturnsError(t *testing.T) {
+	conn := newSmallestAITTSClosingWebsocketConn(t, func(ws *websocket.Conn) {
+		_ = ws.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+			time.Now().Add(time.Second),
+		)
+	})
+	stream := &smallestaiTTSWebsocketChunkedStream{
+		conn:       conn,
+		sampleRate: 24000,
+		segmentID:  "seg-1",
+	}
+
+	audio, err := stream.Next()
+	if err == nil {
+		t.Fatalf("Next() error = nil, audio = %+v, want unexpected close error", audio)
+	}
+	if errors.Is(err, io.EOF) {
+		t.Fatal("Next() error = EOF, want unexpected close error")
+	}
+	if !strings.Contains(err.Error(), "closed unexpectedly") {
+		t.Fatalf("Next() error = %v, want closed unexpectedly", err)
+	}
+}
+
 func TestSmallestAITTSStreamBuffersTextUntilFlush(t *testing.T) {
 	stream := &smallestaiTTSSynthesizeStream{}
 	if err := stream.PushText("hello "); err != nil {
@@ -265,9 +339,110 @@ func TestSmallestAITTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestSmallestAITTSChunkedStreamCloseIsIdempotent(t *testing.T) {
+	body := &smallestAICloseCountBody{reader: bytes.NewReader([]byte{0x01, 0x02})}
+	stream := &smallestaiTTSChunkedStream{
+		resp: &http.Response{Body: body},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("first Close() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close() error = %v, want nil", err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body close count = %d, want 1", body.closeCount)
+	}
+}
+
+func TestSmallestAITTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	body := &smallestAICloseCountBody{reader: bytes.NewReader([]byte{0x01, 0x02})}
+	stream := &smallestaiTTSChunkedStream{
+		resp: &http.Response{Body: body},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	audio, err := stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after close error = %v, want EOF", err)
+	}
+	if audio != nil {
+		t.Fatalf("Next() after close audio = %+v, want nil", audio)
+	}
+}
+
 func assertSmallestAIPayload(t *testing.T, payload map[string]any, key string, want string) {
 	t.Helper()
 	if got := payload[key]; got != want {
 		t.Fatalf("%s = %#v, want %q", key, got, want)
 	}
+}
+
+type smallestAICloseCountBody struct {
+	reader     *bytes.Reader
+	closeCount int
+	closed     bool
+}
+
+func (b *smallestAICloseCountBody) Read(p []byte) (int, error) {
+	if b.closed {
+		return 0, errors.New("read after close")
+	}
+	return b.reader.Read(p)
+}
+
+func (b *smallestAICloseCountBody) Close() error {
+	b.closeCount++
+	if b.closed {
+		return errors.New("closed twice")
+	}
+	b.closed = true
+	return nil
+}
+
+func newSmallestAITTSClosingWebsocketConn(t *testing.T, handler func(*websocket.Conn)) *websocket.Conn {
+	t.Helper()
+	clientConn, serverConn := net.Pipe()
+	listener := newSmallestAISingleConnListener(serverConn)
+	upgrader := websocket.Upgrader{}
+	serverErr := make(chan error, 1)
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer ws.Close()
+		handler(ws)
+	})}
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			serverErr <- err
+		}
+	}()
+	t.Cleanup(func() {
+		_ = server.Close()
+		_ = listener.Close()
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+	})
+
+	dialer := websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+	}
+	conn, _, err := dialer.DialContext(context.Background(), "ws://smallest.test/tts/live", nil)
+	if err != nil {
+		t.Fatalf("dial test websocket: %v", err)
+	}
+	select {
+	case err := <-serverErr:
+		t.Fatalf("test websocket server error: %v", err)
+	default:
+	}
+	return conn
 }

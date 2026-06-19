@@ -263,6 +263,9 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 			}
 			return err
 		}
+		if audio == nil || audio.Frame == nil {
+			continue
+		}
 
 		if pending != nil {
 			combined, combineErr := combineAudioFrames(pending.Frame, audio.Frame)

@@ -288,6 +288,9 @@ func (p *SentenceStreamPacer) audioLoop() {
 			p.mu.Unlock()
 			return
 		}
+		if audio == nil || audio.Frame == nil {
+			continue
+		}
 
 		p.mu.Lock()
 		p.generationStarted = true
