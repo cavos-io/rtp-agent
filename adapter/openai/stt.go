@@ -269,6 +269,27 @@ func (s *OpenAISTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: s.useRealtime, InterimResults: s.useRealtime, Diarization: false, OfflineRecognize: true}
 }
 
+func (s *OpenAISTT) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.streamsMu.Lock()
+	streams := make([]*openAIRealtimeSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.streams = make(map[*openAIRealtimeSTTStream]struct{})
+	s.streamsMu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
 func (s *OpenAISTT) UpdateOptions(opts ...OpenAISTTOption) {
 	previousDetectOptionSet := s.detectOptionSet
 	s.languageSet = false

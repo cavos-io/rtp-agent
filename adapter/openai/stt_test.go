@@ -1224,6 +1224,47 @@ func TestOpenAIRealtimeSTTCloseDoesNotWaitForBlockedVADPushFrame(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTProviderCloseClosesActiveStreams(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	closed := make(chan struct{})
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			_, _, err := conn.ReadMessage()
+			if err == nil {
+				t.Error("ReadMessage after provider close error = nil, want websocket close")
+			}
+			close(closed)
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Provider Close error = %v", err)
+	}
+
+	select {
+	case <-closed:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("provider Close did not close active realtime STT websocket")
+	}
+	if err := stream.PushFrame(openAIRealtimeSTTTestFrame([]byte{0x01, 0x02})); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after provider Close error = %v, want io.ErrClosedPipe", err)
+	}
+}
+
 func openAIRealtimeSTTTestFrame(data []byte) *model.AudioFrame {
 	return &model.AudioFrame{
 		Data:              data,
