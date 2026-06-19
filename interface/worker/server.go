@@ -461,7 +461,7 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 				return s.finishJob(jobCtx)
 			},
 			SendStatus: func(status workerlivekit.JobStatus) error {
-				if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(jobCtx.JobID(), status)); err != nil {
+				if err := s.sendWorkerMessage(workerlivekit.ServerJobStatusMessage(jobCtx.JobID(), status)); err != nil {
 					logger.Logger.Errorw("failed to update reloaded job status", err, "jobId", jobCtx.JobID())
 					return err
 				}
@@ -1626,7 +1626,7 @@ func (s *AgentServer) sendWorkerMessage(msg *workerlivekit.WorkerMessage) error 
 	if s.conn == nil {
 		return fmt.Errorf("worker websocket is not connected")
 	}
-	return workerlivekit.WriteWorkerMessageWebSocket(s.conn, msg)
+	return workerlivekit.WriteServerWorkerMessageWebSocket(s.conn, msg)
 }
 
 func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) {
@@ -1678,7 +1678,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.J
 	s.activeJobs[assignedJob.JobID] = jobCtx
 	s.mu.Unlock()
 
-	if err := s.sendWorkerMessage(workerlivekit.JobRunningMessage(jobID)); err != nil {
+	if err := s.sendWorkerMessage(workerlivekit.ServerJobRunningMessage(jobID)); err != nil {
 		logger.Logger.Errorw("failed to update job status", err, "jobId", jobID)
 	}
 
@@ -1708,7 +1708,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.J
 					return s.finishJob(jobCtx)
 				},
 				SendStatus: func(status workerlivekit.JobStatus) error {
-					err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(jobID, status))
+					err := s.sendWorkerMessage(workerlivekit.ServerJobStatusMessage(jobID, status))
 					if err != nil {
 						logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", jobID)...)
 					}
