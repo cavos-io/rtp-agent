@@ -217,13 +217,19 @@ const (
 
 type ConnectOptions = workerlivekit.ConnectOptions
 
-type ParticipantEntrypoint func(*JobContext, *workerlivekit.ParticipantInfo)
+type ParticipantInfo = workerlivekit.ParticipantInfo
+
+type ParticipantInfoKind = workerlivekit.ParticipantInfoKind
+
+type ParticipantTaskKey = workerlivekit.ParticipantTaskKey
+
+type ParticipantEntrypoint func(*JobContext, *ParticipantInfo)
 
 type TrackPublicationWaitOptions = workerlivekit.TrackPublicationWaitOptions
 
 type participantEntrypointRegistration struct {
 	entrypoint ParticipantEntrypoint
-	kinds      []workerlivekit.ParticipantInfoKind
+	kinds      []ParticipantInfoKind
 }
 
 type JobRequest = workerlivekit.JobRequest
@@ -249,8 +255,8 @@ type JobContext struct {
 	terminated             atomic.Bool
 	finishOnce             sync.Once
 	participantEntrypoints []participantEntrypointRegistration
-	availableParticipants  []*workerlivekit.ParticipantInfo
-	participantTasks       map[workerlivekit.ParticipantTaskKey]struct{}
+	availableParticipants  []*ParticipantInfo
+	participantTasks       map[ParticipantTaskKey]struct{}
 	participantTasksMu     sync.Mutex
 
 	api       *JobAPI
@@ -413,7 +419,7 @@ func (c *JobContext) RoomInfo() *workerlivekit.Room {
 	return workerlivekit.JobContextRoom(c.Job)
 }
 
-func (c *JobContext) PublisherInfo() *workerlivekit.ParticipantInfo {
+func (c *JobContext) PublisherInfo() *ParticipantInfo {
 	return workerlivekit.JobContextPublisher(c.Job)
 }
 
@@ -501,7 +507,7 @@ func (c *JobContext) participantAvailable(participant workerlivekit.RemotePartic
 	c.scheduleParticipantEntrypoints(info)
 }
 
-func (c *JobContext) rememberAvailableParticipant(info *workerlivekit.ParticipantInfo) {
+func (c *JobContext) rememberAvailableParticipant(info *ParticipantInfo) {
 	c.availableParticipants = workerlivekit.JobContextUpsertParticipantInfo(c.availableParticipants, info)
 }
 
@@ -525,7 +531,7 @@ func (c *JobContext) AddShutdownCallback(callback any) error {
 	return nil
 }
 
-func (c *JobContext) AddParticipantEntrypoint(entrypoint ParticipantEntrypoint, kinds ...workerlivekit.ParticipantInfoKind) error {
+func (c *JobContext) AddParticipantEntrypoint(entrypoint ParticipantEntrypoint, kinds ...ParticipantInfoKind) error {
 	if entrypoint == nil {
 		return fmt.Errorf("participant entrypoint must not be nil")
 	}
@@ -560,7 +566,7 @@ func (c *JobContext) scheduleParticipantEntrypointForExistingParticipants(regist
 func (c *JobContext) WaitForParticipant(
 	ctx context.Context,
 	identity string,
-	kinds ...workerlivekit.ParticipantInfoKind,
+	kinds ...ParticipantInfoKind,
 ) (*workerlivekit.RemoteParticipant, error) {
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
@@ -618,7 +624,7 @@ func (c *JobContext) ensureRoomConnected(ctx context.Context) error {
 	return c.Connect(ctx, nil)
 }
 
-func (c *JobContext) scheduleParticipantEntrypoints(participant *workerlivekit.ParticipantInfo) {
+func (c *JobContext) scheduleParticipantEntrypoints(participant *ParticipantInfo) {
 	if participant == nil {
 		return
 	}
@@ -627,7 +633,7 @@ func (c *JobContext) scheduleParticipantEntrypoints(participant *workerlivekit.P
 	}
 }
 
-func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntrypointRegistration, participant *workerlivekit.ParticipantInfo) {
+func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntrypointRegistration, participant *ParticipantInfo) {
 	plan := workerlivekit.JobContextParticipantEntrypointTaskPlan(
 		participant,
 		registration.kinds,
@@ -638,7 +644,7 @@ func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntry
 	}
 	c.participantTasksMu.Lock()
 	if c.participantTasks == nil {
-		c.participantTasks = make(map[workerlivekit.ParticipantTaskKey]struct{})
+		c.participantTasks = make(map[ParticipantTaskKey]struct{})
 	}
 	if _, ok := c.participantTasks[plan.TaskKey]; ok {
 		logger.Logger.Warnw("participant entrypoint already running for participant", nil, "participant", plan.Participant.Identity)

@@ -196,3 +196,21 @@ func TestSharedJobContextDoesNotCallLiveKitInfoHelpersDirectly(t *testing.T) {
 		}
 	}
 }
+
+func TestSharedJobContextDoesNotExposeParticipantInternalsDirectly(t *testing.T) {
+	data, err := os.ReadFile("job.go")
+	if err != nil {
+		t.Fatalf("read job.go: %v", err)
+	}
+	forbidden := []string{
+		"*workerlivekit.ParticipantInfo)",
+		"[]workerlivekit.ParticipantInfoKind",
+		"[]*workerlivekit.ParticipantInfo",
+		"map[workerlivekit.ParticipantTaskKey]",
+	}
+	for _, direct := range forbidden {
+		if strings.Contains(string(data), direct) {
+			t.Fatalf("job.go exposes %s directly; use worker participant contracts", direct)
+		}
+	}
+}
