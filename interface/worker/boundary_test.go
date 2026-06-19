@@ -236,6 +236,22 @@ func TestSharedJobContextDoesNotCallLiveKitInfoHelpersDirectly(t *testing.T) {
 	}
 }
 
+func TestJobKeepsLiveKitCompatibilityAliasesOutOfImplementation(t *testing.T) {
+	data, err := os.ReadFile("job.go")
+	if err != nil {
+		t.Fatalf("read job.go: %v", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "type ") && strings.Contains(line, "= workerlivekit.") {
+			t.Fatalf("job.go owns LiveKit compatibility alias %q; move it to shared worker contracts", line)
+		}
+		if strings.HasPrefix(line, "AutoSubscribe") && strings.Contains(line, "= workerlivekit.") {
+			t.Fatalf("job.go owns LiveKit compatibility const %q; move it to shared worker contracts", line)
+		}
+	}
+}
+
 func TestSharedJobContextDoesNotExposeParticipantInternalsDirectly(t *testing.T) {
 	data, err := os.ReadFile("job.go")
 	if err != nil {

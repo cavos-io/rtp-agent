@@ -128,10 +128,6 @@ func currentGoroutineID() (uint64, bool) {
 	return id, true
 }
 
-type JobAcceptArguments = workerlivekit.JobAcceptArguments
-
-type JobRejectArguments = workerlivekit.JobRejectArguments
-
 type JobExecutorType = workeripc.ExecutorType
 
 const (
@@ -198,67 +194,16 @@ func (p *JobProcess) HTTPProxy() string {
 	return p.httpProxy
 }
 
-type JobRoomServiceAPI = workerlivekit.JobRoomServiceAPI
-type JobSIPAPI = workerlivekit.JobSIPAPI
-type JobAPI = workerlivekit.JobAPI
-
 func NewJobAPI(url string, apiKey string, apiSecret string) *JobAPI {
 	return workerlivekit.NewJobContextAPI(url, apiKey, apiSecret)
 }
 
-type AutoSubscribe = workerlivekit.AutoSubscribe
-
-const (
-	AutoSubscribeSubscribeAll  = workerlivekit.AutoSubscribeSubscribeAll
-	AutoSubscribeSubscribeNone = workerlivekit.AutoSubscribeSubscribeNone
-	AutoSubscribeAudioOnly     = workerlivekit.AutoSubscribeAudioOnly
-	AutoSubscribeVideoOnly     = workerlivekit.AutoSubscribeVideoOnly
-)
-
-type ConnectOptions = workerlivekit.ConnectOptions
-
-type Job = workerlivekit.Job
-
-type SDKRoom = workerlivekit.SDKRoom
-
-type Room = workerlivekit.Room
-
-type LocalParticipant = workerlivekit.LocalParticipant
-
-type RoomCallback = workerlivekit.RoomCallback
-
-type RemoteParticipantView = workerlivekit.RemoteParticipantView
-
-type RemoteParticipant = workerlivekit.RemoteParticipant
-
-type TrackType = workerlivekit.TrackType
-
-type RemoteTrackPublication = workerlivekit.RemoteTrackPublication
-
-type ClaimGrants = workerlivekit.ClaimGrants
-
-type DeleteRoomResponse = workerlivekit.DeleteRoomResponse
-
-type SIPParticipantInfo = workerlivekit.SIPParticipantInfo
-
-type SIPCreateParticipantRequest = workerlivekit.SIPCreateParticipantRequest
-
-type ParticipantInfo = workerlivekit.ParticipantInfo
-
-type ParticipantInfoKind = workerlivekit.ParticipantInfoKind
-
-type ParticipantTaskKey = workerlivekit.ParticipantTaskKey
-
 type ParticipantEntrypoint func(*JobContext, *ParticipantInfo)
-
-type TrackPublicationWaitOptions = workerlivekit.TrackPublicationWaitOptions
 
 type participantEntrypointRegistration struct {
 	entrypoint ParticipantEntrypoint
 	kinds      []ParticipantInfoKind
 }
-
-type JobRequest = workerlivekit.JobRequest
 
 type JobContext struct {
 	Job                    *Job
