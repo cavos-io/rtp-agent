@@ -29,3 +29,13 @@ func TestIPCExecutorsDoNotCallLiveKitFacadeDirectly(t *testing.T) {
 		}
 	}
 }
+
+func TestIPCProtoDoesNotOwnLiveKitBridge(t *testing.T) {
+	data, err := os.ReadFile("proto.go")
+	if err != nil {
+		t.Fatalf("read proto.go: %v", err)
+	}
+	if strings.Contains(string(data), "workerlivekit.") {
+		t.Fatalf("proto.go owns LiveKit conversion details; keep them in livekit bridge code")
+	}
+}
