@@ -4127,6 +4127,40 @@ func TestPipelineAgentReplyWaitsForPlayoutBeforeCommit(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentReplyWithoutTTSAudioCommitsAssistantText(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "text only answer"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, nil, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx.Items length = %d, want committed assistant message without TTS", len(chatCtx.Items))
+	}
+	msg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || msg.TextContent() != "text only answer" || msg.Interrupted {
+		t.Fatalf("assistant message = %#v, want uninterrupted text-only answer", chatCtx.Items[0])
+	}
+	if len(speech.ChatItems()) != 1 {
+		t.Fatalf("speech.ChatItems length = %d, want committed assistant message", len(speech.ChatItems()))
+	}
+	select {
+	case ev := <-session.ErrorEvents():
+		t.Fatalf("ErrorEvents received unexpected error = %v, want no TTS error without audio output", ev.Error)
+	default:
+	}
+}
+
 func TestPipelineAgentReplyFlushesPlaybackAfterTTSEOFBeforeWaiting(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

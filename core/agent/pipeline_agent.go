@@ -799,13 +799,17 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		}
 
 		var ttsGen *TTSGenerationData
-		if opts.SpeechHandle != nil && toolSteps == 0 {
-			ttsGen = opts.SpeechHandle.takePrecomputedTTSGeneration()
-		}
-		if ttsGen != nil {
-			ttsGen, err = va.playTTSGeneration(ctx, session, ttsGen, opts.SpeechHandle)
+		if va.tts == nil {
+			err = drainLLMText(ctx, genData.TextCh, opts.SpeechHandle)
 		} else {
-			ttsGen, err = va.synthesizeSpeech(ctx, session, genData.TextCh, opts.SpeechHandle)
+			if opts.SpeechHandle != nil && toolSteps == 0 {
+				ttsGen = opts.SpeechHandle.takePrecomputedTTSGeneration()
+			}
+			if ttsGen != nil {
+				ttsGen, err = va.playTTSGeneration(ctx, session, ttsGen, opts.SpeechHandle)
+			} else {
+				ttsGen, err = va.synthesizeSpeech(ctx, session, genData.TextCh, opts.SpeechHandle)
+			}
 		}
 		if err != nil {
 			if suppressReplyContextCanceledError(ctx, opts.SpeechHandle, err) {
@@ -856,6 +860,9 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			}
 			if genData.TTFT > 0 {
 				metrics["llm_node_ttft"] = genData.TTFT.Seconds()
+			}
+			if va.tts == nil {
+				delete(metrics, "tts_metadata")
 			}
 			if ttsGen != nil && ttsGen.TTFB > 0 {
 				metrics["tts_node_ttfb"] = ttsGen.TTFB.Seconds()
@@ -937,6 +944,25 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		}
 		toolSteps++
 		// Loop back to LLM with tool outputs
+	}
+}
+
+func drainLLMText(ctx context.Context, textCh <-chan string, speech *SpeechHandle) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		if speech != nil && speech.IsInterrupted() {
+			return nil
+		}
+		select {
+		case _, ok := <-textCh:
+			if !ok {
+				return nil
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 }
 
