@@ -1237,8 +1237,15 @@ func TestMultimodalToolExecutionDetachesRunContextAfterReturn(t *testing.T) {
 	if err := tool.runContext.Update("late progress"); err != nil {
 		t.Fatalf("late run context update returned error: %v", err)
 	}
-	if updates := tool.runContext.Updates(); len(updates) != 0 {
-		t.Fatalf("late run context updates = %#v, want detached context to ignore updates", updates)
+	updates := tool.runContext.Updates()
+	if len(updates) != 1 {
+		t.Fatalf("late run context updates = %#v, want detached context to record standalone update", updates)
+	}
+	if got := updates[0].FunctionCall.CallID; got != "call_lookup" {
+		t.Fatalf("late update call_id = %q, want original call id", got)
+	}
+	if got := updates[0].FunctionCallOutput.Output; got != "The tool `lookup` has updated, message: late progress\nThe task is still running, so DON'T make up or give information not included in the message above." {
+		t.Fatalf("late update output = %q, want reference standalone update", got)
 	}
 }
 
@@ -2132,6 +2139,80 @@ func TestMultimodalAgentInterruptedRealtimeMessageSkipsTruncateWhenPlayoutWaitCa
 	}
 }
 
+func TestMultimodalAgentInterruptedRealtimeMessageWaitsForPlaybackAfterContextCanceled(t *testing.T) {
+	playback := &fakePipelinePlaybackController{
+		result: AudioPlaybackResult{
+			PlaybackPosition:       420 * time.Millisecond,
+			Interrupted:            true,
+			SynchronizedTranscript: "heard words",
+		},
+		respectContext: true,
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(playback)
+	ma := &MultimodalAgent{
+		session: session,
+		ctx:     context.Background(),
+	}
+	replyCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	forwarded, playbackResult := ma.forwardedRealtimeTextAfterInterruption(replyCtx, "heard words unheard words")
+
+	if playback.clearCalls != 1 {
+		t.Fatalf("ClearBuffer calls = %d, want 1 for interrupted realtime speech", playback.clearCalls)
+	}
+	if forwarded != "heard words" {
+		t.Fatalf("forwarded text = %q, want synchronized transcript after canceled reply context", forwarded)
+	}
+	if playbackResult.PlaybackPosition != 420*time.Millisecond {
+		t.Fatalf("playback position = %v, want 420ms", playbackResult.PlaybackPosition)
+	}
+}
+
+func TestMultimodalAgentRealtimeMessageSkipsCommitWhenPlayoutWaitFails(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(&fakePipelinePlaybackController{
+		err: errors.New("playout failed"),
+	})
+	chatCtx := llm.NewChatContext()
+	ma := &MultimodalAgent{
+		model: &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{
+			AudioOutput: true,
+		}},
+		session: session,
+		chatCtx: chatCtx,
+		ctx:     context.Background(),
+		PublishAudio: func(context.Context, *model.AudioFrame) error {
+			return nil
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "unconfirmed realtime text"
+	close(textCh)
+	audioCh := make(chan *model.AudioFrame, 1)
+	audioCh <- &model.AudioFrame{Data: []byte{1}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}
+	close(audioCh)
+	modalitiesCh := make(chan []string, 1)
+	modalitiesCh <- []string{"audio"}
+	close(modalitiesCh)
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	ma.consumeRealtimeMessage(context.Background(), speech, llm.MessageGeneration{
+		MessageID:    "msg_realtime_playout_failed",
+		TextCh:       textCh,
+		AudioCh:      audioCh,
+		ModalitiesCh: modalitiesCh,
+	})
+
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chat context items = %#v, want no assistant message when playout wait fails", chatCtx.Items)
+	}
+	if len(speech.ChatItems()) != 0 {
+		t.Fatalf("speech chat items = %#v, want no committed assistant message", speech.ChatItems())
+	}
+}
+
 func TestMultimodalAgentPartialRealtimeMessageDoesNotSyncChatContext(t *testing.T) {
 	playback := &fakePipelinePlaybackController{
 		result: AudioPlaybackResult{
@@ -2550,6 +2631,39 @@ func TestMultimodalAgentGeneratesToolReplyWhenRealtimeDoesNotAutoReply(t *testin
 	}
 	if rtSession.generatedWithChatCtx == nil || !containsFunctionOutput(rtSession.generatedWithChatCtx, "call_lookup", "agent result") {
 		t.Fatalf("generated chat context = %#v, want tool output before explicit reply", rtSession.generatedWithChatCtx)
+	}
+}
+
+func TestMultimodalAgentCancelToolReplyEventSkipsExplicitReply(t *testing.T) {
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.On("function_tools_executed", func(ev Event) {
+		if toolsEv, ok := ev.(*FunctionToolsExecutedEvent); ok {
+			toolsEv.CancelToolReply()
+		}
+	})
+	rtSession := &fakeRealtimeSession{generateCh: make(chan llm.RealtimeGenerateReplyOptions, 1)}
+	ma := &MultimodalAgent{
+		model:     &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{AutoToolReplyGeneration: false}},
+		session:   session,
+		chatCtx:   llm.NewChatContext(),
+		rtSession: rtSession,
+		ctx:       context.Background(),
+	}
+	session.Assistant = ma
+
+	ma.executeRealtimeFunctionCall(&llm.FunctionCall{Name: "lookup", CallID: "call_lookup", Arguments: `{}`})
+
+	select {
+	case <-session.FunctionToolsExecutedEvents():
+	case <-time.After(time.Second):
+		t.Fatal("FunctionToolsExecutedEvents did not receive realtime function execution")
+	}
+	select {
+	case opts := <-rtSession.generateCh:
+		t.Fatalf("realtime session received explicit tool reply after CancelToolReply: %#v", opts)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

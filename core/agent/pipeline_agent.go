@@ -651,10 +651,11 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 			logger.Logger.Errorw("TTS inference failed", err)
 			va.emitTTSError(session, err)
 		}
+		playoutOK := true
 		if err == nil && !speech.IsInterrupted() {
-			va.waitForAssistantPlayout(ctx, session, speech)
+			playoutOK = va.waitForAssistantPlayout(ctx, session, speech)
 		}
-		canCommit := (!speech.IsInterrupted() && err == nil) || (speech.IsInterrupted() && ttsGen != nil && ttsGen.ForwardedAudio)
+		canCommit := (!speech.IsInterrupted() && err == nil && playoutOK) || (speech.IsInterrupted() && ttsGen != nil && ttsGen.ForwardedAudio)
 		if canCommit {
 			forwardedText := speech.Generation.Text
 			if speech.IsInterrupted() {
@@ -742,9 +743,25 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			insertChatItemIfMissing(replyCtx, opts.UserMessage)
 		}
 	}
+	appendToolOutput := func(toolOut ToolExecutionOutput, functionCalls *[]*llm.FunctionCall, functionCallOutputs *[]*llm.FunctionCallOutput) bool {
+		logger.Logger.Infow("Tool executed", "name", toolOut.FncCall.Name)
+		fncCall := toolOut.FncCall
+		*functionCalls = append(*functionCalls, &fncCall)
+		*functionCallOutputs = append(*functionCallOutputs, toolOut.FncCallOut)
+		if toolOut.FncCallOut != nil {
+			va.chatCtx.Append(&fncCall)
+			va.chatCtx.Append(toolOut.FncCallOut)
+			if replyCtx != va.chatCtx {
+				replyCtx.Append(&fncCall)
+				replyCtx.Append(toolOut.FncCallOut)
+			}
+		}
+		return toolOut.FncCallOut != nil
+	}
 
 	// In Python parity, we loop for tool calls
 	toolSteps := 0
+	var pendingToolOutCh <-chan ToolExecutionOutput
 	for {
 		inferenceCtx := replyCtx
 		inputModality := ""
@@ -859,7 +876,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		}
 		va.emitLLMMetrics(session, genData)
 
-		va.waitForAssistantPlayout(ctx, session, opts.SpeechHandle)
+		playoutOK := va.waitForAssistantPlayout(ctx, session, opts.SpeechHandle)
 		forwardedText := genData.GeneratedText
 		if opts.SpeechHandle != nil && opts.SpeechHandle.IsInterrupted() {
 			if ttsGen == nil && session.AudioPlaybackController() == nil {
@@ -867,6 +884,8 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			} else {
 				forwardedText = va.forwardedAssistantTextAfterInterruption(ctx, session, opts.SpeechHandle, genData.GeneratedText)
 			}
+		} else if !playoutOK {
+			forwardedText = ""
 		}
 		if forwardedText != "" {
 			args := llm.ChatMessageArgs{
@@ -924,22 +943,28 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		var replyRequired bool
 		var functionCalls []*llm.FunctionCall
 		var functionCallOutputs []*llm.FunctionCallOutput
+		var releasedByUpdate bool
 		for toolOut := range toolOutCh {
 			executedTools = true
-			logger.Logger.Infow("Tool executed", "name", toolOut.FncCall.Name)
-
-			fncCall := toolOut.FncCall
-			functionCalls = append(functionCalls, &fncCall)
-			functionCallOutputs = append(functionCallOutputs, toolOut.FncCallOut)
-			if toolOut.FncCallOut != nil {
+			if appendToolOutput(toolOut, &functionCalls, &functionCallOutputs) {
 				replyRequired = true
-				va.chatCtx.Append(&fncCall)
-				va.chatCtx.Append(toolOut.FncCallOut)
-				if replyCtx != va.chatCtx {
-					replyCtx.Append(&fncCall)
-					replyCtx.Append(toolOut.FncCallOut)
+			}
+			if toolOut.RunContextUpdate {
+				releasedByUpdate = true
+				break
+			}
+		}
+		if releasedByUpdate {
+			pendingToolOutCh = toolOutCh
+		}
+		if !executedTools && pendingToolOutCh != nil {
+			for toolOut := range pendingToolOutCh {
+				executedTools = true
+				if appendToolOutput(toolOut, &functionCalls, &functionCallOutputs) {
+					replyRequired = true
 				}
 			}
+			pendingToolOutCh = nil
 		}
 
 		if executedTools {
@@ -950,7 +975,8 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 						break
 					}
 				}
-				session.EmitFunctionToolsExecuted(*ev)
+				emitted := session.EmitFunctionToolsExecuted(*ev)
+				replyRequired = emitted.HasToolReply()
 			}
 			if activeAgent := session.Agent.GetAgent(); activeAgent != nil {
 				if err := updateAgentInstructionsMessage(replyCtx, agentInstructionVariants(activeAgent), false); err != nil {
@@ -1223,24 +1249,25 @@ func waitForLLMGenerationDone(genData *LLMGenerationData) {
 	<-genData.Done
 }
 
-func (va *PipelineAgent) waitForAssistantPlayout(ctx context.Context, session *AgentSession, speech *SpeechHandle) {
+func (va *PipelineAgent) waitForAssistantPlayout(ctx context.Context, session *AgentSession, speech *SpeechHandle) bool {
 	if session == nil || (speech != nil && speech.IsInterrupted()) {
-		return
+		return true
 	}
 	playback := session.AudioPlaybackController()
 	if playback == nil {
-		return
+		return true
 	}
 	if _, err := playback.WaitForPlayout(ctx); err != nil {
 		if suppressContextCanceledError(ctx, speech, err) {
-			return
+			return false
 		}
 		logger.Logger.Warnw("failed to wait for assistant playback", err)
-		return
+		return false
 	}
 	if session.activity != nil {
 		session.activity.holdUserTranscriptsUntil(time.Now())
 	}
+	return true
 }
 
 func suppressInterruptedCanceledError(speech *SpeechHandle, err error) bool {
@@ -1286,7 +1313,8 @@ func (va *PipelineAgent) forwardedAssistantTextAfterInterruption(ctx context.Con
 		return generatedText
 	}
 	playback.ClearBuffer()
-	ev, err := playback.WaitForPlayout(ctx)
+	playoutCtx := context.WithoutCancel(ctx)
+	ev, err := playback.WaitForPlayout(playoutCtx)
 	if err != nil {
 		logger.Logger.Warnw("failed to wait for interrupted playback", err)
 		return ""

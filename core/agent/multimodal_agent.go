@@ -787,16 +787,21 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 		}
 		publishedAudio = publishedAudio || fallbackPublishedAudio
 	}
+	playoutOK := true
 	if publishedAudio && !interrupted && ma.session != nil {
 		if playback := ma.session.AudioPlaybackController(); playback != nil {
 			if _, err := playback.WaitForPlayout(ctx); err != nil {
 				logger.Logger.Warnw("failed to wait for realtime message playback", err)
+				playoutOK = false
 			}
 		}
 		interrupted = speech != nil && speech.IsInterrupted()
 	}
 	if publishedAudio && ma.session != nil {
 		ma.session.UpdateAgentState(AgentStateListening)
+	}
+	if !interrupted && !playoutOK {
+		return false
 	}
 	if interrupted {
 		var playback AudioPlaybackResult
@@ -924,7 +929,8 @@ func (ma *MultimodalAgent) forwardedRealtimeTextAfterInterruption(ctx context.Co
 		return generatedText, AudioPlaybackResult{}
 	}
 	playback.ClearBuffer()
-	ev, err := playback.WaitForPlayout(ctx)
+	playoutCtx := context.WithoutCancel(ctx)
+	ev, err := playback.WaitForPlayout(playoutCtx)
 	if err != nil {
 		logger.Logger.Warnw("failed to wait for interrupted realtime playback", err)
 		return "", AudioPlaybackResult{}
@@ -1111,7 +1117,8 @@ func (ma *MultimodalAgent) appendRealtimeToolResult(call *llm.FunctionCall, outp
 			return
 		}
 		ev.ReplyRequired = true
-		ma.session.EmitFunctionToolsExecuted(*ev)
+		emitted := ma.session.EmitFunctionToolsExecuted(*ev)
+		ev = &emitted
 	}
 	syncFailed := false
 	if ma.rtSession != nil && ma.chatCtx != nil {

@@ -1533,7 +1533,7 @@ func (s *AgentSession) FunctionToolsExecutedEvents() <-chan FunctionToolsExecute
 	return s.functionToolsExecutedEvents()
 }
 
-func (s *AgentSession) EmitFunctionToolsExecuted(ev FunctionToolsExecutedEvent) {
+func (s *AgentSession) EmitFunctionToolsExecuted(ev FunctionToolsExecutedEvent) FunctionToolsExecutedEvent {
 	if ev.CreatedAt.IsZero() {
 		ev.CreatedAt = time.Now()
 	}
@@ -1564,6 +1564,7 @@ func (s *AgentSession) EmitFunctionToolsExecuted(ev FunctionToolsExecutedEvent) 
 		default:
 		}
 	}
+	return ev
 }
 
 func (s *AgentSession) functionToolsExecutedEvents() chan FunctionToolsExecutedEvent {

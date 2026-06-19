@@ -399,7 +399,8 @@ type RunContext struct {
 	updates          []RunContextUpdate
 	fillerSchedulers []*runContextFillerScheduler
 	attached         bool
-	detached         bool
+	updateSink       chan<- ToolExecutionOutput
+	emittedUpdates   int
 	mu               sync.Mutex
 }
 
@@ -520,18 +521,14 @@ func (r *RunContext) Update(message any, templates ...string) error {
 	}
 
 	r.mu.Lock()
-	if r.detached {
-		r.mu.Unlock()
-		return nil
-	}
 	updateStep := len(r.updates)
+	call := copyRunContextUpdateCall(r.FunctionCall, runContextUpdateCallIDSuffix(updateStep))
 	if updateStep == 0 && r.attached {
 		if r.FunctionCall.Extra == nil {
 			r.FunctionCall.Extra = make(map[string]any)
 		}
 		r.FunctionCall.Extra["__livekit_agents_tool_non_blocking"] = true
 	}
-	call := copyRunContextUpdateCall(r.FunctionCall, runContextUpdateCallIDSuffix(updateStep))
 	result := llm.MakeToolOutput(*call, message, nil)
 	output := result.FncCallOut
 	if output == nil {
@@ -543,8 +540,17 @@ func (r *RunContext) Update(message any, templates ...string) error {
 			CreatedAt: time.Now(),
 		}
 	}
-	r.updates = append(r.updates, RunContextUpdate{FunctionCall: call, FunctionCallOutput: output})
+	update := RunContextUpdate{FunctionCall: call, FunctionCallOutput: output}
+	r.updates = append(r.updates, update)
+	var sink chan<- ToolExecutionOutput
+	if r.attached && r.updateSink != nil {
+		sink = r.updateSink
+		r.emittedUpdates = len(r.updates)
+	}
 	r.mu.Unlock()
+	if sink != nil {
+		sink <- toolExecutionOutputFromUpdate(update)
+	}
 	return nil
 }
 
@@ -558,6 +564,15 @@ func (r *RunContext) Updates() []RunContextUpdate {
 	updates := make([]RunContextUpdate, len(r.updates))
 	copy(updates, r.updates)
 	return updates
+}
+
+func (r *RunContext) EmittedUpdateCount() int {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.emittedUpdates
 }
 
 func (r *RunContext) addFillerScheduler(scheduler *runContextFillerScheduler) {
@@ -621,9 +636,9 @@ func (s *runContextFillerScheduler) run(ctx context.Context) {
 		if !s.waitForDwell(ctx, agentEvents, userEvents) {
 			return
 		}
-		text, handle, ok := s.nextFiller(created)
+		text, handle, ok, sayText := s.nextFiller(created)
 		if ok {
-			if handle == nil {
+			if sayText {
 				var err error
 				handle, err = s.runCtx.Session.Say(ctx, text)
 				if err != nil {
@@ -643,16 +658,16 @@ func (s *runContextFillerScheduler) run(ctx context.Context) {
 	}
 }
 
-func (s *runContextFillerScheduler) nextFiller(step int) (string, *SpeechHandle, bool) {
+func (s *runContextFillerScheduler) nextFiller(step int) (string, *SpeechHandle, bool, bool) {
 	if s.opts.SpeechSource != nil {
 		handle, ok := s.opts.SpeechSource(step)
-		return "", handle, ok
+		return "", handle, ok, false
 	}
 	if s.opts.Source != nil {
 		text, ok := s.opts.Source(step)
-		return text, nil, ok
+		return text, nil, ok, true
 	}
-	return s.opts.Text, nil, true
+	return s.opts.Text, nil, true, true
 }
 
 func (s *runContextFillerScheduler) waitForDwell(ctx context.Context, agentEvents <-chan AgentStateChangedEvent, userEvents <-chan UserStateChangedEvent) bool {
@@ -702,15 +717,8 @@ func (s *runContextFillerScheduler) waitForInterval(ctx context.Context, interva
 		case <-s.interruptDone():
 			return false
 		case <-s.reset:
-			return true
-		case ev := <-agentEvents:
-			if ev.NewState == AgentStateSpeaking || ev.NewState == AgentStateThinking {
-				return true
-			}
-		case ev := <-userEvents:
-			if ev.NewState == UserStateSpeaking {
-				return true
-			}
+		case <-agentEvents:
+		case <-userEvents:
 		}
 	}
 }
@@ -722,13 +730,15 @@ func (s *runContextFillerScheduler) interruptDone() <-chan struct{} {
 	return s.runCtx.SpeechHandle.interruptCh
 }
 
-func (r *RunContext) attach() {
+func (r *RunContext) attach(updateSink ...chan<- ToolExecutionOutput) {
 	if r == nil {
 		return
 	}
 	r.mu.Lock()
 	r.attached = true
-	r.detached = false
+	if len(updateSink) > 0 {
+		r.updateSink = updateSink[0]
+	}
 	r.mu.Unlock()
 }
 
@@ -738,7 +748,7 @@ func (r *RunContext) detach() {
 	}
 	r.mu.Lock()
 	r.attached = false
-	r.detached = true
+	r.updateSink = nil
 	r.mu.Unlock()
 }
 
