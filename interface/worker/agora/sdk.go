@@ -123,6 +123,22 @@ func (c *sdkChannelClient) publishActiveAudio(connection *agoraservice.RtcConnec
 	return connection.PublishAudio(), true
 }
 
+func (c *sdkChannelClient) forwardActiveAudioFrame(connection *agoraservice.RtcConnection, audioHandler AudioHandler, frame *agoraservice.AudioFrame) {
+	if audioHandler == nil {
+		return
+	}
+	audioFrame := sdkAudioFrameToModel(frame)
+	if audioFrame == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.connection != connection {
+		return
+	}
+	audioHandler(audioFrame)
+}
+
 func emitSDKEvent(handler EventHandler, event Event) {
 	if handler != nil {
 		handler(event)
@@ -324,9 +340,7 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts Options, handler Event
 				if !acceptRemoteStream(opts.RemoteStreamID, userID) {
 					return true
 				}
-				if audioFrame := sdkAudioFrameToModel(frame); audioFrame != nil {
-					audioHandler(audioFrame)
-				}
+				c.forwardActiveAudioFrame(connection, audioHandler, frame)
 				return true
 			},
 		}, 0, nil); ret != 0 {
