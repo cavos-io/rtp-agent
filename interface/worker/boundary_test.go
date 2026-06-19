@@ -77,6 +77,37 @@ func TestIPCProductionCodeDoesNotDependOnLiveKitWorkerSubpackage(t *testing.T) {
 	}
 }
 
+func TestLiveKitCompatibilityAliasesStaySeparateFromPrivateFacadeHooks(t *testing.T) {
+	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if path == "livekit" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasPrefix(path, "livekit_") || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		text := string(data)
+		hasAlias := strings.Contains(text, "type ") && strings.Contains(text, " = workerlivekit.")
+		hasPrivateFacade := strings.Contains(text, "var livekit") || strings.Contains(text, "func livekit")
+		if hasAlias && hasPrivateFacade {
+			t.Fatalf("%s mixes public LiveKit compatibility aliases with private facade hooks", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk worker files: %v", err)
+	}
+}
+
 func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
 	forbiddenCalls := []string{
 		"workerlivekit.AnswerAvailabilityRequest(",
