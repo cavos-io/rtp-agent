@@ -1584,7 +1584,7 @@ func (s *AgentServer) answerAvailability(ctx context.Context, req *workerlivekit
 	jobID := availability.JobID
 	logger.Logger.Infow("Received availability request", "jobId", jobID)
 
-	workerlivekit.AnswerAvailabilityRequest(workerlivekit.AvailabilityAnswerOptions{
+	workerlivekit.AnswerServerAvailabilityRequest(workerlivekit.AvailabilityAnswerOptions{
 		Request:         req,
 		AgentName:       s.Options.AgentName,
 		AvailableForJob: s.availableForJob,
