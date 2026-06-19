@@ -108,6 +108,35 @@ func TestLiveKitCompatibilityAliasesStaySeparateFromPrivateFacadeHooks(t *testin
 	}
 }
 
+func TestLiveKitPrivateFacadeHooksStayScopedByWorkerOwner(t *testing.T) {
+	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if path == "livekit" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasPrefix(path, "livekit_") || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		text := string(data)
+		if strings.Contains(text, "livekitServer") && strings.Contains(text, "livekitJobContext") {
+			t.Fatalf("%s mixes LiveKit server facade hooks with JobContext facade hooks", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk worker files: %v", err)
+	}
+}
+
 func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
 	forbiddenCalls := []string{
 		"workerlivekit.AnswerAvailabilityRequest(",
