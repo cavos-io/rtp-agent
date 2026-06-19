@@ -11,7 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	mathutil "github.com/cavos-io/rtp-agent/library/math"
 )
@@ -305,18 +304,6 @@ func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJ
 	}()
 
 	return nil
-}
-
-func RunningJobInfoFromEnv(env map[string]string) (RunningJobInfo, error) {
-	info, err := workerlivekit.RunningJobInfoFromEnv(env)
-	if err != nil {
-		return RunningJobInfo{}, err
-	}
-	return FromLiveKitRunningJobInfo(info), nil
-}
-
-func ProcessJobEnv(baseEnv []string, processID string, info RunningJobInfo) ([]string, error) {
-	return workerlivekit.ProcessJobEnv(baseEnv, processID, ToLiveKitRunningJobInfo(info))
 }
 
 func (e *ProcessJobExecutor) pingTask(ctx context.Context) {

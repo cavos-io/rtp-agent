@@ -216,6 +216,18 @@ func ToLiveKitRunningJobInfos(infos []RunningJobInfo) []workerlivekit.RunningJob
 	return converted
 }
 
+func RunningJobInfoFromEnv(env map[string]string) (RunningJobInfo, error) {
+	info, err := workerlivekit.RunningJobInfoFromEnv(env)
+	if err != nil {
+		return RunningJobInfo{}, err
+	}
+	return FromLiveKitRunningJobInfo(info), nil
+}
+
+func ProcessJobEnv(baseEnv []string, processID string, info RunningJobInfo) ([]string, error) {
+	return workerlivekit.ProcessJobEnv(baseEnv, processID, ToLiveKitRunningJobInfo(info))
+}
+
 func cloneStringMap(values map[string]string) map[string]string {
 	if values == nil {
 		return nil
