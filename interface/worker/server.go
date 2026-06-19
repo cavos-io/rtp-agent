@@ -1434,9 +1434,9 @@ func (s *AgentServer) RunUnregistered(ctx context.Context) error {
 }
 
 func (s *AgentServer) runWorkerMessageLoop(ctx context.Context, readMessage func() (int, []byte, error), closeConn func() error) error {
-	return workerlivekit.RunWorkerMessageLoop(ctx, workerlivekit.WorkerMessageLoopOptions{
-		Reader: workerlivekit.WorkerWebSocketReadFunc(readMessage),
-		Close:  closeConn,
+	return workerlivekit.RunServerMessageLoop(ctx, workerlivekit.ServerMessageLoopOptions{
+		ReadMessage: readMessage,
+		Close:       closeConn,
 		Handle: func(msg *workerlivekit.ServerMessage) {
 			s.handleMessage(ctx, msg)
 		},
