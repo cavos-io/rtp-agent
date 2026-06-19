@@ -498,6 +498,78 @@ func TestRunContextWithFillerIgnoresNonResetStateEvents(t *testing.T) {
 	}
 }
 
+func TestRunContextWithFillerIntervalIgnoresTransientStateEvents(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	speechEvents := session.SpeechCreatedEvents()
+	runCtx := NewRunContext(session, NewSpeechHandle(true, DefaultInputDetails()), &llm.FunctionCall{Name: "lookup"})
+
+	interval := 80 * time.Millisecond
+	maxSteps := 2
+	workStarted := make(chan struct{})
+	releaseWork := make(chan struct{})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runCtx.WithFiller(context.Background(), FillerOptions{
+			Text:     "still working",
+			Delay:    10 * time.Millisecond,
+			Interval: &interval,
+			MaxSteps: &maxSteps,
+		}, func(context.Context) error {
+			close(workStarted)
+			<-releaseWork
+			return nil
+		})
+	}()
+	<-workStarted
+
+	var first SpeechCreatedEvent
+	select {
+	case first = <-speechEvents:
+	case <-time.After(time.Second):
+		t.Fatal("RunContext.WithFiller did not say first filler")
+	}
+	if first.SpeechHandle == nil || first.SpeechHandle.Generation.Text != "still working" {
+		t.Fatalf("first filler speech event = %#v, want still working", first)
+	}
+	first.SpeechHandle.MarkDone()
+
+	time.Sleep(20 * time.Millisecond)
+	session.UpdateUserState(UserStateSpeaking)
+	session.UpdateUserState(UserStateListening)
+	select {
+	case ev := <-speechEvents:
+		t.Fatalf("filler interval ended early after transient user speech: %#v", ev)
+	case <-time.After(45 * time.Millisecond):
+	}
+
+	select {
+	case ev := <-speechEvents:
+		if ev.SpeechHandle == nil || ev.SpeechHandle.Generation.Text != "still working" {
+			t.Fatalf("second filler speech event = %#v, want still working", ev)
+		}
+		ev.SpeechHandle.MarkDone()
+	case <-time.After(time.Second):
+		t.Fatal("RunContext.WithFiller did not say second filler after full interval")
+	}
+	select {
+	case ev := <-speechEvents:
+		t.Fatalf("filler fired after max_steps reached: %#v", ev)
+	case <-time.After(40 * time.Millisecond):
+	}
+
+	close(releaseWork)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("WithFiller error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WithFiller did not return after work completed")
+	}
+}
+
 func TestRunContextWithFillerSpeechSourceCountsReturnedHandle(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

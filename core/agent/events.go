@@ -702,15 +702,8 @@ func (s *runContextFillerScheduler) waitForInterval(ctx context.Context, interva
 		case <-s.interruptDone():
 			return false
 		case <-s.reset:
-			return true
-		case ev := <-agentEvents:
-			if ev.NewState == AgentStateSpeaking || ev.NewState == AgentStateThinking {
-				return true
-			}
-		case ev := <-userEvents:
-			if ev.NewState == UserStateSpeaking {
-				return true
-			}
+		case <-agentEvents:
+		case <-userEvents:
 		}
 	}
 }
