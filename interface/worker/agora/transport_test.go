@@ -292,6 +292,45 @@ func TestTransportPublishPCMStopsAfterDisconnectedEvent(t *testing.T) {
 	}
 }
 
+func TestTransportDoesNotReviveAfterDisconnectedEvent(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+	frame := PCMFrame{
+		Data:       []byte{1, 2, 3, 4},
+		SampleRate: 100,
+		Channels:   2,
+	}
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	client.emit(Event{Kind: EventDisconnected, Channel: "support", Reason: 17})
+	select {
+	case <-tr.Events():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for disconnected event")
+	}
+
+	client.emit(Event{Kind: EventConnected, Channel: "support", Reason: 0})
+	client.emit(Event{Kind: EventUserJoined, Channel: "support", UserID: "late-user"})
+	select {
+	case event := <-tr.Events():
+		t.Fatalf("stale event forwarded after disconnected event: %#v", event)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	err := tr.PublishPCM(context.Background(), frame)
+	if err == nil {
+		t.Fatal("PublishPCM() after stale connected event error = nil, want disconnected error")
+	}
+	if !strings.Contains(err.Error(), "disconnected") {
+		t.Fatalf("PublishPCM() after stale connected event error = %v, want disconnected error", err)
+	}
+	if client.publishCount != 0 {
+		t.Fatalf("publish count after stale connected event = %d, want 0", client.publishCount)
+	}
+}
+
 func TestTransportPublishPCMStopsAfterErrorEvent(t *testing.T) {
 	client := &fakeChannelClient{}
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)

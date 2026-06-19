@@ -300,6 +300,9 @@ func (t *Transport) acceptEventLocked(event Event) bool {
 	if !t.joined && t.joinCancel == nil {
 		return false
 	}
+	if t.disconnected || t.failed {
+		return event.Kind == EventDisconnected || event.Kind == EventError
+	}
 	switch event.Kind {
 	case EventUserJoined:
 		if event.UserID == "" {
