@@ -75,6 +75,7 @@ type Transport struct {
 	mu           sync.Mutex
 	joinCancel   context.CancelFunc
 	joinSeq      uint64
+	joinCanceled bool
 	joined       bool
 	disconnected bool
 	failed       bool
@@ -146,12 +147,14 @@ func (t *Transport) Join(ctx context.Context) error {
 	t.joinSeq++
 	joinSeq := t.joinSeq
 	t.joinCancel = cancel
+	t.joinCanceled = false
 	t.publishAudio = PublishAudioEnabled(opts.PublishAudio)
 	t.mu.Unlock()
 	defer func() {
 		t.mu.Lock()
 		if t.joinSeq == joinSeq {
 			t.joinCancel = nil
+			t.joinCanceled = false
 		}
 		t.mu.Unlock()
 		cancel()
@@ -161,7 +164,8 @@ func (t *Transport) Join(ctx context.Context) error {
 	}
 	t.mu.Lock()
 	closed := t.closing || t.closed
-	if !closed {
+	left := t.joinCanceled
+	if !closed && !left {
 		t.joined = true
 		t.disconnected = false
 		t.failed = false
@@ -173,6 +177,12 @@ func (t *Transport) Join(ctx context.Context) error {
 		}
 		return fmt.Errorf("agora transport is closed")
 	}
+	if left {
+		if err := t.client.Leave(context.Background()); err != nil {
+			return fmt.Errorf("agora transport was left during late join success; cleanup leave failed: %w", err)
+		}
+		return fmt.Errorf("agora transport was left during join")
+	}
 	return nil
 }
 
@@ -182,8 +192,15 @@ func (t *Transport) Leave(ctx context.Context) error {
 	}
 	t.mu.Lock()
 	joined := t.joined
+	cancelJoin := t.joinCancel
+	if !joined && cancelJoin != nil {
+		t.joinCanceled = true
+	}
 	t.mu.Unlock()
 	if !joined {
+		if cancelJoin != nil {
+			cancelJoin()
+		}
 		return nil
 	}
 	if err := t.client.Leave(normalizeContext(ctx)); err != nil {

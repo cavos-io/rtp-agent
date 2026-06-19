@@ -702,6 +702,85 @@ func TestTransportCloseCancelsInProgressJoin(t *testing.T) {
 	}
 }
 
+func TestTransportLeaveCancelsInProgressJoin(t *testing.T) {
+	client := &fakeChannelClient{blockJoin: true}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+	joinDone := make(chan error, 1)
+
+	go func() {
+		joinDone <- tr.Join(context.Background())
+	}()
+
+	deadline := time.After(time.Second)
+	for {
+		if client.joinCtx != nil {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for Join to reach channel client")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if err := tr.Leave(context.Background()); err != nil {
+		t.Fatalf("Leave() during Join error = %v, want nil", err)
+	}
+
+	select {
+	case err := <-joinDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Join() error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Join() did not return after Leave canceled the in-progress join")
+	}
+	if client.leaveCount != 0 {
+		t.Fatalf("leave count = %d, want 0 before channel join succeeds", client.leaveCount)
+	}
+}
+
+func TestTransportLeaveCleansUpLateJoinSuccess(t *testing.T) {
+	client := &fakeChannelClient{blockJoin: true, joinAfterCancelSucceeds: true}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+	joinDone := make(chan error, 1)
+
+	go func() {
+		joinDone <- tr.Join(context.Background())
+	}()
+
+	deadline := time.After(time.Second)
+	for {
+		if client.joinCtx != nil {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for Join to reach channel client")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if err := tr.Leave(context.Background()); err != nil {
+		t.Fatalf("Leave() during Join error = %v, want nil", err)
+	}
+
+	select {
+	case err := <-joinDone:
+		if err == nil || !strings.Contains(err.Error(), "left") {
+			t.Fatalf("Join() error = %v, want left transport error", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Join() did not return after Leave canceled the in-progress join")
+	}
+	if client.leaveCount != 1 {
+		t.Fatalf("leave count = %d, want 1 cleanup leave after late join success", client.leaveCount)
+	}
+	if !client.left {
+		t.Fatal("client left = false, want cleanup leave after late join success")
+	}
+}
+
 func TestTransportJoinReportsClosedWhenCloseWinsJoinRace(t *testing.T) {
 	client := &fakeChannelClient{blockJoin: true, joinAfterCancelSucceeds: true}
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
