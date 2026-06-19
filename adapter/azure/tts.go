@@ -187,6 +187,9 @@ func (t *AzureTTS) UpdateOptions(voice string, language string, opts ...AzureTTS
 	for _, opt := range opts {
 		opt(&next)
 	}
+	if _, ok := azureTTSSampleFormats[next.sampleRate]; !ok {
+		return fmt.Errorf("azure tts unsupported sample rate: %d", next.sampleRate)
+	}
 	if err := validateAzureTTSVoiceControls(&next); err != nil {
 		return err
 	}

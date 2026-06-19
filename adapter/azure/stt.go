@@ -190,6 +190,7 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 	}
 	var streams []*azureSTTStream
 	s.mu.Lock()
+	beforeLanguage := s.language
 	if language != "" {
 		s.language = language
 	}
@@ -198,12 +199,16 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 			opt(s)
 		}
 	}
+	streamLanguage := language
+	if streamLanguage == "" && s.language != beforeLanguage {
+		streamLanguage = s.language
+	}
 	for stream := range s.streams {
 		streams = append(streams, stream)
 	}
 	s.mu.Unlock()
 	for _, stream := range streams {
-		stream.updateOptions(language, true)
+		stream.updateOptions(streamLanguage, true)
 	}
 }
 func (s *AzureSTT) InputSampleRate() uint32 {

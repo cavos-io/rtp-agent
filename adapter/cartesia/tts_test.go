@@ -92,6 +92,65 @@ func TestCartesiaTTSConstructorOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSUpdateOptionsAffectsFutureRequests(t *testing.T) {
+	provider := NewCartesiaTTS("test-key", "voice-1", "sonic-lite",
+		WithCartesiaLanguage("en"),
+		WithCartesiaSpeed("slow"),
+	)
+
+	provider.UpdateOptions(
+		WithCartesiaModel("sonic-3"),
+		WithCartesiaVoiceID("voice-2"),
+		WithCartesiaLanguage("fr"),
+		WithCartesiaSpeed(1.3),
+		WithCartesiaEmotion("Calm"),
+		WithCartesiaVolume(1.1),
+		WithCartesiaPronunciationDictID("dict-2"),
+		WithCartesiaAPIVersion("2025-05-01"),
+	)
+
+	_, body, err := buildCartesiaSynthesizeRequest(provider, "bonjour")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	if got, want := payload["model_id"], "sonic-3"; got != want {
+		t.Fatalf("model_id = %#v, want %#v", got, want)
+	}
+	if got, want := payload["language"], "fr"; got != want {
+		t.Fatalf("language = %#v, want %#v", got, want)
+	}
+	if got, want := payload["pronunciation_dict_id"], "dict-2"; got != want {
+		t.Fatalf("pronunciation_dict_id = %#v, want %#v", got, want)
+	}
+	voice, ok := payload["voice"].(map[string]any)
+	if !ok {
+		t.Fatalf("voice = %#v, want map", payload["voice"])
+	}
+	if got, want := voice["mode"], "id"; got != want {
+		t.Fatalf("voice.mode = %#v, want %#v", got, want)
+	}
+	if got, want := voice["id"], "voice-2"; got != want {
+		t.Fatalf("voice.id = %#v, want %#v", got, want)
+	}
+	generationConfig, ok := payload["generation_config"].(map[string]any)
+	if !ok {
+		t.Fatalf("generation_config = %#v, want map", payload["generation_config"])
+	}
+	if got, want := generationConfig["speed"], 1.3; got != want {
+		t.Fatalf("speed = %#v, want %#v", got, want)
+	}
+	if got, want := generationConfig["emotion"], "Calm"; got != want {
+		t.Fatalf("emotion = %#v, want %#v", got, want)
+	}
+	if got, want := generationConfig["volume"], 1.1; got != want {
+		t.Fatalf("volume = %#v, want %#v", got, want)
+	}
+}
+
 func TestCartesiaSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	provider := NewCartesiaTTS("test-key", "", "",
 		WithCartesiaSpeed(1.2),
@@ -141,6 +200,46 @@ func TestCartesiaSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	}
 	if generationConfig["volume"] != 1.1 {
 		t.Fatalf("volume = %#v, want 1.1", generationConfig["volume"])
+	}
+}
+
+func TestCartesiaSynthesizeRequestUsesExperimentalVoiceControls(t *testing.T) {
+	provider := NewCartesiaTTS("test-key", "", "sonic-2-2025-03-07",
+		WithCartesiaAPIVersion("2024-11-13"),
+		WithCartesiaSpeed("fast"),
+		WithCartesiaEmotion("Happy"),
+	)
+
+	_, body, err := buildCartesiaSynthesizeRequest(provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	if _, ok := payload["generation_config"]; ok {
+		t.Fatalf("generation_config present for experimental controls: %#v", payload["generation_config"])
+	}
+
+	voice, ok := payload["voice"].(map[string]any)
+	if !ok {
+		t.Fatalf("voice = %#v, want map", payload["voice"])
+	}
+	controls, ok := voice["__experimental_controls"].(map[string]any)
+	if !ok {
+		t.Fatalf("__experimental_controls = %#v, want map", voice["__experimental_controls"])
+	}
+	if controls["speed"] != "fast" {
+		t.Fatalf("speed = %#v, want fast", controls["speed"])
+	}
+	emotion, ok := controls["emotion"].([]any)
+	if !ok {
+		t.Fatalf("emotion = %#v, want array", controls["emotion"])
+	}
+	if len(emotion) != 1 || emotion[0] != "Happy" {
+		t.Fatalf("emotion = %#v, want [Happy]", emotion)
 	}
 }
 
@@ -225,6 +324,71 @@ func TestCartesiaTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	body, ok := statusErr.Body.(string)
 	if !ok || !strings.Contains(body, "rate limited") {
 		t.Fatalf("body = %#v, want provider error body", statusErr.Body)
+	}
+}
+
+func TestCartesiaTTSSynthesizeSendsReferenceHeaders(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: cartesiaRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("X-API-Key") != "test-key" {
+			t.Fatalf("X-API-Key = %q, want test-key", req.Header.Get("X-API-Key"))
+		}
+		if req.Header.Get("Cartesia-Version") != "2025-04-16" {
+			t.Fatalf("Cartesia-Version = %q, want 2025-04-16", req.Header.Get("Cartesia-Version"))
+		}
+		if req.Header.Get("User-Agent") == "" {
+			t.Fatal("User-Agent header missing")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("audio")),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+	defer func() {
+		http.DefaultClient = oldClient
+	}()
+
+	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("https://cartesia.test"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+}
+
+func TestCartesiaTTSSynthesizeUsesReferenceVersionHeader(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: cartesiaRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("Cartesia-Version") != "2025-04-16" {
+			t.Fatalf("Cartesia-Version = %q, want reference default 2025-04-16", req.Header.Get("Cartesia-Version"))
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("audio")),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+	defer func() {
+		http.DefaultClient = oldClient
+	}()
+
+	provider := NewCartesiaTTS("test-key", "", "",
+		WithCartesiaBaseURL("https://cartesia.test"),
+		WithCartesiaAPIVersion("2024-11-13"),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
 	}
 }
 
@@ -544,6 +708,58 @@ func TestCartesiaTTSStreamProviderErrorReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSStreamDoneAfterFlushReturnsEOF(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runCartesiaReadFlushThenDoneWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("http://cartesia.test"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+
+	nextDone := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		nextDone <- err
+	}()
+
+	select {
+	case err := <-nextDone:
+		if err != io.EOF {
+			t.Fatalf("Next error = %v, want io.EOF", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next timed out after provider done")
+	}
+
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for done server")
+	}
+}
+
 func runCartesiaReadThenNormalCloseWebsocketServer(conn net.Conn, closeAfterRead <-chan struct{}, closed chan<- struct{}, errCh chan<- error) {
 	upgrader := websocket.Upgrader{}
 	listener := &singleCartesiaConnListener{conn: conn}
@@ -563,6 +779,33 @@ func runCartesiaReadThenNormalCloseWebsocketServer(conn net.Conn, closeAfterRead
 			err = ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 			close(closed)
 			errCh <- err
+		}),
+	}
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		errCh <- err
+	}
+}
+
+func runCartesiaReadFlushThenDoneWebsocketServer(conn net.Conn, errCh chan<- error) {
+	upgrader := websocket.Upgrader{}
+	listener := &singleCartesiaConnListener{conn: conn}
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ws, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer ws.Close()
+			if _, _, err := ws.ReadMessage(); err != nil {
+				errCh <- err
+				return
+			}
+			if _, _, err := ws.ReadMessage(); err != nil {
+				errCh <- err
+				return
+			}
+			errCh <- ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"done","done":true}`))
 		}),
 	}
 	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
@@ -620,10 +863,31 @@ func TestCartesiaWebsocketURLAndHeadersMatchReference(t *testing.T) {
 	if headers.Get("X-API-Key") != "test-key" {
 		t.Fatalf("X-API-Key = %q, want test-key", headers.Get("X-API-Key"))
 	}
-	if headers.Get("Cartesia-Version") != "2025-04-16" {
-		t.Fatalf("Cartesia-Version = %q, want 2025-04-16", headers.Get("Cartesia-Version"))
+	if headers.Get("Cartesia-Version") != "" {
+		t.Fatalf("Cartesia-Version = %q, want omitted", headers.Get("Cartesia-Version"))
 	}
 	if headers.Get("User-Agent") == "" {
 		t.Fatal("User-Agent header missing")
+	}
+}
+
+func TestCartesiaWebsocketVersionIsQueryOnly(t *testing.T) {
+	provider := NewCartesiaTTS("test-key", "", "",
+		WithCartesiaAPIVersion("2024-11-13"),
+		WithCartesiaBaseURL("https://cartesia.example"),
+	)
+
+	streamURL := buildCartesiaStreamURL(provider)
+	parsed, err := url.Parse(streamURL)
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	if got, want := parsed.Query().Get("cartesia_version"), "2024-11-13"; got != want {
+		t.Fatalf("cartesia_version query = %q, want %q", got, want)
+	}
+
+	headers := buildCartesiaStreamHeaders(provider)
+	if got := headers.Get("Cartesia-Version"); got != "" {
+		t.Fatalf("Cartesia-Version header = %q, want omitted", got)
 	}
 }

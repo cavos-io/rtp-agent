@@ -113,6 +113,9 @@ func TestSmallestAITTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	if got := req.Header.Get("X-Source"); got != "livekit" {
 		t.Fatalf("X-Source = %q, want livekit", got)
 	}
+	if got := req.Header.Get("X-LiveKit-Version"); got != smallestAIPluginVersion {
+		t.Fatalf("X-LiveKit-Version = %q, want %q", got, smallestAIPluginVersion)
+	}
 
 	var payload map[string]any
 	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {

@@ -21,8 +21,10 @@ import (
 )
 
 const (
-	defaultCartesiaTTSBaseURL = "https://api.cartesia.ai"
-	cartesiaTTSUserAgent      = "LiveKit Agents Cartesia Plugin/Go"
+	defaultCartesiaTTSBaseURL         = "https://api.cartesia.ai"
+	defaultCartesiaTTSAPIVersion      = "2025-04-16"
+	cartesiaTTSUserAgent              = "LiveKit Agents Cartesia Plugin/Go"
+	cartesiaTTSExperimentalAPIVersion = "2024-11-13"
 )
 
 type CartesiaTTS struct {
@@ -55,6 +57,23 @@ func WithCartesiaBaseURL(baseURL string) CartesiaTTSOption {
 func WithCartesiaLanguage(language string) CartesiaTTSOption {
 	return func(t *CartesiaTTS) {
 		t.language = language
+	}
+}
+
+func WithCartesiaModel(model string) CartesiaTTSOption {
+	return func(t *CartesiaTTS) {
+		if model != "" {
+			t.model = model
+		}
+	}
+}
+
+func WithCartesiaVoiceID(voiceID string) CartesiaTTSOption {
+	return func(t *CartesiaTTS) {
+		if voiceID != "" {
+			t.voiceID = voiceID
+			t.voiceEmbedding = nil
+		}
 	}
 }
 
@@ -131,7 +150,7 @@ func NewCartesiaTTS(apiKey string, voiceID string, model string, opts ...Cartesi
 		language:       "en",
 		encoding:       "pcm_s16le",
 		sampleRate:     24000,
-		apiVersion:     "2025-04-16",
+		apiVersion:     defaultCartesiaTTSAPIVersion,
 		wordTimestamps: true,
 	}
 	for _, opt := range opts {
@@ -148,6 +167,12 @@ func (t *CartesiaTTS) SampleRate() int  { return t.sampleRate }
 func (t *CartesiaTTS) NumChannels() int { return 1 }
 func (t *CartesiaTTS) Model() string    { return t.model }
 func (t *CartesiaTTS) Provider() string { return "Cartesia" }
+
+func (t *CartesiaTTS) UpdateOptions(opts ...CartesiaTTSOption) {
+	for _, opt := range opts {
+		opt(t)
+	}
+}
 
 func (t *CartesiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if err := validateCartesiaTTSAPIKey(t.apiKey); err != nil {
@@ -166,7 +191,8 @@ func (t *CartesiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", t.apiKey)
-	req.Header.Set("Cartesia-Version", t.apiVersion)
+	req.Header.Set("Cartesia-Version", defaultCartesiaTTSAPIVersion)
+	req.Header.Set("User-Agent", cartesiaTTSUserAgent)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -206,6 +232,18 @@ func buildCartesiaOptions(t *CartesiaTTS, streaming bool) map[string]interface{}
 			"embedding": append([]float64(nil), t.voiceEmbedding...),
 		}
 	}
+	if t.apiVersion == cartesiaTTSExperimentalAPIVersion {
+		voiceControls := map[string]interface{}{}
+		if t.speed != nil {
+			voiceControls["speed"] = t.speed
+		}
+		if t.emotion != "" {
+			voiceControls["emotion"] = []string{t.emotion}
+		}
+		if len(voiceControls) > 0 {
+			voice["__experimental_controls"] = voiceControls
+		}
+	}
 	options := map[string]interface{}{
 		"model_id": t.model,
 		"voice":    voice,
@@ -220,14 +258,16 @@ func buildCartesiaOptions(t *CartesiaTTS, streaming bool) map[string]interface{}
 		options["pronunciation_dict_id"] = t.pronunciationDictID
 	}
 	generationConfig := map[string]interface{}{}
-	if t.speed != nil {
-		generationConfig["speed"] = t.speed
-	}
-	if t.emotion != "" {
-		generationConfig["emotion"] = t.emotion
-	}
-	if t.volume != nil {
-		generationConfig["volume"] = *t.volume
+	if t.apiVersion > cartesiaTTSExperimentalAPIVersion && strings.HasPrefix(t.model, "sonic-3") {
+		if t.speed != nil {
+			generationConfig["speed"] = t.speed
+		}
+		if t.emotion != "" {
+			generationConfig["emotion"] = t.emotion
+		}
+		if t.volume != nil {
+			generationConfig["volume"] = *t.volume
+		}
 	}
 	if len(generationConfig) > 0 {
 		options["generation_config"] = generationConfig
@@ -336,7 +376,6 @@ func buildCartesiaStreamURL(t *CartesiaTTS) string {
 func buildCartesiaStreamHeaders(t *CartesiaTTS) http.Header {
 	headers := make(http.Header)
 	headers.Set("X-API-Key", t.apiKey)
-	headers.Set("Cartesia-Version", t.apiVersion)
 	headers.Set("User-Agent", cartesiaTTSUserAgent)
 	return headers
 }
@@ -349,11 +388,12 @@ func buildCartesiaStreamInitMessage(t *CartesiaTTS) map[string]interface{} {
 }
 
 type cartesiaTTSStream struct {
-	conn   *websocket.Conn
-	audio  chan *tts.SynthesizedAudio
-	errCh  chan error
-	mu     sync.Mutex
-	closed bool
+	conn    *websocket.Conn
+	audio   chan *tts.SynthesizedAudio
+	errCh   chan error
+	mu      sync.Mutex
+	closed  bool
+	flushed bool
 
 	sampleRate int
 	writeJSON  func(any) error
@@ -407,7 +447,9 @@ func (s *cartesiaTTSStream) readLoop() {
 		}
 
 		if resp.Type == "done" || resp.Done {
-			// Context finished, but we might keep connection open for more text
+			if s.isFlushed() {
+				return
+			}
 		}
 	}
 }
@@ -416,6 +458,12 @@ func (s *cartesiaTTSStream) isClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closed
+}
+
+func (s *cartesiaTTSStream) isFlushed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.flushed
 }
 
 func (s *cartesiaTTSStream) PushText(text string) error {
@@ -447,6 +495,7 @@ func (s *cartesiaTTSStream) Flush() error {
 		"transcript": " ",
 		"continue":   false,
 	}
+	s.flushed = true
 	if err := s.writeJSONData(msg); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err

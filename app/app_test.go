@@ -8671,8 +8671,11 @@ func TestCartesiaTTSFallbackPassesReferenceOptions(t *testing.T) {
 	if got, want := gotHeaders.Get("X-API-Key"), "test-cartesia-key"; got != want {
 		t.Fatalf("X-API-Key = %q, want %q", got, want)
 	}
-	if got, want := gotHeaders.Get("Cartesia-Version"), "2025-01-01"; got != want {
+	if got, want := gotHeaders.Get("Cartesia-Version"), "2025-04-16"; got != want {
 		t.Fatalf("Cartesia-Version = %q, want %q", got, want)
+	}
+	if got := gotHeaders.Get("User-Agent"); got == "" {
+		t.Fatal("User-Agent header missing")
 	}
 	if got, want := gotPayload["transcript"], "hola"; got != want {
 		t.Fatalf("transcript = %#v, want %#v", got, want)

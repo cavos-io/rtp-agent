@@ -32,6 +32,11 @@ const (
 	smallestAIPCMBytesPerSample      = 2
 )
 
+var (
+	smallestAISTTHeartbeatInterval   = 5 * time.Second
+	smallestAISTTUsageReportInterval = 5 * time.Second
+)
+
 type SmallestAISTT struct {
 	apiKey         string
 	baseURL        string
@@ -201,18 +206,21 @@ func (s *SmallestAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &smallestAISTTStream{
-		owner:         s,
-		dialWebsocket: dialWebsocket,
-		conn:          conn,
-		events:        make(chan *stt.SpeechEvent, 100),
-		errCh:         make(chan error, 1),
-		ctx:           streamCtx,
-		cancel:        cancel,
-		state:         &smallestAISTTStreamState{language: streamOptions.language, diarize: streamOptions.diarize},
+		owner:          s,
+		dialWebsocket:  dialWebsocket,
+		conn:           conn,
+		events:         make(chan *stt.SpeechEvent, 100),
+		errCh:          make(chan error, 1),
+		ctx:            streamCtx,
+		cancel:         cancel,
+		done:           make(chan struct{}),
+		state:          &smallestAISTTStreamState{language: streamOptions.language, diarize: streamOptions.diarize},
+		usageLastFlush: time.Now(),
 	}
 	stream.applyOptions(streamOptions)
 	s.registerStream(stream)
 	go stream.readLoop()
+	go stream.heartbeatLoop()
 	return stream, nil
 }
 
@@ -442,15 +450,18 @@ type smallestAISTTStream struct {
 
 	ctx                context.Context
 	cancel             context.CancelFunc
+	done               chan struct{}
 	state              *smallestAISTTStreamState
 	audio              bytes.Buffer
 	sampleRate         int
 	usageAudioDuration float64
+	usageLastFlush     time.Time
 	reconnectRequested bool
 }
 
 func (s *smallestAISTTStream) readLoop() {
 	defer close(s.events)
+	defer close(s.done)
 	defer s.owner.unregisterStream(s)
 	for {
 		conn := s.currentConn()
@@ -479,6 +490,31 @@ func (s *smallestAISTTStream) readLoop() {
 			s.events <- event
 		}
 		if resp.IsLast {
+			return
+		}
+	}
+}
+
+func (s *smallestAISTTStream) heartbeatLoop() {
+	interval := smallestAISTTHeartbeatInterval
+	if interval <= 0 {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			conn := s.currentConn()
+			if conn == nil {
+				continue
+			}
+			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second)); err != nil {
+				return
+			}
+		case <-s.done:
+			return
+		case <-s.ctx.Done():
 			return
 		}
 	}
@@ -596,7 +632,7 @@ func (s *smallestAISTTStream) PushFrame(frame *model.AudioFrame) error {
 		if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
 			return err
 		}
-		s.usageAudioDuration += smallestAISTTAudioDuration(len(chunk), s.sampleRate)
+		s.recordUsageAudioLocked(len(chunk))
 	}
 	return nil
 }
@@ -616,12 +652,37 @@ func (s *smallestAISTTStream) Flush() error {
 	if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
 		return err
 	}
-	s.usageAudioDuration += smallestAISTTAudioDuration(len(chunk), s.sampleRate)
+	s.recordUsageAudioLocked(len(chunk))
 	s.emitRecognitionUsageLocked()
 	return nil
 }
 
+func (s *smallestAISTTStream) recordUsageAudioLocked(byteCount int) {
+	duration := smallestAISTTAudioDuration(byteCount, s.sampleRate)
+	if duration <= 0 {
+		return
+	}
+	s.usageAudioDuration += duration
+	interval := smallestAISTTUsageReportInterval
+	if interval <= 0 {
+		return
+	}
+	now := time.Now()
+	if s.usageLastFlush.IsZero() {
+		s.usageLastFlush = now
+		return
+	}
+	if now.Sub(s.usageLastFlush) >= interval {
+		s.emitRecognitionUsageAtLocked(now)
+	}
+}
+
 func (s *smallestAISTTStream) emitRecognitionUsageLocked() {
+	s.emitRecognitionUsageAtLocked(time.Now())
+}
+
+func (s *smallestAISTTStream) emitRecognitionUsageAtLocked(flushTime time.Time) {
+	s.usageLastFlush = flushTime
 	if s.usageAudioDuration <= 0 {
 		return
 	}
