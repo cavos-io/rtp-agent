@@ -537,6 +537,15 @@ func (s *xaiSTTStream) Close() error {
 		s.mu.Unlock()
 		return nil
 	}
+	var flushErr error
+	if s.audioBuf != nil {
+		for _, chunk := range s.audioBuf.Flush() {
+			if err := s.writeOrBufferBinaryDataLocked(chunk.Data); err != nil {
+				flushErr = err
+				break
+			}
+		}
+	}
 	s.closed = true
 	conn := s.conn
 	s.mu.Unlock()
@@ -544,11 +553,17 @@ func (s *xaiSTTStream) Close() error {
 	s.cancel()
 	s.owner.unregisterStream(s)
 	if conn == nil {
-		return nil
+		return flushErr
 	}
-	_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"audio.done"}`))
+	if flushErr == nil {
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"audio.done"}`))
+	}
 	_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return conn.Close()
+	closeErr := conn.Close()
+	if flushErr != nil {
+		return flushErr
+	}
+	return closeErr
 }
 
 func (s *xaiSTTStream) Next() (*stt.SpeechEvent, error) {

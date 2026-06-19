@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -426,6 +427,61 @@ func TestXaiSTTStreamWaitsForTranscriptCreatedBeforeSendingAudio(t *testing.T) {
 	}
 }
 
+func TestXaiSTTStreamCloseFlushesBufferedAudioBeforeDone(t *testing.T) {
+	messages := make(chan string, 3)
+	handlerErr := make(chan error, 2)
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = newXaiSTTTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if err := conn.WriteJSON(map[string]any{"type": "transcript.created"}); err != nil {
+			handlerErr <- err
+			return
+		}
+		for {
+			msgType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			switch msgType {
+			case websocket.BinaryMessage:
+				messages <- "binary:" + strconv.Itoa(len(payload))
+			case websocket.TextMessage:
+				messages <- string(payload)
+			}
+		}
+	}, handlerErr)
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewXaiSTT("test-key", WithXaiSTTWebsocketURL("ws://xai.test/v1/stt"))
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("PushFrame(full chunk) error = %v", err)
+	}
+	assertXaiSTTMessage(t, messages, handlerErr, "binary:1600")
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 400),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 200,
+	}); err != nil {
+		t.Fatalf("PushFrame(partial chunk) error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	assertXaiSTTMessage(t, messages, handlerErr, "binary:400")
+	assertXaiSTTMessage(t, messages, handlerErr, `{"type":"audio.done"}`)
+}
+
 func TestXaiSTTRequiresAPIKeyBeforeRequest(t *testing.T) {
 	t.Setenv("XAI_API_KEY", "")
 	provider := NewXaiSTT("",
@@ -779,6 +835,20 @@ func readMultipartRequest(t *testing.T, req *http.Request) (map[string]string, m
 		}
 	}
 	return fields, files
+}
+
+func assertXaiSTTMessage(t *testing.T, messages <-chan string, handlerErr <-chan error, want string) {
+	t.Helper()
+	select {
+	case got := <-messages:
+		if got != want {
+			t.Fatalf("websocket message = %q, want %q", got, want)
+		}
+	case err := <-handlerErr:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for websocket message %q", want)
+	}
 }
 
 func assertXaiQuery(t *testing.T, query url.Values, key string, want string) {
