@@ -704,6 +704,12 @@ func TestXaiRealtimeCloseEmitsSessionDurationMetrics(t *testing.T) {
 		if ev.Metrics.SessionDuration <= 0 {
 			t.Fatalf("session duration = %v, want positive", ev.Metrics.SessionDuration)
 		}
+		if ev.Metrics.Metadata == nil {
+			t.Fatal("metrics metadata = nil, want xAI model metadata")
+		}
+		if ev.Metrics.Metadata.ModelName != "grok-voice-think-fast-1.0" || ev.Metrics.Metadata.ModelProvider != "xAI Realtime API" {
+			t.Fatalf("metrics metadata = %#v, want xAI model/provider", ev.Metrics.Metadata)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for close metrics event")
 	}

@@ -363,6 +363,8 @@ type xaiSTTStream struct {
 	mu                 sync.Mutex
 	closed             bool
 	reconnectRequested bool
+	serverReady        bool
+	pendingAudio       [][]byte
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -397,6 +399,10 @@ func (s *xaiSTTStream) readLoop() {
 		if err := json.Unmarshal(message, &payload); err != nil {
 			continue
 		}
+		if payloadString(payload, "type") == "transcript.created" {
+			s.markServerReady()
+			continue
+		}
 		s.mu.Lock()
 		events := processXaiSTTStreamEvent(s.state, payload)
 		s.mu.Unlock()
@@ -408,6 +414,9 @@ func (s *xaiSTTStream) readLoop() {
 
 func (s *xaiSTTStream) updateOptions(sampleRate int, language string, interimResults bool, diarization bool, endpointing int) {
 	s.mu.Lock()
+	s.audioBuf = nil
+	s.pendingAudio = nil
+	s.serverReady = false
 	s.sampleRate = sampleRate
 	s.language = language
 	s.endpointing = endpointing
@@ -440,7 +449,7 @@ func (s *xaiSTTStream) PushFrame(frame *model.AudioFrame) error {
 		s.audioBuf = newXaiSTTAudioByteStream(s, frame)
 	}
 	for _, chunk := range s.audioBuf.Push(frame.Data) {
-		if err := s.writeBinaryDataLocked(chunk.Data); err != nil {
+		if err := s.writeOrBufferBinaryDataLocked(chunk.Data); err != nil {
 			return err
 		}
 	}
@@ -457,7 +466,7 @@ func (s *xaiSTTStream) Flush() error {
 		return nil
 	}
 	for _, chunk := range s.audioBuf.Flush() {
-		if err := s.writeBinaryDataLocked(chunk.Data); err != nil {
+		if err := s.writeOrBufferBinaryDataLocked(chunk.Data); err != nil {
 			return err
 		}
 	}
@@ -489,11 +498,56 @@ func (s *xaiSTTStream) writeBinaryDataLocked(data []byte) error {
 	return s.conn.WriteMessage(websocket.BinaryMessage, data)
 }
 
+func (s *xaiSTTStream) writeOrBufferBinaryDataLocked(data []byte) error {
+	if s.writeBinary != nil {
+		return s.writeBinary(data)
+	}
+	if !s.serverReady {
+		s.pendingAudio = append(s.pendingAudio, append([]byte(nil), data...))
+		return nil
+	}
+	return s.writeBinaryDataLocked(data)
+}
+
+func (s *xaiSTTStream) markServerReady() {
+	s.mu.Lock()
+	if s.serverReady {
+		s.mu.Unlock()
+		return
+	}
+	s.serverReady = true
+	pending := s.pendingAudio
+	s.pendingAudio = nil
+	s.mu.Unlock()
+
+	for _, data := range pending {
+		s.mu.Lock()
+		err := s.writeBinaryDataLocked(data)
+		s.mu.Unlock()
+		if err != nil {
+			select {
+			case s.errCh <- err:
+			default:
+			}
+			return
+		}
+	}
+}
+
 func (s *xaiSTTStream) Close() error {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
 		return nil
+	}
+	var flushErr error
+	if s.audioBuf != nil {
+		for _, chunk := range s.audioBuf.Flush() {
+			if err := s.writeOrBufferBinaryDataLocked(chunk.Data); err != nil {
+				flushErr = err
+				break
+			}
+		}
 	}
 	s.closed = true
 	conn := s.conn
@@ -502,11 +556,17 @@ func (s *xaiSTTStream) Close() error {
 	s.cancel()
 	s.owner.unregisterStream(s)
 	if conn == nil {
-		return nil
+		return flushErr
 	}
-	_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"audio.done"}`))
+	if flushErr == nil {
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"audio.done"}`))
+	}
 	_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return conn.Close()
+	closeErr := conn.Close()
+	if flushErr != nil {
+		return flushErr
+	}
+	return closeErr
 }
 
 func (s *xaiSTTStream) Next() (*stt.SpeechEvent, error) {
@@ -576,6 +636,7 @@ func (s *xaiSTTStream) reconnect() error {
 	}
 	s.conn = conn
 	s.reconnectRequested = false
+	s.serverReady = false
 	s.mu.Unlock()
 	return nil
 }

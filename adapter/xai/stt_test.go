@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -360,6 +361,202 @@ func TestXaiSTTUpdateOptionsReconnectsActiveStreams(t *testing.T) {
 	assertXaiQuery(t, query, "interim_results", "false")
 	assertXaiQuery(t, query, "diarize", "true")
 	assertXaiQuery(t, query, "endpointing", "250")
+}
+
+func TestXaiSTTUpdateOptionsResetsActiveAudioChunker(t *testing.T) {
+	var writes [][]byte
+	stream := &xaiSTTStream{
+		sampleRate: 16000,
+		state:      &xaiSTTStreamState{interimResults: true},
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("PushFrame(16k) error = %v", err)
+	}
+	if len(writes) != 1 || len(writes[0]) != 1600 {
+		t.Fatalf("initial writes = %v, want one 1600-byte chunk", chunkLengths(writes))
+	}
+
+	stream.updateOptions(48000, "en", true, false, 100)
+	writes = nil
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 4800),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 2400,
+	}); err != nil {
+		t.Fatalf("PushFrame(48k) error = %v", err)
+	}
+	if len(writes) != 1 || len(writes[0]) != 4800 {
+		t.Fatalf("post-update writes = %v, want one 4800-byte chunk", chunkLengths(writes))
+	}
+}
+
+func TestXaiSTTUpdateOptionsDropsPendingAudioChunkOnReconnect(t *testing.T) {
+	var writes [][]byte
+	stream := &xaiSTTStream{
+		sampleRate: 16000,
+		language:   "en",
+		state:      &xaiSTTStreamState{interimResults: true},
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              bytes.Repeat([]byte{0xaa}, 400),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 200,
+	}); err != nil {
+		t.Fatalf("PushFrame(partial before reconnect) error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes before reconnect = %v, want none for partial chunk", chunkLengths(writes))
+	}
+
+	stream.updateOptions(16000, "id", true, false, 100)
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              bytes.Repeat([]byte{0xbb}, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("PushFrame(after reconnect) error = %v", err)
+	}
+	if len(writes) != 1 || len(writes[0]) != 1600 {
+		t.Fatalf("writes after reconnect = %v, want one fresh 1600-byte chunk", chunkLengths(writes))
+	}
+	if !allBytesEqual(writes[0], 0xbb) {
+		t.Fatalf("post-reconnect chunk includes stale pre-reconnect audio: first bytes %#v", writes[0][:4])
+	}
+}
+
+func TestXaiSTTStreamWaitsForTranscriptCreatedBeforeSendingAudio(t *testing.T) {
+	binaryWrites := make(chan []byte, 1)
+	readyToSend := make(chan struct{})
+	releaseServer := make(chan struct{})
+	handlerErr := make(chan error, 2)
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = newXaiSTTTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		go func() {
+			for {
+				msgType, payload, err := conn.ReadMessage()
+				if err != nil {
+					return
+				}
+				if msgType == websocket.BinaryMessage {
+					binaryWrites <- append([]byte(nil), payload...)
+				}
+			}
+		}()
+		<-readyToSend
+		if err := conn.WriteJSON(map[string]any{"type": "transcript.created"}); err != nil {
+			handlerErr <- err
+		}
+		<-releaseServer
+	}, handlerErr)
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewXaiSTT("test-key", WithXaiSTTWebsocketURL("ws://xai.test/v1/stt"))
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+
+	frameData := make([]byte, 1600)
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              frameData,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	select {
+	case payload := <-binaryWrites:
+		t.Fatalf("audio sent before transcript.created: %d bytes", len(payload))
+	case err := <-handlerErr:
+		t.Fatal(err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(readyToSend)
+	select {
+	case payload := <-binaryWrites:
+		close(releaseServer)
+		if len(payload) != len(frameData) {
+			t.Fatalf("audio payload length = %d, want %d", len(payload), len(frameData))
+		}
+	case err := <-handlerErr:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for buffered audio after transcript.created")
+	}
+}
+
+func TestXaiSTTStreamCloseFlushesBufferedAudioBeforeDone(t *testing.T) {
+	messages := make(chan string, 3)
+	handlerErr := make(chan error, 2)
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = newXaiSTTTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if err := conn.WriteJSON(map[string]any{"type": "transcript.created"}); err != nil {
+			handlerErr <- err
+			return
+		}
+		for {
+			msgType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			switch msgType {
+			case websocket.BinaryMessage:
+				messages <- "binary:" + strconv.Itoa(len(payload))
+			case websocket.TextMessage:
+				messages <- string(payload)
+			}
+		}
+	}, handlerErr)
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewXaiSTT("test-key", WithXaiSTTWebsocketURL("ws://xai.test/v1/stt"))
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("PushFrame(full chunk) error = %v", err)
+	}
+	assertXaiSTTMessage(t, messages, handlerErr, "binary:1600")
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 400),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 200,
+	}); err != nil {
+		t.Fatalf("PushFrame(partial chunk) error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	assertXaiSTTMessage(t, messages, handlerErr, "binary:400")
+	assertXaiSTTMessage(t, messages, handlerErr, `{"type":"audio.done"}`)
 }
 
 func TestXaiSTTRequiresAPIKeyBeforeRequest(t *testing.T) {
@@ -715,6 +912,37 @@ func readMultipartRequest(t *testing.T, req *http.Request) (map[string]string, m
 		}
 	}
 	return fields, files
+}
+
+func assertXaiSTTMessage(t *testing.T, messages <-chan string, handlerErr <-chan error, want string) {
+	t.Helper()
+	select {
+	case got := <-messages:
+		if got != want {
+			t.Fatalf("websocket message = %q, want %q", got, want)
+		}
+	case err := <-handlerErr:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for websocket message %q", want)
+	}
+}
+
+func chunkLengths(chunks [][]byte) []int {
+	lengths := make([]int, 0, len(chunks))
+	for _, chunk := range chunks {
+		lengths = append(lengths, len(chunk))
+	}
+	return lengths
+}
+
+func allBytesEqual(data []byte, want byte) bool {
+	for _, b := range data {
+		if b != want {
+			return false
+		}
+	}
+	return true
 }
 
 func assertXaiQuery(t *testing.T, query url.Values, key string, want string) {
