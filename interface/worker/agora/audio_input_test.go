@@ -50,7 +50,7 @@ func TestAudioInputHandleAudioFrameClonesBeforeForwarding(t *testing.T) {
 	receiver := &fakeAudioReceiver{}
 	input := NewAudioInput(context.Background(), receiver)
 	frame := &model.AudioFrame{
-		Data:              []byte{1, 2, 3},
+		Data:              []byte{1, 2},
 		SampleRate:        16000,
 		NumChannels:       1,
 		SamplesPerChannel: 1,
@@ -64,6 +64,37 @@ func TestAudioInputHandleAudioFrameClonesBeforeForwarding(t *testing.T) {
 	}
 	if receiver.frames[0].Data[0] != 1 {
 		t.Fatalf("forwarded frame data was not cloned, first byte = %d, want 1", receiver.frames[0].Data[0])
+	}
+}
+
+func TestAudioInputDropsInvalidAudioFrames(t *testing.T) {
+	receiver := &fakeAudioReceiver{}
+	input := NewAudioInput(context.Background(), receiver)
+
+	input.HandleAudioFrame(&model.AudioFrame{
+		Data:              []byte{1, 2},
+		SampleRate:        0,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	})
+	input.HandleAudioFrame(&model.AudioFrame{
+		Data:              []byte{1, 2, 3},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	})
+	input.HandleAudioFrame(&model.AudioFrame{
+		Data:              []byte{4, 5},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	})
+
+	if len(receiver.frames) != 1 {
+		t.Fatalf("received frames = %d, want only valid audio frame", len(receiver.frames))
+	}
+	if receiver.frames[0].Data[0] != 4 {
+		t.Fatalf("forwarded frame first byte = %d, want valid frame", receiver.frames[0].Data[0])
 	}
 }
 

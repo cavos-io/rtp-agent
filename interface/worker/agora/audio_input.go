@@ -35,7 +35,7 @@ func (i *AudioInput) HandlePCM(frame PCMFrame) error {
 }
 
 func (i *AudioInput) HandleAudioFrame(frame *model.AudioFrame) {
-	if i == nil || i.receiver == nil || frame == nil || len(frame.Data) == 0 {
+	if i == nil || i.receiver == nil || !validAudioInputFrame(frame) {
 		return
 	}
 	select {
@@ -46,6 +46,17 @@ func (i *AudioInput) HandleAudioFrame(frame *model.AudioFrame) {
 	cloned := *frame
 	cloned.Data = append([]byte(nil), frame.Data...)
 	i.receiver.OnAudioFrame(i.ctx, &cloned)
+}
+
+func validAudioInputFrame(frame *model.AudioFrame) bool {
+	if frame == nil || len(frame.Data) == 0 || frame.SampleRate == 0 || frame.NumChannels == 0 || frame.SamplesPerChannel == 0 {
+		return false
+	}
+	bytesPerInterleavedSample := int(frame.NumChannels) * 2
+	if bytesPerInterleavedSample <= 0 || len(frame.Data)%bytesPerInterleavedSample != 0 {
+		return false
+	}
+	return len(frame.Data) == int(frame.SamplesPerChannel)*bytesPerInterleavedSample
 }
 
 func AudioFrameFromPCM(frame PCMFrame) (*model.AudioFrame, error) {
