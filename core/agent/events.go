@@ -621,9 +621,9 @@ func (s *runContextFillerScheduler) run(ctx context.Context) {
 		if !s.waitForDwell(ctx, agentEvents, userEvents) {
 			return
 		}
-		text, handle, ok := s.nextFiller(created)
+		text, handle, ok, sayText := s.nextFiller(created)
 		if ok {
-			if handle == nil {
+			if sayText {
 				var err error
 				handle, err = s.runCtx.Session.Say(ctx, text)
 				if err != nil {
@@ -643,16 +643,16 @@ func (s *runContextFillerScheduler) run(ctx context.Context) {
 	}
 }
 
-func (s *runContextFillerScheduler) nextFiller(step int) (string, *SpeechHandle, bool) {
+func (s *runContextFillerScheduler) nextFiller(step int) (string, *SpeechHandle, bool, bool) {
 	if s.opts.SpeechSource != nil {
 		handle, ok := s.opts.SpeechSource(step)
-		return "", handle, ok
+		return "", handle, ok, false
 	}
 	if s.opts.Source != nil {
 		text, ok := s.opts.Source(step)
-		return text, nil, ok
+		return text, nil, ok, true
 	}
-	return s.opts.Text, nil, true
+	return s.opts.Text, nil, true, true
 }
 
 func (s *runContextFillerScheduler) waitForDwell(ctx context.Context, agentEvents <-chan AgentStateChangedEvent, userEvents <-chan UserStateChangedEvent) bool {

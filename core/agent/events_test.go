@@ -624,6 +624,75 @@ func TestRunContextWithFillerSpeechSourceCountsReturnedHandle(t *testing.T) {
 	}
 }
 
+func TestRunContextWithFillerSpeechSourceNilSkipsWithoutSaying(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	speechEvents := session.SpeechCreatedEvents()
+	runCtx := NewRunContext(session, NewSpeechHandle(true, DefaultInputDetails()), &llm.FunctionCall{Name: "lookup"})
+
+	interval := 10 * time.Millisecond
+	maxSteps := 1
+	calls := make(chan int, 2)
+	callCount := 0
+	workStarted := make(chan struct{})
+	releaseWork := make(chan struct{})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runCtx.WithFiller(context.Background(), FillerOptions{
+			SpeechSource: func(step int) (*SpeechHandle, bool) {
+				callCount++
+				calls <- step
+				if callCount == 1 {
+					return nil, true
+				}
+				return NewSpeechHandle(true, DefaultInputDetails()), true
+			},
+			Delay:    10 * time.Millisecond,
+			Interval: &interval,
+			MaxSteps: &maxSteps,
+		}, func(context.Context) error {
+			close(workStarted)
+			<-releaseWork
+			return nil
+		})
+	}()
+	<-workStarted
+
+	firstStep := <-calls
+	if firstStep != 0 {
+		t.Fatalf("first SpeechSource step = %d, want 0", firstStep)
+	}
+	select {
+	case ev := <-speechEvents:
+		t.Fatalf("nil SpeechSource result said filler speech: %#v", ev)
+	default:
+	}
+	select {
+	case secondStep := <-calls:
+		if secondStep != 0 {
+			t.Fatalf("second SpeechSource step = %d, want nil result not to advance step", secondStep)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunContext.WithFiller did not retry after nil SpeechSource result")
+	}
+	select {
+	case ev := <-speechEvents:
+		t.Fatalf("SpeechSource returned handle should not call Say: %#v", ev)
+	case <-time.After(40 * time.Millisecond):
+	}
+
+	close(releaseWork)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("WithFiller error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WithFiller did not return after work completed")
+	}
+}
+
 func TestRunContextWithFillerRejectsNegativeTiming(t *testing.T) {
 	runCtx := NewRunContext(NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{}), nil, &llm.FunctionCall{Name: "lookup"})
 
