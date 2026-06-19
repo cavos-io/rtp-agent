@@ -28,9 +28,9 @@ type JobExecutor interface {
 	ID() string
 	Status() JobStatus
 	Started() bool
-	Job() *workerlivekit.Job
+	Job() *Job
 	RunningJob() *RunningJobInfo
-	LaunchJob(ctx context.Context, job *workerlivekit.Job) error
+	LaunchJob(ctx context.Context, job *Job) error
 	LaunchRunningJob(ctx context.Context, info RunningJobInfo) error
 	Close(ctx context.Context) error
 }
@@ -55,7 +55,7 @@ type ThreadJobExecutor struct {
 	mu     sync.Mutex
 
 	entrypoint func() error
-	job        *workerlivekit.Job
+	job        *Job
 	runningJob *RunningJobInfo
 	started    bool
 	done       chan struct{}
@@ -84,7 +84,7 @@ func (e *ThreadJobExecutor) Started() bool {
 	return e.started
 }
 
-func (e *ThreadJobExecutor) Job() *workerlivekit.Job {
+func (e *ThreadJobExecutor) Job() *Job {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.job
@@ -96,7 +96,7 @@ func (e *ThreadJobExecutor) RunningJob() *RunningJobInfo {
 	return e.runningJob
 }
 
-func (e *ThreadJobExecutor) LaunchJob(ctx context.Context, job *workerlivekit.Job) error {
+func (e *ThreadJobExecutor) LaunchJob(ctx context.Context, job *Job) error {
 	return e.LaunchRunningJob(ctx, RunningJobInfo{Job: job})
 }
 
@@ -158,7 +158,7 @@ type ProcessJobExecutor struct {
 	mu         sync.Mutex
 	started    bool
 	cmd        *exec.Cmd
-	job        *workerlivekit.Job
+	job        *Job
 	runningJob *RunningJobInfo
 	done       chan struct{}
 
@@ -195,7 +195,7 @@ func (e *ProcessJobExecutor) Started() bool {
 	return e.started
 }
 
-func (e *ProcessJobExecutor) Job() *workerlivekit.Job {
+func (e *ProcessJobExecutor) Job() *Job {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.job
@@ -207,7 +207,7 @@ func (e *ProcessJobExecutor) RunningJob() *RunningJobInfo {
 	return e.runningJob
 }
 
-func (e *ProcessJobExecutor) LaunchJob(ctx context.Context, job *workerlivekit.Job) error {
+func (e *ProcessJobExecutor) LaunchJob(ctx context.Context, job *Job) error {
 	return e.LaunchRunningJob(ctx, RunningJobInfo{Job: job})
 }
 

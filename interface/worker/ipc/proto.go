@@ -154,9 +154,11 @@ type JobAcceptArguments struct {
 	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
+type Job = workerlivekit.Job
+
 type RunningJobInfo struct {
 	AcceptArguments JobAcceptArguments `json:"accept_arguments"`
-	Job             *workerlivekit.Job `json:"job"`
+	Job             *Job               `json:"job"`
 	URL             string             `json:"url"`
 	Token           string             `json:"token"`
 	WorkerID        string             `json:"worker_id"`
