@@ -448,6 +448,21 @@ func TestInworldTTSChunkedStreamDecodesReferenceJSONLines(t *testing.T) {
 	}
 }
 
+func TestInworldTTSChunkedStreamSkipsMalformedReferenceJSONLines(t *testing.T) {
+	stream := &inworldTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte("not-json\n{\"result\":{\"audioContent\":\"AQI=\"}}\n")))},
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if string(audio.Frame.Data) != string([]byte{1, 2}) {
+		t.Fatalf("audio data = %#v, want decoded base64 audio after malformed line", audio.Frame.Data)
+	}
+}
+
 func TestInworldTTSStreamBuffersTextUntilFlush(t *testing.T) {
 	stream := &inworldTTSSynthesizeStream{}
 	if err := stream.PushText("hello "); err != nil {

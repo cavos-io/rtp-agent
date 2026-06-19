@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -390,6 +391,10 @@ func (s *inworldTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 		audio, done, err := inworldTTSAudioFromResponseLine(line, s.sampleRate)
 		if err != nil {
+			var syntaxErr *json.SyntaxError
+			if errors.As(err, &syntaxErr) {
+				continue
+			}
 			return nil, err
 		}
 		if done {
