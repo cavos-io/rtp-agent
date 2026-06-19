@@ -1073,7 +1073,7 @@ func (s *AgentServer) RTCSession(
 	s.requestFnc = request
 	s.sessionEndFnc = sessionEnd
 	if NormalizeWorkerTransport(string(s.Options.Transport)) == WorkerTransportLiveKit {
-		agentName := workerlivekit.ResolveAgentNameFromEnv(workerlivekit.AgentNameEnvOptions{
+		agentName := workerlivekit.ResolveServerAgentNameFromEnv(workerlivekit.AgentNameEnvOptions{
 			AgentName:      s.Options.AgentName,
 			AgentNameIsEnv: s.Options.AgentNameIsEnv,
 		})

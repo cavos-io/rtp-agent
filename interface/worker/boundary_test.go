@@ -76,6 +76,7 @@ func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
 		"workerlivekit.WorkerLogLevelFromEnv(",
 		"workerlivekit.DefaultWorkerPermissions(",
 		"workerlivekit.ResolveWorkerConnectionOptions(",
+		"workerlivekit.ResolveAgentNameFromEnv(",
 		"workerlivekit.AllRecordingOptions(",
 		"workerlivekit.DefaultFakeLocalJobOptions(",
 		"workerlivekit.PrepareLocalJobRunOptions(",

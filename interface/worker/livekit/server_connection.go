@@ -47,3 +47,7 @@ func DefaultServerWorkerPermissions() *WorkerPermissions {
 func ResolveServerConnectionOptions(opts ServerConnectionResolveOptions) WorkerConnectionOptions {
 	return ResolveWorkerConnectionOptions(WorkerConnectionOptions(opts))
 }
+
+func ResolveServerAgentNameFromEnv(opts AgentNameEnvOptions) AgentNameEnvResult {
+	return ResolveAgentNameFromEnv(opts)
+}
