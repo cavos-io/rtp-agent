@@ -616,6 +616,34 @@ func TestTransportForwardsClientAudioFrames(t *testing.T) {
 	}
 }
 
+func TestTransportDropsClientAudioFramesAfterLeave(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+	received := make(chan *model.AudioFrame, 1)
+	tr.SetAudioHandler(func(frame *model.AudioFrame) {
+		received <- frame
+	})
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	if err := tr.Leave(context.Background()); err != nil {
+		t.Fatalf("Leave() error = %v", err)
+	}
+	client.emitAudio(&model.AudioFrame{
+		Data:              []byte{1, 2, 3, 4},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	})
+
+	select {
+	case frame := <-received:
+		t.Fatalf("stale audio frame forwarded after Leave(): %#v", frame)
+	case <-time.After(10 * time.Millisecond):
+	}
+}
+
 func TestTransportJoinDisablesAudioHandlerWhenSubscribeAudioDisabled(t *testing.T) {
 	disabled := false
 	client := &fakeChannelClient{}

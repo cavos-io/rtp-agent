@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 )
 
 type EventKind string
@@ -143,6 +145,8 @@ func (t *Transport) Join(ctx context.Context) error {
 	audio := t.audio
 	if !SubscribeAudioEnabled(opts.SubscribeAudio) {
 		audio = nil
+	} else if audio != nil {
+		audio = t.emitAudioFrame
 	}
 	t.joinSeq++
 	joinSeq := t.joinSeq
@@ -213,6 +217,23 @@ func (t *Transport) Leave(ctx context.Context) error {
 	t.users = nil
 	t.mu.Unlock()
 	return nil
+}
+
+func (t *Transport) emitAudioFrame(frame *model.AudioFrame) {
+	if t == nil || frame == nil {
+		return
+	}
+	t.mu.Lock()
+	handler := t.audio
+	joined := t.joined
+	closed := t.closing || t.closed
+	disconnected := t.disconnected
+	failed := t.failed
+	t.mu.Unlock()
+	if handler == nil || !joined || closed || disconnected || failed {
+		return
+	}
+	handler(frame)
 }
 
 func (t *Transport) PublishPCM(ctx context.Context, frame PCMFrame) error {
