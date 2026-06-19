@@ -123,8 +123,18 @@ func TestSharedWorkerDoesNotExposeLiveKitWorkerMessageDirectly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read server.go: %v", err)
 	}
-	if strings.Contains(string(data), "*workerlivekit.WorkerMessage") {
-		t.Fatal("server.go exposes *workerlivekit.WorkerMessage directly; use the worker message contract")
+	forbidden := []string{
+		"*workerlivekit.WorkerMessage",
+		"*workerlivekit.ServerMessage",
+		"*workerlivekit.AvailabilityRequest",
+		"*workerlivekit.JobAssignment",
+		"*workerlivekit.JobTermination",
+		"*workerlivekit.ServerInfo",
+	}
+	for _, direct := range forbidden {
+		if strings.Contains(string(data), direct) {
+			t.Fatalf("server.go exposes %s directly; use worker message contracts", direct)
+		}
 	}
 }
 
