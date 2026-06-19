@@ -94,6 +94,19 @@ func TestSonioxSTTStreamRequiresAPIKeyBeforeDial(t *testing.T) {
 	}
 }
 
+func TestSonioxSTTStreamRejectsReferenceEndpointDelayRangeBeforeDial(t *testing.T) {
+	provider := NewSonioxSTT("test-key", WithSonioxBaseURL("://bad-url"), WithSonioxMaxEndpointDelayMS(499))
+
+	_, err := provider.Stream(context.Background(), "")
+
+	if err == nil || !strings.Contains(err.Error(), "max_endpoint_delay_ms") {
+		t.Fatalf("Stream error = %v, want endpoint delay range error", err)
+	}
+	if strings.Contains(err.Error(), "dial") {
+		t.Fatalf("Stream error = %v, want validation before websocket dial", err)
+	}
+}
+
 func TestSonioxSTTOptionsBuildReferenceConfig(t *testing.T) {
 	provider := NewSonioxSTT("test-key",
 		WithSonioxBaseURL("ws://soniox.example/ws"),

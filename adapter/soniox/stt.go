@@ -209,6 +209,9 @@ func (s *SonioxSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	if err := validateSonioxAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}
+	if err := validateSonioxSTTOptions(s); err != nil {
+		return nil, err
+	}
 	payload, err := buildSonioxConfigJSON(s)
 	if err != nil {
 		return nil, err
@@ -244,6 +247,13 @@ func (s *SonioxSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 func validateSonioxAPIKey(apiKey string) error {
 	if apiKey == "" {
 		return fmt.Errorf("soniox API key is required. Set SONIOX_API_KEY or pass api_key")
+	}
+	return nil
+}
+
+func validateSonioxSTTOptions(s *SonioxSTT) error {
+	if s.maxEndpointDelayMS < 500 || s.maxEndpointDelayMS > 3000 {
+		return fmt.Errorf("max_endpoint_delay_ms must be between 500 and 3000")
 	}
 	return nil
 }
