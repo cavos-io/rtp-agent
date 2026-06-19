@@ -209,6 +209,7 @@ func buildSmallestAITTSRequest(ctx context.Context, t *SmallestAITTS, text strin
 	req.Header.Set("Authorization", "Bearer "+t.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Source", "livekit")
+	req.Header.Set("X-LiveKit-Version", smallestAIPluginVersion)
 	return req, nil
 }
 
