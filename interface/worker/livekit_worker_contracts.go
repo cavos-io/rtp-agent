@@ -3,6 +3,7 @@ package worker
 import (
 	"time"
 
+	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 )
 
@@ -227,6 +228,18 @@ var livekitValidateServerConnectionOptions = workerlivekit.ValidateServerConnect
 var livekitApplyServerConnectionEnv = workerlivekit.ApplyServerConnectionEnv
 
 var livekitServerRunningJobInfoSnapshot = workerlivekit.ServerRunningJobInfoSnapshot
+
+func livekitRunningJobInfoToIPC(info workerlivekit.RunningJobInfo) workeripc.RunningJobInfo {
+	return workerlivekit.ToIPCRunningJobInfo(info)
+}
+
+func livekitRunningJobInfoFromIPC(info workeripc.RunningJobInfo) (workerlivekit.RunningJobInfo, error) {
+	return workerlivekit.FromIPCRunningJobInfo(info)
+}
+
+func livekitRunningJobInfosFromIPC(infos []workeripc.RunningJobInfo) ([]workerlivekit.RunningJobInfo, error) {
+	return workerlivekit.FromIPCRunningJobInfos(infos)
+}
 
 var livekitRefreshServerRunningJobsForReload = workerlivekit.RefreshServerRunningJobsForReload
 

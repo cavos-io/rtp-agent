@@ -291,7 +291,7 @@ func (s *AgentServer) ActiveRunningJobs() []workeripc.RunningJobInfo {
 }
 
 func runningJobInfoFromContext(jobCtx *JobContext) workeripc.RunningJobInfo {
-	return workeripc.FromLiveKitRunningJobInfo(livekitServerRunningJobInfoSnapshot(RunningJobInfoOptions{
+	return livekitRunningJobInfoToIPC(livekitServerRunningJobInfoSnapshot(RunningJobInfoOptions{
 		AcceptArguments: JobAcceptArguments{
 			Name:       jobCtx.AcceptArguments.Name,
 			Identity:   jobCtx.AcceptArguments.Identity,
@@ -327,7 +327,11 @@ func jobLogValues(jobCtx *JobContext, values ...any) []any {
 }
 
 func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.RunningJobInfo, now time.Time) error {
-	refreshed, err := livekitRefreshServerRunningJobsForReload(workeripc.ToLiveKitRunningJobInfos(jobs), s.Options.APISecret, now)
+	livekitJobs, err := livekitRunningJobInfosFromIPC(jobs)
+	if err != nil {
+		return err
+	}
+	refreshed, err := livekitRefreshServerRunningJobsForReload(livekitJobs, s.Options.APISecret, now)
 	if err != nil {
 		return err
 	}
@@ -370,8 +374,12 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 		return workerReferenceError(rtcSessionRequiredMessage)
 	}
 
+	livekitInfo, err := livekitRunningJobInfoFromIPC(info)
+	if err != nil {
+		return err
+	}
 	runningJob := livekitServerRunningJobContextValues(RunningJobContextValueOptions{
-		Info:            workeripc.ToLiveKitRunningJobInfo(info),
+		Info:            livekitInfo,
 		OverrideURL:     s.Options.WSRL,
 		DefaultWorkerID: s.workerID,
 	})
@@ -1551,7 +1559,11 @@ func callWorkerRegisteredHandler(handler WorkerRegisteredHandler, workerID strin
 
 func (s *AgentServer) reportActiveJobs() {
 	runningJobs := s.ActiveRunningJobs()
-	livekitJobs := workeripc.ToLiveKitRunningJobInfos(runningJobs)
+	livekitJobs, err := livekitRunningJobInfosFromIPC(runningJobs)
+	if err != nil {
+		logger.Logger.Errorw("failed to report active jobs", err)
+		return
+	}
 	jobIDs := livekitServerMigratableRunningJobIDs(livekitJobs)
 
 	if len(jobIDs) == 0 {

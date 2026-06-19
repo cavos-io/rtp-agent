@@ -152,24 +152,131 @@ type JobAcceptArguments struct {
 	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
+type Job interface {
+	GetId() string
+}
+
+type JSONJob struct {
+	ID  string
+	raw json.RawMessage
+}
+
+func (j *JSONJob) GetId() string {
+	if j == nil {
+		return ""
+	}
+	return j.ID
+}
+
+func (j *JSONJob) RawJSON() json.RawMessage {
+	if j == nil || j.raw == nil {
+		return nil
+	}
+	raw := make(json.RawMessage, len(j.raw))
+	copy(raw, j.raw)
+	return raw
+}
+
+func (j JSONJob) MarshalJSON() ([]byte, error) {
+	if len(j.raw) > 0 {
+		raw := make([]byte, len(j.raw))
+		copy(raw, j.raw)
+		return raw, nil
+	}
+	return json.Marshal(struct {
+		ID string `json:"id,omitempty"`
+	}{
+		ID: j.ID,
+	})
+}
+
+func (j *JSONJob) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*j = JSONJob{}
+		return nil
+	}
+	var id struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(data, &id); err != nil {
+		return err
+	}
+	j.ID = id.ID
+	j.raw = make(json.RawMessage, len(data))
+	copy(j.raw, data)
+	return nil
+}
+
 type RunningJobInfo struct {
 	AcceptArguments JobAcceptArguments `json:"accept_arguments"`
-	Job             *Job               `json:"job"`
+	Job             Job                `json:"job"`
 	URL             string             `json:"url"`
 	Token           string             `json:"token"`
 	WorkerID        string             `json:"worker_id"`
 	FakeJob         bool               `json:"fake_job"`
 }
 
-func cloneStringMap(values map[string]string) map[string]string {
-	if values == nil {
-		return nil
+func (info RunningJobInfo) MarshalJSON() ([]byte, error) {
+	type runningJobInfoJSON struct {
+		AcceptArguments JobAcceptArguments `json:"accept_arguments"`
+		Job             json.RawMessage    `json:"job"`
+		URL             string             `json:"url"`
+		Token           string             `json:"token"`
+		WorkerID        string             `json:"worker_id"`
+		FakeJob         bool               `json:"fake_job"`
 	}
-	clone := make(map[string]string, len(values))
-	for key, value := range values {
-		clone[key] = value
+	var jobJSON json.RawMessage
+	if info.Job != nil {
+		data, err := json.Marshal(info.Job)
+		if err != nil {
+			return nil, err
+		}
+		jobJSON = data
 	}
-	return clone
+	return json.Marshal(runningJobInfoJSON{
+		AcceptArguments: info.AcceptArguments,
+		Job:             jobJSON,
+		URL:             info.URL,
+		Token:           info.Token,
+		WorkerID:        info.WorkerID,
+		FakeJob:         info.FakeJob,
+	})
+}
+
+func (info *RunningJobInfo) UnmarshalJSON(data []byte) error {
+	type runningJobInfoJSON struct {
+		AcceptArguments JobAcceptArguments `json:"accept_arguments"`
+		Job             json.RawMessage    `json:"job"`
+		URL             string             `json:"url"`
+		Token           string             `json:"token"`
+		WorkerID        string             `json:"worker_id"`
+		FakeJob         bool               `json:"fake_job"`
+	}
+	var decoded runningJobInfoJSON
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	info.AcceptArguments = decoded.AcceptArguments
+	info.URL = decoded.URL
+	info.Token = decoded.Token
+	info.WorkerID = decoded.WorkerID
+	info.FakeJob = decoded.FakeJob
+	info.Job = nil
+	if len(decoded.Job) > 0 && string(decoded.Job) != "null" {
+		job := &JSONJob{}
+		if err := job.UnmarshalJSON(decoded.Job); err != nil {
+			return err
+		}
+		info.Job = job
+	}
+	return nil
+}
+
+func JobID(job Job) string {
+	if job == nil {
+		return ""
+	}
+	return job.GetId()
 }
 
 type StartJobRequest struct {

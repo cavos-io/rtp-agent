@@ -1356,7 +1356,10 @@ func TestRefreshRunningJobTokenForReloadPreservesAssignmentAndExtendsToken(t *te
 	}
 	now := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
 
-	livekitInfo := ipc.ToLiveKitRunningJobInfo(info)
+	livekitInfo, err := workerlivekit.FromIPCRunningJobInfo(info)
+	if err != nil {
+		t.Fatalf("FromIPCRunningJobInfo() error = %v", err)
+	}
 	refreshed, err := workerlivekit.RefreshRunningJobTokenForReload(livekitInfo, "api-secret", now)
 	if err != nil {
 		t.Fatalf("refreshRunningJobTokenForReload() error = %v", err)
@@ -1466,7 +1469,10 @@ func TestRefreshRunningJobsForReloadRefreshesEveryJob(t *testing.T) {
 	}
 	now := time.Date(2026, 5, 31, 13, 0, 0, 0, time.UTC)
 
-	livekitJobs := ipc.ToLiveKitRunningJobInfos(jobs)
+	livekitJobs, err := workerlivekit.FromIPCRunningJobInfos(jobs)
+	if err != nil {
+		t.Fatalf("FromIPCRunningJobInfos() error = %v", err)
+	}
 	refreshed, err := workerlivekit.RefreshRunningJobsForReload(livekitJobs, "api-secret", now)
 	if err != nil {
 		t.Fatalf("refreshRunningJobsForReload() error = %v", err)
@@ -4651,9 +4657,9 @@ func TestExecuteLocalJobWithExplicitIdleProcessesLaunchesThroughProcPool(t *test
 	close(releaseEntrypoint)
 	select {
 	case jobCtx := <-entrypointCh:
-		if jobCtx.Job.Id != launched.Job.Id {
+		if jobCtx.Job.Id != ipc.JobID(launched.Job) {
 			cancel()
-			t.Fatalf("entrypoint job ID = %q, want launched job %q", jobCtx.Job.Id, launched.Job.Id)
+			t.Fatalf("entrypoint job ID = %q, want launched job %q", jobCtx.Job.Id, ipc.JobID(launched.Job))
 		}
 	case <-time.After(time.Second):
 		cancel()
@@ -5780,7 +5786,7 @@ func (e *localJobExecutorStub) Status() ipc.JobStatus {
 
 func (e *localJobExecutorStub) Started() bool { return e.started }
 
-func (e *localJobExecutorStub) Job() *livekit.Job {
+func (e *localJobExecutorStub) Job() ipc.Job {
 	if e.info == nil {
 		return nil
 	}
@@ -5789,7 +5795,7 @@ func (e *localJobExecutorStub) Job() *livekit.Job {
 
 func (e *localJobExecutorStub) RunningJob() *ipc.RunningJobInfo { return e.info }
 
-func (e *localJobExecutorStub) LaunchJob(ctx context.Context, job *livekit.Job) error {
+func (e *localJobExecutorStub) LaunchJob(ctx context.Context, job ipc.Job) error {
 	return e.LaunchRunningJob(ctx, ipc.RunningJobInfo{Job: job})
 }
 
