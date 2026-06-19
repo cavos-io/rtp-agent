@@ -274,6 +274,9 @@ func TestSmallestAISTTRecognizeRequestUsesReferenceParams(t *testing.T) {
 	if got := req.Header.Get("X-Source"); got != "livekit" {
 		t.Fatalf("X-Source = %q, want livekit", got)
 	}
+	if got := req.Header.Get("X-LiveKit-Version"); got != smallestAIPluginVersion {
+		t.Fatalf("X-LiveKit-Version = %q, want plugin version", got)
+	}
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
 		t.Fatalf("read body: %v", err)
@@ -362,6 +365,9 @@ func TestSmallestAISTTOptionsBuildReferenceStreamURLAndHeaders(t *testing.T) {
 	}
 	if headers.Get("X-Source") != "livekit" {
 		t.Fatalf("X-Source = %q, want livekit", headers.Get("X-Source"))
+	}
+	if headers.Get("X-LiveKit-Version") != smallestAIPluginVersion {
+		t.Fatalf("X-LiveKit-Version = %q, want plugin version", headers.Get("X-LiveKit-Version"))
 	}
 }
 

@@ -381,6 +381,7 @@ func buildSmallestAISTTHeadersFromAPIKey(apiKey string) http.Header {
 	headers := make(http.Header)
 	headers.Set("Authorization", "Bearer "+apiKey)
 	headers.Set("X-Source", "livekit")
+	headers.Set("X-LiveKit-Version", smallestAIPluginVersion)
 	return headers
 }
 
