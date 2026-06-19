@@ -128,6 +128,10 @@ type JobTermination = workerlivekit.JobTermination
 
 type ServerInfo = workerlivekit.ServerInfo
 
+type WorkerWebSocketOpenOptions = workerlivekit.WorkerWebSocketOpenOptions
+
+type WorkerWebSocketOpenResult = workerlivekit.WorkerWebSocketOpenResult
+
 type WorkerStartedHandler func()
 
 type WorkerRegisteredInfo struct {
@@ -1347,7 +1351,7 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		}()
 	}
 
-	openResult, err := s.openWorkerWebSocket(ctx, workerlivekit.WorkerWebSocketOpenOptions{
+	openResult, err := s.openWorkerWebSocket(ctx, WorkerWebSocketOpenOptions{
 		WSURL:       s.Options.WSRL,
 		WorkerToken: s.Options.WorkerToken,
 		APIKey:      s.Options.APIKey,
@@ -1502,7 +1506,7 @@ func (s *AgentServer) sendWorkerStatusUpdate() error {
 	}))
 }
 
-func (s *AgentServer) openWorkerWebSocket(ctx context.Context, opts workerlivekit.WorkerWebSocketOpenOptions) (workerlivekit.WorkerWebSocketOpenResult, error) {
+func (s *AgentServer) openWorkerWebSocket(ctx context.Context, opts WorkerWebSocketOpenOptions) (WorkerWebSocketOpenResult, error) {
 	opts.Dial = workerDialContext
 	opts.Sleep = workerRetrySleep
 	result, err := workerlivekit.OpenServerWorkerWebSocket(ctx, opts)
