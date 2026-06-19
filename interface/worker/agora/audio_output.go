@@ -2,6 +2,7 @@ package agora
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -91,6 +92,9 @@ func (o *AudioOutput) PublishAudio(ctx context.Context, frame *model.AudioFrame)
 			StartPTSMS: o.nextPTSMS,
 		}
 		if err := o.publisher.PublishPCM(ctx, pcm); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				o.buffer = o.buffer[:0]
+			}
 			return err
 		}
 		copy(o.buffer, o.buffer[bytesPer10MS:])

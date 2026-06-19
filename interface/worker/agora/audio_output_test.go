@@ -145,6 +145,38 @@ func TestAudioOutputPublishAudioRechecksContextAfterLock(t *testing.T) {
 	}
 }
 
+func TestAudioOutputDropsBufferedPCMAfterCanceledPublish(t *testing.T) {
+	publisher := &fakePCMPublisher{err: context.Canceled}
+	output := NewAudioOutput(publisher)
+	first := &model.AudioFrame{
+		Data:              bytesWithFirst(320, 1),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	}
+	second := &model.AudioFrame{
+		Data:              bytesWithFirst(320, 9),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	}
+
+	err := output.PublishAudio(context.Background(), first)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("PublishAudio(first) error = %v, want context canceled", err)
+	}
+	publisher.err = nil
+	if err := output.PublishAudio(context.Background(), second); err != nil {
+		t.Fatalf("PublishAudio(second) error = %v", err)
+	}
+	if len(publisher.frames) != 1 {
+		t.Fatalf("published frames = %d, want only fresh audio after canceled publish", len(publisher.frames))
+	}
+	if publisher.frames[0].Data[0] != 9 {
+		t.Fatalf("published first byte = %d, want fresh audio frame", publisher.frames[0].Data[0])
+	}
+}
+
 func TestAudioOutputRejectsPartialSampleFrames(t *testing.T) {
 	publisher := &fakePCMPublisher{}
 	output := NewAudioOutput(publisher)
@@ -291,4 +323,10 @@ func (c *notifyingContext) Done() <-chan struct{} {
 		close(c.doneCalled)
 	})
 	return c.Context.Done()
+}
+
+func bytesWithFirst(size int, first byte) []byte {
+	data := make([]byte, size)
+	data[0] = first
+	return data
 }
