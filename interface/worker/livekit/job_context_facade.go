@@ -37,3 +37,15 @@ func JobContextPublisher(job *Job) *ParticipantInfo {
 func JobContextLocalParticipant(room *SDKRoom) *LocalParticipant {
 	return RoomLocalParticipant(room)
 }
+
+func NewJobContextSessionReport(job *Job) (*agent.SessionReport, *agent.Tagger) {
+	return NewJobSessionReport(job)
+}
+
+func JobContextLogFields(job *Job) map[string]any {
+	return JobLogContextFields(job)
+}
+
+func PopulateJobContextSessionReport(report *agent.SessionReport, job *Job) {
+	PopulateSessionReportWithJobMetadata(report, job)
+}

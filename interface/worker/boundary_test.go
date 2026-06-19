@@ -129,6 +129,9 @@ func TestSharedJobContextDoesNotCallLiveKitInfoHelpersDirectly(t *testing.T) {
 		"workerlivekit.JobRoom(",
 		"workerlivekit.JobPublisher(",
 		"workerlivekit.RoomLocalParticipant(",
+		"workerlivekit.NewJobSessionReport(",
+		"workerlivekit.JobLogContextFields(",
+		"workerlivekit.PopulateSessionReportWithJobMetadata(",
 	}
 
 	data, err := os.ReadFile("job.go")

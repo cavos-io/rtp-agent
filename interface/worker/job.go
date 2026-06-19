@@ -262,7 +262,7 @@ type JobContext struct {
 }
 
 func NewJobContext(job *workerlivekit.Job, url string, apiKey string, apiSecret string) *JobContext {
-	report, tagger := workerlivekit.NewJobSessionReport(job)
+	report, tagger := workerlivekit.NewJobContextSessionReport(job)
 	return &JobContext{
 		Job:              job,
 		url:              url,
@@ -273,7 +273,7 @@ func NewJobContext(job *workerlivekit.Job, url string, apiKey string, apiSecret 
 		process:          NewJobProcess(JobExecutorTypeThread, nil, ""),
 		shutdownDone:     make(chan struct{}),
 		entrypointDone:   make(chan struct{}),
-		logContextFields: workerlivekit.JobLogContextFields(job),
+		logContextFields: workerlivekit.JobContextLogFields(job),
 	}
 }
 
@@ -393,7 +393,7 @@ func (c *JobContext) MakeSessionReport(sessions ...*agent.AgentSession) (*agent.
 	}
 
 	report := agent.NewSessionReport(session)
-	workerlivekit.PopulateSessionReportWithJobMetadata(report, c.Job)
+	workerlivekit.PopulateJobContextSessionReport(report, c.Job)
 	if c.Report != nil {
 		report.RecordingOptions = c.Report.RecordingOptions
 		report.AudioRecordingPath = c.Report.AudioRecordingPath
