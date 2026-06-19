@@ -238,3 +238,21 @@ func TestSharedJobContextDoesNotExposeRoomInternalsDirectly(t *testing.T) {
 		}
 	}
 }
+
+func TestSharedJobContextDoesNotExposeJobAPIResultInternalsDirectly(t *testing.T) {
+	data, err := os.ReadFile("job.go")
+	if err != nil {
+		t.Fatalf("read job.go: %v", err)
+	}
+	forbidden := []string{
+		"*workerlivekit.ClaimGrants",
+		"*workerlivekit.DeleteRoomResponse",
+		"*workerlivekit.SIPParticipantInfo",
+		"*workerlivekit.SIPCreateParticipantRequest",
+	}
+	for _, direct := range forbidden {
+		if strings.Contains(string(data), direct) {
+			t.Fatalf("job.go exposes %s directly; use worker API result contracts", direct)
+		}
+	}
+}

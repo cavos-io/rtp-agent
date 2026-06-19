@@ -235,6 +235,14 @@ type TrackType = workerlivekit.TrackType
 
 type RemoteTrackPublication = workerlivekit.RemoteTrackPublication
 
+type ClaimGrants = workerlivekit.ClaimGrants
+
+type DeleteRoomResponse = workerlivekit.DeleteRoomResponse
+
+type SIPParticipantInfo = workerlivekit.SIPParticipantInfo
+
+type SIPCreateParticipantRequest = workerlivekit.SIPCreateParticipantRequest
+
 type ParticipantInfo = workerlivekit.ParticipantInfo
 
 type ParticipantInfoKind = workerlivekit.ParticipantInfoKind
@@ -351,7 +359,7 @@ func (c *JobContext) LocalParticipantIdentity() string {
 	return workerlivekit.JobContextLocalParticipantIdentity(c.token, c.ParticipantIdentity())
 }
 
-func (c *JobContext) TokenClaims() (*workerlivekit.ClaimGrants, error) {
+func (c *JobContext) TokenClaims() (*ClaimGrants, error) {
 	return workerlivekit.JobContextTokenClaims(c.token)
 }
 
@@ -774,7 +782,7 @@ func (c *JobContext) Terminated() bool {
 }
 
 // DeleteRoom deletes the room and disconnects all participants.
-func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*workerlivekit.DeleteRoomResponse, error) {
+func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*DeleteRoomResponse, error) {
 	if plan := workerlivekit.JobContextDeleteRoomPlan(c.IsFakeJob()); plan.Skip {
 		logger.Logger.Warnw("job context DeleteRoom is skipped for fake jobs", nil)
 		return plan.Response, nil
@@ -795,7 +803,7 @@ func (c *JobContext) MoveParticipant(ctx context.Context, room string, identity 
 }
 
 // AddSIPParticipant adds a SIP participant to the room.
-func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunkID string, identity string, names ...string) (*workerlivekit.SIPParticipantInfo, error) {
+func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunkID string, identity string, names ...string) (*SIPParticipantInfo, error) {
 	if plan := workerlivekit.JobContextSIPCreateParticipantPlan(c.IsFakeJob()); plan.Skip {
 		logger.Logger.Warnw("job context AddSIPParticipant is skipped for fake jobs", nil)
 		return plan.Info, nil
@@ -803,7 +811,7 @@ func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunk
 	return workerlivekit.JobContextCreateSIPParticipantWithNames(ctx, c.API().SIP, c.Job, callTo, trunkID, identity, names...)
 }
 
-func (c *JobContext) CreateSIPParticipant(ctx context.Context, req *workerlivekit.SIPCreateParticipantRequest) (*workerlivekit.SIPParticipantInfo, error) {
+func (c *JobContext) CreateSIPParticipant(ctx context.Context, req *SIPCreateParticipantRequest) (*SIPParticipantInfo, error) {
 	if plan := workerlivekit.JobContextSIPCreateParticipantPlan(c.IsFakeJob()); plan.Skip {
 		logger.Logger.Warnw("job context CreateSIPParticipant is skipped for fake jobs", nil)
 		return plan.Info, nil
