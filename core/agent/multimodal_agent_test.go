@@ -2170,6 +2170,49 @@ func TestMultimodalAgentInterruptedRealtimeMessageWaitsForPlaybackAfterContextCa
 	}
 }
 
+func TestMultimodalAgentRealtimeMessageSkipsCommitWhenPlayoutWaitFails(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(&fakePipelinePlaybackController{
+		err: errors.New("playout failed"),
+	})
+	chatCtx := llm.NewChatContext()
+	ma := &MultimodalAgent{
+		model: &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{
+			AudioOutput: true,
+		}},
+		session: session,
+		chatCtx: chatCtx,
+		ctx:     context.Background(),
+		PublishAudio: func(context.Context, *model.AudioFrame) error {
+			return nil
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "unconfirmed realtime text"
+	close(textCh)
+	audioCh := make(chan *model.AudioFrame, 1)
+	audioCh <- &model.AudioFrame{Data: []byte{1}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}
+	close(audioCh)
+	modalitiesCh := make(chan []string, 1)
+	modalitiesCh <- []string{"audio"}
+	close(modalitiesCh)
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	ma.consumeRealtimeMessage(context.Background(), speech, llm.MessageGeneration{
+		MessageID:    "msg_realtime_playout_failed",
+		TextCh:       textCh,
+		AudioCh:      audioCh,
+		ModalitiesCh: modalitiesCh,
+	})
+
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chat context items = %#v, want no assistant message when playout wait fails", chatCtx.Items)
+	}
+	if len(speech.ChatItems()) != 0 {
+		t.Fatalf("speech chat items = %#v, want no committed assistant message", speech.ChatItems())
+	}
+}
+
 func TestMultimodalAgentPartialRealtimeMessageDoesNotSyncChatContext(t *testing.T) {
 	playback := &fakePipelinePlaybackController{
 		result: AudioPlaybackResult{

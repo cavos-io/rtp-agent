@@ -787,16 +787,21 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 		}
 		publishedAudio = publishedAudio || fallbackPublishedAudio
 	}
+	playoutOK := true
 	if publishedAudio && !interrupted && ma.session != nil {
 		if playback := ma.session.AudioPlaybackController(); playback != nil {
 			if _, err := playback.WaitForPlayout(ctx); err != nil {
 				logger.Logger.Warnw("failed to wait for realtime message playback", err)
+				playoutOK = false
 			}
 		}
 		interrupted = speech != nil && speech.IsInterrupted()
 	}
 	if publishedAudio && ma.session != nil {
 		ma.session.UpdateAgentState(AgentStateListening)
+	}
+	if !interrupted && !playoutOK {
+		return false
 	}
 	if interrupted {
 		var playback AudioPlaybackResult
