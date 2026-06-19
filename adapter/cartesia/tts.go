@@ -42,6 +42,8 @@ type CartesiaTTS struct {
 	volume              *float64
 	wordTimestamps      bool
 	pronunciationDictID string
+	mu                  sync.Mutex
+	streams             map[*cartesiaTTSStream]struct{}
 }
 
 type CartesiaTTSOption func(*CartesiaTTS)
@@ -152,6 +154,7 @@ func NewCartesiaTTS(apiKey string, voiceID string, model string, opts ...Cartesi
 		sampleRate:     24000,
 		apiVersion:     defaultCartesiaTTSAPIVersion,
 		wordTimestamps: true,
+		streams:        make(map[*cartesiaTTSStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -172,6 +175,26 @@ func (t *CartesiaTTS) UpdateOptions(opts ...CartesiaTTSOption) {
 	for _, opt := range opts {
 		opt(t)
 	}
+}
+
+func (t *CartesiaTTS) Close() error {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	streams := make([]*cartesiaTTSStream, 0, len(t.streams))
+	for stream := range t.streams {
+		streams = append(streams, stream)
+	}
+	t.streams = make(map[*cartesiaTTSStream]struct{})
+	t.mu.Unlock()
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
 }
 
 func (t *CartesiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
@@ -339,16 +362,39 @@ func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 	}
 
 	stream := &cartesiaTTSStream{
+		provider:   t,
 		conn:       conn,
 		audio:      make(chan *tts.SynthesizedAudio, 10),
 		errCh:      make(chan error, 1),
 		sampleRate: t.sampleRate,
 	}
 	stream.writeJSON = stream.writeJSONMessage
+	t.registerStream(stream)
 
 	go stream.readLoop()
 
 	return stream, nil
+}
+
+func (t *CartesiaTTS) registerStream(stream *cartesiaTTSStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.streams == nil {
+		t.streams = make(map[*cartesiaTTSStream]struct{})
+	}
+	t.streams[stream] = struct{}{}
+}
+
+func (t *CartesiaTTS) unregisterStream(stream *cartesiaTTSStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.streams, stream)
 }
 
 func validateCartesiaTTSAPIKey(apiKey string) error {
@@ -388,12 +434,13 @@ func buildCartesiaStreamInitMessage(t *CartesiaTTS) map[string]interface{} {
 }
 
 type cartesiaTTSStream struct {
-	conn    *websocket.Conn
-	audio   chan *tts.SynthesizedAudio
-	errCh   chan error
-	mu      sync.Mutex
-	closed  bool
-	flushed bool
+	provider *CartesiaTTS
+	conn     *websocket.Conn
+	audio    chan *tts.SynthesizedAudio
+	errCh    chan error
+	mu       sync.Mutex
+	closed   bool
+	flushed  bool
 
 	sampleRate    int
 	writeJSON     func(any) error
@@ -588,6 +635,9 @@ func (s *cartesiaTTSStream) Close() error {
 		return nil
 	}
 	s.closed = true
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
 	return s.conn.Close()
 }
 

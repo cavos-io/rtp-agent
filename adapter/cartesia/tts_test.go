@@ -622,6 +622,51 @@ func TestCartesiaTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSCloseClosesActiveStreams(t *testing.T) {
+	closed := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runCartesiaHoldOpenWebsocketServer(serverConn, closed, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("http://cartesia.test"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := stream.PushText("after close"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after provider Close = %v, want io.ErrClosedPipe", err)
+	}
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for active websocket close")
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for hold-open server")
+	}
+}
+
 func TestCartesiaTTSUnexpectedNormalCloseReturnsAPIConnectionError(t *testing.T) {
 	closed := make(chan struct{})
 	closeAfterHandshake := make(chan struct{})
@@ -883,6 +928,35 @@ func runCartesiaReadThenNormalCloseWebsocketServer(conn net.Conn, closeAfterRead
 			err = ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 			close(closed)
 			errCh <- err
+		}),
+	}
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		errCh <- err
+	}
+}
+
+func runCartesiaHoldOpenWebsocketServer(conn net.Conn, closed chan<- struct{}, errCh chan<- error) {
+	upgrader := websocket.Upgrader{}
+	listener := &singleCartesiaConnListener{conn: conn}
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ws, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer ws.Close()
+			if _, _, err := ws.ReadMessage(); err != nil {
+				errCh <- err
+				return
+			}
+			_, _, err = ws.ReadMessage()
+			close(closed)
+			if err == nil {
+				errCh <- errors.New("expected websocket close")
+				return
+			}
+			errCh <- nil
 		}),
 	}
 	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
