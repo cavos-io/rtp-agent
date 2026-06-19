@@ -22,6 +22,10 @@ func DefaultFakeLocalJobOptions() LocalJobOptions {
 	return LocalJobOptions{FakeJob: true}
 }
 
+func DefaultServerFakeLocalJobOptions() LocalJobOptions {
+	return DefaultFakeLocalJobOptions()
+}
+
 type LocalJobContextValueOptions struct {
 	RoomName            string
 	ParticipantIdentity string
@@ -59,6 +63,10 @@ func PrepareLocalJobRunOptions(participantIdentity string, opts LocalJobOptions)
 		return "", err
 	}
 	return identity, nil
+}
+
+func PrepareServerLocalJobRunOptions(participantIdentity string, opts LocalJobOptions) (string, error) {
+	return PrepareLocalJobRunOptions(participantIdentity, opts)
 }
 
 func LocalJobSessionReportPath(opts LocalJobOptions, sessionDirectory string) string {

@@ -1750,11 +1750,11 @@ func (s *AgentServer) handleTermination(req *workerlivekit.JobTermination) {
 
 // ExecuteLocalJob runs a job locally without connecting to the worker service, useful for the CLI console
 func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, participantIdentity string) error {
-	return s.ExecuteLocalJobWithOptions(ctx, roomName, participantIdentity, workerlivekit.DefaultFakeLocalJobOptions())
+	return s.ExecuteLocalJobWithOptions(ctx, roomName, participantIdentity, workerlivekit.DefaultServerFakeLocalJobOptions())
 }
 
 func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName string, participantIdentity string, options LocalJobOptions) error {
-	participantIdentity, err := workerlivekit.PrepareLocalJobRunOptions(participantIdentity, options)
+	participantIdentity, err := workerlivekit.PrepareServerLocalJobRunOptions(participantIdentity, options)
 	if err != nil {
 		return err
 	}
@@ -1762,7 +1762,7 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 		return workerReferenceError(rtcSessionRequiredMessage)
 	}
 	jobCtx := newLocalJobContextWithOptions(roomName, participantIdentity, s.Options, options)
-	if options == workerlivekit.DefaultFakeLocalJobOptions() {
+	if options == workerlivekit.DefaultServerFakeLocalJobOptions() {
 		jobCtx = newLocalJobContext(roomName, participantIdentity, s.Options)
 	}
 	localJob := workerlivekit.LocalJobExecutorPlan(jobCtx.Job)
@@ -1996,7 +1996,7 @@ func saveSessionReport(path string, report *agent.SessionReport) error {
 }
 
 func newLocalJobContext(roomName string, participantIdentity string, opts WorkerOptions) *JobContext {
-	return newLocalJobContextWithOptions(roomName, participantIdentity, opts, workerlivekit.DefaultFakeLocalJobOptions())
+	return newLocalJobContextWithOptions(roomName, participantIdentity, opts, workerlivekit.DefaultServerFakeLocalJobOptions())
 }
 
 func newLocalJobContextWithOptions(roomName string, participantIdentity string, opts WorkerOptions, options LocalJobOptions) *JobContext {
