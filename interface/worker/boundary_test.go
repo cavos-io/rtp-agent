@@ -118,6 +118,70 @@ func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
 	}
 }
 
+func TestSharedWorkerDoesNotExposeLiveKitWorkerMessageDirectly(t *testing.T) {
+	data, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatalf("read server.go: %v", err)
+	}
+	forbidden := []string{
+		"*workerlivekit.WorkerMessage",
+		"*workerlivekit.ServerMessage",
+		"*workerlivekit.AvailabilityRequest",
+		"*workerlivekit.JobAssignment",
+		"*workerlivekit.JobTermination",
+		"*workerlivekit.ServerInfo",
+		"opts workerlivekit.WorkerWebSocketOpenOptions",
+		"(workerlivekit.WorkerWebSocketOpenResult",
+		"result workerlivekit.EntrypointResult",
+		"status workerlivekit.JobStatus",
+		") workerlivekit.JobSessionReportUploadPlanResult",
+		"workerlivekit.JobAcceptArguments",
+		"event workerlivekit.WorkerRegisteredEvent",
+		"workerlivekit.ServerConnectionResolveOptions{",
+		"workerlivekit.ServerConnectionOptions{",
+		"workerlivekit.ServerConnectionEnvOptions{",
+		"workerlivekit.AgentNameEnvOptions{",
+		"workerlivekit.WorkerRuntimeMetadataOptions{",
+		"workerlivekit.ServerRegisterWorkerMessageOptions{",
+		"workerlivekit.ServerAvailableWorkerStatusMessageOptions{",
+		"workerlivekit.ServerMessageLoopOptions{",
+		"workerlivekit.ServerMessageRouteOptions{",
+		"workerlivekit.AvailabilityAnswerOptions{",
+		"workerlivekit.PendingAcceptStoreOptions{",
+		"workerlivekit.RunningJobInfoOptions{",
+		"workerlivekit.ReloadedJobContextValueOptions{",
+		"workerlivekit.RunningJobContextValueOptions{",
+		"workerlivekit.RunningJobEntrypointLifecycleOptions{",
+		"workerlivekit.ReloadedJobEntrypointLifecycleOptions{",
+		"workerlivekit.AssignmentContextValueOptions{",
+		"workerlivekit.JobEntrypointLifecycleOptions{",
+		"workerlivekit.JobSessionReportUploadPlanOptions{",
+		"workerlivekit.JobSessionEndPlanOptions{",
+		"workerlivekit.LocalJobContextSetupPlanOptions{",
+	}
+	for _, direct := range forbidden {
+		if strings.Contains(string(data), direct) {
+			t.Fatalf("server.go exposes %s directly; use worker message contracts", direct)
+		}
+	}
+}
+
+func TestServerKeepsLiveKitCompatibilityAliasesOutOfImplementation(t *testing.T) {
+	data, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatalf("read server.go: %v", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "type ") && strings.Contains(line, "= workerlivekit.") {
+			t.Fatalf("server.go owns LiveKit compatibility alias %q; move it to shared worker contracts", line)
+		}
+		if strings.HasPrefix(line, "WorkerType") && strings.Contains(line, "= workerlivekit.") {
+			t.Fatalf("server.go owns LiveKit compatibility const %q; move it to shared worker contracts", line)
+		}
+	}
+}
+
 func TestSharedJobContextDoesNotCallLiveKitInfoHelpersDirectly(t *testing.T) {
 	forbiddenCalls := []string{
 		"workerlivekit.JobInferenceHeaders(",
@@ -168,6 +232,82 @@ func TestSharedJobContextDoesNotCallLiveKitInfoHelpersDirectly(t *testing.T) {
 	for _, forbiddenCall := range forbiddenCalls {
 		if strings.Contains(string(data), forbiddenCall) {
 			t.Fatalf("job.go calls %s; use the LiveKit job context facade", forbiddenCall)
+		}
+	}
+}
+
+func TestJobKeepsLiveKitCompatibilityAliasesOutOfImplementation(t *testing.T) {
+	data, err := os.ReadFile("job.go")
+	if err != nil {
+		t.Fatalf("read job.go: %v", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "type ") && strings.Contains(line, "= workerlivekit.") {
+			t.Fatalf("job.go owns LiveKit compatibility alias %q; move it to shared worker contracts", line)
+		}
+		if strings.HasPrefix(line, "AutoSubscribe") && strings.Contains(line, "= workerlivekit.") {
+			t.Fatalf("job.go owns LiveKit compatibility const %q; move it to shared worker contracts", line)
+		}
+	}
+}
+
+func TestSharedJobContextDoesNotExposeParticipantInternalsDirectly(t *testing.T) {
+	data, err := os.ReadFile("job.go")
+	if err != nil {
+		t.Fatalf("read job.go: %v", err)
+	}
+	forbidden := []string{
+		"*workerlivekit.ParticipantInfo)",
+		"[]workerlivekit.ParticipantInfoKind",
+		"[]*workerlivekit.ParticipantInfo",
+		"map[workerlivekit.ParticipantTaskKey]",
+	}
+	for _, direct := range forbidden {
+		if strings.Contains(string(data), direct) {
+			t.Fatalf("job.go exposes %s directly; use worker participant contracts", direct)
+		}
+	}
+}
+
+func TestSharedJobContextDoesNotExposeRoomInternalsDirectly(t *testing.T) {
+	data, err := os.ReadFile("job.go")
+	if err != nil {
+		t.Fatalf("read job.go: %v", err)
+	}
+	forbidden := []string{
+		"*workerlivekit.Job",
+		"*workerlivekit.SDKRoom",
+		"*workerlivekit.Room",
+		"*workerlivekit.LocalParticipant",
+		"*workerlivekit.RoomCallback",
+		"participant workerlivekit.RemoteParticipantView",
+		"[]workerlivekit.RemoteParticipantView",
+		"*workerlivekit.RemoteParticipant",
+		"kinds ...workerlivekit.TrackType",
+		"*workerlivekit.RemoteTrackPublication",
+	}
+	for _, direct := range forbidden {
+		if strings.Contains(string(data), direct) {
+			t.Fatalf("job.go exposes %s directly; use worker room contracts", direct)
+		}
+	}
+}
+
+func TestSharedJobContextDoesNotExposeJobAPIResultInternalsDirectly(t *testing.T) {
+	data, err := os.ReadFile("job.go")
+	if err != nil {
+		t.Fatalf("read job.go: %v", err)
+	}
+	forbidden := []string{
+		"*workerlivekit.ClaimGrants",
+		"*workerlivekit.DeleteRoomResponse",
+		"*workerlivekit.SIPParticipantInfo",
+		"*workerlivekit.SIPCreateParticipantRequest",
+	}
+	for _, direct := range forbidden {
+		if strings.Contains(string(data), direct) {
+			t.Fatalf("job.go exposes %s directly; use worker API result contracts", direct)
 		}
 	}
 }
