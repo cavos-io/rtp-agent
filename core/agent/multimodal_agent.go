@@ -924,7 +924,8 @@ func (ma *MultimodalAgent) forwardedRealtimeTextAfterInterruption(ctx context.Co
 		return generatedText, AudioPlaybackResult{}
 	}
 	playback.ClearBuffer()
-	ev, err := playback.WaitForPlayout(ctx)
+	playoutCtx := context.WithoutCancel(ctx)
+	ev, err := playback.WaitForPlayout(playoutCtx)
 	if err != nil {
 		logger.Logger.Warnw("failed to wait for interrupted realtime playback", err)
 		return "", AudioPlaybackResult{}

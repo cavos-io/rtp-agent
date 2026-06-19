@@ -2139,6 +2139,37 @@ func TestMultimodalAgentInterruptedRealtimeMessageSkipsTruncateWhenPlayoutWaitCa
 	}
 }
 
+func TestMultimodalAgentInterruptedRealtimeMessageWaitsForPlaybackAfterContextCanceled(t *testing.T) {
+	playback := &fakePipelinePlaybackController{
+		result: AudioPlaybackResult{
+			PlaybackPosition:       420 * time.Millisecond,
+			Interrupted:            true,
+			SynchronizedTranscript: "heard words",
+		},
+		respectContext: true,
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(playback)
+	ma := &MultimodalAgent{
+		session: session,
+		ctx:     context.Background(),
+	}
+	replyCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	forwarded, playbackResult := ma.forwardedRealtimeTextAfterInterruption(replyCtx, "heard words unheard words")
+
+	if playback.clearCalls != 1 {
+		t.Fatalf("ClearBuffer calls = %d, want 1 for interrupted realtime speech", playback.clearCalls)
+	}
+	if forwarded != "heard words" {
+		t.Fatalf("forwarded text = %q, want synchronized transcript after canceled reply context", forwarded)
+	}
+	if playbackResult.PlaybackPosition != 420*time.Millisecond {
+		t.Fatalf("playback position = %v, want 420ms", playbackResult.PlaybackPosition)
+	}
+}
+
 func TestMultimodalAgentPartialRealtimeMessageDoesNotSyncChatContext(t *testing.T) {
 	playback := &fakePipelinePlaybackController{
 		result: AudioPlaybackResult{
