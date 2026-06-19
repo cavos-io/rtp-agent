@@ -142,6 +142,18 @@ type AgentNameEnvOptions = workerlivekit.AgentNameEnvOptions
 
 type WorkerRuntimeMetadataOptions = workerlivekit.WorkerRuntimeMetadataOptions
 
+type ServerRegisterWorkerMessageOptions = workerlivekit.ServerRegisterWorkerMessageOptions
+
+type ServerAvailableWorkerStatusMessageOptions = workerlivekit.ServerAvailableWorkerStatusMessageOptions
+
+type ServerMessageLoopOptions = workerlivekit.ServerMessageLoopOptions
+
+type ServerMessageRouteOptions = workerlivekit.ServerMessageRouteOptions
+
+type AvailabilityAnswerOptions = workerlivekit.AvailabilityAnswerOptions
+
+type PendingAcceptStoreOptions = workerlivekit.PendingAcceptStoreOptions
+
 type EntrypointResult = workerlivekit.EntrypointResult
 
 type JobStatus = workerlivekit.JobStatus
@@ -1073,7 +1085,7 @@ func readSystemCPUTimes() (idle uint64, total uint64, err error) {
 }
 
 func (s *AgentServer) registerWorkerRequest() *WorkerMessage {
-	return workerlivekit.ServerRegisterWorkerMessage(workerlivekit.ServerRegisterWorkerMessageOptions{
+	return workerlivekit.ServerRegisterWorkerMessage(ServerRegisterWorkerMessageOptions{
 		WorkerType:  s.Options.WorkerType,
 		AgentName:   s.Options.AgentName,
 		Version:     s.Options.Version,
@@ -1084,7 +1096,7 @@ func (s *AgentServer) registerWorkerRequest() *WorkerMessage {
 func (s *AgentServer) availableWorkerStatusMessage() *WorkerMessage {
 	jobCount := uint32(s.activeJobCount())
 	load := s.currentLoad()
-	return workerlivekit.ServerAvailableWorkerStatusMessage(workerlivekit.ServerAvailableWorkerStatusMessageOptions{
+	return workerlivekit.ServerAvailableWorkerStatusMessage(ServerAvailableWorkerStatusMessageOptions{
 		Load:         load,
 		JobCount:     jobCount,
 		CanAcceptJob: s.availableForJobWithLoad(load),
@@ -1463,7 +1475,7 @@ func (s *AgentServer) RunUnregistered(ctx context.Context) error {
 }
 
 func (s *AgentServer) runWorkerMessageLoop(ctx context.Context, readMessage func() (int, []byte, error), closeConn func() error) error {
-	return workerlivekit.RunServerMessageLoop(ctx, workerlivekit.ServerMessageLoopOptions{
+	return workerlivekit.RunServerMessageLoop(ctx, ServerMessageLoopOptions{
 		ReadMessage: readMessage,
 		Close:       closeConn,
 		Handle: func(msg *ServerMessage) {
@@ -1517,7 +1529,7 @@ func (s *AgentServer) sendWorkerStatusUpdate() error {
 	}
 	jobCount := uint32(s.activeJobCount())
 	load := s.currentLoad()
-	return s.sendWorkerMessage(workerlivekit.ServerAvailableWorkerStatusMessage(workerlivekit.ServerAvailableWorkerStatusMessageOptions{
+	return s.sendWorkerMessage(workerlivekit.ServerAvailableWorkerStatusMessage(ServerAvailableWorkerStatusMessageOptions{
 		Load:         load,
 		JobCount:     jobCount,
 		CanAcceptJob: s.availableForJobWithLoad(load),
@@ -1539,7 +1551,7 @@ func (s *AgentServer) openWorkerWebSocket(ctx context.Context, opts WorkerWebSoc
 }
 
 func (s *AgentServer) handleMessage(ctx context.Context, msg *ServerMessage) {
-	workerlivekit.RouteServerWorkerMessage(workerlivekit.ServerMessageRouteOptions{
+	workerlivekit.RouteServerWorkerMessage(ServerMessageRouteOptions{
 		Message: msg,
 		OnRegister: func(event WorkerRegisteredEvent) {
 			logger.Logger.Infow("Worker Registered", "workerId", event.WorkerID, "serverInfo", event.ServerInfo)
@@ -1618,7 +1630,7 @@ func (s *AgentServer) answerAvailability(ctx context.Context, req *AvailabilityR
 	jobID := availability.JobID
 	logger.Logger.Infow("Received availability request", "jobId", jobID)
 
-	workerlivekit.AnswerServerAvailabilityRequest(workerlivekit.AvailabilityAnswerOptions{
+	workerlivekit.AnswerServerAvailabilityRequest(AvailabilityAnswerOptions{
 		Request:         req,
 		AgentName:       s.Options.AgentName,
 		AvailableForJob: s.availableForJob,
@@ -1665,7 +1677,7 @@ func (s *AgentServer) sendWorkerMessage(msg *WorkerMessage) error {
 
 func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) {
 	s.mu.Lock()
-	workerlivekit.StoreServerPendingAccept(workerlivekit.PendingAcceptStoreOptions{
+	workerlivekit.StoreServerPendingAccept(PendingAcceptStoreOptions{
 		Pending: s.pendingAccepts,
 		Timers:  s.pendingTimers,
 		JobID:   jobID,
