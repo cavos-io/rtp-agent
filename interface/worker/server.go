@@ -1259,7 +1259,7 @@ func (s *AgentServer) validateRunPreconditions() error {
 	if transport == WorkerTransportAgora {
 		return s.Options.Agora.Validate()
 	}
-	return workerlivekit.ValidateWorkerConnectionOptions(workerlivekit.WorkerConnectionOptions{
+	return workerlivekit.ValidateServerConnectionOptions(workerlivekit.ServerConnectionOptions{
 		WSURL:     s.Options.WSRL,
 		APIKey:    s.Options.APIKey,
 		APISecret: s.Options.APISecret,
@@ -1296,10 +1296,12 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	if err := s.validateRunPreconditions(); err != nil {
 		return err
 	}
-	workerlivekit.ApplyWorkerEnv(workerlivekit.WorkerEnvOptions{
-		URL:       s.Options.WSRL,
-		APIKey:    s.Options.APIKey,
-		APISecret: s.Options.APISecret,
+	workerlivekit.ApplyServerConnectionEnv(workerlivekit.ServerConnectionEnvOptions{
+		ServerConnectionOptions: workerlivekit.ServerConnectionOptions{
+			WSURL:     s.Options.WSRL,
+			APIKey:    s.Options.APIKey,
+			APISecret: s.Options.APISecret,
+		},
 	})
 
 	httpServer, err := s.startWorkerHTTPServer()

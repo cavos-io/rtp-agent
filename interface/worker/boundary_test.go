@@ -48,8 +48,10 @@ func TestWorkerProductionCodeUsesLiveKitSubpackageForLiveKitImports(t *testing.T
 
 func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
 	forbiddenCalls := []string{
+		"workerlivekit.ApplyWorkerEnv(",
 		"workerlivekit.WorkerStatusUpdateMessage(",
 		"workerlivekit.RegisterWorkerMessage(",
+		"workerlivekit.ValidateWorkerConnectionOptions(",
 	}
 
 	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
