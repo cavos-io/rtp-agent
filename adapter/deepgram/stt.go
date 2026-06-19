@@ -521,6 +521,9 @@ type dgRecognitionChannel struct {
 }
 
 type dgRecognitionResponse struct {
+	Metadata struct {
+		RequestID string `json:"request_id"`
+	} `json:"metadata"`
 	Results struct {
 		Channels []dgRecognitionChannel `json:"channels"`
 	} `json:"results"`
@@ -546,7 +549,8 @@ func deepgramRecognizeSpeechEvent(resp dgRecognitionResponse) *stt.SpeechEvent {
 
 func deepgramRecognizeSpeechEventForLanguage(resp dgRecognitionResponse, languageStr string) *stt.SpeechEvent {
 	event := &stt.SpeechEvent{
-		Type: stt.SpeechEventFinalTranscript,
+		Type:      stt.SpeechEventFinalTranscript,
+		RequestID: resp.Metadata.RequestID,
 		Alternatives: []stt.SpeechData{
 			{Language: languageStr},
 		},

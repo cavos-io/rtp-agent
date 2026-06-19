@@ -222,6 +222,7 @@ func TestDeepgramSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
 func TestDeepgramRecognizeSpeechEventPreservesAlternativeWords(t *testing.T) {
 	speaker := 0
 	resp := dgRecognitionResponse{}
+	resp.Metadata.RequestID = "recognize-1"
 	resp.Results.Channels = []dgRecognitionChannel{
 		{
 			Alternatives: []dgAlternative{
@@ -240,6 +241,9 @@ func TestDeepgramRecognizeSpeechEventPreservesAlternativeWords(t *testing.T) {
 	event := deepgramRecognizeSpeechEvent(resp)
 	if event.Type != stt.SpeechEventFinalTranscript {
 		t.Fatalf("event type = %v, want %v", event.Type, stt.SpeechEventFinalTranscript)
+	}
+	if event.RequestID != "recognize-1" {
+		t.Fatalf("request id = %q, want recognize-1", event.RequestID)
 	}
 	if len(event.Alternatives) != 1 {
 		t.Fatalf("alternatives = %d, want 1", len(event.Alternatives))
