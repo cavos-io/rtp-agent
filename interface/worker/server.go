@@ -1569,11 +1569,11 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *AvailabilityR
 }
 
 func (s *AgentServer) answerAvailability(ctx context.Context, req *AvailabilityRequest) {
-	availability := workerlivekit.AvailabilityInfo(req)
+	availability := livekitAvailabilityInfo(req)
 	jobID := availability.JobID
 	logger.Logger.Infow("Received availability request", "jobId", jobID)
 
-	workerlivekit.AnswerServerAvailabilityRequest(AvailabilityAnswerOptions{
+	livekitAnswerServerAvailabilityRequest(AvailabilityAnswerOptions{
 		Request:         req,
 		AgentName:       s.Options.AgentName,
 		AvailableForJob: s.availableForJob,
@@ -1620,7 +1620,7 @@ func (s *AgentServer) sendWorkerMessage(msg *WorkerMessage) error {
 
 func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) {
 	s.mu.Lock()
-	workerlivekit.StoreServerPendingAccept(PendingAcceptStoreOptions{
+	livekitStoreServerPendingAccept(PendingAcceptStoreOptions{
 		Pending: s.pendingAccepts,
 		Timers:  s.pendingTimers,
 		JobID:   jobID,
@@ -1628,7 +1628,7 @@ func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) 
 		Timeout: assignmentTimeout,
 		OnTimeout: func(jobID string, timer *time.Timer) {
 			s.mu.Lock()
-			expired := workerlivekit.ExpireServerPendingAccept(s.pendingAccepts, s.pendingTimers, jobID, timer)
+			expired := livekitExpireServerPendingAccept(s.pendingAccepts, s.pendingTimers, jobID, timer)
 			s.mu.Unlock()
 			if expired {
 				logger.Logger.Warnw("assignment timed out after availability accept", nil, "jobId", jobID)
@@ -1639,11 +1639,11 @@ func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) 
 }
 
 func (s *AgentServer) handleAssignment(ctx context.Context, req *JobAssignment) {
-	assignment := workerlivekit.JobAssignmentInfo(req, s.Options.WSRL)
+	assignment := livekitJobAssignmentInfo(req, s.Options.WSRL)
 	jobID := assignment.JobID
 	logger.Logger.Infow("Received job assignment", "jobId", jobID)
 	s.mu.Lock()
-	args, accepted := workerlivekit.AcceptServerPendingAssignment(s.pendingAccepts, s.pendingTimers, jobID)
+	args, accepted := livekitAcceptServerPendingAssignment(s.pendingAccepts, s.pendingTimers, jobID)
 	if !accepted {
 		s.mu.Unlock()
 		logger.Logger.Warnw("received assignment for unknown job", nil, "jobId", jobID)
@@ -1709,7 +1709,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *JobAssignment) 
 }
 
 func (s *AgentServer) handleTermination(req *JobTermination) {
-	termination := workerlivekit.JobTerminationInfo(req)
+	termination := livekitJobTerminationInfo(req)
 	jobID := termination.JobID
 	logger.Logger.Infow("Received job termination", "jobId", jobID)
 
@@ -1720,7 +1720,7 @@ func (s *AgentServer) handleTermination(req *JobTermination) {
 	}
 	s.mu.Unlock()
 
-	plan := workerlivekit.ServerJobTerminationPlanForActiveJob(exists)
+	plan := livekitServerJobTerminationPlanForActiveJob(exists)
 	if plan.MarkTerminated {
 		jobCtx.markTerminated()
 	}

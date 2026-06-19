@@ -1,6 +1,10 @@
 package worker
 
-import workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
+import (
+	"time"
+
+	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
+)
 
 type WorkerType = workerlivekit.WorkerType
 
@@ -159,3 +163,25 @@ var livekitOpenServerWorkerWebSocket = workerlivekit.OpenServerWorkerWebSocket
 var livekitRouteServerWorkerMessage = workerlivekit.RouteServerWorkerMessage
 
 var livekitWriteServerWorkerMessageWebSocket = workerlivekit.WriteServerWorkerMessageWebSocket
+
+var livekitAvailabilityInfo = workerlivekit.AvailabilityInfo
+
+var livekitAnswerServerAvailabilityRequest = workerlivekit.AnswerServerAvailabilityRequest
+
+var livekitStoreServerPendingAccept = workerlivekit.StoreServerPendingAccept
+
+var livekitExpireServerPendingAccept = workerlivekit.ExpireServerPendingAccept
+
+var livekitJobAssignmentInfo = workerlivekit.JobAssignmentInfo
+
+func livekitAcceptServerPendingAssignment(
+	pending map[string]JobAcceptArguments,
+	timers map[string]*time.Timer,
+	jobID string,
+) (JobAcceptArguments, bool) {
+	return workerlivekit.AcceptServerPendingAssignment(pending, timers, jobID)
+}
+
+var livekitJobTerminationInfo = workerlivekit.JobTerminationInfo
+
+var livekitServerJobTerminationPlanForActiveJob = workerlivekit.ServerJobTerminationPlanForActiveJob
