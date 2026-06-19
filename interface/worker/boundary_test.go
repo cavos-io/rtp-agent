@@ -137,6 +137,11 @@ func TestSharedWorkerDoesNotExposeLiveKitWorkerMessageDirectly(t *testing.T) {
 		") workerlivekit.JobSessionReportUploadPlanResult",
 		"workerlivekit.JobAcceptArguments",
 		"event workerlivekit.WorkerRegisteredEvent",
+		"workerlivekit.ServerConnectionResolveOptions{",
+		"workerlivekit.ServerConnectionOptions{",
+		"workerlivekit.ServerConnectionEnvOptions{",
+		"workerlivekit.AgentNameEnvOptions{",
+		"workerlivekit.WorkerRuntimeMetadataOptions{",
 	}
 	for _, direct := range forbidden {
 		if strings.Contains(string(data), direct) {

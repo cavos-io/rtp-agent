@@ -132,6 +132,16 @@ type WorkerWebSocketOpenOptions = workerlivekit.WorkerWebSocketOpenOptions
 
 type WorkerWebSocketOpenResult = workerlivekit.WorkerWebSocketOpenResult
 
+type ServerConnectionResolveOptions = workerlivekit.ServerConnectionResolveOptions
+
+type ServerConnectionOptions = workerlivekit.ServerConnectionOptions
+
+type ServerConnectionEnvOptions = workerlivekit.ServerConnectionEnvOptions
+
+type AgentNameEnvOptions = workerlivekit.AgentNameEnvOptions
+
+type WorkerRuntimeMetadataOptions = workerlivekit.WorkerRuntimeMetadataOptions
+
 type EntrypointResult = workerlivekit.EntrypointResult
 
 type JobStatus = workerlivekit.JobStatus
@@ -801,7 +811,7 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 		if opts.Permissions == nil {
 			opts.Permissions = workerlivekit.DefaultServerWorkerPermissions()
 		}
-		livekitOptions := workerlivekit.ResolveServerConnectionOptions(workerlivekit.ServerConnectionResolveOptions{
+		livekitOptions := workerlivekit.ResolveServerConnectionOptions(ServerConnectionResolveOptions{
 			WSURL:          opts.WSURL,
 			LegacyWSURL:    opts.WSRL,
 			APIKey:         opts.APIKey,
@@ -853,7 +863,7 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		body := workerlivekit.WorkerRuntimeMetadata(workerlivekit.WorkerRuntimeMetadataOptions{
+		body := workerlivekit.WorkerRuntimeMetadata(WorkerRuntimeMetadataOptions{
 			AgentName:       s.Options.AgentName,
 			AgentNameIsEnv:  s.Options.AgentNameIsEnv,
 			WorkerType:      string(s.Options.WorkerType),
@@ -1097,7 +1107,7 @@ func (s *AgentServer) RTCSession(
 	s.requestFnc = request
 	s.sessionEndFnc = sessionEnd
 	if NormalizeWorkerTransport(string(s.Options.Transport)) == WorkerTransportLiveKit {
-		agentName := workerlivekit.ResolveServerAgentNameFromEnv(workerlivekit.AgentNameEnvOptions{
+		agentName := workerlivekit.ResolveServerAgentNameFromEnv(AgentNameEnvOptions{
 			AgentName:      s.Options.AgentName,
 			AgentNameIsEnv: s.Options.AgentNameIsEnv,
 		})
@@ -1275,7 +1285,7 @@ func (s *AgentServer) validateRunPreconditions() error {
 	if transport == WorkerTransportAgora {
 		return nil
 	}
-	return workerlivekit.ValidateServerConnectionOptions(workerlivekit.ServerConnectionOptions{
+	return workerlivekit.ValidateServerConnectionOptions(ServerConnectionOptions{
 		WSURL:     s.Options.WSRL,
 		APIKey:    s.Options.APIKey,
 		APISecret: s.Options.APISecret,
@@ -1315,8 +1325,8 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	if err := s.validateRunPreconditions(); err != nil {
 		return err
 	}
-	workerlivekit.ApplyServerConnectionEnv(workerlivekit.ServerConnectionEnvOptions{
-		ServerConnectionOptions: workerlivekit.ServerConnectionOptions{
+	workerlivekit.ApplyServerConnectionEnv(ServerConnectionEnvOptions{
+		ServerConnectionOptions: ServerConnectionOptions{
 			WSURL:     s.Options.WSRL,
 			APIKey:    s.Options.APIKey,
 			APISecret: s.Options.APISecret,
