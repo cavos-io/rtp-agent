@@ -132,6 +132,12 @@ type WorkerWebSocketOpenOptions = workerlivekit.WorkerWebSocketOpenOptions
 
 type WorkerWebSocketOpenResult = workerlivekit.WorkerWebSocketOpenResult
 
+type EntrypointResult = workerlivekit.EntrypointResult
+
+type JobStatus = workerlivekit.JobStatus
+
+type JobSessionReportUploadPlanResult = workerlivekit.JobSessionReportUploadPlanResult
+
 type WorkerStartedHandler func()
 
 type WorkerRegisteredInfo struct {
@@ -461,7 +467,7 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 				return s.runJobEntrypoint(jobCtx)
 			},
 			MarkDone: jobCtx.markEntrypointDone,
-			OnResult: func(result workerlivekit.EntrypointResult) {
+			OnResult: func(result EntrypointResult) {
 				if result.Recovered != nil {
 					logger.Logger.Errorw("Reloaded job entrypoint panicked", fmt.Errorf("%v", result.Recovered), "jobId", jobCtx.JobID())
 				}
@@ -476,7 +482,7 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 			Finish: func() bool {
 				return s.finishJob(jobCtx)
 			},
-			SendStatus: func(status workerlivekit.JobStatus) error {
+			SendStatus: func(status JobStatus) error {
 				if err := s.sendWorkerMessage(workerlivekit.ServerJobStatusMessage(jobCtx.JobID(), status)); err != nil {
 					logger.Logger.Errorw("failed to update reloaded job status", err, "jobId", jobCtx.JobID())
 					return err
@@ -1707,7 +1713,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *JobAssignment) 
 					return s.runJobEntrypoint(jobCtx)
 				},
 				MarkDone: jobCtx.markEntrypointDone,
-				OnResult: func(result workerlivekit.EntrypointResult) {
+				OnResult: func(result EntrypointResult) {
 					if result.Recovered != nil {
 						logger.Logger.Errorw("Job entrypoint panicked", fmt.Errorf("%v", result.Recovered), jobLogValues(jobCtx, "jobId", jobID)...)
 					}
@@ -1723,7 +1729,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *JobAssignment) 
 				Finish: func() bool {
 					return s.finishJob(jobCtx)
 				},
-				SendStatus: func(status workerlivekit.JobStatus) error {
+				SendStatus: func(status JobStatus) error {
 					err := s.sendWorkerMessage(workerlivekit.ServerJobStatusMessage(jobID, status))
 					if err != nil {
 						logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", jobID)...)
@@ -1948,9 +1954,9 @@ func shouldUploadJobSessionReport(jobCtx *JobContext) bool {
 	return jobSessionReportUploadPlan(jobCtx, WorkerOptions{}).Upload
 }
 
-func jobSessionReportUploadPlan(jobCtx *JobContext, opts WorkerOptions) workerlivekit.JobSessionReportUploadPlanResult {
+func jobSessionReportUploadPlan(jobCtx *JobContext, opts WorkerOptions) JobSessionReportUploadPlanResult {
 	if jobCtx == nil {
-		return workerlivekit.JobSessionReportUploadPlanResult{}
+		return JobSessionReportUploadPlanResult{}
 	}
 	return workerlivekit.ServerJobSessionReportUploadPlan(workerlivekit.JobSessionReportUploadPlanOptions{
 		Job:       jobCtx.Job,
