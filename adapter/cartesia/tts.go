@@ -395,8 +395,10 @@ type cartesiaTTSStream struct {
 	closed  bool
 	flushed bool
 
-	sampleRate int
-	writeJSON  func(any) error
+	sampleRate    int
+	writeJSON     func(any) error
+	sentTokens    []string
+	skipAlignment bool
 }
 
 type cartesiaWSResponse struct {
@@ -455,7 +457,7 @@ func (s *cartesiaTTSStream) readLoop() {
 
 		if len(resp.WordTimestamps.Words) > 0 {
 			s.audio <- &tts.SynthesizedAudio{
-				TimedTranscript: cartesiaTimedTranscript(resp.WordTimestamps),
+				TimedTranscript: s.cartesiaTimedTranscript(resp.WordTimestamps),
 			}
 		}
 
@@ -467,17 +469,47 @@ func (s *cartesiaTTSStream) readLoop() {
 	}
 }
 
-func cartesiaTimedTranscript(timestamps cartesiaTTSWordTimestamps) []tts.TimedString {
+func (s *cartesiaTTSStream) cartesiaTimedTranscript(timestamps cartesiaTTSWordTimestamps) []tts.TimedString {
 	count := min(len(timestamps.Words), len(timestamps.Start), len(timestamps.End))
 	timed := make([]tts.TimedString, 0, count)
+	words := s.alignCartesiaTimestampWords(timestamps.Words[:count])
 	for i := 0; i < count; i++ {
 		timed = append(timed, tts.TimedString{
-			Text:      timestamps.Words[i],
+			Text:      words[i],
 			StartTime: timestamps.Start[i],
 			EndTime:   timestamps.End[i],
 		})
 	}
 	return timed
+}
+
+func (s *cartesiaTTSStream) alignCartesiaTimestampWords(words []string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	aligned := make([]string, 0, len(words))
+	for _, word := range words {
+		if len(s.sentTokens) == 0 || s.skipAlignment {
+			aligned = append(aligned, word+" ")
+			s.skipAlignment = true
+			continue
+		}
+		sent := s.sentTokens[0]
+		s.sentTokens = s.sentTokens[1:]
+		if idx := strings.Index(sent, word); idx != -1 {
+			alignedWord := sent[:idx+len(word)]
+			remaining := sent[idx+len(word):]
+			if strings.TrimSpace(remaining) != "" {
+				s.sentTokens = append([]string{remaining}, s.sentTokens...)
+			} else if remaining != "" && len(s.sentTokens) > 0 {
+				s.sentTokens[0] = remaining + s.sentTokens[0]
+			}
+			aligned = append(aligned, alignedWord)
+			continue
+		}
+		aligned = append(aligned, word+" ")
+		s.skipAlignment = true
+	}
+	return aligned
 }
 
 func (s *cartesiaTTSStream) isClosed() bool {
@@ -503,6 +535,7 @@ func (s *cartesiaTTSStream) PushText(text string) error {
 		"transcript": text + " ",
 		"continue":   true,
 	}
+	s.sentTokens = append(s.sentTokens, text+" ")
 	if err := s.writeJSONData(msg); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
@@ -522,6 +555,7 @@ func (s *cartesiaTTSStream) Flush() error {
 		"continue":   false,
 	}
 	s.flushed = true
+	s.sentTokens = append(s.sentTokens, " ")
 	if err := s.writeJSONData(msg); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
