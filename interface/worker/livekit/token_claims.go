@@ -103,6 +103,10 @@ func RefreshRunningJobsForReload(jobs []RunningJobInfo, apiSecret string, now ti
 	return refreshed, nil
 }
 
+func RefreshServerRunningJobsForReload(jobs []RunningJobInfo, apiSecret string, now time.Time) ([]RunningJobInfo, error) {
+	return RefreshRunningJobsForReload(jobs, apiSecret, now)
+}
+
 func LocalParticipantIdentity(token string, fallbackIdentity string) string {
 	claims, err := TokenClaims(token)
 	if err == nil && claims.Identity != "" {

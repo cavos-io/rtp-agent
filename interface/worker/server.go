@@ -303,7 +303,7 @@ func (s *AgentServer) ActiveRunningJobs() []workeripc.RunningJobInfo {
 }
 
 func runningJobInfoFromContext(jobCtx *JobContext) workeripc.RunningJobInfo {
-	return workeripc.FromLiveKitRunningJobInfo(workerlivekit.RunningJobInfoSnapshot(workerlivekit.RunningJobInfoOptions{
+	return workeripc.FromLiveKitRunningJobInfo(workerlivekit.ServerRunningJobInfoSnapshot(workerlivekit.RunningJobInfoOptions{
 		AcceptArguments: workerlivekit.JobAcceptArguments{
 			Name:       jobCtx.AcceptArguments.Name,
 			Identity:   jobCtx.AcceptArguments.Identity,
@@ -339,7 +339,7 @@ func jobLogValues(jobCtx *JobContext, values ...any) []any {
 }
 
 func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.RunningJobInfo, now time.Time) error {
-	refreshed, err := workerlivekit.RefreshRunningJobsForReload(workeripc.ToLiveKitRunningJobInfos(jobs), s.Options.APISecret, now)
+	refreshed, err := workerlivekit.RefreshServerRunningJobsForReload(workeripc.ToLiveKitRunningJobInfos(jobs), s.Options.APISecret, now)
 	if err != nil {
 		return err
 	}
@@ -349,7 +349,7 @@ func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.Ru
 			continue
 		}
 
-		reloadedJob := workerlivekit.ReloadedJobContextValues(workerlivekit.ReloadedJobContextValueOptions{
+		reloadedJob := workerlivekit.ServerReloadedJobContextValues(workerlivekit.ReloadedJobContextValueOptions{
 			Info:            info,
 			OverrideURL:     s.Options.WSRL,
 			DefaultWorkerID: s.workerID,
@@ -357,7 +357,7 @@ func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.Ru
 		jobCtx := NewJobContext(reloadedJob.Job, reloadedJob.URL, s.Options.APIKey, s.Options.APISecret)
 		jobCtx.process = s.newJobProcess()
 		if reloadedJob.EnableRecording {
-			jobCtx.InitRecording(workerlivekit.AllRecordingOptions())
+			jobCtx.InitRecording(workerlivekit.ServerRecordingOptions())
 		}
 		jobCtx.token = reloadedJob.Token
 		jobCtx.workerID = reloadedJob.WorkerID
@@ -382,7 +382,7 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 		return workerReferenceError(rtcSessionRequiredMessage)
 	}
 
-	runningJob := workerlivekit.RunningJobContextValues(workerlivekit.RunningJobContextValueOptions{
+	runningJob := workerlivekit.ServerRunningJobContextValues(workerlivekit.RunningJobContextValueOptions{
 		Info:            workeripc.ToLiveKitRunningJobInfo(info),
 		OverrideURL:     s.Options.WSRL,
 		DefaultWorkerID: s.workerID,
@@ -390,7 +390,7 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 	jobCtx := NewJobContext(runningJob.Job, runningJob.URL, s.Options.APIKey, s.Options.APISecret)
 	jobCtx.process = s.newJobProcess()
 	if runningJob.EnableRecording {
-		jobCtx.InitRecording(workerlivekit.AllRecordingOptions())
+		jobCtx.InitRecording(workerlivekit.ServerRecordingOptions())
 	}
 	jobCtx.token = runningJob.Token
 	jobCtx.workerID = runningJob.WorkerID
@@ -401,7 +401,7 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 	s.activeJobs[runningJob.JobID] = jobCtx
 	s.mu.Unlock()
 
-	return workerlivekit.RunRunningJobEntrypointLifecycle(workerlivekit.RunningJobEntrypointLifecycleOptions{
+	return workerlivekit.RunServerRunningJobEntrypointLifecycle(workerlivekit.RunningJobEntrypointLifecycleOptions{
 		Context:     ctx,
 		MarkStarted: jobCtx.markEntrypointStarted,
 		Entrypoint: func() error {
@@ -439,7 +439,7 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 
 	jobCtx.markEntrypointStarted()
 	go func() {
-		workerlivekit.RunReloadedJobEntrypointLifecycle(workerlivekit.ReloadedJobEntrypointLifecycleOptions{
+		workerlivekit.RunServerReloadedJobEntrypointLifecycle(workerlivekit.ReloadedJobEntrypointLifecycleOptions{
 			Context: ctx,
 			Entrypoint: func() error {
 				return s.runJobEntrypoint(jobCtx)
@@ -461,7 +461,7 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 				return s.finishJob(jobCtx)
 			},
 			SendStatus: func(status workerlivekit.JobStatus) error {
-				if err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(jobCtx.JobID(), status)); err != nil {
+				if err := s.sendWorkerMessage(workerlivekit.ServerJobStatusMessage(jobCtx.JobID(), status)); err != nil {
 					logger.Logger.Errorw("failed to update reloaded job status", err, "jobId", jobCtx.JobID())
 					return err
 				}
@@ -742,7 +742,7 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 		opts.InitializeProcessTimeoutSeconds = defaultProcessTimeout
 	}
 	if opts.LogLevel == "" && opts.Transport == WorkerTransportLiveKit {
-		opts.LogLevel = workerlivekit.WorkerLogLevelFromEnv(nil)
+		opts.LogLevel = workerlivekit.ServerLogLevelFromEnv(nil)
 	}
 	if opts.LogLevel == "" {
 		if opts.DevMode {
@@ -775,9 +775,9 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 			opts.WorkerType = WorkerTypeRoom
 		}
 		if opts.Permissions == nil {
-			opts.Permissions = workerlivekit.DefaultWorkerPermissions()
+			opts.Permissions = workerlivekit.DefaultServerWorkerPermissions()
 		}
-		livekitOptions := workerlivekit.ResolveWorkerConnectionOptions(workerlivekit.WorkerConnectionOptions{
+		livekitOptions := workerlivekit.ResolveServerConnectionOptions(workerlivekit.ServerConnectionResolveOptions{
 			WSURL:          opts.WSURL,
 			LegacyWSURL:    opts.WSRL,
 			APIKey:         opts.APIKey,
@@ -1073,7 +1073,7 @@ func (s *AgentServer) RTCSession(
 	s.requestFnc = request
 	s.sessionEndFnc = sessionEnd
 	if NormalizeWorkerTransport(string(s.Options.Transport)) == WorkerTransportLiveKit {
-		agentName := workerlivekit.ResolveAgentNameFromEnv(workerlivekit.AgentNameEnvOptions{
+		agentName := workerlivekit.ResolveServerAgentNameFromEnv(workerlivekit.AgentNameEnvOptions{
 			AgentName:      s.Options.AgentName,
 			AgentNameIsEnv: s.Options.AgentNameIsEnv,
 		})
@@ -1584,7 +1584,7 @@ func (s *AgentServer) answerAvailability(ctx context.Context, req *workerlivekit
 	jobID := availability.JobID
 	logger.Logger.Infow("Received availability request", "jobId", jobID)
 
-	workerlivekit.AnswerAvailabilityRequest(workerlivekit.AvailabilityAnswerOptions{
+	workerlivekit.AnswerServerAvailabilityRequest(workerlivekit.AvailabilityAnswerOptions{
 		Request:         req,
 		AgentName:       s.Options.AgentName,
 		AvailableForJob: s.availableForJob,
@@ -1626,12 +1626,12 @@ func (s *AgentServer) sendWorkerMessage(msg *workerlivekit.WorkerMessage) error 
 	if s.conn == nil {
 		return fmt.Errorf("worker websocket is not connected")
 	}
-	return workerlivekit.WriteWorkerMessageWebSocket(s.conn, msg)
+	return workerlivekit.WriteServerWorkerMessageWebSocket(s.conn, msg)
 }
 
 func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) {
 	s.mu.Lock()
-	workerlivekit.StorePendingAccept(workerlivekit.PendingAcceptStoreOptions{
+	workerlivekit.StoreServerPendingAccept(workerlivekit.PendingAcceptStoreOptions{
 		Pending: s.pendingAccepts,
 		Timers:  s.pendingTimers,
 		JobID:   jobID,
@@ -1639,7 +1639,7 @@ func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) 
 		Timeout: assignmentTimeout,
 		OnTimeout: func(jobID string, timer *time.Timer) {
 			s.mu.Lock()
-			expired := workerlivekit.ExpirePendingAccept(s.pendingAccepts, s.pendingTimers, jobID, timer)
+			expired := workerlivekit.ExpireServerPendingAccept(s.pendingAccepts, s.pendingTimers, jobID, timer)
 			s.mu.Unlock()
 			if expired {
 				logger.Logger.Warnw("assignment timed out after availability accept", nil, "jobId", jobID)
@@ -1654,14 +1654,14 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.J
 	jobID := assignment.JobID
 	logger.Logger.Infow("Received job assignment", "jobId", jobID)
 	s.mu.Lock()
-	args, accepted := workerlivekit.AcceptPendingAssignment(s.pendingAccepts, s.pendingTimers, jobID)
+	args, accepted := workerlivekit.AcceptServerPendingAssignment(s.pendingAccepts, s.pendingTimers, jobID)
 	if !accepted {
 		s.mu.Unlock()
 		logger.Logger.Warnw("received assignment for unknown job", nil, "jobId", jobID)
 		return
 	}
 
-	assignedJob := workerlivekit.AssignmentContextValues(workerlivekit.AssignmentContextValueOptions{
+	assignedJob := workerlivekit.ServerAssignmentContextValues(workerlivekit.AssignmentContextValueOptions{
 		Assignment:      assignment,
 		AcceptArguments: args,
 		WorkerID:        s.workerID,
@@ -1669,7 +1669,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.J
 	jobCtx := NewJobContext(assignedJob.Job, assignedJob.URL, s.Options.APIKey, s.Options.APISecret)
 	jobCtx.process = s.newJobProcess()
 	if assignedJob.EnableRecording {
-		jobCtx.InitRecording(workerlivekit.AllRecordingOptions())
+		jobCtx.InitRecording(workerlivekit.ServerRecordingOptions())
 	}
 	jobCtx.token = assignedJob.Token
 	jobCtx.workerID = assignedJob.WorkerID
@@ -1678,14 +1678,14 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.J
 	s.activeJobs[assignedJob.JobID] = jobCtx
 	s.mu.Unlock()
 
-	if err := s.sendWorkerMessage(workerlivekit.JobRunningMessage(jobID)); err != nil {
+	if err := s.sendWorkerMessage(workerlivekit.ServerJobRunningMessage(jobID)); err != nil {
 		logger.Logger.Errorw("failed to update job status", err, "jobId", jobID)
 	}
 
 	if s.entrypointFnc != nil {
 		jobCtx.markEntrypointStarted()
 		go func() {
-			workerlivekit.RunJobEntrypointLifecycle(workerlivekit.JobEntrypointLifecycleOptions{
+			workerlivekit.RunServerJobEntrypointLifecycle(workerlivekit.JobEntrypointLifecycleOptions{
 				Context: ctx,
 				Entrypoint: func() error {
 					return s.runJobEntrypoint(jobCtx)
@@ -1708,7 +1708,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.J
 					return s.finishJob(jobCtx)
 				},
 				SendStatus: func(status workerlivekit.JobStatus) error {
-					err := s.sendWorkerMessage(workerlivekit.JobStatusMessage(jobID, status))
+					err := s.sendWorkerMessage(workerlivekit.ServerJobStatusMessage(jobID, status))
 					if err != nil {
 						logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", jobID)...)
 					}
@@ -1731,7 +1731,7 @@ func (s *AgentServer) handleTermination(req *workerlivekit.JobTermination) {
 	}
 	s.mu.Unlock()
 
-	plan := workerlivekit.JobTerminationPlanForActiveJob(exists)
+	plan := workerlivekit.ServerJobTerminationPlanForActiveJob(exists)
 	if plan.MarkTerminated {
 		jobCtx.markTerminated()
 	}
@@ -1750,11 +1750,11 @@ func (s *AgentServer) handleTermination(req *workerlivekit.JobTermination) {
 
 // ExecuteLocalJob runs a job locally without connecting to the worker service, useful for the CLI console
 func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, participantIdentity string) error {
-	return s.ExecuteLocalJobWithOptions(ctx, roomName, participantIdentity, workerlivekit.DefaultFakeLocalJobOptions())
+	return s.ExecuteLocalJobWithOptions(ctx, roomName, participantIdentity, workerlivekit.DefaultServerFakeLocalJobOptions())
 }
 
 func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName string, participantIdentity string, options LocalJobOptions) error {
-	participantIdentity, err := workerlivekit.PrepareLocalJobRunOptions(participantIdentity, options)
+	participantIdentity, err := workerlivekit.PrepareServerLocalJobRunOptions(participantIdentity, options)
 	if err != nil {
 		return err
 	}
@@ -1762,10 +1762,10 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 		return workerReferenceError(rtcSessionRequiredMessage)
 	}
 	jobCtx := newLocalJobContextWithOptions(roomName, participantIdentity, s.Options, options)
-	if options == workerlivekit.DefaultFakeLocalJobOptions() {
+	if options == workerlivekit.DefaultServerFakeLocalJobOptions() {
 		jobCtx = newLocalJobContext(roomName, participantIdentity, s.Options)
 	}
-	localJob := workerlivekit.LocalJobExecutorPlan(jobCtx.Job)
+	localJob := workerlivekit.ServerLocalJobExecutorPlan(jobCtx.Job)
 	jobCtx.workerID = s.workerID
 	jobCtx.LogContextFields()["worker_id"] = jobCtx.WorkerID()
 	shutdownCh := make(chan struct{})
@@ -1806,7 +1806,7 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	case <-shutdownCh:
 	}
 	s.finishJob(jobCtx)
-	if reportPath := workerlivekit.LocalJobSessionReportPath(options, jobCtx.SessionDirectory()); reportPath != "" {
+	if reportPath := workerlivekit.ServerLocalJobSessionReportPath(options, jobCtx.SessionDirectory()); reportPath != "" {
 		return saveSessionReport(reportPath, jobCtx.Report)
 	}
 	return nil
@@ -1814,7 +1814,7 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 
 func (s *AgentServer) launchLocalJobExecutor(ctx context.Context, jobCtx *JobContext, entrypoint func() error, entrypointDone chan<- struct{}) error {
 	info := runningJobInfoFromContext(jobCtx)
-	localJob := workerlivekit.LocalJobExecutorPlan(jobCtx.Job)
+	localJob := workerlivekit.ServerLocalJobExecutorPlan(jobCtx.Job)
 	if s.Options.NumIdleProcessesSet && s.Options.NumIdleProcesses > 0 {
 		pool := newLocalProcPool(s.Options.NumIdleProcesses, workeripc.ExecutorTypeThread, entrypoint)
 		pool.SetTargetIdleProcesses(s.Options.NumIdleProcesses)
@@ -1883,7 +1883,7 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
 	if jobCtx == nil {
 		return false
 	}
-	plan := workerlivekit.JobFinishPlan(jobCtx.Job)
+	plan := workerlivekit.ServerJobFinishPlan(jobCtx.Job)
 	if !plan.Finish {
 		return false
 	}
@@ -1936,7 +1936,7 @@ func jobSessionReportUploadPlan(jobCtx *JobContext, opts WorkerOptions) workerli
 	if jobCtx == nil {
 		return workerlivekit.JobSessionReportUploadPlanResult{}
 	}
-	return workerlivekit.JobSessionReportUploadPlan(workerlivekit.JobSessionReportUploadPlanOptions{
+	return workerlivekit.ServerJobSessionReportUploadPlan(workerlivekit.JobSessionReportUploadPlanOptions{
 		Job:       jobCtx.Job,
 		FakeJob:   jobCtx.IsFakeJob(),
 		Report:    jobCtx.Report,
@@ -1952,7 +1952,7 @@ func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
 		return
 	}
 
-	plan := workerlivekit.JobSessionEndPlan(workerlivekit.JobSessionEndPlanOptions{
+	plan := workerlivekit.ServerJobSessionEndPlan(workerlivekit.JobSessionEndPlanOptions{
 		Job:            jobCtx.Job,
 		TimeoutSeconds: s.Options.SessionEndTimeoutSeconds,
 	})
@@ -1996,12 +1996,12 @@ func saveSessionReport(path string, report *agent.SessionReport) error {
 }
 
 func newLocalJobContext(roomName string, participantIdentity string, opts WorkerOptions) *JobContext {
-	return newLocalJobContextWithOptions(roomName, participantIdentity, opts, workerlivekit.DefaultFakeLocalJobOptions())
+	return newLocalJobContextWithOptions(roomName, participantIdentity, opts, workerlivekit.DefaultServerFakeLocalJobOptions())
 }
 
 func newLocalJobContextWithOptions(roomName string, participantIdentity string, opts WorkerOptions, options LocalJobOptions) *JobContext {
 	opts = resolveWorkerOptions(opts)
-	localPlan := workerlivekit.LocalJobContextSetupPlan(workerlivekit.LocalJobContextSetupPlanOptions{
+	localPlan := workerlivekit.ServerLocalJobContextSetupPlan(workerlivekit.LocalJobContextSetupPlanOptions{
 		RoomName:            roomName,
 		ParticipantIdentity: participantIdentity,
 		APIKey:              opts.APIKey,

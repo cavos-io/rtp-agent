@@ -172,12 +172,20 @@ func JobFinishPlan(job *lkprotocol.Job) JobFinishPlanResult {
 	}
 }
 
+func ServerJobFinishPlan(job *lkprotocol.Job) JobFinishPlanResult {
+	return JobFinishPlan(job)
+}
+
 func JobSessionEndPlan(opts JobSessionEndPlanOptions) JobSessionEndPlanResult {
 	runtimeJob := JobRuntimeInfo(opts.Job)
 	return JobSessionEndPlanResult{
 		JobID:   runtimeJob.JobID,
 		Timeout: time.Duration(opts.TimeoutSeconds * float64(time.Second)),
 	}
+}
+
+func ServerJobSessionEndPlan(opts JobSessionEndPlanOptions) JobSessionEndPlanResult {
+	return JobSessionEndPlan(opts)
 }
 
 type SessionReportInfo struct {
@@ -225,6 +233,10 @@ func AllRecordingOptions() agent.RecordingOptions {
 	}
 }
 
+func ServerRecordingOptions() agent.RecordingOptions {
+	return AllRecordingOptions()
+}
+
 func ShouldUploadJobSessionReport(job *lkprotocol.Job, fakeJob bool, report *agent.SessionReport) bool {
 	if job == nil || fakeJob || report == nil {
 		return false
@@ -266,6 +278,10 @@ func JobSessionReportUploadPlan(opts JobSessionReportUploadPlanOptions) JobSessi
 		APISecret: opts.APISecret,
 		AgentName: opts.AgentName,
 	}
+}
+
+func ServerJobSessionReportUploadPlan(opts JobSessionReportUploadPlanOptions) JobSessionReportUploadPlanResult {
+	return JobSessionReportUploadPlan(opts)
 }
 
 func HasSessionRecordingOption(options agent.RecordingOptions) bool {
@@ -382,6 +398,10 @@ func RunningJobInfoSnapshot(opts RunningJobInfoOptions) RunningJobInfo {
 	return CloneRunningJobInfo(RunningJobInfo(opts))
 }
 
+func ServerRunningJobInfoSnapshot(opts RunningJobInfoOptions) RunningJobInfo {
+	return RunningJobInfoSnapshot(opts)
+}
+
 func CloneRunningJobInfo(info RunningJobInfo) RunningJobInfo {
 	info.AcceptArguments = CloneJobAcceptArguments(info.AcceptArguments)
 	return info
@@ -415,6 +435,14 @@ func RunningJobContextValues(opts RunningJobContextValueOptions) RunningJobConte
 	}
 }
 
+func ServerRunningJobContextValues(opts RunningJobContextValueOptions) RunningJobContextValuesResult {
+	return RunningJobContextValues(opts)
+}
+
+func ServerReloadedJobContextValues(opts ReloadedJobContextValueOptions) RunningJobContextValuesResult {
+	return ReloadedJobContextValues(opts)
+}
+
 func ReloadedJobContextValues(opts ReloadedJobContextValueOptions) RunningJobContextValuesResult {
 	return RunningJobContextValues(RunningJobContextValueOptions(opts))
 }
@@ -429,6 +457,10 @@ func AssignmentContextValues(opts AssignmentContextValueOptions) AssignmentConte
 		AcceptArguments: CloneJobAcceptArguments(opts.AcceptArguments),
 		EnableRecording: opts.Assignment.EnableRecording,
 	}
+}
+
+func ServerAssignmentContextValues(opts AssignmentContextValueOptions) AssignmentContextValuesResult {
+	return AssignmentContextValues(opts)
 }
 
 func JobAssignmentInfo(req *JobAssignment, defaultURL string) AssignmentInfo {
@@ -491,6 +523,10 @@ func StorePendingAccept(opts PendingAcceptStoreOptions) {
 	opts.Timers[opts.JobID] = timer
 }
 
+func StoreServerPendingAccept(opts PendingAcceptStoreOptions) {
+	StorePendingAccept(opts)
+}
+
 func ExpirePendingAccept(
 	pending map[string]JobAcceptArguments,
 	timers map[string]*time.Timer,
@@ -505,6 +541,15 @@ func ExpirePendingAccept(
 	return true
 }
 
+func ExpireServerPendingAccept(
+	pending map[string]JobAcceptArguments,
+	timers map[string]*time.Timer,
+	jobID string,
+	timer *time.Timer,
+) bool {
+	return ExpirePendingAccept(pending, timers, jobID, timer)
+}
+
 func AcceptPendingAssignment[T PendingAssignmentTimer](
 	pending map[string]JobAcceptArguments,
 	timers map[string]T,
@@ -516,6 +561,14 @@ func AcceptPendingAssignment[T PendingAssignmentTimer](
 	}
 	StopPendingAssignmentTimer(timers, jobID)
 	return args, true
+}
+
+func AcceptServerPendingAssignment[T PendingAssignmentTimer](
+	pending map[string]JobAcceptArguments,
+	timers map[string]T,
+	jobID string,
+) (JobAcceptArguments, bool) {
+	return AcceptPendingAssignment(pending, timers, jobID)
 }
 
 type TerminationInfo struct {
@@ -548,6 +601,10 @@ func JobTerminationPlanForActiveJob(exists bool) JobTerminationPlan {
 		WaitEntrypoint: true,
 		Finish:         true,
 	}
+}
+
+func ServerJobTerminationPlanForActiveJob(exists bool) JobTerminationPlan {
+	return JobTerminationPlanForActiveJob(exists)
 }
 
 type LocalRoomJobOptions struct {
@@ -597,6 +654,10 @@ func LocalJobInfo(job *lkprotocol.Job) LocalJobRuntimeInfo {
 
 func LocalJobExecutorPlan(job *lkprotocol.Job) LocalJobExecutorPlanResult {
 	return LocalJobExecutorPlanResult(LocalJobInfo(job))
+}
+
+func ServerLocalJobExecutorPlan(job *lkprotocol.Job) LocalJobExecutorPlanResult {
+	return LocalJobExecutorPlan(job)
 }
 
 func JobAcceptIdentity(job *lkprotocol.Job, identity string) string {

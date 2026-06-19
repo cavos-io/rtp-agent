@@ -1037,6 +1037,57 @@ func TestPerformTTSInferenceErrorsWhenNonStreamingTTSProducesNoAudio(t *testing.
 	}
 }
 
+func TestPerformTTSInferenceErrorsWhenStreamingTTSProducesNoAudio(t *testing.T) {
+	providerStream := &fakeGenerationTTSStream{}
+	provider := &fakeGenerationTTS{stream: providerStream}
+	textCh := make(chan string, 1)
+	textCh <- "hello"
+	close(textCh)
+
+	data, err := PerformTTSInference(context.Background(), provider, textCh, WithTTSRequireAudio())
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+
+	if _, ok := <-data.AudioCh; ok {
+		t.Fatal("AudioCh emitted audio, want closed stream")
+	}
+	if data.StreamErr == nil {
+		t.Fatal("StreamErr = nil, want no-audio error")
+	}
+	if !strings.Contains(data.StreamErr.Error(), "no audio frames") {
+		t.Fatalf("StreamErr = %v, want no-audio error", data.StreamErr)
+	}
+	if !providerStream.closed {
+		t.Fatal("stream was not closed")
+	}
+}
+
+func TestPerformTTSInferenceSkipsNilStreamingAudioFrame(t *testing.T) {
+	providerStream := &fakeGenerationTTSStream{
+		audio: []*tts.SynthesizedAudio{{RequestID: "nil-frame"}},
+	}
+	provider := &fakeGenerationTTS{stream: providerStream}
+	textCh := make(chan string, 1)
+	textCh <- "hello"
+	close(textCh)
+
+	data, err := PerformTTSInference(context.Background(), provider, textCh, WithTTSRequireAudio())
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+
+	if frame, ok := <-data.AudioCh; ok {
+		t.Fatalf("AudioCh emitted %#v, want nil-frame audio skipped", frame)
+	}
+	if data.StreamErr == nil {
+		t.Fatal("StreamErr = nil, want no-audio error after nil-frame event")
+	}
+	if !strings.Contains(data.StreamErr.Error(), "no audio frames") {
+		t.Fatalf("StreamErr = %v, want no-audio error", data.StreamErr)
+	}
+}
+
 func TestPerformTTSInferenceAllowsEmptyTransformedTextWithoutAudio(t *testing.T) {
 	provider := &fakeGenerationChunkedTTS{
 		stream: &fakeGenerationChunkedStream{},

@@ -276,6 +276,7 @@ type TTSInferenceOptions struct {
 	TextTransformsSet       bool
 	DisableTextTransforms   bool
 	PreserveTimedTranscript bool
+	RequireAudio            bool
 }
 
 type TTSInferenceOption func(*TTSInferenceOptions)
@@ -314,6 +315,12 @@ func WithTTSTextTransforms(transforms []string) TTSInferenceOption {
 func WithTTSPreserveTimedTranscript() TTSInferenceOption {
 	return func(options *TTSInferenceOptions) {
 		options.PreserveTimedTranscript = true
+	}
+}
+
+func WithTTSRequireAudio() TTSInferenceOption {
+	return func(options *TTSInferenceOptions) {
+		options.RequireAudio = true
 	}
 }
 
@@ -462,6 +469,33 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			cancelStream()
 			_ = stream.Close()
 		}
+		var pushedTextMu sync.Mutex
+		var pushedText strings.Builder
+		recordPushedText := func(text string) {
+			if text == "" {
+				return
+			}
+			pushedTextMu.Lock()
+			pushedText.WriteString(text)
+			pushedTextMu.Unlock()
+		}
+		pushedTextString := func() string {
+			pushedTextMu.Lock()
+			defer pushedTextMu.Unlock()
+			return pushedText.String()
+		}
+		var audioFramesMu sync.Mutex
+		audioFrames := 0
+		recordAudioFrame := func() {
+			audioFramesMu.Lock()
+			audioFrames++
+			audioFramesMu.Unlock()
+		}
+		audioFrameCount := func() int {
+			audioFramesMu.Lock()
+			defer audioFramesMu.Unlock()
+			return audioFrames
+		}
 		pushChunks := func(chunks []string) bool {
 			for _, chunk := range chunks {
 				if chunk == "" {
@@ -471,6 +505,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 					setStreamErr(err)
 					return false
 				}
+				recordPushedText(chunk)
 			}
 			return true
 		}
@@ -519,12 +554,16 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 					}
 					return
 				}
+				if audio == nil || audio.Frame == nil {
+					continue
+				}
 				if data.TTFB == 0 {
 					if ttfb, ok := timeSinceStart(); ok {
 						data.TTFB = ttfb
 						span.SetAttributes(attribute.Float64(telemetry.AttrResponseTTFB, data.TTFB.Seconds()))
 					}
 				}
+				recordAudioFrame()
 				for _, timedText := range audio.TimedTranscript {
 					select {
 					case data.TimedTextCh <- timedText:
@@ -540,6 +579,12 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			}
 		}()
 		wg.Wait()
+		streamErrMu.Lock()
+		hasStreamErr := data.StreamErr != nil
+		streamErrMu.Unlock()
+		if options.RequireAudio && !hasStreamErr && strings.TrimSpace(pushedTextString()) != "" && audioFrameCount() == 0 {
+			setStreamErr(fmt.Errorf("no audio frames were pushed for text: %s", pushedTextString()))
+		}
 	}()
 
 	return data, nil

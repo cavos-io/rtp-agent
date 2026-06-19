@@ -91,6 +91,10 @@ func AnswerAvailabilityRequest(opts AvailabilityAnswerOptions) {
 	_ = responder.RejectIfUnanswered(JobRejectArguments{Terminate: false})
 }
 
+func AnswerServerAvailabilityRequest(opts AvailabilityAnswerOptions) {
+	AnswerAvailabilityRequest(opts)
+}
+
 func sendAvailabilityMessage(send func(*lkprotocol.WorkerMessage) error, msg *lkprotocol.WorkerMessage) error {
 	if send == nil {
 		return nil

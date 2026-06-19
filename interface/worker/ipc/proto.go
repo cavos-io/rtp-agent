@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-
-	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 )
 
 var ErrUnknownMessageType = errors.New("unknown IPC message type")
@@ -156,62 +154,11 @@ type JobAcceptArguments struct {
 
 type RunningJobInfo struct {
 	AcceptArguments JobAcceptArguments `json:"accept_arguments"`
-	Job             *workerlivekit.Job `json:"job"`
+	Job             *Job               `json:"job"`
 	URL             string             `json:"url"`
 	Token           string             `json:"token"`
 	WorkerID        string             `json:"worker_id"`
 	FakeJob         bool               `json:"fake_job"`
-}
-
-func ToLiveKitJobAcceptArguments(args JobAcceptArguments) workerlivekit.JobAcceptArguments {
-	return workerlivekit.JobAcceptArguments{
-		Name:       args.Name,
-		Identity:   args.Identity,
-		Metadata:   args.Metadata,
-		Attributes: cloneStringMap(args.Attributes),
-	}
-}
-
-func FromLiveKitJobAcceptArguments(args workerlivekit.JobAcceptArguments) JobAcceptArguments {
-	return JobAcceptArguments{
-		Name:       args.Name,
-		Identity:   args.Identity,
-		Metadata:   args.Metadata,
-		Attributes: cloneStringMap(args.Attributes),
-	}
-}
-
-func ToLiveKitRunningJobInfo(info RunningJobInfo) workerlivekit.RunningJobInfo {
-	return workerlivekit.RunningJobInfo{
-		AcceptArguments: ToLiveKitJobAcceptArguments(info.AcceptArguments),
-		Job:             info.Job,
-		URL:             info.URL,
-		Token:           info.Token,
-		WorkerID:        info.WorkerID,
-		FakeJob:         info.FakeJob,
-	}
-}
-
-func FromLiveKitRunningJobInfo(info workerlivekit.RunningJobInfo) RunningJobInfo {
-	return RunningJobInfo{
-		AcceptArguments: FromLiveKitJobAcceptArguments(info.AcceptArguments),
-		Job:             info.Job,
-		URL:             info.URL,
-		Token:           info.Token,
-		WorkerID:        info.WorkerID,
-		FakeJob:         info.FakeJob,
-	}
-}
-
-func ToLiveKitRunningJobInfos(infos []RunningJobInfo) []workerlivekit.RunningJobInfo {
-	if infos == nil {
-		return nil
-	}
-	converted := make([]workerlivekit.RunningJobInfo, 0, len(infos))
-	for _, info := range infos {
-		converted = append(converted, ToLiveKitRunningJobInfo(info))
-	}
-	return converted
 }
 
 func cloneStringMap(values map[string]string) map[string]string {

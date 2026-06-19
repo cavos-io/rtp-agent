@@ -48,15 +48,44 @@ func TestWorkerProductionCodeUsesLiveKitSubpackageForLiveKitImports(t *testing.T
 
 func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
 	forbiddenCalls := []string{
+		"workerlivekit.AnswerAvailabilityRequest(",
 		"workerlivekit.ApplyWorkerEnv(",
 		"workerlivekit.ExchangeInitialRegisterWebSocket(",
 		"workerlivekit.MigratableRunningJobIDs(",
 		"workerlivekit.MigrateRunningJobsMessage(",
 		"workerlivekit.OpenWorkerWebSocket(",
+		"workerlivekit.JobRunningMessage(",
+		"workerlivekit.JobStatusMessage(",
+		"workerlivekit.WriteWorkerMessageWebSocket(",
 		"workerlivekit.WorkerStatusUpdateMessage(",
 		"workerlivekit.RegisterWorkerMessage(",
 		"workerlivekit.RouteServerMessage(",
 		"workerlivekit.RunWorkerMessageLoop(",
+		"workerlivekit.StorePendingAccept(",
+		"workerlivekit.ExpirePendingAccept(",
+		"workerlivekit.AcceptPendingAssignment(",
+		"workerlivekit.RunningJobInfoSnapshot(",
+		"workerlivekit.RefreshRunningJobsForReload(",
+		"workerlivekit.RunningJobContextValues(",
+		"workerlivekit.ReloadedJobContextValues(",
+		"workerlivekit.RunRunningJobEntrypointLifecycle(",
+		"workerlivekit.RunReloadedJobEntrypointLifecycle(",
+		"workerlivekit.RunJobEntrypointLifecycle(",
+		"workerlivekit.AssignmentContextValues(",
+		"workerlivekit.JobTerminationPlanForActiveJob(",
+		"workerlivekit.WorkerLogLevelFromEnv(",
+		"workerlivekit.DefaultWorkerPermissions(",
+		"workerlivekit.ResolveWorkerConnectionOptions(",
+		"workerlivekit.ResolveAgentNameFromEnv(",
+		"workerlivekit.AllRecordingOptions(",
+		"workerlivekit.DefaultFakeLocalJobOptions(",
+		"workerlivekit.PrepareLocalJobRunOptions(",
+		"workerlivekit.LocalJobExecutorPlan(",
+		"workerlivekit.LocalJobSessionReportPath(",
+		"workerlivekit.JobFinishPlan(",
+		"workerlivekit.JobSessionReportUploadPlan(",
+		"workerlivekit.JobSessionEndPlan(",
+		"workerlivekit.LocalJobContextSetupPlan(",
 		"workerlivekit.ValidateWorkerConnectionOptions(",
 	}
 
@@ -86,5 +115,59 @@ func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("walk worker files: %v", err)
+	}
+}
+
+func TestSharedJobContextDoesNotCallLiveKitInfoHelpersDirectly(t *testing.T) {
+	forbiddenCalls := []string{
+		"workerlivekit.JobInferenceHeaders(",
+		"workerlivekit.NewJobAPI(",
+		"workerlivekit.JobParticipantIdentity(",
+		"workerlivekit.LocalParticipantIdentity(",
+		"workerlivekit.TokenClaims(",
+		"workerlivekit.JobID(",
+		"workerlivekit.JobAvatarStartInfo(",
+		"workerlivekit.JobRoom(",
+		"workerlivekit.JobPublisher(",
+		"workerlivekit.RoomLocalParticipant(",
+		"workerlivekit.NewJobSessionReport(",
+		"workerlivekit.JobLogContextFields(",
+		"workerlivekit.PopulateSessionReportWithJobMetadata(",
+		"workerlivekit.NormalizeConnectOptions(",
+		"workerlivekit.JoinPreparedRoom(",
+		"workerlivekit.PreparedRoomConnectOptionsFromAcceptedJob(",
+		"workerlivekit.RoomRemoteParticipantViews(",
+		"workerlivekit.JobRoomName(",
+		"workerlivekit.ApplyAutoSubscribeToRoom(",
+		"workerlivekit.RoomCallbackWithHandlers(",
+		"workerlivekit.NewRoom",
+		"workerlivekit.ParticipantInfoFromRemoteParticipant(",
+		"workerlivekit.UpsertParticipantInfo(",
+		"workerlivekit.WaitForParticipant(",
+		"workerlivekit.WaitForAgent(",
+		"workerlivekit.WaitForTrackPublication(",
+		"workerlivekit.WaitForTrackPublicationWithOptions(",
+		"workerlivekit.WaitForParticipantAttribute(",
+		"workerlivekit.ParticipantEntrypointRegistrationPlan(",
+		"workerlivekit.ParticipantEntrypointTaskPlan(",
+		"workerlivekit.DeleteRoomPlan(",
+		"workerlivekit.DeleteRoomBestEffort(",
+		"workerlivekit.MoveParticipantPlan(",
+		"workerlivekit.MoveParticipant(",
+		"workerlivekit.SIPCreateParticipantPlan(",
+		"workerlivekit.CreateSIPParticipantWithNames(",
+		"workerlivekit.CreateSIPParticipantWithRequest(",
+		"workerlivekit.SIPTransferParticipantPlan(",
+		"workerlivekit.TransferSIPParticipantByParticipant(",
+	}
+
+	data, err := os.ReadFile("job.go")
+	if err != nil {
+		t.Fatalf("read job.go: %v", err)
+	}
+	for _, forbiddenCall := range forbiddenCalls {
+		if strings.Contains(string(data), forbiddenCall) {
+			t.Fatalf("job.go calls %s; use the LiveKit job context facade", forbiddenCall)
+		}
 	}
 }

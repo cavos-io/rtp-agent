@@ -22,6 +22,10 @@ func DefaultFakeLocalJobOptions() LocalJobOptions {
 	return LocalJobOptions{FakeJob: true}
 }
 
+func DefaultServerFakeLocalJobOptions() LocalJobOptions {
+	return DefaultFakeLocalJobOptions()
+}
+
 type LocalJobContextValueOptions struct {
 	RoomName            string
 	ParticipantIdentity string
@@ -61,6 +65,10 @@ func PrepareLocalJobRunOptions(participantIdentity string, opts LocalJobOptions)
 	return identity, nil
 }
 
+func PrepareServerLocalJobRunOptions(participantIdentity string, opts LocalJobOptions) (string, error) {
+	return PrepareLocalJobRunOptions(participantIdentity, opts)
+}
+
 func LocalJobSessionReportPath(opts LocalJobOptions, sessionDirectory string) string {
 	if opts.SessionReportPath != "" {
 		return opts.SessionReportPath
@@ -69,6 +77,10 @@ func LocalJobSessionReportPath(opts LocalJobOptions, sessionDirectory string) st
 		return ""
 	}
 	return filepath.Join(sessionDirectory, "session_report.json")
+}
+
+func ServerLocalJobSessionReportPath(opts LocalJobOptions, sessionDirectory string) string {
+	return LocalJobSessionReportPath(opts, sessionDirectory)
 }
 
 func LocalJobContextValues(opts LocalJobContextValueOptions) LocalJobContextValuesResult {
@@ -103,6 +115,10 @@ func LocalJobContextSetupPlan(opts LocalJobContextSetupPlanOptions) LocalJobCont
 		RecordingOptions: localOptions.RecordingOptions,
 		SessionDirectory: localOptions.SessionDirectory,
 	}
+}
+
+func ServerLocalJobContextSetupPlan(opts LocalJobContextSetupPlanOptions) LocalJobContextSetupPlanResult {
+	return LocalJobContextSetupPlan(opts)
 }
 
 func ValidateLocalJobRunOptions(participantIdentity string, opts LocalJobOptions) error {

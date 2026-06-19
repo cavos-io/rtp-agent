@@ -13,6 +13,8 @@ type ServerConnectionEnvOptions struct {
 	Setenv func(string, string) error
 }
 
+type ServerConnectionResolveOptions = WorkerConnectionOptions
+
 func ValidateServerConnectionOptions(opts ServerConnectionOptions) error {
 	return ValidateWorkerConnectionOptions(WorkerConnectionOptions{
 		WSURL:     opts.WSURL,
@@ -32,4 +34,20 @@ func ApplyServerConnectionEnv(opts ServerConnectionEnvOptions) {
 
 func OpenServerWorkerWebSocket(ctx context.Context, opts WorkerWebSocketOpenOptions) (WorkerWebSocketOpenResult, error) {
 	return OpenWorkerWebSocket(ctx, opts)
+}
+
+func ServerLogLevelFromEnv(lookupEnv func(string) string) string {
+	return WorkerLogLevelFromEnv(lookupEnv)
+}
+
+func DefaultServerWorkerPermissions() *WorkerPermissions {
+	return DefaultWorkerPermissions()
+}
+
+func ResolveServerConnectionOptions(opts ServerConnectionResolveOptions) WorkerConnectionOptions {
+	return ResolveWorkerConnectionOptions(WorkerConnectionOptions(opts))
+}
+
+func ResolveServerAgentNameFromEnv(opts AgentNameEnvOptions) AgentNameEnvResult {
+	return ResolveAgentNameFromEnv(opts)
 }
