@@ -229,6 +229,7 @@ type xaiTTSSynthesizeStream struct {
 	closeConn     func() error
 	tokenBuffer   string
 	tokenLanguage string
+	inputEnded    bool
 }
 
 func (s *xaiTTSSynthesizeStream) PushText(text string) error {
@@ -269,6 +270,7 @@ func (s *xaiTTSSynthesizeStream) Flush() error {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
+	s.inputEnded = true
 	return nil
 }
 
@@ -325,6 +327,7 @@ func (s *xaiTTSSynthesizeStream) ensureConnLocked() error {
 		return llm.NewAPIConnectionError("failed to connect to xAI")
 	}
 	s.conn = conn
+	s.inputEnded = false
 	return nil
 }
 
@@ -393,6 +396,9 @@ func (s *xaiTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 			return nil, err
 		}
 		if done {
+			if !s.realtimeInputEnded() {
+				continue
+			}
 			s.clearCurrentConn(conn)
 			return nil, io.EOF
 		}
@@ -406,6 +412,12 @@ func (s *xaiTTSSynthesizeStream) currentConn() *websocket.Conn {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.conn
+}
+
+func (s *xaiTTSSynthesizeStream) realtimeInputEnded() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inputEnded
 }
 
 func (s *xaiTTSSynthesizeStream) clearCurrentConn(conn *websocket.Conn) {

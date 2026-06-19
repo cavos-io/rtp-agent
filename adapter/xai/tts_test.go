@@ -335,6 +335,72 @@ func TestXaiTTSStreamReconnectsBetweenFlushSegments(t *testing.T) {
 	readXaiTTSRequestURL(t, requestURLs, handlerErr)
 }
 
+func TestXaiTTSStreamIgnoresAudioDoneBeforeTextDone(t *testing.T) {
+	requestURLs := make(chan string, 1)
+	handlerErr := make(chan error, 2)
+	audioDelta := base64.StdEncoding.EncodeToString([]byte{0x01, 0x02, 0x03, 0x04})
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = newXaiSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		requestURLs <- r.URL.String()
+		sentEarlyDone := false
+		for {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				handlerErr <- err
+				return
+			}
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				handlerErr <- err
+				return
+			}
+			switch message["type"] {
+			case "text.delta":
+				if !sentEarlyDone {
+					sentEarlyDone = true
+					if err := conn.WriteJSON(map[string]any{"type": "audio.done"}); err != nil {
+						handlerErr <- err
+						return
+					}
+					if err := conn.WriteJSON(map[string]any{"type": "audio.delta", "delta": audioDelta}); err != nil {
+						handlerErr <- err
+						return
+					}
+				}
+			case "text.done":
+				if err := conn.WriteJSON(map[string]any{"type": "audio.done"}); err != nil {
+					handlerErr <- err
+				}
+				return
+			}
+		}
+	}, handlerErr)
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewXaiTTS("test-key", "ara", WithXaiTTSWebsocketURL("ws://xai.test/v1/tts"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := stream.PushText("hello world"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	readXaiTTSRequestURL(t, requestURLs, handlerErr)
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() before text.done error = %v, want audio", err)
+	}
+	assertXaiTTSAudio(t, audio, []byte{0x01, 0x02, 0x03, 0x04})
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if audio, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next() after text.done = (%#v, %v), want EOF", audio, err)
+	}
+}
+
 func TestXaiTTSSynthesizeUnexpectedCloseBeforeDoneReturnsAPIStatusError(t *testing.T) {
 	handlerErr := make(chan error, 1)
 	oldDialer := websocket.DefaultDialer
