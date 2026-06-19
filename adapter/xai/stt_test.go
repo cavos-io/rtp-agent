@@ -362,6 +362,70 @@ func TestXaiSTTUpdateOptionsReconnectsActiveStreams(t *testing.T) {
 	assertXaiQuery(t, query, "endpointing", "250")
 }
 
+func TestXaiSTTStreamWaitsForTranscriptCreatedBeforeSendingAudio(t *testing.T) {
+	binaryWrites := make(chan []byte, 1)
+	readyToSend := make(chan struct{})
+	releaseServer := make(chan struct{})
+	handlerErr := make(chan error, 2)
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = newXaiSTTTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		go func() {
+			for {
+				msgType, payload, err := conn.ReadMessage()
+				if err != nil {
+					return
+				}
+				if msgType == websocket.BinaryMessage {
+					binaryWrites <- append([]byte(nil), payload...)
+				}
+			}
+		}()
+		<-readyToSend
+		if err := conn.WriteJSON(map[string]any{"type": "transcript.created"}); err != nil {
+			handlerErr <- err
+		}
+		<-releaseServer
+	}, handlerErr)
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewXaiSTT("test-key", WithXaiSTTWebsocketURL("ws://xai.test/v1/stt"))
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+
+	frameData := make([]byte, 1600)
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              frameData,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	select {
+	case payload := <-binaryWrites:
+		t.Fatalf("audio sent before transcript.created: %d bytes", len(payload))
+	case err := <-handlerErr:
+		t.Fatal(err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(readyToSend)
+	select {
+	case payload := <-binaryWrites:
+		close(releaseServer)
+		if len(payload) != len(frameData) {
+			t.Fatalf("audio payload length = %d, want %d", len(payload), len(frameData))
+		}
+	case err := <-handlerErr:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for buffered audio after transcript.created")
+	}
+}
+
 func TestXaiSTTRequiresAPIKeyBeforeRequest(t *testing.T) {
 	t.Setenv("XAI_API_KEY", "")
 	provider := NewXaiSTT("",
