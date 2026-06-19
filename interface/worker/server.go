@@ -326,7 +326,7 @@ func (s *AgentServer) ActiveRunningJobs() []workeripc.RunningJobInfo {
 
 func runningJobInfoFromContext(jobCtx *JobContext) workeripc.RunningJobInfo {
 	return workeripc.FromLiveKitRunningJobInfo(workerlivekit.ServerRunningJobInfoSnapshot(workerlivekit.RunningJobInfoOptions{
-		AcceptArguments: workerlivekit.JobAcceptArguments{
+		AcceptArguments: JobAcceptArguments{
 			Name:       jobCtx.AcceptArguments.Name,
 			Identity:   jobCtx.AcceptArguments.Identity,
 			Metadata:   jobCtx.AcceptArguments.Metadata,
