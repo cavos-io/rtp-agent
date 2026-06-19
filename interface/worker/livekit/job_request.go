@@ -644,6 +644,10 @@ func LocalJobExecutorPlan(job *lkprotocol.Job) LocalJobExecutorPlanResult {
 	return LocalJobExecutorPlanResult(LocalJobInfo(job))
 }
 
+func ServerLocalJobExecutorPlan(job *lkprotocol.Job) LocalJobExecutorPlanResult {
+	return LocalJobExecutorPlan(job)
+}
+
 func JobAcceptIdentity(job *lkprotocol.Job, identity string) string {
 	if identity != "" || job == nil {
 		return identity

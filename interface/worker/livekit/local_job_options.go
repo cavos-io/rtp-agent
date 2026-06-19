@@ -79,6 +79,10 @@ func LocalJobSessionReportPath(opts LocalJobOptions, sessionDirectory string) st
 	return filepath.Join(sessionDirectory, "session_report.json")
 }
 
+func ServerLocalJobSessionReportPath(opts LocalJobOptions, sessionDirectory string) string {
+	return LocalJobSessionReportPath(opts, sessionDirectory)
+}
+
 func LocalJobContextValues(opts LocalJobContextValueOptions) LocalJobContextValuesResult {
 	localOptions := opts.Options
 	token := localOptions.Token
