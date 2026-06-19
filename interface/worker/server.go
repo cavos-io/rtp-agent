@@ -731,7 +731,7 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 		opts.InitializeProcessTimeoutSeconds = defaultProcessTimeout
 	}
 	if opts.LogLevel == "" && opts.Transport == WorkerTransportLiveKit {
-		opts.LogLevel = workerlivekit.ServerLogLevelFromEnv(nil)
+		opts.LogLevel = livekitServerLogLevelFromEnv(nil)
 	}
 	if opts.LogLevel == "" {
 		if opts.DevMode {
@@ -764,9 +764,9 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 			opts.WorkerType = WorkerTypeRoom
 		}
 		if opts.Permissions == nil {
-			opts.Permissions = workerlivekit.DefaultServerWorkerPermissions()
+			opts.Permissions = livekitDefaultServerWorkerPermissions()
 		}
-		livekitOptions := workerlivekit.ResolveServerConnectionOptions(ServerConnectionResolveOptions{
+		livekitOptions := livekitResolveServerConnectionOptions(ServerConnectionResolveOptions{
 			WSURL:          opts.WSURL,
 			LegacyWSURL:    opts.WSRL,
 			APIKey:         opts.APIKey,
@@ -818,7 +818,7 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		body := workerlivekit.WorkerRuntimeMetadata(WorkerRuntimeMetadataOptions{
+		body := livekitWorkerRuntimeMetadata(WorkerRuntimeMetadataOptions{
 			AgentName:       s.Options.AgentName,
 			AgentNameIsEnv:  s.Options.AgentNameIsEnv,
 			WorkerType:      string(s.Options.WorkerType),
@@ -1062,7 +1062,7 @@ func (s *AgentServer) RTCSession(
 	s.requestFnc = request
 	s.sessionEndFnc = sessionEnd
 	if NormalizeWorkerTransport(string(s.Options.Transport)) == WorkerTransportLiveKit {
-		agentName := workerlivekit.ResolveServerAgentNameFromEnv(AgentNameEnvOptions{
+		agentName := livekitResolveServerAgentNameFromEnv(AgentNameEnvOptions{
 			AgentName:      s.Options.AgentName,
 			AgentNameIsEnv: s.Options.AgentNameIsEnv,
 		})
@@ -1240,7 +1240,7 @@ func (s *AgentServer) validateRunPreconditions() error {
 	if transport == WorkerTransportAgora {
 		return nil
 	}
-	return workerlivekit.ValidateServerConnectionOptions(ServerConnectionOptions{
+	return livekitValidateServerConnectionOptions(ServerConnectionOptions{
 		WSURL:     s.Options.WSRL,
 		APIKey:    s.Options.APIKey,
 		APISecret: s.Options.APISecret,
@@ -1280,7 +1280,7 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	if err := s.validateRunPreconditions(); err != nil {
 		return err
 	}
-	workerlivekit.ApplyServerConnectionEnv(ServerConnectionEnvOptions{
+	livekitApplyServerConnectionEnv(ServerConnectionEnvOptions{
 		ServerConnectionOptions: ServerConnectionOptions{
 			WSURL:     s.Options.WSRL,
 			APIKey:    s.Options.APIKey,

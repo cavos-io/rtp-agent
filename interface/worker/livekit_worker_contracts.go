@@ -201,3 +201,17 @@ var livekitServerJobSessionReportUploadPlan = workerlivekit.ServerJobSessionRepo
 var livekitServerJobSessionEndPlan = workerlivekit.ServerJobSessionEndPlan
 
 var livekitServerLocalJobContextSetupPlan = workerlivekit.ServerLocalJobContextSetupPlan
+
+var livekitServerLogLevelFromEnv = workerlivekit.ServerLogLevelFromEnv
+
+var livekitDefaultServerWorkerPermissions = workerlivekit.DefaultServerWorkerPermissions
+
+var livekitResolveServerConnectionOptions = workerlivekit.ResolveServerConnectionOptions
+
+var livekitWorkerRuntimeMetadata = workerlivekit.WorkerRuntimeMetadata
+
+var livekitResolveServerAgentNameFromEnv = workerlivekit.ResolveServerAgentNameFromEnv
+
+var livekitValidateServerConnectionOptions = workerlivekit.ValidateServerConnectionOptions
+
+var livekitApplyServerConnectionEnv = workerlivekit.ApplyServerConnectionEnv
