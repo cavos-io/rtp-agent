@@ -1602,6 +1602,24 @@ func TestAzureTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T)
 	}
 }
 
+func TestAzureTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
+	body := &countingReadCloser{}
+	stream := &azureTTSChunkedStream{
+		body:       body,
+		sampleRate: 24000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close error = %v, want nil", err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1", body.closed)
+	}
+}
+
 func TestAzureTTSSynthesizeUsesConfiguredClient(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {
@@ -1740,6 +1758,22 @@ func (r errorReadCloser) Read([]byte) (int, error) {
 }
 
 func (r errorReadCloser) Close() error {
+	return nil
+}
+
+type countingReadCloser struct {
+	closed int
+}
+
+func (r *countingReadCloser) Read([]byte) (int, error) {
+	return 0, io.EOF
+}
+
+func (r *countingReadCloser) Close() error {
+	r.closed++
+	if r.closed > 1 {
+		return fmt.Errorf("closed twice")
+	}
 	return nil
 }
 
