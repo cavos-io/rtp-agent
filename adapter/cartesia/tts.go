@@ -21,8 +21,9 @@ import (
 )
 
 const (
-	defaultCartesiaTTSBaseURL = "https://api.cartesia.ai"
-	cartesiaTTSUserAgent      = "LiveKit Agents Cartesia Plugin/Go"
+	defaultCartesiaTTSBaseURL         = "https://api.cartesia.ai"
+	cartesiaTTSUserAgent              = "LiveKit Agents Cartesia Plugin/Go"
+	cartesiaTTSExperimentalAPIVersion = "2024-11-13"
 )
 
 type CartesiaTTS struct {
@@ -206,6 +207,18 @@ func buildCartesiaOptions(t *CartesiaTTS, streaming bool) map[string]interface{}
 			"embedding": append([]float64(nil), t.voiceEmbedding...),
 		}
 	}
+	if t.apiVersion == cartesiaTTSExperimentalAPIVersion {
+		voiceControls := map[string]interface{}{}
+		if t.speed != nil {
+			voiceControls["speed"] = t.speed
+		}
+		if t.emotion != "" {
+			voiceControls["emotion"] = []string{t.emotion}
+		}
+		if len(voiceControls) > 0 {
+			voice["__experimental_controls"] = voiceControls
+		}
+	}
 	options := map[string]interface{}{
 		"model_id": t.model,
 		"voice":    voice,
@@ -220,14 +233,16 @@ func buildCartesiaOptions(t *CartesiaTTS, streaming bool) map[string]interface{}
 		options["pronunciation_dict_id"] = t.pronunciationDictID
 	}
 	generationConfig := map[string]interface{}{}
-	if t.speed != nil {
-		generationConfig["speed"] = t.speed
-	}
-	if t.emotion != "" {
-		generationConfig["emotion"] = t.emotion
-	}
-	if t.volume != nil {
-		generationConfig["volume"] = *t.volume
+	if t.apiVersion > cartesiaTTSExperimentalAPIVersion && strings.HasPrefix(t.model, "sonic-3") {
+		if t.speed != nil {
+			generationConfig["speed"] = t.speed
+		}
+		if t.emotion != "" {
+			generationConfig["emotion"] = t.emotion
+		}
+		if t.volume != nil {
+			generationConfig["volume"] = *t.volume
+		}
 	}
 	if len(generationConfig) > 0 {
 		options["generation_config"] = generationConfig

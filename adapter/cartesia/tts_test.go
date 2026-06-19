@@ -144,6 +144,46 @@ func TestCartesiaSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestCartesiaSynthesizeRequestUsesExperimentalVoiceControls(t *testing.T) {
+	provider := NewCartesiaTTS("test-key", "", "sonic-2-2025-03-07",
+		WithCartesiaAPIVersion("2024-11-13"),
+		WithCartesiaSpeed("fast"),
+		WithCartesiaEmotion("Happy"),
+	)
+
+	_, body, err := buildCartesiaSynthesizeRequest(provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	if _, ok := payload["generation_config"]; ok {
+		t.Fatalf("generation_config present for experimental controls: %#v", payload["generation_config"])
+	}
+
+	voice, ok := payload["voice"].(map[string]any)
+	if !ok {
+		t.Fatalf("voice = %#v, want map", payload["voice"])
+	}
+	controls, ok := voice["__experimental_controls"].(map[string]any)
+	if !ok {
+		t.Fatalf("__experimental_controls = %#v, want map", voice["__experimental_controls"])
+	}
+	if controls["speed"] != "fast" {
+		t.Fatalf("speed = %#v, want fast", controls["speed"])
+	}
+	emotion, ok := controls["emotion"].([]any)
+	if !ok {
+		t.Fatalf("emotion = %#v, want array", controls["emotion"])
+	}
+	if len(emotion) != 1 || emotion[0] != "Happy" {
+		t.Fatalf("emotion = %#v, want [Happy]", emotion)
+	}
+}
+
 func TestCartesiaSynthesizeRequestSupportsVoiceEmbedding(t *testing.T) {
 	provider := NewCartesiaTTS("test-key", "voice-id", "",
 		WithCartesiaVoiceEmbedding([]float64{0.1, 0.2, 0.3}),
