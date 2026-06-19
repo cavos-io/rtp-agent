@@ -187,6 +187,48 @@ func TestElevenLabsSTTRecognizeRequestUsesReferenceMultipartFields(t *testing.T)
 	}
 }
 
+func TestElevenLabsSTTRecognizeLanguageOverridePersistsLikeReference(t *testing.T) {
+	oldClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+	http.DefaultClient = &http.Client{Transport: elevenLabsSTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		fields, _ := readElevenLabsMultipartRequest(t, r)
+		if fields["language_code"] != "fr" {
+			t.Fatalf("recognize language_code = %q, want fr", fields["language_code"])
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"text":"bonjour","language_code":"fr"}`)),
+			Header:     make(http.Header),
+		}, nil
+	})}
+
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTBaseURL("https://eleven.example/v1"),
+		WithElevenLabsSTTModel("scribe_v2"),
+		WithElevenLabsSTTLanguage("en"),
+	)
+	if _, err := provider.Recognize(context.Background(), []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}, "fr"); err != nil {
+		t.Fatalf("Recognize() error = %v", err)
+	}
+	if provider.languageCode != "fr" {
+		t.Fatalf("languageCode = %q, want fr persisted for later calls", provider.languageCode)
+	}
+
+	req, err := buildElevenLabsSTTRecognizeRequest(context.Background(), provider, []byte("wav"), "")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	fields, _ := readElevenLabsMultipartRequest(t, req)
+	if fields["language_code"] != "fr" {
+		t.Fatalf("later language_code = %q, want persisted fr", fields["language_code"])
+	}
+}
+
 func TestElevenLabsSTTStreamURLAndMessagesMatchReference(t *testing.T) {
 	provider := NewElevenLabsSTT("test-key",
 		WithElevenLabsSTTBaseURL("https://eleven.example/v1"),
