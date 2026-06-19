@@ -149,3 +149,13 @@ var livekitServerJobStatusMessage = workerlivekit.ServerJobStatusMessage
 var livekitServerJobRunningMessage = workerlivekit.ServerJobRunningMessage
 
 var livekitServerMigrateRunningJobsMessage = workerlivekit.ServerMigrateRunningJobsMessage
+
+var livekitExchangeInitialServerRegisterWebSocket = workerlivekit.ExchangeInitialServerRegisterWebSocket
+
+var livekitRunServerMessageLoop = workerlivekit.RunServerMessageLoop
+
+var livekitOpenServerWorkerWebSocket = workerlivekit.OpenServerWorkerWebSocket
+
+var livekitRouteServerWorkerMessage = workerlivekit.RouteServerWorkerMessage
+
+var livekitWriteServerWorkerMessageWebSocket = workerlivekit.WriteServerWorkerMessageWebSocket

@@ -1351,7 +1351,7 @@ func (s *AgentServer) Run(ctx context.Context) error {
 
 	logger.Logger.Infow("Connected to LiveKit Server", "url", s.Options.WSRL)
 
-	msg, err := workerlivekit.ExchangeInitialServerRegisterWebSocket(conn, s.registerWorkerRequest())
+	msg, err := livekitExchangeInitialServerRegisterWebSocket(conn, s.registerWorkerRequest())
 	if err != nil {
 		return err
 	}
@@ -1418,7 +1418,7 @@ func (s *AgentServer) RunUnregistered(ctx context.Context) error {
 }
 
 func (s *AgentServer) runWorkerMessageLoop(ctx context.Context, readMessage func() (int, []byte, error), closeConn func() error) error {
-	return workerlivekit.RunServerMessageLoop(ctx, ServerMessageLoopOptions{
+	return livekitRunServerMessageLoop(ctx, ServerMessageLoopOptions{
 		ReadMessage: readMessage,
 		Close:       closeConn,
 		Handle: func(msg *ServerMessage) {
@@ -1482,7 +1482,7 @@ func (s *AgentServer) sendWorkerStatusUpdate() error {
 func (s *AgentServer) openWorkerWebSocket(ctx context.Context, opts WorkerWebSocketOpenOptions) (WorkerWebSocketOpenResult, error) {
 	opts.Dial = workerDialContext
 	opts.Sleep = workerRetrySleep
-	result, err := workerlivekit.OpenServerWorkerWebSocket(ctx, opts)
+	result, err := livekitOpenServerWorkerWebSocket(ctx, opts)
 	if err != nil {
 		if result.ConnectFailed {
 			s.setConnectionFailed(true)
@@ -1494,7 +1494,7 @@ func (s *AgentServer) openWorkerWebSocket(ctx context.Context, opts WorkerWebSoc
 }
 
 func (s *AgentServer) handleMessage(ctx context.Context, msg *ServerMessage) {
-	workerlivekit.RouteServerWorkerMessage(ServerMessageRouteOptions{
+	livekitRouteServerWorkerMessage(ServerMessageRouteOptions{
 		Message: msg,
 		OnRegister: func(event WorkerRegisteredEvent) {
 			logger.Logger.Infow("Worker Registered", "workerId", event.WorkerID, "serverInfo", event.ServerInfo)
@@ -1615,7 +1615,7 @@ func (s *AgentServer) sendWorkerMessage(msg *WorkerMessage) error {
 	if s.conn == nil {
 		return fmt.Errorf("worker websocket is not connected")
 	}
-	return workerlivekit.WriteServerWorkerMessageWebSocket(s.conn, msg)
+	return livekitWriteServerWorkerMessageWebSocket(s.conn, msg)
 }
 
 func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) {
