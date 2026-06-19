@@ -400,10 +400,17 @@ type cartesiaTTSStream struct {
 }
 
 type cartesiaWSResponse struct {
-	Type  string `json:"type"`
-	Error string `json:"error"`
-	Data  string `json:"data"` // base64 encoded audio
-	Done  bool   `json:"done"`
+	Type           string                    `json:"type"`
+	Error          string                    `json:"error"`
+	Data           string                    `json:"data"` // base64 encoded audio
+	Done           bool                      `json:"done"`
+	WordTimestamps cartesiaTTSWordTimestamps `json:"word_timestamps"`
+}
+
+type cartesiaTTSWordTimestamps struct {
+	Words []string  `json:"words"`
+	Start []float64 `json:"start"`
+	End   []float64 `json:"end"`
 }
 
 func (s *cartesiaTTSStream) readLoop() {
@@ -446,12 +453,31 @@ func (s *cartesiaTTSStream) readLoop() {
 			}
 		}
 
+		if len(resp.WordTimestamps.Words) > 0 {
+			s.audio <- &tts.SynthesizedAudio{
+				TimedTranscript: cartesiaTimedTranscript(resp.WordTimestamps),
+			}
+		}
+
 		if resp.Type == "done" || resp.Done {
 			if s.isFlushed() {
 				return
 			}
 		}
 	}
+}
+
+func cartesiaTimedTranscript(timestamps cartesiaTTSWordTimestamps) []tts.TimedString {
+	count := min(len(timestamps.Words), len(timestamps.Start), len(timestamps.End))
+	timed := make([]tts.TimedString, 0, count)
+	for i := 0; i < count; i++ {
+		timed = append(timed, tts.TimedString{
+			Text:      timestamps.Words[i],
+			StartTime: timestamps.Start[i],
+			EndTime:   timestamps.End[i],
+		})
+	}
+	return timed
 }
 
 func (s *cartesiaTTSStream) isClosed() bool {
