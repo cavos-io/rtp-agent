@@ -21,6 +21,7 @@ import (
 
 type LLMGenerationData struct {
 	TextCh             chan string
+	TextEventCh        chan LLMTextEvent
 	FunctionCh         chan *llm.FunctionToolCall
 	GeneratedText      string
 	GeneratedFunctions []llm.FunctionToolCall
@@ -33,6 +34,11 @@ type LLMGenerationData struct {
 	StreamErr          error
 }
 
+type LLMTextEvent struct {
+	Text  string
+	Flush bool
+}
+
 func PerformLLMInference(
 	ctx context.Context,
 	l llm.LLM,
@@ -40,11 +46,35 @@ func PerformLLMInference(
 	tools []llm.Tool,
 	options ...llm.ChatOption,
 ) (*LLMGenerationData, error) {
+	return performLLMInference(ctx, l, chatCtx, tools, false, options...)
+}
+
+func PerformLLMInferenceWithTextEvents(
+	ctx context.Context,
+	l llm.LLM,
+	chatCtx *llm.ChatContext,
+	tools []llm.Tool,
+	options ...llm.ChatOption,
+) (*LLMGenerationData, error) {
+	return performLLMInference(ctx, l, chatCtx, tools, true, options...)
+}
+
+func performLLMInference(
+	ctx context.Context,
+	l llm.LLM,
+	chatCtx *llm.ChatContext,
+	tools []llm.Tool,
+	emitTextEvents bool,
+	options ...llm.ChatOption,
+) (*LLMGenerationData, error) {
 	data := &LLMGenerationData{
 		TextCh:         make(chan string, 100),
 		FunctionCh:     make(chan *llm.FunctionToolCall, 10),
 		GeneratedExtra: make(map[string]any),
 		ID:             cavosmath.ShortUUID("item_"),
+	}
+	if emitTextEvents {
+		data.TextEventCh = make(chan LLMTextEvent, 100)
 	}
 
 	chatOptions := make([]llm.ChatOption, 0, len(options)+1)
@@ -66,6 +96,9 @@ func PerformLLMInference(
 
 	go func() {
 		defer close(data.TextCh)
+		if data.TextEventCh != nil {
+			defer close(data.TextEventCh)
+		}
 		defer close(data.FunctionCh)
 		defer stream.Close()
 		defer span.End()
@@ -99,6 +132,12 @@ func PerformLLMInference(
 				if chunk.Delta.Content != "" {
 					data.GeneratedText += chunk.Delta.Content
 					data.TextCh <- chunk.Delta.Content
+					if data.TextEventCh != nil {
+						data.TextEventCh <- LLMTextEvent{Text: chunk.Delta.Content}
+					}
+				}
+				if chunk.Delta.Flush && data.TextEventCh != nil {
+					data.TextEventCh <- LLMTextEvent{Flush: true}
 				}
 				for _, fc := range chunk.Delta.ToolCalls {
 					if fc.Type != "function" {

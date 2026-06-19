@@ -4161,6 +4161,74 @@ func TestPipelineAgentReplyWithoutTTSAudioCommitsAssistantText(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentReplySplitsTTSOnLLMFlush(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "first segment"}},
+				{Delta: &llm.ChoiceDelta{Flush: true}},
+				{Delta: &llm.ChoiceDelta{Content: "second segment"}},
+			},
+		},
+	}
+	firstTTS := &fakePipelineTTSStream{}
+	secondTTS := &fakePipelineTTSStream{}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{streams: []*fakePipelineTTSStream{firstTTS, secondTTS}}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: NewSpeechHandle(true, DefaultInputDetails())})
+
+	if firstTTS.text.String() != "first segment" {
+		t.Fatalf("first TTS text = %q, want first segment", firstTTS.text.String())
+	}
+	if secondTTS.text.String() != "second segment" {
+		t.Fatalf("second TTS text = %q, want second segment", secondTTS.text.String())
+	}
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx.Items length = %d, want committed assistant message", len(chatCtx.Items))
+	}
+	msg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || msg.TextContent() != "first segmentsecond segment" {
+		t.Fatalf("assistant message = %#v, want full generated text", chatCtx.Items[0])
+	}
+}
+
+func TestPipelineAgentPreemptiveTTSDoesNotCollapseLLMFlushSegments(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "first preemptive"}},
+				{Delta: &llm.ChoiceDelta{Flush: true}},
+				{Delta: &llm.ChoiceDelta{Content: "second preemptive"}},
+			},
+		},
+	}
+	firstTTS := &fakePipelineTTSStream{}
+	secondTTS := &fakePipelineTTSStream{}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		PreemptiveGenerationPreemptiveTTS:    true,
+		PreemptiveGenerationPreemptiveTTSSet: true,
+	})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{streams: []*fakePipelineTTSStream{firstTTS, secondTTS}}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	agent.OnSpeechPreemptive(context.Background(), speech)
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	if firstTTS.text.String() != "first preemptive" {
+		t.Fatalf("first TTS text = %q, want first preemptive", firstTTS.text.String())
+	}
+	if secondTTS.text.String() != "second preemptive" {
+		t.Fatalf("second TTS text = %q, want second preemptive", secondTTS.text.String())
+	}
+}
+
 func TestPipelineAgentInterruptedTextOnlyReplySkipsAssistantText(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
@@ -4257,6 +4325,7 @@ type fakePipelineTTS struct {
 	model         string
 	provider      string
 	stream        *fakePipelineTTSStream
+	streams       []*fakePipelineTTSStream
 	streamErr     error
 	synthesizeErr error
 	capabilities  tts.TTSCapabilities
@@ -4289,6 +4358,11 @@ func (f *fakePipelineTTS) Synthesize(context.Context, string) (tts.ChunkedStream
 func (f *fakePipelineTTS) Stream(context.Context) (tts.SynthesizeStream, error) {
 	if f.streamErr != nil {
 		return nil, f.streamErr
+	}
+	if len(f.streams) > 0 {
+		stream := f.streams[0]
+		f.streams = f.streams[1:]
+		return stream, nil
 	}
 	if f.stream == nil {
 		f.stream = &fakePipelineTTSStream{}

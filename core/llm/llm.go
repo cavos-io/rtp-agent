@@ -455,6 +455,7 @@ func (u *CompletionUsage) UnmarshalJSON(data []byte) error {
 type ChoiceDelta struct {
 	Role      ChatRole
 	Content   string
+	Flush     bool
 	ToolCalls []FunctionToolCall
 	Extra     map[string]any
 }
@@ -463,6 +464,7 @@ func (d ChoiceDelta) MarshalJSON() ([]byte, error) {
 	type payload struct {
 		Role      *ChatRole          `json:"role"`
 		Content   *string            `json:"content"`
+		Flush     *bool              `json:"flush"`
 		ToolCalls []FunctionToolCall `json:"tool_calls"`
 		Extra     map[string]any     `json:"extra"`
 	}
@@ -475,6 +477,10 @@ func (d ChoiceDelta) MarshalJSON() ([]byte, error) {
 	if d.Content != "" {
 		content = &d.Content
 	}
+	var flush *bool
+	if d.Flush {
+		flush = &d.Flush
+	}
 	toolCalls := d.ToolCalls
 	if toolCalls == nil {
 		toolCalls = []FunctionToolCall{}
@@ -483,6 +489,7 @@ func (d ChoiceDelta) MarshalJSON() ([]byte, error) {
 	return json.Marshal(payload{
 		Role:      role,
 		Content:   content,
+		Flush:     flush,
 		ToolCalls: toolCalls,
 		Extra:     d.Extra,
 	})
@@ -492,6 +499,7 @@ func (d *ChoiceDelta) UnmarshalJSON(data []byte) error {
 	type payload struct {
 		Role      *ChatRole          `json:"role"`
 		Content   *string            `json:"content"`
+		Flush     *bool              `json:"flush"`
 		ToolCalls []FunctionToolCall `json:"tool_calls"`
 		Extra     map[string]any     `json:"extra"`
 	}
@@ -508,6 +516,7 @@ func (d *ChoiceDelta) UnmarshalJSON(data []byte) error {
 	if decoded.Content != nil {
 		d.Content = *decoded.Content
 	}
+	d.Flush = decoded.Flush != nil && *decoded.Flush
 	d.ToolCalls = decoded.ToolCalls
 	if d.ToolCalls == nil {
 		d.ToolCalls = []FunctionToolCall{}
