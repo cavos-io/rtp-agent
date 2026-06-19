@@ -27,7 +27,7 @@ func TestWorkerProductionCodeUsesLiveKitSubpackageForLiveKitImports(t *testing.T
 			}
 			return nil
 		}
-		if path == "livekit_worker_contracts.go" {
+		if strings.HasPrefix(path, "livekit_") {
 			return nil
 		}
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
@@ -74,6 +74,106 @@ func TestIPCProductionCodeDoesNotDependOnLiveKitWorkerSubpackage(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("walk IPC files: %v", err)
+	}
+}
+
+func TestLiveKitCompatibilityAliasesStaySeparateFromPrivateFacadeHooks(t *testing.T) {
+	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if path == "livekit" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasPrefix(path, "livekit_") || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		text := string(data)
+		hasAlias := strings.Contains(text, "type ") && strings.Contains(text, " = workerlivekit.")
+		hasPrivateFacade := strings.Contains(text, "var livekit") || strings.Contains(text, "func livekit")
+		if hasAlias && hasPrivateFacade {
+			t.Fatalf("%s mixes public LiveKit compatibility aliases with private facade hooks", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk worker files: %v", err)
+	}
+}
+
+func TestLiveKitPrivateFacadeHooksStayScopedByWorkerOwner(t *testing.T) {
+	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if path == "livekit" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasPrefix(path, "livekit_") || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		text := string(data)
+		if strings.Contains(text, "livekitServer") && strings.Contains(text, "livekitJobContext") {
+			t.Fatalf("%s mixes LiveKit server facade hooks with JobContext facade hooks", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk worker files: %v", err)
+	}
+}
+
+func TestLiveKitServerBridgeDoesNotOwnJobLifecycleHooks(t *testing.T) {
+	data, err := os.ReadFile("livekit_worker_contracts.go")
+	if err != nil {
+		t.Fatalf("read livekit_worker_contracts.go: %v", err)
+	}
+	forbidden := []string{
+		"livekitJobAssignmentInfo",
+		"livekitAcceptServerPendingAssignment",
+		"livekitJobTerminationInfo",
+		"livekitServerJobTerminationPlanForActiveJob",
+		"livekitDefaultServerFakeLocalJobOptions",
+		"livekitPrepareServerLocalJobRunOptions",
+		"livekitServerLocalJobExecutorPlan",
+		"livekitServerLocalJobSessionReportPath",
+		"livekitServerJobFinishPlan",
+		"livekitServerJobSessionReportUploadPlan",
+		"livekitServerJobSessionEndPlan",
+		"livekitServerLocalJobContextSetupPlan",
+		"livekitServerRunningJobInfoSnapshot",
+		"livekitRunningJobInfoToIPC",
+		"livekitRunningJobInfoFromIPC",
+		"livekitRunningJobInfosFromIPC",
+		"livekitRefreshServerRunningJobsForReload",
+		"livekitServerReloadedJobContextValues",
+		"livekitServerRecordingOptions",
+		"livekitServerRunningJobContextValues",
+		"livekitRunServerRunningJobEntrypointLifecycle",
+		"livekitRunServerReloadedJobEntrypointLifecycle",
+		"livekitServerMigratableRunningJobIDs",
+		"livekitServerAssignmentContextValues",
+		"livekitRunServerJobEntrypointLifecycle",
+	}
+	text := string(data)
+	for _, name := range forbidden {
+		if strings.Contains(text, name) {
+			t.Fatalf("livekit_worker_contracts.go owns %s; keep LiveKit job lifecycle hooks in the job bridge", name)
+		}
 	}
 }
 
@@ -174,7 +274,7 @@ func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
 			}
 			return nil
 		}
-		if path == "livekit_worker_contracts.go" {
+		if strings.HasPrefix(path, "livekit_") {
 			return nil
 		}
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
