@@ -1347,6 +1347,26 @@ func TestRunAgoraLogsJoinErrorTransportEvent(t *testing.T) {
 	}
 }
 
+func TestAgoraTransportFatalErrorPreservesSDKErrorMetadata(t *testing.T) {
+	sdkErr := errors.New("sdk denied")
+
+	err := agoraTransportFatalError(workeragora.Event{
+		Kind:    workeragora.EventError,
+		Channel: "support",
+		Reason:  110,
+		Err:     sdkErr,
+	})
+
+	if !errors.Is(err, sdkErr) {
+		t.Fatalf("agoraTransportFatalError() error = %v, want wrapped SDK error", err)
+	}
+	for _, want := range []string{"support", "110"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("agoraTransportFatalError() error = %q, want metadata %q", err.Error(), want)
+		}
+	}
+}
+
 func TestRunAgoraDoesNotLeaveChannelWhenJoinFailsBeforeStart(t *testing.T) {
 	joinErr := errors.New("join failed")
 	client := &fakeAppAgoraChannelClient{joinErr: joinErr}
