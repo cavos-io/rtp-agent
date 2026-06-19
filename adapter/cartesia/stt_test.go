@@ -448,6 +448,44 @@ func TestCartesiaSTTCloseFlushesBufferedAudioBeforeClose(t *testing.T) {
 	}
 }
 
+func TestCartesiaSTTLegacyFlushFlushesBufferedAudioBeforeFinalize(t *testing.T) {
+	var writes [][]byte
+	var textMessages []string
+	stream := &cartesiaSTTStream{
+		state:        &cartesiaSTTStreamState{mode: "legacy"},
+		audioBStream: newCartesiaSTTAudioByteStream(16000, 160),
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+		writeText: func(data []byte) error {
+			textMessages = append(textMessages, string(data))
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&audiomodel.AudioFrame{
+		Data:              make([]byte, 1280*2),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1280,
+	}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes before flush = %s, want none", cartesiaWriteSizes(writes))
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if len(writes) != 1 || len(writes[0]) != 2560 {
+		t.Fatalf("writes after flush = %s, want buffered 80ms chunk", cartesiaWriteSizes(writes))
+	}
+	if len(textMessages) != 1 || textMessages[0] != "finalize" {
+		t.Fatalf("text messages = %#v, want finalize after buffered audio", textMessages)
+	}
+}
+
 func TestCartesiaSTTErrorEventReportsServerErrors(t *testing.T) {
 	_, err := processCartesiaSTTEvent(&cartesiaSTTStreamState{}, map[string]any{
 		"type":        "error",

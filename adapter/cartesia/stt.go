@@ -257,7 +257,14 @@ func (s *cartesiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 
 func (s *cartesiaSTTStream) Flush() error {
 	if s.state.mode == "legacy" {
-		return s.conn.WriteMessage(websocket.TextMessage, []byte("finalize"))
+		if s.audioBStream != nil {
+			for _, chunk := range s.audioBStream.Flush() {
+				if err := s.writeBinaryData(chunk.Data); err != nil {
+					return err
+				}
+			}
+		}
+		return s.writeTextData([]byte("finalize"))
 	}
 	return nil
 }
