@@ -148,6 +148,8 @@ type WorkerRegisteredInfoHandler func(WorkerRegisteredInfo)
 
 type WorkerRegisteredHandler = workerlivekit.WorkerRegisteredHandler
 
+type WorkerRegisteredEvent = workerlivekit.WorkerRegisteredEvent
+
 type WorkerInfo struct {
 	HTTPPort    int
 	CloudAgents bool
@@ -1529,7 +1531,7 @@ func (s *AgentServer) openWorkerWebSocket(ctx context.Context, opts WorkerWebSoc
 func (s *AgentServer) handleMessage(ctx context.Context, msg *ServerMessage) {
 	workerlivekit.RouteServerWorkerMessage(workerlivekit.ServerMessageRouteOptions{
 		Message: msg,
-		OnRegister: func(event workerlivekit.WorkerRegisteredEvent) {
+		OnRegister: func(event WorkerRegisteredEvent) {
 			logger.Logger.Infow("Worker Registered", "workerId", event.WorkerID, "serverInfo", event.ServerInfo)
 			s.mu.Lock()
 			s.workerID = event.WorkerID
