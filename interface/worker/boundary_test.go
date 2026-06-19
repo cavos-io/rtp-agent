@@ -118,6 +118,16 @@ func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
 	}
 }
 
+func TestSharedWorkerDoesNotExposeLiveKitWorkerMessageDirectly(t *testing.T) {
+	data, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatalf("read server.go: %v", err)
+	}
+	if strings.Contains(string(data), "*workerlivekit.WorkerMessage") {
+		t.Fatal("server.go exposes *workerlivekit.WorkerMessage directly; use the worker message contract")
+	}
+}
+
 func TestSharedJobContextDoesNotCallLiveKitInfoHelpersDirectly(t *testing.T) {
 	forbiddenCalls := []string{
 		"workerlivekit.JobInferenceHeaders(",

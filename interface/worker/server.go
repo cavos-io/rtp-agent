@@ -116,6 +116,8 @@ var workerReloadIPCDial = net.Dial
 
 type WorkerPermissions = workerlivekit.WorkerPermissions
 
+type WorkerMessage = workerlivekit.WorkerMessage
+
 type WorkerStartedHandler func()
 
 type WorkerRegisteredInfo struct {
@@ -198,7 +200,7 @@ type AgentServer struct {
 	httpServer             *http.Server
 	httpPort               int
 	prometheusServer       *telemetry.HttpServer
-	workerMessageSink      func(*workerlivekit.WorkerMessage) error
+	workerMessageSink      func(*WorkerMessage) error
 	workerID               string
 	connectionFailed       bool
 	startedHandlers        []WorkerStartedHandler
@@ -1038,7 +1040,7 @@ func readSystemCPUTimes() (idle uint64, total uint64, err error) {
 	return idle, total, nil
 }
 
-func (s *AgentServer) registerWorkerRequest() *workerlivekit.WorkerMessage {
+func (s *AgentServer) registerWorkerRequest() *WorkerMessage {
 	return workerlivekit.ServerRegisterWorkerMessage(workerlivekit.ServerRegisterWorkerMessageOptions{
 		WorkerType:  s.Options.WorkerType,
 		AgentName:   s.Options.AgentName,
@@ -1047,7 +1049,7 @@ func (s *AgentServer) registerWorkerRequest() *workerlivekit.WorkerMessage {
 	})
 }
 
-func (s *AgentServer) availableWorkerStatusMessage() *workerlivekit.WorkerMessage {
+func (s *AgentServer) availableWorkerStatusMessage() *WorkerMessage {
 	jobCount := uint32(s.activeJobCount())
 	load := s.currentLoad()
 	return workerlivekit.ServerAvailableWorkerStatusMessage(workerlivekit.ServerAvailableWorkerStatusMessageOptions{
@@ -1057,7 +1059,7 @@ func (s *AgentServer) availableWorkerStatusMessage() *workerlivekit.WorkerMessag
 	})
 }
 
-func (s *AgentServer) drainingWorkerStatusMessage() *workerlivekit.WorkerMessage {
+func (s *AgentServer) drainingWorkerStatusMessage() *WorkerMessage {
 	return workerlivekit.ServerDrainingWorkerStatusMessage(uint32(s.activeJobCount()))
 }
 
@@ -1616,7 +1618,7 @@ func (s *AgentServer) releaseAvailabilitySlot() {
 	}
 }
 
-func (s *AgentServer) sendWorkerMessage(msg *workerlivekit.WorkerMessage) error {
+func (s *AgentServer) sendWorkerMessage(msg *WorkerMessage) error {
 	if s.workerMessageSink != nil {
 		return s.workerMessageSink(msg)
 	}
