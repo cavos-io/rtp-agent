@@ -552,6 +552,31 @@ func TestRunContextWithFillerSpeechSourceCountsReturnedHandle(t *testing.T) {
 	}
 }
 
+func TestRunContextWithFillerRejectsNegativeTiming(t *testing.T) {
+	runCtx := NewRunContext(NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{}), nil, &llm.FunctionCall{Name: "lookup"})
+
+	if err := runCtx.WithFiller(context.Background(), FillerOptions{
+		Text:  "invalid",
+		Delay: -time.Millisecond,
+	}, func(context.Context) error {
+		t.Fatal("WithFiller ran work with negative delay")
+		return nil
+	}); err == nil || err.Error() != "delay must be non-negative" {
+		t.Fatalf("negative delay error = %v, want reference message", err)
+	}
+
+	negativeInterval := -time.Millisecond
+	if err := runCtx.WithFiller(context.Background(), FillerOptions{
+		Text:     "invalid",
+		Interval: &negativeInterval,
+	}, func(context.Context) error {
+		t.Fatal("WithFiller ran work with negative interval")
+		return nil
+	}); err == nil || err.Error() != "interval must be non-negative when set" {
+		t.Fatalf("negative interval error = %v, want reference message", err)
+	}
+}
+
 func TestFunctionToolsExecutedEventPairsCallsAndOutputs(t *testing.T) {
 	callA := &llm.FunctionCall{CallID: "call_a", Name: "lookup"}
 	callB := &llm.FunctionCall{CallID: "call_b", Name: "notify"}
