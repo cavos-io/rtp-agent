@@ -409,11 +409,12 @@ type RunContextUpdate struct {
 }
 
 type FillerOptions struct {
-	Text     string
-	Source   func(step int) (string, bool)
-	Delay    time.Duration
-	Interval *time.Duration
-	MaxSteps *int
+	Text         string
+	Source       func(step int) (string, bool)
+	SpeechSource func(step int) (*SpeechHandle, bool)
+	Delay        time.Duration
+	Interval     *time.Duration
+	MaxSteps     *int
 }
 
 func NewRunContext(session *AgentSession, speechHandle *SpeechHandle, functionCall *llm.FunctionCall) *RunContext {
@@ -620,11 +621,14 @@ func (s *runContextFillerScheduler) run(ctx context.Context) {
 		if !s.waitForDwell(ctx, agentEvents, userEvents) {
 			return
 		}
-		text, ok := s.nextText(created)
+		text, handle, ok := s.nextFiller(created)
 		if ok {
-			handle, err := s.runCtx.Session.Say(ctx, text)
-			if err != nil {
-				return
+			if handle == nil {
+				var err error
+				handle, err = s.runCtx.Session.Say(ctx, text)
+				if err != nil {
+					return
+				}
 			}
 			if handle != nil {
 				created++
@@ -639,11 +643,16 @@ func (s *runContextFillerScheduler) run(ctx context.Context) {
 	}
 }
 
-func (s *runContextFillerScheduler) nextText(step int) (string, bool) {
-	if s.opts.Source != nil {
-		return s.opts.Source(step)
+func (s *runContextFillerScheduler) nextFiller(step int) (string, *SpeechHandle, bool) {
+	if s.opts.SpeechSource != nil {
+		handle, ok := s.opts.SpeechSource(step)
+		return "", handle, ok
 	}
-	return s.opts.Text, true
+	if s.opts.Source != nil {
+		text, ok := s.opts.Source(step)
+		return text, nil, ok
+	}
+	return s.opts.Text, nil, true
 }
 
 func (s *runContextFillerScheduler) waitForDwell(ctx context.Context, agentEvents <-chan AgentStateChangedEvent, userEvents <-chan UserStateChangedEvent) bool {

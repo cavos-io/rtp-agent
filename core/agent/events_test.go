@@ -498,6 +498,60 @@ func TestRunContextWithFillerIgnoresNonResetStateEvents(t *testing.T) {
 	}
 }
 
+func TestRunContextWithFillerSpeechSourceCountsReturnedHandle(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	runCtx := NewRunContext(session, NewSpeechHandle(true, DefaultInputDetails()), &llm.FunctionCall{Name: "lookup"})
+
+	interval := 10 * time.Millisecond
+	maxSteps := 1
+	calls := make(chan int, 2)
+	workStarted := make(chan struct{})
+	releaseWork := make(chan struct{})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runCtx.WithFiller(context.Background(), FillerOptions{
+			SpeechSource: func(step int) (*SpeechHandle, bool) {
+				calls <- step
+				return NewSpeechHandle(true, DefaultInputDetails()), true
+			},
+			Delay:    10 * time.Millisecond,
+			Interval: &interval,
+			MaxSteps: &maxSteps,
+		}, func(context.Context) error {
+			close(workStarted)
+			<-releaseWork
+			return nil
+		})
+	}()
+	<-workStarted
+
+	select {
+	case step := <-calls:
+		if step != 0 {
+			t.Fatalf("source step = %d, want 0", step)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunContext.WithFiller did not call SpeechSource")
+	}
+	select {
+	case step := <-calls:
+		t.Fatalf("SpeechSource called again after max_steps reached: %d", step)
+	case <-time.After(40 * time.Millisecond):
+	}
+
+	close(releaseWork)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("WithFiller error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WithFiller did not return after work completed")
+	}
+}
+
 func TestFunctionToolsExecutedEventPairsCallsAndOutputs(t *testing.T) {
 	callA := &llm.FunctionCall{CallID: "call_a", Name: "lookup"}
 	callB := &llm.FunctionCall{CallID: "call_b", Name: "notify"}
