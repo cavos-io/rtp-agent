@@ -397,6 +397,7 @@ type RunContext struct {
 	FunctionCall     *llm.FunctionCall
 	initialStepIndex int
 	updates          []RunContextUpdate
+	fillerSchedulers []*runContextFillerScheduler
 	attached         bool
 	detached         bool
 	mu               sync.Mutex
@@ -405,6 +406,13 @@ type RunContext struct {
 type RunContextUpdate struct {
 	FunctionCall       *llm.FunctionCall
 	FunctionCallOutput *llm.FunctionCallOutput
+}
+
+type FillerOptions struct {
+	Text     string
+	Delay    time.Duration
+	Interval *time.Duration
+	MaxSteps *int
 }
 
 func NewRunContext(session *AgentSession, speechHandle *SpeechHandle, functionCall *llm.FunctionCall) *RunContext {
@@ -444,6 +452,42 @@ func (r *RunContext) Foreground(ctx context.Context, fn func(context.Context) er
 	return r.Session.WaitForInactiveAndHold(ctx, fn)
 }
 
+func (r *RunContext) WithFiller(ctx context.Context, opts FillerOptions, fn func(context.Context) error) error {
+	if r == nil || r.Session == nil || fn == nil {
+		if fn != nil {
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			return fn(ctx)
+		}
+		return nil
+	}
+	if opts.Delay < 0 {
+		return fmt.Errorf("delay must be non-negative")
+	}
+	if opts.Interval != nil && *opts.Interval < 0 {
+		return fmt.Errorf("interval must be non-negative when set")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	schedulerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	scheduler := newRunContextFillerScheduler(r, opts)
+	r.addFillerScheduler(scheduler)
+	done := make(chan struct{})
+	defer func() {
+		cancel()
+		<-done
+		r.removeFillerScheduler(scheduler)
+	}()
+	go func() {
+		defer close(done)
+		scheduler.run(schedulerCtx)
+	}()
+	return fn(ctx)
+}
+
 func (r *RunContext) Userdata() (any, error) {
 	if r == nil || r.Session == nil {
 		return nil, ErrAgentSessionUserdataNotSet
@@ -464,6 +508,7 @@ func (r *RunContext) Update(message any, templates ...string) error {
 	if r == nil || r.FunctionCall == nil {
 		return nil
 	}
+	r.resetFillerDwell()
 	if text, ok := message.(string); ok {
 		template := runContextUpdateTemplate
 		if len(templates) > 0 && templates[0] != "" {
@@ -511,6 +556,155 @@ func (r *RunContext) Updates() []RunContextUpdate {
 	updates := make([]RunContextUpdate, len(r.updates))
 	copy(updates, r.updates)
 	return updates
+}
+
+func (r *RunContext) addFillerScheduler(scheduler *runContextFillerScheduler) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.fillerSchedulers = append(r.fillerSchedulers, scheduler)
+}
+
+func (r *RunContext) removeFillerScheduler(scheduler *runContextFillerScheduler) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, existing := range r.fillerSchedulers {
+		if existing == scheduler {
+			r.fillerSchedulers = append(r.fillerSchedulers[:i], r.fillerSchedulers[i+1:]...)
+			return
+		}
+	}
+}
+
+func (r *RunContext) resetFillerDwell() {
+	r.mu.Lock()
+	schedulers := append([]*runContextFillerScheduler(nil), r.fillerSchedulers...)
+	r.mu.Unlock()
+	for _, scheduler := range schedulers {
+		scheduler.resetDwell()
+	}
+}
+
+type runContextFillerScheduler struct {
+	runCtx *RunContext
+	opts   FillerOptions
+	reset  chan struct{}
+}
+
+func newRunContextFillerScheduler(runCtx *RunContext, opts FillerOptions) *runContextFillerScheduler {
+	return &runContextFillerScheduler{
+		runCtx: runCtx,
+		opts:   opts,
+		reset:  make(chan struct{}, 1),
+	}
+}
+
+func (s *runContextFillerScheduler) resetDwell() {
+	select {
+	case s.reset <- struct{}{}:
+	default:
+	}
+}
+
+func (s *runContextFillerScheduler) run(ctx context.Context) {
+	if s == nil || s.runCtx == nil || s.runCtx.Session == nil {
+		return
+	}
+	agentEvents := s.runCtx.Session.AgentStateChangedEvents()
+	userEvents := s.runCtx.Session.UserStateChangedEvents()
+	created := 0
+	for {
+		if err := s.runCtx.Session.WaitForInactive(ctx); err != nil {
+			return
+		}
+		if !s.waitForDwell(ctx, agentEvents, userEvents) {
+			return
+		}
+		handle, err := s.runCtx.Session.Say(ctx, s.opts.Text)
+		if err != nil {
+			return
+		}
+		if handle != nil {
+			created++
+		}
+		if s.opts.Interval == nil || (s.opts.MaxSteps != nil && created >= *s.opts.MaxSteps) {
+			return
+		}
+		if !s.waitForInterval(ctx, *s.opts.Interval, agentEvents, userEvents) {
+			return
+		}
+	}
+}
+
+func (s *runContextFillerScheduler) waitForDwell(ctx context.Context, agentEvents <-chan AgentStateChangedEvent, userEvents <-chan UserStateChangedEvent) bool {
+	for {
+		timer := time.NewTimer(s.opts.Delay)
+		reset := false
+		select {
+		case <-timer.C:
+			return true
+		case <-ctx.Done():
+			reset = false
+		case <-s.interruptDone():
+			reset = false
+		case <-s.reset:
+			reset = true
+		case ev := <-agentEvents:
+			reset = ev.NewState == AgentStateSpeaking || ev.NewState == AgentStateThinking
+		case ev := <-userEvents:
+			reset = ev.NewState == UserStateSpeaking
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		if !reset && ctx.Err() != nil {
+			return false
+		}
+		if !reset && s.isInterrupted() {
+			return false
+		}
+	}
+}
+
+func (s *runContextFillerScheduler) waitForInterval(ctx context.Context, interval time.Duration, agentEvents <-chan AgentStateChangedEvent, userEvents <-chan UserStateChangedEvent) bool {
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	for {
+		select {
+		case <-timer.C:
+			return true
+		case <-ctx.Done():
+			return false
+		case <-s.interruptDone():
+			return false
+		case <-s.reset:
+			return true
+		case ev := <-agentEvents:
+			if ev.NewState == AgentStateSpeaking || ev.NewState == AgentStateThinking {
+				return true
+			}
+		case ev := <-userEvents:
+			if ev.NewState == UserStateSpeaking {
+				return true
+			}
+		}
+	}
+}
+
+func (s *runContextFillerScheduler) isInterrupted() bool {
+	if s.runCtx == nil || s.runCtx.SpeechHandle == nil {
+		return false
+	}
+	return s.runCtx.SpeechHandle.IsInterrupted()
+}
+
+func (s *runContextFillerScheduler) interruptDone() <-chan struct{} {
+	if s.runCtx == nil || s.runCtx.SpeechHandle == nil {
+		return nil
+	}
+	return s.runCtx.SpeechHandle.interruptCh
 }
 
 func (r *RunContext) attach() {
