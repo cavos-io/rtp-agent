@@ -313,6 +313,70 @@ func TestTranscriptForwarderStopBeforeStartPreventsLaterPublish(t *testing.T) {
 	}
 }
 
+func TestTranscriptForwarderExitsWhenSubscriptionCloses(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		run  func(context.Context, *TranscriptForwarder, chan struct{})
+	}{
+		{
+			name: "user transcript",
+			run: func(ctx context.Context, f *TranscriptForwarder, done chan struct{}) {
+				events := make(chan agent.UserInputTranscribedEvent)
+				close(events)
+				f.wg.Add(1)
+				go func() {
+					f.forwardUserTranscripts(ctx, events)
+					close(done)
+				}()
+			},
+		},
+		{
+			name: "agent transcript",
+			run: func(ctx context.Context, f *TranscriptForwarder, done chan struct{}) {
+				events := make(chan agent.AgentOutputTranscribedEvent)
+				close(events)
+				f.wg.Add(1)
+				go func() {
+					f.forwardAgentTranscripts(ctx, events)
+					close(done)
+				}()
+			},
+		},
+		{
+			name: "agent reasoning",
+			run: func(ctx context.Context, f *TranscriptForwarder, done chan struct{}) {
+				events := make(chan agent.AgentReasoningTranscribedEvent)
+				close(events)
+				f.wg.Add(1)
+				go func() {
+					f.forwardAgentReasoning(ctx, events)
+					close(done)
+				}()
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			forwarder := &TranscriptForwarder{publisher: &recordingDataPublisher{}}
+			done := make(chan struct{})
+
+			tt.run(ctx, forwarder, done)
+
+			select {
+			case <-done:
+			case <-time.After(100 * time.Millisecond):
+				cancel()
+				select {
+				case <-done:
+				case <-time.After(time.Second):
+				}
+				t.Fatal("forwarder did not exit after subscription channel closed")
+			}
+		})
+	}
+}
+
 func waitForPublishedTranscript(t *testing.T, publisher *recordingDataPublisher) map[string]any {
 	t.Helper()
 	deadline := time.After(time.Second)
