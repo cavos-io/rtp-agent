@@ -429,9 +429,25 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 	go func() {
 		defer close(data.AudioCh)
 		defer close(data.TimedTextCh)
-		defer stream.Close()
 		defer cancelStream()
 		defer span.End()
+
+		var closeStreamOnce sync.Once
+		closeStream := func() {
+			closeStreamOnce.Do(func() {
+				_ = stream.Close()
+			})
+		}
+		done := make(chan struct{})
+		defer close(done)
+		defer closeStream()
+		go func() {
+			select {
+			case <-streamCtx.Done():
+				closeStream()
+			case <-done:
+			}
+		}()
 
 		streamOpenedAt := time.Now()
 		startTime := streamOpenedAt
@@ -467,7 +483,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			}
 			streamErrMu.Unlock()
 			cancelStream()
-			_ = stream.Close()
+			closeStream()
 		}
 		var pushedTextMu sync.Mutex
 		var pushedText strings.Builder
@@ -514,22 +530,33 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			if options.DisableTextTransforms {
-				for text := range textCh {
-					markStartTime()
-					if !pushChunks(replaceBuffer.Push(text)) {
+			processText := func(text string) bool {
+				markStartTime()
+				if options.DisableTextTransforms {
+					return pushChunks(replaceBuffer.Push(text))
+				}
+				for _, filteredText := range transformBuffer.Push(text) {
+					if !pushChunks(replaceBuffer.Push(filteredText)) {
+						return false
+					}
+				}
+				return true
+			}
+			for {
+				select {
+				case <-streamCtx.Done():
+					return
+				case text, ok := <-textCh:
+					if !ok {
+						goto inputClosed
+					}
+					if !processText(text) {
 						return
 					}
 				}
-			} else {
-				for text := range textCh {
-					markStartTime()
-					for _, filteredText := range transformBuffer.Push(text) {
-						if !pushChunks(replaceBuffer.Push(filteredText)) {
-							return
-						}
-					}
-				}
+			}
+		inputClosed:
+			if !options.DisableTextTransforms {
 				for _, filteredText := range transformBuffer.Flush() {
 					if !pushChunks(replaceBuffer.Push(filteredText)) {
 						return
