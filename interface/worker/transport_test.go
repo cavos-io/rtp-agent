@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -27,21 +28,41 @@ func TestValidateWorkerTransportRejectsUnknown(t *testing.T) {
 	}
 }
 
-func TestAgoraOptionsValidateRequiresAppIDAndChannel(t *testing.T) {
-	err := (AgoraOptions{}).Validate()
-	if err == nil {
-		t.Fatal("AgoraOptions.Validate() error = nil, want missing app ID")
-	}
-	if !strings.Contains(err.Error(), "AGORA_APP_ID") {
-		t.Fatalf("AgoraOptions.Validate() error = %q, want AGORA_APP_ID", err.Error())
+func TestValidateWorkerTransportAcceptsKnownTransports(t *testing.T) {
+	tests := []struct {
+		name      string
+		transport WorkerTransport
+	}{
+		{name: "default livekit", transport: ""},
+		{name: "livekit", transport: WorkerTransportLiveKit},
+		{name: "agora", transport: WorkerTransportAgora},
+		{name: "trimmed agora", transport: WorkerTransport(" agora ")},
+		{name: "upper livekit", transport: WorkerTransport("LIVEKIT")},
 	}
 
-	err = (AgoraOptions{AppID: "app-id"}).Validate()
-	if err == nil {
-		t.Fatal("AgoraOptions.Validate() error = nil, want missing channel")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := ValidateWorkerTransport(tt.transport); err != nil {
+				t.Fatalf("ValidateWorkerTransport(%q) error = %v", tt.transport, err)
+			}
+		})
 	}
-	if !strings.Contains(err.Error(), "AGORA_CHANNEL") {
-		t.Fatalf("AgoraOptions.Validate() error = %q, want AGORA_CHANNEL", err.Error())
+}
+
+func TestSharedWorkerOptionsDoNotOwnAgoraProviderOptions(t *testing.T) {
+	files := []string{"transport.go", "server.go"}
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		source := string(data)
+		if strings.Contains(source, "type AgoraOptions") {
+			t.Fatalf("%s defines Agora provider options; keep provider config in interface/worker/agora or app wiring", file)
+		}
+		if strings.Contains(source, "Agora          AgoraOptions") {
+			t.Fatalf("%s exposes Agora provider options on shared WorkerOptions", file)
+		}
 	}
 }
 

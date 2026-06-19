@@ -746,16 +746,9 @@ func TestUpdateOptionsMergesConfiguredValuesBeforeRun(t *testing.T) {
 	}
 }
 
-func TestUpdateOptionsPreservesAgoraTransportConfig(t *testing.T) {
+func TestUpdateOptionsPreservesWorkerTransport(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		Transport: WorkerTransportAgora,
-		Agora: AgoraOptions{
-			AppID:          "app",
-			AppCertificate: "cert",
-			Channel:        "support",
-			UID:            "agent",
-			Token:          "token",
-		},
 	})
 
 	err := server.UpdateOptions(WorkerOptions{
@@ -768,21 +761,6 @@ func TestUpdateOptionsPreservesAgoraTransportConfig(t *testing.T) {
 
 	if server.Options.Transport != WorkerTransportAgora {
 		t.Fatalf("Transport = %q, want %q", server.Options.Transport, WorkerTransportAgora)
-	}
-	if server.Options.Agora.AppID != "app" {
-		t.Fatalf("Agora.AppID = %q, want app", server.Options.Agora.AppID)
-	}
-	if server.Options.Agora.AppCertificate != "cert" {
-		t.Fatalf("Agora.AppCertificate = %q, want cert", server.Options.Agora.AppCertificate)
-	}
-	if server.Options.Agora.Channel != "support" {
-		t.Fatalf("Agora.Channel = %q, want support", server.Options.Agora.Channel)
-	}
-	if server.Options.Agora.UID != "agent" {
-		t.Fatalf("Agora.UID = %q, want agent", server.Options.Agora.UID)
-	}
-	if server.Options.Agora.Token != "token" {
-		t.Fatalf("Agora.Token = %q, want token", server.Options.Agora.Token)
 	}
 }
 
@@ -3597,31 +3575,83 @@ func TestValidateRunPreconditionsRejectsUnknownWorkerTransport(t *testing.T) {
 	}
 }
 
-func TestValidateRunPreconditionsRequiresAgoraOptionsForAgoraTransport(t *testing.T) {
+func TestValidateRunPreconditionsAcceptsAgoraWithoutProviderOptions(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		Transport: WorkerTransportAgora,
+		WSRL:      "",
+		APIKey:    "",
+		APISecret: "",
 	})
 	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
 		t.Fatalf("RTCSession() error = %v", err)
 	}
 
-	err := server.validateRunPreconditions()
-	if err == nil {
-		t.Fatal("validateRunPreconditions() error = nil, want Agora config error")
+	if err := server.validateRunPreconditions(); err != nil {
+		t.Fatalf("validateRunPreconditions() error = %v, want provider-neutral preconditions", err)
 	}
-	if !strings.Contains(err.Error(), "AGORA_APP_ID") {
-		t.Fatalf("validateRunPreconditions() error = %q, want AGORA_APP_ID", err.Error())
+	if server.Options.Transport != WorkerTransportAgora {
+		t.Fatalf("Transport = %q, want %q", server.Options.Transport, WorkerTransportAgora)
+	}
+	if server.Options.WSRL != "" || server.Options.APIKey != "" || server.Options.APISecret != "" {
+		t.Fatalf("LiveKit credentials mutated for Agora transport: url=%q key=%q secret=%q", server.Options.WSRL, server.Options.APIKey, server.Options.APISecret)
+	}
+}
+
+func TestValidateRunPreconditionsKeepsTransportCredentialsSeparated(t *testing.T) {
+	tests := []struct {
+		name      string
+		options   WorkerOptions
+		wantError string
+	}{
+		{
+			name: "agora does not require livekit credentials",
+			options: WorkerOptions{
+				Transport: WorkerTransportAgora,
+			},
+		},
+		{
+			name: "livekit still requires url",
+			options: WorkerOptions{
+				Transport: WorkerTransportLiveKit,
+				APIKey:    "key",
+				APISecret: "secret",
+			},
+			wantError: "ws_url is required",
+		},
+		{
+			name: "livekit still requires api key",
+			options: WorkerOptions{
+				Transport: WorkerTransportLiveKit,
+				WSRL:      "wss://livekit.example",
+				APISecret: "secret",
+			},
+			wantError: "api_key is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := NewAgentServer(tt.options)
+			if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+				t.Fatalf("RTCSession() error = %v", err)
+			}
+			err := server.validateRunPreconditions()
+			if tt.wantError == "" {
+				if err != nil {
+					t.Fatalf("validateRunPreconditions() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("validateRunPreconditions() error = %v, want %q", err, tt.wantError)
+			}
+		})
 	}
 }
 
 func TestValidateRunPreconditionsAcceptsAgoraTransportConfig(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		Transport: WorkerTransportAgora,
-		Agora: AgoraOptions{
-			AppID:   "app",
-			Channel: "support",
-			UID:     "agent",
-		},
 	})
 	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
 		t.Fatalf("RTCSession() error = %v", err)
@@ -3635,11 +3665,6 @@ func TestValidateRunPreconditionsAcceptsAgoraTransportConfig(t *testing.T) {
 func TestRunRequiresAgoraTransportRunFunc(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		Transport: WorkerTransportAgora,
-		Agora: AgoraOptions{
-			AppID:   "app",
-			Channel: "support",
-			UID:     "agent",
-		},
 	})
 	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
 		t.Fatalf("RTCSession() error = %v", err)
@@ -3662,6 +3687,26 @@ func TestRunRequiresAgoraTransportRunFunc(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("Run() did not return missing Agora transport runner error")
+	}
+}
+
+func TestRunRequiresAgoraTransportRunnerWithoutProviderValidation(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		Transport: WorkerTransportAgora,
+	})
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	err := server.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run() error = nil, want missing transport runner")
+	}
+	if !strings.Contains(err.Error(), "agora transport run function") {
+		t.Fatalf("Run() error = %q, want missing transport runner", err.Error())
+	}
+	if strings.Contains(err.Error(), "AGORA_") {
+		t.Fatalf("Run() error = %q, want no provider-specific validation", err.Error())
 	}
 }
 

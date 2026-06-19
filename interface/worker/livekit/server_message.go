@@ -1,5 +1,7 @@
 package livekit
 
+import "context"
+
 type ServerRegisterWorkerMessageOptions struct {
 	WorkerType  WorkerType
 	AgentName   string
@@ -11,6 +13,13 @@ type ServerAvailableWorkerStatusMessageOptions struct {
 	Load         float64
 	JobCount     uint32
 	CanAcceptJob bool
+}
+
+type ServerMessageLoopOptions struct {
+	ReadMessage   func() (int, []byte, error)
+	Close         func() error
+	Handle        func(*ServerMessage)
+	OnDecodeError func(error)
 }
 
 func ServerRegisterWorkerMessage(opts ServerRegisterWorkerMessageOptions) *WorkerMessage {
@@ -35,4 +44,29 @@ func ServerDrainingWorkerStatusMessage(jobCount uint32) *WorkerMessage {
 		Draining: true,
 		JobCount: jobCount,
 	})
+}
+
+func ExchangeInitialServerRegisterWebSocket(conn WorkerRegisterWebSocket, msg *WorkerMessage) (*ServerMessage, error) {
+	return ExchangeInitialRegisterWebSocket(conn, msg)
+}
+
+func RunServerMessageLoop(ctx context.Context, opts ServerMessageLoopOptions) error {
+	return RunWorkerMessageLoop(ctx, WorkerMessageLoopOptions{
+		Reader:        WorkerWebSocketReadFunc(opts.ReadMessage),
+		Close:         opts.Close,
+		Handle:        opts.Handle,
+		OnDecodeError: opts.OnDecodeError,
+	})
+}
+
+func RouteServerWorkerMessage(opts ServerMessageRouteOptions) ServerMessageKind {
+	return RouteServerMessage(opts)
+}
+
+func ServerMigratableRunningJobIDs(jobs []RunningJobInfo) []string {
+	return MigratableRunningJobIDs(jobs)
+}
+
+func ServerMigrateRunningJobsMessage(jobs []RunningJobInfo) *WorkerMessage {
+	return MigrateRunningJobsMessage(jobs)
 }

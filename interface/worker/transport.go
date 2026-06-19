@@ -12,14 +12,6 @@ const (
 	WorkerTransportAgora   WorkerTransport = "agora"
 )
 
-type AgoraOptions struct {
-	AppID          string
-	AppCertificate string
-	Channel        string
-	UID            string
-	Token          string
-}
-
 func NormalizeWorkerTransport(value string) WorkerTransport {
 	normalized := strings.ToLower(strings.TrimSpace(value))
 	switch normalized {
@@ -39,14 +31,4 @@ func ValidateWorkerTransport(value WorkerTransport) error {
 	default:
 		return fmt.Errorf("unknown worker transport %q", value)
 	}
-}
-
-func (opts AgoraOptions) Validate() error {
-	if strings.TrimSpace(opts.AppID) == "" {
-		return fmt.Errorf("AGORA_APP_ID is required for agora worker transport")
-	}
-	if strings.TrimSpace(opts.Channel) == "" {
-		return fmt.Errorf("AGORA_CHANNEL is required for agora worker transport")
-	}
-	return nil
 }

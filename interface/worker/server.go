@@ -138,7 +138,6 @@ type WorkerOptions struct {
 	AgentNameIsEnv bool
 	WorkerType     WorkerType
 	Transport      WorkerTransport
-	Agora          AgoraOptions
 	MaxRetry       int
 	MaxRetrySet    bool
 	Version        string
@@ -1257,7 +1256,7 @@ func (s *AgentServer) validateRunPreconditions() error {
 		return err
 	}
 	if transport == WorkerTransportAgora {
-		return s.Options.Agora.Validate()
+		return nil
 	}
 	return workerlivekit.ValidateServerConnectionOptions(workerlivekit.ServerConnectionOptions{
 		WSURL:     s.Options.WSRL,
@@ -1284,6 +1283,9 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	defer s.finishRun()
 
 	if NormalizeWorkerTransport(string(s.Options.Transport)) == WorkerTransportAgora {
+		if err := s.validateRunPreconditions(); err != nil {
+			return err
+		}
 		s.mu.Lock()
 		transportRun := s.transportRun
 		s.mu.Unlock()
@@ -1367,7 +1369,7 @@ func (s *AgentServer) Run(ctx context.Context) error {
 
 	logger.Logger.Infow("Connected to LiveKit Server", "url", s.Options.WSRL)
 
-	msg, err := workerlivekit.ExchangeInitialRegisterWebSocket(conn, s.registerWorkerRequest())
+	msg, err := workerlivekit.ExchangeInitialServerRegisterWebSocket(conn, s.registerWorkerRequest())
 	if err != nil {
 		return err
 	}
@@ -1434,9 +1436,9 @@ func (s *AgentServer) RunUnregistered(ctx context.Context) error {
 }
 
 func (s *AgentServer) runWorkerMessageLoop(ctx context.Context, readMessage func() (int, []byte, error), closeConn func() error) error {
-	return workerlivekit.RunWorkerMessageLoop(ctx, workerlivekit.WorkerMessageLoopOptions{
-		Reader: workerlivekit.WorkerWebSocketReadFunc(readMessage),
-		Close:  closeConn,
+	return workerlivekit.RunServerMessageLoop(ctx, workerlivekit.ServerMessageLoopOptions{
+		ReadMessage: readMessage,
+		Close:       closeConn,
 		Handle: func(msg *workerlivekit.ServerMessage) {
 			s.handleMessage(ctx, msg)
 		},
@@ -1498,7 +1500,7 @@ func (s *AgentServer) sendWorkerStatusUpdate() error {
 func (s *AgentServer) openWorkerWebSocket(ctx context.Context, opts workerlivekit.WorkerWebSocketOpenOptions) (workerlivekit.WorkerWebSocketOpenResult, error) {
 	opts.Dial = workerDialContext
 	opts.Sleep = workerRetrySleep
-	result, err := workerlivekit.OpenWorkerWebSocket(ctx, opts)
+	result, err := workerlivekit.OpenServerWorkerWebSocket(ctx, opts)
 	if err != nil {
 		if result.ConnectFailed {
 			s.setConnectionFailed(true)
@@ -1510,7 +1512,7 @@ func (s *AgentServer) openWorkerWebSocket(ctx context.Context, opts workerliveki
 }
 
 func (s *AgentServer) handleMessage(ctx context.Context, msg *workerlivekit.ServerMessage) {
-	workerlivekit.RouteServerMessage(workerlivekit.ServerMessageRouteOptions{
+	workerlivekit.RouteServerWorkerMessage(workerlivekit.ServerMessageRouteOptions{
 		Message: msg,
 		OnRegister: func(event workerlivekit.WorkerRegisteredEvent) {
 			logger.Logger.Infow("Worker Registered", "workerId", event.WorkerID, "serverInfo", event.ServerInfo)
@@ -1569,13 +1571,13 @@ func callWorkerRegisteredHandler(handler WorkerRegisteredHandler, workerID strin
 func (s *AgentServer) reportActiveJobs() {
 	runningJobs := s.ActiveRunningJobs()
 	livekitJobs := workeripc.ToLiveKitRunningJobInfos(runningJobs)
-	jobIDs := workerlivekit.MigratableRunningJobIDs(livekitJobs)
+	jobIDs := workerlivekit.ServerMigratableRunningJobIDs(livekitJobs)
 
 	if len(jobIDs) == 0 {
 		return
 	}
 
-	if err := s.sendWorkerMessage(workerlivekit.MigrateRunningJobsMessage(livekitJobs)); err != nil {
+	if err := s.sendWorkerMessage(workerlivekit.ServerMigrateRunningJobsMessage(livekitJobs)); err != nil {
 		logger.Logger.Errorw("failed to report active jobs", err, "jobIds", jobIDs)
 	}
 }

@@ -22,6 +22,7 @@ type fakeChannelClient struct {
 	leaveErr     error
 	publishErr   error
 	blockJoin    bool
+	joinCount    int
 	leaveCount   int
 	publishCount int
 	joined       bool
@@ -29,6 +30,7 @@ type fakeChannelClient struct {
 }
 
 func (f *fakeChannelClient) Join(ctx context.Context, opts Options, handler EventHandler, audioHandler AudioHandler) error {
+	f.joinCount++
 	f.joinCtx = ctx
 	f.joinOptions = opts
 	f.handler = handler
@@ -149,6 +151,25 @@ func TestTransportJoinGeneratesTokenFromCertificate(t *testing.T) {
 	}
 }
 
+func TestTransportJoinRejectsDuplicateJoinBeforeClient(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("first Join() error = %v", err)
+	}
+	err := tr.Join(context.Background())
+	if err == nil {
+		t.Fatal("second Join() error = nil, want already joined error")
+	}
+	if !strings.Contains(err.Error(), "already joined") {
+		t.Fatalf("second Join() error = %v, want already joined error", err)
+	}
+	if client.joinCount != 1 {
+		t.Fatalf("client join count = %d, want 1", client.joinCount)
+	}
+}
+
 func TestTransportLeaveDelegatesToClient(t *testing.T) {
 	client := &fakeChannelClient{}
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
@@ -158,6 +179,48 @@ func TestTransportLeaveDelegatesToClient(t *testing.T) {
 	}
 	if !client.left {
 		t.Fatal("client left = false, want true")
+	}
+}
+
+func TestTransportPublishPCMRequiresJoinedChannel(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+	frame := PCMFrame{
+		Data:       []byte{1, 2, 3, 4},
+		SampleRate: 100,
+		Channels:   2,
+	}
+
+	err := tr.PublishPCM(context.Background(), frame)
+	if err == nil {
+		t.Fatal("PublishPCM() before Join error = nil, want not joined error")
+	}
+	if !strings.Contains(err.Error(), "not joined") {
+		t.Fatalf("PublishPCM() before Join error = %v, want not joined error", err)
+	}
+	if client.publishCount != 0 {
+		t.Fatalf("publish count before Join = %d, want 0", client.publishCount)
+	}
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	if err := tr.PublishPCM(context.Background(), frame); err != nil {
+		t.Fatalf("PublishPCM() after Join error = %v", err)
+	}
+	if err := tr.Leave(context.Background()); err != nil {
+		t.Fatalf("Leave() error = %v", err)
+	}
+
+	err = tr.PublishPCM(context.Background(), frame)
+	if err == nil {
+		t.Fatal("PublishPCM() after Leave error = nil, want not joined error")
+	}
+	if !strings.Contains(err.Error(), "not joined") {
+		t.Fatalf("PublishPCM() after Leave error = %v, want not joined error", err)
+	}
+	if client.publishCount != 1 {
+		t.Fatalf("publish count = %d, want 1", client.publishCount)
 	}
 }
 
@@ -333,6 +396,9 @@ func TestTransportPublishPCMValidatesAndDelegates(t *testing.T) {
 		StartPTSMS: 42,
 	}
 
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
 	if err := tr.PublishPCM(context.Background(), frame); err != nil {
 		t.Fatalf("PublishPCM() error = %v", err)
 	}
@@ -353,6 +419,9 @@ func TestTransportPublishPCMNormalizesNilContext(t *testing.T) {
 		Channels:   2,
 	}
 
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
 	var nilCtx context.Context
 	if err := tr.PublishPCM(nilCtx, frame); err != nil {
 		t.Fatalf("PublishPCM() error = %v", err)
