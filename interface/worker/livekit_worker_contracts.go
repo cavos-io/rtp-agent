@@ -185,3 +185,19 @@ func livekitAcceptServerPendingAssignment(
 var livekitJobTerminationInfo = workerlivekit.JobTerminationInfo
 
 var livekitServerJobTerminationPlanForActiveJob = workerlivekit.ServerJobTerminationPlanForActiveJob
+
+var livekitDefaultServerFakeLocalJobOptions = workerlivekit.DefaultServerFakeLocalJobOptions
+
+var livekitPrepareServerLocalJobRunOptions = workerlivekit.PrepareServerLocalJobRunOptions
+
+var livekitServerLocalJobExecutorPlan = workerlivekit.ServerLocalJobExecutorPlan
+
+var livekitServerLocalJobSessionReportPath = workerlivekit.ServerLocalJobSessionReportPath
+
+var livekitServerJobFinishPlan = workerlivekit.ServerJobFinishPlan
+
+var livekitServerJobSessionReportUploadPlan = workerlivekit.ServerJobSessionReportUploadPlan
+
+var livekitServerJobSessionEndPlan = workerlivekit.ServerJobSessionEndPlan
+
+var livekitServerLocalJobContextSetupPlan = workerlivekit.ServerLocalJobContextSetupPlan

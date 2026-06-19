@@ -1739,11 +1739,11 @@ func (s *AgentServer) handleTermination(req *JobTermination) {
 
 // ExecuteLocalJob runs a job locally without connecting to the worker service, useful for the CLI console
 func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, participantIdentity string) error {
-	return s.ExecuteLocalJobWithOptions(ctx, roomName, participantIdentity, workerlivekit.DefaultServerFakeLocalJobOptions())
+	return s.ExecuteLocalJobWithOptions(ctx, roomName, participantIdentity, livekitDefaultServerFakeLocalJobOptions())
 }
 
 func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName string, participantIdentity string, options LocalJobOptions) error {
-	participantIdentity, err := workerlivekit.PrepareServerLocalJobRunOptions(participantIdentity, options)
+	participantIdentity, err := livekitPrepareServerLocalJobRunOptions(participantIdentity, options)
 	if err != nil {
 		return err
 	}
@@ -1751,10 +1751,10 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 		return workerReferenceError(rtcSessionRequiredMessage)
 	}
 	jobCtx := newLocalJobContextWithOptions(roomName, participantIdentity, s.Options, options)
-	if options == workerlivekit.DefaultServerFakeLocalJobOptions() {
+	if options == livekitDefaultServerFakeLocalJobOptions() {
 		jobCtx = newLocalJobContext(roomName, participantIdentity, s.Options)
 	}
-	localJob := workerlivekit.ServerLocalJobExecutorPlan(jobCtx.Job)
+	localJob := livekitServerLocalJobExecutorPlan(jobCtx.Job)
 	jobCtx.workerID = s.workerID
 	jobCtx.LogContextFields()["worker_id"] = jobCtx.WorkerID()
 	shutdownCh := make(chan struct{})
@@ -1795,7 +1795,7 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	case <-shutdownCh:
 	}
 	s.finishJob(jobCtx)
-	if reportPath := workerlivekit.ServerLocalJobSessionReportPath(options, jobCtx.SessionDirectory()); reportPath != "" {
+	if reportPath := livekitServerLocalJobSessionReportPath(options, jobCtx.SessionDirectory()); reportPath != "" {
 		return saveSessionReport(reportPath, jobCtx.Report)
 	}
 	return nil
@@ -1803,7 +1803,7 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 
 func (s *AgentServer) launchLocalJobExecutor(ctx context.Context, jobCtx *JobContext, entrypoint func() error, entrypointDone chan<- struct{}) error {
 	info := runningJobInfoFromContext(jobCtx)
-	localJob := workerlivekit.ServerLocalJobExecutorPlan(jobCtx.Job)
+	localJob := livekitServerLocalJobExecutorPlan(jobCtx.Job)
 	if s.Options.NumIdleProcessesSet && s.Options.NumIdleProcesses > 0 {
 		pool := newLocalProcPool(s.Options.NumIdleProcesses, workeripc.ExecutorTypeThread, entrypoint)
 		pool.SetTargetIdleProcesses(s.Options.NumIdleProcesses)
@@ -1872,7 +1872,7 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
 	if jobCtx == nil {
 		return false
 	}
-	plan := workerlivekit.ServerJobFinishPlan(jobCtx.Job)
+	plan := livekitServerJobFinishPlan(jobCtx.Job)
 	if !plan.Finish {
 		return false
 	}
@@ -1925,7 +1925,7 @@ func jobSessionReportUploadPlan(jobCtx *JobContext, opts WorkerOptions) JobSessi
 	if jobCtx == nil {
 		return JobSessionReportUploadPlanResult{}
 	}
-	return workerlivekit.ServerJobSessionReportUploadPlan(JobSessionReportUploadPlanOptions{
+	return livekitServerJobSessionReportUploadPlan(JobSessionReportUploadPlanOptions{
 		Job:       jobCtx.Job,
 		FakeJob:   jobCtx.IsFakeJob(),
 		Report:    jobCtx.Report,
@@ -1941,7 +1941,7 @@ func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
 		return
 	}
 
-	plan := workerlivekit.ServerJobSessionEndPlan(JobSessionEndPlanOptions{
+	plan := livekitServerJobSessionEndPlan(JobSessionEndPlanOptions{
 		Job:            jobCtx.Job,
 		TimeoutSeconds: s.Options.SessionEndTimeoutSeconds,
 	})
@@ -1985,12 +1985,12 @@ func saveSessionReport(path string, report *agent.SessionReport) error {
 }
 
 func newLocalJobContext(roomName string, participantIdentity string, opts WorkerOptions) *JobContext {
-	return newLocalJobContextWithOptions(roomName, participantIdentity, opts, workerlivekit.DefaultServerFakeLocalJobOptions())
+	return newLocalJobContextWithOptions(roomName, participantIdentity, opts, livekitDefaultServerFakeLocalJobOptions())
 }
 
 func newLocalJobContextWithOptions(roomName string, participantIdentity string, opts WorkerOptions, options LocalJobOptions) *JobContext {
 	opts = resolveWorkerOptions(opts)
-	localPlan := workerlivekit.ServerLocalJobContextSetupPlan(LocalJobContextSetupPlanOptions{
+	localPlan := livekitServerLocalJobContextSetupPlan(LocalJobContextSetupPlanOptions{
 		RoomName:            roomName,
 		ParticipantIdentity: participantIdentity,
 		APIKey:              opts.APIKey,
