@@ -195,6 +195,7 @@ type sonioxTTSSynthesizeStream struct {
 	errCh      chan error
 	mu         sync.Mutex
 	closed     bool
+	audioEnded bool
 
 	writeMessage func(map[string]any) error
 }
@@ -294,18 +295,32 @@ func (s *sonioxTTSSynthesizeStream) readLoop() {
 		if msgType != websocket.TextMessage {
 			continue
 		}
-		audio, done, err := sonioxTTSAudioFromMessage(payload, s.streamID, s.sampleRate)
+		done, err := s.handleSonioxTTSMessage(payload)
 		if err != nil {
 			s.errCh <- err
 			return
-		}
-		if audio != nil {
-			s.events <- audio
 		}
 		if done {
 			return
 		}
 	}
+}
+
+func (s *sonioxTTSSynthesizeStream) handleSonioxTTSMessage(payload []byte) (bool, error) {
+	audio, audioEnd, terminated, err := sonioxTTSAudioFromMessage(payload, s.streamID, s.sampleRate)
+	if err != nil {
+		return false, err
+	}
+	if audio != nil {
+		s.events <- audio
+	}
+	if audioEnd {
+		s.audioEnded = true
+	}
+	if terminated && !s.audioEnded {
+		return false, fmt.Errorf("soniox tts stream terminated without producing audio")
+	}
+	return terminated, nil
 }
 
 func (s *sonioxTTSSynthesizeStream) keepAliveLoop() {
@@ -364,7 +379,7 @@ func writeSonioxTTSMessage(conn *websocket.Conn, message map[string]any) error {
 	return conn.WriteMessage(websocket.TextMessage, payload)
 }
 
-func sonioxTTSAudioFromMessage(payload []byte, streamID string, sampleRate int) (*tts.SynthesizedAudio, bool, error) {
+func sonioxTTSAudioFromMessage(payload []byte, streamID string, sampleRate int) (*tts.SynthesizedAudio, bool, bool, error) {
 	var message struct {
 		StreamID     string `json:"stream_id"`
 		Audio        string `json:"audio"`
@@ -374,23 +389,23 @@ func sonioxTTSAudioFromMessage(payload []byte, streamID string, sampleRate int) 
 		ErrorMessage string `json:"error_message"`
 	}
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	if message.StreamID == "" || message.StreamID != streamID {
-		return nil, false, nil
+		return nil, false, false, nil
 	}
 	if message.ErrorCode != nil {
-		return nil, false, fmt.Errorf("soniox tts error %v: %s", message.ErrorCode, message.ErrorMessage)
+		return nil, false, false, fmt.Errorf("soniox tts error %v: %s", message.ErrorCode, message.ErrorMessage)
 	}
 	var audio *tts.SynthesizedAudio
 	if message.Audio != "" {
 		data, err := base64.StdEncoding.DecodeString(message.Audio)
 		if err != nil {
-			return nil, false, err
+			return nil, false, false, err
 		}
 		audio = sonioxTTSAudioFrame(data, sampleRate)
 	}
-	return audio, message.Terminated, nil
+	return audio, message.AudioEnd, message.Terminated, nil
 }
 
 func sonioxTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {

@@ -168,30 +168,64 @@ func TestSonioxTTSAudioFromMessageDecodesAudioAndTermination(t *testing.T) {
 		"terminated": true,
 	})
 
-	audio, done, err := sonioxTTSAudioFromMessage(payload, "stream-1", 24000)
+	audio, audioEnd, done, err := sonioxTTSAudioFromMessage(payload, "stream-1", 24000)
 	if err != nil {
 		t.Fatalf("audio from message: %v", err)
 	}
 	assertSonioxTTSAudio(t, audio, []byte{0x01, 0x02, 0x03, 0x04})
+	if !audioEnd {
+		t.Fatal("audioEnd = false, want true for audio_end response")
+	}
 	if !done {
 		t.Fatal("done = false, want true for terminated response")
 	}
 }
 
 func TestSonioxTTSAudioFromMessageIgnoresOtherStreams(t *testing.T) {
-	audio, done, err := sonioxTTSAudioFromMessage([]byte(`{"stream_id":"other","audio":"AQI="}`), "stream-1", 24000)
+	audio, audioEnd, done, err := sonioxTTSAudioFromMessage([]byte(`{"stream_id":"other","audio":"AQI="}`), "stream-1", 24000)
 	if err != nil {
 		t.Fatalf("audio from message: %v", err)
 	}
-	if audio != nil || done {
-		t.Fatalf("audio/done = %#v/%v, want ignored message", audio, done)
+	if audio != nil || audioEnd || done {
+		t.Fatalf("audio/audioEnd/done = %#v/%v/%v, want ignored message", audio, audioEnd, done)
 	}
 }
 
 func TestSonioxTTSAudioFromMessageReportsProviderError(t *testing.T) {
-	_, _, err := sonioxTTSAudioFromMessage([]byte(`{"stream_id":"stream-1","error_code":429,"error_message":"rate limited"}`), "stream-1", 24000)
+	_, _, _, err := sonioxTTSAudioFromMessage([]byte(`{"stream_id":"stream-1","error_code":429,"error_message":"rate limited"}`), "stream-1", 24000)
 	if err == nil || !strings.Contains(err.Error(), "429") || !strings.Contains(err.Error(), "rate limited") {
 		t.Fatalf("error = %v, want provider error", err)
+	}
+}
+
+func TestSonioxTTSStreamRejectsBareTerminationLikeReference(t *testing.T) {
+	stream := &sonioxTTSSynthesizeStream{
+		streamID:   "stream-1",
+		sampleRate: 24000,
+		events:     make(chan *tts.SynthesizedAudio, 1),
+	}
+
+	done, err := stream.handleSonioxTTSMessage([]byte(`{"stream_id":"stream-1","terminated":true}`))
+
+	if err == nil || !strings.Contains(err.Error(), "terminated without producing audio") {
+		t.Fatalf("handle message error = %v, want bare termination error", err)
+	}
+	if done {
+		t.Fatal("done = true, want false on bare termination error")
+	}
+
+	stream = &sonioxTTSSynthesizeStream{
+		streamID:   "stream-1",
+		sampleRate: 24000,
+		events:     make(chan *tts.SynthesizedAudio, 1),
+	}
+	done, err = stream.handleSonioxTTSMessage([]byte(`{"stream_id":"stream-1","audio_end":true}`))
+	if err != nil || done {
+		t.Fatalf("audio_end handling = done %v error %v, want open stream", done, err)
+	}
+	done, err = stream.handleSonioxTTSMessage([]byte(`{"stream_id":"stream-1","terminated":true}`))
+	if err != nil || !done {
+		t.Fatalf("terminated after audio_end = done %v error %v, want normal completion", done, err)
 	}
 }
 
