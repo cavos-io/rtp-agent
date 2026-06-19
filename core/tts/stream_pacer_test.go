@@ -180,6 +180,27 @@ func TestSentenceStreamPacerPropagatesUnderlyingError(t *testing.T) {
 	}
 }
 
+func TestSentenceStreamPacerSkipsNilSynthesizedAudioEvents(t *testing.T) {
+	underlying := newNilThenAudioPacerStream()
+	pacer := NewSentenceStreamPacerWithOptions(context.Background(), underlying, SentenceStreamPacerOptions{})
+	defer pacer.Close()
+
+	if err := pacer.PushText("Only segment."); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := pacer.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	audio, err := pacer.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("Next() audio = %#v, want nil event skipped and real audio returned", audio)
+	}
+}
+
 func TestSentenceStreamPacerCloseWaitsForAudioLoop(t *testing.T) {
 	underlying := newBlockingClosePacerStream()
 	pacer := NewSentenceStreamPacerWithOptions(context.Background(), underlying, SentenceStreamPacerOptions{})
@@ -415,6 +436,56 @@ func (s *eofAfterOnePacerStream) Next() (*SynthesizedAudio, error) {
 			SamplesPerChannel: 24000,
 		},
 	}, nil
+}
+
+type nilThenAudioPacerStream struct {
+	ready chan struct{}
+	once  sync.Once
+	index int
+}
+
+func newNilThenAudioPacerStream() *nilThenAudioPacerStream {
+	return &nilThenAudioPacerStream{
+		ready: make(chan struct{}),
+	}
+}
+
+func (s *nilThenAudioPacerStream) PushText(string) error {
+	s.once.Do(func() {
+		close(s.ready)
+	})
+	return nil
+}
+
+func (s *nilThenAudioPacerStream) Flush() error {
+	return nil
+}
+
+func (s *nilThenAudioPacerStream) Close() error {
+	s.once.Do(func() {
+		close(s.ready)
+	})
+	return nil
+}
+
+func (s *nilThenAudioPacerStream) Next() (*SynthesizedAudio, error) {
+	<-s.ready
+	switch s.index {
+	case 0:
+		s.index++
+		return nil, nil
+	case 1:
+		s.index++
+		return &SynthesizedAudio{
+			Frame: &model.AudioFrame{
+				SampleRate:        24000,
+				NumChannels:       1,
+				SamplesPerChannel: 24000,
+			},
+		}, nil
+	default:
+		return nil, io.EOF
+	}
 }
 
 type blockingClosePacerStream struct {
