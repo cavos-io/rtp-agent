@@ -4161,6 +4161,37 @@ func TestPipelineAgentReplyWithoutTTSAudioCommitsAssistantText(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentInterruptedTextOnlyReplySkipsAssistantText(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, &fakeGenerationLLM{}, nil, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	textCh := make(chan string)
+	close(textCh)
+	functionCh := make(chan *llm.FunctionToolCall)
+	close(functionCh)
+	speech.setPrecomputedLLMGeneration(&LLMGenerationData{
+		TextCh:        textCh,
+		FunctionCh:    functionCh,
+		GeneratedText: "unheard text only answer",
+		ID:            "item_text_only",
+	})
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chatCtx.Items = %#v, want no assistant message for interrupted text-only reply", chatCtx.Items)
+	}
+	if len(speech.ChatItems()) != 0 {
+		t.Fatalf("speech.ChatItems = %#v, want no committed assistant message", speech.ChatItems())
+	}
+}
+
 func TestPipelineAgentReplyFlushesPlaybackAfterTTSEOFBeforeWaiting(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

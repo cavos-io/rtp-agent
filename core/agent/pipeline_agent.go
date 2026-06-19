@@ -837,7 +837,14 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		va.emitLLMMetrics(session, genData)
 
 		va.waitForAssistantPlayout(ctx, session, opts.SpeechHandle)
-		forwardedText := va.forwardedAssistantTextAfterInterruption(ctx, session, opts.SpeechHandle, genData.GeneratedText)
+		forwardedText := genData.GeneratedText
+		if opts.SpeechHandle != nil && opts.SpeechHandle.IsInterrupted() {
+			if ttsGen == nil && session.AudioPlaybackController() == nil {
+				forwardedText = ""
+			} else {
+				forwardedText = va.forwardedAssistantTextAfterInterruption(ctx, session, opts.SpeechHandle, genData.GeneratedText)
+			}
+		}
 		if forwardedText != "" {
 			args := llm.ChatMessageArgs{
 				ID:          genData.ID,
