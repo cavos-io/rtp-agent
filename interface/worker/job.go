@@ -33,7 +33,7 @@ func currentInferenceContextHeaders() map[string]string {
 	if !ok || ctx == nil || ctx.Job == nil {
 		return nil
 	}
-	return workerlivekit.JobContextInferenceHeaders(ctx.Job)
+	return livekitJobContextInferenceHeaders(ctx.Job)
 }
 
 type jobContextStack struct {
@@ -195,7 +195,7 @@ func (p *JobProcess) HTTPProxy() string {
 }
 
 func NewJobAPI(url string, apiKey string, apiSecret string) *JobAPI {
-	return workerlivekit.NewJobContextAPI(url, apiKey, apiSecret)
+	return livekitNewJobContextAPI(url, apiKey, apiSecret)
 }
 
 type ParticipantEntrypoint func(*JobContext, *ParticipantInfo)
@@ -239,7 +239,7 @@ type JobContext struct {
 }
 
 func NewJobContext(job *Job, url string, apiKey string, apiSecret string) *JobContext {
-	report, tagger := workerlivekit.NewJobContextSessionReport(job)
+	report, tagger := livekitNewJobContextSessionReport(job)
 	return &JobContext{
 		Job:              job,
 		url:              url,
@@ -250,7 +250,7 @@ func NewJobContext(job *Job, url string, apiKey string, apiSecret string) *JobCo
 		process:          NewJobProcess(JobExecutorTypeThread, nil, ""),
 		shutdownDone:     make(chan struct{}),
 		entrypointDone:   make(chan struct{}),
-		logContextFields: workerlivekit.JobContextLogFields(job),
+		logContextFields: livekitJobContextLogFields(job),
 	}
 }
 
@@ -297,19 +297,19 @@ func (c *JobContext) API() *JobAPI {
 }
 
 func (c *JobContext) ParticipantIdentity() string {
-	return workerlivekit.JobContextParticipantIdentity(c.Job, c.AcceptArguments.Identity)
+	return livekitJobContextParticipantIdentity(c.Job, c.AcceptArguments.Identity)
 }
 
 func (c *JobContext) LocalParticipantIdentity() string {
-	return workerlivekit.JobContextLocalParticipantIdentity(c.token, c.ParticipantIdentity())
+	return livekitJobContextLocalParticipantIdentity(c.token, c.ParticipantIdentity())
 }
 
 func (c *JobContext) TokenClaims() (*ClaimGrants, error) {
-	return workerlivekit.JobContextTokenClaims(c.token)
+	return livekitJobContextTokenClaims(c.token)
 }
 
 func (c *JobContext) JobID() string {
-	return workerlivekit.JobContextJobID(c.Job)
+	return livekitJobContextJobID(c.Job)
 }
 
 func (c *JobContext) IsFakeJob() bool {
@@ -370,7 +370,7 @@ func (c *JobContext) MakeSessionReport(sessions ...*agent.AgentSession) (*agent.
 	}
 
 	report := agent.NewSessionReport(session)
-	workerlivekit.PopulateJobContextSessionReport(report, c.Job)
+	livekitPopulateJobContextSessionReport(report, c.Job)
 	if c.Report != nil {
 		report.RecordingOptions = c.Report.RecordingOptions
 		report.AudioRecordingPath = c.Report.AudioRecordingPath
@@ -383,22 +383,22 @@ func (c *JobContext) MakeSessionReport(sessions ...*agent.AgentSession) (*agent.
 }
 
 func (c *JobContext) AvatarStartInfo() agent.AvatarStartInfo {
-	return workerlivekit.JobContextAvatarStartInfo(c.Job, c.url, c.token, c.LocalParticipantIdentity())
+	return livekitJobContextAvatarStartInfo(c.Job, c.url, c.token, c.LocalParticipantIdentity())
 }
 
 func (c *JobContext) RoomInfo() *Room {
-	return workerlivekit.JobContextRoom(c.Job)
+	return livekitJobContextRoom(c.Job)
 }
 
 func (c *JobContext) PublisherInfo() *ParticipantInfo {
-	return workerlivekit.JobContextPublisher(c.Job)
+	return livekitJobContextPublisher(c.Job)
 }
 
 func (c *JobContext) Agent() *LocalParticipant {
 	if c == nil {
 		return nil
 	}
-	return workerlivekit.JobContextLocalParticipant(c.Room)
+	return livekitJobContextLocalParticipant(c.Room)
 }
 
 var jobContextNewRoom = workerlivekit.NewJobContextRoom

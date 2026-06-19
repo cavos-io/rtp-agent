@@ -235,3 +235,29 @@ var livekitServerMigratableRunningJobIDs = workerlivekit.ServerMigratableRunning
 var livekitServerAssignmentContextValues = workerlivekit.ServerAssignmentContextValues
 
 var livekitRunServerJobEntrypointLifecycle = workerlivekit.RunServerJobEntrypointLifecycle
+
+var livekitJobContextInferenceHeaders = workerlivekit.JobContextInferenceHeaders
+
+var livekitNewJobContextAPI = workerlivekit.NewJobContextAPI
+
+var livekitNewJobContextSessionReport = workerlivekit.NewJobContextSessionReport
+
+var livekitJobContextLogFields = workerlivekit.JobContextLogFields
+
+var livekitJobContextParticipantIdentity = workerlivekit.JobContextParticipantIdentity
+
+var livekitJobContextLocalParticipantIdentity = workerlivekit.JobContextLocalParticipantIdentity
+
+var livekitJobContextTokenClaims = workerlivekit.JobContextTokenClaims
+
+var livekitJobContextJobID = workerlivekit.JobContextJobID
+
+var livekitPopulateJobContextSessionReport = workerlivekit.PopulateJobContextSessionReport
+
+var livekitJobContextAvatarStartInfo = workerlivekit.JobContextAvatarStartInfo
+
+var livekitJobContextRoom = workerlivekit.JobContextRoom
+
+var livekitJobContextPublisher = workerlivekit.JobContextPublisher
+
+var livekitJobContextLocalParticipant = workerlivekit.JobContextLocalParticipant
