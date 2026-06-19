@@ -95,6 +95,64 @@ func TestRealtimeModelCloseClosesActiveSessions(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionUpdateToolsSkipsProviderTools(t *testing.T) {
+	messages := make(chan string, 2)
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("Read tools update error = %v", err)
+			return
+		}
+		messages <- string(msg)
+		<-releaseServer
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateTools([]llm.Tool{requestTestTool{}, openAIRealtimeProviderTestTool{}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+
+	update := <-messages
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(update), &payload); err != nil {
+		t.Fatalf("Decode tools update error = %v", err)
+	}
+	sessionPayload := payload["session"].(map[string]any)
+	tools := sessionPayload["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("tools length = %d, want only function tools: %#v", len(tools), tools)
+	}
+	tool := tools[0].(map[string]any)
+	if tool["name"] != "lookup" {
+		t.Fatalf("tool name = %#v, want lookup", tool["name"])
+	}
+}
+
+type openAIRealtimeProviderTestTool struct {
+	requestTestTool
+}
+
+func (openAIRealtimeProviderTestTool) ID() string                 { return "web_search" }
+func (openAIRealtimeProviderTestTool) Name() string               { return "web_search" }
+func (openAIRealtimeProviderTestTool) Description() string        { return "provider web search" }
+func (openAIRealtimeProviderTestTool) IsProviderTool() bool       { return true }
+func (openAIRealtimeProviderTestTool) Parameters() map[string]any { return map[string]any{} }
+
 func TestNewOpenAIRealtimeModelUsesEnvAPIKey(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "env-key")
 

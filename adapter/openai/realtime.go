@@ -796,6 +796,9 @@ func (m *RealtimeModel) realtimeTools(tools []llm.Tool) []map[string]any {
 func openAIRealtimeTools(tools []llm.Tool) []map[string]any {
 	var oaTools []map[string]any
 	for _, t := range tools {
+		if _, ok := t.(llm.ProviderTool); ok {
+			continue
+		}
 		oaTools = append(oaTools, map[string]any{
 			"type":        "function",
 			"name":        t.Name(),
