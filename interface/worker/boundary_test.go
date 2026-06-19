@@ -166,6 +166,22 @@ func TestSharedWorkerDoesNotExposeLiveKitWorkerMessageDirectly(t *testing.T) {
 	}
 }
 
+func TestServerKeepsLiveKitCompatibilityAliasesOutOfImplementation(t *testing.T) {
+	data, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatalf("read server.go: %v", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "type ") && strings.Contains(line, "= workerlivekit.") {
+			t.Fatalf("server.go owns LiveKit compatibility alias %q; move it to shared worker contracts", line)
+		}
+		if strings.HasPrefix(line, "WorkerType") && strings.Contains(line, "= workerlivekit.") {
+			t.Fatalf("server.go owns LiveKit compatibility const %q; move it to shared worker contracts", line)
+		}
+	}
+}
+
 func TestSharedJobContextDoesNotCallLiveKitInfoHelpersDirectly(t *testing.T) {
 	forbiddenCalls := []string{
 		"workerlivekit.JobInferenceHeaders(",
