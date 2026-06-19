@@ -79,6 +79,28 @@ func TestRTMMessageRouterDispatchesTENInputTextType(t *testing.T) {
 	}
 }
 
+func TestRTMMessageRouterDefaultsMissingStreamID(t *testing.T) {
+	var got TextInputEvent
+	router := RTMMessageRouter{
+		TextInput: func(_ context.Context, ev TextInputEvent) error {
+			got = ev
+			return nil
+		},
+	}
+
+	err := router.HandleDataMessage(context.Background(), DataMessage{
+		Channel:   "support",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"data_type":"input_text","text":"hello from ten"}`),
+	})
+	if err != nil {
+		t.Fatalf("HandleDataMessage() error = %v, want nil", err)
+	}
+	if got.StreamID != "0" {
+		t.Fatalf("StreamID = %q, want TEN default stream id 0", got.StreamID)
+	}
+}
+
 func TestRTMMessageRouterPreservesNumericStreamID(t *testing.T) {
 	var got TextInputEvent
 	router := RTMMessageRouter{

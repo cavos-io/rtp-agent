@@ -61,9 +61,13 @@ func (r RTMMessageRouter) HandleDataMessage(ctx context.Context, msg DataMessage
 	if messageType != "input_text" {
 		return nil
 	}
+	streamID := rtmStreamIDValue(payload.StreamID)
+	if streamID == "" {
+		streamID = "0"
+	}
 	return r.TextInput(normalizeContext(ctx), TextInputEvent{
 		Text:      payload.Text,
-		StreamID:  rtmStreamIDValue(payload.StreamID),
+		StreamID:  streamID,
 		Channel:   msg.Channel,
 		Publisher: msg.Publisher,
 	})
