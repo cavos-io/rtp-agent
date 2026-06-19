@@ -138,9 +138,9 @@ func TestLiveKitPrivateFacadeHooksStayScopedByWorkerOwner(t *testing.T) {
 }
 
 func TestLiveKitServerBridgeDoesNotOwnJobLifecycleHooks(t *testing.T) {
-	data, err := os.ReadFile("livekit_worker_contracts.go")
+	data, err := os.ReadFile("livekit_server_bridge.go")
 	if err != nil {
-		t.Fatalf("read livekit_worker_contracts.go: %v", err)
+		t.Fatalf("read livekit_server_bridge.go: %v", err)
 	}
 	forbidden := []string{
 		"livekitJobAssignmentInfo",
@@ -172,7 +172,20 @@ func TestLiveKitServerBridgeDoesNotOwnJobLifecycleHooks(t *testing.T) {
 	text := string(data)
 	for _, name := range forbidden {
 		if strings.Contains(text, name) {
-			t.Fatalf("livekit_worker_contracts.go owns %s; keep LiveKit job lifecycle hooks in the job bridge", name)
+			t.Fatalf("livekit_server_bridge.go owns %s; keep LiveKit job lifecycle hooks in the job bridge", name)
+		}
+	}
+}
+
+func TestLiveKitBridgeFilesUseExplicitOwnerNames(t *testing.T) {
+	forbidden := []string{
+		"livekit_worker_contracts.go",
+	}
+	for _, path := range forbidden {
+		if _, err := os.Stat(path); err == nil {
+			t.Fatalf("%s is too broad; LiveKit bridge files should name the owner boundary", path)
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("stat %s: %v", path, err)
 		}
 	}
 }
