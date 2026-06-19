@@ -4196,6 +4196,39 @@ func TestPipelineAgentReplySplitsTTSOnLLMFlush(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentPreemptiveTTSDoesNotCollapseLLMFlushSegments(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "first preemptive"}},
+				{Delta: &llm.ChoiceDelta{Flush: true}},
+				{Delta: &llm.ChoiceDelta{Content: "second preemptive"}},
+			},
+		},
+	}
+	firstTTS := &fakePipelineTTSStream{}
+	secondTTS := &fakePipelineTTSStream{}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		PreemptiveGenerationPreemptiveTTS:    true,
+		PreemptiveGenerationPreemptiveTTSSet: true,
+	})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{streams: []*fakePipelineTTSStream{firstTTS, secondTTS}}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	agent.OnSpeechPreemptive(context.Background(), speech)
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	if firstTTS.text.String() != "first preemptive" {
+		t.Fatalf("first TTS text = %q, want first preemptive", firstTTS.text.String())
+	}
+	if secondTTS.text.String() != "second preemptive" {
+		t.Fatalf("second TTS text = %q, want second preemptive", secondTTS.text.String())
+	}
+}
+
 func TestPipelineAgentInterruptedTextOnlyReplySkipsAssistantText(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})

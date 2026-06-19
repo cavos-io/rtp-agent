@@ -75,13 +75,14 @@ type SpeechHandle struct {
 	Priority           int
 	CreatedAt          time.Time
 
-	numSteps          int
-	chatItems         []llm.ChatItem
-	runFinalOutput    any
-	runFinalOutputSet bool
-	precomputedLLM    *LLMGenerationData
-	precomputedTTS    *TTSGenerationData
-	precomputeCancel  context.CancelFunc
+	numSteps               int
+	chatItems              []llm.ChatItem
+	runFinalOutput         any
+	runFinalOutputSet      bool
+	precomputedLLM         *LLMGenerationData
+	precomputedTTS         *TTSGenerationData
+	precomputedTTSSegments <-chan precomputedTTSSegment
+	precomputeCancel       context.CancelFunc
 
 	interruptCh        chan struct{}
 	doneCh             chan struct{}
@@ -232,6 +233,22 @@ func (s *SpeechHandle) takePrecomputedTTSGeneration() *TTSGenerationData {
 	data := s.precomputedTTS
 	s.precomputedTTS = nil
 	return data
+}
+
+func (s *SpeechHandle) setPrecomputedTTSSegments(segments <-chan precomputedTTSSegment) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.precomputedTTSSegments = segments
+}
+
+func (s *SpeechHandle) takePrecomputedTTSSegments() <-chan precomputedTTSSegment {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	segments := s.precomputedTTSSegments
+	s.precomputedTTSSegments = nil
+	return segments
 }
 
 func (s *SpeechHandle) setPrecomputedGenerationCancel(cancel context.CancelFunc) {
