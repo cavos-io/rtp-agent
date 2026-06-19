@@ -845,6 +845,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 				return
 			}
 		}
+		waitForLLMGenerationDone(genData)
 		if genData.StreamErr != nil {
 			if !suppressContextCanceledError(ctx, opts.SpeechHandle, genData.StreamErr) {
 				logger.Logger.Errorw("LLM stream failed", genData.StreamErr)
@@ -1213,6 +1214,13 @@ func (va *PipelineAgent) playPrecomputedTTSSegments(ctx context.Context, session
 		}
 	}
 	return firstGen, nil
+}
+
+func waitForLLMGenerationDone(genData *LLMGenerationData) {
+	if genData == nil || genData.Done == nil {
+		return
+	}
+	<-genData.Done
 }
 
 func (va *PipelineAgent) waitForAssistantPlayout(ctx context.Context, session *AgentSession, speech *SpeechHandle) {
