@@ -53,6 +53,7 @@ func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
 		"workerlivekit.OpenWorkerWebSocket(",
 		"workerlivekit.WorkerStatusUpdateMessage(",
 		"workerlivekit.RegisterWorkerMessage(",
+		"workerlivekit.RouteServerMessage(",
 		"workerlivekit.RunWorkerMessageLoop(",
 		"workerlivekit.ValidateWorkerConnectionOptions(",
 	}

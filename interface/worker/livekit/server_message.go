@@ -58,3 +58,7 @@ func RunServerMessageLoop(ctx context.Context, opts ServerMessageLoopOptions) er
 		OnDecodeError: opts.OnDecodeError,
 	})
 }
+
+func RouteServerWorkerMessage(opts ServerMessageRouteOptions) ServerMessageKind {
+	return RouteServerMessage(opts)
+}

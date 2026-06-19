@@ -1510,7 +1510,7 @@ func (s *AgentServer) openWorkerWebSocket(ctx context.Context, opts workerliveki
 }
 
 func (s *AgentServer) handleMessage(ctx context.Context, msg *workerlivekit.ServerMessage) {
-	workerlivekit.RouteServerMessage(workerlivekit.ServerMessageRouteOptions{
+	workerlivekit.RouteServerWorkerMessage(workerlivekit.ServerMessageRouteOptions{
 		Message: msg,
 		OnRegister: func(event workerlivekit.WorkerRegisteredEvent) {
 			logger.Logger.Infow("Worker Registered", "workerId", event.WorkerID, "serverInfo", event.ServerInfo)
