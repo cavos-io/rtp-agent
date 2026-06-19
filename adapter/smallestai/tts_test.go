@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -309,9 +310,66 @@ func TestSmallestAITTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestSmallestAITTSChunkedStreamCloseIsIdempotent(t *testing.T) {
+	body := &smallestAICloseCountBody{reader: bytes.NewReader([]byte{0x01, 0x02})}
+	stream := &smallestaiTTSChunkedStream{
+		resp: &http.Response{Body: body},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("first Close() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close() error = %v, want nil", err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body close count = %d, want 1", body.closeCount)
+	}
+}
+
+func TestSmallestAITTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	body := &smallestAICloseCountBody{reader: bytes.NewReader([]byte{0x01, 0x02})}
+	stream := &smallestaiTTSChunkedStream{
+		resp: &http.Response{Body: body},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	audio, err := stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after close error = %v, want EOF", err)
+	}
+	if audio != nil {
+		t.Fatalf("Next() after close audio = %+v, want nil", audio)
+	}
+}
+
 func assertSmallestAIPayload(t *testing.T, payload map[string]any, key string, want string) {
 	t.Helper()
 	if got := payload[key]; got != want {
 		t.Fatalf("%s = %#v, want %q", key, got, want)
 	}
+}
+
+type smallestAICloseCountBody struct {
+	reader     *bytes.Reader
+	closeCount int
+	closed     bool
+}
+
+func (b *smallestAICloseCountBody) Read(p []byte) (int, error) {
+	if b.closed {
+		return 0, errors.New("read after close")
+	}
+	return b.reader.Read(p)
+}
+
+func (b *smallestAICloseCountBody) Close() error {
+	b.closeCount++
+	if b.closed {
+		return errors.New("closed twice")
+	}
+	b.closed = true
+	return nil
 }

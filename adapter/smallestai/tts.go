@@ -264,11 +264,18 @@ func buildSmallestAITTSStreamMessage(t *SmallestAITTS, text string) ([]byte, err
 type smallestaiTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
+	mu         sync.Mutex
 }
 
 func (s *smallestaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	s.mu.Lock()
+	resp := s.resp
+	s.mu.Unlock()
+	if resp == nil || resp.Body == nil {
+		return nil, io.EOF
+	}
 	buf := make([]byte, 4096)
-	n, err := s.resp.Body.Read(buf)
+	n, err := resp.Body.Read(buf)
 	if err != nil {
 		if err == io.EOF {
 			return nil, io.EOF
@@ -287,7 +294,14 @@ func (s *smallestaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *smallestaiTTSChunkedStream) Close() error {
-	return s.resp.Body.Close()
+	s.mu.Lock()
+	resp := s.resp
+	s.resp = nil
+	s.mu.Unlock()
+	if resp == nil || resp.Body == nil {
+		return nil
+	}
+	return resp.Body.Close()
 }
 
 type smallestaiTTSWebsocketChunkedStream struct {
