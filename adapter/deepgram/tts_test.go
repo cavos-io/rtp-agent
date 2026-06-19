@@ -385,6 +385,55 @@ func TestDeepgramTTSStreamCloseIgnoresReferenceFlushWriteFailure(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSStreamCloseWaitsForReferenceFlushedAck(t *testing.T) {
+	sawClose := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramTTSFlushOnCloseWebsocketServer(serverConn, sawClose, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- stream.Close()
+	}()
+
+	select {
+	case <-sawClose:
+	case <-time.After(time.Second):
+		t.Fatal("server did not receive Close message")
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want Flushed final marker", err)
+	}
+	if audio == nil || !audio.IsFinal {
+		t.Fatalf("Next() = %+v, want final marker from Flushed ack", audio)
+	}
+
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
 func TestDeepgramTTSStreamSpeakTextKeepsReferenceTrailingSeparator(t *testing.T) {
 	var speakText string
 	stream := &deepgramTTSStream{
@@ -645,4 +694,73 @@ func runDeepgramNormalCloseWebsocketServer(conn net.Conn, closeAfterHandshake <-
 	}
 	close(closed)
 	errCh <- nil
+}
+
+func runDeepgramTTSFlushOnCloseWebsocketServer(conn net.Conn, sawClose chan<- struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	for {
+		opcode, payload, err := readDeepgramTestClientWebsocketFrame(reader)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if opcode != websocket.TextMessage {
+			continue
+		}
+		if strings.Contains(string(payload), `"type":"Close"`) {
+			close(sawClose)
+			time.Sleep(50 * time.Millisecond)
+			if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(`{"type":"Flushed"}`)); err != nil {
+				errCh <- err
+				return
+			}
+			errCh <- nil
+			return
+		}
+	}
+}
+
+func readDeepgramTestClientWebsocketFrame(r *bufio.Reader) (int, []byte, error) {
+	header := make([]byte, 2)
+	if _, err := io.ReadFull(r, header); err != nil {
+		return 0, nil, err
+	}
+	opcode := int(header[0] & 0x0f)
+	masked := header[1]&0x80 != 0
+	length := int(header[1] & 0x7f)
+	if length == 126 {
+		ext := make([]byte, 2)
+		if _, err := io.ReadFull(r, ext); err != nil {
+			return 0, nil, err
+		}
+		length = int(ext[0])<<8 | int(ext[1])
+	} else if length == 127 {
+		return 0, nil, fmt.Errorf("test websocket frame too large")
+	}
+	mask := make([]byte, 4)
+	if masked {
+		if _, err := io.ReadFull(r, mask); err != nil {
+			return 0, nil, err
+		}
+	}
+	payload := make([]byte, length)
+	if _, err := io.ReadFull(r, payload); err != nil {
+		return 0, nil, err
+	}
+	if masked {
+		for i := range payload {
+			payload[i] ^= mask[i%4]
+		}
+	}
+	return opcode, payload, nil
 }

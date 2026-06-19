@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -20,6 +21,7 @@ import (
 )
 
 const defaultDeepgramTTSBaseURL = "https://api.deepgram.com/v1/speak"
+const deepgramTTSCloseAckTimeout = time.Second
 
 type DeepgramTTS struct {
 	apiKey     string
@@ -159,6 +161,7 @@ func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 		conn:       conn,
 		audio:      make(chan *tts.SynthesizedAudio, 10),
 		errCh:      make(chan error, 1),
+		flushed:    make(chan struct{}, 1),
 		sampleRate: t.sampleRate,
 	}
 	stream.writeJSON = stream.writeJSONMessage
@@ -246,6 +249,7 @@ type deepgramTTSStream struct {
 	sampleRate int
 	writeJSON  func(any) error
 	closeConn  func() error
+	flushed    chan struct{}
 }
 
 func (s *deepgramTTSStream) readLoop() {
@@ -294,10 +298,21 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 	switch metadata["type"] {
 	case "Flushed":
 		s.audio <- &tts.SynthesizedAudio{IsFinal: true}
+		s.signalFlushed()
 	case "Error", "error":
 		return llm.NewAPIError("Deepgram TTS returned error", metadata, true)
 	}
 	return nil
+}
+
+func (s *deepgramTTSStream) signalFlushed() {
+	if s.flushed == nil {
+		return
+	}
+	select {
+	case s.flushed <- struct{}{}:
+	default:
+	}
 }
 
 func (s *deepgramTTSStream) PushText(text string) error {
@@ -350,12 +365,25 @@ func (s *deepgramTTSStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	_ = s.writeJSONData(map[string]interface{}{"type": "Flush"})
-	_ = s.writeJSONData(map[string]interface{}{"type": "Close"})
+	flushErr := s.writeJSONData(map[string]interface{}{"type": "Flush"})
+	closeErr := s.writeJSONData(map[string]interface{}{"type": "Close"})
+	if flushErr == nil && closeErr == nil {
+		s.waitForFlushedAckLocked()
+	}
 	if err := s.closeConnection(); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (s *deepgramTTSStream) waitForFlushedAckLocked() {
+	if s.flushed == nil {
+		return
+	}
+	select {
+	case <-s.flushed:
+	case <-time.After(deepgramTTSCloseAckTimeout):
+	}
 }
 
 func (s *deepgramTTSStream) writeJSONData(v any) error {
