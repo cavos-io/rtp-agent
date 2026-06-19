@@ -268,6 +268,40 @@ func TestCartesiaTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSSynthesizeSendsReferenceHeaders(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: cartesiaRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("X-API-Key") != "test-key" {
+			t.Fatalf("X-API-Key = %q, want test-key", req.Header.Get("X-API-Key"))
+		}
+		if req.Header.Get("Cartesia-Version") != "2025-04-16" {
+			t.Fatalf("Cartesia-Version = %q, want 2025-04-16", req.Header.Get("Cartesia-Version"))
+		}
+		if req.Header.Get("User-Agent") == "" {
+			t.Fatal("User-Agent header missing")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("audio")),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+	defer func() {
+		http.DefaultClient = oldClient
+	}()
+
+	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("https://cartesia.test"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+}
+
 func TestCartesiaTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
 	oldClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: cartesiaRoundTripperFunc(func(*http.Request) (*http.Response, error) {

@@ -168,6 +168,7 @@ func (t *CartesiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", t.apiKey)
 	req.Header.Set("Cartesia-Version", t.apiVersion)
+	req.Header.Set("User-Agent", cartesiaTTSUserAgent)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
