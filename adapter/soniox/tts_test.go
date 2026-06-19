@@ -136,6 +136,39 @@ func TestSonioxTTSOutboundMessagesMatchReference(t *testing.T) {
 	}
 }
 
+func TestSonioxTTSStreamLazilySendsStartConfigLikeReference(t *testing.T) {
+	provider := NewSonioxTTS("test-key")
+	var sent []map[string]any
+	stream := &sonioxTTSSynthesizeStream{
+		provider: provider,
+		streamID: "stream-1",
+		writeMessage: func(message map[string]any) error {
+			sent = append(sent, message)
+			return nil
+		},
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush before text error = %v", err)
+	}
+	if len(sent) != 0 {
+		t.Fatalf("messages after empty flush = %#v, want none", sent)
+	}
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if len(sent) != 2 {
+		t.Fatalf("messages after first text = %#v, want start config then text", sent)
+	}
+	if sent[0]["api_key"] != "test-key" || sent[0]["stream_id"] != "stream-1" {
+		t.Fatalf("first message = %#v, want start config", sent[0])
+	}
+	if sent[1]["text"] != "hello" || sent[1]["stream_id"] != "stream-1" {
+		t.Fatalf("second message = %#v, want text delta", sent[1])
+	}
+}
+
 func TestSonioxTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	writeErr := errors.New("websocket closed")
 	stream := &sonioxTTSSynthesizeStream{

@@ -162,11 +162,6 @@ func (t *SonioxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		errCh:      make(chan error, 1),
 	}
 	stream.writeMessage = stream.writeWebsocketMessage
-	if err := writeSonioxTTSMessage(conn, buildSonioxTTSStartConfig(t, streamID)); err != nil {
-		conn.Close()
-		cancel()
-		return nil, err
-	}
 	go stream.readLoop()
 	go stream.keepAliveLoop()
 	return stream, nil
@@ -196,6 +191,7 @@ type sonioxTTSSynthesizeStream struct {
 	mu         sync.Mutex
 	closed     bool
 	audioEnded bool
+	configSent bool
 
 	writeMessage func(map[string]any) error
 }
@@ -208,6 +204,10 @@ func (s *sonioxTTSSynthesizeStream) PushText(text string) error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
+	}
+	if err := s.ensureStartConfigLocked(); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
 	}
 	if err := s.writeMessageData(buildSonioxTTSTextMessage(s.streamID, text, false)); err != nil {
 		s.closeAfterWriteFailureLocked()
@@ -222,10 +222,28 @@ func (s *sonioxTTSSynthesizeStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if !s.configSent {
+		return nil
+	}
 	if err := s.writeMessageData(buildSonioxTTSTextMessage(s.streamID, "", true)); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
+	return nil
+}
+
+func (s *sonioxTTSSynthesizeStream) ensureStartConfigLocked() error {
+	if s.configSent {
+		return nil
+	}
+	if s.provider == nil {
+		s.configSent = true
+		return nil
+	}
+	if err := s.writeMessageData(buildSonioxTTSStartConfig(s.provider, s.streamID)); err != nil {
+		return err
+	}
+	s.configSent = true
 	return nil
 }
 
