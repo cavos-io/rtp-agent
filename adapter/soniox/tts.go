@@ -254,8 +254,15 @@ func (s *sonioxTTSSynthesizeStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	s.cancel()
-	_ = writeSonioxTTSMessage(s.conn, buildSonioxTTSCancelMessage(s.streamID))
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.configSent {
+		_ = s.writeMessageData(buildSonioxTTSCancelMessage(s.streamID))
+	}
+	if s.conn == nil {
+		return nil
+	}
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
 }

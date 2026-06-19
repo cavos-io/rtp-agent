@@ -169,6 +169,39 @@ func TestSonioxTTSStreamLazilySendsStartConfigLikeReference(t *testing.T) {
 	}
 }
 
+func TestSonioxTTSCloseBeforeTextSendsNoCancelLikeReference(t *testing.T) {
+	var sent []map[string]any
+	stream := &sonioxTTSSynthesizeStream{
+		streamID: "stream-1",
+		writeMessage: func(message map[string]any) error {
+			sent = append(sent, message)
+			return nil
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if len(sent) != 0 {
+		t.Fatalf("messages after close before text = %#v, want none", sent)
+	}
+
+	stream = &sonioxTTSSynthesizeStream{
+		streamID:   "stream-1",
+		configSent: true,
+		writeMessage: func(message map[string]any) error {
+			sent = append(sent, message)
+			return nil
+		},
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after config error = %v", err)
+	}
+	if len(sent) != 1 || sent[0]["cancel"] != true {
+		t.Fatalf("messages after close with config = %#v, want cancel", sent)
+	}
+}
+
 func TestSonioxTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	writeErr := errors.New("websocket closed")
 	stream := &sonioxTTSSynthesizeStream{
