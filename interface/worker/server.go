@@ -19,7 +19,6 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
-	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	mathutil "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -292,7 +291,7 @@ func (s *AgentServer) ActiveRunningJobs() []workeripc.RunningJobInfo {
 }
 
 func runningJobInfoFromContext(jobCtx *JobContext) workeripc.RunningJobInfo {
-	return workeripc.FromLiveKitRunningJobInfo(workerlivekit.ServerRunningJobInfoSnapshot(RunningJobInfoOptions{
+	return workeripc.FromLiveKitRunningJobInfo(livekitServerRunningJobInfoSnapshot(RunningJobInfoOptions{
 		AcceptArguments: JobAcceptArguments{
 			Name:       jobCtx.AcceptArguments.Name,
 			Identity:   jobCtx.AcceptArguments.Identity,
@@ -328,7 +327,7 @@ func jobLogValues(jobCtx *JobContext, values ...any) []any {
 }
 
 func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.RunningJobInfo, now time.Time) error {
-	refreshed, err := workerlivekit.RefreshServerRunningJobsForReload(workeripc.ToLiveKitRunningJobInfos(jobs), s.Options.APISecret, now)
+	refreshed, err := livekitRefreshServerRunningJobsForReload(workeripc.ToLiveKitRunningJobInfos(jobs), s.Options.APISecret, now)
 	if err != nil {
 		return err
 	}
@@ -338,7 +337,7 @@ func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.Ru
 			continue
 		}
 
-		reloadedJob := workerlivekit.ServerReloadedJobContextValues(ReloadedJobContextValueOptions{
+		reloadedJob := livekitServerReloadedJobContextValues(ReloadedJobContextValueOptions{
 			Info:            info,
 			OverrideURL:     s.Options.WSRL,
 			DefaultWorkerID: s.workerID,
@@ -346,7 +345,7 @@ func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.Ru
 		jobCtx := NewJobContext(reloadedJob.Job, reloadedJob.URL, s.Options.APIKey, s.Options.APISecret)
 		jobCtx.process = s.newJobProcess()
 		if reloadedJob.EnableRecording {
-			jobCtx.InitRecording(workerlivekit.ServerRecordingOptions())
+			jobCtx.InitRecording(livekitServerRecordingOptions())
 		}
 		jobCtx.token = reloadedJob.Token
 		jobCtx.workerID = reloadedJob.WorkerID
@@ -371,7 +370,7 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 		return workerReferenceError(rtcSessionRequiredMessage)
 	}
 
-	runningJob := workerlivekit.ServerRunningJobContextValues(RunningJobContextValueOptions{
+	runningJob := livekitServerRunningJobContextValues(RunningJobContextValueOptions{
 		Info:            workeripc.ToLiveKitRunningJobInfo(info),
 		OverrideURL:     s.Options.WSRL,
 		DefaultWorkerID: s.workerID,
@@ -379,7 +378,7 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 	jobCtx := NewJobContext(runningJob.Job, runningJob.URL, s.Options.APIKey, s.Options.APISecret)
 	jobCtx.process = s.newJobProcess()
 	if runningJob.EnableRecording {
-		jobCtx.InitRecording(workerlivekit.ServerRecordingOptions())
+		jobCtx.InitRecording(livekitServerRecordingOptions())
 	}
 	jobCtx.token = runningJob.Token
 	jobCtx.workerID = runningJob.WorkerID
@@ -390,7 +389,7 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 	s.activeJobs[runningJob.JobID] = jobCtx
 	s.mu.Unlock()
 
-	return workerlivekit.RunServerRunningJobEntrypointLifecycle(RunningJobEntrypointLifecycleOptions{
+	return livekitRunServerRunningJobEntrypointLifecycle(RunningJobEntrypointLifecycleOptions{
 		Context:     ctx,
 		MarkStarted: jobCtx.markEntrypointStarted,
 		Entrypoint: func() error {
@@ -428,7 +427,7 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 
 	jobCtx.markEntrypointStarted()
 	go func() {
-		workerlivekit.RunServerReloadedJobEntrypointLifecycle(ReloadedJobEntrypointLifecycleOptions{
+		livekitRunServerReloadedJobEntrypointLifecycle(ReloadedJobEntrypointLifecycleOptions{
 			Context: ctx,
 			Entrypoint: func() error {
 				return s.runJobEntrypoint(jobCtx)
@@ -1553,7 +1552,7 @@ func callWorkerRegisteredHandler(handler WorkerRegisteredHandler, workerID strin
 func (s *AgentServer) reportActiveJobs() {
 	runningJobs := s.ActiveRunningJobs()
 	livekitJobs := workeripc.ToLiveKitRunningJobInfos(runningJobs)
-	jobIDs := workerlivekit.ServerMigratableRunningJobIDs(livekitJobs)
+	jobIDs := livekitServerMigratableRunningJobIDs(livekitJobs)
 
 	if len(jobIDs) == 0 {
 		return
@@ -1650,7 +1649,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *JobAssignment) 
 		return
 	}
 
-	assignedJob := workerlivekit.ServerAssignmentContextValues(AssignmentContextValueOptions{
+	assignedJob := livekitServerAssignmentContextValues(AssignmentContextValueOptions{
 		Assignment:      assignment,
 		AcceptArguments: args,
 		WorkerID:        s.workerID,
@@ -1658,7 +1657,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *JobAssignment) 
 	jobCtx := NewJobContext(assignedJob.Job, assignedJob.URL, s.Options.APIKey, s.Options.APISecret)
 	jobCtx.process = s.newJobProcess()
 	if assignedJob.EnableRecording {
-		jobCtx.InitRecording(workerlivekit.ServerRecordingOptions())
+		jobCtx.InitRecording(livekitServerRecordingOptions())
 	}
 	jobCtx.token = assignedJob.Token
 	jobCtx.workerID = assignedJob.WorkerID
@@ -1674,7 +1673,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *JobAssignment) 
 	if s.entrypointFnc != nil {
 		jobCtx.markEntrypointStarted()
 		go func() {
-			workerlivekit.RunServerJobEntrypointLifecycle(JobEntrypointLifecycleOptions{
+			livekitRunServerJobEntrypointLifecycle(JobEntrypointLifecycleOptions{
 				Context: ctx,
 				Entrypoint: func() error {
 					return s.runJobEntrypoint(jobCtx)

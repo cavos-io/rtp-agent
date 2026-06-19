@@ -215,3 +215,23 @@ var livekitResolveServerAgentNameFromEnv = workerlivekit.ResolveServerAgentNameF
 var livekitValidateServerConnectionOptions = workerlivekit.ValidateServerConnectionOptions
 
 var livekitApplyServerConnectionEnv = workerlivekit.ApplyServerConnectionEnv
+
+var livekitServerRunningJobInfoSnapshot = workerlivekit.ServerRunningJobInfoSnapshot
+
+var livekitRefreshServerRunningJobsForReload = workerlivekit.RefreshServerRunningJobsForReload
+
+var livekitServerReloadedJobContextValues = workerlivekit.ServerReloadedJobContextValues
+
+var livekitServerRecordingOptions = workerlivekit.ServerRecordingOptions
+
+var livekitServerRunningJobContextValues = workerlivekit.ServerRunningJobContextValues
+
+var livekitRunServerRunningJobEntrypointLifecycle = workerlivekit.RunServerRunningJobEntrypointLifecycle
+
+var livekitRunServerReloadedJobEntrypointLifecycle = workerlivekit.RunServerReloadedJobEntrypointLifecycle
+
+var livekitServerMigratableRunningJobIDs = workerlivekit.ServerMigratableRunningJobIDs
+
+var livekitServerAssignmentContextValues = workerlivekit.ServerAssignmentContextValues
+
+var livekitRunServerJobEntrypointLifecycle = workerlivekit.RunServerJobEntrypointLifecycle
