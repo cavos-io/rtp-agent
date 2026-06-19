@@ -1072,6 +1072,61 @@ func TestDeepgramSTTStreamChunksAndFinalizesReferenceAudio(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTStreamCloseDrainsFinalTranscript(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	closeSent := make(chan struct{})
+	closeDone := make(chan error, 1)
+	stream := &deepgramStream{
+		ctx:    ctx,
+		cancel: cancel,
+		events: make(chan *stt.SpeechEvent, 1),
+		writeJSON: func(payload any) error {
+			msg, ok := payload.(map[string]string)
+			if ok && msg["type"] == "CloseStream" {
+				close(closeSent)
+			}
+			return nil
+		},
+	}
+
+	go func() {
+		closeDone <- stream.Close()
+	}()
+
+	select {
+	case <-closeSent:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CloseStream")
+	}
+
+	select {
+	case <-ctx.Done():
+		t.Fatal("stream context canceled before final transcript drain")
+	default:
+	}
+
+	want := &stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text: "final words",
+		}},
+	}
+	stream.sendEvent(want)
+
+	select {
+	case got := <-stream.events:
+		if got.Type != stt.SpeechEventFinalTranscript || got.Alternatives[0].Text != "final words" {
+			t.Fatalf("event = %#v, want drained final transcript", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for final transcript during close drain")
+	}
+
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+}
+
 func runDeepgramClosingWebsocketServer(conn net.Conn, closeAfterHandshake <-chan struct{}, closed chan<- struct{}, errCh chan<- error) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)

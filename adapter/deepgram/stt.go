@@ -863,12 +863,12 @@ func (s *deepgramStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	if s.cancel != nil {
-		s.cancel()
-	}
 	_ = s.writeJSONData(map[string]string{"type": "CloseStream"})
 	// Wait a tiny bit for the final transcript
 	time.Sleep(50 * time.Millisecond)
+	if s.cancel != nil {
+		s.cancel()
+	}
 	return s.closeConnection()
 }
 
