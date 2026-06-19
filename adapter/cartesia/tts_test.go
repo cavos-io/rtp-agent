@@ -281,6 +281,37 @@ func TestCartesiaTTSChunkedStreamReadErrorReturnsAPIConnectionError(t *testing.T
 	}
 }
 
+func TestCartesiaTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
+	body := &cartesiaCloseCountBody{Reader: strings.NewReader("audio")}
+	stream := &cartesiaTTSChunkedStream{
+		resp: &http.Response{Body: body},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("first Close() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close() error = %v, want nil", err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close() calls = %d, want 1", body.closeCount)
+	}
+}
+
+func TestCartesiaTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	stream := &cartesiaTTSChunkedStream{
+		resp: &http.Response{Body: &cartesiaCloseCountBody{Reader: strings.NewReader("audio")}},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	audio, err := stream.Next()
+	if err != io.EOF {
+		t.Fatalf("Next after Close = (%#v, %v), want io.EOF", audio, err)
+	}
+}
+
 func TestCartesiaSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
 	provider := NewCartesiaTTS("test-key", "", "",
 		WithCartesiaBaseURL("https://cartesia.example"),
@@ -327,6 +358,19 @@ func (r cartesiaErrorReadCloser) Read([]byte) (int, error) {
 }
 
 func (r cartesiaErrorReadCloser) Close() error {
+	return nil
+}
+
+type cartesiaCloseCountBody struct {
+	*strings.Reader
+	closeCount int
+}
+
+func (b *cartesiaCloseCountBody) Close() error {
+	b.closeCount++
+	if b.closeCount > 1 {
+		return errors.New("closed twice")
+	}
 	return nil
 }
 

@@ -241,9 +241,15 @@ func buildCartesiaOptions(t *CartesiaTTS, streaming bool) map[string]interface{}
 type cartesiaTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
+	mu         sync.Mutex
 }
 
 func (s *cartesiaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.resp == nil || s.resp.Body == nil {
+		return nil, io.EOF
+	}
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
 	if err != nil {
@@ -264,7 +270,15 @@ func (s *cartesiaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *cartesiaTTSChunkedStream) Close() error {
-	return s.resp.Body.Close()
+	s.mu.Lock()
+	if s.resp == nil || s.resp.Body == nil {
+		s.mu.Unlock()
+		return nil
+	}
+	body := s.resp.Body
+	s.resp = nil
+	s.mu.Unlock()
+	return body.Close()
 }
 
 func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
