@@ -36,3 +36,7 @@ func ServerDrainingWorkerStatusMessage(jobCount uint32) *WorkerMessage {
 		JobCount: jobCount,
 	})
 }
+
+func ExchangeInitialServerRegisterWebSocket(conn WorkerRegisterWebSocket, msg *WorkerMessage) (*ServerMessage, error) {
+	return ExchangeInitialRegisterWebSocket(conn, msg)
+}

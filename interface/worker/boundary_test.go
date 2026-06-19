@@ -49,6 +49,7 @@ func TestWorkerProductionCodeUsesLiveKitSubpackageForLiveKitImports(t *testing.T
 func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
 	forbiddenCalls := []string{
 		"workerlivekit.ApplyWorkerEnv(",
+		"workerlivekit.ExchangeInitialRegisterWebSocket(",
 		"workerlivekit.WorkerStatusUpdateMessage(",
 		"workerlivekit.RegisterWorkerMessage(",
 		"workerlivekit.ValidateWorkerConnectionOptions(",
