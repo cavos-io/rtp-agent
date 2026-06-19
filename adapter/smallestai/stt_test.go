@@ -124,6 +124,67 @@ func TestSmallestAISTTUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) 
 	assertSmallestAIQuery(t, query, "eou_timeout_ms", "250")
 }
 
+func TestSmallestAISTTUpdateOptionsReconnectsActiveStreams(t *testing.T) {
+	requestURLs := make(chan string, 2)
+	handlerErr := make(chan error, 2)
+	dialer := newSmallestAISTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		select {
+		case requestURLs <- r.URL.String():
+		case <-time.After(time.Second):
+			handlerErr <- errors.New("timed out recording websocket request URL")
+			return
+		}
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})
+
+	provider := NewSmallestAISTT("test-key",
+		WithSmallestAISTTBaseURL("ws://smallest.test/waves/v1"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+
+	first := readSmallestAIRequestURL(t, requestURLs, handlerErr)
+	if !strings.HasPrefix(first, "/waves/v1/pulse/get_text?") {
+		t.Fatalf("initial request URL = %q, want pulse endpoint", first)
+	}
+	firstQuery, err := url.Parse(first)
+	if err != nil {
+		t.Fatalf("parse initial URL: %v", err)
+	}
+	assertSmallestAIQuery(t, firstQuery.Query(), "language", "en")
+	assertSmallestAIQuery(t, firstQuery.Query(), "sample_rate", "16000")
+
+	provider.UpdateOptions(
+		WithSmallestAISTTModel("pulse-v2"),
+		WithSmallestAISTTLanguage("hi"),
+		WithSmallestAISTTSampleRate(48000),
+		WithSmallestAISTTEncoding("pcm_s16le"),
+		WithSmallestAISTTEOUTimeoutMS(250),
+	)
+
+	second := readSmallestAIRequestURL(t, requestURLs, handlerErr)
+	if !strings.HasPrefix(second, "/waves/v1/pulse-v2/get_text?") {
+		t.Fatalf("reconnect request URL = %q, want updated model endpoint", second)
+	}
+	secondQuery, err := url.Parse(second)
+	if err != nil {
+		t.Fatalf("parse reconnect URL: %v", err)
+	}
+	query := secondQuery.Query()
+	assertSmallestAIQuery(t, query, "language", "hi")
+	assertSmallestAIQuery(t, query, "encoding", "pcm_s16le")
+	assertSmallestAIQuery(t, query, "sample_rate", "48000")
+	assertSmallestAIQuery(t, query, "eou_timeout_ms", "250")
+}
+
 func TestNewSmallestAISTTUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("SMALLEST_API_KEY", "env-key")
 
@@ -541,6 +602,19 @@ func readSmallestAITestChan[T any](t *testing.T, ch <-chan T, errCh <-chan error
 		t.Fatal("timed out waiting for websocket server")
 	}
 	return zero
+}
+
+func readSmallestAIRequestURL(t *testing.T, ch <-chan string, errCh <-chan error) string {
+	t.Helper()
+	select {
+	case got := <-ch:
+		return got
+	case err := <-errCh:
+		t.Fatal(err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for websocket request")
+	}
+	return ""
 }
 
 func TestSmallestAISTTRecognizeResponseDecode(t *testing.T) {

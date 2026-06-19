@@ -43,6 +43,8 @@ type SmallestAISTT struct {
 	diarize        bool
 	eouTimeoutMS   int
 	dialWebsocket  smallestAISTTWebsocketDialer
+	mu             sync.Mutex
+	streams        map[*smallestAISTTStream]struct{}
 }
 
 type SmallestAISTTOption func(*SmallestAISTT)
@@ -131,6 +133,7 @@ func NewSmallestAISTT(apiKey string, opts ...SmallestAISTTOption) *SmallestAISTT
 		diarize:        false,
 		eouTimeoutMS:   defaultSmallestAISTTEOUTimeoutMS,
 		dialWebsocket:  defaultSmallestAISTTWebsocketDialer,
+		streams:        make(map[*smallestAISTTStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -151,10 +154,21 @@ func (s *SmallestAISTT) UpdateOptions(opts ...SmallestAISTTOption) {
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
 	for _, opt := range opts {
 		if opt != nil {
 			opt(s)
 		}
+	}
+	streamOptions := s.streamOptionsLocked("")
+	streams := make([]*smallestAISTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.mu.Unlock()
+
+	for _, stream := range streams {
+		stream.updateOptions(streamOptions)
 	}
 }
 
@@ -177,22 +191,47 @@ func (s *SmallestAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 		return nil, err
 	}
 
-	conn, _, err := s.dialWebsocket(ctx, buildSmallestAISTTStreamURL(s, language), buildSmallestAISTTHeaders(s))
+	s.mu.Lock()
+	streamOptions := s.streamOptionsLocked(language)
+	dialWebsocket := s.dialWebsocket
+	s.mu.Unlock()
+	conn, _, err := dialWebsocket(ctx, buildSmallestAISTTStreamURLFromOptions(streamOptions), buildSmallestAISTTHeadersFromAPIKey(streamOptions.apiKey))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial smallestai stt websocket: %w", err)
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &smallestAISTTStream{
-		conn:       conn,
-		events:     make(chan *stt.SpeechEvent, 100),
-		errCh:      make(chan error, 1),
-		ctx:        streamCtx,
-		cancel:     cancel,
-		state:      &smallestAISTTStreamState{language: resolveSmallestAISTTLanguage(s, language), diarize: s.diarize},
-		sampleRate: s.sampleRate,
+		owner:         s,
+		dialWebsocket: dialWebsocket,
+		conn:          conn,
+		events:        make(chan *stt.SpeechEvent, 100),
+		errCh:         make(chan error, 1),
+		ctx:           streamCtx,
+		cancel:        cancel,
+		state:         &smallestAISTTStreamState{language: streamOptions.language, diarize: streamOptions.diarize},
 	}
+	stream.applyOptions(streamOptions)
+	s.registerStream(stream)
 	go stream.readLoop()
 	return stream, nil
+}
+
+func (s *SmallestAISTT) registerStream(stream *smallestAISTTStream) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.streams == nil {
+		s.streams = make(map[*smallestAISTTStream]struct{})
+	}
+	s.streams[stream] = struct{}{}
+}
+
+func (s *SmallestAISTT) unregisterStream(stream *smallestAISTTStream) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.streams, stream)
 }
 
 func defaultSmallestAISTTWebsocketDialer(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
@@ -295,11 +334,15 @@ func buildSmallestAISTTHTTPURL(s *SmallestAISTT, language string) string {
 }
 
 func buildSmallestAISTTStreamURL(s *SmallestAISTT, language string) string {
-	streamBase := strings.TrimRight(s.baseURL, "/")
+	return buildSmallestAISTTStreamURLFromOptions(s.streamOptionsLocked(language))
+}
+
+func buildSmallestAISTTStreamURLFromOptions(opts smallestAISTTStreamOptions) string {
+	streamBase := strings.TrimRight(opts.baseURL, "/")
 	streamBase = strings.Replace(streamBase, "https://", "wss://", 1)
 	streamBase = strings.Replace(streamBase, "http://", "ws://", 1)
-	u, _ := url.Parse(streamBase + "/" + s.model + "/get_text")
-	q := smallestAISTTQuery(s, language, true)
+	u, _ := url.Parse(streamBase + "/" + opts.model + "/get_text")
+	q := smallestAISTTQueryFromOptions(opts, true)
 	u.RawQuery = q.Encode()
 	return u.String()
 }
@@ -317,9 +360,26 @@ func smallestAISTTQuery(s *SmallestAISTT, language string, includeEOU bool) url.
 	return q
 }
 
+func smallestAISTTQueryFromOptions(opts smallestAISTTStreamOptions, includeEOU bool) url.Values {
+	q := url.Values{}
+	q.Set("language", opts.language)
+	q.Set("encoding", opts.encoding)
+	q.Set("sample_rate", strconv.Itoa(opts.sampleRate))
+	q.Set("word_timestamps", strconv.FormatBool(opts.wordTimestamps))
+	q.Set("diarize", strconv.FormatBool(opts.diarize))
+	if includeEOU && opts.eouTimeoutMS > 0 {
+		q.Set("eou_timeout_ms", strconv.Itoa(opts.eouTimeoutMS))
+	}
+	return q
+}
+
 func buildSmallestAISTTHeaders(s *SmallestAISTT) http.Header {
+	return buildSmallestAISTTHeadersFromAPIKey(s.apiKey)
+}
+
+func buildSmallestAISTTHeadersFromAPIKey(apiKey string) http.Header {
 	headers := make(http.Header)
-	headers.Set("Authorization", "Bearer "+s.apiKey)
+	headers.Set("Authorization", "Bearer "+apiKey)
 	headers.Set("X-Source", "livekit")
 	return headers
 }
@@ -331,25 +391,76 @@ func resolveSmallestAISTTLanguage(s *SmallestAISTT, language string) string {
 	return s.language
 }
 
-type smallestAISTTStream struct {
-	conn   *websocket.Conn
-	events chan *stt.SpeechEvent
-	errCh  chan error
-	mu     sync.Mutex
-	closed bool
+type smallestAISTTStreamOptions struct {
+	apiKey         string
+	baseURL        string
+	model          string
+	language       string
+	sampleRate     int
+	encoding       string
+	wordTimestamps bool
+	diarize        bool
+	eouTimeoutMS   int
+}
 
-	ctx        context.Context
-	cancel     context.CancelFunc
-	state      *smallestAISTTStreamState
-	audio      bytes.Buffer
-	sampleRate int
+func (s *SmallestAISTT) streamOptionsLocked(language string) smallestAISTTStreamOptions {
+	streamLanguage := s.language
+	if language != "" {
+		streamLanguage = language
+	}
+	return smallestAISTTStreamOptions{
+		apiKey:         s.apiKey,
+		baseURL:        s.baseURL,
+		model:          s.model,
+		language:       streamLanguage,
+		sampleRate:     s.sampleRate,
+		encoding:       s.encoding,
+		wordTimestamps: s.wordTimestamps,
+		diarize:        s.diarize,
+		eouTimeoutMS:   s.eouTimeoutMS,
+	}
+}
+
+type smallestAISTTStream struct {
+	owner         *SmallestAISTT
+	dialWebsocket smallestAISTTWebsocketDialer
+	conn          *websocket.Conn
+	events        chan *stt.SpeechEvent
+	errCh         chan error
+	mu            sync.Mutex
+	closed        bool
+
+	apiKey         string
+	baseURL        string
+	model          string
+	language       string
+	encoding       string
+	wordTimestamps bool
+	diarize        bool
+	eouTimeoutMS   int
+
+	ctx                context.Context
+	cancel             context.CancelFunc
+	state              *smallestAISTTStreamState
+	audio              bytes.Buffer
+	sampleRate         int
+	reconnectRequested bool
 }
 
 func (s *smallestAISTTStream) readLoop() {
 	defer close(s.events)
+	defer s.owner.unregisterStream(s)
 	for {
-		msgType, message, err := s.conn.ReadMessage()
+		conn := s.currentConn()
+		msgType, message, err := conn.ReadMessage()
 		if err != nil {
+			if s.shouldReconnect() {
+				if err := s.reconnect(); err != nil {
+					s.errCh <- err
+					return
+				}
+				continue
+			}
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
 				s.errCh <- err
 			}
@@ -369,6 +480,84 @@ func (s *smallestAISTTStream) readLoop() {
 			return
 		}
 	}
+}
+
+func (s *smallestAISTTStream) applyOptions(opts smallestAISTTStreamOptions) {
+	s.apiKey = opts.apiKey
+	s.baseURL = opts.baseURL
+	s.model = opts.model
+	s.language = opts.language
+	s.sampleRate = opts.sampleRate
+	s.encoding = opts.encoding
+	s.wordTimestamps = opts.wordTimestamps
+	s.diarize = opts.diarize
+	s.eouTimeoutMS = opts.eouTimeoutMS
+}
+
+func (s *smallestAISTTStream) updateOptions(opts smallestAISTTStreamOptions) {
+	s.mu.Lock()
+	s.applyOptions(opts)
+	s.audio.Reset()
+	s.state.language = opts.language
+	s.state.diarize = opts.diarize
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.reconnectRequested = true
+	conn := s.conn
+	s.mu.Unlock()
+
+	if conn != nil {
+		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+		_ = conn.Close()
+	}
+}
+
+func (s *smallestAISTTStream) currentConn() *websocket.Conn {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.conn
+}
+
+func (s *smallestAISTTStream) shouldReconnect() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reconnectRequested && !s.closed
+}
+
+func (s *smallestAISTTStream) reconnect() error {
+	s.mu.Lock()
+	opts := smallestAISTTStreamOptions{
+		apiKey:         s.apiKey,
+		baseURL:        s.baseURL,
+		model:          s.model,
+		language:       s.language,
+		sampleRate:     s.sampleRate,
+		encoding:       s.encoding,
+		wordTimestamps: s.wordTimestamps,
+		diarize:        s.diarize,
+		eouTimeoutMS:   s.eouTimeoutMS,
+	}
+	dialWebsocket := s.dialWebsocket
+	ctx := s.ctx
+	s.mu.Unlock()
+
+	conn, _, err := dialWebsocket(ctx, buildSmallestAISTTStreamURLFromOptions(opts), buildSmallestAISTTHeadersFromAPIKey(opts.apiKey))
+	if err != nil {
+		return fmt.Errorf("failed to reconnect smallestai stt websocket: %w", err)
+	}
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = conn.Close()
+		return io.ErrClosedPipe
+	}
+	s.conn = conn
+	s.reconnectRequested = false
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *smallestAISTTStream) PushFrame(frame *model.AudioFrame) error {
