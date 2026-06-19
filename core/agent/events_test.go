@@ -243,6 +243,37 @@ func TestRunContextUpdateRecordsStandaloneProgress(t *testing.T) {
 	}
 }
 
+func TestRunContextAttachedFirstUpdateCopiesExtraBeforeNonBlockingMarker(t *testing.T) {
+	runCtx := NewRunContext(nil, nil, &llm.FunctionCall{
+		CallID:    "call_lookup",
+		Name:      "lookup",
+		Arguments: `{"city":"Paris"}`,
+		Extra:     map[string]any{"trace_id": "trace_123"},
+	})
+	runCtx.attach()
+
+	if err := runCtx.Update("searching"); err != nil {
+		t.Fatalf("Update first error = %v, want nil", err)
+	}
+	if err := runCtx.Update("ranking"); err != nil {
+		t.Fatalf("Update second error = %v, want nil", err)
+	}
+
+	updates := runCtx.Updates()
+	if len(updates) != 2 {
+		t.Fatalf("len(Updates()) = %d, want 2", len(updates))
+	}
+	if _, ok := updates[0].FunctionCall.Extra["__livekit_agents_tool_non_blocking"]; ok {
+		t.Fatalf("first update extra has nonblocking marker: %#v", updates[0].FunctionCall.Extra)
+	}
+	if got := runCtx.FunctionCall.Extra["__livekit_agents_tool_non_blocking"]; got != true {
+		t.Fatalf("original function call nonblocking marker = %#v, want true after first attached update", got)
+	}
+	if got := updates[1].FunctionCall.Extra["__livekit_agents_tool_non_blocking"]; got != true {
+		t.Fatalf("second update extra nonblocking marker = %#v, want true after first update mutates original call", got)
+	}
+}
+
 func TestRunContextWithFillerSaysAfterIdleDwell(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
