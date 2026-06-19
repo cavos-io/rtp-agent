@@ -1237,8 +1237,15 @@ func TestMultimodalToolExecutionDetachesRunContextAfterReturn(t *testing.T) {
 	if err := tool.runContext.Update("late progress"); err != nil {
 		t.Fatalf("late run context update returned error: %v", err)
 	}
-	if updates := tool.runContext.Updates(); len(updates) != 0 {
-		t.Fatalf("late run context updates = %#v, want detached context to ignore updates", updates)
+	updates := tool.runContext.Updates()
+	if len(updates) != 1 {
+		t.Fatalf("late run context updates = %#v, want detached context to record standalone update", updates)
+	}
+	if got := updates[0].FunctionCall.CallID; got != "call_lookup" {
+		t.Fatalf("late update call_id = %q, want original call id", got)
+	}
+	if got := updates[0].FunctionCallOutput.Output; got != "The tool `lookup` has updated, message: late progress\nThe task is still running, so DON'T make up or give information not included in the message above." {
+		t.Fatalf("late update output = %q, want reference standalone update", got)
 	}
 }
 

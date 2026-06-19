@@ -399,7 +399,6 @@ type RunContext struct {
 	updates          []RunContextUpdate
 	fillerSchedulers []*runContextFillerScheduler
 	attached         bool
-	detached         bool
 	mu               sync.Mutex
 }
 
@@ -520,10 +519,6 @@ func (r *RunContext) Update(message any, templates ...string) error {
 	}
 
 	r.mu.Lock()
-	if r.detached {
-		r.mu.Unlock()
-		return nil
-	}
 	updateStep := len(r.updates)
 	call := copyRunContextUpdateCall(r.FunctionCall, runContextUpdateCallIDSuffix(updateStep))
 	if updateStep == 0 && r.attached {
@@ -721,7 +716,6 @@ func (r *RunContext) attach() {
 	}
 	r.mu.Lock()
 	r.attached = true
-	r.detached = false
 	r.mu.Unlock()
 }
 
@@ -731,7 +725,6 @@ func (r *RunContext) detach() {
 	}
 	r.mu.Lock()
 	r.attached = false
-	r.detached = true
 	r.mu.Unlock()
 }
 
