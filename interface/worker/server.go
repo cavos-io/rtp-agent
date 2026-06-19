@@ -1631,7 +1631,7 @@ func (s *AgentServer) sendWorkerMessage(msg *workerlivekit.WorkerMessage) error 
 
 func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) {
 	s.mu.Lock()
-	workerlivekit.StorePendingAccept(workerlivekit.PendingAcceptStoreOptions{
+	workerlivekit.StoreServerPendingAccept(workerlivekit.PendingAcceptStoreOptions{
 		Pending: s.pendingAccepts,
 		Timers:  s.pendingTimers,
 		JobID:   jobID,
@@ -1639,7 +1639,7 @@ func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) 
 		Timeout: assignmentTimeout,
 		OnTimeout: func(jobID string, timer *time.Timer) {
 			s.mu.Lock()
-			expired := workerlivekit.ExpirePendingAccept(s.pendingAccepts, s.pendingTimers, jobID, timer)
+			expired := workerlivekit.ExpireServerPendingAccept(s.pendingAccepts, s.pendingTimers, jobID, timer)
 			s.mu.Unlock()
 			if expired {
 				logger.Logger.Warnw("assignment timed out after availability accept", nil, "jobId", jobID)
@@ -1654,7 +1654,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *workerlivekit.J
 	jobID := assignment.JobID
 	logger.Logger.Infow("Received job assignment", "jobId", jobID)
 	s.mu.Lock()
-	args, accepted := workerlivekit.AcceptPendingAssignment(s.pendingAccepts, s.pendingTimers, jobID)
+	args, accepted := workerlivekit.AcceptServerPendingAssignment(s.pendingAccepts, s.pendingTimers, jobID)
 	if !accepted {
 		s.mu.Unlock()
 		logger.Logger.Warnw("received assignment for unknown job", nil, "jobId", jobID)

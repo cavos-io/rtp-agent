@@ -61,6 +61,9 @@ func TestSharedWorkerDoesNotBuildLiveKitStatusMessagesDirectly(t *testing.T) {
 		"workerlivekit.RegisterWorkerMessage(",
 		"workerlivekit.RouteServerMessage(",
 		"workerlivekit.RunWorkerMessageLoop(",
+		"workerlivekit.StorePendingAccept(",
+		"workerlivekit.ExpirePendingAccept(",
+		"workerlivekit.AcceptPendingAssignment(",
 		"workerlivekit.ValidateWorkerConnectionOptions(",
 	}
 

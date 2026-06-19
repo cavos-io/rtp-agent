@@ -491,6 +491,10 @@ func StorePendingAccept(opts PendingAcceptStoreOptions) {
 	opts.Timers[opts.JobID] = timer
 }
 
+func StoreServerPendingAccept(opts PendingAcceptStoreOptions) {
+	StorePendingAccept(opts)
+}
+
 func ExpirePendingAccept(
 	pending map[string]JobAcceptArguments,
 	timers map[string]*time.Timer,
@@ -505,6 +509,15 @@ func ExpirePendingAccept(
 	return true
 }
 
+func ExpireServerPendingAccept(
+	pending map[string]JobAcceptArguments,
+	timers map[string]*time.Timer,
+	jobID string,
+	timer *time.Timer,
+) bool {
+	return ExpirePendingAccept(pending, timers, jobID, timer)
+}
+
 func AcceptPendingAssignment[T PendingAssignmentTimer](
 	pending map[string]JobAcceptArguments,
 	timers map[string]T,
@@ -516,6 +529,14 @@ func AcceptPendingAssignment[T PendingAssignmentTimer](
 	}
 	StopPendingAssignmentTimer(timers, jobID)
 	return args, true
+}
+
+func AcceptServerPendingAssignment[T PendingAssignmentTimer](
+	pending map[string]JobAcceptArguments,
+	timers map[string]T,
+	jobID string,
+) (JobAcceptArguments, bool) {
+	return AcceptPendingAssignment(pending, timers, jobID)
 }
 
 type TerminationInfo struct {
