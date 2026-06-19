@@ -124,7 +124,9 @@ func NewXaiRealtimeModel(apiKey string, opts ...XaiRealtimeOption) *XaiRealtimeM
 		adapteropenai.WithOpenAIRealtimeInputTranscriptionFinalHook(xaiRealtimeDeduplicateFinalInputTranscription),
 		adapteropenai.WithOpenAIRealtimeRemoteItemAddedHook(xaiRealtimeAppendNilPreviousItemID),
 		adapteropenai.WithOpenAIRealtimeFunctionCallFilter(xaiRealtimeKnownFunctionTool),
-		adapteropenai.WithOpenAIRealtimeSessionCloseMetricsHook(xaiRealtimeSessionCloseMetrics),
+		adapteropenai.WithOpenAIRealtimeSessionCloseMetricsHook(func(duration time.Duration) *telemetry.RealtimeModelMetrics {
+			return xaiRealtimeSessionCloseMetrics(model, duration)
+		}),
 		adapteropenai.WithOpenAIRealtimeVoice(voice),
 		adapteropenai.WithOpenAIRealtimeModalities([]string{"audio"}),
 		adapteropenai.WithOpenAIRealtimeInputAudioTranscription(map[string]any{}),
@@ -192,12 +194,16 @@ func xaiRealtimeKnownFunctionTool(tools []llm.Tool, name string) bool {
 	return false
 }
 
-func xaiRealtimeSessionCloseMetrics(duration time.Duration) *telemetry.RealtimeModelMetrics {
+func xaiRealtimeSessionCloseMetrics(model string, duration time.Duration) *telemetry.RealtimeModelMetrics {
 	return &telemetry.RealtimeModelMetrics{
 		Label:           "xAI Realtime API",
 		RequestID:       "session_close",
 		Timestamp:       time.Now(),
 		SessionDuration: duration.Seconds(),
+		Metadata: &telemetry.Metadata{
+			ModelName:     model,
+			ModelProvider: "xAI Realtime API",
+		},
 	}
 }
 
