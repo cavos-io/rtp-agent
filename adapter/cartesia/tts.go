@@ -388,11 +388,12 @@ func buildCartesiaStreamInitMessage(t *CartesiaTTS) map[string]interface{} {
 }
 
 type cartesiaTTSStream struct {
-	conn   *websocket.Conn
-	audio  chan *tts.SynthesizedAudio
-	errCh  chan error
-	mu     sync.Mutex
-	closed bool
+	conn    *websocket.Conn
+	audio   chan *tts.SynthesizedAudio
+	errCh   chan error
+	mu      sync.Mutex
+	closed  bool
+	flushed bool
 
 	sampleRate int
 	writeJSON  func(any) error
@@ -446,7 +447,9 @@ func (s *cartesiaTTSStream) readLoop() {
 		}
 
 		if resp.Type == "done" || resp.Done {
-			// Context finished, but we might keep connection open for more text
+			if s.isFlushed() {
+				return
+			}
 		}
 	}
 }
@@ -455,6 +458,12 @@ func (s *cartesiaTTSStream) isClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closed
+}
+
+func (s *cartesiaTTSStream) isFlushed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.flushed
 }
 
 func (s *cartesiaTTSStream) PushText(text string) error {
@@ -486,6 +495,7 @@ func (s *cartesiaTTSStream) Flush() error {
 		"transcript": " ",
 		"continue":   false,
 	}
+	s.flushed = true
 	if err := s.writeJSONData(msg); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
