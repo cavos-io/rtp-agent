@@ -60,6 +60,23 @@ func WithCartesiaLanguage(language string) CartesiaTTSOption {
 	}
 }
 
+func WithCartesiaModel(model string) CartesiaTTSOption {
+	return func(t *CartesiaTTS) {
+		if model != "" {
+			t.model = model
+		}
+	}
+}
+
+func WithCartesiaVoiceID(voiceID string) CartesiaTTSOption {
+	return func(t *CartesiaTTS) {
+		if voiceID != "" {
+			t.voiceID = voiceID
+			t.voiceEmbedding = nil
+		}
+	}
+}
+
 func WithCartesiaAudioFormat(encoding string, sampleRate int) CartesiaTTSOption {
 	return func(t *CartesiaTTS) {
 		if encoding != "" {
@@ -150,6 +167,12 @@ func (t *CartesiaTTS) SampleRate() int  { return t.sampleRate }
 func (t *CartesiaTTS) NumChannels() int { return 1 }
 func (t *CartesiaTTS) Model() string    { return t.model }
 func (t *CartesiaTTS) Provider() string { return "Cartesia" }
+
+func (t *CartesiaTTS) UpdateOptions(opts ...CartesiaTTSOption) {
+	for _, opt := range opts {
+		opt(t)
+	}
+}
 
 func (t *CartesiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if err := validateCartesiaTTSAPIKey(t.apiKey); err != nil {

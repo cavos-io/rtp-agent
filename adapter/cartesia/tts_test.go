@@ -92,6 +92,65 @@ func TestCartesiaTTSConstructorOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSUpdateOptionsAffectsFutureRequests(t *testing.T) {
+	provider := NewCartesiaTTS("test-key", "voice-1", "sonic-lite",
+		WithCartesiaLanguage("en"),
+		WithCartesiaSpeed("slow"),
+	)
+
+	provider.UpdateOptions(
+		WithCartesiaModel("sonic-3"),
+		WithCartesiaVoiceID("voice-2"),
+		WithCartesiaLanguage("fr"),
+		WithCartesiaSpeed(1.3),
+		WithCartesiaEmotion("Calm"),
+		WithCartesiaVolume(1.1),
+		WithCartesiaPronunciationDictID("dict-2"),
+		WithCartesiaAPIVersion("2025-05-01"),
+	)
+
+	_, body, err := buildCartesiaSynthesizeRequest(provider, "bonjour")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	if got, want := payload["model_id"], "sonic-3"; got != want {
+		t.Fatalf("model_id = %#v, want %#v", got, want)
+	}
+	if got, want := payload["language"], "fr"; got != want {
+		t.Fatalf("language = %#v, want %#v", got, want)
+	}
+	if got, want := payload["pronunciation_dict_id"], "dict-2"; got != want {
+		t.Fatalf("pronunciation_dict_id = %#v, want %#v", got, want)
+	}
+	voice, ok := payload["voice"].(map[string]any)
+	if !ok {
+		t.Fatalf("voice = %#v, want map", payload["voice"])
+	}
+	if got, want := voice["mode"], "id"; got != want {
+		t.Fatalf("voice.mode = %#v, want %#v", got, want)
+	}
+	if got, want := voice["id"], "voice-2"; got != want {
+		t.Fatalf("voice.id = %#v, want %#v", got, want)
+	}
+	generationConfig, ok := payload["generation_config"].(map[string]any)
+	if !ok {
+		t.Fatalf("generation_config = %#v, want map", payload["generation_config"])
+	}
+	if got, want := generationConfig["speed"], 1.3; got != want {
+		t.Fatalf("speed = %#v, want %#v", got, want)
+	}
+	if got, want := generationConfig["emotion"], "Calm"; got != want {
+		t.Fatalf("emotion = %#v, want %#v", got, want)
+	}
+	if got, want := generationConfig["volume"], 1.1; got != want {
+		t.Fatalf("volume = %#v, want %#v", got, want)
+	}
+}
+
 func TestCartesiaSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	provider := NewCartesiaTTS("test-key", "", "",
 		WithCartesiaSpeed(1.2),
