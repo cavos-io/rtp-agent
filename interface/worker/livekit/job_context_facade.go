@@ -1,6 +1,10 @@
 package livekit
 
-import "github.com/cavos-io/rtp-agent/core/agent"
+import (
+	"context"
+
+	"github.com/cavos-io/rtp-agent/core/agent"
+)
 
 func JobContextInferenceHeaders(job *Job) map[string]string {
 	return JobInferenceHeaders(job)
@@ -48,4 +52,28 @@ func JobContextLogFields(job *Job) map[string]any {
 
 func PopulateJobContextSessionReport(report *agent.SessionReport, job *Job) {
 	PopulateSessionReportWithJobMetadata(report, job)
+}
+
+func JobContextNormalizeConnectOptions(options ...ConnectOptions) ConnectOptions {
+	return NormalizeConnectOptions(options...)
+}
+
+func JobContextJoinPreparedRoom(ctx context.Context, opts AcceptedJobRoomConnectOptions) error {
+	return JoinPreparedRoom(ctx, PreparedRoomConnectOptionsFromAcceptedJob(opts))
+}
+
+func JobContextRemoteParticipantViews(room *SDKRoom) []RemoteParticipantView {
+	return RoomRemoteParticipantViews(room)
+}
+
+func JobContextRoomName(job *Job) string {
+	return JobRoomName(job)
+}
+
+func JobContextApplyAutoSubscribeToRoom(room *SDKRoom, mode string) []RemoteTrackSubscriptionResult {
+	return ApplyAutoSubscribeToRoom(room, mode)
+}
+
+func JobContextRoomCallbackWithHandlers(cb *RoomCallback, handlers RoomCallbackHandlers) *RoomCallback {
+	return RoomCallbackWithHandlers(cb, handlers)
 }
