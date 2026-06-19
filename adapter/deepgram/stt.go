@@ -685,17 +685,9 @@ func deepgramTimedStringsOffset(words []dgWord, startTimeOffset float64) []stt.T
 			EndTime:         word.End + startTimeOffset,
 			Confidence:      word.Confidence,
 			StartTimeOffset: startTimeOffset,
-			SpeakerID:       deepgramSpeakerID(word.Speaker),
 		})
 	}
 	return timed
-}
-
-func deepgramSpeakerID(speaker *int) string {
-	if speaker == nil {
-		return ""
-	}
-	return strconv.Itoa(*speaker)
 }
 
 func (s *deepgramStream) readLoop() {
