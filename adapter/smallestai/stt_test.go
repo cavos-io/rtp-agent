@@ -85,6 +85,45 @@ func TestSmallestAISTTExposesConfiguredInputSampleRate(t *testing.T) {
 	}
 }
 
+func TestSmallestAISTTUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
+	provider := NewSmallestAISTT("test-key",
+		WithSmallestAISTTModel("pulse"),
+		WithSmallestAISTTLanguage("en"),
+		WithSmallestAISTTSampleRate(16000),
+		WithSmallestAISTTEncoding("linear16"),
+	)
+
+	provider.UpdateOptions(
+		WithSmallestAISTTModel("pulse-v2"),
+		WithSmallestAISTTLanguage("hi"),
+		WithSmallestAISTTSampleRate(48000),
+		WithSmallestAISTTEncoding("pcm_s16le"),
+		WithSmallestAISTTEOUTimeoutMS(250),
+	)
+
+	if provider.model != "pulse-v2" {
+		t.Fatalf("model = %q, want updated model", provider.model)
+	}
+	if provider.language != "hi" {
+		t.Fatalf("language = %q, want updated language", provider.language)
+	}
+	if got := provider.InputSampleRate(); got != 48000 {
+		t.Fatalf("InputSampleRate = %d, want updated sample rate", got)
+	}
+	streamURL, err := url.Parse(buildSmallestAISTTStreamURL(provider, ""))
+	if err != nil {
+		t.Fatalf("parse stream URL: %v", err)
+	}
+	if !strings.HasPrefix(streamURL.String(), "wss://api.smallest.ai/waves/v1/pulse-v2/get_text?") {
+		t.Fatalf("stream URL = %q, want updated model endpoint", streamURL.String())
+	}
+	query := streamURL.Query()
+	assertSmallestAIQuery(t, query, "language", "hi")
+	assertSmallestAIQuery(t, query, "encoding", "pcm_s16le")
+	assertSmallestAIQuery(t, query, "sample_rate", "48000")
+	assertSmallestAIQuery(t, query, "eou_timeout_ms", "250")
+}
+
 func TestNewSmallestAISTTUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("SMALLEST_API_KEY", "env-key")
 

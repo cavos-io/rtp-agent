@@ -147,6 +147,17 @@ func (s *SmallestAISTT) InputSampleRate() uint32 {
 	return uint32(s.sampleRate)
 }
 
+func (s *SmallestAISTT) UpdateOptions(opts ...SmallestAISTTOption) {
+	if s == nil {
+		return
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+}
+
 func (s *SmallestAISTT) Capabilities() stt.STTCapabilities {
 	aligned := ""
 	if s.wordTimestamps {
