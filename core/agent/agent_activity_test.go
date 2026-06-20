@@ -2557,6 +2557,29 @@ func TestAgentActivityRunEOUDetectionSkipsEmptyTranscript(t *testing.T) {
 	}
 }
 
+func TestAgentActivityVADTurnWithPipelineSTTNoTranscriptDoesNotStartEOU(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.2})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	defer activity.Stop()
+
+	session.Assistant = NewPipelineAgent(agent.VAD, &fakePipelineSTT{}, nil, nil, agent.ChatCtx)
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Timestamp: 1.0})
+	activity.OnEndOfSpeech(&vad.VADEvent{Timestamp: 1.2})
+
+	activity.eouMu.Lock()
+	eouStarted := activity.eouDone != nil
+	activity.eouMu.Unlock()
+	if eouStarted {
+		t.Fatal("EOU detection started for empty transcript with active pipeline STT")
+	}
+}
+
 func TestAgentActivityVADTurnCompletesPendingFinalTranscriptAfterEndOfSpeech(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeVAD

@@ -3248,7 +3248,22 @@ func (a *AgentActivity) hasVADModel() bool {
 }
 
 func (a *AgentActivity) hasSTTModel() bool {
-	return a != nil && ((a.Agent != nil && a.Agent.STT != nil) || (a.Session != nil && a.Session.STT != nil))
+	if a == nil {
+		return false
+	}
+	if (a.Agent != nil && a.Agent.STT != nil) || (a.Session != nil && a.Session.STT != nil) {
+		return true
+	}
+	if a.Session == nil {
+		return false
+	}
+	a.Session.mu.Lock()
+	assistant := a.Session.Assistant
+	a.Session.mu.Unlock()
+	if pipeline, ok := assistant.(*PipelineAgent); ok {
+		return pipeline.stt != nil
+	}
+	return false
 }
 
 func (a *AgentActivity) realtimeTurnDetectionCapabilities() (bool, bool) {
