@@ -927,6 +927,9 @@ func (rio *RoomIO) PublishDTMF(code int32, digit string) error {
 	if rio == nil || rio.Room == nil || rio.Room.LocalParticipant == nil {
 		return errors.New("room local participant not available")
 	}
+	if rio.Room.ConnectionState() != lksdk.ConnectionStateConnected {
+		return errors.New("room is not connected")
+	}
 	return rio.Room.LocalParticipant.PublishDataPacket(&livekit.SipDTMF{
 		Code:  uint32(code),
 		Digit: digit,

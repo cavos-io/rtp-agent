@@ -3685,6 +3685,18 @@ func TestRoomIOCallbackForwardsSipDTMFToSession(t *testing.T) {
 	}
 }
 
+func TestRoomIOPublishDTMFReturnsErrorWhenRoomDisconnected(t *testing.T) {
+	rio := &RoomIO{
+		Room: &lksdk.Room{LocalParticipant: &lksdk.LocalParticipant{}},
+	}
+
+	err := rio.PublishDTMF(1, "1")
+
+	if err == nil {
+		t.Fatal("PublishDTMF() error = nil, want disconnected room error")
+	}
+}
+
 type fakeClientEventsDispatcher struct {
 	agentStates []agent.AgentState
 	userStates  []agent.UserState
