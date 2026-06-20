@@ -1943,6 +1943,50 @@ func TestRealtimeEventIgnoresEmptyInputAudioTranscriptionDelta(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventRejectsInputAudioTranscriptionWithoutStringItemID(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		event map[string]any
+	}{
+		{
+			name: "missing_completed_item_id",
+			event: map[string]any{
+				"type":       "conversation.item.input_audio_transcription.completed",
+				"transcript": "hello",
+			},
+		},
+		{
+			name: "null_completed_item_id",
+			event: map[string]any{
+				"type":       "conversation.item.input_audio_transcription.completed",
+				"item_id":    nil,
+				"transcript": "hello",
+			},
+		},
+		{
+			name: "missing_delta_item_id",
+			event: map[string]any{
+				"type":  "conversation.item.input_audio_transcription.delta",
+				"delta": "hel",
+			},
+		},
+		{
+			name: "null_delta_item_id",
+			event: map[string]any{
+				"type":    "conversation.item.input_audio_transcription.delta",
+				"item_id": nil,
+				"delta":   "hel",
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if ev, ok := openAIRealtimeEvent(tt.event); ok {
+				t.Fatalf("openAIRealtimeEvent = %#v, true; want malformed input transcription ignored", ev)
+			}
+		})
+	}
+}
+
 func TestRealtimeEventMapsOutputAudioTranscriptDelta(t *testing.T) {
 	for _, eventType := range []string{
 		"response.output_audio_transcript.delta",
@@ -4178,6 +4222,37 @@ func TestRealtimeSessionAccumulatesEmptyItemIDInputAudioTranscription(t *testing
 	}
 	if ev.InputTranscription == nil || ev.InputTranscription.ItemID != "" || ev.InputTranscription.Transcript != "hello" || !ev.InputTranscription.IsFinal {
 		t.Fatalf("InputTranscription = %#v, want final accumulated hello with empty item id", ev.InputTranscription)
+	}
+}
+
+func TestRealtimeSessionIgnoresInputAudioTranscriptionFailedWithoutItemID(t *testing.T) {
+	session := &realtimeSession{}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "",
+			Transcript: "partial",
+			IsFinal:    false,
+		},
+	})
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "conversation.item.input_audio_transcription.failed",
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want missing item_id failure ignored", ev)
+	}
+
+	next := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "",
+			Transcript: " tail",
+			IsFinal:    false,
+		},
+	})
+	if next.InputTranscription.Transcript != "partial tail" {
+		t.Fatalf("empty-id partial transcript = %q, want missing item_id failure to preserve partial", next.InputTranscription.Transcript)
 	}
 }
 

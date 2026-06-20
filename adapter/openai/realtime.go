@@ -2171,7 +2171,10 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 		}
 		s.clearRealtimeInputTranscripts(itemID)
 	case "conversation.item.input_audio_transcription.failed":
-		itemID, _ := ev["item_id"].(string)
+		itemID, hasItemID := ev["item_id"].(string)
+		if !hasItemID {
+			return llm.RealtimeEvent{}, false
+		}
 		contentIndex := openAIRealtimeInt(ev["content_index"])
 		logger.Logger.Errorw("OpenAI realtime input audio transcription failed", nil, "item_id", itemID, "error", ev["error"])
 		partial, ok := s.clearRealtimeInputTranscript(itemID, contentIndex)
@@ -2574,7 +2577,10 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 			},
 		}, true
 	case "conversation.item.input_audio_transcription.completed":
-		itemID, _ := ev["item_id"].(string)
+		itemID, hasItemID := ev["item_id"].(string)
+		if !hasItemID {
+			return llm.RealtimeEvent{}, false
+		}
 		contentIndex := openAIRealtimeInt(ev["content_index"])
 		transcript, _ := ev["transcript"].(string)
 		return llm.RealtimeEvent{
@@ -2588,7 +2594,10 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 			},
 		}, true
 	case "conversation.item.input_audio_transcription.delta":
-		itemID, _ := ev["item_id"].(string)
+		itemID, hasItemID := ev["item_id"].(string)
+		if !hasItemID {
+			return llm.RealtimeEvent{}, false
+		}
 		contentIndex := openAIRealtimeInt(ev["content_index"])
 		delta, _ := ev["delta"].(string)
 		if delta == "" {
