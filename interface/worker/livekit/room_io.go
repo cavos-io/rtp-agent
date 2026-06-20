@@ -1042,18 +1042,23 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 	if publication != nil {
 		trackID = publication.SID()
 	}
-	subscribed := make(chan struct{})
+	rio.setAudioOutputTrack(track, trackID, publication)
+	return rio.waitForAudioSubscription(ctx)
+}
+
+func (rio *RoomIO) setAudioOutputTrack(track *lksdk.LocalTrack, trackID string, publication *lksdk.LocalTrackPublication) {
 	rio.audioSubOnce = sync.Once{}
 	rio.mu.Lock()
+	if rio.audioSubscribed == nil {
+		rio.audioSubscribed = make(chan struct{})
+	}
 	rio.audioTrack = track
 	rio.audioTrackID = trackID
 	rio.audioPublication = publication
-	rio.audioSubscribed = subscribed
 	rio.audioOutputDiagnostics.TrackID = trackID
 	rio.audioOutputDiagnostics.TrackPublished = publication != nil
 	rio.audioOutputDiagnostics.TrackSubscribed = false
 	rio.mu.Unlock()
-	return rio.waitForAudioSubscription(ctx)
 }
 
 func (rio *RoomIO) audioTrackPublicationOptions() *lksdk.TrackPublicationOptions {
