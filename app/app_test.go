@@ -2006,8 +2006,11 @@ func TestInstallAgoraRTMDataMessageHandlerDispatchesInputText(t *testing.T) {
 		t.Fatalf("user transcripts = %d, want one final RTM input transcript", len(responder.userTranscripts))
 	}
 	transcript := responder.userTranscripts[0]
-	if transcript.Transcript != "hello from chat" || !transcript.IsFinal || transcript.SpeakerID != "caller-7" {
-		t.Fatalf("user transcript = %#v, want final RTM input transcript with stream id", transcript)
+	if transcript.Transcript != "hello from chat" || !transcript.IsFinal || transcript.SpeakerID != "0" {
+		t.Fatalf("user transcript = %#v, want final RTM input transcript with TEN default stream id", transcript)
+	}
+	if transcript.SpeakerID == "caller-7" {
+		t.Fatal("RTM input_text preserved payload stream_id, want TEN backend default")
 	}
 }
 
