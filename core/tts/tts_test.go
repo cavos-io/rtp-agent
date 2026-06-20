@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
@@ -622,6 +623,23 @@ func TestCollectReturnsStreamError(t *testing.T) {
 	_, err := Collect(stream)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("Collect error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestCollectTreatsAPIStatus499AsGracefulEOF(t *testing.T) {
+	stream := &collectChunkedStream{
+		err: llm.NewAPIStatusError("client closed", 499, "req_499", nil),
+	}
+
+	frame, err := Collect(stream)
+	if err != nil {
+		t.Fatalf("Collect error = %v, want nil for APIStatusError 499", err)
+	}
+	if frame != nil {
+		t.Fatalf("Collect frame = %#v, want nil when client closed before audio", frame)
+	}
+	if !stream.closed {
+		t.Fatal("Collect did not close stream after APIStatusError 499")
 	}
 }
 

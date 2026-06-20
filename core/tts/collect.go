@@ -27,6 +27,9 @@ func CollectWithTimedTranscript(stream ChunkedStream) (frame *model.AudioFrame, 
 	var combined *model.AudioFrame
 	for {
 		audio, err := stream.Next()
+		if isClientClosedStatus(err) {
+			err = io.EOF
+		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return combined, timedTranscript, nil
