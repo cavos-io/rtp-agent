@@ -308,6 +308,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	rio.startSessionCloseListener()
 
 	if !opts.DisableAudioOutput {
+		rio.audioSubscribed = make(chan struct{})
 		session.SetAudioOutputController(rio)
 		session.SetAudioPlaybackController(roomIOPlaybackController{rio: rio})
 		session.SetUserAwayTimerGate(rio.userAwayTimerBlocked)

@@ -389,6 +389,19 @@ func TestRoomIOBlocksUserAwayUntilAudioSubscribed(t *testing.T) {
 	}
 }
 
+func TestRoomIOBlocksUserAwayBeforeAudioOutputStarts(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{UserAwayTimeout: 0.01})
+	_ = NewRoomIO(nil, session, RoomOptions{})
+
+	session.UpdateAgentState(agent.AgentStateListening)
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		t.Fatalf("unexpected user state before audio output subscription = %q -> %q", ev.OldState, ev.NewState)
+	case <-time.After(40 * time.Millisecond):
+	}
+}
+
 func TestRoomIOAudioSubscriptionTimeoutReleasesUserAwayGate(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{UserAwayTimeout: 0.01})
 	rio := NewRoomIO(nil, session, RoomOptions{AudioSubscriptionTimeout: 20 * time.Millisecond})
