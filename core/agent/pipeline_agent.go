@@ -453,6 +453,9 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 			continue
 		}
 		if session != nil {
+			if ev.Type == stt.SpeechEventFinalTranscript && alternative.Text == "" {
+				continue
+			}
 			session.EmitUserInputTranscribed(UserInputTranscribedEvent{
 				Language:   alternative.Language,
 				Transcript: alternative.Text,
