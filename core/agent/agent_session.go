@@ -1738,11 +1738,17 @@ func (s *AgentSession) EmitError(ev ErrorEvent) {
 		ev.CreatedAt = NewErrorEvent(ev.Error, ev.Source).CreatedAt
 	}
 	s.recordEvent(&ev)
-	for _, ch := range s.errorSubscribers() {
+	primary, primarySubscribed, subscribers := s.errorSubscribers()
+	if primarySubscribed {
+		primary <- ev
+	} else if primary != nil {
 		select {
-		case ch <- ev:
+		case primary <- ev:
 		default:
 		}
+	}
+	for _, ch := range subscribers {
+		ch <- ev
 	}
 	s.closeOnUnrecoverableError(ev.Error)
 }
@@ -1850,17 +1856,14 @@ func (s *AgentSession) errorEvents() chan ErrorEvent {
 	return ch
 }
 
-func (s *AgentSession) errorSubscribers() []chan ErrorEvent {
+func (s *AgentSession) errorSubscribers() (chan ErrorEvent, bool, []chan ErrorEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	subs := make([]chan ErrorEvent, 0, len(s.errorSubs)+1)
 	if s.errorCh == nil {
 		s.errorCh = make(chan ErrorEvent, 10)
 	}
-	subs = append(subs, s.errorCh)
-	subs = append(subs, s.errorSubs...)
-	return subs
+	return s.errorCh, s.errorChSubscribed, append([]chan ErrorEvent(nil), s.errorSubs...)
 }
 
 func (s *AgentSession) SipDTMFEvents() <-chan SipDTMFEvent {

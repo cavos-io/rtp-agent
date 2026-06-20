@@ -464,6 +464,64 @@ func TestAgentSessionErrorEventsFanOutToSubscribers(t *testing.T) {
 	assertErrorEvent(t, second, "second")
 }
 
+func TestAgentSessionErrorDeliveredWhenChannelFull(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	errorEvents := session.errorEvents()
+	for i := 0; i < cap(errorEvents); i++ {
+		errorEvents <- ErrorEvent{Error: fmt.Errorf("prefill %d", i), Source: "test"}
+	}
+	cause := errors.New("provider failed")
+
+	done := make(chan struct{})
+	go func() {
+		session.EmitError(ErrorEvent{Error: cause, Source: "llm"})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("EmitError returned while event channel was full; error event may be dropped")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	<-errorEvents
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("EmitError did not unblock after error event channel had capacity")
+	}
+
+	for {
+		select {
+		case ev := <-errorEvents:
+			if errors.Is(ev.Error, cause) && ev.Source == "llm" {
+				return
+			}
+		default:
+			t.Fatal("ErrorEvents did not receive error event")
+		}
+	}
+}
+
+func TestAgentSessionErrorDoesNotBlockWithoutSubscriber(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	for i := 0; i < cap(session.errorCh); i++ {
+		session.errorCh <- ErrorEvent{Error: fmt.Errorf("prefill %d", i), Source: "test"}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.EmitError(ErrorEvent{Error: errors.New("provider failed"), Source: "llm"})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("EmitError blocked on unclaimed error event channel")
+	}
+}
+
 func TestAgentSessionCloseEventsFanOutToSubscribers(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	session.activity = NewAgentActivity(session.Agent, session)
