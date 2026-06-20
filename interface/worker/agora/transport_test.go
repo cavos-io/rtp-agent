@@ -99,6 +99,27 @@ func TestTransportJoinValidatesOptions(t *testing.T) {
 	}
 }
 
+func TestOptionsValidateRejectsUnsafeTENChannelNames(t *testing.T) {
+	for _, channel := range []string{
+		"../support",
+		"support/room",
+		`support\room`,
+		"support\x00room",
+		".support",
+		strings.Repeat("a", 101),
+	} {
+		t.Run(fmt.Sprintf("%q", channel), func(t *testing.T) {
+			err := (Options{AppID: "app", Channel: channel}).Validate()
+			if err == nil {
+				t.Fatalf("Validate() error = nil, want unsafe channel %q rejected", channel)
+			}
+			if !strings.Contains(err.Error(), "AGORA_CHANNEL") {
+				t.Fatalf("Validate() error = %q, want AGORA_CHANNEL context", err.Error())
+			}
+		})
+	}
+}
+
 func TestTransportJoinPassesOptionsToClient(t *testing.T) {
 	client := &fakeChannelClient{}
 	opts := Options{
