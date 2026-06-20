@@ -175,6 +175,44 @@ func TestBasetenTTSSynthesizePostsReferencePayloadAndReturnsChunks(t *testing.T)
 	}
 }
 
+func TestBasetenTTSUpdateOptionsAppliesToFutureSynthesize(t *testing.T) {
+	var payload map[string]any
+	client := basetenTTSRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("pcm")),
+			Header:     make(http.Header),
+			Request:    r,
+		}, nil
+	})
+
+	provider := mustNewBasetenTTS(t, "test-key", "",
+		WithBasetenTTSModelEndpoint("https://baseten.test/predict"),
+		WithBasetenTTSVoice("tara"),
+		WithBasetenTTSLanguage("en"),
+		WithBasetenTTSTemperature(0.6),
+		withBasetenTTSHTTPClient(client),
+	)
+	provider.UpdateOptions(
+		WithBasetenTTSVoice("emma"),
+		WithBasetenTTSLanguage("es"),
+		WithBasetenTTSTemperature(0.8),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	assertBasetenPayload(t, payload, "voice", "emma")
+	assertBasetenPayload(t, payload, "language", "es")
+	assertBasetenPayload(t, payload, "temperature", float64(0.8))
+}
+
 func TestBasetenTTSSynthesizeReturnsHTTPErrorBody(t *testing.T) {
 	client := basetenTTSRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
@@ -320,6 +358,48 @@ func TestBasetenTTSStreamSendsReferenceSetupTextAndEnd(t *testing.T) {
 	if got := readBasetenTestChan(t, endCh, errCh); got != "__END__" {
 		t.Fatalf("end message = %q, want sentinel", got)
 	}
+}
+
+func TestBasetenTTSUpdateOptionsAppliesToFutureStream(t *testing.T) {
+	setupCh := make(chan map[string]any, 1)
+	errCh := make(chan error, 1)
+	dialer := newBasetenTTSTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		_, setupPayload, err := conn.ReadMessage()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		var setup map[string]any
+		if err := json.Unmarshal(setupPayload, &setup); err != nil {
+			errCh <- err
+			return
+		}
+		setupCh <- setup
+	})
+
+	provider := mustNewBasetenTTS(t, "test-key", "",
+		WithBasetenTTSModelEndpoint("ws://baseten.test/websocket"),
+		WithBasetenTTSVoice("tara"),
+		WithBasetenTTSMaxTokens(2000),
+		WithBasetenTTSBufferSize(10),
+		dialer,
+	)
+	provider.UpdateOptions(
+		WithBasetenTTSVoice("emma"),
+		WithBasetenTTSMaxTokens(512),
+		WithBasetenTTSBufferSize(4),
+	)
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	defer stream.Close()
+
+	setup := readBasetenTestChan(t, setupCh, errCh)
+	assertBasetenPayload(t, setup, "voice", "emma")
+	assertBasetenPayload(t, setup, "max_tokens", float64(512))
+	assertBasetenPayload(t, setup, "buffer_size", float64(4))
 }
 
 func TestBasetenTTSStreamClosesAfterTextWriteFailure(t *testing.T) {

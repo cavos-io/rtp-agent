@@ -159,10 +159,27 @@ func (t *BasetenTTS) Provider() string {
 	return "Baseten"
 }
 func (t *BasetenTTS) Capabilities() tts.TTSCapabilities {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	return tts.TTSCapabilities{Streaming: strings.HasPrefix(t.modelEndpoint, "ws://") || strings.HasPrefix(t.modelEndpoint, "wss://"), AlignedTranscript: false}
 }
-func (t *BasetenTTS) SampleRate() int  { return t.sampleRate }
+func (t *BasetenTTS) SampleRate() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.sampleRate
+}
 func (t *BasetenTTS) NumChannels() int { return 1 }
+
+func (t *BasetenTTS) UpdateOptions(opts ...BasetenTTSOption) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, opt := range opts {
+		opt(t)
+	}
+}
 
 func (t *BasetenTTS) Close() error {
 	if t == nil {
@@ -186,11 +203,15 @@ func (t *BasetenTTS) Close() error {
 }
 
 func (t *BasetenTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	t.mu.Lock()
 	req, err := buildBasetenTTSRequest(ctx, t, text)
+	client := t.httpClient
+	sampleRate := t.sampleRate
+	t.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
-	resp, err := t.httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
@@ -199,7 +220,7 @@ func (t *BasetenTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 		resp.Body.Close()
 		return nil, llm.NewAPIStatusError("Baseten TTS request failed", resp.StatusCode, "", string(respBody))
 	}
-	return &basetenTTSChunkedStream{body: resp.Body, sampleRate: t.sampleRate}, nil
+	return &basetenTTSChunkedStream{body: resp.Body, sampleRate: sampleRate}, nil
 }
 
 func buildBasetenTTSRequest(ctx context.Context, t *BasetenTTS, text string) (*http.Request, error) {
@@ -223,17 +244,23 @@ func buildBasetenTTSRequest(ctx context.Context, t *BasetenTTS, text string) (*h
 }
 
 func (t *BasetenTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
-	if !t.Capabilities().Streaming {
+	t.mu.Lock()
+	streaming := strings.HasPrefix(t.modelEndpoint, "ws://") || strings.HasPrefix(t.modelEndpoint, "wss://")
+	endpoint := t.modelEndpoint
+	headers := buildBasetenTTSWebsocketHeaders(t)
+	startMessage, err := buildBasetenTTSStartMessage(t)
+	dialer := t.dialWebsocket
+	sampleRate := t.sampleRate
+	t.mu.Unlock()
+	if !streaming {
 		return nil, fmt.Errorf("baseten websocket tts streaming requires a ws:// or wss:// endpoint")
 	}
-	conn, _, err := t.dialWebsocket(ctx, t.modelEndpoint, buildBasetenTTSWebsocketHeaders(t))
+	if err != nil {
+		return nil, err
+	}
+	conn, _, err := dialer(ctx, endpoint, headers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial baseten tts websocket: %w", err)
-	}
-	startMessage, err := buildBasetenTTSStartMessage(t)
-	if err != nil {
-		conn.Close()
-		return nil, err
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, startMessage); err != nil {
 		conn.Close()
@@ -245,7 +272,7 @@ func (t *BasetenTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		conn:       conn,
 		ctx:        streamCtx,
 		cancel:     cancel,
-		sampleRate: t.sampleRate,
+		sampleRate: sampleRate,
 		events:     make(chan *tts.SynthesizedAudio, 100),
 		errCh:      make(chan error, 1),
 	}
