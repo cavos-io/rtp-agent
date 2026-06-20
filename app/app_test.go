@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"net"
 	"net/http"
@@ -177,20 +180,21 @@ func (f *fakeAppAgoraDataPublisher) isClosed() bool {
 type recordingAppTextResponder struct {
 	calls           []string
 	userTranscripts []agent.UserInputTranscribedEvent
+	err             error
 }
 
 func (r *recordingAppTextResponder) Interrupt(force bool) error {
 	if force {
 		r.calls = append(r.calls, "interrupt:true")
-		return nil
+		return r.err
 	}
 	r.calls = append(r.calls, "interrupt:false")
-	return nil
+	return r.err
 }
 
 func (r *recordingAppTextResponder) GenerateReply(_ context.Context, text string) (*agent.SpeechHandle, error) {
 	r.calls = append(r.calls, "generate:"+text)
-	return nil, nil
+	return nil, r.err
 }
 
 func (r *recordingAppTextResponder) ClaimUserTurn(ctx context.Context, fn func(context.Context) error) error {
@@ -727,8 +731,11 @@ func TestDefaultConfigFromEnvUsesTENAgoraGreetingDefault(t *testing.T) {
 
 	cfg := DefaultConfigFromEnv()
 
-	if cfg.AgoraGreeting != "Hello, I am your AI assistant." {
+	if cfg.AgoraGreeting != "TEN Agent connected. How can I help you today?" {
 		t.Fatalf("AgoraGreeting = %q, want TEN default greeting", cfg.AgoraGreeting)
+	}
+	if !strings.Contains(cfg.AgoraGreeting, "TEN Agent") {
+		t.Fatalf("AgoraGreeting = %q, want TEN-branded greeting", cfg.AgoraGreeting)
 	}
 }
 
@@ -892,6 +899,27 @@ func TestRunAgoraLogsConnectedTransportEvent(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("runAgora() did not return after cancellation")
+	}
+}
+
+func TestRunAgoraNormalizesNilContextBeforeValidation(t *testing.T) {
+	rtpApp := &App{
+		Session: agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{}),
+		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("runAgora(nil) panic = %v, want validation error", recovered)
+		}
+	}()
+	var ctx context.Context
+	err := rtpApp.runAgora(ctx)
+	if err == nil {
+		t.Fatal("runAgora(nil) error = nil, want config validation error")
+	}
+	if !strings.Contains(err.Error(), "AGORA_APP_ID is required") {
+		t.Fatalf("runAgora(nil) error = %v, want config validation error", err)
 	}
 }
 
@@ -1756,6 +1784,44 @@ func TestRunAgoraPublishesTranscriptDataWhenRTMEnabled(t *testing.T) {
 	}
 }
 
+func TestRunAgoraDoesNotUseLiveKitRuntimeSymbols(t *testing.T) {
+	fileSet := token.NewFileSet()
+	file, err := parser.ParseFile(fileSet, "app.go", nil, 0)
+	if err != nil {
+		t.Fatalf("ParseFile(app.go) error = %v", err)
+	}
+	var runAgora *ast.FuncDecl
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if ok && fn.Name.Name == "runAgora" {
+			runAgora = fn
+			break
+		}
+	}
+	if runAgora == nil {
+		t.Fatal("app.go missing runAgora")
+	}
+	forbidden := map[string]struct{}{
+		"adapterlivekit": {},
+		"livekit":        {},
+		"livekitlogger":  {},
+		"lksdk":          {},
+		"RoomIO":         {},
+		"RoomOptions":    {},
+		"workerlivekit":  {},
+	}
+	ast.Inspect(runAgora.Body, func(node ast.Node) bool {
+		ident, ok := node.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if _, found := forbidden[ident.Name]; found {
+			t.Fatalf("runAgora references %q; keep Agora runtime isolated from LiveKit-specific internals", ident.Name)
+		}
+		return true
+	})
+}
+
 func TestRunAgoraClearsRTMDataHandlerOnShutdown(t *testing.T) {
 	client := &fakeAppAgoraChannelClient{joinedCh: make(chan struct{}, 1)}
 	dataPublisher := &fakeAppAgoraDataPublisher{}
@@ -1876,8 +1942,8 @@ func TestRunAgoraLogsRTMDataMessageErrors(t *testing.T) {
 		Publisher: "caller-7",
 		Payload:   []byte(`{bad json`),
 	})
-	if err == nil {
-		t.Fatal("RTM data handler error = nil, want malformed payload error")
+	if err != nil {
+		t.Fatalf("RTM data handler error = %v, want nil after logging malformed payload", err)
 	}
 
 	select {
@@ -1887,6 +1953,9 @@ func TestRunAgoraLogsRTMDataMessageErrors(t *testing.T) {
 		}
 		if entry.msg != "failed to handle Agora RTM data message" {
 			t.Fatalf("log msg = %q, want failed to handle Agora RTM data message", entry.msg)
+		}
+		if entry.err == nil {
+			t.Fatal("log error = nil, want malformed payload error detail")
 		}
 		if got := entry.value("channel"); got != "support" {
 			t.Fatalf("log channel = %#v, want support", got)
@@ -1990,7 +2059,18 @@ func TestInstallAgoraRTMDataMessageHandlerDispatchesInputText(t *testing.T) {
 	err := handler(context.Background(), workeragora.DataMessage{
 		Channel:   "support",
 		Publisher: "caller-7",
-		Payload:   []byte(`{"type":"input_text","text":"hello from chat","stream_id":"caller-7"}`),
+		Payload:   []byte(`{"type":"input_text","text":"wrong discriminator"}`),
+	})
+	if err != nil {
+		t.Fatalf("type-only RTM data handler error = %v, want nil ignored", err)
+	}
+	if len(responder.calls) != 0 || len(responder.userTranscripts) != 0 {
+		t.Fatalf("type-only RTM payload entered text turn: calls=%#v transcripts=%#v", responder.calls, responder.userTranscripts)
+	}
+	err = handler(context.Background(), workeragora.DataMessage{
+		Channel:   "support",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"data_type":"input_text","text":"hello from chat","stream_id":"caller-7"}`),
 	})
 	if err != nil {
 		t.Fatalf("RTM data handler error = %v, want nil", err)
@@ -2002,8 +2082,55 @@ func TestInstallAgoraRTMDataMessageHandlerDispatchesInputText(t *testing.T) {
 		t.Fatalf("user transcripts = %d, want one final RTM input transcript", len(responder.userTranscripts))
 	}
 	transcript := responder.userTranscripts[0]
-	if transcript.Transcript != "hello from chat" || !transcript.IsFinal || transcript.SpeakerID != "caller-7" {
-		t.Fatalf("user transcript = %#v, want final RTM input transcript with stream id", transcript)
+	if transcript.Transcript != "hello from chat" || !transcript.IsFinal || transcript.SpeakerID != "0" {
+		t.Fatalf("user transcript = %#v, want final RTM input transcript with TEN default stream id", transcript)
+	}
+	if transcript.SpeakerID == "caller-7" {
+		t.Fatal("RTM input_text preserved payload stream_id, want TEN backend default")
+	}
+}
+
+func TestInstallAgoraRTMDataMessageHandlerLogsTextInputErrorsOnce(t *testing.T) {
+	previousLogger := logutil.Logger
+	recorder := &appRecordingLogger{entriesCh: make(chan appLogEntry, 8)}
+	logutil.Logger = recorder
+	t.Cleanup(func() {
+		logutil.Logger = previousLogger
+	})
+
+	dataPublisher := &fakeAppAgoraDataPublisher{}
+	responder := &recordingAppTextResponder{err: errors.New("interrupt failed")}
+
+	installAgoraRTMDataMessageHandler(dataPublisher, responder, "agent-rtm")
+
+	handler := dataPublisher.dataHandler()
+	if handler == nil {
+		t.Fatal("installAgoraRTMDataMessageHandler() did not install handler")
+	}
+	err := handler(context.Background(), workeragora.DataMessage{
+		Channel:   "support",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"data_type":"input_text","text":"hello from chat","stream_id":"caller-7"}`),
+	})
+	if err != nil {
+		t.Fatalf("RTM data handler error = %v, want nil after logging text input failure", err)
+	}
+
+	select {
+	case entry := <-recorder.entriesCh:
+		if entry.msg != "failed to handle Agora RTM text input" {
+			t.Fatalf("log msg = %q, want failed to handle Agora RTM text input", entry.msg)
+		}
+		if entry.err == nil {
+			t.Fatal("log error = nil, want text input failure detail")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Agora RTM text input warning")
+	}
+	select {
+	case entry := <-recorder.entriesCh:
+		t.Fatalf("unexpected extra RTM warning = %#v", entry)
+	default:
 	}
 }
 

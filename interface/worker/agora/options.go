@@ -33,3 +33,7 @@ func (opts Options) Validate() error {
 func PublishDataEnabled(value *bool) bool {
 	return value != nil && *value
 }
+
+func DataEnabled(opts Options) bool {
+	return PublishDataEnabled(opts.PublishData) || PublishDataEnabled(opts.RTMEnabled)
+}

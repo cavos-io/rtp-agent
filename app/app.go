@@ -318,7 +318,7 @@ const (
 	providerXAI          = "xai"
 	providerLiveKit      = "livekit"
 
-	defaultAgoraGreeting = "Hello, I am your AI assistant."
+	defaultAgoraGreeting = "TEN Agent connected. How can I help you today?"
 )
 
 type AppConfig struct {
@@ -1161,6 +1161,9 @@ func (a *App) runAgora(ctx context.Context) error {
 	if a.Session == nil {
 		return fmt.Errorf("agent session is not configured")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	runCtx, cancelRun := context.WithCancelCause(ctx)
 	defer cancelRun(nil)
 	agoraOpts := a.Config.Agora
@@ -1178,7 +1181,7 @@ func (a *App) runAgora(ctx context.Context) error {
 		session:  a.Session,
 		greeting: a.Config.AgoraGreeting,
 	}
-	if workeragora.PublishDataEnabled(agoraOpts.PublishData) || workeragora.PublishDataEnabled(agoraOpts.RTMEnabled) {
+	if workeragora.DataEnabled(agoraOpts) {
 		dataOpts, err := workeragora.ResolveDataOptions(agoraOpts)
 		if err != nil {
 			return err
@@ -1264,7 +1267,6 @@ func installAgoraRTMDataMessageHandler(subscriber workeragora.DataMessageSubscri
 		TextInput: func(ctx context.Context, ev workeragora.TextInputEvent) error {
 			if err := workeragora.HandleTextInputEvent(ctx, responder, ev); err != nil {
 				logutil.Logger.Warnw("failed to handle Agora RTM text input", err, "channel", ev.Channel, "publisher", ev.Publisher)
-				return err
 			}
 			return nil
 		},
@@ -1272,7 +1274,6 @@ func installAgoraRTMDataMessageHandler(subscriber workeragora.DataMessageSubscri
 	subscriber.SetDataMessageHandler(func(ctx context.Context, msg workeragora.DataMessage) error {
 		if err := router.HandleDataMessage(ctx, msg); err != nil {
 			logutil.Logger.Warnw("failed to handle Agora RTM data message", err, "channel", msg.Channel, "publisher", msg.Publisher)
-			return err
 		}
 		return nil
 	})

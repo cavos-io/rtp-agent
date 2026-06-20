@@ -3,7 +3,6 @@ package agora
 import (
 	"context"
 	"encoding/json"
-	"strconv"
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -47,37 +46,20 @@ func (r RTMMessageRouter) HandleDataMessage(ctx context.Context, msg DataMessage
 	}
 	var payload struct {
 		DataType string `json:"data_type"`
-		Type     string `json:"type"`
 		Text     string `json:"text"`
-		StreamID any    `json:"stream_id"`
 	}
 	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 		return err
 	}
-	messageType := payload.DataType
-	if messageType == "" {
-		messageType = payload.Type
-	}
-	if messageType != "input_text" {
+	if payload.DataType != "input_text" {
 		return nil
 	}
 	return r.TextInput(normalizeContext(ctx), TextInputEvent{
 		Text:      payload.Text,
-		StreamID:  defaultRTMStreamID(rtmStreamIDValue(payload.StreamID)),
+		StreamID:  defaultRTMStreamID(""),
 		Channel:   msg.Channel,
 		Publisher: msg.Publisher,
 	})
-}
-
-func rtmStreamIDValue(value any) string {
-	switch v := value.(type) {
-	case string:
-		return strings.TrimSpace(v)
-	case float64:
-		return strconv.FormatFloat(v, 'f', -1, 64)
-	default:
-		return ""
-	}
 }
 
 type TextResponder interface {
@@ -102,13 +84,6 @@ func HandleTextInputEvent(ctx context.Context, responder TextResponder, ev TextI
 		return nil
 	}
 	if ev.Text == "" {
-		if transcriber, ok := responder.(TextInputTranscriber); ok {
-			transcriber.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{
-				Transcript: ev.Text,
-				IsFinal:    true,
-				SpeakerID:  defaultRTMStreamID(ev.StreamID),
-			})
-		}
 		return nil
 	}
 	run := func(ctx context.Context) error {

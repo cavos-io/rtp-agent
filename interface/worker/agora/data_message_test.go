@@ -28,6 +28,9 @@ func TestRTMMessageRouterDispatchesInputText(t *testing.T) {
 	if got.Text != "hello from chat" || got.Publisher != "caller-7" || got.Channel != "support" {
 		t.Fatalf("TextInputEvent = %#v, want parsed input_text event", got)
 	}
+	if got.StreamID != "0" {
+		t.Fatalf("StreamID = %q, want TEN default stream id 0", got.StreamID)
+	}
 }
 
 func TestRTMMessageRouterDispatchesEmptyInputText(t *testing.T) {
@@ -57,11 +60,11 @@ func TestRTMMessageRouterDispatchesEmptyInputText(t *testing.T) {
 	}
 }
 
-func TestRTMMessageRouterDispatchesTENInputTextType(t *testing.T) {
-	var got TextInputEvent
+func TestRTMMessageRouterIgnoresTypeOnlyInputText(t *testing.T) {
+	calls := 0
 	router := RTMMessageRouter{
 		TextInput: func(_ context.Context, ev TextInputEvent) error {
-			got = ev
+			calls++
 			return nil
 		},
 	}
@@ -74,8 +77,8 @@ func TestRTMMessageRouterDispatchesTENInputTextType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleDataMessage() error = %v, want nil", err)
 	}
-	if got.Text != "hello from ten" || got.StreamID != "caller-7" || got.Publisher != "caller-7" || got.Channel != "support" {
-		t.Fatalf("TextInputEvent = %#v, want TEN input_text event", got)
+	if calls != 0 {
+		t.Fatal("type-only RTM message was dispatched; want TEN data_type contract")
 	}
 }
 
@@ -101,7 +104,7 @@ func TestRTMMessageRouterDefaultsMissingStreamID(t *testing.T) {
 	}
 }
 
-func TestRTMMessageRouterPreservesNumericStreamID(t *testing.T) {
+func TestRTMMessageRouterIgnoresPayloadStreamID(t *testing.T) {
 	var got TextInputEvent
 	router := RTMMessageRouter{
 		TextInput: func(_ context.Context, ev TextInputEvent) error {
@@ -113,13 +116,16 @@ func TestRTMMessageRouterPreservesNumericStreamID(t *testing.T) {
 	err := router.HandleDataMessage(context.Background(), DataMessage{
 		Channel:   "support",
 		Publisher: "caller-7",
-		Payload:   []byte(`{"type":"input_text","text":"hello from ten","stream_id":100}`),
+		Payload:   []byte(`{"data_type":"input_text","text":"hello from ten","stream_id":100}`),
 	})
 	if err != nil {
 		t.Fatalf("HandleDataMessage() error = %v, want nil", err)
 	}
-	if got.StreamID != "100" {
-		t.Fatalf("StreamID = %q, want numeric TEN stream id preserved", got.StreamID)
+	if got.StreamID != "0" {
+		t.Fatalf("StreamID = %q, want TEN backend default stream id 0", got.StreamID)
+	}
+	if got.Text != "hello from ten" {
+		t.Fatalf("Text = %q, want payload text still dispatched", got.Text)
 	}
 }
 
@@ -163,6 +169,27 @@ func TestRTMMessageRouterIgnoresNonInputText(t *testing.T) {
 	}
 	if called {
 		t.Fatal("non-input_text RTM message was dispatched")
+	}
+}
+
+func TestRTMMessageRouterDoesNotFallbackWhenDataTypePresent(t *testing.T) {
+	called := false
+	router := RTMMessageRouter{
+		TextInput: func(context.Context, TextInputEvent) error {
+			called = true
+			return nil
+		},
+	}
+
+	err := router.HandleDataMessage(context.Background(), DataMessage{
+		Publisher: "caller-7",
+		Payload:   []byte(`{"data_type":"transcribe","type":"input_text","text":"agent transcript"}`),
+	})
+	if err != nil {
+		t.Fatalf("HandleDataMessage() error = %v, want nil", err)
+	}
+	if called {
+		t.Fatal("type fallback overrode data_type discriminator")
 	}
 }
 
@@ -238,7 +265,7 @@ func TestHandleTextInputDefaultsTranscriptStreamID(t *testing.T) {
 	}
 }
 
-func TestHandleTextInputEventEmitsEmptyFinalTranscriptWithoutReply(t *testing.T) {
+func TestHandleTextInputEventIgnoresEmptyText(t *testing.T) {
 	responder := &recordingTextResponder{}
 
 	err := HandleTextInputEvent(context.Background(), responder, TextInputEvent{
@@ -248,11 +275,17 @@ func TestHandleTextInputEventEmitsEmptyFinalTranscriptWithoutReply(t *testing.T)
 	if err != nil {
 		t.Fatalf("HandleTextInputEvent() error = %v, want nil", err)
 	}
-	if got := responder.calls; len(got) != 1 || got[0] != "transcript::caller-7" {
-		t.Fatalf("calls = %#v, want empty final transcript without interrupt/generate", got)
+	if got := responder.calls; len(got) != 0 {
+		t.Fatalf("calls = %#v, want empty text ignored before interrupt/generate/transcript", got)
 	}
 	if responder.claimed {
 		t.Fatal("HandleTextInputEvent() claimed user turn for empty input_text")
+	}
+	if err := HandleTextInput(context.Background(), responder, ""); err != nil {
+		t.Fatalf("HandleTextInput() error = %v, want nil", err)
+	}
+	if got := responder.calls; len(got) != 0 {
+		t.Fatalf("calls after direct empty input = %#v, want still ignored", got)
 	}
 }
 

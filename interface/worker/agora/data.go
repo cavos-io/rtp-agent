@@ -31,7 +31,7 @@ func ResolveDataOptions(opts Options) (Options, error) {
 	}
 	if opts.RTMToken != "" {
 		opts.Token = opts.RTMToken
-	} else if opts.RTMUserID != "" && opts.RTMUserID != rtcUID && opts.AppCertificate != "" {
+	} else if opts.RTMUserID != "" && opts.RTMUserID != rtcUID {
 		opts.Token = ""
 	}
 	if opts.UID == "" {

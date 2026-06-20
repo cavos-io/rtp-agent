@@ -1280,6 +1280,9 @@ func (s *AgentServer) validateUnregisteredRunPreconditions() error {
 }
 
 func (s *AgentServer) Run(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if err := s.beginRun(); err != nil {
 		return err
 	}
