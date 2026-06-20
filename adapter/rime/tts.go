@@ -34,6 +34,8 @@ const (
 )
 
 type RimeTTS struct {
+	mu              sync.Mutex
+	streams         map[*rimeTTSSynthesizeStream]struct{}
 	apiKey          string
 	baseURL         string
 	model           string
@@ -243,8 +245,48 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	stream.writeMessage = stream.writeWebsocketMessage
 	stream.closeConn = stream.closeWebsocketConn
+	t.registerStream(stream)
 	go stream.readLoop()
 	return stream, nil
+}
+
+func (t *RimeTTS) Close() error {
+	t.mu.Lock()
+	streams := make([]*rimeTTSSynthesizeStream, 0, len(t.streams))
+	for stream := range t.streams {
+		streams = append(streams, stream)
+	}
+	t.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
+func (t *RimeTTS) registerStream(stream *rimeTTSSynthesizeStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.streams == nil {
+		t.streams = make(map[*rimeTTSSynthesizeStream]struct{})
+	}
+	t.streams[stream] = struct{}{}
+	stream.provider = t
+}
+
+func (t *RimeTTS) unregisterStream(stream *rimeTTSSynthesizeStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.streams, stream)
 }
 
 func validateRimeAPIKey(apiKey string) error {
@@ -399,8 +441,15 @@ func (s *rimeTTSSynthesizeStream) Close() error {
 	}
 	s.closed = true
 	s.cancel()
+	defer func() {
+		if s.provider != nil {
+			s.provider.unregisterStream(s)
+		}
+	}()
 	_ = s.writeMessageData(websocket.TextMessage, []byte(`{"operation":"eos"}`))
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	if s.conn != nil {
+		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	}
 	return s.closeConnection()
 }
 
@@ -412,6 +461,9 @@ func (s *rimeTTSSynthesizeStream) writeMessageData(messageType int, data []byte)
 }
 
 func (s *rimeTTSSynthesizeStream) writeWebsocketMessage(messageType int, data []byte) error {
+	if s.conn == nil {
+		return io.ErrClosedPipe
+	}
 	return s.conn.WriteMessage(messageType, data)
 }
 
@@ -423,6 +475,9 @@ func (s *rimeTTSSynthesizeStream) closeConnection() error {
 }
 
 func (s *rimeTTSSynthesizeStream) closeWebsocketConn() error {
+	if s.conn == nil {
+		return nil
+	}
 	return s.conn.Close()
 }
 
@@ -433,6 +488,9 @@ func (s *rimeTTSSynthesizeStream) closeAfterWriteFailureLocked() {
 	s.closed = true
 	s.cancel()
 	_ = s.closeConnection()
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
 }
 
 func (s *rimeTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
