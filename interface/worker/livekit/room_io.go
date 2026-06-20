@@ -137,7 +137,7 @@ const roomIOOpusClockRate uint32 = 48000
 const roomIOOpusFrameSamples uint32 = 960
 const roomIOInputSampleRate uint32 = 24000
 const roomIOInputFrameSizeMS uint32 = 50
-const roomIOAudioSubscriptionTimeout = 3 * time.Second
+const roomIOAudioSubscriptionTimeout = 10 * time.Second
 const roomIOInputSilenceFlushDuration = 500 * time.Millisecond
 
 func roomIOAudioOutputCodec() webrtc.RTPCodecCapability {

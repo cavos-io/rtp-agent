@@ -447,6 +447,14 @@ func TestRoomIOAudioSubscriptionWaitFallsBackAfterTimeout(t *testing.T) {
 	}
 }
 
+func TestRoomIOAudioSubscriptionDefaultTimeoutKeepsStartupGateLongEnough(t *testing.T) {
+	rio := &RoomIO{}
+
+	if got := rio.audioSubscriptionTimeout(); got != 10*time.Second {
+		t.Fatalf("audioSubscriptionTimeout() = %v, want 10s default startup gate", got)
+	}
+}
+
 func TestRoomIOPublishAudioWaitsForSubscriptionBeforeEncoding(t *testing.T) {
 	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
 	rio := &RoomIO{
