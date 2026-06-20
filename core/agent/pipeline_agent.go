@@ -336,6 +336,7 @@ func (va *PipelineAgent) pushSTTFrame(frame *model.AudioFrame) error {
 		SampleRate:        sttFrame.SampleRate,
 		NumChannels:       sttFrame.NumChannels,
 		SamplesPerChannel: sttFrame.SamplesPerChannel,
+		ParticipantID:     sttFrame.ParticipantID,
 	}
 	va.mu.Unlock()
 	return sttStream.PushFrame(sttFrame)
@@ -473,6 +474,7 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 		if len(ev.Alternatives) == 0 {
 			continue
 		}
+		va.applyAudioParticipantIDToSpeechEvent(ev)
 
 		alternative := ev.Alternatives[0]
 		va.mu.Lock()
@@ -525,6 +527,22 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 			go va.generateReply()
 		}
 	}
+}
+
+func (va *PipelineAgent) applyAudioParticipantIDToSpeechEvent(ev *stt.SpeechEvent) {
+	if va == nil || ev == nil || len(ev.Alternatives) == 0 || ev.Alternatives[0].SpeakerID != "" {
+		return
+	}
+	va.mu.Lock()
+	participantID := ""
+	if va.lastSTTFrame != nil {
+		participantID = va.lastSTTFrame.ParticipantID
+	}
+	va.mu.Unlock()
+	if participantID == "" {
+		return
+	}
+	ev.Alternatives[0].SpeakerID = participantID
 }
 
 func (va *PipelineAgent) flushActiveVADSegment() {
