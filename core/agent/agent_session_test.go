@@ -723,6 +723,75 @@ func TestAgentSessionFunctionToolsExecutedEventsFanOutToSubscribers(t *testing.T
 	assertFunctionToolsExecutedEvent(t, second, call, output, "second")
 }
 
+func TestAgentSessionFunctionToolsExecutedDeliveredWhenChannelFull(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	functionEvents := session.functionToolsExecutedEvents()
+	for i := 0; i < cap(functionEvents); i++ {
+		functionEvents <- FunctionToolsExecutedEvent{CreatedAt: time.Now()}
+	}
+	call := &llm.FunctionCall{ID: "call_full", CallID: "lookup_full", Name: "lookup"}
+	output := &llm.FunctionCallOutput{ID: "output_full", CallID: "lookup_full", Name: "lookup", Output: "ok"}
+	ev, err := NewFunctionToolsExecutedEvent([]*llm.FunctionCall{call}, []*llm.FunctionCallOutput{output})
+	if err != nil {
+		t.Fatalf("NewFunctionToolsExecutedEvent error = %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.EmitFunctionToolsExecuted(*ev)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("EmitFunctionToolsExecuted returned while event channel was full; function tools event may be dropped")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	<-functionEvents
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("EmitFunctionToolsExecuted did not unblock after function tools event channel had capacity")
+	}
+
+	for {
+		select {
+		case got := <-functionEvents:
+			if len(got.FunctionCalls) == 1 && got.FunctionCalls[0] == call {
+				return
+			}
+		default:
+			t.Fatal("FunctionToolsExecutedEvents did not receive function tools event")
+		}
+	}
+}
+
+func TestAgentSessionFunctionToolsExecutedDoesNotBlockWithoutSubscriber(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	for i := 0; i < cap(session.functionToolsCh); i++ {
+		session.functionToolsCh <- FunctionToolsExecutedEvent{CreatedAt: time.Now()}
+	}
+	call := &llm.FunctionCall{ID: "call_no_subscriber", CallID: "lookup_no_subscriber", Name: "lookup"}
+	output := &llm.FunctionCallOutput{ID: "output_no_subscriber", CallID: "lookup_no_subscriber", Name: "lookup", Output: "ok"}
+	ev, err := NewFunctionToolsExecutedEvent([]*llm.FunctionCall{call}, []*llm.FunctionCallOutput{output})
+	if err != nil {
+		t.Fatalf("NewFunctionToolsExecutedEvent error = %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.EmitFunctionToolsExecuted(*ev)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("EmitFunctionToolsExecuted blocked on unclaimed function tools event channel")
+	}
+}
+
 func TestAgentSessionSpeechCreatedEventsFanOutToSubscribers(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	first := session.SpeechCreatedEvents()

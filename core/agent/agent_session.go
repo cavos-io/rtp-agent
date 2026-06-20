@@ -1570,11 +1570,17 @@ func (s *AgentSession) EmitFunctionToolsExecuted(ev FunctionToolsExecutedEvent) 
 		}
 	}
 	s.recordEvent(&ev)
-	for _, ch := range s.functionToolsExecutedSubscribers() {
+	primary, primarySubscribed, subscribers := s.functionToolsExecutedSubscribers()
+	if primarySubscribed {
+		primary <- ev
+	} else if primary != nil {
 		select {
-		case ch <- ev:
+		case primary <- ev:
 		default:
 		}
+	}
+	for _, ch := range subscribers {
+		ch <- ev
 	}
 	return ev
 }
@@ -1595,17 +1601,14 @@ func (s *AgentSession) functionToolsExecutedEvents() chan FunctionToolsExecutedE
 	return ch
 }
 
-func (s *AgentSession) functionToolsExecutedSubscribers() []chan FunctionToolsExecutedEvent {
+func (s *AgentSession) functionToolsExecutedSubscribers() (chan FunctionToolsExecutedEvent, bool, []chan FunctionToolsExecutedEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	subs := make([]chan FunctionToolsExecutedEvent, 0, len(s.functionToolsSubs)+1)
 	if s.functionToolsCh == nil {
 		s.functionToolsCh = make(chan FunctionToolsExecutedEvent, 10)
 	}
-	subs = append(subs, s.functionToolsCh)
-	subs = append(subs, s.functionToolsSubs...)
-	return subs
+	return s.functionToolsCh, s.functionToolsSubd, append([]chan FunctionToolsExecutedEvent(nil), s.functionToolsSubs...)
 }
 
 func (s *AgentSession) MetricsCollectedEvents() <-chan MetricsCollectedEvent {
