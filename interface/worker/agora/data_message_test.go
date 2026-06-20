@@ -60,11 +60,11 @@ func TestRTMMessageRouterDispatchesEmptyInputText(t *testing.T) {
 	}
 }
 
-func TestRTMMessageRouterIgnoresTypeOnlyInputText(t *testing.T) {
-	calls := 0
+func TestRTMMessageRouterDispatchesTypeOnlyInputText(t *testing.T) {
+	var got TextInputEvent
 	router := RTMMessageRouter{
 		TextInput: func(_ context.Context, ev TextInputEvent) error {
-			calls++
+			got = ev
 			return nil
 		},
 	}
@@ -77,8 +77,11 @@ func TestRTMMessageRouterIgnoresTypeOnlyInputText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleDataMessage() error = %v, want nil", err)
 	}
-	if calls != 0 {
-		t.Fatal("type-only RTM message was dispatched; want TEN data_type contract")
+	if got.Text != "hello from ten" || got.Publisher != "caller-7" || got.Channel != "support" {
+		t.Fatalf("TextInputEvent = %#v, want TEN frontend type input_text event", got)
+	}
+	if got.StreamID != "0" {
+		t.Fatalf("StreamID = %q, want TEN default stream id 0", got.StreamID)
 	}
 }
 

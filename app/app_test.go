@@ -2181,14 +2181,19 @@ func TestInstallAgoraRTMDataMessageHandlerDispatchesInputText(t *testing.T) {
 	err := handler(context.Background(), workeragora.DataMessage{
 		Channel:   "support",
 		Publisher: "caller-7",
-		Payload:   []byte(`{"type":"input_text","text":"wrong discriminator"}`),
+		Payload:   []byte(`{"type":"input_text","text":"hello from TEN frontend"}`),
 	})
 	if err != nil {
-		t.Fatalf("type-only RTM data handler error = %v, want nil ignored", err)
+		t.Fatalf("type-only RTM data handler error = %v, want nil", err)
 	}
-	if len(responder.calls) != 0 || len(responder.userTranscripts) != 0 {
-		t.Fatalf("type-only RTM payload entered text turn: calls=%#v transcripts=%#v", responder.calls, responder.userTranscripts)
+	if got := strings.Join(responder.calls, ","); got != "claim,interrupt:false,generate:hello from TEN frontend" {
+		t.Fatalf("responder calls after type-only payload = %q, want TEN frontend input_text dispatch", got)
 	}
+	if len(responder.userTranscripts) != 1 || responder.userTranscripts[0].Transcript != "hello from TEN frontend" {
+		t.Fatalf("user transcripts after type-only payload = %#v, want TEN frontend input transcript", responder.userTranscripts)
+	}
+	responder.calls = nil
+	responder.userTranscripts = nil
 	err = handler(context.Background(), workeragora.DataMessage{
 		Channel:   "support",
 		Publisher: "caller-7",
