@@ -1214,6 +1214,42 @@ func TestAgoraRuntimeEventHandlerCancelsPendingGreetingWhenUserLeaves(t *testing
 	}
 }
 
+func TestAgoraRuntimeEventHandlerDropsGreetingAfterContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	session.Assistant = &fakeAppSessionAssistant{}
+	session.TTS = &fakeAppTTS{}
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("session.Start() error = %v", err)
+	}
+	t.Cleanup(func() { session.Shutdown() })
+	speechEvents := session.SpeechCreatedEvents()
+	published := make(chan string, 1)
+	handler := &agoraRuntimeEventHandler{
+		ctx:      ctx,
+		session:  session,
+		greeting: "TEN Agent connected. How can I help you today?",
+		publishGreetingTranscript: func(_ context.Context, text string) error {
+			published <- text
+			return nil
+		},
+	}
+
+	handler.Handle(workeragora.Event{Kind: workeragora.EventUserJoined, Channel: "support", UserID: "caller-1"})
+
+	select {
+	case ev := <-speechEvents:
+		t.Fatalf("Handle() emitted greeting speech after runtime context canceled: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+	select {
+	case text := <-published:
+		t.Fatalf("Handle() published greeting transcript after runtime context canceled: %q", text)
+	default:
+	}
+}
+
 func TestRunAgoraStopsSessionOnTransportDisconnect(t *testing.T) {
 	client := &fakeAppAgoraChannelClient{joinedCh: make(chan struct{}, 1)}
 	oldNewAgoraChannelClient := appNewAgoraChannelClient

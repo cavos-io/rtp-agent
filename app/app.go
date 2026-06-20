@@ -1178,6 +1178,7 @@ func (a *App) runAgora(ctx context.Context) error {
 	audioInput := workeragora.NewAudioInput(runCtx, a.Session)
 	transport.SetAudioHandler(audioInput.HandleAudioFrame)
 	agoraEvents := &agoraRuntimeEventHandler{
+		ctx:      runCtx,
 		session:  a.Session,
 		greeting: a.Config.AgoraGreeting,
 	}
@@ -1246,7 +1247,7 @@ func (a *App) runAgora(ctx context.Context) error {
 		}
 		return err
 	}
-	agoraEvents.FlushPendingGreeting(context.Background())
+	agoraEvents.FlushPendingGreeting(runCtx)
 	<-runCtx.Done()
 	return runContextErr(runCtx)
 }
@@ -1256,6 +1257,13 @@ func runContextErr(ctx context.Context) error {
 		return cause
 	}
 	return ctx.Err()
+}
+
+func normalizeAgoraRuntimeContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
 }
 
 func installAgoraRTMDataMessageHandler(ctx context.Context, subscriber workeragora.DataMessageSubscriber, responder workeragora.TextResponder, agentUserID string) {
@@ -1295,6 +1303,7 @@ func installAgoraRTMDataMessageHandler(ctx context.Context, subscriber workerago
 }
 
 type agoraRuntimeEventHandler struct {
+	ctx                       context.Context
 	session                   *agent.AgentSession
 	greeting                  string
 	publishGreetingTranscript func(context.Context, string) error
@@ -1309,11 +1318,17 @@ func (h *agoraRuntimeEventHandler) Handle(event workeragora.Event) {
 	}
 	switch event.Kind {
 	case workeragora.EventUserJoined:
+		ctx := normalizeAgoraRuntimeContext(h.ctx)
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		h.mu.Lock()
 		h.users++
 		shouldGreet := h.users == 1 && h.greeting != "" && h.session != nil
 		h.mu.Unlock()
-		if shouldGreet && !h.sayAndPublishGreeting(context.Background(), event) {
+		if shouldGreet && !h.sayAndPublishGreeting(ctx, event) {
 			h.mu.Lock()
 			h.pendingGreeting = true
 			h.mu.Unlock()
@@ -1338,6 +1353,12 @@ func (h *agoraRuntimeEventHandler) Handle(event workeragora.Event) {
 func (h *agoraRuntimeEventHandler) FlushPendingGreeting(ctx context.Context) {
 	if h == nil {
 		return
+	}
+	ctx = normalizeAgoraRuntimeContext(ctx)
+	select {
+	case <-ctx.Done():
+		return
+	default:
 	}
 	h.mu.Lock()
 	pending := h.pendingGreeting
