@@ -138,6 +138,11 @@ type fakeAppAgoraDataPublisher struct {
 	handler   workeragora.DataMessageHandler
 }
 
+func appAgoraRTMDisabled() *bool {
+	value := false
+	return &value
+}
+
 func (f *fakeAppAgoraDataPublisher) PublishData(_ context.Context, payload []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -764,10 +769,11 @@ func TestAppRunUsesAgoraTransportWhenConfigured(t *testing.T) {
 			Transport: worker.WorkerTransportAgora,
 		},
 		Agora: workeragora.Options{
-			AppID:   "app",
-			Channel: "support",
-			UID:     "agent",
-			Token:   "token",
+			AppID:      "app",
+			Channel:    "support",
+			UID:        "agent",
+			Token:      "token",
+			RTMEnabled: appAgoraRTMDisabled(),
 		},
 	})
 	if err != nil {
@@ -854,10 +860,11 @@ func TestRunAgoraLogsConnectedTransportEvent(t *testing.T) {
 		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
 		Config: AppConfig{
 			Agora: workeragora.Options{
-				AppID:   "app",
-				Channel: "support",
-				UID:     "agent",
-				Token:   "token",
+				AppID:      "app",
+				Channel:    "support",
+				UID:        "agent",
+				Token:      "token",
+				RTMEnabled: appAgoraRTMDisabled(),
 			},
 		},
 	}
@@ -943,10 +950,11 @@ func TestRunAgoraSaysGreetingWhenFirstParticipantJoins(t *testing.T) {
 		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
 		Config: AppConfig{
 			Agora: workeragora.Options{
-				AppID:   "app",
-				Channel: "support",
-				UID:     "agent",
-				Token:   "token",
+				AppID:      "app",
+				Channel:    "support",
+				UID:        "agent",
+				Token:      "token",
+				RTMEnabled: appAgoraRTMDisabled(),
 			},
 			AgoraGreeting: "TEN Agent connected. How can I help you today?",
 		},
@@ -1221,10 +1229,11 @@ func TestRunAgoraStopsSessionOnTransportDisconnect(t *testing.T) {
 		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
 		Config: AppConfig{
 			Agora: workeragora.Options{
-				AppID:   "app",
-				Channel: "support",
-				UID:     "agent",
-				Token:   "token",
+				AppID:      "app",
+				Channel:    "support",
+				UID:        "agent",
+				Token:      "token",
+				RTMEnabled: appAgoraRTMDisabled(),
 			},
 		},
 	}
@@ -1290,10 +1299,11 @@ func TestRunAgoraWaitsForDisconnectEventOnShutdown(t *testing.T) {
 		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
 		Config: AppConfig{
 			Agora: workeragora.Options{
-				AppID:   "app",
-				Channel: "support",
-				UID:     "agent",
-				Token:   "token",
+				AppID:      "app",
+				Channel:    "support",
+				UID:        "agent",
+				Token:      "token",
+				RTMEnabled: appAgoraRTMDisabled(),
 			},
 		},
 	}
@@ -1367,10 +1377,11 @@ func TestRunAgoraLogsJoinErrorTransportEvent(t *testing.T) {
 		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
 		Config: AppConfig{
 			Agora: workeragora.Options{
-				AppID:   "app",
-				Channel: "support",
-				UID:     "agent",
-				Token:   "token",
+				AppID:      "app",
+				Channel:    "support",
+				UID:        "agent",
+				Token:      "token",
+				RTMEnabled: appAgoraRTMDisabled(),
 			},
 		},
 	}
@@ -1431,10 +1442,11 @@ func TestRunAgoraDoesNotLeaveChannelWhenJoinFailsBeforeStart(t *testing.T) {
 		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
 		Config: AppConfig{
 			Agora: workeragora.Options{
-				AppID:   "app",
-				Channel: "support",
-				UID:     "agent",
-				Token:   "token",
+				AppID:      "app",
+				Channel:    "support",
+				UID:        "agent",
+				Token:      "token",
+				RTMEnabled: appAgoraRTMDisabled(),
 			},
 		},
 	}
@@ -1470,10 +1482,11 @@ func TestRunAgoraPublishesAssistantAudioToChannel(t *testing.T) {
 		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
 		Config: AppConfig{
 			Agora: workeragora.Options{
-				AppID:   "app",
-				Channel: "support",
-				UID:     "agent",
-				Token:   "token",
+				AppID:      "app",
+				Channel:    "support",
+				UID:        "agent",
+				Token:      "token",
+				RTMEnabled: appAgoraRTMDisabled(),
 			},
 		},
 	}
@@ -2181,6 +2194,7 @@ func TestRunAgoraDoesNotWireAssistantAudioWhenPublishDisabled(t *testing.T) {
 				UID:          "agent",
 				Token:        "token",
 				PublishAudio: &disabled,
+				RTMEnabled:   appAgoraRTMDisabled(),
 			},
 		},
 	}
@@ -2235,9 +2249,10 @@ func TestRunAgoraForwardsChannelAudioToSession(t *testing.T) {
 		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
 		Config: AppConfig{
 			Agora: workeragora.Options{
-				AppID:   "app",
-				Channel: "support",
-				UID:     "agent",
+				AppID:      "app",
+				Channel:    "support",
+				UID:        "agent",
+				RTMEnabled: appAgoraRTMDisabled(),
 			},
 		},
 	}
@@ -2311,6 +2326,7 @@ func TestRunAgoraDoesNotForwardChannelAudioWhenSubscribeDisabled(t *testing.T) {
 				UID:            "agent",
 				Token:          "token",
 				SubscribeAudio: &disabled,
+				RTMEnabled:     appAgoraRTMDisabled(),
 			},
 		},
 	}
@@ -2361,10 +2377,11 @@ func TestRunAgoraStartsSessionWithWorkerContext(t *testing.T) {
 		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
 		Config: AppConfig{
 			Agora: workeragora.Options{
-				AppID:   "app",
-				Channel: "support",
-				UID:     "agent",
-				Token:   "token",
+				AppID:      "app",
+				Channel:    "support",
+				UID:        "agent",
+				Token:      "token",
+				RTMEnabled: appAgoraRTMDisabled(),
 			},
 		},
 	}

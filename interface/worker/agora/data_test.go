@@ -34,9 +34,10 @@ func TestDataEnabledAcceptsPublishDataOrRTMEnabled(t *testing.T) {
 		opts Options
 		want bool
 	}{
-		{name: "unset", opts: Options{}, want: false},
+		{name: "unset", opts: Options{}, want: true},
 		{name: "publish_data", opts: Options{PublishData: &enabled}, want: true},
 		{name: "rtm_enabled", opts: Options{RTMEnabled: &enabled}, want: true},
+		{name: "rtm_disabled", opts: Options{RTMEnabled: &disabled}, want: false},
 		{name: "disabled", opts: Options{PublishData: &disabled, RTMEnabled: &disabled}, want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
