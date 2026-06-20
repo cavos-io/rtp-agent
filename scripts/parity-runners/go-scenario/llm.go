@@ -2710,6 +2710,18 @@ func runLLMChatContextCallStep(state *llmScenarioState, step llmScenarioStepSpec
 			return nil
 		}
 		state.vars[step.Assign] = lkllm.FunctionCallItemToMessage(item)
+	case "summarize":
+		keepLastTurns := 2
+		if value, ok := scenarioIntArg(step.Args, "keep_last_turns"); ok {
+			keepLastTurns = value
+		}
+		summarized, err := ctx.Summarize(context.Background(), &scenarioSummaryLLM{
+			response: stringArg(step.Args, "response"),
+		}, lkllm.ChatContextSummarizeOptions{KeepLastTurns: keepLastTurns})
+		if err != nil {
+			return err
+		}
+		state.vars[step.Assign] = summarized
 	case "tool_names":
 		tools, err := buildLLMScenarioTools(step.Args)
 		if err != nil {
@@ -5197,6 +5209,18 @@ func (s *scenarioLLMTextStream) Next() (*lkllm.ChatChunk, error) {
 func (s *scenarioLLMTextStream) Close() error {
 	s.closed = true
 	return nil
+}
+
+type scenarioSummaryLLM struct {
+	response string
+}
+
+func (s *scenarioSummaryLLM) Chat(context.Context, *lkllm.ChatContext, ...lkllm.ChatOption) (lkllm.LLMStream, error) {
+	return &scenarioLLMTextStream{
+		events: []scenarioLLMTextStreamEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: s.response}}},
+		},
+	}, nil
 }
 
 func completionUsagePayload(usage lkllm.CompletionUsage) (map[string]any, error) {

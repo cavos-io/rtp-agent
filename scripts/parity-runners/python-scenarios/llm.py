@@ -4138,6 +4138,82 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             )
         raise ValueError(f"unsupported function call item type {item_type!r}")
 
+    def summarize_items(
+        items: list[dict[str, Any]],
+        *,
+        keep_last_turns: int = 2,
+        response: str = "",
+    ) -> None:
+        msg_budget = keep_last_turns * 2
+        split_idx = len(items)
+        if msg_budget > 0:
+            msg_count = 0
+            for index in range(len(items) - 1, -1, -1):
+                item = items[index]
+                if item.get("type") == "message" and item.get("role") in ("user", "assistant"):
+                    msg_count += 1
+                    if msg_count >= msg_budget:
+                        split_idx = index
+                        break
+            if msg_count < msg_budget:
+                return
+        if split_idx == 0:
+            return
+
+        head_items = list(items[:split_idx])
+        tail_items = list(items[split_idx:])
+        to_summarize: list[dict[str, Any]] = []
+        for item in head_items:
+            item_type = item.get("type")
+            if item_type == "message":
+                if item.get("role") not in ("user", "assistant"):
+                    continue
+                if item.get("extra", {}).get("is_summary") is True:
+                    continue
+                text = (text_content(item.get("content", [])) or "").strip()
+                if text:
+                    to_summarize.append(item)
+            elif item_type in ("function_call", "function_call_output"):
+                to_summarize.append(item)
+
+        if not to_summarize:
+            return
+
+        contents: list[str] = []
+        for item in to_summarize:
+            if item.get("type") in ("function_call", "function_call_output"):
+                contents.append(text_content(function_call_item_to_message(item)["content"]) or "")
+            else:
+                contents.append(xml_string(str(item["role"]), (text_content(item["content"]) or "").strip()))
+        if not "\n".join(contents).strip():
+            return
+
+        summary = response.strip()
+        if not summary:
+            return
+
+        preserved: list[dict[str, Any]] = []
+        for item in head_items:
+            if item.get("type") == "message" and item.get("role") in ("user", "assistant"):
+                continue
+            if item.get("type") in ("function_call", "function_call_output"):
+                continue
+            preserved.append(item)
+
+        items[:] = preserved
+        created_at = (
+            float(tail_items[0].get("created_at", 0.0)) - 0.000001
+            if tail_items
+            else float(head_items[-1].get("created_at", 0.0)) + 0.000001
+        )
+        add_message(
+            items,
+            role="assistant",
+            content=[xml_string("chat_history_summary", summary)],
+            created_at=created_at,
+        )
+        items.extend(tail_items)
+
     def declarative_item_id(item: dict[str, Any]) -> str:
         return str(item["id"]) if "id" in item else generated_id()
 
@@ -4309,6 +4385,15 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 variables[step["assign"]] = None
                 return
             variables[step["assign"]] = function_call_item_to_message(item)
+            return
+        if op == "summarize":
+            args = step.get("args", {})
+            summarize_items(
+                target_items,
+                keep_last_turns=int(args.get("keep_last_turns", 2)),
+                response=str(args.get("response", "")),
+            )
+            variables[step["assign"]] = target
             return
         if op == "tool_names":
             variables[step["assign"]] = build_declarative_tool_names(
