@@ -1773,6 +1773,9 @@ func (rio *RoomIO) waitForAudioSubscriptionReady(ctx context.Context) error {
 		rio.mu.Lock()
 		rio.audioSubscribed = nil
 		rio.mu.Unlock()
+		if rio.AgentSession != nil {
+			rio.AgentSession.RefreshUserAwayTimer()
+		}
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -1808,7 +1811,7 @@ func (rio *RoomIO) userAwayTimerBlocked() bool {
 	ch := rio.audioSubscribed
 	rio.mu.Unlock()
 	if ch == nil {
-		return true
+		return false
 	}
 	select {
 	case <-ch:
@@ -1839,6 +1842,9 @@ func (rio *RoomIO) waitForAudioSubscription(ctx context.Context) error {
 		rio.mu.Lock()
 		rio.audioSubscribed = nil
 		rio.mu.Unlock()
+		if rio.AgentSession != nil {
+			rio.AgentSession.RefreshUserAwayTimer()
+		}
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()

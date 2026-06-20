@@ -548,6 +548,47 @@ func TestRoomIOPublishAudioSubscriptionTimeoutFallsBackOnce(t *testing.T) {
 	}
 }
 
+func TestRoomIOPublishAudioSubscriptionTimeoutReleasesUserAwayGate(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{UserAwayTimeout: 0.01})
+	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
+	rio := &RoomIO{
+		AgentSession: session,
+		Options: RoomOptions{
+			AudioSubscriptionTimeout: 20 * time.Millisecond,
+		},
+		audioTrack:      newRoomIOTestAudioTrack(t),
+		encoder:         encoder,
+		audioSubscribed: make(chan struct{}),
+	}
+	session.SetUserAwayTimerGate(rio.userAwayTimerBlocked)
+	session.UpdateAgentState(agent.AgentStateListening)
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		t.Fatalf("unexpected user state before publish fallback = %q -> %q", ev.OldState, ev.NewState)
+	case <-time.After(15 * time.Millisecond):
+	}
+
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		if ev.OldState != agent.UserStateListening || ev.NewState != agent.UserStateAway {
+			t.Fatalf("event states = %q -> %q, want listening -> away after publish subscription timeout", ev.OldState, ev.NewState)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserStateChangedCh did not receive away event after publish subscription timeout")
+	}
+}
+
 func TestRoomIOPlaybackEventsFollowCaptureAndFlush(t *testing.T) {
 	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
 	var started []PlaybackStartedEvent
