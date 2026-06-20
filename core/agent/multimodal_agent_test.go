@@ -1133,6 +1133,26 @@ func TestMultimodalAgentEmitsRealtimeErrorWhenVideoPushFails(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentRealtimeVideoPushCancelSuppressesError(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	rtSession := &fakeRealtimeSession{pushVideoErr: context.Canceled}
+	ma := &MultimodalAgent{
+		session:   session,
+		rtSession: rtSession,
+	}
+
+	ma.OnVideoFrame(context.Background(), &images.VideoFrame{})
+
+	if rtSession.videoFrames != 1 {
+		t.Fatalf("videoFrames = %d, want realtime video push", rtSession.videoFrames)
+	}
+	select {
+	case ev := <-session.ErrorEvents():
+		t.Fatalf("ErrorEvents received %#v, want cancellation suppressed", ev)
+	default:
+	}
+}
+
 func TestMultimodalAgentExecutesAgentToolFunctionCall(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	agent := NewAgent("test")

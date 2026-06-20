@@ -1324,6 +1324,9 @@ func (ma *MultimodalAgent) OnVideoFrame(ctx context.Context, frame *images.Video
 		return
 	}
 	if err := rtSession.PushVideo(frame); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		logger.Logger.Errorw("failed to push video to multimodal session", err)
 		if session != nil {
 			session.EmitError(ErrorEvent{
