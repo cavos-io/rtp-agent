@@ -709,6 +709,17 @@ func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvUsesAgoraChannelNameFallback(t *testing.T) {
+	unsetEnvForTest(t, "AGORA_CHANNEL")
+	t.Setenv("AGORA_CHANNEL_NAME", " support-room ")
+
+	cfg := DefaultConfigFromEnv()
+
+	if cfg.Agora.Channel != "support-room" {
+		t.Fatalf("Agora.Channel = %q, want AGORA_CHANNEL_NAME fallback", cfg.Agora.Channel)
+	}
+}
+
 func TestDefaultConfigFromEnvUsesAgoraStreamIDAsUIDFallback(t *testing.T) {
 	unsetEnvForTest(t, "AGORA_UID")
 	t.Setenv("AGORA_STREAM_ID", " 1234 ")

@@ -701,7 +701,7 @@ func DefaultConfigFromEnv() AppConfig {
 		Agora: workeragora.Options{
 			AppID:          strings.TrimSpace(os.Getenv("AGORA_APP_ID")),
 			AppCertificate: strings.TrimSpace(os.Getenv("AGORA_APP_CERTIFICATE")),
-			Channel:        strings.TrimSpace(os.Getenv("AGORA_CHANNEL")),
+			Channel:        firstTrimmedEnv("AGORA_CHANNEL", "AGORA_CHANNEL_NAME"),
 			UID:            firstTrimmedEnv("AGORA_UID", "AGORA_STREAM_ID", "AGORA_BOT_UID"),
 			RemoteStreamID: firstTrimmedEnv("AGORA_REMOTE_STREAM_ID", "AGORA_USER_UID"),
 			Token:          strings.TrimSpace(os.Getenv("AGORA_TOKEN")),
