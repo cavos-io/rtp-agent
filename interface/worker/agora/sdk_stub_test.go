@@ -726,6 +726,30 @@ func TestSDKClientImplementationLeavesBeforeCheckingContext(t *testing.T) {
 	}
 }
 
+func TestSDKClientImplementationDoesNotReportCanceledContextAfterActiveLeaveCleanup(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	leaveIndex := strings.Index(text, "func (c *sdkChannelClient) Leave")
+	if leaveIndex < 0 {
+		t.Fatal("sdk.go missing sdkChannelClient.Leave")
+	}
+	leaveBody := text[leaveIndex:]
+	if nextFunc := strings.Index(leaveBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		leaveBody = leaveBody[:len("func ")+nextFunc]
+	}
+	connectionIndex := strings.Index(leaveBody, "connection.Release()")
+	if connectionIndex < 0 {
+		t.Fatal("sdk.go Leave missing active connection cleanup")
+	}
+	afterCleanup := leaveBody[connectionIndex:]
+	if strings.Contains(afterCleanup, "err = ctx.Err()") {
+		t.Fatal("sdk.go Leave must not turn successful active connection cleanup into a context cancellation error")
+	}
+}
+
 func TestSDKClientImplementationNormalizesNilContexts(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {

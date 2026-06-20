@@ -445,13 +445,6 @@ func (c *sdkChannelClient) Leave(ctx context.Context) error {
 	if releaseErr := releaseSDKService(); releaseErr != nil && err == nil {
 		err = releaseErr
 	}
-	select {
-	case <-ctx.Done():
-		if err == nil {
-			err = ctx.Err()
-		}
-	default:
-	}
 	return err
 }
 
