@@ -477,6 +477,46 @@ func TestAgentSessionCloseEventsFanOutToSubscribers(t *testing.T) {
 	assertCloseEvent(t, second, "second")
 }
 
+func TestAgentSessionCloseEventDeliveredWhenChannelFull(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.started = true
+
+	closeEvents := session.closeEvents()
+	for i := 0; i < cap(closeEvents); i++ {
+		closeEvents <- CloseEvent{Reason: CloseReasonError}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.CloseSoon(CloseReasonUserInitiated)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("CloseSoon returned while close event channel was full; terminal close event may be dropped")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	<-closeEvents
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("CloseSoon did not unblock after close event channel had capacity")
+	}
+
+	for {
+		select {
+		case ev := <-closeEvents:
+			if ev.Reason == CloseReasonUserInitiated {
+				return
+			}
+		default:
+			t.Fatal("CloseEvents did not receive terminal close event")
+		}
+	}
+}
+
 func TestAgentSessionMetricsCollectedEventsFanOutToSubscribers(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	first := session.MetricsCollectedEvents()

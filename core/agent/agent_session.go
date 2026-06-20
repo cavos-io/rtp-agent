@@ -1940,10 +1940,7 @@ func (s *AgentSession) closeSoon(reason CloseReason, err error) {
 		callAgentSessionListener("close", listener, ev)
 	}
 	for _, ch := range closeSubscribers {
-		select {
-		case ch <- *ev:
-		default:
-		}
+		ch <- *ev
 	}
 }
 
