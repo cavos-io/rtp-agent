@@ -2540,6 +2540,26 @@ func TestPipelineAgentStartsWithoutVAD(t *testing.T) {
 	receivePipelineClosed(t, sttClosed, "STT")
 }
 
+func TestPipelineAgentSeedsSTTStreamTimingOnStart(t *testing.T) {
+	sttClosed := make(chan struct{})
+	timingSeeded := make(chan struct{})
+	sttStream := &fakePipelineRecognizeStream{closedCh: sttClosed, timingSeededCh: timingSeeded}
+	agent := NewPipelineAgent(nil, &fakePipelineSTT{stream: sttStream}, nil, nil, llm.NewChatContext())
+	ctx, cancel := context.WithCancel(context.Background())
+	go agent.run(ctx)
+
+	select {
+	case <-timingSeeded:
+	case <-time.After(time.Second):
+		t.Fatal("STT stream start time offset was not seeded")
+	}
+	if sttStream.startTimeOffset < 0 {
+		t.Fatalf("STT stream start time offset = %v, want non-negative", sttStream.startTimeOffset)
+	}
+	cancel()
+	receivePipelineClosed(t, sttClosed, "STT")
+}
+
 func TestPipelineAgentStartsWithoutSTT(t *testing.T) {
 	vadClosed := make(chan struct{})
 	vadPushed := make(chan *model.AudioFrame, 1)
@@ -6078,16 +6098,22 @@ func (e erroringPipelineLLM) Chat(context.Context, *llm.ChatContext, ...llm.Chat
 }
 
 type fakePipelineRecognizeStream struct {
-	events     []*stt.SpeechEvent
-	index      int
-	err        error
-	pushErr    error
-	frames     []*model.AudioFrame
-	pushedCh   chan *model.AudioFrame
-	closedCh   chan struct{}
-	flushCount int
-	closeOnce  sync.Once
-	closeErr   error
+	events             []*stt.SpeechEvent
+	index              int
+	err                error
+	pushErr            error
+	frames             []*model.AudioFrame
+	pushedCh           chan *model.AudioFrame
+	closedCh           chan struct{}
+	flushCount         int
+	closeOnce          sync.Once
+	closeErr           error
+	startTimeOffset    float64
+	startTimeOffsetSet bool
+	startTime          float64
+	startTimeSet       bool
+	timingSeededCh     chan struct{}
+	timingSeededOnce   sync.Once
 }
 
 func (f *fakePipelineRecognizeStream) PushFrame(frame *model.AudioFrame) error {
@@ -6122,4 +6148,25 @@ func (f *fakePipelineRecognizeStream) Next() (*stt.SpeechEvent, error) {
 	ev := f.events[f.index]
 	f.index++
 	return ev, nil
+}
+
+func (f *fakePipelineRecognizeStream) StartTimeOffset() float64 {
+	return f.startTimeOffset
+}
+
+func (f *fakePipelineRecognizeStream) SetStartTimeOffset(offset float64) {
+	f.startTimeOffset = offset
+	f.startTimeOffsetSet = true
+	if f.timingSeededCh != nil {
+		f.timingSeededOnce.Do(func() { close(f.timingSeededCh) })
+	}
+}
+
+func (f *fakePipelineRecognizeStream) StartTime() float64 {
+	return f.startTime
+}
+
+func (f *fakePipelineRecognizeStream) SetStartTime(startTime float64) {
+	f.startTime = startTime
+	f.startTimeSet = true
 }

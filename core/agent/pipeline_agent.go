@@ -168,6 +168,7 @@ func (va *PipelineAgent) ClearInputTranscription() error {
 	if err != nil {
 		return err
 	}
+	seedSTTStreamTiming(stream)
 	va.mu.Lock()
 	va.sttStream = stream
 	va.lastSTTFrame = nil
@@ -187,6 +188,14 @@ func streamableSTT(sttObj stt.STT, vadObj vad.VAD) (stt.STT, error) {
 		return nil, fmt.Errorf("the STT (%s) does not support streaming, add a VAD to the AgentTask/VoiceAgent to enable streaming. Or manually wrap your STT in a stt.StreamAdapter", sttObj.Label())
 	}
 	return stt.NewStreamAdapter(sttObj, vadObj), nil
+}
+
+func seedSTTStreamTiming(stream stt.RecognizeStream) {
+	timing, ok := stream.(stt.StreamTiming)
+	if !ok {
+		return
+	}
+	stt.SetStreamStartTimeOffset(timing, 0)
 }
 
 func (va *PipelineAgent) UpdateComponents(vadObj vad.VAD, sttObj stt.STT, llmObj llm.LLM, ttsObj tts.TTS) {
@@ -257,6 +266,7 @@ func (va *PipelineAgent) run(ctx context.Context) {
 			}
 			return
 		}
+		seedSTTStreamTiming(stream)
 		sttStream = stream
 		va.mu.Lock()
 		va.sttStream = stream
