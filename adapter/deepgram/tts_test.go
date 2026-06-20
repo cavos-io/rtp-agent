@@ -523,7 +523,7 @@ func TestDeepgramTTSStreamSpeakTextKeepsReferenceTrailingSeparator(t *testing.T)
 				t.Fatalf("writeJSON payload = %#v, want map", v)
 			}
 			if msg["type"] != "Speak" {
-				t.Fatalf("message type = %#v, want Speak", msg["type"])
+				return nil
 			}
 			speakText, _ = msg["text"].(string)
 			return nil
@@ -533,8 +533,77 @@ func TestDeepgramTTSStreamSpeakTextKeepsReferenceTrailingSeparator(t *testing.T)
 	if err := stream.PushText("hello"); err != nil {
 		t.Fatalf("PushText() error = %v", err)
 	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
 	if speakText != "hello " {
 		t.Fatalf("Speak text = %q, want reference trailing separator", speakText)
+	}
+}
+
+func TestDeepgramTTSStreamTokenizesReferenceSpeakMessages(t *testing.T) {
+	var writes []string
+	stream := &deepgramTTSStream{
+		writeJSON: func(v any) error {
+			msg, ok := v.(map[string]interface{})
+			if !ok {
+				t.Fatalf("writeJSON payload = %#v, want map", v)
+			}
+			msgType, _ := msg["type"].(string)
+			if msgType == "Speak" {
+				text, _ := msg["text"].(string)
+				writes = append(writes, msgType+":"+text)
+				return nil
+			}
+			writes = append(writes, msgType)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("hello world"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if !reflect.DeepEqual(writes, []string{"Speak:hello "}) {
+		t.Fatalf("writes after PushText = %#v, want completed first word only", writes)
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	want := []string{"Speak:hello ", "Speak:world ", "Flush"}
+	if !reflect.DeepEqual(writes, want) {
+		t.Fatalf("writes after Flush = %#v, want %#v", writes, want)
+	}
+
+	writes = nil
+	stream = &deepgramTTSStream{
+		writeJSON: func(v any) error {
+			msg, ok := v.(map[string]interface{})
+			if !ok {
+				t.Fatalf("writeJSON payload = %#v, want map", v)
+			}
+			msgType, _ := msg["type"].(string)
+			if msgType == "Speak" {
+				text, _ := msg["text"].(string)
+				writes = append(writes, msgType+":"+text)
+				return nil
+			}
+			writes = append(writes, msgType)
+			return nil
+		},
+	}
+	if err := stream.PushText("hello wor"); err != nil {
+		t.Fatalf("PushText(partial) error = %v", err)
+	}
+	if err := stream.PushText("ld again"); err != nil {
+		t.Fatalf("PushText(rest) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(partial) error = %v", err)
+	}
+	want = []string{"Speak:hello ", "Speak:world ", "Speak:again ", "Flush"}
+	if !reflect.DeepEqual(writes, want) {
+		t.Fatalf("writes after split PushText = %#v, want %#v", writes, want)
 	}
 }
 
@@ -611,7 +680,7 @@ func TestDeepgramTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 		},
 	}
 
-	if err := stream.PushText("hello"); !errors.Is(err, writeErr) {
+	if err := stream.PushText("hello world"); !errors.Is(err, writeErr) {
 		t.Fatalf("PushText error = %v, want write error", err)
 	}
 	if closeCalls != 1 {
