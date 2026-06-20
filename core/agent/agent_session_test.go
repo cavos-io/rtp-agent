@@ -590,6 +590,64 @@ func TestAgentSessionConversationItemAddedEventsFanOutToSubscribers(t *testing.T
 	assertConversationItemAddedEvent(t, second, msg, "second")
 }
 
+func TestAgentSessionConversationItemAddedDeliveredWhenChannelFull(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	conversationEvents := session.conversationItemAddedEvents()
+	for i := 0; i < cap(conversationEvents); i++ {
+		conversationEvents <- ConversationItemAddedEvent{Item: &llm.ChatMessage{ID: fmt.Sprintf("prefill_%d", i), Role: llm.ChatRoleUser}}
+	}
+	msg := &llm.ChatMessage{ID: "msg_full", Role: llm.ChatRoleUser}
+
+	done := make(chan struct{})
+	go func() {
+		session.EmitConversationItemAdded(msg)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("EmitConversationItemAdded returned while event channel was full; conversation item may be dropped")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	<-conversationEvents
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("EmitConversationItemAdded did not unblock after conversation event channel had capacity")
+	}
+
+	for {
+		select {
+		case ev := <-conversationEvents:
+			if ev.Item == msg {
+				return
+			}
+		default:
+			t.Fatal("ConversationItemAddedEvents did not receive conversation item")
+		}
+	}
+}
+
+func TestAgentSessionConversationItemAddedDoesNotBlockWithoutSubscriber(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	for i := 0; i < cap(session.conversationItemCh); i++ {
+		session.conversationItemCh <- ConversationItemAddedEvent{Item: &llm.ChatMessage{ID: fmt.Sprintf("prefill_%d", i), Role: llm.ChatRoleUser}}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.EmitConversationItemAdded(&llm.ChatMessage{ID: "msg_no_subscriber", Role: llm.ChatRoleUser})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("EmitConversationItemAdded blocked on unclaimed conversation event channel")
+	}
+}
+
 func TestAgentSessionFunctionToolsExecutedEventsFanOutToSubscribers(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	first := session.FunctionToolsExecutedEvents()

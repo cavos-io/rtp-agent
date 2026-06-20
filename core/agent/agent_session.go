@@ -1483,11 +1483,17 @@ func (s *AgentSession) EmitConversationItemAdded(item llm.ChatItem) {
 	s.insertChatItem(item)
 	ev := ConversationItemAddedEvent{Item: item, CreatedAt: time.Now()}
 	s.recordEvent(&ev)
-	for _, ch := range s.conversationItemAddedSubscribers() {
+	primary, primarySubscribed, subscribers := s.conversationItemAddedSubscribers()
+	if primarySubscribed {
+		primary <- ev
+	} else if primary != nil {
 		select {
-		case ch <- ev:
+		case primary <- ev:
 		default:
 		}
+	}
+	for _, ch := range subscribers {
+		ch <- ev
 	}
 }
 
@@ -1507,17 +1513,14 @@ func (s *AgentSession) conversationItemAddedEvents() chan ConversationItemAddedE
 	return ch
 }
 
-func (s *AgentSession) conversationItemAddedSubscribers() []chan ConversationItemAddedEvent {
+func (s *AgentSession) conversationItemAddedSubscribers() (chan ConversationItemAddedEvent, bool, []chan ConversationItemAddedEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	subs := make([]chan ConversationItemAddedEvent, 0, len(s.conversationItemSubs)+1)
 	if s.conversationItemCh == nil {
 		s.conversationItemCh = make(chan ConversationItemAddedEvent, 10)
 	}
-	subs = append(subs, s.conversationItemCh)
-	subs = append(subs, s.conversationItemSubs...)
-	return subs
+	return s.conversationItemCh, s.conversationItemSubd, append([]chan ConversationItemAddedEvent(nil), s.conversationItemSubs...)
 }
 
 func (s *AgentSession) insertChatItem(item llm.ChatItem) {
