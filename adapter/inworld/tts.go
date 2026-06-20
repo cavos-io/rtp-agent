@@ -250,7 +250,7 @@ func (t *InworldTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -288,7 +288,7 @@ func inworldTTSRequestPayload(t *InworldTTS, text string) map[string]interface{}
 func (t *InworldTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildInworldTTSWebsocketURL(t), buildInworldTTSWebsocketHeaders(t))
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial inworld tts websocket: %w", err)
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial inworld tts websocket: %v", err))
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &inworldTTSSynthesizeStream{

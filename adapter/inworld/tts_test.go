@@ -229,6 +229,24 @@ func TestInworldTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestInworldTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: inworldRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("dial failed")
+	})}
+	defer func() { http.DefaultClient = originalClient }()
+
+	provider := NewInworldTTS("test-key", "")
+	_, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("Synthesize error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestInworldTTSWebsocketURLAndHeadersMatchReference(t *testing.T) {
 	provider := NewInworldTTS("test-key", "", WithInworldTTSWebsocketURL("wss://inworld.example/"))
 
@@ -315,6 +333,18 @@ func TestInworldTTSWebsocketMessagesMatchReference(t *testing.T) {
 	}
 	if _, ok := closePayload["close_context"].(map[string]any); !ok {
 		t.Fatalf("close_context missing from %#v", closePayload)
+	}
+}
+
+func TestInworldTTSStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
+	provider := NewInworldTTS("test-key", "", WithInworldTTSWebsocketURL("://bad"))
+	_, err := provider.Stream(context.Background())
+	if err == nil {
+		t.Fatal("Stream error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
