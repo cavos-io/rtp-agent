@@ -150,6 +150,41 @@ func TestAsyncAITTSInitPayloadMatchesReference(t *testing.T) {
 	}
 }
 
+func TestAsyncAITTSUpdateOptionsAppliesToFutureInitPayload(t *testing.T) {
+	provider := NewAsyncAITTS("test-key", "voice-1",
+		WithAsyncAITTSModel("async_flash_v1.0"),
+		WithAsyncAITTSLanguage("en"),
+		WithAsyncAITTSEncoding("pcm_mulaw"),
+		WithAsyncAITTSSampleRate(24000),
+	)
+
+	provider.UpdateOptions(
+		WithAsyncAITTSModel("async_v2"),
+		WithAsyncAITTSLanguage("hi"),
+		WithAsyncAITTSVoice("voice-2"),
+	)
+
+	payload, err := buildAsyncAITTSInitMessage(provider)
+	if err != nil {
+		t.Fatalf("build init message: %v", err)
+	}
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		t.Fatalf("decode init message: %v", err)
+	}
+	if message["model_id"] != "async_v2" || message["language"] != "hi" {
+		t.Fatalf("message = %+v, want updated model and language", message)
+	}
+	voice := message["voice"].(map[string]any)
+	if voice["id"] != "voice-2" {
+		t.Fatalf("voice = %+v, want updated voice", voice)
+	}
+	output := message["output_format"].(map[string]any)
+	if output["encoding"] != "pcm_mulaw" || output["sample_rate"] != float64(24000) {
+		t.Fatalf("output = %+v, want preserved audio format", output)
+	}
+}
+
 func TestAsyncAITTSTextAndEndMessagesMatchReference(t *testing.T) {
 	textPayload, err := buildAsyncAITTSTextMessage("ctx-1", "hello")
 	if err != nil {

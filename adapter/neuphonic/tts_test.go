@@ -154,6 +154,50 @@ func TestNeuphonicTTSOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNeuphonicTTSUpdateOptionsAffectsFutureRequests(t *testing.T) {
+	provider := NewNeuphonicTTS("test-key", "voice-1",
+		WithNeuphonicTTSBaseURL("https://neuphonic.example"),
+		WithNeuphonicTTSLangCode("en"),
+		WithNeuphonicTTSSpeed(1.0),
+	)
+
+	provider.UpdateOptions(
+		WithNeuphonicTTSLangCode("es"),
+		WithNeuphonicTTSVoice("voice-2"),
+		WithNeuphonicTTSSpeed(0.75),
+	)
+
+	req, err := buildNeuphonicTTSRequest(context.Background(), provider, "hola")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if req.URL.String() != "https://neuphonic.example/sse/speak/es" {
+		t.Fatalf("url = %q, want updated language endpoint", req.URL.String())
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	assertNeuphonicPayload(t, payload, "voice_id", "voice-2")
+	assertNeuphonicPayload(t, payload, "lang_code", "es")
+	if got := payload["speed"]; got != 0.75 {
+		t.Fatalf("speed = %#v, want 0.75", got)
+	}
+
+	wsURL := buildNeuphonicTTSWebsocketURL(provider)
+	query := wsURL.Query()
+	if query.Get("lang_code") != "es" {
+		t.Fatalf("websocket lang_code = %q, want es", query.Get("lang_code"))
+	}
+	if query.Get("voice_id") != "voice-2" {
+		t.Fatalf("websocket voice_id = %q, want voice-2", query.Get("voice_id"))
+	}
+	if query.Get("speed") != "0.75" {
+		t.Fatalf("websocket speed = %q, want 0.75", query.Get("speed"))
+	}
+}
+
 func TestNeuphonicTTSChunkedStreamDecodesSSEAudio(t *testing.T) {
 	stream := &neuphonicTTSChunkedStream{
 		resp: &http.Response{Body: io.NopCloser(bytes.NewReader([]byte(
@@ -224,6 +268,41 @@ func TestNeuphonicTTSStreamTextMessageMatchesReference(t *testing.T) {
 	}
 	if message["context_id"] != "segment-1" {
 		t.Fatalf("context_id = %#v, want segment-1", message["context_id"])
+	}
+}
+
+func TestNeuphonicTTSFlushStartsNextReferenceSegment(t *testing.T) {
+	var writes []map[string]any
+	stream := &neuphonicTTSSynthesizeStream{
+		segmentID: "segment-1",
+		writeMessage: func(messageType int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("first"); err != nil {
+		t.Fatalf("PushText(first) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if err := stream.PushText("second"); err != nil {
+		t.Fatalf("PushText(second) error = %v", err)
+	}
+
+	if len(writes) != 2 {
+		t.Fatalf("writes = %d, want 2", len(writes))
+	}
+	if writes[0]["context_id"] != "segment-1" {
+		t.Fatalf("first context_id = %#v, want segment-1", writes[0]["context_id"])
+	}
+	if writes[1]["context_id"] == "" || writes[1]["context_id"] == writes[0]["context_id"] {
+		t.Fatalf("second context_id = %#v, want new segment after Flush", writes[1]["context_id"])
 	}
 }
 

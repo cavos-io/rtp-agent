@@ -153,6 +153,23 @@ func (t *FishAudioTTS) NumChannels() int { return 1 }
 func (t *FishAudioTTS) Model() string    { return t.model }
 func (t *FishAudioTTS) Provider() string { return "FishAudio" }
 
+func (t *FishAudioTTS) UpdateOptions(opts ...FishAudioTTSOption) error {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	before := t.chunkLength
+	for _, opt := range opts {
+		opt(t)
+	}
+	if t.chunkLength < 100 || t.chunkLength > 300 {
+		t.chunkLength = before
+		return fmt.Errorf("chunk_length must be between 100 and 300")
+	}
+	return nil
+}
+
 func (t *FishAudioTTS) Close() error {
 	if t == nil {
 		return nil

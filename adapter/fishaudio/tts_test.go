@@ -203,6 +203,60 @@ func TestFishAudioTTSOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestFishAudioTTSUpdateOptionsAffectsFutureRequests(t *testing.T) {
+	provider := NewFishAudioTTS("test-key", "",
+		WithFishAudioTTSBaseURL("https://fish.example"),
+		WithFishAudioTTSModel("s1"),
+		WithFishAudioTTSVoice("voice-1"),
+		WithFishAudioTTSLatencyMode("balanced"),
+		WithFishAudioTTSChunkLength(100),
+	)
+
+	provider.UpdateOptions(
+		WithFishAudioTTSModel("s2-pro"),
+		WithFishAudioTTSVoice("voice-2"),
+		WithFishAudioTTSLatencyMode("low"),
+		WithFishAudioTTSChunkLength(250),
+	)
+
+	req, err := buildFishAudioTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if got := req.Header.Get("model"); got != "s2-pro" {
+		t.Fatalf("model header = %q, want updated model", got)
+	}
+	var payload map[string]any
+	if err := msgpack.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode msgpack body: %v", err)
+	}
+	assertFishPayload(t, payload, "reference_id", "voice-2")
+	assertFishPayload(t, payload, "latency", "low")
+	if got := fishPayloadInt(payload["chunk_length"]); got != 250 {
+		t.Fatalf("chunk_length = %#v, want 250", got)
+	}
+}
+
+func TestFishAudioTTSUpdateOptionsRejectsInvalidChunkLength(t *testing.T) {
+	provider := NewFishAudioTTS("test-key", "", WithFishAudioTTSChunkLength(150))
+
+	err := provider.UpdateOptions(WithFishAudioTTSChunkLength(99))
+	if err == nil || !strings.Contains(err.Error(), "chunk_length") {
+		t.Fatalf("UpdateOptions error = %v, want chunk_length validation", err)
+	}
+	if provider.chunkLength != 150 {
+		t.Fatalf("chunk length = %d, want previous valid value", provider.chunkLength)
+	}
+
+	err = provider.UpdateOptions(WithFishAudioTTSChunkLength(301))
+	if err == nil || !strings.Contains(err.Error(), "chunk_length") {
+		t.Fatalf("UpdateOptions high error = %v, want chunk_length validation", err)
+	}
+	if provider.chunkLength != 150 {
+		t.Fatalf("chunk length after high value = %d, want previous valid value", provider.chunkLength)
+	}
+}
+
 func TestFishAudioTTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {
 	pcm := []byte{0x01, 0x02, 0x03, 0x04}
 	stream := &fishaudioTTSChunkedStream{

@@ -381,17 +381,41 @@ func TestMurfTTSProviderCloseClosesActiveStreams(t *testing.T) {
 func newMurfClosingWebsocketConn(t *testing.T) (*websocket.Conn, <-chan struct{}) {
 	t.Helper()
 	clientConn, serverConn := net.Pipe()
+	ready := make(chan struct{})
 	closed := make(chan struct{})
+	release := make(chan struct{})
+	var readyOnce sync.Once
+	var closedOnce sync.Once
+	var releaseOnce sync.Once
+	signalReady := func() {
+		readyOnce.Do(func() {
+			close(ready)
+		})
+	}
+	signalClosed := func() {
+		closedOnce.Do(func() {
+			close(closed)
+		})
+	}
+	releaseServer := func() {
+		releaseOnce.Do(func() {
+			close(release)
+		})
+	}
 	listener := newMurfSingleConnListener(serverConn)
 	upgrader := websocket.Upgrader{}
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
+			signalReady()
+			signalClosed()
 			t.Errorf("upgrade websocket: %v", err)
 			return
 		}
-		defer conn.Close()
-		close(closed)
+		signalReady()
+		<-release
+		_ = conn.Close()
+		signalClosed()
 	})}
 	serverErr := make(chan error, 1)
 	go func() {
@@ -407,10 +431,19 @@ func newMurfClosingWebsocketConn(t *testing.T) (*websocket.Conn, <-chan struct{}
 	}
 	conn, _, err := dialer.Dial("ws://murf.test/v1/speech/stream-input", nil)
 	if err != nil {
+		releaseServer()
 		clientConn.Close()
 		t.Fatalf("dial test websocket: %v", err)
 	}
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		releaseServer()
+		t.Fatal("timed out waiting for test websocket upgrade")
+	}
+	releaseServer()
 	t.Cleanup(func() {
+		releaseServer()
 		_ = server.Close()
 		_ = listener.Close()
 		_ = conn.Close()

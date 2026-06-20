@@ -481,6 +481,24 @@ func TestSarvamSTTStreamEOSFallbackTimeoutMatchesReference(t *testing.T) {
 	}
 }
 
+func TestSarvamSTTProviderCloseClosesActiveStreams(t *testing.T) {
+	provider := NewSarvamSTT("test-key")
+	stream := &sarvamSTTRecognizeStream{
+		cancel: func() {},
+	}
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1, 2}, SampleRate: 16000}); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushFrame after provider Close error = %v, want closed stream error", err)
+	}
+	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("Flush after provider Close error = %v, want closed stream error", err)
+	}
+}
+
 func TestSarvamSTTImplementsStreamingInterface(t *testing.T) {
 	var _ stt.STT = NewSarvamSTT("test-key")
 }
@@ -624,6 +642,60 @@ func TestSarvamTTSAdvancedOptionsBuildReferencePayloads(t *testing.T) {
 		t.Fatalf("decode v3 websocket config: %v", err)
 	}
 	data := config["data"].(map[string]any)
+	assertSarvamJSONField(t, data, "output_audio_bitrate", "96k")
+	assertSarvamJSONField(t, data, "min_buffer_size", float64(80))
+	assertSarvamJSONField(t, data, "max_chunk_length", float64(240))
+	assertSarvamJSONField(t, data, "dict_id", "dict-123")
+}
+
+func TestSarvamTTSUpdateOptionsAppliesToFuturePayloads(t *testing.T) {
+	provider := NewSarvamTTS("test-key", "",
+		WithSarvamTTSModel("bulbul:v3"),
+		WithSarvamTTSVoice("shubh"),
+		WithSarvamTTSLanguage("en-IN"),
+		WithSarvamTTSTemperature(0.5),
+		WithSarvamTTSOutputAudioBitrate("64k"),
+		WithSarvamTTSMinBufferSize(50),
+		WithSarvamTTSMaxChunkLength(100),
+	)
+
+	provider.UpdateOptions(
+		WithSarvamTTSVoice("ritu"),
+		WithSarvamTTSLanguage("hi-IN"),
+		WithSarvamTTSTemperature(0.8),
+		WithSarvamTTSOutputAudioBitrate("96k"),
+		WithSarvamTTSMinBufferSize(80),
+		WithSarvamTTSMaxChunkLength(240),
+		WithSarvamTTSDictID("dict-123"),
+	)
+
+	req, err := buildSarvamTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	assertSarvamJSONField(t, payload, "speaker", "ritu")
+	assertSarvamJSONField(t, payload, "target_language_code", "hi-IN")
+	assertSarvamJSONField(t, payload, "temperature", float64(0.8))
+	assertSarvamJSONField(t, payload, "output_audio_bitrate", "96k")
+	assertSarvamJSONField(t, payload, "min_buffer_size", float64(80))
+	assertSarvamJSONField(t, payload, "max_chunk_length", float64(240))
+	assertSarvamJSONField(t, payload, "dict_id", "dict-123")
+
+	configPayload, err := buildSarvamTTSConfigMessage(provider)
+	if err != nil {
+		t.Fatalf("build websocket config: %v", err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(configPayload, &config); err != nil {
+		t.Fatalf("decode config: %v", err)
+	}
+	data := config["data"].(map[string]any)
+	assertSarvamJSONField(t, data, "speaker", "ritu")
+	assertSarvamJSONField(t, data, "target_language_code", "hi-IN")
 	assertSarvamJSONField(t, data, "output_audio_bitrate", "96k")
 	assertSarvamJSONField(t, data, "min_buffer_size", float64(80))
 	assertSarvamJSONField(t, data, "max_chunk_length", float64(240))

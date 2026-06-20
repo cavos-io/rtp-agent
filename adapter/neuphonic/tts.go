@@ -122,6 +122,14 @@ func (t *NeuphonicTTS) NumChannels() int { return 1 }
 func (t *NeuphonicTTS) Model() string    { return "Octave" }
 func (t *NeuphonicTTS) Provider() string { return "Neuphonic" }
 
+func (t *NeuphonicTTS) UpdateOptions(opts ...NeuphonicTTSOption) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, opt := range opts {
+		opt(t)
+	}
+}
+
 func (t *NeuphonicTTS) Close() error {
 	t.mu.Lock()
 	streams := make([]*neuphonicTTSSynthesizeStream, 0, len(t.streams))
@@ -381,6 +389,12 @@ func (s *neuphonicTTSSynthesizeStream) PushText(text string) error {
 }
 
 func (s *neuphonicTTSSynthesizeStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("neuphonic tts stream is closed")
+	}
+	s.segmentID = neuphonicTTSSegmentID()
 	return nil
 }
 
