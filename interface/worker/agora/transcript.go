@@ -174,7 +174,7 @@ func PublishTranscript(ctx context.Context, publisher DataPublisher, role string
 }
 
 func shouldPublishTENTranscript(role string, text string, final bool) bool {
-	return text != "" || (role == "assistant" && final)
+	return text != "" || role == "assistant"
 }
 
 func PublishReasoning(ctx context.Context, publisher DataPublisher, role string, text string, final bool, streamID string, createdAt time.Time) error {

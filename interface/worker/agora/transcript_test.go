@@ -94,6 +94,38 @@ func TestTranscriptForwarderPublishesEmptyFinalAssistantTranscript(t *testing.T)
 	}
 }
 
+func TestTranscriptForwarderPublishesEmptyNonFinalAssistantTranscript(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	publisher := &recordingDataPublisher{}
+	forwarder := NewTranscriptForwarder(session, publisher, TranscriptForwarderOptions{
+		AssistantStreamID: "100",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	forwarder.Start(ctx)
+	defer forwarder.Stop(context.Background())
+
+	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "",
+		IsFinal:    false,
+		CreatedAt:  time.UnixMilli(1710000000144),
+	})
+
+	got := waitForPublishedTranscript(t, publisher)
+	if got["data_type"] != "transcribe" {
+		t.Fatalf("data_type = %#v, want transcribe", got["data_type"])
+	}
+	if got["role"] != "assistant" {
+		t.Fatalf("role = %#v, want assistant", got["role"])
+	}
+	if got["text"] != "" {
+		t.Fatalf("text = %#v, want empty non-final transcript", got["text"])
+	}
+	if got["is_final"] != false {
+		t.Fatalf("is_final = %#v, want false", got["is_final"])
+	}
+}
+
 func TestTranscriptForwarderPublishesTENUserTranscriptWithRemoteStreamID(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 	publisher := &recordingDataPublisher{}
