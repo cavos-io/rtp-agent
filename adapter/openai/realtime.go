@@ -2738,10 +2738,13 @@ func openAIRealtimeFunctionCallOutput(item map[string]any) (*llm.FunctionCallOut
 }
 
 func openAIRealtimeFunctionCall(item map[string]any) (*llm.FunctionCall, error) {
-	id, _ := item["id"].(string)
+	id, hasID := item["id"].(string)
 	callID, hasCallID := item["call_id"].(string)
 	name, hasName := item["name"].(string)
 	arguments, hasArguments := item["arguments"].(string)
+	if !hasID {
+		return nil, fmt.Errorf("id is None")
+	}
 	if !hasCallID {
 		return nil, fmt.Errorf("call_id is None")
 	}

@@ -4767,6 +4767,50 @@ func TestRealtimeEventMapsOutputItemDoneFunctionCall(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventRejectsOutputItemDoneFunctionCallWithoutID(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		id   any
+		set  bool
+	}{
+		{name: "missing"},
+		{name: "null", id: nil, set: true},
+		{name: "non_string", id: 123, set: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			item := map[string]any{
+				"type":      "function_call",
+				"call_id":   "call_123",
+				"name":      "lookup",
+				"arguments": `{"query":"hello"}`,
+			}
+			if tt.set {
+				item["id"] = tt.id
+			}
+
+			if ev, ok := openAIRealtimeEvent(map[string]any{
+				"type": "response.output_item.done",
+				"item": item,
+			}); ok {
+				t.Fatalf("openAIRealtimeEvent = %#v, true; want malformed function call ignored", ev)
+			}
+		})
+	}
+
+	if ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.done",
+		"item": map[string]any{
+			"id":        "",
+			"type":      "function_call",
+			"call_id":   "call_123",
+			"name":      "lookup",
+			"arguments": `{"query":"hello"}`,
+		},
+	}); !ok || ev.Function == nil {
+		t.Fatalf("openAIRealtimeEvent explicit empty id = %#v, %v; want accepted function call", ev, ok)
+	}
+}
+
 func TestRealtimeEventIgnoresFunctionCallArgumentDelta(t *testing.T) {
 	if ev, ok := openAIRealtimeEvent(map[string]any{
 		"type":    "response.function_call_arguments.delta",
