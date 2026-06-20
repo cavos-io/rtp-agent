@@ -802,6 +802,7 @@ func (s *simpleVADStream) resetState() {
 	s.sampleIndexRemainder = 0
 	s.timestamp = 0
 	s.probabilityFilter = nil
+	s.probabilityEstimator = nil
 }
 
 func (s *simpleVADStream) smoothProbability(probability float64) (float64, error) {
