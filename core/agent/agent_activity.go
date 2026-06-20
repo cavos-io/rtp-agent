@@ -970,14 +970,10 @@ func (a *AgentActivity) UpdateOptions(opts AgentSessionUpdateOptions) error {
 		return nil
 	}
 	var toolChoice llm.ToolChoice
-	explicitToolChoice := opts.ToolChoice != nil
 	if opts.ToolChoice != nil {
 		toolChoice = *opts.ToolChoice
 	} else {
 		toolChoice = a.Session.Options.ToolChoice
-	}
-	if !explicitToolChoice && toolChoice == nil {
-		return nil
 	}
 	return updater.UpdateOptions(context.Background(), llm.RealtimeSessionOptions{
 		ToolChoice:    toolChoice,
@@ -2020,7 +2016,7 @@ func (a *AgentActivity) holdSTTEventWhileAgentSpeaking(ev *stt.SpeechEvent) bool
 		return false
 	}
 	switch ev.Type {
-	case "", stt.SpeechEventInterimTranscript, stt.SpeechEventFinalTranscript:
+	case "", stt.SpeechEventStartOfSpeech, stt.SpeechEventInterimTranscript, stt.SpeechEventPreflightTranscript, stt.SpeechEventFinalTranscript, stt.SpeechEventEndOfSpeech:
 	default:
 		return false
 	}
@@ -2047,8 +2043,12 @@ func (a *AgentActivity) flushHeldSTTEvents() {
 			continue
 		}
 		switch ev.Type {
-		case stt.SpeechEventInterimTranscript:
+		case stt.SpeechEventStartOfSpeech:
+			a.OnSTTStartOfSpeech(ev)
+		case stt.SpeechEventInterimTranscript, stt.SpeechEventPreflightTranscript:
 			a.OnInterimTranscript(ev)
+		case stt.SpeechEventEndOfSpeech:
+			a.OnEndOfSpeech(nil)
 		default:
 			a.OnFinalTranscript(ev)
 		}

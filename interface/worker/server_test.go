@@ -188,6 +188,13 @@ func TestNewAgentServerUsesReferenceWorkerDefaults(t *testing.T) {
 	if server.Options.MaxRetry != 16 {
 		t.Fatalf("MaxRetry = %d, want reference default 16", server.Options.MaxRetry)
 	}
+	wantExecutorType := JobExecutorTypeProcess
+	if runtime.GOOS == "windows" {
+		wantExecutorType = JobExecutorTypeThread
+	}
+	if server.Options.JobExecutorType != wantExecutorType {
+		t.Fatalf("JobExecutorType = %q, want reference default %q", server.Options.JobExecutorType, wantExecutorType)
+	}
 	if server.Options.JobMemoryWarnMB != 500 {
 		t.Fatalf("JobMemoryWarnMB = %v, want reference default 500", server.Options.JobMemoryWarnMB)
 	}
@@ -746,6 +753,21 @@ func TestUpdateOptionsMergesConfiguredValuesBeforeRun(t *testing.T) {
 	}
 }
 
+func TestUpdateOptionsAppliesReferenceJobExecutorType(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{JobExecutorType: JobExecutorTypeThread})
+
+	if err := server.UpdateOptions(WorkerOptions{JobExecutorType: JobExecutorTypeProcess}); err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	if server.Options.JobExecutorType != JobExecutorTypeProcess {
+		t.Fatalf("JobExecutorType = %q, want process", server.Options.JobExecutorType)
+	}
+	if got := server.newJobProcess().ExecutorType(); got != JobExecutorTypeProcess {
+		t.Fatalf("newJobProcess().ExecutorType() = %q, want process", got)
+	}
+}
+
 func TestUpdateOptionsPreservesWorkerTransport(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		Transport: WorkerTransportAgora,
@@ -861,10 +883,9 @@ func TestUpdateOptionsPreservesExplicitZeroTimeoutValues(t *testing.T) {
 	})
 
 	err := server.UpdateOptions(WorkerOptions{
-		DrainTimeoutSecondsSet:             true,
-		SessionEndTimeoutSecondsSet:        true,
-		ShutdownProcessTimeoutSecondsSet:   true,
-		InitializeProcessTimeoutSecondsSet: true,
+		DrainTimeoutSecondsSet:           true,
+		SessionEndTimeoutSecondsSet:      true,
+		ShutdownProcessTimeoutSecondsSet: true,
 	})
 	if err != nil {
 		t.Fatalf("UpdateOptions() error = %v", err)
@@ -879,8 +900,8 @@ func TestUpdateOptionsPreservesExplicitZeroTimeoutValues(t *testing.T) {
 	if server.Options.ShutdownProcessTimeoutSeconds != 0 {
 		t.Fatalf("ShutdownProcessTimeoutSeconds = %v, want explicit zero", server.Options.ShutdownProcessTimeoutSeconds)
 	}
-	if server.Options.InitializeProcessTimeoutSeconds != 0 {
-		t.Fatalf("InitializeProcessTimeoutSeconds = %v, want explicit zero", server.Options.InitializeProcessTimeoutSeconds)
+	if server.Options.InitializeProcessTimeoutSeconds != 20 {
+		t.Fatalf("InitializeProcessTimeoutSeconds = %v, want unchanged 20", server.Options.InitializeProcessTimeoutSeconds)
 	}
 }
 
@@ -897,6 +918,53 @@ func TestUpdateOptionsMarksNonZeroDrainTimeoutAsSet(t *testing.T) {
 	}
 	if !server.Options.DrainTimeoutSecondsSet {
 		t.Fatal("DrainTimeoutSecondsSet = false, want true for non-zero update")
+	}
+}
+
+func TestUpdateOptionsResetsReferenceDefaultProcessTimeouts(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		SessionEndTimeoutSeconds:         120,
+		SessionEndTimeoutSecondsSet:      true,
+		ShutdownProcessTimeoutSeconds:    30,
+		ShutdownProcessTimeoutSecondsSet: true,
+	})
+
+	if err := server.UpdateOptions(WorkerOptions{APIKey: "new-key"}); err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	if server.Options.SessionEndTimeoutSeconds != 300 {
+		t.Fatalf("SessionEndTimeoutSeconds = %v, want reference default 300", server.Options.SessionEndTimeoutSeconds)
+	}
+	if server.Options.ShutdownProcessTimeoutSeconds != 10 {
+		t.Fatalf("ShutdownProcessTimeoutSeconds = %v, want reference default 10", server.Options.ShutdownProcessTimeoutSeconds)
+	}
+	if server.Options.InitializeProcessTimeoutSeconds != 10 {
+		t.Fatalf("InitializeProcessTimeoutSeconds = %v, want preserved resolved default 10", server.Options.InitializeProcessTimeoutSeconds)
+	}
+	if !server.Options.SessionEndTimeoutSecondsSet {
+		t.Fatal("SessionEndTimeoutSecondsSet = false, want true after reference default reset")
+	}
+	if !server.Options.ShutdownProcessTimeoutSecondsSet {
+		t.Fatal("ShutdownProcessTimeoutSecondsSet = false, want true after reference default reset")
+	}
+}
+
+func TestUpdateOptionsIgnoresInitializeProcessTimeout(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		InitializeProcessTimeoutSeconds:    20,
+		InitializeProcessTimeoutSecondsSet: true,
+	})
+
+	if err := server.UpdateOptions(WorkerOptions{
+		InitializeProcessTimeoutSeconds:    5,
+		InitializeProcessTimeoutSecondsSet: true,
+	}); err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	if server.Options.InitializeProcessTimeoutSeconds != 20 {
+		t.Fatalf("InitializeProcessTimeoutSeconds = %v, want unchanged 20", server.Options.InitializeProcessTimeoutSeconds)
 	}
 }
 
@@ -4267,6 +4335,16 @@ func TestLocalJobContextUsesReferenceFakeRoomSIDPrefix(t *testing.T) {
 	}
 }
 
+func TestLocalJobContextUsesConfiguredJobExecutorType(t *testing.T) {
+	ctx := newLocalJobContext("room-a", "agent-local", WorkerOptions{
+		JobExecutorType: JobExecutorTypeProcess,
+	})
+
+	if got := ctx.Proc().ExecutorType(); got != JobExecutorTypeProcess {
+		t.Fatalf("local job ExecutorType() = %q, want process", got)
+	}
+}
+
 func TestLocalJobContextCreatesReferenceAgentJoinToken(t *testing.T) {
 	ctx := newLocalJobContext("room-a", "agent-local", WorkerOptions{
 		APIKey:    "api-key",
@@ -4459,10 +4537,11 @@ func TestExecuteLocalJobLaunchesThroughThreadExecutor(t *testing.T) {
 func TestExecuteLocalJobExposesProcessContextToEntrypoint(t *testing.T) {
 	setupCh := make(chan *JobProcess, 1)
 	server := NewAgentServer(WorkerOptions{
-		WSRL:          "wss://local.example",
-		HTTPProxy:     "https://proxy.example",
-		HTTPProxySet:  true,
-		UserArguments: "user-args",
+		WSRL:            "wss://local.example",
+		JobExecutorType: JobExecutorTypeThread,
+		HTTPProxy:       "https://proxy.example",
+		HTTPProxySet:    true,
+		UserArguments:   "user-args",
 		SetupFunc: func(proc *JobProcess) error {
 			proc.Userdata()["setup"] = true
 			setupCh <- proc
@@ -4598,6 +4677,7 @@ func TestExecuteLocalJobWithExplicitIdleProcessesLaunchesThroughProcPool(t *test
 
 	server := NewAgentServer(WorkerOptions{
 		WSRL:                             "wss://local.example",
+		JobExecutorType:                  JobExecutorTypeProcess,
 		NumIdleProcesses:                 2,
 		NumIdleProcessesSet:              true,
 		ShutdownProcessTimeoutSeconds:    3,
@@ -4627,9 +4707,9 @@ func TestExecuteLocalJobWithExplicitIdleProcessesLaunchesThroughProcPool(t *test
 		cancel()
 		t.Fatalf("proc pool max processes = %d, want 2", capturedMaxProcesses)
 	}
-	if capturedExecutorType != ipc.ExecutorTypeThread {
+	if capturedExecutorType != ipc.ExecutorTypeProcess {
 		cancel()
-		t.Fatalf("proc pool executor type = %q, want thread", capturedExecutorType)
+		t.Fatalf("proc pool executor type = %q, want process", capturedExecutorType)
 	}
 	if capturedCloseTimeout != 3*time.Second {
 		cancel()

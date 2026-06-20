@@ -482,6 +482,26 @@ func TestAgentActivityUpdateOptionsRefreshesRealtimeStoredToolChoice(t *testing.
 	}
 }
 
+func TestAgentActivityUpdateOptionsRefreshesRealtimeNilToolChoice(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	assistant := &recordingOptionsAssistant{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	minDelay := 0.2
+
+	if err := activity.UpdateOptions(AgentSessionUpdateOptions{MinEndpointingDelay: &minDelay}); err != nil {
+		t.Fatalf("UpdateOptions error = %v, want nil", err)
+	}
+
+	if assistant.options.ToolChoice != nil {
+		t.Fatalf("realtime ToolChoice = %#v, want nil refresh", assistant.options.ToolChoice)
+	}
+	if !assistant.options.ToolChoiceSet {
+		t.Fatal("realtime ToolChoiceSet = false, want true for nil tool choice refresh")
+	}
+}
+
 func TestAgentActivityRealtimeInputSpeechCallbacksUpdateUserState(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -787,6 +807,33 @@ func TestAgentSessionUpdateOptionsToManualCancelsPendingEOU(t *testing.T) {
 	}
 }
 
+func TestAgentUpdateTurnDetectionWhileRunningCancelsPendingEOU(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		MinEndpointingDelay: 0.05,
+		TurnDetection:       TurnDetectionModeSTT,
+	})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	defer activity.Stop()
+
+	activity.runEOUDetection(EndOfTurnInfo{NewTranscript: "pending automatic", TranscriptConfidence: 0.9})
+	if err := agent.UpdateTurnDetection(context.Background(), TurnDetectionModeManual); err != nil {
+		t.Fatalf("UpdateTurnDetection error = %v, want nil", err)
+	}
+
+	if got := agent.TurnDetection; got != TurnDetectionModeManual {
+		t.Fatalf("agent TurnDetection = %q, want %q", got, TurnDetectionModeManual)
+	}
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called after agent turn_detection switched to manual with %q", msg.TextContent())
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestAgentActivityDuplicateStartOfSpeechKeepsActiveAudioFrames(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -994,6 +1041,92 @@ func TestAgentActivityOnInterruptionFlushesHeldSTTWithOverlapCutoff(t *testing.T
 	case ev := <-userTranscriptEvents:
 		t.Fatalf("unexpected stale held transcript after interruption flush: %#v", ev)
 	default:
+	}
+}
+
+func TestAgentActivityHoldsPreflightTranscriptWhileAgentSpeaking(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:              TurnDetectionModeVAD,
+		MinInterruptionDuration:    0.05,
+		MinInterruptionDurationSet: true,
+	})
+	session.agentState = AgentStateSpeaking
+	activity := NewAgentActivity(agent, session)
+	activity.holdSTTWhileAgentSpeaking = true
+	userTranscriptEvents := session.UserInputTranscribedEvents()
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Type: stt.SpeechEventPreflightTranscript,
+		Alternatives: []stt.SpeechData{{
+			Language:   "id",
+			Text:       "halo dari user",
+			Confidence: 0.8,
+		}},
+	})
+
+	if len(activity.heldSTTEvents) != 1 {
+		t.Fatalf("held STT events = %d, want preflight transcript buffered while agent speaking", len(activity.heldSTTEvents))
+	}
+	select {
+	case ev := <-userTranscriptEvents:
+		t.Fatalf("preflight transcript emitted before hold released: %#v", ev)
+	default:
+	}
+
+	session.agentState = AgentStateListening
+	activity.flushHeldSTTEvents()
+
+	if len(activity.heldSTTEvents) != 0 {
+		t.Fatalf("held STT events = %d, want flushed", len(activity.heldSTTEvents))
+	}
+	select {
+	case ev := <-userTranscriptEvents:
+		if ev.Transcript != "halo dari user" || ev.IsFinal {
+			t.Fatalf("flushed preflight event = %#v, want non-final transcript", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("held preflight transcript was not emitted after flush")
+	}
+}
+
+func TestAgentActivityHoldsSTTStartOfSpeechWhileAgentSpeaking(t *testing.T) {
+	endpointing := &recordingActivityEndpointing{}
+	agent := NewAgent("test")
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection: TurnDetectionModeSTT,
+		Endpointing:   endpointing,
+	})
+	session.agentState = AgentStateSpeaking
+	activity := NewAgentActivity(agent, session)
+	activity.holdSTTWhileAgentSpeaking = true
+	startedAt := 123.4
+
+	held := activity.holdSTTEventWhileAgentSpeaking(&stt.SpeechEvent{
+		Type:            stt.SpeechEventStartOfSpeech,
+		SpeechStartTime: &startedAt,
+	})
+
+	if !held {
+		t.Fatal("STT start_of_speech was not held while agent speaking")
+	}
+	if len(activity.heldSTTEvents) != 1 {
+		t.Fatalf("held STT events = %d, want start_of_speech buffered while agent speaking", len(activity.heldSTTEvents))
+	}
+	if endpointing.startCount != 0 {
+		t.Fatalf("endpointing start count = %d, want held start_of_speech delayed", endpointing.startCount)
+	}
+
+	session.agentState = AgentStateListening
+	activity.flushHeldSTTEvents()
+
+	if endpointing.startCount != 1 {
+		t.Fatalf("endpointing start count after flush = %d, want 1", endpointing.startCount)
+	}
+	if endpointing.lastStart != startedAt {
+		t.Fatalf("endpointing start = %v, want %v", endpointing.lastStart, startedAt)
 	}
 }
 
