@@ -387,6 +387,7 @@ type realtimeSession struct {
 	ctx                   context.Context
 	cancel                context.CancelFunc
 	mu                    sync.Mutex
+	chatContextMu         sync.Mutex
 	eventCh               chan llm.RealtimeEvent
 	remote                *llm.RemoteChatContext
 	inputTranscripts      *utils.BoundedDict[inputTranscriptKey, realtimeInputTranscript]
@@ -751,6 +752,9 @@ func (s *realtimeSession) UpdateInstructions(instructions string) error {
 }
 
 func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
+	s.chatContextMu.Lock()
+	defer s.chatContextMu.Unlock()
+
 	syncedChatCtx := openAIRealtimeSyncedChatContext(chatCtx)
 	var (
 		msgs []map[string]any

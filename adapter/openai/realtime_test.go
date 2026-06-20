@@ -1287,6 +1287,132 @@ func TestRealtimeSessionUpdateChatContextTimesOutWithoutProviderAck(t *testing.T
 	}
 }
 
+func TestRealtimeSessionUpdateChatContextSerializesConcurrentUpdates(t *testing.T) {
+	firstSeen := make(chan map[string]any, 1)
+	secondSeen := make(chan map[string]any, 1)
+	allowFirstAck := make(chan struct{})
+	var allowFirstAckOnce sync.Once
+	releaseFirstAck := func() {
+		allowFirstAckOnce.Do(func() { close(allowFirstAck) })
+	}
+	defer releaseFirstAck()
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("Read first chat context update error = %v", err)
+			return
+		}
+		var first map[string]any
+		if err := json.Unmarshal(raw, &first); err != nil {
+			t.Errorf("Decode first chat context update error = %v", err)
+			return
+		}
+		firstSeen <- first
+
+		secondRaw := make(chan []byte, 1)
+		go func() {
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			secondRaw <- raw
+		}()
+
+		<-allowFirstAck
+		if err := conn.WriteJSON(map[string]any{
+			"type":             "conversation.item.added",
+			"previous_item_id": first["previous_item_id"],
+			"item":             first["item"],
+		}); err != nil {
+			t.Errorf("Write first conversation.item.added error = %v", err)
+			return
+		}
+		raw = <-secondRaw
+		var second map[string]any
+		if err := json.Unmarshal(raw, &second); err != nil {
+			t.Errorf("Decode second chat context update error = %v", err)
+			return
+		}
+		secondSeen <- second
+		ackOpenAIRealtimeChatContextMessage(t, conn, raw)
+		<-releaseServer
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	firstCtx := llm.NewChatContext()
+	firstCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user-first", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "first"}}},
+	}
+	secondCtx := llm.NewChatContext()
+	secondCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user-first", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "first"}}},
+		&llm.ChatMessage{ID: "user-second", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "second"}}},
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- session.UpdateChatContext(firstCtx)
+	}()
+	select {
+	case <-firstSeen:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first chat context update")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- session.UpdateChatContext(secondCtx)
+	}()
+	select {
+	case msg := <-secondSeen:
+		releaseFirstAck()
+		t.Fatalf("second chat context update sent before first ACK: %#v", msg)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	releaseFirstAck()
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatalf("first UpdateChatContext error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first UpdateChatContext did not return after ACK")
+	}
+	select {
+	case msg := <-secondSeen:
+		item := msg["item"].(map[string]any)
+		if item["id"] != "user-second" {
+			t.Fatalf("second chat update item = %#v, want user-second", item)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for second chat context update")
+	}
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("second UpdateChatContext error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second UpdateChatContext did not return after ACK")
+	}
+}
+
 func TestRealtimeGenerateReplyTimeoutClearsPendingResponse(t *testing.T) {
 	messages := make(chan string, 8)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
