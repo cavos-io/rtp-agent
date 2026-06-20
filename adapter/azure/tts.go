@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -47,6 +48,8 @@ type AzureTTS struct {
 	style          AzureTTSStyle
 	lexiconURI     string
 	httpClient     *http.Client
+	mu             sync.Mutex
+	streams        map[*azureTTSChunkedStream]struct{}
 }
 
 type AzureTTSProsody struct {
@@ -148,6 +151,7 @@ func NewAzureTTSWithOptions(apiKey string, region string, voice string, opts ...
 		sampleRate:     defaultAzureTTSSampleRate,
 		speechEndpoint: os.Getenv(azureSpeechEndpointEnv),
 		httpClient:     http.DefaultClient,
+		streams:        make(map[*azureTTSChunkedStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -177,7 +181,20 @@ func (t *AzureTTS) NumChannels() int { return 1 }
 func (t *AzureTTS) Language() string { return t.language }
 
 func (t *AzureTTS) UpdateOptions(voice string, language string, opts ...AzureTTSOption) error {
-	next := *t
+	next := AzureTTS{
+		apiKey:         t.apiKey,
+		region:         t.region,
+		voice:          t.voice,
+		language:       t.language,
+		sampleRate:     t.sampleRate,
+		speechEndpoint: t.speechEndpoint,
+		deploymentID:   t.deploymentID,
+		authToken:      t.authToken,
+		prosody:        t.prosody,
+		style:          t.style,
+		lexiconURI:     t.lexiconURI,
+		httpClient:     t.httpClient,
+	}
 	if voice != "" {
 		next.voice = voice
 	}
@@ -193,7 +210,18 @@ func (t *AzureTTS) UpdateOptions(voice string, language string, opts ...AzureTTS
 	if err := validateAzureTTSVoiceControls(&next); err != nil {
 		return err
 	}
-	*t = next
+	t.apiKey = next.apiKey
+	t.region = next.region
+	t.voice = next.voice
+	t.language = next.language
+	t.sampleRate = next.sampleRate
+	t.speechEndpoint = next.speechEndpoint
+	t.deploymentID = next.deploymentID
+	t.authToken = next.authToken
+	t.prosody = next.prosody
+	t.style = next.style
+	t.lexiconURI = next.lexiconURI
+	t.httpClient = next.httpClient
 	return nil
 }
 
@@ -221,10 +249,46 @@ func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStre
 		return nil, llm.NewAPIStatusError("Azure TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 
-	return &azureTTSChunkedStream{
+	stream := &azureTTSChunkedStream{
 		body:       resp.Body,
 		sampleRate: t.sampleRate,
-	}, nil
+		provider:   t,
+	}
+	t.registerStream(stream)
+	return stream, nil
+}
+
+func (t *AzureTTS) Close() error {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	streams := make([]*azureTTSChunkedStream, 0, len(t.streams))
+	for stream := range t.streams {
+		streams = append(streams, stream)
+	}
+	t.streams = make(map[*azureTTSChunkedStream]struct{})
+	t.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
+func (t *AzureTTS) registerStream(stream *azureTTSChunkedStream) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.streams[stream] = struct{}{}
+}
+
+func (t *AzureTTS) unregisterStream(stream *azureTTSChunkedStream) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.streams, stream)
 }
 
 func buildAzureTTSRequest(ctx context.Context, t *AzureTTS, text string) (*http.Request, error) {
@@ -356,6 +420,7 @@ type azureTTSChunkedStream struct {
 	sampleRate int
 	carry      byte
 	hasCarry   bool
+	provider   *AzureTTS
 }
 
 func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -415,11 +480,18 @@ func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 func (s *azureTTSChunkedStream) Close() error {
 	if s.body == nil {
+		if s.provider != nil {
+			s.provider.unregisterStream(s)
+		}
 		return nil
 	}
 	body := s.body
 	s.body = nil
 	s.carry = 0
 	s.hasCarry = false
-	return body.Close()
+	err := body.Close()
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
+	return err
 }

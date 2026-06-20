@@ -1829,6 +1829,45 @@ func TestAzureTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestAzureTTSProviderCloseClosesActiveStreams(t *testing.T) {
+	body := &countingReadCloser{}
+	provider, err := NewAzureTTS("key", "eastus", "")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       body,
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1", body.closed)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after provider Close error = %v, want io.EOF", err)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("second Close error = %v", err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls after second Close = %d, want 1", body.closed)
+	}
+}
+
 func TestAzureTTSSynthesizeUsesConfiguredClient(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {

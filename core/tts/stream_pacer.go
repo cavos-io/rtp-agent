@@ -105,8 +105,11 @@ func (p *SentenceStreamPacer) tokenizeLoop() {
 				return
 			}
 			if input.flush {
-				p.sendTokenizedSentences(buffer, true)
+				_, emitted := p.sendTokenizedSentences(buffer, true)
 				buffer = ""
+				if !emitted {
+					continue
+				}
 				select {
 				case <-p.ctx.Done():
 					return

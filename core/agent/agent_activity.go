@@ -1808,10 +1808,6 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	if transcript == "" {
 		return
 	}
-	if rejectsZeroConfidenceTranscript(transcript, confidence) {
-		logger.Logger.Warnw("skipping zero-confidence final transcript", nil, "transcript", transcript)
-		return
-	}
 	if a.shouldDropFinalTranscriptBeforeAgentSpeechEnd(ev) {
 		logger.Logger.Debugw("dropping stale final transcript before agent speech end", "transcript", transcript)
 		return
@@ -1823,6 +1819,10 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 			IsFinal:    true,
 			SpeakerID:  speakerID,
 		})
+	}
+	if rejectsZeroConfidenceTranscript(transcript, confidence) {
+		logger.Logger.Warnw("skipping zero-confidence final transcript", nil, "transcript", transcript)
+		return
 	}
 
 	startedSpeakingAt, stoppedSpeakingAt, transcriptionDelay := a.finalTranscriptTiming(ev)

@@ -182,3 +182,45 @@ func TestAWSTTSChunkedStreamEOFAndClose(t *testing.T) {
 		t.Fatalf("empty Close err = %v, want nil", err)
 	}
 }
+
+func TestAWSTTSProviderCloseClosesActiveStreams(t *testing.T) {
+	body := &countingAWSReadCloser{}
+	provider := newAWSTTSWithClient(nil, "")
+	stream := &awsTTSChunkedStream{
+		stream:   body,
+		provider: provider,
+	}
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close err = %v", err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1", body.closed)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after provider Close err = %v, want EOF", err)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("second Close err = %v", err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls after second Close = %d, want 1", body.closed)
+	}
+}
+
+type countingAWSReadCloser struct {
+	closed int
+}
+
+func (c *countingAWSReadCloser) Read([]byte) (int, error) {
+	return 0, io.EOF
+}
+
+func (c *countingAWSReadCloser) Close() error {
+	c.closed++
+	if c.closed > 1 {
+		return io.ErrClosedPipe
+	}
+	return nil
+}

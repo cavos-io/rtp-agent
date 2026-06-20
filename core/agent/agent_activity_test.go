@@ -4278,10 +4278,20 @@ func TestAgentActivityCommitUserTurnRejectsZeroConfidenceTranscript(t *testing.T
 	activity := NewAgentActivity(agent, session)
 	session.activity = activity
 	defer activity.Stop()
+	transcriptEvents := session.UserInputTranscribedEvents()
 
 	activity.OnFinalTranscript(&stt.SpeechEvent{
 		Alternatives: []stt.SpeechData{{Text: "phantom turn", Confidence: 0}},
 	})
+
+	select {
+	case ev := <-transcriptEvents:
+		if ev.Transcript != "phantom turn" || !ev.IsFinal {
+			t.Fatalf("zero-confidence transcript event = %#v, want final phantom turn", ev)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("UserInputTranscribedEvents did not receive zero-confidence final transcript")
+	}
 
 	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
 	if err != nil {
