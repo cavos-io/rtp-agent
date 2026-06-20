@@ -1764,7 +1764,7 @@ func (va *PipelineAgent) forwardAgentOutputTranscription(session *AgentSession, 
 		}
 		if transcript.Len() > 0 {
 			session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
-				Transcript: strings.TrimSpace(transcript.String()),
+				Transcript: transcript.String(),
 				IsFinal:    true,
 			})
 		}
@@ -1788,7 +1788,7 @@ func (va *PipelineAgent) forwardAlignedAgentOutputTranscription(session *AgentSe
 		}
 		if transcript.Len() > 0 {
 			session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
-				Transcript: strings.TrimSpace(transcript.String()),
+				Transcript: transcript.String(),
 				IsFinal:    true,
 			})
 		}

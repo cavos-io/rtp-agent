@@ -4844,6 +4844,70 @@ func TestPipelineAgentSegmentedTTSCancelFinalizesActiveTranscript(t *testing.T) 
 	}
 }
 
+func TestPipelineAgentAgentOutputTranscriptionFinalPreservesReferenceWhitespace(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	events := session.AgentOutputTranscribedEvents()
+	syncer := NewTranscriptSynchronizer(0)
+	agent := &PipelineAgent{}
+	done := agent.forwardAgentOutputTranscription(session, syncer)
+
+	syncer.PushText("  padded answer  ")
+	syncer.Close()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("agent output transcription forwarder did not stop")
+	}
+
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case ev := <-events:
+			if ev.IsFinal {
+				if ev.Transcript != "  padded answer  " {
+					t.Fatalf("final transcript = %q, want exact reference text with whitespace", ev.Transcript)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("AgentOutputTranscribedEvents did not receive final transcript")
+		}
+	}
+}
+
+func TestPipelineAgentAlignedAgentOutputTranscriptionFinalPreservesReferenceWhitespace(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	events := session.AgentOutputTranscribedEvents()
+	timedTextCh := make(chan tts.TimedString, 1)
+	agent := &PipelineAgent{}
+	done := agent.forwardAlignedAgentOutputTranscription(session, timedTextCh)
+
+	timedTextCh <- tts.TimedString{Text: "  aligned answer  "}
+	close(timedTextCh)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("aligned agent output transcription forwarder did not stop")
+	}
+
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case ev := <-events:
+			if ev.IsFinal {
+				if ev.Transcript != "  aligned answer  " {
+					t.Fatalf("final aligned transcript = %q, want exact reference text with whitespace", ev.Transcript)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("AgentOutputTranscribedEvents did not receive final aligned transcript")
+		}
+	}
+}
+
 func TestPipelineAgentPreemptiveTTSDoesNotCollapseLLMFlushSegments(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
