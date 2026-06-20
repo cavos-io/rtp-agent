@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -342,6 +343,30 @@ func TestHumeTTSChunkedStreamDecodesReferenceMP3JSONLines(t *testing.T) {
 	}
 }
 
+func TestHumeTTSChunkedStreamDecodesReferenceWAVJSONLines(t *testing.T) {
+	wav := humeTestWAVPCM16(16000, 1, []byte{0x01, 0x02, 0x03, 0x04})
+	line := `{"audio":"` + base64.StdEncoding.EncodeToString(wav) + `"}` + "\n"
+	stream := &humeTTSChunkedStream{
+		resp:        &http.Response{Body: io.NopCloser(strings.NewReader(line))},
+		audioFormat: "wav",
+		sampleRate:  48000,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if !bytes.Equal(audio.Frame.Data, []byte{0x01, 0x02, 0x03, 0x04}) {
+		t.Fatalf("audio data = %#v, want WAV PCM payload without RIFF header", audio.Frame.Data)
+	}
+	if audio.Frame.SampleRate != 16000 {
+		t.Fatalf("sample rate = %d, want WAV sample rate 16000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("channels = %d, want WAV mono", audio.Frame.NumChannels)
+	}
+}
+
 func TestHumeTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &humeCloseCountBody{Reader: strings.NewReader("audio")}
 	stream := &humeTTSChunkedStream{resp: &http.Response{Body: body}, audioFormat: "pcm", sampleRate: 48000}
@@ -389,4 +414,25 @@ func (b *humeCloseCountBody) Close() error {
 		return errors.New("closed twice")
 	}
 	return nil
+}
+
+func humeTestWAVPCM16(sampleRate uint32, channels uint16, pcm []byte) []byte {
+	buf := bytes.NewBuffer(nil)
+	buf.WriteString("RIFF")
+	_ = binary.Write(buf, binary.LittleEndian, uint32(36+len(pcm)))
+	buf.WriteString("WAVE")
+	buf.WriteString("fmt ")
+	_ = binary.Write(buf, binary.LittleEndian, uint32(16))
+	_ = binary.Write(buf, binary.LittleEndian, uint16(1))
+	_ = binary.Write(buf, binary.LittleEndian, channels)
+	_ = binary.Write(buf, binary.LittleEndian, sampleRate)
+	byteRate := sampleRate * uint32(channels) * 2
+	_ = binary.Write(buf, binary.LittleEndian, byteRate)
+	blockAlign := channels * 2
+	_ = binary.Write(buf, binary.LittleEndian, blockAlign)
+	_ = binary.Write(buf, binary.LittleEndian, uint16(16))
+	buf.WriteString("data")
+	_ = binary.Write(buf, binary.LittleEndian, uint32(len(pcm)))
+	buf.Write(pcm)
+	return buf.Bytes()
 }
