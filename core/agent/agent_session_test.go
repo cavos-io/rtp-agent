@@ -421,6 +421,69 @@ func TestAgentSessionUserStateChangedEventsFanOutToSubscribers(t *testing.T) {
 	assertUserStateChangedEvent(t, second, "second")
 }
 
+func TestAgentSessionUserStateChangedDeliveredWhenChannelFull(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	userStateEvents := session.userStateChangedEvents()
+	for i := 0; i < cap(userStateEvents); i++ {
+		userStateEvents <- UserStateChangedEvent{
+			OldState: UserStateListening,
+			NewState: UserStateListening,
+		}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.UpdateUserState(UserStateSpeaking)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("UpdateUserState returned while event channel was full; user state event may be dropped")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	<-userStateEvents
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("UpdateUserState did not unblock after user state event channel had capacity")
+	}
+
+	for {
+		select {
+		case ev := <-userStateEvents:
+			if ev.OldState == UserStateListening && ev.NewState == UserStateSpeaking {
+				return
+			}
+		default:
+			t.Fatal("UserStateChangedEvents did not receive user state event")
+		}
+	}
+}
+
+func TestAgentSessionUserStateChangedDoesNotBlockWithoutSubscriber(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	for i := 0; i < cap(session.UserStateChangedCh); i++ {
+		session.UserStateChangedCh <- UserStateChangedEvent{
+			OldState: UserStateListening,
+			NewState: UserStateListening,
+		}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.UpdateUserState(UserStateSpeaking)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("UpdateUserState blocked on unclaimed user state event channel")
+	}
+}
+
 func TestAgentSessionAudioDisabledEndsSpeakingState(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -451,6 +514,69 @@ func TestAgentSessionAgentStateChangedEventsFanOutToSubscribers(t *testing.T) {
 
 	assertAgentStateChangedEvent(t, first, "first")
 	assertAgentStateChangedEvent(t, second, "second")
+}
+
+func TestAgentSessionAgentStateChangedDeliveredWhenChannelFull(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agentStateEvents := session.agentStateChangedEvents()
+	for i := 0; i < cap(agentStateEvents); i++ {
+		agentStateEvents <- AgentStateChangedEvent{
+			OldState: AgentStateInitializing,
+			NewState: AgentStateInitializing,
+		}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.UpdateAgentState(AgentStateThinking)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("UpdateAgentState returned while event channel was full; agent state event may be dropped")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	<-agentStateEvents
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("UpdateAgentState did not unblock after agent state event channel had capacity")
+	}
+
+	for {
+		select {
+		case ev := <-agentStateEvents:
+			if ev.OldState == AgentStateInitializing && ev.NewState == AgentStateThinking {
+				return
+			}
+		default:
+			t.Fatal("AgentStateChangedEvents did not receive agent state event")
+		}
+	}
+}
+
+func TestAgentSessionAgentStateChangedDoesNotBlockWithoutSubscriber(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	for i := 0; i < cap(session.AgentStateChangedCh); i++ {
+		session.AgentStateChangedCh <- AgentStateChangedEvent{
+			OldState: AgentStateInitializing,
+			NewState: AgentStateInitializing,
+		}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.UpdateAgentState(AgentStateThinking)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("UpdateAgentState blocked on unclaimed agent state event channel")
+	}
 }
 
 func TestAgentSessionErrorEventsFanOutToSubscribers(t *testing.T) {
