@@ -7473,6 +7473,7 @@ func TestDeepgramSTTFallbackPassesReferenceOptions(t *testing.T) {
 	provider, err := fallbackSTTFromProvider(AppConfig{
 		STTBaseURL:          "ws" + strings.TrimPrefix(server.URL, "http"),
 		STTModel:            "nova-2",
+		STTLanguage:         "id",
 		STTInterimResults:   &interim,
 		STTPunctuate:        &punctuate,
 		STTSmartFormat:      &smartFormat,
@@ -7523,6 +7524,7 @@ func TestDeepgramSTTFallbackPassesReferenceOptions(t *testing.T) {
 		}
 		expectedQuery := map[string]string{
 			"model":            "nova-2",
+			"language":         "id",
 			"punctuate":        "false",
 			"smart_format":     "true",
 			"no_delay":         "true",

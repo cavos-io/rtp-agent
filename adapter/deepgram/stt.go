@@ -28,6 +28,7 @@ import (
 type DeepgramSTT struct {
 	apiKey            string
 	model             string
+	language          string
 	detectLanguage    bool
 	punctuate         bool
 	smartFormat       bool
@@ -77,6 +78,14 @@ func WithDeepgramSTTInterimResults(interimResults bool) DeepgramSTTOption {
 func WithDeepgramSTTDetectLanguage(detectLanguage bool) DeepgramSTTOption {
 	return func(s *DeepgramSTT) {
 		s.detectLanguage = detectLanguage
+	}
+}
+
+func WithDeepgramSTTLanguage(languageStr string) DeepgramSTTOption {
+	return func(s *DeepgramSTT) {
+		if languageStr != "" {
+			s.language = language.NormalizeLanguage(languageStr)
+		}
 	}
 }
 
@@ -190,6 +199,7 @@ func NewDeepgramSTT(apiKey string, model string, opts ...DeepgramSTTOption) *Dee
 	provider := &DeepgramSTT{
 		apiKey:         apiKey,
 		model:          model,
+		language:       "en-US",
 		punctuate:      true,
 		smartFormat:    false,
 		noDelay:        true,
@@ -262,7 +272,7 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 		return nil, err
 	}
 
-	languageStr = language.NormalizeLanguage(languageStr)
+	languageStr = s.resolveLanguage(languageStr)
 	if s.detectLanguage {
 		return nil, fmt.Errorf("language detection is not supported in streaming mode, please disable it and specify a language")
 	}
@@ -328,7 +338,7 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 		return nil, err
 	}
 
-	languageStr = language.NormalizeLanguage(languageStr)
+	languageStr = s.resolveLanguage(languageStr)
 	if s.detectLanguage {
 		languageStr = ""
 	}
@@ -363,6 +373,13 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 	}
 
 	return deepgramRecognizeSpeechEventForLanguage(result, languageStr), nil
+}
+
+func (s *DeepgramSTT) resolveLanguage(languageStr string) string {
+	if normalized := language.NormalizeLanguage(languageStr); normalized != "" {
+		return normalized
+	}
+	return s.language
 }
 
 func validateDeepgramSTTAPIKey(apiKey string) error {
@@ -442,6 +459,7 @@ func validateDeepgramSTTOptions(s *DeepgramSTT) error {
 }
 
 func buildDeepgramStreamURL(s *DeepgramSTT, languageStr string) string {
+	languageStr = s.resolveLanguage(languageStr)
 	u, q := deepgramBaseURL(s, true)
 	q.Set("model", deepgramSTTModelForLanguage(s.model, languageStr))
 	if languageStr != "" {
@@ -473,6 +491,10 @@ func buildDeepgramStreamURL(s *DeepgramSTT, languageStr string) string {
 }
 
 func buildDeepgramRecognizeURL(s *DeepgramSTT, languageStr string) string {
+	languageStr = s.resolveLanguage(languageStr)
+	if s.detectLanguage {
+		languageStr = ""
+	}
 	u, q := deepgramBaseURL(s, false)
 	q.Set("model", deepgramSTTModelForLanguage(s.model, languageStr))
 	q.Set("punctuate", strconv.FormatBool(s.punctuate))

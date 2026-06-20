@@ -785,6 +785,22 @@ func TestDeepgramSTTEnglishOnlyModelFallsBackForNonEnglishLanguage(t *testing.T)
 	assertDeepgramQuery(t, englishURL.Query(), "model", "nova-2-meeting")
 }
 
+func TestDeepgramSTTUsesReferenceDefaultLanguageWhenCallLanguageOmitted(t *testing.T) {
+	provider := NewDeepgramSTT("test-key", "")
+
+	streamURL, err := url.Parse(buildDeepgramStreamURL(provider, ""))
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	assertDeepgramQuery(t, streamURL.Query(), "language", "en-US")
+
+	recognizeURL, err := url.Parse(buildDeepgramRecognizeURL(provider, ""))
+	if err != nil {
+		t.Fatalf("parse recognize url: %v", err)
+	}
+	assertDeepgramQuery(t, recognizeURL.Query(), "language", "en-US")
+}
+
 func TestDeepgramSTTAdvancedOptionsUseReferenceQueryParams(t *testing.T) {
 	provider := NewDeepgramSTT("test-key", "nova-2",
 		WithDeepgramSTTBaseURL("https://deepgram.example/v1/listen"),
