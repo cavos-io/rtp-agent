@@ -38,6 +38,7 @@ const (
 )
 
 type InworldTTS struct {
+	mu                         sync.Mutex
 	apiKey                     string
 	baseURL                    string
 	wsURL                      string
@@ -55,6 +56,7 @@ type InworldTTS struct {
 	timestampTransportStrategy string
 	bufferCharThreshold        int
 	maxBufferDelayMS           int
+	streams                    map[*inworldTTSSynthesizeStream]struct{}
 }
 
 type InworldTTSOption func(*InworldTTS)
@@ -293,8 +295,48 @@ func (t *InworldTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		cancel()
 		return nil, err
 	}
+	t.registerStream(stream)
 	go stream.readLoop()
 	return stream, nil
+}
+
+func (t *InworldTTS) Close() error {
+	t.mu.Lock()
+	streams := make([]*inworldTTSSynthesizeStream, 0, len(t.streams))
+	for stream := range t.streams {
+		streams = append(streams, stream)
+	}
+	t.mu.Unlock()
+
+	var firstErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (t *InworldTTS) registerStream(stream *inworldTTSSynthesizeStream) {
+	if stream == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.streams == nil {
+		t.streams = make(map[*inworldTTSSynthesizeStream]struct{})
+	}
+	stream.provider = t
+	t.streams[stream] = struct{}{}
+}
+
+func (t *InworldTTS) unregisterStream(stream *inworldTTSSynthesizeStream) {
+	if stream == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.streams, stream)
 }
 
 func buildInworldTTSWebsocketURL(t *InworldTTS) string {
@@ -486,10 +528,15 @@ func (s *inworldTTSSynthesizeStream) Close() error {
 	}
 	s.closed = true
 	s.cancel()
+	if s.provider != nil {
+		defer s.provider.unregisterStream(s)
+	}
 	if message, err := buildInworldTTSCloseMessage(s.contextID); err == nil {
 		_ = s.writeMessageData(websocket.TextMessage, message)
 	}
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	if s.conn != nil {
+		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	}
 	return s.closeConnection()
 }
 
@@ -512,6 +559,9 @@ func (s *inworldTTSSynthesizeStream) closeConnection() error {
 }
 
 func (s *inworldTTSSynthesizeStream) closeWebsocketConn() error {
+	if s.conn == nil {
+		return nil
+	}
 	return s.conn.Close()
 }
 
@@ -522,6 +572,9 @@ func (s *inworldTTSSynthesizeStream) closeAfterWriteFailureLocked() {
 	s.closed = true
 	s.cancel()
 	_ = s.closeConnection()
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
 }
 
 func (s *inworldTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {

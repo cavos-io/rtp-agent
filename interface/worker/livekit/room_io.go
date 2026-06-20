@@ -144,7 +144,7 @@ func roomIOAudioOutputCodec() webrtc.RTPCodecCapability {
 	return webrtc.RTPCodecCapability{
 		MimeType:  webrtc.MimeTypeOpus,
 		ClockRate: roomIOOpusClockRate,
-		Channels:  1,
+		Channels:  2,
 	}
 }
 
@@ -550,10 +550,13 @@ func (rio *RoomIO) handleUserStateChanged(ev agent.UserStateChangedEvent) {
 }
 
 func (rio *RoomIO) handleAgentOutputTranscribed(ev agent.AgentOutputTranscribedEvent) {
-	if rio == nil || ev.Transcript == "" {
+	if rio == nil || (ev.Transcript == "" && !ev.IsFinal) {
 		return
 	}
-	segmentID, transcript := rio.agentOutputTranscriptionState(ev.Transcript, ev.IsFinal)
+	segmentID, transcript, ok := rio.agentOutputTranscriptionState(ev.Transcript, ev.IsFinal)
+	if !ok {
+		return
+	}
 	rio.setPlaybackTranscript(transcript, ev.IsFinal)
 	attributes := map[string]string{
 		RoomIOTranscriptionFinalAttribute:     strconv.FormatBool(ev.IsFinal),
@@ -574,12 +577,15 @@ func (rio *RoomIO) handleAgentOutputTranscribed(ev agent.AgentOutputTranscribedE
 	})
 }
 
-func (rio *RoomIO) agentOutputTranscriptionState(transcript string, final bool) (string, string) {
+func (rio *RoomIO) agentOutputTranscriptionState(transcript string, final bool) (string, string, bool) {
 	if rio == nil {
-		return roomIOTranscriptionSegmentID(), transcript
+		return roomIOTranscriptionSegmentID(), transcript, true
 	}
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
+	if final && transcript == "" && rio.agentTranscriptionSegmentID == "" {
+		return "", "", false
+	}
 	if rio.agentTranscriptionSegmentID == "" {
 		rio.agentTranscriptionSegmentID = roomIOTranscriptionSegmentID()
 	}
@@ -593,15 +599,18 @@ func (rio *RoomIO) agentOutputTranscriptionState(transcript string, final bool) 
 		rio.agentTranscriptionSegmentID = ""
 		rio.agentTranscriptionText = ""
 	}
-	return segmentID, publishText
+	return segmentID, publishText, true
 }
 
-func (rio *RoomIO) userInputTranscriptionState(final bool) string {
+func (rio *RoomIO) userInputTranscriptionState(transcript string, final bool) (string, bool) {
 	if rio == nil {
-		return roomIOTranscriptionSegmentID()
+		return roomIOTranscriptionSegmentID(), true
 	}
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
+	if final && transcript == "" && rio.userTranscriptionSegmentID == "" {
+		return "", false
+	}
 	if rio.userTranscriptionSegmentID == "" {
 		rio.userTranscriptionSegmentID = roomIOTranscriptionSegmentID()
 	}
@@ -609,18 +618,21 @@ func (rio *RoomIO) userInputTranscriptionState(final bool) string {
 	if final {
 		rio.userTranscriptionSegmentID = ""
 	}
-	return segmentID
+	return segmentID, true
 }
 
 func (rio *RoomIO) handleUserInputTranscribed(ev agent.UserInputTranscribedEvent) {
-	if rio == nil || ev.Transcript == "" {
+	if rio == nil {
 		return
 	}
 	trackID, participantID := rio.userTranscriptionTarget()
 	if trackID == "" || participantID == "" {
 		return
 	}
-	segmentID := rio.userInputTranscriptionState(ev.IsFinal)
+	segmentID, ok := rio.userInputTranscriptionState(ev.Transcript, ev.IsFinal)
+	if !ok {
+		return
+	}
 	rio.publishTranscriptionPacketWithSegment(participantID, trackID, &livekit.TranscriptionSegment{
 		Id:       segmentID,
 		Text:     ev.Transcript,
@@ -696,7 +708,7 @@ func roomIOTranscriptionSegmentID() string {
 }
 
 func (rio *RoomIO) publishTranscriptionTextStream(text string, trackID string, final bool, segmentID string) {
-	if rio == nil || rio.transcriptionTextPublisher == nil || text == "" {
+	if rio == nil || rio.transcriptionTextPublisher == nil {
 		return
 	}
 	attributes := map[string]string{

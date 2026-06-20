@@ -670,12 +670,14 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	if frame.SampleRate != 0 {
 		if s.pushedSR != 0 && s.pushedSR != frame.SampleRate {
+			s.mu.Unlock()
 			return fmt.Errorf("the sample rate of the input frames must be consistent")
 		}
 		s.pushedSR = frame.SampleRate
 	}
 	normalizedFrame, err := normalizeOpenAIRealtimeInputAudio(frame)
 	if err != nil {
+		s.mu.Unlock()
 		return err
 	}
 	if s.audio == nil {
@@ -908,8 +910,12 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 }
 
 func (s *openAIRealtimeSTTStream) vadLoop() {
+	vadStream := s.vadStream
+	if vadStream == nil {
+		return
+	}
 	for {
-		ev, err := s.vadStream.Next()
+		ev, err := vadStream.Next()
 		if err != nil {
 			if err != io.EOF {
 				s.mu.Lock()

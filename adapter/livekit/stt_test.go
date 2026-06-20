@@ -160,6 +160,14 @@ func TestInferenceSTTSessionCreateUsesReferenceAudioOptions(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTExposesConfiguredInputSampleRate(t *testing.T) {
+	provider := NewSTT("deepgram/nova-3", "key", "secret", WithSTTSampleRate(8000))
+
+	if got := stt.InputSampleRate(provider); got != 8000 {
+		t.Fatalf("InputSampleRate() = %d, want configured sample rate 8000", got)
+	}
+}
+
 func TestInferenceSTTSessionCreateUsesReferenceConnectOptions(t *testing.T) {
 	conn := &fakeInferenceWebsocketConn{}
 	provider := NewSTT("deepgram/nova-3", "key", "secret",

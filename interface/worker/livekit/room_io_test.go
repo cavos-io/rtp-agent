@@ -73,9 +73,11 @@ func TestRoomIOAudioTrackPublicationOptionsPreserveConfiguredName(t *testing.T) 
 	}
 }
 
-func TestRoomIOAudioOutputCodecMatchesMonoAudioOutput(t *testing.T) {
+func TestRoomIOAudioOutputCodecUsesStandardOpusChannels(t *testing.T) {
+	const standardOpusChannels = 2
+
 	codec := roomIOAudioOutputCodec()
-	wantChannels := uint16(1)
+	wantChannels := uint16(standardOpusChannels)
 
 	if codec.MimeType != webrtc.MimeTypeOpus {
 		t.Fatalf("MimeType = %q, want %q", codec.MimeType, webrtc.MimeTypeOpus)
@@ -84,7 +86,7 @@ func TestRoomIOAudioOutputCodecMatchesMonoAudioOutput(t *testing.T) {
 		t.Fatalf("ClockRate = %d, want %d", codec.ClockRate, roomIOOpusClockRate)
 	}
 	if codec.Channels != wantChannels {
-		t.Fatalf("Channels = %d, want %d matching RoomIO mono encoder output", codec.Channels, wantChannels)
+		t.Fatalf("Channels = %d, want %d for standard Opus SDP negotiation", codec.Channels, wantChannels)
 	}
 }
 
@@ -2099,6 +2101,50 @@ func TestRoomIOSpeechCreatedResetsAgentTranscriptionSegment(t *testing.T) {
 	}
 }
 
+func TestRoomIOPublishesEmptyFinalAgentTranscriptionToCloseSegment(t *testing.T) {
+	published := make(chan roomIOPublishedText, 3)
+	rio := &RoomIO{
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "partial",
+		IsFinal:    false,
+	})
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "",
+		IsFinal:    true,
+	})
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "next",
+		IsFinal:    false,
+	})
+
+	first := receivePublishedText(t, published, "first assistant transcript")
+	final := receivePublishedText(t, published, "empty final assistant transcript")
+	next := receivePublishedText(t, published, "next assistant transcript")
+
+	firstID := first.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if firstID == "" {
+		t.Fatal("first segment id is empty")
+	}
+	if final.text != "" {
+		t.Fatalf("empty final text = %q, want empty", final.text)
+	}
+	if final.opts.Attributes[RoomIOTranscriptionFinalAttribute] != "true" {
+		t.Fatalf("empty final attribute = %q, want true", final.opts.Attributes[RoomIOTranscriptionFinalAttribute])
+	}
+	if final.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute] != firstID {
+		t.Fatalf("empty final segment id = %q, want %q", final.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute], firstID)
+	}
+	nextID := next.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if nextID == "" || nextID == firstID {
+		t.Fatalf("next segment id = %q, want non-empty id different from %q", nextID, firstID)
+	}
+}
+
 func TestRoomIOPublishesAgentOutputTranscriptionTrackID(t *testing.T) {
 	published := make(chan roomIOPublishedText, 1)
 	rio := &RoomIO{
@@ -2343,6 +2389,121 @@ func TestRoomIOPublishesUserInputTranscriptionStream(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("user transcription stream was not published")
+	}
+}
+
+func TestRoomIOPublishesEmptyUserInputInterimTranscriptionStream(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	publishedText := make(chan roomIOPublishedText, 1)
+	publishedPacket := make(chan *livekit.Transcription, 1)
+	rio := &RoomIO{
+		AgentSession:                   session,
+		userTranscriptionTrackID:       "TR_user_audio",
+		userTranscriptionParticipantID: "caller-a",
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			publishedText <- roomIOPublishedText{text: text, opts: opts}
+		},
+		transcriptionPacketPublisher: func(transcription *livekit.Transcription) error {
+			publishedPacket <- transcription
+			return nil
+		},
+	}
+	rio.startUserTranscriptionListener()
+	defer rio.userTranscriptionCancel()
+
+	session.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "",
+		IsFinal:    false,
+	})
+
+	select {
+	case got := <-publishedText:
+		if got.text != "" {
+			t.Fatalf("published empty interim text = %q, want empty clear marker", got.text)
+		}
+		if got.opts.Attributes[RoomIOTranscriptionFinalAttribute] != "false" {
+			t.Fatalf("final attribute = %q, want false", got.opts.Attributes[RoomIOTranscriptionFinalAttribute])
+		}
+		if got.opts.Attributes[RoomIOTranscriptionTrackIDAttribute] != "TR_user_audio" {
+			t.Fatalf("track id attribute = %q, want TR_user_audio", got.opts.Attributes[RoomIOTranscriptionTrackIDAttribute])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("empty user input transcription stream was not published")
+	}
+	select {
+	case got := <-publishedPacket:
+		if got.TranscribedParticipantIdentity != "caller-a" || got.TrackId != "TR_user_audio" || len(got.Segments) != 1 {
+			t.Fatalf("published packet = %#v, want caller-a/TR_user_audio with one empty segment", got)
+		}
+		segment := got.Segments[0]
+		if segment.Text != "" || segment.Final {
+			t.Fatalf("empty interim segment = %#v, want non-final empty clear marker", segment)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("empty user input transcription packet was not published")
+	}
+}
+
+func TestRoomIOPublishesEmptyFinalUserTranscriptionToCloseSegment(t *testing.T) {
+	published := make(chan roomIOPublishedText, 3)
+	packets := make(chan *livekit.Transcription, 3)
+	rio := &RoomIO{
+		userTranscriptionTrackID:       "TR_user_audio",
+		userTranscriptionParticipantID: "caller-a",
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+		transcriptionPacketPublisher: func(transcription *livekit.Transcription) error {
+			packets <- transcription
+			return nil
+		},
+	}
+
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "partial",
+		IsFinal:    false,
+		Language:   "id",
+	})
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "",
+		IsFinal:    true,
+		Language:   "id",
+	})
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "next",
+		IsFinal:    false,
+		Language:   "id",
+	})
+
+	first := receivePublishedText(t, published, "first user transcript")
+	final := receivePublishedText(t, published, "empty final user transcript")
+	next := receivePublishedText(t, published, "next user transcript")
+
+	firstID := first.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if firstID == "" {
+		t.Fatal("first segment id is empty")
+	}
+	if final.text != "" {
+		t.Fatalf("empty final text = %q, want empty", final.text)
+	}
+	if final.opts.Attributes[RoomIOTranscriptionFinalAttribute] != "true" {
+		t.Fatalf("empty final attribute = %q, want true", final.opts.Attributes[RoomIOTranscriptionFinalAttribute])
+	}
+	if final.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute] != firstID {
+		t.Fatalf("empty final segment id = %q, want %q", final.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute], firstID)
+	}
+	nextID := next.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if nextID == "" || nextID == firstID {
+		t.Fatalf("next segment id = %q, want non-empty id different from %q", nextID, firstID)
+	}
+
+	_ = receiveTranscriptionPacket(t, packets, "first user packet")
+	finalPacket := receiveTranscriptionPacket(t, packets, "empty final user packet")
+	if len(finalPacket.Segments) != 1 {
+		t.Fatalf("empty final packet segments = %d, want 1", len(finalPacket.Segments))
+	}
+	if finalPacket.Segments[0].Text != "" || !finalPacket.Segments[0].Final {
+		t.Fatalf("empty final packet segment = %#v, want final empty text", finalPacket.Segments[0])
 	}
 }
 
@@ -2617,6 +2778,17 @@ func TestRoomIOCanDisableUserTranscriptionOutput(t *testing.T) {
 type roomIOPublishedText struct {
 	text string
 	opts lksdk.StreamTextOptions
+}
+
+func receiveTranscriptionPacket(t *testing.T, ch <-chan *livekit.Transcription, label string) *livekit.Transcription {
+	t.Helper()
+	select {
+	case got := <-ch:
+		return got
+	case <-time.After(time.Second):
+		t.Fatalf("%s was not published", label)
+		return nil
+	}
 }
 
 func TestRoomIOHandleAgentSessionCloseDeletesRoomWhenEnabled(t *testing.T) {

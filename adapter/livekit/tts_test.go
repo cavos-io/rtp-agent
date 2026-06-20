@@ -318,6 +318,33 @@ func (c *recordingTTSConn) Close() error {
 	return nil
 }
 
+type closeRaceTTSConn struct {
+	writeCount   atomic.Int64
+	readCount    atomic.Int64
+	readCh       chan []byte
+	secondReadCh chan struct{}
+}
+
+func (c *closeRaceTTSConn) WriteJSON(v any) error {
+	c.writeCount.Add(1)
+	return nil
+}
+
+func (c *closeRaceTTSConn) ReadMessage() (int, []byte, error) {
+	if c.readCount.Add(1) == 2 {
+		close(c.secondReadCh)
+	}
+	msg, ok := <-c.readCh
+	if !ok {
+		return 0, nil, context.Canceled
+	}
+	return 1, msg, nil
+}
+
+func (c *closeRaceTTSConn) Close() error {
+	return nil
+}
+
 func TestTTSConnectionPoolRefreshesSessionAgeOnGet(t *testing.T) {
 	provider := NewTTS("cartesia/sonic-3", "key", "secret")
 
@@ -713,6 +740,66 @@ func TestInferenceTTSOutputAudioUsesConfiguredSampleRate(t *testing.T) {
 	}
 	if audio.Frame.SampleRate != 16000 {
 		t.Fatalf("SampleRate = %d, want configured sample rate 16000", audio.Frame.SampleRate)
+	}
+}
+
+func TestInferenceTTSCloseWhileReadLoopReceivesBufferedAudioDoesNotPanic(t *testing.T) {
+	conn := &closeRaceTTSConn{
+		readCh:       make(chan []byte),
+		secondReadCh: make(chan struct{}),
+	}
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	ending, ok := stream.(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+
+	for conn.writeCount.Load() < 2 {
+		time.Sleep(time.Millisecond)
+	}
+	conn.readCh <- []byte(`{"type":"output_audio","audio":"AQIDBA=="}`)
+
+	select {
+	case <-conn.secondReadCh:
+	case <-time.After(time.Second):
+		t.Fatal("read loop did not enter second ReadMessage")
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	sent := make(chan struct{})
+	go func() {
+		conn.readCh <- []byte(`{"type":"output_audio","audio":"BQYHCA=="}`)
+		close(sent)
+	}()
+
+	select {
+	case <-sent:
+	case <-time.After(time.Second):
+		t.Fatal("second output_audio was not read after Close")
+	}
+
+	_, err = stream.Next()
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next() error = %v, want context.Canceled", err)
 	}
 }
 

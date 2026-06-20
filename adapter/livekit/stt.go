@@ -170,6 +170,13 @@ func (s *STT) Provider() string {
 	return "livekit"
 }
 
+func (s *STT) InputSampleRate() uint32 {
+	if s == nil || s.sampleRate <= 0 {
+		return 0
+	}
+	return uint32(s.sampleRate)
+}
+
 func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:         true,

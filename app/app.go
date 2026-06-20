@@ -3168,7 +3168,14 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		}
 		return slng.NewSTT(cfg.SLNGAPIKey, sttOpts...), nil
 	case providerLiveKit:
-		return adapterlivekit.NewSTT(cfg.STTModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret), nil
+		sttOpts := []adapterlivekit.STTOption{}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, adapterlivekit.WithSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, adapterlivekit.WithSTTSampleRate(*cfg.STTSampleRate))
+		}
+		return adapterlivekit.NewSTT(cfg.STTModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret, sttOpts...), nil
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_STT_FALLBACK_PROVIDERS entry %q", provider)
 	}
@@ -3414,6 +3421,33 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 		googleCfg.volumeGainDB = *volumeGainDB
 	}
 	return googleCfg
+}
+
+func liveKitTTSOptionsFromConfig(cfg AppConfig) ([]adapterlivekit.TTSOption, error) {
+	ttsOpts := []adapterlivekit.TTSOption{}
+	tokenizer, err := ttsSentenceTokenizer(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if tokenizer != nil {
+		ttsOpts = append(ttsOpts, adapterlivekit.WithSentenceTokenizer(tokenizer))
+	}
+	if cfg.TTSVoice != "" {
+		ttsOpts = append(ttsOpts, adapterlivekit.WithTTSVoice(cfg.TTSVoice))
+	}
+	if cfg.TTSLanguage != "" {
+		ttsOpts = append(ttsOpts, adapterlivekit.WithTTSLanguage(cfg.TTSLanguage))
+	}
+	if cfg.TTSEncoding != "" {
+		ttsOpts = append(ttsOpts, adapterlivekit.WithTTSEncoding(cfg.TTSEncoding))
+	}
+	if cfg.TTSSampleRate != nil {
+		ttsOpts = append(ttsOpts, adapterlivekit.WithTTSSampleRate(*cfg.TTSSampleRate))
+	}
+	if len(cfg.TTSModelOptions) > 0 {
+		ttsOpts = append(ttsOpts, adapterlivekit.WithTTSExtraKwargs(cfg.TTSModelOptions))
+	}
+	return ttsOpts, nil
 }
 
 func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error) {
@@ -4228,13 +4262,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		return telnyx.NewTelnyxTTS(cfg.TelnyxAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerLiveKit:
-		ttsOpts := []adapterlivekit.TTSOption{}
-		tokenizer, err := ttsSentenceTokenizer(cfg)
+		ttsOpts, err := liveKitTTSOptionsFromConfig(cfg)
 		if err != nil {
 			return nil, err
-		}
-		if tokenizer != nil {
-			ttsOpts = append(ttsOpts, adapterlivekit.WithSentenceTokenizer(tokenizer))
 		}
 		return adapterlivekit.NewTTS(cfg.TTSModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret, ttsOpts...), nil
 	default:
@@ -5255,7 +5285,14 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.STT = provider
 	case providerLiveKit:
-		a.STT = adapterlivekit.NewSTT(cfg.STTModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret)
+		sttOpts := []adapterlivekit.STTOption{}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, adapterlivekit.WithSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, adapterlivekit.WithSTTSampleRate(*cfg.STTSampleRate))
+		}
+		a.STT = adapterlivekit.NewSTT(cfg.STTModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret, sttOpts...)
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_STT_PROVIDER %q", cfg.STTProvider)
 	}
@@ -6116,13 +6153,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = provider
 	case providerLiveKit:
-		ttsOpts := []adapterlivekit.TTSOption{}
-		tokenizer, err := ttsSentenceTokenizer(cfg)
+		ttsOpts, err := liveKitTTSOptionsFromConfig(cfg)
 		if err != nil {
 			return nil, err
-		}
-		if tokenizer != nil {
-			ttsOpts = append(ttsOpts, adapterlivekit.WithSentenceTokenizer(tokenizer))
 		}
 		a.TTS = adapterlivekit.NewTTS(cfg.TTSModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret, ttsOpts...)
 	default:
