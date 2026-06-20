@@ -591,25 +591,26 @@ func deepgramRecognizeSpeechEvent(resp dgRecognitionResponse) *stt.SpeechEvent {
 
 func deepgramRecognizeSpeechEventForLanguage(resp dgRecognitionResponse, languageStr string) *stt.SpeechEvent {
 	event := &stt.SpeechEvent{
-		Type:      stt.SpeechEventFinalTranscript,
-		RequestID: resp.Metadata.RequestID,
-		Alternatives: []stt.SpeechData{
-			{Language: languageStr},
-		},
+		Type:         stt.SpeechEventFinalTranscript,
+		RequestID:    resp.Metadata.RequestID,
+		Alternatives: []stt.SpeechData{{Language: languageStr}},
 	}
 
 	if len(resp.Results.Channels) == 0 || len(resp.Results.Channels[0].Alternatives) == 0 {
 		return event
 	}
 
-	alt := resp.Results.Channels[0].Alternatives[0]
-	event.Alternatives[0] = stt.SpeechData{
-		Language:   deepgramRecognizeLanguage(languageStr, resp.Results.Channels[0].DetectedLanguage),
-		Text:       alt.Transcript,
-		StartTime:  deepgramFirstWordStart(alt.Words),
-		EndTime:    deepgramLastWordEnd(alt.Words),
-		Confidence: alt.Confidence,
-		Words:      deepgramTimedStrings(alt.Words),
+	channel := resp.Results.Channels[0]
+	event.Alternatives = event.Alternatives[:0]
+	for _, alt := range channel.Alternatives {
+		event.Alternatives = append(event.Alternatives, stt.SpeechData{
+			Language:   deepgramRecognizeLanguage(languageStr, channel.DetectedLanguage),
+			Text:       alt.Transcript,
+			StartTime:  deepgramFirstWordStart(alt.Words),
+			EndTime:    deepgramLastWordEnd(alt.Words),
+			Confidence: alt.Confidence,
+			Words:      deepgramTimedStrings(alt.Words),
+		})
 	}
 	return event
 }

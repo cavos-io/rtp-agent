@@ -267,6 +267,41 @@ func TestDeepgramRecognizeSpeechEventPreservesAlternativeWords(t *testing.T) {
 	}
 }
 
+func TestDeepgramRecognizeSpeechEventPreservesReferenceAlternatives(t *testing.T) {
+	resp := dgRecognitionResponse{}
+	resp.Metadata.RequestID = "recognize-multi"
+	resp.Results.Channels = []dgRecognitionChannel{
+		{
+			Alternatives: []dgAlternative{
+				{
+					Transcript: "first choice",
+					Confidence: 0.91,
+					Words:      []dgWord{{Word: "first", Start: 0.1, End: 0.2}, {Word: "choice", Start: 0.3, End: 0.5}},
+				},
+				{
+					Transcript: "second choice",
+					Confidence: 0.72,
+					Words:      []dgWord{{Word: "second", Start: 0.2, End: 0.4}, {Word: "choice", Start: 0.5, End: 0.7}},
+				},
+			},
+		},
+	}
+
+	event := deepgramRecognizeSpeechEventForLanguage(resp, "en-US")
+	if event.RequestID != "recognize-multi" {
+		t.Fatalf("request id = %q, want recognize-multi", event.RequestID)
+	}
+	if len(event.Alternatives) != 2 {
+		t.Fatalf("alternatives = %d, want 2", len(event.Alternatives))
+	}
+	if got := event.Alternatives[0]; got.Text != "first choice" || got.StartTime != 0.1 || got.EndTime != 0.5 || got.Confidence != 0.91 {
+		t.Fatalf("first alternative = %+v, want first choice timing/confidence", got)
+	}
+	if got := event.Alternatives[1]; got.Text != "second choice" || got.StartTime != 0.2 || got.EndTime != 0.7 || got.Confidence != 0.72 {
+		t.Fatalf("second alternative = %+v, want second choice timing/confidence", got)
+	}
+}
+
 func TestDeepgramRecognizeSpeechEventSetsReferenceLanguage(t *testing.T) {
 	resp := dgRecognitionResponse{}
 	resp.Results.Channels = []dgRecognitionChannel{
