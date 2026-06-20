@@ -44,6 +44,19 @@ func TestSendDTMFToolReturnsFailureOutputForInvalidEvent(t *testing.T) {
 	}
 }
 
+func TestSendDTMFToolSuccessOutputUsesReferenceCommaSeparator(t *testing.T) {
+	tool := NewSendDTMFTool(&fakeDtmfPublisher{})
+
+	output, err := tool.Execute(context.Background(), `{"events":["1","#"]}`)
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if output != "Successfully sent DTMF events: 1, #" {
+		t.Fatalf("Execute() output = %q, want reference comma-separated events", output)
+	}
+}
+
 type fakeDtmfPublisher struct{}
 
 func (fakeDtmfPublisher) PublishDTMF(int32, string) error {

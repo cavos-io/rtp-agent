@@ -63,17 +63,18 @@ def dtmf_tool(input_data: Any) -> dict[str, Any]:
             output = f"Successfully sent DTMF events: {', '.join(values)}"
         except Exception as exc:
             output = f"Failed to send DTMF event: {value}. Error: {str(exc)}"
+        event = {
+            "name": "execute",
+            "invalid_event": values[0] if values else "",
+            "output_contains_failed": "Failed to send DTMF event:" in output,
+            "error": error,
+            "error_class": "error" if error else "",
+        }
+        if not event["output_contains_failed"]:
+            event["output"] = output
         return {
             "contract": "send-dtmf-tool",
-            "events": [
-                {
-                    "name": "execute",
-                    "invalid_event": values[0] if values else "",
-                    "output_contains_failed": "Failed to send DTMF event:" in output,
-                    "error": error,
-                    "error_class": "error" if error else "",
-                }
-            ],
+            "events": [event],
         }
     raise ValueError(f"unsupported dtmf tool action {action!r}")
 
@@ -113,5 +114,4 @@ def end_call_tool(input_data: Any) -> dict[str, Any]:
             ],
         }
     raise ValueError(f"unsupported end call tool action {action!r}")
-
 
