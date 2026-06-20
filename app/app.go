@@ -1272,7 +1272,6 @@ func installAgoraRTMDataMessageHandler(subscriber workeragora.DataMessageSubscri
 	subscriber.SetDataMessageHandler(func(ctx context.Context, msg workeragora.DataMessage) error {
 		if err := router.HandleDataMessage(ctx, msg); err != nil {
 			logutil.Logger.Warnw("failed to handle Agora RTM data message", err, "channel", msg.Channel, "publisher", msg.Publisher)
-			return err
 		}
 		return nil
 	})

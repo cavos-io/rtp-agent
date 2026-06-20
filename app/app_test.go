@@ -1876,8 +1876,8 @@ func TestRunAgoraLogsRTMDataMessageErrors(t *testing.T) {
 		Publisher: "caller-7",
 		Payload:   []byte(`{bad json`),
 	})
-	if err == nil {
-		t.Fatal("RTM data handler error = nil, want malformed payload error")
+	if err != nil {
+		t.Fatalf("RTM data handler error = %v, want nil after logging malformed payload", err)
 	}
 
 	select {
@@ -1887,6 +1887,9 @@ func TestRunAgoraLogsRTMDataMessageErrors(t *testing.T) {
 		}
 		if entry.msg != "failed to handle Agora RTM data message" {
 			t.Fatalf("log msg = %q, want failed to handle Agora RTM data message", entry.msg)
+		}
+		if entry.err == nil {
+			t.Fatal("log error = nil, want malformed payload error detail")
 		}
 		if got := entry.value("channel"); got != "support" {
 			t.Fatalf("log channel = %#v, want support", got)
