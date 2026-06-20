@@ -219,6 +219,38 @@ func TestNeuphonicTTSChunkedStreamDecodesSSEAudio(t *testing.T) {
 	}
 }
 
+func TestNeuphonicTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
+	body := &neuphonicCloseCountBody{Reader: bytes.NewReader([]byte("data: {\"status_code\":200,\"data\":{\"audio\":\"AQI=\"}}\n\n"))}
+	stream := &neuphonicTTSChunkedStream{
+		resp:       &http.Response{Body: body},
+		sampleRate: 16000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close() error = %v, want nil", err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close() calls = %d, want 1", body.closeCount)
+	}
+}
+
+func TestNeuphonicTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	stream := &neuphonicTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte("data: {\"status_code\":200,\"data\":{\"audio\":\"AQI=\"}}\n\n")))},
+		sampleRate: 16000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after Close error = %T %v, want EOF", err, err)
+	}
+}
+
 func TestNeuphonicTTSWebsocketURLAndHeadersMatchReference(t *testing.T) {
 	provider := NewNeuphonicTTS("test-key", "",
 		WithNeuphonicTTSBaseURL("https://neuphonic.example"),
@@ -401,4 +433,17 @@ func assertNeuphonicPayload(t *testing.T, payload map[string]any, key string, wa
 	if got := payload[key]; got != want {
 		t.Fatalf("%s = %#v, want %q", key, got, want)
 	}
+}
+
+type neuphonicCloseCountBody struct {
+	*bytes.Reader
+	closeCount int
+}
+
+func (b *neuphonicCloseCountBody) Close() error {
+	b.closeCount++
+	if b.closeCount > 1 {
+		return errors.New("closed twice")
+	}
+	return nil
 }
