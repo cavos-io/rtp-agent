@@ -927,6 +927,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		var replyRequired bool
 		var functionCalls []*llm.FunctionCall
 		var functionCallOutputs []*llm.FunctionCallOutput
+		var releasedByUpdate bool
 		for toolOut := range toolOutCh {
 			executedTools = true
 			logger.Logger.Infow("Tool executed", "name", toolOut.FncCall.Name)
@@ -943,6 +944,13 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 					replyCtx.Append(toolOut.FncCallOut)
 				}
 			}
+			if toolOut.RunContextUpdate {
+				releasedByUpdate = true
+				break
+			}
+		}
+		if releasedByUpdate {
+			go drainToolExecutionOutputs(toolOutCh)
 		}
 
 		if executedTools {
@@ -977,6 +985,11 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		}
 		toolSteps++
 		// Loop back to LLM with tool outputs
+	}
+}
+
+func drainToolExecutionOutputs(outCh <-chan ToolExecutionOutput) {
+	for range outCh {
 	}
 }
 

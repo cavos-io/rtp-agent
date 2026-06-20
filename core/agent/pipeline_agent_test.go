@@ -403,6 +403,65 @@ func TestPipelineAgentGenerateReplyWithChatContextCarriesToolOutputs(t *testing.
 	}
 }
 
+func TestPipelineAgentStartsToolUpdateReplyBeforeToolReturns(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{
+						ToolCalls: []llm.FunctionToolCall{{
+							Type:      "function",
+							Name:      "lookup",
+							CallID:    "call_lookup",
+							Arguments: `{}`,
+						}},
+					}},
+				},
+			},
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{Content: "progress acknowledged"}},
+				},
+			},
+		},
+	}
+	tool := &blockingRunContextUpdatingTool{
+		updateSent: make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{tool}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.generateReply()
+	}()
+
+	select {
+	case <-tool.updateSent:
+	case <-time.After(time.Second):
+		t.Fatal("tool did not send run context update")
+	}
+	deadline := time.After(time.Second)
+	for len(l.calls) < 2 {
+		select {
+		case <-deadline:
+			t.Fatalf("LLM Chat calls = %d, want progress reply before tool returns", len(l.calls))
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	close(tool.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("generateReply did not finish after tool release")
+	}
+}
+
 func TestPipelineAgentToolReplyRefreshesUpdatedInstructions(t *testing.T) {
 	baseAgent := NewAgent("old instructions")
 	if err := updateAgentInstructionsMessage(baseAgent.ChatCtx, llm.NewInstructions(baseAgent.Instructions), true); err != nil {
