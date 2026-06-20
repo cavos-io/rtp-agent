@@ -271,6 +271,41 @@ func TestNeuphonicTTSStreamTextMessageMatchesReference(t *testing.T) {
 	}
 }
 
+func TestNeuphonicTTSFlushStartsNextReferenceSegment(t *testing.T) {
+	var writes []map[string]any
+	stream := &neuphonicTTSSynthesizeStream{
+		segmentID: "segment-1",
+		writeMessage: func(messageType int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("first"); err != nil {
+		t.Fatalf("PushText(first) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if err := stream.PushText("second"); err != nil {
+		t.Fatalf("PushText(second) error = %v", err)
+	}
+
+	if len(writes) != 2 {
+		t.Fatalf("writes = %d, want 2", len(writes))
+	}
+	if writes[0]["context_id"] != "segment-1" {
+		t.Fatalf("first context_id = %#v, want segment-1", writes[0]["context_id"])
+	}
+	if writes[1]["context_id"] == "" || writes[1]["context_id"] == writes[0]["context_id"] {
+		t.Fatalf("second context_id = %#v, want new segment after Flush", writes[1]["context_id"])
+	}
+}
+
 func TestNeuphonicTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	cancelled := false

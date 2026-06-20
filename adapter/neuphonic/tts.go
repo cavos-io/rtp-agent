@@ -389,6 +389,12 @@ func (s *neuphonicTTSSynthesizeStream) PushText(text string) error {
 }
 
 func (s *neuphonicTTSSynthesizeStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("neuphonic tts stream is closed")
+	}
+	s.segmentID = neuphonicTTSSegmentID()
 	return nil
 }
 
