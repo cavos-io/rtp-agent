@@ -2009,6 +2009,65 @@ func TestRealtimeEventMapsOutputTextAndAudioAliases(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventRejectsOutputDeltasWithoutStringItemID(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		event map[string]any
+	}{
+		{
+			name: "missing_text_item_id",
+			event: map[string]any{
+				"type":  "response.output_text.delta",
+				"delta": "hello",
+			},
+		},
+		{
+			name: "null_text_item_id",
+			event: map[string]any{
+				"type":    "response.output_text.delta",
+				"item_id": nil,
+				"delta":   "hello",
+			},
+		},
+		{
+			name: "missing_audio_transcript_item_id",
+			event: map[string]any{
+				"type":  "response.output_audio_transcript.delta",
+				"delta": "hello",
+			},
+		},
+		{
+			name: "missing_audio_item_id",
+			event: map[string]any{
+				"type":  "response.output_audio.delta",
+				"delta": "aGVsbG8=",
+			},
+		},
+		{
+			name: "null_audio_item_id",
+			event: map[string]any{
+				"type":    "response.output_audio.delta",
+				"item_id": nil,
+				"delta":   "aGVsbG8=",
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if ev, ok := openAIRealtimeEvent(tt.event); ok {
+				t.Fatalf("openAIRealtimeEvent = %#v, true; want malformed output delta ignored", ev)
+			}
+		})
+	}
+
+	if ev, ok := openAIRealtimeEvent(map[string]any{
+		"type":    "response.output_text.delta",
+		"item_id": "",
+		"delta":   "hello",
+	}); !ok || ev.ItemID != "" {
+		t.Fatalf("openAIRealtimeEvent explicit empty item_id = %#v, %v; want accepted empty id", ev, ok)
+	}
+}
+
 func TestRealtimeEventMapsInputAudioBufferSpeechStoppedPayload(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "input_audio_buffer.speech_stopped",
@@ -3521,6 +3580,48 @@ func TestRealtimeSessionPersistsEmptyIDAudioTranscriptOnResponseDone(t *testing.
 	}
 	if got := msg.TextContent(); got != "empty id transcript" {
 		t.Fatalf("remote empty-id text content = %q, want accumulated audio transcript", got)
+	}
+}
+
+func TestRealtimeSessionIgnoresOutputTranscriptDeltaWithoutItemID(t *testing.T) {
+	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
+	if err := session.remote.Insert(nil, &llm.ChatMessage{
+		ID:      "",
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{},
+	}); err != nil {
+		t.Fatalf("Insert remote message error = %v", err)
+	}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "",
+			"type": "message",
+		},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":  "response.output_audio_transcript.delta",
+		"delta": "missing id transcript",
+	})
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":     "response.done",
+		"response": map[string]any{"id": "resp_123", "status": "completed"},
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
+	}
+
+	msg, ok := session.remote.Get("").(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("remote empty-id item = %T, want *llm.ChatMessage", session.remote.Get(""))
+	}
+	if got := msg.TextContent(); got != "" {
+		t.Fatalf("remote empty-id text content = %q, want missing item_id transcript ignored", got)
 	}
 }
 

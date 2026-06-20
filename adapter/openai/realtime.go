@@ -2136,11 +2136,17 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 			}
 		}
 	case "response.output_text.delta", "response.text.delta":
-		itemID, _ := ev["item_id"].(string)
+		itemID, hasItemID := ev["item_id"].(string)
+		if !hasItemID {
+			return llm.RealtimeEvent{}, false
+		}
 		delta, _ := ev["delta"].(string)
 		s.trackRealtimeOutputTranscript(itemID, delta)
 	case "response.output_audio_transcript.delta", "response.audio_transcript.delta":
-		itemID, _ := ev["item_id"].(string)
+		itemID, hasItemID := ev["item_id"].(string)
+		if !hasItemID {
+			return llm.RealtimeEvent{}, false
+		}
 		delta, _ := ev["delta"].(string)
 		s.trackRealtimeOutputTranscript(itemID, delta)
 	case "response.done":
@@ -2517,32 +2523,35 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 			Error: llm.NewAPIError("OpenAI Realtime API returned an error", errorBody, true),
 		}, true
 	case "response.output_text.delta", "response.text.delta":
-		if delta, ok := ev["delta"].(string); ok {
+		itemID, hasItemID := ev["item_id"].(string)
+		if delta, ok := ev["delta"].(string); ok && hasItemID {
 			return llm.RealtimeEvent{
 				Type:         llm.RealtimeEventTypeText,
-				ItemID:       openAIRealtimeString(ev["item_id"]),
+				ItemID:       itemID,
 				ContentIndex: openAIRealtimeInt(ev["content_index"]),
 				Text:         delta,
 			}, true
 		}
 	case "response.output_audio_transcript.delta", "response.audio_transcript.delta":
-		if delta, ok := ev["delta"].(string); ok {
+		itemID, hasItemID := ev["item_id"].(string)
+		if delta, ok := ev["delta"].(string); ok && hasItemID {
 			return llm.RealtimeEvent{
 				Type:         llm.RealtimeEventTypeText,
-				ItemID:       openAIRealtimeString(ev["item_id"]),
+				ItemID:       itemID,
 				ContentIndex: openAIRealtimeInt(ev["content_index"]),
 				Text:         delta,
 			}, true
 		}
 	case "response.output_audio.delta", "response.audio.delta":
-		if delta, ok := ev["delta"].(string); ok {
+		itemID, hasItemID := ev["item_id"].(string)
+		if delta, ok := ev["delta"].(string); ok && hasItemID {
 			data, err := base64.StdEncoding.DecodeString(delta)
 			if err != nil {
 				return llm.RealtimeEvent{}, false
 			}
 			return llm.RealtimeEvent{
 				Type:         llm.RealtimeEventTypeAudio,
-				ItemID:       openAIRealtimeString(ev["item_id"]),
+				ItemID:       itemID,
 				ContentIndex: openAIRealtimeInt(ev["content_index"]),
 				Data:         data,
 			}, true
