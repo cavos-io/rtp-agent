@@ -1858,7 +1858,6 @@ func TestRoomIOHandleAgentStateChangedPublishesReferenceAttribute(t *testing.T) 
 
 func TestRoomIOHandleAgentStateChangedSkipsWhenRoomDisconnected(t *testing.T) {
 	called := false
-	dispatcher := &fakeClientEventsDispatcher{}
 	rio := &RoomIO{
 		agentStatePublisher: func(map[string]string) {
 			called = true
@@ -1866,16 +1865,12 @@ func TestRoomIOHandleAgentStateChangedSkipsWhenRoomDisconnected(t *testing.T) {
 		agentStatePublishEnabled: func() bool {
 			return false
 		},
-		clientEvents: dispatcher,
 	}
 
 	rio.handleAgentStateChanged(agent.AgentStateChangedEvent{NewState: agent.AgentStateSpeaking})
 
 	if called {
 		t.Fatal("agent state publisher was called while room was disconnected")
-	}
-	if len(dispatcher.agentStates) != 0 {
-		t.Fatalf("dispatched agent states = %#v, want none while disconnected", dispatcher.agentStates)
 	}
 }
 
@@ -1889,6 +1884,22 @@ func TestRoomIOHandleAgentStateChangedDispatchesClientEventWithoutAttributePubli
 
 	if len(dispatcher.agentStates) != 1 || dispatcher.agentStates[0] != agent.AgentStateThinking {
 		t.Fatalf("dispatched agent states = %#v, want thinking", dispatcher.agentStates)
+	}
+}
+
+func TestRoomIOHandleAgentStateChangedDispatchesClientEventWhenAttributePublishingDisabled(t *testing.T) {
+	dispatcher := &fakeClientEventsDispatcher{}
+	rio := &RoomIO{
+		agentStatePublishEnabled: func() bool {
+			return false
+		},
+		clientEvents: dispatcher,
+	}
+
+	rio.handleAgentStateChanged(agent.AgentStateChangedEvent{NewState: agent.AgentStateSpeaking})
+
+	if len(dispatcher.agentStates) != 1 || dispatcher.agentStates[0] != agent.AgentStateSpeaking {
+		t.Fatalf("dispatched agent states = %#v, want speaking", dispatcher.agentStates)
 	}
 }
 
@@ -1944,6 +1955,22 @@ func TestRoomIOHandleUserStateChangedDispatchesClientEvent(t *testing.T) {
 
 	if len(dispatcher.userStates) != 1 || dispatcher.userStates[0] != agent.UserStateSpeaking {
 		t.Fatalf("dispatched user states = %#v, want speaking", dispatcher.userStates)
+	}
+}
+
+func TestRoomIOHandleUserStateChangedDispatchesClientEventWhenAttributePublishingDisabled(t *testing.T) {
+	dispatcher := &fakeClientEventsDispatcher{}
+	rio := &RoomIO{
+		agentStatePublishEnabled: func() bool {
+			return false
+		},
+		clientEvents: dispatcher,
+	}
+
+	rio.handleUserStateChanged(agent.UserStateChangedEvent{NewState: agent.UserStateAway})
+
+	if len(dispatcher.userStates) != 1 || dispatcher.userStates[0] != agent.UserStateAway {
+		t.Fatalf("dispatched user states = %#v, want away", dispatcher.userStates)
 	}
 }
 

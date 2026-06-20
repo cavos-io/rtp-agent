@@ -532,10 +532,7 @@ func (rio *RoomIO) handleAgentStateChanged(ev agent.AgentStateChangedEvent) {
 	if rio == nil || (rio.agentStatePublisher == nil && rio.clientEvents == nil) {
 		return
 	}
-	if rio.agentStatePublishEnabled != nil && !rio.agentStatePublishEnabled() {
-		return
-	}
-	if rio.agentStatePublisher != nil {
+	if rio.agentStatePublisher != nil && (rio.agentStatePublishEnabled == nil || rio.agentStatePublishEnabled()) {
 		rio.agentStatePublisher(map[string]string{
 			RoomIOAgentStateAttribute: string(ev.NewState),
 		})
@@ -547,9 +544,6 @@ func (rio *RoomIO) handleAgentStateChanged(ev agent.AgentStateChangedEvent) {
 
 func (rio *RoomIO) handleUserStateChanged(ev agent.UserStateChangedEvent) {
 	if rio == nil || rio.clientEvents == nil {
-		return
-	}
-	if rio.agentStatePublishEnabled != nil && !rio.agentStatePublishEnabled() {
 		return
 	}
 	rio.clientEvents.DispatchUserState(ev.NewState)
