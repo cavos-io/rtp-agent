@@ -487,6 +487,9 @@ func (ma *MultimodalAgent) run(ctx context.Context, rtSession llm.RealtimeSessio
 					rtFrame = audio.SilenceFrameLike(frame)
 				}
 				if err := rtSession.PushAudio(rtFrame); err != nil {
+					if errors.Is(err, context.Canceled) {
+						continue
+					}
 					logger.Logger.Errorw("failed to push audio to multimodal session", err)
 					ma.mu.Lock()
 					session := ma.session

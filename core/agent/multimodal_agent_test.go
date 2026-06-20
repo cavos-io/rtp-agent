@@ -224,6 +224,42 @@ func TestMultimodalAgentEmitsRealtimeErrorWhenAudioPushFails(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentRealtimeAudioInputPushCancelSuppressesError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	audioCh := make(chan *model.AudioFrame, 1)
+	eventCh := make(chan llm.RealtimeEvent)
+	rtSession := &fakeRealtimeSession{
+		eventCh:      eventCh,
+		audioCh:      audioCh,
+		pushAudioErr: context.Canceled,
+	}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{}, llm.NewChatContext())
+	ma.session = session
+	ma.rtSession = rtSession
+	go ma.run(ctx, rtSession)
+
+	ma.OnAudioFrame(context.Background(), &model.AudioFrame{
+		Data:              []byte{0, 1},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	})
+
+	select {
+	case <-audioCh:
+	case <-time.After(time.Second):
+		t.Fatal("realtime session did not receive input audio")
+	}
+	select {
+	case ev := <-session.ErrorEvents():
+		t.Fatalf("ErrorEvents received %#v, want cancellation suppressed", ev)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestMultimodalAgentEmitsRealtimeErrorWhenEventAudioPublishFails(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	cause := errors.New("publish realtime audio failed")
