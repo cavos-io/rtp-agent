@@ -35,8 +35,14 @@ func PublishDataEnabled(value *bool) bool {
 }
 
 func DataEnabled(opts Options) bool {
-	if opts.RTMEnabled == nil {
+	if PublishDataEnabled(opts.PublishData) || PublishDataEnabled(opts.RTMEnabled) {
 		return true
 	}
-	return PublishDataEnabled(opts.PublishData) || PublishDataEnabled(opts.RTMEnabled)
+	if opts.RTMEnabled != nil {
+		return false
+	}
+	if opts.PublishData != nil {
+		return false
+	}
+	return true
 }

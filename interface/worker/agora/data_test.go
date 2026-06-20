@@ -36,7 +36,10 @@ func TestDataEnabledAcceptsPublishDataOrRTMEnabled(t *testing.T) {
 	}{
 		{name: "unset", opts: Options{}, want: true},
 		{name: "publish_data", opts: Options{PublishData: &enabled}, want: true},
+		{name: "publish_data_disabled", opts: Options{PublishData: &disabled}, want: false},
 		{name: "rtm_enabled", opts: Options{RTMEnabled: &enabled}, want: true},
+		{name: "rtm_enabled_overrides_publish_data_disabled", opts: Options{PublishData: &disabled, RTMEnabled: &enabled}, want: true},
+		{name: "publish_data_overrides_rtm_disabled", opts: Options{PublishData: &enabled, RTMEnabled: &disabled}, want: true},
 		{name: "rtm_disabled", opts: Options{RTMEnabled: &disabled}, want: false},
 		{name: "disabled", opts: Options{PublishData: &disabled, RTMEnabled: &disabled}, want: false},
 	} {
