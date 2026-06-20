@@ -764,6 +764,16 @@ func TestAzureSTTStreamFinalTranscriptMatchesReferenceResultTextAndConfidence(t 
 	}
 }
 
+func TestAzureSTTStreamIgnoresNonSuccessFinalPhrase(t *testing.T) {
+	event := parseAzureSTTMessage(
+		resolveAzureSTTLanguage("id-ID"),
+		[]byte("Path: speech.phrase\r\nContent-Type: application/json\r\n\r\n{\"RecognitionStatus\":\"NoMatch\",\"DisplayText\":\"background noise\"}"),
+	)
+	if event != nil {
+		t.Fatalf("event = %#v, want nil for non-success Azure phrase", event)
+	}
+}
+
 func TestAzureSTTStreamInterimConfidenceMatchesReference(t *testing.T) {
 	event := parseAzureSTTMessage(
 		resolveAzureSTTLanguage("id-ID"),
