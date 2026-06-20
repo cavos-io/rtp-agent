@@ -254,6 +254,24 @@ func TestSentenceStreamPacerPropagatesUnderlyingError(t *testing.T) {
 	}
 }
 
+func TestSentenceStreamPacerPropagatesUnderlyingPushTextError(t *testing.T) {
+	pushErr := errors.New("provider write failed")
+	underlying := &pushErrorPacerStream{err: pushErr, pushed: make(chan struct{})}
+	pacer := NewSentenceStreamPacerWithOptions(context.Background(), underlying, SentenceStreamPacerOptions{})
+	defer pacer.Close()
+
+	if err := pacer.PushText("Only segment."); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := pacer.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	if _, err := pacer.Next(); !errors.Is(err, pushErr) {
+		t.Fatalf("Next() error = %v, want push error %v", err, pushErr)
+	}
+}
+
 func TestSentenceStreamPacerSkipsNilSynthesizedAudioEvents(t *testing.T) {
 	underlying := newNilThenAudioPacerStream()
 	pacer := NewSentenceStreamPacerWithOptions(context.Background(), underlying, SentenceStreamPacerOptions{})
@@ -560,6 +578,35 @@ func (s *nilThenAudioPacerStream) Next() (*SynthesizedAudio, error) {
 	default:
 		return nil, io.EOF
 	}
+}
+
+type pushErrorPacerStream struct {
+	err    error
+	once   sync.Once
+	pushed chan struct{}
+}
+
+func (s *pushErrorPacerStream) PushText(string) error {
+	s.once.Do(func() {
+		close(s.pushed)
+	})
+	return s.err
+}
+
+func (s *pushErrorPacerStream) Flush() error {
+	return nil
+}
+
+func (s *pushErrorPacerStream) Close() error {
+	s.once.Do(func() {
+		close(s.pushed)
+	})
+	return nil
+}
+
+func (s *pushErrorPacerStream) Next() (*SynthesizedAudio, error) {
+	<-s.pushed
+	return nil, io.EOF
 }
 
 type blockingClosePacerStream struct {

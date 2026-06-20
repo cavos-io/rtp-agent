@@ -272,6 +272,7 @@ func (p *SentenceStreamPacer) flushPendingSentences(pending *[]string, firstSent
 			return
 		}
 		if err := p.pushBatch(pending, firstSentence); err != nil {
+			p.failStream(err)
 			return
 		}
 	}
@@ -279,7 +280,9 @@ func (p *SentenceStreamPacer) flushPendingSentences(pending *[]string, firstSent
 		p.endUnderlyingInput()
 		return
 	}
-	p.underlying.Flush()
+	if err := p.underlying.Flush(); err != nil {
+		p.failStream(err)
+	}
 }
 
 func (p *SentenceStreamPacer) drainAvailableSentences(pending *[]string) bool {
@@ -335,9 +338,7 @@ func (p *SentenceStreamPacer) audioLoop() {
 	for {
 		audio, err := p.underlying.Next()
 		if err != nil {
-			p.mu.Lock()
-			p.audioErr = err
-			p.mu.Unlock()
+			p.setAudioErr(err)
 			return
 		}
 		if audio == nil || audio.Frame == nil {
@@ -459,7 +460,9 @@ func (p *SentenceStreamPacer) endUnderlyingInput() {
 	p.underlyingInputDone = true
 	p.mu.Unlock()
 
-	_ = endSynthesizeStreamInput(p.underlying)
+	if err := endSynthesizeStreamInput(p.underlying); err != nil {
+		p.failStream(err)
+	}
 }
 
 func (p *SentenceStreamPacer) Next() (*SynthesizedAudio, error) {
@@ -478,4 +481,23 @@ func (p *SentenceStreamPacer) Next() (*SynthesizedAudio, error) {
 		}
 		return audio, nil
 	}
+}
+
+func (p *SentenceStreamPacer) failStream(err error) {
+	if err == nil {
+		return
+	}
+	p.setAudioErr(err)
+	_ = p.underlying.Close()
+}
+
+func (p *SentenceStreamPacer) setAudioErr(err error) {
+	if err == nil {
+		return
+	}
+	p.mu.Lock()
+	if p.audioErr == nil || p.audioErr == io.EOF {
+		p.audioErr = err
+	}
+	p.mu.Unlock()
 }
