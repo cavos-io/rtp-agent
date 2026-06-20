@@ -4753,6 +4753,33 @@ func TestPipelineAgentInterruptedReplyFallsBackWhenSynchronizedTranscriptMissing
 	}
 }
 
+func TestPipelineAgentInterruptedReplyUsesSynchronizedTranscriptWhenGeneratedTextEmpty(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	playback := &fakePipelinePlaybackController{
+		result: AudioPlaybackResult{
+			PlaybackPosition:          200 * time.Millisecond,
+			Interrupted:               true,
+			SynchronizedTranscript:    "heard aligned transcript",
+			HasSynchronizedTranscript: true,
+		},
+	}
+	session.SetAudioPlaybackController(playback)
+	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{}, llm.NewChatContext())
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+
+	forwarded := agent.forwardedAssistantTextAfterInterruption(context.Background(), session, speech, "")
+
+	if playback.clearCalls != 1 {
+		t.Fatalf("ClearBuffer calls = %d, want 1", playback.clearCalls)
+	}
+	if forwarded != "heard aligned transcript" {
+		t.Fatalf("forwarded text = %q, want synchronized transcript even when generated text is empty", forwarded)
+	}
+}
+
 func TestPipelineAgentReplyWaitsForPlayoutBeforeCommit(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

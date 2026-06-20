@@ -1424,7 +1424,7 @@ func (va *PipelineAgent) clearAssistantPlayback(session *AgentSession) {
 }
 
 func (va *PipelineAgent) forwardedAssistantTextAfterInterruption(ctx context.Context, session *AgentSession, speech *SpeechHandle, generatedText string) string {
-	if generatedText == "" || speech == nil || !speech.IsInterrupted() || session == nil {
+	if speech == nil || !speech.IsInterrupted() || session == nil {
 		return generatedText
 	}
 	playback := session.AudioPlaybackController()
