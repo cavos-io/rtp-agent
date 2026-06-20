@@ -254,6 +254,27 @@ func (s *AssemblyAISTT) unregisterStream(stream *assemblyAISTTStream) {
 	}
 }
 
+func (s *AssemblyAISTT) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	streams := make([]*assemblyAISTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.streams = map[*assemblyAISTTStream]struct{}{}
+	s.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
 func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if err := s.validateStreamConfig(); err != nil {
 		return nil, err

@@ -2,6 +2,7 @@ package deepgram
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -84,6 +85,46 @@ func TestDeepgramTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
 	_, streamErr := provider.Stream(context.Background())
 	if streamErr == nil || !strings.Contains(streamErr.Error(), "DEEPGRAM_API_KEY") {
 		t.Fatalf("Stream error = %v, want missing API key error", streamErr)
+	}
+}
+
+func TestDeepgramTTSProviderCloseClosesActiveStreams(t *testing.T) {
+	sawClose := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramTTSFlushOnCloseWebsocketServer(serverConn, sawClose, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	if err := tts.Close(provider); err != nil {
+		t.Fatalf("tts.Close(provider) error = %v", err)
+	}
+
+	select {
+	case <-sawClose:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for provider close to close active stream")
+	}
+	if err := stream.PushText("later"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after provider close error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
 	}
 }
 
@@ -246,6 +287,27 @@ func TestDeepgramTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	}
 	if body.closeCalls != 1 {
 		t.Fatalf("body close calls = %d, want 1", body.closeCalls)
+	}
+}
+
+func TestDeepgramTTSChunkedStreamKeepsFinalReadBytes(t *testing.T) {
+	stream := &deepgramTTSChunkedStream{
+		resp:       &http.Response{Body: &deepgramTTSFinalReadCloser{data: []byte{0x01, 0x02, 0x03, 0x04}}},
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want final audio bytes", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("Next() = %+v, want audio frame", audio)
+	}
+	if got := audio.Frame.Data; !bytes.Equal(got, []byte{0x01, 0x02, 0x03, 0x04}) {
+		t.Fatalf("audio bytes = %v, want final read bytes", got)
+	}
+	if got := audio.Frame.SamplesPerChannel; got != 2 {
+		t.Fatalf("samples per channel = %d, want 2", got)
 	}
 }
 
@@ -461,7 +523,7 @@ func TestDeepgramTTSStreamSpeakTextKeepsReferenceTrailingSeparator(t *testing.T)
 				t.Fatalf("writeJSON payload = %#v, want map", v)
 			}
 			if msg["type"] != "Speak" {
-				t.Fatalf("message type = %#v, want Speak", msg["type"])
+				return nil
 			}
 			speakText, _ = msg["text"].(string)
 			return nil
@@ -471,8 +533,77 @@ func TestDeepgramTTSStreamSpeakTextKeepsReferenceTrailingSeparator(t *testing.T)
 	if err := stream.PushText("hello"); err != nil {
 		t.Fatalf("PushText() error = %v", err)
 	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
 	if speakText != "hello " {
 		t.Fatalf("Speak text = %q, want reference trailing separator", speakText)
+	}
+}
+
+func TestDeepgramTTSStreamTokenizesReferenceSpeakMessages(t *testing.T) {
+	var writes []string
+	stream := &deepgramTTSStream{
+		writeJSON: func(v any) error {
+			msg, ok := v.(map[string]interface{})
+			if !ok {
+				t.Fatalf("writeJSON payload = %#v, want map", v)
+			}
+			msgType, _ := msg["type"].(string)
+			if msgType == "Speak" {
+				text, _ := msg["text"].(string)
+				writes = append(writes, msgType+":"+text)
+				return nil
+			}
+			writes = append(writes, msgType)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("hello world"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if !reflect.DeepEqual(writes, []string{"Speak:hello "}) {
+		t.Fatalf("writes after PushText = %#v, want completed first word only", writes)
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	want := []string{"Speak:hello ", "Speak:world ", "Flush"}
+	if !reflect.DeepEqual(writes, want) {
+		t.Fatalf("writes after Flush = %#v, want %#v", writes, want)
+	}
+
+	writes = nil
+	stream = &deepgramTTSStream{
+		writeJSON: func(v any) error {
+			msg, ok := v.(map[string]interface{})
+			if !ok {
+				t.Fatalf("writeJSON payload = %#v, want map", v)
+			}
+			msgType, _ := msg["type"].(string)
+			if msgType == "Speak" {
+				text, _ := msg["text"].(string)
+				writes = append(writes, msgType+":"+text)
+				return nil
+			}
+			writes = append(writes, msgType)
+			return nil
+		},
+	}
+	if err := stream.PushText("hello wor"); err != nil {
+		t.Fatalf("PushText(partial) error = %v", err)
+	}
+	if err := stream.PushText("ld again"); err != nil {
+		t.Fatalf("PushText(rest) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(partial) error = %v", err)
+	}
+	want = []string{"Speak:hello ", "Speak:world ", "Speak:again ", "Flush"}
+	if !reflect.DeepEqual(writes, want) {
+		t.Fatalf("writes after split PushText = %#v, want %#v", writes, want)
 	}
 }
 
@@ -549,7 +680,7 @@ func TestDeepgramTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 		},
 	}
 
-	if err := stream.PushText("hello"); !errors.Is(err, writeErr) {
+	if err := stream.PushText("hello world"); !errors.Is(err, writeErr) {
 		t.Fatalf("PushText error = %v, want write error", err)
 	}
 	if closeCalls != 1 {
@@ -702,6 +833,23 @@ func (r *deepgramTTSCountingReadCloser) Read([]byte) (int, error) {
 
 func (r *deepgramTTSCountingReadCloser) Close() error {
 	r.closeCalls++
+	return nil
+}
+
+type deepgramTTSFinalReadCloser struct {
+	data []byte
+	read bool
+}
+
+func (r *deepgramTTSFinalReadCloser) Read(p []byte) (int, error) {
+	if r.read {
+		return 0, io.EOF
+	}
+	r.read = true
+	return copy(p, r.data), io.EOF
+}
+
+func (r *deepgramTTSFinalReadCloser) Close() error {
 	return nil
 }
 
