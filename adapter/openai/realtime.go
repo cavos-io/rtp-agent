@@ -859,19 +859,21 @@ func (s *realtimeSession) clearRealtimeChatContextAcks(msgs []map[string]any) {
 }
 
 func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
+	formattedTools := s.model.realtimeTools(tools)
+	retainedTools := openAIRealtimeRetainedTools(tools, formattedTools)
 	msg := map[string]any{
 		"type":     "session.update",
 		"event_id": cavosmath.ShortUUID("tools_update_"),
 		"session": map[string]any{
-			"tools": s.model.realtimeTools(tools),
+			"tools": formattedTools,
 		},
 	}
+	s.mu.Lock()
+	s.tools = retainedTools
+	s.mu.Unlock()
 	if err := s.sendMsg(msg); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	s.tools = append([]llm.Tool(nil), tools...)
-	s.mu.Unlock()
 	return nil
 }
 
@@ -896,6 +898,27 @@ func openAIRealtimeTools(tools []llm.Tool) []map[string]any {
 		})
 	}
 	return oaTools
+}
+
+func openAIRealtimeRetainedTools(tools []llm.Tool, emitted []map[string]any) []llm.Tool {
+	emittedNames := make(map[string]struct{}, len(emitted))
+	for _, tool := range emitted {
+		name, _ := tool["name"].(string)
+		if name != "" {
+			emittedNames[name] = struct{}{}
+		}
+	}
+	retained := make([]llm.Tool, 0, len(tools))
+	for _, tool := range tools {
+		if _, ok := tool.(llm.ProviderTool); ok {
+			retained = append(retained, tool)
+			continue
+		}
+		if _, ok := emittedNames[tool.Name()]; ok {
+			retained = append(retained, tool)
+		}
+	}
+	return retained
 }
 
 func openAIRealtimeChatContextCreateMessages(chatCtx *llm.ChatContext) ([]map[string]any, error) {

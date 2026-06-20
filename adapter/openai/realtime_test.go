@@ -143,6 +143,78 @@ func TestRealtimeSessionUpdateToolsSkipsProviderTools(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionUpdateToolsRetainsOnlyEmittedTools(t *testing.T) {
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for i := 0; i < 2; i++ {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("Read realtime message %d error = %v", i, err)
+				return
+			}
+		}
+		<-releaseServer
+	})
+
+	realtimeModel := NewRealtimeModel(
+		"test-key",
+		"gpt-realtime",
+		WithOpenAIRealtimeWebsocketDialer(dialer),
+		WithOpenAIRealtimeToolFormatter(func(tools []llm.Tool) []map[string]any {
+			return []map[string]any{{
+				"type":        "function",
+				"name":        "lookup",
+				"description": "look up information",
+				"parameters":  llm.ToolParameters(requestTestTool{}),
+			}}
+		}),
+		WithOpenAIRealtimeFunctionCallFilter(func(tools []llm.Tool, name string) bool {
+			for _, tool := range tools {
+				if tool.Name() == name {
+					return true
+				}
+			}
+			return false
+		}),
+	)
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateTools([]llm.Tool{requestTestTool{}, droppedRealtimeFunctionTool{}, openAIRealtimeProviderTestTool{}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+
+	liveSession := session.(*realtimeSession)
+	if !liveSession.acceptRealtimeFunctionCall("lookup") {
+		t.Fatal("lookup function call rejected, want emitted function tool accepted")
+	}
+	if liveSession.acceptRealtimeFunctionCall("dropped") {
+		t.Fatal("dropped function call accepted, want non-emitted function tool rejected after update")
+	}
+	if !liveSession.acceptRealtimeFunctionCall("web_search") {
+		t.Fatal("web_search provider tool rejected, want provider tool retained like reference")
+	}
+}
+
+type droppedRealtimeFunctionTool struct{}
+
+func (droppedRealtimeFunctionTool) ID() string          { return "dropped" }
+func (droppedRealtimeFunctionTool) Name() string        { return "dropped" }
+func (droppedRealtimeFunctionTool) Description() string { return "dropped function" }
+func (droppedRealtimeFunctionTool) Parameters() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties":           map[string]any{},
+	}
+}
+func (droppedRealtimeFunctionTool) Execute(context.Context, string) (string, error) { return "", nil }
+
 type openAIRealtimeProviderTestTool struct {
 	requestTestTool
 }
