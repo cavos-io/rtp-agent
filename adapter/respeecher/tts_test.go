@@ -282,6 +282,35 @@ func TestRespeecherTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	}
 }
 
+func TestRespeecherTTSProviderCloseClosesActiveStreams(t *testing.T) {
+	cancelled := false
+	closeCalls := 0
+	provider := NewRespeecherTTS("test-key", "")
+	stream := &respeecherTTSSynthesizeStream{
+		cancel:    func() { cancelled = true },
+		provider:  provider,
+		contextID: "ctx-1",
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if !cancelled {
+		t.Fatal("cancel not called after provider Close")
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushText after provider Close error = %v, want closed stream error", err)
+	}
+}
+
 func TestRespeecherTTSAudioFromStreamMessage(t *testing.T) {
 	audio, done, err := respeecherTTSAudioFromStreamMessage([]byte(`{"context_id":"ctx-1","type":"chunk","data":"`+base64.StdEncoding.EncodeToString([]byte{1, 2, 3, 4})+`"}`), "ctx-1", 24000)
 	if err != nil {

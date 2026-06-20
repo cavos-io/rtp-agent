@@ -34,6 +34,8 @@ var defaultRespeecherVoices = map[string]string{
 }
 
 type RespeecherTTS struct {
+	mu             sync.Mutex
+	streams        map[*respeecherTTSSynthesizeStream]struct{}
 	apiKey         string
 	baseURL        string
 	model          string
@@ -91,6 +93,7 @@ func NewRespeecherTTS(apiKey string, voiceID string, opts ...RespeecherTTSOption
 		apiKey = os.Getenv("RESPEECHER_API_KEY")
 	}
 	provider := &RespeecherTTS{
+		streams:    make(map[*respeecherTTSSynthesizeStream]struct{}),
 		apiKey:     apiKey,
 		baseURL:    defaultRespeecherBaseURL,
 		model:      defaultRespeecherModel,
@@ -121,6 +124,46 @@ func (t *RespeecherTTS) Capabilities() tts.TTSCapabilities {
 }
 func (t *RespeecherTTS) SampleRate() int  { return t.sampleRate }
 func (t *RespeecherTTS) NumChannels() int { return 1 }
+
+func (t *RespeecherTTS) Close() error {
+	t.mu.Lock()
+	streams := make([]*respeecherTTSSynthesizeStream, 0, len(t.streams))
+	for stream := range t.streams {
+		streams = append(streams, stream)
+	}
+	t.streams = make(map[*respeecherTTSSynthesizeStream]struct{})
+	t.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
+func (t *RespeecherTTS) registerStream(stream *respeecherTTSSynthesizeStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	if t.streams == nil {
+		t.streams = make(map[*respeecherTTSSynthesizeStream]struct{})
+	}
+	t.streams[stream] = struct{}{}
+	stream.provider = t
+	t.mu.Unlock()
+}
+
+func (t *RespeecherTTS) unregisterStream(stream *respeecherTTSSynthesizeStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	delete(t.streams, stream)
+	t.mu.Unlock()
+}
 
 func (t *RespeecherTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if err := validateRespeecherAPIKey(t.apiKey); err != nil {
@@ -191,6 +234,7 @@ func (t *RespeecherTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 	}
 	stream.writeMessage = stream.writeWebsocketMessage
 	stream.closeConn = stream.closeWebsocketConn
+	t.registerStream(stream)
 	go stream.readLoop()
 	return stream, nil
 }
@@ -332,8 +376,14 @@ func (s *respeecherTTSSynthesizeStream) Close() error {
 	}
 	s.closed = true
 	s.cancel()
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.closeConnection()
+	if s.conn != nil {
+		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	}
+	err := s.closeConnection()
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
+	return err
 }
 
 func (s *respeecherTTSSynthesizeStream) writeMessageData(message []byte) error {
@@ -355,6 +405,9 @@ func (s *respeecherTTSSynthesizeStream) closeConnection() error {
 }
 
 func (s *respeecherTTSSynthesizeStream) closeWebsocketConn() error {
+	if s.conn == nil {
+		return nil
+	}
 	return s.conn.Close()
 }
 
@@ -365,6 +418,9 @@ func (s *respeecherTTSSynthesizeStream) closeAfterWriteFailureLocked() {
 	s.closed = true
 	s.cancel()
 	_ = s.closeConnection()
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
 }
 
 func (s *respeecherTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
