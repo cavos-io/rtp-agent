@@ -194,9 +194,11 @@ func marshalTENTranscript(role string, text string, final bool, streamID string,
 	}
 	return json.Marshal(map[string]any{
 		"data_type": "transcribe",
+		"type":      "transcribe",
 		"role":      role,
 		"text":      text,
 		"text_ts":   createdAt.UnixMilli(),
+		"ts":        createdAt.UnixMilli(),
 		"is_final":  final,
 		"stream_id": transcriptStreamIDValue(streamID),
 	})
