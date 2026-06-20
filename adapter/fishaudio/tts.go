@@ -40,6 +40,8 @@ type FishAudioTTS struct {
 	sampleRate   int
 	latencyMode  string
 	chunkLength  int
+	mu           sync.Mutex
+	streams      map[*fishAudioTTSSynthesizeStream]struct{}
 }
 
 type FishAudioTTSOption func(*FishAudioTTS)
@@ -120,6 +122,7 @@ func NewFishAudioTTS(apiKey string, voice string, opts ...FishAudioTTSOption) *F
 		sampleRate:   defaultFishAudioSampleRate(defaultFishAudioFormat),
 		latencyMode:  defaultFishAudioLatencyMode,
 		chunkLength:  defaultFishAudioChunkLength,
+		streams:      make(map[*fishAudioTTSSynthesizeStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -149,6 +152,27 @@ func (t *FishAudioTTS) SampleRate() int  { return t.sampleRate }
 func (t *FishAudioTTS) NumChannels() int { return 1 }
 func (t *FishAudioTTS) Model() string    { return t.model }
 func (t *FishAudioTTS) Provider() string { return "FishAudio" }
+
+func (t *FishAudioTTS) Close() error {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	streams := make([]*fishAudioTTSSynthesizeStream, 0, len(t.streams))
+	for stream := range t.streams {
+		streams = append(streams, stream)
+	}
+	t.streams = make(map[*fishAudioTTSSynthesizeStream]struct{})
+	t.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
 
 func (t *FishAudioTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if err := validateFishAudioAPIKey(t.apiKey); err != nil {
@@ -272,6 +296,7 @@ func (t *FishAudioTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error)
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &fishAudioTTSSynthesizeStream{
+		owner:      t,
 		conn:       conn,
 		ctx:        streamCtx,
 		cancel:     cancel,
@@ -282,8 +307,34 @@ func (t *FishAudioTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error)
 	}
 	stream.writeMessage = stream.writeWebsocketMessage
 	stream.closeConn = stream.closeWebsocketConn
+	t.registerStream(stream)
 	go stream.readLoop()
 	return stream, nil
+}
+
+func (t *FishAudioTTS) registerStream(stream *fishAudioTTSSynthesizeStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.streams == nil {
+		t.streams = make(map[*fishAudioTTSSynthesizeStream]struct{})
+	}
+	t.streams[stream] = struct{}{}
+	stream.owner = t
+}
+
+func (t *FishAudioTTS) unregisterStream(stream *fishAudioTTSSynthesizeStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.streams, stream)
+	if stream.owner == t {
+		stream.owner = nil
+	}
 }
 
 type fishaudioTTSChunkedStream struct {
@@ -321,6 +372,7 @@ func (s *fishaudioTTSChunkedStream) Close() error {
 }
 
 type fishAudioTTSSynthesizeStream struct {
+	owner      *FishAudioTTS
 	conn       *websocket.Conn
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -379,12 +431,20 @@ func (s *fishAudioTTSSynthesizeStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	s.cancel()
+	if s.cancel != nil {
+		s.cancel()
+	}
 	if stopMessage, err := buildFishAudioTTSSimpleEvent("stop"); err == nil {
 		_ = s.writeMessageData(websocket.BinaryMessage, stopMessage)
 	}
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.closeConnection()
+	if s.conn != nil {
+		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	}
+	err := s.closeConnection()
+	if s.owner != nil {
+		s.owner.unregisterStream(s)
+	}
+	return err
 }
 
 func (s *fishAudioTTSSynthesizeStream) writeMessageData(messageType int, data []byte) error {
@@ -406,6 +466,9 @@ func (s *fishAudioTTSSynthesizeStream) closeConnection() error {
 }
 
 func (s *fishAudioTTSSynthesizeStream) closeWebsocketConn() error {
+	if s.conn == nil {
+		return nil
+	}
 	return s.conn.Close()
 }
 
@@ -414,8 +477,13 @@ func (s *fishAudioTTSSynthesizeStream) closeAfterWriteFailureLocked() {
 		return
 	}
 	s.closed = true
-	s.cancel()
+	if s.cancel != nil {
+		s.cancel()
+	}
 	_ = s.closeConnection()
+	if s.owner != nil {
+		s.owner.unregisterStream(s)
+	}
 }
 
 func (s *fishAudioTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
