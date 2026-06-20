@@ -522,6 +522,21 @@ func (a *AgentActivity) Interrupt(force bool) error {
 }
 
 func (a *AgentActivity) interrupt(force bool, cancelPreemptive bool) error {
+	interrupted, err := a.interruptHandles(force, cancelPreemptive)
+	if err != nil {
+		return err
+	}
+
+	for _, speech := range interrupted {
+		if err := speech.Wait(a.ctx); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (a *AgentActivity) interruptHandles(force bool, cancelPreemptive bool) ([]*SpeechHandle, error) {
 	if cancelPreemptive {
 		a.cancelPreemptiveGeneration()
 	}
@@ -531,14 +546,14 @@ func (a *AgentActivity) interrupt(force bool, cancelPreemptive bool) error {
 	if a.currentSpeech != nil {
 		if err := a.currentSpeech.Interrupt(force); err != nil {
 			a.queueMu.Unlock()
-			return err
+			return nil, err
 		}
 		interrupted = append(interrupted, a.currentSpeech)
 	}
 	for _, queued := range a.speechQueue {
 		if err := queued.speech.Interrupt(force); err != nil {
 			a.queueMu.Unlock()
-			return err
+			return nil, err
 		}
 		interrupted = append(interrupted, queued.speech)
 	}
@@ -550,18 +565,12 @@ func (a *AgentActivity) interrupt(force bool, cancelPreemptive bool) error {
 		a.Session.mu.Unlock()
 		if interrupter, ok := assistant.(realtimeInterrupter); ok {
 			if err := interrupter.Interrupt(); err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
 
-	for _, speech := range interrupted {
-		if err := speech.Wait(a.ctx); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return interrupted, nil
 }
 
 func (a *AgentActivity) WaitForInactive(ctx context.Context) error {
@@ -2204,11 +2213,9 @@ func (a *AgentActivity) interruptByAudioActivity(reason string, key string, valu
 	if a.pauseSpeechForFalseInterruption(ignoreUserTranscriptUntil) {
 		return
 	}
-	go func() {
-		if err := a.interrupt(false, false); err != nil {
-			logger.Logger.Warnw("failed to interrupt speech for "+reason, err, key, value)
-		}
-	}()
+	if _, err := a.interruptHandles(false, false); err != nil {
+		logger.Logger.Warnw("failed to interrupt speech for "+reason, err, key, value)
+	}
 }
 
 func (a *AgentActivity) pauseSpeechForFalseInterruption(ignoreUserTranscriptUntil time.Time) bool {

@@ -1161,6 +1161,48 @@ func TestAgentActivityVADInferenceDoneIgnoresAfterBackchannelBoundaryExpires(t *
 	waitForInterrupted(t, current)
 }
 
+func TestAgentActivityAudioInterruptionAppliesBeforeReturning(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:           TurnDetectionModeVAD,
+		MinInterruptionDuration: 0.05,
+	})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	defer current.MarkDone()
+
+	activity.queueMu.Lock()
+	returned := make(chan struct{})
+	go func() {
+		activity.OnVADInferenceDone(&vad.VADEvent{
+			Type:                  vad.VADEventInferenceDone,
+			SpeechDuration:        0.06,
+			Speaking:              true,
+			RawAccumulatedSilence: 0,
+		})
+		close(returned)
+	}()
+
+	select {
+	case <-returned:
+		activity.queueMu.Unlock()
+		t.Fatal("OnVADInferenceDone returned before applying interruption")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	activity.queueMu.Unlock()
+	select {
+	case <-returned:
+	case <-testTimeout():
+		t.Fatal("OnVADInferenceDone did not return after queue lock released")
+	}
+	if !current.IsInterrupted() {
+		t.Fatal("current speech was not interrupted before OnVADInferenceDone returned")
+	}
+}
+
 func TestAgentActivityVADInferenceDoneIgnoresWithoutBackchannelBoundaryStart(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}
