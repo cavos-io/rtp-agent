@@ -302,6 +302,9 @@ func TestInworldTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "closed") {
 		t.Fatalf("PushText after provider Close error = %v, want closed stream error", err)
 	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after provider Close error = %T %v, want EOF", err, err)
+	}
 }
 
 func TestInworldTTSAudioFromReferenceResponses(t *testing.T) {

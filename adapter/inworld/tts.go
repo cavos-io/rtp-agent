@@ -560,7 +560,9 @@ func (s *inworldTTSSynthesizeStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	s.cancel()
+	if s.cancel != nil {
+		s.cancel()
+	}
 	if s.provider != nil {
 		defer s.provider.unregisterStream(s)
 	}
@@ -611,6 +613,9 @@ func (s *inworldTTSSynthesizeStream) closeAfterWriteFailureLocked() {
 }
 
 func (s *inworldTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.isClosed() {
+		return nil, io.EOF
+	}
 	select {
 	case event, ok := <-s.events:
 		if !ok {
@@ -625,8 +630,17 @@ func (s *inworldTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	case err := <-s.errCh:
 		return nil, err
 	case <-s.ctx.Done():
+		if s.isClosed() {
+			return nil, io.EOF
+		}
 		return nil, s.ctx.Err()
 	}
+}
+
+func (s *inworldTTSSynthesizeStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func (s *inworldTTSSynthesizeStream) readLoop() {
