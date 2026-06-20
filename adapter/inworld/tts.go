@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/gorilla/websocket"
@@ -35,6 +36,8 @@ const (
 	defaultInworldTimestampTransportStrategy = "ASYNC"
 	defaultInworldBufferCharThreshold        = 120
 	defaultInworldMaxBufferDelayMS           = 3000
+	inworldTTSSendTextChunkLimit             = 1000
+	inworldTTSMaxResponseLineBytes           = 16 * 1024 * 1024
 )
 
 type InworldTTS struct {
@@ -229,6 +232,17 @@ func (t *InworldTTS) Capabilities() tts.TTSCapabilities {
 func (t *InworldTTS) SampleRate() int  { return t.sampleRate }
 func (t *InworldTTS) NumChannels() int { return 1 }
 
+func (t *InworldTTS) UpdateOptions(opts ...InworldTTSOption) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, opt := range opts {
+		opt(t)
+	}
+}
+
 func (t *InworldTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	req, err := buildInworldTTSRequest(ctx, t, text)
 	if err != nil {
@@ -236,19 +250,18 @@ func (t *InworldTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("inworld tts error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("Inworld TTS request failed", resp.StatusCode, req.Header.Get("X-Request-Id"), string(respBody))
 	}
 	return &inworldTTSChunkedStream{resp: resp, sampleRate: t.sampleRate}, nil
 }
 
 func buildInworldTTSRequest(ctx context.Context, t *InworldTTS, text string) (*http.Request, error) {
-	payload := inworldTTSBasePayload(t)
-	payload["text"] = text
+	payload := inworldTTSRequestPayload(t, text)
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -266,10 +279,16 @@ func buildInworldTTSRequest(ctx context.Context, t *InworldTTS, text string) (*h
 	return req, nil
 }
 
+func inworldTTSRequestPayload(t *InworldTTS, text string) map[string]interface{} {
+	payload := inworldTTSBasePayload(t)
+	payload["text"] = text
+	return payload
+}
+
 func (t *InworldTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildInworldTTSWebsocketURL(t), buildInworldTTSWebsocketHeaders(t))
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial inworld tts websocket: %w", err)
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial inworld tts websocket: %v", err))
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &inworldTTSSynthesizeStream{
@@ -358,6 +377,10 @@ func buildInworldTTSWebsocketHeaders(t *InworldTTS) http.Header {
 func buildInworldTTSCreateMessage(t *InworldTTS, contextID string) ([]byte, error) {
 	create := inworldTTSBasePayload(t)
 	delete(create, "text")
+	if audioConfig, ok := create["audioConfig"].(map[string]interface{}); ok {
+		delete(audioConfig, "temperature")
+	}
+	create["temperature"] = t.temperature
 	create["bufferCharThreshold"] = t.bufferCharThreshold
 	create["maxBufferDelayMs"] = t.maxBufferDelayMS
 	create["autoMode"] = true
@@ -397,8 +420,8 @@ func inworldTTSBasePayload(t *InworldTTS) map[string]interface{} {
 			"sampleRateHertz": t.sampleRate,
 			"bitrate":         t.bitRate,
 			"speakingRate":    t.speakingRate,
+			"temperature":     t.temperature,
 		},
-		"temperature":                t.temperature,
 		"timestampTransportStrategy": t.timestampTransportStrategy,
 	}
 	if t.language != "" {
@@ -428,6 +451,7 @@ func (s *inworldTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	if s.scanner == nil {
 		s.scanner = bufio.NewScanner(s.resp.Body)
+		s.scanner.Buffer(make([]byte, 0, 64*1024), inworldTTSMaxResponseLineBytes)
 	}
 	for s.scanner.Scan() {
 		line := bytes.TrimSpace(s.scanner.Bytes())
@@ -502,19 +526,21 @@ func (s *inworldTTSSynthesizeStream) Flush() error {
 	if s.closed {
 		return fmt.Errorf("inworld tts stream is closed")
 	}
-	text := strings.TrimSpace(s.pendingText.String())
+	text := s.pendingText.String()
 	s.pendingText.Reset()
 	if s.conn == nil && s.writeMessage == nil {
 		return nil
 	}
 	if text != "" {
-		message, err := buildInworldTTSSendTextMessage(s.contextID, text)
-		if err != nil {
-			return err
-		}
-		if err := s.writeMessageData(websocket.TextMessage, message); err != nil {
-			s.closeAfterWriteFailureLocked()
-			return err
+		for _, chunk := range inworldTTSChunkText(text, inworldTTSSendTextChunkLimit) {
+			message, err := buildInworldTTSSendTextMessage(s.contextID, chunk)
+			if err != nil {
+				return err
+			}
+			if err := s.writeMessageData(websocket.TextMessage, message); err != nil {
+				s.closeAfterWriteFailureLocked()
+				return err
+			}
 		}
 	}
 	message, err := buildInworldTTSFlushMessage(s.contextID)
@@ -528,6 +554,28 @@ func (s *inworldTTSSynthesizeStream) Flush() error {
 	return nil
 }
 
+func inworldTTSChunkText(text string, limit int) []string {
+	if text == "" {
+		return nil
+	}
+	if limit <= 0 {
+		return []string{text}
+	}
+	chunks := make([]string, 0, (len([]rune(text))+limit-1)/limit)
+	start := 0
+	count := 0
+	for i := range text {
+		if count == limit {
+			chunks = append(chunks, text[start:i])
+			start = i
+			count = 0
+		}
+		count++
+	}
+	chunks = append(chunks, text[start:])
+	return chunks
+}
+
 func (s *inworldTTSSynthesizeStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -535,7 +583,9 @@ func (s *inworldTTSSynthesizeStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	s.cancel()
+	if s.cancel != nil {
+		s.cancel()
+	}
 	if s.provider != nil {
 		defer s.provider.unregisterStream(s)
 	}
@@ -586,6 +636,9 @@ func (s *inworldTTSSynthesizeStream) closeAfterWriteFailureLocked() {
 }
 
 func (s *inworldTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.isClosed() {
+		return nil, io.EOF
+	}
 	select {
 	case event, ok := <-s.events:
 		if !ok {
@@ -600,8 +653,17 @@ func (s *inworldTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	case err := <-s.errCh:
 		return nil, err
 	case <-s.ctx.Done():
+		if s.isClosed() {
+			return nil, io.EOF
+		}
 		return nil, s.ctx.Err()
 	}
+}
+
+func (s *inworldTTSSynthesizeStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func (s *inworldTTSSynthesizeStream) readLoop() {
@@ -666,7 +728,7 @@ func inworldTTSAudioFromResponseLine(payload []byte, sampleRate int) (*tts.Synth
 		return nil, false, err
 	}
 	if message.Error != nil {
-		return nil, false, fmt.Errorf("inworld tts error: %s", message.Error.Message)
+		return nil, false, llm.NewAPIStatusError(message.Error.Message, message.Error.Code, "", nil)
 	}
 	if message.Result.AudioContent == "" {
 		return nil, false, nil
@@ -715,10 +777,10 @@ func inworldTTSAudioFromWebsocketMessageWithOffset(payload []byte, contextID str
 		return nil, false, false, 0, err
 	}
 	if message.Error != nil {
-		return nil, false, false, 0, fmt.Errorf("inworld tts error: %s", message.Error.Message)
+		return nil, false, false, 0, llm.NewAPIStatusError(message.Error.Message, message.Error.Code, "", nil)
 	}
 	if message.Result.Status != nil && message.Result.Status.Code != 0 {
-		return nil, false, false, 0, fmt.Errorf("inworld tts error: %s", message.Result.Status.Message)
+		return nil, false, false, 0, llm.NewAPIStatusError(message.Result.Status.Message, message.Result.Status.Code, "", nil)
 	}
 	if message.Result.ContextID != "" && message.Result.ContextID != contextID {
 		return nil, false, false, 0, nil

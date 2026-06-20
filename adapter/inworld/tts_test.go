@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -103,6 +104,57 @@ func TestInworldTTSOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestInworldTTSUpdateOptionsAffectFutureRequests(t *testing.T) {
+	provider := NewInworldTTS("test-key", "")
+	provider.UpdateOptions(
+		WithInworldTTSVoice("Luna"),
+		WithInworldTTSModel("inworld-tts-2"),
+		WithInworldTTSEncoding("MP3"),
+		WithInworldTTSBitRate(96000),
+		WithInworldTTSSampleRate(44100),
+		WithInworldTTSSpeakingRate(1.2),
+		WithInworldTTSTemperature(0.4),
+		WithInworldTTSLanguage("fr-FR"),
+		WithInworldTTSTimestampType("WORD"),
+		WithInworldTTSTextNormalization(false),
+		WithInworldTTSDeliveryMode("CREATIVE"),
+		WithInworldTTSTimestampTransportStrategy("SYNC"),
+		WithInworldTTSBufferCharThreshold(333),
+		WithInworldTTSMaxBufferDelayMS(444),
+	)
+
+	payload := inworldTTSRequestPayload(provider, "bonjour")
+	assertInworldPayload(t, payload, "voiceId", "Luna")
+	assertInworldPayload(t, payload, "modelId", "inworld-tts-2")
+	assertInworldPayload(t, payload, "language", "fr-FR")
+	assertInworldPayload(t, payload, "timestampType", "WORD")
+	assertInworldPayload(t, payload, "applyTextNormalization", "OFF")
+	assertInworldPayload(t, payload, "deliveryMode", "CREATIVE")
+	assertInworldPayload(t, payload, "timestampTransportStrategy", "SYNC")
+	audioConfig := payload["audioConfig"].(map[string]interface{})
+	if audioConfig["audioEncoding"] != "MP3" {
+		t.Fatalf("audioEncoding = %#v, want MP3", audioConfig["audioEncoding"])
+	}
+	if audioConfig["bitrate"] != 96000 {
+		t.Fatalf("bitrate = %#v, want 96000", audioConfig["bitrate"])
+	}
+	if audioConfig["sampleRateHertz"] != 44100 {
+		t.Fatalf("sampleRateHertz = %#v, want 44100", audioConfig["sampleRateHertz"])
+	}
+	if audioConfig["speakingRate"] != 1.2 {
+		t.Fatalf("speakingRate = %#v, want 1.2", audioConfig["speakingRate"])
+	}
+	if audioConfig["temperature"] != 0.4 {
+		t.Fatalf("temperature = %#v, want 0.4", audioConfig["temperature"])
+	}
+	if provider.bufferCharThreshold != 333 {
+		t.Fatalf("bufferCharThreshold = %d, want 333", provider.bufferCharThreshold)
+	}
+	if provider.maxBufferDelayMS != 444 {
+		t.Fatalf("maxBufferDelayMS = %d, want 444", provider.maxBufferDelayMS)
+	}
+}
+
 func TestInworldTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	provider := NewInworldTTS("test-key", "",
 		WithInworldTTSVoice("Ava"),
@@ -150,6 +202,51 @@ func TestInworldTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	}
 }
 
+func TestInworldTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: inworldRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader(`{"message":"rate limited"}`)),
+		}, nil
+	})}
+	defer func() { http.DefaultClient = originalClient }()
+
+	provider := NewInworldTTS("test-key", "")
+	_, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("Synthesize error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	if !strings.Contains(statusErr.Error(), "rate limited") {
+		t.Fatalf("status error = %v, want provider body", statusErr)
+	}
+}
+
+func TestInworldTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: inworldRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("dial failed")
+	})}
+	defer func() { http.DefaultClient = originalClient }()
+
+	provider := NewInworldTTS("test-key", "")
+	_, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("Synthesize error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestInworldTTSWebsocketURLAndHeadersMatchReference(t *testing.T) {
 	provider := NewInworldTTS("test-key", "", WithInworldTTSWebsocketURL("wss://inworld.example/"))
 
@@ -170,6 +267,7 @@ func TestInworldTTSWebsocketMessagesMatchReference(t *testing.T) {
 		WithInworldTTSVoice("Ava"),
 		WithInworldTTSModel("inworld-tts-2"),
 		WithInworldTTSLanguage("en-US"),
+		WithInworldTTSTemperature(0.7),
 		WithInworldTTSBufferCharThreshold(120),
 		WithInworldTTSMaxBufferDelayMS(500),
 	)
@@ -187,6 +285,13 @@ func TestInworldTTSWebsocketMessagesMatchReference(t *testing.T) {
 	assertInworldPayload(t, create, "voiceId", "Ava")
 	assertInworldPayload(t, create, "modelId", "inworld-tts-2")
 	assertInworldPayload(t, create, "language", "en-US")
+	if create["temperature"] != 0.7 {
+		t.Fatalf("temperature = %#v, want top-level websocket temperature 0.7", create["temperature"])
+	}
+	audioConfig := create["audioConfig"].(map[string]any)
+	if _, ok := audioConfig["temperature"]; ok {
+		t.Fatalf("audioConfig.temperature = %#v, want websocket temperature at top level", audioConfig["temperature"])
+	}
 	if create["autoMode"] != true {
 		t.Fatalf("autoMode = %#v, want true", create["autoMode"])
 	}
@@ -228,6 +333,18 @@ func TestInworldTTSWebsocketMessagesMatchReference(t *testing.T) {
 	}
 	if _, ok := closePayload["close_context"].(map[string]any); !ok {
 		t.Fatalf("close_context missing from %#v", closePayload)
+	}
+}
+
+func TestInworldTTSStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
+	provider := NewInworldTTS("test-key", "", WithInworldTTSWebsocketURL("://bad"))
+	_, err := provider.Stream(context.Background())
+	if err == nil {
+		t.Fatal("Stream error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
@@ -302,6 +419,9 @@ func TestInworldTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "closed") {
 		t.Fatalf("PushText after provider Close error = %v, want closed stream error", err)
 	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after provider Close error = %T %v, want EOF", err, err)
+	}
 }
 
 func TestInworldTTSAudioFromReferenceResponses(t *testing.T) {
@@ -334,6 +454,26 @@ func TestInworldTTSAudioFromReferenceResponses(t *testing.T) {
 
 	if _, _, err := inworldTTSAudioFromResponseLine([]byte(`{"error":{"code":3,"message":"bad text"}}`), 24000); err == nil {
 		t.Fatal("error response returned nil error, want API error")
+	} else {
+		var statusErr *llm.APIStatusError
+		if !errors.As(err, &statusErr) {
+			t.Fatalf("error response = %T %v, want APIStatusError", err, err)
+		}
+		if statusErr.StatusCode != 3 {
+			t.Fatalf("status code = %d, want provider code 3", statusErr.StatusCode)
+		}
+	}
+
+	if _, _, err := inworldTTSAudioFromWebsocketMessage([]byte(`{"error":{"code":7,"message":"voice unavailable"}}`), "ctx-1", 24000); err == nil {
+		t.Fatal("websocket error response returned nil error, want API error")
+	} else {
+		var statusErr *llm.APIStatusError
+		if !errors.As(err, &statusErr) {
+			t.Fatalf("websocket error response = %T %v, want APIStatusError", err, err)
+		}
+		if statusErr.StatusCode != 7 {
+			t.Fatalf("websocket status code = %d, want provider code 7", statusErr.StatusCode)
+		}
 	}
 }
 
@@ -479,6 +619,23 @@ func TestInworldTTSChunkedStreamDecodesReferenceJSONLines(t *testing.T) {
 	}
 }
 
+func TestInworldTTSChunkedStreamDecodesLargeReferenceJSONLine(t *testing.T) {
+	audioContent := strings.Repeat("AQID", 20000)
+	body := []byte("{\"result\":{\"audioContent\":\"" + audioContent + "\"}}\n")
+	stream := &inworldTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(body))},
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if len(audio.Frame.Data) != 60000 {
+		t.Fatalf("audio data length = %d, want decoded large audio chunk", len(audio.Frame.Data))
+	}
+}
+
 func TestInworldTTSChunkedStreamSkipsMalformedReferenceJSONLines(t *testing.T) {
 	stream := &inworldTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte("not-json\n{\"result\":{\"audioContent\":\"AQI=\"}}\n")))},
@@ -545,8 +702,118 @@ func TestInworldTTSStreamBuffersTextUntilFlush(t *testing.T) {
 	}
 }
 
+func TestInworldTTSStreamPreservesWhitespaceOnFlush(t *testing.T) {
+	var sent [][]byte
+	stream := &inworldTTSSynthesizeStream{
+		contextID: "ctx-1",
+		writeMessage: func(_ int, payload []byte) error {
+			sent = append(sent, bytes.Clone(payload))
+			return nil
+		},
+	}
+
+	const text = "  hello world  "
+	if err := stream.PushText(text); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+
+	if len(sent) != 2 {
+		t.Fatalf("sent messages = %d, want send_text and flush", len(sent))
+	}
+	if got := inworldTTSTestSendText(t, sent[0]); got != text {
+		t.Fatalf("send_text = %q, want exact buffered text %q", got, text)
+	}
+}
+
+func TestInworldTTSStreamChunksLongTextOnFlush(t *testing.T) {
+	var sent [][]byte
+	stream := &inworldTTSSynthesizeStream{
+		contextID: "ctx-1",
+		writeMessage: func(_ int, payload []byte) error {
+			sent = append(sent, bytes.Clone(payload))
+			return nil
+		},
+	}
+
+	text := strings.Repeat("a", 2505)
+	if err := stream.PushText(text); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+
+	if len(sent) != 4 {
+		t.Fatalf("sent messages = %d, want 3 text chunks and flush", len(sent))
+	}
+	for i, wantLen := range []int{1000, 1000, 505} {
+		gotText := inworldTTSTestSendText(t, sent[i])
+		if len(gotText) != wantLen {
+			t.Fatalf("send_text chunk %d length = %d, want %d", i, len(gotText), wantLen)
+		}
+	}
+	var flush map[string]any
+	if err := json.Unmarshal(sent[3], &flush); err != nil {
+		t.Fatalf("decode flush message: %v", err)
+	}
+	if _, ok := flush["flush_context"]; !ok {
+		t.Fatalf("last message = %#v, want flush_context", flush)
+	}
+}
+
+func TestInworldTTSStreamChunksLongUnicodeTextByRune(t *testing.T) {
+	var sent [][]byte
+	stream := &inworldTTSSynthesizeStream{
+		contextID: "ctx-1",
+		writeMessage: func(_ int, payload []byte) error {
+			sent = append(sent, bytes.Clone(payload))
+			return nil
+		},
+	}
+
+	text := strings.Repeat("界", 1001)
+	if err := stream.PushText(text); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+
+	if len(sent) != 3 {
+		t.Fatalf("sent messages = %d, want 2 text chunks and flush", len(sent))
+	}
+	first := inworldTTSTestSendText(t, sent[0])
+	if got := len([]rune(first)); got != 1000 {
+		t.Fatalf("first send_text rune length = %d, want 1000", got)
+	}
+	second := inworldTTSTestSendText(t, sent[1])
+	if got := len([]rune(second)); got != 1 {
+		t.Fatalf("second send_text rune length = %d, want 1", got)
+	}
+}
+
 func TestInworldTTSImplementsInterface(t *testing.T) {
 	var _ tts.TTS = NewInworldTTS("test-key", "")
+}
+
+func inworldTTSTestSendText(t *testing.T, payload []byte) string {
+	t.Helper()
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		t.Fatalf("decode send_text message: %v", err)
+	}
+	sendText, ok := message["send_text"].(map[string]any)
+	if !ok {
+		t.Fatalf("message = %#v, want send_text", message)
+	}
+	text, ok := sendText["text"].(string)
+	if !ok {
+		t.Fatalf("send_text = %#v, want text string", sendText)
+	}
+	return text
 }
 
 func assertInworldPayload(t *testing.T, payload map[string]any, key string, want string) {
@@ -567,4 +834,10 @@ func (b *inworldCloseCountBody) Close() error {
 		return errors.New("closed twice")
 	}
 	return nil
+}
+
+type inworldRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f inworldRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }

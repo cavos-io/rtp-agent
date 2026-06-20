@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
@@ -144,6 +145,48 @@ func TestInworldSTTOptionsBuildReferenceConfigURLAndHeaders(t *testing.T) {
 	headers := buildInworldSTTHeaders(provider)
 	if headers.Get("Authorization") != "Basic test-key" {
 		t.Fatalf("authorization = %q, want basic key", headers.Get("Authorization"))
+	}
+}
+
+func TestInworldSTTStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
+	provider := NewInworldSTT("test-key", WithInworldSTTBaseURL("://bad"))
+	_, err := provider.Stream(context.Background(), "")
+	if err == nil {
+		t.Fatal("Stream error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestInworldSTTUpdateOptionsAffectFutureStreamConfig(t *testing.T) {
+	provider := NewInworldSTT("test-key")
+	provider.UpdateOptions(
+		WithInworldSTTModel("soniox/stt-rt-v4"),
+		WithInworldSTTLanguage("fr-FR"),
+		WithInworldSTTVoiceProfile(false),
+		WithInworldSTTVoiceProfileTopN(4),
+		WithInworldSTTVADThreshold(0.55),
+		WithInworldSTTMinEndOfTurnSilenceWhenConfident(350),
+		WithInworldSTTEndOfTurnConfidenceThreshold(0.8),
+	)
+
+	config := buildInworldSTTTranscribeConfig(provider, "")
+	assertInworldConfig(t, config, "modelId", "soniox/stt-rt-v4")
+	assertInworldConfig(t, config, "language", "fr-FR")
+	if _, ok := config["voiceProfileConfig"]; ok {
+		t.Fatalf("voiceProfileConfig present after disabled update: %#v", config["voiceProfileConfig"])
+	}
+	if config["endOfTurnConfidenceThreshold"] != 0.8 {
+		t.Fatalf("endOfTurnConfidenceThreshold = %#v, want 0.8", config["endOfTurnConfidenceThreshold"])
+	}
+	inworldV1 := config["inworldSttV1Config"].(map[string]any)
+	if inworldV1["vadThreshold"] != 0.55 {
+		t.Fatalf("vadThreshold = %#v, want 0.55", inworldV1["vadThreshold"])
+	}
+	if inworldV1["minEndOfTurnSilenceWhenConfident"] != 350 {
+		t.Fatalf("minEndOfTurnSilenceWhenConfident = %#v, want 350", inworldV1["minEndOfTurnSilenceWhenConfident"])
 	}
 }
 
