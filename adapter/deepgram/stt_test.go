@@ -785,6 +785,22 @@ func TestDeepgramSTTEnglishOnlyModelFallsBackForNonEnglishLanguage(t *testing.T)
 	assertDeepgramQuery(t, englishURL.Query(), "model", "nova-2-meeting")
 }
 
+func TestDeepgramSTTUsesReferenceDefaultLanguageWhenCallLanguageOmitted(t *testing.T) {
+	provider := NewDeepgramSTT("test-key", "")
+
+	streamURL, err := url.Parse(buildDeepgramStreamURL(provider, ""))
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	assertDeepgramQuery(t, streamURL.Query(), "language", "en-US")
+
+	recognizeURL, err := url.Parse(buildDeepgramRecognizeURL(provider, ""))
+	if err != nil {
+		t.Fatalf("parse recognize url: %v", err)
+	}
+	assertDeepgramQuery(t, recognizeURL.Query(), "language", "en-US")
+}
+
 func TestDeepgramSTTAdvancedOptionsUseReferenceQueryParams(t *testing.T) {
 	provider := NewDeepgramSTT("test-key", "nova-2",
 		WithDeepgramSTTBaseURL("https://deepgram.example/v1/listen"),
@@ -940,10 +956,12 @@ func TestDeepgramSTTUpdateOptionsReconnectsActiveStream(t *testing.T) {
 	defer stream.Close()
 
 	firstURL := receiveDeepgramTestRequestURL(t, requests, "first websocket request")
+	assertDeepgramQuery(t, firstURL.Query(), "language", "en-US")
 	assertDeepgramQuery(t, firstURL.Query(), "interim_results", "true")
 	assertDeepgramQuery(t, firstURL.Query(), "endpointing", "25")
 
 	provider.UpdateOptions(
+		WithDeepgramSTTLanguage("id"),
 		WithDeepgramSTTInterimResults(false),
 		WithDeepgramSTTEndpointing(0),
 	)
@@ -957,6 +975,7 @@ func TestDeepgramSTTUpdateOptionsReconnectsActiveStream(t *testing.T) {
 	}
 
 	secondURL := receiveDeepgramTestRequestURL(t, requests, "updated websocket request")
+	assertDeepgramQuery(t, secondURL.Query(), "language", "id")
 	assertDeepgramQuery(t, secondURL.Query(), "interim_results", "false")
 	assertDeepgramQuery(t, secondURL.Query(), "endpointing", "false")
 	select {

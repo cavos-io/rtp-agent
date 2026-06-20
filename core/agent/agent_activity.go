@@ -285,6 +285,61 @@ func (a *AgentActivity) Start() {
 		a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
 	}
 	if a.Session != nil {
+		if pipeline, ok := a.Session.Assistant.(*PipelineAgent); ok {
+			if pipeline.LLM != nil && !sameProviderInstance(pipeline.LLM, a.Session.LLM) {
+				if collector, ok := pipeline.LLM.(llmMetricsCollector); ok {
+					unsubscribe := collector.OnMetricsCollected(func(metrics *telemetry.LLMMetrics) {
+						a.OnMetricsCollected(metrics)
+					})
+					a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+				}
+				if collector, ok := pipeline.LLM.(llmErrorCollector); ok {
+					llmSource := pipeline.LLM
+					unsubscribe := collector.OnError(func(err *llm.LLMError) {
+						a.OnError(err, llmSource)
+					})
+					a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+				}
+			}
+			if pipeline.tts != nil && !sameProviderInstance(pipeline.tts, a.Session.TTS) {
+				if collector, ok := pipeline.tts.(ttsMetricsCollector); ok {
+					unsubscribe := collector.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+						a.OnMetricsCollected(metrics)
+					})
+					a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+				}
+				if collector, ok := pipeline.tts.(ttsErrorCollector); ok {
+					ttsSource := pipeline.tts
+					unsubscribe := collector.OnError(func(err tts.TTSError) {
+						a.OnError(err, ttsSource)
+					})
+					a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+				}
+			}
+			if pipeline.stt != nil && !sameProviderInstance(pipeline.stt, a.Session.STT) {
+				if collector, ok := pipeline.stt.(sttMetricsCollector); ok {
+					unsubscribe := collector.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+						a.OnMetricsCollected(metrics)
+					})
+					a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+				}
+				if collector, ok := pipeline.stt.(sttErrorCollector); ok {
+					sttSource := pipeline.stt
+					unsubscribe := collector.OnError(func(err *stt.STTError) {
+						a.OnError(err, sttSource)
+					})
+					a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+				}
+			}
+			if pipeline.vad != nil && !sameProviderInstance(pipeline.vad, a.Session.VAD) {
+				unsubscribe := pipeline.vad.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
+					a.OnMetricsCollected(metrics)
+				})
+				a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+			}
+		}
+	}
+	if a.Session != nil {
 		a.Session.mu.Lock()
 		a.Session.onEnterDepth++
 		a.Session.mu.Unlock()
@@ -327,6 +382,21 @@ func (a *AgentActivity) Stop() {
 	if a.Agent.activity == a {
 		a.Agent.activity = nil
 	}
+}
+
+func sameProviderInstance(left, right any) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	leftValue := reflect.ValueOf(left)
+	rightValue := reflect.ValueOf(right)
+	if !leftValue.IsValid() || !rightValue.IsValid() || leftValue.Type() != rightValue.Type() {
+		return false
+	}
+	if !leftValue.Type().Comparable() {
+		return false
+	}
+	return leftValue.Interface() == rightValue.Interface()
 }
 
 func (a *AgentActivity) SchedulingPaused() bool {
@@ -2768,7 +2838,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		a.emitEOUMetrics(handle, info, hookDelay)
 		return handle, nil
 	}
-	if a.Agent.LLM == nil || a.Session == nil {
+	if !a.hasLLMModel() || a.Session == nil {
 		a.cancelPreemptiveGeneration()
 		return nil, nil
 	}
@@ -2859,7 +2929,7 @@ func (a *AgentActivity) shortInterruptionTranscript(transcript string) bool {
 	if a.Session == nil || a.Session.Options.MinInterruptionWords <= 0 {
 		return false
 	}
-	if a.Agent.STT == nil && a.Session.STT == nil {
+	if !a.hasSTTModel() {
 		return false
 	}
 	var wordCount int
@@ -2956,7 +3026,7 @@ func (a *AgentActivity) maybeStartPreemptiveGeneration(transcript string, confid
 	}
 	opts := a.Session.Options
 	mode := a.turnDetectionMode()
-	if !opts.PreemptiveGeneration || a.Agent.LLM == nil || mode == TurnDetectionModeManual || mode == TurnDetectionModeRealtimeLLM {
+	if !opts.PreemptiveGeneration || !a.hasLLMModel() || mode == TurnDetectionModeManual || mode == TurnDetectionModeRealtimeLLM {
 		return
 	}
 	a.queueMu.Lock()
@@ -3222,12 +3292,12 @@ func (a *AgentActivity) turnDetectionMode() TurnDetectionMode {
 	}
 	switch TurnDetectionMode(mode) {
 	case TurnDetectionModeSTT:
-		if (a.Agent == nil || a.Agent.STT == nil) && (a.Session == nil || a.Session.STT == nil) {
+		if !a.hasSTTModel() {
 			logger.Logger.Warnw("turn_detection is set to stt, but no STT model is provided", nil)
 			return ""
 		}
 	case TurnDetectionModeVAD:
-		if (a.Agent == nil || a.Agent.VAD == nil) && (a.Session == nil || a.Session.VAD == nil) {
+		if !a.hasVADModel() {
 			logger.Logger.Warnw("turn_detection is set to vad, but no VAD model is provided", nil)
 			return ""
 		}
@@ -3244,11 +3314,54 @@ func (a *AgentActivity) turnDetectionMode() TurnDetectionMode {
 }
 
 func (a *AgentActivity) hasVADModel() bool {
-	return a != nil && ((a.Agent != nil && a.Agent.VAD != nil) || (a.Session != nil && a.Session.VAD != nil))
+	if a == nil {
+		return false
+	}
+	if (a.Agent != nil && a.Agent.VAD != nil) || (a.Session != nil && a.Session.VAD != nil) {
+		return true
+	}
+	if a.Session == nil {
+		return false
+	}
+	assistant := a.Session.Assistant
+	if pipeline, ok := assistant.(*PipelineAgent); ok {
+		return pipeline.vad != nil
+	}
+	return false
 }
 
 func (a *AgentActivity) hasSTTModel() bool {
-	return a != nil && ((a.Agent != nil && a.Agent.STT != nil) || (a.Session != nil && a.Session.STT != nil))
+	if a == nil {
+		return false
+	}
+	if (a.Agent != nil && a.Agent.STT != nil) || (a.Session != nil && a.Session.STT != nil) {
+		return true
+	}
+	if a.Session == nil {
+		return false
+	}
+	assistant := a.Session.Assistant
+	if pipeline, ok := assistant.(*PipelineAgent); ok {
+		return pipeline.stt != nil
+	}
+	return false
+}
+
+func (a *AgentActivity) hasLLMModel() bool {
+	if a == nil {
+		return false
+	}
+	if (a.Agent != nil && a.Agent.LLM != nil) || (a.Session != nil && a.Session.LLM != nil) {
+		return true
+	}
+	if a.Session == nil {
+		return false
+	}
+	assistant := a.Session.Assistant
+	if pipeline, ok := assistant.(*PipelineAgent); ok {
+		return pipeline.LLM != nil
+	}
+	return false
 }
 
 func (a *AgentActivity) realtimeTurnDetectionCapabilities() (bool, bool) {

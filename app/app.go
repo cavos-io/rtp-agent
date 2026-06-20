@@ -2371,12 +2371,20 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		return azureSTTFromConfig(cfg)
 	case providerFal:
 		return falSTTFromConfig(cfg), nil
+	case providerGroq:
+		return groqSTTFromConfig(cfg)
 	case providerSpitch:
 		return spitch.NewSpitchSTT(cfg.SpitchAPIKey), nil
 	case providerDeepgram:
 		sttOpts := []deepgram.DeepgramSTTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTDetectLanguage {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTDetectLanguage(true))
 		}
 		if cfg.STTInterimResults != nil {
 			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTInterimResults(*cfg.STTInterimResults))
@@ -3321,6 +3329,23 @@ func falSTTFromConfig(cfg AppConfig) *fal.FalSTT {
 		sttOpts = append(sttOpts, fal.WithFalSTTVersion(cfg.STTVersion))
 	}
 	return fal.NewFalSTT(cfg.FalAPIKey, sttOpts...)
+}
+
+func groqSTTFromConfig(cfg AppConfig) (*groq.GroqSTT, error) {
+	sttOpts := []groq.GroqSTTOption{}
+	if cfg.STTBaseURL != "" {
+		sttOpts = append(sttOpts, groq.WithGroqSTTBaseURL(cfg.STTBaseURL))
+	}
+	if cfg.STTLanguage != "" {
+		sttOpts = append(sttOpts, groq.WithGroqSTTLanguage(cfg.STTLanguage))
+	}
+	if cfg.STTDetectLanguage {
+		sttOpts = append(sttOpts, groq.WithGroqSTTDetectLanguage(true))
+	}
+	if cfg.STTPrompt != "" {
+		sttOpts = append(sttOpts, groq.WithGroqSTTPrompt(cfg.STTPrompt))
+	}
+	return groq.NewGroqSTT(cfg.GroqAPIKey, cfg.STTModel, sttOpts...)
 }
 
 func configureTTSFallbacks(cfg AppConfig, a *agent.Agent) error {
@@ -4569,6 +4594,12 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTBaseURL(cfg.STTBaseURL))
 		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTDetectLanguage {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTDetectLanguage(true))
+		}
 		if cfg.STTInterimResults != nil {
 			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTInterimResults(*cfg.STTInterimResults))
 		}
@@ -5246,6 +5277,12 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.STT = assemblyai.NewAssemblyAISTT(os.Getenv("ASSEMBLYAI_API_KEY"), sttOpts...)
 	case providerCavos:
 		a.STT = ensureSTTStreaming(cavosSTTFromConfig(cfg), a.VAD)
+	case providerGroq:
+		provider, err := groqSTTFromConfig(cfg)
+		if err != nil {
+			return nil, err
+		}
+		a.STT = provider
 	case providerOpenAI:
 		sttOpts := []openai.OpenAISTTOption{openai.WithOpenAISTTRealtime(true)}
 		if cfg.STTLanguage != "" {

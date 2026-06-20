@@ -2296,6 +2296,25 @@ func TestPipelineAgentClearInputTranscriptionReplacesSTTStreamWhenOldCloseFails(
 	}
 }
 
+func TestPipelineAgentClearInputTranscriptionWrapsNonStreamingSTTWithVAD(t *testing.T) {
+	sttObj := &nonStreamingPipelineSTT{
+		streamErr: errors.New("direct STT stream should not be used"),
+	}
+	vadObj := &fakePipelineVAD{stream: &fakePipelineVADStream{}}
+	pipeline := NewPipelineAgent(vadObj, sttObj, nil, nil, nil)
+	pipeline.ctx = context.Background()
+
+	if err := pipeline.ClearInputTranscription(); err != nil {
+		t.Fatalf("ClearInputTranscription error = %v, want nil via StreamAdapter", err)
+	}
+	if sttObj.streamCalls != 0 {
+		t.Fatalf("non-streaming STT Stream calls = %d, want 0 because VAD StreamAdapter should wrap it", sttObj.streamCalls)
+	}
+	if pipeline.sttStream == nil {
+		t.Fatal("pipeline sttStream = nil, want replacement stream")
+	}
+}
+
 func TestPipelineAgentEmitsUserInputTranscribedEvents(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
@@ -2521,6 +2540,26 @@ func TestPipelineAgentStartsWithoutVAD(t *testing.T) {
 	receivePipelineClosed(t, sttClosed, "STT")
 }
 
+func TestPipelineAgentSeedsSTTStreamTimingOnStart(t *testing.T) {
+	sttClosed := make(chan struct{})
+	timingSeeded := make(chan struct{})
+	sttStream := &fakePipelineRecognizeStream{closedCh: sttClosed, timingSeededCh: timingSeeded}
+	agent := NewPipelineAgent(nil, &fakePipelineSTT{stream: sttStream}, nil, nil, llm.NewChatContext())
+	ctx, cancel := context.WithCancel(context.Background())
+	go agent.run(ctx)
+
+	select {
+	case <-timingSeeded:
+	case <-time.After(time.Second):
+		t.Fatal("STT stream start time offset was not seeded")
+	}
+	if sttStream.startTimeOffset < 0 {
+		t.Fatalf("STT stream start time offset = %v, want non-negative", sttStream.startTimeOffset)
+	}
+	cancel()
+	receivePipelineClosed(t, sttClosed, "STT")
+}
+
 func TestPipelineAgentStartsWithoutSTT(t *testing.T) {
 	vadClosed := make(chan struct{})
 	vadPushed := make(chan *model.AudioFrame, 1)
@@ -2533,6 +2572,74 @@ func TestPipelineAgentStartsWithoutSTT(t *testing.T) {
 	receivePipelineFrame(t, vadPushed)
 	cancel()
 	receivePipelineClosed(t, vadClosed, "VAD")
+}
+
+func TestPipelineAgentStartWrapsNonStreamingSTTWithVAD(t *testing.T) {
+	sttObj := &nonStreamingPipelineSTT{
+		streamErr: errors.New("direct STT stream should not be used"),
+	}
+	agent := NewPipelineAgent(&fakePipelineVAD{}, sttObj, nil, nil, llm.NewChatContext())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.run(ctx)
+
+	deadline := time.After(time.Second)
+	for {
+		agent.mu.Lock()
+		stream := agent.sttStream
+		agent.mu.Unlock()
+		if stream != nil {
+			break
+		}
+		if sttObj.streamCalls != 0 {
+			t.Fatalf("non-streaming STT Stream calls = %d, want 0 because VAD StreamAdapter should wrap it", sttObj.streamCalls)
+		}
+		select {
+		case <-deadline:
+			t.Fatal("pipeline sttStream was not started with StreamAdapter")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if sttObj.streamCalls != 0 {
+		t.Fatalf("non-streaming STT Stream calls = %d, want 0 because VAD StreamAdapter should wrap it", sttObj.streamCalls)
+	}
+}
+
+func TestPipelineAgentStartRejectsNonStreamingSTTWithoutVAD(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	sttObj := &nonStreamingPipelineSTT{
+		streamErr: errors.New("direct STT stream should not be used"),
+	}
+	agent := NewPipelineAgent(nil, sttObj, nil, nil, llm.NewChatContext())
+	agent.session = session
+
+	agent.run(context.Background())
+
+	if sttObj.streamCalls != 0 {
+		t.Fatalf("non-streaming STT Stream calls = %d, want 0 because missing VAD should fail before provider stream", sttObj.streamCalls)
+	}
+	select {
+	case ev := <-session.ErrorEvents():
+		var sttErr *stt.STTError
+		if !errors.As(ev.Error, &sttErr) {
+			t.Fatalf("Error = %T, want *stt.STTError", ev.Error)
+		}
+		message := ev.Error.Error()
+		for _, want := range []string{
+			"the STT (non-streaming-stt) does not support streaming",
+			"add a VAD to the AgentTask/VoiceAgent to enable streaming",
+			"stt.StreamAdapter",
+		} {
+			if !strings.Contains(message, want) {
+				t.Fatalf("error message = %q, want to contain %q", message, want)
+			}
+		}
+		if ev.Source != sttObj {
+			t.Fatalf("Source = %#v, want STT source", ev.Source)
+		}
+	default:
+		t.Fatal("ErrorEvents did not receive missing-VAD STT error")
+	}
 }
 
 func TestPipelineAgentEmitsErrorEventForSTTStreamStartError(t *testing.T) {
@@ -5697,6 +5804,32 @@ func (q *queuedPipelineSTT) Recognize(context.Context, []*model.AudioFrame, stri
 	return nil, nil
 }
 
+type nonStreamingPipelineSTT struct {
+	stt.MetricsEmitter
+	stt.ErrorEmitter
+
+	streamErr   error
+	streamCalls int
+}
+
+func (n *nonStreamingPipelineSTT) Label() string { return "non-streaming-stt" }
+
+func (n *nonStreamingPipelineSTT) Capabilities() stt.STTCapabilities {
+	return stt.STTCapabilities{OfflineRecognize: true}
+}
+
+func (n *nonStreamingPipelineSTT) Stream(context.Context, string) (stt.RecognizeStream, error) {
+	n.streamCalls++
+	if n.streamErr != nil {
+		return nil, n.streamErr
+	}
+	return &fakePipelineRecognizeStream{}, nil
+}
+
+func (n *nonStreamingPipelineSTT) Recognize(context.Context, []*model.AudioFrame, string) (*stt.SpeechEvent, error) {
+	return &stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript}, nil
+}
+
 type fakePipelineVAD struct {
 	metricsHandlers []vad.VADMetricsHandler
 	stream          *fakePipelineVADStream
@@ -5965,16 +6098,22 @@ func (e erroringPipelineLLM) Chat(context.Context, *llm.ChatContext, ...llm.Chat
 }
 
 type fakePipelineRecognizeStream struct {
-	events     []*stt.SpeechEvent
-	index      int
-	err        error
-	pushErr    error
-	frames     []*model.AudioFrame
-	pushedCh   chan *model.AudioFrame
-	closedCh   chan struct{}
-	flushCount int
-	closeOnce  sync.Once
-	closeErr   error
+	events             []*stt.SpeechEvent
+	index              int
+	err                error
+	pushErr            error
+	frames             []*model.AudioFrame
+	pushedCh           chan *model.AudioFrame
+	closedCh           chan struct{}
+	flushCount         int
+	closeOnce          sync.Once
+	closeErr           error
+	startTimeOffset    float64
+	startTimeOffsetSet bool
+	startTime          float64
+	startTimeSet       bool
+	timingSeededCh     chan struct{}
+	timingSeededOnce   sync.Once
 }
 
 func (f *fakePipelineRecognizeStream) PushFrame(frame *model.AudioFrame) error {
@@ -6009,4 +6148,25 @@ func (f *fakePipelineRecognizeStream) Next() (*stt.SpeechEvent, error) {
 	ev := f.events[f.index]
 	f.index++
 	return ev, nil
+}
+
+func (f *fakePipelineRecognizeStream) StartTimeOffset() float64 {
+	return f.startTimeOffset
+}
+
+func (f *fakePipelineRecognizeStream) SetStartTimeOffset(offset float64) {
+	f.startTimeOffset = offset
+	f.startTimeOffsetSet = true
+	if f.timingSeededCh != nil {
+		f.timingSeededOnce.Do(func() { close(f.timingSeededCh) })
+	}
+}
+
+func (f *fakePipelineRecognizeStream) StartTime() float64 {
+	return f.startTime
+}
+
+func (f *fakePipelineRecognizeStream) SetStartTime(startTime float64) {
+	f.startTime = startTime
+	f.startTimeSet = true
 }

@@ -146,6 +146,7 @@ func (va *PipelineAgent) ClearInputTranscription() error {
 	va.mu.Lock()
 	oldStream := va.sttStream
 	sttObj := va.stt
+	vadObj := va.vad
 	ctx := va.ctx
 	va.mu.Unlock()
 	if oldStream != nil {
@@ -159,16 +160,42 @@ func (va *PipelineAgent) ClearInputTranscription() error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	sttObj, err := streamableSTT(sttObj, vadObj)
+	if err != nil {
+		return err
+	}
 	stream, err := sttObj.Stream(ctx, "")
 	if err != nil {
 		return err
 	}
+	seedSTTStreamTiming(stream)
 	va.mu.Lock()
 	va.sttStream = stream
 	va.lastSTTFrame = nil
 	va.mu.Unlock()
 	go va.sttLoop(stream)
 	return nil
+}
+
+func streamableSTT(sttObj stt.STT, vadObj vad.VAD) (stt.STT, error) {
+	if sttObj == nil {
+		return nil, nil
+	}
+	if sttObj.Capabilities().Streaming {
+		return sttObj, nil
+	}
+	if vadObj == nil {
+		return nil, fmt.Errorf("the STT (%s) does not support streaming, add a VAD to the AgentTask/VoiceAgent to enable streaming. Or manually wrap your STT in a stt.StreamAdapter", sttObj.Label())
+	}
+	return stt.NewStreamAdapter(sttObj, vadObj), nil
+}
+
+func seedSTTStreamTiming(stream stt.RecognizeStream) {
+	timing, ok := stream.(stt.StreamTiming)
+	if !ok {
+		return
+	}
+	stt.SetStreamStartTimeOffset(timing, 0)
 }
 
 func (va *PipelineAgent) UpdateComponents(vadObj vad.VAD, sttObj stt.STT, llmObj llm.LLM, ttsObj tts.TTS) {
@@ -215,7 +242,19 @@ func (va *PipelineAgent) run(ctx context.Context) {
 
 	var sttStream stt.RecognizeStream
 	if va.stt != nil {
-		stream, err := va.stt.Stream(ctx, "")
+		sttObj, err := streamableSTT(va.stt, va.vad)
+		if err != nil {
+			if !isSpeechStreamShutdownError(err) {
+				logger.Logger.Errorw("failed to prepare STT stream", err)
+				label := "stt"
+				if va.stt != nil {
+					label = va.stt.Label()
+				}
+				va.emitError(stt.NewSTTError(label, err, false), va.stt)
+			}
+			return
+		}
+		stream, err := sttObj.Stream(ctx, "")
 		if err != nil {
 			if !isSpeechStreamShutdownError(err) {
 				logger.Logger.Errorw("failed to start STT stream", err)
@@ -227,6 +266,7 @@ func (va *PipelineAgent) run(ctx context.Context) {
 			}
 			return
 		}
+		seedSTTStreamTiming(stream)
 		sttStream = stream
 		va.mu.Lock()
 		va.sttStream = stream

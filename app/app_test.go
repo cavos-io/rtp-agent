@@ -3218,6 +3218,8 @@ func TestDefaultConfigFromEnvSelectsDeepgramSpeechProviders(t *testing.T) {
 	t.Setenv("DEEPGRAM_API_KEY", "test-deepgram-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
 	t.Setenv("RTP_AGENT_STT_MODEL", "nova-3")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "id")
+	t.Setenv("RTP_AGENT_STT_DETECT_LANGUAGE", "true")
 	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://deepgram.example/v1/listen")
 	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "16000")
 	t.Setenv("RTP_AGENT_STT_NUMBER_OF_CHANNELS", "2")
@@ -3255,6 +3257,12 @@ func TestDefaultConfigFromEnvSelectsDeepgramSpeechProviders(t *testing.T) {
 	}
 	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.Diarization || !caps.OfflineRecognize {
 		t.Fatalf("STT capabilities = %+v, want streaming diarization offline recognize", caps)
+	}
+	if got := reflect.ValueOf(app.Session.STT).Elem().FieldByName("language").String(); got != "id" {
+		t.Fatalf("STT language = %q, want env language id", got)
+	}
+	if got := reflect.ValueOf(app.Session.STT).Elem().FieldByName("detectLanguage").Bool(); !got {
+		t.Fatal("STT detectLanguage = false, want env detect-language true")
 	}
 	if got := app.Session.TTS.Label(); got != "deepgram.TTS" {
 		t.Fatalf("TTS label = %q, want deepgram.TTS", got)
@@ -7473,6 +7481,7 @@ func TestDeepgramSTTFallbackPassesReferenceOptions(t *testing.T) {
 	provider, err := fallbackSTTFromProvider(AppConfig{
 		STTBaseURL:          "ws" + strings.TrimPrefix(server.URL, "http"),
 		STTModel:            "nova-2",
+		STTLanguage:         "id",
 		STTInterimResults:   &interim,
 		STTPunctuate:        &punctuate,
 		STTSmartFormat:      &smartFormat,
@@ -7523,6 +7532,7 @@ func TestDeepgramSTTFallbackPassesReferenceOptions(t *testing.T) {
 		}
 		expectedQuery := map[string]string{
 			"model":            "nova-2",
+			"language":         "id",
 			"punctuate":        "false",
 			"smart_format":     "true",
 			"no_delay":         "true",
@@ -7554,6 +7564,25 @@ func TestDeepgramSTTFallbackPassesReferenceOptions(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for Deepgram STT websocket request")
+	}
+}
+
+func TestDeepgramSTTFallbackPassesReferenceDetectLanguage(t *testing.T) {
+	t.Setenv("DEEPGRAM_API_KEY", "test-deepgram-key")
+	detectLanguage := true
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTDetectLanguage: detectLanguage,
+	}, providerDeepgram)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	deepgramProvider, ok := provider.(*deepgram.DeepgramSTT)
+	if !ok {
+		t.Fatalf("provider type = %T, want *deepgram.DeepgramSTT", provider)
+	}
+	if got := reflect.ValueOf(deepgramProvider).Elem().FieldByName("detectLanguage").Bool(); !got {
+		t.Fatal("detectLanguage = false, want configured true")
 	}
 }
 
@@ -11833,10 +11862,59 @@ func TestDefaultConfigFromEnvSelectsGoogleTTS(t *testing.T) {
 	}
 }
 
+func TestGroqSTTFallbackPassesReferenceOptions(t *testing.T) {
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		GroqAPIKey:        "test-groq-key",
+		STTBaseURL:        "https://groq.example/openai/v1/",
+		STTModel:          "whisper-large-v3",
+		STTLanguage:       "id",
+		STTPrompt:         "domain words",
+		STTDetectLanguage: true,
+	}, providerGroq)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	groqProvider, ok := provider.(*groq.GroqSTT)
+	if !ok {
+		t.Fatalf("provider type = %T, want *groq.GroqSTT", provider)
+	}
+	if got, want := provider.Label(), "groq.STT"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "whisper-large-v3"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+	if got, want := stt.Provider(provider), "groq"; got != want {
+		t.Fatalf("stt.Provider() = %q, want %q", got, want)
+	}
+	state := reflect.ValueOf(groqProvider).Elem()
+	if got := state.FieldByName("baseURL").String(); got != "https://groq.example/openai/v1" {
+		t.Fatalf("baseURL = %q, want configured Groq OpenAI-compatible URL", got)
+	}
+	if got := state.FieldByName("language").String(); got != "" {
+		t.Fatalf("language = %q, want empty when detect_language is enabled", got)
+	}
+	if got := state.FieldByName("prompt").String(); got != "domain words" {
+		t.Fatalf("prompt = %q, want domain words", got)
+	}
+	if got := state.FieldByName("detectLanguage").Bool(); !got {
+		t.Fatal("detectLanguage = false, want configured true")
+	}
+	if caps := provider.Capabilities(); caps.Streaming || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities() = %+v, want reference offline-only Groq STT", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsGroqProviders(t *testing.T) {
 	t.Setenv("GROQ_API_KEY", "test-groq-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "groq")
 	t.Setenv("RTP_AGENT_LLM_MODEL", "llama3-70b-8192")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "groq")
+	t.Setenv("RTP_AGENT_STT_MODEL", "whisper-large-v3")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "id")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://groq.example/openai/v1")
+	t.Setenv("RTP_AGENT_STT_PROMPT", "domain words")
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "groq")
 	t.Setenv("RTP_AGENT_TTS_MODEL", "canopylabs/orpheus-v1-english")
 	t.Setenv("RTP_AGENT_TTS_VOICE", "autumn")
@@ -11854,6 +11932,28 @@ func TestDefaultConfigFromEnvSelectsGroqProviders(t *testing.T) {
 	}
 	if got := llm.Model(app.Session.LLM); got != "llama3-70b-8192" {
 		t.Fatalf("LLM model = %q, want llama3-70b-8192", got)
+	}
+	if got := app.Session.STT.Label(); got != "groq.STT" {
+		t.Fatalf("STT label = %q, want groq.STT", got)
+	}
+	if got := stt.Provider(app.Session.STT); got != "groq" {
+		t.Fatalf("STT provider = %q, want groq", got)
+	}
+	if got := stt.Model(app.Session.STT); got != "whisper-large-v3" {
+		t.Fatalf("STT model = %q, want whisper-large-v3", got)
+	}
+	sttState := reflect.ValueOf(app.Session.STT).Elem()
+	if got := sttState.FieldByName("baseURL").String(); got != "https://groq.example/openai/v1" {
+		t.Fatalf("STT baseURL = %q, want configured Groq OpenAI-compatible URL", got)
+	}
+	if got := sttState.FieldByName("language").String(); got != "id" {
+		t.Fatalf("STT language = %q, want id", got)
+	}
+	if got := sttState.FieldByName("prompt").String(); got != "domain words" {
+		t.Fatalf("STT prompt = %q, want domain words", got)
+	}
+	if caps := app.Session.STT.Capabilities(); caps.Streaming || !caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want reference offline-only Groq STT", caps)
 	}
 	if got := app.Session.TTS.Label(); got != "StreamAdapter(groq.TTS)" {
 		t.Fatalf("TTS label = %q, want StreamAdapter(groq.TTS)", got)

@@ -2557,6 +2557,29 @@ func TestAgentActivityRunEOUDetectionSkipsEmptyTranscript(t *testing.T) {
 	}
 }
 
+func TestAgentActivityVADTurnWithPipelineSTTNoTranscriptDoesNotStartEOU(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.2})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	defer activity.Stop()
+
+	session.Assistant = NewPipelineAgent(agent.VAD, &fakePipelineSTT{}, nil, nil, agent.ChatCtx)
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Timestamp: 1.0})
+	activity.OnEndOfSpeech(&vad.VADEvent{Timestamp: 1.2})
+
+	activity.eouMu.Lock()
+	eouStarted := activity.eouDone != nil
+	activity.eouMu.Unlock()
+	if eouStarted {
+		t.Fatal("EOU detection started for empty transcript with active pipeline STT")
+	}
+}
+
 func TestAgentActivityVADTurnCompletesPendingFinalTranscriptAfterEndOfSpeech(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeVAD
@@ -2940,6 +2963,31 @@ func TestAgentActivityIgnoresSTTTurnDetectionWithoutSTT(t *testing.T) {
 	}
 }
 
+func TestAgentActivitySTTTurnDetectionUsesActivePipelineSTT(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	session.Assistant = NewPipelineAgent(nil, &fakePipelineSTT{}, nil, nil, agent.ChatCtx)
+	defer activity.Stop()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "pipeline stt turn", Confidence: 0.9}},
+	})
+	activity.OnEndOfSpeech(nil)
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "pipeline stt turn" {
+			t.Fatalf("turn message text = %q, want pipeline stt turn", msg.TextContent())
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called with active pipeline STT")
+	}
+}
+
 func TestAgentActivityIgnoresVADTurnDetectionWithoutVAD(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeVAD
@@ -2953,6 +3001,31 @@ func TestAgentActivityIgnoresVADTurnDetectionWithoutVAD(t *testing.T) {
 	case msg := <-agent.turns:
 		t.Fatalf("OnUserTurnCompleted called without VAD configured with %q", msg.TextContent())
 	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestAgentActivityVADTurnDetectionUsesActivePipelineVAD(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	session.Assistant = NewPipelineAgent(&fakePipelineVAD{}, nil, nil, nil, agent.ChatCtx)
+	defer activity.Stop()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "pipeline vad turn", Confidence: 0.9}},
+	})
+	activity.OnEndOfSpeech(&vad.VADEvent{Timestamp: 1.0})
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "pipeline vad turn" {
+			t.Fatalf("turn message text = %q, want pipeline vad turn", msg.TextContent())
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called with active pipeline VAD")
 	}
 }
 
@@ -3501,6 +3574,29 @@ func TestAgentActivityOnInterimTranscriptRespectsMinInterruptionWords(t *testing
 	select {
 	case <-current.interruptCh:
 		t.Fatal("current speech was interrupted for interim transcript below MinInterruptionWords")
+	case <-time.After(20 * time.Millisecond):
+	}
+	current.MarkDone()
+}
+
+func TestAgentActivityOnInterimTranscriptRespectsMinInterruptionWordsWithPipelineSTT(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:        TurnDetectionModeSTT,
+		MinInterruptionWords: 2,
+	})
+	session.Assistant = NewPipelineAgent(nil, &fakePipelineSTT{}, nil, nil, agent.ChatCtx)
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "wait"}},
+	})
+
+	select {
+	case <-current.interruptCh:
+		t.Fatal("current speech was interrupted for pipeline STT transcript below MinInterruptionWords")
 	case <-time.After(20 * time.Millisecond):
 	}
 	current.MarkDone()
@@ -6057,6 +6153,58 @@ func TestAgentActivityPreemptiveGenerationStartsLLMBeforeScheduling(t *testing.T
 	select {
 	case <-countingLLM.calls:
 		t.Fatal("LLM started again after scheduling reused preemptive speech")
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestAgentActivityPreemptiveGenerationUsesActivePipelineLLM(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	countingLLM := &preemptiveCountingLLM{
+		calls: make(chan struct{}, 2),
+		stream: &fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{
+			Delta: &llm.ChoiceDelta{Content: "early pipeline reply"},
+		}}},
+	}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	pipeline := NewPipelineAgent(nil, nil, countingLLM, &fakePipelineTTS{stream: &fakePipelineTTSStream{}}, agent.ChatCtx)
+	pipeline.session = session
+	session.Assistant = pipeline
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	defer activity.Stop()
+
+	speechEvents := session.SpeechCreatedEvents()
+	activity.OnStartOfSpeech(&vad.VADEvent{})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "start active pipeline early", Confidence: 0.93}},
+	})
+
+	var preemptive *SpeechHandle
+	select {
+	case ev := <-speechEvents:
+		preemptive = ev.SpeechHandle
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive active pipeline preemptive generation")
+	}
+	if preemptive == nil || preemptive.IsScheduled() {
+		t.Fatalf("preemptive speech = %#v, want unscheduled handle", preemptive)
+	}
+	select {
+	case <-countingLLM.calls:
+	case <-time.After(time.Second):
+		t.Fatal("active pipeline LLM was not started for preemptive generation before scheduling")
+	}
+
+	if _, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{}); err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if !preemptive.IsScheduled() {
+		t.Fatal("active pipeline preemptive speech was not scheduled after matching turn completion")
+	}
+	select {
+	case <-countingLLM.calls:
+		t.Fatal("active pipeline LLM started again after scheduling reused preemptive speech")
 	case <-time.After(20 * time.Millisecond):
 	}
 }
