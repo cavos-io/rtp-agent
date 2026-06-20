@@ -2186,7 +2186,7 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 }
 
 func (s *realtimeSession) trackRealtimeOutputTranscript(itemID, delta string) {
-	if s.generation == nil || itemID == "" {
+	if s.generation == nil {
 		return
 	}
 	if msg := s.generation.messages[itemID]; msg != nil {

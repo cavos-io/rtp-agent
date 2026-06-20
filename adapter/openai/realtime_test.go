@@ -3401,6 +3401,49 @@ func TestRealtimeSessionPersistsAudioTranscriptOnResponseDone(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionPersistsEmptyIDAudioTranscriptOnResponseDone(t *testing.T) {
+	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
+	if err := session.remote.Insert(nil, &llm.ChatMessage{
+		ID:      "",
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{},
+	}); err != nil {
+		t.Fatalf("Insert remote message error = %v", err)
+	}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "",
+			"type": "message",
+		},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "response.output_audio_transcript.delta",
+		"item_id": "",
+		"delta":   "empty id transcript",
+	})
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":     "response.done",
+		"response": map[string]any{"id": "resp_123", "status": "completed"},
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
+	}
+
+	msg, ok := session.remote.Get("").(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("remote empty-id item = %T, want *llm.ChatMessage", session.remote.Get(""))
+	}
+	if got := msg.TextContent(); got != "empty id transcript" {
+		t.Fatalf("remote empty-id text content = %q, want accumulated audio transcript", got)
+	}
+}
+
 func TestRealtimeSessionPersistsTextDeltaOnResponseDone(t *testing.T) {
 	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
 	if err := session.remote.Insert(nil, &llm.ChatMessage{
