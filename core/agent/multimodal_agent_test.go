@@ -1011,6 +1011,57 @@ func TestMultimodalAgentSayUsesRealtimeSessionWhenSupported(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentSayUsesTTSWhenRealtimeSayAndTTSAvailable(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ttsStream := newEndInputGenerationTTSStream()
+	rtSession := &fakeRealtimeSession{sayCh: make(chan string, 1)}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{
+		session:      rtSession,
+		capabilities: llm.RealtimeCapabilities{SupportsSay: true},
+	}, llm.NewChatContext())
+	var published []*model.AudioFrame
+	ma.PublishAudio = func(ctx context.Context, frame *model.AudioFrame) error {
+		published = append(published, frame)
+		return nil
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.TTS = &fakeGenerationTTS{stream: ttsStream}
+	session.Assistant = ma
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	handle, err := session.Say(ctx, "hello from tts")
+	if err != nil {
+		t.Fatalf("Say returned error: %v", err)
+	}
+	waitCtx, waitCancel := context.WithTimeout(ctx, time.Second)
+	defer waitCancel()
+	if err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("speech handle did not finish after TTS say: %v", err)
+	}
+
+	select {
+	case text := <-rtSession.sayCh:
+		t.Fatalf("realtime session received native Say %q, want TTS path", text)
+	default:
+	}
+	if len(published) != 1 || string(published[0].Data) != "audio" {
+		t.Fatalf("published frames = %#v, want one synthesized TTS audio frame", published)
+	}
+	if !strings.Contains(strings.Join(ttsStream.calls, ","), "push:hello from") ||
+		!strings.Contains(strings.Join(ttsStream.calls, ","), "push: tts") ||
+		ttsStream.calls[len(ttsStream.calls)-1] != "end_input" {
+		t.Fatalf("TTS stream calls = %#v, want say text pushed before end_input", ttsStream.calls)
+	}
+	msg := findChatMessage(session.ChatCtx, llm.ChatRoleAssistant, "hello from tts")
+	if msg == nil {
+		t.Fatalf("session chat context items = %#v, want TTS say assistant message", session.ChatCtx.Items)
+	}
+}
+
 func TestMultimodalAgentRealtimeSayErrorSkipsAssistantChatCommit(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

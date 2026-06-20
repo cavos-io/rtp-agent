@@ -334,6 +334,39 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 		return
 	}
 
+	if speech.Generation.Text != "" && session != nil && session.TTS != nil {
+		publishedAudio, err := ma.publishTTSFallbackForRealtimeText(ctx, speech, speech.Generation.Text)
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return
+			}
+			logger.Logger.Errorw("failed to synthesize realtime say text", err)
+			if publishedAudio {
+				session.UpdateAgentState(AgentStateListening)
+			}
+			session.EmitError(ErrorEvent{Error: err, Source: session.TTS})
+			return
+		}
+		if publishedAudio {
+			playoutOK := true
+			if playback := session.AudioPlaybackController(); playback != nil && !speech.IsInterrupted() {
+				if _, err := playback.WaitForPlayout(ctx); err != nil {
+					logger.Logger.Warnw("failed to wait for realtime say playback", err)
+					playoutOK = false
+				}
+			}
+			session.UpdateAgentState(AgentStateListening)
+			if !playoutOK {
+				return
+			}
+		}
+		if !speech.IsInterrupted() && speech.Generation.AssistantMessage != nil {
+			session.EmitConversationItemAdded(speech.Generation.AssistantMessage)
+			addSpeechChatItemIfMissing(speech, speech.Generation.AssistantMessage)
+		}
+		return
+	}
+
 	if speech.Generation.Text != "" && ma.model.Capabilities().SupportsSay {
 		if err := rtSession.Say(speech.Generation.Text); err != nil {
 			if errors.Is(err, context.Canceled) {
