@@ -164,6 +164,14 @@ func (t *Transport) Join(ctx context.Context) error {
 		cancel()
 	}()
 	if err := t.client.Join(joinCtx, opts, t.emit, audio); err != nil {
+		t.mu.Lock()
+		if t.joinSeq == joinSeq {
+			t.joined = false
+			t.disconnected = false
+			t.failed = false
+			t.users = nil
+		}
+		t.mu.Unlock()
 		return err
 	}
 	t.mu.Lock()
