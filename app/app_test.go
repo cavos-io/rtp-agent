@@ -902,6 +902,27 @@ func TestRunAgoraLogsConnectedTransportEvent(t *testing.T) {
 	}
 }
 
+func TestRunAgoraNormalizesNilContextBeforeValidation(t *testing.T) {
+	rtpApp := &App{
+		Session: agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{}),
+		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("runAgora(nil) panic = %v, want validation error", recovered)
+		}
+	}()
+	var ctx context.Context
+	err := rtpApp.runAgora(ctx)
+	if err == nil {
+		t.Fatal("runAgora(nil) error = nil, want config validation error")
+	}
+	if !strings.Contains(err.Error(), "AGORA_APP_ID is required") {
+		t.Fatalf("runAgora(nil) error = %v, want config validation error", err)
+	}
+}
+
 func TestRunAgoraSaysGreetingWhenFirstParticipantJoins(t *testing.T) {
 	client := &fakeAppAgoraChannelClient{joinedCh: make(chan struct{}, 1)}
 	oldNewAgoraChannelClient := appNewAgoraChannelClient

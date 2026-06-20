@@ -1161,6 +1161,9 @@ func (a *App) runAgora(ctx context.Context) error {
 	if a.Session == nil {
 		return fmt.Errorf("agent session is not configured")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	runCtx, cancelRun := context.WithCancelCause(ctx)
 	defer cancelRun(nil)
 	agoraOpts := a.Config.Agora
