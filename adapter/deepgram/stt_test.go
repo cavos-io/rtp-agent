@@ -956,6 +956,55 @@ func TestDeepgramSTTUpdateOptionsReconnectsActiveStream(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTProviderCloseClosesActiveStreams(t *testing.T) {
+	closed := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramHoldOpenWebsocketServer(serverConn, closed, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"))
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	closer, ok := any(provider).(interface{ Close() error })
+	if !ok {
+		t.Fatal("DeepgramSTT does not implement Close")
+	}
+	if err := closer.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 320),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after provider Close = %v, want io.ErrClosedPipe", err)
+	}
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for active websocket close")
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
 func TestDeepgramSTTStreamPreservesReferenceSpeechState(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	serverErr := make(chan error, 1)
@@ -1301,6 +1350,27 @@ func runDeepgramClosingWebsocketServer(conn net.Conn, closeAfterHandshake <-chan
 		return
 	}
 	<-closeAfterHandshake
+	close(closed)
+	errCh <- nil
+}
+
+func runDeepgramHoldOpenWebsocketServer(conn net.Conn, closed chan<- struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	_, _, err = readDeepgramSTTTestClientWebsocketFrame(reader)
+	if err != nil && !errors.Is(err, io.EOF) && !strings.Contains(err.Error(), "closed pipe") {
+		errCh <- err
+		return
+	}
 	close(closed)
 	errCh <- nil
 }
