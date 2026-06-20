@@ -2302,7 +2302,7 @@ func (s *realtimeSession) trackRealtimeGenerationCreated(ev llm.RealtimeEvent) l
 }
 
 func (s *realtimeSession) trackRealtimeText(ev llm.RealtimeEvent) {
-	if s.generation == nil || ev.ItemID == "" {
+	if s.generation == nil {
 		return
 	}
 	msg := s.generation.messages[ev.ItemID]
@@ -2320,7 +2320,7 @@ func (s *realtimeSession) trackRealtimeText(ev llm.RealtimeEvent) {
 }
 
 func (s *realtimeSession) trackRealtimeAudio(ev llm.RealtimeEvent) {
-	if s.generation == nil || ev.ItemID == "" {
+	if s.generation == nil {
 		return
 	}
 	msg := s.generation.messages[ev.ItemID]

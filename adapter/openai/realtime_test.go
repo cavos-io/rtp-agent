@@ -2195,6 +2195,43 @@ func TestRealtimeSessionRoutesOutputMessageWithEmptyID(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionRoutesEmptyIDOutputMessageTextDeltas(t *testing.T) {
+	session := &realtimeSession{}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "",
+			"type": "message",
+		},
+	})
+
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for empty-id message generation")
+	}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:   llm.RealtimeEventTypeText,
+		ItemID: "",
+		Text:   "empty id text",
+	})
+
+	select {
+	case text := <-msg.TextCh:
+		if text != "empty id text" {
+			t.Fatalf("empty-id text delta = %q, want empty id text", text)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for empty-id text delta")
+	}
+}
+
 func TestRealtimeSessionRoutesOutputMessageAudioDeltasToGenerationStream(t *testing.T) {
 	session := &realtimeSession{}
 	created := session.trackRealtimeEvent(llm.RealtimeEvent{
@@ -2235,6 +2272,49 @@ func TestRealtimeSessionRoutesOutputMessageAudioDeltasToGenerationStream(t *test
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for audio delta")
+	}
+}
+
+func TestRealtimeSessionRoutesEmptyIDOutputMessageAudioDeltas(t *testing.T) {
+	session := &realtimeSession{}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "",
+			"type": "message",
+		},
+	})
+
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for empty-id message generation")
+	}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:   llm.RealtimeEventTypeAudio,
+		ItemID: "",
+		Data:   []byte{3, 0, 4, 0},
+	})
+
+	select {
+	case frame := <-msg.AudioCh:
+		if frame == nil {
+			t.Fatal("empty-id audio frame = nil, want frame")
+		}
+		if string(frame.Data) != string([]byte{3, 0, 4, 0}) {
+			t.Fatalf("empty-id audio data = %v, want [3 0 4 0]", frame.Data)
+		}
+		if frame.SampleRate != 24000 || frame.NumChannels != 1 || frame.SamplesPerChannel != 2 {
+			t.Fatalf("empty-id audio frame metadata = %#v, want 24kHz mono with 2 samples", frame)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for empty-id audio delta")
 	}
 }
 
