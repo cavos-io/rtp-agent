@@ -73,8 +73,9 @@ func TestRoomIOAudioTrackPublicationOptionsPreserveConfiguredName(t *testing.T) 
 	}
 }
 
-func TestRoomIOAudioOutputCodecUsesStandardOpusChannels(t *testing.T) {
+func TestRoomIOAudioOutputCodecMatchesMonoAudioOutput(t *testing.T) {
 	codec := roomIOAudioOutputCodec()
+	wantChannels := uint16(1)
 
 	if codec.MimeType != webrtc.MimeTypeOpus {
 		t.Fatalf("MimeType = %q, want %q", codec.MimeType, webrtc.MimeTypeOpus)
@@ -82,8 +83,8 @@ func TestRoomIOAudioOutputCodecUsesStandardOpusChannels(t *testing.T) {
 	if codec.ClockRate != roomIOOpusClockRate {
 		t.Fatalf("ClockRate = %d, want %d", codec.ClockRate, roomIOOpusClockRate)
 	}
-	if codec.Channels != 2 {
-		t.Fatalf("Channels = %d, want 2 for standard Opus SDP negotiation", codec.Channels)
+	if codec.Channels != wantChannels {
+		t.Fatalf("Channels = %d, want %d matching RoomIO mono encoder output", codec.Channels, wantChannels)
 	}
 }
 
@@ -444,6 +445,14 @@ func TestRoomIOAudioSubscriptionWaitFallsBackAfterTimeout(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed < 20*time.Millisecond {
 		t.Fatalf("waitForAudioSubscription returned after %v, want timeout wait", elapsed)
+	}
+}
+
+func TestRoomIOAudioSubscriptionDefaultTimeoutKeepsStartupGateLongEnough(t *testing.T) {
+	rio := &RoomIO{}
+
+	if got := rio.audioSubscriptionTimeout(); got != 10*time.Second {
+		t.Fatalf("audioSubscriptionTimeout() = %v, want 10s default startup gate", got)
 	}
 }
 

@@ -36,6 +36,54 @@ func TestSentenceStreamPacerBatchesQueuedSentencesByMaxTextLength(t *testing.T) 
 	}
 }
 
+func TestSentenceStreamPacerHoldsIncompleteSentenceUntilFlush(t *testing.T) {
+	underlying := newFakePacerStream()
+	pacer := NewSentenceStreamPacerWithOptions(context.Background(), underlying, SentenceStreamPacerOptions{
+		MinRemainingAudio: 20 * time.Second,
+		MaxTextLength:     80,
+	})
+	defer pacer.Close()
+
+	if err := pacer.PushText("This sentence is still arriving without punctuation"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := underlying.pushes(); len(got) != 0 {
+		t.Fatalf("pushed text before flush = %#v, want none for incomplete sentence", got)
+	}
+
+	if err := pacer.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if !underlying.waitForPushes(t, []string{"This sentence is still arriving without punctuation"}) {
+		t.Fatalf("pushed text = %#v, want incomplete sentence released by flush", underlying.pushes())
+	}
+}
+
+func TestSentenceStreamPacerRetainsTailAfterNormalizedNewlineSentence(t *testing.T) {
+	underlying := newFakePacerStream()
+	pacer := NewSentenceStreamPacerWithOptions(context.Background(), underlying, SentenceStreamPacerOptions{
+		MinRemainingAudio: 20 * time.Second,
+		MaxTextLength:     80,
+	})
+	defer pacer.Close()
+
+	if err := pacer.PushText("First line\ncontinues complete sentence. Second sentence still arriving"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if !underlying.waitForPushes(t, []string{"First line continues complete sentence."}) {
+		t.Fatalf("pushed text = %#v, want normalized first sentence only", underlying.pushes())
+	}
+
+	if err := pacer.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	want := []string{"First line continues complete sentence.", "Second sentence still arriving"}
+	if !underlying.waitForPushes(t, want) {
+		t.Fatalf("pushed text = %#v, want tail once after flush", underlying.pushes())
+	}
+}
+
 func TestSentenceStreamPacerOptionsPreserveExplicitZeroValues(t *testing.T) {
 	underlying := newFakePacerStream()
 	pacer := NewSentenceStreamPacerWithOptions(context.Background(), underlying, SentenceStreamPacerOptions{

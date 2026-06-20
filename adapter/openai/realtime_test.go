@@ -1720,6 +1720,41 @@ func TestRealtimeAudioBufferMessages(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionIgnoresClientEventsAfterClose(t *testing.T) {
+	releaseServer := make(chan struct{})
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		<-releaseServer
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	close(releaseServer)
+
+	if err := session.ClearAudio(); err != nil {
+		t.Fatalf("ClearAudio after Close error = %v, want nil like reference closed send_event", err)
+	}
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              make([]byte, 2400*2),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 2400,
+	}); err != nil {
+		t.Fatalf("PushAudio after Close error = %v, want nil like reference closed send_event", err)
+	}
+}
+
 func TestRealtimeGenerateReplyMessageMapsPerResponseOptions(t *testing.T) {
 	msg := openAIRealtimeGenerateReplyMessageWithSessionInstructions(llm.RealtimeGenerateReplyOptions{
 		Instructions: "answer briefly",
@@ -1908,6 +1943,87 @@ func TestRealtimeEventIgnoresEmptyInputAudioTranscriptionDelta(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventRejectsInputAudioTranscriptionWithoutStringItemID(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		event map[string]any
+	}{
+		{
+			name: "missing_completed_item_id",
+			event: map[string]any{
+				"type":       "conversation.item.input_audio_transcription.completed",
+				"transcript": "hello",
+			},
+		},
+		{
+			name: "null_completed_item_id",
+			event: map[string]any{
+				"type":       "conversation.item.input_audio_transcription.completed",
+				"item_id":    nil,
+				"transcript": "hello",
+			},
+		},
+		{
+			name: "missing_delta_item_id",
+			event: map[string]any{
+				"type":  "conversation.item.input_audio_transcription.delta",
+				"delta": "hel",
+			},
+		},
+		{
+			name: "null_delta_item_id",
+			event: map[string]any{
+				"type":    "conversation.item.input_audio_transcription.delta",
+				"item_id": nil,
+				"delta":   "hel",
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if ev, ok := openAIRealtimeEvent(tt.event); ok {
+				t.Fatalf("openAIRealtimeEvent = %#v, true; want malformed input transcription ignored", ev)
+			}
+		})
+	}
+}
+
+func TestRealtimeEventRejectsCompletedInputAudioTranscriptionWithoutStringTranscript(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		event map[string]any
+	}{
+		{
+			name: "missing_transcript",
+			event: map[string]any{
+				"type":    "conversation.item.input_audio_transcription.completed",
+				"item_id": "item_123",
+			},
+		},
+		{
+			name: "null_transcript",
+			event: map[string]any{
+				"type":       "conversation.item.input_audio_transcription.completed",
+				"item_id":    "item_123",
+				"transcript": nil,
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if ev, ok := openAIRealtimeEvent(tt.event); ok {
+				t.Fatalf("openAIRealtimeEvent = %#v, true; want malformed completed transcription ignored", ev)
+			}
+		})
+	}
+
+	if ev, ok := openAIRealtimeEvent(map[string]any{
+		"type":       "conversation.item.input_audio_transcription.completed",
+		"item_id":    "item_123",
+		"transcript": "",
+	}); !ok || ev.InputTranscription == nil || ev.InputTranscription.Transcript != "" {
+		t.Fatalf("openAIRealtimeEvent explicit empty transcript = %#v, %v; want accepted empty transcript", ev, ok)
+	}
+}
+
 func TestRealtimeEventMapsOutputAudioTranscriptDelta(t *testing.T) {
 	for _, eventType := range []string{
 		"response.output_audio_transcript.delta",
@@ -1971,6 +2087,65 @@ func TestRealtimeEventMapsOutputTextAndAudioAliases(t *testing.T) {
 		"delta": "not-base64",
 	}); ok {
 		t.Fatal("openAIRealtimeEvent invalid audio returned ok=true, want false")
+	}
+}
+
+func TestRealtimeEventRejectsOutputDeltasWithoutStringItemID(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		event map[string]any
+	}{
+		{
+			name: "missing_text_item_id",
+			event: map[string]any{
+				"type":  "response.output_text.delta",
+				"delta": "hello",
+			},
+		},
+		{
+			name: "null_text_item_id",
+			event: map[string]any{
+				"type":    "response.output_text.delta",
+				"item_id": nil,
+				"delta":   "hello",
+			},
+		},
+		{
+			name: "missing_audio_transcript_item_id",
+			event: map[string]any{
+				"type":  "response.output_audio_transcript.delta",
+				"delta": "hello",
+			},
+		},
+		{
+			name: "missing_audio_item_id",
+			event: map[string]any{
+				"type":  "response.output_audio.delta",
+				"delta": "aGVsbG8=",
+			},
+		},
+		{
+			name: "null_audio_item_id",
+			event: map[string]any{
+				"type":    "response.output_audio.delta",
+				"item_id": nil,
+				"delta":   "aGVsbG8=",
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if ev, ok := openAIRealtimeEvent(tt.event); ok {
+				t.Fatalf("openAIRealtimeEvent = %#v, true; want malformed output delta ignored", ev)
+			}
+		})
+	}
+
+	if ev, ok := openAIRealtimeEvent(map[string]any{
+		"type":    "response.output_text.delta",
+		"item_id": "",
+		"delta":   "hello",
+	}); !ok || ev.ItemID != "" {
+		t.Fatalf("openAIRealtimeEvent explicit empty item_id = %#v, %v; want accepted empty id", ev, ok)
 	}
 }
 
@@ -2160,6 +2335,43 @@ func TestRealtimeSessionRoutesOutputMessageWithEmptyID(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionRoutesEmptyIDOutputMessageTextDeltas(t *testing.T) {
+	session := &realtimeSession{}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "",
+			"type": "message",
+		},
+	})
+
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for empty-id message generation")
+	}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:   llm.RealtimeEventTypeText,
+		ItemID: "",
+		Text:   "empty id text",
+	})
+
+	select {
+	case text := <-msg.TextCh:
+		if text != "empty id text" {
+			t.Fatalf("empty-id text delta = %q, want empty id text", text)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for empty-id text delta")
+	}
+}
+
 func TestRealtimeSessionRoutesOutputMessageAudioDeltasToGenerationStream(t *testing.T) {
 	session := &realtimeSession{}
 	created := session.trackRealtimeEvent(llm.RealtimeEvent{
@@ -2200,6 +2412,49 @@ func TestRealtimeSessionRoutesOutputMessageAudioDeltasToGenerationStream(t *test
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for audio delta")
+	}
+}
+
+func TestRealtimeSessionRoutesEmptyIDOutputMessageAudioDeltas(t *testing.T) {
+	session := &realtimeSession{}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "",
+			"type": "message",
+		},
+	})
+
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for empty-id message generation")
+	}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:   llm.RealtimeEventTypeAudio,
+		ItemID: "",
+		Data:   []byte{3, 0, 4, 0},
+	})
+
+	select {
+	case frame := <-msg.AudioCh:
+		if frame == nil {
+			t.Fatal("empty-id audio frame = nil, want frame")
+		}
+		if string(frame.Data) != string([]byte{3, 0, 4, 0}) {
+			t.Fatalf("empty-id audio data = %v, want [3 0 4 0]", frame.Data)
+		}
+		if frame.SampleRate != 24000 || frame.NumChannels != 1 || frame.SamplesPerChannel != 2 {
+			t.Fatalf("empty-id audio frame metadata = %#v, want 24kHz mono with 2 samples", frame)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for empty-id audio delta")
 	}
 }
 
@@ -2338,6 +2593,48 @@ func TestRealtimeSessionClosesOutputMessageStreamsWhenItemDone(t *testing.T) {
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for audio stream close")
+	}
+}
+
+func TestRealtimeSessionResolvesDefaultModalitiesWhenItemDone(t *testing.T) {
+	session := &realtimeSession{}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+		},
+	})
+
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.done",
+		"item": map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+		},
+	})
+
+	select {
+	case modalities, ok := <-msg.ModalitiesCh:
+		if !ok {
+			t.Fatal("ModalitiesCh closed before default modalities, want default modalities")
+		}
+		if len(modalities) != 2 || modalities[0] != "audio" || modalities[1] != "text" {
+			t.Fatalf("modalities = %#v, want default audio and text", modalities)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for default modalities")
 	}
 }
 
@@ -3324,6 +3621,91 @@ func TestRealtimeSessionPersistsAudioTranscriptOnResponseDone(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionPersistsEmptyIDAudioTranscriptOnResponseDone(t *testing.T) {
+	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
+	if err := session.remote.Insert(nil, &llm.ChatMessage{
+		ID:      "",
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{},
+	}); err != nil {
+		t.Fatalf("Insert remote message error = %v", err)
+	}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "",
+			"type": "message",
+		},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "response.output_audio_transcript.delta",
+		"item_id": "",
+		"delta":   "empty id transcript",
+	})
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":     "response.done",
+		"response": map[string]any{"id": "resp_123", "status": "completed"},
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
+	}
+
+	msg, ok := session.remote.Get("").(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("remote empty-id item = %T, want *llm.ChatMessage", session.remote.Get(""))
+	}
+	if got := msg.TextContent(); got != "empty id transcript" {
+		t.Fatalf("remote empty-id text content = %q, want accumulated audio transcript", got)
+	}
+}
+
+func TestRealtimeSessionIgnoresOutputTranscriptDeltaWithoutItemID(t *testing.T) {
+	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
+	if err := session.remote.Insert(nil, &llm.ChatMessage{
+		ID:      "",
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{},
+	}); err != nil {
+		t.Fatalf("Insert remote message error = %v", err)
+	}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "",
+			"type": "message",
+		},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":  "response.output_audio_transcript.delta",
+		"delta": "missing id transcript",
+	})
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":     "response.done",
+		"response": map[string]any{"id": "resp_123", "status": "completed"},
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
+	}
+
+	msg, ok := session.remote.Get("").(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("remote empty-id item = %T, want *llm.ChatMessage", session.remote.Get(""))
+	}
+	if got := msg.TextContent(); got != "" {
+		t.Fatalf("remote empty-id text content = %q, want missing item_id transcript ignored", got)
+	}
+}
+
 func TestRealtimeSessionPersistsTextDeltaOnResponseDone(t *testing.T) {
 	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
 	if err := session.remote.Insert(nil, &llm.ChatMessage{
@@ -3842,6 +4224,75 @@ func TestRealtimeSessionEmitsFinalPartialTranscriptOnInputAudioTranscriptionFail
 	}
 }
 
+func TestRealtimeSessionAccumulatesEmptyItemIDInputAudioTranscription(t *testing.T) {
+	session := &realtimeSession{}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:       "",
+			ContentIndex: 1,
+			Transcript:   "hel",
+			IsFinal:      false,
+		},
+	})
+	second := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:       "",
+			ContentIndex: 1,
+			Transcript:   "lo",
+			IsFinal:      false,
+		},
+	})
+	if second.InputTranscription.Transcript != "hello" {
+		t.Fatalf("empty-id partial transcript = %q, want accumulated hello", second.InputTranscription.Transcript)
+	}
+
+	ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":          "conversation.item.input_audio_transcription.failed",
+		"item_id":       "",
+		"content_index": 1,
+	})
+	if !ok {
+		t.Fatal("trackOpenAIRealtimeEvent returned ok=false, want final empty-id partial event")
+	}
+	if ev.InputTranscription == nil || ev.InputTranscription.ItemID != "" || ev.InputTranscription.Transcript != "hello" || !ev.InputTranscription.IsFinal {
+		t.Fatalf("InputTranscription = %#v, want final accumulated hello with empty item id", ev.InputTranscription)
+	}
+}
+
+func TestRealtimeSessionIgnoresInputAudioTranscriptionFailedWithoutItemID(t *testing.T) {
+	session := &realtimeSession{}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "",
+			Transcript: "partial",
+			IsFinal:    false,
+		},
+	})
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "conversation.item.input_audio_transcription.failed",
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want missing item_id failure ignored", ev)
+	}
+
+	next := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "",
+			Transcript: " tail",
+			IsFinal:    false,
+		},
+	})
+	if next.InputTranscription.Transcript != "partial tail" {
+		t.Fatalf("empty-id partial transcript = %q, want missing item_id failure to preserve partial", next.InputTranscription.Transcript)
+	}
+}
+
 func TestRealtimeSessionIgnoresInputAudioTranscriptionFailedWithoutPartial(t *testing.T) {
 	session := &realtimeSession{}
 
@@ -4313,6 +4764,61 @@ func TestRealtimeEventMapsOutputItemDoneFunctionCall(t *testing.T) {
 	}
 	if ev.Function.CallID != "call_123" || ev.Function.Name != "lookup" || ev.Function.Arguments != `{"query":"hello"}` {
 		t.Fatalf("Function = %#v, want completed OpenAI function call", ev.Function)
+	}
+}
+
+func TestRealtimeEventRejectsOutputItemDoneFunctionCallWithoutID(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		id   any
+		set  bool
+	}{
+		{name: "missing"},
+		{name: "null", id: nil, set: true},
+		{name: "non_string", id: 123, set: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			item := map[string]any{
+				"type":      "function_call",
+				"call_id":   "call_123",
+				"name":      "lookup",
+				"arguments": `{"query":"hello"}`,
+			}
+			if tt.set {
+				item["id"] = tt.id
+			}
+
+			if ev, ok := openAIRealtimeEvent(map[string]any{
+				"type": "response.output_item.done",
+				"item": item,
+			}); ok {
+				t.Fatalf("openAIRealtimeEvent = %#v, true; want malformed function call ignored", ev)
+			}
+		})
+	}
+
+	if ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.done",
+		"item": map[string]any{
+			"id":        "",
+			"type":      "function_call",
+			"call_id":   "call_123",
+			"name":      "lookup",
+			"arguments": `{"query":"hello"}`,
+		},
+	}); !ok || ev.Function == nil {
+		t.Fatalf("openAIRealtimeEvent explicit empty id = %#v, %v; want accepted function call", ev, ok)
+	}
+}
+
+func TestRealtimeEventIgnoresFunctionCallArgumentDelta(t *testing.T) {
+	if ev, ok := openAIRealtimeEvent(map[string]any{
+		"type":    "response.function_call_arguments.delta",
+		"call_id": "call_123",
+		"name":    "lookup",
+		"delta":   `{"query":`,
+	}); ok {
+		t.Fatalf("openAIRealtimeEvent = %#v, true; want argument delta ignored until output item done", ev)
 	}
 }
 
