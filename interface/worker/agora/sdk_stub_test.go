@@ -306,6 +306,44 @@ func TestSDKDataPublisherCloseCancelsAcceptedCallbacks(t *testing.T) {
 	}
 }
 
+func TestSDKDataPublisherCancelsCallbacksOnStartupFailure(t *testing.T) {
+	source, err := os.ReadFile("sdk_rtm.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk_rtm.go) error = %v", err)
+	}
+	text := string(source)
+	constructorIndex := strings.Index(text, "func NewSDKDataPublisher")
+	if constructorIndex < 0 {
+		t.Fatal("sdk_rtm.go missing NewSDKDataPublisher")
+	}
+	constructorBody := text[constructorIndex:]
+	if nextFunc := strings.Index(constructorBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		constructorBody = constructorBody[:len("func ")+nextFunc]
+	}
+	for _, want := range []string{
+		"callbackCtx, cancelCallbacks := context.WithCancel(context.Background())",
+		"cancelCallbacks()",
+		"return nil, fmt.Errorf(\"agora RTM client creation failed\")",
+		"return nil, fmt.Errorf(\"agora RTM login failed: %d\", ret)",
+		"return nil, fmt.Errorf(\"agora RTM subscribe failed: %d\", ret)",
+	} {
+		if !strings.Contains(constructorBody, want) {
+			t.Fatalf("NewSDKDataPublisher missing %q", want)
+		}
+	}
+	for _, returnText := range []string{
+		"return nil, fmt.Errorf(\"agora RTM client creation failed\")",
+		"return nil, fmt.Errorf(\"agora RTM login failed: %d\", ret)",
+		"return nil, fmt.Errorf(\"agora RTM subscribe failed: %d\", ret)",
+	} {
+		returnIndex := strings.Index(constructorBody, returnText)
+		cancelBeforeReturn := strings.LastIndex(constructorBody[:returnIndex], "cancelCallbacks()")
+		if cancelBeforeReturn < 0 {
+			t.Fatalf("NewSDKDataPublisher must cancel callback context before %s", returnText)
+		}
+	}
+}
+
 func TestSDKDataPublisherRechecksPublishContextAfterLock(t *testing.T) {
 	source, err := os.ReadFile("sdk_rtm.go")
 	if err != nil {

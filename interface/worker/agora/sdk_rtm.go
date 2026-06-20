@@ -46,13 +46,16 @@ func NewSDKDataPublisher(opts Options) (DataPublisher, error) {
 	}
 	client := agorartm.NewRtmClient(cfg)
 	if client == nil {
+		cancelCallbacks()
 		return nil, fmt.Errorf("agora RTM client creation failed")
 	}
 	if ret, _ := client.Login(resolved.Token); ret != 0 {
+		cancelCallbacks()
 		client.Release()
 		return nil, fmt.Errorf("agora RTM login failed: %d", ret)
 	}
 	if ret, _ := subscribeRTMMessages(client, resolved.Channel); ret != 0 {
+		cancelCallbacks()
 		client.Logout()
 		client.Release()
 		return nil, fmt.Errorf("agora RTM subscribe failed: %d", ret)
