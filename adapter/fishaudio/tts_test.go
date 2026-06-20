@@ -318,6 +318,56 @@ func TestFishAudioTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	}
 }
 
+func TestFishAudioTTSProviderCloseClosesActiveStreams(t *testing.T) {
+	provider := NewFishAudioTTS("test-key", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	closeCalls := 0
+	var stopSeen bool
+	stream := &fishAudioTTSSynthesizeStream{
+		ctx:    ctx,
+		cancel: cancel,
+		events: make(chan *tts.SynthesizedAudio, 1),
+		errCh:  make(chan error, 1),
+		writeMessage: func(_ int, data []byte) error {
+			var msg map[string]any
+			if err := msgpack.Unmarshal(data, &msg); err != nil {
+				t.Fatalf("decode close message: %v", err)
+			}
+			stopSeen = msg["event"] == "stop"
+			return nil
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+	if !stopSeen {
+		t.Fatal("stop event not sent on provider Close")
+	}
+	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushText after provider Close error = %v, want closed stream error", err)
+	}
+	provider.mu.Lock()
+	active := len(provider.streams)
+	provider.mu.Unlock()
+	if active != 0 {
+		t.Fatalf("active streams after Close = %d, want 0", active)
+	}
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("stream context still active after provider Close")
+	}
+}
+
 func TestFishAudioTTSAudioFromStreamMessage(t *testing.T) {
 	pcm := []byte{1, 2, 3, 4}
 	audio, done, err := fishAudioTTSAudioFromStreamMessage(mustFishMessage(t, map[string]any{

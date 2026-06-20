@@ -14,11 +14,13 @@ import (
 )
 
 type GoogleTTS struct {
-	client googleTTSClient
-	voice  *texttospeechpb.VoiceSelectionParams
-	model  string
-	prompt *string
-	audio  *texttospeechpb.AudioConfig
+	mu      sync.Mutex
+	streams map[*googleTTSSynthesizeStream]struct{}
+	client  googleTTSClient
+	voice   *texttospeechpb.VoiceSelectionParams
+	model   string
+	prompt  *string
+	audio   *texttospeechpb.AudioConfig
 }
 
 type googleTTSClient interface {
@@ -140,10 +142,11 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 	}
 
 	return &GoogleTTS{
-		client: client,
-		voice:  googleTTSVoiceParams(cfg),
-		model:  cfg.model,
-		prompt: cfg.prompt,
+		streams: make(map[*googleTTSSynthesizeStream]struct{}),
+		client:  client,
+		voice:   googleTTSVoiceParams(cfg),
+		model:   cfg.model,
+		prompt:  cfg.prompt,
 		audio: &texttospeechpb.AudioConfig{
 			AudioEncoding:    texttospeechpb.AudioEncoding_PCM,
 			SampleRateHertz:  24000,
@@ -168,6 +171,39 @@ func (t *GoogleTTS) Model() string {
 	return "Chirp3"
 }
 func (t *GoogleTTS) Provider() string { return "Google Cloud Platform" }
+
+func (t *GoogleTTS) Close() error {
+	t.mu.Lock()
+	streams := make([]*googleTTSSynthesizeStream, 0, len(t.streams))
+	for stream := range t.streams {
+		streams = append(streams, stream)
+	}
+	t.streams = make(map[*googleTTSSynthesizeStream]struct{})
+	t.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
+func (t *GoogleTTS) registerStream(stream *googleTTSSynthesizeStream) {
+	t.mu.Lock()
+	if t.streams == nil {
+		t.streams = make(map[*googleTTSSynthesizeStream]struct{})
+	}
+	t.streams[stream] = struct{}{}
+	t.mu.Unlock()
+}
+
+func (t *GoogleTTS) unregisterStream(stream *googleTTSSynthesizeStream) {
+	t.mu.Lock()
+	delete(t.streams, stream)
+	t.mu.Unlock()
+}
 
 func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 	cfg := googleTTSConfig{
@@ -228,6 +264,7 @@ func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 
 func (t *GoogleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	stream := &googleTTSSynthesizeStream{
+		owner:  t,
 		ctx:    ctx,
 		client: t.client,
 		voice:  t.voice,
@@ -235,6 +272,7 @@ func (t *GoogleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		audio:  t.audio,
 	}
 	stream.cond = sync.NewCond(&stream.mu)
+	t.registerStream(stream)
 	return stream, nil
 }
 
@@ -284,6 +322,7 @@ func (s *googleTTSChunkedStream) Close() error {
 type googleTTSSynthesizeStream struct {
 	mu         sync.Mutex
 	cond       *sync.Cond
+	owner      *GoogleTTS
 	ctx        context.Context
 	client     googleTTSClient
 	streams    []texttospeechpb.TextToSpeech_StreamingSynthesizeClient
@@ -390,6 +429,7 @@ func (s *googleTTSSynthesizeStream) Close() error {
 	s.streams = nil
 	s.cond.Broadcast()
 	s.mu.Unlock()
+	s.unregister()
 	var closeErr error
 	for _, stream := range streams {
 		if err := stream.CloseSend(); err != nil && closeErr == nil {
@@ -441,6 +481,13 @@ func (s *googleTTSSynthesizeStream) markClosed() {
 	s.closed = true
 	s.cond.Broadcast()
 	s.mu.Unlock()
+	s.unregister()
+}
+
+func (s *googleTTSSynthesizeStream) unregister() {
+	if s.owner != nil {
+		s.owner.unregisterStream(s)
+	}
 }
 
 func googleTTSVoiceParams(cfg googleTTSConfig) *texttospeechpb.VoiceSelectionParams {

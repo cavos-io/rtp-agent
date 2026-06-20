@@ -348,6 +348,36 @@ func TestMurfTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	}
 }
 
+func TestMurfTTSProviderCloseClosesActiveStreams(t *testing.T) {
+	conn, closed := newMurfClosingWebsocketConn(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	provider := NewMurfTTS("test-key", "")
+	stream := &murfTTSSynthesizeStream{
+		conn:       conn,
+		ctx:        ctx,
+		cancel:     cancel,
+		provider:   provider,
+		contextID:  "context-1",
+		sampleRate: 24000,
+		events:     make(chan *tts.SynthesizedAudio, 1),
+		errCh:      make(chan error, 1),
+	}
+	provider.registerStream(stream)
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test websocket close")
+	}
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after provider Close error = %v, want io.ErrClosedPipe", err)
+	}
+}
+
 func newMurfClosingWebsocketConn(t *testing.T) (*websocket.Conn, <-chan struct{}) {
 	t.Helper()
 	clientConn, serverConn := net.Pipe()

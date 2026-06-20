@@ -32,6 +32,8 @@ const (
 )
 
 type MurfTTS struct {
+	mu         sync.Mutex
+	streams    map[*murfTTSSynthesizeStream]struct{}
 	apiKey     string
 	baseURL    string
 	model      string
@@ -115,6 +117,7 @@ func NewMurfTTS(apiKey string, voice string, opts ...MurfTTSOption) *MurfTTS {
 		apiKey = os.Getenv("MURF_API_KEY")
 	}
 	provider := &MurfTTS{
+		streams:    make(map[*murfTTSSynthesizeStream]struct{}),
 		apiKey:     apiKey,
 		baseURL:    defaultMurfBaseURL,
 		model:      defaultMurfModel,
@@ -140,6 +143,46 @@ func (t *MurfTTS) SampleRate() int  { return t.sampleRate }
 func (t *MurfTTS) NumChannels() int { return 1 }
 func (t *MurfTTS) Model() string    { return t.model }
 func (t *MurfTTS) Provider() string { return "Murf" }
+
+func (t *MurfTTS) Close() error {
+	t.mu.Lock()
+	streams := make([]*murfTTSSynthesizeStream, 0, len(t.streams))
+	for stream := range t.streams {
+		streams = append(streams, stream)
+	}
+	t.streams = make(map[*murfTTSSynthesizeStream]struct{})
+	t.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
+func (t *MurfTTS) registerStream(stream *murfTTSSynthesizeStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	if t.streams == nil {
+		t.streams = make(map[*murfTTSSynthesizeStream]struct{})
+	}
+	t.streams[stream] = struct{}{}
+	stream.provider = t
+	t.mu.Unlock()
+}
+
+func (t *MurfTTS) unregisterStream(stream *murfTTSSynthesizeStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	delete(t.streams, stream)
+	t.mu.Unlock()
+}
 
 func (t *MurfTTS) UpdateOptions(opts ...MurfTTSOption) {
 	for _, opt := range opts {
@@ -221,6 +264,7 @@ func (t *MurfTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		events:     make(chan *tts.SynthesizedAudio, 100),
 		errCh:      make(chan error, 1),
 	}
+	t.registerStream(stream)
 	go stream.readLoop()
 	return stream, nil
 }
@@ -372,7 +416,11 @@ func (s *murfTTSSynthesizeStream) Close() error {
 	s.closed = true
 	s.cancel()
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.conn.Close()
+	err := s.conn.Close()
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
+	return err
 }
 
 func (s *murfTTSSynthesizeStream) writeMessageLocked(message []byte) error {
@@ -380,6 +428,9 @@ func (s *murfTTSSynthesizeStream) writeMessageLocked(message []byte) error {
 		s.closed = true
 		s.cancel()
 		_ = s.conn.Close()
+		if s.provider != nil {
+			s.provider.unregisterStream(s)
+		}
 		return err
 	}
 	return nil

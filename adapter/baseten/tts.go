@@ -39,6 +39,8 @@ type BasetenTTS struct {
 	sampleRate    int
 	httpClient    basetenTTSHTTPDoer
 	dialWebsocket basetenTTSWebsocketDialer
+	mu            sync.Mutex
+	streams       map[*basetenTTSSynthesizeStream]struct{}
 }
 
 type BasetenTTSOption func(*BasetenTTS)
@@ -140,6 +142,7 @@ func NewBasetenTTS(apiKey string, model string, opts ...BasetenTTSOption) (*Base
 		sampleRate:    defaultBasetenTTSSampleRate,
 		httpClient:    http.DefaultClient,
 		dialWebsocket: defaultBasetenTTSWebsocketDialer,
+		streams:       make(map[*basetenTTSSynthesizeStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -160,6 +163,27 @@ func (t *BasetenTTS) Capabilities() tts.TTSCapabilities {
 }
 func (t *BasetenTTS) SampleRate() int  { return t.sampleRate }
 func (t *BasetenTTS) NumChannels() int { return 1 }
+
+func (t *BasetenTTS) Close() error {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	streams := make([]*basetenTTSSynthesizeStream, 0, len(t.streams))
+	for stream := range t.streams {
+		streams = append(streams, stream)
+	}
+	t.streams = make(map[*basetenTTSSynthesizeStream]struct{})
+	t.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
 
 func (t *BasetenTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	req, err := buildBasetenTTSRequest(ctx, t, text)
@@ -217,6 +241,7 @@ func (t *BasetenTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &basetenTTSSynthesizeStream{
+		owner:      t,
 		conn:       conn,
 		ctx:        streamCtx,
 		cancel:     cancel,
@@ -226,8 +251,34 @@ func (t *BasetenTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	stream.writeMessage = stream.writeWebsocketMessage
 	stream.closeConn = stream.closeWebsocketConn
+	t.registerStream(stream)
 	go stream.readLoop()
 	return stream, nil
+}
+
+func (t *BasetenTTS) registerStream(stream *basetenTTSSynthesizeStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.streams == nil {
+		t.streams = make(map[*basetenTTSSynthesizeStream]struct{})
+	}
+	t.streams[stream] = struct{}{}
+	stream.owner = t
+}
+
+func (t *BasetenTTS) unregisterStream(stream *basetenTTSSynthesizeStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.streams, stream)
+	if stream.owner == t {
+		stream.owner = nil
+	}
 }
 
 func defaultBasetenTTSWebsocketDialer(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
@@ -288,6 +339,7 @@ func (s *basetenTTSChunkedStream) Close() error {
 }
 
 type basetenTTSSynthesizeStream struct {
+	owner      *BasetenTTS
 	conn       *websocket.Conn
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -332,12 +384,20 @@ func (s *basetenTTSSynthesizeStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	s.cancel()
+	if s.cancel != nil {
+		s.cancel()
+	}
 	if endMessage, err := buildBasetenTTSEndMessage(); err == nil {
 		_ = s.writeMessageData(websocket.TextMessage, endMessage)
 	}
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.closeConnection()
+	if s.conn != nil {
+		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	}
+	err := s.closeConnection()
+	if s.owner != nil {
+		s.owner.unregisterStream(s)
+	}
+	return err
 }
 
 func (s *basetenTTSSynthesizeStream) writeMessageData(messageType int, data []byte) error {
@@ -359,6 +419,9 @@ func (s *basetenTTSSynthesizeStream) closeConnection() error {
 }
 
 func (s *basetenTTSSynthesizeStream) closeWebsocketConn() error {
+	if s.conn == nil {
+		return nil
+	}
 	return s.conn.Close()
 }
 
@@ -367,8 +430,13 @@ func (s *basetenTTSSynthesizeStream) closeAfterWriteFailureLocked() {
 		return
 	}
 	s.closed = true
-	s.cancel()
+	if s.cancel != nil {
+		s.cancel()
+	}
 	_ = s.closeConnection()
+	if s.owner != nil {
+		s.owner.unregisterStream(s)
+	}
 }
 
 func (s *basetenTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {

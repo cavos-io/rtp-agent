@@ -15,6 +15,8 @@ import (
 )
 
 type GoogleSTT struct {
+	mu                   sync.Mutex
+	streams              map[*googleSTTStream]struct{}
 	client               googleSpeechClient
 	model                string
 	punctuate            bool
@@ -101,6 +103,7 @@ func NewGoogleSTT(credentialsFile string, providerOpts ...GoogleSTTOption) (*Goo
 
 func newGoogleSTTWithClient(client googleSpeechClient, opts ...GoogleSTTOption) *GoogleSTT {
 	provider := &GoogleSTT{
+		streams:              make(map[*googleSTTStream]struct{}),
 		client:               client,
 		model:                "latest_long",
 		punctuate:            true,
@@ -119,6 +122,39 @@ func (s *GoogleSTT) Label() string           { return "google.STT" }
 func (s *GoogleSTT) InputSampleRate() uint32 { return uint32(s.sampleRate) }
 func (s *GoogleSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "word", OfflineRecognize: true}
+}
+
+func (s *GoogleSTT) Close() error {
+	s.mu.Lock()
+	streams := make([]*googleSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.streams = make(map[*googleSTTStream]struct{})
+	s.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
+func (s *GoogleSTT) registerStream(stream *googleSTTStream) {
+	s.mu.Lock()
+	if s.streams == nil {
+		s.streams = make(map[*googleSTTStream]struct{})
+	}
+	s.streams[stream] = struct{}{}
+	s.mu.Unlock()
+}
+
+func (s *GoogleSTT) unregisterStream(stream *googleSTTStream) {
+	s.mu.Lock()
+	delete(s.streams, stream)
+	s.mu.Unlock()
 }
 
 func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
@@ -146,11 +182,13 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	}
 
 	gs := &googleSTTStream{
+		owner:         s,
 		stream:        stream,
 		minConfidence: s.minConfidence,
 		events:        make(chan *stt.SpeechEvent, 10),
 		errCh:         make(chan error, 1),
 	}
+	s.registerStream(gs)
 	go gs.readLoop()
 
 	return gs, nil
@@ -265,6 +303,7 @@ func googleSpeakerID(word *speechpb.WordInfo) string {
 
 type googleSTTStream struct {
 	mu            sync.Mutex
+	owner         *GoogleSTT
 	stream        speechpb.Speech_StreamingRecognizeClient
 	minConfidence float64
 	events        chan *stt.SpeechEvent
@@ -349,6 +388,7 @@ func (s *googleSTTStream) PushFrame(frame *model.AudioFrame) error {
 	}); err != nil {
 		s.closed = true
 		_ = s.stream.CloseSend()
+		s.unregister()
 		return err
 	}
 	return nil
@@ -365,7 +405,9 @@ func (s *googleSTTStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	return s.stream.CloseSend()
+	err := s.stream.CloseSend()
+	s.unregister()
+	return err
 }
 
 func (s *googleSTTStream) Next() (*stt.SpeechEvent, error) {
@@ -382,5 +424,11 @@ func (s *googleSTTStream) Next() (*stt.SpeechEvent, error) {
 		return event, nil
 	case err := <-s.errCh:
 		return nil, err
+	}
+}
+
+func (s *googleSTTStream) unregister() {
+	if s.owner != nil {
+		s.owner.unregisterStream(s)
 	}
 }
