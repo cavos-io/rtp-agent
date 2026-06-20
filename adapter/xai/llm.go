@@ -399,6 +399,7 @@ func buildXAIToolOutput(toolOutput *llm.FunctionCallOutput) xaiMessage {
 func (s *xaiStream) Next() (*llm.ChatChunk, error) {
 	if s.scanner == nil {
 		s.scanner = bufio.NewScanner(s.resp.Body)
+		s.scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	}
 
 	for s.scanner.Scan() {

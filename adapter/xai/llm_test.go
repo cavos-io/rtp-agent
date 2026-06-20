@@ -501,6 +501,35 @@ func TestXAIStreamMapsToolCallDeltas(t *testing.T) {
 	}
 }
 
+func TestXAIStreamHandlesLargeReferenceDeltas(t *testing.T) {
+	largeDelta := strings.Repeat("a", 70*1024)
+	payload, err := json.Marshal(map[string]any{
+		"id": "chat",
+		"choices": []map[string]any{
+			{
+				"delta": map[string]any{
+					"role":    "assistant",
+					"content": largeDelta,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal chunk: %v", err)
+	}
+	stream := &xaiStream{resp: &http.Response{
+		Body: io.NopCloser(strings.NewReader("data: " + string(payload) + "\n" + "data: [DONE]\n")),
+	}}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want large delta chunk", err)
+	}
+	if chunk.Delta == nil || chunk.Delta.Content != largeDelta {
+		t.Fatalf("large delta length = %d, want %d", len(chunk.Delta.Content), len(largeDelta))
+	}
+}
+
 func xaiMessageContentAsList(t *testing.T, message xaiMessage) []map[string]any {
 	t.Helper()
 	data, err := json.Marshal(message)
