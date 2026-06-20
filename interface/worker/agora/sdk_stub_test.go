@@ -92,6 +92,31 @@ func TestSDKDataPublisherCloseUsesLifecycleHelper(t *testing.T) {
 	}
 }
 
+func TestSDKDataPublisherSubscribesWithMessages(t *testing.T) {
+	source, err := os.ReadFile("sdk_rtm.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk_rtm.go) error = %v", err)
+	}
+	text := string(source)
+	subscribeIndex := strings.Index(text, "func subscribeRTMMessages")
+	if subscribeIndex < 0 {
+		t.Fatal("sdk_rtm.go missing explicit RTM message subscription helper")
+	}
+	subscribeBody := text[subscribeIndex:]
+	if nextFunc := strings.Index(subscribeBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		subscribeBody = subscribeBody[:len("func ")+nextFunc]
+	}
+	for _, want := range []string{
+		"opts := agorartm.NewSubscribeOptions()",
+		"opts.WithMessage = true",
+		"client.Subscribe(channel, opts)",
+	} {
+		if !strings.Contains(subscribeBody, want) {
+			t.Fatalf("subscribeRTMMessages missing %q", want)
+		}
+	}
+}
+
 func TestSDKDataPublisherIgnoresInboundMessagesAfterClose(t *testing.T) {
 	source, err := os.ReadFile("sdk_rtm.go")
 	if err != nil {
