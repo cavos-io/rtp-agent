@@ -679,6 +679,47 @@ func TestAssemblyAISTTStreamCloseSendsReferenceTerminate(t *testing.T) {
 	}
 }
 
+func TestAssemblyAISTTProviderCloseClosesActiveStreams(t *testing.T) {
+	provider := NewAssemblyAISTT("test-key")
+	var messages []map[string]string
+	closeCalls := 0
+	stream := &assemblyAISTTStream{
+		writeJSON: func(message any) error {
+			payload, ok := message.(map[string]string)
+			if !ok {
+				t.Fatalf("close message = %#v, want map[string]string", message)
+			}
+			messages = append(messages, payload)
+			return nil
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	closer, ok := any(provider).(interface{ Close() error })
+	if !ok {
+		t.Fatal("AssemblyAISTT does not implement Close")
+	}
+	if err := closer.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if len(messages) != 1 || messages[0]["type"] != "Terminate" {
+		t.Fatalf("close messages = %#v, want one Terminate", messages)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01}}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after provider Close = %v, want io.ErrClosedPipe", err)
+	}
+	if len(provider.streams) != 0 {
+		t.Fatalf("provider streams = %d, want 0", len(provider.streams))
+	}
+}
+
 func TestAssemblyAISTTUnexpectedNormalCloseReturnsAPIStatusError(t *testing.T) {
 	closed := make(chan struct{})
 	closeAfterHandshake := make(chan struct{})
