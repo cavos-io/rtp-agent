@@ -3218,6 +3218,7 @@ func TestDefaultConfigFromEnvSelectsDeepgramSpeechProviders(t *testing.T) {
 	t.Setenv("DEEPGRAM_API_KEY", "test-deepgram-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
 	t.Setenv("RTP_AGENT_STT_MODEL", "nova-3")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "id")
 	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://deepgram.example/v1/listen")
 	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "16000")
 	t.Setenv("RTP_AGENT_STT_NUMBER_OF_CHANNELS", "2")
@@ -3255,6 +3256,9 @@ func TestDefaultConfigFromEnvSelectsDeepgramSpeechProviders(t *testing.T) {
 	}
 	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.Diarization || !caps.OfflineRecognize {
 		t.Fatalf("STT capabilities = %+v, want streaming diarization offline recognize", caps)
+	}
+	if got := reflect.ValueOf(app.Session.STT).Elem().FieldByName("language").String(); got != "id" {
+		t.Fatalf("STT language = %q, want env language id", got)
 	}
 	if got := app.Session.TTS.Label(); got != "deepgram.TTS" {
 		t.Fatalf("TTS label = %q, want deepgram.TTS", got)
