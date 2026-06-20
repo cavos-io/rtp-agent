@@ -412,6 +412,54 @@ func TestBasetenSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestBasetenSTTUpdateOptionsReconnectsActiveStreams(t *testing.T) {
+	metadataCh := make(chan map[string]any, 2)
+	errCh := make(chan error, 2)
+	dialer := newBasetenSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		_, metadataPayload, err := conn.ReadMessage()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		var metadata map[string]any
+		if err := json.Unmarshal(metadataPayload, &metadata); err != nil {
+			errCh <- err
+			return
+		}
+		metadataCh <- metadata
+		_, _, _ = conn.ReadMessage()
+	})
+
+	provider := mustNewBasetenSTT(t, "test-key", "",
+		WithBasetenSTTModelEndpoint("ws://baseten.test/websocket"),
+		dialer,
+		WithBasetenSTTLanguage("en"),
+		WithBasetenSTTVADThreshold(0.5),
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	first := readBasetenTestChan(t, metadataCh, errCh)
+	firstWhisper := first["whisper_params"].(map[string]any)
+	assertBasetenPayload(t, firstWhisper, "audio_language", "en")
+	firstVAD := first["streaming_vad_config"].(map[string]any)
+	assertBasetenPayload(t, firstVAD, "threshold", 0.5)
+
+	provider.UpdateOptions(
+		WithBasetenSTTLanguage("id"),
+		WithBasetenSTTVADThreshold(0.8),
+	)
+
+	second := readBasetenTestChan(t, metadataCh, errCh)
+	secondWhisper := second["whisper_params"].(map[string]any)
+	assertBasetenPayload(t, secondWhisper, "audio_language", "id")
+	secondVAD := second["streaming_vad_config"].(map[string]any)
+	assertBasetenPayload(t, secondVAD, "threshold", 0.8)
+}
+
 func TestBasetenSTTUnexpectedNormalCloseReturnsAPIStatusError(t *testing.T) {
 	dialer := newBasetenSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
 		if _, _, err := conn.ReadMessage(); err != nil {

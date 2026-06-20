@@ -184,17 +184,22 @@ func (s *BasetenSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *BasetenSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	s.mu.Lock()
 	if language != "" {
 		s.language = language
 	}
-	conn, _, err := s.dialWebsocket(ctx, s.modelEndpoint, buildBasetenSTTHeaders(s))
+	endpoint := s.modelEndpoint
+	headers := buildBasetenSTTHeaders(s)
+	metadata, err := json.Marshal(buildBasetenSTTMetadata(s))
+	dialer := s.dialWebsocket
+	streamLanguage := s.language
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	conn, _, err := dialer(ctx, endpoint, headers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial baseten stt websocket: %w", err)
-	}
-	metadata, err := json.Marshal(buildBasetenSTTMetadata(s))
-	if err != nil {
-		_ = conn.Close()
-		return nil, err
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, metadata); err != nil {
 		_ = conn.Close()
@@ -208,12 +213,39 @@ func (s *BasetenSTT) Stream(ctx context.Context, language string) (stt.Recognize
 		ctx:    streamCtx,
 		cancel: cancel,
 		state: &basetenSTTStreamState{
-			language: s.language,
+			language: streamLanguage,
 		},
 	}
 	s.registerStream(stream)
-	go stream.readLoop()
+	go stream.readLoop(conn)
 	return stream, nil
+}
+
+func (s *BasetenSTT) UpdateOptions(opts ...BasetenSTTOption) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	for _, opt := range opts {
+		opt(s)
+	}
+	streams := make([]*basetenSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	endpoint := s.modelEndpoint
+	headers := buildBasetenSTTHeaders(s)
+	metadata, err := json.Marshal(buildBasetenSTTMetadata(s))
+	dialer := s.dialWebsocket
+	language := s.language
+	s.mu.Unlock()
+	if err != nil {
+		return
+	}
+
+	for _, stream := range streams {
+		stream.updateOptions(endpoint, headers, metadata, dialer, language)
+	}
 }
 
 func (s *BasetenSTT) Close() error {
@@ -298,16 +330,17 @@ func buildBasetenSTTMetadata(s *BasetenSTT) map[string]interface{} {
 }
 
 type basetenSTTStream struct {
-	conn   *websocket.Conn
-	events chan *stt.SpeechEvent
-	errCh  chan error
-	owner  *BasetenSTT
-	mu     sync.Mutex
-	closed bool
-	ctx    context.Context
-	cancel context.CancelFunc
-	state  *basetenSTTStreamState
-	audio  bytes.Buffer
+	conn         *websocket.Conn
+	events       chan *stt.SpeechEvent
+	errCh        chan error
+	owner        *BasetenSTT
+	mu           sync.Mutex
+	closed       bool
+	reconnecting bool
+	ctx          context.Context
+	cancel       context.CancelFunc
+	state        *basetenSTTStreamState
+	audio        bytes.Buffer
 }
 
 func (s *basetenSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -322,11 +355,25 @@ func (s *basetenSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if _, err := s.audio.Write(frame.Data); err != nil {
 		return err
 	}
+	if s.reconnecting || s.conn == nil {
+		return nil
+	}
+	return s.writeBufferedAudioLocked(false)
+}
+
+func (s *basetenSTTStream) writeBufferedAudioLocked(flush bool) error {
 	for s.audio.Len() >= basetenSTTAudioChunkBytes {
 		chunk := make([]byte, basetenSTTAudioChunkBytes)
 		if _, err := s.audio.Read(chunk); err != nil {
 			return err
 		}
+		if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
+			return err
+		}
+	}
+	if flush && s.audio.Len() > 0 {
+		chunk := bytes.Clone(s.audio.Bytes())
+		s.audio.Reset()
 		if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
 			return err
 		}
@@ -343,12 +390,10 @@ func (s *basetenSTTStream) Flush() error {
 	if s.audio.Len() == 0 {
 		return nil
 	}
-	chunk := bytes.Clone(s.audio.Bytes())
-	s.audio.Reset()
-	if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
-		return err
+	if s.reconnecting || s.conn == nil {
+		return nil
 	}
-	return nil
+	return s.writeBufferedAudioLocked(true)
 }
 
 func (s *basetenSTTStream) Close() error {
@@ -370,6 +415,63 @@ func (s *basetenSTTStream) Close() error {
 	return err
 }
 
+func (s *basetenSTTStream) updateOptions(endpoint string, headers http.Header, metadata []byte, dialer basetenSTTWebsocketDialer, language string) {
+	if dialer == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	oldConn := s.conn
+	s.reconnecting = true
+	s.mu.Unlock()
+
+	if oldConn != nil {
+		_ = oldConn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+		_ = oldConn.Close()
+	}
+	newConn, _, err := dialer(s.ctx, endpoint, headers)
+	if err == nil {
+		err = newConn.WriteMessage(websocket.TextMessage, metadata)
+	}
+	if err != nil {
+		if newConn != nil {
+			_ = newConn.Close()
+		}
+		s.mu.Lock()
+		if !s.closed {
+			s.reconnecting = false
+			select {
+			case s.errCh <- fmt.Errorf("failed to reconnect baseten stt websocket: %w", err):
+			default:
+			}
+		}
+		s.mu.Unlock()
+		return
+	}
+
+	s.mu.Lock()
+	if s.closed {
+		s.reconnecting = false
+		s.mu.Unlock()
+		_ = newConn.Close()
+		return
+	}
+	s.conn = newConn
+	s.state.language = language
+	s.reconnecting = false
+	if err := s.writeBufferedAudioLocked(false); err != nil {
+		select {
+		case s.errCh <- err:
+		default:
+		}
+	}
+	s.mu.Unlock()
+	go s.readLoop(newConn)
+}
+
 func (s *basetenSTTStream) Next() (*stt.SpeechEvent, error) {
 	select {
 	case event, ok := <-s.events:
@@ -389,12 +491,28 @@ func (s *basetenSTTStream) Next() (*stt.SpeechEvent, error) {
 	}
 }
 
-func (s *basetenSTTStream) readLoop() {
-	defer close(s.events)
+func (s *basetenSTTStream) readLoop(conn *websocket.Conn) {
+	closeEvents := false
+	defer func() {
+		if closeEvents {
+			if s.owner != nil {
+				s.owner.unregisterStream(s)
+			}
+			close(s.events)
+		}
+	}()
 	for {
-		msgType, payload, err := s.conn.ReadMessage()
+		msgType, payload, err := conn.ReadMessage()
 		if err != nil {
-			if !s.isClosed() {
+			s.mu.Lock()
+			current := s.conn == conn
+			closed := s.closed
+			reconnecting := s.reconnecting
+			if current && !reconnecting {
+				closeEvents = true
+			}
+			s.mu.Unlock()
+			if current && !closed && !reconnecting {
 				if closeErr, ok := err.(*websocket.CloseError); ok {
 					s.errCh <- llm.NewAPIStatusError("Baseten connection closed unexpectedly", closeErr.Code, "", err.Error())
 				} else if err == io.EOF {
@@ -417,12 +535,6 @@ func (s *basetenSTTStream) readLoop() {
 			s.events <- event
 		}
 	}
-}
-
-func (s *basetenSTTStream) isClosed() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.closed
 }
 
 type basetenSTTStreamState struct {
