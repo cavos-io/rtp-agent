@@ -1883,11 +1883,17 @@ func (s *AgentSession) SipDTMFEvents() <-chan SipDTMFEvent {
 }
 
 func (s *AgentSession) EmitSipDTMF(ev SipDTMFEvent) {
-	for _, ch := range s.sipDTMFSubscribers() {
+	primary, primarySubscribed, subscribers := s.sipDTMFSubscribers()
+	if primarySubscribed {
+		primary <- ev
+	} else if primary != nil {
 		select {
-		case ch <- ev:
+		case primary <- ev:
 		default:
 		}
+	}
+	for _, ch := range subscribers {
+		ch <- ev
 	}
 }
 
@@ -1907,17 +1913,14 @@ func (s *AgentSession) sipDTMFEvents() chan SipDTMFEvent {
 	return ch
 }
 
-func (s *AgentSession) sipDTMFSubscribers() []chan SipDTMFEvent {
+func (s *AgentSession) sipDTMFSubscribers() (chan SipDTMFEvent, bool, []chan SipDTMFEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	subs := make([]chan SipDTMFEvent, 0, len(s.sipDTMFSubs)+1)
 	if s.sipDTMFCh == nil {
 		s.sipDTMFCh = make(chan SipDTMFEvent, 10)
 	}
-	subs = append(subs, s.sipDTMFCh)
-	subs = append(subs, s.sipDTMFSubs...)
-	return subs
+	return s.sipDTMFCh, s.sipDTMFSubd, append([]chan SipDTMFEvent(nil), s.sipDTMFSubs...)
 }
 
 func (s *AgentSession) CloseEvents() <-chan CloseEvent {
