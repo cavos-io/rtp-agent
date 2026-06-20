@@ -961,7 +961,8 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 						break
 					}
 				}
-				session.EmitFunctionToolsExecuted(*ev)
+				emitted := session.EmitFunctionToolsExecuted(*ev)
+				replyRequired = emitted.HasToolReply()
 			}
 			if activeAgent := session.Agent.GetAgent(); activeAgent != nil {
 				if err := updateAgentInstructionsMessage(replyCtx, agentInstructionVariants(activeAgent), false); err != nil {

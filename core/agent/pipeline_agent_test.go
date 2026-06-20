@@ -3340,6 +3340,52 @@ func TestPipelineAgentEmitsFunctionToolsExecutedEvent(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentCancelToolReplyEventSkipsFollowupGeneration(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{
+						ToolCalls: []llm.FunctionToolCall{{
+							Type:      "function",
+							Name:      "lookup",
+							CallID:    "call_lookup",
+							Arguments: `{}`,
+						}},
+					}},
+				},
+			},
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{Content: "unwanted follow-up"}},
+				},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "tool result"}}
+	session.On("function_tools_executed", func(ev Event) {
+		if toolsEv, ok := ev.(*FunctionToolsExecutedEvent); ok {
+			toolsEv.CancelToolReply()
+		}
+	})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	if len(l.calls) != 1 {
+		t.Fatalf("LLM Chat calls = %d, want no follow-up generation after CancelToolReply", len(l.calls))
+	}
+	for _, item := range chatCtx.Items {
+		if msg, ok := item.(*llm.ChatMessage); ok && msg.Role == llm.ChatRoleAssistant {
+			t.Fatalf("assistant chat item = %#v, want no follow-up assistant message", msg)
+		}
+	}
+}
+
 func TestPipelineAgentStopResponseDoesNotAppendToolCallOrGenerateReply(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
