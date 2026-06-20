@@ -635,6 +635,57 @@ func TestRoomIOPublishAudioSubscriptionTimeoutFallsBackOnce(t *testing.T) {
 	}
 }
 
+func TestRoomIOAudioSubscriptionTimeoutReleasesConcurrentPublishWaiters(t *testing.T) {
+	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
+	rio := &RoomIO{
+		Options: RoomOptions{
+			AudioSubscriptionTimeout: 40 * time.Millisecond,
+		},
+		audioTrack:      newRoomIOTestAudioTrack(t),
+		encoder:         encoder,
+		audioSubscribed: make(chan struct{}),
+	}
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- rio.waitForAudioSubscription(context.Background())
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+	publishDone := make(chan error, 1)
+	go func() {
+		publishDone <- rio.PublishAudio(context.Background(), frame)
+	}()
+
+	select {
+	case err := <-waitDone:
+		if err != nil {
+			t.Fatalf("waitForAudioSubscription error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waitForAudioSubscription did not return after timeout fallback")
+	}
+
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatalf("PublishAudio error = %v", err)
+		}
+	case <-time.After(10 * time.Millisecond):
+		t.Fatal("PublishAudio waiter did not release with subscription timeout fallback")
+	}
+	if len(encoder.calls) == 0 {
+		t.Fatal("encoder was not called after shared subscription timeout fallback")
+	}
+}
+
 func TestRoomIOPublishAudioSubscriptionTimeoutReleasesUserAwayGate(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{UserAwayTimeout: 0.01})
 	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}

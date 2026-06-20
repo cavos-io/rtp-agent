@@ -1776,9 +1776,7 @@ func (rio *RoomIO) waitForAudioSubscriptionReady(ctx context.Context) error {
 		return nil
 	case <-timer.C:
 		logger.Logger.Warnw("room audio output publish subscription wait timed out", nil, "timeout", timeout)
-		rio.mu.Lock()
-		rio.audioSubscribed = nil
-		rio.mu.Unlock()
+		rio.releaseAudioSubscriptionFallback(ch)
 		if rio.AgentSession != nil {
 			rio.AgentSession.RefreshUserAwayTimer()
 		}
@@ -1845,9 +1843,7 @@ func (rio *RoomIO) waitForAudioSubscription(ctx context.Context) error {
 		return nil
 	case <-timer.C:
 		logger.Logger.Warnw("room audio output subscription wait timed out", nil, "timeout", timeout)
-		rio.mu.Lock()
-		rio.audioSubscribed = nil
-		rio.mu.Unlock()
+		rio.releaseAudioSubscriptionFallback(ch)
 		if rio.AgentSession != nil {
 			rio.AgentSession.RefreshUserAwayTimer()
 		}
@@ -1883,6 +1879,20 @@ func (rio *RoomIO) releaseAudioSubscriptionWaiters() {
 	if ch == nil {
 		return
 	}
+	rio.audioSubOnce.Do(func() {
+		close(ch)
+	})
+}
+
+func (rio *RoomIO) releaseAudioSubscriptionFallback(ch chan struct{}) {
+	if rio == nil || ch == nil {
+		return
+	}
+	rio.mu.Lock()
+	if rio.audioSubscribed == ch {
+		rio.audioSubscribed = nil
+	}
+	rio.mu.Unlock()
 	rio.audioSubOnce.Do(func() {
 		close(ch)
 	})
