@@ -1151,7 +1151,7 @@ func TestAgentSessionStartReturnsAvatarStartError(t *testing.T) {
 }
 
 func TestAgentSessionBackgroundAudioLifecycleWithoutRoom(t *testing.T) {
-	player := NewBackgroundAudioPlayer(nil, nil)
+	player := NewBackgroundAudioPlayer(nil, "thinking.pcm")
 	baseAgent := NewAgent("test")
 	baseAgent.VAD = &fakePipelineVAD{}
 	baseAgent.STT = &fakePipelineSTT{}
@@ -1174,6 +1174,10 @@ func TestAgentSessionBackgroundAudioLifecycleWithoutRoom(t *testing.T) {
 	session.UpdateAgentState(AgentStateSpeaking)
 	if got := player.targetVolume; got != 0.2 {
 		t.Fatalf("targetVolume after speaking = %v, want ducked volume 0.2", got)
+	}
+	session.UpdateAgentState(AgentStateThinking)
+	if player.thinkingHandle != nil {
+		t.Fatal("thinking handle started without a room")
 	}
 
 	if err := session.Stop(context.Background()); err != nil {

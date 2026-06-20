@@ -443,6 +443,9 @@ func (p *BackgroundAudioPlayer) AgentStateChanged(newState AgentState) {
 	if p.thinkingSound == nil {
 		return
 	}
+	if p.mixerTaskCancel == nil {
+		return
+	}
 
 	if newState == AgentStateThinking {
 		if p.thinkingHandle != nil && !p.thinkingHandle.Done() {
