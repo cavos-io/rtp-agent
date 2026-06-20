@@ -1707,6 +1707,11 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 	if drop {
 		return nil
 	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 
 	var encodeFrames []*model.AudioFrame
 	if encoder != nil {

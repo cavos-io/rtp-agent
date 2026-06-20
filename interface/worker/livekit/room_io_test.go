@@ -1112,6 +1112,10 @@ func TestRoomIOPublishAudioHonorsCanceledContextBeforeEncoding(t *testing.T) {
 		audioTrack: newRoomIOTestAudioTrack(t),
 		encoder:    encoder,
 	}
+	started := make(chan PlaybackStartedEvent, 1)
+	rio.OnPlaybackStarted(func(ev PlaybackStartedEvent) {
+		started <- ev
+	})
 	frame := &model.AudioFrame{
 		Data:              make([]byte, 960*2),
 		SampleRate:        48000,
@@ -1128,6 +1132,16 @@ func TestRoomIOPublishAudioHonorsCanceledContextBeforeEncoding(t *testing.T) {
 	}
 	if len(encoder.calls) != 0 {
 		t.Fatalf("encoder calls = %d, want 0 after canceled context", len(encoder.calls))
+	}
+	select {
+	case ev := <-started:
+		t.Fatalf("playback_started event = %#v, want none after canceled context", ev)
+	default:
+	}
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer waitCancel()
+	if _, err := rio.WaitForPlayout(waitCtx); err != nil {
+		t.Fatalf("WaitForPlayout error = %v, want no pending playback segment", err)
 	}
 }
 
