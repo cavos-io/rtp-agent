@@ -211,6 +211,40 @@ func TestSDKDataPublisherCloseReleasesLockBeforeNativeCleanup(t *testing.T) {
 	}
 }
 
+func TestSDKDataPublisherCloseWaitsForAcceptedCallbacks(t *testing.T) {
+	source, err := os.ReadFile("sdk_rtm.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk_rtm.go) error = %v", err)
+	}
+	text := string(source)
+	if !strings.Contains(text, "callbacks sync.WaitGroup") {
+		t.Fatal("sdkDataPublisher must track accepted RTM message callbacks")
+	}
+	handlerIndex := strings.Index(text, "func (p *sdkDataPublisher) handleMessageEvent")
+	closeIndex := strings.Index(text, "func (p *sdkDataPublisher) Close")
+	if handlerIndex < 0 || closeIndex < 0 {
+		t.Fatal("sdk_rtm.go missing handleMessageEvent or Close")
+	}
+	handlerBody := text[handlerIndex:closeIndex]
+	for _, want := range []string{
+		"p.callbacks.Add(1)",
+		"defer p.callbacks.Done()",
+	} {
+		if !strings.Contains(handlerBody, want) {
+			t.Fatalf("handleMessageEvent missing %q", want)
+		}
+	}
+	closeBody := text[closeIndex:]
+	if nextFunc := strings.Index(closeBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		closeBody = closeBody[:len("func ")+nextFunc]
+	}
+	waitIndex := strings.Index(closeBody, "p.callbacks.Wait()")
+	cleanupIndex := strings.Index(closeBody, "closeRTMClient")
+	if waitIndex < 0 || cleanupIndex < 0 || waitIndex > cleanupIndex {
+		t.Fatal("Close must wait for accepted RTM callbacks before native cleanup returns")
+	}
+}
+
 func TestSDKDataPublisherRechecksPublishContextAfterLock(t *testing.T) {
 	source, err := os.ReadFile("sdk_rtm.go")
 	if err != nil {
