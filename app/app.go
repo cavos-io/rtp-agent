@@ -1200,7 +1200,7 @@ func (a *App) runAgora(ctx context.Context) error {
 		var dataSubscriber workeragora.DataMessageSubscriber
 		if subscriber, ok := dataPublisher.(workeragora.DataMessageSubscriber); ok {
 			dataSubscriber = subscriber
-			installAgoraRTMDataMessageHandler(runCtx, dataSubscriber, a.Session, dataOpts.UID)
+			installAgoraRTMDataMessageHandler(runCtx, dataSubscriber, a.Session, dataOpts.UID, dataOpts.Channel)
 		}
 		transcriptForwarder.Start(runCtx)
 		defer func() {
@@ -1266,7 +1266,7 @@ func normalizeAgoraRuntimeContext(ctx context.Context) context.Context {
 	return ctx
 }
 
-func installAgoraRTMDataMessageHandler(ctx context.Context, subscriber workeragora.DataMessageSubscriber, responder workeragora.TextResponder, agentUserID string) {
+func installAgoraRTMDataMessageHandler(ctx context.Context, subscriber workeragora.DataMessageSubscriber, responder workeragora.TextResponder, agentUserID string, channel string) {
 	if subscriber == nil {
 		return
 	}
@@ -1275,6 +1275,7 @@ func installAgoraRTMDataMessageHandler(ctx context.Context, subscriber workerago
 	}
 	router := workeragora.RTMMessageRouter{
 		AgentUserID: agentUserID,
+		Channel:     channel,
 		TextInput: func(ctx context.Context, ev workeragora.TextInputEvent) error {
 			if err := workeragora.HandleTextInputEvent(ctx, responder, ev); err != nil {
 				logutil.Logger.Warnw("failed to handle Agora RTM text input", err, "channel", ev.Channel, "publisher", ev.Publisher)

@@ -2222,7 +2222,7 @@ func TestInstallAgoraRTMDataMessageHandlerDispatchesInputText(t *testing.T) {
 	dataPublisher := &fakeAppAgoraDataPublisher{}
 	responder := &recordingAppTextResponder{}
 
-	installAgoraRTMDataMessageHandler(context.Background(), dataPublisher, responder, "agent-rtm")
+	installAgoraRTMDataMessageHandler(context.Background(), dataPublisher, responder, "agent-rtm", "support")
 
 	handler := dataPublisher.dataHandler()
 	if handler == nil {
@@ -2267,12 +2267,35 @@ func TestInstallAgoraRTMDataMessageHandlerDispatchesInputText(t *testing.T) {
 	}
 }
 
+func TestInstallAgoraRTMDataMessageHandlerDropsForeignChannel(t *testing.T) {
+	dataPublisher := &fakeAppAgoraDataPublisher{}
+	responder := &recordingAppTextResponder{}
+
+	installAgoraRTMDataMessageHandler(context.Background(), dataPublisher, responder, "agent-rtm", "support")
+
+	handler := dataPublisher.dataHandler()
+	if handler == nil {
+		t.Fatal("installAgoraRTMDataMessageHandler() did not install handler")
+	}
+	err := handler(context.Background(), workeragora.DataMessage{
+		Channel:   "sales",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"data_type":"input_text","text":"wrong room"}`),
+	})
+	if err != nil {
+		t.Fatalf("foreign-channel RTM data handler error = %v, want nil ignored message", err)
+	}
+	if len(responder.calls) != 0 || len(responder.userTranscripts) != 0 {
+		t.Fatalf("foreign-channel RTM callback entered text turn: calls=%#v transcripts=%#v", responder.calls, responder.userTranscripts)
+	}
+}
+
 func TestInstallAgoraRTMDataMessageHandlerDropsAfterRuntimeContextCanceled(t *testing.T) {
 	dataPublisher := &fakeAppAgoraDataPublisher{}
 	responder := &recordingAppTextResponder{}
 	ctx, cancel := context.WithCancel(context.Background())
 
-	installAgoraRTMDataMessageHandler(ctx, dataPublisher, responder, "agent-rtm")
+	installAgoraRTMDataMessageHandler(ctx, dataPublisher, responder, "agent-rtm", "support")
 
 	handler := dataPublisher.dataHandler()
 	if handler == nil {
@@ -2303,7 +2326,7 @@ func TestInstallAgoraRTMDataMessageHandlerLogsTextInputErrorsOnce(t *testing.T) 
 	dataPublisher := &fakeAppAgoraDataPublisher{}
 	responder := &recordingAppTextResponder{err: errors.New("interrupt failed")}
 
-	installAgoraRTMDataMessageHandler(context.Background(), dataPublisher, responder, "agent-rtm")
+	installAgoraRTMDataMessageHandler(context.Background(), dataPublisher, responder, "agent-rtm", "support")
 
 	handler := dataPublisher.dataHandler()
 	if handler == nil {

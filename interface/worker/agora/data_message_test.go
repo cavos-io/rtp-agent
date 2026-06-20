@@ -33,6 +33,29 @@ func TestRTMMessageRouterDispatchesInputText(t *testing.T) {
 	}
 }
 
+func TestRTMMessageRouterDropsForeignChannel(t *testing.T) {
+	called := false
+	router := RTMMessageRouter{
+		Channel: "support",
+		TextInput: func(context.Context, TextInputEvent) error {
+			called = true
+			return nil
+		},
+	}
+
+	err := router.HandleDataMessage(context.Background(), DataMessage{
+		Channel:   "sales",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"data_type":"input_text","text":"wrong room"}`),
+	})
+	if err != nil {
+		t.Fatalf("HandleDataMessage() error = %v, want nil for foreign channel", err)
+	}
+	if called {
+		t.Fatal("foreign-channel RTM input_text message was dispatched")
+	}
+}
+
 func TestRTMMessageRouterDispatchesEmptyInputText(t *testing.T) {
 	called := false
 	var got TextInputEvent

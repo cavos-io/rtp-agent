@@ -31,6 +31,7 @@ type TextInputHandler func(context.Context, TextInputEvent) error
 
 type RTMMessageRouter struct {
 	AgentUserID string
+	Channel     string
 	TextInput   TextInputHandler
 }
 
@@ -45,6 +46,9 @@ func (r RTMMessageRouter) HandleDataMessage(ctx context.Context, msg DataMessage
 	default:
 	}
 	if agentUserID := strings.TrimSpace(r.AgentUserID); agentUserID != "" && strings.TrimSpace(msg.Publisher) == agentUserID {
+		return nil
+	}
+	if strings.TrimSpace(r.Channel) != "" && !acceptChannel(r.Channel, msg.Channel) {
 		return nil
 	}
 	if strings.TrimSpace(string(msg.Payload)) == "" {
