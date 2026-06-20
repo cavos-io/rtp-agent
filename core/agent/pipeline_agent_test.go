@@ -4230,6 +4230,29 @@ func TestPipelineAgentGeneratedReplyTTSErrorSkipsAssistantCommit(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentSynthesizeSpeechStopsTranscriptForwarderAfterTTSStartupError(t *testing.T) {
+	cause := errors.New("tts stream startup failed")
+	chatCtx := llm.NewChatContext()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{streamErr: cause}, chatCtx)
+	textCh := make(chan string)
+
+	gen, err := agent.synthesizeSpeech(context.Background(), session, textCh, NewSpeechHandle(true, DefaultInputDetails()))
+	if gen != nil {
+		t.Fatalf("synthesizeSpeech generation = %#v, want nil on TTS startup error", gen)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("synthesizeSpeech error = %v, want %v", err, cause)
+	}
+
+	select {
+	case textCh <- "unheard text":
+		t.Fatal("transcript forwarder consumed text after TTS startup error")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(textCh)
+}
+
 func TestPipelineAgentGeneratedReplyInterruptSuppressesCanceledTTSError(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

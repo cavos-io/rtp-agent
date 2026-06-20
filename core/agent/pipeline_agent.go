@@ -1578,18 +1578,28 @@ func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSes
 	useAlignedTranscript := va.useTTSAlignedTranscript(session)
 	var transcriptionDone <-chan struct{}
 	ttsTextCh := textCh
+	cancelTextForward := func() {}
+	textForwardDone := closedChannel()
 	if useAlignedTranscript {
 		transcriptionDone = closedChannel()
 	} else {
 		transcriptionDone = va.forwardAgentOutputTranscription(session, transcriptSync)
-		ttsTextCh, _ = va.forwardTextToTranscriptSynchronizer(ctx, textCh, transcriptSync)
+		forwardCtx, cancel := context.WithCancel(ctx)
+		cancelTextForward = cancel
+		ttsTextCh, textForwardDone = va.forwardTextToTranscriptSynchronizer(forwardCtx, textCh, transcriptSync)
+	}
+	cleanupTextForward := func() {
+		cancelTextForward()
+		<-textForwardDone
 	}
 	ttsGen, err := PerformTTSInference(ctx, va.tts, ttsTextCh, va.ttsInferenceOptions(session)...)
 	if err != nil {
+		cleanupTextForward()
 		transcriptSync.Close()
 		<-transcriptionDone
 		return nil, err
 	}
+	defer cleanupTextForward()
 	if useAlignedTranscript {
 		transcriptionDone = va.forwardAlignedAgentOutputTranscription(session, ttsGen.TimedTextCh)
 	}
@@ -1718,12 +1728,20 @@ func (va *PipelineAgent) forwardTextToTranscriptSynchronizer(ctx context.Context
 	go func() {
 		defer close(out)
 		defer close(done)
-		for text := range textCh {
-			syncer.PushText(text)
+		for {
 			select {
-			case out <- text:
 			case <-ctx.Done():
 				return
+			case text, ok := <-textCh:
+				if !ok {
+					return
+				}
+				syncer.PushText(text)
+				select {
+				case out <- text:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}()
