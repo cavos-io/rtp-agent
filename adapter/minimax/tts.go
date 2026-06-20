@@ -31,6 +31,7 @@ const (
 )
 
 type MinimaxTTS struct {
+	mu                sync.Mutex
 	apiKey            string
 	baseURL           string
 	model             string
@@ -47,6 +48,7 @@ type MinimaxTTS struct {
 	languageBoost     string
 	pronunciationDict map[string][]string
 	textNormalization bool
+	streams           map[*minimaxTTSSynthesizeStream]struct{}
 }
 
 type MinimaxTTSOption func(*MinimaxTTS)
@@ -320,8 +322,48 @@ func (t *MinimaxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	stream.writeMessage = stream.writeWebsocketMessage
 	stream.closeConn = stream.closeWebsocketConn
+	t.registerStream(stream)
 	go stream.readLoop()
 	return stream, nil
+}
+
+func (t *MinimaxTTS) Close() error {
+	t.mu.Lock()
+	streams := make([]*minimaxTTSSynthesizeStream, 0, len(t.streams))
+	for stream := range t.streams {
+		streams = append(streams, stream)
+	}
+	t.mu.Unlock()
+
+	var firstErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (t *MinimaxTTS) registerStream(stream *minimaxTTSSynthesizeStream) {
+	if stream == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.streams == nil {
+		t.streams = make(map[*minimaxTTSSynthesizeStream]struct{})
+	}
+	stream.provider = t
+	t.streams[stream] = struct{}{}
+}
+
+func (t *MinimaxTTS) unregisterStream(stream *minimaxTTSSynthesizeStream) {
+	if stream == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.streams, stream)
 }
 
 func validateMinimaxAPIKey(apiKey string) error {
@@ -568,11 +610,16 @@ func (s *minimaxTTSSynthesizeStream) Close() error {
 	}
 	s.closed = true
 	s.cancel()
+	if s.provider != nil {
+		defer s.provider.unregisterStream(s)
+	}
 	finishMessage, err := buildMinimaxTTSTaskFinishMessage()
 	if err == nil {
 		_ = s.writeMessageData(finishMessage)
 	}
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	if s.conn != nil {
+		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	}
 	return s.closeConnection()
 }
 
@@ -595,6 +642,9 @@ func (s *minimaxTTSSynthesizeStream) closeConnection() error {
 }
 
 func (s *minimaxTTSSynthesizeStream) closeWebsocketConn() error {
+	if s.conn == nil {
+		return nil
+	}
 	return s.conn.Close()
 }
 
@@ -605,6 +655,9 @@ func (s *minimaxTTSSynthesizeStream) closeAfterWriteFailureLocked() {
 	s.closed = true
 	s.cancel()
 	_ = s.closeConnection()
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
 }
 
 func (s *minimaxTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {

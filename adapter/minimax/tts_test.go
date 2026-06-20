@@ -503,6 +503,36 @@ func TestMinimaxTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	}
 }
 
+func TestMinimaxTTSProviderCloseClosesActiveStreams(t *testing.T) {
+	provider := NewMinimaxTTS("test-key", "")
+	cancelled := false
+	closeCalls := 0
+	stream := &minimaxTTSSynthesizeStream{
+		cancel: func() { cancelled = true },
+		writeMessage: func([]byte) error {
+			return nil
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if !cancelled {
+		t.Fatal("cancel not called")
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushText after provider Close error = %v, want closed stream error", err)
+	}
+}
+
 func TestMinimaxTTSAudioFromWebsocketMessage(t *testing.T) {
 	audio, done, traceID, err := minimaxAudioFromWebsocketMessage([]byte(`{"event":"task_continued","trace_id":"trace-1","data":{"audio":"01020304"}}`), "fallback", 24000)
 	if err != nil {
