@@ -1174,6 +1174,9 @@ func (ma *MultimodalAgent) appendRealtimeToolResults(calls []*llm.FunctionCall, 
 	syncFailed := false
 	if len(results) > 0 && ma.rtSession != nil && ma.chatCtx != nil {
 		if err := ma.rtSession.UpdateChatContext(ma.chatCtx); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return
+			}
 			syncFailed = true
 			logger.Logger.Errorw("failed to update realtime session chat context with tool result", err)
 			if ma.session != nil {
@@ -1218,6 +1221,9 @@ func (ma *MultimodalAgent) generateRealtimeToolReply() {
 		logger.Logger.Warnw("failed to interrupt realtime session before tool reply", err)
 	}
 	if err := rtSession.GenerateReply(llm.RealtimeGenerateReplyOptions{ToolChoice: "auto"}); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		logger.Logger.Errorw("failed to generate realtime tool reply", err)
 		if ma.session != nil {
 			ma.session.EmitError(ErrorEvent{

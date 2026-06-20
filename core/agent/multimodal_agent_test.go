@@ -1214,6 +1214,35 @@ func TestMultimodalAgentEmitsErrorWhenRealtimeToolResultSyncFails(t *testing.T) 
 	}
 }
 
+func TestMultimodalAgentRealtimeToolResultSyncCancelSuppressesError(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	rtSession := &fakeRealtimeSession{updateChatContextErr: context.Canceled}
+	ma := &MultimodalAgent{
+		model:     &fakeRealtimeModel{label: "test.RealtimeModel"},
+		session:   session,
+		chatCtx:   chatCtx,
+		rtSession: rtSession,
+		ctx:       context.Background(),
+	}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type:     llm.RealtimeEventTypeFunctionCall,
+		Function: &llm.FunctionToolCall{Name: "lookup", CallID: "call_lookup", Arguments: `{}`},
+	})
+
+	if rtSession.chatContextUpdates != 1 {
+		t.Fatalf("UpdateChatContext calls = %d, want 1", rtSession.chatContextUpdates)
+	}
+	select {
+	case ev := <-session.ErrorEvents():
+		t.Fatalf("ErrorEvents received %#v, want cancellation suppressed", ev)
+	default:
+	}
+}
+
 func TestMultimodalAgentRealtimeToolResultSyncFailureStillEmitsEventAndReply(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	agent := NewAgent("test")
@@ -3025,6 +3054,39 @@ func TestMultimodalAgentToolReplyGenerateErrorIsRecoverable(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive realtime tool reply GenerateReply error")
+	}
+}
+
+func TestMultimodalAgentToolReplyGenerateCancelSuppressesError(t *testing.T) {
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	chatCtx := llm.NewChatContext()
+	rtSession := &fakeRealtimeSession{
+		generateCh:  make(chan llm.RealtimeGenerateReplyOptions, 1),
+		generateErr: context.Canceled,
+	}
+	ma := &MultimodalAgent{
+		model:     &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{AutoToolReplyGeneration: false}},
+		session:   session,
+		chatCtx:   chatCtx,
+		rtSession: rtSession,
+		ctx:       context.Background(),
+	}
+	session.Assistant = ma
+	errorEvents := session.ErrorEvents()
+
+	ma.executeRealtimeFunctionCall(&llm.FunctionCall{Name: "lookup", CallID: "call_lookup", Arguments: `{}`})
+
+	select {
+	case <-rtSession.generateCh:
+	case <-time.After(time.Second):
+		t.Fatal("realtime session did not receive explicit tool reply GenerateReply")
+	}
+	select {
+	case ev := <-errorEvents:
+		t.Fatalf("ErrorEvents received %#v, want cancellation suppressed", ev)
+	default:
 	}
 }
 
