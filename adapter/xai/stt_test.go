@@ -293,6 +293,48 @@ func TestXaiSTTUpdateOptionsPropagatesToActiveStreams(t *testing.T) {
 	}
 }
 
+func TestXaiSTTProviderCloseClosesActiveStreams(t *testing.T) {
+	handlerDone := make(chan struct{})
+	handlerErr := make(chan error, 1)
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = newXaiSTTTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		defer close(handlerDone)
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}, handlerErr)
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewXaiSTT("test-key", WithXaiSTTWebsocketURL("ws://xai.test/v1/stt"))
+	streamIface, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	stream := streamIface.(*xaiSTTStream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		SampleRate:        defaultXaiSTTSampleRate,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+		Data:              make([]byte, 320),
+	}); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushFrame after provider Close error = %v, want closed stream", err)
+	}
+
+	select {
+	case <-handlerDone:
+	case err := <-handlerErr:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("provider Close did not close active websocket stream")
+	}
+}
+
 func TestXaiSTTUpdateOptionsReconnectsActiveStreams(t *testing.T) {
 	requestURLs := make(chan string, 2)
 	handlerErr := make(chan error, 2)
