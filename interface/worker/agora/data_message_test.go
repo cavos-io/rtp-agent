@@ -28,6 +28,9 @@ func TestRTMMessageRouterDispatchesInputText(t *testing.T) {
 	if got.Text != "hello from chat" || got.Publisher != "caller-7" || got.Channel != "support" {
 		t.Fatalf("TextInputEvent = %#v, want parsed input_text event", got)
 	}
+	if got.StreamID != "0" {
+		t.Fatalf("StreamID = %q, want TEN default stream id 0", got.StreamID)
+	}
 }
 
 func TestRTMMessageRouterDispatchesEmptyInputText(t *testing.T) {
@@ -57,11 +60,11 @@ func TestRTMMessageRouterDispatchesEmptyInputText(t *testing.T) {
 	}
 }
 
-func TestRTMMessageRouterDispatchesTENInputTextType(t *testing.T) {
-	var got TextInputEvent
+func TestRTMMessageRouterIgnoresTypeOnlyInputText(t *testing.T) {
+	calls := 0
 	router := RTMMessageRouter{
 		TextInput: func(_ context.Context, ev TextInputEvent) error {
-			got = ev
+			calls++
 			return nil
 		},
 	}
@@ -74,11 +77,8 @@ func TestRTMMessageRouterDispatchesTENInputTextType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleDataMessage() error = %v, want nil", err)
 	}
-	if got.Text != "hello from ten" || got.StreamID != "0" || got.Publisher != "caller-7" || got.Channel != "support" {
-		t.Fatalf("TextInputEvent = %#v, want TEN input_text event with default stream id", got)
-	}
-	if got.StreamID == "caller-7" {
-		t.Fatal("router preserved payload stream_id, want TEN backend default")
+	if calls != 0 {
+		t.Fatal("type-only RTM message was dispatched; want TEN data_type contract")
 	}
 }
 
@@ -116,7 +116,7 @@ func TestRTMMessageRouterIgnoresPayloadStreamID(t *testing.T) {
 	err := router.HandleDataMessage(context.Background(), DataMessage{
 		Channel:   "support",
 		Publisher: "caller-7",
-		Payload:   []byte(`{"type":"input_text","text":"hello from ten","stream_id":100}`),
+		Payload:   []byte(`{"data_type":"input_text","text":"hello from ten","stream_id":100}`),
 	})
 	if err != nil {
 		t.Fatalf("HandleDataMessage() error = %v, want nil", err)
@@ -169,6 +169,27 @@ func TestRTMMessageRouterIgnoresNonInputText(t *testing.T) {
 	}
 	if called {
 		t.Fatal("non-input_text RTM message was dispatched")
+	}
+}
+
+func TestRTMMessageRouterDoesNotFallbackWhenDataTypePresent(t *testing.T) {
+	called := false
+	router := RTMMessageRouter{
+		TextInput: func(context.Context, TextInputEvent) error {
+			called = true
+			return nil
+		},
+	}
+
+	err := router.HandleDataMessage(context.Background(), DataMessage{
+		Publisher: "caller-7",
+		Payload:   []byte(`{"data_type":"transcribe","type":"input_text","text":"agent transcript"}`),
+	})
+	if err != nil {
+		t.Fatalf("HandleDataMessage() error = %v, want nil", err)
+	}
+	if called {
+		t.Fatal("type fallback overrode data_type discriminator")
 	}
 }
 

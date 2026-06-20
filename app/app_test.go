@@ -1997,7 +1997,18 @@ func TestInstallAgoraRTMDataMessageHandlerDispatchesInputText(t *testing.T) {
 	err := handler(context.Background(), workeragora.DataMessage{
 		Channel:   "support",
 		Publisher: "caller-7",
-		Payload:   []byte(`{"type":"input_text","text":"hello from chat","stream_id":"caller-7"}`),
+		Payload:   []byte(`{"type":"input_text","text":"wrong discriminator"}`),
+	})
+	if err != nil {
+		t.Fatalf("type-only RTM data handler error = %v, want nil ignored", err)
+	}
+	if len(responder.calls) != 0 || len(responder.userTranscripts) != 0 {
+		t.Fatalf("type-only RTM payload entered text turn: calls=%#v transcripts=%#v", responder.calls, responder.userTranscripts)
+	}
+	err = handler(context.Background(), workeragora.DataMessage{
+		Channel:   "support",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"data_type":"input_text","text":"hello from chat","stream_id":"caller-7"}`),
 	})
 	if err != nil {
 		t.Fatalf("RTM data handler error = %v, want nil", err)
@@ -2037,7 +2048,7 @@ func TestInstallAgoraRTMDataMessageHandlerLogsTextInputErrorsOnce(t *testing.T) 
 	err := handler(context.Background(), workeragora.DataMessage{
 		Channel:   "support",
 		Publisher: "caller-7",
-		Payload:   []byte(`{"type":"input_text","text":"hello from chat","stream_id":"caller-7"}`),
+		Payload:   []byte(`{"data_type":"input_text","text":"hello from chat","stream_id":"caller-7"}`),
 	})
 	if err != nil {
 		t.Fatalf("RTM data handler error = %v, want nil after logging text input failure", err)
