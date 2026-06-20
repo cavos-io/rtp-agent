@@ -392,6 +392,35 @@ func TestMinimaxTTSChunkedStreamDecodesReferenceMP3SSEAudio(t *testing.T) {
 	}
 }
 
+func TestMinimaxTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
+	body := &minimaxCloseCountBody{Reader: strings.NewReader("data: {\"data\":{\"audio\":\"0102\"},\"base_resp\":{\"status_code\":0}}\n\n")}
+	stream := &minimaxTTSChunkedStream{resp: &http.Response{Body: body}, sampleRate: 24000}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close() error = %v, want nil", err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close() calls = %d, want 1", body.closeCount)
+	}
+}
+
+func TestMinimaxTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	stream := &minimaxTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(strings.NewReader("data: {\"data\":{\"audio\":\"0102\"},\"base_resp\":{\"status_code\":0}}\n\n"))},
+		sampleRate: 24000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after Close error = %T %v, want EOF", err, err)
+	}
+}
+
 func TestMinimaxTTSWebsocketURLAndHeadersMatchReference(t *testing.T) {
 	provider := NewMinimaxTTS("test-key", "", WithMinimaxTTSBaseURL("https://minimax.example"))
 
@@ -589,4 +618,17 @@ type minimaxRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f minimaxRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+type minimaxCloseCountBody struct {
+	*strings.Reader
+	closeCount int
+}
+
+func (b *minimaxCloseCountBody) Close() error {
+	b.closeCount++
+	if b.closeCount > 1 {
+		return errors.New("closed twice")
+	}
+	return nil
 }

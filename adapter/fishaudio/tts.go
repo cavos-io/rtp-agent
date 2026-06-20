@@ -361,6 +361,9 @@ type fishaudioTTSChunkedStream struct {
 }
 
 func (s *fishaudioTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.resp == nil || s.resp.Body == nil {
+		return nil, io.EOF
+	}
 	if s.format == "wav" {
 		data, err := io.ReadAll(s.resp.Body)
 		if err != nil {
@@ -385,7 +388,12 @@ func (s *fishaudioTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *fishaudioTTSChunkedStream) Close() error {
-	return s.resp.Body.Close()
+	if s.resp == nil || s.resp.Body == nil {
+		return nil
+	}
+	body := s.resp.Body
+	s.resp = nil
+	return body.Close()
 }
 
 type fishAudioTTSSynthesizeStream struct {

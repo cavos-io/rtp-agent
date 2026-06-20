@@ -1269,12 +1269,19 @@ func (s *sttStream) Close() error {
 
 func (s *sttStream) Next() (*stt.SpeechEvent, error) {
 	for {
+		s.mu.Lock()
+		closed := s.closed
+		conn := s.conn
+		s.mu.Unlock()
+		if closed || conn == nil {
+			return nil, io.EOF
+		}
 		if len(s.pendingEvents) > 0 {
 			event := s.pendingEvents[0]
 			s.pendingEvents = s.pendingEvents[1:]
 			return event, nil
 		}
-		msgType, payload, err := s.conn.ReadMessage()
+		msgType, payload, err := conn.ReadMessage()
 		if err != nil {
 			return nil, err
 		}
@@ -1388,7 +1395,14 @@ func (s *ttsStream) Close() error {
 
 func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
 	for {
-		msgType, payload, err := s.conn.ReadMessage()
+		s.mu.Lock()
+		closed := s.closed
+		conn := s.conn
+		s.mu.Unlock()
+		if closed || conn == nil {
+			return nil, io.EOF
+		}
+		msgType, payload, err := conn.ReadMessage()
 		if err != nil {
 			return nil, s.readError(err)
 		}

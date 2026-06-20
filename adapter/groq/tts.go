@@ -163,6 +163,9 @@ type groqTTSChunkedStream struct {
 }
 
 func (s *groqTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.resp == nil || s.resp.Body == nil {
+		return nil, io.EOF
+	}
 	if s.emitted {
 		return nil, io.EOF
 	}
@@ -185,7 +188,12 @@ func (s *groqTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *groqTTSChunkedStream) Close() error {
-	return s.resp.Body.Close()
+	if s.resp == nil || s.resp.Body == nil {
+		return nil
+	}
+	body := s.resp.Body
+	s.resp = nil
+	return body.Close()
 }
 
 func decodeGroqWAVPCM16(data []byte) (*model.AudioFrame, error) {

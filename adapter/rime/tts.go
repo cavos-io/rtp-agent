@@ -353,6 +353,9 @@ type rimeTTSChunkedStream struct {
 }
 
 func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.resp == nil || s.resp.Body == nil {
+		return nil, io.EOF
+	}
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
 	if err != nil {
@@ -373,7 +376,12 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *rimeTTSChunkedStream) Close() error {
-	return s.resp.Body.Close()
+	if s.resp == nil || s.resp.Body == nil {
+		return nil
+	}
+	body := s.resp.Body
+	s.resp = nil
+	return body.Close()
 }
 
 type rimeTTSSynthesizeStream struct {

@@ -280,6 +280,40 @@ func TestFishAudioTTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {
 	}
 }
 
+func TestFishAudioTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
+	body := &fishAudioCloseCountBody{Reader: bytes.NewReader(fishAudioTestWAV([]byte{0x01, 0x02}, 24000, 1))}
+	stream := &fishaudioTTSChunkedStream{
+		resp:       &http.Response{Body: body},
+		sampleRate: 24000,
+		format:     "wav",
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close() error = %v, want nil", err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close() calls = %d, want 1", body.closeCount)
+	}
+}
+
+func TestFishAudioTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	stream := &fishaudioTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(fishAudioTestWAV([]byte{0x01, 0x02}, 24000, 1)))},
+		sampleRate: 24000,
+		format:     "wav",
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after Close error = %T %v, want EOF", err, err)
+	}
+}
+
 func TestFishAudioTTSWebsocketURLAndHeadersMatchReference(t *testing.T) {
 	provider := NewFishAudioTTS("test-key", "", WithFishAudioTTSBaseURL("https://fish.example"))
 
@@ -499,6 +533,19 @@ func assertFishEvent(t *testing.T, encoded []byte, want string) {
 	if payload["event"] != want {
 		t.Fatalf("event = %#v, want %q", payload["event"], want)
 	}
+}
+
+type fishAudioCloseCountBody struct {
+	*bytes.Reader
+	closeCount int
+}
+
+func (b *fishAudioCloseCountBody) Close() error {
+	b.closeCount++
+	if b.closeCount > 1 {
+		return errors.New("closed twice")
+	}
+	return nil
 }
 
 func mustFishMessage(t *testing.T, message map[string]any) []byte {

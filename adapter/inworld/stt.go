@@ -28,6 +28,7 @@ const (
 )
 
 type InworldSTT struct {
+	mu                               sync.Mutex
 	apiKey                           string
 	authorization                    string
 	baseURL                          string
@@ -40,6 +41,7 @@ type InworldSTT struct {
 	vadThreshold                     *float64
 	minEndOfTurnSilenceWhenConfident int
 	endOfTurnConfidenceThreshold     float64
+	streams                          map[*inworldSTTStream]struct{}
 }
 
 type InworldSTTOption func(*InworldSTT)
@@ -132,6 +134,7 @@ func NewInworldSTT(apiKey string, opts ...InworldSTTOption) *InworldSTT {
 		voiceProfileTopN:                 1,
 		minEndOfTurnSilenceWhenConfident: defaultInworldSTTMinEndOfTurnSilenceWhenConfident,
 		endOfTurnConfidenceThreshold:     defaultInworldSTTEndOfTurnConfidenceThreshold,
+		streams:                          make(map[*inworldSTTStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -154,6 +157,27 @@ func (s *InworldSTT) InputSampleRate() uint32 {
 		return defaultInworldSTTSampleRate
 	}
 	return uint32(s.sampleRate)
+}
+
+func (s *InworldSTT) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	streams := make([]*inworldSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.streams = make(map[*inworldSTTStream]struct{})
+	s.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
 }
 
 func (s *InworldSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
@@ -181,7 +205,9 @@ func (s *InworldSTT) Stream(ctx context.Context, language string) (stt.Recognize
 			language:  requestLanguage,
 			requestID: shortInworldSTTRequestID(),
 		},
+		provider: s,
 	}
+	s.registerStream(stream)
 	go stream.readLoop()
 	return stream, nil
 }
@@ -202,9 +228,41 @@ type inworldSTTStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	state  *inworldSTTStreamState
+
+	provider *InworldSTT
+}
+
+func (s *InworldSTT) registerStream(stream *inworldSTTStream) {
+	if s == nil || stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.streams == nil {
+		s.streams = make(map[*inworldSTTStream]struct{})
+	}
+	s.streams[stream] = struct{}{}
+}
+
+func (s *InworldSTT) unregisterStream(stream *inworldSTTStream) {
+	if s == nil || stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.streams, stream)
+}
+
+func (s *inworldSTTStream) unregisterFromProvider() {
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
 }
 
 func (s *inworldSTTStream) PushFrame(frame *model.AudioFrame) error {
+	if s.isClosed() {
+		return io.ErrClosedPipe
+	}
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
@@ -213,6 +271,9 @@ func (s *inworldSTTStream) PushFrame(frame *model.AudioFrame) error {
 }
 
 func (s *inworldSTTStream) Flush() error {
+	if s.isClosed() {
+		return io.ErrClosedPipe
+	}
 	s.flushRecognitionUsage()
 	return s.writeMessage(buildInworldSTTEndTurnMessage())
 }
@@ -220,6 +281,9 @@ func (s *inworldSTTStream) Flush() error {
 func (s *inworldSTTStream) writeMessage(message map[string]any) error {
 	if s.sendMessage != nil {
 		return s.sendMessage(message)
+	}
+	if s.conn == nil {
+		return io.ErrClosedPipe
 	}
 	return writeInworldSTTMessage(s.conn, message)
 }
@@ -252,18 +316,32 @@ func (s *inworldSTTStream) flushRecognitionUsage() {
 
 func (s *inworldSTTStream) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
-	s.cancel()
+	cancel := s.cancel
+	conn := s.conn
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
 	_ = s.writeMessage(buildInworldSTTCloseStreamMessage())
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.conn.Close()
+	var err error
+	if conn != nil {
+		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+		err = conn.Close()
+	}
+	s.unregisterFromProvider()
+	return err
 }
 
 func (s *inworldSTTStream) Next() (*stt.SpeechEvent, error) {
+	if s.isClosed() {
+		return nil, io.EOF
+	}
 	select {
 	case event, ok := <-s.events:
 		if !ok {
@@ -278,12 +356,24 @@ func (s *inworldSTTStream) Next() (*stt.SpeechEvent, error) {
 	case err := <-s.errCh:
 		return nil, err
 	case <-s.ctx.Done():
+		if s.isClosed() {
+			return nil, io.EOF
+		}
 		return nil, s.ctx.Err()
 	}
 }
 
+func (s *inworldSTTStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 func (s *inworldSTTStream) readLoop() {
-	defer close(s.events)
+	defer func() {
+		s.unregisterFromProvider()
+		close(s.events)
+	}()
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
