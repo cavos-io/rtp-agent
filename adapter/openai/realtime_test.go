@@ -4767,6 +4767,25 @@ func TestRealtimeEventMapsOutputItemDoneFunctionCall(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventOutputItemDoneFunctionCallPreservesReferenceID(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.done",
+		"item": map[string]any{
+			"id":        "fc_123",
+			"type":      "function_call",
+			"call_id":   "call_123",
+			"name":      "lookup",
+			"arguments": `{"query":"hello"}`,
+		},
+	})
+	if !ok || ev.Function == nil {
+		t.Fatalf("openAIRealtimeEvent = %#v, %v; want completed function call", ev, ok)
+	}
+	if ev.Function.ID != "fc_123" {
+		t.Fatalf("Function.ID = %q, want reference item id %q", ev.Function.ID, "fc_123")
+	}
+}
+
 func TestRealtimeEventRejectsOutputItemDoneFunctionCallWithoutID(t *testing.T) {
 	for _, tt := range []struct {
 		name string
