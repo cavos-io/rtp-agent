@@ -1260,6 +1260,17 @@ func WithSarvamTTSOutputAudioCodec(codec string) SarvamTTSOption {
 	}
 }
 
+func (t *SarvamTTS) UpdateOptions(opts ...SarvamTTSOption) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, opt := range opts {
+		opt(t)
+	}
+}
+
 func NewSarvamTTS(apiKey string, voice string, opts ...SarvamTTSOption) *SarvamTTS {
 	provider := &SarvamTTS{
 		apiKey:             resolveSarvamAPIKey(apiKey),
