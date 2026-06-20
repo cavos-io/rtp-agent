@@ -4767,6 +4767,60 @@ func TestPipelineAgentReplySplitsTTSOnLLMFlush(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentSegmentedTTSCancelFinalizesActiveTranscript(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	events := session.AgentOutputTranscribedEvents()
+	ttsStream := &fakePipelineTTSStream{pushed: make(chan struct{})}
+	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{stream: ttsStream}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	textCh := make(chan LLMTextEvent, 1)
+	textCh <- LLMTextEvent{Text: "partial answer"}
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	done := make(chan struct{})
+	var gen *TTSGenerationData
+	var err error
+	go func() {
+		defer close(done)
+		gen, err = agent.synthesizeSegmentedSpeech(ctx, session, textCh, speech)
+	}()
+
+	select {
+	case <-ttsStream.pushed:
+	case <-time.After(time.Second):
+		t.Fatal("TTS stream did not receive active segment text")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("synthesizeSegmentedSpeech did not return after context cancellation")
+	}
+	if gen == nil {
+		t.Fatal("synthesizeSegmentedSpeech generation = nil, want active generation returned")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("synthesizeSegmentedSpeech error = %v, want context.Canceled", err)
+	}
+
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case ev := <-events:
+			if ev.Transcript == "partial answer" && ev.IsFinal {
+				return
+			}
+		case <-deadline:
+			t.Fatal("AgentOutputTranscribedEvents did not receive final transcript after cancellation")
+		}
+	}
+}
+
 func TestPipelineAgentPreemptiveTTSDoesNotCollapseLLMFlushSegments(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -5124,6 +5178,8 @@ type fakePipelineTTSStream struct {
 	timedTranscripts [][]tts.TimedString
 	next             int
 	err              error
+	pushed           chan struct{}
+	pushOnce         sync.Once
 }
 
 type blockingPipelineTTSStream struct {
@@ -5313,6 +5369,9 @@ func (f *fakePipelinePlaybackController) WaitForPlayout(ctx context.Context) (Au
 
 func (f *fakePipelineTTSStream) PushText(text string) error {
 	_, _ = f.text.WriteString(text)
+	if f.pushed != nil {
+		f.pushOnce.Do(func() { close(f.pushed) })
+	}
 	return nil
 }
 

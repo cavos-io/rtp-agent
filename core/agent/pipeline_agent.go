@@ -1159,12 +1159,19 @@ func (va *PipelineAgent) synthesizeSegmentedSpeech(ctx context.Context, session 
 		}
 		current := segment
 		segment = nil
-		close(current.input)
+		current.closeInput()
 		_, err := va.playTTSGenerationWithTranscript(ctx, session, current.ttsGen, current.transcriptSync, current.transcriptionDone, speech)
 		if firstGen != nil && current.ttsGen != nil && current.ttsGen.ForwardedAudio {
 			firstGen.ForwardedAudio = true
 		}
 		return err
+	}
+	cancelSegment := func() {
+		if segment == nil {
+			return
+		}
+		segment.closeTranscript()
+		segment = nil
 	}
 
 	for {
@@ -1188,9 +1195,11 @@ func (va *PipelineAgent) synthesizeSegmentedSpeech(ctx context.Context, session 
 			select {
 			case segment.input <- event.Text:
 			case <-ctx.Done():
+				cancelSegment()
 				return firstGen, ctx.Err()
 			}
 		case <-ctx.Done():
+			cancelSegment()
 			return firstGen, ctx.Err()
 		}
 	}
@@ -1198,9 +1207,36 @@ func (va *PipelineAgent) synthesizeSegmentedSpeech(ctx context.Context, session 
 
 type activeTTSSegment struct {
 	input             chan string
+	closeInputOnce    sync.Once
 	ttsGen            *TTSGenerationData
 	transcriptSync    *TranscriptSynchronizer
+	textForwardDone   <-chan struct{}
 	transcriptionDone <-chan struct{}
+}
+
+func (s *activeTTSSegment) closeInput() {
+	if s == nil {
+		return
+	}
+	s.closeInputOnce.Do(func() {
+		close(s.input)
+	})
+}
+
+func (s *activeTTSSegment) closeTranscript() {
+	if s == nil {
+		return
+	}
+	s.closeInput()
+	if s.textForwardDone != nil {
+		<-s.textForwardDone
+	}
+	if s.transcriptSync != nil {
+		s.transcriptSync.Close()
+	}
+	if s.transcriptionDone != nil {
+		<-s.transcriptionDone
+	}
 }
 
 func (va *PipelineAgent) startActiveTTSSegment(ctx context.Context, session *AgentSession) (*activeTTSSegment, error) {
@@ -1208,16 +1244,18 @@ func (va *PipelineAgent) startActiveTTSSegment(ctx context.Context, session *Age
 	transcriptSync := NewTranscriptSynchronizer(0)
 	useAlignedTranscript := va.useTTSAlignedTranscript(session)
 	var transcriptionDone <-chan struct{}
+	textForwardDone := closedChannel()
 	ttsTextCh := (<-chan string)(input)
 	if useAlignedTranscript {
 		transcriptionDone = closedChannel()
 	} else {
 		transcriptionDone = va.forwardAgentOutputTranscription(session, transcriptSync)
-		ttsTextCh = va.forwardTextToTranscriptSynchronizer(ctx, input, transcriptSync)
+		ttsTextCh, textForwardDone = va.forwardTextToTranscriptSynchronizer(ctx, input, transcriptSync)
 	}
 	ttsGen, err := PerformTTSInference(ctx, va.tts, ttsTextCh, va.ttsInferenceOptions(session)...)
 	if err != nil {
 		close(input)
+		<-textForwardDone
 		transcriptSync.Close()
 		<-transcriptionDone
 		return nil, err
@@ -1229,6 +1267,7 @@ func (va *PipelineAgent) startActiveTTSSegment(ctx context.Context, session *Age
 		input:             input,
 		ttsGen:            ttsGen,
 		transcriptSync:    transcriptSync,
+		textForwardDone:   textForwardDone,
 		transcriptionDone: transcriptionDone,
 	}, nil
 }
@@ -1259,7 +1298,7 @@ func (va *PipelineAgent) startSegmentedTTSGeneration(ctx context.Context, sessio
 			if segment == nil {
 				return
 			}
-			close(segment.input)
+			segment.closeInput()
 			segment = nil
 		}
 		defer closeSegment()
@@ -1543,7 +1582,7 @@ func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSes
 		transcriptionDone = closedChannel()
 	} else {
 		transcriptionDone = va.forwardAgentOutputTranscription(session, transcriptSync)
-		ttsTextCh = va.forwardTextToTranscriptSynchronizer(ctx, textCh, transcriptSync)
+		ttsTextCh, _ = va.forwardTextToTranscriptSynchronizer(ctx, textCh, transcriptSync)
 	}
 	ttsGen, err := PerformTTSInference(ctx, va.tts, ttsTextCh, va.ttsInferenceOptions(session)...)
 	if err != nil {
@@ -1673,10 +1712,12 @@ func singleTextChannel(text string) <-chan string {
 	return ch
 }
 
-func (va *PipelineAgent) forwardTextToTranscriptSynchronizer(ctx context.Context, textCh <-chan string, syncer *TranscriptSynchronizer) <-chan string {
+func (va *PipelineAgent) forwardTextToTranscriptSynchronizer(ctx context.Context, textCh <-chan string, syncer *TranscriptSynchronizer) (<-chan string, <-chan struct{}) {
 	out := make(chan string, 100)
+	done := make(chan struct{})
 	go func() {
 		defer close(out)
+		defer close(done)
 		for text := range textCh {
 			syncer.PushText(text)
 			select {
@@ -1686,7 +1727,7 @@ func (va *PipelineAgent) forwardTextToTranscriptSynchronizer(ctx context.Context
 			}
 		}
 	}()
-	return out
+	return out, done
 }
 
 func (va *PipelineAgent) forwardAgentOutputTranscription(session *AgentSession, syncer *TranscriptSynchronizer) <-chan struct{} {
