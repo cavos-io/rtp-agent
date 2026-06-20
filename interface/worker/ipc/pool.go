@@ -119,11 +119,6 @@ func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) er
 		}
 		executor := p.idleExecutorLocked()
 		executorWarmed := executor != nil
-		if executor == nil && len(p.executors) >= p.maxProcesses {
-			p.mu.Unlock()
-			p.emitMany(ProcPoolEventProcessClosed, closedExecutors)
-			return fmt.Errorf("proc pool exhausted, max capacity reached")
-		}
 
 		if executor == nil {
 			executor = p.createExecutorLocked()

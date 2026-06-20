@@ -604,6 +604,37 @@ func TestProcPoolLaunchJobRetriesWithFreshExecutor(t *testing.T) {
 	}
 }
 
+func TestProcPoolLaunchJobSpawnsBeyondIdleCapacityForConcurrentJobs(t *testing.T) {
+	first := &fakeJobExecutor{id: "exec-a"}
+	second := &fakeJobExecutor{id: "exec-b"}
+	executors := []*fakeJobExecutor{first, second}
+	var created int
+
+	pool := NewProcPool(1, ExecutorTypeThread, nil)
+	pool.executorFactory = func(id string) JobExecutor {
+		executor := executors[created]
+		created++
+		return executor
+	}
+
+	if err := pool.LaunchJob(context.Background(), &livekit.Job{Id: "job-a"}); err != nil {
+		t.Fatalf("first LaunchJob: %v", err)
+	}
+	if err := pool.LaunchJob(context.Background(), &livekit.Job{Id: "job-b"}); err != nil {
+		t.Fatalf("second LaunchJob while first running: %v", err)
+	}
+
+	if created != 2 {
+		t.Fatalf("created executors = %d, want 2 concurrent executors", created)
+	}
+	if pool.GetByJobID("job-a") == nil {
+		t.Fatal("GetByJobID(job-a) = nil, want first running job")
+	}
+	if pool.GetByJobID("job-b") == nil {
+		t.Fatal("GetByJobID(job-b) = nil, want second running job")
+	}
+}
+
 func waitForProcPoolExecutorStatus(t *testing.T, pool *ProcPool, status JobStatus) {
 	t.Helper()
 
