@@ -389,6 +389,34 @@ func TestRoomIOBlocksUserAwayUntilAudioSubscribed(t *testing.T) {
 	}
 }
 
+func TestRoomIOAudioSubscriptionTimeoutReleasesUserAwayGate(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{UserAwayTimeout: 0.01})
+	rio := NewRoomIO(nil, session, RoomOptions{AudioSubscriptionTimeout: 20 * time.Millisecond})
+	rio.audioSubscribed = make(chan struct{})
+	rio.audioSubOnce = sync.Once{}
+
+	session.UpdateAgentState(agent.AgentStateListening)
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		t.Fatalf("unexpected user state before subscription timeout = %q -> %q", ev.OldState, ev.NewState)
+	case <-time.After(15 * time.Millisecond):
+	}
+
+	if err := rio.waitForAudioSubscription(context.Background()); err != nil {
+		t.Fatalf("waitForAudioSubscription error = %v", err)
+	}
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		if ev.OldState != agent.UserStateListening || ev.NewState != agent.UserStateAway {
+			t.Fatalf("event states = %q -> %q, want listening -> away after subscription timeout", ev.OldState, ev.NewState)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserStateChangedCh did not receive away event after subscription timeout")
+	}
+}
+
 func TestRoomIOAudioSubscriptionWaitFallsBackAfterTimeout(t *testing.T) {
 	rio := &RoomIO{
 		Options: RoomOptions{
