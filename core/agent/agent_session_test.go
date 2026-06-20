@@ -517,6 +517,26 @@ func TestAgentSessionCloseEventDeliveredWhenChannelFull(t *testing.T) {
 	}
 }
 
+func TestAgentSessionCloseEventDoesNotBlockWithoutSubscriber(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.started = true
+	for i := 0; i < cap(session.closeCh); i++ {
+		session.closeCh <- CloseEvent{Reason: CloseReasonError}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.CloseSoon(CloseReasonUserInitiated)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("CloseSoon blocked on unclaimed close event channel")
+	}
+}
+
 func TestAgentSessionMetricsCollectedEventsFanOutToSubscribers(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	first := session.MetricsCollectedEvents()
@@ -635,6 +655,28 @@ func TestAgentSessionSpeechCreatedDeliveredWhenChannelFull(t *testing.T) {
 		default:
 			t.Fatal("SpeechCreatedEvents did not receive speech_created event")
 		}
+	}
+}
+
+func TestAgentSessionSpeechCreatedDoesNotBlockWithoutSubscriber(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	for i := 0; i < cap(session.speechCreatedCh); i++ {
+		session.speechCreatedCh <- SpeechCreatedEvent{Source: "prefill"}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.EmitSpeechCreated(SpeechCreatedEvent{
+			SpeechHandle: NewSpeechHandle(true, DefaultInputDetails()),
+			Source:       "say",
+		})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("EmitSpeechCreated blocked on unclaimed speech event channel")
 	}
 }
 

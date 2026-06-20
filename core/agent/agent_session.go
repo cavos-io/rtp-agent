@@ -1279,7 +1279,16 @@ func (s *AgentSession) EmitSpeechCreated(ev SpeechCreatedEvent) {
 		ev.CreatedAt = time.Now()
 	}
 	s.recordEvent(&ev)
-	for _, ch := range s.speechCreatedSubscribers() {
+	primary, primarySubscribed, subscribers := s.speechCreatedSubscribers()
+	if primarySubscribed {
+		primary <- ev
+	} else if primary != nil {
+		select {
+		case primary <- ev:
+		default:
+		}
+	}
+	for _, ch := range subscribers {
 		ch <- ev
 	}
 }
@@ -1300,17 +1309,14 @@ func (s *AgentSession) speechCreatedEvents() chan SpeechCreatedEvent {
 	return ch
 }
 
-func (s *AgentSession) speechCreatedSubscribers() []chan SpeechCreatedEvent {
+func (s *AgentSession) speechCreatedSubscribers() (chan SpeechCreatedEvent, bool, []chan SpeechCreatedEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	subs := make([]chan SpeechCreatedEvent, 0, len(s.speechCreatedSubs)+1)
 	if s.speechCreatedCh == nil {
 		s.speechCreatedCh = make(chan SpeechCreatedEvent, 10)
 	}
-	subs = append(subs, s.speechCreatedCh)
-	subs = append(subs, s.speechCreatedSubs...)
-	return subs
+	return s.speechCreatedCh, s.speechCreatedSubd, append([]chan SpeechCreatedEvent(nil), s.speechCreatedSubs...)
 }
 
 func (s *AgentSession) AgentFalseInterruptionEvents() <-chan AgentFalseInterruptionEvent {
@@ -1921,7 +1927,7 @@ func (s *AgentSession) closeSoon(reason CloseReason, err error) {
 	s.cancelUserAwayTimerLocked()
 	s.clearAECWarmupLocked()
 	closeEventListeners := s.closeEventListenersLocked()
-	closeSubscribers := s.closeSubscribersLocked()
+	closePrimary, closePrimarySubscribed, closeSubscribers := s.closeSubscribersLocked()
 	s.mu.Unlock()
 
 	if activity != nil {
@@ -1935,6 +1941,14 @@ func (s *AgentSession) closeSoon(reason CloseReason, err error) {
 	s.appendRecordedEvent(ev)
 	for _, listener := range closeEventListeners {
 		callAgentSessionListener("close", listener, ev)
+	}
+	if closePrimarySubscribed {
+		closePrimary <- *ev
+	} else if closePrimary != nil {
+		select {
+		case closePrimary <- *ev:
+		default:
+		}
 	}
 	for _, ch := range closeSubscribers {
 		ch <- *ev
@@ -1970,14 +1984,11 @@ func (s *AgentSession) closeEvents() chan CloseEvent {
 	return ch
 }
 
-func (s *AgentSession) closeSubscribersLocked() []chan CloseEvent {
-	subs := make([]chan CloseEvent, 0, len(s.closeSubs)+1)
+func (s *AgentSession) closeSubscribersLocked() (chan CloseEvent, bool, []chan CloseEvent) {
 	if s.closeCh == nil {
 		s.closeCh = make(chan CloseEvent, 10)
 	}
-	subs = append(subs, s.closeCh)
-	subs = append(subs, s.closeSubs...)
-	return subs
+	return s.closeCh, s.closeChSubscribed, append([]chan CloseEvent(nil), s.closeSubs...)
 }
 
 func (s *AgentSession) closeEventListenersLocked() []func(Event) {
