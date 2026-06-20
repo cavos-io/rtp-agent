@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -228,6 +229,7 @@ func marshalTENReasoning(role string, text string, final bool, streamID string, 
 }
 
 func transcriptStreamIDValue(streamID string) any {
+	streamID = strings.TrimSpace(streamID)
 	if streamID == "" {
 		return nil
 	}

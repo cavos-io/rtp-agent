@@ -68,6 +68,20 @@ func TestTranscriptForwarderPublishesTENAssistantTranscript(t *testing.T) {
 	}
 }
 
+func TestPublishTranscriptNormalizesStreamID(t *testing.T) {
+	publisher := &recordingDataPublisher{}
+
+	err := PublishTranscript(context.Background(), publisher, "assistant", "hello there", true, " 100 ", time.UnixMilli(1710000000123))
+	if err != nil {
+		t.Fatalf("PublishTranscript() error = %v, want nil", err)
+	}
+
+	got := publishedJSON(t, publisher, 0)
+	if got["stream_id"] != float64(100) {
+		t.Fatalf("stream_id = %#v, want normalized numeric stream id", got["stream_id"])
+	}
+}
+
 func TestTranscriptForwarderPublishesEmptyFinalAssistantTranscript(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 	publisher := &recordingDataPublisher{}
