@@ -154,6 +154,50 @@ func TestNeuphonicTTSOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNeuphonicTTSUpdateOptionsAffectsFutureRequests(t *testing.T) {
+	provider := NewNeuphonicTTS("test-key", "voice-1",
+		WithNeuphonicTTSBaseURL("https://neuphonic.example"),
+		WithNeuphonicTTSLangCode("en"),
+		WithNeuphonicTTSSpeed(1.0),
+	)
+
+	provider.UpdateOptions(
+		WithNeuphonicTTSLangCode("es"),
+		WithNeuphonicTTSVoice("voice-2"),
+		WithNeuphonicTTSSpeed(0.75),
+	)
+
+	req, err := buildNeuphonicTTSRequest(context.Background(), provider, "hola")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if req.URL.String() != "https://neuphonic.example/sse/speak/es" {
+		t.Fatalf("url = %q, want updated language endpoint", req.URL.String())
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	assertNeuphonicPayload(t, payload, "voice_id", "voice-2")
+	assertNeuphonicPayload(t, payload, "lang_code", "es")
+	if got := payload["speed"]; got != 0.75 {
+		t.Fatalf("speed = %#v, want 0.75", got)
+	}
+
+	wsURL := buildNeuphonicTTSWebsocketURL(provider)
+	query := wsURL.Query()
+	if query.Get("lang_code") != "es" {
+		t.Fatalf("websocket lang_code = %q, want es", query.Get("lang_code"))
+	}
+	if query.Get("voice_id") != "voice-2" {
+		t.Fatalf("websocket voice_id = %q, want voice-2", query.Get("voice_id"))
+	}
+	if query.Get("speed") != "0.75" {
+		t.Fatalf("websocket speed = %q, want 0.75", query.Get("speed"))
+	}
+}
+
 func TestNeuphonicTTSChunkedStreamDecodesSSEAudio(t *testing.T) {
 	stream := &neuphonicTTSChunkedStream{
 		resp: &http.Response{Body: io.NopCloser(bytes.NewReader([]byte(
