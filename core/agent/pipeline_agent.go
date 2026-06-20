@@ -146,6 +146,7 @@ func (va *PipelineAgent) ClearInputTranscription() error {
 	va.mu.Lock()
 	oldStream := va.sttStream
 	sttObj := va.stt
+	vadObj := va.vad
 	ctx := va.ctx
 	va.mu.Unlock()
 	if oldStream != nil {
@@ -159,6 +160,10 @@ func (va *PipelineAgent) ClearInputTranscription() error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	sttObj, err := streamableSTT(sttObj, vadObj)
+	if err != nil {
+		return err
+	}
 	stream, err := sttObj.Stream(ctx, "")
 	if err != nil {
 		return err
@@ -169,6 +174,19 @@ func (va *PipelineAgent) ClearInputTranscription() error {
 	va.mu.Unlock()
 	go va.sttLoop(stream)
 	return nil
+}
+
+func streamableSTT(sttObj stt.STT, vadObj vad.VAD) (stt.STT, error) {
+	if sttObj == nil {
+		return nil, nil
+	}
+	if sttObj.Capabilities().Streaming {
+		return sttObj, nil
+	}
+	if vadObj == nil {
+		return nil, fmt.Errorf("the STT (%s) does not support streaming, add a VAD to enable streaming or wrap it with stt.StreamAdapter", sttObj.Label())
+	}
+	return stt.NewStreamAdapter(sttObj, vadObj), nil
 }
 
 func (va *PipelineAgent) UpdateComponents(vadObj vad.VAD, sttObj stt.STT, llmObj llm.LLM, ttsObj tts.TTS) {
@@ -215,7 +233,19 @@ func (va *PipelineAgent) run(ctx context.Context) {
 
 	var sttStream stt.RecognizeStream
 	if va.stt != nil {
-		stream, err := va.stt.Stream(ctx, "")
+		sttObj, err := streamableSTT(va.stt, va.vad)
+		if err != nil {
+			if !isSpeechStreamShutdownError(err) {
+				logger.Logger.Errorw("failed to prepare STT stream", err)
+				label := "stt"
+				if va.stt != nil {
+					label = va.stt.Label()
+				}
+				va.emitError(stt.NewSTTError(label, err, false), va.stt)
+			}
+			return
+		}
+		stream, err := sttObj.Stream(ctx, "")
 		if err != nil {
 			if !isSpeechStreamShutdownError(err) {
 				logger.Logger.Errorw("failed to start STT stream", err)

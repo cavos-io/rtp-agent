@@ -2296,6 +2296,25 @@ func TestPipelineAgentClearInputTranscriptionReplacesSTTStreamWhenOldCloseFails(
 	}
 }
 
+func TestPipelineAgentClearInputTranscriptionWrapsNonStreamingSTTWithVAD(t *testing.T) {
+	sttObj := &nonStreamingPipelineSTT{
+		streamErr: errors.New("direct STT stream should not be used"),
+	}
+	vadObj := &fakePipelineVAD{stream: &fakePipelineVADStream{}}
+	pipeline := NewPipelineAgent(vadObj, sttObj, nil, nil, nil)
+	pipeline.ctx = context.Background()
+
+	if err := pipeline.ClearInputTranscription(); err != nil {
+		t.Fatalf("ClearInputTranscription error = %v, want nil via StreamAdapter", err)
+	}
+	if sttObj.streamCalls != 0 {
+		t.Fatalf("non-streaming STT Stream calls = %d, want 0 because VAD StreamAdapter should wrap it", sttObj.streamCalls)
+	}
+	if pipeline.sttStream == nil {
+		t.Fatal("pipeline sttStream = nil, want replacement stream")
+	}
+}
+
 func TestPipelineAgentEmitsUserInputTranscribedEvents(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
@@ -5695,6 +5714,32 @@ func (q *queuedPipelineSTT) Stream(context.Context, string) (stt.RecognizeStream
 
 func (q *queuedPipelineSTT) Recognize(context.Context, []*model.AudioFrame, string) (*stt.SpeechEvent, error) {
 	return nil, nil
+}
+
+type nonStreamingPipelineSTT struct {
+	stt.MetricsEmitter
+	stt.ErrorEmitter
+
+	streamErr   error
+	streamCalls int
+}
+
+func (n *nonStreamingPipelineSTT) Label() string { return "non-streaming-stt" }
+
+func (n *nonStreamingPipelineSTT) Capabilities() stt.STTCapabilities {
+	return stt.STTCapabilities{OfflineRecognize: true}
+}
+
+func (n *nonStreamingPipelineSTT) Stream(context.Context, string) (stt.RecognizeStream, error) {
+	n.streamCalls++
+	if n.streamErr != nil {
+		return nil, n.streamErr
+	}
+	return &fakePipelineRecognizeStream{}, nil
+}
+
+func (n *nonStreamingPipelineSTT) Recognize(context.Context, []*model.AudioFrame, string) (*stt.SpeechEvent, error) {
+	return &stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript}, nil
 }
 
 type fakePipelineVAD struct {
