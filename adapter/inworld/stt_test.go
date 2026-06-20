@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
@@ -144,6 +145,18 @@ func TestInworldSTTOptionsBuildReferenceConfigURLAndHeaders(t *testing.T) {
 	headers := buildInworldSTTHeaders(provider)
 	if headers.Get("Authorization") != "Basic test-key" {
 		t.Fatalf("authorization = %q, want basic key", headers.Get("Authorization"))
+	}
+}
+
+func TestInworldSTTStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
+	provider := NewInworldSTT("test-key", WithInworldSTTBaseURL("://bad"))
+	_, err := provider.Stream(context.Background(), "")
+	if err == nil {
+		t.Fatal("Stream error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
