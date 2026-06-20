@@ -88,6 +88,46 @@ func TestDeepgramTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSProviderCloseClosesActiveStreams(t *testing.T) {
+	sawClose := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramTTSFlushOnCloseWebsocketServer(serverConn, sawClose, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	if err := tts.Close(provider); err != nil {
+		t.Fatalf("tts.Close(provider) error = %v", err)
+	}
+
+	select {
+	case <-sawClose:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for provider close to close active stream")
+	}
+	if err := stream.PushText("later"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after provider close error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
 func TestDeepgramTTSSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	provider := NewDeepgramTTS("test-key", "",
 		WithDeepgramTTSMipOptOut(true),

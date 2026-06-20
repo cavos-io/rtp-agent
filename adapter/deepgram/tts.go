@@ -30,6 +30,8 @@ type DeepgramTTS struct {
 	encoding   string
 	sampleRate int
 	mipOptOut  bool
+	mu         sync.Mutex
+	streams    map[*deepgramTTSStream]struct{}
 }
 
 type DeepgramTTSOption func(*DeepgramTTS)
@@ -72,6 +74,7 @@ func NewDeepgramTTS(apiKey string, model string, opts ...DeepgramTTSOption) *Dee
 		model:      model,
 		encoding:   "linear16",
 		sampleRate: 24000,
+		streams:    make(map[*deepgramTTSStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -92,6 +95,24 @@ func (t *DeepgramTTS) UpdateOptions(model string) {
 	if model != "" {
 		t.model = model
 	}
+}
+
+func (t *DeepgramTTS) Close() error {
+	t.mu.Lock()
+	streams := make([]*deepgramTTSStream, 0, len(t.streams))
+	for stream := range t.streams {
+		streams = append(streams, stream)
+	}
+	t.streams = make(map[*deepgramTTSStream]struct{})
+	t.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
 }
 
 func (t *DeepgramTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
@@ -158,6 +179,7 @@ func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 	}
 
 	stream := &deepgramTTSStream{
+		provider:   t,
 		conn:       conn,
 		audio:      make(chan *tts.SynthesizedAudio, 10),
 		errCh:      make(chan error, 1),
@@ -166,10 +188,26 @@ func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 	}
 	stream.writeJSON = stream.writeJSONMessage
 	stream.closeConn = stream.closeWebsocketConn
+	t.registerStream(stream)
 
 	go stream.readLoop()
 
 	return stream, nil
+}
+
+func (t *DeepgramTTS) registerStream(stream *deepgramTTSStream) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.streams == nil {
+		t.streams = make(map[*deepgramTTSStream]struct{})
+	}
+	t.streams[stream] = struct{}{}
+}
+
+func (t *DeepgramTTS) unregisterStream(stream *deepgramTTSStream) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.streams, stream)
 }
 
 func validateDeepgramTTSAPIKey(apiKey string) error {
@@ -256,11 +294,12 @@ func (s *deepgramTTSChunkedStream) Close() error {
 }
 
 type deepgramTTSStream struct {
-	conn   *websocket.Conn
-	audio  chan *tts.SynthesizedAudio
-	errCh  chan error
-	mu     sync.Mutex
-	closed bool
+	provider *DeepgramTTS
+	conn     *websocket.Conn
+	audio    chan *tts.SynthesizedAudio
+	errCh    chan error
+	mu       sync.Mutex
+	closed   bool
 
 	sampleRate int
 	writeJSON  func(any) error
@@ -385,6 +424,9 @@ func (s *deepgramTTSStream) Close() error {
 	closeErr := s.writeJSONData(map[string]interface{}{"type": "Close"})
 	if flushErr == nil && closeErr == nil {
 		s.waitForFlushedAckLocked()
+	}
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
 	}
 	if err := s.closeConnection(); err != nil {
 		return err
