@@ -1987,6 +1987,43 @@ func TestRealtimeEventRejectsInputAudioTranscriptionWithoutStringItemID(t *testi
 	}
 }
 
+func TestRealtimeEventRejectsCompletedInputAudioTranscriptionWithoutStringTranscript(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		event map[string]any
+	}{
+		{
+			name: "missing_transcript",
+			event: map[string]any{
+				"type":    "conversation.item.input_audio_transcription.completed",
+				"item_id": "item_123",
+			},
+		},
+		{
+			name: "null_transcript",
+			event: map[string]any{
+				"type":       "conversation.item.input_audio_transcription.completed",
+				"item_id":    "item_123",
+				"transcript": nil,
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if ev, ok := openAIRealtimeEvent(tt.event); ok {
+				t.Fatalf("openAIRealtimeEvent = %#v, true; want malformed completed transcription ignored", ev)
+			}
+		})
+	}
+
+	if ev, ok := openAIRealtimeEvent(map[string]any{
+		"type":       "conversation.item.input_audio_transcription.completed",
+		"item_id":    "item_123",
+		"transcript": "",
+	}); !ok || ev.InputTranscription == nil || ev.InputTranscription.Transcript != "" {
+		t.Fatalf("openAIRealtimeEvent explicit empty transcript = %#v, %v; want accepted empty transcript", ev, ok)
+	}
+}
+
 func TestRealtimeEventMapsOutputAudioTranscriptDelta(t *testing.T) {
 	for _, eventType := range []string{
 		"response.output_audio_transcript.delta",
