@@ -1328,11 +1328,17 @@ func (s *AgentSession) EmitAgentFalseInterruption(ev AgentFalseInterruptionEvent
 		ev.CreatedAt = NewAgentFalseInterruptionEvent(ev.Resumed).CreatedAt
 	}
 	s.recordEvent(&ev)
-	for _, ch := range s.agentFalseInterruptionSubscribers() {
+	primary, primarySubscribed, subscribers := s.agentFalseInterruptionSubscribers()
+	if primarySubscribed {
+		primary <- ev
+	} else if primary != nil {
 		select {
-		case ch <- ev:
+		case primary <- ev:
 		default:
 		}
+	}
+	for _, ch := range subscribers {
+		ch <- ev
 	}
 }
 
@@ -1352,17 +1358,14 @@ func (s *AgentSession) agentFalseInterruptionEvents() chan AgentFalseInterruptio
 	return ch
 }
 
-func (s *AgentSession) agentFalseInterruptionSubscribers() []chan AgentFalseInterruptionEvent {
+func (s *AgentSession) agentFalseInterruptionSubscribers() (chan AgentFalseInterruptionEvent, bool, []chan AgentFalseInterruptionEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	subs := make([]chan AgentFalseInterruptionEvent, 0, len(s.falseInterruptSubs)+1)
 	if s.falseInterruptionCh == nil {
 		s.falseInterruptionCh = make(chan AgentFalseInterruptionEvent, 10)
 	}
-	subs = append(subs, s.falseInterruptionCh)
-	subs = append(subs, s.falseInterruptSubs...)
-	return subs
+	return s.falseInterruptionCh, s.falseInterruptSubd, append([]chan AgentFalseInterruptionEvent(nil), s.falseInterruptSubs...)
 }
 
 func (s *AgentSession) UserTurnExceededEvents() <-chan UserTurnExceededEvent {
@@ -1438,11 +1441,17 @@ func (s *AgentSession) EmitOverlappingSpeech(ev OverlappingSpeechEvent) {
 		ev.DetectedAt = now
 	}
 	s.recordEvent(&ev)
-	for _, ch := range s.overlappingSpeechSubscribers() {
+	primary, primarySubscribed, subscribers := s.overlappingSpeechSubscribers()
+	if primarySubscribed {
+		primary <- ev
+	} else if primary != nil {
 		select {
-		case ch <- ev:
+		case primary <- ev:
 		default:
 		}
+	}
+	for _, ch := range subscribers {
+		ch <- ev
 	}
 }
 
@@ -1462,17 +1471,14 @@ func (s *AgentSession) overlappingSpeechEvents() chan OverlappingSpeechEvent {
 	return ch
 }
 
-func (s *AgentSession) overlappingSpeechSubscribers() []chan OverlappingSpeechEvent {
+func (s *AgentSession) overlappingSpeechSubscribers() (chan OverlappingSpeechEvent, bool, []chan OverlappingSpeechEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	subs := make([]chan OverlappingSpeechEvent, 0, len(s.overlappingSubs)+1)
 	if s.overlappingSpeechCh == nil {
 		s.overlappingSpeechCh = make(chan OverlappingSpeechEvent, 10)
 	}
-	subs = append(subs, s.overlappingSpeechCh)
-	subs = append(subs, s.overlappingSubs...)
-	return subs
+	return s.overlappingSpeechCh, s.overlappingSubd, append([]chan OverlappingSpeechEvent(nil), s.overlappingSubs...)
 }
 
 func (s *AgentSession) ConversationItemAddedEvents() <-chan ConversationItemAddedEvent {
