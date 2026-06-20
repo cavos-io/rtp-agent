@@ -23,6 +23,7 @@ import (
 )
 
 type TTS struct {
+	mu                sync.Mutex
 	model             string
 	voice             string
 	language          string
@@ -38,6 +39,7 @@ type TTS struct {
 	dialWebsocket     inferenceTTSDialer
 	connPoolMu        sync.Mutex
 	connPool          *utils.ConnectionPool[inferenceTTSConn]
+	streams           map[*inferenceTTSStream]struct{}
 }
 
 type TTSOption func(*TTS)
@@ -144,6 +146,36 @@ func (t *TTS) UpdateOptions(opts ...TTSOption) {
 	for _, opt := range opts {
 		opt(t)
 	}
+}
+
+func (t *TTS) Close() error {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	streams := make([]*inferenceTTSStream, 0, len(t.streams))
+	for stream := range t.streams {
+		streams = append(streams, stream)
+	}
+	t.streams = make(map[*inferenceTTSStream]struct{})
+	t.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+
+	t.connPoolMu.Lock()
+	pool := t.connPool
+	t.connPoolMu.Unlock()
+	if pool != nil {
+		if err := pool.Close(context.Background()); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
 }
 
 type FallbackModel struct {
@@ -272,9 +304,31 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		eventCh:     make(chan *tts.SynthesizedAudio, 100),
 	}
 
+	t.registerStream(stream)
 	go stream.run()
 
 	return stream, nil
+}
+
+func (t *TTS) registerStream(stream *inferenceTTSStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.streams == nil {
+		t.streams = make(map[*inferenceTTSStream]struct{})
+	}
+	t.streams[stream] = struct{}{}
+}
+
+func (t *TTS) unregisterStream(stream *inferenceTTSStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.streams, stream)
 }
 
 func (t *TTS) connectionPool() *utils.ConnectionPool[inferenceTTSConn] {
@@ -525,6 +579,10 @@ func (s *inferenceTTSStream) Close() error {
 		s.connPool.Remove(s.conn)
 	}
 	s.conn.Close()
+	if s.tts != nil {
+		s.tts.unregisterStream(s)
+	}
+	close(s.eventCh)
 	return nil
 }
 
