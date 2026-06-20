@@ -535,6 +535,16 @@ func (t *TTS) Capabilities() tts.TTSCapabilities {
 func (t *TTS) SampleRate() int  { return t.sampleRate }
 func (t *TTS) NumChannels() int { return slngNumChannels }
 
+func (t *TTS) UpdateOptions(opts ...TTSOption) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, opt := range opts {
+		if opt != nil {
+			opt(t)
+		}
+	}
+}
+
 func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	stream, err := t.stream(ctx, false)
 	if err != nil {

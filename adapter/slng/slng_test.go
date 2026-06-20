@@ -210,6 +210,26 @@ func TestSLNGTTSInitPayloadUsesTargetLanguageWithoutLeakingOption(t *testing.T) 
 	assertSLNGNestedFieldAbsent(t, payload, "config", "target_language_code")
 }
 
+func TestSLNGTTSUpdateOptionsAffectsFutureInitPayload(t *testing.T) {
+	provider := NewTTS("test-key",
+		WithTTSModel("elevenlabs/eleven-flash:2.5"),
+		WithTTSVoice("voice-before"),
+		WithTTSLanguage("en-US"),
+	)
+
+	provider.UpdateOptions(
+		WithTTSVoice("voice-after"),
+		WithTTSLanguage("id-ID"),
+	)
+
+	payload := buildTTSInitPayload(provider)
+	assertSLNGField(t, payload, "voice", "voice-after")
+	assertSLNGField(t, payload, "language", "id-ID")
+	assertSLNGNestedField(t, payload, "config", "language", "id-ID")
+	assertSLNGNestedField(t, payload, "config", "sample_rate", float64(24000))
+	assertSLNGNestedField(t, payload, "config", "encoding", "linear16")
+}
+
 func TestSLNGSTTInitPayloadPreservesExplicitZeroVADSilence(t *testing.T) {
 	provider := NewSTT("test-key", WithSTTVADMinSilenceDurationMS(0))
 
