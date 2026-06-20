@@ -201,6 +201,9 @@ type lmntTTSChunkedStream struct {
 }
 
 func (s *lmntTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.resp == nil || s.resp.Body == nil {
+		return nil, io.EOF
+	}
 	if s.format == "mp3" {
 		return s.nextDecodedMP3()
 	}
@@ -227,7 +230,6 @@ func (s *lmntTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *lmntTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
 	if !s.started {
 		s.started = true
-		s.decoder = codecs.NewMP3AudioStreamDecoder()
 		data, err := io.ReadAll(s.resp.Body)
 		if err != nil {
 			return nil, err
@@ -235,9 +237,11 @@ func (s *lmntTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
 		if len(data) == 0 {
 			return nil, io.EOF
 		}
+		decoder := codecs.NewMP3AudioStreamDecoder()
+		s.decoder = decoder
 		go func() {
-			s.decoder.Push(data)
-			s.decoder.EndInput()
+			decoder.Push(data)
+			decoder.EndInput()
 		}()
 	}
 
@@ -252,8 +256,15 @@ func (s *lmntTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *lmntTTSChunkedStream) Close() error {
-	if s.decoder != nil {
-		_ = s.decoder.Close()
+	if s.resp == nil || s.resp.Body == nil {
+		return nil
 	}
-	return s.resp.Body.Close()
+	body := s.resp.Body
+	decoder := s.decoder
+	s.resp = nil
+	s.decoder = nil
+	if decoder != nil {
+		_ = decoder.Close()
+	}
+	return body.Close()
 }
