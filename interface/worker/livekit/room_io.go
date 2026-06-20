@@ -529,15 +529,17 @@ func roomIODefaultTextInput(ctx context.Context, responder roomIOTextResponder, 
 }
 
 func (rio *RoomIO) handleAgentStateChanged(ev agent.AgentStateChangedEvent) {
-	if rio == nil || rio.agentStatePublisher == nil {
+	if rio == nil || (rio.agentStatePublisher == nil && rio.clientEvents == nil) {
 		return
 	}
 	if rio.agentStatePublishEnabled != nil && !rio.agentStatePublishEnabled() {
 		return
 	}
-	rio.agentStatePublisher(map[string]string{
-		RoomIOAgentStateAttribute: string(ev.NewState),
-	})
+	if rio.agentStatePublisher != nil {
+		rio.agentStatePublisher(map[string]string{
+			RoomIOAgentStateAttribute: string(ev.NewState),
+		})
+	}
 	if rio.clientEvents != nil {
 		rio.clientEvents.DispatchAgentState(ev.NewState)
 	}

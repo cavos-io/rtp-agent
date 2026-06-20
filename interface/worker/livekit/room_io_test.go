@@ -1879,6 +1879,19 @@ func TestRoomIOHandleAgentStateChangedSkipsWhenRoomDisconnected(t *testing.T) {
 	}
 }
 
+func TestRoomIOHandleAgentStateChangedDispatchesClientEventWithoutAttributePublisher(t *testing.T) {
+	dispatcher := &fakeClientEventsDispatcher{}
+	rio := &RoomIO{
+		clientEvents: dispatcher,
+	}
+
+	rio.handleAgentStateChanged(agent.AgentStateChangedEvent{NewState: agent.AgentStateThinking})
+
+	if len(dispatcher.agentStates) != 1 || dispatcher.agentStates[0] != agent.AgentStateThinking {
+		t.Fatalf("dispatched agent states = %#v, want thinking", dispatcher.agentStates)
+	}
+}
+
 func TestRoomIOAgentStateListenerDoesNotConsumeLegacySessionChannel(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 	published := make(chan map[string]string, 1)
