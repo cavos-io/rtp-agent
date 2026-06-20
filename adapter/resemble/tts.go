@@ -92,6 +92,14 @@ func (t *ResembleTTS) Model() string {
 }
 func (t *ResembleTTS) Provider() string { return "Resemble" }
 
+func (t *ResembleTTS) UpdateOptions(opts ...ResembleTTSOption) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, opt := range opts {
+		opt(t)
+	}
+}
+
 func (t *ResembleTTS) Close() error {
 	t.mu.Lock()
 	streams := make([]*resembleTTSSynthesizeStream, 0, len(t.streams))

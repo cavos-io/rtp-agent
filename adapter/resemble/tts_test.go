@@ -144,6 +144,49 @@ func TestResembleTTSOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestResembleTTSUpdateOptionsAffectsFutureRequests(t *testing.T) {
+	provider := NewResembleTTS("test-key", "voice-1",
+		WithResembleTTSSampleRate(24000),
+		WithResembleTTSModel("chatterbox"),
+	)
+
+	provider.UpdateOptions(
+		WithResembleTTSVoice("voice-2"),
+		WithResembleTTSModel("chatterbox-turbo"),
+	)
+
+	req, err := buildResembleTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	var restPayload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&restPayload); err != nil {
+		t.Fatalf("decode REST body: %v", err)
+	}
+	assertResemblePayload(t, restPayload, "voice_uuid", "voice-2")
+	assertResemblePayload(t, restPayload, "model", "chatterbox-turbo")
+	if got := restPayload["sample_rate"]; got != float64(24000) {
+		t.Fatalf("REST sample_rate = %#v, want unchanged 24000", got)
+	}
+
+	message, err := buildResembleTTSWebsocketMessage(provider, "hello", 9)
+	if err != nil {
+		t.Fatalf("build websocket message: %v", err)
+	}
+	var websocketPayload map[string]any
+	if err := json.Unmarshal(message, &websocketPayload); err != nil {
+		t.Fatalf("decode websocket message: %v", err)
+	}
+	assertResemblePayload(t, websocketPayload, "voice_uuid", "voice-2")
+	assertResemblePayload(t, websocketPayload, "model", "chatterbox-turbo")
+	if got := websocketPayload["sample_rate"]; got != float64(24000) {
+		t.Fatalf("websocket sample_rate = %#v, want unchanged 24000", got)
+	}
+	if got := coretts.Model(provider); got != "chatterbox-turbo" {
+		t.Fatalf("model metadata = %q, want chatterbox-turbo", got)
+	}
+}
+
 func TestResembleTTSChunkedStreamDecodesReferenceResponse(t *testing.T) {
 	stream := &resembleTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte(`{"success":true,"audio_content":"AQI="}`)))},
