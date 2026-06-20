@@ -225,6 +225,41 @@ func TestPublishReasoningSendsTENRawPayload(t *testing.T) {
 	}
 }
 
+func TestPublishReasoningSendsEmptyFinalTENRawPayload(t *testing.T) {
+	publisher := &recordingDataPublisher{}
+
+	err := PublishReasoning(context.Background(), publisher, "assistant", "", true, "100", time.UnixMilli(1710000000799))
+	if err != nil {
+		t.Fatalf("PublishReasoning() error = %v, want nil", err)
+	}
+
+	got := publishedJSON(t, publisher, 0)
+	if got["data_type"] != "raw" {
+		t.Fatalf("data_type = %#v, want raw", got["data_type"])
+	}
+	if got["role"] != "assistant" {
+		t.Fatalf("role = %#v, want assistant", got["role"])
+	}
+	if got["is_final"] != true {
+		t.Fatalf("is_final = %#v, want true", got["is_final"])
+	}
+	rawText, ok := got["text"].(string)
+	if !ok {
+		t.Fatalf("text = %#v, want raw JSON string", got["text"])
+	}
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(rawText), &raw); err != nil {
+		t.Fatalf("raw text is not JSON: %v", err)
+	}
+	data, ok := raw["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("raw data = %#v, want object", raw["data"])
+	}
+	if data["text"] != "" {
+		t.Fatalf("raw data text = %#v, want empty reasoning text", data["text"])
+	}
+}
+
 func TestTranscriptForwarderPublishesTENReasoningTranscript(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 	publisher := &recordingDataPublisher{}

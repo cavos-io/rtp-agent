@@ -146,7 +146,7 @@ func (f *TranscriptForwarder) publishTranscript(ctx context.Context, role string
 }
 
 func (f *TranscriptForwarder) publishReasoning(ctx context.Context, text string, final bool, streamID string, createdAt time.Time) {
-	if text == "" || f == nil || f.publisher == nil {
+	if f == nil || f.publisher == nil || !shouldPublishTENTranscript("assistant", text, final) {
 		return
 	}
 	_ = PublishReasoning(ctx, f.publisher, "assistant", text, final, streamID, createdAt)
@@ -178,7 +178,7 @@ func shouldPublishTENTranscript(role string, text string, final bool) bool {
 }
 
 func PublishReasoning(ctx context.Context, publisher DataPublisher, role string, text string, final bool, streamID string, createdAt time.Time) error {
-	if text == "" || publisher == nil {
+	if publisher == nil || !shouldPublishTENTranscript(role, text, final) {
 		return nil
 	}
 	payload, err := marshalTENReasoning(role, text, final, streamID, createdAt)
