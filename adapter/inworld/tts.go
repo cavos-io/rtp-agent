@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/gorilla/websocket"
@@ -254,7 +255,7 @@ func (t *InworldTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("inworld tts error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("Inworld TTS request failed", resp.StatusCode, req.Header.Get("X-Request-Id"), string(respBody))
 	}
 	return &inworldTTSChunkedStream{resp: resp, sampleRate: t.sampleRate}, nil
 }
@@ -727,7 +728,7 @@ func inworldTTSAudioFromResponseLine(payload []byte, sampleRate int) (*tts.Synth
 		return nil, false, err
 	}
 	if message.Error != nil {
-		return nil, false, fmt.Errorf("inworld tts error: %s", message.Error.Message)
+		return nil, false, llm.NewAPIStatusError(message.Error.Message, message.Error.Code, "", nil)
 	}
 	if message.Result.AudioContent == "" {
 		return nil, false, nil
@@ -776,10 +777,10 @@ func inworldTTSAudioFromWebsocketMessageWithOffset(payload []byte, contextID str
 		return nil, false, false, 0, err
 	}
 	if message.Error != nil {
-		return nil, false, false, 0, fmt.Errorf("inworld tts error: %s", message.Error.Message)
+		return nil, false, false, 0, llm.NewAPIStatusError(message.Error.Message, message.Error.Code, "", nil)
 	}
 	if message.Result.Status != nil && message.Result.Status.Code != 0 {
-		return nil, false, false, 0, fmt.Errorf("inworld tts error: %s", message.Result.Status.Message)
+		return nil, false, false, 0, llm.NewAPIStatusError(message.Result.Status.Message, message.Result.Status.Code, "", nil)
 	}
 	if message.Result.ContextID != "" && message.Result.ContextID != contextID {
 		return nil, false, false, 0, nil

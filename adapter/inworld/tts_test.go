@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -198,6 +199,33 @@ func TestInworldTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	assertInworldPayload(t, audioConfig, "audioEncoding", "MP3")
 	if audioConfig["sampleRateHertz"] != float64(24000) {
 		t.Fatalf("sampleRateHertz = %#v, want 24000", audioConfig["sampleRateHertz"])
+	}
+}
+
+func TestInworldTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: inworldRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader(`{"message":"rate limited"}`)),
+		}, nil
+	})}
+	defer func() { http.DefaultClient = originalClient }()
+
+	provider := NewInworldTTS("test-key", "")
+	_, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("Synthesize error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	if !strings.Contains(statusErr.Error(), "rate limited") {
+		t.Fatalf("status error = %v, want provider body", statusErr)
 	}
 }
 
@@ -396,6 +424,26 @@ func TestInworldTTSAudioFromReferenceResponses(t *testing.T) {
 
 	if _, _, err := inworldTTSAudioFromResponseLine([]byte(`{"error":{"code":3,"message":"bad text"}}`), 24000); err == nil {
 		t.Fatal("error response returned nil error, want API error")
+	} else {
+		var statusErr *llm.APIStatusError
+		if !errors.As(err, &statusErr) {
+			t.Fatalf("error response = %T %v, want APIStatusError", err, err)
+		}
+		if statusErr.StatusCode != 3 {
+			t.Fatalf("status code = %d, want provider code 3", statusErr.StatusCode)
+		}
+	}
+
+	if _, _, err := inworldTTSAudioFromWebsocketMessage([]byte(`{"error":{"code":7,"message":"voice unavailable"}}`), "ctx-1", 24000); err == nil {
+		t.Fatal("websocket error response returned nil error, want API error")
+	} else {
+		var statusErr *llm.APIStatusError
+		if !errors.As(err, &statusErr) {
+			t.Fatalf("websocket error response = %T %v, want APIStatusError", err, err)
+		}
+		if statusErr.StatusCode != 7 {
+			t.Fatalf("websocket status code = %d, want provider code 7", statusErr.StatusCode)
+		}
 	}
 }
 
@@ -756,4 +804,10 @@ func (b *inworldCloseCountBody) Close() error {
 		return errors.New("closed twice")
 	}
 	return nil
+}
+
+type inworldRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f inworldRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
