@@ -1282,6 +1282,48 @@ func TestAzureSTTUpdateOptionsPropagatesOptionLanguageToActiveStream(t *testing.
 	}
 }
 
+func TestAzureSTTUpdateOptionsKeepsActiveStreamSampleRate(t *testing.T) {
+	requests := make(chan *http.Request, 2)
+	configMessages := make(chan string, 2)
+	audioMessages := make(chan []byte, 1)
+
+	provider, err := NewAzureSTT(
+		"key",
+		"eastus",
+		WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"),
+		WithAzureSTTSampleRate(16000),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = azureTestDialer(t, requests, configMessages, audioMessages)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	receiveAzureTestValue(t, requests, "request")
+	receiveAzureTestValue(t, configMessages, "speech config")
+
+	provider.UpdateOptions("", WithAzureSTTSampleRate(8000))
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame after sample-rate update error = %v", err)
+	}
+
+	audioMessage := receiveAzureTestValue(t, audioMessages, "audio")
+	headers, _ := splitAzureTestBinaryMessage(t, audioMessage)
+	if got := headers["Content-Type"]; got != "audio/x-wav;codec=audio/pcm;samplerate=16000" {
+		t.Fatalf("audio Content-Type = %q, want active stream sample rate 16000", got)
+	}
+}
+
 func TestAzureSTTUpdateOptionsPropagatesSegmentationToActiveStream(t *testing.T) {
 	requests := make(chan *http.Request, 2)
 	configMessages := make(chan string, 2)

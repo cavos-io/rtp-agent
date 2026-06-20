@@ -387,12 +387,16 @@ type realtimeSession struct {
 	ctx                   context.Context
 	cancel                context.CancelFunc
 	mu                    sync.Mutex
+	chatContextMu         sync.Mutex
+	toolsMu               sync.Mutex
 	eventCh               chan llm.RealtimeEvent
 	remote                *llm.RemoteChatContext
 	inputTranscripts      *utils.BoundedDict[inputTranscriptKey, realtimeInputTranscript]
 	generation            *realtimeGeneration
 	pendingResponses      map[string]struct{}
 	pendingDeleteItemIDs  []string
+	pendingCreateAcks     map[string]chan struct{}
+	pendingDeleteAcks     map[string]chan struct{}
 	instructions          string
 	tools                 []llm.Tool
 	audioBStream          *audio.AudioByteStream
@@ -401,6 +405,7 @@ type realtimeSession struct {
 	connectedAt           time.Time
 	lastGeneration        realtimeGenerationTiming
 	responseCreateTimeout time.Duration
+	chatContextAckTimeout time.Duration
 }
 
 type realtimeGenerationTiming struct {
@@ -417,6 +422,7 @@ const openAIRealtimeDefaultMaxOutputTokens = "inf"
 const openAIRealtimeDefaultMaxSessionDuration = 20 * time.Minute
 const openAIRealtimeActiveGenerationRecyclePoll = 100 * time.Millisecond
 const openAIRealtimeResponseCreateTimeout = 10 * time.Second
+const openAIRealtimeChatContextAckTimeout = 5 * time.Second
 
 type inputTranscriptKey struct {
 	itemID       string
@@ -747,6 +753,9 @@ func (s *realtimeSession) UpdateInstructions(instructions string) error {
 }
 
 func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
+	s.chatContextMu.Lock()
+	defer s.chatContextMu.Unlock()
+
 	syncedChatCtx := openAIRealtimeSyncedChatContext(chatCtx)
 	var (
 		msgs []map[string]any
@@ -760,29 +769,115 @@ func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	if err != nil {
 		return err
 	}
+	acks := make([]<-chan struct{}, 0, len(msgs))
 	for _, msg := range msgs {
+		if ack := s.addRealtimeChatContextAck(msg); ack != nil {
+			acks = append(acks, ack)
+		}
 		if err := s.sendMsg(msg); err != nil {
+			s.clearRealtimeChatContextAcks(msgs)
 			return err
 		}
+	}
+	if err := s.waitRealtimeChatContextAcks(acks); err != nil {
+		s.clearRealtimeChatContextAcks(msgs)
+		return err
 	}
 	s.remote = openAIRealtimeRemoteSnapshot(syncedChatCtx)
 	return nil
 }
 
+func (s *realtimeSession) addRealtimeChatContextAck(msg map[string]any) <-chan struct{} {
+	if s == nil {
+		return nil
+	}
+	typ, _ := msg["type"].(string)
+	var (
+		itemID string
+		target *map[string]chan struct{}
+	)
+	switch typ {
+	case "conversation.item.create":
+		item, _ := msg["item"].(map[string]any)
+		itemID, _ = item["id"].(string)
+		target = &s.pendingCreateAcks
+	case "conversation.item.delete":
+		itemID, _ = msg["item_id"].(string)
+		target = &s.pendingDeleteAcks
+	default:
+		return nil
+	}
+	ack := make(chan struct{})
+	s.mu.Lock()
+	if *target == nil {
+		*target = make(map[string]chan struct{})
+	}
+	(*target)[itemID] = ack
+	s.mu.Unlock()
+	return ack
+}
+
+func (s *realtimeSession) waitRealtimeChatContextAcks(acks []<-chan struct{}) error {
+	if len(acks) == 0 {
+		return nil
+	}
+	timeout := s.chatContextAckTimeout
+	if timeout == 0 {
+		timeout = openAIRealtimeChatContextAckTimeout
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for _, ack := range acks {
+		select {
+		case <-ack:
+		case <-timer.C:
+			return llm.NewRealtimeError("update_chat_ctx timed out.", nil)
+		case <-s.ctx.Done():
+			return s.ctx.Err()
+		}
+	}
+	return nil
+}
+
+func (s *realtimeSession) clearRealtimeChatContextAcks(msgs []map[string]any) {
+	if s == nil || len(msgs) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, msg := range msgs {
+		typ, _ := msg["type"].(string)
+		switch typ {
+		case "conversation.item.create":
+			item, _ := msg["item"].(map[string]any)
+			itemID, _ := item["id"].(string)
+			delete(s.pendingCreateAcks, itemID)
+		case "conversation.item.delete":
+			itemID, _ := msg["item_id"].(string)
+			delete(s.pendingDeleteAcks, itemID)
+		}
+	}
+}
+
 func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
+	s.toolsMu.Lock()
+	defer s.toolsMu.Unlock()
+
+	formattedTools := s.model.realtimeTools(tools)
+	retainedTools := openAIRealtimeRetainedTools(tools, formattedTools)
 	msg := map[string]any{
 		"type":     "session.update",
 		"event_id": cavosmath.ShortUUID("tools_update_"),
 		"session": map[string]any{
-			"tools": s.model.realtimeTools(tools),
+			"tools": formattedTools,
 		},
 	}
+	s.mu.Lock()
+	s.tools = retainedTools
+	s.mu.Unlock()
 	if err := s.sendMsg(msg); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	s.tools = append([]llm.Tool(nil), tools...)
-	s.mu.Unlock()
 	return nil
 }
 
@@ -807,6 +902,27 @@ func openAIRealtimeTools(tools []llm.Tool) []map[string]any {
 		})
 	}
 	return oaTools
+}
+
+func openAIRealtimeRetainedTools(tools []llm.Tool, emitted []map[string]any) []llm.Tool {
+	emittedNames := make(map[string]struct{}, len(emitted))
+	for _, tool := range emitted {
+		name, _ := tool["name"].(string)
+		if name != "" {
+			emittedNames[name] = struct{}{}
+		}
+	}
+	retained := make([]llm.Tool, 0, len(tools))
+	for _, tool := range tools {
+		if _, ok := tool.(llm.ProviderTool); ok {
+			retained = append(retained, tool)
+			continue
+		}
+		if _, ok := emittedNames[tool.Name()]; ok {
+			retained = append(retained, tool)
+		}
+	}
+	return retained
 }
 
 func openAIRealtimeChatContextCreateMessages(chatCtx *llm.ChatContext) ([]map[string]any, error) {
@@ -1692,17 +1808,22 @@ func (s *realtimeSession) emitSessionCloseMetrics() {
 
 func (s *realtimeSession) sendMsg(msg any) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.ctx != nil && s.ctx.Err() != nil {
+		s.mu.Unlock()
 		return nil
 	}
 	msg = s.prepareClientMessage(msg)
 	s.trackPendingRealtimeDelete(msg)
+	conn := s.conn
+	s.mu.Unlock()
 	b, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
-	return s.conn.WriteMessage(websocket.TextMessage, b)
+	if conn == nil {
+		return fmt.Errorf("OpenAI realtime websocket is not connected")
+	}
+	return conn.WriteMessage(websocket.TextMessage, b)
 }
 
 func (s *realtimeSession) trackPendingRealtimeDelete(msg any) {
@@ -2190,6 +2311,11 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 			logger.Logger.Warnw("failed to track OpenAI realtime deleted item", err, "item_id", itemID)
 		}
 		s.clearRealtimeInputTranscripts(itemID)
+		s.resolveRealtimeChatContextDeleteAck(itemID)
+	case "conversation.item.added", "conversation.item.created":
+		item, _ := ev["item"].(map[string]any)
+		itemID, _ := item["id"].(string)
+		s.resolveRealtimeChatContextCreateAck(itemID)
 	case "conversation.item.input_audio_transcription.failed":
 		itemID, hasItemID := ev["item_id"].(string)
 		if !hasItemID {
@@ -2698,6 +2824,30 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 		}, true
 	}
 	return llm.RealtimeEvent{}, false
+}
+
+func (s *realtimeSession) resolveRealtimeChatContextCreateAck(itemID string) {
+	s.mu.Lock()
+	ack, ok := s.pendingCreateAcks[itemID]
+	if ok {
+		delete(s.pendingCreateAcks, itemID)
+	}
+	s.mu.Unlock()
+	if ok {
+		close(ack)
+	}
+}
+
+func (s *realtimeSession) resolveRealtimeChatContextDeleteAck(itemID string) {
+	s.mu.Lock()
+	ack, ok := s.pendingDeleteAcks[itemID]
+	if ok {
+		delete(s.pendingDeleteAcks, itemID)
+	}
+	s.mu.Unlock()
+	if ok {
+		close(ack)
+	}
 }
 
 func openAIRealtimeMetrics(response map[string]any) (*telemetry.RealtimeModelMetrics, bool) {

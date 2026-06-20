@@ -191,6 +191,7 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 	var streams []*azureSTTStream
 	s.mu.Lock()
 	beforeLanguage := s.language
+	beforeActive := s.activeStreamOptions()
 	if language != "" {
 		s.language = language
 	}
@@ -199,6 +200,7 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 			opt(s)
 		}
 	}
+	activeChanged := beforeActive != s.activeStreamOptions()
 	streamLanguage := language
 	if streamLanguage == "" && s.language != beforeLanguage {
 		streamLanguage = s.language
@@ -208,7 +210,37 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 	}
 	s.mu.Unlock()
 	for _, stream := range streams {
-		stream.updateOptions(streamLanguage, true)
+		stream.updateOptions(streamLanguage, activeChanged)
+	}
+}
+
+type azureSTTActiveStreamOptions struct {
+	language               string
+	speechHost             string
+	speechEndpoint         string
+	authToken              string
+	websocketURL           string
+	segmentationSilence    int
+	segmentationMaxTime    int
+	segmentationStrategy   string
+	trueTextPostProcessing bool
+	explicitPunctuation    bool
+	profanity              string
+}
+
+func (s *AzureSTT) activeStreamOptions() azureSTTActiveStreamOptions {
+	return azureSTTActiveStreamOptions{
+		language:               s.language,
+		speechHost:             s.speechHost,
+		speechEndpoint:         s.speechEndpoint,
+		authToken:              s.authToken,
+		websocketURL:           s.websocketURL,
+		segmentationSilence:    s.segmentationSilence,
+		segmentationMaxTime:    s.segmentationMaxTime,
+		segmentationStrategy:   s.segmentationStrategy,
+		trueTextPostProcessing: s.trueTextPostProcessing,
+		explicitPunctuation:    s.explicitPunctuation,
+		profanity:              s.profanity,
 	}
 }
 func (s *AzureSTT) Close() error {
@@ -255,6 +287,7 @@ func (s *AzureSTT) Stream(ctx context.Context, language string) (stt.RecognizeSt
 		connectionID:  connectionID,
 		streamURL:     streamURL,
 		language:      resolvedLanguage,
+		sampleRate:    s.InputSampleRate(),
 		events:        make(chan *stt.SpeechEvent, 100),
 		errCh:         make(chan error, 1),
 		ctx:           streamCtx,
@@ -573,6 +606,7 @@ type azureSTTStream struct {
 	connectionID    string
 	streamURL       string
 	language        string
+	sampleRate      uint32
 	events          chan *stt.SpeechEvent
 	errCh           chan error
 	mu              sync.Mutex
@@ -620,7 +654,7 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 		s.reconnectNext = false
 	}
 	audio := azureSTTPendingAudio{
-		contentType: azureSTTStreamAudioContentType(s.provider, frame),
+		contentType: s.audioContentType(),
 		data:        append([]byte(nil), frame.Data...),
 	}
 	if !s.sessionStarted {
@@ -634,6 +668,18 @@ func azureSTTStreamAudioContentType(provider *AzureSTT, frame *model.AudioFrame)
 	sampleRate := uint32(defaultAzureSTTSampleRate)
 	if provider != nil && provider.InputSampleRate() > 0 {
 		sampleRate = provider.InputSampleRate()
+	}
+	return fmt.Sprintf("audio/x-wav;codec=audio/pcm;samplerate=%d", sampleRate)
+}
+
+func (s *azureSTTStream) audioContentType() string {
+	sampleRate := s.sampleRate
+	if sampleRate == 0 {
+		if s.provider != nil && s.provider.InputSampleRate() > 0 {
+			sampleRate = s.provider.InputSampleRate()
+		} else {
+			sampleRate = defaultAzureSTTSampleRate
+		}
 	}
 	return fmt.Sprintf("audio/x-wav;codec=audio/pcm;samplerate=%d", sampleRate)
 }

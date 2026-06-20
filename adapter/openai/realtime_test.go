@@ -143,6 +143,161 @@ func TestRealtimeSessionUpdateToolsSkipsProviderTools(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionUpdateToolsRetainsOnlyEmittedTools(t *testing.T) {
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for i := 0; i < 2; i++ {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("Read realtime message %d error = %v", i, err)
+				return
+			}
+		}
+		<-releaseServer
+	})
+
+	realtimeModel := NewRealtimeModel(
+		"test-key",
+		"gpt-realtime",
+		WithOpenAIRealtimeWebsocketDialer(dialer),
+		WithOpenAIRealtimeToolFormatter(func(tools []llm.Tool) []map[string]any {
+			return []map[string]any{{
+				"type":        "function",
+				"name":        "lookup",
+				"description": "look up information",
+				"parameters":  llm.ToolParameters(requestTestTool{}),
+			}}
+		}),
+		WithOpenAIRealtimeFunctionCallFilter(func(tools []llm.Tool, name string) bool {
+			for _, tool := range tools {
+				if tool.Name() == name {
+					return true
+				}
+			}
+			return false
+		}),
+	)
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateTools([]llm.Tool{requestTestTool{}, droppedRealtimeFunctionTool{}, openAIRealtimeProviderTestTool{}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+
+	liveSession := session.(*realtimeSession)
+	if !liveSession.acceptRealtimeFunctionCall("lookup") {
+		t.Fatal("lookup function call rejected, want emitted function tool accepted")
+	}
+	if liveSession.acceptRealtimeFunctionCall("dropped") {
+		t.Fatal("dropped function call accepted, want non-emitted function tool rejected after update")
+	}
+	if !liveSession.acceptRealtimeFunctionCall("web_search") {
+		t.Fatal("web_search provider tool rejected, want provider tool retained like reference")
+	}
+}
+
+func TestRealtimeSessionUpdateToolsSerializesConcurrentUpdates(t *testing.T) {
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for i := 0; i < 3; i++ {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("Read realtime message %d error = %v", i, err)
+				return
+			}
+		}
+		<-releaseServer
+	})
+
+	firstEntered := make(chan struct{})
+	secondEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var formatterCalls atomic.Int32
+	realtimeModel := NewRealtimeModel(
+		"test-key",
+		"gpt-realtime",
+		WithOpenAIRealtimeWebsocketDialer(dialer),
+		WithOpenAIRealtimeToolFormatter(func(tools []llm.Tool) []map[string]any {
+			switch formatterCalls.Add(1) {
+			case 1:
+				close(firstEntered)
+				<-releaseFirst
+			case 2:
+				close(secondEntered)
+			}
+			formatted := make([]map[string]any, 0, len(tools))
+			for _, tool := range tools {
+				formatted = append(formatted, map[string]any{
+					"type":        "function",
+					"name":        tool.Name(),
+					"description": tool.Description(),
+					"parameters":  llm.ToolParameters(tool),
+				})
+			}
+			return formatted
+		}),
+	)
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- session.UpdateTools([]llm.Tool{requestTestTool{}})
+	}()
+	select {
+	case <-firstEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first UpdateTools did not enter formatter")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- session.UpdateTools([]llm.Tool{droppedRealtimeFunctionTool{}})
+	}()
+	select {
+	case <-secondEntered:
+		t.Fatal("second UpdateTools entered formatter before first update completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first UpdateTools error = %v", err)
+	}
+	select {
+	case <-secondEntered:
+	case <-time.After(time.Second):
+		t.Fatal("second UpdateTools did not enter formatter after first completed")
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second UpdateTools error = %v", err)
+	}
+}
+
+type droppedRealtimeFunctionTool struct{}
+
+func (droppedRealtimeFunctionTool) ID() string          { return "dropped" }
+func (droppedRealtimeFunctionTool) Name() string        { return "dropped" }
+func (droppedRealtimeFunctionTool) Description() string { return "dropped function" }
+func (droppedRealtimeFunctionTool) Parameters() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties":           map[string]any{},
+	}
+}
+func (droppedRealtimeFunctionTool) Execute(context.Context, string) (string, error) { return "", nil }
+
 type openAIRealtimeProviderTestTool struct {
 	requestTestTool
 }
@@ -405,6 +560,7 @@ func TestAzureOpenAIRealtimeNormalizesAssistantTextForLegacyAPI(t *testing.T) {
 				return
 			}
 			messages <- string(msg)
+			ackOpenAIRealtimeChatContextMessage(t, conn, msg)
 		}
 		<-releaseServer
 	})
@@ -456,6 +612,7 @@ func TestRealtimeModelUpdateOptionsForwardsToActiveSession(t *testing.T) {
 				return
 			}
 			messages <- string(msg)
+			ackOpenAIRealtimeChatContextMessage(t, conn, msg)
 		}
 	})
 
@@ -510,6 +667,7 @@ func TestRealtimeModelUpdateOptionsAppliesToNewSession(t *testing.T) {
 				return
 			}
 			messages <- string(msg)
+			ackOpenAIRealtimeChatContextMessage(t, conn, msg)
 		}
 	})
 
@@ -977,6 +1135,7 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 				return
 			}
 			messages <- string(msg)
+			ackOpenAIRealtimeChatContextMessage(t, conn, msg)
 		}
 	})
 
@@ -1157,6 +1316,255 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
+	}
+}
+
+func TestRealtimeSessionUpdateChatContextWaitsForProviderAck(t *testing.T) {
+	createReceived := make(chan map[string]any, 1)
+	allowAck := make(chan struct{})
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("Read chat context update error = %v", err)
+			return
+		}
+		var msg map[string]any
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Errorf("Decode chat context update error = %v", err)
+			return
+		}
+		createReceived <- msg
+		<-allowAck
+		if err := conn.WriteJSON(map[string]any{
+			"type":             "conversation.item.added",
+			"previous_item_id": msg["previous_item_id"],
+			"item":             msg["item"],
+		}); err != nil {
+			t.Errorf("Write conversation.item.added error = %v", err)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user-ack", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- session.UpdateChatContext(chatCtx)
+	}()
+
+	select {
+	case msg := <-createReceived:
+		if msg["type"] != "conversation.item.create" {
+			t.Fatalf("chat update type = %#v, want conversation.item.create", msg["type"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for chat context create message")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("UpdateChatContext returned before provider ACK: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(allowAck)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("UpdateChatContext error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UpdateChatContext did not return after provider ACK")
+	}
+}
+
+func TestRealtimeSessionUpdateChatContextTimesOutWithoutProviderAck(t *testing.T) {
+	chatSent := make(chan struct{})
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read chat context update error = %v", err)
+			return
+		}
+		close(chatSent)
+		<-releaseServer
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	session.(*realtimeSession).chatContextAckTimeout = 25 * time.Millisecond
+
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user-timeout", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+	err = session.UpdateChatContext(chatCtx)
+	if err == nil {
+		t.Fatal("UpdateChatContext error = nil, want timeout")
+	}
+	var realtimeErr llm.RealtimeError
+	if !errors.As(err, &realtimeErr) {
+		t.Fatalf("UpdateChatContext error = %T, want llm.RealtimeError", err)
+	}
+	if realtimeErr.Message != "update_chat_ctx timed out." {
+		t.Fatalf("RealtimeError message = %q, want update_chat_ctx timed out.", realtimeErr.Message)
+	}
+	select {
+	case <-chatSent:
+	default:
+		t.Fatal("chat context update was not sent before timeout")
+	}
+}
+
+func TestRealtimeSessionUpdateChatContextSerializesConcurrentUpdates(t *testing.T) {
+	firstSeen := make(chan map[string]any, 1)
+	secondSeen := make(chan map[string]any, 1)
+	allowFirstAck := make(chan struct{})
+	var allowFirstAckOnce sync.Once
+	releaseFirstAck := func() {
+		allowFirstAckOnce.Do(func() { close(allowFirstAck) })
+	}
+	defer releaseFirstAck()
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("Read first chat context update error = %v", err)
+			return
+		}
+		var first map[string]any
+		if err := json.Unmarshal(raw, &first); err != nil {
+			t.Errorf("Decode first chat context update error = %v", err)
+			return
+		}
+		firstSeen <- first
+
+		secondRaw := make(chan []byte, 1)
+		go func() {
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			secondRaw <- raw
+		}()
+
+		<-allowFirstAck
+		if err := conn.WriteJSON(map[string]any{
+			"type":             "conversation.item.added",
+			"previous_item_id": first["previous_item_id"],
+			"item":             first["item"],
+		}); err != nil {
+			t.Errorf("Write first conversation.item.added error = %v", err)
+			return
+		}
+		raw = <-secondRaw
+		var second map[string]any
+		if err := json.Unmarshal(raw, &second); err != nil {
+			t.Errorf("Decode second chat context update error = %v", err)
+			return
+		}
+		secondSeen <- second
+		ackOpenAIRealtimeChatContextMessage(t, conn, raw)
+		<-releaseServer
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	firstCtx := llm.NewChatContext()
+	firstCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user-first", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "first"}}},
+	}
+	secondCtx := llm.NewChatContext()
+	secondCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user-first", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "first"}}},
+		&llm.ChatMessage{ID: "user-second", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "second"}}},
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- session.UpdateChatContext(firstCtx)
+	}()
+	select {
+	case <-firstSeen:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first chat context update")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- session.UpdateChatContext(secondCtx)
+	}()
+	select {
+	case msg := <-secondSeen:
+		releaseFirstAck()
+		t.Fatalf("second chat context update sent before first ACK: %#v", msg)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	releaseFirstAck()
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatalf("first UpdateChatContext error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first UpdateChatContext did not return after ACK")
+	}
+	select {
+	case msg := <-secondSeen:
+		item := msg["item"].(map[string]any)
+		if item["id"] != "user-second" {
+			t.Fatalf("second chat update item = %#v, want user-second", item)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for second chat context update")
+	}
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("second UpdateChatContext error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second UpdateChatContext did not return after ACK")
 	}
 }
 
@@ -1361,6 +1769,31 @@ func newOpenAIRealtimeTestWebsocketDialer(t *testing.T, handler func(*websocket.
 		default:
 		}
 		return conn, response, err
+	}
+}
+
+func ackOpenAIRealtimeChatContextMessage(t *testing.T, conn *websocket.Conn, raw []byte) {
+	t.Helper()
+	var msg map[string]any
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return
+	}
+	switch msg["type"] {
+	case "conversation.item.create":
+		if err := conn.WriteJSON(map[string]any{
+			"type":             "conversation.item.added",
+			"previous_item_id": msg["previous_item_id"],
+			"item":             msg["item"],
+		}); err != nil {
+			t.Errorf("Write conversation.item.added error = %v", err)
+		}
+	case "conversation.item.delete":
+		if err := conn.WriteJSON(map[string]any{
+			"type":    "conversation.item.deleted",
+			"item_id": msg["item_id"],
+		}); err != nil {
+			t.Errorf("Write conversation.item.deleted error = %v", err)
+		}
 	}
 }
 
@@ -3200,6 +3633,7 @@ func TestRealtimeSessionReconnectReplaysTools(t *testing.T) {
 func TestRealtimeSessionReconnectReplaysChatContext(t *testing.T) {
 	var dialCount atomic.Int32
 	chatReplayed := make(chan map[string]any, 1)
+	closeFirst := make(chan struct{})
 	releaseSecond := make(chan struct{})
 	defer close(releaseSecond)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
@@ -3213,7 +3647,9 @@ func TestRealtimeSessionReconnectReplaysChatContext(t *testing.T) {
 			t.Errorf("Read chat context update error = %v", err)
 			return
 		}
+		ackOpenAIRealtimeChatContextMessage(t, conn, chatPayload)
 		if attempt == 1 {
+			<-closeFirst
 			_ = conn.Close()
 			return
 		}
@@ -3242,6 +3678,8 @@ func TestRealtimeSessionReconnectReplaysChatContext(t *testing.T) {
 	if err := session.UpdateChatContext(chatCtx); err != nil {
 		t.Fatalf("UpdateChatContext error = %v", err)
 	}
+	assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeRemoteItemAdded)
+	close(closeFirst)
 
 	select {
 	case update := <-chatReplayed:

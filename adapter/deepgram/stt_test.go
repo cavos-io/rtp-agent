@@ -1099,6 +1099,46 @@ func TestDeepgramSTTStreamChunksAndFinalizesReferenceAudio(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTStreamChunksReferenceAudioUsingStreamFormat(t *testing.T) {
+	var binaryWrites [][]byte
+	stream := &deepgramStream{
+		sampleRate:  16000,
+		numChannels: 1,
+		writeBinary: func(data []byte) error {
+			binaryWrites = append(binaryWrites, append([]byte(nil), data...))
+			return nil
+		},
+		writeJSON: func(any) error {
+			return nil
+		},
+	}
+
+	audioData := make([]byte, 2000)
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              audioData,
+		SampleRate:        48000,
+		NumChannels:       2,
+		SamplesPerChannel: 500,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(binaryWrites) != 1 {
+		t.Fatalf("binary writes after PushFrame = %d, want 1 stream-format 50ms chunk", len(binaryWrites))
+	}
+	if got := len(binaryWrites[0]); got != 1600 {
+		t.Fatalf("first binary write length = %d, want 1600 from stream 16k mono format", got)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if len(binaryWrites) != 2 {
+		t.Fatalf("binary writes after Flush = %d, want remainder chunk", len(binaryWrites))
+	}
+	if got := len(binaryWrites[1]); got != 400 {
+		t.Fatalf("flush binary write length = %d, want 400 from stream 16k mono format", got)
+	}
+}
+
 func TestDeepgramSTTStreamCloseDrainsFinalTranscript(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	closeSent := make(chan struct{})

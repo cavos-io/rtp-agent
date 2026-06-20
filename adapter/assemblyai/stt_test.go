@@ -340,6 +340,41 @@ func TestAssemblyAIRealtimeTranscriptEventPreservesWordTimings(t *testing.T) {
 	}
 }
 
+func TestAssemblyAIRealtimeTurnAppliesReferenceStartTimeOffset(t *testing.T) {
+	stream := &assemblyAISTTStream{state: &assemblyAIStreamState{}}
+	timing, ok := any(stream).(stt.StreamTiming)
+	if !ok {
+		t.Fatalf("stream type = %T, want stt.StreamTiming", stream)
+	}
+	timing.SetStartTimeOffset(2.5)
+
+	resp := aaiResponse{
+		Type:       "Turn",
+		Transcript: "hello realtime",
+		EndOfTurn:  true,
+		Words: []assemblyAIWord{
+			{Text: "hello", Start: 100, End: 300, Confidence: 0.95},
+			{Text: "realtime", Start: 350, End: 800, Confidence: 0.9},
+		},
+	}
+
+	events := assemblyAIRealtimeTranscriptEvents(resp, stream.state)
+	if len(events) < 2 {
+		t.Fatalf("events = %d, want interim and final", len(events))
+	}
+	interim := events[0].Alternatives[0]
+	if interim.StartTime != 2.6 || interim.EndTime != 3.3 {
+		t.Fatalf("interim timing = %v-%v, want offset timing 2.6-3.3", interim.StartTime, interim.EndTime)
+	}
+	if got := interim.Words[0]; got.StartTime != 2.6 || got.EndTime != 2.8 || got.StartTimeOffset != 2.5 {
+		t.Fatalf("first word timing = %+v, want offset timing and start_time_offset", got)
+	}
+	final := events[1].Alternatives[0]
+	if final.StartTime != 2.6 || final.EndTime != 3.3 {
+		t.Fatalf("final timing = %v-%v, want offset timing 2.6-3.3", final.StartTime, final.EndTime)
+	}
+}
+
 func TestAssemblyAIRealtimeTurnEmitsReferenceEventOrder(t *testing.T) {
 	resp := aaiResponse{
 		Type:       "Turn",
