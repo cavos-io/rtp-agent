@@ -1262,6 +1262,42 @@ func TestPipelineAgentCanceledTTSForwardingClearsPlayback(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentCanceledPublishAudioClearsPlayback(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	playback := &fakePipelinePlaybackController{}
+	session.SetAudioPlaybackController(playback)
+	agent := NewPipelineAgent(nil, nil, nil, nil, llm.NewChatContext())
+	ctx, cancel := context.WithCancel(context.Background())
+	ttsGen := &TTSGenerationData{
+		AudioCh:     make(chan *model.AudioFrame, 1),
+		TimedTextCh: make(chan tts.TimedString),
+	}
+	ttsGen.AudioCh <- &model.AudioFrame{
+		Data:              []byte{1},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+	close(ttsGen.AudioCh)
+	close(ttsGen.TimedTextCh)
+	transcriptSync := NewTranscriptSynchronizer(0)
+	defer transcriptSync.Close()
+	done := closedChannel()
+	agent.PublishAudio = func(context.Context, *model.AudioFrame) error {
+		cancel()
+		return context.Canceled
+	}
+
+	_, err := agent.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, done, nil)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("playTTSGenerationWithTranscript error = %v, want context.Canceled", err)
+	}
+	if playback.clearCalls != 1 {
+		t.Fatalf("ClearBuffer calls = %d, want 1 after canceled PublishAudio", playback.clearCalls)
+	}
+}
+
 func TestPipelineAgentSayReturnsDirectSpeechToListeningWithoutIdle(t *testing.T) {
 	baseAgent := NewAgent("test")
 	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
