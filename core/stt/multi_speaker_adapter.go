@@ -106,6 +106,7 @@ func (a *MultiSpeakerAdapter) Stream(ctx context.Context, language string) (Reco
 		eventCh:   make(chan *SpeechEvent, 100),
 		errCh:     make(chan error, 1),
 		inputCh:   make(chan multiSpeakerInput, 100),
+		doneCh:    make(chan struct{}),
 		startTime: streamStartTimeNow(),
 	}
 	w.applyTiming()
@@ -124,9 +125,10 @@ type multiSpeakerAdapterWrapper struct {
 	eventCh     chan *SpeechEvent
 	errCh       chan error
 	inputCh     chan multiSpeakerInput
+	doneCh      chan struct{}
 	mu          sync.Mutex
 	closed      bool
-	inputClosed bool
+	doneClosed  bool
 	terminalErr error
 	rateGuard   SampleRateGuard
 	inputEnded  bool
@@ -177,45 +179,73 @@ func (w *multiSpeakerAdapterWrapper) applyTiming() {
 
 func (w *multiSpeakerAdapterWrapper) PushFrame(frame *model.AudioFrame) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.closed {
+		w.mu.Unlock()
 		return fmt.Errorf("stream closed")
 	}
 	if w.inputEnded {
+		w.mu.Unlock()
 		return fmt.Errorf("stream input ended")
 	}
 	if err := w.rateGuard.Check(frame); err != nil {
+		w.mu.Unlock()
 		return err
 	}
-	w.inputCh <- multiSpeakerInput{frame: frame}
-	return nil
+	w.ensureDoneChLocked()
+	w.mu.Unlock()
+	return w.enqueueInput(multiSpeakerInput{frame: frame})
 }
 
 func (w *multiSpeakerAdapterWrapper) Flush() error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.closed {
+		w.mu.Unlock()
 		return fmt.Errorf("stream closed")
 	}
 	if w.inputEnded {
+		w.mu.Unlock()
 		return fmt.Errorf("stream input ended")
 	}
-	w.inputCh <- multiSpeakerInput{flush: true}
-	return nil
+	w.ensureDoneChLocked()
+	w.mu.Unlock()
+	return w.enqueueInput(multiSpeakerInput{flush: true})
 }
 
 func (w *multiSpeakerAdapterWrapper) EndInput() error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.closed {
+		w.mu.Unlock()
 		return fmt.Errorf("stream closed")
 	}
 	if w.inputEnded {
+		w.mu.Unlock()
 		return fmt.Errorf("stream input ended")
 	}
 	w.inputEnded = true
-	w.inputCh <- multiSpeakerInput{end: true}
-	return nil
+	w.ensureDoneChLocked()
+	w.mu.Unlock()
+	return w.enqueueInput(multiSpeakerInput{end: true})
+}
+
+func (w *multiSpeakerAdapterWrapper) enqueueInput(input multiSpeakerInput) error {
+	w.mu.Lock()
+	doneCh := w.ensureDoneChLocked()
+	w.mu.Unlock()
+
+	select {
+	case <-doneCh:
+		return fmt.Errorf("stream closed")
+	default:
+	}
+
+	select {
+	case <-doneCh:
+		return fmt.Errorf("stream closed")
+	case <-w.ctx.Done():
+		return fmt.Errorf("stream closed")
+	case w.inputCh <- input:
+		return nil
+	}
 }
 
 func (w *multiSpeakerAdapterWrapper) Close() error {
@@ -356,10 +386,18 @@ func (w *multiSpeakerAdapterWrapper) markClosedFromRun() {
 }
 
 func (w *multiSpeakerAdapterWrapper) closeInputLocked() {
-	if !w.inputClosed {
-		close(w.inputCh)
-		w.inputClosed = true
+	doneCh := w.ensureDoneChLocked()
+	if !w.doneClosed {
+		close(doneCh)
+		w.doneClosed = true
 	}
+}
+
+func (w *multiSpeakerAdapterWrapper) ensureDoneChLocked() chan struct{} {
+	if w.doneCh == nil {
+		w.doneCh = make(chan struct{})
+	}
+	return w.doneCh
 }
 
 type speakerData struct {

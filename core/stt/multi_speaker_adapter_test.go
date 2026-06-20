@@ -499,6 +499,65 @@ func TestMultiSpeakerAdapterWrapperEndInputDoesNotFlushAndRejectsMoreInput(t *te
 	}
 }
 
+func TestMultiSpeakerAdapterCloseDoesNotPanicBlockedPushFrame(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	wrapper := &multiSpeakerAdapterWrapper{
+		inner:    &fakeMultiSpeakerStream{},
+		ctx:      ctx,
+		cancel:   cancel,
+		detector: newPrimarySpeakerDetector(false, false, "{text}", "{text}", DefaultPrimarySpeakerDetectionOptions()),
+		eventCh:  make(chan *SpeechEvent, 1),
+		errCh:    make(chan error, 1),
+		inputCh:  make(chan multiSpeakerInput, 1),
+	}
+
+	frame := &model.AudioFrame{Data: []byte("first"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+	if err := wrapper.PushFrame(frame); err != nil {
+		t.Fatalf("first PushFrame returned error: %v", err)
+	}
+
+	pushDone := make(chan error, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				pushDone <- errors.New("PushFrame panicked")
+			}
+		}()
+		pushDone <- wrapper.PushFrame(frame)
+	}()
+
+	select {
+	case err := <-pushDone:
+		t.Fatalf("blocked PushFrame returned before Close: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- wrapper.Close()
+	}()
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close returned error: %v", err)
+		}
+	case <-time.After(50 * time.Millisecond):
+		<-wrapper.inputCh
+		<-closeDone
+		t.Fatal("Close blocked waiting for PushFrame")
+	}
+
+	select {
+	case err := <-pushDone:
+		if err == nil || !strings.Contains(err.Error(), "stream closed") {
+			t.Fatalf("blocked PushFrame error = %v, want stream closed", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for blocked PushFrame")
+	}
+}
+
 func TestMultiSpeakerAdapterWrapperForwardsEndInput(t *testing.T) {
 	inner := &fakeMultiSpeakerStream{nextErr: io.EOF, callCh: make(chan struct{}, 1)}
 	wrapper := &multiSpeakerAdapterWrapper{
