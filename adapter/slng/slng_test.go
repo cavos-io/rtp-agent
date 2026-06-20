@@ -946,6 +946,19 @@ func TestSLNGSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestSLNGSTTClosedStreamNextReturnsEOF(t *testing.T) {
+	provider := NewSTT("test-key")
+	stream := &sttStream{}
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after provider Close error = %T %v, want io.EOF", err, err)
+	}
+}
+
 func TestSLNGTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	provider := NewTTS("test-key")
 	stream := &ttsStream{}
@@ -959,6 +972,19 @@ func TestSLNGTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("Flush after provider Close error = %v, want io.ErrClosedPipe", err)
+	}
+}
+
+func TestSLNGTTSClosedStreamNextReturnsEOF(t *testing.T) {
+	provider := NewTTS("test-key")
+	stream := &ttsStream{}
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after provider Close error = %T %v, want io.EOF", err, err)
 	}
 }
 
