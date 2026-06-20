@@ -159,6 +159,17 @@ func (s *InworldSTT) InputSampleRate() uint32 {
 	return uint32(s.sampleRate)
 }
 
+func (s *InworldSTT) UpdateOptions(opts ...InworldSTTOption) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, opt := range opts {
+		opt(s)
+	}
+}
+
 func (s *InworldSTT) Close() error {
 	if s == nil {
 		return nil

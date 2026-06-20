@@ -147,6 +147,36 @@ func TestInworldSTTOptionsBuildReferenceConfigURLAndHeaders(t *testing.T) {
 	}
 }
 
+func TestInworldSTTUpdateOptionsAffectFutureStreamConfig(t *testing.T) {
+	provider := NewInworldSTT("test-key")
+	provider.UpdateOptions(
+		WithInworldSTTModel("soniox/stt-rt-v4"),
+		WithInworldSTTLanguage("fr-FR"),
+		WithInworldSTTVoiceProfile(false),
+		WithInworldSTTVoiceProfileTopN(4),
+		WithInworldSTTVADThreshold(0.55),
+		WithInworldSTTMinEndOfTurnSilenceWhenConfident(350),
+		WithInworldSTTEndOfTurnConfidenceThreshold(0.8),
+	)
+
+	config := buildInworldSTTTranscribeConfig(provider, "")
+	assertInworldConfig(t, config, "modelId", "soniox/stt-rt-v4")
+	assertInworldConfig(t, config, "language", "fr-FR")
+	if _, ok := config["voiceProfileConfig"]; ok {
+		t.Fatalf("voiceProfileConfig present after disabled update: %#v", config["voiceProfileConfig"])
+	}
+	if config["endOfTurnConfidenceThreshold"] != 0.8 {
+		t.Fatalf("endOfTurnConfidenceThreshold = %#v, want 0.8", config["endOfTurnConfidenceThreshold"])
+	}
+	inworldV1 := config["inworldSttV1Config"].(map[string]any)
+	if inworldV1["vadThreshold"] != 0.55 {
+		t.Fatalf("vadThreshold = %#v, want 0.55", inworldV1["vadThreshold"])
+	}
+	if inworldV1["minEndOfTurnSilenceWhenConfident"] != 350 {
+		t.Fatalf("minEndOfTurnSilenceWhenConfident = %#v, want 350", inworldV1["minEndOfTurnSilenceWhenConfident"])
+	}
+}
+
 func TestInworldSTTOutboundMessagesMatchReference(t *testing.T) {
 	provider := NewInworldSTT("test-key")
 	configMsg := buildInworldSTTConfigMessage(provider, "en-US")
