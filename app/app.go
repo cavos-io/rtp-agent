@@ -3168,7 +3168,14 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		}
 		return slng.NewSTT(cfg.SLNGAPIKey, sttOpts...), nil
 	case providerLiveKit:
-		return adapterlivekit.NewSTT(cfg.STTModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret), nil
+		sttOpts := []adapterlivekit.STTOption{}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, adapterlivekit.WithSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, adapterlivekit.WithSTTSampleRate(*cfg.STTSampleRate))
+		}
+		return adapterlivekit.NewSTT(cfg.STTModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret, sttOpts...), nil
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_STT_FALLBACK_PROVIDERS entry %q", provider)
 	}
@@ -5255,7 +5262,14 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.STT = provider
 	case providerLiveKit:
-		a.STT = adapterlivekit.NewSTT(cfg.STTModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret)
+		sttOpts := []adapterlivekit.STTOption{}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, adapterlivekit.WithSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, adapterlivekit.WithSTTSampleRate(*cfg.STTSampleRate))
+		}
+		a.STT = adapterlivekit.NewSTT(cfg.STTModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret, sttOpts...)
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_STT_PROVIDER %q", cfg.STTProvider)
 	}

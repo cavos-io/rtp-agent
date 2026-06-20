@@ -12002,6 +12002,8 @@ func TestDefaultConfigFromEnvSelectsLiveKitInferenceLLM(t *testing.T) {
 	t.Setenv("RTP_AGENT_LLM_MODEL", "openai/gpt-4.1-mini")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "livekit")
 	t.Setenv("RTP_AGENT_STT_MODEL", "deepgram/nova-3")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "id")
+	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "8000")
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "livekit")
 	t.Setenv("RTP_AGENT_TTS_MODEL", "cartesia/sonic-3")
 
@@ -12023,6 +12025,12 @@ func TestDefaultConfigFromEnvSelectsLiveKitInferenceLLM(t *testing.T) {
 	}
 	if got := app.Session.STT.Label(); got != "livekit.STT" {
 		t.Fatalf("STT label = %q, want livekit.STT", got)
+	}
+	if got := reflect.ValueOf(app.Session.STT).Elem().FieldByName("language").String(); got != "id" {
+		t.Fatalf("LiveKit STT language = %q, want env language id", got)
+	}
+	if got := stt.InputSampleRate(app.Session.STT); got != 8000 {
+		t.Fatalf("LiveKit STT input sample rate = %d, want env sample rate 8000", got)
 	}
 	if app.Session.TTS == nil {
 		t.Fatal("Session TTS is nil")
