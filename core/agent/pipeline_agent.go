@@ -1424,7 +1424,7 @@ func (va *PipelineAgent) clearAssistantPlayback(session *AgentSession) {
 }
 
 func (va *PipelineAgent) forwardedAssistantTextAfterInterruption(ctx context.Context, session *AgentSession, speech *SpeechHandle, generatedText string) string {
-	if generatedText == "" || speech == nil || !speech.IsInterrupted() || session == nil {
+	if speech == nil || !speech.IsInterrupted() || session == nil {
 		return generatedText
 	}
 	playback := session.AudioPlaybackController()
@@ -1444,7 +1444,10 @@ func (va *PipelineAgent) forwardedAssistantTextAfterInterruption(ctx context.Con
 	if ev.PlaybackPosition <= 0 {
 		return ""
 	}
-	return ev.SynchronizedTranscript
+	if ev.HasSynchronizedTranscript || ev.SynchronizedTranscript != "" {
+		return ev.SynchronizedTranscript
+	}
+	return generatedText
 }
 
 func (va *PipelineAgent) precomputeLLMGeneration(ctx context.Context, session *AgentSession, opts pipelineReplyOptions) (*LLMGenerationData, error) {

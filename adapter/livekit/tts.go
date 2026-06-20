@@ -523,6 +523,7 @@ type inferenceTTSStream struct {
 	tokenizer   tokenize.SentenceStream
 	eventCh     chan *tts.SynthesizedAudio
 	mu          sync.Mutex
+	closeEvents sync.Once
 	closed      bool
 	inputEnded  bool
 	done        bool
@@ -582,8 +583,14 @@ func (s *inferenceTTSStream) Close() error {
 	if s.tts != nil {
 		s.tts.unregisterStream(s)
 	}
-	close(s.eventCh)
+	s.closeEventCh()
 	return nil
+}
+
+func (s *inferenceTTSStream) closeEventCh() {
+	s.closeEvents.Do(func() {
+		close(s.eventCh)
+	})
 }
 
 func (s *inferenceTTSStream) Next() (*tts.SynthesizedAudio, error) {
@@ -635,7 +642,6 @@ func (s *inferenceTTSStream) emitAudio(audio *tts.SynthesizedAudio) bool {
 func (s *inferenceTTSStream) run() {
 	defer func() {
 		s.Close()
-		close(s.eventCh)
 	}()
 
 	// Tokenizer loop

@@ -203,9 +203,10 @@ type AudioPlaybackController interface {
 }
 
 type AudioPlaybackResult struct {
-	PlaybackPosition       time.Duration
-	Interrupted            bool
-	SynchronizedTranscript string
+	PlaybackPosition          time.Duration
+	Interrupted               bool
+	SynchronizedTranscript    string
+	HasSynchronizedTranscript bool
 }
 
 type closeableSessionAssistant interface {
