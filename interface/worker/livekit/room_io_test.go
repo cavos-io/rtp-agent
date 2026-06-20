@@ -2348,6 +2348,58 @@ func TestRoomIOPublishesUserInputTranscriptionStream(t *testing.T) {
 	}
 }
 
+func TestRoomIOPublishesEmptyUserInputInterimTranscriptionStream(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	publishedText := make(chan roomIOPublishedText, 1)
+	publishedPacket := make(chan *livekit.Transcription, 1)
+	rio := &RoomIO{
+		AgentSession:                   session,
+		userTranscriptionTrackID:       "TR_user_audio",
+		userTranscriptionParticipantID: "caller-a",
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			publishedText <- roomIOPublishedText{text: text, opts: opts}
+		},
+		transcriptionPacketPublisher: func(transcription *livekit.Transcription) error {
+			publishedPacket <- transcription
+			return nil
+		},
+	}
+	rio.startUserTranscriptionListener()
+	defer rio.userTranscriptionCancel()
+
+	session.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "",
+		IsFinal:    false,
+	})
+
+	select {
+	case got := <-publishedText:
+		if got.text != "" {
+			t.Fatalf("published empty interim text = %q, want empty clear marker", got.text)
+		}
+		if got.opts.Attributes[RoomIOTranscriptionFinalAttribute] != "false" {
+			t.Fatalf("final attribute = %q, want false", got.opts.Attributes[RoomIOTranscriptionFinalAttribute])
+		}
+		if got.opts.Attributes[RoomIOTranscriptionTrackIDAttribute] != "TR_user_audio" {
+			t.Fatalf("track id attribute = %q, want TR_user_audio", got.opts.Attributes[RoomIOTranscriptionTrackIDAttribute])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("empty user input transcription stream was not published")
+	}
+	select {
+	case got := <-publishedPacket:
+		if got.TranscribedParticipantIdentity != "caller-a" || got.TrackId != "TR_user_audio" || len(got.Segments) != 1 {
+			t.Fatalf("published packet = %#v, want caller-a/TR_user_audio with one empty segment", got)
+		}
+		segment := got.Segments[0]
+		if segment.Text != "" || segment.Final {
+			t.Fatalf("empty interim segment = %#v, want non-final empty clear marker", segment)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("empty user input transcription packet was not published")
+	}
+}
+
 func TestRoomIOReusesUserTranscriptionSegmentUntilFinal(t *testing.T) {
 	published := make(chan roomIOPublishedText, 3)
 	rio := &RoomIO{

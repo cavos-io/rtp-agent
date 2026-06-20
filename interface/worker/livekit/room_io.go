@@ -613,7 +613,7 @@ func (rio *RoomIO) userInputTranscriptionState(final bool) string {
 }
 
 func (rio *RoomIO) handleUserInputTranscribed(ev agent.UserInputTranscribedEvent) {
-	if rio == nil || ev.Transcript == "" {
+	if rio == nil || (ev.Transcript == "" && ev.IsFinal) {
 		return
 	}
 	trackID, participantID := rio.userTranscriptionTarget()
@@ -696,7 +696,7 @@ func roomIOTranscriptionSegmentID() string {
 }
 
 func (rio *RoomIO) publishTranscriptionTextStream(text string, trackID string, final bool, segmentID string) {
-	if rio == nil || rio.transcriptionTextPublisher == nil || text == "" {
+	if rio == nil || rio.transcriptionTextPublisher == nil {
 		return
 	}
 	attributes := map[string]string{
