@@ -69,3 +69,11 @@ func acceptRemoteStream(remoteStreamID, userID string) bool {
 	}
 	return userID == remoteStreamID
 }
+
+func acceptChannel(configuredChannel, eventChannel string) bool {
+	eventChannel = strings.TrimSpace(eventChannel)
+	if eventChannel == "" {
+		return true
+	}
+	return eventChannel == strings.TrimSpace(configuredChannel)
+}

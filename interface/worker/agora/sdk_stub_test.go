@@ -827,6 +827,31 @@ func TestSDKClientImplementationFiltersRemoteStreamID(t *testing.T) {
 	}
 }
 
+func TestSDKClientImplementationFiltersAudioByChannel(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	callbackIndex := strings.Index(text, "OnPlaybackAudioFrameBeforeMixing")
+	if callbackIndex < 0 {
+		t.Fatal("sdk.go missing OnPlaybackAudioFrameBeforeMixing callback")
+	}
+	callbackBody := text[callbackIndex:]
+	if nextCallback := strings.Index(callbackBody[len("OnPlaybackAudioFrameBeforeMixing"):], "\n\t\t\t},"); nextCallback >= 0 {
+		callbackBody = callbackBody[:len("OnPlaybackAudioFrameBeforeMixing")+nextCallback]
+	}
+	channelFilterIndex := strings.Index(callbackBody, "if !acceptChannel(opts.Channel, channelID)")
+	remoteFilterIndex := strings.Index(callbackBody, "if !acceptRemoteStream(opts.RemoteStreamID, userID)")
+	forwardIndex := strings.Index(callbackBody, "c.forwardActiveAudioFrame(connection, audioHandler, frame)")
+	if channelFilterIndex < 0 || remoteFilterIndex < 0 || forwardIndex < 0 {
+		t.Fatal("audio callback must filter channel and remote stream before forwarding audio")
+	}
+	if !(channelFilterIndex < remoteFilterIndex && remoteFilterIndex < forwardIndex) {
+		t.Fatal("audio callback must drop foreign channels before remote stream filtering and audio forwarding")
+	}
+}
+
 func TestSDKClientImplementationEmitsConnectedAfterPublishAudio(t *testing.T) {
 	source, err := os.ReadFile("sdk.go")
 	if err != nil {

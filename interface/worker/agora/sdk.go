@@ -331,6 +331,9 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts Options, handler Event
 		}
 		if ret := connection.RegisterAudioFrameObserver(&agoraservice.AudioFrameObserver{
 			OnPlaybackAudioFrameBeforeMixing: func(_ *agoraservice.LocalUser, channelID string, userID string, frame *agoraservice.AudioFrame, _ agoraservice.VadState, _ *agoraservice.AudioFrame) bool {
+				if !acceptChannel(opts.Channel, channelID) {
+					return true
+				}
 				if !acceptRemoteStream(opts.RemoteStreamID, userID) {
 					return true
 				}

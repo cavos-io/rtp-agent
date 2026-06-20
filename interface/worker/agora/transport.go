@@ -3,7 +3,6 @@ package agora
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -338,7 +337,7 @@ func (t *Transport) acceptEventLocked(event Event) bool {
 	if t.closed {
 		return false
 	}
-	if event.Channel != "" && event.Channel != strings.TrimSpace(t.opts.Channel) {
+	if !acceptChannel(t.opts.Channel, event.Channel) {
 		return false
 	}
 	if t.closing {
