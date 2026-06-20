@@ -1305,6 +1305,47 @@ func TestPerformToolExecutionsUsesFirstRunContextUpdateAsOutput(t *testing.T) {
 	}
 }
 
+func TestPerformToolExecutionsEmitsRunContextUpdateBeforeToolReturns(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	tool := &blockingRunContextUpdatingTool{
+		updateSent: make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	toolCtx := llm.NewToolContext([]interface{}{tool})
+	functionCh := make(chan *llm.FunctionToolCall, 1)
+	functionCh <- &llm.FunctionToolCall{
+		ID:        "reply-a/fnc_0",
+		Name:      tool.Name(),
+		CallID:    "call_lookup",
+		Arguments: `{"city": "Jakarta"}`,
+	}
+	close(functionCh)
+
+	outputs := PerformToolExecutions(context.Background(), functionCh, toolCtx, WithToolExecutionSession(session))
+	select {
+	case <-tool.updateSent:
+	case <-time.After(time.Second):
+		t.Fatal("tool did not send run context update")
+	}
+	select {
+	case output := <-outputs:
+		want := "The tool `lookup` has updated, message: searching\nThe task is still running, so DON'T make up or give information not included in the message above."
+		if output.RawOutput != want {
+			t.Fatalf("RawOutput = %#v, want progress update before tool returns", output.RawOutput)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("PerformToolExecutions did not emit run context update before tool returned")
+	}
+	close(tool.release)
+	final := mustReceiveToolOutput(t, outputs)
+	if final.RawOutput != "final result" {
+		t.Fatalf("final RawOutput = %#v, want final result", final.RawOutput)
+	}
+	if _, ok := <-outputs; ok {
+		t.Fatal("PerformToolExecutions emitted duplicate update after tool returned")
+	}
+}
+
 func TestPerformToolExecutionsEmitsFinalReturnAfterRunContextUpdate(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	tool := &runContextUpdatingTool{}
@@ -2251,6 +2292,35 @@ func (m *multiRunContextUpdatingTool) Execute(ctx context.Context, args string) 
 		}
 	}
 	return "final result", nil
+}
+
+type blockingRunContextUpdatingTool struct {
+	updateSent chan struct{}
+	release    chan struct{}
+}
+
+func (b *blockingRunContextUpdatingTool) ID() string { return "lookup" }
+
+func (b *blockingRunContextUpdatingTool) Name() string { return "lookup" }
+
+func (b *blockingRunContextUpdatingTool) Description() string { return "" }
+
+func (b *blockingRunContextUpdatingTool) Parameters() map[string]any { return nil }
+
+func (b *blockingRunContextUpdatingTool) Execute(ctx context.Context, args string) (string, error) {
+	runCtx := GetRunContext(ctx)
+	if runCtx != nil {
+		if err := runCtx.Update("searching"); err != nil {
+			return "", err
+		}
+	}
+	close(b.updateSent)
+	select {
+	case <-b.release:
+		return "final result", nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
 }
 
 type blockingGenerationTool struct {

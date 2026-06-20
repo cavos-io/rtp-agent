@@ -973,7 +973,7 @@ func PerformToolExecutions(
 						CreatedAt: time.Now(),
 					}
 					runCtx = NewRunContext(options.Session, options.SpeechHandle, &functionCall)
-					runCtx.attach()
+					runCtx.attach(outCh)
 					execCtx = WithRunContext(execCtx, runCtx)
 				}
 				executionToolCtx := mockToolContext(execCtx, toolCtx, options.Session, fc.Name)
@@ -986,8 +986,12 @@ func PerformToolExecutions(
 				}
 				if runCtx != nil {
 					updates := runCtx.Updates()
+					emittedUpdates := runCtx.EmittedUpdateCount()
+					if emittedUpdates > len(updates) {
+						emittedUpdates = len(updates)
+					}
 					if len(updates) > 0 {
-						for _, update := range updates {
+						for _, update := range updates[emittedUpdates:] {
 							outCh <- toolExecutionOutputFromUpdate(update)
 						}
 						if finalOutput, ok := makeRunContextFinalToolOutput(runCtx, result); ok {

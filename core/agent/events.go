@@ -399,6 +399,8 @@ type RunContext struct {
 	updates          []RunContextUpdate
 	fillerSchedulers []*runContextFillerScheduler
 	attached         bool
+	updateSink       chan<- ToolExecutionOutput
+	emittedUpdates   int
 	mu               sync.Mutex
 }
 
@@ -538,8 +540,17 @@ func (r *RunContext) Update(message any, templates ...string) error {
 			CreatedAt: time.Now(),
 		}
 	}
-	r.updates = append(r.updates, RunContextUpdate{FunctionCall: call, FunctionCallOutput: output})
+	update := RunContextUpdate{FunctionCall: call, FunctionCallOutput: output}
+	r.updates = append(r.updates, update)
+	var sink chan<- ToolExecutionOutput
+	if r.attached && r.updateSink != nil {
+		sink = r.updateSink
+		r.emittedUpdates = len(r.updates)
+	}
 	r.mu.Unlock()
+	if sink != nil {
+		sink <- toolExecutionOutputFromUpdate(update)
+	}
 	return nil
 }
 
@@ -553,6 +564,15 @@ func (r *RunContext) Updates() []RunContextUpdate {
 	updates := make([]RunContextUpdate, len(r.updates))
 	copy(updates, r.updates)
 	return updates
+}
+
+func (r *RunContext) EmittedUpdateCount() int {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.emittedUpdates
 }
 
 func (r *RunContext) addFillerScheduler(scheduler *runContextFillerScheduler) {
@@ -710,12 +730,15 @@ func (s *runContextFillerScheduler) interruptDone() <-chan struct{} {
 	return s.runCtx.SpeechHandle.interruptCh
 }
 
-func (r *RunContext) attach() {
+func (r *RunContext) attach(updateSink ...chan<- ToolExecutionOutput) {
 	if r == nil {
 		return
 	}
 	r.mu.Lock()
 	r.attached = true
+	if len(updateSink) > 0 {
+		r.updateSink = updateSink[0]
+	}
 	r.mu.Unlock()
 }
 
@@ -725,6 +748,7 @@ func (r *RunContext) detach() {
 	}
 	r.mu.Lock()
 	r.attached = false
+	r.updateSink = nil
 	r.mu.Unlock()
 }
 
