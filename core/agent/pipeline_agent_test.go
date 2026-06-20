@@ -3637,6 +3637,76 @@ func TestPipelineAgentCancelToolUpdateReplyKeepsFinalReturnReply(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentCancelFirstToolUpdateReplyKeepsSubsequentUpdateReply(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{ToolCalls: []llm.FunctionToolCall{{
+						Type:      "function",
+						Name:      "lookup",
+						CallID:    "call_lookup",
+						Arguments: `{}`,
+					}}}},
+				},
+			},
+			&fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "second acknowledged"}}}},
+			&fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "final acknowledged"}}}},
+		},
+	}
+	tool := &blockingMultiRunContextUpdatingTool{
+		firstSent:     make(chan struct{}),
+		releaseSecond: make(chan struct{}),
+		secondSent:    make(chan struct{}),
+		releaseFinal:  make(chan struct{}),
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{tool}
+	cancelNextReply := true
+	session.On("function_tools_executed", func(ev Event) {
+		if toolsEv, ok := ev.(*FunctionToolsExecutedEvent); ok && cancelNextReply {
+			toolsEv.CancelToolReply()
+			cancelNextReply = false
+		}
+	})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.generateReply()
+	}()
+
+	select {
+	case <-tool.firstSent:
+	case <-time.After(time.Second):
+		t.Fatal("tool did not send first update")
+	}
+	close(tool.releaseSecond)
+	select {
+	case <-tool.secondSent:
+	case <-time.After(time.Second):
+		t.Fatal("tool did not send second update")
+	}
+	waitForLLMCalls(t, l, 2, "subsequent update reply after first reply was canceled")
+	select {
+	case <-done:
+		t.Fatal("generateReply finished before final tool return")
+	default:
+	}
+	close(tool.releaseFinal)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("generateReply did not finish after final return")
+	}
+	if len(l.calls) != 3 {
+		t.Fatalf("LLM Chat calls = %d, want initial, second update reply, and final reply", len(l.calls))
+	}
+}
+
 func TestPipelineAgentStopResponseDoesNotAppendToolCallOrGenerateReply(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

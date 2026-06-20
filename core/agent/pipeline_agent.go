@@ -1025,16 +1025,24 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 				replyRequired = false
 				functionCalls = nil
 				functionCallOutputs = nil
+				var pendingReleasedByUpdate bool
 				for toolOut := range pendingToolOutCh {
 					executedTools = true
 					if appendToolOutput(toolOut, &functionCalls, &functionCallOutputs) {
 						replyRequired = true
 					}
 					if toolOut.RunContextUpdate {
+						pendingReleasedByUpdate = true
 						pendingToolUpdateReplyDone = toolOut.RunContextUpdateDone
+						break
+					}
+					if replyRequired {
+						break
 					}
 				}
-				pendingToolOutCh = nil
+				if !pendingReleasedByUpdate && !replyRequired {
+					pendingToolOutCh = nil
+				}
 				if executedTools {
 					if ev, err := NewFunctionToolsExecutedEvent(functionCalls, functionCallOutputs); err == nil {
 						for _, out := range functionCallOutputs {
