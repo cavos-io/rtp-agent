@@ -139,3 +139,22 @@ func TestResolveDataOptionsRegeneratesRTMTokenWhenRTMUserOverridesRTCUser(t *tes
 		t.Fatalf("RTM token user id = %q, want resolved RTM user id", rtmService.UserId)
 	}
 }
+
+func TestResolveDataOptionsDoesNotReuseRTCTokenWhenRTMUserOverridesRTCUserWithoutCertificate(t *testing.T) {
+	opts, err := ResolveDataOptions(Options{
+		AppID:     "app",
+		Channel:   "support",
+		UID:       "rtc-agent",
+		Token:     "rtc-token",
+		RTMUserID: "rtm-agent",
+	})
+	if err != nil {
+		t.Fatalf("ResolveDataOptions() error = %v, want nil", err)
+	}
+	if opts.UID != "rtm-agent" {
+		t.Fatalf("UID = %q, want resolved RTM user id", opts.UID)
+	}
+	if opts.Token != "app" {
+		t.Fatalf("Token = %q, want AppID token fallback instead of RTC token reuse", opts.Token)
+	}
+}
