@@ -187,6 +187,77 @@ func TestFireworksSTTPushFrameBuffersReferenceAudioChunks(t *testing.T) {
 	}
 }
 
+func TestFireworksSTTUpdateOptionsReconnectsActiveStreams(t *testing.T) {
+	endpoints := make(chan string, 2)
+	errCh := make(chan error, 2)
+	dialer := newFireworksSTTMultiWebsocketDialer(t, endpoints, errCh)
+
+	provider := NewFireworksSTT("test-key",
+		WithFireworksBaseURL("ws://fireworks.test/v1"),
+		WithFireworksLanguage("en"),
+		WithFireworksTextTimeoutSeconds(1.5),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	firstURL, err := url.Parse(readFireworksTestChan(t, endpoints, errCh))
+	if err != nil {
+		t.Fatalf("parse first stream url: %v", err)
+	}
+	assertFireworksQuery(t, firstURL.Query(), "language", "en")
+	assertFireworksQuery(t, firstURL.Query(), "text_timeout_seconds", "1.5")
+
+	provider.UpdateOptions(
+		WithFireworksLanguage("id"),
+		WithFireworksTextTimeoutSeconds(2.5),
+	)
+
+	secondURL, err := url.Parse(readFireworksTestChan(t, endpoints, errCh))
+	if err != nil {
+		t.Fatalf("parse second stream url: %v", err)
+	}
+	assertFireworksQuery(t, secondURL.Query(), "language", "id")
+	assertFireworksQuery(t, secondURL.Query(), "text_timeout_seconds", "2.5")
+}
+
+func TestFireworksSTTUpdateOptionsBuffersAudioDuringReconnect(t *testing.T) {
+	secondDialStarted := make(chan struct{})
+	allowSecondDial := make(chan struct{})
+	audioCh := make(chan []byte, 1)
+	errCh := make(chan error, 2)
+	dialer := newFireworksSTTBlockingReconnectDialer(t, secondDialStarted, allowSecondDial, audioCh, errCh)
+
+	provider := NewFireworksSTT("test-key",
+		WithFireworksBaseURL("ws://fireworks.test/v1"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	updateDone := make(chan struct{})
+	go func() {
+		provider.UpdateOptions(WithFireworksLanguage("id"))
+		close(updateDone)
+	}()
+
+	readFireworksTestChan(t, secondDialStarted, errCh)
+	if err := stream.PushFrame(&model.AudioFrame{Data: bytes.Repeat([]byte{7}, 1600)}); err != nil {
+		t.Fatalf("PushFrame during reconnect error = %v", err)
+	}
+	close(allowSecondDial)
+	readFireworksTestChan(t, updateDone, errCh)
+	if got := readFireworksTestChan(t, audioCh, errCh); len(got) != 1600 {
+		t.Fatalf("reconnected audio len = %d, want buffered chunk", len(got))
+	}
+}
+
 func TestFireworksSTTUnexpectedNormalCloseReturnsAPIStatusError(t *testing.T) {
 	dialer := newFireworksSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
 		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "done"), time.Now().Add(time.Second))
@@ -352,6 +423,110 @@ func newFireworksSTTTestWebsocketDialer(t *testing.T, handler func(*websocket.Co
 		}
 		return conn, response, err
 	})
+}
+
+func newFireworksSTTBlockingReconnectDialer(
+	t *testing.T,
+	secondDialStarted chan<- struct{},
+	allowSecondDial <-chan struct{},
+	audioCh chan<- []byte,
+	errCh chan<- error,
+) FireworksSTTOption {
+	t.Helper()
+	var mu sync.Mutex
+	dialCount := 0
+	return withFireworksSTTWebsocketDialer(func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		mu.Lock()
+		dialCount++
+		call := dialCount
+		mu.Unlock()
+		if call == 2 {
+			close(secondDialStarted)
+			select {
+			case <-allowSecondDial:
+			case <-ctx.Done():
+				return nil, nil, ctx.Err()
+			}
+		}
+		return dialFireworksTestWebsocket(t, errCh, func(conn *websocket.Conn, r *http.Request) {
+			defer conn.Close()
+			if call == 1 {
+				for {
+					if _, _, err := conn.ReadMessage(); err != nil {
+						return
+					}
+				}
+			}
+			msgType, payload, err := conn.ReadMessage()
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if msgType != websocket.BinaryMessage {
+				t.Errorf("message type = %d, want binary", msgType)
+			}
+			audioCh <- append([]byte(nil), payload...)
+		})
+	})
+}
+
+func newFireworksSTTMultiWebsocketDialer(t *testing.T, endpoints chan<- string, errCh chan<- error) FireworksSTTOption {
+	t.Helper()
+	return withFireworksSTTWebsocketDialer(func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		endpoints <- endpoint
+		return dialFireworksTestWebsocket(t, errCh, func(conn *websocket.Conn, r *http.Request) {
+			defer conn.Close()
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		})
+	})
+}
+
+func dialFireworksTestWebsocket(t *testing.T, errCh chan<- error, handler func(*websocket.Conn, *http.Request)) (*websocket.Conn, *http.Response, error) {
+	t.Helper()
+	upgrader := websocket.Upgrader{}
+	clientConn, serverConn := net.Pipe()
+	listener := newFireworksSingleConnListener(serverConn)
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			handler(conn, r)
+		}),
+	}
+	serverErrCh := make(chan error, 1)
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			serverErrCh <- err
+		}
+	}()
+	t.Cleanup(func() {
+		_ = server.Close()
+		_ = listener.Close()
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+	})
+
+	dialer := websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+	}
+	conn, response, err := dialer.DialContext(context.Background(), "ws://fireworks.test/v1", nil)
+	select {
+	case serverErr := <-serverErrCh:
+		if err == nil {
+			err = serverErr
+		}
+	default:
+	}
+	return conn, response, err
 }
 
 type fireworksSingleConnListener struct {

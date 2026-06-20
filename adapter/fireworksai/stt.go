@@ -32,6 +32,7 @@ const (
 )
 
 type FireworksSTT struct {
+	mu                     sync.Mutex
 	apiKey                 string
 	baseURL                string
 	model                  string
@@ -45,6 +46,7 @@ type FireworksSTT struct {
 	responseFormat         string
 	timestampGranularities []string
 	dialWebsocket          fireworksSTTWebsocketDialer
+	streams                map[*fireworksStream]struct{}
 }
 
 type FireworksSTTOption func(*FireworksSTT)
@@ -150,35 +152,88 @@ func (s *FireworksSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, OfflineRecognize: false}
 }
 
+func (s *FireworksSTT) UpdateOptions(opts ...FireworksSTTOption) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	for _, opt := range opts {
+		opt(s)
+	}
+	streams := make([]*fireworksStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	endpoint := buildFireworksStreamURL(s)
+	headers := buildFireworksStreamHeaders(s)
+	dialer := s.dialWebsocket
+	language := s.language
+	s.mu.Unlock()
+
+	for _, stream := range streams {
+		stream.updateOptions(endpoint, headers, dialer, language)
+	}
+}
+
 func (s *FireworksSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if err := validateFireworksAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}
 
+	s.mu.Lock()
 	if language != "" {
 		s.language = language
 	}
-	conn, _, err := s.dialWebsocket(ctx, buildFireworksStreamURL(s), buildFireworksStreamHeaders(s))
+	endpoint := buildFireworksStreamURL(s)
+	headers := buildFireworksStreamHeaders(s)
+	dialer := s.dialWebsocket
+	streamLanguage := s.language
+	s.mu.Unlock()
+
+	conn, _, err := dialer(ctx, endpoint, headers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial fireworks stt websocket: %w", err)
 	}
 
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &fireworksStream{
+		owner:  s,
 		conn:   conn,
 		events: make(chan *stt.SpeechEvent, 100),
 		errCh:  make(chan error, 1),
 		ctx:    streamCtx,
 		cancel: cancel,
 		state: &fireworksStreamState{
-			language:            s.language,
+			language:            streamLanguage,
 			transcriptState:     map[int]string{},
 			finalSegmentsLength: map[int]int{},
 			lastFinalSegmentID:  -1,
 		},
 	}
-	go stream.readLoop()
+	s.registerStream(stream)
+	go stream.readLoop(conn)
 	return stream, nil
+}
+
+func (s *FireworksSTT) registerStream(stream *fireworksStream) {
+	if s == nil || stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.streams == nil {
+		s.streams = make(map[*fireworksStream]struct{})
+	}
+	s.streams[stream] = struct{}{}
+}
+
+func (s *FireworksSTT) unregisterStream(stream *fireworksStream) {
+	if s == nil || stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.streams, stream)
 }
 
 func defaultFireworksSTTWebsocketDialer(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
@@ -240,11 +295,13 @@ func setOptionalString(values url.Values, key string, value string) {
 }
 
 type fireworksStream struct {
-	conn   *websocket.Conn
-	events chan *stt.SpeechEvent
-	errCh  chan error
-	mu     sync.Mutex
-	closed bool
+	owner        *FireworksSTT
+	conn         *websocket.Conn
+	events       chan *stt.SpeechEvent
+	errCh        chan error
+	mu           sync.Mutex
+	closed       bool
+	reconnecting bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -252,12 +309,28 @@ type fireworksStream struct {
 	audio  bytes.Buffer
 }
 
-func (s *fireworksStream) readLoop() {
-	defer close(s.events)
+func (s *fireworksStream) readLoop(conn *websocket.Conn) {
+	closeEvents := false
+	defer func() {
+		if closeEvents {
+			if s.owner != nil {
+				s.owner.unregisterStream(s)
+			}
+			close(s.events)
+		}
+	}()
 	for {
-		msgType, message, err := s.conn.ReadMessage()
+		msgType, message, err := conn.ReadMessage()
 		if err != nil {
-			if !s.isClosed() {
+			s.mu.Lock()
+			current := s.conn == conn
+			closed := s.closed
+			reconnecting := s.reconnecting
+			if current && !reconnecting {
+				closeEvents = true
+			}
+			s.mu.Unlock()
+			if current && !closed && !reconnecting {
 				if closeErr, ok := err.(*websocket.CloseError); ok {
 					s.errCh <- llm.NewAPIStatusError("Fireworks connection closed unexpectedly", closeErr.Code, "", err.Error())
 				} else if err == io.EOF {
@@ -281,10 +354,55 @@ func (s *fireworksStream) readLoop() {
 	}
 }
 
-func (s *fireworksStream) isClosed() bool {
+func (s *fireworksStream) updateOptions(endpoint string, headers http.Header, dialer fireworksSTTWebsocketDialer, language string) {
+	if dialer == nil {
+		return
+	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.closed
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	oldConn := s.conn
+	s.reconnecting = true
+	s.mu.Unlock()
+
+	if oldConn != nil {
+		_ = oldConn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+		_ = oldConn.Close()
+	}
+	newConn, _, err := dialer(s.ctx, endpoint, headers)
+	if err != nil {
+		s.mu.Lock()
+		if !s.closed {
+			s.reconnecting = false
+			select {
+			case s.errCh <- fmt.Errorf("failed to reconnect fireworks stt websocket: %w", err):
+			default:
+			}
+		}
+		s.mu.Unlock()
+		return
+	}
+
+	s.mu.Lock()
+	if s.closed {
+		s.reconnecting = false
+		s.mu.Unlock()
+		_ = newConn.Close()
+		return
+	}
+	s.conn = newConn
+	s.state.language = language
+	s.reconnecting = false
+	if err := s.writeBufferedAudioLocked(false); err != nil {
+		select {
+		case s.errCh <- err:
+		default:
+		}
+	}
+	s.mu.Unlock()
+	go s.readLoop(newConn)
 }
 
 func (s *fireworksStream) PushFrame(frame *model.AudioFrame) error {
@@ -299,6 +417,31 @@ func (s *fireworksStream) PushFrame(frame *model.AudioFrame) error {
 	if _, err := s.audio.Write(frame.Data); err != nil {
 		return err
 	}
+	if s.reconnecting || s.conn == nil {
+		return nil
+	}
+	return s.writeBufferedAudioLocked(false)
+}
+
+func (s *fireworksStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("fireworks stt stream is closed")
+	}
+	if s.audio.Len() == 0 {
+		return nil
+	}
+	if s.reconnecting || s.conn == nil {
+		return nil
+	}
+	return s.writeBufferedAudioLocked(true)
+}
+
+func (s *fireworksStream) writeBufferedAudioLocked(flush bool) error {
+	if s.conn == nil {
+		return nil
+	}
 	chunkBytes := defaultSampleRate / 20 * fireworksPCMBytesPerSample
 	for s.audio.Len() >= chunkBytes {
 		chunk := make([]byte, chunkBytes)
@@ -309,16 +452,7 @@ func (s *fireworksStream) PushFrame(frame *model.AudioFrame) error {
 			return err
 		}
 	}
-	return nil
-}
-
-func (s *fireworksStream) Flush() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return fmt.Errorf("fireworks stt stream is closed")
-	}
-	if s.audio.Len() == 0 {
+	if !flush || s.audio.Len() == 0 {
 		return nil
 	}
 	chunk := bytes.Clone(s.audio.Bytes())
@@ -339,6 +473,9 @@ func (s *fireworksStream) Close() error {
 	s.cancel()
 	_ = s.conn.WriteMessage(websocket.TextMessage, []byte(closeMessage))
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	if s.owner != nil {
+		s.owner.unregisterStream(s)
+	}
 	return s.conn.Close()
 }
 
