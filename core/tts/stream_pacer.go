@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
@@ -149,11 +150,50 @@ func (p *SentenceStreamPacer) sendTokenizedSentences(text string, flush bool) (s
 			}
 			emitted = true
 		}
-		if idx := strings.Index(remainder, sentence); idx >= 0 {
-			remainder = strings.TrimLeft(remainder[idx+len(sentence):], " \t\r\n")
-		}
+		remainder = consumePacerSentenceRemainder(remainder, sentence)
 	}
 	return remainder, emitted
+}
+
+func consumePacerSentenceRemainder(text, sentence string) string {
+	if idx := strings.Index(text, sentence); idx >= 0 {
+		return strings.TrimLeftFunc(text[idx+len(sentence):], unicode.IsSpace)
+	}
+	for start := range text {
+		if end, ok := matchPacerSentenceAt(text[start:], sentence); ok {
+			return strings.TrimLeftFunc(text[start+end:], unicode.IsSpace)
+		}
+	}
+	return text
+}
+
+func matchPacerSentenceAt(text, sentence string) (int, bool) {
+	textRunes := []rune(text)
+	sentenceRunes := []rune(sentence)
+	i, j := 0, 0
+	for i < len(textRunes) && j < len(sentenceRunes) {
+		if unicode.IsSpace(sentenceRunes[j]) {
+			if !unicode.IsSpace(textRunes[i]) {
+				return 0, false
+			}
+			for j < len(sentenceRunes) && unicode.IsSpace(sentenceRunes[j]) {
+				j++
+			}
+			for i < len(textRunes) && unicode.IsSpace(textRunes[i]) {
+				i++
+			}
+			continue
+		}
+		if textRunes[i] != sentenceRunes[j] {
+			return 0, false
+		}
+		i++
+		j++
+	}
+	if j != len(sentenceRunes) {
+		return 0, false
+	}
+	return len(string(textRunes[:i])), true
 }
 
 func (p *SentenceStreamPacer) paceLoop() {
