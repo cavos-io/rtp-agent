@@ -427,17 +427,18 @@ type assemblyAIWord struct {
 	Confidence float64 `json:"confidence"`
 }
 
-func assemblyAITimedStrings(words []assemblyAIWord) []stt.TimedString {
+func assemblyAITimedStrings(words []assemblyAIWord, startTimeOffset float64) []stt.TimedString {
 	if len(words) == 0 {
 		return nil
 	}
 	timed := make([]stt.TimedString, 0, len(words))
 	for _, word := range words {
 		timed = append(timed, stt.TimedString{
-			Text:       word.Text,
-			StartTime:  float64(word.Start) / 1000,
-			EndTime:    float64(word.End) / 1000,
-			Confidence: word.Confidence,
+			Text:            word.Text,
+			StartTime:       float64(word.Start)/1000 + startTimeOffset,
+			EndTime:         float64(word.End)/1000 + startTimeOffset,
+			Confidence:      word.Confidence,
+			StartTimeOffset: startTimeOffset,
 		})
 	}
 	return timed
@@ -465,6 +466,8 @@ type assemblyAIStreamState struct {
 	lastPreflightStartTime float64
 	requireFormattedFinal  bool
 	streamStartTime        *float64
+	startTimeOffset        float64
+	startTime              float64
 	speechDuration         float64
 }
 
@@ -536,6 +539,40 @@ func (s *assemblyAISTTStream) isClosed() bool {
 	return s.closed
 }
 
+func (s *assemblyAISTTStream) StartTimeOffset() float64 {
+	if s == nil || s.state == nil {
+		return 0
+	}
+	return s.state.StartTimeOffset()
+}
+
+func (s *assemblyAISTTStream) SetStartTimeOffset(offset float64) {
+	if s == nil {
+		return
+	}
+	if s.state == nil {
+		s.state = &assemblyAIStreamState{}
+	}
+	s.state.SetStartTimeOffset(offset)
+}
+
+func (s *assemblyAISTTStream) StartTime() float64 {
+	if s == nil || s.state == nil {
+		return 0
+	}
+	return s.state.StartTime()
+}
+
+func (s *assemblyAISTTStream) SetStartTime(startTime float64) {
+	if s == nil {
+		return
+	}
+	if s.state == nil {
+		s.state = &assemblyAIStreamState{}
+	}
+	s.state.SetStartTime(startTime)
+}
+
 func assemblyAIRealtimeEvents(resp aaiResponse, state *assemblyAIStreamState) []*stt.SpeechEvent {
 	if resp.Type == "SpeechStarted" {
 		return []*stt.SpeechEvent{{
@@ -572,6 +609,48 @@ func (state *assemblyAIStreamState) speechStartTime(timestampMS *float64) *float
 	}
 	startTime := *state.streamStartTime + *timestampMS/1000
 	return &startTime
+}
+
+func (state *assemblyAIStreamState) StartTimeOffset() float64 {
+	if state == nil {
+		return 0
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.startTimeOffset
+}
+
+func (state *assemblyAIStreamState) SetStartTimeOffset(offset float64) {
+	if state == nil {
+		return
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	state.mu.Lock()
+	state.startTimeOffset = offset
+	state.mu.Unlock()
+}
+
+func (state *assemblyAIStreamState) StartTime() float64 {
+	if state == nil {
+		return 0
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.startTime
+}
+
+func (state *assemblyAIStreamState) SetStartTime(startTime float64) {
+	if state == nil {
+		return
+	}
+	if startTime < 0 {
+		startTime = 0
+	}
+	state.mu.Lock()
+	state.startTime = startTime
+	state.mu.Unlock()
 }
 
 func (state *assemblyAIStreamState) addSpeechDuration(duration float64) {
@@ -617,20 +696,21 @@ func assemblyAIRealtimeTranscriptEvents(resp aaiResponse, state *assemblyAIStrea
 	if state == nil {
 		state = &assemblyAIStreamState{}
 	}
+	startTimeOffset := state.StartTimeOffset()
 	if resp.MessageType == "PartialTranscript" {
 		if text := assemblyAIResponseText(resp); text != "" {
-			return []*stt.SpeechEvent{assemblyAITranscriptEvent(stt.SpeechEventInterimTranscript, resp, text, assemblyAITimedStrings(resp.Words), 0, 0)}
+			return []*stt.SpeechEvent{assemblyAITranscriptEvent(stt.SpeechEventInterimTranscript, resp, text, assemblyAITimedStrings(resp.Words, startTimeOffset), 0, 0)}
 		}
 		return nil
 	}
 	if resp.MessageType == "FinalTranscript" {
 		if text := assemblyAIResponseText(resp); text != "" {
-			return []*stt.SpeechEvent{assemblyAITranscriptEvent(stt.SpeechEventFinalTranscript, resp, text, assemblyAITimedStrings(resp.Words), 0, 0)}
+			return []*stt.SpeechEvent{assemblyAITranscriptEvent(stt.SpeechEventFinalTranscript, resp, text, assemblyAITimedStrings(resp.Words, startTimeOffset), 0, 0)}
 		}
 		return nil
 	}
 
-	words := assemblyAITimedStrings(resp.Words)
+	words := assemblyAITimedStrings(resp.Words, startTimeOffset)
 	startTime, endTime := assemblyAIWordTimeRange(words)
 	events := make([]*stt.SpeechEvent, 0, 4)
 	if len(words) > 0 {
