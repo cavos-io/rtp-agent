@@ -11,12 +11,14 @@ import (
 )
 
 type sdkDataPublisher struct {
-	channel   string
-	client    *agorartm.IRtmClient
-	mu        sync.Mutex
-	callbacks sync.WaitGroup
-	closed    bool
-	handler   DataMessageHandler
+	channel         string
+	client          *agorartm.IRtmClient
+	callbackCtx     context.Context
+	cancelCallbacks context.CancelFunc
+	mu              sync.Mutex
+	callbacks       sync.WaitGroup
+	closed          bool
+	handler         DataMessageHandler
 }
 
 func NewSDKDataPublisher(opts Options) (DataPublisher, error) {
@@ -27,12 +29,15 @@ func NewSDKDataPublisher(opts Options) (DataPublisher, error) {
 	if resolved.UID == "" {
 		return nil, fmt.Errorf("agora UID is required for data publishing")
 	}
+	callbackCtx, cancelCallbacks := context.WithCancel(context.Background())
 	cfg := agorartm.NewRtmConfig()
 	cfg.AppId = resolved.AppID
 	cfg.UserId = resolved.UID
 	cfg.UseStringUserId = true
 	publisher := &sdkDataPublisher{
-		channel: resolved.Channel,
+		channel:         resolved.Channel,
+		callbackCtx:     callbackCtx,
+		cancelCallbacks: cancelCallbacks,
 	}
 	cfg.EventHandler = &agorartm.RtmEventHandler{
 		OnMessageEvent: func(event *agorartm.MessageEvent) {
@@ -80,6 +85,7 @@ func (p *sdkDataPublisher) handleMessageEvent(event *agorartm.MessageEvent) {
 	}
 	p.mu.Lock()
 	handler := p.handler
+	callbackCtx := p.callbackCtx
 	closed := p.closed
 	if handler != nil && !closed {
 		p.callbacks.Add(1)
@@ -89,7 +95,7 @@ func (p *sdkDataPublisher) handleMessageEvent(event *agorartm.MessageEvent) {
 		return
 	}
 	defer p.callbacks.Done()
-	_ = handler(context.Background(), DataMessage{
+	_ = handler(callbackCtx, DataMessage{
 		Channel:   event.ChannelName,
 		Publisher: event.Publisher,
 		Payload:   append([]byte(nil), event.Message...),
@@ -166,9 +172,13 @@ func (p *sdkDataPublisher) Close(context.Context) error {
 	}
 	p.closed = true
 	p.handler = nil
+	cancelCallbacks := p.cancelCallbacks
 	client := p.client
 	channel := p.channel
 	p.mu.Unlock()
+	if cancelCallbacks != nil {
+		cancelCallbacks()
+	}
 	p.callbacks.Wait()
 	return closeRTMClient(sdkRTMLifecycleClient{client: client}, channel)
 }

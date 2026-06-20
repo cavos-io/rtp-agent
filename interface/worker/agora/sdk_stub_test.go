@@ -2,6 +2,7 @@ package agora
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -236,7 +237,7 @@ func TestSDKDataPublisherCloseWaitsForAcceptedCallbacks(t *testing.T) {
 		t.Fatalf("ReadFile(sdk_rtm.go) error = %v", err)
 	}
 	text := string(source)
-	if !strings.Contains(text, "callbacks sync.WaitGroup") {
+	if !regexp.MustCompile(`callbacks\s+sync\.WaitGroup`).MatchString(text) {
 		t.Fatal("sdkDataPublisher must track accepted RTM message callbacks")
 	}
 	handlerIndex := strings.Index(text, "func (p *sdkDataPublisher) handleMessageEvent")
@@ -261,6 +262,47 @@ func TestSDKDataPublisherCloseWaitsForAcceptedCallbacks(t *testing.T) {
 	cleanupIndex := strings.Index(closeBody, "closeRTMClient")
 	if waitIndex < 0 || cleanupIndex < 0 || waitIndex > cleanupIndex {
 		t.Fatal("Close must wait for accepted RTM callbacks before native cleanup returns")
+	}
+}
+
+func TestSDKDataPublisherCloseCancelsAcceptedCallbacks(t *testing.T) {
+	source, err := os.ReadFile("sdk_rtm.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk_rtm.go) error = %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"context.WithCancel(context.Background())",
+		"callbackCtx := p.callbackCtx",
+		"handler(callbackCtx, DataMessage{",
+		"cancelCallbacks := p.cancelCallbacks",
+		"cancelCallbacks()",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sdk_rtm.go missing %q", want)
+		}
+	}
+	for _, want := range []*regexp.Regexp{
+		regexp.MustCompile(`callbackCtx\s+context\.Context`),
+		regexp.MustCompile(`cancelCallbacks\s+context\.CancelFunc`),
+	} {
+		if !want.MatchString(text) {
+			t.Fatalf("sdk_rtm.go missing pattern %q", want.String())
+		}
+	}
+	closeIndex := strings.Index(text, "func (p *sdkDataPublisher) Close")
+	if closeIndex < 0 {
+		t.Fatal("sdk_rtm.go missing sdkDataPublisher.Close")
+	}
+	closeBody := text[closeIndex:]
+	if nextFunc := strings.Index(closeBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		closeBody = closeBody[:len("func ")+nextFunc]
+	}
+	cancelIndex := strings.Index(closeBody, "cancelCallbacks()")
+	waitIndex := strings.Index(closeBody, "p.callbacks.Wait()")
+	cleanupIndex := strings.Index(closeBody, "closeRTMClient")
+	if cancelIndex < 0 || waitIndex < 0 || cleanupIndex < 0 || !(cancelIndex < waitIndex && waitIndex < cleanupIndex) {
+		t.Fatal("Close must cancel accepted RTM callback contexts before waiting, then run native cleanup")
 	}
 }
 
