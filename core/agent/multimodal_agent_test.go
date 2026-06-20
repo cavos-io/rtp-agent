@@ -610,6 +610,57 @@ func TestMultimodalAgentGenerateReplySendsRealtimeOverrides(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentGenerateReplyChatContextSyncCancelSuppressesError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rtSession := &fakeRealtimeSession{
+		generateCh: make(chan llm.RealtimeGenerateReplyOptions, 1),
+	}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Assistant = ma
+	errorEvents := session.ErrorEvents()
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	initialUpdates := rtSession.chatContextUpdates
+	rtSession.updateChatContextErr = context.Canceled
+	handle, err := session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+		UserInput:     "hello",
+		InputModality: "text",
+	})
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions returned error: %v", err)
+	}
+
+	deadline := time.After(time.Second)
+	for rtSession.chatContextUpdates <= initialUpdates {
+		select {
+		case <-deadline:
+			t.Fatalf("UpdateChatContext calls = %d, want more than startup count %d", rtSession.chatContextUpdates, initialUpdates)
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	waitCtx, waitCancel := context.WithTimeout(ctx, time.Second)
+	defer waitCancel()
+	if err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("speech handle did not finish after canceled realtime chat context sync: %v", err)
+	}
+	select {
+	case ev := <-errorEvents:
+		t.Fatalf("ErrorEvents received %#v, want cancellation suppressed", ev)
+	default:
+	}
+	select {
+	case opts := <-rtSession.generateCh:
+		t.Fatalf("realtime session received GenerateReply after canceled chat context sync: %#v", opts)
+	default:
+	}
+}
+
 func TestMultimodalAgentGenerateReplyUsesSessionToolChoiceWhenPerResponseUnsupported(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
