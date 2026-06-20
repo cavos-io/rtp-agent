@@ -2634,6 +2634,39 @@ func TestMultimodalAgentGeneratesToolReplyWhenRealtimeDoesNotAutoReply(t *testin
 	}
 }
 
+func TestMultimodalAgentCancelToolReplyEventSkipsExplicitReply(t *testing.T) {
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.On("function_tools_executed", func(ev Event) {
+		if toolsEv, ok := ev.(*FunctionToolsExecutedEvent); ok {
+			toolsEv.CancelToolReply()
+		}
+	})
+	rtSession := &fakeRealtimeSession{generateCh: make(chan llm.RealtimeGenerateReplyOptions, 1)}
+	ma := &MultimodalAgent{
+		model:     &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{AutoToolReplyGeneration: false}},
+		session:   session,
+		chatCtx:   llm.NewChatContext(),
+		rtSession: rtSession,
+		ctx:       context.Background(),
+	}
+	session.Assistant = ma
+
+	ma.executeRealtimeFunctionCall(&llm.FunctionCall{Name: "lookup", CallID: "call_lookup", Arguments: `{}`})
+
+	select {
+	case <-session.FunctionToolsExecutedEvents():
+	case <-time.After(time.Second):
+		t.Fatal("FunctionToolsExecutedEvents did not receive realtime function execution")
+	}
+	select {
+	case opts := <-rtSession.generateCh:
+		t.Fatalf("realtime session received explicit tool reply after CancelToolReply: %#v", opts)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestMultimodalAgentToolReplyGenerateErrorIsRecoverable(t *testing.T) {
 	agent := NewAgent("test")
 	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}

@@ -1117,7 +1117,8 @@ func (ma *MultimodalAgent) appendRealtimeToolResult(call *llm.FunctionCall, outp
 			return
 		}
 		ev.ReplyRequired = true
-		ma.session.EmitFunctionToolsExecuted(*ev)
+		emitted := ma.session.EmitFunctionToolsExecuted(*ev)
+		ev = &emitted
 	}
 	syncFailed := false
 	if ma.rtSession != nil && ma.chatCtx != nil {
