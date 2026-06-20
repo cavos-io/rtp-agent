@@ -376,6 +376,42 @@ func TestBasetenSTTStreamMapsWebsocketTranscripts(t *testing.T) {
 	}
 }
 
+func TestBasetenSTTProviderCloseClosesActiveStreams(t *testing.T) {
+	terminateCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+	dialer := newBasetenSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			errCh <- err
+			return
+		}
+		_, terminatePayload, err := conn.ReadMessage()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		terminateCh <- string(terminatePayload)
+	})
+
+	provider := mustNewBasetenSTT(t, "test-key", "",
+		WithBasetenSTTModelEndpoint("ws://baseten.test/websocket"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close error = %v", err)
+	}
+
+	if got := readBasetenTestChan(t, terminateCh, errCh); got != `{"terminate_session":true}` {
+		t.Fatalf("terminate payload = %q, want terminate_session", got)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("pcm")}); err == nil {
+		t.Fatal("PushFrame error = nil, want closed stream error")
+	}
+}
+
 func TestBasetenSTTUnexpectedNormalCloseReturnsAPIStatusError(t *testing.T) {
 	dialer := newBasetenSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
 		if _, _, err := conn.ReadMessage(); err != nil {

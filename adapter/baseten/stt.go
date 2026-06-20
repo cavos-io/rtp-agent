@@ -48,6 +48,8 @@ type BasetenSTT struct {
 	vadMinSilenceDurationMS    int
 	vadSpeechPadMS             int
 	dialWebsocket              basetenSTTWebsocketDialer
+	mu                         sync.Mutex
+	streams                    map[*basetenSTTStream]struct{}
 }
 
 type BasetenSTTOption func(*BasetenSTT)
@@ -154,6 +156,7 @@ func NewBasetenSTT(apiKey string, model string, opts ...BasetenSTTOption) (*Base
 		vadMinSilenceDurationMS:    defaultBasetenSTTVADMinSilenceMS,
 		vadSpeechPadMS:             defaultBasetenSTTVADSpeechPadMS,
 		dialWebsocket:              defaultBasetenSTTWebsocketDialer,
+		streams:                    map[*basetenSTTStream]struct{}{},
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -208,8 +211,55 @@ func (s *BasetenSTT) Stream(ctx context.Context, language string) (stt.Recognize
 			language: s.language,
 		},
 	}
+	s.registerStream(stream)
 	go stream.readLoop()
 	return stream, nil
+}
+
+func (s *BasetenSTT) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	streams := make([]*basetenSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.streams = map[*basetenSTTStream]struct{}{}
+	s.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
+func (s *BasetenSTT) registerStream(stream *basetenSTTStream) {
+	if s == nil || stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.streams == nil {
+		s.streams = map[*basetenSTTStream]struct{}{}
+	}
+	s.streams[stream] = struct{}{}
+	stream.owner = s
+}
+
+func (s *BasetenSTT) unregisterStream(stream *basetenSTTStream) {
+	if s == nil || stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.streams, stream)
+	if stream.owner == s {
+		stream.owner = nil
+	}
 }
 
 func defaultBasetenSTTWebsocketDialer(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
@@ -251,6 +301,7 @@ type basetenSTTStream struct {
 	conn   *websocket.Conn
 	events chan *stt.SpeechEvent
 	errCh  chan error
+	owner  *BasetenSTT
 	mu     sync.Mutex
 	closed bool
 	ctx    context.Context
@@ -307,10 +358,16 @@ func (s *basetenSTTStream) Close() error {
 		return nil
 	}
 	s.closed = true
+	owner := s.owner
+	s.owner = nil
 	s.cancel()
 	_ = s.conn.WriteMessage(websocket.TextMessage, []byte(`{"terminate_session":true}`))
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.conn.Close()
+	err := s.conn.Close()
+	if owner != nil {
+		owner.unregisterStream(s)
+	}
+	return err
 }
 
 func (s *basetenSTTStream) Next() (*stt.SpeechEvent, error) {
