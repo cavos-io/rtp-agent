@@ -3919,6 +3919,44 @@ func TestRealtimeSessionEmitsFinalPartialTranscriptOnInputAudioTranscriptionFail
 	}
 }
 
+func TestRealtimeSessionAccumulatesEmptyItemIDInputAudioTranscription(t *testing.T) {
+	session := &realtimeSession{}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:       "",
+			ContentIndex: 1,
+			Transcript:   "hel",
+			IsFinal:      false,
+		},
+	})
+	second := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:       "",
+			ContentIndex: 1,
+			Transcript:   "lo",
+			IsFinal:      false,
+		},
+	})
+	if second.InputTranscription.Transcript != "hello" {
+		t.Fatalf("empty-id partial transcript = %q, want accumulated hello", second.InputTranscription.Transcript)
+	}
+
+	ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":          "conversation.item.input_audio_transcription.failed",
+		"item_id":       "",
+		"content_index": 1,
+	})
+	if !ok {
+		t.Fatal("trackOpenAIRealtimeEvent returned ok=false, want final empty-id partial event")
+	}
+	if ev.InputTranscription == nil || ev.InputTranscription.ItemID != "" || ev.InputTranscription.Transcript != "hello" || !ev.InputTranscription.IsFinal {
+		t.Fatalf("InputTranscription = %#v, want final accumulated hello with empty item id", ev.InputTranscription)
+	}
+}
+
 func TestRealtimeSessionIgnoresInputAudioTranscriptionFailedWithoutPartial(t *testing.T) {
 	session := &realtimeSession{}
 

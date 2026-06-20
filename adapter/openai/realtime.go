@@ -2445,7 +2445,7 @@ func (s *realtimeSession) trackRealtimeRemoteItemAdded(ev llm.RealtimeEvent) {
 
 func (s *realtimeSession) trackRealtimeInputTranscription(ev llm.RealtimeEvent) llm.RealtimeEvent {
 	transcription := ev.InputTranscription
-	if transcription == nil || transcription.ItemID == "" {
+	if transcription == nil {
 		return ev
 	}
 	if !transcription.IsFinal {
@@ -2481,7 +2481,7 @@ func (s *realtimeSession) trackRealtimeInputTranscription(ev llm.RealtimeEvent) 
 }
 
 func (s *realtimeSession) clearRealtimeInputTranscript(itemID string, contentIndex int) (string, bool) {
-	if itemID == "" || s.inputTranscripts == nil {
+	if s.inputTranscripts == nil {
 		return "", false
 	}
 	_, partial, ok := s.inputTranscripts.PopIf(func(value realtimeInputTranscript) bool {
@@ -2491,7 +2491,7 @@ func (s *realtimeSession) clearRealtimeInputTranscript(itemID string, contentInd
 }
 
 func (s *realtimeSession) clearRealtimeInputTranscripts(itemID string) {
-	if itemID == "" || s.inputTranscripts == nil {
+	if s.inputTranscripts == nil {
 		return
 	}
 	for {
