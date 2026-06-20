@@ -1084,6 +1084,7 @@ func TestFallbackAdapterRecoversUnavailableProviderInBackground(t *testing.T) {
 	}
 
 	waitForFallbackCalls(t, primary, 2)
+	waitForFallbackRecoveryState(t, adapter, 0, true, false)
 
 	stream, err = adapter.Chat(context.Background(), NewChatContext())
 	if err != nil {
@@ -1130,6 +1131,7 @@ func TestFallbackAdapterRetriesRecoveryAfterFailedProbeOnLaterChat(t *testing.T)
 		t.Fatalf("fallback content = %q, want fallback first", got)
 	}
 	waitForFallbackCalls(t, primary, 2)
+	waitForFallbackRecoveryState(t, adapter, 0, false, false)
 
 	stream, err = adapter.Chat(context.Background(), NewChatContext())
 	if err != nil {
@@ -1231,6 +1233,26 @@ func waitForFallbackCalls(t *testing.T, llm *fakeFallbackLLM, calls int) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("llm calls = %d, want at least %d", llm.calls, calls)
+}
+
+func waitForFallbackRecoveryState(t *testing.T, adapter *FallbackAdapter, index int, available bool, recovering bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		adapter.mu.Lock()
+		gotAvailable := adapter.available[index]
+		gotRecovering := adapter.recovering[index]
+		adapter.mu.Unlock()
+		if gotAvailable == available && gotRecovering == recovering {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	adapter.mu.Lock()
+	gotAvailable := adapter.available[index]
+	gotRecovering := adapter.recovering[index]
+	adapter.mu.Unlock()
+	t.Fatalf("fallback state = available:%v recovering:%v, want available:%v recovering:%v", gotAvailable, gotRecovering, available, recovering)
 }
 
 func readFallbackAvailabilityEvent(t *testing.T, adapter *FallbackAdapter) FallbackAvailabilityChangedEvent {
