@@ -1708,6 +1708,16 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 		return nil
 	}
 
+	var encodeFrames []*model.AudioFrame
+	if encoder != nil {
+		var err error
+		encodeFrames, err = roomIOOpusEncodeFrames(frame)
+		if err != nil {
+			rio.recordAudioOutputError(err)
+			return err
+		}
+	}
+
 	started, handlers, ok := rio.startPlayback()
 	if ok {
 		for _, handler := range handlers {
@@ -1717,10 +1727,6 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 	rio.recordPlaybackInputFrame(frame)
 
 	if encoder != nil {
-		encodeFrames, err := roomIOOpusEncodeFrames(frame)
-		if err != nil {
-			return err
-		}
 		for i, encodeFrame := range encodeFrames {
 			select {
 			case <-ctx.Done():

@@ -1039,6 +1039,43 @@ func TestRoomIOPublishAudioDownmixesStereoToMonoOutput(t *testing.T) {
 	}
 }
 
+func TestRoomIOPublishAudioEncodeValidationFailureDoesNotStartPlayback(t *testing.T) {
+	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
+	rio := &RoomIO{
+		audioTrack: newRoomIOTestAudioTrack(t),
+		encoder:    encoder,
+	}
+	started := make(chan PlaybackStartedEvent, 1)
+	rio.OnPlaybackStarted(func(ev PlaybackStartedEvent) {
+		started <- ev
+	})
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        roomIOOpusClockRate,
+		NumChannels:       0,
+		SamplesPerChannel: 960,
+	}
+
+	err := rio.PublishAudio(context.Background(), frame)
+
+	if err == nil {
+		t.Fatal("PublishAudio error = nil, want encode validation error")
+	}
+	if !strings.Contains(err.Error(), "zero channels") {
+		t.Fatalf("PublishAudio error = %v, want zero-channels validation", err)
+	}
+	select {
+	case ev := <-started:
+		t.Fatalf("playback_started event = %#v, want none for unencodable frame", ev)
+	default:
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := rio.WaitForPlayout(ctx); err != nil {
+		t.Fatalf("WaitForPlayout error = %v, want no pending playback segment", err)
+	}
+}
+
 func TestRoomIOPublishAudioChunksLongPCMForOpus(t *testing.T) {
 	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}, maxPCMBytes: 960 * 2}
 	rio := &RoomIO{
