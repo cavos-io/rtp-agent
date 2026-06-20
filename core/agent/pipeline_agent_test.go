@@ -2585,6 +2585,43 @@ func TestPipelineAgentStartWrapsNonStreamingSTTWithVAD(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentStartRejectsNonStreamingSTTWithoutVAD(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	sttObj := &nonStreamingPipelineSTT{
+		streamErr: errors.New("direct STT stream should not be used"),
+	}
+	agent := NewPipelineAgent(nil, sttObj, nil, nil, llm.NewChatContext())
+	agent.session = session
+
+	agent.run(context.Background())
+
+	if sttObj.streamCalls != 0 {
+		t.Fatalf("non-streaming STT Stream calls = %d, want 0 because missing VAD should fail before provider stream", sttObj.streamCalls)
+	}
+	select {
+	case ev := <-session.ErrorEvents():
+		var sttErr *stt.STTError
+		if !errors.As(ev.Error, &sttErr) {
+			t.Fatalf("Error = %T, want *stt.STTError", ev.Error)
+		}
+		message := ev.Error.Error()
+		for _, want := range []string{
+			"the STT (non-streaming-stt) does not support streaming",
+			"add a VAD to the AgentTask/VoiceAgent to enable streaming",
+			"stt.StreamAdapter",
+		} {
+			if !strings.Contains(message, want) {
+				t.Fatalf("error message = %q, want to contain %q", message, want)
+			}
+		}
+		if ev.Source != sttObj {
+			t.Fatalf("Source = %#v, want STT source", ev.Source)
+		}
+	default:
+		t.Fatal("ErrorEvents did not receive missing-VAD STT error")
+	}
+}
+
 func TestPipelineAgentEmitsErrorEventForSTTStreamStartError(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	cause := errors.New("stt start failed")
