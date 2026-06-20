@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -208,6 +209,38 @@ func TestGroqTTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {
 	}
 }
 
+func TestGroqTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
+	body := &groqCloseCountBody{Reader: bytes.NewReader(groqTestWAV([]byte{0x01, 0x02}, 48000, 1))}
+	stream := &groqTTSChunkedStream{
+		resp:       &http.Response{Body: body},
+		sampleRate: 48000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close() error = %v, want nil", err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close() calls = %d, want 1", body.closeCount)
+	}
+}
+
+func TestGroqTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	stream := &groqTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(groqTestWAV([]byte{0x01, 0x02}, 48000, 1)))},
+		sampleRate: 48000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after Close error = %T %v, want EOF", err, err)
+	}
+}
+
 func assertGroqTTSPayload(t *testing.T, payload map[string]any, key string, want string) {
 	t.Helper()
 	if got := payload[key]; got != want {
@@ -240,4 +273,17 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+type groqCloseCountBody struct {
+	*bytes.Reader
+	closeCount int
+}
+
+func (b *groqCloseCountBody) Close() error {
+	b.closeCount++
+	if b.closeCount > 1 {
+		return errors.New("closed twice")
+	}
+	return nil
 }
