@@ -648,11 +648,12 @@ func newTTSReplacementBuffer(options TTSInferenceOptions) *tts.TextRegexReplaceB
 }
 
 type ToolExecutionOutput struct {
-	FncCall          llm.FunctionCall
-	FncCallOut       *llm.FunctionCallOutput
-	RawOutput        any
-	RawError         error
-	RunContextUpdate bool
+	FncCall              llm.FunctionCall
+	FncCallOut           *llm.FunctionCallOutput
+	RawOutput            any
+	RawError             error
+	RunContextUpdate     bool
+	RunContextUpdateDone chan struct{}
 }
 
 type activeToolCall struct {
@@ -1019,12 +1020,17 @@ func PerformToolExecutions(
 }
 
 func toolExecutionOutputFromUpdate(update RunContextUpdate) ToolExecutionOutput {
+	return toolExecutionOutputFromUpdateWithDone(update, nil)
+}
+
+func toolExecutionOutputFromUpdateWithDone(update RunContextUpdate, done chan struct{}) ToolExecutionOutput {
 	output := ToolExecutionOutput{}
 	if update.FunctionCall != nil {
 		output.FncCall = *update.FunctionCall
 	}
 	output.FncCallOut = update.FunctionCallOutput
 	output.RunContextUpdate = true
+	output.RunContextUpdateDone = done
 	if update.FunctionCallOutput != nil {
 		output.RawOutput = update.FunctionCallOutput.Output
 	}

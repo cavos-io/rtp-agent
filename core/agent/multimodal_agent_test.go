@@ -1106,8 +1106,9 @@ func TestMultimodalAgentRealtimeToolResultSyncFailureStillEmitsEventAndReply(t *
 
 func TestMultimodalToolExecutionSuppressesStopResponse(t *testing.T) {
 	chatCtx := llm.NewChatContext()
+	session := &AgentSession{Tools: []llm.Tool{&fakeGenerationTool{name: "lookup", err: llm.StopResponse{}}}}
 	ma := &MultimodalAgent{
-		session:   &AgentSession{Tools: []llm.Tool{&fakeGenerationTool{name: "lookup", err: llm.StopResponse{}}}},
+		session:   session,
 		chatCtx:   chatCtx,
 		rtSession: &fakeRealtimeSession{},
 		ctx:       context.Background(),
@@ -1120,6 +1121,20 @@ func TestMultimodalToolExecutionSuppressesStopResponse(t *testing.T) {
 
 	if len(chatCtx.Items) != 0 {
 		t.Fatalf("chat items = %#v, want no output for StopResponse", chatCtx.Items)
+	}
+	select {
+	case ev := <-session.FunctionToolsExecutedEvents():
+		if len(ev.FunctionCalls) != 1 || ev.FunctionCalls[0].CallID != "call_lookup" {
+			t.Fatalf("FunctionCalls = %#v, want call_lookup event", ev.FunctionCalls)
+		}
+		if len(ev.FunctionCallOutputs) != 1 || ev.FunctionCallOutputs[0] != nil {
+			t.Fatalf("FunctionCallOutputs = %#v, want nil output for StopResponse", ev.FunctionCallOutputs)
+		}
+		if ev.HasToolReply() {
+			t.Fatal("HasToolReply() = true, want false for StopResponse")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("FunctionToolsExecutedEvents did not receive StopResponse event")
 	}
 }
 
@@ -1181,8 +1196,8 @@ func TestMultimodalToolExecutionUsesFirstRunContextUpdateAsOutput(t *testing.T) 
 		},
 	})
 
-	if len(chatCtx.Items) != 2 {
-		t.Fatalf("chat context items = %#v, want function call and first update output", chatCtx.Items)
+	if len(chatCtx.Items) < 2 {
+		t.Fatalf("chat context items = %#v, want at least function call and first update output", chatCtx.Items)
 	}
 	call, ok := chatCtx.Items[0].(*llm.FunctionCall)
 	if !ok {
@@ -1194,7 +1209,10 @@ func TestMultimodalToolExecutionUsesFirstRunContextUpdateAsOutput(t *testing.T) 
 	if call.Arguments != `{"city":"Jakarta"}` {
 		t.Fatalf("function call arguments = %q, want canonical JSON arguments", call.Arguments)
 	}
-	output := lastFunctionOutput(t, chatCtx)
+	output, ok := chatCtx.Items[1].(*llm.FunctionCallOutput)
+	if !ok {
+		t.Fatalf("second item = %T, want FunctionCallOutput", chatCtx.Items[1])
+	}
 	const wantOutput = "The tool `lookup` has updated, message: searching\nThe task is still running, so DON'T make up or give information not included in the message above."
 	if output.IsError || output.Output != wantOutput {
 		t.Fatalf("function output = %#v, want first update success", output)
@@ -1207,6 +1225,61 @@ func TestMultimodalToolExecutionUsesFirstRunContextUpdateAsOutput(t *testing.T) 
 	}
 	if got := tool.runContext.FunctionCall.Extra["__livekit_agents_tool_non_blocking"]; got != true {
 		t.Fatalf("nonblocking extra = %#v, want true", got)
+	}
+}
+
+func TestMultimodalToolExecutionPreservesFinalReturnAfterRunContextUpdate(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	tool := &runContextUpdatingTool{}
+	rtSession := &fakeRealtimeSession{generateCh: make(chan llm.RealtimeGenerateReplyOptions, 1)}
+	session := &AgentSession{Tools: []llm.Tool{tool}}
+	ma := &MultimodalAgent{
+		session:   session,
+		chatCtx:   chatCtx,
+		rtSession: rtSession,
+		ctx:       context.Background(),
+	}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeFunctionCall,
+		Function: &llm.FunctionToolCall{
+			Name:      "lookup",
+			CallID:    "call_lookup",
+			Arguments: `{}`,
+		},
+	})
+
+	select {
+	case <-rtSession.generateCh:
+	case <-time.After(time.Second):
+		t.Fatal("GenerateReply was not requested for realtime tool output")
+	}
+	var outputs []*llm.FunctionCallOutput
+	for _, item := range chatCtx.Items {
+		if output, ok := item.(*llm.FunctionCallOutput); ok {
+			outputs = append(outputs, output)
+		}
+	}
+	if len(outputs) != 2 {
+		t.Fatalf("function outputs = %#v, want update and final return outputs", outputs)
+	}
+	if outputs[0].CallID != "call_lookup" || outputs[0].Output == "final result" {
+		t.Fatalf("first output = %#v, want progress update for original call", outputs[0])
+	}
+	if outputs[1].CallID != "call_lookup_final" || outputs[1].Output != "final result" {
+		t.Fatalf("second output = %#v, want synthetic final return output", outputs[1])
+	}
+	if rtSession.generatedWithChatCtx == nil {
+		t.Fatal("GenerateReply did not capture updated chat context")
+	}
+	gotFinal := false
+	for _, item := range rtSession.generatedWithChatCtx.Items {
+		if output, ok := item.(*llm.FunctionCallOutput); ok && output.CallID == "call_lookup_final" && output.Output == "final result" {
+			gotFinal = true
+		}
+	}
+	if !gotFinal {
+		t.Fatalf("generated chat context items = %#v, want final return output", rtSession.generatedWithChatCtx.Items)
 	}
 }
 

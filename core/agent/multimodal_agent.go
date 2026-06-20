@@ -1086,12 +1086,22 @@ func (ma *MultimodalAgent) executeRealtimeFunctionCall(functionCall *llm.Functio
 	updates := runCtx.Updates()
 	runCtx.detach()
 	if len(updates) > 0 {
-		if updates[0].FunctionCall != nil {
-			resultCall = updates[0].FunctionCall
+		var calls []*llm.FunctionCall
+		var outputs []*llm.FunctionCallOutput
+		for _, update := range updates {
+			calls = append(calls, update.FunctionCall)
+			outputs = append(outputs, update.FunctionCallOutput)
 		}
-		result.FncCallOut = updates[0].FunctionCallOutput
+		if finalOutput, ok := makeRunContextFinalToolOutput(runCtx, result); ok {
+			finalCall := finalOutput.FncCall
+			calls = append(calls, &finalCall)
+			outputs = append(outputs, finalOutput.FncCallOut)
+		}
+		ma.appendRealtimeToolResults(calls, outputs)
+		return
 	}
 	if result.FncCallOut == nil {
+		ma.appendRealtimeToolResult(resultCall, nil)
 		return
 	}
 
@@ -1099,29 +1109,57 @@ func (ma *MultimodalAgent) executeRealtimeFunctionCall(functionCall *llm.Functio
 }
 
 func (ma *MultimodalAgent) appendRealtimeToolResult(call *llm.FunctionCall, output *llm.FunctionCallOutput) {
-	if output == nil {
+	ma.appendRealtimeToolResults([]*llm.FunctionCall{call}, []*llm.FunctionCallOutput{output})
+}
+
+func (ma *MultimodalAgent) appendRealtimeToolResults(calls []*llm.FunctionCall, outputs []*llm.FunctionCallOutput) {
+	if len(calls) != len(outputs) {
+		logger.Logger.Errorw("failed to append realtime tool results", ErrFunctionToolEventLengthMismatch)
+		return
+	}
+	type realtimeToolResult struct {
+		call   *llm.FunctionCall
+		output *llm.FunctionCallOutput
+	}
+	var results []realtimeToolResult
+	var eventCalls []*llm.FunctionCall
+	var eventOutputs []*llm.FunctionCallOutput
+	for i, output := range outputs {
+		call := calls[i]
+		if call != nil {
+			eventCalls = append(eventCalls, call)
+			eventOutputs = append(eventOutputs, output)
+		}
+		if output == nil {
+			continue
+		}
+		results = append(results, realtimeToolResult{call: call, output: output})
+	}
+	if len(results) == 0 && len(eventCalls) == 0 {
 		return
 	}
 	if ma.chatCtx != nil {
-		if call != nil {
-			ma.chatCtx.Append(call)
+		for _, result := range results {
+			if result.call != nil {
+				ma.chatCtx.Append(result.call)
+			}
+			ma.chatCtx.Append(result.output)
 		}
-		ma.chatCtx.Append(output)
 	}
 	var ev *FunctionToolsExecutedEvent
-	if ma.session != nil && call != nil {
+	if ma.session != nil && len(eventOutputs) > 0 {
 		var err error
-		ev, err = NewFunctionToolsExecutedEvent([]*llm.FunctionCall{call}, []*llm.FunctionCallOutput{output})
+		ev, err = NewFunctionToolsExecutedEvent(eventCalls, eventOutputs)
 		if err != nil {
 			logger.Logger.Errorw("failed to create realtime function tools executed event", err)
 			return
 		}
-		ev.ReplyRequired = true
+		ev.ReplyRequired = len(results) > 0
 		emitted := ma.session.EmitFunctionToolsExecuted(*ev)
 		ev = &emitted
 	}
 	syncFailed := false
-	if ma.rtSession != nil && ma.chatCtx != nil {
+	if len(results) > 0 && ma.rtSession != nil && ma.chatCtx != nil {
 		if err := ma.rtSession.UpdateChatContext(ma.chatCtx); err != nil {
 			syncFailed = true
 			logger.Logger.Errorw("failed to update realtime session chat context with tool result", err)

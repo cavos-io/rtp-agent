@@ -762,7 +762,22 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 	// In Python parity, we loop for tool calls
 	toolSteps := 0
 	var pendingToolOutCh <-chan ToolExecutionOutput
+	var pendingToolUpdateReplyDone chan struct{}
+	closePendingToolUpdateReplyDone := func() {
+		if pendingToolUpdateReplyDone != nil {
+			close(pendingToolUpdateReplyDone)
+			pendingToolUpdateReplyDone = nil
+		}
+	}
 	for {
+		replyDone := pendingToolUpdateReplyDone
+		pendingToolUpdateReplyDone = nil
+		closeReplyDone := func() {
+			if replyDone != nil {
+				close(replyDone)
+				replyDone = nil
+			}
+		}
 		inferenceCtx := replyCtx
 		inputModality := ""
 		if opts.SpeechHandle != nil {
@@ -818,6 +833,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 					}
 					va.emitLLMError(session, err)
 				}
+				closeReplyDone()
 				session.UpdateAgentState(AgentStateListening)
 				return
 			}
@@ -852,12 +868,14 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		}
 		if err != nil {
 			if suppressReplyContextCanceledError(ctx, opts.SpeechHandle, err) {
+				closeReplyDone()
 				session.UpdateAgentState(AgentStateListening)
 				return
 			}
 			if !suppressContextCanceledError(ctx, opts.SpeechHandle, err) {
 				logger.Logger.Errorw("TTS inference failed", err)
 				va.emitTTSError(session, err)
+				closeReplyDone()
 				session.UpdateAgentState(AgentStateListening)
 				return
 			}
@@ -871,6 +889,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 				}
 				va.emitLLMError(session, genData.StreamErr)
 			}
+			closeReplyDone()
 			session.UpdateAgentState(AgentStateListening)
 			return
 		}
@@ -927,6 +946,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		if opts.SpeechHandle != nil {
 			_ = opts.SpeechHandle.MarkGenerationDone()
 		}
+		closeReplyDone()
 
 		if len(genData.GeneratedFunctions) > 0 {
 			session.UpdateAgentState(AgentStateThinking)
@@ -951,6 +971,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			}
 			if toolOut.RunContextUpdate {
 				releasedByUpdate = true
+				pendingToolUpdateReplyDone = toolOut.RunContextUpdateDone
 				break
 			}
 		}
@@ -963,8 +984,15 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 				if appendToolOutput(toolOut, &functionCalls, &functionCallOutputs) {
 					replyRequired = true
 				}
+				if toolOut.RunContextUpdate {
+					releasedByUpdate = true
+					pendingToolUpdateReplyDone = toolOut.RunContextUpdateDone
+					break
+				}
 			}
-			pendingToolOutCh = nil
+			if !releasedByUpdate {
+				pendingToolOutCh = nil
+			}
 		}
 
 		if executedTools {
@@ -991,8 +1019,53 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			break
 		}
 		if !replyRequired {
-			session.UpdateAgentState(AgentStateListening)
-			break
+			closePendingToolUpdateReplyDone()
+			if pendingToolOutCh != nil {
+				executedTools = false
+				replyRequired = false
+				functionCalls = nil
+				functionCallOutputs = nil
+				var pendingReleasedByUpdate bool
+				for toolOut := range pendingToolOutCh {
+					executedTools = true
+					if appendToolOutput(toolOut, &functionCalls, &functionCallOutputs) {
+						replyRequired = true
+					}
+					if toolOut.RunContextUpdate {
+						pendingReleasedByUpdate = true
+						pendingToolUpdateReplyDone = toolOut.RunContextUpdateDone
+						break
+					}
+					if replyRequired {
+						break
+					}
+				}
+				if !pendingReleasedByUpdate && !replyRequired {
+					pendingToolOutCh = nil
+				}
+				if executedTools {
+					if ev, err := NewFunctionToolsExecutedEvent(functionCalls, functionCallOutputs); err == nil {
+						for _, out := range functionCallOutputs {
+							if out != nil {
+								ev.ReplyRequired = true
+								break
+							}
+						}
+						emitted := session.EmitFunctionToolsExecuted(*ev)
+						replyRequired = emitted.HasToolReply()
+					}
+					if activeAgent := session.Agent.GetAgent(); activeAgent != nil {
+						if err := updateAgentInstructionsMessage(replyCtx, agentInstructionVariants(activeAgent), false); err != nil {
+							logger.Logger.Warnw("failed to refresh reply instructions", err)
+						}
+					}
+				}
+			}
+			if !executedTools || !replyRequired {
+				closePendingToolUpdateReplyDone()
+				session.UpdateAgentState(AgentStateListening)
+				break
+			}
 		}
 		if opts.SpeechHandle != nil {
 			opts.SpeechHandle.IncrementStep()

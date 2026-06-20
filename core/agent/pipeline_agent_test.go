@@ -403,6 +403,18 @@ func TestPipelineAgentGenerateReplyWithChatContextCarriesToolOutputs(t *testing.
 	}
 }
 
+func waitForLLMCalls(t *testing.T, llm *fakeGenerationLLM, count int, label string) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for len(llm.calls) < count {
+		select {
+		case <-deadline:
+			t.Fatalf("LLM Chat calls = %d, want %d for %s", len(llm.calls), count, label)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
 func TestPipelineAgentStartsToolUpdateReplyBeforeToolReturns(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -451,14 +463,7 @@ func TestPipelineAgentStartsToolUpdateReplyBeforeToolReturns(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("tool did not send run context update")
 	}
-	deadline := time.After(time.Second)
-	for len(l.calls) < 2 {
-		select {
-		case <-deadline:
-			t.Fatalf("LLM Chat calls = %d, want progress reply before tool returns", len(l.calls))
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
+	waitForLLMCalls(t, l, 2, "progress reply before tool returns")
 	close(tool.release)
 	select {
 	case <-done:
@@ -467,6 +472,182 @@ func TestPipelineAgentStartsToolUpdateReplyBeforeToolReturns(t *testing.T) {
 	}
 	if len(l.calls) != 3 {
 		t.Fatalf("LLM Chat calls = %d, want progress reply and final return reply", len(l.calls))
+	}
+}
+
+func TestPipelineAgentStartsSubsequentToolUpdateReplyBeforeFinalReturn(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{ToolCalls: []llm.FunctionToolCall{{
+						Type:      "function",
+						Name:      "lookup",
+						CallID:    "call_lookup",
+						Arguments: `{}`,
+					}}}},
+				},
+			},
+			&fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "first acknowledged"}}}},
+			&fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "second acknowledged"}}}},
+			&fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "final acknowledged"}}}},
+		},
+	}
+	tool := &blockingMultiRunContextUpdatingTool{
+		firstSent:     make(chan struct{}),
+		releaseSecond: make(chan struct{}),
+		secondSent:    make(chan struct{}),
+		releaseFinal:  make(chan struct{}),
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{tool}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.generateReply()
+	}()
+
+	select {
+	case <-tool.firstSent:
+	case <-time.After(time.Second):
+		t.Fatal("tool did not send first update")
+	}
+	waitForLLMCalls(t, l, 2, "first progress reply")
+	close(tool.releaseSecond)
+	select {
+	case <-tool.secondSent:
+	case <-time.After(time.Second):
+		t.Fatal("tool did not send second update")
+	}
+	waitForLLMCalls(t, l, 3, "second progress reply")
+	close(tool.releaseFinal)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("generateReply did not finish after final release")
+	}
+	if len(l.calls) != 4 {
+		t.Fatalf("LLM Chat calls = %d, want initial, two progress replies, and final reply", len(l.calls))
+	}
+}
+
+func TestRunContextForegroundWaitsForPendingToolUpdateReply(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	progressStarted := make(chan struct{})
+	releaseProgress := make(chan struct{})
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{ToolCalls: []llm.FunctionToolCall{{
+						Type:      "function",
+						Name:      "lookup",
+						CallID:    "call_lookup",
+						Arguments: `{}`,
+					}}}},
+				},
+			},
+			&blockingContentLLMStream{
+				started: progressStarted,
+				release: releaseProgress,
+				content: "progress acknowledged",
+			},
+			&fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "final acknowledged"}}}},
+		},
+	}
+	tool := &foregroundAfterUpdateTool{
+		foregroundEntered: make(chan struct{}),
+		releaseForeground: make(chan struct{}),
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{tool}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.generateReply()
+	}()
+
+	select {
+	case <-progressStarted:
+	case <-time.After(time.Second):
+		t.Fatal("progress reply did not start")
+	}
+	select {
+	case <-tool.foregroundEntered:
+		t.Fatal("Foreground entered before pending tool update reply completed")
+	default:
+	}
+	close(releaseProgress)
+	select {
+	case <-tool.foregroundEntered:
+	case <-time.After(time.Second):
+		t.Fatal("Foreground did not enter after pending tool update reply completed")
+	}
+	close(tool.releaseForeground)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("generateReply did not finish after foreground release")
+	}
+}
+
+func TestRunContextForegroundContinuesWhenToolUpdateReplyCanceled(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{ToolCalls: []llm.FunctionToolCall{{
+						Type:      "function",
+						Name:      "lookup",
+						CallID:    "call_lookup",
+						Arguments: `{}`,
+					}}}},
+				},
+			},
+			&fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "unwanted progress reply"}}}},
+		},
+	}
+	tool := &foregroundAfterUpdateTool{
+		foregroundEntered: make(chan struct{}),
+		releaseForeground: make(chan struct{}),
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{tool}
+	session.On("function_tools_executed", func(ev Event) {
+		if toolsEv, ok := ev.(*FunctionToolsExecutedEvent); ok {
+			toolsEv.CancelToolReply()
+		}
+	})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.generateReply()
+	}()
+
+	select {
+	case <-tool.foregroundEntered:
+	case <-time.After(time.Second):
+		t.Fatal("Foreground did not enter after pending tool update reply was canceled")
+	}
+	close(tool.releaseForeground)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("generateReply did not finish after canceled update reply foreground release")
+	}
+	if len(l.calls) != 1 {
+		t.Fatalf("LLM Chat calls = %d, want canceled progress reply to skip follow-up generation", len(l.calls))
 	}
 }
 
@@ -3394,6 +3575,138 @@ func TestPipelineAgentCancelToolReplyEventSkipsFollowupGeneration(t *testing.T) 
 	}
 }
 
+func TestPipelineAgentCancelToolUpdateReplyKeepsFinalReturnReply(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{ToolCalls: []llm.FunctionToolCall{{
+						Type:      "function",
+						Name:      "lookup",
+						CallID:    "call_lookup",
+						Arguments: `{}`,
+					}}}},
+				},
+			},
+			&fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "final acknowledged"}}}},
+		},
+	}
+	tool := &blockingRunContextUpdatingTool{
+		updateSent: make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{tool}
+	cancelNextReply := true
+	session.On("function_tools_executed", func(ev Event) {
+		if toolsEv, ok := ev.(*FunctionToolsExecutedEvent); ok && cancelNextReply {
+			toolsEv.CancelToolReply()
+			cancelNextReply = false
+		}
+	})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.generateReply()
+	}()
+
+	select {
+	case <-tool.updateSent:
+	case <-time.After(time.Second):
+		t.Fatal("tool did not send run context update")
+	}
+	close(tool.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("generateReply did not finish after final return")
+	}
+	if len(l.calls) != 2 {
+		t.Fatalf("LLM Chat calls = %d, want initial tool call plus final return reply", len(l.calls))
+	}
+	if len(chatCtx.Items) == 0 {
+		t.Fatal("chatCtx.Items empty, want final return reply assistant message")
+	}
+	msg, ok := chatCtx.Items[len(chatCtx.Items)-1].(*llm.ChatMessage)
+	if !ok || msg.Role != llm.ChatRoleAssistant || msg.TextContent() != "final acknowledged" {
+		t.Fatalf("last chat item = %#v, want final return assistant reply", chatCtx.Items[len(chatCtx.Items)-1])
+	}
+}
+
+func TestPipelineAgentCancelFirstToolUpdateReplyKeepsSubsequentUpdateReply(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{ToolCalls: []llm.FunctionToolCall{{
+						Type:      "function",
+						Name:      "lookup",
+						CallID:    "call_lookup",
+						Arguments: `{}`,
+					}}}},
+				},
+			},
+			&fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "second acknowledged"}}}},
+			&fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "final acknowledged"}}}},
+		},
+	}
+	tool := &blockingMultiRunContextUpdatingTool{
+		firstSent:     make(chan struct{}),
+		releaseSecond: make(chan struct{}),
+		secondSent:    make(chan struct{}),
+		releaseFinal:  make(chan struct{}),
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{tool}
+	cancelNextReply := true
+	session.On("function_tools_executed", func(ev Event) {
+		if toolsEv, ok := ev.(*FunctionToolsExecutedEvent); ok && cancelNextReply {
+			toolsEv.CancelToolReply()
+			cancelNextReply = false
+		}
+	})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.generateReply()
+	}()
+
+	select {
+	case <-tool.firstSent:
+	case <-time.After(time.Second):
+		t.Fatal("tool did not send first update")
+	}
+	close(tool.releaseSecond)
+	select {
+	case <-tool.secondSent:
+	case <-time.After(time.Second):
+		t.Fatal("tool did not send second update")
+	}
+	waitForLLMCalls(t, l, 2, "subsequent update reply after first reply was canceled")
+	select {
+	case <-done:
+		t.Fatal("generateReply finished before final tool return")
+	default:
+	}
+	close(tool.releaseFinal)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("generateReply did not finish after final return")
+	}
+	if len(l.calls) != 3 {
+		t.Fatalf("LLM Chat calls = %d, want initial, second update reply, and final reply", len(l.calls))
+	}
+}
+
 func TestPipelineAgentStopResponseDoesNotAppendToolCallOrGenerateReply(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -4771,6 +5084,106 @@ func (b *blockingPipelineTTS) Synthesize(context.Context, string) (tts.ChunkedSt
 }
 func (b *blockingPipelineTTS) Stream(context.Context) (tts.SynthesizeStream, error) {
 	return b.stream, nil
+}
+
+type blockingMultiRunContextUpdatingTool struct {
+	firstSent     chan struct{}
+	releaseSecond chan struct{}
+	secondSent    chan struct{}
+	releaseFinal  chan struct{}
+}
+
+func (b *blockingMultiRunContextUpdatingTool) ID() string { return "lookup" }
+
+func (b *blockingMultiRunContextUpdatingTool) Name() string { return "lookup" }
+
+func (b *blockingMultiRunContextUpdatingTool) Description() string { return "" }
+
+func (b *blockingMultiRunContextUpdatingTool) Parameters() map[string]any { return nil }
+
+func (b *blockingMultiRunContextUpdatingTool) Execute(ctx context.Context, args string) (string, error) {
+	runCtx := GetRunContext(ctx)
+	if runCtx != nil {
+		if err := runCtx.Update("searching"); err != nil {
+			return "", err
+		}
+	}
+	close(b.firstSent)
+	select {
+	case <-b.releaseSecond:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	if runCtx != nil {
+		if err := runCtx.Update("ranking"); err != nil {
+			return "", err
+		}
+	}
+	close(b.secondSent)
+	select {
+	case <-b.releaseFinal:
+		return "final result", nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+type blockingContentLLMStream struct {
+	started chan struct{}
+	release chan struct{}
+	content string
+	sent    bool
+}
+
+func (b *blockingContentLLMStream) Next() (*llm.ChatChunk, error) {
+	if b.sent {
+		return nil, io.EOF
+	}
+	b.sent = true
+	if b.started != nil {
+		close(b.started)
+		b.started = nil
+	}
+	<-b.release
+	return &llm.ChatChunk{Delta: &llm.ChoiceDelta{Content: b.content}}, nil
+}
+
+func (b *blockingContentLLMStream) Close() error { return nil }
+
+type foregroundAfterUpdateTool struct {
+	foregroundEntered chan struct{}
+	releaseForeground chan struct{}
+	once              sync.Once
+}
+
+func (f *foregroundAfterUpdateTool) ID() string { return "lookup" }
+
+func (f *foregroundAfterUpdateTool) Name() string { return "lookup" }
+
+func (f *foregroundAfterUpdateTool) Description() string { return "" }
+
+func (f *foregroundAfterUpdateTool) Parameters() map[string]any { return nil }
+
+func (f *foregroundAfterUpdateTool) Execute(ctx context.Context, args string) (string, error) {
+	runCtx := GetRunContext(ctx)
+	if runCtx == nil {
+		return "final result", nil
+	}
+	if err := runCtx.Update("searching"); err != nil {
+		return "", err
+	}
+	if err := runCtx.Foreground(ctx, func(context.Context) error {
+		f.once.Do(func() { close(f.foregroundEntered) })
+		select {
+		case <-f.releaseForeground:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}); err != nil {
+		return "", err
+	}
+	return "final result", nil
 }
 
 type fakePipelinePlaybackController struct {
