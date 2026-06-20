@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -705,6 +706,34 @@ func TestSynthesizeWithStreamEmitsErrorOnStreamFailure(t *testing.T) {
 		}
 	default:
 		t.Fatal("provider did not emit TTS error")
+	}
+}
+
+func TestSynthesizeWithStreamTreatsAPIStatus499AsGracefulEOF(t *testing.T) {
+	clientClosed := llm.NewAPIStatusError("client closed", 499, "req_499", nil)
+	provider := &fakeStreamingTTS{
+		stream: &fakeSynthesizeStream{emptyErr: clientClosed},
+	}
+	errCh := make(chan TTSError, 1)
+	provider.OnError(func(err TTSError) {
+		errCh <- err
+	})
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+	defer chunked.Close()
+
+	_, err = chunked.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() error = %v, want io.EOF for APIStatusError 499", err)
+	}
+
+	select {
+	case got := <-errCh:
+		t.Fatalf("provider emitted error for APIStatusError 499: %#v", got)
+	default:
 	}
 }
 

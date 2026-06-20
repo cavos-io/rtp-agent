@@ -11,6 +11,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"go.opentelemetry.io/otel/trace"
@@ -109,6 +110,10 @@ type chunkedStreamFromSynthesizeStream struct {
 func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
 	for {
 		audio, err := s.stream.Next()
+		clientClosed := isClientClosedStatus(err)
+		if clientClosed {
+			err = io.EOF
+		}
 		if err != nil {
 			_ = s.Close()
 			if errors.Is(err, io.EOF) {
@@ -122,7 +127,7 @@ func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
 					s.emitMetrics()
 					return pending, nil
 				}
-				if !s.audioSeen && strings.TrimSpace(s.text) != "" {
+				if !clientClosed && !s.audioSeen && strings.TrimSpace(s.text) != "" {
 					err := fmt.Errorf("no audio frames were pushed for text: %s", s.text)
 					s.markDone(err)
 					s.emitError(err)
@@ -163,6 +168,11 @@ func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
 		s.pending = tail
 		s.pendingTail = false
 	}
+}
+
+func isClientClosedStatus(err error) bool {
+	var statusErr *llm.APIStatusError
+	return errors.As(err, &statusErr) && statusErr.StatusCode == 499
 }
 
 func (s *chunkedStreamFromSynthesizeStream) observeAudio(audio *SynthesizedAudio) {
