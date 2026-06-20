@@ -132,6 +132,33 @@ func TestTelnyxTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	}
 }
 
+func TestTelnyxTTSProviderCloseClosesActiveStreams(t *testing.T) {
+	cancelled := false
+	closeCalls := 0
+	provider := NewTelnyxTTS("test-key", "")
+	stream := &telnyxTTSStream{
+		cancel: func() { cancelled = true },
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if !cancelled {
+		t.Fatal("cancel not called after provider Close")
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushText after provider Close error = %v, want closed stream error", err)
+	}
+}
+
 func TestTelnyxTTSAudioFromMessageDecodesBase64Audio(t *testing.T) {
 	payload, _ := json.Marshal(map[string]string{
 		"audio": base64.StdEncoding.EncodeToString([]byte{1, 2, 3, 4}),
