@@ -1441,13 +1441,10 @@ func (va *PipelineAgent) forwardedAssistantTextAfterInterruption(ctx context.Con
 	if session.activity != nil {
 		session.activity.holdUserTranscriptsUntil(time.Now())
 	}
-	if ev.SynchronizedTranscript != "" {
-		return ev.SynchronizedTranscript
-	}
 	if ev.PlaybackPosition <= 0 {
 		return ""
 	}
-	return generatedText
+	return ev.SynchronizedTranscript
 }
 
 func (va *PipelineAgent) precomputeLLMGeneration(ctx context.Context, session *AgentSession, opts pipelineReplyOptions) (*LLMGenerationData, error) {
@@ -1644,7 +1641,11 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 				if err := va.PublishAudio(ctx, frame); err != nil {
 					transcriptSync.Close()
 					<-transcriptionDone
-					va.flushAssistantPlayback(session)
+					if errors.Is(err, context.Canceled) {
+						va.clearAssistantPlayback(session)
+					} else {
+						va.flushAssistantPlayback(session)
+					}
 					return ttsGen, err
 				}
 			}
@@ -1764,7 +1765,7 @@ func (va *PipelineAgent) forwardAgentOutputTranscription(session *AgentSession, 
 		}
 		if transcript.Len() > 0 {
 			session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
-				Transcript: strings.TrimSpace(transcript.String()),
+				Transcript: transcript.String(),
 				IsFinal:    true,
 			})
 		}
@@ -1788,7 +1789,7 @@ func (va *PipelineAgent) forwardAlignedAgentOutputTranscription(session *AgentSe
 		}
 		if transcript.Len() > 0 {
 			session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
-				Transcript: strings.TrimSpace(transcript.String()),
+				Transcript: transcript.String(),
 				IsFinal:    true,
 			})
 		}

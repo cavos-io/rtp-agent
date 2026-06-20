@@ -150,6 +150,33 @@ func TestRoomIOInputFrameUsesReferenceSampleRate(t *testing.T) {
 	}
 }
 
+func TestRoomIOInputFrameDownmixesStereoToReferenceMono(t *testing.T) {
+	pcm := []byte{
+		0x00, 0x00, 0x02, 0x00,
+		0x04, 0x00, 0x06, 0x00,
+	}
+	frame := roomIOInputFrameFromPCM(pcm, roomIOInputSampleRate, 2)
+
+	if frame.SampleRate != roomIOInputSampleRate {
+		t.Fatalf("SampleRate = %d, want reference RoomIO input rate %d", frame.SampleRate, roomIOInputSampleRate)
+	}
+	if frame.NumChannels != 1 {
+		t.Fatalf("NumChannels = %d, want mono reference input", frame.NumChannels)
+	}
+	if frame.SamplesPerChannel != 2 {
+		t.Fatalf("SamplesPerChannel = %d, want stereo samples preserved per channel after downmix", frame.SamplesPerChannel)
+	}
+	if got, want := len(frame.Data), 4; got != want {
+		t.Fatalf("frame data bytes = %d, want %d", got, want)
+	}
+	if got := int16(frame.Data[0]) | int16(frame.Data[1])<<8; got != 1 {
+		t.Fatalf("first downmixed sample = %d, want average of stereo pair", got)
+	}
+	if got := int16(frame.Data[2]) | int16(frame.Data[3])<<8; got != 5 {
+		t.Fatalf("second downmixed sample = %d, want average of stereo pair", got)
+	}
+}
+
 func TestRoomIOInputStreamUsesReferenceFrameSize(t *testing.T) {
 	stream := newRoomIOInputAudioStream()
 	var frames []*model.AudioFrame
@@ -977,6 +1004,78 @@ func TestRoomIOPublishAudioResamplesPCMToOpusClockRate(t *testing.T) {
 	}
 }
 
+func TestRoomIOPublishAudioDownmixesStereoToMonoOutput(t *testing.T) {
+	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
+	rio := &RoomIO{
+		audioTrack: newRoomIOTestAudioTrack(t),
+		encoder:    encoder,
+	}
+	frame := &model.AudioFrame{
+		Data: []byte{
+			0x00, 0x00, 0x02, 0x00,
+			0x04, 0x00, 0x06, 0x00,
+		},
+		SampleRate:        roomIOOpusClockRate,
+		NumChannels:       2,
+		SamplesPerChannel: 2,
+	}
+
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+
+	if got, want := len(encoder.pcm), int(roomIOValidOpusSamples(2))*2; got != want {
+		t.Fatalf("encoder PCM length = %d, want %d bytes for mono Opus frame", got, want)
+	}
+	if got := int16(encoder.pcm[0]) | int16(encoder.pcm[1])<<8; got != 1 {
+		t.Fatalf("first downmixed sample = %d, want average of stereo pair", got)
+	}
+	if got := int16(encoder.pcm[2]) | int16(encoder.pcm[3])<<8; got != 5 {
+		t.Fatalf("second downmixed sample = %d, want average of stereo pair", got)
+	}
+	stats := rio.AudioOutputDiagnostics()
+	if stats.LastPublishedChannels != 1 {
+		t.Fatalf("LastPublishedChannels = %d, want mono RoomIO output", stats.LastPublishedChannels)
+	}
+}
+
+func TestRoomIOPublishAudioEncodeValidationFailureDoesNotStartPlayback(t *testing.T) {
+	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
+	rio := &RoomIO{
+		audioTrack: newRoomIOTestAudioTrack(t),
+		encoder:    encoder,
+	}
+	started := make(chan PlaybackStartedEvent, 1)
+	rio.OnPlaybackStarted(func(ev PlaybackStartedEvent) {
+		started <- ev
+	})
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        roomIOOpusClockRate,
+		NumChannels:       0,
+		SamplesPerChannel: 960,
+	}
+
+	err := rio.PublishAudio(context.Background(), frame)
+
+	if err == nil {
+		t.Fatal("PublishAudio error = nil, want encode validation error")
+	}
+	if !strings.Contains(err.Error(), "zero channels") {
+		t.Fatalf("PublishAudio error = %v, want zero-channels validation", err)
+	}
+	select {
+	case ev := <-started:
+		t.Fatalf("playback_started event = %#v, want none for unencodable frame", ev)
+	default:
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := rio.WaitForPlayout(ctx); err != nil {
+		t.Fatalf("WaitForPlayout error = %v, want no pending playback segment", err)
+	}
+}
+
 func TestRoomIOPublishAudioChunksLongPCMForOpus(t *testing.T) {
 	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}, maxPCMBytes: 960 * 2}
 	rio := &RoomIO{
@@ -1013,6 +1112,10 @@ func TestRoomIOPublishAudioHonorsCanceledContextBeforeEncoding(t *testing.T) {
 		audioTrack: newRoomIOTestAudioTrack(t),
 		encoder:    encoder,
 	}
+	started := make(chan PlaybackStartedEvent, 1)
+	rio.OnPlaybackStarted(func(ev PlaybackStartedEvent) {
+		started <- ev
+	})
 	frame := &model.AudioFrame{
 		Data:              make([]byte, 960*2),
 		SampleRate:        48000,
@@ -1029,6 +1132,16 @@ func TestRoomIOPublishAudioHonorsCanceledContextBeforeEncoding(t *testing.T) {
 	}
 	if len(encoder.calls) != 0 {
 		t.Fatalf("encoder calls = %d, want 0 after canceled context", len(encoder.calls))
+	}
+	select {
+	case ev := <-started:
+		t.Fatalf("playback_started event = %#v, want none after canceled context", ev)
+	default:
+	}
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer waitCancel()
+	if _, err := rio.WaitForPlayout(waitCtx); err != nil {
+		t.Fatalf("WaitForPlayout error = %v, want no pending playback segment", err)
 	}
 }
 
@@ -1187,6 +1300,36 @@ func TestRoomIOPlaybackFinishedIncludesSynchronizedTranscript(t *testing.T) {
 		IsFinal:    false,
 	})
 
+	rio.Flush()
+
+	ev, err := rio.WaitForPlayout(context.Background())
+	if err != nil {
+		t.Fatalf("WaitForPlayout error = %v", err)
+	}
+	if ev.Interrupted {
+		t.Fatal("PlaybackFinishedEvent.Interrupted = true, want false after Flush")
+	}
+	if ev.SynchronizedTranscript != "hello there" {
+		t.Fatalf("SynchronizedTranscript = %q, want accumulated transcript", ev.SynchronizedTranscript)
+	}
+}
+
+func TestRoomIOInterruptedPlaybackDoesNotReportFullTranscriptWhenPartial(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 4800*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 4800,
+	}
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "heard words unheard words",
+		IsFinal:    false,
+	})
+
 	rio.ClearBuffer()
 
 	ev, err := rio.WaitForPlayout(context.Background())
@@ -1196,8 +1339,11 @@ func TestRoomIOPlaybackFinishedIncludesSynchronizedTranscript(t *testing.T) {
 	if !ev.Interrupted {
 		t.Fatal("PlaybackFinishedEvent.Interrupted = false, want true after ClearBuffer")
 	}
-	if ev.SynchronizedTranscript != "hello there" {
-		t.Fatalf("SynchronizedTranscript = %q, want accumulated transcript", ev.SynchronizedTranscript)
+	if ev.PlaybackPosition >= 100*time.Millisecond {
+		t.Fatalf("PlaybackPosition = %v, want partial playout before full transcript duration", ev.PlaybackPosition)
+	}
+	if ev.SynchronizedTranscript == "heard words unheard words" {
+		t.Fatal("SynchronizedTranscript reported full transcript for partial interrupted playback")
 	}
 }
 

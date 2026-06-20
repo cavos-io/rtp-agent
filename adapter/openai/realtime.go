@@ -2571,6 +2571,7 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 		return llm.RealtimeEvent{
 			Type: llm.RealtimeEventTypeFunctionCall,
 			Function: &llm.FunctionToolCall{
+				ID:        call.ID,
 				CallID:    call.CallID,
 				Name:      call.Name,
 				Arguments: call.Arguments,

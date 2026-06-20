@@ -1277,15 +1277,23 @@ func roomIOInputFrameFromPCM(pcm []byte, sampleRate uint32, channels uint32) *mo
 		NumChannels:       channels,
 		SamplesPerChannel: uint32(len(pcm)) / channels / 2,
 	}
-	if sampleRate == 0 || sampleRate == roomIOInputSampleRate {
-		return frame
+	if sampleRate != 0 && sampleRate != roomIOInputSampleRate {
+		resampled, err := audio.ResampleAudioFrame(frame, roomIOInputSampleRate)
+		if err != nil {
+			logger.Logger.Warnw("room audio input resample failed", err, "from", sampleRate, "to", roomIOInputSampleRate)
+			return frame
+		}
+		frame = resampled
 	}
-	resampled, err := audio.ResampleAudioFrame(frame, roomIOInputSampleRate)
-	if err != nil {
-		logger.Logger.Warnw("room audio input resample failed", err, "from", sampleRate, "to", roomIOInputSampleRate)
-		return frame
+	if frame.NumChannels > 1 {
+		mono, err := roomIOMonoAudioFrame(frame)
+		if err != nil {
+			logger.Logger.Warnw("room audio input downmix failed", err, "channels", frame.NumChannels)
+			return frame
+		}
+		frame = mono
 	}
-	return resampled
+	return frame
 }
 
 func roomIOInputFrameFromFrame(frame *model.AudioFrame) *model.AudioFrame {
@@ -1616,15 +1624,16 @@ func (rio *RoomIO) finishPlayback(interrupted bool, synchronizedTranscript strin
 	}
 	rio.playbackCapturing = false
 	rio.playbackFinishedCount++
-	if synchronizedTranscript == "" {
-		synchronizedTranscript = rio.playbackTranscript
-	}
 	playbackPosition := rio.playbackPosition
+	fullPlaybackPosition := playbackPosition
 	if interrupted && !rio.playbackStartedAt.IsZero() {
 		elapsed := time.Since(rio.playbackStartedAt)
 		if elapsed < playbackPosition {
 			playbackPosition = elapsed
 		}
+	}
+	if synchronizedTranscript == "" && (!interrupted || playbackPosition >= fullPlaybackPosition) {
+		synchronizedTranscript = rio.playbackTranscript
 	}
 	ev := PlaybackFinishedEvent{
 		PlaybackPosition:       playbackPosition,
@@ -1698,6 +1707,21 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 	if drop {
 		return nil
 	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	var encodeFrames []*model.AudioFrame
+	if encoder != nil {
+		var err error
+		encodeFrames, err = roomIOOpusEncodeFrames(frame)
+		if err != nil {
+			rio.recordAudioOutputError(err)
+			return err
+		}
+	}
 
 	started, handlers, ok := rio.startPlayback()
 	if ok {
@@ -1708,10 +1732,6 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 	rio.recordPlaybackInputFrame(frame)
 
 	if encoder != nil {
-		encodeFrames, err := roomIOOpusEncodeFrames(frame)
-		if err != nil {
-			return err
-		}
 		for i, encodeFrame := range encodeFrames {
 			select {
 			case <-ctx.Done():
@@ -1910,6 +1930,13 @@ func roomIOOpusEncodeFrames(frame *model.AudioFrame) ([]*model.AudioFrame, error
 		}
 		encodeFrame = resampled
 	}
+	if encodeFrame.NumChannels > 1 {
+		mono, err := roomIOMonoAudioFrame(encodeFrame)
+		if err != nil {
+			return nil, err
+		}
+		encodeFrame = mono
+	}
 	if encodeFrame.NumChannels == 0 {
 		return nil, fmt.Errorf("cannot encode audio with zero channels")
 	}
@@ -1948,6 +1975,51 @@ func roomIOOpusEncodeFrames(frame *model.AudioFrame) ([]*model.AudioFrame, error
 		sampleOffset += chunkSamples
 	}
 	return frames, nil
+}
+
+func roomIOMonoAudioFrame(frame *model.AudioFrame) (*model.AudioFrame, error) {
+	if frame == nil || frame.NumChannels <= 1 {
+		return frame, nil
+	}
+	if frame.NumChannels == 0 {
+		return nil, fmt.Errorf("cannot downmix audio with zero channels")
+	}
+	if len(frame.Data)%2 != 0 {
+		return nil, fmt.Errorf("cannot downmix non-16-bit PCM audio")
+	}
+	bytesPerSample := int(frame.NumChannels * 2)
+	if len(frame.Data)%bytesPerSample != 0 {
+		return nil, fmt.Errorf("cannot downmix incomplete PCM sample")
+	}
+	samplesPerChannel := frame.SamplesPerChannel
+	if samplesPerChannel == 0 {
+		samplesPerChannel = uint32(len(frame.Data) / bytesPerSample)
+	}
+	expectedBytes := int(samplesPerChannel) * bytesPerSample
+	if len(frame.Data) < expectedBytes {
+		return nil, fmt.Errorf("audio frame data is shorter than declared sample count")
+	}
+
+	channels := int(frame.NumChannels)
+	out := make([]byte, int(samplesPerChannel)*2)
+	for sample := 0; sample < int(samplesPerChannel); sample++ {
+		var sum int32
+		base := sample * bytesPerSample
+		for ch := 0; ch < channels; ch++ {
+			offset := base + ch*2
+			v := int16(frame.Data[offset]) | int16(frame.Data[offset+1])<<8
+			sum += int32(v)
+		}
+		mixed := int16(sum / int32(channels))
+		out[sample*2] = byte(mixed)
+		out[sample*2+1] = byte(mixed >> 8)
+	}
+	return &model.AudioFrame{
+		Data:              out,
+		SampleRate:        frame.SampleRate,
+		NumChannels:       1,
+		SamplesPerChannel: samplesPerChannel,
+	}, nil
 }
 
 func roomIOValidOpusSamples(samples uint32) uint32 {

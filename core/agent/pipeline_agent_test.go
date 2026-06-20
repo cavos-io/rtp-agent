@@ -1262,6 +1262,42 @@ func TestPipelineAgentCanceledTTSForwardingClearsPlayback(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentCanceledPublishAudioClearsPlayback(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	playback := &fakePipelinePlaybackController{}
+	session.SetAudioPlaybackController(playback)
+	agent := NewPipelineAgent(nil, nil, nil, nil, llm.NewChatContext())
+	ctx, cancel := context.WithCancel(context.Background())
+	ttsGen := &TTSGenerationData{
+		AudioCh:     make(chan *model.AudioFrame, 1),
+		TimedTextCh: make(chan tts.TimedString),
+	}
+	ttsGen.AudioCh <- &model.AudioFrame{
+		Data:              []byte{1},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+	close(ttsGen.AudioCh)
+	close(ttsGen.TimedTextCh)
+	transcriptSync := NewTranscriptSynchronizer(0)
+	defer transcriptSync.Close()
+	done := closedChannel()
+	agent.PublishAudio = func(context.Context, *model.AudioFrame) error {
+		cancel()
+		return context.Canceled
+	}
+
+	_, err := agent.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, done, nil)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("playTTSGenerationWithTranscript error = %v, want context.Canceled", err)
+	}
+	if playback.clearCalls != 1 {
+		t.Fatalf("ClearBuffer calls = %d, want 1 after canceled PublishAudio", playback.clearCalls)
+	}
+}
+
 func TestPipelineAgentSayReturnsDirectSpeechToListeningWithoutIdle(t *testing.T) {
 	baseAgent := NewAgent("test")
 	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
@@ -4662,6 +4698,32 @@ func TestPipelineAgentInterruptedReplyWaitsForPlaybackAfterReplyContextCanceled(
 	}
 }
 
+func TestPipelineAgentInterruptedReplyUsesEmptySynchronizedTranscript(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	playback := &fakePipelinePlaybackController{
+		result: AudioPlaybackResult{
+			PlaybackPosition:       200 * time.Millisecond,
+			Interrupted:            true,
+			SynchronizedTranscript: "",
+		},
+	}
+	session.SetAudioPlaybackController(playback)
+	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{}, llm.NewChatContext())
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+
+	forwarded := agent.forwardedAssistantTextAfterInterruption(context.Background(), session, speech, "full answer")
+
+	if playback.clearCalls != 1 {
+		t.Fatalf("ClearBuffer calls = %d, want 1", playback.clearCalls)
+	}
+	if forwarded != "" {
+		t.Fatalf("forwarded text = %q, want empty synchronized transcript to suppress full fallback", forwarded)
+	}
+}
+
 func TestPipelineAgentReplyWaitsForPlayoutBeforeCommit(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -4840,6 +4902,70 @@ func TestPipelineAgentSegmentedTTSCancelFinalizesActiveTranscript(t *testing.T) 
 			}
 		case <-deadline:
 			t.Fatal("AgentOutputTranscribedEvents did not receive final transcript after cancellation")
+		}
+	}
+}
+
+func TestPipelineAgentAgentOutputTranscriptionFinalPreservesReferenceWhitespace(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	events := session.AgentOutputTranscribedEvents()
+	syncer := NewTranscriptSynchronizer(0)
+	agent := &PipelineAgent{}
+	done := agent.forwardAgentOutputTranscription(session, syncer)
+
+	syncer.PushText("  padded answer  ")
+	syncer.Close()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("agent output transcription forwarder did not stop")
+	}
+
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case ev := <-events:
+			if ev.IsFinal {
+				if ev.Transcript != "  padded answer  " {
+					t.Fatalf("final transcript = %q, want exact reference text with whitespace", ev.Transcript)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("AgentOutputTranscribedEvents did not receive final transcript")
+		}
+	}
+}
+
+func TestPipelineAgentAlignedAgentOutputTranscriptionFinalPreservesReferenceWhitespace(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	events := session.AgentOutputTranscribedEvents()
+	timedTextCh := make(chan tts.TimedString, 1)
+	agent := &PipelineAgent{}
+	done := agent.forwardAlignedAgentOutputTranscription(session, timedTextCh)
+
+	timedTextCh <- tts.TimedString{Text: "  aligned answer  "}
+	close(timedTextCh)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("aligned agent output transcription forwarder did not stop")
+	}
+
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case ev := <-events:
+			if ev.IsFinal {
+				if ev.Transcript != "  aligned answer  " {
+					t.Fatalf("final aligned transcript = %q, want exact reference text with whitespace", ev.Transcript)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("AgentOutputTranscribedEvents did not receive final aligned transcript")
 		}
 	}
 }
