@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
@@ -34,6 +35,8 @@ type OpenAITTS struct {
 	speed          float64
 	instructions   string
 	responseFormat openai.SpeechResponseFormat
+	mu             sync.Mutex
+	streams        map[*openaiTTSChunkedStream]struct{}
 }
 
 const (
@@ -140,6 +143,7 @@ func NewAzureOpenAITTS(model openai.SpeechModel, voice openai.SpeechVoice, azure
 		baseURL:        azureEndpoint,
 		speed:          1.0,
 		responseFormat: openai.SpeechResponseFormatMp3,
+		streams:        make(map[*openaiTTSChunkedStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -184,6 +188,7 @@ func newOpenAITTS(client *openai.Client, apiKey string, model openai.SpeechModel
 		baseURL:        defaultOpenAIBaseURL,
 		speed:          1.0,
 		responseFormat: openai.SpeechResponseFormatMp3,
+		streams:        make(map[*openaiTTSChunkedStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -234,13 +239,15 @@ func (t *OpenAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 		return nil, mapOpenAIError(err)
 	}
 
-	return &openaiTTSChunkedStream{
+	stream := &openaiTTSChunkedStream{
 		resp:           resp,
 		responseFormat: t.responseFormat,
 		streamFormat:   openAITTSStreamFormatForModel(t.model),
 		provider:       t,
 		inputText:      text,
-	}, nil
+	}
+	t.registerStream(stream)
+	return stream, nil
 }
 
 func buildOpenAITTSSpeechRequest(t *OpenAITTS, text string) openai.CreateSpeechRequest {
@@ -257,6 +264,39 @@ func buildOpenAITTSSpeechRequest(t *OpenAITTS, text string) openai.CreateSpeechR
 func (t *OpenAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	// OpenAI does not have a native streaming API for TTS via standard REST.
 	return nil, io.ErrUnexpectedEOF
+}
+
+func (t *OpenAITTS) Close() error {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	streams := make([]*openaiTTSChunkedStream, 0, len(t.streams))
+	for stream := range t.streams {
+		streams = append(streams, stream)
+	}
+	t.streams = make(map[*openaiTTSChunkedStream]struct{})
+	t.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
+func (t *OpenAITTS) registerStream(stream *openaiTTSChunkedStream) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.streams[stream] = struct{}{}
+}
+
+func (t *OpenAITTS) unregisterStream(stream *openaiTTSChunkedStream) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.streams, stream)
 }
 
 type openaiTTSChunkedStream struct {
@@ -651,13 +691,20 @@ func (s *openaiTTSChunkedStream) emitSSEUsageMetrics(event map[string]any) {
 
 func (s *openaiTTSChunkedStream) Close() error {
 	if s.closed {
+		if s.provider != nil {
+			s.provider.unregisterStream(s)
+		}
 		return nil
 	}
 	s.closed = true
 	if s.decoder != nil {
 		_ = s.decoder.Close()
 	}
-	return s.resp.Close()
+	err := s.resp.Close()
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
+	return err
 }
 
 type openAITTSStreamFormatHTTPClient struct {
