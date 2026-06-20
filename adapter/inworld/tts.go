@@ -519,7 +519,7 @@ func (s *inworldTTSSynthesizeStream) Flush() error {
 	if s.closed {
 		return fmt.Errorf("inworld tts stream is closed")
 	}
-	text := strings.TrimSpace(s.pendingText.String())
+	text := s.pendingText.String()
 	s.pendingText.Reset()
 	if s.conn == nil && s.writeMessage == nil {
 		return nil

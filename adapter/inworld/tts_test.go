@@ -599,6 +599,32 @@ func TestInworldTTSStreamBuffersTextUntilFlush(t *testing.T) {
 	}
 }
 
+func TestInworldTTSStreamPreservesWhitespaceOnFlush(t *testing.T) {
+	var sent [][]byte
+	stream := &inworldTTSSynthesizeStream{
+		contextID: "ctx-1",
+		writeMessage: func(_ int, payload []byte) error {
+			sent = append(sent, bytes.Clone(payload))
+			return nil
+		},
+	}
+
+	const text = "  hello world  "
+	if err := stream.PushText(text); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+
+	if len(sent) != 2 {
+		t.Fatalf("sent messages = %d, want send_text and flush", len(sent))
+	}
+	if got := inworldTTSTestSendText(t, sent[0]); got != text {
+		t.Fatalf("send_text = %q, want exact buffered text %q", got, text)
+	}
+}
+
 func TestInworldTTSStreamChunksLongTextOnFlush(t *testing.T) {
 	var sent [][]byte
 	stream := &inworldTTSSynthesizeStream{
