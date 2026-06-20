@@ -164,6 +164,45 @@ func TestBackgroundAudioPlayLoopingChannelPanicsLikeReference(t *testing.T) {
 	player.Play((<-chan *model.AudioFrame)(frames), true)
 }
 
+func TestPlayHandleStopWithFadeOutWaitsForPlayoutDone(t *testing.T) {
+	player := NewBackgroundAudioPlayer(nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	player.mixerTaskCtx = ctx
+	player.mixerTaskCancel = cancel
+	frames := make(chan *model.AudioFrame)
+
+	handle := player.Play(AudioConfig{
+		Source:  (<-chan *model.AudioFrame)(frames),
+		FadeOut: 0.2,
+	}, false)
+
+	handle.Stop()
+	if handle.Done() {
+		t.Fatal("Done() = true immediately after Stop with fade-out, want pending until playout is marked done")
+	}
+
+	close(frames)
+	waitForBackgroundHandleDone(t, handle)
+	if !handle.Done() {
+		t.Fatal("Done() = false after markPlayoutDone, want true")
+	}
+}
+
+func waitForBackgroundHandleDone(t *testing.T, handle *PlayHandle) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		handle.WaitForPlayout()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for background play handle")
+	}
+}
+
 func backgroundTestFrame(sampleRate uint32, channels uint32, samplesPerChannel uint32, samples []int16) *model.AudioFrame {
 	data := make([]byte, len(samples)*2)
 	for i, sample := range samples {

@@ -241,15 +241,22 @@ func clampFloat(value float64, minValue float64, maxValue float64) float64 {
 }
 
 type PlayHandle struct {
-	doneCh chan struct{}
-	stopCh chan struct{}
-	once   sync.Once
+	doneCh   chan struct{}
+	stopCh   chan struct{}
+	stopOnce sync.Once
+	doneOnce sync.Once
+	fadeOut  float64
 }
 
-func newPlayHandle() *PlayHandle {
+func newPlayHandle(fadeOut ...float64) *PlayHandle {
+	fade := 0.0
+	if len(fadeOut) > 0 {
+		fade = fadeOut[0]
+	}
 	return &PlayHandle{
-		doneCh: make(chan struct{}),
-		stopCh: make(chan struct{}),
+		doneCh:  make(chan struct{}),
+		stopCh:  make(chan struct{}),
+		fadeOut: fade,
 	}
 }
 
@@ -266,10 +273,12 @@ func (h *PlayHandle) Stop() {
 	if h.Done() {
 		return
 	}
-	h.once.Do(func() {
+	h.stopOnce.Do(func() {
 		close(h.stopCh)
-		close(h.doneCh)
 	})
+	if h.fadeOut <= 0 {
+		h.markPlayoutDone()
+	}
 }
 
 func (h *PlayHandle) WaitForPlayout() {
@@ -277,7 +286,7 @@ func (h *PlayHandle) WaitForPlayout() {
 }
 
 func (h *PlayHandle) markPlayoutDone() {
-	h.once.Do(func() {
+	h.doneOnce.Do(func() {
 		close(h.doneCh)
 	})
 }
@@ -300,7 +309,7 @@ func (p *BackgroundAudioPlayer) Play(audio interface{}, loop bool) *PlayHandle {
 		}
 	}
 
-	handle := newPlayHandle()
+	handle := newPlayHandle(cfg.FadeOut)
 	p.playTasks.Add(1)
 	go p.playTask(handle, soundSource, cfg, loop)
 	return handle
