@@ -310,6 +310,9 @@ type humeTTSChunkedStream struct {
 }
 
 func (s *humeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.resp == nil || s.resp.Body == nil {
+		return nil, io.EOF
+	}
 	if s.scanner == nil {
 		s.scanner = bufio.NewScanner(s.resp.Body)
 		s.scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
@@ -354,10 +357,11 @@ func (s *humeTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
 		if len(audio) == 0 {
 			return nil, io.EOF
 		}
-		s.decoder = codecs.NewMP3AudioStreamDecoder()
+		decoder := codecs.NewMP3AudioStreamDecoder()
+		s.decoder = decoder
 		go func() {
-			s.decoder.Push(audio)
-			s.decoder.EndInput()
+			decoder.Push(audio)
+			decoder.EndInput()
 		}()
 	}
 
@@ -394,10 +398,17 @@ func (s *humeTTSChunkedStream) collectJSONLineAudio() ([]byte, error) {
 }
 
 func (s *humeTTSChunkedStream) Close() error {
-	if s.decoder != nil {
-		_ = s.decoder.Close()
+	if s.resp == nil || s.resp.Body == nil {
+		return nil
 	}
-	return s.resp.Body.Close()
+	body := s.resp.Body
+	decoder := s.decoder
+	s.resp = nil
+	s.decoder = nil
+	if decoder != nil {
+		_ = decoder.Close()
+	}
+	return body.Close()
 }
 
 func humeAudioFromJSONLine(line string) ([]byte, error) {

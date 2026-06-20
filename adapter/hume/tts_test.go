@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -341,8 +342,51 @@ func TestHumeTTSChunkedStreamDecodesReferenceMP3JSONLines(t *testing.T) {
 	}
 }
 
+func TestHumeTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
+	body := &humeCloseCountBody{Reader: strings.NewReader("audio")}
+	stream := &humeTTSChunkedStream{resp: &http.Response{Body: body}, audioFormat: "pcm", sampleRate: 48000}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close() error = %v, want nil", err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close() calls = %d, want 1", body.closeCount)
+	}
+}
+
+func TestHumeTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	stream := &humeTTSChunkedStream{
+		resp:        &http.Response{Body: io.NopCloser(strings.NewReader(`{"audio":"AQI="}` + "\n"))},
+		audioFormat: "pcm",
+		sampleRate:  48000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after Close error = %T %v, want EOF", err, err)
+	}
+}
+
 type humeRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f humeRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+type humeCloseCountBody struct {
+	*strings.Reader
+	closeCount int
+}
+
+func (b *humeCloseCountBody) Close() error {
+	b.closeCount++
+	if b.closeCount > 1 {
+		return errors.New("closed twice")
+	}
+	return nil
 }
