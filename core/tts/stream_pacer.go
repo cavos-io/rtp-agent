@@ -2,7 +2,6 @@ package tts
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -321,7 +320,7 @@ func (p *SentenceStreamPacer) PushText(text string) error {
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
-		return fmt.Errorf("pacer closed")
+		return nil
 	}
 	if p.inputDone {
 		p.mu.Unlock()
@@ -340,7 +339,7 @@ func (p *SentenceStreamPacer) Flush() error {
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
-		return fmt.Errorf("pacer closed")
+		return nil
 	}
 	if p.inputDone {
 		p.mu.Unlock()
@@ -359,7 +358,7 @@ func (p *SentenceStreamPacer) EndInput() error {
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
-		return fmt.Errorf("pacer closed")
+		return nil
 	}
 	if p.inputDone {
 		p.mu.Unlock()
