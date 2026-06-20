@@ -35,6 +35,7 @@ const (
 	defaultInworldTimestampTransportStrategy = "ASYNC"
 	defaultInworldBufferCharThreshold        = 120
 	defaultInworldMaxBufferDelayMS           = 3000
+	inworldTTSSendTextChunkLimit             = 1000
 )
 
 type InworldTTS struct {
@@ -508,13 +509,15 @@ func (s *inworldTTSSynthesizeStream) Flush() error {
 		return nil
 	}
 	if text != "" {
-		message, err := buildInworldTTSSendTextMessage(s.contextID, text)
-		if err != nil {
-			return err
-		}
-		if err := s.writeMessageData(websocket.TextMessage, message); err != nil {
-			s.closeAfterWriteFailureLocked()
-			return err
+		for _, chunk := range inworldTTSChunkText(text, inworldTTSSendTextChunkLimit) {
+			message, err := buildInworldTTSSendTextMessage(s.contextID, chunk)
+			if err != nil {
+				return err
+			}
+			if err := s.writeMessageData(websocket.TextMessage, message); err != nil {
+				s.closeAfterWriteFailureLocked()
+				return err
+			}
 		}
 	}
 	message, err := buildInworldTTSFlushMessage(s.contextID)
@@ -526,6 +529,28 @@ func (s *inworldTTSSynthesizeStream) Flush() error {
 		return err
 	}
 	return nil
+}
+
+func inworldTTSChunkText(text string, limit int) []string {
+	if text == "" {
+		return nil
+	}
+	if limit <= 0 {
+		return []string{text}
+	}
+	chunks := make([]string, 0, (len([]rune(text))+limit-1)/limit)
+	start := 0
+	count := 0
+	for i := range text {
+		if count == limit {
+			chunks = append(chunks, text[start:i])
+			start = i
+			count = 0
+		}
+		count++
+	}
+	chunks = append(chunks, text[start:])
+	return chunks
 }
 
 func (s *inworldTTSSynthesizeStream) Close() error {

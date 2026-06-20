@@ -545,8 +545,92 @@ func TestInworldTTSStreamBuffersTextUntilFlush(t *testing.T) {
 	}
 }
 
+func TestInworldTTSStreamChunksLongTextOnFlush(t *testing.T) {
+	var sent [][]byte
+	stream := &inworldTTSSynthesizeStream{
+		contextID: "ctx-1",
+		writeMessage: func(_ int, payload []byte) error {
+			sent = append(sent, bytes.Clone(payload))
+			return nil
+		},
+	}
+
+	text := strings.Repeat("a", 2505)
+	if err := stream.PushText(text); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+
+	if len(sent) != 4 {
+		t.Fatalf("sent messages = %d, want 3 text chunks and flush", len(sent))
+	}
+	for i, wantLen := range []int{1000, 1000, 505} {
+		gotText := inworldTTSTestSendText(t, sent[i])
+		if len(gotText) != wantLen {
+			t.Fatalf("send_text chunk %d length = %d, want %d", i, len(gotText), wantLen)
+		}
+	}
+	var flush map[string]any
+	if err := json.Unmarshal(sent[3], &flush); err != nil {
+		t.Fatalf("decode flush message: %v", err)
+	}
+	if _, ok := flush["flush_context"]; !ok {
+		t.Fatalf("last message = %#v, want flush_context", flush)
+	}
+}
+
+func TestInworldTTSStreamChunksLongUnicodeTextByRune(t *testing.T) {
+	var sent [][]byte
+	stream := &inworldTTSSynthesizeStream{
+		contextID: "ctx-1",
+		writeMessage: func(_ int, payload []byte) error {
+			sent = append(sent, bytes.Clone(payload))
+			return nil
+		},
+	}
+
+	text := strings.Repeat("界", 1001)
+	if err := stream.PushText(text); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+
+	if len(sent) != 3 {
+		t.Fatalf("sent messages = %d, want 2 text chunks and flush", len(sent))
+	}
+	first := inworldTTSTestSendText(t, sent[0])
+	if got := len([]rune(first)); got != 1000 {
+		t.Fatalf("first send_text rune length = %d, want 1000", got)
+	}
+	second := inworldTTSTestSendText(t, sent[1])
+	if got := len([]rune(second)); got != 1 {
+		t.Fatalf("second send_text rune length = %d, want 1", got)
+	}
+}
+
 func TestInworldTTSImplementsInterface(t *testing.T) {
 	var _ tts.TTS = NewInworldTTS("test-key", "")
+}
+
+func inworldTTSTestSendText(t *testing.T, payload []byte) string {
+	t.Helper()
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		t.Fatalf("decode send_text message: %v", err)
+	}
+	sendText, ok := message["send_text"].(map[string]any)
+	if !ok {
+		t.Fatalf("message = %#v, want send_text", message)
+	}
+	text, ok := sendText["text"].(string)
+	if !ok {
+		t.Fatalf("send_text = %#v, want text string", sendText)
+	}
+	return text
 }
 
 func assertInworldPayload(t *testing.T, payload map[string]any, key string, want string) {
