@@ -155,11 +155,14 @@ func (p *sdkDataPublisher) Close(context.Context) error {
 		return nil
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if p.closed {
+		p.mu.Unlock()
 		return nil
 	}
 	p.closed = true
 	p.handler = nil
-	return closeRTMClient(sdkRTMLifecycleClient{client: p.client}, p.channel)
+	client := p.client
+	channel := p.channel
+	p.mu.Unlock()
+	return closeRTMClient(sdkRTMLifecycleClient{client: client}, channel)
 }

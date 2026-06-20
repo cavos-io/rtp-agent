@@ -177,6 +177,40 @@ func TestSDKDataPublisherDropsForeignChannelMessages(t *testing.T) {
 	}
 }
 
+func TestSDKDataPublisherCloseReleasesLockBeforeNativeCleanup(t *testing.T) {
+	source, err := os.ReadFile("sdk_rtm.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk_rtm.go) error = %v", err)
+	}
+	text := string(source)
+	closeIndex := strings.Index(text, "func (p *sdkDataPublisher) Close")
+	if closeIndex < 0 {
+		t.Fatal("sdk_rtm.go missing sdkDataPublisher.Close")
+	}
+	closeBody := text[closeIndex:]
+	if nextFunc := strings.Index(closeBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		closeBody = closeBody[:len("func ")+nextFunc]
+	}
+	for _, want := range []string{
+		"client := p.client",
+		"channel := p.channel",
+		"p.mu.Unlock()",
+		"closeRTMClient(sdkRTMLifecycleClient{client: client}, channel)",
+	} {
+		if !strings.Contains(closeBody, want) {
+			t.Fatalf("Close missing %q", want)
+		}
+	}
+	unlockIndex := strings.Index(closeBody, "p.mu.Unlock()")
+	cleanupIndex := strings.Index(closeBody, "closeRTMClient")
+	if unlockIndex < 0 || cleanupIndex < 0 || unlockIndex > cleanupIndex {
+		t.Fatal("Close must release publisher lock before native RTM cleanup")
+	}
+	if strings.Contains(closeBody, "defer p.mu.Unlock()") {
+		t.Fatal("Close must not defer unlock across native RTM cleanup")
+	}
+}
+
 func TestSDKDataPublisherRechecksPublishContextAfterLock(t *testing.T) {
 	source, err := os.ReadFile("sdk_rtm.go")
 	if err != nil {
