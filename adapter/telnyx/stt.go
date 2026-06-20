@@ -29,12 +29,14 @@ const (
 )
 
 type TelnyxSTT struct {
+	mu                  sync.Mutex
 	apiKey              string
 	baseURL             string
 	language            string
 	transcriptionEngine string
 	interimResults      bool
 	sampleRate          int
+	streams             map[*telnyxSTTStream]struct{}
 }
 
 type TelnyxSTTOption func(*TelnyxSTT)
@@ -131,18 +133,59 @@ func (s *TelnyxSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &telnyxSTTStream{
-		conn:   conn,
-		events: make(chan *stt.SpeechEvent, 100),
-		errCh:  make(chan error, 1),
-		ctx:    streamCtx,
-		cancel: cancel,
+		provider: s,
+		conn:     conn,
+		events:   make(chan *stt.SpeechEvent, 100),
+		errCh:    make(chan error, 1),
+		ctx:      streamCtx,
+		cancel:   cancel,
 		state: &telnyxSTTStreamState{
 			language: resolveTelnyxSTTLanguage(s, language),
 		},
 	}
 	stream.writeBinary = stream.writeBinaryMessage
+	s.registerStream(stream)
 	go stream.readLoop()
 	return stream, nil
+}
+
+func (s *TelnyxSTT) Close() error {
+	s.mu.Lock()
+	streams := make([]*telnyxSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.mu.Unlock()
+
+	var firstErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (s *TelnyxSTT) registerStream(stream *telnyxSTTStream) {
+	if stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.streams == nil {
+		s.streams = make(map[*telnyxSTTStream]struct{})
+	}
+	stream.provider = s
+	s.streams[stream] = struct{}{}
+}
+
+func (s *TelnyxSTT) unregisterStream(stream *telnyxSTTStream) {
+	if stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.streams, stream)
 }
 
 func (s *TelnyxSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
@@ -245,14 +288,15 @@ func createTelnyxStreamingWAVHeader(sampleRate int, numChannels int) []byte {
 }
 
 type telnyxSTTStream struct {
-	conn   *websocket.Conn
-	events chan *stt.SpeechEvent
-	errCh  chan error
-	mu     sync.Mutex
-	closed bool
-	ctx    context.Context
-	cancel context.CancelFunc
-	state  *telnyxSTTStreamState
+	provider *TelnyxSTT
+	conn     *websocket.Conn
+	events   chan *stt.SpeechEvent
+	errCh    chan error
+	mu       sync.Mutex
+	closed   bool
+	ctx      context.Context
+	cancel   context.CancelFunc
+	state    *telnyxSTTStreamState
 
 	audioBStream *audio.AudioByteStream
 	writeBinary  func([]byte) error
@@ -307,6 +351,9 @@ func (s *telnyxSTTStream) Close() error {
 	s.closed = true
 	if s.cancel != nil {
 		s.cancel()
+	}
+	if s.provider != nil {
+		defer s.provider.unregisterStream(s)
 	}
 	if s.audioBStream != nil {
 		for _, chunk := range s.audioBStream.Flush() {
@@ -367,6 +414,9 @@ func (s *telnyxSTTStream) closeAfterWriteFailureLocked() {
 		s.cancel()
 	}
 	_ = s.closeConnection()
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
 }
 
 func (s *telnyxSTTStream) Next() (*stt.SpeechEvent, error) {

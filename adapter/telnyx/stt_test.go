@@ -231,6 +231,28 @@ func TestTelnyxSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	}
 }
 
+func TestTelnyxSTTProviderCloseClosesActiveStreams(t *testing.T) {
+	provider := NewTelnyxSTT("test-key")
+	closeCalls := 0
+	stream := &telnyxSTTStream{
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01, 0x02}}); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushFrame after provider Close error = %v, want closed error", err)
+	}
+}
+
 func TestTelnyxSTTStreamCloseFlushesBufferedAudioBeforeClose(t *testing.T) {
 	var writes [][]byte
 	closeCalls := 0
