@@ -2920,6 +2920,45 @@ func TestMultimodalAgentUsesTTSFallbackForTextOnlyRealtimeMessage(t *testing.T) 
 	}
 }
 
+func TestMultimodalAgentUsesTTSFallbackForRealtimeMessageWithoutAudioModality(t *testing.T) {
+	ttsStream := newEndInputGenerationTTSStream()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.TTS = &fakeGenerationTTS{stream: ttsStream}
+	var published []*model.AudioFrame
+	ma := &MultimodalAgent{
+		model: &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{
+			AudioOutput: true,
+		}},
+		session: session,
+		chatCtx: llm.NewChatContext(),
+		PublishAudio: func(ctx context.Context, frame *model.AudioFrame) error {
+			published = append(published, frame)
+			return nil
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "spoken fallback"
+	close(textCh)
+	modalitiesCh := make(chan []string, 1)
+	modalitiesCh <- []string{}
+	close(modalitiesCh)
+
+	ma.consumeRealtimeMessage(context.Background(), NewSpeechHandle(true, DefaultInputDetails()), llm.MessageGeneration{
+		MessageID:    "msg_empty_modalities",
+		TextCh:       textCh,
+		ModalitiesCh: modalitiesCh,
+	})
+
+	if len(published) != 1 || string(published[0].Data) != "audio" {
+		t.Fatalf("published frames = %#v, want one synthesized TTS audio frame", published)
+	}
+	if !strings.Contains(strings.Join(ttsStream.calls, ","), "push:spoken") ||
+		!strings.Contains(strings.Join(ttsStream.calls, ","), "push: fallback") ||
+		ttsStream.calls[len(ttsStream.calls)-1] != "end_input" {
+		t.Fatalf("TTS stream calls = %#v, want text pushed before end_input", ttsStream.calls)
+	}
+}
+
 func TestMultimodalAgentTTSFallbackWaitsForPlayoutBeforeCommit(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	session.TTS = &fakeGenerationTTS{stream: newEndInputGenerationTTSStream()}

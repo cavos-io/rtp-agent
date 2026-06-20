@@ -821,7 +821,7 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 		}
 	}
 	interrupted := speech != nil && speech.IsInterrupted()
-	if !interrupted && text != "" && len(modalities) > 0 && !realtimeModalitiesContain(modalities, "audio") {
+	if !interrupted && text != "" && !realtimeModalitiesContain(modalities, "audio") {
 		fallbackPublishedAudio, err := ma.publishTTSFallbackForRealtimeText(ctx, speech, text)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
