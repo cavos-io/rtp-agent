@@ -403,6 +403,18 @@ func TestPipelineAgentGenerateReplyWithChatContextCarriesToolOutputs(t *testing.
 	}
 }
 
+func waitForLLMCalls(t *testing.T, llm *fakeGenerationLLM, count int, label string) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for len(llm.calls) < count {
+		select {
+		case <-deadline:
+			t.Fatalf("LLM Chat calls = %d, want %d for %s", len(llm.calls), count, label)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
 func TestPipelineAgentStartsToolUpdateReplyBeforeToolReturns(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -451,14 +463,7 @@ func TestPipelineAgentStartsToolUpdateReplyBeforeToolReturns(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("tool did not send run context update")
 	}
-	deadline := time.After(time.Second)
-	for len(l.calls) < 2 {
-		select {
-		case <-deadline:
-			t.Fatalf("LLM Chat calls = %d, want progress reply before tool returns", len(l.calls))
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
+	waitForLLMCalls(t, l, 2, "progress reply before tool returns")
 	close(tool.release)
 	select {
 	case <-done:
@@ -467,6 +472,66 @@ func TestPipelineAgentStartsToolUpdateReplyBeforeToolReturns(t *testing.T) {
 	}
 	if len(l.calls) != 3 {
 		t.Fatalf("LLM Chat calls = %d, want progress reply and final return reply", len(l.calls))
+	}
+}
+
+func TestPipelineAgentStartsSubsequentToolUpdateReplyBeforeFinalReturn(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{ToolCalls: []llm.FunctionToolCall{{
+						Type:      "function",
+						Name:      "lookup",
+						CallID:    "call_lookup",
+						Arguments: `{}`,
+					}}}},
+				},
+			},
+			&fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "first acknowledged"}}}},
+			&fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "second acknowledged"}}}},
+			&fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "final acknowledged"}}}},
+		},
+	}
+	tool := &blockingMultiRunContextUpdatingTool{
+		firstSent:     make(chan struct{}),
+		releaseSecond: make(chan struct{}),
+		secondSent:    make(chan struct{}),
+		releaseFinal:  make(chan struct{}),
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{tool}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.generateReply()
+	}()
+
+	select {
+	case <-tool.firstSent:
+	case <-time.After(time.Second):
+		t.Fatal("tool did not send first update")
+	}
+	waitForLLMCalls(t, l, 2, "first progress reply")
+	close(tool.releaseSecond)
+	select {
+	case <-tool.secondSent:
+	case <-time.After(time.Second):
+		t.Fatal("tool did not send second update")
+	}
+	waitForLLMCalls(t, l, 3, "second progress reply")
+	close(tool.releaseFinal)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("generateReply did not finish after final release")
+	}
+	if len(l.calls) != 4 {
+		t.Fatalf("LLM Chat calls = %d, want initial, two progress replies, and final reply", len(l.calls))
 	}
 }
 
@@ -4771,6 +4836,48 @@ func (b *blockingPipelineTTS) Synthesize(context.Context, string) (tts.ChunkedSt
 }
 func (b *blockingPipelineTTS) Stream(context.Context) (tts.SynthesizeStream, error) {
 	return b.stream, nil
+}
+
+type blockingMultiRunContextUpdatingTool struct {
+	firstSent     chan struct{}
+	releaseSecond chan struct{}
+	secondSent    chan struct{}
+	releaseFinal  chan struct{}
+}
+
+func (b *blockingMultiRunContextUpdatingTool) ID() string { return "lookup" }
+
+func (b *blockingMultiRunContextUpdatingTool) Name() string { return "lookup" }
+
+func (b *blockingMultiRunContextUpdatingTool) Description() string { return "" }
+
+func (b *blockingMultiRunContextUpdatingTool) Parameters() map[string]any { return nil }
+
+func (b *blockingMultiRunContextUpdatingTool) Execute(ctx context.Context, args string) (string, error) {
+	runCtx := GetRunContext(ctx)
+	if runCtx != nil {
+		if err := runCtx.Update("searching"); err != nil {
+			return "", err
+		}
+	}
+	close(b.firstSent)
+	select {
+	case <-b.releaseSecond:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	if runCtx != nil {
+		if err := runCtx.Update("ranking"); err != nil {
+			return "", err
+		}
+	}
+	close(b.secondSent)
+	select {
+	case <-b.releaseFinal:
+		return "final result", nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
 }
 
 type fakePipelinePlaybackController struct {

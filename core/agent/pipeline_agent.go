@@ -963,8 +963,14 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 				if appendToolOutput(toolOut, &functionCalls, &functionCallOutputs) {
 					replyRequired = true
 				}
+				if toolOut.RunContextUpdate {
+					releasedByUpdate = true
+					break
+				}
 			}
-			pendingToolOutCh = nil
+			if !releasedByUpdate {
+				pendingToolOutCh = nil
+			}
 		}
 
 		if executedTools {
