@@ -365,6 +365,29 @@ func TestTTSConnectionPoolUsesReferenceMaxSessionDuration(t *testing.T) {
 	}
 }
 
+func TestInferenceTTSProviderCloseClosesActiveStreams(t *testing.T) {
+	conn := &recordingTTSConn{}
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if !conn.closed.Load() {
+		t.Fatal("websocket not closed")
+	}
+	if err := stream.PushText("hello"); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushText after provider Close error = %v, want closed stream error", err)
+	}
+}
+
 func TestInferenceTTSSessionCreateWriteErrorMatchesReference(t *testing.T) {
 	conn := &recordingTTSConn{writeErr: errors.New("write failed")}
 	provider := NewTTS("cartesia/sonic-3", "key", "secret")
