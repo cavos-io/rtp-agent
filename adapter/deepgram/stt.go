@@ -251,16 +251,18 @@ func (s *DeepgramSTT) Close() error {
 
 func (s *DeepgramSTT) UpdateOptions(opts ...DeepgramSTTOption) {
 	s.mu.Lock()
+	oldLanguage := s.language
 	for _, opt := range opts {
 		opt(s)
 	}
+	languageChanged := oldLanguage != s.language
 	streams := make([]*deepgramStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
 	}
 	s.mu.Unlock()
 	for _, stream := range streams {
-		stream.updateOptions()
+		stream.updateOptions(languageChanged)
 	}
 }
 
@@ -993,11 +995,14 @@ func (s *deepgramStream) Close() error {
 	return s.closeConnection()
 }
 
-func (s *deepgramStream) updateOptions() {
+func (s *deepgramStream) updateOptions(languageChanged bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.provider == nil {
 		return
+	}
+	if languageChanged {
+		s.language = s.provider.language
 	}
 	nextURL := buildDeepgramStreamURL(s.provider, s.language)
 	if nextURL != s.streamURL {

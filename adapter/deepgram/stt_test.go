@@ -956,10 +956,12 @@ func TestDeepgramSTTUpdateOptionsReconnectsActiveStream(t *testing.T) {
 	defer stream.Close()
 
 	firstURL := receiveDeepgramTestRequestURL(t, requests, "first websocket request")
+	assertDeepgramQuery(t, firstURL.Query(), "language", "en-US")
 	assertDeepgramQuery(t, firstURL.Query(), "interim_results", "true")
 	assertDeepgramQuery(t, firstURL.Query(), "endpointing", "25")
 
 	provider.UpdateOptions(
+		WithDeepgramSTTLanguage("id"),
 		WithDeepgramSTTInterimResults(false),
 		WithDeepgramSTTEndpointing(0),
 	)
@@ -973,6 +975,7 @@ func TestDeepgramSTTUpdateOptionsReconnectsActiveStream(t *testing.T) {
 	}
 
 	secondURL := receiveDeepgramTestRequestURL(t, requests, "updated websocket request")
+	assertDeepgramQuery(t, secondURL.Query(), "language", "id")
 	assertDeepgramQuery(t, secondURL.Query(), "interim_results", "false")
 	assertDeepgramQuery(t, secondURL.Query(), "endpointing", "false")
 	select {
