@@ -887,6 +887,63 @@ func TestAgentSessionUserTurnExceededEventsFanOutToSubscribers(t *testing.T) {
 	assertUserTurnExceededEvent(t, second, "second")
 }
 
+func TestAgentSessionUserTurnExceededDeliveredWhenChannelFull(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	userTurnEvents := session.userTurnExceededEvents()
+	for i := 0; i < cap(userTurnEvents); i++ {
+		userTurnEvents <- UserTurnExceededEvent{Transcript: fmt.Sprintf("prefill %d", i)}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.EmitUserTurnExceeded(UserTurnExceededEvent{Transcript: "too long"})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("EmitUserTurnExceeded returned while event channel was full; user turn event may be dropped")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	<-userTurnEvents
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("EmitUserTurnExceeded did not unblock after user turn event channel had capacity")
+	}
+
+	for {
+		select {
+		case got := <-userTurnEvents:
+			if got.Transcript == "too long" {
+				return
+			}
+		default:
+			t.Fatal("UserTurnExceededEvents did not receive user turn exceeded event")
+		}
+	}
+}
+
+func TestAgentSessionUserTurnExceededDoesNotBlockWithoutSubscriber(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	for i := 0; i < cap(session.userTurnExceededCh); i++ {
+		session.userTurnExceededCh <- UserTurnExceededEvent{Transcript: fmt.Sprintf("prefill %d", i)}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.EmitUserTurnExceeded(UserTurnExceededEvent{Transcript: "too long"})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("EmitUserTurnExceeded blocked on unclaimed user turn event channel")
+	}
+}
+
 func TestAgentSessionOverlappingSpeechEventsFanOutToSubscribers(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	first := session.OverlappingSpeechEvents()

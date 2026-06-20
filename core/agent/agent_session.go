@@ -1382,11 +1382,17 @@ func (s *AgentSession) EmitUserTurnExceeded(ev UserTurnExceededEvent) {
 	s.mu.Lock()
 	activity := s.activity
 	s.mu.Unlock()
-	for _, ch := range s.userTurnExceededSubscribers() {
+	primary, primarySubscribed, subscribers := s.userTurnExceededSubscribers()
+	if primarySubscribed {
+		primary <- ev
+	} else if primary != nil {
 		select {
-		case ch <- ev:
+		case primary <- ev:
 		default:
 		}
+	}
+	for _, ch := range subscribers {
+		ch <- ev
 	}
 	if activity != nil {
 		activity.OnUserTurnExceeded(ev)
@@ -1409,17 +1415,14 @@ func (s *AgentSession) userTurnExceededEvents() chan UserTurnExceededEvent {
 	return ch
 }
 
-func (s *AgentSession) userTurnExceededSubscribers() []chan UserTurnExceededEvent {
+func (s *AgentSession) userTurnExceededSubscribers() (chan UserTurnExceededEvent, bool, []chan UserTurnExceededEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	subs := make([]chan UserTurnExceededEvent, 0, len(s.userTurnExceededSubs)+1)
 	if s.userTurnExceededCh == nil {
 		s.userTurnExceededCh = make(chan UserTurnExceededEvent, 10)
 	}
-	subs = append(subs, s.userTurnExceededCh)
-	subs = append(subs, s.userTurnExceededSubs...)
-	return subs
+	return s.userTurnExceededCh, s.userTurnExceededSubd, append([]chan UserTurnExceededEvent(nil), s.userTurnExceededSubs...)
 }
 
 func (s *AgentSession) OverlappingSpeechEvents() <-chan OverlappingSpeechEvent {
