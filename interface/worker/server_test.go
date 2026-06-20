@@ -861,10 +861,9 @@ func TestUpdateOptionsPreservesExplicitZeroTimeoutValues(t *testing.T) {
 	})
 
 	err := server.UpdateOptions(WorkerOptions{
-		DrainTimeoutSecondsSet:             true,
-		SessionEndTimeoutSecondsSet:        true,
-		ShutdownProcessTimeoutSecondsSet:   true,
-		InitializeProcessTimeoutSecondsSet: true,
+		DrainTimeoutSecondsSet:           true,
+		SessionEndTimeoutSecondsSet:      true,
+		ShutdownProcessTimeoutSecondsSet: true,
 	})
 	if err != nil {
 		t.Fatalf("UpdateOptions() error = %v", err)
@@ -879,8 +878,8 @@ func TestUpdateOptionsPreservesExplicitZeroTimeoutValues(t *testing.T) {
 	if server.Options.ShutdownProcessTimeoutSeconds != 0 {
 		t.Fatalf("ShutdownProcessTimeoutSeconds = %v, want explicit zero", server.Options.ShutdownProcessTimeoutSeconds)
 	}
-	if server.Options.InitializeProcessTimeoutSeconds != 0 {
-		t.Fatalf("InitializeProcessTimeoutSeconds = %v, want explicit zero", server.Options.InitializeProcessTimeoutSeconds)
+	if server.Options.InitializeProcessTimeoutSeconds != 20 {
+		t.Fatalf("InitializeProcessTimeoutSeconds = %v, want unchanged 20", server.Options.InitializeProcessTimeoutSeconds)
 	}
 }
 
@@ -926,6 +925,24 @@ func TestUpdateOptionsResetsReferenceDefaultProcessTimeouts(t *testing.T) {
 	}
 	if !server.Options.ShutdownProcessTimeoutSecondsSet {
 		t.Fatal("ShutdownProcessTimeoutSecondsSet = false, want true after reference default reset")
+	}
+}
+
+func TestUpdateOptionsIgnoresInitializeProcessTimeout(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		InitializeProcessTimeoutSeconds:    20,
+		InitializeProcessTimeoutSecondsSet: true,
+	})
+
+	if err := server.UpdateOptions(WorkerOptions{
+		InitializeProcessTimeoutSeconds:    5,
+		InitializeProcessTimeoutSecondsSet: true,
+	}); err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	if server.Options.InitializeProcessTimeoutSeconds != 20 {
+		t.Fatalf("InitializeProcessTimeoutSeconds = %v, want unchanged 20", server.Options.InitializeProcessTimeoutSeconds)
 	}
 }
 

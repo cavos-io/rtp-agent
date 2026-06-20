@@ -707,10 +707,6 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 		current.ShutdownProcessTimeoutSeconds = defaultProcessTimeout
 		current.ShutdownProcessTimeoutSecondsSet = true
 	}
-	if next.InitializeProcessTimeoutSecondsSet || next.InitializeProcessTimeoutSeconds != 0 {
-		current.InitializeProcessTimeoutSeconds = next.InitializeProcessTimeoutSeconds
-		current.InitializeProcessTimeoutSecondsSet = true
-	}
 	if next.Permissions != nil {
 		current.Permissions = next.Permissions
 	}
