@@ -2243,6 +2243,34 @@ func TestMultimodalAgentInterruptedRealtimeMessageWaitsForPlaybackAfterContextCa
 	}
 }
 
+func TestMultimodalAgentInterruptedRealtimeMessageUsesEmptySynchronizedTranscript(t *testing.T) {
+	playback := &fakePipelinePlaybackController{
+		result: AudioPlaybackResult{
+			PlaybackPosition:       420 * time.Millisecond,
+			Interrupted:            true,
+			SynchronizedTranscript: "",
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(playback)
+	ma := &MultimodalAgent{
+		session: session,
+		ctx:     context.Background(),
+	}
+
+	forwarded, playbackResult := ma.forwardedRealtimeTextAfterInterruption(context.Background(), "heard words unheard words")
+
+	if playback.clearCalls != 1 {
+		t.Fatalf("ClearBuffer calls = %d, want 1 for interrupted realtime speech", playback.clearCalls)
+	}
+	if forwarded != "" {
+		t.Fatalf("forwarded text = %q, want empty synchronized transcript to suppress full fallback", forwarded)
+	}
+	if playbackResult.PlaybackPosition != 420*time.Millisecond {
+		t.Fatalf("playback position = %v, want 420ms", playbackResult.PlaybackPosition)
+	}
+}
+
 func TestMultimodalAgentRealtimeMessageSkipsCommitWhenPlayoutWaitFails(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	session.SetAudioPlaybackController(&fakePipelinePlaybackController{

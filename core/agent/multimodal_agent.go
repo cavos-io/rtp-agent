@@ -935,12 +935,6 @@ func (ma *MultimodalAgent) forwardedRealtimeTextAfterInterruption(ctx context.Co
 		logger.Logger.Warnw("failed to wait for interrupted realtime playback", err)
 		return "", AudioPlaybackResult{}
 	}
-	if ev.SynchronizedTranscript != "" {
-		if session.activity != nil {
-			session.activity.holdUserTranscriptsUntil(time.Now())
-		}
-		return ev.SynchronizedTranscript, ev
-	}
 	if ev.PlaybackPosition <= 0 {
 		if session.activity != nil {
 			session.activity.holdUserTranscriptsUntil(time.Now())
@@ -950,7 +944,7 @@ func (ma *MultimodalAgent) forwardedRealtimeTextAfterInterruption(ctx context.Co
 	if session.activity != nil {
 		session.activity.holdUserTranscriptsUntil(time.Now())
 	}
-	return generatedText, ev
+	return ev.SynchronizedTranscript, ev
 }
 
 func (ma *MultimodalAgent) truncateInterruptedRealtimeMessage(messageID string, modalities []string, transcript string, playback AudioPlaybackResult) {
