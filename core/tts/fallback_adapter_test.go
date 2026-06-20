@@ -122,6 +122,42 @@ func TestFallbackAdapterCloseCancelsChunkedRecovery(t *testing.T) {
 	}
 }
 
+func TestFallbackSynthesizeStreamIgnoresInputAfterCloseLikeReference(t *testing.T) {
+	providerStream := &metadataSynthesizeStream{}
+	adapter := NewFallbackAdapter([]TTS{&metadataTTS{
+		label:        "primary",
+		sampleRate:   24000,
+		numChannels:  1,
+		capabilities: TTSCapabilities{Streaming: true},
+		stream:       providerStream,
+	}})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	if err := stream.PushText("late"); err != nil {
+		t.Fatalf("PushText after close error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after close error = %v", err)
+	}
+	ending, ok := stream.(inputEndingSynthesizeStream)
+	if !ok {
+		t.Fatal("fallback synthesize stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput after close error = %v", err)
+	}
+	if got := providerStream.calls; len(got) != 0 {
+		t.Fatalf("provider stream calls after close = %#v, want none", got)
+	}
+}
+
 func TestFallbackAdapterEmitsAvailabilityChanges(t *testing.T) {
 	streamErr := errors.New("primary unavailable")
 	primary := &metadataTTS{

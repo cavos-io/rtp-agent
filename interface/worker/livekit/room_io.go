@@ -308,6 +308,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	rio.startSessionCloseListener()
 
 	if !opts.DisableAudioOutput {
+		rio.audioSubscribed = make(chan struct{})
 		session.SetAudioOutputController(rio)
 		session.SetAudioPlaybackController(roomIOPlaybackController{rio: rio})
 		session.SetUserAwayTimerGate(rio.userAwayTimerBlocked)
@@ -1041,18 +1042,23 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 	if publication != nil {
 		trackID = publication.SID()
 	}
-	subscribed := make(chan struct{})
+	rio.setAudioOutputTrack(track, trackID, publication)
+	return rio.waitForAudioSubscription(ctx)
+}
+
+func (rio *RoomIO) setAudioOutputTrack(track *lksdk.LocalTrack, trackID string, publication *lksdk.LocalTrackPublication) {
 	rio.audioSubOnce = sync.Once{}
 	rio.mu.Lock()
+	if rio.audioSubscribed == nil {
+		rio.audioSubscribed = make(chan struct{})
+	}
 	rio.audioTrack = track
 	rio.audioTrackID = trackID
 	rio.audioPublication = publication
-	rio.audioSubscribed = subscribed
 	rio.audioOutputDiagnostics.TrackID = trackID
 	rio.audioOutputDiagnostics.TrackPublished = publication != nil
 	rio.audioOutputDiagnostics.TrackSubscribed = false
 	rio.mu.Unlock()
-	return rio.waitForAudioSubscription(ctx)
 }
 
 func (rio *RoomIO) audioTrackPublicationOptions() *lksdk.TrackPublicationOptions {
@@ -1659,6 +1665,13 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 	if rio == nil || rio.Options.DisableAudioOutput || rio.isAudioDisabled() {
 		return nil
 	}
+	if err := rio.waitForAudioSubscriptionReady(ctx); err != nil {
+		return err
+	}
+	if rio.isClosed() {
+		return nil
+	}
+
 	rio.mu.Lock()
 	track := rio.audioTrack
 	encoder := rio.encoder
@@ -1670,13 +1683,6 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 			rio.Recorder.RecordOutput(frame)
 		}
 		rio.recordAudioOutputError(errors.New("room audio output track not started"))
-		return nil
-	}
-
-	if err := rio.waitForAudioSubscriptionReady(ctx); err != nil {
-		return err
-	}
-	if rio.isClosed() {
 		return nil
 	}
 
@@ -1770,9 +1776,10 @@ func (rio *RoomIO) waitForAudioSubscriptionReady(ctx context.Context) error {
 		return nil
 	case <-timer.C:
 		logger.Logger.Warnw("room audio output publish subscription wait timed out", nil, "timeout", timeout)
-		rio.mu.Lock()
-		rio.audioSubscribed = nil
-		rio.mu.Unlock()
+		rio.releaseAudioSubscriptionFallback(ch)
+		if rio.AgentSession != nil {
+			rio.AgentSession.RefreshUserAwayTimer()
+		}
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -1808,7 +1815,7 @@ func (rio *RoomIO) userAwayTimerBlocked() bool {
 	ch := rio.audioSubscribed
 	rio.mu.Unlock()
 	if ch == nil {
-		return true
+		return false
 	}
 	select {
 	case <-ch:
@@ -1836,9 +1843,10 @@ func (rio *RoomIO) waitForAudioSubscription(ctx context.Context) error {
 		return nil
 	case <-timer.C:
 		logger.Logger.Warnw("room audio output subscription wait timed out", nil, "timeout", timeout)
-		rio.mu.Lock()
-		rio.audioSubscribed = nil
-		rio.mu.Unlock()
+		rio.releaseAudioSubscriptionFallback(ch)
+		if rio.AgentSession != nil {
+			rio.AgentSession.RefreshUserAwayTimer()
+		}
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -1871,6 +1879,20 @@ func (rio *RoomIO) releaseAudioSubscriptionWaiters() {
 	if ch == nil {
 		return
 	}
+	rio.audioSubOnce.Do(func() {
+		close(ch)
+	})
+}
+
+func (rio *RoomIO) releaseAudioSubscriptionFallback(ch chan struct{}) {
+	if rio == nil || ch == nil {
+		return
+	}
+	rio.mu.Lock()
+	if rio.audioSubscribed == ch {
+		rio.audioSubscribed = nil
+	}
+	rio.mu.Unlock()
 	rio.audioSubOnce.Do(func() {
 		close(ch)
 	})
@@ -1992,6 +2014,7 @@ func (rio *RoomIO) Close() error {
 	deleteRoomDone := rio.deleteRoomDone
 	rio.mu.Unlock()
 	rio.releaseAudioSubscriptionWaiters()
+	rio.finishPlayback(true, "")
 
 	if deleteRoomDone != nil {
 		select {

@@ -1215,6 +1215,53 @@ func TestPipelineAgentMarksSpeakingAfterFirstAudioFrame(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentCanceledTTSForwardingClearsPlayback(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	playback := &fakePipelinePlaybackController{}
+	session.SetAudioPlaybackController(playback)
+	agent := NewPipelineAgent(nil, nil, nil, nil, llm.NewChatContext())
+	ctx, cancel := context.WithCancel(context.Background())
+	ttsGen := &TTSGenerationData{
+		AudioCh:     make(chan *model.AudioFrame, 2),
+		TimedTextCh: make(chan tts.TimedString),
+	}
+	ttsGen.AudioCh <- &model.AudioFrame{
+		Data:              []byte{1},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+	ttsGen.AudioCh <- &model.AudioFrame{
+		Data:              []byte{2},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+	close(ttsGen.AudioCh)
+	close(ttsGen.TimedTextCh)
+	transcriptSync := NewTranscriptSynchronizer(0)
+	defer transcriptSync.Close()
+	done := closedChannel()
+	var published int
+	agent.PublishAudio = func(context.Context, *model.AudioFrame) error {
+		published++
+		cancel()
+		return nil
+	}
+
+	_, err := agent.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, done, nil)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("playTTSGenerationWithTranscript error = %v, want context.Canceled", err)
+	}
+	if published != 1 {
+		t.Fatalf("published frames = %d, want 1 before context cancellation", published)
+	}
+	if playback.clearCalls != 1 {
+		t.Fatalf("ClearBuffer calls = %d, want 1 after canceled TTS forwarding", playback.clearCalls)
+	}
+}
+
 func TestPipelineAgentSayReturnsDirectSpeechToListeningWithoutIdle(t *testing.T) {
 	baseAgent := NewAgent("test")
 	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
@@ -2093,17 +2140,22 @@ func TestPipelineAgentFlushInputTranscriptionPushesSilenceAndFlushesSTT(t *testi
 	if len(stream.frames) != 3 {
 		t.Fatalf("silence frames = %d, want 3", len(stream.frames))
 	}
-	wantSamples := []uint32{200, 200, 50}
+	wantSamples := []uint32{200, 200, 200}
+	var totalSamples uint32
 	for i, frame := range stream.frames {
 		if frame.SampleRate != 1000 || frame.NumChannels != 1 || frame.SamplesPerChannel != wantSamples[i] {
 			t.Fatalf("silence frame %d shape = rate %d channels %d samples %d, want 1000/1/%d",
 				i, frame.SampleRate, frame.NumChannels, frame.SamplesPerChannel, wantSamples[i])
 		}
+		totalSamples += frame.SamplesPerChannel
 		for _, sample := range frame.Data {
 			if sample != 0 {
 				t.Fatalf("silence frame %d contains non-zero data byte %d", i, sample)
 			}
 		}
+	}
+	if totalSamples != 600 {
+		t.Fatalf("total silence samples = %d, want 600", totalSamples)
 	}
 }
 
@@ -2141,6 +2193,35 @@ func TestPipelineAgentClearInputTranscriptionReplacesSTTStream(t *testing.T) {
 	}
 	if len(second.frames) != 1 {
 		t.Fatalf("new stream frames = %d, want 1 after clear", len(second.frames))
+	}
+}
+
+func TestPipelineAgentClearInputTranscriptionReplacesSTTStreamWhenOldCloseFails(t *testing.T) {
+	closeErr := errors.New("old stream close failed")
+	first := &fakePipelineRecognizeStream{
+		closedCh: make(chan struct{}),
+		closeErr: closeErr,
+	}
+	second := &fakePipelineRecognizeStream{}
+	sttObj := &queuedPipelineSTT{streams: []stt.RecognizeStream{second}}
+	pipeline := NewPipelineAgent(nil, sttObj, nil, nil, nil)
+	pipeline.sttStream = first
+	pipeline.ctx = context.Background()
+
+	if err := pipeline.ClearInputTranscription(); err != nil {
+		t.Fatalf("ClearInputTranscription error = %v, want nil despite old close failure", err)
+	}
+
+	select {
+	case <-first.closedCh:
+	case <-time.After(time.Second):
+		t.Fatal("old STT stream close was not attempted")
+	}
+	if pipeline.sttStream != second {
+		t.Fatalf("pipeline sttStream = %#v, want replacement stream", pipeline.sttStream)
+	}
+	if len(sttObj.streams) != 0 {
+		t.Fatalf("queued streams = %d, want replacement stream consumed", len(sttObj.streams))
 	}
 }
 
@@ -3011,6 +3092,8 @@ func TestPipelineAgentEmitsTTSErrorEventForSpeechStreamFailure(t *testing.T) {
 
 func TestPipelineAgentEmitsTTSErrorEventForPublishAudioFailure(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	playback := &fakePipelinePlaybackController{}
+	session.SetAudioPlaybackController(playback)
 	cause := errors.New("publish audio failed")
 	ttsSource := &fakePipelineTTS{stream: &fakePipelineTTSStream{
 		frames: []*model.AudioFrame{{
@@ -3048,6 +3131,9 @@ func TestPipelineAgentEmitsTTSErrorEventForPublishAudioFailure(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive publish audio error")
+	}
+	if playback.flushCalls != 1 {
+		t.Fatalf("Flush calls = %d, want 1 after publish audio failure", playback.flushCalls)
 	}
 }
 
@@ -4144,6 +4230,29 @@ func TestPipelineAgentGeneratedReplyTTSErrorSkipsAssistantCommit(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentSynthesizeSpeechStopsTranscriptForwarderAfterTTSStartupError(t *testing.T) {
+	cause := errors.New("tts stream startup failed")
+	chatCtx := llm.NewChatContext()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{streamErr: cause}, chatCtx)
+	textCh := make(chan string)
+
+	gen, err := agent.synthesizeSpeech(context.Background(), session, textCh, NewSpeechHandle(true, DefaultInputDetails()))
+	if gen != nil {
+		t.Fatalf("synthesizeSpeech generation = %#v, want nil on TTS startup error", gen)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("synthesizeSpeech error = %v, want %v", err, cause)
+	}
+
+	select {
+	case textCh <- "unheard text":
+		t.Fatal("transcript forwarder consumed text after TTS startup error")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(textCh)
+}
+
 func TestPipelineAgentGeneratedReplyInterruptSuppressesCanceledTTSError(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -4681,6 +4790,60 @@ func TestPipelineAgentReplySplitsTTSOnLLMFlush(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentSegmentedTTSCancelFinalizesActiveTranscript(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	events := session.AgentOutputTranscribedEvents()
+	ttsStream := &fakePipelineTTSStream{pushed: make(chan struct{})}
+	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{stream: ttsStream}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	textCh := make(chan LLMTextEvent, 1)
+	textCh <- LLMTextEvent{Text: "partial answer"}
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	done := make(chan struct{})
+	var gen *TTSGenerationData
+	var err error
+	go func() {
+		defer close(done)
+		gen, err = agent.synthesizeSegmentedSpeech(ctx, session, textCh, speech)
+	}()
+
+	select {
+	case <-ttsStream.pushed:
+	case <-time.After(time.Second):
+		t.Fatal("TTS stream did not receive active segment text")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("synthesizeSegmentedSpeech did not return after context cancellation")
+	}
+	if gen == nil {
+		t.Fatal("synthesizeSegmentedSpeech generation = nil, want active generation returned")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("synthesizeSegmentedSpeech error = %v, want context.Canceled", err)
+	}
+
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case ev := <-events:
+			if ev.Transcript == "partial answer" && ev.IsFinal {
+				return
+			}
+		case <-deadline:
+			t.Fatal("AgentOutputTranscribedEvents did not receive final transcript after cancellation")
+		}
+	}
+}
+
 func TestPipelineAgentPreemptiveTTSDoesNotCollapseLLMFlushSegments(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -5038,6 +5201,8 @@ type fakePipelineTTSStream struct {
 	timedTranscripts [][]tts.TimedString
 	next             int
 	err              error
+	pushed           chan struct{}
+	pushOnce         sync.Once
 }
 
 type blockingPipelineTTSStream struct {
@@ -5227,6 +5392,9 @@ func (f *fakePipelinePlaybackController) WaitForPlayout(ctx context.Context) (Au
 
 func (f *fakePipelineTTSStream) PushText(text string) error {
 	_, _ = f.text.WriteString(text)
+	if f.pushed != nil {
+		f.pushOnce.Do(func() { close(f.pushed) })
+	}
 	return nil
 }
 
@@ -5589,6 +5757,7 @@ type fakePipelineRecognizeStream struct {
 	closedCh   chan struct{}
 	flushCount int
 	closeOnce  sync.Once
+	closeErr   error
 }
 
 func (f *fakePipelineRecognizeStream) PushFrame(frame *model.AudioFrame) error {
@@ -5608,7 +5777,7 @@ func (f *fakePipelineRecognizeStream) Close() error {
 	if f.closedCh != nil {
 		f.closeOnce.Do(func() { close(f.closedCh) })
 	}
-	return nil
+	return f.closeErr
 }
 
 func (f *fakePipelineRecognizeStream) Next() (*stt.SpeechEvent, error) {

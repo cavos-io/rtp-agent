@@ -138,6 +138,32 @@ func TestSentenceStreamPacerEndsInputWhenSupported(t *testing.T) {
 	}
 }
 
+func TestSentenceStreamPacerIgnoresInputAfterCloseLikeReference(t *testing.T) {
+	underlying := newEndInputPacerStream()
+	pacer := NewSentenceStreamPacerWithOptions(context.Background(), underlying, SentenceStreamPacerOptions{})
+
+	if err := pacer.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	callsAfterClose := underlying.calls()
+	if err := pacer.PushText("late"); err != nil {
+		t.Fatalf("PushText after close error = %v", err)
+	}
+	if err := pacer.Flush(); err != nil {
+		t.Fatalf("Flush after close error = %v", err)
+	}
+	ending, ok := any(pacer).(inputEndingSynthesizeStream)
+	if !ok {
+		t.Fatal("SentenceStreamPacer does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput after close error = %v", err)
+	}
+	if got := underlying.calls(); !reflect.DeepEqual(got, callsAfterClose) {
+		t.Fatalf("underlying calls after late input = %#v, want unchanged %#v", got, callsAfterClose)
+	}
+}
+
 func TestSentenceStreamPacerReturnsEOFWhenUnderlyingCompletes(t *testing.T) {
 	underlying := newEOFAfterOnePacerStream()
 	pacer := NewSentenceStreamPacerWithOptions(context.Background(), underlying, SentenceStreamPacerOptions{})

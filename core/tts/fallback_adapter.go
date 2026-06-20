@@ -1348,7 +1348,7 @@ func (s *fallbackSynthesizeStream) PushText(text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("stream closed")
+		return nil
 	}
 	if s.inputDone {
 		return nil
@@ -1365,7 +1365,7 @@ func (s *fallbackSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("stream closed")
+		return nil
 	}
 	if s.inputDone {
 		return nil
@@ -1381,7 +1381,7 @@ func (s *fallbackSynthesizeStream) EndInput() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("stream closed")
+		return nil
 	}
 	if s.inputDone {
 		return nil

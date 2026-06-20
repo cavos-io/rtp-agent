@@ -108,7 +108,7 @@ func performLLMInference(
 
 		startTime := time.Now()
 		for {
-			chunk, err := stream.Next()
+			chunk, err := nextLLMChunk(ctx, stream)
 			if err != nil {
 				if err != io.EOF {
 					data.StreamErr = err
@@ -156,6 +156,38 @@ func performLLMInference(
 	}()
 
 	return data, nil
+}
+
+type llmChunkResult struct {
+	chunk *llm.ChatChunk
+	err   error
+}
+
+func nextLLMChunk(ctx context.Context, stream llm.LLMStream) (*llm.ChatChunk, error) {
+	if ctx.Err() != nil {
+		return stream.Next()
+	}
+
+	resultCh := make(chan llmChunkResult, 1)
+	go func() {
+		chunk, err := stream.Next()
+		resultCh <- llmChunkResult{chunk: chunk, err: err}
+	}()
+
+	select {
+	case result := <-resultCh:
+		return result.chunk, result.err
+	case <-ctx.Done():
+		timer := time.NewTimer(time.Millisecond)
+		defer timer.Stop()
+		select {
+		case result := <-resultCh:
+			return result.chunk, result.err
+		case <-timer.C:
+		}
+		_ = stream.Close()
+		return nil, ctx.Err()
+	}
 }
 
 func llmChatTraceEvents(chatCtx *llm.ChatContext) []telemetry.ChatTraceEvent {

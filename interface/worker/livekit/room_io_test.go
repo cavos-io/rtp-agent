@@ -389,6 +389,47 @@ func TestRoomIOBlocksUserAwayUntilAudioSubscribed(t *testing.T) {
 	}
 }
 
+func TestRoomIOBlocksUserAwayBeforeAudioOutputStarts(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{UserAwayTimeout: 0.01})
+	_ = NewRoomIO(nil, session, RoomOptions{})
+
+	session.UpdateAgentState(agent.AgentStateListening)
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		t.Fatalf("unexpected user state before audio output subscription = %q -> %q", ev.OldState, ev.NewState)
+	case <-time.After(40 * time.Millisecond):
+	}
+}
+
+func TestRoomIOAudioSubscriptionTimeoutReleasesUserAwayGate(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{UserAwayTimeout: 0.01})
+	rio := NewRoomIO(nil, session, RoomOptions{AudioSubscriptionTimeout: 20 * time.Millisecond})
+	rio.audioSubscribed = make(chan struct{})
+	rio.audioSubOnce = sync.Once{}
+
+	session.UpdateAgentState(agent.AgentStateListening)
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		t.Fatalf("unexpected user state before subscription timeout = %q -> %q", ev.OldState, ev.NewState)
+	case <-time.After(15 * time.Millisecond):
+	}
+
+	if err := rio.waitForAudioSubscription(context.Background()); err != nil {
+		t.Fatalf("waitForAudioSubscription error = %v", err)
+	}
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		if ev.OldState != agent.UserStateListening || ev.NewState != agent.UserStateAway {
+			t.Fatalf("event states = %q -> %q, want listening -> away after subscription timeout", ev.OldState, ev.NewState)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserStateChangedCh did not receive away event after subscription timeout")
+	}
+}
+
 func TestRoomIOAudioSubscriptionWaitFallsBackAfterTimeout(t *testing.T) {
 	rio := &RoomIO{
 		Options: RoomOptions{
@@ -446,6 +487,93 @@ func TestRoomIOPublishAudioWaitsForSubscriptionBeforeEncoding(t *testing.T) {
 	}
 	if len(encoder.calls) == 0 {
 		t.Fatal("encoder was not called after audio subscription")
+	}
+}
+
+func TestRoomIOPublishAudioPendingWaiterSurvivesAudioStart(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	rio := NewRoomIO(nil, session, RoomOptions{})
+	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
+	rio.mu.Lock()
+	pending := rio.audioSubscribed
+	rio.audioTrack = newRoomIOTestAudioTrack(t)
+	rio.encoder = encoder
+	rio.mu.Unlock()
+
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- rio.PublishAudio(context.Background(), frame)
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("PublishAudio returned before subscription ready: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	rio.setAudioOutputTrack(newRoomIOTestAudioTrack(t), "", nil)
+	rio.markAudioSubscribed()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("PublishAudio error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("PublishAudio waiter did not unblock after audio start subscription")
+	}
+	if pending == nil {
+		t.Fatal("pending subscription channel was nil")
+	}
+	if len(encoder.calls) != 1 {
+		t.Fatalf("encoder calls = %d, want 1 after subscription", len(encoder.calls))
+	}
+}
+
+func TestRoomIOPublishAudioBeforeTrackStartWaitsForSubscription(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	rio := NewRoomIO(nil, session, RoomOptions{})
+	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
+	rio.mu.Lock()
+	rio.encoder = encoder
+	rio.mu.Unlock()
+
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- rio.PublishAudio(context.Background(), frame)
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("PublishAudio returned before audio output track start: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	rio.setAudioOutputTrack(newRoomIOTestAudioTrack(t), "", nil)
+	rio.markAudioSubscribed()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("PublishAudio error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("PublishAudio did not unblock after audio output track start")
+	}
+	if len(encoder.calls) != 1 {
+		t.Fatalf("encoder calls = %d, want 1 after track start subscription", len(encoder.calls))
 	}
 }
 
@@ -548,6 +676,98 @@ func TestRoomIOPublishAudioSubscriptionTimeoutFallsBackOnce(t *testing.T) {
 	}
 }
 
+func TestRoomIOAudioSubscriptionTimeoutReleasesConcurrentPublishWaiters(t *testing.T) {
+	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
+	rio := &RoomIO{
+		Options: RoomOptions{
+			AudioSubscriptionTimeout: 40 * time.Millisecond,
+		},
+		audioTrack:      newRoomIOTestAudioTrack(t),
+		encoder:         encoder,
+		audioSubscribed: make(chan struct{}),
+	}
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- rio.waitForAudioSubscription(context.Background())
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+	publishDone := make(chan error, 1)
+	go func() {
+		publishDone <- rio.PublishAudio(context.Background(), frame)
+	}()
+
+	select {
+	case err := <-waitDone:
+		if err != nil {
+			t.Fatalf("waitForAudioSubscription error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waitForAudioSubscription did not return after timeout fallback")
+	}
+
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatalf("PublishAudio error = %v", err)
+		}
+	case <-time.After(10 * time.Millisecond):
+		t.Fatal("PublishAudio waiter did not release with subscription timeout fallback")
+	}
+	if len(encoder.calls) == 0 {
+		t.Fatal("encoder was not called after shared subscription timeout fallback")
+	}
+}
+
+func TestRoomIOPublishAudioSubscriptionTimeoutReleasesUserAwayGate(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{UserAwayTimeout: 0.01})
+	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
+	rio := &RoomIO{
+		AgentSession: session,
+		Options: RoomOptions{
+			AudioSubscriptionTimeout: 20 * time.Millisecond,
+		},
+		audioTrack:      newRoomIOTestAudioTrack(t),
+		encoder:         encoder,
+		audioSubscribed: make(chan struct{}),
+	}
+	session.SetUserAwayTimerGate(rio.userAwayTimerBlocked)
+	session.UpdateAgentState(agent.AgentStateListening)
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		t.Fatalf("unexpected user state before publish fallback = %q -> %q", ev.OldState, ev.NewState)
+	case <-time.After(15 * time.Millisecond):
+	}
+
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		if ev.OldState != agent.UserStateListening || ev.NewState != agent.UserStateAway {
+			t.Fatalf("event states = %q -> %q, want listening -> away after publish subscription timeout", ev.OldState, ev.NewState)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserStateChangedCh did not receive away event after publish subscription timeout")
+	}
+}
+
 func TestRoomIOPlaybackEventsFollowCaptureAndFlush(t *testing.T) {
 	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
 	var started []PlaybackStartedEvent
@@ -612,6 +832,46 @@ func TestRoomIOPlaybackEventsFollowCaptureAndFlush(t *testing.T) {
 	}
 	if finished[0].Interrupted || finished[0].PlaybackPosition != 20*time.Millisecond {
 		t.Fatalf("playback_finished event = %#v, want non-interrupted 20ms", finished[0])
+	}
+}
+
+func TestRoomIOCloseUnblocksActivePlayoutWait(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+	done := make(chan PlaybackFinishedEvent, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		ev, err := rio.WaitForPlayout(context.Background())
+		if err != nil {
+			errCh <- err
+			return
+		}
+		done <- ev
+	}()
+	waitForPlaybackWaiters(t, rio, 1)
+
+	if err := rio.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("WaitForPlayout error after Close = %v", err)
+	case ev := <-done:
+		if !ev.Interrupted {
+			t.Fatal("PlaybackFinishedEvent.Interrupted = false, want true after Close")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitForPlayout did not unblock after Close")
 	}
 }
 
