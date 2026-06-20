@@ -3788,6 +3788,26 @@ func TestRunDelegatesAgoraTransportToRunFunc(t *testing.T) {
 	}
 }
 
+func TestRunDelegatesAgoraTransportWithNormalizedContext(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		Transport: WorkerTransportAgora,
+	})
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+	server.SetTransportRunFunc(func(ctx context.Context) error {
+		if ctx == nil {
+			return errors.New("transport runner received nil context")
+		}
+		return ctx.Err()
+	})
+
+	var ctx context.Context
+	if err := server.Run(ctx); err != nil {
+		t.Fatalf("Run(nil) error = %v, want nil from background context", err)
+	}
+}
+
 func TestRunDelegatesAgoraTransportWithoutLiveKitEnvExport(t *testing.T) {
 	t.Setenv("LIVEKIT_URL", "wss://existing.livekit.example")
 	t.Setenv("LIVEKIT_API_KEY", "existing-key")
