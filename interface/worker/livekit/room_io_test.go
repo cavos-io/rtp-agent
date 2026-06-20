@@ -2013,9 +2013,18 @@ func TestRoomIOPublishesAgentOutputTranscriptionStream(t *testing.T) {
 
 func TestRoomIOReusesAgentTranscriptionSegmentUntilFinal(t *testing.T) {
 	published := make(chan roomIOPublishedText, 3)
+	packets := make(chan *livekit.Transcription, 3)
 	rio := &RoomIO{
+		audioTrackID: "TR_agent_audio",
 		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
 			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+		transcriptionParticipantIdentity: func() string {
+			return "agent-local"
+		},
+		transcriptionPacketPublisher: func(transcription *livekit.Transcription) error {
+			packets <- transcription
+			return nil
 		},
 	}
 
@@ -2052,11 +2061,21 @@ func TestRoomIOReusesAgentTranscriptionSegmentUntilFinal(t *testing.T) {
 	if final.opts.Attributes[RoomIOTranscriptionFinalAttribute] != "true" {
 		t.Fatalf("final attribute = %q, want true", final.opts.Attributes[RoomIOTranscriptionFinalAttribute])
 	}
-	if second.text != "Halo, ada yang bisa saya bantu?" {
-		t.Fatalf("second text = %q, want accumulated utterance", second.text)
+	if second.text != " ada yang bisa saya bantu?" {
+		t.Fatalf("second text = %q, want reference delta chunk", second.text)
 	}
 	if final.text != "Halo, ada yang bisa saya bantu?" {
 		t.Fatalf("final text = %q, want full utterance", final.text)
+	}
+
+	_ = receiveTranscriptionPacket(t, packets, "first legacy agent packet")
+	secondPacket := receiveTranscriptionPacket(t, packets, "second legacy agent packet")
+	finalPacket := receiveTranscriptionPacket(t, packets, "final legacy agent packet")
+	if len(secondPacket.Segments) != 1 || secondPacket.Segments[0].Text != "Halo, ada yang bisa saya bantu?" {
+		t.Fatalf("second legacy packet = %#v, want accumulated utterance", secondPacket)
+	}
+	if len(finalPacket.Segments) != 1 || finalPacket.Segments[0].Text != "Halo, ada yang bisa saya bantu?" || !finalPacket.Segments[0].Final {
+		t.Fatalf("final legacy packet = %#v, want final full utterance", finalPacket)
 	}
 }
 
