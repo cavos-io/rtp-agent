@@ -977,6 +977,41 @@ func TestRoomIOPublishAudioResamplesPCMToOpusClockRate(t *testing.T) {
 	}
 }
 
+func TestRoomIOPublishAudioDownmixesStereoToMonoOutput(t *testing.T) {
+	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
+	rio := &RoomIO{
+		audioTrack: newRoomIOTestAudioTrack(t),
+		encoder:    encoder,
+	}
+	frame := &model.AudioFrame{
+		Data: []byte{
+			0x00, 0x00, 0x02, 0x00,
+			0x04, 0x00, 0x06, 0x00,
+		},
+		SampleRate:        roomIOOpusClockRate,
+		NumChannels:       2,
+		SamplesPerChannel: 2,
+	}
+
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+
+	if got, want := len(encoder.pcm), int(roomIOValidOpusSamples(2))*2; got != want {
+		t.Fatalf("encoder PCM length = %d, want %d bytes for mono Opus frame", got, want)
+	}
+	if got := int16(encoder.pcm[0]) | int16(encoder.pcm[1])<<8; got != 1 {
+		t.Fatalf("first downmixed sample = %d, want average of stereo pair", got)
+	}
+	if got := int16(encoder.pcm[2]) | int16(encoder.pcm[3])<<8; got != 5 {
+		t.Fatalf("second downmixed sample = %d, want average of stereo pair", got)
+	}
+	stats := rio.AudioOutputDiagnostics()
+	if stats.LastPublishedChannels != 1 {
+		t.Fatalf("LastPublishedChannels = %d, want mono RoomIO output", stats.LastPublishedChannels)
+	}
+}
+
 func TestRoomIOPublishAudioChunksLongPCMForOpus(t *testing.T) {
 	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}, maxPCMBytes: 960 * 2}
 	rio := &RoomIO{
