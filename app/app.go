@@ -3423,6 +3423,33 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 	return googleCfg
 }
 
+func liveKitTTSOptionsFromConfig(cfg AppConfig) ([]adapterlivekit.TTSOption, error) {
+	ttsOpts := []adapterlivekit.TTSOption{}
+	tokenizer, err := ttsSentenceTokenizer(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if tokenizer != nil {
+		ttsOpts = append(ttsOpts, adapterlivekit.WithSentenceTokenizer(tokenizer))
+	}
+	if cfg.TTSVoice != "" {
+		ttsOpts = append(ttsOpts, adapterlivekit.WithTTSVoice(cfg.TTSVoice))
+	}
+	if cfg.TTSLanguage != "" {
+		ttsOpts = append(ttsOpts, adapterlivekit.WithTTSLanguage(cfg.TTSLanguage))
+	}
+	if cfg.TTSEncoding != "" {
+		ttsOpts = append(ttsOpts, adapterlivekit.WithTTSEncoding(cfg.TTSEncoding))
+	}
+	if cfg.TTSSampleRate != nil {
+		ttsOpts = append(ttsOpts, adapterlivekit.WithTTSSampleRate(*cfg.TTSSampleRate))
+	}
+	if len(cfg.TTSModelOptions) > 0 {
+		ttsOpts = append(ttsOpts, adapterlivekit.WithTTSExtraKwargs(cfg.TTSModelOptions))
+	}
+	return ttsOpts, nil
+}
+
 func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error) {
 	switch normalizeProvider(provider) {
 	case providerOpenAI:
@@ -4235,13 +4262,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		return telnyx.NewTelnyxTTS(cfg.TelnyxAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerLiveKit:
-		ttsOpts := []adapterlivekit.TTSOption{}
-		tokenizer, err := ttsSentenceTokenizer(cfg)
+		ttsOpts, err := liveKitTTSOptionsFromConfig(cfg)
 		if err != nil {
 			return nil, err
-		}
-		if tokenizer != nil {
-			ttsOpts = append(ttsOpts, adapterlivekit.WithSentenceTokenizer(tokenizer))
 		}
 		return adapterlivekit.NewTTS(cfg.TTSModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret, ttsOpts...), nil
 	default:
@@ -6130,13 +6153,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = provider
 	case providerLiveKit:
-		ttsOpts := []adapterlivekit.TTSOption{}
-		tokenizer, err := ttsSentenceTokenizer(cfg)
+		ttsOpts, err := liveKitTTSOptionsFromConfig(cfg)
 		if err != nil {
 			return nil, err
-		}
-		if tokenizer != nil {
-			ttsOpts = append(ttsOpts, adapterlivekit.WithSentenceTokenizer(tokenizer))
 		}
 		a.TTS = adapterlivekit.NewTTS(cfg.TTSModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret, ttsOpts...)
 	default:

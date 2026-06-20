@@ -12006,6 +12006,9 @@ func TestDefaultConfigFromEnvSelectsLiveKitInferenceLLM(t *testing.T) {
 	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "8000")
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "livekit")
 	t.Setenv("RTP_AGENT_TTS_MODEL", "cartesia/sonic-3")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "id")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "indonesian-voice")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "16000")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -12037,6 +12040,16 @@ func TestDefaultConfigFromEnvSelectsLiveKitInferenceLLM(t *testing.T) {
 	}
 	if got := app.Session.TTS.Label(); got != "livekit.TTS" {
 		t.Fatalf("TTS label = %q, want livekit.TTS", got)
+	}
+	ttsValue := reflect.ValueOf(app.Session.TTS).Elem()
+	if got := ttsValue.FieldByName("language").String(); got != "id" {
+		t.Fatalf("LiveKit TTS language = %q, want env language id", got)
+	}
+	if got := ttsValue.FieldByName("voice").String(); got != "indonesian-voice" {
+		t.Fatalf("LiveKit TTS voice = %q, want env voice", got)
+	}
+	if got := int(ttsValue.FieldByName("sampleRate").Int()); got != 16000 {
+		t.Fatalf("LiveKit TTS sample rate = %d, want env sample rate 16000", got)
 	}
 }
 
