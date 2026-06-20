@@ -599,6 +599,45 @@ func TestAgentSessionSpeechCreatedEventsFanOutToSubscribers(t *testing.T) {
 	assertSpeechCreatedEvent(t, second, speech, "second")
 }
 
+func TestAgentSessionSpeechCreatedDeliveredWhenChannelFull(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	speechEvents := session.speechCreatedEvents()
+	for i := 0; i < cap(speechEvents); i++ {
+		speechEvents <- SpeechCreatedEvent{Source: "prefill"}
+	}
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	done := make(chan struct{})
+	go func() {
+		session.EmitSpeechCreated(SpeechCreatedEvent{SpeechHandle: speech, Source: "say"})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("EmitSpeechCreated returned while event channel was full; speech_created may be dropped")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	<-speechEvents
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("EmitSpeechCreated did not unblock after speech event channel had capacity")
+	}
+
+	for {
+		select {
+		case ev := <-speechEvents:
+			if ev.SpeechHandle == speech && ev.Source == "say" {
+				return
+			}
+		default:
+			t.Fatal("SpeechCreatedEvents did not receive speech_created event")
+		}
+	}
+}
+
 func TestAgentSessionFalseInterruptionEventsFanOutToSubscribers(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	first := session.AgentFalseInterruptionEvents()

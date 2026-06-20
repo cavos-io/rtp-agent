@@ -1280,10 +1280,7 @@ func (s *AgentSession) EmitSpeechCreated(ev SpeechCreatedEvent) {
 	}
 	s.recordEvent(&ev)
 	for _, ch := range s.speechCreatedSubscribers() {
-		select {
-		case ch <- ev:
-		default:
-		}
+		ch <- ev
 	}
 }
 
