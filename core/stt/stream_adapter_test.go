@@ -3,6 +3,7 @@ package stt
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -421,6 +422,68 @@ func TestStreamAdapterCloseClosesVADStream(t *testing.T) {
 	case <-closedCh:
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for VAD Close")
+	}
+}
+
+func TestStreamAdapterCloseDoesNotPanicBlockedPushFrame(t *testing.T) {
+	pushStartedCh := make(chan struct{}, 1)
+	releasePushCh := make(chan struct{})
+	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{
+		stream: &fakeStreamAdapterVADStream{
+			pushStartedCh: pushStartedCh,
+			releasePushCh: releasePushCh,
+			done:          make(chan struct{}),
+		},
+	}).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	frame := &model.AudioFrame{SampleRate: 16000}
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("first PushFrame returned error: %v", err)
+	}
+	select {
+	case <-pushStartedCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for VAD PushFrame to block")
+	}
+
+	wrapper := stream.(*streamAdapterWrapper)
+	for range cap(wrapper.inputCh) {
+		if err := stream.PushFrame(frame); err != nil {
+			t.Fatalf("buffering PushFrame returned error: %v", err)
+		}
+	}
+
+	pushDone := make(chan error, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				pushDone <- fmt.Errorf("PushFrame panicked: %v", r)
+			}
+		}()
+		pushDone <- stream.PushFrame(frame)
+	}()
+
+	select {
+	case err := <-pushDone:
+		t.Fatalf("blocked PushFrame returned before Close: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	close(releasePushCh)
+
+	select {
+	case err := <-pushDone:
+		if err == nil || !strings.Contains(err.Error(), "stream closed") {
+			t.Fatalf("blocked PushFrame error = %v, want stream closed", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for blocked PushFrame to unblock")
 	}
 }
 
