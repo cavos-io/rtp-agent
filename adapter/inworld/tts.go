@@ -423,6 +423,9 @@ type inworldTTSChunkedStream struct {
 }
 
 func (s *inworldTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.resp == nil || s.resp.Body == nil {
+		return nil, io.EOF
+	}
 	if s.scanner == nil {
 		s.scanner = bufio.NewScanner(s.resp.Body)
 	}
@@ -453,7 +456,12 @@ func (s *inworldTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *inworldTTSChunkedStream) Close() error {
-	return s.resp.Body.Close()
+	if s.resp == nil || s.resp.Body == nil {
+		return nil
+	}
+	body := s.resp.Body
+	s.resp = nil
+	return body.Close()
 }
 
 type inworldTTSSynthesizeStream struct {

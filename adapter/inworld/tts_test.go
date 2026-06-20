@@ -494,6 +494,38 @@ func TestInworldTTSChunkedStreamSkipsMalformedReferenceJSONLines(t *testing.T) {
 	}
 }
 
+func TestInworldTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
+	body := &inworldCloseCountBody{Reader: bytes.NewReader([]byte("{\"result\":{\"audioContent\":\"AQI=\"}}\n"))}
+	stream := &inworldTTSChunkedStream{
+		resp:       &http.Response{Body: body},
+		sampleRate: 24000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close() error = %v, want nil", err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close() calls = %d, want 1", body.closeCount)
+	}
+}
+
+func TestInworldTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	stream := &inworldTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte("{\"result\":{\"audioContent\":\"AQI=\"}}\n")))},
+		sampleRate: 24000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after Close error = %T %v, want EOF", err, err)
+	}
+}
+
 func TestInworldTTSStreamBuffersTextUntilFlush(t *testing.T) {
 	stream := &inworldTTSSynthesizeStream{}
 	if err := stream.PushText("hello "); err != nil {
@@ -522,4 +554,17 @@ func assertInworldPayload(t *testing.T, payload map[string]any, key string, want
 	if got := payload[key]; got != want {
 		t.Fatalf("%s = %#v, want %q", key, got, want)
 	}
+}
+
+type inworldCloseCountBody struct {
+	*bytes.Reader
+	closeCount int
+}
+
+func (b *inworldCloseCountBody) Close() error {
+	b.closeCount++
+	if b.closeCount > 1 {
+		return errors.New("closed twice")
+	}
+	return nil
 }
