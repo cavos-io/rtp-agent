@@ -900,6 +900,35 @@ func TestUpdateOptionsMarksNonZeroDrainTimeoutAsSet(t *testing.T) {
 	}
 }
 
+func TestUpdateOptionsResetsReferenceDefaultProcessTimeouts(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		SessionEndTimeoutSeconds:         120,
+		SessionEndTimeoutSecondsSet:      true,
+		ShutdownProcessTimeoutSeconds:    30,
+		ShutdownProcessTimeoutSecondsSet: true,
+	})
+
+	if err := server.UpdateOptions(WorkerOptions{APIKey: "new-key"}); err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	if server.Options.SessionEndTimeoutSeconds != 300 {
+		t.Fatalf("SessionEndTimeoutSeconds = %v, want reference default 300", server.Options.SessionEndTimeoutSeconds)
+	}
+	if server.Options.ShutdownProcessTimeoutSeconds != 10 {
+		t.Fatalf("ShutdownProcessTimeoutSeconds = %v, want reference default 10", server.Options.ShutdownProcessTimeoutSeconds)
+	}
+	if server.Options.InitializeProcessTimeoutSeconds != 10 {
+		t.Fatalf("InitializeProcessTimeoutSeconds = %v, want preserved resolved default 10", server.Options.InitializeProcessTimeoutSeconds)
+	}
+	if !server.Options.SessionEndTimeoutSecondsSet {
+		t.Fatal("SessionEndTimeoutSecondsSet = false, want true after reference default reset")
+	}
+	if !server.Options.ShutdownProcessTimeoutSecondsSet {
+		t.Fatal("ShutdownProcessTimeoutSecondsSet = false, want true after reference default reset")
+	}
+}
+
 func TestUpdateOptionsMarksExplicitAgentNameAsNotEnvironment(t *testing.T) {
 	t.Setenv("LIVEKIT_AGENT_NAME", "env-agent")
 	server := NewAgentServer(WorkerOptions{})

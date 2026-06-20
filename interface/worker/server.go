@@ -696,9 +696,15 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	if next.SessionEndTimeoutSecondsSet || next.SessionEndTimeoutSeconds != 0 {
 		current.SessionEndTimeoutSeconds = next.SessionEndTimeoutSeconds
 		current.SessionEndTimeoutSecondsSet = true
+	} else {
+		current.SessionEndTimeoutSeconds = defaultSessionEnd
+		current.SessionEndTimeoutSecondsSet = true
 	}
 	if next.ShutdownProcessTimeoutSecondsSet || next.ShutdownProcessTimeoutSeconds != 0 {
 		current.ShutdownProcessTimeoutSeconds = next.ShutdownProcessTimeoutSeconds
+		current.ShutdownProcessTimeoutSecondsSet = true
+	} else {
+		current.ShutdownProcessTimeoutSeconds = defaultProcessTimeout
 		current.ShutdownProcessTimeoutSecondsSet = true
 	}
 	if next.InitializeProcessTimeoutSecondsSet || next.InitializeProcessTimeoutSeconds != 0 {
