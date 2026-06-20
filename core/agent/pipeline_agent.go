@@ -1377,6 +1377,17 @@ func (va *PipelineAgent) flushAssistantPlayback(session *AgentSession) {
 	}
 }
 
+func (va *PipelineAgent) clearAssistantPlayback(session *AgentSession) {
+	if session == nil {
+		return
+	}
+	playback := session.AudioPlaybackController()
+	if playback == nil {
+		return
+	}
+	playback.ClearBuffer()
+}
+
 func (va *PipelineAgent) forwardedAssistantTextAfterInterruption(ctx context.Context, session *AgentSession, speech *SpeechHandle, generatedText string) string {
 	if generatedText == "" || speech == nil || !speech.IsInterrupted() || session == nil {
 		return generatedText
@@ -1385,7 +1396,7 @@ func (va *PipelineAgent) forwardedAssistantTextAfterInterruption(ctx context.Con
 	if playback == nil {
 		return generatedText
 	}
-	playback.ClearBuffer()
+	va.clearAssistantPlayback(session)
 	playoutCtx := context.WithoutCancel(ctx)
 	ev, err := playback.WaitForPlayout(playoutCtx)
 	if err != nil {
@@ -1575,6 +1586,7 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 		case <-ctx.Done():
 			transcriptSync.Close()
 			<-transcriptionDone
+			va.clearAssistantPlayback(session)
 			return ttsGen, ctx.Err()
 		default:
 			if speech != nil && speech.IsInterrupted() {
