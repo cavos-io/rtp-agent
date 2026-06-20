@@ -238,7 +238,7 @@ func TestHandleTextInputDefaultsTranscriptStreamID(t *testing.T) {
 	}
 }
 
-func TestHandleTextInputEventEmitsEmptyFinalTranscriptWithoutReply(t *testing.T) {
+func TestHandleTextInputEventIgnoresEmptyText(t *testing.T) {
 	responder := &recordingTextResponder{}
 
 	err := HandleTextInputEvent(context.Background(), responder, TextInputEvent{
@@ -248,11 +248,17 @@ func TestHandleTextInputEventEmitsEmptyFinalTranscriptWithoutReply(t *testing.T)
 	if err != nil {
 		t.Fatalf("HandleTextInputEvent() error = %v, want nil", err)
 	}
-	if got := responder.calls; len(got) != 1 || got[0] != "transcript::caller-7" {
-		t.Fatalf("calls = %#v, want empty final transcript without interrupt/generate", got)
+	if got := responder.calls; len(got) != 0 {
+		t.Fatalf("calls = %#v, want empty text ignored before interrupt/generate/transcript", got)
 	}
 	if responder.claimed {
 		t.Fatal("HandleTextInputEvent() claimed user turn for empty input_text")
+	}
+	if err := HandleTextInput(context.Background(), responder, ""); err != nil {
+		t.Fatalf("HandleTextInput() error = %v, want nil", err)
+	}
+	if got := responder.calls; len(got) != 0 {
+		t.Fatalf("calls after direct empty input = %#v, want still ignored", got)
 	}
 }
 
