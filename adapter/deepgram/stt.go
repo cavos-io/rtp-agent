@@ -47,6 +47,8 @@ type DeepgramSTT struct {
 	redact            []string
 	tags              []string
 	baseURL           string
+	mu                sync.Mutex
+	streams           map[*deepgramStream]struct{}
 }
 
 type DeepgramKeyword struct {
@@ -198,6 +200,7 @@ func NewDeepgramSTT(apiKey string, model string, opts ...DeepgramSTTOption) *Dee
 		interimResults: true,
 		vadEvents:      true,
 		baseURL:        "https://api.deepgram.com/v1/listen",
+		streams:        make(map[*deepgramStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -216,8 +219,17 @@ func (s *DeepgramSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *DeepgramSTT) UpdateOptions(opts ...DeepgramSTTOption) {
+	s.mu.Lock()
 	for _, opt := range opts {
 		opt(s)
+	}
+	streams := make([]*deepgramStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.mu.Unlock()
+	for _, stream := range streams {
+		stream.updateOptions()
 	}
 }
 
@@ -237,14 +249,17 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 	header := make(http.Header)
 	header.Set("Authorization", "Token "+s.apiKey)
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildDeepgramStreamURL(s, languageStr), header)
+	streamURL := buildDeepgramStreamURL(s, languageStr)
+	conn, err := openDeepgramStreamConnection(ctx, s, streamURL, header)
 	if err != nil {
-		return nil, llm.NewAPIConnectionError("failed to connect to deepgram")
+		return nil, err
 	}
 
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &deepgramStream{
+		provider:    s,
 		conn:        conn,
+		streamURL:   streamURL,
 		events:      make(chan *stt.SpeechEvent, 100),
 		errCh:       make(chan error, 1),
 		ctx:         streamCtx,
@@ -253,11 +268,35 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 		numChannels: s.numChannels,
 		language:    languageStr,
 	}
+	s.registerStream(stream)
 
-	go stream.readLoop()
+	go stream.readLoop(conn)
 	go stream.keepAliveLoop()
 
 	return stream, nil
+}
+
+func openDeepgramStreamConnection(ctx context.Context, s *DeepgramSTT, streamURL string, header http.Header) (*websocket.Conn, error) {
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, streamURL, header)
+	if err != nil {
+		return nil, llm.NewAPIConnectionError("failed to connect to deepgram")
+	}
+	return conn, nil
+}
+
+func (s *DeepgramSTT) registerStream(stream *deepgramStream) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.streams == nil {
+		s.streams = make(map[*deepgramStream]struct{})
+	}
+	s.streams[stream] = struct{}{}
+}
+
+func (s *DeepgramSTT) unregisterStream(stream *deepgramStream) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.streams, stream)
 }
 
 func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, languageStr string) (*stt.SpeechEvent, error) {
@@ -480,14 +519,17 @@ func deepgramBaseURL(s *DeepgramSTT, websocketURL bool) (*url.URL, url.Values) {
 }
 
 type deepgramStream struct {
-	conn     *websocket.Conn
-	events   chan *stt.SpeechEvent
-	errCh    chan error
-	mu       sync.Mutex
-	closed   bool
-	speaking bool
-	start    float64
-	offset   float64
+	provider      *DeepgramSTT
+	conn          *websocket.Conn
+	streamURL     string
+	events        chan *stt.SpeechEvent
+	errCh         chan error
+	mu            sync.Mutex
+	closed        bool
+	speaking      bool
+	reconnectNext bool
+	start         float64
+	offset        float64
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -694,12 +736,20 @@ func deepgramTimedStringsOffset(words []dgWord, startTimeOffset float64) []stt.T
 	return timed
 }
 
-func (s *deepgramStream) readLoop() {
-	defer s.Close()
-	defer close(s.events)
+func (s *deepgramStream) readLoop(conn *websocket.Conn) {
+	defer func() {
+		s.mu.Lock()
+		stale := conn != s.conn
+		s.mu.Unlock()
+		if stale {
+			return
+		}
+		_ = s.Close()
+		close(s.events)
+	}()
 
 	for {
-		_, message, err := s.conn.ReadMessage()
+		_, message, err := conn.ReadMessage()
 		if err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
 				logger.Logger.Errorw("Deepgram WebSocket read error", err)
@@ -819,6 +869,13 @@ func (s *deepgramStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.reconnectNext {
+		if err := s.reconnectLocked(); err != nil {
+			s.closeAfterWriteFailureLocked()
+			return err
+		}
+		s.reconnectNext = false
+	}
 	if s.audioBStream == nil {
 		s.audioBStream = newDeepgramSTTAudioByteStream(s)
 	}
@@ -865,7 +922,46 @@ func (s *deepgramStream) Close() error {
 	if s.cancel != nil {
 		s.cancel()
 	}
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
 	return s.closeConnection()
+}
+
+func (s *deepgramStream) updateOptions() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.provider == nil {
+		return
+	}
+	nextURL := buildDeepgramStreamURL(s.provider, s.language)
+	if nextURL != s.streamURL {
+		s.streamURL = nextURL
+		s.reconnectNext = true
+	}
+	s.sampleRate = s.provider.sampleRate
+	s.numChannels = s.provider.numChannels
+	s.audioBStream = nil
+}
+
+func (s *deepgramStream) reconnectLocked() error {
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.provider == nil {
+		return nil
+	}
+	header := make(http.Header)
+	header.Set("Authorization", "Token "+s.provider.apiKey)
+	conn, err := openDeepgramStreamConnection(s.ctx, s.provider, s.streamURL, header)
+	if err != nil {
+		return err
+	}
+	oldConn := s.conn
+	s.conn = conn
+	_ = oldConn.Close()
+	go s.readLoop(conn)
+	return nil
 }
 
 func newDeepgramSTTAudioByteStream(s *deepgramStream) *audio.AudioByteStream {

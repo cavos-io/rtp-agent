@@ -862,6 +862,65 @@ func TestDeepgramSTTUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
 	assertDeepgramQueryValues(t, recognizeQuery, "tag", []string{"agent"})
 }
 
+func TestDeepgramSTTUpdateOptionsReconnectsActiveStream(t *testing.T) {
+	requests := make(chan *url.URL, 2)
+	audioMessages := make(chan []byte, 1)
+	serverErr := make(chan error, 2)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			clientConn, serverConn := net.Pipe()
+			go runDeepgramReconnectRecordingWebsocketServer(serverConn, requests, audioMessages, serverErr)
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTT("test-key", "nova-2", WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"))
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	firstURL := receiveDeepgramTestRequestURL(t, requests, "first websocket request")
+	assertDeepgramQuery(t, firstURL.Query(), "interim_results", "true")
+	assertDeepgramQuery(t, firstURL.Query(), "endpointing", "25")
+
+	provider.UpdateOptions(
+		WithDeepgramSTTInterimResults(false),
+		WithDeepgramSTTEndpointing(0),
+	)
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("PushFrame after update error = %v", err)
+	}
+
+	secondURL := receiveDeepgramTestRequestURL(t, requests, "updated websocket request")
+	assertDeepgramQuery(t, secondURL.Query(), "interim_results", "false")
+	assertDeepgramQuery(t, secondURL.Query(), "endpointing", "false")
+	select {
+	case <-audioMessages:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for audio on updated websocket")
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe) && !strings.Contains(err.Error(), "closed pipe") {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	default:
+	}
+}
+
 func TestDeepgramSTTStreamPreservesReferenceSpeechState(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	serverErr := make(chan error, 1)
@@ -1264,6 +1323,87 @@ func runDeepgramTimingOffsetWebsocketServer(conn net.Conn, closeServer <-chan st
 	}
 	<-closeServer
 	errCh <- nil
+}
+
+func runDeepgramReconnectRecordingWebsocketServer(conn net.Conn, requests chan<- *url.URL, audioMessages chan<- []byte, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	requestURL := *req.URL
+	requests <- &requestURL
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	for {
+		msgType, payload, err := readDeepgramSTTTestClientWebsocketFrame(reader)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if msgType == websocket.BinaryMessage {
+			audioMessages <- payload
+			continue
+		}
+		if msgType == websocket.CloseMessage {
+			errCh <- nil
+			return
+		}
+	}
+}
+
+func receiveDeepgramTestRequestURL(t *testing.T, requests <-chan *url.URL, label string) *url.URL {
+	t.Helper()
+	select {
+	case requestURL := <-requests:
+		return requestURL
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s", label)
+		return nil
+	}
+}
+
+func readDeepgramSTTTestClientWebsocketFrame(reader *bufio.Reader) (int, []byte, error) {
+	header, err := reader.ReadByte()
+	if err != nil {
+		return 0, nil, err
+	}
+	lengthByte, err := reader.ReadByte()
+	if err != nil {
+		return 0, nil, err
+	}
+	masked := lengthByte&0x80 != 0
+	length := int(lengthByte & 0x7f)
+	switch length {
+	case 126:
+		extended := make([]byte, 2)
+		if _, err := io.ReadFull(reader, extended); err != nil {
+			return 0, nil, err
+		}
+		length = int(extended[0])<<8 | int(extended[1])
+	case 127:
+		return 0, nil, fmt.Errorf("test websocket frame too large")
+	}
+	mask := []byte{0, 0, 0, 0}
+	if masked {
+		if _, err := io.ReadFull(reader, mask); err != nil {
+			return 0, nil, err
+		}
+	}
+	payload := make([]byte, length)
+	if _, err := io.ReadFull(reader, payload); err != nil {
+		return 0, nil, err
+	}
+	if masked {
+		for i := range payload {
+			payload[i] ^= mask[i%4]
+		}
+	}
+	return int(header & 0x0f), payload, nil
 }
 
 func writeDeepgramTestWebsocketFrame(w io.Writer, opcode int, payload []byte) error {
