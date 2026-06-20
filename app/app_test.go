@@ -728,8 +728,11 @@ func TestDefaultConfigFromEnvUsesTENAgoraGreetingDefault(t *testing.T) {
 
 	cfg := DefaultConfigFromEnv()
 
-	if cfg.AgoraGreeting != "Hello, I am your AI assistant." {
+	if cfg.AgoraGreeting != "TEN Agent connected. How can I help you today?" {
 		t.Fatalf("AgoraGreeting = %q, want TEN default greeting", cfg.AgoraGreeting)
+	}
+	if !strings.Contains(cfg.AgoraGreeting, "TEN Agent") {
+		t.Fatalf("AgoraGreeting = %q, want TEN-branded greeting", cfg.AgoraGreeting)
 	}
 }
 

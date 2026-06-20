@@ -318,7 +318,7 @@ const (
 	providerXAI          = "xai"
 	providerLiveKit      = "livekit"
 
-	defaultAgoraGreeting = "Hello, I am your AI assistant."
+	defaultAgoraGreeting = "TEN Agent connected. How can I help you today?"
 )
 
 type AppConfig struct {
