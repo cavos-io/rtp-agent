@@ -1173,9 +1173,13 @@ func (s *AgentSession) EmitUserInputTranscribed(ev UserInputTranscribedEvent) {
 	}
 	s.recordEvent(&ev)
 	for _, ch := range s.userInputTranscribedSubscribers() {
-		select {
-		case ch <- ev:
-		default:
+		if ev.IsFinal {
+			ch <- ev
+		} else {
+			select {
+			case ch <- ev:
+			default:
+			}
 		}
 	}
 }

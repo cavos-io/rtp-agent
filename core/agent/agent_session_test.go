@@ -289,6 +289,51 @@ func TestAgentSessionFinalTranscriptResetsAwayBeforeTranscriptEvent(t *testing.T
 	}
 }
 
+func TestAgentSessionFinalUserInputTranscribedDeliveredWhenChannelFull(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	ch := session.UserInputTranscribedEvents()
+
+	// Fill the channel buffer with interim events so it's full.
+	for range cap(ch) {
+		session.EmitUserInputTranscribed(UserInputTranscribedEvent{Transcript: "interim", IsFinal: false})
+	}
+
+	// Final user transcripts must not be dropped; they close the user's turn.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		session.EmitUserInputTranscribed(UserInputTranscribedEvent{Transcript: "final user turn", IsFinal: true})
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("final UserInputTranscribed emit returned while channel was full, want guaranteed delivery")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	<-ch
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("final UserInputTranscribed event was not delivered when channel became available")
+	}
+
+	var finalReceived bool
+	for {
+		select {
+		case ev := <-ch:
+			if ev.IsFinal && ev.Transcript == "final user turn" {
+				finalReceived = true
+			}
+		default:
+			if !finalReceived {
+				t.Fatal("final UserInputTranscribed event not found in channel after delivery")
+			}
+			return
+		}
+	}
+}
+
 func TestAgentSessionAgentOutputTranscribedEventsFanOutToSubscribers(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	first := session.AgentOutputTranscribedEvents()
