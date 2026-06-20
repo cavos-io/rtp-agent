@@ -1044,6 +1044,78 @@ func TestJobContextParticipantAvailableStartsDuplicateEntrypointWhileRunning(t *
 	close(release)
 }
 
+func TestJobContextParticipantAvailableKeepsNewestDuplicateEntrypointTracked(t *testing.T) {
+	recorder := &roomIORecordingLogger{}
+	oldLogger := logutil.Logger
+	logutil.SetLogger(recorder)
+	t.Cleanup(func() { logutil.SetLogger(oldLogger) })
+
+	ctx := NewJobContext(&livekit.Job{Id: "job_participant_available_duplicate_tracking"}, "", "", "")
+	started := make(chan struct{}, 3)
+	finished := make(chan struct{}, 3)
+	release := make(chan struct{}, 3)
+	entrypoint := func(*JobContext, *livekit.ParticipantInfo) {
+		started <- struct{}{}
+		<-release
+		finished <- struct{}{}
+	}
+	if err := ctx.AddParticipantEntrypoint(entrypoint); err != nil {
+		t.Fatalf("AddParticipantEntrypoint() error = %v", err)
+	}
+
+	participant := fakeParticipantView{
+		identity: "caller",
+		kind:     lksdk.ParticipantStandard,
+	}
+	ctx.participantAvailable(participant)
+	waitForParticipantEntrypointStart(t, started)
+	ctx.participantAvailable(participant)
+	waitForParticipantEntrypointStart(t, started)
+
+	release <- struct{}{}
+	waitForParticipantEntrypointFinish(t, finished)
+	time.Sleep(20 * time.Millisecond)
+
+	ctx.participantAvailable(participant)
+	waitForParticipantEntrypointStart(t, started)
+
+	got := countWarnMessage(recorder.warnMessages, "participant entrypoint already running for participant")
+	if got != 2 {
+		t.Fatalf("duplicate entrypoint warnings = %d (%#v), want two reference warnings", got, recorder.warnMessages)
+	}
+
+	release <- struct{}{}
+	release <- struct{}{}
+}
+
+func waitForParticipantEntrypointStart(t *testing.T, started <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-started:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("participant entrypoint did not start")
+	}
+}
+
+func waitForParticipantEntrypointFinish(t *testing.T, finished <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-finished:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("participant entrypoint did not finish")
+	}
+}
+
+func countWarnMessage(messages []string, want string) int {
+	count := 0
+	for _, msg := range messages {
+		if msg == want {
+			count++
+		}
+	}
+	return count
+}
+
 func TestJobContextAddParticipantEntrypointReplaysAvailableParticipantOncePerIdentity(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_participant_available_replay_unique"}, "", "", "")
 	participant := fakeParticipantView{

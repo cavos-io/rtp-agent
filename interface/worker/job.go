@@ -226,7 +226,8 @@ type JobContext struct {
 	finishOnce             sync.Once
 	participantEntrypoints []participantEntrypointRegistration
 	availableParticipants  []*ParticipantInfo
-	participantTasks       map[ParticipantTaskKey]struct{}
+	participantTasks       map[ParticipantTaskKey]uint64
+	participantTaskSeq     uint64
 	participantTasksMu     sync.Mutex
 
 	api       *JobAPI
@@ -614,12 +615,14 @@ func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntry
 	}
 	c.participantTasksMu.Lock()
 	if c.participantTasks == nil {
-		c.participantTasks = make(map[ParticipantTaskKey]struct{})
+		c.participantTasks = make(map[ParticipantTaskKey]uint64)
 	}
 	if _, ok := c.participantTasks[plan.TaskKey]; ok {
 		logger.Logger.Warnw("participant entrypoint already running for participant", nil, "participant", plan.Participant.Identity)
 	}
-	c.participantTasks[plan.TaskKey] = struct{}{}
+	c.participantTaskSeq++
+	taskSeq := c.participantTaskSeq
+	c.participantTasks[plan.TaskKey] = taskSeq
 	c.participantTasksMu.Unlock()
 
 	go func() {
@@ -628,7 +631,9 @@ func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntry
 				logger.Logger.Errorw("Participant entrypoint panicked", fmt.Errorf("%v", recovered), "participant", plan.Participant.Identity)
 			}
 			c.participantTasksMu.Lock()
-			delete(c.participantTasks, plan.TaskKey)
+			if c.participantTasks[plan.TaskKey] == taskSeq {
+				delete(c.participantTasks, plan.TaskKey)
+			}
 			c.participantTasksMu.Unlock()
 		}()
 		_ = runWithJobContext(c, func() error {
