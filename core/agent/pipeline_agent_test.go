@@ -3575,6 +3575,68 @@ func TestPipelineAgentCancelToolReplyEventSkipsFollowupGeneration(t *testing.T) 
 	}
 }
 
+func TestPipelineAgentCancelToolUpdateReplyKeepsFinalReturnReply(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{ToolCalls: []llm.FunctionToolCall{{
+						Type:      "function",
+						Name:      "lookup",
+						CallID:    "call_lookup",
+						Arguments: `{}`,
+					}}}},
+				},
+			},
+			&fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "final acknowledged"}}}},
+		},
+	}
+	tool := &blockingRunContextUpdatingTool{
+		updateSent: make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{tool}
+	cancelNextReply := true
+	session.On("function_tools_executed", func(ev Event) {
+		if toolsEv, ok := ev.(*FunctionToolsExecutedEvent); ok && cancelNextReply {
+			toolsEv.CancelToolReply()
+			cancelNextReply = false
+		}
+	})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.generateReply()
+	}()
+
+	select {
+	case <-tool.updateSent:
+	case <-time.After(time.Second):
+		t.Fatal("tool did not send run context update")
+	}
+	close(tool.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("generateReply did not finish after final return")
+	}
+	if len(l.calls) != 2 {
+		t.Fatalf("LLM Chat calls = %d, want initial tool call plus final return reply", len(l.calls))
+	}
+	if len(chatCtx.Items) == 0 {
+		t.Fatal("chatCtx.Items empty, want final return reply assistant message")
+	}
+	msg, ok := chatCtx.Items[len(chatCtx.Items)-1].(*llm.ChatMessage)
+	if !ok || msg.Role != llm.ChatRoleAssistant || msg.TextContent() != "final acknowledged" {
+		t.Fatalf("last chat item = %#v, want final return assistant reply", chatCtx.Items[len(chatCtx.Items)-1])
+	}
+}
+
 func TestPipelineAgentStopResponseDoesNotAppendToolCallOrGenerateReply(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

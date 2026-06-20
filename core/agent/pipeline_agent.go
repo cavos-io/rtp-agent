@@ -763,6 +763,12 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 	toolSteps := 0
 	var pendingToolOutCh <-chan ToolExecutionOutput
 	var pendingToolUpdateReplyDone chan struct{}
+	closePendingToolUpdateReplyDone := func() {
+		if pendingToolUpdateReplyDone != nil {
+			close(pendingToolUpdateReplyDone)
+			pendingToolUpdateReplyDone = nil
+		}
+	}
 	for {
 		replyDone := pendingToolUpdateReplyDone
 		pendingToolUpdateReplyDone = nil
@@ -1013,12 +1019,45 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			break
 		}
 		if !replyRequired {
-			if pendingToolUpdateReplyDone != nil {
-				close(pendingToolUpdateReplyDone)
-				pendingToolUpdateReplyDone = nil
+			closePendingToolUpdateReplyDone()
+			if pendingToolOutCh != nil {
+				executedTools = false
+				replyRequired = false
+				functionCalls = nil
+				functionCallOutputs = nil
+				for toolOut := range pendingToolOutCh {
+					executedTools = true
+					if appendToolOutput(toolOut, &functionCalls, &functionCallOutputs) {
+						replyRequired = true
+					}
+					if toolOut.RunContextUpdate {
+						pendingToolUpdateReplyDone = toolOut.RunContextUpdateDone
+					}
+				}
+				pendingToolOutCh = nil
+				if executedTools {
+					if ev, err := NewFunctionToolsExecutedEvent(functionCalls, functionCallOutputs); err == nil {
+						for _, out := range functionCallOutputs {
+							if out != nil {
+								ev.ReplyRequired = true
+								break
+							}
+						}
+						emitted := session.EmitFunctionToolsExecuted(*ev)
+						replyRequired = emitted.HasToolReply()
+					}
+					if activeAgent := session.Agent.GetAgent(); activeAgent != nil {
+						if err := updateAgentInstructionsMessage(replyCtx, agentInstructionVariants(activeAgent), false); err != nil {
+							logger.Logger.Warnw("failed to refresh reply instructions", err)
+						}
+					}
+				}
 			}
-			session.UpdateAgentState(AgentStateListening)
-			break
+			if !executedTools || !replyRequired {
+				closePendingToolUpdateReplyDone()
+				session.UpdateAgentState(AgentStateListening)
+				break
+			}
 		}
 		if opts.SpeechHandle != nil {
 			opts.SpeechHandle.IncrementStep()
