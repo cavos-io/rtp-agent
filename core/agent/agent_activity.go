@@ -2859,7 +2859,7 @@ func (a *AgentActivity) shortInterruptionTranscript(transcript string) bool {
 	if a.Session == nil || a.Session.Options.MinInterruptionWords <= 0 {
 		return false
 	}
-	if a.Agent.STT == nil && a.Session.STT == nil {
+	if !a.hasSTTModel() {
 		return false
 	}
 	var wordCount int

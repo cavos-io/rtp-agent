@@ -3579,6 +3579,29 @@ func TestAgentActivityOnInterimTranscriptRespectsMinInterruptionWords(t *testing
 	current.MarkDone()
 }
 
+func TestAgentActivityOnInterimTranscriptRespectsMinInterruptionWordsWithPipelineSTT(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:        TurnDetectionModeSTT,
+		MinInterruptionWords: 2,
+	})
+	session.Assistant = NewPipelineAgent(nil, &fakePipelineSTT{}, nil, nil, agent.ChatCtx)
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "wait"}},
+	})
+
+	select {
+	case <-current.interruptCh:
+		t.Fatal("current speech was interrupted for pipeline STT transcript below MinInterruptionWords")
+	case <-time.After(20 * time.Millisecond):
+	}
+	current.MarkDone()
+}
+
 func TestAgentActivityOnInterimTranscriptIgnoresAECWarmup(t *testing.T) {
 	agent := NewAgent("test")
 	agent.STT = &fakePipelineSTT{}
