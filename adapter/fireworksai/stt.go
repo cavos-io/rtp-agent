@@ -25,6 +25,8 @@ const (
 	defaultBaseURL             = "wss://audio-streaming.us-virginia-1.direct.fireworks.ai/v1"
 	defaultSampleRate          = 16000
 	defaultTextTimeoutSeconds  = 1.0
+	minTextTimeoutSeconds      = 1.0
+	maxTextTimeoutSeconds      = 29.0
 	defaultResponseFormat      = "verbose_json"
 	streamingPath              = "/audio/transcriptions/streaming"
 	closeMessage               = `{"checkpoint_id":"final"}`
@@ -98,10 +100,14 @@ func WithFireworksVADKwargs(vadKwargs map[string]any) FireworksSTTOption {
 
 func WithFireworksTextTimeoutSeconds(seconds float64) FireworksSTTOption {
 	return func(s *FireworksSTT) {
-		if seconds > 0 {
+		if validFireworksTextTimeoutSeconds(seconds) {
 			s.textTimeoutSeconds = seconds
 		}
 	}
+}
+
+func validFireworksTextTimeoutSeconds(seconds float64) bool {
+	return seconds >= minTextTimeoutSeconds && seconds <= maxTextTimeoutSeconds
 }
 
 func WithFireworksTimestampGranularities(granularities []string) FireworksSTTOption {

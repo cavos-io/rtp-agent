@@ -123,6 +123,30 @@ func TestFireworksSTTOptionsBuildReferenceStreamURLAndHeaders(t *testing.T) {
 	}
 }
 
+func TestFireworksSTTTextTimeoutRejectsReferenceInvalidValues(t *testing.T) {
+	provider := NewFireworksSTT("test-key",
+		WithFireworksTextTimeoutSeconds(2.5),
+		WithFireworksTextTimeoutSeconds(0.5),
+		WithFireworksTextTimeoutSeconds(30),
+	)
+
+	streamURL, err := url.Parse(buildFireworksStreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	assertFireworksQuery(t, streamURL.Query(), "text_timeout_seconds", "2.5")
+
+	provider.UpdateOptions(
+		WithFireworksTextTimeoutSeconds(1.0),
+		WithFireworksTextTimeoutSeconds(29.0),
+	)
+	streamURL, err = url.Parse(buildFireworksStreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse updated stream url: %v", err)
+	}
+	assertFireworksQuery(t, streamURL.Query(), "text_timeout_seconds", "29")
+}
+
 func TestFireworksSTTRecognizeMatchesReferenceUnsupportedOffline(t *testing.T) {
 	provider := NewFireworksSTT("test-key")
 
