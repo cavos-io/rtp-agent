@@ -279,6 +279,9 @@ type openaiTTSChunkedStream struct {
 }
 
 func (s *openaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
 	if s.streamFormat == openAITTSStreamFormatSSE {
 		return s.nextSSE()
 	}

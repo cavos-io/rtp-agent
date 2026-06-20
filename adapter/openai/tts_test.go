@@ -817,6 +817,19 @@ func TestOpenAITTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	body := &readErrorAfterClose{}
+	stream := &openaiTTSChunkedStream{resp: body}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	_, err := stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after Close error = %T %v, want EOF", err, err)
+	}
+}
+
 type failingReadCloser struct {
 	err error
 }
@@ -836,6 +849,22 @@ func (r *countingOpenAIReadCloser) Close() error {
 	if r.closed > 1 {
 		return errors.New("already closed")
 	}
+	return nil
+}
+
+type readErrorAfterClose struct {
+	closed bool
+}
+
+func (r *readErrorAfterClose) Read([]byte) (int, error) {
+	if r.closed {
+		return 0, errors.New("read after close")
+	}
+	return 0, io.EOF
+}
+
+func (r *readErrorAfterClose) Close() error {
+	r.closed = true
 	return nil
 }
 
