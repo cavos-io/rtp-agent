@@ -1199,7 +1199,7 @@ func (a *App) runAgora(ctx context.Context) error {
 		var dataSubscriber workeragora.DataMessageSubscriber
 		if subscriber, ok := dataPublisher.(workeragora.DataMessageSubscriber); ok {
 			dataSubscriber = subscriber
-			installAgoraRTMDataMessageHandler(dataSubscriber, a.Session, dataOpts.UID)
+			installAgoraRTMDataMessageHandler(runCtx, dataSubscriber, a.Session, dataOpts.UID)
 		}
 		transcriptForwarder.Start(runCtx)
 		defer func() {
@@ -1258,9 +1258,12 @@ func runContextErr(ctx context.Context) error {
 	return ctx.Err()
 }
 
-func installAgoraRTMDataMessageHandler(subscriber workeragora.DataMessageSubscriber, responder workeragora.TextResponder, agentUserID string) {
+func installAgoraRTMDataMessageHandler(ctx context.Context, subscriber workeragora.DataMessageSubscriber, responder workeragora.TextResponder, agentUserID string) {
 	if subscriber == nil {
 		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	router := workeragora.RTMMessageRouter{
 		AgentUserID: agentUserID,
@@ -1271,7 +1274,19 @@ func installAgoraRTMDataMessageHandler(subscriber workeragora.DataMessageSubscri
 			return nil
 		},
 	}
-	subscriber.SetDataMessageHandler(func(ctx context.Context, msg workeragora.DataMessage) error {
+	subscriber.SetDataMessageHandler(func(callbackCtx context.Context, msg workeragora.DataMessage) error {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+		if callbackCtx != nil {
+			select {
+			case <-callbackCtx.Done():
+				return nil
+			default:
+			}
+		}
 		if err := router.HandleDataMessage(ctx, msg); err != nil {
 			logutil.Logger.Warnw("failed to handle Agora RTM data message", err, "channel", msg.Channel, "publisher", msg.Publisher)
 		}

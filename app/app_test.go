@@ -2050,7 +2050,7 @@ func TestInstallAgoraRTMDataMessageHandlerDispatchesInputText(t *testing.T) {
 	dataPublisher := &fakeAppAgoraDataPublisher{}
 	responder := &recordingAppTextResponder{}
 
-	installAgoraRTMDataMessageHandler(dataPublisher, responder, "agent-rtm")
+	installAgoraRTMDataMessageHandler(context.Background(), dataPublisher, responder, "agent-rtm")
 
 	handler := dataPublisher.dataHandler()
 	if handler == nil {
@@ -2090,6 +2090,31 @@ func TestInstallAgoraRTMDataMessageHandlerDispatchesInputText(t *testing.T) {
 	}
 }
 
+func TestInstallAgoraRTMDataMessageHandlerDropsAfterRuntimeContextCanceled(t *testing.T) {
+	dataPublisher := &fakeAppAgoraDataPublisher{}
+	responder := &recordingAppTextResponder{}
+	ctx, cancel := context.WithCancel(context.Background())
+
+	installAgoraRTMDataMessageHandler(ctx, dataPublisher, responder, "agent-rtm")
+
+	handler := dataPublisher.dataHandler()
+	if handler == nil {
+		t.Fatal("installAgoraRTMDataMessageHandler() did not install handler")
+	}
+	cancel()
+	err := handler(context.Background(), workeragora.DataMessage{
+		Channel:   "support",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"data_type":"input_text","text":"hello from chat"}`),
+	})
+	if err != nil {
+		t.Fatalf("RTM data handler error = %v, want nil after runtime cancellation", err)
+	}
+	if len(responder.calls) != 0 || len(responder.userTranscripts) != 0 {
+		t.Fatalf("canceled RTM callback entered text turn: calls=%#v transcripts=%#v", responder.calls, responder.userTranscripts)
+	}
+}
+
 func TestInstallAgoraRTMDataMessageHandlerLogsTextInputErrorsOnce(t *testing.T) {
 	previousLogger := logutil.Logger
 	recorder := &appRecordingLogger{entriesCh: make(chan appLogEntry, 8)}
@@ -2101,7 +2126,7 @@ func TestInstallAgoraRTMDataMessageHandlerLogsTextInputErrorsOnce(t *testing.T) 
 	dataPublisher := &fakeAppAgoraDataPublisher{}
 	responder := &recordingAppTextResponder{err: errors.New("interrupt failed")}
 
-	installAgoraRTMDataMessageHandler(dataPublisher, responder, "agent-rtm")
+	installAgoraRTMDataMessageHandler(context.Background(), dataPublisher, responder, "agent-rtm")
 
 	handler := dataPublisher.dataHandler()
 	if handler == nil {
