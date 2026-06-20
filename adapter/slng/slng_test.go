@@ -870,6 +870,35 @@ func TestSLNGSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	}
 }
 
+func TestSLNGSTTProviderCloseClosesActiveStreams(t *testing.T) {
+	provider := NewSTT("test-key")
+	stream := &sttStream{}
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01, 0x02}}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after provider Close error = %v, want io.ErrClosedPipe", err)
+	}
+}
+
+func TestSLNGTTSProviderCloseClosesActiveStreams(t *testing.T) {
+	provider := NewTTS("test-key")
+	stream := &ttsStream{}
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after provider Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after provider Close error = %v, want io.ErrClosedPipe", err)
+	}
+}
+
 func TestSLNGSTTStreamFallsBackToNextModelEndpoint(t *testing.T) {
 	initPayloads := make(chan map[string]any, 1)
 	upgrader := websocket.Upgrader{}
