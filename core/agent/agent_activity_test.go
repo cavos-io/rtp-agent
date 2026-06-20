@@ -997,6 +997,53 @@ func TestAgentActivityOnInterruptionFlushesHeldSTTWithOverlapCutoff(t *testing.T
 	}
 }
 
+func TestAgentActivityHoldsPreflightTranscriptWhileAgentSpeaking(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:              TurnDetectionModeVAD,
+		MinInterruptionDuration:    0.05,
+		MinInterruptionDurationSet: true,
+	})
+	session.agentState = AgentStateSpeaking
+	activity := NewAgentActivity(agent, session)
+	activity.holdSTTWhileAgentSpeaking = true
+	userTranscriptEvents := session.UserInputTranscribedEvents()
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Type: stt.SpeechEventPreflightTranscript,
+		Alternatives: []stt.SpeechData{{
+			Language:   "id",
+			Text:       "halo dari user",
+			Confidence: 0.8,
+		}},
+	})
+
+	if len(activity.heldSTTEvents) != 1 {
+		t.Fatalf("held STT events = %d, want preflight transcript buffered while agent speaking", len(activity.heldSTTEvents))
+	}
+	select {
+	case ev := <-userTranscriptEvents:
+		t.Fatalf("preflight transcript emitted before hold released: %#v", ev)
+	default:
+	}
+
+	session.agentState = AgentStateListening
+	activity.flushHeldSTTEvents()
+
+	if len(activity.heldSTTEvents) != 0 {
+		t.Fatalf("held STT events = %d, want flushed", len(activity.heldSTTEvents))
+	}
+	select {
+	case ev := <-userTranscriptEvents:
+		if ev.Transcript != "halo dari user" || ev.IsFinal {
+			t.Fatalf("flushed preflight event = %#v, want non-final transcript", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("held preflight transcript was not emitted after flush")
+	}
+}
+
 func TestAgentActivityOnVADInferenceDoneInterruptsCurrentSpeech(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}

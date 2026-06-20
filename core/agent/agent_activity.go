@@ -2020,7 +2020,7 @@ func (a *AgentActivity) holdSTTEventWhileAgentSpeaking(ev *stt.SpeechEvent) bool
 		return false
 	}
 	switch ev.Type {
-	case "", stt.SpeechEventInterimTranscript, stt.SpeechEventFinalTranscript:
+	case "", stt.SpeechEventInterimTranscript, stt.SpeechEventPreflightTranscript, stt.SpeechEventFinalTranscript:
 	default:
 		return false
 	}
@@ -2047,7 +2047,7 @@ func (a *AgentActivity) flushHeldSTTEvents() {
 			continue
 		}
 		switch ev.Type {
-		case stt.SpeechEventInterimTranscript:
+		case stt.SpeechEventInterimTranscript, stt.SpeechEventPreflightTranscript:
 			a.OnInterimTranscript(ev)
 		default:
 			a.OnFinalTranscript(ev)
