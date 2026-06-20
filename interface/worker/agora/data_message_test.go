@@ -154,6 +154,28 @@ func TestRTMMessageRouterIgnoresSelfPublisher(t *testing.T) {
 	}
 }
 
+func TestRTMMessageRouterIgnoresTrimmedSelfPublisher(t *testing.T) {
+	called := false
+	router := RTMMessageRouter{
+		AgentUserID: " agent-rtm ",
+		TextInput: func(context.Context, TextInputEvent) error {
+			called = true
+			return nil
+		},
+	}
+
+	err := router.HandleDataMessage(context.Background(), DataMessage{
+		Publisher: " agent-rtm ",
+		Payload:   []byte(`{"data_type":"input_text","text":"loop"}`),
+	})
+	if err != nil {
+		t.Fatalf("HandleDataMessage() error = %v, want nil", err)
+	}
+	if called {
+		t.Fatal("trimmed self-published RTM message was dispatched")
+	}
+}
+
 func TestRTMMessageRouterIgnoresNonInputText(t *testing.T) {
 	called := false
 	router := RTMMessageRouter{

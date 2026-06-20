@@ -44,7 +44,7 @@ func (r RTMMessageRouter) HandleDataMessage(ctx context.Context, msg DataMessage
 		return ctx.Err()
 	default:
 	}
-	if strings.TrimSpace(r.AgentUserID) != "" && msg.Publisher == strings.TrimSpace(r.AgentUserID) {
+	if agentUserID := strings.TrimSpace(r.AgentUserID); agentUserID != "" && strings.TrimSpace(msg.Publisher) == agentUserID {
 		return nil
 	}
 	if strings.TrimSpace(string(msg.Payload)) == "" {
