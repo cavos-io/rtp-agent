@@ -3788,6 +3788,40 @@ func TestRunDelegatesAgoraTransportToRunFunc(t *testing.T) {
 	}
 }
 
+func TestRunDelegatesAgoraTransportWithoutLiveKitEnvExport(t *testing.T) {
+	t.Setenv("LIVEKIT_URL", "wss://existing.livekit.example")
+	t.Setenv("LIVEKIT_API_KEY", "existing-key")
+	t.Setenv("LIVEKIT_API_SECRET", "existing-secret")
+
+	server := NewAgentServer(WorkerOptions{
+		Transport: WorkerTransportAgora,
+		WSRL:      "wss://should-not-export.livekit.example",
+		APIKey:    "should-not-export-key",
+		APISecret: "should-not-export-secret",
+	})
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+	server.SetTransportRunFunc(func(ctx context.Context) error {
+		return ctx.Err()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := server.Run(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want context canceled from Agora transport runner", err)
+	}
+	if got := os.Getenv("LIVEKIT_URL"); got != "wss://existing.livekit.example" {
+		t.Fatalf("LIVEKIT_URL = %q, want existing value", got)
+	}
+	if got := os.Getenv("LIVEKIT_API_KEY"); got != "existing-key" {
+		t.Fatalf("LIVEKIT_API_KEY = %q, want existing value", got)
+	}
+	if got := os.Getenv("LIVEKIT_API_SECRET"); got != "existing-secret" {
+		t.Fatalf("LIVEKIT_API_SECRET = %q, want existing value", got)
+	}
+}
+
 func TestRunRequiresAgoraTransportRunnerWithoutProviderValidation(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		Transport: WorkerTransportAgora,
