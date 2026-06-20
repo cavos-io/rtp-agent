@@ -1266,6 +1266,31 @@ func normalizeAgoraRuntimeContext(ctx context.Context) context.Context {
 	return ctx
 }
 
+type agoraRTMCallbackMergedContext struct {
+	context.Context
+	callback context.Context
+}
+
+func (c agoraRTMCallbackMergedContext) Err() error {
+	if err := c.Context.Err(); err != nil {
+		return err
+	}
+	return c.callback.Err()
+}
+
+func agoraRTMCallbackContext(runtimeCtx context.Context, callbackCtx context.Context) (context.Context, context.CancelFunc) {
+	runtimeCtx = normalizeAgoraRuntimeContext(runtimeCtx)
+	if callbackCtx == nil {
+		return runtimeCtx, func() {}
+	}
+	ctx, cancel := context.WithCancel(runtimeCtx)
+	stopCallbackCancel := context.AfterFunc(callbackCtx, cancel)
+	return agoraRTMCallbackMergedContext{Context: ctx, callback: callbackCtx}, func() {
+		stopCallbackCancel()
+		cancel()
+	}
+}
+
 func installAgoraRTMDataMessageHandler(ctx context.Context, subscriber workeragora.DataMessageSubscriber, responder workeragora.TextResponder, agentUserID string, channel string) {
 	if subscriber == nil {
 		return
@@ -1296,7 +1321,9 @@ func installAgoraRTMDataMessageHandler(ctx context.Context, subscriber workerago
 			default:
 			}
 		}
-		if err := router.HandleDataMessage(ctx, msg); err != nil {
+		routeCtx, cancelRoute := agoraRTMCallbackContext(ctx, callbackCtx)
+		defer cancelRoute()
+		if err := router.HandleDataMessage(routeCtx, msg); err != nil {
 			logutil.Logger.Warnw("failed to handle Agora RTM data message", err, "channel", msg.Channel, "publisher", msg.Publisher)
 		}
 		return nil
