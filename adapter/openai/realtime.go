@@ -2114,7 +2114,10 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 		}
 		switch itemType {
 		case "message":
-			s.closeRealtimeMessageStreams(s.generation.messages[itemID])
+			if msg := s.generation.messages[itemID]; msg != nil {
+				s.setRealtimeMessageModalities(itemID, []string{"audio", "text"})
+				s.closeRealtimeMessageStreams(msg)
+			}
 		case "function_call":
 			call, err := openAIRealtimeFunctionCall(item)
 			if err != nil {
