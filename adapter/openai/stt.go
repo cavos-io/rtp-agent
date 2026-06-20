@@ -648,6 +648,7 @@ type openAIRealtimeSTTStream struct {
 	mu         sync.Mutex
 	closed     bool
 	inputEnded bool
+	pushedSR   uint32
 	audio      *audio.AudioByteStream
 	state      *openAIRealtimeSTTMessageState
 	owner      *OpenAISTT
@@ -658,10 +659,6 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	normalizedFrame, err := normalizeOpenAIRealtimeInputAudio(frame)
-	if err != nil {
-		return err
-	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -670,6 +667,16 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.inputEnded {
 		s.mu.Unlock()
 		return io.ErrClosedPipe
+	}
+	if frame.SampleRate != 0 {
+		if s.pushedSR != 0 && s.pushedSR != frame.SampleRate {
+			return fmt.Errorf("the sample rate of the input frames must be consistent")
+		}
+		s.pushedSR = frame.SampleRate
+	}
+	normalizedFrame, err := normalizeOpenAIRealtimeInputAudio(frame)
+	if err != nil {
+		return err
 	}
 	if s.audio == nil {
 		s.audio = newOpenAIRealtimeSTTAudioByteStream()
