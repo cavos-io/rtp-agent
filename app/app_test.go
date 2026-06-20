@@ -10841,8 +10841,8 @@ func TestInworldTTSFallbackPassesReferenceOptions(t *testing.T) {
 	if got, want := gotPayload["timestampTransportStrategy"], "SYNC"; got != want {
 		t.Fatalf("payload timestampTransportStrategy = %#v, want %#v", got, want)
 	}
-	if got, want := gotPayload["temperature"], float64(0.8); got != want {
-		t.Fatalf("payload temperature = %#v, want %#v", got, want)
+	if _, ok := gotPayload["temperature"]; ok {
+		t.Fatalf("payload temperature present at top level, want audioConfig.temperature in %#v", gotPayload)
 	}
 	audioConfig, _ := gotPayload["audioConfig"].(map[string]any)
 	if got, want := audioConfig["audioEncoding"], "MP3"; got != want {
@@ -10856,6 +10856,9 @@ func TestInworldTTSFallbackPassesReferenceOptions(t *testing.T) {
 	}
 	if got, want := audioConfig["speakingRate"], float64(1.2); got != want {
 		t.Fatalf("audioConfig.speakingRate = %#v, want %#v in %#v", got, want, gotPayload)
+	}
+	if got, want := audioConfig["temperature"], float64(0.8); got != want {
+		t.Fatalf("audioConfig.temperature = %#v, want %#v in %#v", got, want, gotPayload)
 	}
 }
 

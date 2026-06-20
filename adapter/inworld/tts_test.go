@@ -103,6 +103,57 @@ func TestInworldTTSOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestInworldTTSUpdateOptionsAffectFutureRequests(t *testing.T) {
+	provider := NewInworldTTS("test-key", "")
+	provider.UpdateOptions(
+		WithInworldTTSVoice("Luna"),
+		WithInworldTTSModel("inworld-tts-2"),
+		WithInworldTTSEncoding("MP3"),
+		WithInworldTTSBitRate(96000),
+		WithInworldTTSSampleRate(44100),
+		WithInworldTTSSpeakingRate(1.2),
+		WithInworldTTSTemperature(0.4),
+		WithInworldTTSLanguage("fr-FR"),
+		WithInworldTTSTimestampType("WORD"),
+		WithInworldTTSTextNormalization(false),
+		WithInworldTTSDeliveryMode("CREATIVE"),
+		WithInworldTTSTimestampTransportStrategy("SYNC"),
+		WithInworldTTSBufferCharThreshold(333),
+		WithInworldTTSMaxBufferDelayMS(444),
+	)
+
+	payload := inworldTTSRequestPayload(provider, "bonjour")
+	assertInworldPayload(t, payload, "voiceId", "Luna")
+	assertInworldPayload(t, payload, "modelId", "inworld-tts-2")
+	assertInworldPayload(t, payload, "language", "fr-FR")
+	assertInworldPayload(t, payload, "timestampType", "WORD")
+	assertInworldPayload(t, payload, "applyTextNormalization", "OFF")
+	assertInworldPayload(t, payload, "deliveryMode", "CREATIVE")
+	assertInworldPayload(t, payload, "timestampTransportStrategy", "SYNC")
+	audioConfig := payload["audioConfig"].(map[string]interface{})
+	if audioConfig["audioEncoding"] != "MP3" {
+		t.Fatalf("audioEncoding = %#v, want MP3", audioConfig["audioEncoding"])
+	}
+	if audioConfig["bitrate"] != 96000 {
+		t.Fatalf("bitrate = %#v, want 96000", audioConfig["bitrate"])
+	}
+	if audioConfig["sampleRateHertz"] != 44100 {
+		t.Fatalf("sampleRateHertz = %#v, want 44100", audioConfig["sampleRateHertz"])
+	}
+	if audioConfig["speakingRate"] != 1.2 {
+		t.Fatalf("speakingRate = %#v, want 1.2", audioConfig["speakingRate"])
+	}
+	if audioConfig["temperature"] != 0.4 {
+		t.Fatalf("temperature = %#v, want 0.4", audioConfig["temperature"])
+	}
+	if provider.bufferCharThreshold != 333 {
+		t.Fatalf("bufferCharThreshold = %d, want 333", provider.bufferCharThreshold)
+	}
+	if provider.maxBufferDelayMS != 444 {
+		t.Fatalf("maxBufferDelayMS = %d, want 444", provider.maxBufferDelayMS)
+	}
+}
+
 func TestInworldTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	provider := NewInworldTTS("test-key", "",
 		WithInworldTTSVoice("Ava"),

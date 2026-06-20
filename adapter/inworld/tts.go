@@ -230,6 +230,17 @@ func (t *InworldTTS) Capabilities() tts.TTSCapabilities {
 func (t *InworldTTS) SampleRate() int  { return t.sampleRate }
 func (t *InworldTTS) NumChannels() int { return 1 }
 
+func (t *InworldTTS) UpdateOptions(opts ...InworldTTSOption) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, opt := range opts {
+		opt(t)
+	}
+}
+
 func (t *InworldTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	req, err := buildInworldTTSRequest(ctx, t, text)
 	if err != nil {
@@ -248,8 +259,7 @@ func (t *InworldTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 }
 
 func buildInworldTTSRequest(ctx context.Context, t *InworldTTS, text string) (*http.Request, error) {
-	payload := inworldTTSBasePayload(t)
-	payload["text"] = text
+	payload := inworldTTSRequestPayload(t, text)
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -265,6 +275,12 @@ func buildInworldTTSRequest(ctx context.Context, t *InworldTTS, text string) (*h
 	}
 	req.Header.Set("Content-Type", "application/json")
 	return req, nil
+}
+
+func inworldTTSRequestPayload(t *InworldTTS, text string) map[string]interface{} {
+	payload := inworldTTSBasePayload(t)
+	payload["text"] = text
+	return payload
 }
 
 func (t *InworldTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
@@ -398,8 +414,8 @@ func inworldTTSBasePayload(t *InworldTTS) map[string]interface{} {
 			"sampleRateHertz": t.sampleRate,
 			"bitrate":         t.bitRate,
 			"speakingRate":    t.speakingRate,
+			"temperature":     t.temperature,
 		},
-		"temperature":                t.temperature,
 		"timestampTransportStrategy": t.timestampTransportStrategy,
 	}
 	if t.language != "" {
