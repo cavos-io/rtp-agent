@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -539,6 +540,9 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 				SamplesPerChannel: uint32(len(ev.Data) / 2),
 			}
 			if err := ma.PublishAudio(context.Background(), frame); err != nil {
+				if errors.Is(err, context.Canceled) {
+					return
+				}
 				if ma.session != nil {
 					ma.session.EmitError(ErrorEvent{
 						Error:  llm.NewRealtimeError("failed to publish realtime audio", err),
