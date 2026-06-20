@@ -2554,6 +2554,37 @@ func TestPipelineAgentStartsWithoutSTT(t *testing.T) {
 	receivePipelineClosed(t, vadClosed, "VAD")
 }
 
+func TestPipelineAgentStartWrapsNonStreamingSTTWithVAD(t *testing.T) {
+	sttObj := &nonStreamingPipelineSTT{
+		streamErr: errors.New("direct STT stream should not be used"),
+	}
+	agent := NewPipelineAgent(&fakePipelineVAD{}, sttObj, nil, nil, llm.NewChatContext())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.run(ctx)
+
+	deadline := time.After(time.Second)
+	for {
+		agent.mu.Lock()
+		stream := agent.sttStream
+		agent.mu.Unlock()
+		if stream != nil {
+			break
+		}
+		if sttObj.streamCalls != 0 {
+			t.Fatalf("non-streaming STT Stream calls = %d, want 0 because VAD StreamAdapter should wrap it", sttObj.streamCalls)
+		}
+		select {
+		case <-deadline:
+			t.Fatal("pipeline sttStream was not started with StreamAdapter")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if sttObj.streamCalls != 0 {
+		t.Fatalf("non-streaming STT Stream calls = %d, want 0 because VAD StreamAdapter should wrap it", sttObj.streamCalls)
+	}
+}
+
 func TestPipelineAgentEmitsErrorEventForSTTStreamStartError(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	cause := errors.New("stt start failed")
