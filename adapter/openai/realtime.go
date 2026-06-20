@@ -2544,20 +2544,6 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 				Data:         data,
 			}, true
 		}
-	case "response.function_call_arguments.delta":
-		if name, ok := ev["name"].(string); ok {
-			if args, ok2 := ev["delta"].(string); ok2 {
-				callID, _ := ev["call_id"].(string)
-				return llm.RealtimeEvent{
-					Type: llm.RealtimeEventTypeFunctionCall,
-					Function: &llm.FunctionToolCall{
-						CallID:    callID,
-						Name:      name,
-						Arguments: args,
-					},
-				}, true
-			}
-		}
 	case "response.output_item.done":
 		item, _ := ev["item"].(map[string]any)
 		if itemType, _ := item["type"].(string); itemType != "function_call" {

@@ -4358,6 +4358,17 @@ func TestRealtimeEventMapsOutputItemDoneFunctionCall(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventIgnoresFunctionCallArgumentDelta(t *testing.T) {
+	if ev, ok := openAIRealtimeEvent(map[string]any{
+		"type":    "response.function_call_arguments.delta",
+		"call_id": "call_123",
+		"name":    "lookup",
+		"delta":   `{"query":`,
+	}); ok {
+		t.Fatalf("openAIRealtimeEvent = %#v, true; want argument delta ignored until output item done", ev)
+	}
+}
+
 func TestRealtimeEventMapsConversationItemAddedFunctionCallOutput(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "conversation.item.added",
