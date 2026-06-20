@@ -746,6 +746,21 @@ func TestUpdateOptionsMergesConfiguredValuesBeforeRun(t *testing.T) {
 	}
 }
 
+func TestUpdateOptionsAppliesReferenceJobExecutorType(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{JobExecutorType: JobExecutorTypeThread})
+
+	if err := server.UpdateOptions(WorkerOptions{JobExecutorType: JobExecutorTypeProcess}); err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	if server.Options.JobExecutorType != JobExecutorTypeProcess {
+		t.Fatalf("JobExecutorType = %q, want process", server.Options.JobExecutorType)
+	}
+	if got := server.newJobProcess().ExecutorType(); got != JobExecutorTypeProcess {
+		t.Fatalf("newJobProcess().ExecutorType() = %q, want process", got)
+	}
+}
+
 func TestUpdateOptionsPreservesWorkerTransport(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		Transport: WorkerTransportAgora,
@@ -4313,6 +4328,16 @@ func TestLocalJobContextUsesReferenceFakeRoomSIDPrefix(t *testing.T) {
 	}
 }
 
+func TestLocalJobContextUsesConfiguredJobExecutorType(t *testing.T) {
+	ctx := newLocalJobContext("room-a", "agent-local", WorkerOptions{
+		JobExecutorType: JobExecutorTypeProcess,
+	})
+
+	if got := ctx.Proc().ExecutorType(); got != JobExecutorTypeProcess {
+		t.Fatalf("local job ExecutorType() = %q, want process", got)
+	}
+}
+
 func TestLocalJobContextCreatesReferenceAgentJoinToken(t *testing.T) {
 	ctx := newLocalJobContext("room-a", "agent-local", WorkerOptions{
 		APIKey:    "api-key",
@@ -4644,6 +4669,7 @@ func TestExecuteLocalJobWithExplicitIdleProcessesLaunchesThroughProcPool(t *test
 
 	server := NewAgentServer(WorkerOptions{
 		WSRL:                             "wss://local.example",
+		JobExecutorType:                  JobExecutorTypeProcess,
 		NumIdleProcesses:                 2,
 		NumIdleProcessesSet:              true,
 		ShutdownProcessTimeoutSeconds:    3,
@@ -4673,9 +4699,9 @@ func TestExecuteLocalJobWithExplicitIdleProcessesLaunchesThroughProcPool(t *test
 		cancel()
 		t.Fatalf("proc pool max processes = %d, want 2", capturedMaxProcesses)
 	}
-	if capturedExecutorType != ipc.ExecutorTypeThread {
+	if capturedExecutorType != ipc.ExecutorTypeProcess {
 		cancel()
-		t.Fatalf("proc pool executor type = %q, want thread", capturedExecutorType)
+		t.Fatalf("proc pool executor type = %q, want process", capturedExecutorType)
 	}
 	if capturedCloseTimeout != 3*time.Second {
 		cancel()

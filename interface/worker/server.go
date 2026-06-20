@@ -122,20 +122,21 @@ type WorkerInfo struct {
 }
 
 type WorkerOptions struct {
-	AgentName      string
-	AgentNameIsEnv bool
-	WorkerType     WorkerType
-	Transport      WorkerTransport
-	MaxRetry       int
-	MaxRetrySet    bool
-	Version        string
-	Host           string
-	Port           int
-	PortSet        bool
-	WSURL          string
-	LoadFunc       func(*AgentServer) float64
-	HealthCheck    func(*AgentServer) error
-	SetupFunc      func(*JobProcess) error
+	AgentName       string
+	AgentNameIsEnv  bool
+	WorkerType      WorkerType
+	Transport       WorkerTransport
+	JobExecutorType JobExecutorType
+	MaxRetry        int
+	MaxRetrySet     bool
+	Version         string
+	Host            string
+	Port            int
+	PortSet         bool
+	WSURL           string
+	LoadFunc        func(*AgentServer) float64
+	HealthCheck     func(*AgentServer) error
+	SetupFunc       func(*JobProcess) error
 	// WSRL is kept for backward compatibility. Prefer WSURL for new code.
 	WSRL                               string
 	APIKey                             string
@@ -614,6 +615,9 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	if next.WorkerType != "" {
 		current.WorkerType = next.WorkerType
 	}
+	if next.JobExecutorType != "" {
+		current.JobExecutorType = next.JobExecutorType
+	}
 	if next.MaxRetrySet || next.MaxRetry != 0 {
 		current.MaxRetry = next.MaxRetry
 		current.MaxRetrySet = true
@@ -723,6 +727,9 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	}
 	if opts.MaxRetry == 0 && !opts.MaxRetrySet {
 		opts.MaxRetry = defaultMaxRetry
+	}
+	if opts.JobExecutorType == "" {
+		opts.JobExecutorType = JobExecutorTypeThread
 	}
 	if opts.JobMemoryWarnMB == 0 && !opts.JobMemoryWarnMBSet {
 		opts.JobMemoryWarnMB = defaultJobMemoryWarn
@@ -1816,7 +1823,7 @@ func (s *AgentServer) launchLocalJobExecutor(ctx context.Context, jobCtx *JobCon
 	info := runningJobInfoFromContext(jobCtx)
 	localJob := livekitServerLocalJobExecutorPlan(jobCtx.Job)
 	if s.Options.NumIdleProcessesSet && s.Options.NumIdleProcesses > 0 {
-		pool := newLocalProcPool(s.Options.NumIdleProcesses, workeripc.ExecutorTypeThread, entrypoint)
+		pool := newLocalProcPool(s.Options.NumIdleProcesses, s.Options.JobExecutorType, entrypoint)
 		pool.SetTargetIdleProcesses(s.Options.NumIdleProcesses)
 		pool.SetCloseTimeout(time.Duration(s.Options.ShutdownProcessTimeoutSeconds * float64(time.Second)))
 		if err := pool.Start(ctx); err != nil {
@@ -1859,7 +1866,7 @@ func waitForLocalEntrypoint(done <-chan struct{}) {
 }
 
 func (s *AgentServer) newJobProcess() *JobProcess {
-	return NewJobProcess(JobExecutorTypeThread, s.Options.UserArguments, s.Options.HTTPProxy)
+	return NewJobProcess(s.Options.JobExecutorType, s.Options.UserArguments, s.Options.HTTPProxy)
 }
 
 func (s *AgentServer) runJobEntrypoint(jobCtx *JobContext) error {
@@ -2018,7 +2025,7 @@ func newLocalJobContextWithOptions(roomName string, participantIdentity string, 
 		jobCtx.InitRecording(localPlan.RecordingOptions)
 	}
 	jobCtx.SetSessionDirectory(localPlan.SessionDirectory)
-	jobCtx.process = NewJobProcess(JobExecutorTypeThread, opts.UserArguments, opts.HTTPProxy)
+	jobCtx.process = NewJobProcess(opts.JobExecutorType, opts.UserArguments, opts.HTTPProxy)
 	jobCtx.token = localPlan.Token
 	return jobCtx
 }
