@@ -127,6 +127,7 @@ func TestSilenceFrameLikeMatchesShapeAndZerosData(t *testing.T) {
 		SampleRate:        16000,
 		NumChannels:       1,
 		SamplesPerChannel: 2,
+		ParticipantID:     "caller-7",
 	}
 
 	frame := SilenceFrameLike(source)
@@ -146,6 +147,25 @@ func TestSilenceFrameLikeMatchesShapeAndZerosData(t *testing.T) {
 		if sample != 0 {
 			t.Fatalf("SilenceFrameLike data[%d] = %d, want 0", i, sample)
 		}
+	}
+	if frame.ParticipantID != "caller-7" {
+		t.Fatalf("SilenceFrameLike ParticipantID = %q, want caller-7", frame.ParticipantID)
+	}
+}
+
+func TestResampleAudioFramePreservesParticipantID(t *testing.T) {
+	source := audioFrameFromInt16(16000, 1, []int16{1, 2, 3, 4})
+	source.ParticipantID = "caller-7"
+
+	frame, err := ResampleAudioFrame(source, 8000)
+	if err != nil {
+		t.Fatalf("ResampleAudioFrame() error = %v, want nil", err)
+	}
+	if frame == source {
+		t.Fatal("ResampleAudioFrame returned original frame, want resampled frame")
+	}
+	if frame.ParticipantID != "caller-7" {
+		t.Fatalf("ResampleAudioFrame ParticipantID = %q, want caller-7", frame.ParticipantID)
 	}
 }
 
