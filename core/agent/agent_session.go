@@ -268,6 +268,8 @@ type AgentSession struct {
 	mu             sync.Mutex
 	activity       *AgentActivity
 	started        bool
+	starting       bool
+	startDone      chan struct{}
 	closing        bool
 	runCtx         context.Context
 	runState       *RunResult
@@ -2045,14 +2047,30 @@ func (s *AgentSession) Start(ctx context.Context) error {
 }
 
 func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) (*RunResult, error) {
-	s.mu.Lock()
-	if s.started {
-		s.mu.Unlock()
-		return nil, nil
-	}
-	if opts.CaptureRun && s.runState != nil && !s.runState.Done() {
-		s.mu.Unlock()
-		return nil, ErrAgentSessionNestedRun
+	var startDone chan struct{}
+	for {
+		s.mu.Lock()
+		if s.started {
+			s.mu.Unlock()
+			return nil, nil
+		}
+		if s.starting {
+			done := s.startDone
+			s.mu.Unlock()
+			if done != nil {
+				<-done
+			}
+			continue
+		}
+		if opts.CaptureRun && s.runState != nil && !s.runState.Done() {
+			s.mu.Unlock()
+			return nil, ErrAgentSessionNestedRun
+		}
+
+		startDone = make(chan struct{})
+		s.starting = true
+		s.startDone = startDone
+		break
 	}
 
 	if s.VAD == nil {
@@ -2077,6 +2095,7 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 
 	if err := s.validateRealtimeTurnDetectionInterruptions(assistant); err != nil {
 		s.clearRunStateIfCurrent(runState)
+		s.clearStartingIfCurrent(startDone)
 		return nil, err
 	}
 
@@ -2085,6 +2104,7 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 	if backgroundAudio != nil && room != nil {
 		if err := backgroundAudio.Start(room, s); err != nil {
 			s.clearRunStateIfCurrent(runState)
+			s.clearStartingIfCurrent(startDone)
 			return nil, err
 		}
 	}
@@ -2103,6 +2123,7 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 				_ = backgroundAudio.Close()
 			}
 			s.clearRunStateIfCurrent(runState)
+			s.clearStartingIfCurrent(startDone)
 			return nil, err
 		}
 	}
@@ -2114,6 +2135,7 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 			_ = backgroundAudio.Close()
 		}
 		s.clearRunStateIfCurrent(runState)
+		s.clearStartingIfCurrent(startDone)
 		return nil, err
 	}
 
@@ -2123,6 +2145,11 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 	s.started = true
 	s.closing = false
 	s.runCtx = ctx
+	if s.startDone == startDone {
+		s.starting = false
+		close(startDone)
+		s.startDone = nil
+	}
 	s.mu.Unlock()
 
 	activity.Start()
@@ -2158,6 +2185,19 @@ func (s *AgentSession) clearRunStateIfCurrent(runState *RunResult) {
 	s.mu.Lock()
 	if s.runState == runState {
 		s.runState = nil
+	}
+	s.mu.Unlock()
+}
+
+func (s *AgentSession) clearStartingIfCurrent(startDone chan struct{}) {
+	if startDone == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.startDone == startDone {
+		s.starting = false
+		close(startDone)
+		s.startDone = nil
 	}
 	s.mu.Unlock()
 }

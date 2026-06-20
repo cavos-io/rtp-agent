@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1799,6 +1800,46 @@ func (f *fakeSessionAssistant) OnAudioFrame(context.Context, *model.AudioFrame) 
 func (f *fakeSessionAssistant) SetPublishAudio(func(context.Context, *model.AudioFrame) error) {
 }
 
+type blockingStartSessionAssistant struct {
+	fakeSessionAssistant
+
+	mu            sync.Mutex
+	starts        int
+	firstStarted  chan struct{}
+	secondStarted chan struct{}
+	release       chan struct{}
+}
+
+func newBlockingStartSessionAssistant() *blockingStartSessionAssistant {
+	return &blockingStartSessionAssistant{
+		firstStarted:  make(chan struct{}),
+		secondStarted: make(chan struct{}),
+		release:       make(chan struct{}),
+	}
+}
+
+func (b *blockingStartSessionAssistant) Start(context.Context, *AgentSession) error {
+	b.mu.Lock()
+	b.starts++
+	starts := b.starts
+	switch starts {
+	case 1:
+		close(b.firstStarted)
+	case 2:
+		close(b.secondStarted)
+	}
+	b.mu.Unlock()
+
+	<-b.release
+	return nil
+}
+
+func (b *blockingStartSessionAssistant) startCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.starts
+}
+
 type doneScheduledSpeechAssistant struct {
 	fakeSessionAssistant
 }
@@ -1892,6 +1933,52 @@ func TestAgentSessionStartStartsConfiguredAvatar(t *testing.T) {
 
 	if avatar.startCalls != 1 {
 		t.Fatalf("avatar startCalls = %d, want 1", avatar.startCalls)
+	}
+}
+
+func TestAgentSessionConcurrentStartIsIdempotent(t *testing.T) {
+	baseAgent := NewAgent("test")
+	assistant := newBlockingStartSessionAssistant()
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	session.Assistant = assistant
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	firstErr := make(chan error, 1)
+	go func() {
+		firstErr <- session.Start(ctx)
+	}()
+
+	select {
+	case <-assistant.firstStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("first Start did not reach assistant")
+	}
+
+	secondErr := make(chan error, 1)
+	go func() {
+		secondErr <- session.Start(ctx)
+	}()
+
+	select {
+	case <-assistant.secondStarted:
+		close(assistant.release)
+		<-firstErr
+		<-secondErr
+		t.Fatalf("concurrent Start reached assistant %d times, want once", assistant.startCount())
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(assistant.release)
+	if err := <-firstErr; err != nil {
+		t.Fatalf("first Start error = %v", err)
+	}
+	if err := <-secondErr; err != nil {
+		t.Fatalf("second Start error = %v", err)
+	}
+	if got := assistant.startCount(); got != 1 {
+		t.Fatalf("assistant start count = %d, want 1", got)
 	}
 }
 
