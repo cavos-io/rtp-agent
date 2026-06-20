@@ -155,7 +155,7 @@ func TestMultimodalAgentTTSFallbackMarksSpeakingAfterFirstAudioFrame(t *testing.
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := ma.publishTTSFallbackForRealtimeText(context.Background(), nil, "hello")
+		_, _, err := ma.publishTTSFallbackForRealtimeText(context.Background(), nil, "hello")
 		done <- err
 	}()
 
@@ -3114,6 +3114,45 @@ func TestMultimodalAgentTTSFallbackStreamErrorSourcesTTS(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive fallback stream error")
+	}
+}
+
+func TestMultimodalAgentTTSFallbackPublishErrorSourcesAgent(t *testing.T) {
+	cause := errors.New("fallback publish failed")
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.TTS = &fakeGenerationTTS{stream: newEndInputGenerationTTSStream()}
+	ma := &MultimodalAgent{
+		model: &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{
+			AudioOutput: true,
+		}},
+		session: session,
+		PublishAudio: func(context.Context, *model.AudioFrame) error {
+			return cause
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "spoken fallback"
+	close(textCh)
+	modalitiesCh := make(chan []string, 1)
+	modalitiesCh <- []string{"text"}
+	close(modalitiesCh)
+
+	ma.consumeRealtimeMessage(context.Background(), NewSpeechHandle(true, DefaultInputDetails()), llm.MessageGeneration{
+		MessageID:    "msg_text_only_publish_error_source",
+		TextCh:       textCh,
+		ModalitiesCh: modalitiesCh,
+	})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("ErrorEvents error = %v, want %v", ev.Error, cause)
+		}
+		if ev.Source != ma {
+			t.Fatalf("ErrorEvents source = %#v, want multimodal agent", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive fallback publish error")
 	}
 }
 
