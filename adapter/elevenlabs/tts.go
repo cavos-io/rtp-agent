@@ -32,6 +32,7 @@ const (
 )
 
 type ElevenLabsTTS struct {
+	mu                             sync.Mutex
 	apiKey                         string
 	baseURL                        string
 	voiceID                        string
@@ -52,6 +53,7 @@ type ElevenLabsTTS struct {
 	applyTextNormalization         string
 	applyLanguageTextNormalization *bool
 	preferredAlignment             string
+	streams                        map[*elevenLabsStream]struct{}
 }
 
 type ElevenLabsTTSOption func(*ElevenLabsTTS)
@@ -231,6 +233,45 @@ func (t *ElevenLabsTTS) SampleRate() int  { return t.sampleRate }
 func (t *ElevenLabsTTS) NumChannels() int { return 1 }
 func (t *ElevenLabsTTS) Model() string    { return t.modelID }
 func (t *ElevenLabsTTS) Provider() string { return "ElevenLabs" }
+
+func (t *ElevenLabsTTS) Close() error {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	streams := make([]*elevenLabsStream, 0, len(t.streams))
+	for stream := range t.streams {
+		streams = append(streams, stream)
+	}
+	t.streams = nil
+	t.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
+func (t *ElevenLabsTTS) registerStream(stream *elevenLabsStream) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.streams == nil {
+		t.streams = make(map[*elevenLabsStream]struct{})
+	}
+	t.streams[stream] = struct{}{}
+}
+
+func (t *ElevenLabsTTS) unregisterStream(stream *elevenLabsStream) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.streams, stream)
+}
 
 func (t *ElevenLabsTTS) UpdateOptions(opts ...ElevenLabsTTSOption) {
 	for _, opt := range opts {
@@ -471,6 +512,7 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 	contextID := "ctx_" + uuid.NewString()[:12]
 	ctx, cancel := context.WithCancel(ctx)
 	stream := &elevenLabsStream{
+		provider:                  t,
 		conn:                      conn,
 		audio:                     make(chan *tts.SynthesizedAudio, 100),
 		errCh:                     make(chan error, 1),
@@ -488,6 +530,7 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 	go stream.readLoop()
 	go stream.pingLoop()
 
+	t.registerStream(stream)
 	return stream, nil
 }
 
@@ -545,11 +588,12 @@ func elevenLabsSampleRate(encoding string) int {
 }
 
 type elevenLabsStream struct {
-	conn   *websocket.Conn
-	audio  chan *tts.SynthesizedAudio
-	errCh  chan error
-	mu     sync.Mutex
-	closed bool
+	provider *ElevenLabsTTS
+	conn     *websocket.Conn
+	audio    chan *tts.SynthesizedAudio
+	errCh    chan error
+	mu       sync.Mutex
+	closed   bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -1071,6 +1115,7 @@ func (s *elevenLabsStream) sendInitLocked() error {
 func (s *elevenLabsStream) closeAfterWriteFailureLocked() {
 	s.closed = true
 	s.cancel()
+	s.provider.unregisterStream(s)
 	_ = s.conn.Close()
 }
 
@@ -1085,6 +1130,7 @@ func (s *elevenLabsStream) Close() error {
 	if s.initSent {
 		_ = s.conn.WriteJSON(elevenLabsCloseContextPayload(s.contextID))
 	}
+	s.provider.unregisterStream(s)
 	return s.conn.Close()
 }
 
