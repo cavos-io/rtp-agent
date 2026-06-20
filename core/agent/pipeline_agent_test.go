@@ -598,6 +598,59 @@ func TestRunContextForegroundWaitsForPendingToolUpdateReply(t *testing.T) {
 	}
 }
 
+func TestRunContextForegroundContinuesWhenToolUpdateReplyCanceled(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{ToolCalls: []llm.FunctionToolCall{{
+						Type:      "function",
+						Name:      "lookup",
+						CallID:    "call_lookup",
+						Arguments: `{}`,
+					}}}},
+				},
+			},
+			&fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "unwanted progress reply"}}}},
+		},
+	}
+	tool := &foregroundAfterUpdateTool{
+		foregroundEntered: make(chan struct{}),
+		releaseForeground: make(chan struct{}),
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{tool}
+	session.On("function_tools_executed", func(ev Event) {
+		if toolsEv, ok := ev.(*FunctionToolsExecutedEvent); ok {
+			toolsEv.CancelToolReply()
+		}
+	})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.generateReply()
+	}()
+
+	select {
+	case <-tool.foregroundEntered:
+	case <-time.After(time.Second):
+		t.Fatal("Foreground did not enter after pending tool update reply was canceled")
+	}
+	close(tool.releaseForeground)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("generateReply did not finish after canceled update reply foreground release")
+	}
+	if len(l.calls) != 1 {
+		t.Fatalf("LLM Chat calls = %d, want canceled progress reply to skip follow-up generation", len(l.calls))
+	}
+}
+
 func TestPipelineAgentToolReplyRefreshesUpdatedInstructions(t *testing.T) {
 	baseAgent := NewAgent("old instructions")
 	if err := updateAgentInstructionsMessage(baseAgent.ChatCtx, llm.NewInstructions(baseAgent.Instructions), true); err != nil {

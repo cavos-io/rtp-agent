@@ -1013,6 +1013,10 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			break
 		}
 		if !replyRequired {
+			if pendingToolUpdateReplyDone != nil {
+				close(pendingToolUpdateReplyDone)
+				pendingToolUpdateReplyDone = nil
+			}
 			session.UpdateAgentState(AgentStateListening)
 			break
 		}
