@@ -3011,6 +3011,8 @@ func TestPipelineAgentEmitsTTSErrorEventForSpeechStreamFailure(t *testing.T) {
 
 func TestPipelineAgentEmitsTTSErrorEventForPublishAudioFailure(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	playback := &fakePipelinePlaybackController{}
+	session.SetAudioPlaybackController(playback)
 	cause := errors.New("publish audio failed")
 	ttsSource := &fakePipelineTTS{stream: &fakePipelineTTSStream{
 		frames: []*model.AudioFrame{{
@@ -3048,6 +3050,9 @@ func TestPipelineAgentEmitsTTSErrorEventForPublishAudioFailure(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive publish audio error")
+	}
+	if playback.flushCalls != 1 {
+		t.Fatalf("Flush calls = %d, want 1 after publish audio failure", playback.flushCalls)
 	}
 }
 

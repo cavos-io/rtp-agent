@@ -1587,6 +1587,7 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 				if err := va.PublishAudio(ctx, frame); err != nil {
 					transcriptSync.Close()
 					<-transcriptionDone
+					va.flushAssistantPlayback(session)
 					return ttsGen, err
 				}
 			}
