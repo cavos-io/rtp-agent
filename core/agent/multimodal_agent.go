@@ -336,6 +336,9 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 
 	if speech.Generation.Text != "" && ma.model.Capabilities().SupportsSay {
 		if err := rtSession.Say(speech.Generation.Text); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return
+			}
 			logger.Logger.Errorw("failed to say text with realtime session", err)
 			if session != nil {
 				session.EmitError(ErrorEvent{
@@ -456,6 +459,9 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 		options.Instructions = speech.Generation.Instructions.AsModality(speech.InputDetails.Modality).String()
 	}
 	if err := rtSession.GenerateReply(options); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		logger.Logger.Errorw("failed to generate realtime reply", err)
 		if session != nil {
 			session.EmitError(ErrorEvent{

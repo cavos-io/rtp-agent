@@ -829,6 +829,47 @@ func TestMultimodalAgentRealtimeGenerateReplyErrorIsRecoverable(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentRealtimeGenerateReplyCancelSuppressesError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rtSession := &fakeRealtimeSession{
+		generateCh:  make(chan llm.RealtimeGenerateReplyOptions, 1),
+		generateErr: context.Canceled,
+	}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Assistant = ma
+	errorEvents := session.ErrorEvents()
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	handle, err := session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+		UserInput:     "hello",
+		InputModality: "text",
+	})
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions returned error: %v", err)
+	}
+
+	select {
+	case <-rtSession.generateCh:
+	case <-time.After(time.Second):
+		t.Fatal("realtime session did not receive GenerateReply")
+	}
+	waitCtx, waitCancel := context.WithTimeout(ctx, time.Second)
+	defer waitCancel()
+	if err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("speech handle did not finish after canceled realtime GenerateReply: %v", err)
+	}
+	select {
+	case ev := <-errorEvents:
+		t.Fatalf("ErrorEvents received %#v, want cancellation suppressed", ev)
+	default:
+	}
+}
+
 func TestMultimodalAgentSayUsesRealtimeSessionWhenSupported(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -936,6 +977,62 @@ func TestMultimodalAgentRealtimeSayErrorSkipsAssistantChatCommit(t *testing.T) {
 	select {
 	case ev := <-conversationEvents:
 		t.Fatalf("ConversationItemAdded event = %#v, want none after realtime Say error", ev)
+	default:
+	}
+}
+
+func TestMultimodalAgentRealtimeSayCancelSuppressesError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rtSession := &fakeRealtimeSession{
+		sayCh:  make(chan string, 1),
+		sayErr: context.Canceled,
+	}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{
+		session:      rtSession,
+		capabilities: llm.RealtimeCapabilities{SupportsSay: true},
+	}, llm.NewChatContext())
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Assistant = ma
+	conversationEvents := session.ConversationItemAddedEvents()
+	errorEvents := session.ErrorEvents()
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	handle, err := session.Say(ctx, "canceled realtime say")
+	if err != nil {
+		t.Fatalf("Say returned error: %v", err)
+	}
+
+	select {
+	case text := <-rtSession.sayCh:
+		if text != "canceled realtime say" {
+			t.Fatalf("Say text = %q, want canceled realtime say", text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("realtime session did not receive Say")
+	}
+	waitCtx, waitCancel := context.WithTimeout(ctx, time.Second)
+	defer waitCancel()
+	if err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("speech handle did not finish after canceled realtime Say: %v", err)
+	}
+	select {
+	case ev := <-errorEvents:
+		t.Fatalf("ErrorEvents received %#v, want cancellation suppressed", ev)
+	default:
+	}
+	if msg := findChatMessage(session.ChatCtx, llm.ChatRoleAssistant, "canceled realtime say"); msg != nil {
+		t.Fatalf("session chat context contains canceled realtime Say message = %#v", msg)
+	}
+	if len(handle.ChatItems()) != 0 {
+		t.Fatalf("handle chat items = %#v, want none after canceled realtime Say", handle.ChatItems())
+	}
+	select {
+	case ev := <-conversationEvents:
+		t.Fatalf("ConversationItemAdded event = %#v, want none after canceled realtime Say", ev)
 	default:
 	}
 }
