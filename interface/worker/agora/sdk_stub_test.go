@@ -133,6 +133,31 @@ func TestSDKDataPublisherIgnoresInboundMessagesAfterClose(t *testing.T) {
 	}
 }
 
+func TestSDKDataPublisherCloseClearsMessageHandler(t *testing.T) {
+	source, err := os.ReadFile("sdk_rtm.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk_rtm.go) error = %v", err)
+	}
+	text := string(source)
+	closeIndex := strings.Index(text, "func (p *sdkDataPublisher) Close")
+	if closeIndex < 0 {
+		t.Fatal("sdk_rtm.go missing sdkDataPublisher.Close")
+	}
+	closeBody := text[closeIndex:]
+	if nextFunc := strings.Index(closeBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		closeBody = closeBody[:len("func ")+nextFunc]
+	}
+	closedIndex := strings.Index(closeBody, "p.closed = true")
+	clearIndex := strings.Index(closeBody, "p.handler = nil")
+	cleanupIndex := strings.Index(closeBody, "closeRTMClient")
+	if closedIndex < 0 || clearIndex < 0 || cleanupIndex < 0 {
+		t.Fatal("Close must mark closed, clear message handler, then close native RTM client")
+	}
+	if !(closedIndex < clearIndex && clearIndex < cleanupIndex) {
+		t.Fatal("Close must clear message handler before native RTM cleanup starts")
+	}
+}
+
 func TestSDKDataPublisherRechecksPublishContextAfterLock(t *testing.T) {
 	source, err := os.ReadFile("sdk_rtm.go")
 	if err != nil {

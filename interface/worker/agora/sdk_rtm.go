@@ -157,5 +157,6 @@ func (p *sdkDataPublisher) Close(context.Context) error {
 		return nil
 	}
 	p.closed = true
+	p.handler = nil
 	return closeRTMClient(sdkRTMLifecycleClient{client: p.client}, p.channel)
 }
