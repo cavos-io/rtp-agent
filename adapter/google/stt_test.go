@@ -368,6 +368,32 @@ func TestGoogleSTTStreamSuppressesLowConfidenceInterimTranscript(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTConfiguredMinConfidenceThresholdFiltersInterimTranscript(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{{
+			Results: []*speechpb.StreamingRecognitionResult{{
+				Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+					Transcript: "almost",
+					Confidence: 0.7,
+				}},
+			}},
+		}},
+	}
+	provider := newGoogleSTTWithClient(
+		&fakeGoogleSpeechClient{stream: streamClient},
+		WithGoogleSTTMinConfidenceThreshold(0.75),
+	)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	if event, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next event = %#v, error = %v; want EOF without below-threshold interim event", event, err)
+	}
+}
+
 func TestGoogleSTTStreamMapsReferenceVoiceActivityEvents(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{
@@ -441,6 +467,26 @@ func TestGoogleSTTStreamClosesAfterAudioSendFailure(t *testing.T) {
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close after send failure error = %v", err)
+	}
+}
+
+func TestGoogleSTTProviderCloseClosesActiveStreams(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if !streamClient.closed {
+		t.Fatal("stream client closed = false after provider Close")
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("again")}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after provider Close error = %v, want io.ErrClosedPipe", err)
 	}
 }
 
