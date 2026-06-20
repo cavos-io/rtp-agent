@@ -154,10 +154,10 @@ func (f *TranscriptForwarder) publishReasoning(ctx context.Context, text string,
 }
 
 func userTranscriptStreamID(ev agent.UserInputTranscribedEvent, fallback string) string {
-	if ev.SpeakerID != "" {
-		return ev.SpeakerID
+	if speakerID := strings.TrimSpace(ev.SpeakerID); speakerID != "" {
+		return speakerID
 	}
-	if fallback != "" {
+	if fallback := strings.TrimSpace(fallback); fallback != "" {
 		return fallback
 	}
 	return defaultUserTranscriptStreamID
