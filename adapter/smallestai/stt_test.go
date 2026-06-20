@@ -185,6 +185,45 @@ func TestSmallestAISTTUpdateOptionsReconnectsActiveStreams(t *testing.T) {
 	assertSmallestAIQuery(t, query, "eou_timeout_ms", "250")
 }
 
+func TestSmallestAISTTProviderCloseClosesActiveStreams(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &smallestAISTTStream{
+		owner:  NewSmallestAISTT("test-key"),
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		ctx:    ctx,
+		cancel: cancel,
+		done:   make(chan struct{}),
+		state:  &smallestAISTTStreamState{sessionID: "session-1"},
+	}
+	provider := stream.owner
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushFrame after provider Close error = %v, want closed stream error", err)
+	}
+	provider.mu.Lock()
+	active := len(provider.streams)
+	provider.mu.Unlock()
+	if active != 0 {
+		t.Fatalf("active streams after Close = %d, want 0", active)
+	}
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("stream context still active after provider Close")
+	}
+}
+
 func TestSmallestAISTTUnexpectedNormalCloseReturnsError(t *testing.T) {
 	dialer := newSmallestAISTTTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
 		_ = conn.WriteControl(
