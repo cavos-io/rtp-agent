@@ -486,6 +486,25 @@ func TestTransportDropsForeignChannelEvents(t *testing.T) {
 	}
 }
 
+func TestTransportAcceptsEventsForTrimmedConfiguredChannel(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: " support "}, client)
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	client.emit(Event{Kind: EventConnected, Channel: "support"})
+
+	select {
+	case event := <-tr.Events():
+		if event.Kind != EventConnected || event.Channel != "support" {
+			t.Fatalf("event = %#v, want connected event for trimmed channel", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for trimmed channel event")
+	}
+}
+
 func TestTransportFiltersDuplicateParticipantJoinEvents(t *testing.T) {
 	client := &fakeChannelClient{}
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
