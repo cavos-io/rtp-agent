@@ -275,6 +275,7 @@ type openaiTTSChunkedStream struct {
 	wavDataLeft    int
 	wavSampleRate  uint32
 	wavChannels    uint32
+	closed         bool
 }
 
 func (s *openaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -646,6 +647,10 @@ func (s *openaiTTSChunkedStream) emitSSEUsageMetrics(event map[string]any) {
 }
 
 func (s *openaiTTSChunkedStream) Close() error {
+	if s.closed {
+		return nil
+	}
+	s.closed = true
 	if s.decoder != nil {
 		_ = s.decoder.Close()
 	}

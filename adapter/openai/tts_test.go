@@ -802,6 +802,21 @@ func TestOpenAITTSChunkedStreamReturnsAPIConnectionErrorOnReadFailure(t *testing
 	}
 }
 
+func TestOpenAITTSChunkedStreamCloseIsIdempotent(t *testing.T) {
+	body := &countingOpenAIReadCloser{}
+	stream := &openaiTTSChunkedStream{resp: body}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close() error = %v, want nil", err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1", body.closed)
+	}
+}
+
 type failingReadCloser struct {
 	err error
 }
@@ -809,6 +824,20 @@ type failingReadCloser struct {
 func (r failingReadCloser) Read([]byte) (int, error) { return 0, r.err }
 
 func (r failingReadCloser) Close() error { return nil }
+
+type countingOpenAIReadCloser struct {
+	closed int
+}
+
+func (r *countingOpenAIReadCloser) Read([]byte) (int, error) { return 0, io.EOF }
+
+func (r *countingOpenAIReadCloser) Close() error {
+	r.closed++
+	if r.closed > 1 {
+		return errors.New("already closed")
+	}
+	return nil
+}
 
 type eofWithDataReader struct {
 	data []byte
