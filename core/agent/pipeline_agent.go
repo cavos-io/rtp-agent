@@ -130,11 +130,7 @@ func (va *PipelineAgent) FlushInputTranscription(ctx context.Context, duration t
 				return ctx.Err()
 			default:
 			}
-			chunk := silenceChunk
-			if remaining < chunk {
-				chunk = remaining
-			}
-			frame := audio.SilenceFrame(chunk.Seconds(), shape.SampleRate, shape.NumChannels)
+			frame := audio.SilenceFrame(silenceChunk.Seconds(), shape.SampleRate, shape.NumChannels)
 			if err := stream.PushFrame(frame); err != nil {
 				return err
 			}

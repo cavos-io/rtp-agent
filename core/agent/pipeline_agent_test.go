@@ -2140,17 +2140,22 @@ func TestPipelineAgentFlushInputTranscriptionPushesSilenceAndFlushesSTT(t *testi
 	if len(stream.frames) != 3 {
 		t.Fatalf("silence frames = %d, want 3", len(stream.frames))
 	}
-	wantSamples := []uint32{200, 200, 50}
+	wantSamples := []uint32{200, 200, 200}
+	var totalSamples uint32
 	for i, frame := range stream.frames {
 		if frame.SampleRate != 1000 || frame.NumChannels != 1 || frame.SamplesPerChannel != wantSamples[i] {
 			t.Fatalf("silence frame %d shape = rate %d channels %d samples %d, want 1000/1/%d",
 				i, frame.SampleRate, frame.NumChannels, frame.SamplesPerChannel, wantSamples[i])
 		}
+		totalSamples += frame.SamplesPerChannel
 		for _, sample := range frame.Data {
 			if sample != 0 {
 				t.Fatalf("silence frame %d contains non-zero data byte %d", i, sample)
 			}
 		}
+	}
+	if totalSamples != 600 {
+		t.Fatalf("total silence samples = %d, want 600", totalSamples)
 	}
 }
 
