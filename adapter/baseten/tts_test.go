@@ -357,6 +357,52 @@ func TestBasetenTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	}
 }
 
+func TestBasetenTTSProviderCloseClosesActiveStreams(t *testing.T) {
+	provider := mustNewBasetenTTS(t, "test-key", "", WithBasetenTTSModelEndpoint("ws://baseten.test/websocket"))
+	ctx, cancel := context.WithCancel(context.Background())
+	closeCalls := 0
+	var messages []string
+	stream := &basetenTTSSynthesizeStream{
+		ctx:    ctx,
+		cancel: cancel,
+		events: make(chan *tts.SynthesizedAudio, 1),
+		errCh:  make(chan error, 1),
+		writeMessage: func(_ int, data []byte) error {
+			messages = append(messages, string(data))
+			return nil
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+	if len(messages) != 1 || messages[0] != basetenTTSEndSentinel {
+		t.Fatalf("close messages = %+v, want end sentinel", messages)
+	}
+	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushText after provider Close error = %v, want closed stream error", err)
+	}
+	provider.mu.Lock()
+	active := len(provider.streams)
+	provider.mu.Unlock()
+	if active != 0 {
+		t.Fatalf("active streams after Close = %d, want 0", active)
+	}
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("stream context still active after provider Close")
+	}
+}
+
 func TestBasetenTTSStreamReturnsBinaryAudioFrames(t *testing.T) {
 	dialer := newBasetenTTSTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
 		if _, _, err := conn.ReadMessage(); err != nil {
