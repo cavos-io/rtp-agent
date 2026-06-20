@@ -92,6 +92,8 @@ type SarvamSTT struct {
 	interruptMinSpeechFrames   *int
 	preSpeechPadFrames         *int
 	numInitialIgnoredFrames    *int
+	mu                         sync.Mutex
+	streams                    map[*sarvamSTTRecognizeStream]struct{}
 }
 
 type SarvamSTTOption func(*SarvamSTT)
@@ -301,8 +303,55 @@ func (s *SarvamSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		}
 	}
 	stream := newSarvamSTTRecognizeStream(ctx, conn, s, requestLanguage)
+	s.registerStream(stream)
 	go stream.readLoop()
 	return stream, nil
+}
+
+func (s *SarvamSTT) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	streams := make([]*sarvamSTTRecognizeStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.streams = make(map[*sarvamSTTRecognizeStream]struct{})
+	s.mu.Unlock()
+
+	var firstErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (s *SarvamSTT) registerStream(stream *sarvamSTTRecognizeStream) {
+	if s == nil || stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.streams == nil {
+		s.streams = make(map[*sarvamSTTRecognizeStream]struct{})
+	}
+	s.streams[stream] = struct{}{}
+	stream.provider = s
+}
+
+func (s *SarvamSTT) unregisterStream(stream *sarvamSTTRecognizeStream) {
+	if s == nil || stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.streams, stream)
+	if stream.provider == s {
+		stream.provider = nil
+	}
 }
 
 func buildSarvamSTTWebsocketURL(s *SarvamSTT, language string) *url.URL {
@@ -582,6 +631,7 @@ func sarvamSTTConfidence(probability float64) float64 {
 
 type sarvamSTTRecognizeStream struct {
 	conn          *websocket.Conn
+	provider      *SarvamSTT
 	ctx           context.Context
 	cancel        context.CancelFunc
 	language      string
@@ -618,6 +668,13 @@ func (s *sarvamSTTRecognizeStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
+	s.mu.Lock()
+	closed := s.closed
+	conn := s.conn
+	s.mu.Unlock()
+	if closed || conn == nil {
+		return io.ErrClosedPipe
+	}
 	sampleRate := s.sampleRate
 	if frame.SampleRate > 0 {
 		sampleRate = int(frame.SampleRate)
@@ -636,7 +693,7 @@ func (s *sarvamSTTRecognizeStream) PushFrame(frame *model.AudioFrame) error {
 		if err != nil {
 			return err
 		}
-		if err := s.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+		if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
 			return err
 		}
 		s.addAudioPosition(chunk.SamplesPerChannel, sampleRate)
@@ -660,11 +717,18 @@ func (s *sarvamSTTRecognizeStream) currentAudioPosition() float64 {
 }
 
 func (s *sarvamSTTRecognizeStream) Flush() error {
+	s.mu.Lock()
+	closed := s.closed
+	conn := s.conn
+	s.mu.Unlock()
+	if closed || conn == nil {
+		return io.ErrClosedPipe
+	}
 	message, err := buildSarvamSTTEndOfStreamMessage(s.encoding, s.sampleRate)
 	if err != nil {
 		return err
 	}
-	return s.conn.WriteMessage(websocket.TextMessage, message)
+	return conn.WriteMessage(websocket.TextMessage, message)
 }
 
 func (s *sarvamSTTRecognizeStream) Close() error {
@@ -674,9 +738,20 @@ func (s *sarvamSTTRecognizeStream) Close() error {
 		return nil
 	}
 	s.closed = true
+	provider := s.provider
+	s.provider = nil
+	conn := s.conn
 	s.cancel()
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.conn.Close()
+	if conn != nil {
+		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	}
+	if provider != nil {
+		defer provider.unregisterStream(s)
+	}
+	if conn == nil {
+		return nil
+	}
+	return conn.Close()
 }
 
 func (s *sarvamSTTRecognizeStream) Next() (*stt.SpeechEvent, error) {
@@ -699,7 +774,12 @@ func (s *sarvamSTTRecognizeStream) Next() (*stt.SpeechEvent, error) {
 }
 
 func (s *sarvamSTTRecognizeStream) readLoop() {
-	defer close(s.events)
+	defer func() {
+		if s.provider != nil {
+			s.provider.unregisterStream(s)
+		}
+		close(s.events)
+	}()
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {

@@ -481,6 +481,24 @@ func TestSarvamSTTStreamEOSFallbackTimeoutMatchesReference(t *testing.T) {
 	}
 }
 
+func TestSarvamSTTProviderCloseClosesActiveStreams(t *testing.T) {
+	provider := NewSarvamSTT("test-key")
+	stream := &sarvamSTTRecognizeStream{
+		cancel: func() {},
+	}
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1, 2}, SampleRate: 16000}); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushFrame after provider Close error = %v, want closed stream error", err)
+	}
+	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("Flush after provider Close error = %v, want closed stream error", err)
+	}
+}
+
 func TestSarvamSTTImplementsStreamingInterface(t *testing.T) {
 	var _ stt.STT = NewSarvamSTT("test-key")
 }
