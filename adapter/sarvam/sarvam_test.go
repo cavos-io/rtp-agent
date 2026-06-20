@@ -713,6 +713,24 @@ func TestSarvamTTSStreamMessagesMatchReference(t *testing.T) {
 	}
 }
 
+func TestSarvamTTSProviderCloseClosesActiveStreams(t *testing.T) {
+	provider := NewSarvamTTS("test-key", "")
+	stream := &sarvamTTSSynthesizeStream{
+		cancel: func() {},
+	}
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushText after provider Close error = %v, want closed stream error", err)
+	}
+	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("Flush after provider Close error = %v, want closed stream error", err)
+	}
+}
+
 func TestSarvamTTSAudioFromStreamMessage(t *testing.T) {
 	audio, done, err := sarvamTTSAudioFromStreamMessage([]byte(`{"type":"audio","data":{"audio":"AQIDBA==","request_id":"req-1"}}`), 22050, "mp3")
 	if err != nil {

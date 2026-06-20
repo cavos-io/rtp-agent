@@ -1031,6 +1031,7 @@ func sarvamFloat64(value any) float64 {
 }
 
 type SarvamTTS struct {
+	mu                    sync.Mutex
 	apiKey                string
 	baseURL               string
 	wsURL                 string
@@ -1049,6 +1050,7 @@ type SarvamTTS struct {
 	enableCachedResponses *bool
 	dictID                string
 	outputAudioCodec      string
+	streams               map[*sarvamTTSSynthesizeStream]struct{}
 }
 
 type SarvamTTSOption func(*SarvamTTS)
@@ -1290,6 +1292,7 @@ func (t *SarvamTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &sarvamTTSSynthesizeStream{
+		provider:         t,
 		conn:             conn,
 		ctx:              streamCtx,
 		cancel:           cancel,
@@ -1298,8 +1301,48 @@ func (t *SarvamTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		events:           make(chan *tts.SynthesizedAudio, 100),
 		errCh:            make(chan error, 1),
 	}
+	t.registerStream(stream)
 	go stream.readLoop()
 	return stream, nil
+}
+
+func (t *SarvamTTS) Close() error {
+	t.mu.Lock()
+	streams := make([]*sarvamTTSSynthesizeStream, 0, len(t.streams))
+	for stream := range t.streams {
+		streams = append(streams, stream)
+	}
+	t.mu.Unlock()
+
+	var firstErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (t *SarvamTTS) registerStream(stream *sarvamTTSSynthesizeStream) {
+	if stream == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.streams == nil {
+		t.streams = make(map[*sarvamTTSSynthesizeStream]struct{})
+	}
+	stream.provider = t
+	t.streams[stream] = struct{}{}
+}
+
+func (t *SarvamTTS) unregisterStream(stream *sarvamTTSSynthesizeStream) {
+	if stream == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.streams, stream)
 }
 
 func buildSarvamTTSWebsocketURL(t *SarvamTTS) *url.URL {
@@ -1412,6 +1455,7 @@ func defaultSarvamTTSVoice(model string) string {
 }
 
 type sarvamTTSSynthesizeStream struct {
+	provider         *SarvamTTS
 	conn             *websocket.Conn
 	ctx              context.Context
 	cancel           context.CancelFunc
@@ -1427,19 +1471,43 @@ func (s *sarvamTTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("sarvam tts stream is closed")
+	}
+	if s.conn == nil {
+		return fmt.Errorf("sarvam tts stream is closed")
+	}
 	message, err := buildSarvamTTSTextMessage(text)
 	if err != nil {
 		return err
 	}
-	return s.conn.WriteMessage(websocket.TextMessage, message)
+	if err := s.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *sarvamTTSSynthesizeStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("sarvam tts stream is closed")
+	}
+	if s.conn == nil {
+		return fmt.Errorf("sarvam tts stream is closed")
+	}
 	message, err := buildSarvamTTSFlushMessage()
 	if err != nil {
 		return err
 	}
-	return s.conn.WriteMessage(websocket.TextMessage, message)
+	if err := s.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *sarvamTTSSynthesizeStream) Close() error {
@@ -1450,8 +1518,30 @@ func (s *sarvamTTSSynthesizeStream) Close() error {
 	}
 	s.closed = true
 	s.cancel()
+	if s.provider != nil {
+		defer s.provider.unregisterStream(s)
+	}
+	if s.conn == nil {
+		return nil
+	}
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
+}
+
+func (s *sarvamTTSSynthesizeStream) closeAfterWriteFailureLocked() {
+	if s.closed {
+		return
+	}
+	s.closed = true
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.conn != nil {
+		_ = s.conn.Close()
+	}
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
 }
 
 func (s *sarvamTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
