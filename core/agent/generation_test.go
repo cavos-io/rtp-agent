@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -145,6 +146,39 @@ func TestPerformLLMInferenceWithTextEventsForwardsFlushSentinel(t *testing.T) {
 	}
 	if data.GeneratedText != "firstsecond" {
 		t.Fatalf("GeneratedText = %q, want firstsecond", data.GeneratedText)
+	}
+}
+
+func TestPerformLLMInferenceCancelClosesBlockedStream(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := newBlockingGenerationLLMStream()
+	l := &fakeGenerationLLM{stream: stream}
+
+	data, err := PerformLLMInference(ctx, l, llm.NewChatContext(), nil)
+	if err != nil {
+		t.Fatalf("PerformLLMInference error = %v", err)
+	}
+	select {
+	case <-stream.enteredCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("LLM stream Next was not entered")
+	}
+
+	cancel()
+
+	select {
+	case <-stream.closedCh:
+	case <-time.After(100 * time.Millisecond):
+		_ = stream.Close()
+		t.Fatal("LLM stream was not closed after context cancellation")
+	}
+	select {
+	case <-data.Done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("LLM generation did not finish after context cancellation")
+	}
+	if !errors.Is(data.StreamErr, context.Canceled) {
+		t.Fatalf("StreamErr = %v, want context.Canceled", data.StreamErr)
 	}
 }
 
@@ -2412,6 +2446,38 @@ func (f *fakeGenerationLLMStream) Next() (*llm.ChatChunk, error) {
 }
 
 func (f *fakeGenerationLLMStream) Close() error { return nil }
+
+type blockingGenerationLLMStream struct {
+	enteredCh chan struct{}
+	closedCh  chan struct{}
+	closeCh   chan struct{}
+	once      sync.Once
+	enter     sync.Once
+}
+
+func newBlockingGenerationLLMStream() *blockingGenerationLLMStream {
+	return &blockingGenerationLLMStream{
+		enteredCh: make(chan struct{}),
+		closedCh:  make(chan struct{}),
+		closeCh:   make(chan struct{}),
+	}
+}
+
+func (b *blockingGenerationLLMStream) Next() (*llm.ChatChunk, error) {
+	b.enter.Do(func() {
+		close(b.enteredCh)
+	})
+	<-b.closeCh
+	return nil, context.Canceled
+}
+
+func (b *blockingGenerationLLMStream) Close() error {
+	b.once.Do(func() {
+		close(b.closedCh)
+		close(b.closeCh)
+	})
+	return nil
+}
 
 type fakeGenerationTTS struct {
 	model    string
