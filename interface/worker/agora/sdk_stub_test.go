@@ -294,27 +294,34 @@ func TestSDKClientImplementationRequiresPCM16InboundAudio(t *testing.T) {
 }
 
 func TestSDKClientImplementationValidatesInboundPCMBufferShape(t *testing.T) {
-	source, err := os.ReadFile("sdk.go")
+	source, err := os.ReadFile("audio_frame.go")
 	if err != nil {
-		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+		t.Fatalf("ReadFile(audio_frame.go) error = %v", err)
 	}
 	text := string(source)
-	helperIndex := strings.Index(text, "func sdkAudioFrameToModel")
+	helperIndex := strings.Index(text, "func pcm16AudioFrameToModel")
 	if helperIndex < 0 {
-		t.Fatal("sdk.go missing sdkAudioFrameToModel")
+		t.Fatal("audio_frame.go missing pcm16AudioFrameToModel")
 	}
 	helperBody := text[helperIndex:]
 	if nextFunc := strings.Index(helperBody[len("func "):], "\nfunc "); nextFunc >= 0 {
 		helperBody = helperBody[:len("func ")+nextFunc]
 	}
 	for _, want := range []string{
-		"len(frame.Buffer)%bytesPerInterleavedSample != 0",
+		"len(frame.Data)%bytesPerInterleavedSample != 0",
 		"samplesPerChannel < 0",
-		"len(frame.Buffer) != samplesPerChannel*bytesPerInterleavedSample",
+		"len(frame.Data) != samplesPerChannel*bytesPerInterleavedSample",
 	} {
 		if !strings.Contains(helperBody, want) {
-			t.Fatalf("sdkAudioFrameToModel missing %q", want)
+			t.Fatalf("pcm16AudioFrameToModel missing %q", want)
 		}
+	}
+	sdkSource, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	if !strings.Contains(string(sdkSource), "pcm16AudioFrameToModel(pcm16AudioFrame{") {
+		t.Fatal("sdkAudioFrameToModel must delegate native SDK frame validation to pcm16AudioFrameToModel")
 	}
 }
 

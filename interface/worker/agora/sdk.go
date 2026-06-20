@@ -161,28 +161,13 @@ func sdkAudioFrameToModel(frame *agoraservice.AudioFrame) *model.AudioFrame {
 	if frame.Type != agoraservice.AudioFrameTypePCM16 || frame.BytesPerSample != 2 {
 		return nil
 	}
-	bytesPerInterleavedSample := frame.Channels * frame.BytesPerSample
-	if len(frame.Buffer)%bytesPerInterleavedSample != 0 {
-		return nil
-	}
-	samplesPerChannel := frame.SamplesPerChannel
-	if samplesPerChannel < 0 {
-		return nil
-	}
-	if samplesPerChannel == 0 {
-		samplesPerChannel = len(frame.Buffer) / bytesPerInterleavedSample
-	} else if len(frame.Buffer) != samplesPerChannel*bytesPerInterleavedSample {
-		return nil
-	}
-	if samplesPerChannel <= 0 {
-		return nil
-	}
-	return &model.AudioFrame{
-		Data:              append([]byte(nil), frame.Buffer...),
-		SampleRate:        uint32(frame.SamplesPerSec),
-		NumChannels:       uint32(frame.Channels),
-		SamplesPerChannel: uint32(samplesPerChannel),
-	}
+	return pcm16AudioFrameToModel(pcm16AudioFrame{
+		Data:              frame.Buffer,
+		SampleRate:        frame.SamplesPerSec,
+		Channels:          frame.Channels,
+		BytesPerSample:    frame.BytesPerSample,
+		SamplesPerChannel: frame.SamplesPerChannel,
+	})
 }
 
 func (c *sdkChannelClient) Join(ctx context.Context, opts Options, handler EventHandler, audioHandler AudioHandler) error {
