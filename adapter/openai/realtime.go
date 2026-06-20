@@ -388,6 +388,7 @@ type realtimeSession struct {
 	cancel                context.CancelFunc
 	mu                    sync.Mutex
 	chatContextMu         sync.Mutex
+	toolsMu               sync.Mutex
 	eventCh               chan llm.RealtimeEvent
 	remote                *llm.RemoteChatContext
 	inputTranscripts      *utils.BoundedDict[inputTranscriptKey, realtimeInputTranscript]
@@ -859,6 +860,9 @@ func (s *realtimeSession) clearRealtimeChatContextAcks(msgs []map[string]any) {
 }
 
 func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
+	s.toolsMu.Lock()
+	defer s.toolsMu.Unlock()
+
 	formattedTools := s.model.realtimeTools(tools)
 	retainedTools := openAIRealtimeRetainedTools(tools, formattedTools)
 	msg := map[string]any{

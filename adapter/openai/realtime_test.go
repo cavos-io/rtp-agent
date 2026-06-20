@@ -201,6 +201,89 @@ func TestRealtimeSessionUpdateToolsRetainsOnlyEmittedTools(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionUpdateToolsSerializesConcurrentUpdates(t *testing.T) {
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for i := 0; i < 3; i++ {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("Read realtime message %d error = %v", i, err)
+				return
+			}
+		}
+		<-releaseServer
+	})
+
+	firstEntered := make(chan struct{})
+	secondEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var formatterCalls atomic.Int32
+	realtimeModel := NewRealtimeModel(
+		"test-key",
+		"gpt-realtime",
+		WithOpenAIRealtimeWebsocketDialer(dialer),
+		WithOpenAIRealtimeToolFormatter(func(tools []llm.Tool) []map[string]any {
+			switch formatterCalls.Add(1) {
+			case 1:
+				close(firstEntered)
+				<-releaseFirst
+			case 2:
+				close(secondEntered)
+			}
+			formatted := make([]map[string]any, 0, len(tools))
+			for _, tool := range tools {
+				formatted = append(formatted, map[string]any{
+					"type":        "function",
+					"name":        tool.Name(),
+					"description": tool.Description(),
+					"parameters":  llm.ToolParameters(tool),
+				})
+			}
+			return formatted
+		}),
+	)
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- session.UpdateTools([]llm.Tool{requestTestTool{}})
+	}()
+	select {
+	case <-firstEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first UpdateTools did not enter formatter")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- session.UpdateTools([]llm.Tool{droppedRealtimeFunctionTool{}})
+	}()
+	select {
+	case <-secondEntered:
+		t.Fatal("second UpdateTools entered formatter before first update completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first UpdateTools error = %v", err)
+	}
+	select {
+	case <-secondEntered:
+	case <-time.After(time.Second):
+		t.Fatal("second UpdateTools did not enter formatter after first completed")
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second UpdateTools error = %v", err)
+	}
+}
+
 type droppedRealtimeFunctionTool struct{}
 
 func (droppedRealtimeFunctionTool) ID() string          { return "dropped" }
