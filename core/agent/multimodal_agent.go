@@ -1101,6 +1101,7 @@ func (ma *MultimodalAgent) executeRealtimeFunctionCall(functionCall *llm.Functio
 		return
 	}
 	if result.FncCallOut == nil {
+		ma.appendRealtimeToolResult(resultCall, nil)
 		return
 	}
 
@@ -1125,16 +1126,16 @@ func (ma *MultimodalAgent) appendRealtimeToolResults(calls []*llm.FunctionCall, 
 	var eventOutputs []*llm.FunctionCallOutput
 	for i, output := range outputs {
 		call := calls[i]
-		if output == nil {
-			continue
-		}
-		results = append(results, realtimeToolResult{call: call, output: output})
 		if call != nil {
 			eventCalls = append(eventCalls, call)
 			eventOutputs = append(eventOutputs, output)
 		}
+		if output == nil {
+			continue
+		}
+		results = append(results, realtimeToolResult{call: call, output: output})
 	}
-	if len(results) == 0 {
+	if len(results) == 0 && len(eventCalls) == 0 {
 		return
 	}
 	if ma.chatCtx != nil {
@@ -1153,12 +1154,12 @@ func (ma *MultimodalAgent) appendRealtimeToolResults(calls []*llm.FunctionCall, 
 			logger.Logger.Errorw("failed to create realtime function tools executed event", err)
 			return
 		}
-		ev.ReplyRequired = true
+		ev.ReplyRequired = len(results) > 0
 		emitted := ma.session.EmitFunctionToolsExecuted(*ev)
 		ev = &emitted
 	}
 	syncFailed := false
-	if ma.rtSession != nil && ma.chatCtx != nil {
+	if len(results) > 0 && ma.rtSession != nil && ma.chatCtx != nil {
 		if err := ma.rtSession.UpdateChatContext(ma.chatCtx); err != nil {
 			syncFailed = true
 			logger.Logger.Errorw("failed to update realtime session chat context with tool result", err)

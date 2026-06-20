@@ -1106,8 +1106,9 @@ func TestMultimodalAgentRealtimeToolResultSyncFailureStillEmitsEventAndReply(t *
 
 func TestMultimodalToolExecutionSuppressesStopResponse(t *testing.T) {
 	chatCtx := llm.NewChatContext()
+	session := &AgentSession{Tools: []llm.Tool{&fakeGenerationTool{name: "lookup", err: llm.StopResponse{}}}}
 	ma := &MultimodalAgent{
-		session:   &AgentSession{Tools: []llm.Tool{&fakeGenerationTool{name: "lookup", err: llm.StopResponse{}}}},
+		session:   session,
 		chatCtx:   chatCtx,
 		rtSession: &fakeRealtimeSession{},
 		ctx:       context.Background(),
@@ -1120,6 +1121,20 @@ func TestMultimodalToolExecutionSuppressesStopResponse(t *testing.T) {
 
 	if len(chatCtx.Items) != 0 {
 		t.Fatalf("chat items = %#v, want no output for StopResponse", chatCtx.Items)
+	}
+	select {
+	case ev := <-session.FunctionToolsExecutedEvents():
+		if len(ev.FunctionCalls) != 1 || ev.FunctionCalls[0].CallID != "call_lookup" {
+			t.Fatalf("FunctionCalls = %#v, want call_lookup event", ev.FunctionCalls)
+		}
+		if len(ev.FunctionCallOutputs) != 1 || ev.FunctionCallOutputs[0] != nil {
+			t.Fatalf("FunctionCallOutputs = %#v, want nil output for StopResponse", ev.FunctionCallOutputs)
+		}
+		if ev.HasToolReply() {
+			t.Fatal("HasToolReply() = true, want false for StopResponse")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("FunctionToolsExecutedEvents did not receive StopResponse event")
 	}
 }
 
