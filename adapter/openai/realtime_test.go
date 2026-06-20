@@ -1720,6 +1720,41 @@ func TestRealtimeAudioBufferMessages(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionIgnoresClientEventsAfterClose(t *testing.T) {
+	releaseServer := make(chan struct{})
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		<-releaseServer
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	close(releaseServer)
+
+	if err := session.ClearAudio(); err != nil {
+		t.Fatalf("ClearAudio after Close error = %v, want nil like reference closed send_event", err)
+	}
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              make([]byte, 2400*2),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 2400,
+	}); err != nil {
+		t.Fatalf("PushAudio after Close error = %v, want nil like reference closed send_event", err)
+	}
+}
+
 func TestRealtimeGenerateReplyMessageMapsPerResponseOptions(t *testing.T) {
 	msg := openAIRealtimeGenerateReplyMessageWithSessionInstructions(llm.RealtimeGenerateReplyOptions{
 		Instructions: "answer briefly",

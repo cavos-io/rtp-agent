@@ -1673,6 +1673,9 @@ func (s *realtimeSession) emitSessionCloseMetrics() {
 func (s *realtimeSession) sendMsg(msg any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.ctx != nil && s.ctx.Err() != nil {
+		return nil
+	}
 	msg = s.prepareClientMessage(msg)
 	s.trackPendingRealtimeDelete(msg)
 	b, err := json.Marshal(msg)
