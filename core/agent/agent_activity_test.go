@@ -1044,6 +1044,45 @@ func TestAgentActivityHoldsPreflightTranscriptWhileAgentSpeaking(t *testing.T) {
 	}
 }
 
+func TestAgentActivityHoldsSTTStartOfSpeechWhileAgentSpeaking(t *testing.T) {
+	endpointing := &recordingActivityEndpointing{}
+	agent := NewAgent("test")
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection: TurnDetectionModeSTT,
+		Endpointing:   endpointing,
+	})
+	session.agentState = AgentStateSpeaking
+	activity := NewAgentActivity(agent, session)
+	activity.holdSTTWhileAgentSpeaking = true
+	startedAt := 123.4
+
+	held := activity.holdSTTEventWhileAgentSpeaking(&stt.SpeechEvent{
+		Type:            stt.SpeechEventStartOfSpeech,
+		SpeechStartTime: &startedAt,
+	})
+
+	if !held {
+		t.Fatal("STT start_of_speech was not held while agent speaking")
+	}
+	if len(activity.heldSTTEvents) != 1 {
+		t.Fatalf("held STT events = %d, want start_of_speech buffered while agent speaking", len(activity.heldSTTEvents))
+	}
+	if endpointing.startCount != 0 {
+		t.Fatalf("endpointing start count = %d, want held start_of_speech delayed", endpointing.startCount)
+	}
+
+	session.agentState = AgentStateListening
+	activity.flushHeldSTTEvents()
+
+	if endpointing.startCount != 1 {
+		t.Fatalf("endpointing start count after flush = %d, want 1", endpointing.startCount)
+	}
+	if endpointing.lastStart != startedAt {
+		t.Fatalf("endpointing start = %v, want %v", endpointing.lastStart, startedAt)
+	}
+}
+
 func TestAgentActivityOnVADInferenceDoneInterruptsCurrentSpeech(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}
