@@ -834,7 +834,7 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 			if ma.session != nil {
 				ma.session.EmitError(ErrorEvent{
 					Error:  err,
-					Source: ma,
+					Source: ma.session.TTS,
 				})
 			}
 			return false

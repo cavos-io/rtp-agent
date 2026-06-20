@@ -3078,6 +3078,45 @@ func TestMultimodalAgentTTSFallbackStreamErrorReturnsListening(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentTTSFallbackStreamErrorSourcesTTS(t *testing.T) {
+	cause := errors.New("fallback tts stream failed")
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.TTS = &fakeGenerationTTS{stream: &failingAfterAudioRealtimeFallbackTTSStream{err: cause}}
+	ma := &MultimodalAgent{
+		model: &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{
+			AudioOutput: true,
+		}},
+		session: session,
+		PublishAudio: func(context.Context, *model.AudioFrame) error {
+			return nil
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "spoken fallback"
+	close(textCh)
+	modalitiesCh := make(chan []string, 1)
+	modalitiesCh <- []string{"text"}
+	close(modalitiesCh)
+
+	ma.consumeRealtimeMessage(context.Background(), NewSpeechHandle(true, DefaultInputDetails()), llm.MessageGeneration{
+		MessageID:    "msg_text_only_error_source",
+		TextCh:       textCh,
+		ModalitiesCh: modalitiesCh,
+	})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("ErrorEvents error = %v, want %v", ev.Error, cause)
+		}
+		if ev.Source != session.TTS {
+			t.Fatalf("ErrorEvents source = %T, want session TTS", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive fallback stream error")
+	}
+}
+
 func TestMultimodalAgentTTSFallbackPublishCancelSuppressesError(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	session.TTS = &fakeGenerationTTS{stream: newEndInputGenerationTTSStream()}
