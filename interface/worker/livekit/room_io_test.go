@@ -2101,6 +2101,50 @@ func TestRoomIOSpeechCreatedResetsAgentTranscriptionSegment(t *testing.T) {
 	}
 }
 
+func TestRoomIOPublishesEmptyFinalAgentTranscriptionToCloseSegment(t *testing.T) {
+	published := make(chan roomIOPublishedText, 3)
+	rio := &RoomIO{
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "partial",
+		IsFinal:    false,
+	})
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "",
+		IsFinal:    true,
+	})
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "next",
+		IsFinal:    false,
+	})
+
+	first := receivePublishedText(t, published, "first assistant transcript")
+	final := receivePublishedText(t, published, "empty final assistant transcript")
+	next := receivePublishedText(t, published, "next assistant transcript")
+
+	firstID := first.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if firstID == "" {
+		t.Fatal("first segment id is empty")
+	}
+	if final.text != "" {
+		t.Fatalf("empty final text = %q, want empty", final.text)
+	}
+	if final.opts.Attributes[RoomIOTranscriptionFinalAttribute] != "true" {
+		t.Fatalf("empty final attribute = %q, want true", final.opts.Attributes[RoomIOTranscriptionFinalAttribute])
+	}
+	if final.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute] != firstID {
+		t.Fatalf("empty final segment id = %q, want %q", final.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute], firstID)
+	}
+	nextID := next.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if nextID == "" || nextID == firstID {
+		t.Fatalf("next segment id = %q, want non-empty id different from %q", nextID, firstID)
+	}
+}
+
 func TestRoomIOPublishesAgentOutputTranscriptionTrackID(t *testing.T) {
 	published := make(chan roomIOPublishedText, 1)
 	rio := &RoomIO{

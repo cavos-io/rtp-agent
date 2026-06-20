@@ -550,10 +550,13 @@ func (rio *RoomIO) handleUserStateChanged(ev agent.UserStateChangedEvent) {
 }
 
 func (rio *RoomIO) handleAgentOutputTranscribed(ev agent.AgentOutputTranscribedEvent) {
-	if rio == nil || ev.Transcript == "" {
+	if rio == nil || (ev.Transcript == "" && !ev.IsFinal) {
 		return
 	}
-	segmentID, transcript := rio.agentOutputTranscriptionState(ev.Transcript, ev.IsFinal)
+	segmentID, transcript, ok := rio.agentOutputTranscriptionState(ev.Transcript, ev.IsFinal)
+	if !ok {
+		return
+	}
 	rio.setPlaybackTranscript(transcript, ev.IsFinal)
 	attributes := map[string]string{
 		RoomIOTranscriptionFinalAttribute:     strconv.FormatBool(ev.IsFinal),
@@ -574,12 +577,15 @@ func (rio *RoomIO) handleAgentOutputTranscribed(ev agent.AgentOutputTranscribedE
 	})
 }
 
-func (rio *RoomIO) agentOutputTranscriptionState(transcript string, final bool) (string, string) {
+func (rio *RoomIO) agentOutputTranscriptionState(transcript string, final bool) (string, string, bool) {
 	if rio == nil {
-		return roomIOTranscriptionSegmentID(), transcript
+		return roomIOTranscriptionSegmentID(), transcript, true
 	}
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
+	if final && transcript == "" && rio.agentTranscriptionSegmentID == "" {
+		return "", "", false
+	}
 	if rio.agentTranscriptionSegmentID == "" {
 		rio.agentTranscriptionSegmentID = roomIOTranscriptionSegmentID()
 	}
@@ -593,7 +599,7 @@ func (rio *RoomIO) agentOutputTranscriptionState(transcript string, final bool) 
 		rio.agentTranscriptionSegmentID = ""
 		rio.agentTranscriptionText = ""
 	}
-	return segmentID, publishText
+	return segmentID, publishText, true
 }
 
 func (rio *RoomIO) userInputTranscriptionState(final bool) string {
