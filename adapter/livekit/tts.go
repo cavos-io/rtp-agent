@@ -525,7 +525,6 @@ func (s *inferenceTTSStream) Close() error {
 		s.connPool.Remove(s.conn)
 	}
 	s.conn.Close()
-	close(s.eventCh)
 	return nil
 }
 
@@ -560,8 +559,26 @@ func (s *inferenceTTSStream) setStreamError(err error) {
 	s.mu.Unlock()
 }
 
+func (s *inferenceTTSStream) emitAudio(audio *tts.SynthesizedAudio) bool {
+	select {
+	case <-s.ctx.Done():
+		return false
+	default:
+	}
+
+	select {
+	case <-s.ctx.Done():
+		return false
+	case s.eventCh <- audio:
+		return true
+	}
+}
+
 func (s *inferenceTTSStream) run() {
-	defer s.Close()
+	defer func() {
+		s.Close()
+		close(s.eventCh)
+	}()
 
 	// Tokenizer loop
 	go func() {
@@ -658,7 +675,9 @@ func (s *inferenceTTSStream) run() {
 						return
 					}
 					if pendingAudio != nil {
-						s.eventCh <- pendingAudio
+						if !s.emitAudio(pendingAudio) {
+							return
+						}
 					}
 					pendingAudio = &tts.SynthesizedAudio{
 						SegmentID: currentSessionID,
@@ -676,12 +695,16 @@ func (s *inferenceTTSStream) run() {
 						return
 					}
 					if len(timedTranscript) > 0 {
-						s.eventCh <- &tts.SynthesizedAudio{SegmentID: currentSessionID, TimedTranscript: timedTranscript}
+						if !s.emitAudio(&tts.SynthesizedAudio{SegmentID: currentSessionID, TimedTranscript: timedTranscript}) {
+							return
+						}
 					}
 				} else if evType == "done" {
 					if pendingAudio != nil {
 						pendingAudio.IsFinal = true
-						s.eventCh <- pendingAudio
+						if !s.emitAudio(pendingAudio) {
+							return
+						}
 						pendingAudio = nil
 					}
 					s.mu.Lock()
