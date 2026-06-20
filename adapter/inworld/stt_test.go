@@ -1,7 +1,10 @@
 package inworld
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -207,6 +210,115 @@ func TestInworldSTTStreamFlushReportsReferenceUsage(t *testing.T) {
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("timed out waiting for recognition_usage after Flush")
+	}
+}
+
+func TestInworldSTTProviderCloseClosesActiveStreams(t *testing.T) {
+	provider := NewInworldSTT("test-key")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancelCalled := false
+	var sent []map[string]any
+	stream := &inworldSTTStream{
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		ctx:    ctx,
+		cancel: func() {
+			cancelCalled = true
+			cancel()
+		},
+		state: &inworldSTTStreamState{language: "en-US", requestID: "req-close"},
+		sendMessage: func(message map[string]any) error {
+			sent = append(sent, message)
+			return nil
+		},
+	}
+	provider.streams = map[*inworldSTTStream]struct{}{stream: {}}
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if !cancelCalled {
+		t.Fatal("stream cancel was not called")
+	}
+	if len(provider.streams) != 0 {
+		t.Fatalf("active streams = %d, want 0", len(provider.streams))
+	}
+	if len(sent) != 1 {
+		t.Fatalf("sent messages = %d, want closeStream", len(sent))
+	}
+	if _, ok := sent[0]["closeStream"]; !ok {
+		t.Fatalf("sent message = %#v, want closeStream", sent[0])
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after provider Close error = %T %v, want EOF", err, err)
+	}
+}
+
+func TestInworldSTTStreamCloseIsIdempotent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var closeMessages int
+	stream := &inworldSTTStream{
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		ctx:    ctx,
+		cancel: cancel,
+		state:  &inworldSTTStreamState{language: "en-US", requestID: "req-close"},
+		sendMessage: func(message map[string]any) error {
+			if _, ok := message["closeStream"]; ok {
+				closeMessages++
+			}
+			return nil
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close() error = %v, want nil", err)
+	}
+	if closeMessages != 1 {
+		t.Fatalf("closeStream messages = %d, want 1", closeMessages)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after Close error = %T %v, want EOF", err, err)
+	}
+}
+
+func TestInworldSTTStreamRejectsInputAfterClose(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var sent []map[string]any
+	stream := &inworldSTTStream{
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		ctx:    ctx,
+		cancel: cancel,
+		state:  &inworldSTTStreamState{language: "en-US", requestID: "req-close"},
+		sendMessage: func(message map[string]any) error {
+			sent = append(sent, message)
+			return nil
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after Close error = %T %v, want ErrClosedPipe", err, err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after Close error = %T %v, want ErrClosedPipe", err, err)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("sent messages = %d, want only closeStream", len(sent))
+	}
+	if _, ok := sent[0]["closeStream"]; !ok {
+		t.Fatalf("sent message = %#v, want closeStream", sent[0])
 	}
 }
 
