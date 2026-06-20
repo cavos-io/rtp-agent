@@ -398,6 +398,9 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 	}
 
 	emitRealtimeError := func(message string, err error) {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		logger.Logger.Errorw(message, err)
 		if session != nil {
 			session.EmitError(ErrorEvent{
