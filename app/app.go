@@ -1278,6 +1278,13 @@ func (c agoraRTMCallbackMergedContext) Err() error {
 	return c.callback.Err()
 }
 
+func (c agoraRTMCallbackMergedContext) Value(key any) any {
+	if value := c.callback.Value(key); value != nil {
+		return value
+	}
+	return c.Context.Value(key)
+}
+
 func agoraRTMCallbackContext(runtimeCtx context.Context, callbackCtx context.Context) (context.Context, context.CancelFunc) {
 	runtimeCtx = normalizeAgoraRuntimeContext(runtimeCtx)
 	if callbackCtx == nil {

@@ -214,6 +214,8 @@ func (r *recordingAppTextResponder) EmitUserInputTranscribed(ev agent.UserInputT
 type callbackCancelingAppTextResponder struct {
 	cancel         context.CancelFunc
 	generateCtxErr error
+	valueKey       any
+	generateValue  any
 }
 
 func (r *callbackCancelingAppTextResponder) Interrupt(bool) error {
@@ -223,6 +225,9 @@ func (r *callbackCancelingAppTextResponder) Interrupt(bool) error {
 
 func (r *callbackCancelingAppTextResponder) GenerateReply(ctx context.Context, _ string) (*agent.SpeechHandle, error) {
 	r.generateCtxErr = ctx.Err()
+	if r.valueKey != nil {
+		r.generateValue = ctx.Value(r.valueKey)
+	}
 	return nil, ctx.Err()
 }
 
@@ -2351,6 +2356,35 @@ func TestInstallAgoraRTMDataMessageHandlerPropagatesCallbackCancelDuringTextTurn
 	}
 	if !errors.Is(responder.generateCtxErr, context.Canceled) {
 		t.Fatalf("GenerateReply ctx error = %v, want callback cancellation propagated into text turn", responder.generateCtxErr)
+	}
+}
+
+func TestInstallAgoraRTMDataMessageHandlerPreservesCallbackContextValues(t *testing.T) {
+	dataPublisher := &fakeAppAgoraDataPublisher{}
+	type callbackValueKey struct{}
+	valueKey := callbackValueKey{}
+	callbackCtx := context.WithValue(context.Background(), valueKey, "rtm-callback-trace")
+	responder := &callbackCancelingAppTextResponder{
+		cancel:   func() {},
+		valueKey: valueKey,
+	}
+
+	installAgoraRTMDataMessageHandler(context.Background(), dataPublisher, responder, "agent-rtm", "support")
+
+	handler := dataPublisher.dataHandler()
+	if handler == nil {
+		t.Fatal("installAgoraRTMDataMessageHandler() did not install handler")
+	}
+	err := handler(callbackCtx, workeragora.DataMessage{
+		Channel:   "support",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"data_type":"input_text","text":"hello from chat"}`),
+	})
+	if err != nil {
+		t.Fatalf("RTM data handler error = %v, want nil", err)
+	}
+	if responder.generateValue != "rtm-callback-trace" {
+		t.Fatalf("GenerateReply callback value = %v, want propagated callback context value", responder.generateValue)
 	}
 }
 
