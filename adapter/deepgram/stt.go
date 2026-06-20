@@ -655,6 +655,9 @@ func deepgramSpeechEventForLanguageOffset(resp dgResponse, languageStr string, s
 	if resp.Type != "Results" || len(resp.Channel.Alternatives) == 0 {
 		return nil
 	}
+	if resp.Channel.Alternatives[0].Transcript == "" {
+		return nil
+	}
 
 	event := &stt.SpeechEvent{
 		Type:      stt.SpeechEventInterimTranscript,

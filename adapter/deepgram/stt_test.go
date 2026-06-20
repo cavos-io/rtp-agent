@@ -139,6 +139,23 @@ func TestDeepgramSpeechEventSkipsEmptyFinalTranscript(t *testing.T) {
 	}
 }
 
+func TestDeepgramSpeechEventSkipsReferenceEmptyPrimaryAlternative(t *testing.T) {
+	resp := dgResponse{
+		Type:        "Results",
+		IsFinal:     true,
+		SpeechFinal: true,
+	}
+	resp.Metadata.RequestID = "request-empty-primary"
+	resp.Channel.Alternatives = []dgAlternative{
+		{Transcript: "", Confidence: 0},
+		{Transcript: "fallback transcript", Confidence: 0.7},
+	}
+
+	if event := deepgramSpeechEvent(resp); event != nil {
+		t.Fatalf("deepgramSpeechEvent() = %+v, want nil when primary alternative has no text", event)
+	}
+}
+
 func TestDeepgramSpeechEventSetsReferenceLanguage(t *testing.T) {
 	resp := dgResponse{Type: "Results", IsFinal: true}
 	resp.Channel.Alternatives = []dgAlternative{{Transcript: "halo", Confidence: 0.9}}
