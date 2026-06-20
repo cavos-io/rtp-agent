@@ -274,6 +274,27 @@ func (s *GladiaSTT) UpdateOptions(opts ...GladiaSTTOption) {
 	}
 }
 
+func (s *GladiaSTT) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	streams := make([]*gladiaSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.streams = map[*gladiaSTTStream]struct{}{}
+	s.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
 func (s *GladiaSTT) registerStream(stream *gladiaSTTStream) {
 	if s == nil || stream == nil {
 		return
@@ -754,9 +775,14 @@ func (s *gladiaSTTStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	s.cancel()
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	err := s.conn.Close()
+	if s.cancel != nil {
+		s.cancel()
+	}
+	var err error
+	if s.conn != nil {
+		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+		err = s.conn.Close()
+	}
 	if s.owner != nil {
 		s.owner.unregisterStream(s)
 	}

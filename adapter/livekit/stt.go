@@ -137,6 +137,27 @@ func (s *STT) UpdateOptions(opts ...STTOption) {
 	}
 }
 
+func (s *STT) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	streams := make([]*inferenceSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.streams = make(map[*inferenceSTTStream]struct{})
+	s.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
 func (s *STT) Label() string {
 	return "livekit.STT"
 }

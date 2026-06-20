@@ -177,6 +177,27 @@ func (s *SmallestAISTT) UpdateOptions(opts ...SmallestAISTTOption) {
 	}
 }
 
+func (s *SmallestAISTT) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	streams := make([]*smallestAISTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.streams = make(map[*smallestAISTTStream]struct{})
+	s.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
 func (s *SmallestAISTT) Capabilities() stt.STTCapabilities {
 	aligned := ""
 	if s.wordTimestamps {
@@ -711,10 +732,19 @@ func (s *smallestAISTTStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	s.cancel()
-	_ = s.conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"close_stream"}`))
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.conn.Close()
+	if s.cancel != nil {
+		s.cancel()
+	}
+	var err error
+	if s.conn != nil {
+		_ = s.conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"close_stream"}`))
+		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+		err = s.conn.Close()
+	}
+	if s.owner != nil {
+		s.owner.unregisterStream(s)
+	}
+	return err
 }
 
 func (s *smallestAISTTStream) Next() (*stt.SpeechEvent, error) {

@@ -32,10 +32,12 @@ const (
 )
 
 type XaiTTS struct {
+	mu           sync.Mutex
 	apiKey       string
 	websocketURL string
 	voice        string
 	language     string
+	streams      map[*xaiTTSSynthesizeStream]struct{}
 }
 
 type XaiTTSOption func(*XaiTTS)
@@ -96,6 +98,8 @@ func (t *XaiTTS) SampleRate() int  { return xaiTTSSampleRate }
 func (t *XaiTTS) NumChannels() int { return xaiTTSNumChannels }
 
 func (t *XaiTTS) UpdateOptions(opts ...XaiTTSOption) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	for _, opt := range opts {
 		opt(t)
 	}
@@ -126,6 +130,7 @@ func (t *XaiTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &xaiTTSSynthesizeStream{
+		owner:         t,
 		streamURL:     buildXaiTTSStreamURL(t),
 		headers:       buildXaiTTSHeaders(t),
 		ctx:           streamCtx,
@@ -134,7 +139,47 @@ func (t *XaiTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	stream.writeMessage = stream.writeTTSMessage
 	stream.closeConn = stream.closeWebsocketConn
+	t.registerStream(stream)
 	return stream, nil
+}
+
+func (t *XaiTTS) Close() error {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	streams := make([]*xaiTTSSynthesizeStream, 0, len(t.streams))
+	for stream := range t.streams {
+		streams = append(streams, stream)
+	}
+	t.streams = nil
+	t.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
+func (t *XaiTTS) registerStream(stream *xaiTTSSynthesizeStream) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.streams == nil {
+		t.streams = make(map[*xaiTTSSynthesizeStream]struct{})
+	}
+	t.streams[stream] = struct{}{}
+}
+
+func (t *XaiTTS) unregisterStream(stream *xaiTTSSynthesizeStream) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.streams, stream)
 }
 
 func validateXaiAPIKey(apiKey string) error {
@@ -218,6 +263,7 @@ func (s *xaiTTSWebsocketChunkedStream) Close() error {
 }
 
 type xaiTTSSynthesizeStream struct {
+	owner         *XaiTTS
 	conn          *websocket.Conn
 	streamURL     string
 	headers       http.Header
@@ -285,6 +331,7 @@ func (s *xaiTTSSynthesizeStream) Close() error {
 	if s.conn != nil {
 		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	}
+	s.owner.unregisterStream(s)
 	return s.closeConnection()
 }
 
@@ -338,6 +385,7 @@ func (s *xaiTTSSynthesizeStream) closeAfterWriteFailureLocked() {
 	s.closed = true
 	s.tokenBuffer = ""
 	s.cancel()
+	s.owner.unregisterStream(s)
 	_ = s.closeConnection()
 }
 

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -202,6 +204,43 @@ func TestGladiaSTTUpdateOptionsPropagatesReferenceOptions(t *testing.T) {
 	}
 	if !stream.state.translationEnabled {
 		t.Fatal("stream translationEnabled = false, want true")
+	}
+}
+
+func TestGladiaSTTProviderCloseClosesActiveStreams(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &gladiaSTTStream{
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		ctx:    ctx,
+		cancel: cancel,
+		state:  &gladiaSTTStreamState{requestID: "session-1"},
+	}
+	provider := NewGladiaSTT("test-key")
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after provider Close error = %v, want io.ErrClosedPipe", err)
+	}
+	provider.mu.Lock()
+	active := len(provider.streams)
+	provider.mu.Unlock()
+	if active != 0 {
+		t.Fatalf("active streams after Close = %d, want 0", active)
+	}
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("stream context still active after provider Close")
 	}
 }
 

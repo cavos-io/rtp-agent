@@ -264,6 +264,42 @@ func TestAsyncAITTSStreamClosesAfterFlushWriteFailure(t *testing.T) {
 	}
 }
 
+func TestAsyncAITTSProviderCloseClosesActiveStreams(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	closeCalls := 0
+	stream := &asyncAITTSStream{
+		ctx:    ctx,
+		cancel: cancel,
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+	provider := NewAsyncAITTS("test-key", "")
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushText after provider Close error = %v, want closed stream error", err)
+	}
+	provider.mu.Lock()
+	active := len(provider.streams)
+	provider.mu.Unlock()
+	if active != 0 {
+		t.Fatalf("active streams after Close = %d, want 0", active)
+	}
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("stream context still active after provider Close")
+	}
+}
+
 func TestAsyncAITTSSynthesizeReportsStreamingOnly(t *testing.T) {
 	provider := NewAsyncAITTS("test-key", "")
 	_, err := provider.Synthesize(context.Background(), "hello")

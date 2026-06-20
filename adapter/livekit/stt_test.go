@@ -351,6 +351,48 @@ func TestInferenceSTTUpdateOptionsSendsReferenceSessionUpdateToActiveStream(t *t
 	}
 }
 
+func TestInferenceSTTProviderCloseClosesActiveStreams(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{}
+	ctx, cancel := context.WithCancel(context.Background())
+	provider := NewSTT("deepgram/nova-3", "key", "secret")
+	stream := &inferenceSTTStream{
+		stt:     provider,
+		conn:    conn,
+		ctx:     ctx,
+		cancel:  cancel,
+		audioCh: make(chan *model.AudioFrame, 1),
+		eventCh: make(chan *stt.SpeechEvent, 1),
+	}
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if !conn.closed {
+		t.Fatal("websocket not closed")
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushFrame after provider Close error = %v, want closed stream error", err)
+	}
+	provider.mu.Lock()
+	active := len(provider.streams)
+	provider.mu.Unlock()
+	if active != 0 {
+		t.Fatalf("active streams after Close = %d, want 0", active)
+	}
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("stream context still active after provider Close")
+	}
+}
+
 func TestSTTWebsocketSendsReferenceInferenceHeaders(t *testing.T) {
 	var captured http.Header
 	provider := NewSTT("deepgram/nova-3", "key", "secret")
