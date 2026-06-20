@@ -20,6 +20,7 @@ type fakeChannelClient struct {
 	publishCtx              context.Context
 	joinErr                 error
 	leaveErr                error
+	leaveErrs               []error
 	publishErr              error
 	blockJoin               bool
 	joinAfterCancelSucceeds bool
@@ -53,6 +54,13 @@ func (f *fakeChannelClient) Join(ctx context.Context, opts Options, handler Even
 
 func (f *fakeChannelClient) Leave(ctx context.Context) error {
 	f.leaveCount++
+	if len(f.leaveErrs) > 0 {
+		err := f.leaveErrs[0]
+		f.leaveErrs = f.leaveErrs[1:]
+		if err != nil {
+			return err
+		}
+	}
 	if f.leaveErr != nil {
 		return f.leaveErr
 	}
@@ -677,6 +685,31 @@ func TestTransportCloseLeavesClientAndClosesEvents(t *testing.T) {
 	}
 	if _, ok := <-tr.Events(); ok {
 		t.Fatal("events channel open after Close(), want closed")
+	}
+}
+
+func TestTransportCloseRetriesLeaveAfterFailure(t *testing.T) {
+	leaveErr := errors.New("leave failed")
+	client := &fakeChannelClient{leaveErrs: []error{leaveErr, nil}}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	if err := tr.Close(context.Background()); !errors.Is(err, leaveErr) {
+		t.Fatalf("Close() error = %v, want leave failure", err)
+	}
+	if _, ok := <-tr.Events(); ok {
+		t.Fatal("events channel open after failed Close(), want closed")
+	}
+	if err := tr.Close(context.Background()); err != nil {
+		t.Fatalf("second Close() error = %v, want retry success", err)
+	}
+	if client.leaveCount != 2 {
+		t.Fatalf("leave count = %d, want retry after failure", client.leaveCount)
+	}
+	if !client.left {
+		t.Fatal("client left = false, want retry success")
 	}
 }
 
