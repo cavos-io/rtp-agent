@@ -1665,6 +1665,13 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 	if rio == nil || rio.Options.DisableAudioOutput || rio.isAudioDisabled() {
 		return nil
 	}
+	if err := rio.waitForAudioSubscriptionReady(ctx); err != nil {
+		return err
+	}
+	if rio.isClosed() {
+		return nil
+	}
+
 	rio.mu.Lock()
 	track := rio.audioTrack
 	encoder := rio.encoder
@@ -1676,13 +1683,6 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 			rio.Recorder.RecordOutput(frame)
 		}
 		rio.recordAudioOutputError(errors.New("room audio output track not started"))
-		return nil
-	}
-
-	if err := rio.waitForAudioSubscriptionReady(ctx); err != nil {
-		return err
-	}
-	if rio.isClosed() {
 		return nil
 	}
 

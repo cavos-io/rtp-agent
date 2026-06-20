@@ -536,6 +536,47 @@ func TestRoomIOPublishAudioPendingWaiterSurvivesAudioStart(t *testing.T) {
 	}
 }
 
+func TestRoomIOPublishAudioBeforeTrackStartWaitsForSubscription(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	rio := NewRoomIO(nil, session, RoomOptions{})
+	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
+	rio.mu.Lock()
+	rio.encoder = encoder
+	rio.mu.Unlock()
+
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- rio.PublishAudio(context.Background(), frame)
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("PublishAudio returned before audio output track start: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	rio.setAudioOutputTrack(newRoomIOTestAudioTrack(t), "", nil)
+	rio.markAudioSubscribed()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("PublishAudio error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("PublishAudio did not unblock after audio output track start")
+	}
+	if len(encoder.calls) != 1 {
+		t.Fatalf("encoder calls = %d, want 1 after track start subscription", len(encoder.calls))
+	}
+}
+
 func TestRoomIOPublishAudioWaitForSubscriptionHonorsContext(t *testing.T) {
 	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
 	rio := &RoomIO{
