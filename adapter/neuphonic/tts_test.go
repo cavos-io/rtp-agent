@@ -262,6 +262,33 @@ func TestNeuphonicTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	}
 }
 
+func TestNeuphonicTTSProviderCloseClosesActiveStreams(t *testing.T) {
+	cancelled := false
+	closeCalls := 0
+	provider := NewNeuphonicTTS("test-key", "")
+	stream := &neuphonicTTSSynthesizeStream{
+		cancel: func() { cancelled = true },
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if !cancelled {
+		t.Fatal("cancel not called after provider Close")
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushText after provider Close error = %v, want closed stream error", err)
+	}
+}
+
 func TestNeuphonicTTSAudioFromStreamMessage(t *testing.T) {
 	audio, done, err := neuphonicAudioFromStreamMessage([]byte(`{"data":{"audio":"AQIDBA==","context_id":"segment-1"}}`), "segment-1", 22050)
 	if err != nil {
