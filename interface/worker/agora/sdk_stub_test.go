@@ -172,8 +172,27 @@ func TestSDKDataPublisherDropsForeignChannelMessages(t *testing.T) {
 	if nextFunc := strings.Index(handlerBody[len("func "):], "\nfunc "); nextFunc >= 0 {
 		handlerBody = handlerBody[:len("func ")+nextFunc]
 	}
-	if !strings.Contains(handlerBody, "event.ChannelName != p.channel") {
+	if !strings.Contains(handlerBody, "!acceptChannel(p.channel, event.ChannelName)") {
 		t.Fatal("handleMessageEvent must drop SDK messages from channels other than the subscribed channel")
+	}
+}
+
+func TestSDKDataPublisherUsesNormalizedChannelFilter(t *testing.T) {
+	source, err := os.ReadFile("sdk_rtm.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk_rtm.go) error = %v", err)
+	}
+	text := string(source)
+	handlerIndex := strings.Index(text, "func (p *sdkDataPublisher) handleMessageEvent")
+	if handlerIndex < 0 {
+		t.Fatal("sdk_rtm.go missing sdkDataPublisher.handleMessageEvent")
+	}
+	handlerBody := text[handlerIndex:]
+	if nextFunc := strings.Index(handlerBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		handlerBody = handlerBody[:len("func ")+nextFunc]
+	}
+	if !strings.Contains(handlerBody, "if !acceptChannel(p.channel, event.ChannelName)") {
+		t.Fatal("handleMessageEvent must use normalized channel filtering for RTM callbacks")
 	}
 }
 

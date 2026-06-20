@@ -75,7 +75,7 @@ func (p *sdkDataPublisher) handleMessageEvent(event *agorartm.MessageEvent) {
 	if p == nil || event == nil {
 		return
 	}
-	if event.ChannelName != p.channel {
+	if !acceptChannel(p.channel, event.ChannelName) {
 		return
 	}
 	p.mu.Lock()
