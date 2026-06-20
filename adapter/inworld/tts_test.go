@@ -273,6 +273,37 @@ func TestInworldTTSStreamClosesAfterFlushWriteFailure(t *testing.T) {
 	}
 }
 
+func TestInworldTTSProviderCloseClosesActiveStreams(t *testing.T) {
+	provider := NewInworldTTS("test-key", "")
+	cancelled := false
+	closeCalls := 0
+	stream := &inworldTTSSynthesizeStream{
+		cancel:    func() { cancelled = true },
+		contextID: "ctx-1",
+		writeMessage: func(int, []byte) error {
+			return nil
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if !cancelled {
+		t.Fatal("cancel not called")
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushText after provider Close error = %v, want closed stream error", err)
+	}
+}
+
 func TestInworldTTSAudioFromReferenceResponses(t *testing.T) {
 	audio, done, err := inworldTTSAudioFromResponseLine([]byte(`{"result":{"audioContent":"AQIDBA=="}}`), 24000)
 	if err != nil {
