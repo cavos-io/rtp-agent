@@ -911,17 +911,14 @@ func (s *AgentSession) agentStateChangedEvents() chan AgentStateChangedEvent {
 	return ch
 }
 
-func (s *AgentSession) agentStateChangedSubscribers() []chan AgentStateChangedEvent {
+func (s *AgentSession) agentStateChangedSubscribers() (chan AgentStateChangedEvent, []chan AgentStateChangedEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	subs := make([]chan AgentStateChangedEvent, 0, len(s.agentStateSubs)+1)
 	if s.AgentStateChangedCh == nil {
 		s.AgentStateChangedCh = make(chan AgentStateChangedEvent, 10)
 	}
-	subs = append(subs, s.AgentStateChangedCh)
-	subs = append(subs, s.agentStateSubs...)
-	return subs
+	return s.AgentStateChangedCh, append([]chan AgentStateChangedEvent(nil), s.agentStateSubs...)
 }
 
 func (s *AgentSession) UserStateChangedEvents() <-chan UserStateChangedEvent {
@@ -937,17 +934,14 @@ func (s *AgentSession) userStateChangedEvents() chan UserStateChangedEvent {
 	return ch
 }
 
-func (s *AgentSession) userStateChangedSubscribers() []chan UserStateChangedEvent {
+func (s *AgentSession) userStateChangedSubscribers() (chan UserStateChangedEvent, []chan UserStateChangedEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	subs := make([]chan UserStateChangedEvent, 0, len(s.userStateSubs)+1)
 	if s.UserStateChangedCh == nil {
 		s.UserStateChangedCh = make(chan UserStateChangedEvent, 10)
 	}
-	subs = append(subs, s.UserStateChangedCh)
-	subs = append(subs, s.userStateSubs...)
-	return subs
+	return s.UserStateChangedCh, append([]chan UserStateChangedEvent(nil), s.userStateSubs...)
 }
 
 func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOptions) *AgentSession {
@@ -1328,11 +1322,17 @@ func (s *AgentSession) EmitAgentFalseInterruption(ev AgentFalseInterruptionEvent
 		ev.CreatedAt = NewAgentFalseInterruptionEvent(ev.Resumed).CreatedAt
 	}
 	s.recordEvent(&ev)
-	for _, ch := range s.agentFalseInterruptionSubscribers() {
+	primary, primarySubscribed, subscribers := s.agentFalseInterruptionSubscribers()
+	if primarySubscribed {
+		primary <- ev
+	} else if primary != nil {
 		select {
-		case ch <- ev:
+		case primary <- ev:
 		default:
 		}
+	}
+	for _, ch := range subscribers {
+		ch <- ev
 	}
 }
 
@@ -1352,17 +1352,14 @@ func (s *AgentSession) agentFalseInterruptionEvents() chan AgentFalseInterruptio
 	return ch
 }
 
-func (s *AgentSession) agentFalseInterruptionSubscribers() []chan AgentFalseInterruptionEvent {
+func (s *AgentSession) agentFalseInterruptionSubscribers() (chan AgentFalseInterruptionEvent, bool, []chan AgentFalseInterruptionEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	subs := make([]chan AgentFalseInterruptionEvent, 0, len(s.falseInterruptSubs)+1)
 	if s.falseInterruptionCh == nil {
 		s.falseInterruptionCh = make(chan AgentFalseInterruptionEvent, 10)
 	}
-	subs = append(subs, s.falseInterruptionCh)
-	subs = append(subs, s.falseInterruptSubs...)
-	return subs
+	return s.falseInterruptionCh, s.falseInterruptSubd, append([]chan AgentFalseInterruptionEvent(nil), s.falseInterruptSubs...)
 }
 
 func (s *AgentSession) UserTurnExceededEvents() <-chan UserTurnExceededEvent {
@@ -1438,11 +1435,17 @@ func (s *AgentSession) EmitOverlappingSpeech(ev OverlappingSpeechEvent) {
 		ev.DetectedAt = now
 	}
 	s.recordEvent(&ev)
-	for _, ch := range s.overlappingSpeechSubscribers() {
+	primary, primarySubscribed, subscribers := s.overlappingSpeechSubscribers()
+	if primarySubscribed {
+		primary <- ev
+	} else if primary != nil {
 		select {
-		case ch <- ev:
+		case primary <- ev:
 		default:
 		}
+	}
+	for _, ch := range subscribers {
+		ch <- ev
 	}
 }
 
@@ -1462,17 +1465,14 @@ func (s *AgentSession) overlappingSpeechEvents() chan OverlappingSpeechEvent {
 	return ch
 }
 
-func (s *AgentSession) overlappingSpeechSubscribers() []chan OverlappingSpeechEvent {
+func (s *AgentSession) overlappingSpeechSubscribers() (chan OverlappingSpeechEvent, bool, []chan OverlappingSpeechEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	subs := make([]chan OverlappingSpeechEvent, 0, len(s.overlappingSubs)+1)
 	if s.overlappingSpeechCh == nil {
 		s.overlappingSpeechCh = make(chan OverlappingSpeechEvent, 10)
 	}
-	subs = append(subs, s.overlappingSpeechCh)
-	subs = append(subs, s.overlappingSubs...)
-	return subs
+	return s.overlappingSpeechCh, s.overlappingSubd, append([]chan OverlappingSpeechEvent(nil), s.overlappingSubs...)
 }
 
 func (s *AgentSession) ConversationItemAddedEvents() <-chan ConversationItemAddedEvent {
@@ -1635,11 +1635,17 @@ func (s *AgentSession) EmitMetricsCollected(metrics telemetry.AgentMetrics) {
 		CreatedAt: time.Now(),
 	}
 	s.recordEvent(&ev)
-	for _, ch := range s.metricsCollectedSubscribers() {
+	primary, primarySubscribed, subscribers := s.metricsCollectedSubscribers()
+	if primarySubscribed {
+		primary <- ev
+	} else if primary != nil {
 		select {
-		case ch <- ev:
+		case primary <- ev:
 		default:
 		}
+	}
+	for _, ch := range subscribers {
+		ch <- ev
 	}
 	if s.MetricsCollector != nil {
 		s.EmitSessionUsageUpdated(SessionUsageUpdatedEvent{Usage: s.ModelUsage()})
@@ -1676,17 +1682,14 @@ func (s *AgentSession) metricsCollectedEvents() chan MetricsCollectedEvent {
 	return ch
 }
 
-func (s *AgentSession) metricsCollectedSubscribers() []chan MetricsCollectedEvent {
+func (s *AgentSession) metricsCollectedSubscribers() (chan MetricsCollectedEvent, bool, []chan MetricsCollectedEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	subs := make([]chan MetricsCollectedEvent, 0, len(s.metricsSubs)+1)
 	if s.metricsCollectedCh == nil {
 		s.metricsCollectedCh = make(chan MetricsCollectedEvent, 10)
 	}
-	subs = append(subs, s.metricsCollectedCh)
-	subs = append(subs, s.metricsSubs...)
-	return subs
+	return s.metricsCollectedCh, s.metricsChSubscribed, append([]chan MetricsCollectedEvent(nil), s.metricsSubs...)
 }
 
 func (s *AgentSession) SessionUsageUpdatedEvents() <-chan SessionUsageUpdatedEvent {
@@ -1698,11 +1701,17 @@ func (s *AgentSession) EmitSessionUsageUpdated(ev SessionUsageUpdatedEvent) {
 		ev.CreatedAt = time.Now()
 	}
 	s.recordEvent(&ev)
-	for _, ch := range s.sessionUsageUpdatedSubscribers() {
+	primary, primarySubscribed, subscribers := s.sessionUsageUpdatedSubscribers()
+	if primarySubscribed {
+		primary <- ev
+	} else if primary != nil {
 		select {
-		case ch <- ev:
+		case primary <- ev:
 		default:
 		}
+	}
+	for _, ch := range subscribers {
+		ch <- ev
 	}
 }
 
@@ -1722,17 +1731,14 @@ func (s *AgentSession) sessionUsageUpdatedEvents() chan SessionUsageUpdatedEvent
 	return ch
 }
 
-func (s *AgentSession) sessionUsageUpdatedSubscribers() []chan SessionUsageUpdatedEvent {
+func (s *AgentSession) sessionUsageUpdatedSubscribers() (chan SessionUsageUpdatedEvent, bool, []chan SessionUsageUpdatedEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	subs := make([]chan SessionUsageUpdatedEvent, 0, len(s.sessionUsageSubs)+1)
 	if s.sessionUsageCh == nil {
 		s.sessionUsageCh = make(chan SessionUsageUpdatedEvent, 10)
 	}
-	subs = append(subs, s.sessionUsageCh)
-	subs = append(subs, s.sessionUsageSubs...)
-	return subs
+	return s.sessionUsageCh, s.sessionUsageChSubbed, append([]chan SessionUsageUpdatedEvent(nil), s.sessionUsageSubs...)
 }
 
 func (s *AgentSession) ErrorEvents() <-chan ErrorEvent {
@@ -1877,11 +1883,17 @@ func (s *AgentSession) SipDTMFEvents() <-chan SipDTMFEvent {
 }
 
 func (s *AgentSession) EmitSipDTMF(ev SipDTMFEvent) {
-	for _, ch := range s.sipDTMFSubscribers() {
+	primary, primarySubscribed, subscribers := s.sipDTMFSubscribers()
+	if primarySubscribed {
+		primary <- ev
+	} else if primary != nil {
 		select {
-		case ch <- ev:
+		case primary <- ev:
 		default:
 		}
+	}
+	for _, ch := range subscribers {
+		ch <- ev
 	}
 }
 
@@ -1901,17 +1913,14 @@ func (s *AgentSession) sipDTMFEvents() chan SipDTMFEvent {
 	return ch
 }
 
-func (s *AgentSession) sipDTMFSubscribers() []chan SipDTMFEvent {
+func (s *AgentSession) sipDTMFSubscribers() (chan SipDTMFEvent, bool, []chan SipDTMFEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	subs := make([]chan SipDTMFEvent, 0, len(s.sipDTMFSubs)+1)
 	if s.sipDTMFCh == nil {
 		s.sipDTMFCh = make(chan SipDTMFEvent, 10)
 	}
-	subs = append(subs, s.sipDTMFCh)
-	subs = append(subs, s.sipDTMFSubs...)
-	return subs
+	return s.sipDTMFCh, s.sipDTMFSubd, append([]chan SipDTMFEvent(nil), s.sipDTMFSubs...)
 }
 
 func (s *AgentSession) CloseEvents() <-chan CloseEvent {
@@ -2223,11 +2232,15 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 		CreatedAt: time.Now(),
 	}
 	s.recordEvent(&ev)
-	for _, ch := range s.agentStateChangedSubscribers() {
+	primary, subscribers := s.agentStateChangedSubscribers()
+	if primary != nil {
 		select {
-		case ch <- ev:
+		case primary <- ev:
 		default:
 		}
+	}
+	for _, ch := range subscribers {
+		ch <- ev
 	}
 }
 
@@ -2265,11 +2278,15 @@ func (s *AgentSession) updateUserStateAt(state UserState, createdAt time.Time) {
 			CreatedAt: createdAt,
 		}
 		s.recordEvent(&ev)
-		for _, ch := range s.userStateChangedSubscribers() {
+		primary, subscribers := s.userStateChangedSubscribers()
+		if primary != nil {
 			select {
-			case ch <- ev:
+			case primary <- ev:
 			default:
 			}
+		}
+		for _, ch := range subscribers {
+			ch <- ev
 		}
 	}
 }

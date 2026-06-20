@@ -68,17 +68,20 @@ func runDTMFTool(input json.RawMessage) (any, error) {
 			return nil, err
 		}
 		output, err := tool.Execute(context.Background(), string(args))
+		failed := strings.Contains(output, "Failed to send DTMF event:")
+		event := map[string]any{
+			"name":                   "execute",
+			"invalid_event":          firstString(events),
+			"output_contains_failed": failed,
+			"error":                  err != nil,
+			"error_class":            errorClass(err),
+		}
+		if !failed {
+			event["output"] = output
+		}
 		return map[string]any{
 			"contract": "send-dtmf-tool",
-			"events": []map[string]any{
-				{
-					"name":                   "execute",
-					"invalid_event":          firstString(events),
-					"output_contains_failed": strings.Contains(output, "Failed to send DTMF event:"),
-					"error":                  err != nil,
-					"error_class":            errorClass(err),
-				},
-			},
+			"events":   []map[string]any{event},
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported dtmf tool action %q", payload.Action)

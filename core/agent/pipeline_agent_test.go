@@ -1932,6 +1932,41 @@ func TestPipelineAgentRoutesSTTTranscriptsThroughActivity(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentFallbackSTTLoopSkipsEmptyFinalTranscript(t *testing.T) {
+	baseAgent := NewAgent("test")
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	userTranscriptEvents := session.UserInputTranscribedEvents()
+	chatCtx := llm.NewChatContext()
+	pipeline := NewPipelineAgent(nil, nil, &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}, &fakePipelineTTS{}, chatCtx)
+	pipeline.session = session
+	pipeline.ctx = context.Background()
+	session.Assistant = pipeline
+
+	pipeline.sttLoop(&fakePipelineRecognizeStream{
+		events: []*stt.SpeechEvent{{
+			Type: stt.SpeechEventFinalTranscript,
+			Alternatives: []stt.SpeechData{{
+				Text:       "",
+				Confidence: 0.9,
+			}},
+		}},
+	})
+
+	select {
+	case ev := <-userTranscriptEvents:
+		t.Fatalf("UserInputTranscribedEvent = %#v, want no event for empty final transcript", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		t.Fatalf("ConversationItemAddedEvent = %#v, want no chat item for empty final transcript", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chat context items = %d, want none for empty final transcript", len(chatCtx.Items))
+	}
+}
+
 func TestPipelineAgentRoutesPreflightTranscriptAsInterim(t *testing.T) {
 	baseAgent := NewAgent("test")
 	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})

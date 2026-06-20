@@ -421,6 +421,69 @@ func TestAgentSessionUserStateChangedEventsFanOutToSubscribers(t *testing.T) {
 	assertUserStateChangedEvent(t, second, "second")
 }
 
+func TestAgentSessionUserStateChangedDeliveredWhenChannelFull(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	userStateEvents := session.userStateChangedEvents()
+	for i := 0; i < cap(userStateEvents); i++ {
+		userStateEvents <- UserStateChangedEvent{
+			OldState: UserStateListening,
+			NewState: UserStateListening,
+		}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.UpdateUserState(UserStateSpeaking)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("UpdateUserState returned while event channel was full; user state event may be dropped")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	<-userStateEvents
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("UpdateUserState did not unblock after user state event channel had capacity")
+	}
+
+	for {
+		select {
+		case ev := <-userStateEvents:
+			if ev.OldState == UserStateListening && ev.NewState == UserStateSpeaking {
+				return
+			}
+		default:
+			t.Fatal("UserStateChangedEvents did not receive user state event")
+		}
+	}
+}
+
+func TestAgentSessionUserStateChangedDoesNotBlockWithoutSubscriber(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	for i := 0; i < cap(session.UserStateChangedCh); i++ {
+		session.UserStateChangedCh <- UserStateChangedEvent{
+			OldState: UserStateListening,
+			NewState: UserStateListening,
+		}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.UpdateUserState(UserStateSpeaking)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("UpdateUserState blocked on unclaimed user state event channel")
+	}
+}
+
 func TestAgentSessionAudioDisabledEndsSpeakingState(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -451,6 +514,69 @@ func TestAgentSessionAgentStateChangedEventsFanOutToSubscribers(t *testing.T) {
 
 	assertAgentStateChangedEvent(t, first, "first")
 	assertAgentStateChangedEvent(t, second, "second")
+}
+
+func TestAgentSessionAgentStateChangedDeliveredWhenChannelFull(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agentStateEvents := session.agentStateChangedEvents()
+	for i := 0; i < cap(agentStateEvents); i++ {
+		agentStateEvents <- AgentStateChangedEvent{
+			OldState: AgentStateInitializing,
+			NewState: AgentStateInitializing,
+		}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.UpdateAgentState(AgentStateThinking)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("UpdateAgentState returned while event channel was full; agent state event may be dropped")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	<-agentStateEvents
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("UpdateAgentState did not unblock after agent state event channel had capacity")
+	}
+
+	for {
+		select {
+		case ev := <-agentStateEvents:
+			if ev.OldState == AgentStateInitializing && ev.NewState == AgentStateThinking {
+				return
+			}
+		default:
+			t.Fatal("AgentStateChangedEvents did not receive agent state event")
+		}
+	}
+}
+
+func TestAgentSessionAgentStateChangedDoesNotBlockWithoutSubscriber(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	for i := 0; i < cap(session.AgentStateChangedCh); i++ {
+		session.AgentStateChangedCh <- AgentStateChangedEvent{
+			OldState: AgentStateInitializing,
+			NewState: AgentStateInitializing,
+		}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.UpdateAgentState(AgentStateThinking)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("UpdateAgentState blocked on unclaimed agent state event channel")
+	}
 }
 
 func TestAgentSessionErrorEventsFanOutToSubscribers(t *testing.T) {
@@ -607,6 +733,64 @@ func TestAgentSessionMetricsCollectedEventsFanOutToSubscribers(t *testing.T) {
 	assertMetricsCollectedEvent(t, second, metrics, "second")
 }
 
+func TestAgentSessionMetricsCollectedDeliveredWhenChannelFull(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	metricsEvents := session.metricsCollectedEvents()
+	for i := 0; i < cap(metricsEvents); i++ {
+		metricsEvents <- MetricsCollectedEvent{Metrics: &telemetry.LLMMetrics{RequestID: fmt.Sprintf("prefill_%d", i)}}
+	}
+	metrics := &telemetry.LLMMetrics{RequestID: "llm_req", PromptTokens: 3}
+
+	done := make(chan struct{})
+	go func() {
+		session.EmitMetricsCollected(metrics)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("EmitMetricsCollected returned while event channel was full; metrics event may be dropped")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	<-metricsEvents
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("EmitMetricsCollected did not unblock after metrics event channel had capacity")
+	}
+
+	for {
+		select {
+		case ev := <-metricsEvents:
+			if ev.Metrics == metrics {
+				return
+			}
+		default:
+			t.Fatal("MetricsCollectedEvents did not receive metrics event")
+		}
+	}
+}
+
+func TestAgentSessionMetricsCollectedDoesNotBlockWithoutSubscriber(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	for i := 0; i < cap(session.metricsCollectedCh); i++ {
+		session.metricsCollectedCh <- MetricsCollectedEvent{Metrics: &telemetry.LLMMetrics{RequestID: fmt.Sprintf("prefill_%d", i)}}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "llm_req", PromptTokens: 3})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("EmitMetricsCollected blocked on unclaimed metrics event channel")
+	}
+}
+
 func TestAgentSessionOnMetricsCollectedWarnsDeprecated(t *testing.T) {
 	oldLogger := logutil.Logger
 	recorder := &recordingLogger{}
@@ -634,6 +818,66 @@ func TestAgentSessionUsageUpdatedEventsFanOutToSubscribers(t *testing.T) {
 
 	assertUsageUpdatedEvent(t, first, "first")
 	assertUsageUpdatedEvent(t, second, "second")
+}
+
+func TestAgentSessionUsageUpdatedDeliveredWhenChannelFull(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	usageEvents := session.sessionUsageUpdatedEvents()
+	for i := 0; i < cap(usageEvents); i++ {
+		usageEvents <- SessionUsageUpdatedEvent{}
+	}
+	usage := telemetry.AgentSessionUsage{
+		ModelUsage: []telemetry.ModelUsage{&telemetry.LLMModelUsage{Provider: "livekit", Model: "test", InputTokens: 3}},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.EmitSessionUsageUpdated(SessionUsageUpdatedEvent{Usage: usage})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("EmitSessionUsageUpdated returned while event channel was full; usage event may be dropped")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	<-usageEvents
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("EmitSessionUsageUpdated did not unblock after usage event channel had capacity")
+	}
+
+	for {
+		select {
+		case ev := <-usageEvents:
+			if ev.Usage.LLMInputTokens() == 3 {
+				return
+			}
+		default:
+			t.Fatal("SessionUsageUpdatedEvents did not receive usage event")
+		}
+	}
+}
+
+func TestAgentSessionUsageUpdatedDoesNotBlockWithoutSubscriber(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	for i := 0; i < cap(session.sessionUsageCh); i++ {
+		session.sessionUsageCh <- SessionUsageUpdatedEvent{}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.EmitSessionUsageUpdated(SessionUsageUpdatedEvent{})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("EmitSessionUsageUpdated blocked on unclaimed usage event channel")
+	}
 }
 
 func TestAgentSessionConversationItemAddedEventsFanOutToSubscribers(t *testing.T) {
@@ -876,6 +1120,63 @@ func TestAgentSessionFalseInterruptionEventsFanOutToSubscribers(t *testing.T) {
 	assertFalseInterruptionEvent(t, second, "second")
 }
 
+func TestAgentSessionFalseInterruptionDeliveredWhenChannelFull(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	falseInterruptionEvents := session.agentFalseInterruptionEvents()
+	for i := 0; i < cap(falseInterruptionEvents); i++ {
+		falseInterruptionEvents <- AgentFalseInterruptionEvent{Resumed: false, CreatedAt: time.Now()}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.EmitAgentFalseInterruption(AgentFalseInterruptionEvent{Resumed: true})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("EmitAgentFalseInterruption returned while event channel was full; false interruption event may be dropped")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	<-falseInterruptionEvents
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("EmitAgentFalseInterruption did not unblock after false interruption event channel had capacity")
+	}
+
+	for {
+		select {
+		case got := <-falseInterruptionEvents:
+			if got.Resumed {
+				return
+			}
+		default:
+			t.Fatal("AgentFalseInterruptionEvents did not receive false interruption event")
+		}
+	}
+}
+
+func TestAgentSessionFalseInterruptionDoesNotBlockWithoutSubscriber(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	for i := 0; i < cap(session.falseInterruptionCh); i++ {
+		session.falseInterruptionCh <- AgentFalseInterruptionEvent{CreatedAt: time.Now()}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.EmitAgentFalseInterruption(AgentFalseInterruptionEvent{Resumed: true})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("EmitAgentFalseInterruption blocked on unclaimed false interruption event channel")
+	}
+}
+
 func TestAgentSessionUserTurnExceededEventsFanOutToSubscribers(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	first := session.UserTurnExceededEvents()
@@ -953,6 +1254,63 @@ func TestAgentSessionOverlappingSpeechEventsFanOutToSubscribers(t *testing.T) {
 
 	assertOverlappingSpeechEvent(t, first, "first")
 	assertOverlappingSpeechEvent(t, second, "second")
+}
+
+func TestAgentSessionOverlappingSpeechDeliveredWhenChannelFull(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	overlapEvents := session.overlappingSpeechEvents()
+	for i := 0; i < cap(overlapEvents); i++ {
+		overlapEvents <- OverlappingSpeechEvent{CreatedAt: time.Now(), DetectedAt: time.Now()}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.EmitOverlappingSpeech(OverlappingSpeechEvent{IsInterruption: true})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("EmitOverlappingSpeech returned while event channel was full; overlapping speech event may be dropped")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	<-overlapEvents
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("EmitOverlappingSpeech did not unblock after overlap event channel had capacity")
+	}
+
+	for {
+		select {
+		case got := <-overlapEvents:
+			if got.IsInterruption {
+				return
+			}
+		default:
+			t.Fatal("OverlappingSpeechEvents did not receive overlapping speech event")
+		}
+	}
+}
+
+func TestAgentSessionOverlappingSpeechDoesNotBlockWithoutSubscriber(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	for i := 0; i < cap(session.overlappingSpeechCh); i++ {
+		session.overlappingSpeechCh <- OverlappingSpeechEvent{CreatedAt: time.Now(), DetectedAt: time.Now()}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.EmitOverlappingSpeech(OverlappingSpeechEvent{IsInterruption: true})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("EmitOverlappingSpeech blocked on unclaimed overlap event channel")
+	}
 }
 
 func assertUserTranscriptEvent(t *testing.T, events <-chan UserInputTranscribedEvent, name string) {

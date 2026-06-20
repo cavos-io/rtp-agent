@@ -529,15 +529,14 @@ func roomIODefaultTextInput(ctx context.Context, responder roomIOTextResponder, 
 }
 
 func (rio *RoomIO) handleAgentStateChanged(ev agent.AgentStateChangedEvent) {
-	if rio == nil || rio.agentStatePublisher == nil {
+	if rio == nil || (rio.agentStatePublisher == nil && rio.clientEvents == nil) {
 		return
 	}
-	if rio.agentStatePublishEnabled != nil && !rio.agentStatePublishEnabled() {
-		return
+	if rio.agentStatePublisher != nil && (rio.agentStatePublishEnabled == nil || rio.agentStatePublishEnabled()) {
+		rio.agentStatePublisher(map[string]string{
+			RoomIOAgentStateAttribute: string(ev.NewState),
+		})
 	}
-	rio.agentStatePublisher(map[string]string{
-		RoomIOAgentStateAttribute: string(ev.NewState),
-	})
 	if rio.clientEvents != nil {
 		rio.clientEvents.DispatchAgentState(ev.NewState)
 	}
@@ -545,9 +544,6 @@ func (rio *RoomIO) handleAgentStateChanged(ev agent.AgentStateChangedEvent) {
 
 func (rio *RoomIO) handleUserStateChanged(ev agent.UserStateChangedEvent) {
 	if rio == nil || rio.clientEvents == nil {
-		return
-	}
-	if rio.agentStatePublishEnabled != nil && !rio.agentStatePublishEnabled() {
 		return
 	}
 	rio.clientEvents.DispatchUserState(ev.NewState)
@@ -752,6 +748,9 @@ func (rio *RoomIO) publishTranscriptionPacket(transcription *livekit.Transcripti
 	if rio == nil || rio.Room == nil || rio.Room.LocalParticipant == nil || transcription == nil {
 		return nil
 	}
+	if rio.Room.ConnectionState() != lksdk.ConnectionStateConnected {
+		return nil
+	}
 	return rio.Room.LocalParticipant.PublishDataPacket(roomIOTranscriptionPacket{transcription: transcription})
 }
 
@@ -927,6 +926,9 @@ func (rio *RoomIO) onDataPacket(data lksdk.DataPacket, params lksdk.DataReceiveP
 func (rio *RoomIO) PublishDTMF(code int32, digit string) error {
 	if rio == nil || rio.Room == nil || rio.Room.LocalParticipant == nil {
 		return errors.New("room local participant not available")
+	}
+	if rio.Room.ConnectionState() != lksdk.ConnectionStateConnected {
+		return errors.New("room is not connected")
 	}
 	return rio.Room.LocalParticipant.PublishDataPacket(&livekit.SipDTMF{
 		Code:  uint32(code),

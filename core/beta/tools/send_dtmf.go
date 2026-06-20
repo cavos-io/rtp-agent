@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/beta"
@@ -88,5 +89,13 @@ func (t *SendDTMFTool) Execute(ctx context.Context, args string) (string, error)
 		}
 	}
 
-	return fmt.Sprintf("Successfully sent DTMF events: %s", beta.FormatDtmf(a.Events)), nil
+	return fmt.Sprintf("Successfully sent DTMF events: %s", formatSentDTMFEvents(a.Events)), nil
+}
+
+func formatSentDTMFEvents(events []beta.DtmfEvent) string {
+	vals := make([]string, 0, len(events))
+	for _, event := range events {
+		vals = append(vals, string(event))
+	}
+	return strings.Join(vals, ", ")
 }
