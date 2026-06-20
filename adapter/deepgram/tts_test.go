@@ -2,6 +2,7 @@ package deepgram
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -246,6 +247,27 @@ func TestDeepgramTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	}
 	if body.closeCalls != 1 {
 		t.Fatalf("body close calls = %d, want 1", body.closeCalls)
+	}
+}
+
+func TestDeepgramTTSChunkedStreamKeepsFinalReadBytes(t *testing.T) {
+	stream := &deepgramTTSChunkedStream{
+		resp:       &http.Response{Body: &deepgramTTSFinalReadCloser{data: []byte{0x01, 0x02, 0x03, 0x04}}},
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want final audio bytes", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("Next() = %+v, want audio frame", audio)
+	}
+	if got := audio.Frame.Data; !bytes.Equal(got, []byte{0x01, 0x02, 0x03, 0x04}) {
+		t.Fatalf("audio bytes = %v, want final read bytes", got)
+	}
+	if got := audio.Frame.SamplesPerChannel; got != 2 {
+		t.Fatalf("samples per channel = %d, want 2", got)
 	}
 }
 
@@ -702,6 +724,23 @@ func (r *deepgramTTSCountingReadCloser) Read([]byte) (int, error) {
 
 func (r *deepgramTTSCountingReadCloser) Close() error {
 	r.closeCalls++
+	return nil
+}
+
+type deepgramTTSFinalReadCloser struct {
+	data []byte
+	read bool
+}
+
+func (r *deepgramTTSFinalReadCloser) Read(p []byte) (int, error) {
+	if r.read {
+		return 0, io.EOF
+	}
+	r.read = true
+	return copy(p, r.data), io.EOF
+}
+
+func (r *deepgramTTSFinalReadCloser) Close() error {
 	return nil
 }
 

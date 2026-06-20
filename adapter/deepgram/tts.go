@@ -222,13 +222,15 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
 	if err != nil {
-		if err == io.EOF {
+		if err == io.EOF && n == 0 {
 			return nil, io.EOF
 		}
-		if errors.Is(err, context.DeadlineExceeded) {
+		if err != io.EOF && errors.Is(err, context.DeadlineExceeded) {
 			return nil, llm.NewAPITimeoutError(err.Error())
 		}
-		return nil, llm.NewAPIConnectionError(err.Error())
+		if err != io.EOF {
+			return nil, llm.NewAPIConnectionError(err.Error())
+		}
 	}
 
 	return &tts.SynthesizedAudio{
