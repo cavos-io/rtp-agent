@@ -383,6 +383,9 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 			return
 		}
 		if err := rtSession.UpdateChatContext(ma.chatCtx); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return
+			}
 			logger.Logger.Errorw("failed to update realtime session chat context", err)
 			if session != nil {
 				session.EmitError(ErrorEvent{
@@ -395,6 +398,9 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 	}
 
 	emitRealtimeError := func(message string, err error) {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		logger.Logger.Errorw(message, err)
 		if session != nil {
 			session.EmitError(ErrorEvent{

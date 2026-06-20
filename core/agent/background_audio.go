@@ -241,15 +241,22 @@ func clampFloat(value float64, minValue float64, maxValue float64) float64 {
 }
 
 type PlayHandle struct {
-	doneCh chan struct{}
-	stopCh chan struct{}
-	once   sync.Once
+	doneCh   chan struct{}
+	stopCh   chan struct{}
+	stopOnce sync.Once
+	doneOnce sync.Once
+	fadeOut  float64
 }
 
-func newPlayHandle() *PlayHandle {
+func newPlayHandle(fadeOut ...float64) *PlayHandle {
+	fade := 0.0
+	if len(fadeOut) > 0 {
+		fade = fadeOut[0]
+	}
 	return &PlayHandle{
-		doneCh: make(chan struct{}),
-		stopCh: make(chan struct{}),
+		doneCh:  make(chan struct{}),
+		stopCh:  make(chan struct{}),
+		fadeOut: fade,
 	}
 }
 
@@ -266,10 +273,12 @@ func (h *PlayHandle) Stop() {
 	if h.Done() {
 		return
 	}
-	h.once.Do(func() {
+	h.stopOnce.Do(func() {
 		close(h.stopCh)
-		close(h.doneCh)
 	})
+	if h.fadeOut <= 0 {
+		h.markPlayoutDone()
+	}
 }
 
 func (h *PlayHandle) WaitForPlayout() {
@@ -277,17 +286,14 @@ func (h *PlayHandle) WaitForPlayout() {
 }
 
 func (h *PlayHandle) markPlayoutDone() {
-	h.once.Do(func() {
+	h.doneOnce.Do(func() {
 		close(h.doneCh)
 	})
 }
 
 func (p *BackgroundAudioPlayer) Play(audio interface{}, loop bool) *PlayHandle {
 	if p.mixerTaskCancel == nil {
-		logger.Logger.Warnw("BackgroundAudio is not started", nil)
-		handle := newPlayHandle()
-		handle.markPlayoutDone()
-		return handle
+		panic("BackgroundAudio is not started")
 	}
 
 	soundSource, cfg := p.normalizeSoundSource(audio)
@@ -299,14 +305,11 @@ func (p *BackgroundAudioPlayer) Play(audio interface{}, loop bool) *PlayHandle {
 
 	if loop {
 		if _, ok := soundSource.(<-chan *model.AudioFrame); ok {
-			logger.Logger.Warnw("Looping sound via chan is not supported", nil)
-			handle := newPlayHandle()
-			handle.markPlayoutDone()
-			return handle
+			panic("Looping sound via chan is not supported")
 		}
 	}
 
-	handle := newPlayHandle()
+	handle := newPlayHandle(cfg.FadeOut)
 	p.playTasks.Add(1)
 	go p.playTask(handle, soundSource, cfg, loop)
 	return handle
@@ -438,6 +441,9 @@ func (p *BackgroundAudioPlayer) AgentStateChanged(newState AgentState) {
 	p.mu.Unlock()
 
 	if p.thinkingSound == nil {
+		return
+	}
+	if p.mixerTaskCancel == nil {
 		return
 	}
 

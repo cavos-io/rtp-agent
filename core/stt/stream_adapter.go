@@ -106,10 +106,11 @@ type streamAdapterWrapper struct {
 	eventCh chan *SpeechEvent
 	errCh   chan error
 	inputCh chan streamAdapterInput
+	doneCh  chan struct{}
 
 	mu          sync.Mutex
 	closed      bool
-	inputClosed bool
+	doneClosed  bool
 	terminalErr error
 	inputEnded  bool
 	frameBuffer []*model.AudioFrame
@@ -140,6 +141,7 @@ func (a *StreamAdapter) Stream(ctx context.Context, language string) (RecognizeS
 		eventCh:   make(chan *SpeechEvent, 100),
 		errCh:     make(chan error, 1),
 		inputCh:   make(chan streamAdapterInput, 100),
+		doneCh:    make(chan struct{}),
 		startTime: streamStartTimeNow(),
 		span:      span,
 	}
@@ -175,6 +177,8 @@ func (w *streamAdapterWrapper) run() {
 		for {
 			select {
 			case <-w.ctx.Done():
+				return
+			case <-w.doneCh:
 				return
 			case input, ok := <-w.inputCh:
 				if !ok {
@@ -316,8 +320,7 @@ func (w *streamAdapterWrapper) PushFrame(frame *model.AudioFrame) error {
 	}
 	w.mu.Unlock()
 
-	w.inputCh <- streamAdapterInput{frame: frame}
-	return nil
+	return w.enqueueInput(streamAdapterInput{frame: frame})
 }
 
 func (w *streamAdapterWrapper) Flush() error {
@@ -332,8 +335,7 @@ func (w *streamAdapterWrapper) Flush() error {
 	}
 	w.mu.Unlock()
 
-	w.inputCh <- streamAdapterInput{flush: true}
-	return nil
+	return w.enqueueInput(streamAdapterInput{flush: true})
 }
 
 func (w *streamAdapterWrapper) EndInput() error {
@@ -349,9 +351,27 @@ func (w *streamAdapterWrapper) EndInput() error {
 	w.inputEnded = true
 	w.mu.Unlock()
 
-	w.inputCh <- streamAdapterInput{flush: true}
-	w.inputCh <- streamAdapterInput{end: true}
-	return nil
+	if err := w.enqueueInput(streamAdapterInput{flush: true}); err != nil {
+		return err
+	}
+	return w.enqueueInput(streamAdapterInput{end: true})
+}
+
+func (w *streamAdapterWrapper) enqueueInput(input streamAdapterInput) error {
+	select {
+	case <-w.doneCh:
+		return fmt.Errorf("stream closed")
+	default:
+	}
+
+	select {
+	case <-w.doneCh:
+		return fmt.Errorf("stream closed")
+	case <-w.ctx.Done():
+		return fmt.Errorf("stream closed")
+	case w.inputCh <- input:
+		return nil
+	}
 }
 
 func (w *streamAdapterWrapper) Close() error {
@@ -379,9 +399,9 @@ func (w *streamAdapterWrapper) markClosedFromRun() {
 }
 
 func (w *streamAdapterWrapper) closeInputLocked() {
-	if !w.inputClosed {
-		close(w.inputCh)
-		w.inputClosed = true
+	if !w.doneClosed {
+		close(w.doneCh)
+		w.doneClosed = true
 	}
 }
 

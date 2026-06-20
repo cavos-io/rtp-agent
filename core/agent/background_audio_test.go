@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/binary"
 	"math"
 	"os"
@@ -131,6 +132,74 @@ func TestNormalizeSoundSourceAppliesAudioConfigReferenceDefaults(t *testing.T) {
 	}
 	if cfg.Volume != 1.0 || cfg.Probability != 1.0 {
 		t.Fatalf("list cfg = %#v, want default volume/probability 1.0", cfg)
+	}
+}
+
+func TestBackgroundAudioPlayBeforeStartPanicsLikeReference(t *testing.T) {
+	player := NewBackgroundAudioPlayer(nil, nil)
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("Play before Start did not panic, want BackgroundAudio is not started error")
+		}
+	}()
+	player.Play("ambient.ogg", false)
+}
+
+func TestBackgroundAudioPlayLoopingChannelPanicsLikeReference(t *testing.T) {
+	player := NewBackgroundAudioPlayer(nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	player.mixerTaskCtx = ctx
+	player.mixerTaskCancel = cancel
+
+	frames := make(chan *model.AudioFrame)
+	defer close(frames)
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("Play looping channel did not panic, want unsupported looped stream error")
+		}
+	}()
+	player.Play((<-chan *model.AudioFrame)(frames), true)
+}
+
+func TestPlayHandleStopWithFadeOutWaitsForPlayoutDone(t *testing.T) {
+	player := NewBackgroundAudioPlayer(nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	player.mixerTaskCtx = ctx
+	player.mixerTaskCancel = cancel
+	frames := make(chan *model.AudioFrame)
+
+	handle := player.Play(AudioConfig{
+		Source:  (<-chan *model.AudioFrame)(frames),
+		FadeOut: 0.2,
+	}, false)
+
+	handle.Stop()
+	if handle.Done() {
+		t.Fatal("Done() = true immediately after Stop with fade-out, want pending until playout is marked done")
+	}
+
+	close(frames)
+	waitForBackgroundHandleDone(t, handle)
+	if !handle.Done() {
+		t.Fatal("Done() = false after markPlayoutDone, want true")
+	}
+}
+
+func waitForBackgroundHandleDone(t *testing.T, handle *PlayHandle) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		handle.WaitForPlayout()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for background play handle")
 	}
 }
 

@@ -1145,6 +1145,85 @@ func TestOpenAIRealtimeSTTCloseEndsVADInput(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTCloseDoesNotWaitForBlockedVADPushFrame(t *testing.T) {
+	vadStream := newFakeOpenAISTTVADStream()
+	vadStream.pushStartedCh = make(chan struct{}, 1)
+	vadStream.releasePushCh = make(chan struct{})
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+		WithOpenAISTTVAD(&fakeOpenAISTTVAD{stream: vadStream}),
+	)
+	started := make(chan struct{})
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			close(started)
+			for {
+				select {
+				case <-releaseServer:
+					return
+				default:
+				}
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not send initial session update")
+	}
+
+	pushDone := make(chan error, 1)
+	go func() {
+		pushDone <- stream.PushFrame(openAIRealtimeSTTTestFrame(bytes.Repeat([]byte{0x04}, openAIRealtimeSTTChunkBytes())))
+	}()
+	select {
+	case <-vadStream.pushStartedCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for VAD PushFrame to block")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- stream.Close()
+	}()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close error = %v", err)
+		}
+	case <-time.After(50 * time.Millisecond):
+		close(vadStream.releasePushCh)
+		<-closeDone
+		t.Fatal("Close blocked waiting for VAD PushFrame")
+	}
+
+	close(vadStream.releasePushCh)
+	select {
+	case err := <-pushDone:
+		if err != nil && !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("PushFrame error = %v, want nil or closed pipe", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for PushFrame to finish")
+	}
+}
+
 func openAIRealtimeSTTTestFrame(data []byte) *model.AudioFrame {
 	return &model.AudioFrame{
 		Data:              data,
@@ -1883,12 +1962,15 @@ func (f *fakeOpenAISTTVAD) Stream(context.Context) (vad.VADStream, error) {
 }
 
 type fakeOpenAISTTVADStream struct {
-	events       chan *vad.VADEvent
-	endInputCh   chan struct{}
-	closeCh      chan struct{}
-	endInputOnce sync.Once
-	closeOnce    sync.Once
-	eventsOnce   sync.Once
+	mu            sync.Mutex
+	events        chan *vad.VADEvent
+	endInputCh    chan struct{}
+	closeCh       chan struct{}
+	pushStartedCh chan struct{}
+	releasePushCh chan struct{}
+	closed        bool
+	endInputOnce  sync.Once
+	closeOnce     sync.Once
 }
 
 func newFakeOpenAISTTVADStream() *fakeOpenAISTTVADStream {
@@ -1900,6 +1982,17 @@ func newFakeOpenAISTTVADStream() *fakeOpenAISTTVADStream {
 }
 
 func (f *fakeOpenAISTTVADStream) PushFrame(*model.AudioFrame) error {
+	if f.pushStartedCh != nil {
+		f.pushStartedCh <- struct{}{}
+	}
+	if f.releasePushCh != nil {
+		<-f.releasePushCh
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed {
+		return io.ErrClosedPipe
+	}
 	f.events <- &vad.VADEvent{Type: vad.VADEventEndOfSpeech}
 	return nil
 }
@@ -1921,7 +2014,12 @@ func (f *fakeOpenAISTTVADStream) Close() error {
 }
 
 func (f *fakeOpenAISTTVADStream) closeEvents() {
-	f.eventsOnce.Do(func() { close(f.events) })
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.closed {
+		f.closed = true
+		close(f.events)
+	}
 }
 
 func (f *fakeOpenAISTTVADStream) Next() (*vad.VADEvent, error) {

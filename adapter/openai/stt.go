@@ -638,28 +638,39 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 		return nil
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
 	if s.inputEnded {
+		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
 	if s.audio == nil {
 		s.audio = newOpenAIRealtimeSTTAudioByteStream()
 	}
+	vadStream := s.vadStream
 	for _, chunk := range s.audio.Push(frame.Data) {
 		message, err := buildOpenAIRealtimeSTTAudioAppendMessage(chunk)
 		if err != nil {
+			s.mu.Unlock()
 			return err
 		}
 		if err := s.conn.WriteMessage(websocket.TextMessage, message); err != nil {
 			s.closeAfterWriteFailureLocked()
+			s.mu.Unlock()
 			return err
 		}
 	}
-	if s.vadStream != nil {
-		if err := s.vadStream.PushFrame(frame); err != nil {
+	s.mu.Unlock()
+	if vadStream != nil {
+		if err := vadStream.PushFrame(frame); err != nil {
+			s.mu.Lock()
+			closed := s.closed
+			s.mu.Unlock()
+			if closed {
+				return io.ErrClosedPipe
+			}
 			return err
 		}
 	}
@@ -777,8 +788,12 @@ func (s *openAIRealtimeSTTStream) closeVADStreamLocked() {
 	if s.vadStream == nil {
 		return
 	}
-	_ = s.vadStream.EndInput()
-	_ = s.vadStream.Close()
+	vadStream := s.vadStream
+	s.vadStream = nil
+	go func() {
+		_ = vadStream.EndInput()
+		_ = vadStream.Close()
+	}()
 }
 
 func (s *openAIRealtimeSTTStream) sendErrorLocked(err error) {
