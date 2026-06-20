@@ -212,10 +212,12 @@ func (r *recordingAppTextResponder) EmitUserInputTranscribed(ev agent.UserInputT
 }
 
 type callbackCancelingAppTextResponder struct {
-	cancel         context.CancelFunc
-	generateCtxErr error
-	valueKey       any
-	generateValue  any
+	cancel              context.CancelFunc
+	generateCtxErr      error
+	valueKey            any
+	generateValue       any
+	generateDeadline    time.Time
+	generateDeadlineSet bool
 }
 
 func (r *callbackCancelingAppTextResponder) Interrupt(bool) error {
@@ -228,6 +230,7 @@ func (r *callbackCancelingAppTextResponder) GenerateReply(ctx context.Context, _
 	if r.valueKey != nil {
 		r.generateValue = ctx.Value(r.valueKey)
 	}
+	r.generateDeadline, r.generateDeadlineSet = ctx.Deadline()
 	return nil, ctx.Err()
 }
 
@@ -2385,6 +2388,32 @@ func TestInstallAgoraRTMDataMessageHandlerPreservesCallbackContextValues(t *test
 	}
 	if responder.generateValue != "rtm-callback-trace" {
 		t.Fatalf("GenerateReply callback value = %v, want propagated callback context value", responder.generateValue)
+	}
+}
+
+func TestInstallAgoraRTMDataMessageHandlerPreservesCallbackContextDeadline(t *testing.T) {
+	dataPublisher := &fakeAppAgoraDataPublisher{}
+	deadline := time.Now().Add(time.Minute).Round(0)
+	callbackCtx, cancelCallback := context.WithDeadline(context.Background(), deadline)
+	defer cancelCallback()
+	responder := &callbackCancelingAppTextResponder{cancel: func() {}}
+
+	installAgoraRTMDataMessageHandler(context.Background(), dataPublisher, responder, "agent-rtm", "support")
+
+	handler := dataPublisher.dataHandler()
+	if handler == nil {
+		t.Fatal("installAgoraRTMDataMessageHandler() did not install handler")
+	}
+	err := handler(callbackCtx, workeragora.DataMessage{
+		Channel:   "support",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"data_type":"input_text","text":"hello from chat"}`),
+	})
+	if err != nil {
+		t.Fatalf("RTM data handler error = %v, want nil", err)
+	}
+	if !responder.generateDeadlineSet || !responder.generateDeadline.Equal(deadline) {
+		t.Fatalf("GenerateReply deadline = %v set=%v, want callback deadline %v", responder.generateDeadline, responder.generateDeadlineSet, deadline)
 	}
 }
 

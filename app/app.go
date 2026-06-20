@@ -1271,6 +1271,21 @@ type agoraRTMCallbackMergedContext struct {
 	callback context.Context
 }
 
+func (c agoraRTMCallbackMergedContext) Deadline() (time.Time, bool) {
+	runtimeDeadline, runtimeOK := c.Context.Deadline()
+	callbackDeadline, callbackOK := c.callback.Deadline()
+	switch {
+	case !runtimeOK:
+		return callbackDeadline, callbackOK
+	case !callbackOK:
+		return runtimeDeadline, true
+	case callbackDeadline.Before(runtimeDeadline):
+		return callbackDeadline, true
+	default:
+		return runtimeDeadline, true
+	}
+}
+
 func (c agoraRTMCallbackMergedContext) Err() error {
 	if err := c.Context.Err(); err != nil {
 		return err
