@@ -424,6 +424,11 @@ func TestPipelineAgentStartsToolUpdateReplyBeforeToolReturns(t *testing.T) {
 					{Delta: &llm.ChoiceDelta{Content: "progress acknowledged"}},
 				},
 			},
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{Content: "final acknowledged"}},
+				},
+			},
 		},
 	}
 	tool := &blockingRunContextUpdatingTool{
@@ -459,6 +464,9 @@ func TestPipelineAgentStartsToolUpdateReplyBeforeToolReturns(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("generateReply did not finish after tool release")
+	}
+	if len(l.calls) != 3 {
+		t.Fatalf("LLM Chat calls = %d, want progress reply and final return reply", len(l.calls))
 	}
 }
 

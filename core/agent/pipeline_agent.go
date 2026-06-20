@@ -743,9 +743,25 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			insertChatItemIfMissing(replyCtx, opts.UserMessage)
 		}
 	}
+	appendToolOutput := func(toolOut ToolExecutionOutput, functionCalls *[]*llm.FunctionCall, functionCallOutputs *[]*llm.FunctionCallOutput) bool {
+		logger.Logger.Infow("Tool executed", "name", toolOut.FncCall.Name)
+		fncCall := toolOut.FncCall
+		*functionCalls = append(*functionCalls, &fncCall)
+		*functionCallOutputs = append(*functionCallOutputs, toolOut.FncCallOut)
+		if toolOut.FncCallOut != nil {
+			va.chatCtx.Append(&fncCall)
+			va.chatCtx.Append(toolOut.FncCallOut)
+			if replyCtx != va.chatCtx {
+				replyCtx.Append(&fncCall)
+				replyCtx.Append(toolOut.FncCallOut)
+			}
+		}
+		return toolOut.FncCallOut != nil
+	}
 
 	// In Python parity, we loop for tool calls
 	toolSteps := 0
+	var pendingToolOutCh <-chan ToolExecutionOutput
 	for {
 		inferenceCtx := replyCtx
 		inputModality := ""
@@ -930,19 +946,8 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		var releasedByUpdate bool
 		for toolOut := range toolOutCh {
 			executedTools = true
-			logger.Logger.Infow("Tool executed", "name", toolOut.FncCall.Name)
-
-			fncCall := toolOut.FncCall
-			functionCalls = append(functionCalls, &fncCall)
-			functionCallOutputs = append(functionCallOutputs, toolOut.FncCallOut)
-			if toolOut.FncCallOut != nil {
+			if appendToolOutput(toolOut, &functionCalls, &functionCallOutputs) {
 				replyRequired = true
-				va.chatCtx.Append(&fncCall)
-				va.chatCtx.Append(toolOut.FncCallOut)
-				if replyCtx != va.chatCtx {
-					replyCtx.Append(&fncCall)
-					replyCtx.Append(toolOut.FncCallOut)
-				}
 			}
 			if toolOut.RunContextUpdate {
 				releasedByUpdate = true
@@ -950,7 +955,16 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			}
 		}
 		if releasedByUpdate {
-			go drainToolExecutionOutputs(toolOutCh)
+			pendingToolOutCh = toolOutCh
+		}
+		if !executedTools && pendingToolOutCh != nil {
+			for toolOut := range pendingToolOutCh {
+				executedTools = true
+				if appendToolOutput(toolOut, &functionCalls, &functionCallOutputs) {
+					replyRequired = true
+				}
+			}
+			pendingToolOutCh = nil
 		}
 
 		if executedTools {
@@ -986,11 +1000,6 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		}
 		toolSteps++
 		// Loop back to LLM with tool outputs
-	}
-}
-
-func drainToolExecutionOutputs(outCh <-chan ToolExecutionOutput) {
-	for range outCh {
 	}
 }
 
