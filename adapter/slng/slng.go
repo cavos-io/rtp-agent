@@ -42,6 +42,7 @@ const (
 )
 
 type STT struct {
+	mu                      sync.Mutex
 	apiKey                  string
 	model                   string
 	endpoint                string
@@ -59,6 +60,7 @@ type STT struct {
 	maxSpeakers             *int
 	language                string
 	modelOptions            map[string]any
+	streams                 map[*sttStream]struct{}
 }
 
 type STTOption func(*STT)
@@ -325,19 +327,61 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		if len(s.modelEndpoints) > 0 && endpointIndex > 0 {
 			s.modelEndpoints = append([]string(nil), endpoints[endpointIndex:]...)
 		}
-		return &sttStream{
+		stream := &sttStream{
+			provider:          s,
 			conn:              conn,
 			language:          s.resolveLanguage(language),
 			partials:          s.enablePartialTranscript,
 			sampleRate:        s.sampleRate,
 			bufferSizeSeconds: s.bufferSizeSeconds,
 			encoding:          s.encoding,
-		}, nil
+		}
+		s.registerStream(stream)
+		return stream, nil
 	}
 	if lastErr != nil {
 		return nil, lastErr
 	}
 	return nil, errors.New("slng stt websocket endpoint is empty")
+}
+
+func (s *STT) Close() error {
+	s.mu.Lock()
+	streams := make([]*sttStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.mu.Unlock()
+
+	var firstErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (s *STT) registerStream(stream *sttStream) {
+	if stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.streams == nil {
+		s.streams = make(map[*sttStream]struct{})
+	}
+	stream.provider = s
+	s.streams[stream] = struct{}{}
+}
+
+func (s *STT) unregisterStream(stream *sttStream) {
+	if stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.streams, stream)
 }
 
 func (s *STT) requireAPIKey() error {
@@ -378,6 +422,7 @@ func (s *STT) resolveLanguage(language string) string {
 }
 
 type TTS struct {
+	mu             sync.Mutex
 	apiKey         string
 	model          string
 	endpoint       string
@@ -388,6 +433,7 @@ type TTS struct {
 	speed          float64
 	encoding       string
 	modelOptions   map[string]any
+	streams        map[*ttsStream]struct{}
 }
 
 type TTSOption func(*TTS)
@@ -523,7 +569,48 @@ func (t *TTS) stream(ctx context.Context, appendTextSpace bool) (tts.SynthesizeS
 		conn.Close()
 		return nil, err
 	}
-	return &ttsStream{conn: conn, sampleRate: t.sampleRate, model: t.model, appendTextSpace: appendTextSpace}, nil
+	stream := &ttsStream{provider: t, conn: conn, sampleRate: t.sampleRate, model: t.model, appendTextSpace: appendTextSpace}
+	t.registerStream(stream)
+	return stream, nil
+}
+
+func (t *TTS) Close() error {
+	t.mu.Lock()
+	streams := make([]*ttsStream, 0, len(t.streams))
+	for stream := range t.streams {
+		streams = append(streams, stream)
+	}
+	t.mu.Unlock()
+
+	var firstErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (t *TTS) registerStream(stream *ttsStream) {
+	if stream == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.streams == nil {
+		t.streams = make(map[*ttsStream]struct{})
+	}
+	stream.provider = t
+	t.streams[stream] = struct{}{}
+}
+
+func (t *TTS) unregisterStream(stream *ttsStream) {
+	if stream == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.streams, stream)
 }
 
 func (t *TTS) requireAPIKey() error {
@@ -1003,6 +1090,7 @@ func normalizeSLNGResults(message map[string]any) map[string]any {
 
 type sttStream struct {
 	mu                sync.Mutex
+	provider          *STT
 	conn              *websocket.Conn
 	language          string
 	partials          bool
@@ -1058,6 +1146,9 @@ func (s *sttStream) writeAlignedAudio(chunk []byte) error {
 	if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
 		s.closed = true
 		_ = s.conn.Close()
+		if s.provider != nil {
+			s.provider.unregisterStream(s)
+		}
 		return err
 	}
 	s.speechDuration += s.audioDuration(chunk)
@@ -1106,6 +1197,9 @@ func (s *sttStream) Close() error {
 		return nil
 	}
 	s.closed = true
+	if s.provider != nil {
+		defer s.provider.unregisterStream(s)
+	}
 	if s.conn == nil {
 		return nil
 	}
@@ -1141,6 +1235,8 @@ func (s *sttStream) Next() (*stt.SpeechEvent, error) {
 }
 
 type ttsStream struct {
+	mu              sync.Mutex
+	provider        *TTS
 	conn            *websocket.Conn
 	sampleRate      int
 	model           string
@@ -1149,11 +1245,20 @@ type ttsStream struct {
 	textMessages    int
 	lastMessageType string
 	appendTextSpace bool
+	closed          bool
 }
 
 func (s *ttsStream) PushText(text string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
 	if text == "" {
 		return nil
+	}
+	if s.conn == nil {
+		return io.ErrClosedPipe
 	}
 	if s.appendTextSpace && !strings.HasSuffix(text, " ") {
 		text += " "
@@ -1162,17 +1267,58 @@ func (s *ttsStream) PushText(text string) error {
 	if err != nil {
 		return err
 	}
-	return s.conn.WriteMessage(websocket.TextMessage, data)
+	if err := s.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		s.closed = true
+		_ = s.conn.Close()
+		if s.provider != nil {
+			s.provider.unregisterStream(s)
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *ttsStream) Flush() error {
-	if isRimeArcanaModel(s.model) {
-		return s.conn.WriteMessage(websocket.TextMessage, []byte(slngCancelMessage))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
 	}
-	return s.conn.WriteMessage(websocket.TextMessage, []byte(slngFlushMessage))
+	if s.conn == nil {
+		return io.ErrClosedPipe
+	}
+	if isRimeArcanaModel(s.model) {
+		if err := s.conn.WriteMessage(websocket.TextMessage, []byte(slngCancelMessage)); err != nil {
+			s.closed = true
+			_ = s.conn.Close()
+			if s.provider != nil {
+				s.provider.unregisterStream(s)
+			}
+			return err
+		}
+		return nil
+	}
+	if err := s.conn.WriteMessage(websocket.TextMessage, []byte(slngFlushMessage)); err != nil {
+		s.closed = true
+		_ = s.conn.Close()
+		if s.provider != nil {
+			s.provider.unregisterStream(s)
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *ttsStream) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	if s.provider != nil {
+		defer s.provider.unregisterStream(s)
+	}
 	if s.conn == nil {
 		return nil
 	}

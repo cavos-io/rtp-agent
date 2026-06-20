@@ -258,6 +258,27 @@ func TestSonioxTokenAccumulatorBuildsSpeechData(t *testing.T) {
 	}
 }
 
+func TestSonioxSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
+	stream := &sonioxStream{state: &sonioxMessageState{}}
+	timing, ok := any(stream).(stt.StreamTiming)
+	if !ok {
+		t.Fatal("stream does not implement stt.StreamTiming")
+	}
+	timing.SetStartTimeOffset(1.5)
+
+	events, err := processSonioxMessage(stream.state, []byte(`{"tokens":[{"text":"hello ","language":"en","is_final":true,"start_ms":100,"end_ms":250,"confidence":0.9}]}`))
+	if err != nil {
+		t.Fatalf("process message: %v", err)
+	}
+	if len(events) != 2 || events[1].Type != stt.SpeechEventPreflightTranscript {
+		t.Fatalf("events = %#v, want start then preflight", events)
+	}
+	alt := events[1].Alternatives[0]
+	if alt.StartTime != 1.6 || alt.EndTime != 1.75 {
+		t.Fatalf("time range = %v-%v, want 1.6-1.75", alt.StartTime, alt.EndTime)
+	}
+}
+
 func TestSonioxProcessMessagePreservesReferenceLanguageSegments(t *testing.T) {
 	state := &sonioxMessageState{}
 
