@@ -5,4 +5,5 @@ type AudioFrame struct {
 	SampleRate        uint32
 	NumChannels       uint32
 	SamplesPerChannel uint32
+	ParticipantID     string
 }

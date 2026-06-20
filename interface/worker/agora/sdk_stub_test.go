@@ -325,8 +325,8 @@ func TestSDKClientImplementationGuardsInboundAudioByActiveConnection(t *testing.
 			t.Fatalf("forwardActiveAudioFrame missing %q", want)
 		}
 	}
-	if !strings.Contains(text, "c.forwardActiveAudioFrame(connection, audioHandler, frame)") {
-		t.Fatal("SDK inbound audio callback must use forwardActiveAudioFrame")
+	if !strings.Contains(text, "c.forwardActiveAudioFrame(connection, audioHandler, userID, frame)") {
+		t.Fatal("SDK inbound audio callback must pass Agora userID through forwardActiveAudioFrame")
 	}
 }
 
@@ -375,6 +375,9 @@ func TestSDKClientImplementationValidatesInboundPCMBufferShape(t *testing.T) {
 	}
 	if !strings.Contains(string(sdkSource), "pcm16AudioFrameToModel(pcm16AudioFrame{") {
 		t.Fatal("sdkAudioFrameToModel must delegate native SDK frame validation to pcm16AudioFrameToModel")
+	}
+	if !strings.Contains(string(sdkSource), "UserID:            userID") {
+		t.Fatal("sdkAudioFrameToModel must pass SDK callback userID into generic PCM conversion")
 	}
 }
 
@@ -862,7 +865,7 @@ func TestSDKClientImplementationFiltersAudioByChannel(t *testing.T) {
 	}
 	channelFilterIndex := strings.Index(callbackBody, "if !acceptChannel(opts.Channel, channelID)")
 	remoteFilterIndex := strings.Index(callbackBody, "if !acceptRemoteStream(opts.RemoteStreamID, userID)")
-	forwardIndex := strings.Index(callbackBody, "c.forwardActiveAudioFrame(connection, audioHandler, frame)")
+	forwardIndex := strings.Index(callbackBody, "c.forwardActiveAudioFrame(connection, audioHandler, userID, frame)")
 	if channelFilterIndex < 0 || remoteFilterIndex < 0 || forwardIndex < 0 {
 		t.Fatal("audio callback must filter channel and remote stream before forwarding audio")
 	}

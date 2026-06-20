@@ -123,11 +123,11 @@ func (c *sdkChannelClient) publishActiveAudio(connection *agoraservice.RtcConnec
 	return connection.PublishAudio(), true
 }
 
-func (c *sdkChannelClient) forwardActiveAudioFrame(connection *agoraservice.RtcConnection, audioHandler AudioHandler, frame *agoraservice.AudioFrame) {
+func (c *sdkChannelClient) forwardActiveAudioFrame(connection *agoraservice.RtcConnection, audioHandler AudioHandler, userID string, frame *agoraservice.AudioFrame) {
 	if audioHandler == nil {
 		return
 	}
-	audioFrame := sdkAudioFrameToModel(frame)
+	audioFrame := sdkAudioFrameToModel(userID, frame)
 	if audioFrame == nil {
 		return
 	}
@@ -154,7 +154,7 @@ func emitSDKEvent(handler EventHandler, event Event) {
 	}
 }
 
-func sdkAudioFrameToModel(frame *agoraservice.AudioFrame) *model.AudioFrame {
+func sdkAudioFrameToModel(userID string, frame *agoraservice.AudioFrame) *model.AudioFrame {
 	if frame == nil || len(frame.Buffer) == 0 || frame.SamplesPerSec <= 0 || frame.Channels <= 0 {
 		return nil
 	}
@@ -167,6 +167,7 @@ func sdkAudioFrameToModel(frame *agoraservice.AudioFrame) *model.AudioFrame {
 		Channels:          frame.Channels,
 		BytesPerSample:    frame.BytesPerSample,
 		SamplesPerChannel: frame.SamplesPerChannel,
+		UserID:            userID,
 	})
 }
 
@@ -337,7 +338,7 @@ func (c *sdkChannelClient) Join(ctx context.Context, opts Options, handler Event
 				if !acceptRemoteStream(opts.RemoteStreamID, userID) {
 					return true
 				}
-				c.forwardActiveAudioFrame(connection, audioHandler, frame)
+				c.forwardActiveAudioFrame(connection, audioHandler, userID, frame)
 				return true
 			},
 		}, 0, nil); ret != 0 {
