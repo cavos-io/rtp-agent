@@ -2254,7 +2254,7 @@ func openAIRealtimeResponseDoneError(response map[string]any) (llm.RealtimeEvent
 	if status != "failed" && status != "incomplete" {
 		return llm.RealtimeEvent{}, false
 	}
-	statusDetails, _ := response["status_details"].(map[string]any)
+	statusDetails, statusDetailsBody := openAIRealtimeStatusDetails(response["status_details"])
 	if status == "incomplete" {
 		reason := openAIRealtimeString(statusDetails["reason"])
 		if reason == "" {
@@ -2266,7 +2266,7 @@ func openAIRealtimeResponseDoneError(response map[string]any) (llm.RealtimeEvent
 		}
 		return llm.RealtimeEvent{
 			Type:  llm.RealtimeEventTypeError,
-			Error: llm.NewAPIError(message, statusDetails, true),
+			Error: llm.NewAPIError(message, statusDetailsBody, true),
 		}, true
 	}
 	errorBody, hasError := statusDetails["error"].(map[string]any)
@@ -2284,6 +2284,16 @@ func openAIRealtimeResponseDoneError(response map[string]any) (llm.RealtimeEvent
 		Type:  llm.RealtimeEventTypeError,
 		Error: llm.NewAPIError(message, body, true),
 	}, true
+}
+
+func openAIRealtimeStatusDetails(value any) (map[string]any, any) {
+	if details, ok := value.(map[string]any); ok {
+		return details, details
+	}
+	if details := openAIRealtimeString(value); details != "" {
+		return map[string]any{"reason": details}, details
+	}
+	return map[string]any{}, nil
 }
 
 func (s *realtimeSession) trackRealtimeEvent(ev llm.RealtimeEvent) llm.RealtimeEvent {

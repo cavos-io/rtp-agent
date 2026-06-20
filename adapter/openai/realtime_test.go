@@ -5532,6 +5532,39 @@ func TestRealtimeResponseDoneIncompleteReportsRecoverableError(t *testing.T) {
 	}
 }
 
+func TestRealtimeResponseDoneIncompletePreservesStringStatusDetails(t *testing.T) {
+	responseDone := map[string]any{
+		"type": "response.done",
+		"response": map[string]any{
+			"id":             "resp_incomplete",
+			"status":         "incomplete",
+			"status_details": "max_output_tokens",
+		},
+	}
+
+	session := &realtimeSession{
+		generation: &realtimeGeneration{
+			messages:   map[string]*realtimeMessageGeneration{},
+			messageCh:  make(chan llm.MessageGeneration),
+			functionCh: make(chan *llm.FunctionCall),
+		},
+	}
+	errorEvent, ok := session.trackOpenAIRealtimeEvent(responseDone)
+	if !ok {
+		t.Fatal("trackOpenAIRealtimeEvent returned ok=false, want incomplete response error event")
+	}
+	var apiErr *llm.APIError
+	if !errors.As(errorEvent.Error, &apiErr) {
+		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
+	}
+	if apiErr.Message != "OpenAI Realtime API response incomplete: max_output_tokens" {
+		t.Fatalf("APIError message = %q", apiErr.Message)
+	}
+	if apiErr.Body != "max_output_tokens" {
+		t.Fatalf("APIError Body = %#v, want string status_details", apiErr.Body)
+	}
+}
+
 func TestRealtimeEventMapsResponseDoneMetricsEmptyID(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "response.done",
