@@ -3219,6 +3219,7 @@ func TestDefaultConfigFromEnvSelectsDeepgramSpeechProviders(t *testing.T) {
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
 	t.Setenv("RTP_AGENT_STT_MODEL", "nova-3")
 	t.Setenv("RTP_AGENT_STT_LANGUAGE", "id")
+	t.Setenv("RTP_AGENT_STT_DETECT_LANGUAGE", "true")
 	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://deepgram.example/v1/listen")
 	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "16000")
 	t.Setenv("RTP_AGENT_STT_NUMBER_OF_CHANNELS", "2")
@@ -3259,6 +3260,9 @@ func TestDefaultConfigFromEnvSelectsDeepgramSpeechProviders(t *testing.T) {
 	}
 	if got := reflect.ValueOf(app.Session.STT).Elem().FieldByName("language").String(); got != "id" {
 		t.Fatalf("STT language = %q, want env language id", got)
+	}
+	if got := reflect.ValueOf(app.Session.STT).Elem().FieldByName("detectLanguage").Bool(); !got {
+		t.Fatal("STT detectLanguage = false, want env detect-language true")
 	}
 	if got := app.Session.TTS.Label(); got != "deepgram.TTS" {
 		t.Fatalf("TTS label = %q, want deepgram.TTS", got)
@@ -7560,6 +7564,25 @@ func TestDeepgramSTTFallbackPassesReferenceOptions(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for Deepgram STT websocket request")
+	}
+}
+
+func TestDeepgramSTTFallbackPassesReferenceDetectLanguage(t *testing.T) {
+	t.Setenv("DEEPGRAM_API_KEY", "test-deepgram-key")
+	detectLanguage := true
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTDetectLanguage: detectLanguage,
+	}, providerDeepgram)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	deepgramProvider, ok := provider.(*deepgram.DeepgramSTT)
+	if !ok {
+		t.Fatalf("provider type = %T, want *deepgram.DeepgramSTT", provider)
+	}
+	if got := reflect.ValueOf(deepgramProvider).Elem().FieldByName("detectLanguage").Bool(); !got {
+		t.Fatal("detectLanguage = false, want configured true")
 	}
 }
 

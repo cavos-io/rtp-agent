@@ -2381,6 +2381,9 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		if cfg.STTLanguage != "" {
 			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTLanguage(cfg.STTLanguage))
 		}
+		if cfg.STTDetectLanguage {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTDetectLanguage(true))
+		}
 		if cfg.STTInterimResults != nil {
 			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTInterimResults(*cfg.STTInterimResults))
 		}
@@ -4574,6 +4577,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.STTLanguage != "" {
 			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTDetectLanguage {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTDetectLanguage(true))
 		}
 		if cfg.STTInterimResults != nil {
 			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTInterimResults(*cfg.STTInterimResults))
