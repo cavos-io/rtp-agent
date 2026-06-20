@@ -284,10 +284,7 @@ func (h *PlayHandle) markPlayoutDone() {
 
 func (p *BackgroundAudioPlayer) Play(audio interface{}, loop bool) *PlayHandle {
 	if p.mixerTaskCancel == nil {
-		logger.Logger.Warnw("BackgroundAudio is not started", nil)
-		handle := newPlayHandle()
-		handle.markPlayoutDone()
-		return handle
+		panic("BackgroundAudio is not started")
 	}
 
 	soundSource, cfg := p.normalizeSoundSource(audio)

@@ -134,6 +134,17 @@ func TestNormalizeSoundSourceAppliesAudioConfigReferenceDefaults(t *testing.T) {
 	}
 }
 
+func TestBackgroundAudioPlayBeforeStartPanicsLikeReference(t *testing.T) {
+	player := NewBackgroundAudioPlayer(nil, nil)
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("Play before Start did not panic, want BackgroundAudio is not started error")
+		}
+	}()
+	player.Play("ambient.ogg", false)
+}
+
 func backgroundTestFrame(sampleRate uint32, channels uint32, samplesPerChannel uint32, samples []int16) *model.AudioFrame {
 	data := make([]byte, len(samples)*2)
 	for i, sample := range samples {
