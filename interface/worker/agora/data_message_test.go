@@ -289,6 +289,23 @@ func TestHandleTextInputEventIgnoresEmptyText(t *testing.T) {
 	}
 }
 
+func TestHandleTextInputEventStopsOnCanceledContextBeforeSideEffects(t *testing.T) {
+	responder := &recordingTextResponder{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := HandleTextInputEvent(ctx, responder, TextInputEvent{Text: "hello"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("HandleTextInputEvent() error = %v, want context canceled", err)
+	}
+	if got := responder.calls; len(got) != 0 {
+		t.Fatalf("calls = %#v, want canceled text turn to skip interrupt/generate/transcript", got)
+	}
+	if responder.claimed {
+		t.Fatal("HandleTextInputEvent() claimed user turn after context canceled")
+	}
+}
+
 type recordingTextResponder struct {
 	calls   []string
 	claimed bool

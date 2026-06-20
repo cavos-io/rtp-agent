@@ -83,6 +83,12 @@ func HandleTextInputEvent(ctx context.Context, responder TextResponder, ev TextI
 	if responder == nil {
 		return nil
 	}
+	ctx = normalizeContext(ctx)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 	if ev.Text == "" {
 		return nil
 	}
@@ -104,9 +110,9 @@ func HandleTextInputEvent(ctx context.Context, responder TextResponder, ev TextI
 		return nil
 	}
 	if claimer, ok := responder.(TextTurnClaimer); ok {
-		return claimer.ClaimUserTurn(normalizeContext(ctx), run)
+		return claimer.ClaimUserTurn(ctx, run)
 	}
-	return run(normalizeContext(ctx))
+	return run(ctx)
 }
 
 func defaultRTMStreamID(streamID string) string {
