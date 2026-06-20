@@ -375,6 +375,10 @@ func buildInworldTTSWebsocketHeaders(t *InworldTTS) http.Header {
 func buildInworldTTSCreateMessage(t *InworldTTS, contextID string) ([]byte, error) {
 	create := inworldTTSBasePayload(t)
 	delete(create, "text")
+	if audioConfig, ok := create["audioConfig"].(map[string]interface{}); ok {
+		delete(audioConfig, "temperature")
+	}
+	create["temperature"] = t.temperature
 	create["bufferCharThreshold"] = t.bufferCharThreshold
 	create["maxBufferDelayMs"] = t.maxBufferDelayMS
 	create["autoMode"] = true

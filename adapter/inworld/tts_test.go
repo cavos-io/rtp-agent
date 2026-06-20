@@ -221,6 +221,7 @@ func TestInworldTTSWebsocketMessagesMatchReference(t *testing.T) {
 		WithInworldTTSVoice("Ava"),
 		WithInworldTTSModel("inworld-tts-2"),
 		WithInworldTTSLanguage("en-US"),
+		WithInworldTTSTemperature(0.7),
 		WithInworldTTSBufferCharThreshold(120),
 		WithInworldTTSMaxBufferDelayMS(500),
 	)
@@ -238,6 +239,13 @@ func TestInworldTTSWebsocketMessagesMatchReference(t *testing.T) {
 	assertInworldPayload(t, create, "voiceId", "Ava")
 	assertInworldPayload(t, create, "modelId", "inworld-tts-2")
 	assertInworldPayload(t, create, "language", "en-US")
+	if create["temperature"] != 0.7 {
+		t.Fatalf("temperature = %#v, want top-level websocket temperature 0.7", create["temperature"])
+	}
+	audioConfig := create["audioConfig"].(map[string]any)
+	if _, ok := audioConfig["temperature"]; ok {
+		t.Fatalf("audioConfig.temperature = %#v, want websocket temperature at top level", audioConfig["temperature"])
+	}
 	if create["autoMode"] != true {
 		t.Fatalf("autoMode = %#v, want true", create["autoMode"])
 	}
