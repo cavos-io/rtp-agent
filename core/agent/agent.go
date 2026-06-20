@@ -120,6 +120,21 @@ func (a *Agent) UpdateInstructions(ctx context.Context, instructions string) err
 	return nil
 }
 
+func (a *Agent) UpdateTurnDetection(ctx context.Context, turnDetection TurnDetectionMode) error {
+	_ = ctx
+	activity := a.activity
+	oldTurnDetection := a.TurnDetection
+	a.TurnDetection = turnDetection
+	if activity == nil {
+		return nil
+	}
+	if oldTurnDetection == TurnDetectionModeManual || turnDetection == TurnDetectionModeManual {
+		activity.cancelFalseInterruptionTimer()
+		activity.cancelPendingEOUDetection()
+	}
+	return activity.UpdateOptions(AgentSessionUpdateOptions{TurnDetection: &turnDetection})
+}
+
 func (a *Agent) UpdateTools(ctx context.Context, tools []llm.Tool) error {
 	if a.activity != nil {
 		return a.activity.UpdateTools(ctx, tools)
