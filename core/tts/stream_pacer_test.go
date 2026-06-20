@@ -212,6 +212,20 @@ func TestSentenceStreamPacerIgnoresInputAfterCloseLikeReference(t *testing.T) {
 	}
 }
 
+func TestSentenceStreamPacerFlushOnlyDoesNotFlushUnderlying(t *testing.T) {
+	underlying := newEndInputPacerStream()
+	pacer := NewSentenceStreamPacerWithOptions(context.Background(), underlying, SentenceStreamPacerOptions{})
+	defer pacer.Close()
+
+	if err := pacer.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	time.Sleep(25 * time.Millisecond)
+	if got := underlying.calls(); len(got) != 0 {
+		t.Fatalf("underlying calls after empty flush = %#v, want none", got)
+	}
+}
+
 func TestSentenceStreamPacerReturnsEOFWhenUnderlyingCompletes(t *testing.T) {
 	underlying := newEOFAfterOnePacerStream()
 	pacer := NewSentenceStreamPacerWithOptions(context.Background(), underlying, SentenceStreamPacerOptions{})
