@@ -1691,6 +1691,36 @@ func TestMultimodalAgentEmitsRealtimeErrorWhenMessageAudioPublishFails(t *testin
 	}
 }
 
+func TestMultimodalAgentRealtimeMessageAudioPublishCancelSuppressesError(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	ma := &MultimodalAgent{session: session}
+	ma.PublishAudio = func(context.Context, *model.AudioFrame) error {
+		return context.Canceled
+	}
+	audioCh := make(chan *model.AudioFrame, 1)
+	audioCh <- &model.AudioFrame{
+		Data:              []byte{0, 1},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+	close(audioCh)
+
+	if consumed := ma.consumeRealtimeMessage(context.Background(), NewSpeechHandle(false, DefaultInputDetails()), llm.MessageGeneration{
+		AudioCh: audioCh,
+	}); consumed {
+		t.Fatal("consumeRealtimeMessage consumed canceled audio publish, want interrupted cleanup path")
+	}
+
+	select {
+	case ev := <-session.ErrorEvents():
+		t.Fatalf("ErrorEvents received %#v, want cancellation suppressed", ev)
+	case ev := <-session.AgentStateChangedCh:
+		t.Fatalf("agent state changed after canceled publish: %#v", ev)
+	default:
+	}
+}
+
 func TestMultimodalAgentRealtimeMessageAudioMarksSpeakingAfterPublish(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	publishStarted := make(chan struct{})

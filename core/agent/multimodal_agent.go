@@ -753,6 +753,9 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 			ma.mu.Unlock()
 			if publish != nil {
 				if err := publish(ctx, frame); err != nil {
+					if errors.Is(err, context.Canceled) {
+						return false
+					}
 					if session != nil {
 						session.EmitError(ErrorEvent{
 							Error:  llm.NewRealtimeError("failed to publish realtime audio", err),
