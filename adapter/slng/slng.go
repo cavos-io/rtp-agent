@@ -229,6 +229,42 @@ func (s *STT) Capabilities() stt.STTCapabilities {
 	}
 }
 
+func (s *STT) UpdateOptions(opts ...STTOption) {
+	s.mu.Lock()
+	before := slngSTTActiveOptions{
+		language:          s.language,
+		partials:          s.enablePartialTranscript,
+		bufferSizeSeconds: s.bufferSizeSeconds,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+	after := slngSTTActiveOptions{
+		language:          s.language,
+		partials:          s.enablePartialTranscript,
+		bufferSizeSeconds: s.bufferSizeSeconds,
+	}
+	streams := make([]*sttStream, 0, len(s.streams))
+	if before != after {
+		for stream := range s.streams {
+			streams = append(streams, stream)
+		}
+	}
+	s.mu.Unlock()
+
+	for _, stream := range streams {
+		stream.updateOptions(after)
+	}
+}
+
+type slngSTTActiveOptions struct {
+	language          string
+	partials          bool
+	bufferSizeSeconds float64
+}
+
 func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	if err := s.requireAPIKey(); err != nil {
 		return nil, err
@@ -1191,6 +1227,21 @@ func (s *sttStream) audioChunkBytes() int {
 		samplesPerBuffer = 1
 	}
 	return samplesPerBuffer * slngSTTBytesPerSample(s.encoding)
+}
+
+func (s *sttStream) updateOptions(opts slngSTTActiveOptions) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	if opts.language != "" {
+		s.language = opts.language
+	}
+	s.partials = opts.partials
+	if opts.bufferSizeSeconds > 0 {
+		s.bufferSizeSeconds = opts.bufferSizeSeconds
+	}
 }
 
 func slngSTTBytesPerSample(encoding string) int {

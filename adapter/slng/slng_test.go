@@ -238,6 +238,49 @@ func TestSLNGSTTInitPayloadPreservesExplicitZeroVADSilence(t *testing.T) {
 	assertSLNGNestedField(t, payload, "config", "vad_min_silence_duration_ms", float64(0))
 }
 
+func TestSLNGSTTUpdateOptionsAffectsFutureInitAndActiveStream(t *testing.T) {
+	provider := NewSTT("test-key",
+		WithSTTLanguage("en"),
+		WithSTTPartialTranscripts(true),
+		WithSTTBufferSizeSeconds(0.064),
+	)
+	stream := &sttStream{
+		language:          "en",
+		partials:          true,
+		bufferSizeSeconds: 0.064,
+		sampleRate:        defaultSLNGSTTSampleRate,
+		encoding:          defaultSLNGSTTEncoding,
+	}
+	provider.registerStream(stream)
+
+	provider.UpdateOptions(
+		WithSTTLanguage("id"),
+		WithSTTPartialTranscripts(false),
+		WithSTTBufferSizeSeconds(0.02),
+		WithSTTVADThreshold(0.7),
+		WithSTTVADMinSilenceDurationMS(450),
+		WithSTTVADSpeechPadMS(80),
+	)
+
+	payload := buildSTTInitPayload(provider)
+	assertSLNGNestedField(t, payload, "config", "language", "id")
+	assertSLNGNestedField(t, payload, "config", "enable_partials", false)
+	assertSLNGNestedField(t, payload, "config", "enable_partial_transcripts", false)
+	assertSLNGNestedField(t, payload, "config", "vad_threshold", float64(0.7))
+	assertSLNGNestedField(t, payload, "config", "vad_min_silence_duration_ms", float64(450))
+	assertSLNGNestedField(t, payload, "config", "vad_speech_pad_ms", float64(80))
+
+	if stream.language != "id" {
+		t.Fatalf("active stream language = %q, want id", stream.language)
+	}
+	if stream.partials {
+		t.Fatal("active stream partials = true, want false")
+	}
+	if stream.bufferSizeSeconds != 0.02 {
+		t.Fatalf("active stream buffer size = %v, want 0.02", stream.bufferSizeSeconds)
+	}
+}
+
 func TestSLNGSTTInitPayloadUsesVADSpeechPadOption(t *testing.T) {
 	provider := NewSTT("test-key", WithSTTVADSpeechPadMS(75))
 
