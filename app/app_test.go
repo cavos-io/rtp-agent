@@ -177,20 +177,21 @@ func (f *fakeAppAgoraDataPublisher) isClosed() bool {
 type recordingAppTextResponder struct {
 	calls           []string
 	userTranscripts []agent.UserInputTranscribedEvent
+	err             error
 }
 
 func (r *recordingAppTextResponder) Interrupt(force bool) error {
 	if force {
 		r.calls = append(r.calls, "interrupt:true")
-		return nil
+		return r.err
 	}
 	r.calls = append(r.calls, "interrupt:false")
-	return nil
+	return r.err
 }
 
 func (r *recordingAppTextResponder) GenerateReply(_ context.Context, text string) (*agent.SpeechHandle, error) {
 	r.calls = append(r.calls, "generate:"+text)
-	return nil, nil
+	return nil, r.err
 }
 
 func (r *recordingAppTextResponder) ClaimUserTurn(ctx context.Context, fn func(context.Context) error) error {
@@ -2007,6 +2008,50 @@ func TestInstallAgoraRTMDataMessageHandlerDispatchesInputText(t *testing.T) {
 	transcript := responder.userTranscripts[0]
 	if transcript.Transcript != "hello from chat" || !transcript.IsFinal || transcript.SpeakerID != "caller-7" {
 		t.Fatalf("user transcript = %#v, want final RTM input transcript with stream id", transcript)
+	}
+}
+
+func TestInstallAgoraRTMDataMessageHandlerLogsTextInputErrorsOnce(t *testing.T) {
+	previousLogger := logutil.Logger
+	recorder := &appRecordingLogger{entriesCh: make(chan appLogEntry, 8)}
+	logutil.Logger = recorder
+	t.Cleanup(func() {
+		logutil.Logger = previousLogger
+	})
+
+	dataPublisher := &fakeAppAgoraDataPublisher{}
+	responder := &recordingAppTextResponder{err: errors.New("interrupt failed")}
+
+	installAgoraRTMDataMessageHandler(dataPublisher, responder, "agent-rtm")
+
+	handler := dataPublisher.dataHandler()
+	if handler == nil {
+		t.Fatal("installAgoraRTMDataMessageHandler() did not install handler")
+	}
+	err := handler(context.Background(), workeragora.DataMessage{
+		Channel:   "support",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"type":"input_text","text":"hello from chat","stream_id":"caller-7"}`),
+	})
+	if err != nil {
+		t.Fatalf("RTM data handler error = %v, want nil after logging text input failure", err)
+	}
+
+	select {
+	case entry := <-recorder.entriesCh:
+		if entry.msg != "failed to handle Agora RTM text input" {
+			t.Fatalf("log msg = %q, want failed to handle Agora RTM text input", entry.msg)
+		}
+		if entry.err == nil {
+			t.Fatal("log error = nil, want text input failure detail")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Agora RTM text input warning")
+	}
+	select {
+	case entry := <-recorder.entriesCh:
+		t.Fatalf("unexpected extra RTM warning = %#v", entry)
+	default:
 	}
 }
 

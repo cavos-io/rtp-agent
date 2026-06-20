@@ -1264,7 +1264,6 @@ func installAgoraRTMDataMessageHandler(subscriber workeragora.DataMessageSubscri
 		TextInput: func(ctx context.Context, ev workeragora.TextInputEvent) error {
 			if err := workeragora.HandleTextInputEvent(ctx, responder, ev); err != nil {
 				logutil.Logger.Warnw("failed to handle Agora RTM text input", err, "channel", ev.Channel, "publisher", ev.Publisher)
-				return err
 			}
 			return nil
 		},
