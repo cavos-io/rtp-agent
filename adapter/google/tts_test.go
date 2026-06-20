@@ -327,6 +327,32 @@ func TestGoogleTTSStreamClosesAfterInputSendFailure(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSProviderCloseClosesActiveStreams(t *testing.T) {
+	streamClient := &fakeGoogleTTSStream{}
+	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if !streamClient.closed {
+		t.Fatal("stream client closed = false after provider Close")
+	}
+	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after provider Close error = %v, want io.ErrClosedPipe", err)
+	}
+}
+
 func TestGoogleTTSSpeakingRateMatchesReferenceRequests(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
