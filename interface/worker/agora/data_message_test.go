@@ -217,6 +217,30 @@ func TestRTMMessageRouterIgnoresEmptyPayload(t *testing.T) {
 	}
 }
 
+func TestRTMMessageRouterStopsOnCanceledContextBeforeDispatch(t *testing.T) {
+	called := false
+	router := RTMMessageRouter{
+		TextInput: func(context.Context, TextInputEvent) error {
+			called = true
+			return nil
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := router.HandleDataMessage(ctx, DataMessage{
+		Channel:   "support",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"data_type":"input_text","text":"late turn"}`),
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("HandleDataMessage() error = %v, want context canceled", err)
+	}
+	if called {
+		t.Fatal("canceled RTM message was dispatched")
+	}
+}
+
 func TestHandleTextInputInterruptsBeforeGenerateReply(t *testing.T) {
 	responder := &recordingTextResponder{}
 

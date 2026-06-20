@@ -38,6 +38,12 @@ func (r RTMMessageRouter) HandleDataMessage(ctx context.Context, msg DataMessage
 	if r.TextInput == nil {
 		return nil
 	}
+	ctx = normalizeContext(ctx)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 	if strings.TrimSpace(r.AgentUserID) != "" && msg.Publisher == strings.TrimSpace(r.AgentUserID) {
 		return nil
 	}
@@ -59,7 +65,7 @@ func (r RTMMessageRouter) HandleDataMessage(ctx context.Context, msg DataMessage
 	if messageType != "input_text" {
 		return nil
 	}
-	return r.TextInput(normalizeContext(ctx), TextInputEvent{
+	return r.TextInput(ctx, TextInputEvent{
 		Text:      payload.Text,
 		StreamID:  defaultRTMStreamID(""),
 		Channel:   msg.Channel,
