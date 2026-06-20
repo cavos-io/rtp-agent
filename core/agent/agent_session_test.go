@@ -1053,6 +1053,21 @@ func (a *onEnterSayAgent) OnEnter() {
 	_, _ = a.session.Say(context.Background(), "hello from on enter")
 }
 
+type blockingOnEnterSayAgent struct {
+	*Agent
+	session *AgentSession
+	entered chan struct{}
+	release chan struct{}
+	handle  *SpeechHandle
+	err     error
+}
+
+func (a *blockingOnEnterSayAgent) OnEnter() {
+	close(a.entered)
+	<-a.release
+	a.handle, a.err = a.session.Say(context.Background(), "hello from blocked on enter")
+}
+
 type onEnterGenerateReplyAgent struct {
 	*Agent
 	session *AgentSession
@@ -3456,6 +3471,81 @@ func TestAgentSessionWaitForInactiveRetargetsDuringAgentHandoff(t *testing.T) {
 		t.Fatal("replacement activity did not schedule speech")
 	}
 	current.MarkDone()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("WaitForInactive error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("WaitForInactive did not return after replacement speech completed")
+	}
+}
+
+func TestAgentSessionWaitForInactiveWaitsForReplacementActivityStart(t *testing.T) {
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	next := &blockingOnEnterSayAgent{
+		Agent:   NewAgent("next"),
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+	next.session = session
+	session.activity = NewAgentActivity(initial, session)
+	session.Assistant = &fakeSessionAssistant{}
+	session.started = true
+	session.activity.currentSpeech = NewSpeechHandle(true, DefaultInputDetails())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.WaitForInactive(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("WaitForInactive returned before handoff began: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	updateDone := make(chan struct{})
+	go func() {
+		session.UpdateAgent(next)
+		close(updateDone)
+	}()
+
+	select {
+	case <-next.entered:
+	case <-testTimeout():
+		t.Fatal("replacement activity OnEnter did not start")
+	}
+
+	select {
+	case err := <-done:
+		close(next.release)
+		t.Fatalf("WaitForInactive returned before replacement OnEnter finished scheduling speech: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(next.release)
+	select {
+	case <-updateDone:
+	case <-testTimeout():
+		t.Fatal("UpdateAgent did not return after releasing OnEnter")
+	}
+
+	select {
+	case err := <-done:
+		t.Fatalf("WaitForInactive returned before replacement OnEnter speech completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	if next.err != nil {
+		t.Fatalf("replacement activity Say error = %v", next.err)
+	}
+	if next.handle == nil {
+		t.Fatal("replacement activity did not schedule speech")
+	}
+	next.handle.MarkDone()
 
 	select {
 	case err := <-done:

@@ -37,6 +37,7 @@ const (
 )
 
 type idleHoldContextKey struct{}
+type drainIdleContextKey struct{}
 
 type AgentSessionOptions struct {
 	AllowInterruptions                       bool

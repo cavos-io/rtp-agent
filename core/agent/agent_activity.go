@@ -109,9 +109,12 @@ type AgentActivity struct {
 	schedulingPaused   bool
 	schedulingDraining bool
 	schedulingStarted  bool
+	startedCh          chan struct{}
+	startedOnce        sync.Once
 
 	sttEOSReceived       bool
 	speaking             bool
+	speakingMu           sync.RWMutex
 	interruptionDetected bool
 	overlapSpeechEnded   bool
 	manualTurnCommitted  bool
@@ -190,6 +193,7 @@ func NewAgentActivity(agentIntf AgentInterface, session *AgentSession) *AgentAct
 		Session:           session,
 		speechQueue:       make([]scheduledSpeech, 0),
 		queueUpdatedCh:    make(chan struct{}, 1),
+		startedCh:         make(chan struct{}),
 		userTurnUpdatedCh: make(chan struct{}, 1),
 		ctx:               ctx,
 		cancel:            cancel,
@@ -301,6 +305,7 @@ func (a *AgentActivity) Start() {
 	a.schedulingStarted = true
 	a.queueMu.Unlock()
 	go a.schedulingTask()
+	a.startedOnce.Do(func() { close(a.startedCh) })
 }
 
 func (a *AgentActivity) Stop() {
@@ -564,6 +569,13 @@ func (a *AgentActivity) WaitForInactive(ctx context.Context) error {
 		a.processQueue()
 		active := a.activeSpeechHandles()
 		if len(active) == 0 {
+			waitedForStart, err := a.waitForStartIfNeeded(ctx)
+			if err != nil {
+				return err
+			}
+			if waitedForStart {
+				continue
+			}
 			if done, ok := a.pendingEOUDetection(); ok {
 				select {
 				case <-done:
@@ -606,6 +618,41 @@ func (a *AgentActivity) WaitForInactive(ctx context.Context) error {
 			}
 			a.processQueue()
 		}
+	}
+}
+
+func (a *AgentActivity) waitForStartIfNeeded(ctx context.Context) (bool, error) {
+	if a == nil || a.hasStarted() || a.Session == nil {
+		return false, nil
+	}
+	if ctx.Value(drainIdleContextKey{}) == true {
+		return false, nil
+	}
+	a.Session.mu.Lock()
+	started := a.Session.started && !a.Session.closing && a.Session.activity == a
+	a.Session.mu.Unlock()
+	if !started {
+		return false, nil
+	}
+	select {
+	case <-a.startedCh:
+		return true, nil
+	case <-a.ctx.Done():
+		return false, errAgentActivityClosed
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+}
+
+func (a *AgentActivity) hasStarted() bool {
+	if a == nil {
+		return true
+	}
+	select {
+	case <-a.startedCh:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -1502,7 +1549,7 @@ func (a *AgentActivity) Drain(ctx context.Context) error {
 	default:
 	}
 
-	err := a.WaitForInactive(ctx)
+	err := a.WaitForInactive(context.WithValue(ctx, drainIdleContextKey{}, true))
 
 	a.queueMu.Lock()
 	a.schedulingDraining = false
@@ -1538,8 +1585,7 @@ func (a *AgentActivity) OnSTTStartOfSpeech(ev *stt.SpeechEvent) {
 }
 
 func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64) {
-	wasSpeaking := a.speaking
-	a.speaking = true
+	wasSpeaking := a.setSpeaking(true)
 	a.sttEOSReceived = false
 	a.manualTurnCommitted = false
 	a.interruptionDetected = false
@@ -1580,8 +1626,7 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 }
 
 func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
-	wasSpeaking := a.speaking
-	a.speaking = false
+	wasSpeaking := a.setSpeaking(false)
 	a.userSpeechStoppedAt = vadSpeechStoppedAt(ev)
 	if ev == nil {
 		a.sttEOSReceived = true
@@ -1721,7 +1766,7 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 	if transcript != "" && turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
 		if !a.shortInterruptionTranscript(transcript) {
 			a.interruptByAudioActivity("interim transcript", "transcript", transcript, time.Time{})
-			if !a.speaking {
+			if !a.isUserSpeaking() {
 				a.startFalseInterruptionTimer()
 			}
 		}
@@ -1803,7 +1848,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	if turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
 		if !a.shortInterruptionTranscript(transcript) {
 			a.interruptByAudioActivity("final transcript", "transcript", transcript, time.Time{})
-			if !a.speaking {
+			if !a.isUserSpeaking() {
 				a.startFalseInterruptionTimer()
 			}
 		}
@@ -1811,7 +1856,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	if !matchesPreflightTranscript {
 		a.maybeStartPreemptiveGeneration(pendingTranscript, confidenceSum/float64(confidenceCount))
 	}
-	if a.vadBasedTurnDetection() && !a.speaking {
+	if a.vadBasedTurnDetection() && !a.isUserSpeaking() {
 		a.runEOUDetection(EndOfTurnInfo{
 			NewTranscript:        transcript,
 			Language:             language,
@@ -2363,7 +2408,7 @@ func (a *AgentActivity) ClearUserTurn() {
 	}
 
 	a.sttEOSReceived = false
-	a.speaking = false
+	a.setSpeaking(false)
 	a.notifyUserTurnUpdated()
 	a.manualTurnCommitted = false
 	a.userSpeechStartedAt = time.Time{}
@@ -2373,7 +2418,20 @@ func (a *AgentActivity) ClearUserTurn() {
 }
 
 func (a *AgentActivity) isUserSpeaking() bool {
-	return a != nil && a.speaking
+	if a == nil {
+		return false
+	}
+	a.speakingMu.RLock()
+	defer a.speakingMu.RUnlock()
+	return a.speaking
+}
+
+func (a *AgentActivity) setSpeaking(speaking bool) bool {
+	a.speakingMu.Lock()
+	wasSpeaking := a.speaking
+	a.speaking = speaking
+	a.speakingMu.Unlock()
+	return wasSpeaking
 }
 
 func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnOptions) (string, error) {
