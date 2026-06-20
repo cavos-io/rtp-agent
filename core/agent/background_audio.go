@@ -296,10 +296,7 @@ func (p *BackgroundAudioPlayer) Play(audio interface{}, loop bool) *PlayHandle {
 
 	if loop {
 		if _, ok := soundSource.(<-chan *model.AudioFrame); ok {
-			logger.Logger.Warnw("Looping sound via chan is not supported", nil)
-			handle := newPlayHandle()
-			handle.markPlayoutDone()
-			return handle
+			panic("Looping sound via chan is not supported")
 		}
 	}
 

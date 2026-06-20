@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/binary"
 	"math"
 	"os"
@@ -143,6 +144,24 @@ func TestBackgroundAudioPlayBeforeStartPanicsLikeReference(t *testing.T) {
 		}
 	}()
 	player.Play("ambient.ogg", false)
+}
+
+func TestBackgroundAudioPlayLoopingChannelPanicsLikeReference(t *testing.T) {
+	player := NewBackgroundAudioPlayer(nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	player.mixerTaskCtx = ctx
+	player.mixerTaskCancel = cancel
+
+	frames := make(chan *model.AudioFrame)
+	defer close(frames)
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("Play looping channel did not panic, want unsupported looped stream error")
+		}
+	}()
+	player.Play((<-chan *model.AudioFrame)(frames), true)
 }
 
 func backgroundTestFrame(sampleRate uint32, channels uint32, samplesPerChannel uint32, samples []int16) *model.AudioFrame {
