@@ -602,12 +602,15 @@ func (rio *RoomIO) agentOutputTranscriptionState(transcript string, final bool) 
 	return segmentID, publishText, true
 }
 
-func (rio *RoomIO) userInputTranscriptionState(final bool) string {
+func (rio *RoomIO) userInputTranscriptionState(transcript string, final bool) (string, bool) {
 	if rio == nil {
-		return roomIOTranscriptionSegmentID()
+		return roomIOTranscriptionSegmentID(), true
 	}
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
+	if final && transcript == "" && rio.userTranscriptionSegmentID == "" {
+		return "", false
+	}
 	if rio.userTranscriptionSegmentID == "" {
 		rio.userTranscriptionSegmentID = roomIOTranscriptionSegmentID()
 	}
@@ -615,18 +618,21 @@ func (rio *RoomIO) userInputTranscriptionState(final bool) string {
 	if final {
 		rio.userTranscriptionSegmentID = ""
 	}
-	return segmentID
+	return segmentID, true
 }
 
 func (rio *RoomIO) handleUserInputTranscribed(ev agent.UserInputTranscribedEvent) {
-	if rio == nil || (ev.Transcript == "" && ev.IsFinal) {
+	if rio == nil {
 		return
 	}
 	trackID, participantID := rio.userTranscriptionTarget()
 	if trackID == "" || participantID == "" {
 		return
 	}
-	segmentID := rio.userInputTranscriptionState(ev.IsFinal)
+	segmentID, ok := rio.userInputTranscriptionState(ev.Transcript, ev.IsFinal)
+	if !ok {
+		return
+	}
 	rio.publishTranscriptionPacketWithSegment(participantID, trackID, &livekit.TranscriptionSegment{
 		Id:       segmentID,
 		Text:     ev.Transcript,
