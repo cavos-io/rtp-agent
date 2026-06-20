@@ -73,9 +73,11 @@ func TestRoomIOAudioTrackPublicationOptionsPreserveConfiguredName(t *testing.T) 
 	}
 }
 
-func TestRoomIOAudioOutputCodecMatchesMonoAudioOutput(t *testing.T) {
+func TestRoomIOAudioOutputCodecUsesStandardOpusChannels(t *testing.T) {
+	const standardOpusChannels = 2
+
 	codec := roomIOAudioOutputCodec()
-	wantChannels := uint16(1)
+	wantChannels := uint16(standardOpusChannels)
 
 	if codec.MimeType != webrtc.MimeTypeOpus {
 		t.Fatalf("MimeType = %q, want %q", codec.MimeType, webrtc.MimeTypeOpus)
@@ -84,7 +86,7 @@ func TestRoomIOAudioOutputCodecMatchesMonoAudioOutput(t *testing.T) {
 		t.Fatalf("ClockRate = %d, want %d", codec.ClockRate, roomIOOpusClockRate)
 	}
 	if codec.Channels != wantChannels {
-		t.Fatalf("Channels = %d, want %d matching RoomIO mono encoder output", codec.Channels, wantChannels)
+		t.Fatalf("Channels = %d, want %d for standard Opus SDP negotiation", codec.Channels, wantChannels)
 	}
 }
 

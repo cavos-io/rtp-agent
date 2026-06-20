@@ -144,7 +144,7 @@ func roomIOAudioOutputCodec() webrtc.RTPCodecCapability {
 	return webrtc.RTPCodecCapability{
 		MimeType:  webrtc.MimeTypeOpus,
 		ClockRate: roomIOOpusClockRate,
-		Channels:  1,
+		Channels:  2,
 	}
 }
 
