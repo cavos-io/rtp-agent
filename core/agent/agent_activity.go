@@ -2838,7 +2838,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		a.emitEOUMetrics(handle, info, hookDelay)
 		return handle, nil
 	}
-	if a.Agent.LLM == nil || a.Session == nil {
+	if !a.hasLLMModel() || a.Session == nil {
 		a.cancelPreemptiveGeneration()
 		return nil, nil
 	}
@@ -3026,7 +3026,7 @@ func (a *AgentActivity) maybeStartPreemptiveGeneration(transcript string, confid
 	}
 	opts := a.Session.Options
 	mode := a.turnDetectionMode()
-	if !opts.PreemptiveGeneration || a.Agent.LLM == nil || mode == TurnDetectionModeManual || mode == TurnDetectionModeRealtimeLLM {
+	if !opts.PreemptiveGeneration || !a.hasLLMModel() || mode == TurnDetectionModeManual || mode == TurnDetectionModeRealtimeLLM {
 		return
 	}
 	a.queueMu.Lock()
@@ -3343,6 +3343,23 @@ func (a *AgentActivity) hasSTTModel() bool {
 	assistant := a.Session.Assistant
 	if pipeline, ok := assistant.(*PipelineAgent); ok {
 		return pipeline.stt != nil
+	}
+	return false
+}
+
+func (a *AgentActivity) hasLLMModel() bool {
+	if a == nil {
+		return false
+	}
+	if (a.Agent != nil && a.Agent.LLM != nil) || (a.Session != nil && a.Session.LLM != nil) {
+		return true
+	}
+	if a.Session == nil {
+		return false
+	}
+	assistant := a.Session.Assistant
+	if pipeline, ok := assistant.(*PipelineAgent); ok {
+		return pipeline.LLM != nil
 	}
 	return false
 }
