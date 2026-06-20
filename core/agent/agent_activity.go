@@ -286,6 +286,36 @@ func (a *AgentActivity) Start() {
 	}
 	if a.Session != nil {
 		if pipeline, ok := a.Session.Assistant.(*PipelineAgent); ok {
+			if pipeline.LLM != nil && !sameProviderInstance(pipeline.LLM, a.Session.LLM) {
+				if collector, ok := pipeline.LLM.(llmMetricsCollector); ok {
+					unsubscribe := collector.OnMetricsCollected(func(metrics *telemetry.LLMMetrics) {
+						a.OnMetricsCollected(metrics)
+					})
+					a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+				}
+				if collector, ok := pipeline.LLM.(llmErrorCollector); ok {
+					llmSource := pipeline.LLM
+					unsubscribe := collector.OnError(func(err *llm.LLMError) {
+						a.OnError(err, llmSource)
+					})
+					a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+				}
+			}
+			if pipeline.tts != nil && !sameProviderInstance(pipeline.tts, a.Session.TTS) {
+				if collector, ok := pipeline.tts.(ttsMetricsCollector); ok {
+					unsubscribe := collector.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+						a.OnMetricsCollected(metrics)
+					})
+					a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+				}
+				if collector, ok := pipeline.tts.(ttsErrorCollector); ok {
+					ttsSource := pipeline.tts
+					unsubscribe := collector.OnError(func(err tts.TTSError) {
+						a.OnError(err, ttsSource)
+					})
+					a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+				}
+			}
 			if pipeline.stt != nil && !sameProviderInstance(pipeline.stt, a.Session.STT) {
 				if collector, ok := pipeline.stt.(sttMetricsCollector); ok {
 					unsubscribe := collector.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {

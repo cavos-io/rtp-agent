@@ -4936,6 +4936,29 @@ func TestAgentSessionStartForwardsTTSMetricsThroughActivity(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStartForwardsPipelineTTSMetricsThroughActivity(t *testing.T) {
+	ttsSource := &fakePipelineTTS{}
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = NewPipelineAgent(nil, nil, nil, ttsSource, agent.ChatCtx)
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+
+	metrics := &telemetry.TTSMetrics{RequestID: "pipeline_tts_req", InputTokens: 2}
+	ttsSource.EmitMetricsCollected(metrics)
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		if ev.Metrics != metrics {
+			t.Fatalf("MetricsCollectedEvent metrics = %#v, want original pipeline TTS metrics", ev.Metrics)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MetricsCollectedEvents did not receive pipeline TTS metrics")
+	}
+}
+
 func TestAgentSessionStartForwardsLLMMetricsThroughActivity(t *testing.T) {
 	llmSource := &fakeGenerationLLM{}
 	agent := NewAgent("test")
@@ -4960,6 +4983,29 @@ func TestAgentSessionStartForwardsLLMMetricsThroughActivity(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("MetricsCollectedEvents did not receive LLM metrics")
+	}
+}
+
+func TestAgentSessionStartForwardsPipelineLLMMetricsThroughActivity(t *testing.T) {
+	llmSource := &fakeGenerationLLM{}
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = NewPipelineAgent(nil, nil, llmSource, nil, agent.ChatCtx)
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+
+	metrics := &telemetry.LLMMetrics{RequestID: "pipeline_llm_req", PromptTokens: 5}
+	llmSource.EmitMetricsCollected(metrics)
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		if ev.Metrics != metrics {
+			t.Fatalf("MetricsCollectedEvent metrics = %#v, want original pipeline LLM metrics", ev.Metrics)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MetricsCollectedEvents did not receive pipeline LLM metrics")
 	}
 }
 
