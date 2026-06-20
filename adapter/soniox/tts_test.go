@@ -244,6 +244,34 @@ func TestSonioxTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	}
 }
 
+func TestSonioxTTSProviderCloseClosesActiveStreams(t *testing.T) {
+	cancelled := false
+	closeCalls := 0
+	provider := NewSonioxTTS("test-key")
+	stream := &sonioxTTSSynthesizeStream{
+		streamID: "stream-1",
+		cancel:   func() { cancelled = true },
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if !cancelled {
+		t.Fatal("cancel not called after provider Close")
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after provider Close error = %v, want io.ErrClosedPipe", err)
+	}
+}
+
 func TestSonioxTTSAudioFromMessageDecodesAudioAndTermination(t *testing.T) {
 	payload, _ := json.Marshal(map[string]any{
 		"stream_id":  "stream-1",
