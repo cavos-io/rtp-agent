@@ -155,7 +155,7 @@ func TestMultimodalAgentTTSFallbackMarksSpeakingAfterFirstAudioFrame(t *testing.
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := ma.publishTTSFallbackForRealtimeText(context.Background(), nil, "hello")
+		_, _, err := ma.publishTTSFallbackForRealtimeText(context.Background(), nil, "hello")
 		done <- err
 	}()
 
@@ -1008,6 +1008,57 @@ func TestMultimodalAgentSayUsesRealtimeSessionWhenSupported(t *testing.T) {
 	}
 	if len(handle.ChatItems()) != 1 || handle.ChatItems()[0] != msg {
 		t.Fatalf("handle chat items = %#v, want realtime say assistant message", handle.ChatItems())
+	}
+}
+
+func TestMultimodalAgentSayUsesTTSWhenRealtimeSayAndTTSAvailable(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ttsStream := newEndInputGenerationTTSStream()
+	rtSession := &fakeRealtimeSession{sayCh: make(chan string, 1)}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{
+		session:      rtSession,
+		capabilities: llm.RealtimeCapabilities{SupportsSay: true},
+	}, llm.NewChatContext())
+	var published []*model.AudioFrame
+	ma.PublishAudio = func(ctx context.Context, frame *model.AudioFrame) error {
+		published = append(published, frame)
+		return nil
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.TTS = &fakeGenerationTTS{stream: ttsStream}
+	session.Assistant = ma
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	handle, err := session.Say(ctx, "hello from tts")
+	if err != nil {
+		t.Fatalf("Say returned error: %v", err)
+	}
+	waitCtx, waitCancel := context.WithTimeout(ctx, time.Second)
+	defer waitCancel()
+	if err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("speech handle did not finish after TTS say: %v", err)
+	}
+
+	select {
+	case text := <-rtSession.sayCh:
+		t.Fatalf("realtime session received native Say %q, want TTS path", text)
+	default:
+	}
+	if len(published) != 1 || string(published[0].Data) != "audio" {
+		t.Fatalf("published frames = %#v, want one synthesized TTS audio frame", published)
+	}
+	if !strings.Contains(strings.Join(ttsStream.calls, ","), "push:hello from") ||
+		!strings.Contains(strings.Join(ttsStream.calls, ","), "push: tts") ||
+		ttsStream.calls[len(ttsStream.calls)-1] != "end_input" {
+		t.Fatalf("TTS stream calls = %#v, want say text pushed before end_input", ttsStream.calls)
+	}
+	msg := findChatMessage(session.ChatCtx, llm.ChatRoleAssistant, "hello from tts")
+	if msg == nil {
+		t.Fatalf("session chat context items = %#v, want TTS say assistant message", session.ChatCtx.Items)
 	}
 }
 
@@ -2869,6 +2920,45 @@ func TestMultimodalAgentUsesTTSFallbackForTextOnlyRealtimeMessage(t *testing.T) 
 	}
 }
 
+func TestMultimodalAgentUsesTTSFallbackForRealtimeMessageWithoutAudioModality(t *testing.T) {
+	ttsStream := newEndInputGenerationTTSStream()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.TTS = &fakeGenerationTTS{stream: ttsStream}
+	var published []*model.AudioFrame
+	ma := &MultimodalAgent{
+		model: &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{
+			AudioOutput: true,
+		}},
+		session: session,
+		chatCtx: llm.NewChatContext(),
+		PublishAudio: func(ctx context.Context, frame *model.AudioFrame) error {
+			published = append(published, frame)
+			return nil
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "spoken fallback"
+	close(textCh)
+	modalitiesCh := make(chan []string, 1)
+	modalitiesCh <- []string{}
+	close(modalitiesCh)
+
+	ma.consumeRealtimeMessage(context.Background(), NewSpeechHandle(true, DefaultInputDetails()), llm.MessageGeneration{
+		MessageID:    "msg_empty_modalities",
+		TextCh:       textCh,
+		ModalitiesCh: modalitiesCh,
+	})
+
+	if len(published) != 1 || string(published[0].Data) != "audio" {
+		t.Fatalf("published frames = %#v, want one synthesized TTS audio frame", published)
+	}
+	if !strings.Contains(strings.Join(ttsStream.calls, ","), "push:spoken") ||
+		!strings.Contains(strings.Join(ttsStream.calls, ","), "push: fallback") ||
+		ttsStream.calls[len(ttsStream.calls)-1] != "end_input" {
+		t.Fatalf("TTS stream calls = %#v, want text pushed before end_input", ttsStream.calls)
+	}
+}
+
 func TestMultimodalAgentTTSFallbackWaitsForPlayoutBeforeCommit(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	session.TTS = &fakeGenerationTTS{stream: newEndInputGenerationTTSStream()}
@@ -2985,6 +3075,84 @@ func TestMultimodalAgentTTSFallbackStreamErrorReturnsListening(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive fallback stream error")
+	}
+}
+
+func TestMultimodalAgentTTSFallbackStreamErrorSourcesTTS(t *testing.T) {
+	cause := errors.New("fallback tts stream failed")
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.TTS = &fakeGenerationTTS{stream: &failingAfterAudioRealtimeFallbackTTSStream{err: cause}}
+	ma := &MultimodalAgent{
+		model: &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{
+			AudioOutput: true,
+		}},
+		session: session,
+		PublishAudio: func(context.Context, *model.AudioFrame) error {
+			return nil
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "spoken fallback"
+	close(textCh)
+	modalitiesCh := make(chan []string, 1)
+	modalitiesCh <- []string{"text"}
+	close(modalitiesCh)
+
+	ma.consumeRealtimeMessage(context.Background(), NewSpeechHandle(true, DefaultInputDetails()), llm.MessageGeneration{
+		MessageID:    "msg_text_only_error_source",
+		TextCh:       textCh,
+		ModalitiesCh: modalitiesCh,
+	})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("ErrorEvents error = %v, want %v", ev.Error, cause)
+		}
+		if ev.Source != session.TTS {
+			t.Fatalf("ErrorEvents source = %T, want session TTS", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive fallback stream error")
+	}
+}
+
+func TestMultimodalAgentTTSFallbackPublishErrorSourcesAgent(t *testing.T) {
+	cause := errors.New("fallback publish failed")
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.TTS = &fakeGenerationTTS{stream: newEndInputGenerationTTSStream()}
+	ma := &MultimodalAgent{
+		model: &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{
+			AudioOutput: true,
+		}},
+		session: session,
+		PublishAudio: func(context.Context, *model.AudioFrame) error {
+			return cause
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "spoken fallback"
+	close(textCh)
+	modalitiesCh := make(chan []string, 1)
+	modalitiesCh <- []string{"text"}
+	close(modalitiesCh)
+
+	ma.consumeRealtimeMessage(context.Background(), NewSpeechHandle(true, DefaultInputDetails()), llm.MessageGeneration{
+		MessageID:    "msg_text_only_publish_error_source",
+		TextCh:       textCh,
+		ModalitiesCh: modalitiesCh,
+	})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("ErrorEvents error = %v, want %v", ev.Error, cause)
+		}
+		if ev.Source != ma {
+			t.Fatalf("ErrorEvents source = %#v, want multimodal agent", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive fallback publish error")
 	}
 }
 

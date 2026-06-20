@@ -99,7 +99,10 @@ func (f *TranscriptForwarder) forwardUserTranscripts(ctx context.Context, events
 		select {
 		case <-ctx.Done():
 			return
-		case ev := <-events:
+		case ev, ok := <-events:
+			if !ok {
+				return
+			}
 			f.publishTranscript(ctx, "user", ev.Transcript, ev.IsFinal, userTranscriptStreamID(ev, f.opts.UserStreamID), ev.CreatedAt)
 		}
 	}
@@ -111,7 +114,10 @@ func (f *TranscriptForwarder) forwardAgentTranscripts(ctx context.Context, event
 		select {
 		case <-ctx.Done():
 			return
-		case ev := <-events:
+		case ev, ok := <-events:
+			if !ok {
+				return
+			}
 			f.publishTranscript(ctx, "assistant", ev.Transcript, ev.IsFinal, f.opts.AssistantStreamID, ev.CreatedAt)
 		}
 	}
@@ -123,7 +129,10 @@ func (f *TranscriptForwarder) forwardAgentReasoning(ctx context.Context, events 
 		select {
 		case <-ctx.Done():
 			return
-		case ev := <-events:
+		case ev, ok := <-events:
+			if !ok {
+				return
+			}
 			f.publishReasoning(ctx, ev.Text, ev.IsFinal, f.opts.AssistantStreamID, ev.CreatedAt)
 		}
 	}

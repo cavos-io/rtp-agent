@@ -1193,11 +1193,16 @@ func (a *App) runAgora(ctx context.Context) error {
 		transcriptForwarder := workeragora.NewTranscriptForwarder(a.Session, dataPublisher, workeragora.TranscriptForwarderOptions{
 			UserStreamID: dataOpts.RemoteStreamID,
 		})
+		var dataSubscriber workeragora.DataMessageSubscriber
 		if subscriber, ok := dataPublisher.(workeragora.DataMessageSubscriber); ok {
-			installAgoraRTMDataMessageHandler(subscriber, a.Session, dataOpts.UID)
+			dataSubscriber = subscriber
+			installAgoraRTMDataMessageHandler(dataSubscriber, a.Session, dataOpts.UID)
 		}
 		transcriptForwarder.Start(runCtx)
 		defer func() {
+			if dataSubscriber != nil {
+				dataSubscriber.SetDataMessageHandler(nil)
+			}
 			if err := transcriptForwarder.Stop(context.Background()); err != nil {
 				logutil.Logger.Errorw("failed to close Agora data publisher", err)
 			}
@@ -1226,9 +1231,11 @@ func (a *App) runAgora(ctx context.Context) error {
 	}()
 	if workeragora.PublishAudioEnabled(agoraOpts.PublishAudio) {
 		audioOutput := workeragora.NewAudioOutput(transport)
-		a.Session.EnsureAssistant().SetPublishAudio(func(ctx context.Context, frame *model.AudioFrame) error {
+		assistant := a.Session.EnsureAssistant()
+		assistant.SetPublishAudio(func(ctx context.Context, frame *model.AudioFrame) error {
 			return audioOutput.PublishAudio(ctx, frame)
 		})
+		defer assistant.SetPublishAudio(nil)
 	}
 	if err := a.runSessionWithContext(nil, runCtx); err != nil {
 		if cause := context.Cause(runCtx); cause != nil && !errors.Is(cause, context.Canceled) && !errors.Is(cause, context.DeadlineExceeded) {

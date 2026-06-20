@@ -2427,6 +2427,26 @@ func TestAgentSessionSayRequiresTTSWhenAudioOutputEnabled(t *testing.T) {
 	}
 }
 
+func TestAgentSessionSayUsesActivePipelineTTSWhenAudioOutputEnabled(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{}, agent.ChatCtx)
+	session.activity = NewAgentActivity(agent, session)
+	session.SetAudioOutputController(&recordingAudioOutputController{canPause: true})
+
+	handle, err := session.Say(context.Background(), "hello")
+
+	if err != nil {
+		t.Fatalf("Say error = %v, want nil with active pipeline TTS", err)
+	}
+	if handle == nil {
+		t.Fatal("Say handle = nil, want speech handle")
+	}
+	if !handle.IsScheduled() {
+		t.Fatal("Say returned unscheduled handle")
+	}
+}
+
 func TestAgentSessionSayUsesAgentAllowInterruptionsDefault(t *testing.T) {
 	agent := NewAgent("test")
 	agent.AllowInterruptions = true

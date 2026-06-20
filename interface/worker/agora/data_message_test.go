@@ -79,6 +79,28 @@ func TestRTMMessageRouterDispatchesTENInputTextType(t *testing.T) {
 	}
 }
 
+func TestRTMMessageRouterDefaultsMissingStreamID(t *testing.T) {
+	var got TextInputEvent
+	router := RTMMessageRouter{
+		TextInput: func(_ context.Context, ev TextInputEvent) error {
+			got = ev
+			return nil
+		},
+	}
+
+	err := router.HandleDataMessage(context.Background(), DataMessage{
+		Channel:   "support",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"data_type":"input_text","text":"hello from ten"}`),
+	})
+	if err != nil {
+		t.Fatalf("HandleDataMessage() error = %v, want nil", err)
+	}
+	if got.StreamID != "0" {
+		t.Fatalf("StreamID = %q, want TEN default stream id 0", got.StreamID)
+	}
+}
+
 func TestRTMMessageRouterPreservesNumericStreamID(t *testing.T) {
 	var got TextInputEvent
 	router := RTMMessageRouter{
@@ -201,6 +223,18 @@ func TestHandleTextInputEventEmitsTranscriptAfterGenerateReply(t *testing.T) {
 	}
 	if got := responder.calls; len(got) != 3 || got[0] != "interrupt:false" || got[1] != "generate:hello" || got[2] != "transcript:hello:caller-7" {
 		t.Fatalf("calls = %#v, want interrupt, generate, transcript", got)
+	}
+}
+
+func TestHandleTextInputDefaultsTranscriptStreamID(t *testing.T) {
+	responder := &recordingTextResponder{}
+
+	err := HandleTextInput(context.Background(), responder, "hello")
+	if err != nil {
+		t.Fatalf("HandleTextInput() error = %v, want nil", err)
+	}
+	if got := responder.calls; len(got) != 3 || got[2] != "transcript:hello:0" {
+		t.Fatalf("calls = %#v, want default TEN stream id 0 on user transcript", got)
 	}
 }
 

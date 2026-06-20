@@ -2547,7 +2547,7 @@ func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*Sp
 		}
 		return nil, ErrAgentSessionNotRunning
 	}
-	if s.AudioOutputController() != nil && s.TTS == nil {
+	if s.AudioOutputController() != nil && !s.hasActiveTTS(assistant) {
 		nativeSay, ok := assistant.(nativeSayAssistant)
 		if !ok || !nativeSay.SupportsNativeSay() {
 			return nil, errSayMissingTTSWithAudioOutput
@@ -2601,6 +2601,19 @@ func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*Sp
 func realtimeTurnDetectionEnabled(assistant any) bool {
 	if capabilities, ok := assistant.(realtimeCapabilitiesAssistant); ok {
 		return capabilities.RealtimeCapabilities().TurnDetection
+	}
+	return false
+}
+
+func (s *AgentSession) hasActiveTTS(assistant any) bool {
+	if s == nil {
+		return false
+	}
+	if s.TTS != nil {
+		return true
+	}
+	if pipeline, ok := assistant.(*PipelineAgent); ok {
+		return pipeline.tts != nil
 	}
 	return false
 }
