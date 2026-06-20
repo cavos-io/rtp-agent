@@ -287,6 +287,9 @@ func TestChoiceDeltaJSONMatchesReferenceDefaults(t *testing.T) {
 	if payload["role"] != string(ChatRoleAssistant) || payload["content"] != "hello" {
 		t.Fatalf("payload = %#v, want assistant text delta", payload)
 	}
+	if _, ok := payload["flush"]; ok {
+		t.Fatalf("payload flush = %#v, want omitted when false", payload["flush"])
+	}
 	toolCalls, ok := payload["tool_calls"].([]any)
 	if !ok || len(toolCalls) != 0 {
 		t.Fatalf("tool_calls = %#v, want empty list", payload["tool_calls"])
