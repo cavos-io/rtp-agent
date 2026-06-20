@@ -56,6 +56,13 @@ func (e workerReferenceError) Error() string {
 
 var localEntrypointCloseWait = 15 * time.Second
 
+func defaultJobExecutorType() JobExecutorType {
+	if runtime.GOOS == "windows" {
+		return JobExecutorTypeThread
+	}
+	return JobExecutorTypeProcess
+}
+
 var newLocalJobExecutor = func(id string, entrypoint func() error) workeripc.JobExecutor {
 	return workeripc.NewThreadJobExecutor(id, entrypoint)
 }
@@ -729,7 +736,7 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 		opts.MaxRetry = defaultMaxRetry
 	}
 	if opts.JobExecutorType == "" {
-		opts.JobExecutorType = JobExecutorTypeThread
+		opts.JobExecutorType = defaultJobExecutorType()
 	}
 	if opts.JobMemoryWarnMB == 0 && !opts.JobMemoryWarnMBSet {
 		opts.JobMemoryWarnMB = defaultJobMemoryWarn

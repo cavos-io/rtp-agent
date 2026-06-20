@@ -188,6 +188,13 @@ func TestNewAgentServerUsesReferenceWorkerDefaults(t *testing.T) {
 	if server.Options.MaxRetry != 16 {
 		t.Fatalf("MaxRetry = %d, want reference default 16", server.Options.MaxRetry)
 	}
+	wantExecutorType := JobExecutorTypeProcess
+	if runtime.GOOS == "windows" {
+		wantExecutorType = JobExecutorTypeThread
+	}
+	if server.Options.JobExecutorType != wantExecutorType {
+		t.Fatalf("JobExecutorType = %q, want reference default %q", server.Options.JobExecutorType, wantExecutorType)
+	}
 	if server.Options.JobMemoryWarnMB != 500 {
 		t.Fatalf("JobMemoryWarnMB = %v, want reference default 500", server.Options.JobMemoryWarnMB)
 	}
@@ -4530,10 +4537,11 @@ func TestExecuteLocalJobLaunchesThroughThreadExecutor(t *testing.T) {
 func TestExecuteLocalJobExposesProcessContextToEntrypoint(t *testing.T) {
 	setupCh := make(chan *JobProcess, 1)
 	server := NewAgentServer(WorkerOptions{
-		WSRL:          "wss://local.example",
-		HTTPProxy:     "https://proxy.example",
-		HTTPProxySet:  true,
-		UserArguments: "user-args",
+		WSRL:            "wss://local.example",
+		JobExecutorType: JobExecutorTypeThread,
+		HTTPProxy:       "https://proxy.example",
+		HTTPProxySet:    true,
+		UserArguments:   "user-args",
 		SetupFunc: func(proc *JobProcess) error {
 			proc.Userdata()["setup"] = true
 			setupCh <- proc
