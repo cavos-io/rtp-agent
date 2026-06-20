@@ -2963,6 +2963,31 @@ func TestAgentActivityIgnoresSTTTurnDetectionWithoutSTT(t *testing.T) {
 	}
 }
 
+func TestAgentActivitySTTTurnDetectionUsesActivePipelineSTT(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	session.Assistant = NewPipelineAgent(nil, &fakePipelineSTT{}, nil, nil, agent.ChatCtx)
+	defer activity.Stop()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "pipeline stt turn", Confidence: 0.9}},
+	})
+	activity.OnEndOfSpeech(nil)
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "pipeline stt turn" {
+			t.Fatalf("turn message text = %q, want pipeline stt turn", msg.TextContent())
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called with active pipeline STT")
+	}
+}
+
 func TestAgentActivityIgnoresVADTurnDetectionWithoutVAD(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeVAD
@@ -2976,6 +3001,31 @@ func TestAgentActivityIgnoresVADTurnDetectionWithoutVAD(t *testing.T) {
 	case msg := <-agent.turns:
 		t.Fatalf("OnUserTurnCompleted called without VAD configured with %q", msg.TextContent())
 	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestAgentActivityVADTurnDetectionUsesActivePipelineVAD(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	session.Assistant = NewPipelineAgent(&fakePipelineVAD{}, nil, nil, nil, agent.ChatCtx)
+	defer activity.Stop()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "pipeline vad turn", Confidence: 0.9}},
+	})
+	activity.OnEndOfSpeech(&vad.VADEvent{Timestamp: 1.0})
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "pipeline vad turn" {
+			t.Fatalf("turn message text = %q, want pipeline vad turn", msg.TextContent())
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called with active pipeline VAD")
 	}
 }
 

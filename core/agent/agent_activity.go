@@ -3222,12 +3222,12 @@ func (a *AgentActivity) turnDetectionMode() TurnDetectionMode {
 	}
 	switch TurnDetectionMode(mode) {
 	case TurnDetectionModeSTT:
-		if (a.Agent == nil || a.Agent.STT == nil) && (a.Session == nil || a.Session.STT == nil) {
+		if !a.hasSTTModel() {
 			logger.Logger.Warnw("turn_detection is set to stt, but no STT model is provided", nil)
 			return ""
 		}
 	case TurnDetectionModeVAD:
-		if (a.Agent == nil || a.Agent.VAD == nil) && (a.Session == nil || a.Session.VAD == nil) {
+		if !a.hasVADModel() {
 			logger.Logger.Warnw("turn_detection is set to vad, but no VAD model is provided", nil)
 			return ""
 		}
@@ -3244,7 +3244,20 @@ func (a *AgentActivity) turnDetectionMode() TurnDetectionMode {
 }
 
 func (a *AgentActivity) hasVADModel() bool {
-	return a != nil && ((a.Agent != nil && a.Agent.VAD != nil) || (a.Session != nil && a.Session.VAD != nil))
+	if a == nil {
+		return false
+	}
+	if (a.Agent != nil && a.Agent.VAD != nil) || (a.Session != nil && a.Session.VAD != nil) {
+		return true
+	}
+	if a.Session == nil {
+		return false
+	}
+	assistant := a.Session.Assistant
+	if pipeline, ok := assistant.(*PipelineAgent); ok {
+		return pipeline.vad != nil
+	}
+	return false
 }
 
 func (a *AgentActivity) hasSTTModel() bool {
@@ -3257,9 +3270,7 @@ func (a *AgentActivity) hasSTTModel() bool {
 	if a.Session == nil {
 		return false
 	}
-	a.Session.mu.Lock()
 	assistant := a.Session.Assistant
-	a.Session.mu.Unlock()
 	if pipeline, ok := assistant.(*PipelineAgent); ok {
 		return pipeline.stt != nil
 	}
