@@ -385,12 +385,56 @@ func (s *sonioxStream) Next() (*stt.SpeechEvent, error) {
 	}
 }
 
+func (s *sonioxStream) StartTimeOffset() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == nil || s.state.startTimeOffset < 0 {
+		return 0
+	}
+	return s.state.startTimeOffset
+}
+
+func (s *sonioxStream) SetStartTimeOffset(offset float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if offset < 0 {
+		offset = 0
+	}
+	if s.state == nil {
+		s.state = &sonioxMessageState{}
+	}
+	s.state.startTimeOffset = offset
+}
+
+func (s *sonioxStream) StartTime() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == nil || s.state.startTime < 0 {
+		return 0
+	}
+	return s.state.startTime
+}
+
+func (s *sonioxStream) SetStartTime(startTime float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if startTime < 0 {
+		startTime = 0
+	}
+	if s.state == nil {
+		s.state = &sonioxMessageState{}
+	}
+	s.state.startTime = startTime
+}
+
 type sonioxMessageState struct {
 	final              sonioxTokenAccumulator
 	finalOriginal      sonioxTokenAccumulator
 	speaking           bool
 	reportedDurationMS int
 	translationMode    bool
+	startTimeOffset    float64
+	startTime          float64
 }
 
 type sonioxMessage struct {
@@ -442,7 +486,7 @@ func processSonioxMessage(state *sonioxMessageState, payload []byte) ([]*stt.Spe
 			&stt.SpeechEvent{
 				Type: stt.SpeechEventFinalTranscript,
 				Alternatives: []stt.SpeechData{
-					state.final.toSpeechData(0, sourceLanguages, sourceTexts, targetLanguages, targetTexts),
+					state.final.toSpeechData(state.startTimeOffset, sourceLanguages, sourceTexts, targetLanguages, targetTexts),
 				},
 			},
 			&stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech},
@@ -491,7 +535,7 @@ func processSonioxMessage(state *sonioxMessageState, payload []byte) ([]*stt.Spe
 		events = append(events, &stt.SpeechEvent{
 			Type: eventType,
 			Alternatives: []stt.SpeechData{
-				state.final.mergedSpeechData(nonFinal, 0, sourceLanguages, sourceTexts, targetLanguages, targetTexts),
+				state.final.mergedSpeechData(nonFinal, state.startTimeOffset, sourceLanguages, sourceTexts, targetLanguages, targetTexts),
 			},
 		})
 	}
