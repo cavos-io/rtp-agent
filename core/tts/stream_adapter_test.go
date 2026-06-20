@@ -1179,6 +1179,13 @@ func TestStreamAdapterIgnoresInputAfterCloseLikeReference(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush after close returned error: %v", err)
 	}
+	ending, ok := stream.(inputEndingSynthesizeStream)
+	if !ok {
+		t.Fatal("stream adapter stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput after close returned error: %v", err)
+	}
 	if err := stream.PushText("later"); err != nil {
 		t.Fatalf("second PushText after close returned error: %v", err)
 	}
