@@ -282,6 +282,40 @@ func TestFireworksSTTUpdateOptionsBuffersAudioDuringReconnect(t *testing.T) {
 	}
 }
 
+func TestFireworksSTTUpdateOptionsEndsSpeechBeforeReconnect(t *testing.T) {
+	errCh := make(chan error, 1)
+	stream := &fireworksStream{
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		ctx:    context.Background(),
+		cancel: func() {},
+		state: &fireworksStreamState{
+			speaking: true,
+		},
+	}
+	dialer := func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error) {
+		return dialFireworksTestWebsocket(t, errCh, func(conn *websocket.Conn, r *http.Request) {
+			defer conn.Close()
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		})
+	}
+
+	stream.updateOptions("ws://fireworks.test/v1", nil, dialer, "en")
+	defer stream.Close()
+
+	event := readFireworksTestChan(t, stream.events, errCh)
+	if event.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("update event type = %v, want end of speech", event.Type)
+	}
+	if stream.state.speaking {
+		t.Fatal("stream speaking = true, want reset before reconnect")
+	}
+}
+
 func TestFireworksSTTUnexpectedNormalCloseReturnsAPIStatusError(t *testing.T) {
 	dialer := newFireworksSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
 		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "done"), time.Now().Add(time.Second))

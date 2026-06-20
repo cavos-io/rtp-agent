@@ -377,6 +377,7 @@ func (s *fireworksStream) updateOptions(endpoint string, headers http.Header, di
 		_ = oldConn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 		_ = oldConn.Close()
 	}
+	s.endSpeechForReconnect()
 	newConn, _, err := dialer(s.ctx, endpoint, headers)
 	if err != nil {
 		s.mu.Lock()
@@ -409,6 +410,17 @@ func (s *fireworksStream) updateOptions(endpoint string, headers http.Header, di
 	}
 	s.mu.Unlock()
 	go s.readLoop(newConn)
+}
+
+func (s *fireworksStream) endSpeechForReconnect() {
+	s.mu.Lock()
+	if s.state == nil || !s.state.speaking || s.events == nil {
+		s.mu.Unlock()
+		return
+	}
+	s.state.speaking = false
+	s.mu.Unlock()
+	s.events <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
 }
 
 func (s *fireworksStream) PushFrame(frame *model.AudioFrame) error {
