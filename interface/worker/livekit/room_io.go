@@ -2014,6 +2014,7 @@ func (rio *RoomIO) Close() error {
 	deleteRoomDone := rio.deleteRoomDone
 	rio.mu.Unlock()
 	rio.releaseAudioSubscriptionWaiters()
+	rio.finishPlayback(true, "")
 
 	if deleteRoomDone != nil {
 		select {

@@ -835,6 +835,46 @@ func TestRoomIOPlaybackEventsFollowCaptureAndFlush(t *testing.T) {
 	}
 }
 
+func TestRoomIOCloseUnblocksActivePlayoutWait(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+	done := make(chan PlaybackFinishedEvent, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		ev, err := rio.WaitForPlayout(context.Background())
+		if err != nil {
+			errCh <- err
+			return
+		}
+		done <- ev
+	}()
+	waitForPlaybackWaiters(t, rio, 1)
+
+	if err := rio.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("WaitForPlayout error after Close = %v", err)
+	case ev := <-done:
+		if !ev.Interrupted {
+			t.Fatal("PlaybackFinishedEvent.Interrupted = false, want true after Close")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitForPlayout did not unblock after Close")
+	}
+}
+
 func TestRoomIOPlaybackFinishedIncludesAudioDiagnostics(t *testing.T) {
 	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
 	frame := &model.AudioFrame{
