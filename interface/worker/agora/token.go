@@ -67,7 +67,7 @@ func acceptRemoteStream(remoteStreamID, userID string) bool {
 	if remoteStreamID == "" {
 		return true
 	}
-	return userID == remoteStreamID
+	return strings.TrimSpace(userID) == remoteStreamID
 }
 
 func acceptChannel(configuredChannel, eventChannel string) bool {

@@ -213,6 +213,9 @@ func TestAcceptRemoteStreamMatchesConfiguredStream(t *testing.T) {
 	if !acceptRemoteStream("caller-1", "caller-1") {
 		t.Fatal("acceptRemoteStream(caller-1, caller-1) = false, want true")
 	}
+	if !acceptRemoteStream(" caller-1 ", " caller-1 ") {
+		t.Fatal("acceptRemoteStream(trimmed caller-1, trimmed caller-1) = false, want true")
+	}
 	if acceptRemoteStream("caller-1", "caller-2") {
 		t.Fatal("acceptRemoteStream(caller-1, caller-2) = true, want false")
 	}
