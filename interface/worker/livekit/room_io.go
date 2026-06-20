@@ -1624,15 +1624,16 @@ func (rio *RoomIO) finishPlayback(interrupted bool, synchronizedTranscript strin
 	}
 	rio.playbackCapturing = false
 	rio.playbackFinishedCount++
-	if synchronizedTranscript == "" {
-		synchronizedTranscript = rio.playbackTranscript
-	}
 	playbackPosition := rio.playbackPosition
+	fullPlaybackPosition := playbackPosition
 	if interrupted && !rio.playbackStartedAt.IsZero() {
 		elapsed := time.Since(rio.playbackStartedAt)
 		if elapsed < playbackPosition {
 			playbackPosition = elapsed
 		}
+	}
+	if synchronizedTranscript == "" && (!interrupted || playbackPosition >= fullPlaybackPosition) {
+		synchronizedTranscript = rio.playbackTranscript
 	}
 	ev := PlaybackFinishedEvent{
 		PlaybackPosition:       playbackPosition,

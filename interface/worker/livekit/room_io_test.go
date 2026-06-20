@@ -1249,6 +1249,36 @@ func TestRoomIOPlaybackFinishedIncludesSynchronizedTranscript(t *testing.T) {
 		IsFinal:    false,
 	})
 
+	rio.Flush()
+
+	ev, err := rio.WaitForPlayout(context.Background())
+	if err != nil {
+		t.Fatalf("WaitForPlayout error = %v", err)
+	}
+	if ev.Interrupted {
+		t.Fatal("PlaybackFinishedEvent.Interrupted = true, want false after Flush")
+	}
+	if ev.SynchronizedTranscript != "hello there" {
+		t.Fatalf("SynchronizedTranscript = %q, want accumulated transcript", ev.SynchronizedTranscript)
+	}
+}
+
+func TestRoomIOInterruptedPlaybackDoesNotReportFullTranscriptWhenPartial(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 4800*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 4800,
+	}
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "heard words unheard words",
+		IsFinal:    false,
+	})
+
 	rio.ClearBuffer()
 
 	ev, err := rio.WaitForPlayout(context.Background())
@@ -1258,8 +1288,11 @@ func TestRoomIOPlaybackFinishedIncludesSynchronizedTranscript(t *testing.T) {
 	if !ev.Interrupted {
 		t.Fatal("PlaybackFinishedEvent.Interrupted = false, want true after ClearBuffer")
 	}
-	if ev.SynchronizedTranscript != "hello there" {
-		t.Fatalf("SynchronizedTranscript = %q, want accumulated transcript", ev.SynchronizedTranscript)
+	if ev.PlaybackPosition >= 100*time.Millisecond {
+		t.Fatalf("PlaybackPosition = %v, want partial playout before full transcript duration", ev.PlaybackPosition)
+	}
+	if ev.SynchronizedTranscript == "heard words unheard words" {
+		t.Fatal("SynchronizedTranscript reported full transcript for partial interrupted playback")
 	}
 }
 
