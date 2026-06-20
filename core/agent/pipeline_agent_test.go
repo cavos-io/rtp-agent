@@ -2191,6 +2191,35 @@ func TestPipelineAgentClearInputTranscriptionReplacesSTTStream(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentClearInputTranscriptionReplacesSTTStreamWhenOldCloseFails(t *testing.T) {
+	closeErr := errors.New("old stream close failed")
+	first := &fakePipelineRecognizeStream{
+		closedCh: make(chan struct{}),
+		closeErr: closeErr,
+	}
+	second := &fakePipelineRecognizeStream{}
+	sttObj := &queuedPipelineSTT{streams: []stt.RecognizeStream{second}}
+	pipeline := NewPipelineAgent(nil, sttObj, nil, nil, nil)
+	pipeline.sttStream = first
+	pipeline.ctx = context.Background()
+
+	if err := pipeline.ClearInputTranscription(); err != nil {
+		t.Fatalf("ClearInputTranscription error = %v, want nil despite old close failure", err)
+	}
+
+	select {
+	case <-first.closedCh:
+	case <-time.After(time.Second):
+		t.Fatal("old STT stream close was not attempted")
+	}
+	if pipeline.sttStream != second {
+		t.Fatalf("pipeline sttStream = %#v, want replacement stream", pipeline.sttStream)
+	}
+	if len(sttObj.streams) != 0 {
+		t.Fatalf("queued streams = %d, want replacement stream consumed", len(sttObj.streams))
+	}
+}
+
 func TestPipelineAgentEmitsUserInputTranscribedEvents(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
@@ -5641,6 +5670,7 @@ type fakePipelineRecognizeStream struct {
 	closedCh   chan struct{}
 	flushCount int
 	closeOnce  sync.Once
+	closeErr   error
 }
 
 func (f *fakePipelineRecognizeStream) PushFrame(frame *model.AudioFrame) error {
@@ -5660,7 +5690,7 @@ func (f *fakePipelineRecognizeStream) Close() error {
 	if f.closedCh != nil {
 		f.closeOnce.Do(func() { close(f.closedCh) })
 	}
-	return nil
+	return f.closeErr
 }
 
 func (f *fakePipelineRecognizeStream) Next() (*stt.SpeechEvent, error) {

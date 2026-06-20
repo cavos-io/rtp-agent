@@ -154,7 +154,7 @@ func (va *PipelineAgent) ClearInputTranscription() error {
 	va.mu.Unlock()
 	if oldStream != nil {
 		if err := oldStream.Close(); err != nil && !isSpeechStreamShutdownError(err) {
-			return err
+			logger.Logger.Warnw("failed to close old STT stream while clearing input transcription", err)
 		}
 	}
 	if sttObj == nil {
