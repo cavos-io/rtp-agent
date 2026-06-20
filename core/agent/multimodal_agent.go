@@ -969,7 +969,10 @@ func (ma *MultimodalAgent) forwardedRealtimeTextAfterInterruption(ctx context.Co
 	if session.activity != nil {
 		session.activity.holdUserTranscriptsUntil(time.Now())
 	}
-	return ev.SynchronizedTranscript, ev
+	if ev.HasSynchronizedTranscript || ev.SynchronizedTranscript != "" {
+		return ev.SynchronizedTranscript, ev
+	}
+	return generatedText, ev
 }
 
 func (ma *MultimodalAgent) truncateInterruptedRealtimeMessage(messageID string, modalities []string, transcript string, playback AudioPlaybackResult) {

@@ -1444,7 +1444,10 @@ func (va *PipelineAgent) forwardedAssistantTextAfterInterruption(ctx context.Con
 	if ev.PlaybackPosition <= 0 {
 		return ""
 	}
-	return ev.SynchronizedTranscript
+	if ev.HasSynchronizedTranscript || ev.SynchronizedTranscript != "" {
+		return ev.SynchronizedTranscript
+	}
+	return generatedText
 }
 
 func (va *PipelineAgent) precomputeLLMGeneration(ctx context.Context, session *AgentSession, opts pipelineReplyOptions) (*LLMGenerationData, error) {

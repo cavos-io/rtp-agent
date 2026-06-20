@@ -170,15 +170,16 @@ type PlaybackStartedEvent struct {
 }
 
 type PlaybackFinishedEvent struct {
-	PlaybackPosition       time.Duration
-	Interrupted            bool
-	SynchronizedTranscript string
-	AudioFrames            int
-	AudioBytes             int
-	AudioEncodedFrames     int
-	AudioSampleRate        uint32
-	AudioChannels          uint32
-	AudioLastError         string
+	PlaybackPosition          time.Duration
+	Interrupted               bool
+	SynchronizedTranscript    string
+	HasSynchronizedTranscript bool
+	AudioFrames               int
+	AudioBytes                int
+	AudioEncodedFrames        int
+	AudioSampleRate           uint32
+	AudioChannels             uint32
+	AudioLastError            string
 }
 
 type RoomIOAudioOutputDiagnostics struct {
@@ -226,23 +227,25 @@ type RoomIO struct {
 	audioSubscribed  chan struct{}
 	audioSubOnce     sync.Once
 
-	playbackCapturing         bool
-	playbackSegmentsCount     int
-	playbackFinishedCount     int
-	playbackPosition          time.Duration
-	playbackStartedAt         time.Time
-	playbackAudioFrames       int
-	playbackAudioBytes        int
-	playbackAudioEncoded      int
-	playbackAudioSampleRate   uint32
-	playbackAudioChannels     uint32
-	playbackAudioLastError    string
-	playbackTranscript        string
-	pendingPlaybackTranscript string
-	lastPlaybackEvent         PlaybackFinishedEvent
-	playbackWaiters           []chan struct{}
-	playbackStartedHandlers   []func(PlaybackStartedEvent)
-	playbackFinishedHandlers  []func(PlaybackFinishedEvent)
+	playbackCapturing            bool
+	playbackSegmentsCount        int
+	playbackFinishedCount        int
+	playbackPosition             time.Duration
+	playbackStartedAt            time.Time
+	playbackAudioFrames          int
+	playbackAudioBytes           int
+	playbackAudioEncoded         int
+	playbackAudioSampleRate      uint32
+	playbackAudioChannels        uint32
+	playbackAudioLastError       string
+	playbackTranscript           string
+	playbackTranscriptSet        bool
+	pendingPlaybackTranscript    string
+	pendingPlaybackTranscriptSet bool
+	lastPlaybackEvent            PlaybackFinishedEvent
+	playbackWaiters              []chan struct{}
+	playbackStartedHandlers      []func(PlaybackStartedEvent)
+	playbackFinishedHandlers     []func(PlaybackFinishedEvent)
 
 	audioOutputPaused  bool
 	audioOutputWaiters []chan audioOutputWaitResult
@@ -341,9 +344,10 @@ func (c roomIOPlaybackController) WaitForPlayout(ctx context.Context) (agent.Aud
 	}
 	ev, err := c.rio.WaitForPlayout(ctx)
 	return agent.AudioPlaybackResult{
-		PlaybackPosition:       ev.PlaybackPosition,
-		Interrupted:            ev.Interrupted,
-		SynchronizedTranscript: ev.SynchronizedTranscript,
+		PlaybackPosition:          ev.PlaybackPosition,
+		Interrupted:               ev.Interrupted,
+		SynchronizedTranscript:    ev.SynchronizedTranscript,
+		HasSynchronizedTranscript: ev.HasSynchronizedTranscript,
 	}, err
 }
 
@@ -557,7 +561,9 @@ func (rio *RoomIO) handleAgentOutputTranscribed(ev agent.AgentOutputTranscribedE
 	if !ok {
 		return
 	}
-	rio.setPlaybackTranscript(transcript, ev.IsFinal)
+	if transcript != "" {
+		rio.setPlaybackTranscript(transcript, ev.IsFinal)
+	}
 	attributes := map[string]string{
 		RoomIOTranscriptionFinalAttribute:     strconv.FormatBool(ev.IsFinal),
 		RoomIOTranscriptionSegmentIDAttribute: segmentID,
@@ -1528,6 +1534,7 @@ func (rio *RoomIO) startPlayback() (PlaybackStartedEvent, []func(PlaybackStarted
 	rio.playbackAudioChannels = 0
 	rio.playbackAudioLastError = ""
 	rio.playbackTranscript = rio.pendingPlaybackTranscript
+	rio.playbackTranscriptSet = rio.pendingPlaybackTranscriptSet
 	startedAt := time.Now()
 	rio.playbackStartedAt = startedAt
 	ev := PlaybackStartedEvent{CreatedAt: startedAt}
@@ -1536,14 +1543,16 @@ func (rio *RoomIO) startPlayback() (PlaybackStartedEvent, []func(PlaybackStarted
 }
 
 func (rio *RoomIO) setPlaybackTranscript(transcript string, final bool) {
-	if rio == nil || transcript == "" {
+	if rio == nil {
 		return
 	}
 	rio.mu.Lock()
 	if rio.playbackCapturing {
 		rio.playbackTranscript = transcript
+		rio.playbackTranscriptSet = true
 	} else if !final {
 		rio.pendingPlaybackTranscript = transcript
+		rio.pendingPlaybackTranscriptSet = true
 	}
 	rio.mu.Unlock()
 }
@@ -1644,19 +1653,22 @@ func (rio *RoomIO) finishPlayback(interrupted bool, synchronizedTranscript strin
 			playbackPosition = elapsed
 		}
 	}
-	if synchronizedTranscript == "" && (!interrupted || playbackPosition >= fullPlaybackPosition) {
+	hasSynchronizedTranscript := synchronizedTranscript != ""
+	if !hasSynchronizedTranscript && (!interrupted || playbackPosition >= fullPlaybackPosition) && rio.playbackTranscriptSet {
 		synchronizedTranscript = rio.playbackTranscript
+		hasSynchronizedTranscript = true
 	}
 	ev := PlaybackFinishedEvent{
-		PlaybackPosition:       playbackPosition,
-		Interrupted:            interrupted,
-		SynchronizedTranscript: synchronizedTranscript,
-		AudioFrames:            rio.playbackAudioFrames,
-		AudioBytes:             rio.playbackAudioBytes,
-		AudioEncodedFrames:     rio.playbackAudioEncoded,
-		AudioSampleRate:        rio.playbackAudioSampleRate,
-		AudioChannels:          rio.playbackAudioChannels,
-		AudioLastError:         rio.playbackAudioLastError,
+		PlaybackPosition:          playbackPosition,
+		Interrupted:               interrupted,
+		SynchronizedTranscript:    synchronizedTranscript,
+		HasSynchronizedTranscript: hasSynchronizedTranscript,
+		AudioFrames:               rio.playbackAudioFrames,
+		AudioBytes:                rio.playbackAudioBytes,
+		AudioEncodedFrames:        rio.playbackAudioEncoded,
+		AudioSampleRate:           rio.playbackAudioSampleRate,
+		AudioChannels:             rio.playbackAudioChannels,
+		AudioLastError:            rio.playbackAudioLastError,
 	}
 	rio.playbackPosition = 0
 	rio.playbackStartedAt = time.Time{}
@@ -1667,7 +1679,9 @@ func (rio *RoomIO) finishPlayback(interrupted bool, synchronizedTranscript strin
 	rio.playbackAudioChannels = 0
 	rio.playbackAudioLastError = ""
 	rio.playbackTranscript = ""
+	rio.playbackTranscriptSet = false
 	rio.pendingPlaybackTranscript = ""
+	rio.pendingPlaybackTranscriptSet = false
 	rio.lastPlaybackEvent = ev
 	handlers := append([]func(PlaybackFinishedEvent){}, rio.playbackFinishedHandlers...)
 	waiters := append([]chan struct{}{}, rio.playbackWaiters...)

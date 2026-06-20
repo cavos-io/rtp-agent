@@ -3240,9 +3240,10 @@ func TestPipelineAgentScheduledSayInterruptUsesSynchronizedTranscript(t *testing
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	playback := &fakePipelinePlaybackController{
 		result: AudioPlaybackResult{
-			PlaybackPosition:       200 * time.Millisecond,
-			Interrupted:            true,
-			SynchronizedTranscript: "heard words",
+			PlaybackPosition:          200 * time.Millisecond,
+			Interrupted:               true,
+			SynchronizedTranscript:    "heard words",
+			HasSynchronizedTranscript: true,
 		},
 	}
 	session.SetAudioPlaybackController(playback)
@@ -4635,9 +4636,10 @@ func TestPipelineAgentInterruptedReplyCommitsSynchronizedTranscript(t *testing.T
 	}
 	playback := &fakePipelinePlaybackController{
 		result: AudioPlaybackResult{
-			PlaybackPosition:       200 * time.Millisecond,
-			Interrupted:            true,
-			SynchronizedTranscript: "full answer",
+			PlaybackPosition:          200 * time.Millisecond,
+			Interrupted:               true,
+			SynchronizedTranscript:    "full answer",
+			HasSynchronizedTranscript: true,
 		},
 	}
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
@@ -4671,9 +4673,10 @@ func TestPipelineAgentInterruptedReplyWaitsForPlaybackAfterReplyContextCanceled(
 	chatCtx := llm.NewChatContext()
 	playback := &fakePipelinePlaybackController{
 		result: AudioPlaybackResult{
-			PlaybackPosition:       200 * time.Millisecond,
-			Interrupted:            true,
-			SynchronizedTranscript: "heard words",
+			PlaybackPosition:          200 * time.Millisecond,
+			Interrupted:               true,
+			SynchronizedTranscript:    "heard words",
+			HasSynchronizedTranscript: true,
 		},
 		respectContext: true,
 	}
@@ -4702,9 +4705,10 @@ func TestPipelineAgentInterruptedReplyUsesEmptySynchronizedTranscript(t *testing
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	playback := &fakePipelinePlaybackController{
 		result: AudioPlaybackResult{
-			PlaybackPosition:       200 * time.Millisecond,
-			Interrupted:            true,
-			SynchronizedTranscript: "",
+			PlaybackPosition:          200 * time.Millisecond,
+			Interrupted:               true,
+			SynchronizedTranscript:    "",
+			HasSynchronizedTranscript: true,
 		},
 	}
 	session.SetAudioPlaybackController(playback)
@@ -4721,6 +4725,31 @@ func TestPipelineAgentInterruptedReplyUsesEmptySynchronizedTranscript(t *testing
 	}
 	if forwarded != "" {
 		t.Fatalf("forwarded text = %q, want empty synchronized transcript to suppress full fallback", forwarded)
+	}
+}
+
+func TestPipelineAgentInterruptedReplyFallsBackWhenSynchronizedTranscriptMissing(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	playback := &fakePipelinePlaybackController{
+		result: AudioPlaybackResult{
+			PlaybackPosition: 200 * time.Millisecond,
+			Interrupted:      true,
+		},
+	}
+	session.SetAudioPlaybackController(playback)
+	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{}, llm.NewChatContext())
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+
+	forwarded := agent.forwardedAssistantTextAfterInterruption(context.Background(), session, speech, "full answer")
+
+	if playback.clearCalls != 1 {
+		t.Fatalf("ClearBuffer calls = %d, want 1", playback.clearCalls)
+	}
+	if forwarded != "full answer" {
+		t.Fatalf("forwarded text = %q, want generated text when synchronized transcript is missing", forwarded)
 	}
 }
 

@@ -1314,6 +1314,9 @@ func TestRoomIOPlaybackFinishedIncludesSynchronizedTranscript(t *testing.T) {
 	if ev.SynchronizedTranscript != "hello there" {
 		t.Fatalf("SynchronizedTranscript = %q, want accumulated transcript", ev.SynchronizedTranscript)
 	}
+	if !ev.HasSynchronizedTranscript {
+		t.Fatal("HasSynchronizedTranscript = false, want true for accumulated transcript")
+	}
 }
 
 func TestRoomIOInterruptedPlaybackDoesNotReportFullTranscriptWhenPartial(t *testing.T) {
@@ -1346,6 +1349,9 @@ func TestRoomIOInterruptedPlaybackDoesNotReportFullTranscriptWhenPartial(t *test
 	}
 	if ev.SynchronizedTranscript == "heard words unheard words" {
 		t.Fatal("SynchronizedTranscript reported full transcript for partial interrupted playback")
+	}
+	if ev.HasSynchronizedTranscript {
+		t.Fatal("HasSynchronizedTranscript = true, want false for partial interrupted playback without synchronized text")
 	}
 }
 
