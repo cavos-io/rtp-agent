@@ -74,6 +74,9 @@ func (p *sdkDataPublisher) handleMessageEvent(event *agorartm.MessageEvent) {
 	if p == nil || event == nil {
 		return
 	}
+	if event.ChannelName != p.channel {
+		return
+	}
 	p.mu.Lock()
 	handler := p.handler
 	closed := p.closed
