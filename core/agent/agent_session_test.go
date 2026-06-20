@@ -733,6 +733,64 @@ func TestAgentSessionMetricsCollectedEventsFanOutToSubscribers(t *testing.T) {
 	assertMetricsCollectedEvent(t, second, metrics, "second")
 }
 
+func TestAgentSessionMetricsCollectedDeliveredWhenChannelFull(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	metricsEvents := session.metricsCollectedEvents()
+	for i := 0; i < cap(metricsEvents); i++ {
+		metricsEvents <- MetricsCollectedEvent{Metrics: &telemetry.LLMMetrics{RequestID: fmt.Sprintf("prefill_%d", i)}}
+	}
+	metrics := &telemetry.LLMMetrics{RequestID: "llm_req", PromptTokens: 3}
+
+	done := make(chan struct{})
+	go func() {
+		session.EmitMetricsCollected(metrics)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("EmitMetricsCollected returned while event channel was full; metrics event may be dropped")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	<-metricsEvents
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("EmitMetricsCollected did not unblock after metrics event channel had capacity")
+	}
+
+	for {
+		select {
+		case ev := <-metricsEvents:
+			if ev.Metrics == metrics {
+				return
+			}
+		default:
+			t.Fatal("MetricsCollectedEvents did not receive metrics event")
+		}
+	}
+}
+
+func TestAgentSessionMetricsCollectedDoesNotBlockWithoutSubscriber(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	for i := 0; i < cap(session.metricsCollectedCh); i++ {
+		session.metricsCollectedCh <- MetricsCollectedEvent{Metrics: &telemetry.LLMMetrics{RequestID: fmt.Sprintf("prefill_%d", i)}}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "llm_req", PromptTokens: 3})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("EmitMetricsCollected blocked on unclaimed metrics event channel")
+	}
+}
+
 func TestAgentSessionOnMetricsCollectedWarnsDeprecated(t *testing.T) {
 	oldLogger := logutil.Logger
 	recorder := &recordingLogger{}
@@ -760,6 +818,66 @@ func TestAgentSessionUsageUpdatedEventsFanOutToSubscribers(t *testing.T) {
 
 	assertUsageUpdatedEvent(t, first, "first")
 	assertUsageUpdatedEvent(t, second, "second")
+}
+
+func TestAgentSessionUsageUpdatedDeliveredWhenChannelFull(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	usageEvents := session.sessionUsageUpdatedEvents()
+	for i := 0; i < cap(usageEvents); i++ {
+		usageEvents <- SessionUsageUpdatedEvent{}
+	}
+	usage := telemetry.AgentSessionUsage{
+		ModelUsage: []telemetry.ModelUsage{&telemetry.LLMModelUsage{Provider: "livekit", Model: "test", InputTokens: 3}},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.EmitSessionUsageUpdated(SessionUsageUpdatedEvent{Usage: usage})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("EmitSessionUsageUpdated returned while event channel was full; usage event may be dropped")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	<-usageEvents
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("EmitSessionUsageUpdated did not unblock after usage event channel had capacity")
+	}
+
+	for {
+		select {
+		case ev := <-usageEvents:
+			if ev.Usage.LLMInputTokens() == 3 {
+				return
+			}
+		default:
+			t.Fatal("SessionUsageUpdatedEvents did not receive usage event")
+		}
+	}
+}
+
+func TestAgentSessionUsageUpdatedDoesNotBlockWithoutSubscriber(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	for i := 0; i < cap(session.sessionUsageCh); i++ {
+		session.sessionUsageCh <- SessionUsageUpdatedEvent{}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.EmitSessionUsageUpdated(SessionUsageUpdatedEvent{})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("EmitSessionUsageUpdated blocked on unclaimed usage event channel")
+	}
 }
 
 func TestAgentSessionConversationItemAddedEventsFanOutToSubscribers(t *testing.T) {

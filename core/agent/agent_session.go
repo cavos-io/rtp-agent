@@ -1635,11 +1635,17 @@ func (s *AgentSession) EmitMetricsCollected(metrics telemetry.AgentMetrics) {
 		CreatedAt: time.Now(),
 	}
 	s.recordEvent(&ev)
-	for _, ch := range s.metricsCollectedSubscribers() {
+	primary, primarySubscribed, subscribers := s.metricsCollectedSubscribers()
+	if primarySubscribed {
+		primary <- ev
+	} else if primary != nil {
 		select {
-		case ch <- ev:
+		case primary <- ev:
 		default:
 		}
+	}
+	for _, ch := range subscribers {
+		ch <- ev
 	}
 	if s.MetricsCollector != nil {
 		s.EmitSessionUsageUpdated(SessionUsageUpdatedEvent{Usage: s.ModelUsage()})
@@ -1676,17 +1682,14 @@ func (s *AgentSession) metricsCollectedEvents() chan MetricsCollectedEvent {
 	return ch
 }
 
-func (s *AgentSession) metricsCollectedSubscribers() []chan MetricsCollectedEvent {
+func (s *AgentSession) metricsCollectedSubscribers() (chan MetricsCollectedEvent, bool, []chan MetricsCollectedEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	subs := make([]chan MetricsCollectedEvent, 0, len(s.metricsSubs)+1)
 	if s.metricsCollectedCh == nil {
 		s.metricsCollectedCh = make(chan MetricsCollectedEvent, 10)
 	}
-	subs = append(subs, s.metricsCollectedCh)
-	subs = append(subs, s.metricsSubs...)
-	return subs
+	return s.metricsCollectedCh, s.metricsChSubscribed, append([]chan MetricsCollectedEvent(nil), s.metricsSubs...)
 }
 
 func (s *AgentSession) SessionUsageUpdatedEvents() <-chan SessionUsageUpdatedEvent {
@@ -1698,11 +1701,17 @@ func (s *AgentSession) EmitSessionUsageUpdated(ev SessionUsageUpdatedEvent) {
 		ev.CreatedAt = time.Now()
 	}
 	s.recordEvent(&ev)
-	for _, ch := range s.sessionUsageUpdatedSubscribers() {
+	primary, primarySubscribed, subscribers := s.sessionUsageUpdatedSubscribers()
+	if primarySubscribed {
+		primary <- ev
+	} else if primary != nil {
 		select {
-		case ch <- ev:
+		case primary <- ev:
 		default:
 		}
+	}
+	for _, ch := range subscribers {
+		ch <- ev
 	}
 }
 
@@ -1722,17 +1731,14 @@ func (s *AgentSession) sessionUsageUpdatedEvents() chan SessionUsageUpdatedEvent
 	return ch
 }
 
-func (s *AgentSession) sessionUsageUpdatedSubscribers() []chan SessionUsageUpdatedEvent {
+func (s *AgentSession) sessionUsageUpdatedSubscribers() (chan SessionUsageUpdatedEvent, bool, []chan SessionUsageUpdatedEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	subs := make([]chan SessionUsageUpdatedEvent, 0, len(s.sessionUsageSubs)+1)
 	if s.sessionUsageCh == nil {
 		s.sessionUsageCh = make(chan SessionUsageUpdatedEvent, 10)
 	}
-	subs = append(subs, s.sessionUsageCh)
-	subs = append(subs, s.sessionUsageSubs...)
-	return subs
+	return s.sessionUsageCh, s.sessionUsageChSubbed, append([]chan SessionUsageUpdatedEvent(nil), s.sessionUsageSubs...)
 }
 
 func (s *AgentSession) ErrorEvents() <-chan ErrorEvent {
