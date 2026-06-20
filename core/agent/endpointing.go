@@ -113,8 +113,8 @@ func (e *DynamicEndpointing) UpdateOptions(minDelay *float64, maxDelay *float64)
 }
 
 func (e *DynamicEndpointing) UpdateAlpha(alpha float64) {
-	e.utterancePause.UpdateBase(alpha)
-	e.turnPause.UpdateBase(alpha)
+	e.utterancePause.Reset(alpha)
+	e.turnPause.Reset(alpha)
 }
 
 func (e *DynamicEndpointing) MinDelay() float64 {

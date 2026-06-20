@@ -188,6 +188,17 @@ func TestAgentSessionUpdateOptionsUpdatesDynamicEndpointingAlpha(t *testing.T) {
 	}
 }
 
+func TestDynamicEndpointingUpdateAlphaRejectsInvalidAlpha(t *testing.T) {
+	endpointing := NewDynamicEndpointing(0.5, 3.0, 0.9)
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("UpdateAlpha(0) did not panic, want invalid alpha rejected")
+		}
+	}()
+	endpointing.UpdateAlpha(0)
+}
+
 func TestAgentSessionUpdateOptionsPersistsEndpointingAlphaAcrossModeChange(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	alpha := 0.5
