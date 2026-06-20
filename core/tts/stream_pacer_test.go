@@ -36,6 +36,30 @@ func TestSentenceStreamPacerBatchesQueuedSentencesByMaxTextLength(t *testing.T) 
 	}
 }
 
+func TestSentenceStreamPacerHoldsIncompleteSentenceUntilFlush(t *testing.T) {
+	underlying := newFakePacerStream()
+	pacer := NewSentenceStreamPacerWithOptions(context.Background(), underlying, SentenceStreamPacerOptions{
+		MinRemainingAudio: 20 * time.Second,
+		MaxTextLength:     80,
+	})
+	defer pacer.Close()
+
+	if err := pacer.PushText("This sentence is still arriving without punctuation"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := underlying.pushes(); len(got) != 0 {
+		t.Fatalf("pushed text before flush = %#v, want none for incomplete sentence", got)
+	}
+
+	if err := pacer.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if !underlying.waitForPushes(t, []string{"This sentence is still arriving without punctuation"}) {
+		t.Fatalf("pushed text = %#v, want incomplete sentence released by flush", underlying.pushes())
+	}
+}
+
 func TestSentenceStreamPacerOptionsPreserveExplicitZeroValues(t *testing.T) {
 	underlying := newFakePacerStream()
 	pacer := NewSentenceStreamPacerWithOptions(context.Background(), underlying, SentenceStreamPacerOptions{

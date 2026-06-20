@@ -100,11 +100,11 @@ func (p *SentenceStreamPacer) tokenizeLoop() {
 			return
 		case input, ok := <-p.textCh:
 			if !ok {
-				p.sendTokenizedSentences(buffer)
+				p.sendTokenizedSentences(buffer, true)
 				return
 			}
 			if input.flush {
-				p.sendTokenizedSentences(buffer)
+				p.sendTokenizedSentences(buffer, true)
 				buffer = ""
 				select {
 				case <-p.ctx.Done():
@@ -119,28 +119,41 @@ func (p *SentenceStreamPacer) tokenizeLoop() {
 			if len(buffer) < 10 {
 				continue
 			}
-			if p.sendTokenizedSentences(buffer) {
-				buffer = ""
+			remainder, emitted := p.sendTokenizedSentences(buffer, false)
+			if emitted {
+				buffer = remainder
 			}
 		}
 	}
 }
 
-func (p *SentenceStreamPacer) sendTokenizedSentences(text string) bool {
+func (p *SentenceStreamPacer) sendTokenizedSentences(text string, flush bool) (string, bool) {
 	sentences := p.tokenizer.Tokenize(text, "en")
 	if len(sentences) == 0 {
-		return false
+		return text, false
 	}
+	if !flush {
+		if len(sentences) <= 1 {
+			return text, false
+		}
+		sentences = sentences[:len(sentences)-1]
+	}
+	remainder := text
+	emitted := false
 	for _, sentence := range sentences {
 		if sentence != "" {
 			select {
 			case <-p.ctx.Done():
-				return false
+				return remainder, emitted
 			case p.sentenceCh <- pacerSentence{text: sentence}:
 			}
+			emitted = true
+		}
+		if idx := strings.Index(remainder, sentence); idx >= 0 {
+			remainder = strings.TrimLeft(remainder[idx+len(sentence):], " \t\r\n")
 		}
 	}
-	return true
+	return remainder, emitted
 }
 
 func (p *SentenceStreamPacer) paceLoop() {
