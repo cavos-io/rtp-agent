@@ -541,6 +541,23 @@ func TestInworldTTSChunkedStreamDecodesReferenceJSONLines(t *testing.T) {
 	}
 }
 
+func TestInworldTTSChunkedStreamDecodesLargeReferenceJSONLine(t *testing.T) {
+	audioContent := strings.Repeat("AQID", 20000)
+	body := []byte("{\"result\":{\"audioContent\":\"" + audioContent + "\"}}\n")
+	stream := &inworldTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(body))},
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if len(audio.Frame.Data) != 60000 {
+		t.Fatalf("audio data length = %d, want decoded large audio chunk", len(audio.Frame.Data))
+	}
+}
+
 func TestInworldTTSChunkedStreamSkipsMalformedReferenceJSONLines(t *testing.T) {
 	stream := &inworldTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte("not-json\n{\"result\":{\"audioContent\":\"AQI=\"}}\n")))},

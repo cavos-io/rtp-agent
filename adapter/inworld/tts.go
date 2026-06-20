@@ -36,6 +36,7 @@ const (
 	defaultInworldBufferCharThreshold        = 120
 	defaultInworldMaxBufferDelayMS           = 3000
 	inworldTTSSendTextChunkLimit             = 1000
+	inworldTTSMaxResponseLineBytes           = 16 * 1024 * 1024
 )
 
 type InworldTTS struct {
@@ -449,6 +450,7 @@ func (s *inworldTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	if s.scanner == nil {
 		s.scanner = bufio.NewScanner(s.resp.Body)
+		s.scanner.Buffer(make([]byte, 0, 64*1024), inworldTTSMaxResponseLineBytes)
 	}
 	for s.scanner.Scan() {
 		line := bytes.TrimSpace(s.scanner.Bytes())
