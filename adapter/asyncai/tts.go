@@ -37,6 +37,8 @@ type AsyncAITTS struct {
 	encoding   string
 	voice      string
 	sampleRate int
+	mu         sync.Mutex
+	streams    map[*asyncAITTSStream]struct{}
 }
 
 type AsyncAITTSOption func(*AsyncAITTS)
@@ -100,6 +102,7 @@ func NewAsyncAITTS(apiKey string, voice string, opts ...AsyncAITTSOption) *Async
 		encoding:   defaultAsyncAITTSEncoding,
 		voice:      voice,
 		sampleRate: defaultAsyncAITTSSampleRate,
+		streams:    make(map[*asyncAITTSStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -123,6 +126,27 @@ func (t *AsyncAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 	return nil, fmt.Errorf("asyncai tts supports streaming only; use tts.stream()")
 }
 
+func (t *AsyncAITTS) Close() error {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	streams := make([]*asyncAITTSStream, 0, len(t.streams))
+	for stream := range t.streams {
+		streams = append(streams, stream)
+	}
+	t.streams = make(map[*asyncAITTSStream]struct{})
+	t.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
 func (t *AsyncAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if err := t.validateStreamConfig(); err != nil {
 		return nil, err
@@ -142,6 +166,7 @@ func (t *AsyncAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &asyncAITTSStream{
+		owner:      t,
 		conn:       conn,
 		ctx:        streamCtx,
 		cancel:     cancel,
@@ -150,7 +175,33 @@ func (t *AsyncAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	stream.writeMessage = stream.writeWebsocketMessage
 	stream.closeConn = stream.closeWebsocketConn
+	t.registerStream(stream)
 	return stream, nil
+}
+
+func (t *AsyncAITTS) registerStream(stream *asyncAITTSStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.streams == nil {
+		t.streams = make(map[*asyncAITTSStream]struct{})
+	}
+	t.streams[stream] = struct{}{}
+	stream.owner = t
+}
+
+func (t *AsyncAITTS) unregisterStream(stream *asyncAITTSStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.streams, stream)
+	if stream.owner == t {
+		stream.owner = nil
+	}
 }
 
 func (t *AsyncAITTS) validateStreamConfig() error {
@@ -248,6 +299,7 @@ func (s *asyncAITTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error)
 }
 
 type asyncAITTSStream struct {
+	owner       *AsyncAITTS
 	conn        *websocket.Conn
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -317,11 +369,20 @@ func (s *asyncAITTSStream) Close() error {
 	if s.cancel != nil {
 		s.cancel()
 	}
-	if s.conn == nil {
+	if s.conn == nil && s.closeConn == nil {
+		if s.owner != nil {
+			s.owner.unregisterStream(s)
+		}
 		return nil
 	}
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.closeConnection()
+	if s.conn != nil {
+		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	}
+	err := s.closeConnection()
+	if s.owner != nil {
+		s.owner.unregisterStream(s)
+	}
+	return err
 }
 
 func (s *asyncAITTSStream) writeMessageData(payload []byte) error {
@@ -358,6 +419,9 @@ func (s *asyncAITTSStream) closeAfterWriteFailureLocked() {
 		s.cancel()
 	}
 	_ = s.closeConnection()
+	if s.owner != nil {
+		s.owner.unregisterStream(s)
+	}
 }
 
 func (s *asyncAITTSStream) Next() (*tts.SynthesizedAudio, error) {
