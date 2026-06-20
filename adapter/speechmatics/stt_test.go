@@ -3,6 +3,8 @@ package speechmatics
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/url"
 	"strings"
 	"testing"
@@ -236,6 +238,28 @@ func TestSpeechmaticsSTTStreamRequiresAPIKeyBeforeDial(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "SPEECHMATICS_API_KEY") {
 		t.Fatalf("Stream error = %v, want missing API key error", err)
+	}
+}
+
+func TestSpeechmaticsSTTProviderCloseClosesActiveStreams(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+	closed := false
+	stream := &speechmaticsSTTStream{
+		closeConn: func() error {
+			closed = true
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if !closed {
+		t.Fatal("stream closed = false after provider Close")
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("again")}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after provider Close = %v, want io.ErrClosedPipe", err)
 	}
 }
 
