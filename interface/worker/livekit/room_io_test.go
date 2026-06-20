@@ -150,6 +150,33 @@ func TestRoomIOInputFrameUsesReferenceSampleRate(t *testing.T) {
 	}
 }
 
+func TestRoomIOInputFrameDownmixesStereoToReferenceMono(t *testing.T) {
+	pcm := []byte{
+		0x00, 0x00, 0x02, 0x00,
+		0x04, 0x00, 0x06, 0x00,
+	}
+	frame := roomIOInputFrameFromPCM(pcm, roomIOInputSampleRate, 2)
+
+	if frame.SampleRate != roomIOInputSampleRate {
+		t.Fatalf("SampleRate = %d, want reference RoomIO input rate %d", frame.SampleRate, roomIOInputSampleRate)
+	}
+	if frame.NumChannels != 1 {
+		t.Fatalf("NumChannels = %d, want mono reference input", frame.NumChannels)
+	}
+	if frame.SamplesPerChannel != 2 {
+		t.Fatalf("SamplesPerChannel = %d, want stereo samples preserved per channel after downmix", frame.SamplesPerChannel)
+	}
+	if got, want := len(frame.Data), 4; got != want {
+		t.Fatalf("frame data bytes = %d, want %d", got, want)
+	}
+	if got := int16(frame.Data[0]) | int16(frame.Data[1])<<8; got != 1 {
+		t.Fatalf("first downmixed sample = %d, want average of stereo pair", got)
+	}
+	if got := int16(frame.Data[2]) | int16(frame.Data[3])<<8; got != 5 {
+		t.Fatalf("second downmixed sample = %d, want average of stereo pair", got)
+	}
+}
+
 func TestRoomIOInputStreamUsesReferenceFrameSize(t *testing.T) {
 	stream := newRoomIOInputAudioStream()
 	var frames []*model.AudioFrame

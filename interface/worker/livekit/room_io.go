@@ -1277,15 +1277,23 @@ func roomIOInputFrameFromPCM(pcm []byte, sampleRate uint32, channels uint32) *mo
 		NumChannels:       channels,
 		SamplesPerChannel: uint32(len(pcm)) / channels / 2,
 	}
-	if sampleRate == 0 || sampleRate == roomIOInputSampleRate {
-		return frame
+	if sampleRate != 0 && sampleRate != roomIOInputSampleRate {
+		resampled, err := audio.ResampleAudioFrame(frame, roomIOInputSampleRate)
+		if err != nil {
+			logger.Logger.Warnw("room audio input resample failed", err, "from", sampleRate, "to", roomIOInputSampleRate)
+			return frame
+		}
+		frame = resampled
 	}
-	resampled, err := audio.ResampleAudioFrame(frame, roomIOInputSampleRate)
-	if err != nil {
-		logger.Logger.Warnw("room audio input resample failed", err, "from", sampleRate, "to", roomIOInputSampleRate)
-		return frame
+	if frame.NumChannels > 1 {
+		mono, err := roomIOMonoAudioFrame(frame)
+		if err != nil {
+			logger.Logger.Warnw("room audio input downmix failed", err, "channels", frame.NumChannels)
+			return frame
+		}
+		frame = mono
 	}
-	return resampled
+	return frame
 }
 
 func roomIOInputFrameFromFrame(frame *model.AudioFrame) *model.AudioFrame {
