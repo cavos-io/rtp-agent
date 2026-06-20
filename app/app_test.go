@@ -743,6 +743,17 @@ func TestDefaultConfigFromEnvUsesAgoraStreamIDAsRTMUserFallback(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvUsesAgoraUserUIDAsRemoteStreamFallback(t *testing.T) {
+	unsetEnvForTest(t, "AGORA_REMOTE_STREAM_ID")
+	t.Setenv("AGORA_USER_UID", " 5678 ")
+
+	cfg := DefaultConfigFromEnv()
+
+	if cfg.Agora.RemoteStreamID != "5678" {
+		t.Fatalf("Agora.RemoteStreamID = %q, want AGORA_USER_UID fallback", cfg.Agora.RemoteStreamID)
+	}
+}
+
 func TestDefaultConfigFromEnvUsesTENAgoraGreetingDefault(t *testing.T) {
 	unsetEnvForTest(t, "AGORA_GREETING")
 
