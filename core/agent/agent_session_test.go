@@ -4990,6 +4990,29 @@ func TestAgentSessionStartForwardsVADMetricsThroughActivity(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStartForwardsPipelineVADMetricsThroughActivity(t *testing.T) {
+	vadSource := &fakePipelineVAD{}
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = NewPipelineAgent(vadSource, nil, nil, nil, agent.ChatCtx)
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+
+	metrics := &telemetry.VADMetrics{Label: "pipeline-vad"}
+	vadSource.EmitMetricsCollected(metrics)
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		if ev.Metrics != metrics {
+			t.Fatalf("MetricsCollectedEvent metrics = %#v, want original pipeline VAD metrics", ev.Metrics)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MetricsCollectedEvents did not receive pipeline VAD metrics")
+	}
+}
+
 func TestAgentSessionStopUnsubscribesVADMetricsFromActivity(t *testing.T) {
 	vadSource := &fakePipelineVAD{}
 	agent := NewAgent("test")
@@ -5040,6 +5063,29 @@ func TestAgentSessionStartForwardsSTTMetricsThroughActivity(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("MetricsCollectedEvents did not receive STT metrics")
+	}
+}
+
+func TestAgentSessionStartForwardsPipelineSTTMetricsThroughActivity(t *testing.T) {
+	sttSource := &fakePipelineSTT{}
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = NewPipelineAgent(nil, sttSource, nil, nil, agent.ChatCtx)
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+
+	metrics := &telemetry.STTMetrics{RequestID: "pipeline_stt_req", InputTokens: 3}
+	sttSource.EmitMetricsCollected(metrics)
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		if ev.Metrics != metrics {
+			t.Fatalf("MetricsCollectedEvent metrics = %#v, want original pipeline STT metrics", ev.Metrics)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MetricsCollectedEvents did not receive pipeline STT metrics")
 	}
 }
 

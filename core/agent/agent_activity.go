@@ -285,6 +285,31 @@ func (a *AgentActivity) Start() {
 		a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
 	}
 	if a.Session != nil {
+		if pipeline, ok := a.Session.Assistant.(*PipelineAgent); ok {
+			if pipeline.stt != nil && !sameProviderInstance(pipeline.stt, a.Session.STT) {
+				if collector, ok := pipeline.stt.(sttMetricsCollector); ok {
+					unsubscribe := collector.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+						a.OnMetricsCollected(metrics)
+					})
+					a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+				}
+				if collector, ok := pipeline.stt.(sttErrorCollector); ok {
+					sttSource := pipeline.stt
+					unsubscribe := collector.OnError(func(err *stt.STTError) {
+						a.OnError(err, sttSource)
+					})
+					a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+				}
+			}
+			if pipeline.vad != nil && !sameProviderInstance(pipeline.vad, a.Session.VAD) {
+				unsubscribe := pipeline.vad.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
+					a.OnMetricsCollected(metrics)
+				})
+				a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+			}
+		}
+	}
+	if a.Session != nil {
 		a.Session.mu.Lock()
 		a.Session.onEnterDepth++
 		a.Session.mu.Unlock()
@@ -327,6 +352,21 @@ func (a *AgentActivity) Stop() {
 	if a.Agent.activity == a {
 		a.Agent.activity = nil
 	}
+}
+
+func sameProviderInstance(left, right any) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	leftValue := reflect.ValueOf(left)
+	rightValue := reflect.ValueOf(right)
+	if !leftValue.IsValid() || !rightValue.IsValid() || leftValue.Type() != rightValue.Type() {
+		return false
+	}
+	if !leftValue.Type().Comparable() {
+		return false
+	}
+	return leftValue.Interface() == rightValue.Interface()
 }
 
 func (a *AgentActivity) SchedulingPaused() bool {
