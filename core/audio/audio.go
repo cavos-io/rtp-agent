@@ -135,6 +135,7 @@ func SilenceFrameLike(frame *model.AudioFrame) *model.AudioFrame {
 		SampleRate:        frame.SampleRate,
 		NumChannels:       frame.NumChannels,
 		SamplesPerChannel: frame.SamplesPerChannel,
+		ParticipantID:     frame.ParticipantID,
 	}
 }
 
@@ -179,6 +180,7 @@ func ResampleAudioFrame(frame *model.AudioFrame, outputRate uint32) (*model.Audi
 			SampleRate:        outputRate,
 			NumChannels:       frame.NumChannels,
 			SamplesPerChannel: 0,
+			ParticipantID:     frame.ParticipantID,
 		}, nil
 	}
 
@@ -213,6 +215,7 @@ func ResampleAudioFrame(frame *model.AudioFrame, outputRate uint32) (*model.Audi
 		SampleRate:        outputRate,
 		NumChannels:       channels,
 		SamplesPerChannel: outSamples,
+		ParticipantID:     frame.ParticipantID,
 	}, nil
 }
 

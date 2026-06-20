@@ -211,6 +211,29 @@ func (r *recordingAppTextResponder) EmitUserInputTranscribed(ev agent.UserInputT
 	r.userTranscripts = append(r.userTranscripts, ev)
 }
 
+type callbackCancelingAppTextResponder struct {
+	cancel              context.CancelFunc
+	generateCtxErr      error
+	valueKey            any
+	generateValue       any
+	generateDeadline    time.Time
+	generateDeadlineSet bool
+}
+
+func (r *callbackCancelingAppTextResponder) Interrupt(bool) error {
+	r.cancel()
+	return nil
+}
+
+func (r *callbackCancelingAppTextResponder) GenerateReply(ctx context.Context, _ string) (*agent.SpeechHandle, error) {
+	r.generateCtxErr = ctx.Err()
+	if r.valueKey != nil {
+		r.generateValue = ctx.Value(r.valueKey)
+	}
+	r.generateDeadline, r.generateDeadlineSet = ctx.Deadline()
+	return nil, ctx.Err()
+}
+
 type fakeAppSessionAssistant struct {
 	audioCh   chan *model.AudioFrame
 	started   chan struct{}
@@ -2222,7 +2245,7 @@ func TestInstallAgoraRTMDataMessageHandlerDispatchesInputText(t *testing.T) {
 	dataPublisher := &fakeAppAgoraDataPublisher{}
 	responder := &recordingAppTextResponder{}
 
-	installAgoraRTMDataMessageHandler(context.Background(), dataPublisher, responder, "agent-rtm")
+	installAgoraRTMDataMessageHandler(context.Background(), dataPublisher, responder, "agent-rtm", "support")
 
 	handler := dataPublisher.dataHandler()
 	if handler == nil {
@@ -2267,12 +2290,35 @@ func TestInstallAgoraRTMDataMessageHandlerDispatchesInputText(t *testing.T) {
 	}
 }
 
+func TestInstallAgoraRTMDataMessageHandlerDropsForeignChannel(t *testing.T) {
+	dataPublisher := &fakeAppAgoraDataPublisher{}
+	responder := &recordingAppTextResponder{}
+
+	installAgoraRTMDataMessageHandler(context.Background(), dataPublisher, responder, "agent-rtm", "support")
+
+	handler := dataPublisher.dataHandler()
+	if handler == nil {
+		t.Fatal("installAgoraRTMDataMessageHandler() did not install handler")
+	}
+	err := handler(context.Background(), workeragora.DataMessage{
+		Channel:   "sales",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"data_type":"input_text","text":"wrong room"}`),
+	})
+	if err != nil {
+		t.Fatalf("foreign-channel RTM data handler error = %v, want nil ignored message", err)
+	}
+	if len(responder.calls) != 0 || len(responder.userTranscripts) != 0 {
+		t.Fatalf("foreign-channel RTM callback entered text turn: calls=%#v transcripts=%#v", responder.calls, responder.userTranscripts)
+	}
+}
+
 func TestInstallAgoraRTMDataMessageHandlerDropsAfterRuntimeContextCanceled(t *testing.T) {
 	dataPublisher := &fakeAppAgoraDataPublisher{}
 	responder := &recordingAppTextResponder{}
 	ctx, cancel := context.WithCancel(context.Background())
 
-	installAgoraRTMDataMessageHandler(ctx, dataPublisher, responder, "agent-rtm")
+	installAgoraRTMDataMessageHandler(ctx, dataPublisher, responder, "agent-rtm", "support")
 
 	handler := dataPublisher.dataHandler()
 	if handler == nil {
@@ -2292,6 +2338,85 @@ func TestInstallAgoraRTMDataMessageHandlerDropsAfterRuntimeContextCanceled(t *te
 	}
 }
 
+func TestInstallAgoraRTMDataMessageHandlerPropagatesCallbackCancelDuringTextTurn(t *testing.T) {
+	dataPublisher := &fakeAppAgoraDataPublisher{}
+	callbackCtx, cancelCallback := context.WithCancel(context.Background())
+	responder := &callbackCancelingAppTextResponder{cancel: cancelCallback}
+
+	installAgoraRTMDataMessageHandler(context.Background(), dataPublisher, responder, "agent-rtm", "support")
+
+	handler := dataPublisher.dataHandler()
+	if handler == nil {
+		t.Fatal("installAgoraRTMDataMessageHandler() did not install handler")
+	}
+	err := handler(callbackCtx, workeragora.DataMessage{
+		Channel:   "support",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"data_type":"input_text","text":"hello from chat"}`),
+	})
+	if err != nil {
+		t.Fatalf("RTM data handler error = %v, want nil after text input cancellation", err)
+	}
+	if !errors.Is(responder.generateCtxErr, context.Canceled) {
+		t.Fatalf("GenerateReply ctx error = %v, want callback cancellation propagated into text turn", responder.generateCtxErr)
+	}
+}
+
+func TestInstallAgoraRTMDataMessageHandlerPreservesCallbackContextValues(t *testing.T) {
+	dataPublisher := &fakeAppAgoraDataPublisher{}
+	type callbackValueKey struct{}
+	valueKey := callbackValueKey{}
+	callbackCtx := context.WithValue(context.Background(), valueKey, "rtm-callback-trace")
+	responder := &callbackCancelingAppTextResponder{
+		cancel:   func() {},
+		valueKey: valueKey,
+	}
+
+	installAgoraRTMDataMessageHandler(context.Background(), dataPublisher, responder, "agent-rtm", "support")
+
+	handler := dataPublisher.dataHandler()
+	if handler == nil {
+		t.Fatal("installAgoraRTMDataMessageHandler() did not install handler")
+	}
+	err := handler(callbackCtx, workeragora.DataMessage{
+		Channel:   "support",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"data_type":"input_text","text":"hello from chat"}`),
+	})
+	if err != nil {
+		t.Fatalf("RTM data handler error = %v, want nil", err)
+	}
+	if responder.generateValue != "rtm-callback-trace" {
+		t.Fatalf("GenerateReply callback value = %v, want propagated callback context value", responder.generateValue)
+	}
+}
+
+func TestInstallAgoraRTMDataMessageHandlerPreservesCallbackContextDeadline(t *testing.T) {
+	dataPublisher := &fakeAppAgoraDataPublisher{}
+	deadline := time.Now().Add(time.Minute).Round(0)
+	callbackCtx, cancelCallback := context.WithDeadline(context.Background(), deadline)
+	defer cancelCallback()
+	responder := &callbackCancelingAppTextResponder{cancel: func() {}}
+
+	installAgoraRTMDataMessageHandler(context.Background(), dataPublisher, responder, "agent-rtm", "support")
+
+	handler := dataPublisher.dataHandler()
+	if handler == nil {
+		t.Fatal("installAgoraRTMDataMessageHandler() did not install handler")
+	}
+	err := handler(callbackCtx, workeragora.DataMessage{
+		Channel:   "support",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"data_type":"input_text","text":"hello from chat"}`),
+	})
+	if err != nil {
+		t.Fatalf("RTM data handler error = %v, want nil", err)
+	}
+	if !responder.generateDeadlineSet || !responder.generateDeadline.Equal(deadline) {
+		t.Fatalf("GenerateReply deadline = %v set=%v, want callback deadline %v", responder.generateDeadline, responder.generateDeadlineSet, deadline)
+	}
+}
+
 func TestInstallAgoraRTMDataMessageHandlerLogsTextInputErrorsOnce(t *testing.T) {
 	previousLogger := logutil.Logger
 	recorder := &appRecordingLogger{entriesCh: make(chan appLogEntry, 8)}
@@ -2303,7 +2428,7 @@ func TestInstallAgoraRTMDataMessageHandlerLogsTextInputErrorsOnce(t *testing.T) 
 	dataPublisher := &fakeAppAgoraDataPublisher{}
 	responder := &recordingAppTextResponder{err: errors.New("interrupt failed")}
 
-	installAgoraRTMDataMessageHandler(context.Background(), dataPublisher, responder, "agent-rtm")
+	installAgoraRTMDataMessageHandler(context.Background(), dataPublisher, responder, "agent-rtm", "support")
 
 	handler := dataPublisher.dataHandler()
 	if handler == nil {

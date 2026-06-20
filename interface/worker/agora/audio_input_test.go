@@ -54,16 +54,21 @@ func TestAudioInputHandleAudioFrameClonesBeforeForwarding(t *testing.T) {
 		SampleRate:        16000,
 		NumChannels:       1,
 		SamplesPerChannel: 1,
+		ParticipantID:     "caller-7",
 	}
 
 	input.HandleAudioFrame(frame)
 	frame.Data[0] = 9
+	frame.ParticipantID = "mutated"
 
 	if len(receiver.frames) != 1 {
 		t.Fatalf("received frames = %d, want 1", len(receiver.frames))
 	}
 	if receiver.frames[0].Data[0] != 1 {
 		t.Fatalf("forwarded frame data was not cloned, first byte = %d, want 1", receiver.frames[0].Data[0])
+	}
+	if receiver.frames[0].ParticipantID != "caller-7" {
+		t.Fatalf("forwarded frame participant id = %q, want caller-7", receiver.frames[0].ParticipantID)
 	}
 }
 

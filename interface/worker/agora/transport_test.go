@@ -19,6 +19,7 @@ type fakeChannelClient struct {
 	joinCtx                 context.Context
 	publishCtx              context.Context
 	joinErr                 error
+	joinHook                func(EventHandler)
 	leaveErr                error
 	leaveErrs               []error
 	publishErr              error
@@ -38,6 +39,9 @@ func (f *fakeChannelClient) Join(ctx context.Context, opts Options, handler Even
 	f.joinOptions = opts
 	f.handler = handler
 	f.audioHandler = audioHandler
+	if f.joinHook != nil {
+		f.joinHook(handler)
+	}
 	if f.joinErr != nil {
 		return f.joinErr
 	}
@@ -452,6 +456,40 @@ func TestTransportReturnsClientErrors(t *testing.T) {
 
 	if err := tr.Join(context.Background()); !errors.Is(err, joinErr) {
 		t.Fatalf("Join() error = %v, want %v", err, joinErr)
+	}
+}
+
+func TestTransportClearsTentativeParticipantStateAfterJoinError(t *testing.T) {
+	joinErr := errors.New("join failed")
+	client := &fakeChannelClient{
+		joinErr: joinErr,
+		joinHook: func(handler EventHandler) {
+			handler(Event{Kind: EventUserJoined, Channel: "support", UserID: "user-1"})
+		},
+	}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+
+	if err := tr.Join(context.Background()); !errors.Is(err, joinErr) {
+		t.Fatalf("first Join() error = %v, want %v", err, joinErr)
+	}
+	if got := <-tr.Events(); got.Kind != EventUserJoined || got.UserID != "user-1" {
+		t.Fatalf("early join event = %#v, want tentative user-1 join", got)
+	}
+
+	client.joinErr = nil
+	client.joinHook = nil
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("second Join() error = %v", err)
+	}
+	client.emit(Event{Kind: EventUserJoined, Channel: "support", UserID: "user-1"})
+
+	select {
+	case event := <-tr.Events():
+		if event.Kind != EventUserJoined || event.UserID != "user-1" {
+			t.Fatalf("event = %#v, want user-1 join after failed join reset", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for user join after failed join reset")
 	}
 }
 

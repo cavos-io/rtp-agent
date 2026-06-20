@@ -206,6 +206,30 @@ func TestTranscriptForwarderPublishesTENUserTranscriptWithSpeakerID(t *testing.T
 	}
 }
 
+func TestTranscriptForwarderFallsBackWhenSpeakerIDIsWhitespace(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	publisher := &recordingDataPublisher{}
+	forwarder := NewTranscriptForwarder(session, publisher, TranscriptForwarderOptions{
+		UserStreamID: "caller-fallback",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	forwarder.Start(ctx)
+	defer forwarder.Stop(context.Background())
+
+	session.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "typed hello",
+		IsFinal:    true,
+		SpeakerID:  "   ",
+		CreatedAt:  time.UnixMilli(1710000000565),
+	})
+
+	got := waitForPublishedTranscript(t, publisher)
+	if got["stream_id"] != "caller-fallback" {
+		t.Fatalf("stream_id = %#v, want fallback stream id", got["stream_id"])
+	}
+}
+
 func TestTranscriptForwarderPublishesTENUserTranscriptWithDefaultStreamID(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 	publisher := &recordingDataPublisher{}

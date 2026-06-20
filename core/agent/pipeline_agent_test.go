@@ -1932,6 +1932,47 @@ func TestPipelineAgentRoutesSTTTranscriptsThroughActivity(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentUsesAudioParticipantIDForSTTSpeaker(t *testing.T) {
+	baseAgent := NewAgent("test")
+	baseAgent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	userTranscriptEvents := session.UserInputTranscribedEvents()
+	activity := NewAgentActivity(baseAgent, session)
+	session.activity = activity
+	pipeline := NewPipelineAgent(nil, nil, baseAgent.LLM, &fakePipelineTTS{}, llm.NewChatContext())
+	pipeline.session = session
+	pipeline.ctx = context.Background()
+	stream := &fakePipelineRecognizeStream{
+		events: []*stt.SpeechEvent{{
+			Type: stt.SpeechEventFinalTranscript,
+			Alternatives: []stt.SpeechData{{
+				Language:   "en",
+				Text:       "hello from agora",
+				Confidence: 0.82,
+			}},
+		}},
+	}
+	pipeline.sttStream = stream
+
+	err := pipeline.pushSTTFrame(&model.AudioFrame{
+		Data:              []byte{1, 2},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+		ParticipantID:     "caller-7",
+	})
+	if err != nil {
+		t.Fatalf("pushSTTFrame() error = %v, want nil", err)
+	}
+
+	pipeline.sttLoop(stream)
+
+	transcriptEvent := receiveUserInputTranscribedEvent(t, userTranscriptEvents)
+	if transcriptEvent.SpeakerID != "caller-7" {
+		t.Fatalf("UserInputTranscribedEvent SpeakerID = %q, want audio participant id", transcriptEvent.SpeakerID)
+	}
+}
+
 func TestPipelineAgentFallbackSTTLoopSkipsEmptyFinalTranscript(t *testing.T) {
 	baseAgent := NewAgent("test")
 	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})

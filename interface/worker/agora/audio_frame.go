@@ -1,6 +1,10 @@
 package agora
 
-import "github.com/cavos-io/rtp-agent/core/audio/model"
+import (
+	"strings"
+
+	"github.com/cavos-io/rtp-agent/core/audio/model"
+)
 
 type pcm16AudioFrame struct {
 	Data              []byte
@@ -8,6 +12,7 @@ type pcm16AudioFrame struct {
 	Channels          int
 	BytesPerSample    int
 	SamplesPerChannel int
+	UserID            string
 }
 
 func pcm16AudioFrameToModel(frame pcm16AudioFrame) *model.AudioFrame {
@@ -38,5 +43,6 @@ func pcm16AudioFrameToModel(frame pcm16AudioFrame) *model.AudioFrame {
 		SampleRate:        uint32(frame.SampleRate),
 		NumChannels:       uint32(frame.Channels),
 		SamplesPerChannel: uint32(samplesPerChannel),
+		ParticipantID:     strings.TrimSpace(frame.UserID),
 	}
 }

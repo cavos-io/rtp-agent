@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -179,13 +182,16 @@ func (t *HumeTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("hume tts error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("Hume TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 
 	return &humeTTSChunkedStream{
@@ -310,6 +316,9 @@ type humeTTSChunkedStream struct {
 }
 
 func (s *humeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.resp == nil || s.resp.Body == nil {
+		return nil, io.EOF
+	}
 	if s.scanner == nil {
 		s.scanner = bufio.NewScanner(s.resp.Body)
 		s.scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
@@ -328,6 +337,13 @@ func (s *humeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 		if len(audio) == 0 {
 			continue
+		}
+		if s.audioFormat == "wav" {
+			frame, err := decodeHumeWAVPCM16(audio)
+			if err != nil {
+				return nil, err
+			}
+			return &tts.SynthesizedAudio{Frame: frame}, nil
 		}
 		return &tts.SynthesizedAudio{
 			Frame: &model.AudioFrame{
@@ -354,10 +370,11 @@ func (s *humeTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
 		if len(audio) == 0 {
 			return nil, io.EOF
 		}
-		s.decoder = codecs.NewMP3AudioStreamDecoder()
+		decoder := codecs.NewMP3AudioStreamDecoder()
+		s.decoder = decoder
 		go func() {
-			s.decoder.Push(audio)
-			s.decoder.EndInput()
+			decoder.Push(audio)
+			decoder.EndInput()
 		}()
 	}
 
@@ -394,10 +411,67 @@ func (s *humeTTSChunkedStream) collectJSONLineAudio() ([]byte, error) {
 }
 
 func (s *humeTTSChunkedStream) Close() error {
-	if s.decoder != nil {
-		_ = s.decoder.Close()
+	if s.resp == nil || s.resp.Body == nil {
+		return nil
 	}
-	return s.resp.Body.Close()
+	body := s.resp.Body
+	decoder := s.decoder
+	s.resp = nil
+	s.decoder = nil
+	if decoder != nil {
+		_ = decoder.Close()
+	}
+	return body.Close()
+}
+
+func decodeHumeWAVPCM16(data []byte) (*model.AudioFrame, error) {
+	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
+		return nil, fmt.Errorf("invalid hume wav data")
+	}
+	offset := 12
+	var sampleRate uint32
+	var channels uint16
+	var bitsPerSample uint16
+	var pcm []byte
+	for offset+8 <= len(data) {
+		chunkID := string(data[offset : offset+4])
+		chunkSize := int(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
+		offset += 8
+		if chunkSize < 0 || offset+chunkSize > len(data) {
+			return nil, fmt.Errorf("invalid hume wav chunk size")
+		}
+		switch chunkID {
+		case "fmt ":
+			if chunkSize < 16 {
+				return nil, fmt.Errorf("invalid hume wav fmt chunk")
+			}
+			audioFormat := binary.LittleEndian.Uint16(data[offset : offset+2])
+			channels = binary.LittleEndian.Uint16(data[offset+2 : offset+4])
+			sampleRate = binary.LittleEndian.Uint32(data[offset+4 : offset+8])
+			bitsPerSample = binary.LittleEndian.Uint16(data[offset+14 : offset+16])
+			if audioFormat != 1 || bitsPerSample != 16 {
+				return nil, fmt.Errorf("unsupported hume wav format: audio_format=%d bits_per_sample=%d", audioFormat, bitsPerSample)
+			}
+		case "data":
+			pcm = bytes.Clone(data[offset : offset+chunkSize])
+		}
+		offset += chunkSize
+		if chunkSize%2 == 1 {
+			offset++
+		}
+	}
+	if sampleRate == 0 || channels == 0 || bitsPerSample == 0 {
+		return nil, fmt.Errorf("missing hume wav format metadata")
+	}
+	if pcm == nil {
+		return nil, fmt.Errorf("missing hume wav data chunk")
+	}
+	return &model.AudioFrame{
+		Data:              pcm,
+		SampleRate:        sampleRate,
+		NumChannels:       uint32(channels),
+		SamplesPerChannel: uint32(len(pcm) / int(channels) / 2),
+	}, nil
 }
 
 func humeAudioFromJSONLine(line string) ([]byte, error) {

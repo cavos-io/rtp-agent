@@ -830,6 +830,44 @@ func TestOpenAITTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSProviderCloseClosesActiveStreams(t *testing.T) {
+	body := &countingOpenAIReadCloser{}
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModel1, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1", body.closed)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after provider Close error = %T %v, want EOF", err, err)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("second Close error = %v", err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls after second Close = %d, want 1", body.closed)
+	}
+}
+
 type failingReadCloser struct {
 	err error
 }
