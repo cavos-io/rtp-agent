@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"net"
 	"net/http"
@@ -1758,6 +1761,44 @@ func TestRunAgoraPublishesTranscriptDataWhenRTMEnabled(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("runAgora() did not return after cancellation")
 	}
+}
+
+func TestRunAgoraDoesNotUseLiveKitRuntimeSymbols(t *testing.T) {
+	fileSet := token.NewFileSet()
+	file, err := parser.ParseFile(fileSet, "app.go", nil, 0)
+	if err != nil {
+		t.Fatalf("ParseFile(app.go) error = %v", err)
+	}
+	var runAgora *ast.FuncDecl
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if ok && fn.Name.Name == "runAgora" {
+			runAgora = fn
+			break
+		}
+	}
+	if runAgora == nil {
+		t.Fatal("app.go missing runAgora")
+	}
+	forbidden := map[string]struct{}{
+		"adapterlivekit": {},
+		"livekit":        {},
+		"livekitlogger":  {},
+		"lksdk":          {},
+		"RoomIO":         {},
+		"RoomOptions":    {},
+		"workerlivekit":  {},
+	}
+	ast.Inspect(runAgora.Body, func(node ast.Node) bool {
+		ident, ok := node.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if _, found := forbidden[ident.Name]; found {
+			t.Fatalf("runAgora references %q; keep Agora runtime isolated from LiveKit-specific internals", ident.Name)
+		}
+		return true
+	})
 }
 
 func TestRunAgoraClearsRTMDataHandlerOnShutdown(t *testing.T) {
