@@ -805,6 +805,26 @@ func TestAppRunUsesAgoraTransportWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestNewAppKeepsAgoraWorkerTypeUnset(t *testing.T) {
+	rtpApp, err := NewApp(AppConfig{
+		WorkerOptions: worker.WorkerOptions{
+			Transport: worker.WorkerTransportAgora,
+		},
+		Agora: workeragora.Options{
+			AppID:   "app",
+			Channel: "support",
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	defer rtpApp.Close(context.Background())
+
+	if got := rtpApp.Server.Options.WorkerType; got != "" {
+		t.Fatalf("Agora WorkerType = %q, want empty provider-neutral worker type", got)
+	}
+}
+
 func TestRunAgoraLogsConnectedTransportEvent(t *testing.T) {
 	previousLogger := logutil.Logger
 	recorder := &appRecordingLogger{entriesCh: make(chan appLogEntry, 8)}

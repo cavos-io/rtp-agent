@@ -1124,7 +1124,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		opts.AgentName = "example-agent"
 		server.Options.AgentName = opts.AgentName
 	}
-	if opts.WorkerType == "" {
+	if opts.WorkerType == "" && opts.Transport != worker.WorkerTransportAgora {
 		opts.WorkerType = worker.WorkerTypeRoom
 		server.Options.WorkerType = opts.WorkerType
 	}
