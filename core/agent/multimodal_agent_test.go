@@ -2684,6 +2684,40 @@ func TestMultimodalAgentTTSFallbackStreamErrorReturnsListening(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentTTSFallbackPublishCancelSuppressesError(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.TTS = &fakeGenerationTTS{stream: newEndInputGenerationTTSStream()}
+	ma := &MultimodalAgent{
+		model: &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{
+			AudioOutput: true,
+		}},
+		session: session,
+		PublishAudio: func(context.Context, *model.AudioFrame) error {
+			return context.Canceled
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "spoken fallback"
+	close(textCh)
+	modalitiesCh := make(chan []string, 1)
+	modalitiesCh <- []string{"text"}
+	close(modalitiesCh)
+
+	ma.consumeRealtimeMessage(context.Background(), NewSpeechHandle(true, DefaultInputDetails()), llm.MessageGeneration{
+		MessageID:    "msg_text_only_publish_cancel",
+		TextCh:       textCh,
+		ModalitiesCh: modalitiesCh,
+	})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		t.Fatalf("ErrorEvents received %#v, want cancellation suppressed", ev)
+	case ev := <-session.AgentStateChangedCh:
+		t.Fatalf("agent state changed after canceled fallback publish: %#v", ev)
+	default:
+	}
+}
+
 func TestMultimodalAgentTTSFallbackInterruptedBeforeAudioSkipsText(t *testing.T) {
 	nextStarted := make(chan struct{})
 	releaseAudio := make(chan struct{})

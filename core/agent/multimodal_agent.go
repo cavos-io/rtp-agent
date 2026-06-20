@@ -776,6 +776,9 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 	if !interrupted && text != "" && len(modalities) > 0 && !realtimeModalitiesContain(modalities, "audio") {
 		fallbackPublishedAudio, err := ma.publishTTSFallbackForRealtimeText(ctx, speech, text)
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return false
+			}
 			logger.Logger.Errorw("failed to synthesize text-only realtime response", err)
 			if fallbackPublishedAudio && ma.session != nil {
 				ma.session.UpdateAgentState(AgentStateListening)
