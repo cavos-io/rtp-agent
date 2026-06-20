@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -22,6 +23,8 @@ type AWSTTS struct {
 	textType     types.TextType
 	language     types.LanguageCode
 	sampleRate   int
+	mu           sync.Mutex
+	streams      map[*awsTTSChunkedStream]struct{}
 }
 
 type AWSTTSOption func(*AWSTTS)
@@ -93,6 +96,7 @@ func newAWSTTSWithClient(client *polly.Client, voice string, opts ...AWSTTSOptio
 		outputFormat: types.OutputFormatMp3,
 		textType:     types.TextTypeText,
 		sampleRate:   16000,
+		streams:      make(map[*awsTTSChunkedStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -120,9 +124,12 @@ func (t *AWSTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream
 		return nil, err
 	}
 
-	return &awsTTSChunkedStream{
-		stream: out.AudioStream,
-	}, nil
+	stream := &awsTTSChunkedStream{
+		stream:   out.AudioStream,
+		provider: t,
+	}
+	t.registerStream(stream)
+	return stream, nil
 }
 
 func buildAWSSynthesizeSpeechInput(t *AWSTTS, text string) *polly.SynthesizeSpeechInput {
@@ -146,17 +153,54 @@ func (t *AWSTTS) UpdateOptions(opts ...AWSTTSOption) {
 	}
 }
 
+func (t *AWSTTS) Close() error {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	streams := make([]*awsTTSChunkedStream, 0, len(t.streams))
+	for stream := range t.streams {
+		streams = append(streams, stream)
+	}
+	t.streams = make(map[*awsTTSChunkedStream]struct{})
+	t.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
+func (t *AWSTTS) registerStream(stream *awsTTSChunkedStream) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.streams[stream] = struct{}{}
+}
+
+func (t *AWSTTS) unregisterStream(stream *awsTTSChunkedStream) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.streams, stream)
+}
+
 func (t *AWSTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return nil, fmt.Errorf("streaming input for polly tts is not supported natively via rest")
 }
 
 type awsTTSChunkedStream struct {
-	stream  io.ReadCloser
-	decoder codecs.AudioStreamDecoder
-	started bool
+	stream   io.ReadCloser
+	decoder  codecs.AudioStreamDecoder
+	started  bool
+	provider *AWSTTS
 }
 
 func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.stream == nil {
+		return nil, io.EOF
+	}
 	if !s.started {
 		s.started = true
 		s.decoder = codecs.NewMP3AudioStreamDecoder()
@@ -191,7 +235,16 @@ func (s *awsTTSChunkedStream) Close() error {
 		_ = s.decoder.Close()
 	}
 	if s.stream == nil {
+		if s.provider != nil {
+			s.provider.unregisterStream(s)
+		}
 		return nil
 	}
-	return s.stream.Close()
+	stream := s.stream
+	s.stream = nil
+	err := stream.Close()
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
+	return err
 }
