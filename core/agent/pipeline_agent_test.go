@@ -535,6 +535,69 @@ func TestPipelineAgentStartsSubsequentToolUpdateReplyBeforeFinalReturn(t *testin
 	}
 }
 
+func TestRunContextForegroundWaitsForPendingToolUpdateReply(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	progressStarted := make(chan struct{})
+	releaseProgress := make(chan struct{})
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{ToolCalls: []llm.FunctionToolCall{{
+						Type:      "function",
+						Name:      "lookup",
+						CallID:    "call_lookup",
+						Arguments: `{}`,
+					}}}},
+				},
+			},
+			&blockingContentLLMStream{
+				started: progressStarted,
+				release: releaseProgress,
+				content: "progress acknowledged",
+			},
+			&fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "final acknowledged"}}}},
+		},
+	}
+	tool := &foregroundAfterUpdateTool{
+		foregroundEntered: make(chan struct{}),
+		releaseForeground: make(chan struct{}),
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{tool}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.generateReply()
+	}()
+
+	select {
+	case <-progressStarted:
+	case <-time.After(time.Second):
+		t.Fatal("progress reply did not start")
+	}
+	select {
+	case <-tool.foregroundEntered:
+		t.Fatal("Foreground entered before pending tool update reply completed")
+	default:
+	}
+	close(releaseProgress)
+	select {
+	case <-tool.foregroundEntered:
+	case <-time.After(time.Second):
+		t.Fatal("Foreground did not enter after pending tool update reply completed")
+	}
+	close(tool.releaseForeground)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("generateReply did not finish after foreground release")
+	}
+}
+
 func TestPipelineAgentToolReplyRefreshesUpdatedInstructions(t *testing.T) {
 	baseAgent := NewAgent("old instructions")
 	if err := updateAgentInstructionsMessage(baseAgent.ChatCtx, llm.NewInstructions(baseAgent.Instructions), true); err != nil {
@@ -4878,6 +4941,64 @@ func (b *blockingMultiRunContextUpdatingTool) Execute(ctx context.Context, args 
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
+}
+
+type blockingContentLLMStream struct {
+	started chan struct{}
+	release chan struct{}
+	content string
+	sent    bool
+}
+
+func (b *blockingContentLLMStream) Next() (*llm.ChatChunk, error) {
+	if b.sent {
+		return nil, io.EOF
+	}
+	b.sent = true
+	if b.started != nil {
+		close(b.started)
+		b.started = nil
+	}
+	<-b.release
+	return &llm.ChatChunk{Delta: &llm.ChoiceDelta{Content: b.content}}, nil
+}
+
+func (b *blockingContentLLMStream) Close() error { return nil }
+
+type foregroundAfterUpdateTool struct {
+	foregroundEntered chan struct{}
+	releaseForeground chan struct{}
+	once              sync.Once
+}
+
+func (f *foregroundAfterUpdateTool) ID() string { return "lookup" }
+
+func (f *foregroundAfterUpdateTool) Name() string { return "lookup" }
+
+func (f *foregroundAfterUpdateTool) Description() string { return "" }
+
+func (f *foregroundAfterUpdateTool) Parameters() map[string]any { return nil }
+
+func (f *foregroundAfterUpdateTool) Execute(ctx context.Context, args string) (string, error) {
+	runCtx := GetRunContext(ctx)
+	if runCtx == nil {
+		return "final result", nil
+	}
+	if err := runCtx.Update("searching"); err != nil {
+		return "", err
+	}
+	if err := runCtx.Foreground(ctx, func(context.Context) error {
+		f.once.Do(func() { close(f.foregroundEntered) })
+		select {
+		case <-f.releaseForeground:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}); err != nil {
+		return "", err
+	}
+	return "final result", nil
 }
 
 type fakePipelinePlaybackController struct {

@@ -762,7 +762,16 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 	// In Python parity, we loop for tool calls
 	toolSteps := 0
 	var pendingToolOutCh <-chan ToolExecutionOutput
+	var pendingToolUpdateReplyDone chan struct{}
 	for {
+		replyDone := pendingToolUpdateReplyDone
+		pendingToolUpdateReplyDone = nil
+		closeReplyDone := func() {
+			if replyDone != nil {
+				close(replyDone)
+				replyDone = nil
+			}
+		}
 		inferenceCtx := replyCtx
 		inputModality := ""
 		if opts.SpeechHandle != nil {
@@ -818,6 +827,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 					}
 					va.emitLLMError(session, err)
 				}
+				closeReplyDone()
 				session.UpdateAgentState(AgentStateListening)
 				return
 			}
@@ -852,12 +862,14 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		}
 		if err != nil {
 			if suppressReplyContextCanceledError(ctx, opts.SpeechHandle, err) {
+				closeReplyDone()
 				session.UpdateAgentState(AgentStateListening)
 				return
 			}
 			if !suppressContextCanceledError(ctx, opts.SpeechHandle, err) {
 				logger.Logger.Errorw("TTS inference failed", err)
 				va.emitTTSError(session, err)
+				closeReplyDone()
 				session.UpdateAgentState(AgentStateListening)
 				return
 			}
@@ -871,6 +883,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 				}
 				va.emitLLMError(session, genData.StreamErr)
 			}
+			closeReplyDone()
 			session.UpdateAgentState(AgentStateListening)
 			return
 		}
@@ -927,6 +940,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		if opts.SpeechHandle != nil {
 			_ = opts.SpeechHandle.MarkGenerationDone()
 		}
+		closeReplyDone()
 
 		if len(genData.GeneratedFunctions) > 0 {
 			session.UpdateAgentState(AgentStateThinking)
@@ -951,6 +965,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			}
 			if toolOut.RunContextUpdate {
 				releasedByUpdate = true
+				pendingToolUpdateReplyDone = toolOut.RunContextUpdateDone
 				break
 			}
 		}
@@ -965,6 +980,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 				}
 				if toolOut.RunContextUpdate {
 					releasedByUpdate = true
+					pendingToolUpdateReplyDone = toolOut.RunContextUpdateDone
 					break
 				}
 			}

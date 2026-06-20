@@ -397,6 +397,7 @@ type RunContext struct {
 	FunctionCall     *llm.FunctionCall
 	initialStepIndex int
 	updates          []RunContextUpdate
+	pendingReplies   []chan struct{}
 	fillerSchedulers []*runContextFillerScheduler
 	attached         bool
 	updateSink       chan<- ToolExecutionOutput
@@ -451,6 +452,9 @@ func (r *RunContext) WaitForPlayout(ctx context.Context) error {
 func (r *RunContext) Foreground(ctx context.Context, fn func(context.Context) error) error {
 	if r == nil || r.Session == nil || fn == nil {
 		return nil
+	}
+	if err := r.drainPendingReplies(ctx); err != nil {
+		return err
 	}
 	return r.Session.WaitForInactiveAndHold(ctx, fn)
 }
@@ -543,13 +547,40 @@ func (r *RunContext) Update(message any, templates ...string) error {
 	update := RunContextUpdate{FunctionCall: call, FunctionCallOutput: output}
 	r.updates = append(r.updates, update)
 	var sink chan<- ToolExecutionOutput
+	var replyDone chan struct{}
 	if r.attached && r.updateSink != nil {
 		sink = r.updateSink
+		replyDone = make(chan struct{})
+		r.pendingReplies = append(r.pendingReplies, replyDone)
 		r.emittedUpdates = len(r.updates)
 	}
 	r.mu.Unlock()
 	if sink != nil {
-		sink <- toolExecutionOutputFromUpdate(update)
+		sink <- toolExecutionOutputFromUpdateWithDone(update, replyDone)
+	}
+	return nil
+}
+
+func (r *RunContext) drainPendingReplies(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	r.mu.Lock()
+	replies := make([]chan struct{}, len(r.pendingReplies))
+	copy(replies, r.pendingReplies)
+	r.mu.Unlock()
+	for _, replyDone := range replies {
+		if replyDone == nil {
+			continue
+		}
+		select {
+		case <-replyDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	return nil
 }
