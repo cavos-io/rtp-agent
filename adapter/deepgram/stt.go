@@ -820,7 +820,7 @@ func (s *deepgramStream) PushFrame(frame *model.AudioFrame) error {
 		return io.ErrClosedPipe
 	}
 	if s.audioBStream == nil {
-		s.audioBStream = newDeepgramSTTAudioByteStream(s, frame)
+		s.audioBStream = newDeepgramSTTAudioByteStream(s)
 	}
 	for _, chunk := range s.audioBStream.Push(frame.Data) {
 		if err := s.writeBinaryData(chunk.Data); err != nil {
@@ -868,18 +868,12 @@ func (s *deepgramStream) Close() error {
 	return s.closeConnection()
 }
 
-func newDeepgramSTTAudioByteStream(s *deepgramStream, frame *model.AudioFrame) *audio.AudioByteStream {
+func newDeepgramSTTAudioByteStream(s *deepgramStream) *audio.AudioByteStream {
 	sampleRate := uint32(s.sampleRate)
-	if frame.SampleRate > 0 {
-		sampleRate = frame.SampleRate
-	}
 	if sampleRate == 0 {
 		sampleRate = 16000
 	}
 	numChannels := uint32(s.numChannels)
-	if frame.NumChannels > 0 {
-		numChannels = frame.NumChannels
-	}
 	if numChannels == 0 {
 		numChannels = 1
 	}
