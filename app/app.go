@@ -1178,7 +1178,7 @@ func (a *App) runAgora(ctx context.Context) error {
 		session:  a.Session,
 		greeting: a.Config.AgoraGreeting,
 	}
-	if workeragora.PublishDataEnabled(agoraOpts.PublishData) || workeragora.PublishDataEnabled(agoraOpts.RTMEnabled) {
+	if workeragora.DataEnabled(agoraOpts) {
 		dataOpts, err := workeragora.ResolveDataOptions(agoraOpts)
 		if err != nil {
 			return err

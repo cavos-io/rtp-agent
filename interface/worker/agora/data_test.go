@@ -26,6 +26,27 @@ func TestResolveDataOptionsUsesRTMIdentityAndToken(t *testing.T) {
 	}
 }
 
+func TestDataEnabledAcceptsPublishDataOrRTMEnabled(t *testing.T) {
+	enabled := true
+	disabled := false
+	for _, tc := range []struct {
+		name string
+		opts Options
+		want bool
+	}{
+		{name: "unset", opts: Options{}, want: false},
+		{name: "publish_data", opts: Options{PublishData: &enabled}, want: true},
+		{name: "rtm_enabled", opts: Options{RTMEnabled: &enabled}, want: true},
+		{name: "disabled", opts: Options{PublishData: &disabled, RTMEnabled: &disabled}, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := DataEnabled(tc.opts); got != tc.want {
+				t.Fatalf("DataEnabled() = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestResolveDataOptionsUsesAppIDTokenWithoutCertificate(t *testing.T) {
 	opts, err := ResolveDataOptions(Options{
 		AppID:   "app",
